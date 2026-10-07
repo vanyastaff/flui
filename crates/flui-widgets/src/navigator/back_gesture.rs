@@ -299,7 +299,7 @@ impl BackGestureRuntime {
 
     fn on_pointer_down(
         &self,
-        recognizer: &Arc<DragGestureRecognizer>,
+        recognizer: &Rc<DragGestureRecognizer>,
         dispatch: flui_interaction::PointerDispatch<'_>,
     ) {
         if !(self.enabled)() {
@@ -565,7 +565,7 @@ pub(crate) struct BackGestureDetectorState {
 }
 
 struct Recognizer {
-    drag: Arc<DragGestureRecognizer>,
+    drag: Rc<DragGestureRecognizer>,
 }
 
 impl Drop for BackGestureDetectorState {
@@ -605,10 +605,10 @@ impl ViewState<BackGestureDetector> for BackGestureDetectorState {
             .expect("BUG: init_state must build the recognizer before the first build");
 
         let down_runtime = super::lifecycle::Terminal::new(Rc::clone(&self.runtime));
-        let down_drag = super::lifecycle::Terminal::new(Arc::clone(&recognizer.drag));
-        let move_drag = Arc::clone(&recognizer.drag);
-        let up_drag = Arc::clone(&recognizer.drag);
-        let cancel_drag = Arc::clone(&recognizer.drag);
+        let down_drag = super::lifecycle::Terminal::new(Rc::clone(&recognizer.drag));
+        let move_drag = Rc::clone(&recognizer.drag);
+        let up_drag = Rc::clone(&recognizer.drag);
+        let cancel_drag = Rc::clone(&recognizer.drag);
 
         let listener = Listener::new()
             .behavior(HitTestBehavior::Translucent)

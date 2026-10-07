@@ -23,12 +23,8 @@ struct Member {
 }
 
 impl Member {
-    #[expect(
-        clippy::arc_with_non_send_sync,
-        reason = "the public arena member contract currently requires Arc"
-    )]
-    fn new(deadline: Option<Instant>) -> Arc<Self> {
-        Arc::new(Self {
+    fn new(deadline: Option<Instant>) -> Rc<Self> {
+        Rc::new(Self {
             accepted: Cell::new(0),
             rejected: Cell::new(0),
             retired: Rc::new(Cell::new(0)),
@@ -48,8 +44,6 @@ impl Member {
     }
 }
 
-impl flui_interaction::sealed::arena_member::Sealed for Member {}
-
 impl GestureArenaMember for Member {
     fn accept_gesture(&self, _: PointerId) {
         self.accepted.set(self.accepted.get() + 1);
@@ -59,15 +53,11 @@ impl GestureArenaMember for Member {
         self.rejected.set(self.rejected.get() + 1);
     }
 
-    fn has_pending_deadline(&self) -> bool {
-        self.query_deadline().is_some()
-    }
-
-    fn next_deadline(&self) -> Option<Instant> {
+    fn deadline(&self) -> Option<Instant> {
         self.query_deadline()
     }
 
-    fn poll_deadline(&self) {
+    fn poll_deadline(&self, _now: Instant) {
         self.polls.set(self.polls.get() + 1);
         self.deadline.set(None);
     }
@@ -85,8 +75,8 @@ fn dropped_member_without_cancel_leaves_the_arena() {
     let departed = Member::new(None);
     let retired = Rc::clone(&departed.retired);
     let rival = Member::new(None);
-    let _departed_entry = arena.add(pointer, departed.clone());
-    let _rival_entry = arena.add(pointer, rival.clone());
+    let _departed_entry = arena.add(pointer, &departed);
+    let _rival_entry = arena.add(pointer, &rival);
     arena.close(pointer);
     drop(departed);
 
@@ -101,7 +91,7 @@ fn dropped_member_without_cancel_leaves_the_arena() {
     assert!(arena.is_empty());
 
     let next = Member::new(None);
-    arena.add(pointer, next.clone());
+    arena.add(pointer, &next);
     arena.close(pointer);
     arena.drain_deferred_resolutions();
     assert_eq!(
@@ -116,7 +106,7 @@ fn custom_member_owns_a_deadline() {
     let arena = GestureArena::with_clock(Arc::new(clock.clone()));
     let due = clock.now() + Duration::from_millis(20);
     let member = Member::new(Some(due));
-    arena.add(PointerId::PRIMARY, member.clone());
+    arena.add(PointerId::PRIMARY, &member);
 
     assert!(arena.has_pending_deadlines());
     assert_eq!(arena.next_deadline(), Some(due));
@@ -151,7 +141,7 @@ fn panicking_deadline_query_does_not_hide_other_deadlines() {
                     .set(Some("second deadline query failed"));
             }
             for member in [&first, &second, &healthy] {
-                arena.add(PointerId::PRIMARY, member.clone());
+                arena.add(PointerId::PRIMARY, member);
             }
 
             let failure = catch_unwind(AssertUnwindSafe(|| {

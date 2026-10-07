@@ -380,16 +380,13 @@ impl std::fmt::Debug for TapAndDragGestureRecognizer {
 
 impl TapAndDragGestureRecognizer {
     /// Create a new tap-and-drag recogniser.
-    pub fn new(arena: crate::arena::GestureArena) -> Arc<Self> {
+    pub fn new(arena: crate::arena::GestureArena) -> Rc<Self> {
         Self::with_settings(arena, GestureSettings::default())
     }
 
     /// Create with custom gesture settings.
-    pub fn with_settings(
-        arena: crate::arena::GestureArena,
-        settings: GestureSettings,
-    ) -> Arc<Self> {
-        Arc::new(Self {
+    pub fn with_settings(arena: crate::arena::GestureArena, settings: GestureSettings) -> Rc<Self> {
+        Rc::new(Self {
             state: RecognizerBase::new(arena),
             gesture_state: Arc::new(Mutex::new(TapDragState::default())),
             callbacks: Rc::new(RefCell::new(TapDragCallbacks::default())),
@@ -413,10 +410,7 @@ impl TapAndDragGestureRecognizer {
 
     /// Register the tap-down callback (fires once the arena has accepted the
     /// contact, at the latest right before `on_tap_up` or `on_drag_start`).
-    pub fn with_on_tap_down(
-        self: Arc<Self>,
-        cb: impl Fn(TapDragDownDetails) + 'static,
-    ) -> Arc<Self> {
+    pub fn with_on_tap_down(self: Rc<Self>, cb: impl Fn(TapDragDownDetails) + 'static) -> Rc<Self> {
         let old = self.callbacks.borrow_mut().on_tap_down.replace(Rc::new(cb));
         drop(old);
         self
@@ -424,7 +418,7 @@ impl TapAndDragGestureRecognizer {
 
     /// Register the tap-up callback (fires when the pointer lifted before
     /// crossing tap slop and the arena accepted the tap).
-    pub fn with_on_tap_up(self: Arc<Self>, cb: impl Fn(TapDragUpDetails) + 'static) -> Arc<Self> {
+    pub fn with_on_tap_up(self: Rc<Self>, cb: impl Fn(TapDragUpDetails) + 'static) -> Rc<Self> {
         let old = self.callbacks.borrow_mut().on_tap_up.replace(Rc::new(cb));
         drop(old);
         self
@@ -433,9 +427,9 @@ impl TapAndDragGestureRecognizer {
     /// Register the drag-start callback (fires when the pointer crossed drag
     /// slop and the arena accepted the drag).
     pub fn with_on_drag_start(
-        self: Arc<Self>,
+        self: Rc<Self>,
         cb: impl Fn(TapDragStartDetails) + 'static,
-    ) -> Arc<Self> {
+    ) -> Rc<Self> {
         let old = self
             .callbacks
             .borrow_mut()
@@ -448,9 +442,9 @@ impl TapAndDragGestureRecognizer {
     /// Register the drag-update callback (fires once with the crossing move
     /// right after `on_drag_start`, then for each move while dragging).
     pub fn with_on_drag_update(
-        self: Arc<Self>,
+        self: Rc<Self>,
         cb: impl Fn(TapDragUpdateDetails) + 'static,
-    ) -> Arc<Self> {
+    ) -> Rc<Self> {
         let old = self
             .callbacks
             .borrow_mut()
@@ -462,10 +456,7 @@ impl TapAndDragGestureRecognizer {
 
     /// Register the drag-end callback (fires when the pointer lifts after a
     /// drag, with end-of-drag velocity).
-    pub fn with_on_drag_end(
-        self: Arc<Self>,
-        cb: impl Fn(TapDragEndDetails) + 'static,
-    ) -> Arc<Self> {
+    pub fn with_on_drag_end(self: Rc<Self>, cb: impl Fn(TapDragEndDetails) + 'static) -> Rc<Self> {
         let old = self.callbacks.borrow_mut().on_drag_end.replace(Rc::new(cb));
         drop(old);
         self
@@ -473,7 +464,7 @@ impl TapAndDragGestureRecognizer {
 
     /// Register the cancel callback. See [`TapDragCancelCallback`] for when
     /// it fires.
-    pub fn with_on_cancel(self: Arc<Self>, cb: impl Fn() + 'static) -> Arc<Self> {
+    pub fn with_on_cancel(self: Rc<Self>, cb: impl Fn() + 'static) -> Rc<Self> {
         let old = self.callbacks.borrow_mut().on_cancel.replace(Rc::new(cb));
         drop(old);
         self
@@ -728,7 +719,7 @@ impl TapAndDragGestureRecognizer {
 
 impl GestureRecognizer for TapAndDragGestureRecognizer {
     fn add_pointer(
-        self: &Arc<Self>,
+        self: &Rc<Self>,
         pointer: PointerId,
         position: Offset<f64>,
         global_position: Offset<f64>,
@@ -806,7 +797,7 @@ impl GestureRecognizer for TapAndDragGestureRecognizer {
         state.velocity_tracker.add_position(now, position);
     }
 
-    fn add_pointer_down(self: &Arc<Self>, dispatch: PointerDispatch<'_>) {
+    fn add_pointer_down(self: &Rc<Self>, dispatch: PointerDispatch<'_>) {
         if matches!(dispatch.local, PointerEvent::Down(_)) {
             self.add_pointer(
                 dispatch.local.pointer_id(),

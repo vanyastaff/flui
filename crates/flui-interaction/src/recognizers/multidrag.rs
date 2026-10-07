@@ -262,8 +262,8 @@ impl std::fmt::Debug for MultiDragGestureRecognizer {
 
 impl MultiDragGestureRecognizer {
     /// Construct a new multi-pointer drag recogniser.
-    pub fn new(arena: crate::arena::GestureArena, axis: MultiDragAxis) -> Arc<Self> {
-        Arc::new(Self {
+    pub fn new(arena: crate::arena::GestureArena, axis: MultiDragAxis) -> Rc<Self> {
+        Rc::new(Self {
             state: RecognizerBase::new(arena),
             axis,
             pointers: Arc::new(Mutex::new(HashMap::new())),
@@ -277,8 +277,8 @@ impl MultiDragGestureRecognizer {
         arena: crate::arena::GestureArena,
         axis: MultiDragAxis,
         settings: GestureSettings,
-    ) -> Arc<Self> {
-        Arc::new(Self {
+    ) -> Rc<Self> {
+        Rc::new(Self {
             state: RecognizerBase::new(arena),
             axis,
             pointers: Arc::new(Mutex::new(HashMap::new())),
@@ -289,7 +289,7 @@ impl MultiDragGestureRecognizer {
 
     /// Set the per-pointer start callback. The callback may return `None` to
     /// reject the drag (caller can read pointer position to filter by region).
-    pub fn with_on_start(self: Arc<Self>, callback: MultiDragStartCallback) -> Arc<Self> {
+    pub fn with_on_start(self: Rc<Self>, callback: MultiDragStartCallback) -> Rc<Self> {
         let _prev = self.on_start.borrow_mut().replace(callback);
         self
     }
@@ -332,7 +332,7 @@ impl MultiDragGestureRecognizer {
 
     /// Add a pointer — called from the binding's hit-test dispatch.
     fn add_pointer_impl(
-        self: &Arc<Self>,
+        self: &Rc<Self>,
         pointer: PointerId,
         position: Offset<f64>,
         global_position: Offset<f64>,
@@ -345,8 +345,8 @@ impl MultiDragGestureRecognizer {
         // multi-drag may win by default after Down;
         // delayed variants belong in a distinct recognizer policy, not an
         // arena-wide hold.
-        let member: Arc<dyn GestureArenaMember> = Arc::<Self>::clone(self);
-        let entry = self.state.arena().add(pointer, member);
+        let member: Rc<dyn GestureArenaMember> = Rc::<Self>::clone(self);
+        let entry = self.state.arena().add_erased(pointer, &member);
         state.arena_entry = Some(entry);
 
         let _prev = self.pointers.lock().insert(pointer, state);
@@ -586,7 +586,7 @@ impl MultiDragGestureRecognizer {
 
 impl GestureRecognizer for MultiDragGestureRecognizer {
     fn add_pointer(
-        self: &Arc<Self>,
+        self: &Rc<Self>,
         pointer: PointerId,
         position: Offset<f64>,
         global_position: Offset<f64>,

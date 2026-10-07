@@ -45,7 +45,7 @@
 
 use std::{
     panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
-    sync::Arc,
+    rc::{Rc, Weak},
 };
 
 use dashmap::DashMap;
@@ -69,8 +69,8 @@ use crate::{
 /// When a member resolves via this entry, it goes through the team's
 /// combining logic instead of directly to the arena.
 pub struct TeamEntry {
-    combiner: Arc<Mutex<CombiningMember>>,
-    member: Arc<dyn GestureArenaMember>,
+    combiner: Rc<Mutex<CombiningMember>>,
+    member: Rc<dyn GestureArenaMember>,
 }
 
 impl TeamEntry {
@@ -107,7 +107,7 @@ impl TeamEntry {
 
     /// Get the member for this entry.
     #[inline]
-    pub fn member(&self) -> &Arc<dyn GestureArenaMember> {
+    pub fn member(&self) -> &Rc<dyn GestureArenaMember> {
         &self.member
     }
 }
@@ -128,28 +128,30 @@ impl std::fmt::Debug for TeamEntry {
 /// distributes the result to all team members appropriately.
 struct CombiningMember {
     /// The team that owns this combiner.
-    team: Arc<GestureArenaTeam>,
+    team: Weak<GestureArenaTeam>,
     /// Pointer ID for this combiner.
     pointer: PointerId,
     /// Members in this team for this pointer.
-    members: SmallVec<[Arc<dyn GestureArenaMember>; 4]>,
+    members: SmallVec<[Weak<dyn GestureArenaMember>; 4]>,
     /// Whether this combiner has been resolved.
     resolved: bool,
     /// The winner within the team (if any).
-    winner: Option<Arc<dyn GestureArenaMember>>,
+    winner: Option<Weak<dyn GestureArenaMember>>,
     /// The entry handle for the arena (set after first add).
     entry: Option<GestureArenaEntry>,
+    arena_member: Option<Rc<CombiningMemberWrapper>>,
 }
 
 impl CombiningMember {
-    fn new(team: Arc<GestureArenaTeam>, pointer: PointerId) -> Self {
+    fn new(team: Rc<GestureArenaTeam>, pointer: PointerId) -> Self {
         Self {
-            team,
+            team: Rc::downgrade(&team),
             pointer,
             members: SmallVec::new(),
             resolved: false,
             winner: None,
             entry: None,
+            arena_member: None,
         }
     }
 
@@ -161,10 +163,10 @@ impl CombiningMember {
     #[expect(clippy::type_complexity)] // local return plumbing, not public API
     fn resolve(
         &mut self,
-        member: &Arc<dyn GestureArenaMember>,
+        member: &Rc<dyn GestureArenaMember>,
         disposition: GestureDisposition,
     ) -> (
-        Option<(Arc<dyn GestureArenaMember>, PointerId)>,
+        Option<(Rc<dyn GestureArenaMember>, PointerId)>,
         Option<(GestureArenaEntry, GestureDisposition)>,
     ) {
         if self.resolved {
@@ -174,7 +176,12 @@ impl CombiningMember {
         match disposition {
             GestureDisposition::Accepted => {
                 // Winner is captain (if set) or the accepting member
-                self.winner = Some(self.team.captain().unwrap_or_else(|| member.clone()));
+                let winner = self
+                    .team
+                    .upgrade()
+                    .and_then(|team| team.captain())
+                    .unwrap_or_else(|| member.clone());
+                self.winner = Some(Rc::downgrade(&winner));
 
                 // Return entry to resolve outside lock
                 (
@@ -187,7 +194,8 @@ impl CombiningMember {
             GestureDisposition::Rejected => {
                 // Remove member from team; the caller notifies it outside the
                 // lock.
-                self.members.retain(|m| !Arc::ptr_eq(m, member));
+                self.members
+                    .retain(|m| !Weak::ptr_eq(m, &Rc::downgrade(member)) && m.strong_count() != 0);
                 let to_reject = Some((member.clone(), self.pointer));
 
                 // If no members left, reject the whole team
@@ -215,22 +223,27 @@ impl CombiningMember {
         self.resolved = true;
 
         // Determine winner: pre-set winner, captain, or first member
-        let winner = self.winner.take().or_else(|| {
-            self.team
-                .captain()
-                .or_else(|| self.members.first().cloned())
-        });
+        let team = self.team.upgrade();
+        let captain = team.as_ref().and_then(|team| team.captain());
+        let winner = self
+            .winner
+            .take()
+            .and_then(|winner| winner.upgrade())
+            .or_else(|| captain.clone())
+            .or_else(|| self.members.iter().find_map(Weak::upgrade));
 
         // Check if winner is the captain (not in members list)
-        let captain = self.team.captain();
         let winner_is_captain = winner
             .as_ref()
             .zip(captain.as_ref())
-            .is_some_and(|(w, c)| Arc::ptr_eq(w, c));
+            .is_some_and(|(w, c)| Rc::ptr_eq(w, c));
 
         // Queue all member notifications - they all lose except the winner
         for member in &self.members {
-            let is_winner = winner.as_ref().is_some_and(|w| Arc::ptr_eq(w, member));
+            let Some(member) = member.upgrade() else {
+                continue;
+            };
+            let is_winner = winner.as_ref().is_some_and(|w| Rc::ptr_eq(w, &member));
             if is_winner {
                 pending.accepts.push(member.clone());
             } else {
@@ -244,7 +257,9 @@ impl CombiningMember {
         }
 
         // Remove from team's combiners
-        self.team.remove_combiner(self.pointer);
+        if let Some(team) = team {
+            team.remove_combiner(self.pointer);
+        }
         pending
     }
 
@@ -260,10 +275,14 @@ impl CombiningMember {
         self.resolved = true;
 
         // Queue rejection for all members
-        pending.rejects.extend(self.members.iter().cloned());
+        pending
+            .rejects
+            .extend(self.members.iter().filter_map(Weak::upgrade));
 
         // Remove from team's combiners
-        self.team.remove_combiner(self.pointer);
+        if let Some(team) = self.team.upgrade() {
+            team.remove_combiner(self.pointer);
+        }
         pending
     }
 }
@@ -278,8 +297,8 @@ impl CombiningMember {
 struct PendingTeamNotifications {
     pointer: PointerId,
     /// At most the winner and (separately) the captain.
-    accepts: SmallVec<[Arc<dyn GestureArenaMember>; 2]>,
-    rejects: SmallVec<[Arc<dyn GestureArenaMember>; 4]>,
+    accepts: SmallVec<[Rc<dyn GestureArenaMember>; 2]>,
+    rejects: SmallVec<[Rc<dyn GestureArenaMember>; 4]>,
 }
 
 impl PendingTeamNotifications {
@@ -316,7 +335,7 @@ impl PendingTeamNotifications {
 
 /// Wrapper that implements GestureArenaMember for the combining member.
 struct CombiningMemberWrapper {
-    combiner: Arc<Mutex<CombiningMember>>,
+    combiner: Weak<Mutex<CombiningMember>>,
 }
 
 // Implement sealed trait for arena membership
@@ -324,12 +343,18 @@ impl crate::sealed::arena_member::Sealed for CombiningMemberWrapper {}
 
 impl GestureArenaMember for CombiningMemberWrapper {
     fn accept_gesture(&self, _pointer: PointerId) {
-        let pending = self.combiner.lock().accept_gesture();
+        let Some(combiner) = self.combiner.upgrade() else {
+            return;
+        };
+        let pending = combiner.lock().accept_gesture();
         pending.dispatch();
     }
 
     fn reject_gesture(&self, _pointer: PointerId) {
-        let pending = self.combiner.lock().reject_gesture();
+        let Some(combiner) = self.combiner.upgrade() else {
+            return;
+        };
+        let pending = combiner.lock().reject_gesture();
         pending.dispatch();
     }
 }
@@ -362,17 +387,17 @@ impl GestureArenaMember for CombiningMemberWrapper {
 /// ```
 pub struct GestureArenaTeam {
     /// Combiner for each active pointer.
-    combiners: DashMap<PointerId, Arc<Mutex<CombiningMember>>>,
+    combiners: DashMap<PointerId, Rc<Mutex<CombiningMember>>>,
     /// Captain that wins on behalf of the team.
-    captain: Mutex<Option<Arc<dyn GestureArenaMember>>>,
+    captain: Mutex<Option<Rc<dyn GestureArenaMember>>>,
 }
 
 impl GestureArenaTeam {
     /// Create a new gesture arena team without a captain.
     ///
     /// When the team wins, the first member added wins.
-    pub fn new() -> Arc<Self> {
-        Arc::new(Self {
+    pub fn new() -> Rc<Self> {
+        Rc::new(Self {
             combiners: DashMap::new(),
             captain: Mutex::new(None),
         })
@@ -382,15 +407,15 @@ impl GestureArenaTeam {
     ///
     /// When any team member wins, the captain receives the gesture.
     /// This is useful for forwarding gestures (e.g., to native views).
-    pub fn with_captain(captain: Arc<dyn GestureArenaMember>) -> Arc<Self> {
-        Arc::new(Self {
+    pub fn with_captain(captain: Rc<dyn GestureArenaMember>) -> Rc<Self> {
+        Rc::new(Self {
             combiners: DashMap::new(),
             captain: Mutex::new(Some(captain)),
         })
     }
 
     /// Get the team's captain (if any).
-    pub fn captain(&self) -> Option<Arc<dyn GestureArenaMember>> {
+    pub fn captain(&self) -> Option<Rc<dyn GestureArenaMember>> {
         self.captain.lock().clone()
     }
 
@@ -398,7 +423,7 @@ impl GestureArenaTeam {
     ///
     /// The captain wins on behalf of the entire team when any member claims
     /// victory.
-    pub fn set_captain(&self, captain: Option<Arc<dyn GestureArenaMember>>) {
+    pub fn set_captain(&self, captain: Option<Rc<dyn GestureArenaMember>>) {
         let _prev = std::mem::replace(&mut *self.captain.lock(), captain);
     }
 
@@ -416,29 +441,30 @@ impl GestureArenaTeam {
     /// entry.resolve(GestureDisposition::Accepted);
     /// ```
     pub fn add(
-        self: &Arc<Self>,
+        self: &Rc<Self>,
         pointer: PointerId,
-        member: Arc<dyn GestureArenaMember>,
+        member: Rc<dyn GestureArenaMember>,
         arena: &GestureArena,
     ) -> TeamEntry {
         let combiner = self
             .combiners
             .entry(pointer)
-            .or_insert_with(|| Arc::new(Mutex::new(CombiningMember::new(self.clone(), pointer))))
+            .or_insert_with(|| Rc::new(Mutex::new(CombiningMember::new(self.clone(), pointer))))
             .clone();
 
         // Add member to combiner
         {
             let mut combiner_lock = combiner.lock();
-            combiner_lock.members.push(member.clone());
+            combiner_lock.members.push(Rc::downgrade(&member));
 
             // First member triggers arena registration
             if combiner_lock.entry.is_none() {
-                let wrapper = Arc::new(CombiningMemberWrapper {
-                    combiner: combiner.clone(),
+                let wrapper = Rc::new(CombiningMemberWrapper {
+                    combiner: Rc::downgrade(&combiner),
                 });
-                let entry = arena.add(pointer, wrapper);
+                let entry = arena.add(pointer, &wrapper);
                 combiner_lock.entry = Some(entry);
+                combiner_lock.arena_member = Some(wrapper);
             }
         }
 
@@ -501,8 +527,8 @@ mod tests {
     impl crate::sealed::arena_member::Sealed for MockMember {}
 
     impl MockMember {
-        fn new(id: usize) -> Arc<Self> {
-            Arc::new(Self {
+        fn new(id: usize) -> Rc<Self> {
+            Rc::new(Self {
                 id,
                 accepted: AtomicBool::new(false),
                 rejected: AtomicBool::new(false),

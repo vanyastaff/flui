@@ -178,8 +178,8 @@ struct LongPressState {
 
 impl LongPressGestureRecognizer {
     /// Create a new long press recognizer with gesture arena
-    pub fn new(arena: crate::arena::GestureArena) -> Arc<Self> {
-        Arc::new(Self {
+    pub fn new(arena: crate::arena::GestureArena) -> Rc<Self> {
+        Rc::new(Self {
             state: RecognizerBase::new(arena),
             callbacks: Rc::new(RefCell::new(LongPressCallbacks::default())),
             gesture_state: Arc::new(Mutex::new(LongPressState::default())),
@@ -189,11 +189,8 @@ impl LongPressGestureRecognizer {
     }
 
     /// Create a new long press recognizer with custom settings
-    pub fn with_settings(
-        arena: crate::arena::GestureArena,
-        settings: GestureSettings,
-    ) -> Arc<Self> {
-        Arc::new(Self {
+    pub fn with_settings(arena: crate::arena::GestureArena, settings: GestureSettings) -> Rc<Self> {
+        Rc::new(Self {
             state: RecognizerBase::new(arena),
             callbacks: Rc::new(RefCell::new(LongPressCallbacks::default())),
             gesture_state: Arc::new(Mutex::new(LongPressState::default())),
@@ -226,9 +223,9 @@ impl LongPressGestureRecognizer {
     /// This is triggered immediately when a pointer contacts the screen,
     /// before the long press timer has elapsed.
     pub fn with_on_long_press_down(
-        self: Arc<Self>,
+        self: Rc<Self>,
         callback: impl Fn(LongPressDownDetails) + 'static,
-    ) -> Arc<Self> {
+    ) -> Rc<Self> {
         self.callbacks.borrow_mut().on_long_press_down = Some(Rc::new(callback));
         self
     }
@@ -238,16 +235,16 @@ impl LongPressGestureRecognizer {
     /// This is a simple callback with no details, called when the long press
     /// duration threshold is reached. For detailed information, use
     /// `with_on_long_press_start` instead.
-    pub fn with_on_long_press(self: Arc<Self>, callback: impl Fn() + 'static) -> Arc<Self> {
+    pub fn with_on_long_press(self: Rc<Self>, callback: impl Fn() + 'static) -> Rc<Self> {
         self.callbacks.borrow_mut().on_long_press = Some(Rc::new(callback));
         self
     }
 
     /// Set the long press start callback (called when timer elapses)
     pub fn with_on_long_press_start(
-        self: Arc<Self>,
+        self: Rc<Self>,
         callback: impl Fn(LongPressStartDetails) + 'static,
-    ) -> Arc<Self> {
+    ) -> Rc<Self> {
         self.callbacks.borrow_mut().on_long_press_start = Some(Rc::new(callback));
         self
     }
@@ -255,9 +252,9 @@ impl LongPressGestureRecognizer {
     /// Set the long press move callback (called during long press if pointer
     /// moves)
     pub fn with_on_long_press_move_update(
-        self: Arc<Self>,
+        self: Rc<Self>,
         callback: impl Fn(LongPressDetails) + 'static,
-    ) -> Arc<Self> {
+    ) -> Rc<Self> {
         self.callbacks.borrow_mut().on_long_press_move_update = Some(Rc::new(callback));
         self
     }
@@ -265,9 +262,9 @@ impl LongPressGestureRecognizer {
     /// Set the long press up callback (called when pointer released after long
     /// press)
     pub fn with_on_long_press_up(
-        self: Arc<Self>,
+        self: Rc<Self>,
         callback: impl Fn(LongPressDetails) + 'static,
-    ) -> Arc<Self> {
+    ) -> Rc<Self> {
         self.callbacks.borrow_mut().on_long_press_up = Some(Rc::new(callback));
         self
     }
@@ -277,18 +274,18 @@ impl LongPressGestureRecognizer {
     /// Similar to `on_long_press_up` but called after the up event is
     /// processed, so both `on_long_press_up` and `on_long_press_end` exist.
     pub fn with_on_long_press_end(
-        self: Arc<Self>,
+        self: Rc<Self>,
         callback: impl Fn(LongPressDetails) + 'static,
-    ) -> Arc<Self> {
+    ) -> Rc<Self> {
         self.callbacks.borrow_mut().on_long_press_end = Some(Rc::new(callback));
         self
     }
 
     /// Set the long press cancel callback
     pub fn with_on_long_press_cancel(
-        self: Arc<Self>,
+        self: Rc<Self>,
         callback: impl Fn(LongPressDetails) + 'static,
-    ) -> Arc<Self> {
+    ) -> Rc<Self> {
         self.callbacks.borrow_mut().on_long_press_cancel = Some(Rc::new(callback));
         self
     }
@@ -454,6 +451,10 @@ impl LongPressGestureRecognizer {
         fields(pointer = ?self.state.primary_pointer())
     )]
     fn try_fire_timer(&self, position: Offset<f64>) -> bool {
+        self.try_fire_timer_at(position, self.state.now())
+    }
+
+    fn try_fire_timer_at(&self, position: Offset<f64>, now: Instant) -> bool {
         // Snapshot under the lock, then drop it before invoking
         // user callbacks (callbacks may re-enter recognizer API).
         let snapshot = {
@@ -464,7 +465,7 @@ impl LongPressGestureRecognizer {
             let Some(down_time) = state.down_time else {
                 return false;
             };
-            if self.state.now().duration_since(down_time) < self.long_press_duration() {
+            if now.duration_since(down_time) < self.long_press_duration() {
                 return false;
             }
             state.phase = LongPressPhase::Started;
@@ -527,18 +528,22 @@ impl LongPressGestureRecognizer {
     /// also fires on release. Callers that drive this tick therefore do not
     /// need to — and must not separately — resolve the arena themselves.
     pub fn check_timer(&self) -> bool {
+        self.check_timer_at(self.state.now())
+    }
+
+    fn check_timer_at(&self, now: Instant) -> bool {
         let position = self
             .gesture_state
             .lock()
             .current_position
             .unwrap_or_else(|| Offset::new(0.0, 0.0));
-        self.try_fire_timer(position)
+        self.try_fire_timer_at(position, now)
     }
 }
 
 impl GestureRecognizer for LongPressGestureRecognizer {
     fn add_pointer(
-        self: &Arc<Self>,
+        self: &Rc<Self>,
         pointer: PointerId,
         position: Offset<f64>,
         global_position: Offset<f64>,
@@ -546,7 +551,7 @@ impl GestureRecognizer for LongPressGestureRecognizer {
         self.admit(pointer, position, global_position, PointerType::Touch);
     }
 
-    fn add_pointer_down(self: &Arc<Self>, dispatch: PointerDispatch<'_>) {
+    fn add_pointer_down(self: &Rc<Self>, dispatch: PointerDispatch<'_>) {
         let event = dispatch.local;
         // A long press answers the primary button only.
         let PointerEvent::Down(data) = event else {
@@ -595,7 +600,7 @@ impl LongPressGestureRecognizer {
     /// contact under the pointer still tracked means that pointer's terminal
     /// event never arrived: the old press is cancelled first.
     fn admit(
-        self: &Arc<Self>,
+        self: &Rc<Self>,
         pointer: PointerId,
         position: Offset<f64>,
         global_position: Offset<f64>,
@@ -630,7 +635,7 @@ impl LongPressGestureRecognizer {
         self.stop_deadline_polling();
         self.state
             .start_tracking(pointer, position, global_position, self);
-        let member: Arc<dyn GestureArenaMember> = Arc::<Self>::clone(self);
+        let member: Rc<dyn GestureArenaMember> = Rc::<Self>::clone(self);
         let registration = self
             .state
             .arena()
@@ -784,7 +789,7 @@ impl GestureArenaMember for LongPressGestureRecognizer {
         // Callbacks will be called when timer elapses or pointer moves/up
     }
 
-    fn poll_deadline(&self) {
+    fn poll_deadline(&self, now: Instant) {
         // Frame-driven deadline check: fires `on_long_press_start` once the
         // hold deadline elapses even if the finger is held still (no further
         // pointer event arrives to drive it). `check_timer` is idempotent, so
@@ -795,18 +800,10 @@ impl GestureArenaMember for LongPressGestureRecognizer {
         // `handle_move`, and the public `check_timer`. It used to be here
         // alone, which left the move-driven path firing without rejecting its
         // competitors.
-        self.check_timer();
+        self.check_timer_at(now);
     }
 
-    fn has_pending_deadline(&self) -> bool {
-        // Armed exactly while `check_timer` could still fire: a contact is
-        // down (`down_time` captured) and the phase is still `Possible` —
-        // the same guard `try_fire_timer` applies before comparing the clock.
-        let state = self.gesture_state.lock();
-        state.phase == LongPressPhase::Possible && state.down_time.is_some()
-    }
-
-    fn next_deadline(&self) -> Option<Instant> {
+    fn deadline(&self) -> Option<Instant> {
         // Same guard as `has_pending_deadline`: `down_time` is only
         // meaningful while still `Possible`. The deadline itself is exactly
         // what `try_fire_timer`/`check_timer` compare `now` against —
@@ -818,7 +815,7 @@ impl GestureArenaMember for LongPressGestureRecognizer {
         }
         state
             .down_time
-            .map(|down_time| down_time + self.long_press_duration())
+            .and_then(|down_time| down_time.checked_add(self.long_press_duration()))
     }
 
     fn reject_gesture(&self, _pointer: PointerId) {
@@ -892,7 +889,8 @@ mod tests {
         let pointer = PointerId::new(3).expect("nonzero pointer id");
         // Competitor joins FIRST so the sweep accepts it and rejects the
         // long press.
-        arena.add(pointer, Arc::new(Competitor));
+        let competitor = Rc::new(Competitor);
+        arena.add(pointer, &competitor);
 
         let recognizer = LongPressGestureRecognizer::new(arena);
         let position = Offset::new(10.0, 10.0);

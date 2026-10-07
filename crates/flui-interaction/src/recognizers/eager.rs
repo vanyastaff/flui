@@ -58,7 +58,7 @@
 //! arena entry and clears the tracked primary pointer so a subsequent
 //! `add_pointer` is a safe no-op.
 
-use std::sync::Arc;
+use std::{rc::Rc, sync::Arc};
 
 use flui_foundation::geometry::Offset;
 use parking_lot::Mutex;
@@ -91,16 +91,16 @@ impl EagerGestureRecognizer {
     /// Create a new eager recognizer with default gesture settings.
     ///
     /// Use [`Self::with_settings`] to override slop / timeout values.
-    pub fn new(arena: GestureArena) -> Arc<Self> {
-        Arc::new(Self {
+    pub fn new(arena: GestureArena) -> Rc<Self> {
+        Rc::new(Self {
             state: RecognizerBase::new(arena),
             settings: Arc::new(Mutex::new(GestureSettings::default())),
         })
     }
 
     /// Create a new eager recognizer with custom gesture settings.
-    pub fn with_settings(arena: GestureArena, settings: GestureSettings) -> Arc<Self> {
-        Arc::new(Self {
+    pub fn with_settings(arena: GestureArena, settings: GestureSettings) -> Rc<Self> {
+        Rc::new(Self {
             state: RecognizerBase::new(arena),
             settings: Arc::new(Mutex::new(settings)),
         })
@@ -119,7 +119,7 @@ impl EagerGestureRecognizer {
 
 impl GestureRecognizer for EagerGestureRecognizer {
     fn add_pointer(
-        self: &Arc<Self>,
+        self: &Rc<Self>,
         pointer: PointerId,
         position: Offset<f64>,
         // Eager reports no position in any callback of its own, but the base

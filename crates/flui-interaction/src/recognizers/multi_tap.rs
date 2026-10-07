@@ -160,12 +160,12 @@ impl MultiTapGestureRecognizer {
     /// # Panics
     ///
     /// Panics if `required_pointer_count` is less than 2.
-    pub fn new(arena: crate::arena::GestureArena, required_pointer_count: usize) -> Arc<Self> {
+    pub fn new(arena: crate::arena::GestureArena, required_pointer_count: usize) -> Rc<Self> {
         assert!(
             required_pointer_count >= 2,
             "MultiTapGestureRecognizer requires at least 2 pointers, got {required_pointer_count}"
         );
-        Arc::new(Self {
+        Rc::new(Self {
             state: RecognizerBase::new(arena),
             required_pointer_count,
             callbacks: Rc::new(RefCell::new(MultiTapCallbacks::default())),
@@ -180,12 +180,12 @@ impl MultiTapGestureRecognizer {
         arena: crate::arena::GestureArena,
         required_pointer_count: usize,
         settings: GestureSettings,
-    ) -> Arc<Self> {
+    ) -> Rc<Self> {
         assert!(
             required_pointer_count >= 2,
             "MultiTapGestureRecognizer requires at least 2 pointers, got {required_pointer_count}"
         );
-        Arc::new(Self {
+        Rc::new(Self {
             state: RecognizerBase::new(arena),
             required_pointer_count,
             callbacks: Rc::new(RefCell::new(MultiTapCallbacks::default())),
@@ -207,18 +207,18 @@ impl MultiTapGestureRecognizer {
 
     /// Set the multi-tap callback
     pub fn with_on_multi_tap(
-        self: Arc<Self>,
+        self: Rc<Self>,
         callback: impl Fn(MultiTapDetails) + 'static,
-    ) -> Arc<Self> {
+    ) -> Rc<Self> {
         self.callbacks.borrow_mut().on_multi_tap = Some(Rc::new(callback));
         self
     }
 
     /// Set the multi-tap cancel callback
     pub fn with_on_multi_tap_cancel(
-        self: Arc<Self>,
+        self: Rc<Self>,
         callback: impl Fn(MultiTapDetails) + 'static,
-    ) -> Arc<Self> {
+    ) -> Rc<Self> {
         self.callbacks.borrow_mut().on_multi_tap_cancel = Some(Rc::new(callback));
         self
     }
@@ -430,7 +430,7 @@ impl MultiTapGestureRecognizer {
 
 impl GestureRecognizer for MultiTapGestureRecognizer {
     fn add_pointer(
-        self: &Arc<Self>,
+        self: &Rc<Self>,
         pointer: PointerId,
         position: Offset<f64>,
         // Multi-tap's per-pointer callbacks carry no position, so none of them

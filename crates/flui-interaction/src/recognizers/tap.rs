@@ -23,8 +23,8 @@
 
 use std::{
     cell::RefCell,
-    rc::Rc,
-    sync::{Arc, Weak},
+    rc::{Rc, Weak},
+    sync::Arc,
 };
 
 use flui_foundation::geometry::Offset;
@@ -272,6 +272,8 @@ struct PendingDown {
 /// ([`TapArenaMember`]), never by pointer ID.
 #[derive(Debug)]
 struct TapSequence {
+    /// Owns the exact sequence participant registered weakly in the arena.
+    _member: Rc<TapArenaMember>,
     id: u64,
     pointer: PointerId,
     /// The contact as it went down. Consumed when `on_*_tap_down` fires.
@@ -317,7 +319,7 @@ impl TapSequences {
 /// Registered in place of the recognizer itself so a verdict names the exact
 /// sequence it decides. It holds the recognizer weakly: the arena must not
 /// keep an unmounted recognizer alive.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct TapArenaMember {
     recognizer: Weak<TapGestureRecognizer>,
     sequence: u64,
@@ -341,16 +343,13 @@ impl GestureArenaMember for TapArenaMember {
 
 impl TapGestureRecognizer {
     /// Create a new tap recognizer with gesture arena
-    pub fn new(arena: crate::arena::GestureArena) -> Arc<Self> {
+    pub fn new(arena: crate::arena::GestureArena) -> Rc<Self> {
         Self::with_settings(arena, GestureSettings::default())
     }
 
     /// Create a new tap recognizer with custom settings
-    pub fn with_settings(
-        arena: crate::arena::GestureArena,
-        settings: GestureSettings,
-    ) -> Arc<Self> {
-        Arc::new(Self {
+    pub fn with_settings(arena: crate::arena::GestureArena, settings: GestureSettings) -> Rc<Self> {
+        Rc::new(Self {
             state: RecognizerBase::new(arena),
             callbacks: Rc::new(RefCell::new(TapCallbacks::default())),
             sequences: Rc::new(RefCell::new(TapSequences::default())),
@@ -369,7 +368,7 @@ impl TapGestureRecognizer {
     }
 
     /// Set the tap down callback
-    pub fn with_on_tap_down(self: Arc<Self>, callback: impl Fn(TapDetails) + 'static) -> Arc<Self> {
+    pub fn with_on_tap_down(self: Rc<Self>, callback: impl Fn(TapDetails) + 'static) -> Rc<Self> {
         self.callbacks.borrow_mut().on_tap_down = Some(Rc::new(callback));
         self
     }
@@ -378,28 +377,25 @@ impl TapGestureRecognizer {
     ///
     /// This callback is triggered when a pointer that initiated a tap moves
     /// but stays within the slop tolerance.
-    pub fn with_on_tap_move(self: Arc<Self>, callback: impl Fn(TapDetails) + 'static) -> Arc<Self> {
+    pub fn with_on_tap_move(self: Rc<Self>, callback: impl Fn(TapDetails) + 'static) -> Rc<Self> {
         self.callbacks.borrow_mut().on_tap_move = Some(Rc::new(callback));
         self
     }
 
     /// Set the tap up callback
-    pub fn with_on_tap_up(self: Arc<Self>, callback: impl Fn(TapDetails) + 'static) -> Arc<Self> {
+    pub fn with_on_tap_up(self: Rc<Self>, callback: impl Fn(TapDetails) + 'static) -> Rc<Self> {
         self.callbacks.borrow_mut().on_tap_up = Some(Rc::new(callback));
         self
     }
 
     /// Set the tap callback (called on successful tap)
-    pub fn with_on_tap(self: Arc<Self>, callback: impl Fn(TapDetails) + 'static) -> Arc<Self> {
+    pub fn with_on_tap(self: Rc<Self>, callback: impl Fn(TapDetails) + 'static) -> Rc<Self> {
         self.callbacks.borrow_mut().on_tap = Some(Rc::new(callback));
         self
     }
 
     /// Set the tap cancel callback
-    pub fn with_on_tap_cancel(
-        self: Arc<Self>,
-        callback: impl Fn(TapDetails) + 'static,
-    ) -> Arc<Self> {
+    pub fn with_on_tap_cancel(self: Rc<Self>, callback: impl Fn(TapDetails) + 'static) -> Rc<Self> {
         self.callbacks.borrow_mut().on_tap_cancel = Some(Rc::new(callback));
         self
     }
@@ -410,36 +406,36 @@ impl TapGestureRecognizer {
 
     /// Set the secondary-button tap-down callback.
     pub fn with_on_secondary_tap_down(
-        self: Arc<Self>,
+        self: Rc<Self>,
         callback: impl Fn(TapDetails) + 'static,
-    ) -> Arc<Self> {
+    ) -> Rc<Self> {
         self.callbacks.borrow_mut().on_secondary_tap_down = Some(Rc::new(callback));
         self
     }
 
     /// Set the secondary-button tap-up callback.
     pub fn with_on_secondary_tap_up(
-        self: Arc<Self>,
+        self: Rc<Self>,
         callback: impl Fn(TapDetails) + 'static,
-    ) -> Arc<Self> {
+    ) -> Rc<Self> {
         self.callbacks.borrow_mut().on_secondary_tap_up = Some(Rc::new(callback));
         self
     }
 
     /// Set the secondary-button tap callback (fires on successful up).
     pub fn with_on_secondary_tap(
-        self: Arc<Self>,
+        self: Rc<Self>,
         callback: impl Fn(TapDetails) + 'static,
-    ) -> Arc<Self> {
+    ) -> Rc<Self> {
         self.callbacks.borrow_mut().on_secondary_tap = Some(Rc::new(callback));
         self
     }
 
     /// Set the secondary-button tap-cancel callback.
     pub fn with_on_secondary_tap_cancel(
-        self: Arc<Self>,
+        self: Rc<Self>,
         callback: impl Fn(TapDetails) + 'static,
-    ) -> Arc<Self> {
+    ) -> Rc<Self> {
         self.callbacks.borrow_mut().on_secondary_tap_cancel = Some(Rc::new(callback));
         self
     }
@@ -450,36 +446,36 @@ impl TapGestureRecognizer {
 
     /// Set the tertiary-button tap-down callback.
     pub fn with_on_tertiary_tap_down(
-        self: Arc<Self>,
+        self: Rc<Self>,
         callback: impl Fn(TapDetails) + 'static,
-    ) -> Arc<Self> {
+    ) -> Rc<Self> {
         self.callbacks.borrow_mut().on_tertiary_tap_down = Some(Rc::new(callback));
         self
     }
 
     /// Set the tertiary-button tap-up callback.
     pub fn with_on_tertiary_tap_up(
-        self: Arc<Self>,
+        self: Rc<Self>,
         callback: impl Fn(TapDetails) + 'static,
-    ) -> Arc<Self> {
+    ) -> Rc<Self> {
         self.callbacks.borrow_mut().on_tertiary_tap_up = Some(Rc::new(callback));
         self
     }
 
     /// Set the tertiary-button tap callback (fires on successful up).
     pub fn with_on_tertiary_tap(
-        self: Arc<Self>,
+        self: Rc<Self>,
         callback: impl Fn(TapDetails) + 'static,
-    ) -> Arc<Self> {
+    ) -> Rc<Self> {
         self.callbacks.borrow_mut().on_tertiary_tap = Some(Rc::new(callback));
         self
     }
 
     /// Set the tertiary-button tap-cancel callback.
     pub fn with_on_tertiary_tap_cancel(
-        self: Arc<Self>,
+        self: Rc<Self>,
         callback: impl Fn(TapDetails) + 'static,
-    ) -> Arc<Self> {
+    ) -> Rc<Self> {
         self.callbacks.borrow_mut().on_tertiary_tap_cancel = Some(Rc::new(callback));
         self
     }
@@ -493,7 +489,7 @@ impl TapGestureRecognizer {
     /// has lifted and only waits for its arena verdict is left alone — its
     /// verdict still reaches it through its own arena member.
     fn begin_sequence(
-        self: &Arc<Self>,
+        self: &Rc<Self>,
         pointer: PointerId,
         position: Offset<f64>,
         global_position: Offset<f64>,
@@ -517,7 +513,7 @@ impl TapGestureRecognizer {
         if stale.is_some() {
             self.state.reject();
         }
-        let id = {
+        let member = {
             let mut sequences = self.sequences.borrow_mut();
             let id = sequences
                 .last_id
@@ -525,7 +521,12 @@ impl TapGestureRecognizer {
                 .expect("BUG: tap sequence identity exhausted");
             sequences.last_id = id;
             sequences.current = Some(id);
+            let member = Rc::new(TapArenaMember {
+                recognizer: Rc::downgrade(self),
+                sequence: id,
+            });
             sequences.live.push(TapSequence {
+                _member: Rc::clone(&member),
                 id,
                 pointer,
                 down: Some(PendingDown {
@@ -539,12 +540,8 @@ impl TapGestureRecognizer {
                 up: None,
                 accepted: false,
             });
-            id
+            member
         };
-        let member = Arc::new(TapArenaMember {
-            recognizer: Arc::downgrade(self),
-            sequence: id,
-        });
         self.state
             .start_tracking(pointer, position, global_position, &member);
     }
@@ -767,7 +764,7 @@ impl TapGestureRecognizer {
 
 impl GestureRecognizer for TapGestureRecognizer {
     fn add_pointer(
-        self: &Arc<Self>,
+        self: &Rc<Self>,
         pointer: PointerId,
         position: Offset<f64>,
         global_position: Offset<f64>,
@@ -789,7 +786,7 @@ impl GestureRecognizer for TapGestureRecognizer {
         );
     }
 
-    fn add_pointer_down(self: &Arc<Self>, dispatch: PointerDispatch<'_>) {
+    fn add_pointer_down(self: &Rc<Self>, dispatch: PointerDispatch<'_>) {
         let PointerEvent::Down(data) = dispatch.local else {
             return;
         };

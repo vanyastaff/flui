@@ -310,8 +310,8 @@ impl DragGestureRecognizer {
         }
     }
     /// Create a new drag recognizer with gesture arena and axis constraint
-    pub fn new(arena: crate::arena::GestureArena, axis: DragAxis) -> Arc<Self> {
-        Arc::new(Self {
+    pub fn new(arena: crate::arena::GestureArena, axis: DragAxis) -> Rc<Self> {
+        Rc::new(Self {
             state: RecognizerBase::new(arena),
             axis,
             start_behavior: DragStartBehavior::default(),
@@ -326,8 +326,8 @@ impl DragGestureRecognizer {
         arena: crate::arena::GestureArena,
         axis: DragAxis,
         settings: GestureSettings,
-    ) -> Arc<Self> {
-        Arc::new(Self {
+    ) -> Rc<Self> {
+        Rc::new(Self {
             state: RecognizerBase::new(arena),
             axis,
             start_behavior: DragStartBehavior::default(),
@@ -341,10 +341,10 @@ impl DragGestureRecognizer {
     ///
     /// See [`DragStartBehavior`] for the semantics. Default is
     /// [`DragStartBehavior::Start`].
-    pub fn with_drag_start_behavior(self: Arc<Self>, behavior: DragStartBehavior) -> Arc<Self> {
+    pub fn with_drag_start_behavior(self: Rc<Self>, behavior: DragStartBehavior) -> Rc<Self> {
         // Re-construct with the new behavior — fields are all `Copy`/Arc so
         // this is a cheap move, and it keeps the constructor pattern uniform.
-        Arc::new(Self {
+        Rc::new(Self {
             start_behavior: behavior,
             ..(*self).clone()
         })
@@ -414,10 +414,7 @@ impl DragGestureRecognizer {
     /// This is called when a pointer contacts the screen with a primary button
     /// and might begin to move. Unlike `on_start`, this is called before any
     /// movement threshold is met.
-    pub fn with_on_down(
-        self: Arc<Self>,
-        callback: impl Fn(DragDownDetails) + 'static,
-    ) -> Arc<Self> {
+    pub fn with_on_down(self: Rc<Self>, callback: impl Fn(DragDownDetails) + 'static) -> Rc<Self> {
         let callback: DragDownCallback = Rc::new(callback);
         self.replace_callback(callback, |callbacks| &mut callbacks.on_down);
         self
@@ -425,9 +422,9 @@ impl DragGestureRecognizer {
 
     /// Set the drag start callback
     pub fn with_on_start(
-        self: Arc<Self>,
+        self: Rc<Self>,
         callback: impl Fn(DragStartDetails) + 'static,
-    ) -> Arc<Self> {
+    ) -> Rc<Self> {
         let callback: DragStartCallback = Rc::new(callback);
         self.replace_callback(callback, |callbacks| &mut callbacks.on_start);
         self
@@ -435,23 +432,23 @@ impl DragGestureRecognizer {
 
     /// Set the drag update callback
     pub fn with_on_update(
-        self: Arc<Self>,
+        self: Rc<Self>,
         callback: impl Fn(DragUpdateDetails) + 'static,
-    ) -> Arc<Self> {
+    ) -> Rc<Self> {
         let callback: DragUpdateCallback = Rc::new(callback);
         self.replace_callback(callback, |callbacks| &mut callbacks.on_update);
         self
     }
 
     /// Set the drag end callback
-    pub fn with_on_end(self: Arc<Self>, callback: impl Fn(DragEndDetails) + 'static) -> Arc<Self> {
+    pub fn with_on_end(self: Rc<Self>, callback: impl Fn(DragEndDetails) + 'static) -> Rc<Self> {
         let callback: DragEndCallback = Rc::new(callback);
         self.replace_callback(callback, |callbacks| &mut callbacks.on_end);
         self
     }
 
     /// Set the drag cancel callback
-    pub fn with_on_cancel(self: Arc<Self>, callback: impl Fn() + 'static) -> Arc<Self> {
+    pub fn with_on_cancel(self: Rc<Self>, callback: impl Fn() + 'static) -> Rc<Self> {
         let callback: DragCancelCallback = Rc::new(callback);
         self.replace_callback(callback, |callbacks| &mut callbacks.on_cancel);
         self
@@ -804,7 +801,7 @@ impl DragGestureRecognizer {
     /// end as cancelled, a possible one its cancel — so the consumer always
     /// sees one terminal callback per started drag.
     fn admit(
-        self: &Arc<Self>,
+        self: &Rc<Self>,
         pointer: PointerId,
         position: Offset<f64>,
         global_position: Offset<f64>,
@@ -833,7 +830,7 @@ impl DragGestureRecognizer {
 
 impl GestureRecognizer for DragGestureRecognizer {
     fn add_pointer(
-        self: &Arc<Self>,
+        self: &Rc<Self>,
         pointer: PointerId,
         position: Offset<f64>,
         global_position: Offset<f64>,
@@ -842,7 +839,7 @@ impl GestureRecognizer for DragGestureRecognizer {
         self.admit(pointer, position, global_position, PointerType::Touch, None);
     }
 
-    fn add_pointer_down(self: &Arc<Self>, dispatch: PointerDispatch<'_>) {
+    fn add_pointer_down(self: &Rc<Self>, dispatch: PointerDispatch<'_>) {
         let event = dispatch.local;
         if !is_primary_down(event) {
             return;
@@ -989,9 +986,11 @@ mod tests {
         fn reject_gesture(&self, _pointer: PointerId) {}
     }
 
-    fn close_with_competitor(arena: &GestureArena, pointer: PointerId) {
-        arena.add(pointer, Arc::new(PassiveCompetitor));
+    fn close_with_competitor(arena: &GestureArena, pointer: PointerId) -> Rc<PassiveCompetitor> {
+        let competitor = Rc::new(PassiveCompetitor);
+        arena.add(pointer, &competitor);
         arena.close(pointer);
+        competitor
     }
 
     // Drag recognizer matrix: vertical recognition and rejection on early up.
@@ -1038,7 +1037,8 @@ mod tests {
         let position = Offset::new(10.0, 20.0);
 
         recognizer.add_pointer(pointer, position, position);
-        arena.add(pointer, Arc::new(Winner(Arc::clone(&accepted))));
+        let winner = Rc::new(Winner(Arc::clone(&accepted)));
+        arena.add(pointer, &winner);
         arena.close(pointer);
         recognizer.handle_event(PointerDispatch::at_root(&crate::events::make_up_event(
             position,
@@ -1077,7 +1077,7 @@ mod tests {
 
         // Start tracking
         recognizer.add_pointer(pointer, start_pos, start_pos);
-        close_with_competitor(&arena, pointer);
+        let _competitor = close_with_competitor(&arena, pointer);
 
         // Move vertically beyond slop
         let moved_pos = Offset::new(100.0, 130.0); // 30px down

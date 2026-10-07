@@ -255,7 +255,7 @@ pub trait GestureRecognizer: GestureArenaMember {
     /// contact in the root's space, carried alongside because a recognizer
     /// cannot recover it: the event it is handed has already been localised.
     fn add_pointer(
-        self: &Arc<Self>,
+        self: &Rc<Self>,
         pointer: PointerId,
         position: Offset<f64>,
         global_position: Offset<f64>,
@@ -277,7 +277,7 @@ pub trait GestureRecognizer: GestureArenaMember {
     /// button, by forwarding the dispatch's position pair to `add_pointer`.
     /// The button and kind rules above belong to the recognizers that
     /// override it.
-    fn add_pointer_down(self: &Arc<Self>, dispatch: PointerDispatch<'_>) {
+    fn add_pointer_down(self: &Rc<Self>, dispatch: PointerDispatch<'_>) {
         if let PointerEvent::Down(_) = dispatch.local {
             self.add_pointer(
                 dispatch.local.pointer_id(),
@@ -518,7 +518,7 @@ impl RecognizerBase {
         pointer: PointerId,
         position: Offset<f64>,
         global_position: Offset<f64>,
-        recognizer: &Arc<T>,
+        recognizer: &Rc<T>,
     ) {
         if self.is_disposed() {
             return;
@@ -532,8 +532,8 @@ impl RecognizerBase {
         });
 
         // Register with the arena and retain the exact slot/member identity.
-        let member: Arc<dyn GestureArenaMember> = recognizer.clone();
-        let entry = self.arena.add(pointer, member);
+        let member: Rc<dyn GestureArenaMember> = recognizer.clone();
+        let entry = self.arena.add_erased(pointer, &member);
         *self.tracked_entry.lock() = Some(entry);
     }
 
@@ -558,7 +558,7 @@ impl RecognizerBase {
     /// dropped). Used by the double-tap lifecycle to resolve the first contact's
     /// entry in favour of the double-tap.
     #[inline]
-    pub fn tracked_member(&self) -> Option<Arc<dyn GestureArenaMember>> {
+    pub fn tracked_member(&self) -> Option<Rc<dyn GestureArenaMember>> {
         self.tracked_entry
             .lock()
             .as_ref()

@@ -29,7 +29,7 @@
 //!     .with_on_start(|d| { let _ = d; });
 //! ```
 
-use std::sync::Arc;
+use std::rc::Rc;
 
 use crate::arena::GestureArena;
 use crate::traits::DragAxis;
@@ -67,7 +67,7 @@ pub type PanGestureRecognizer = DragGestureRecognizer;
 /// Equivalent to `DragGestureRecognizer::new(arena, DragAxis::Vertical)`
 /// but reads more naturally at the call site.
 #[must_use]
-pub fn vertical_drag(arena: GestureArena) -> Arc<VerticalDragGestureRecognizer> {
+pub fn vertical_drag(arena: GestureArena) -> Rc<VerticalDragGestureRecognizer> {
     DragGestureRecognizer::new(arena, DragAxis::Vertical)
 }
 
@@ -76,13 +76,13 @@ pub fn vertical_drag(arena: GestureArena) -> Arc<VerticalDragGestureRecognizer> 
 pub fn vertical_drag_with_settings(
     arena: GestureArena,
     settings: crate::settings::GestureSettings,
-) -> Arc<VerticalDragGestureRecognizer> {
+) -> Rc<VerticalDragGestureRecognizer> {
     DragGestureRecognizer::with_settings(arena, DragAxis::Vertical, settings)
 }
 
 /// Construct a horizontal-only drag recogniser.
 #[must_use]
-pub fn horizontal_drag(arena: GestureArena) -> Arc<HorizontalDragGestureRecognizer> {
+pub fn horizontal_drag(arena: GestureArena) -> Rc<HorizontalDragGestureRecognizer> {
     DragGestureRecognizer::new(arena, DragAxis::Horizontal)
 }
 
@@ -91,13 +91,13 @@ pub fn horizontal_drag(arena: GestureArena) -> Arc<HorizontalDragGestureRecogniz
 pub fn horizontal_drag_with_settings(
     arena: GestureArena,
     settings: crate::settings::GestureSettings,
-) -> Arc<HorizontalDragGestureRecognizer> {
+) -> Rc<HorizontalDragGestureRecognizer> {
     DragGestureRecognizer::with_settings(arena, DragAxis::Horizontal, settings)
 }
 
 /// Construct a free-direction pan recogniser.
 #[must_use]
-pub fn pan(arena: GestureArena) -> Arc<PanGestureRecognizer> {
+pub fn pan(arena: GestureArena) -> Rc<PanGestureRecognizer> {
     DragGestureRecognizer::new(arena, DragAxis::Free)
 }
 
@@ -106,7 +106,7 @@ pub fn pan(arena: GestureArena) -> Arc<PanGestureRecognizer> {
 pub fn pan_with_settings(
     arena: GestureArena,
     settings: crate::settings::GestureSettings,
-) -> Arc<PanGestureRecognizer> {
+) -> Rc<PanGestureRecognizer> {
     DragGestureRecognizer::with_settings(arena, DragAxis::Free, settings)
 }
 
@@ -123,7 +123,7 @@ impl PanGestureRecognizer {
     /// Convenience builder equivalent to
     /// [`DragGestureRecognizer::with_on_start`] but returning the alias
     /// type for fluent chaining.
-    pub fn on_start(self: Arc<Self>, cb: DragStartCallback) -> Arc<Self> {
+    pub fn on_start(self: Rc<Self>, cb: DragStartCallback) -> Rc<Self> {
         // The aliased method already returns Arc<Self>; the closure is
         // forwarded as-is.
         self.with_on_start(move |d| cb(d))
@@ -131,13 +131,13 @@ impl PanGestureRecognizer {
 
     /// Convenience builder equivalent to
     /// [`DragGestureRecognizer::with_on_update`].
-    pub fn on_update(self: Arc<Self>, cb: DragUpdateCallback) -> Arc<Self> {
+    pub fn on_update(self: Rc<Self>, cb: DragUpdateCallback) -> Rc<Self> {
         self.with_on_update(move |d| cb(d))
     }
 
     /// Convenience builder equivalent to
     /// [`DragGestureRecognizer::with_on_end`].
-    pub fn on_end(self: Arc<Self>, cb: DragEndCallback) -> Arc<Self> {
+    pub fn on_end(self: Rc<Self>, cb: DragEndCallback) -> Rc<Self> {
         self.with_on_end(move |d| cb(d))
     }
 }

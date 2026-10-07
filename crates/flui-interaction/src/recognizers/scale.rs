@@ -550,8 +550,8 @@ enum Outcome {
 
 impl ScaleGestureRecognizer {
     /// Create a new scale recognizer with gesture arena
-    pub fn new(arena: crate::arena::GestureArena) -> Arc<Self> {
-        Arc::new(Self {
+    pub fn new(arena: crate::arena::GestureArena) -> Rc<Self> {
+        Rc::new(Self {
             state: RecognizerBase::new(arena),
             callbacks: Rc::new(RefCell::new(ScaleCallbacks::default())),
             gesture_state: Arc::new(Mutex::new(ScaleState::default())),
@@ -560,10 +560,7 @@ impl ScaleGestureRecognizer {
     }
 
     /// Create a scale recognizer with custom settings.
-    pub fn with_settings(
-        arena: crate::arena::GestureArena,
-        settings: GestureSettings,
-    ) -> Arc<Self> {
+    pub fn with_settings(arena: crate::arena::GestureArena, settings: GestureSettings) -> Rc<Self> {
         let recognizer = Self::new(arena);
         *recognizer.settings.lock() = settings;
         recognizer
@@ -577,9 +574,9 @@ impl ScaleGestureRecognizer {
     /// Set the scale start callback. The replaced callback is released after
     /// the new one is installed.
     pub fn with_on_scale_start(
-        self: Arc<Self>,
+        self: Rc<Self>,
         callback: impl Fn(ScaleStartDetails) + 'static,
-    ) -> Arc<Self> {
+    ) -> Rc<Self> {
         let old = self
             .callbacks
             .borrow_mut()
@@ -592,9 +589,9 @@ impl ScaleGestureRecognizer {
     /// Set the scale update callback. The replaced callback is released after
     /// the new one is installed.
     pub fn with_on_scale_update(
-        self: Arc<Self>,
+        self: Rc<Self>,
         callback: impl Fn(ScaleUpdateDetails) + 'static,
-    ) -> Arc<Self> {
+    ) -> Rc<Self> {
         let old = self
             .callbacks
             .borrow_mut()
@@ -607,9 +604,9 @@ impl ScaleGestureRecognizer {
     /// Set the scale end callback. The replaced callback is released after
     /// the new one is installed.
     pub fn with_on_scale_end(
-        self: Arc<Self>,
+        self: Rc<Self>,
         callback: impl Fn(ScaleEndDetails) + 'static,
-    ) -> Arc<Self> {
+    ) -> Rc<Self> {
         let old = self
             .callbacks
             .borrow_mut()
@@ -621,7 +618,7 @@ impl ScaleGestureRecognizer {
 
     /// Set the scale cancel callback. The replaced callback is released after
     /// the new one is installed.
-    pub fn with_on_scale_cancel(self: Arc<Self>, callback: impl Fn() + 'static) -> Arc<Self> {
+    pub fn with_on_scale_cancel(self: Rc<Self>, callback: impl Fn() + 'static) -> Rc<Self> {
         let old = self
             .callbacks
             .borrow_mut()
@@ -895,7 +892,7 @@ impl ScaleGestureRecognizer {
 
 impl GestureRecognizer for ScaleGestureRecognizer {
     fn add_pointer(
-        self: &Arc<Self>,
+        self: &Rc<Self>,
         pointer: PointerId,
         position: Offset<f64>,
         // Scale reports a focal point derived from every tracked contact, in
@@ -917,8 +914,8 @@ impl GestureRecognizer for ScaleGestureRecognizer {
                 return;
             }
         }
-        let member: Arc<dyn GestureArenaMember> = self.clone();
-        let entry = self.state.arena().add(pointer, member);
+        let member: Rc<dyn GestureArenaMember> = self.clone();
+        let entry = self.state.arena().add_erased(pointer, &member);
 
         let mut state = self.gesture_state.lock();
         // A contact added while this recognizer owns the gesture is claimed

@@ -145,8 +145,8 @@ impl Default for DoubleTapState {
 
 impl DoubleTapGestureRecognizer {
     /// Create a new double tap recognizer with gesture arena
-    pub fn new(arena: crate::arena::GestureArena) -> Arc<Self> {
-        Arc::new(Self {
+    pub fn new(arena: crate::arena::GestureArena) -> Rc<Self> {
+        Rc::new(Self {
             state: RecognizerBase::new(arena),
             callbacks: Rc::new(RefCell::new(DoubleTapCallbacks::default())),
             gesture_state: Arc::new(Mutex::new(DoubleTapState::default())),
@@ -156,11 +156,8 @@ impl DoubleTapGestureRecognizer {
     }
 
     /// Create a new double tap recognizer with custom settings
-    pub fn with_settings(
-        arena: crate::arena::GestureArena,
-        settings: GestureSettings,
-    ) -> Arc<Self> {
-        Arc::new(Self {
+    pub fn with_settings(arena: crate::arena::GestureArena, settings: GestureSettings) -> Rc<Self> {
+        Rc::new(Self {
             state: RecognizerBase::new(arena),
             callbacks: Rc::new(RefCell::new(DoubleTapCallbacks::default())),
             gesture_state: Arc::new(Mutex::new(DoubleTapState::default())),
@@ -186,9 +183,9 @@ impl DoubleTapGestureRecognizer {
 
     /// Set the double tap callback
     pub fn with_on_double_tap(
-        self: Arc<Self>,
+        self: Rc<Self>,
         callback: impl Fn(DoubleTapDetails) + 'static,
-    ) -> Arc<Self> {
+    ) -> Rc<Self> {
         self.callbacks.borrow_mut().on_double_tap = Some(Rc::new(callback));
         self
     }
@@ -204,18 +201,18 @@ impl DoubleTapGestureRecognizer {
     /// gesture: `on_double_tap_down` first, `on_double_tap` after, if the
     /// second contact lifts cleanly.
     pub fn with_on_double_tap_down(
-        self: Arc<Self>,
+        self: Rc<Self>,
         callback: impl Fn(DoubleTapDetails) + 'static,
-    ) -> Arc<Self> {
+    ) -> Rc<Self> {
         self.callbacks.borrow_mut().on_double_tap_down = Some(Rc::new(callback));
         self
     }
 
     /// Set the double tap cancel callback
     pub fn with_on_double_tap_cancel(
-        self: Arc<Self>,
+        self: Rc<Self>,
         callback: impl Fn(DoubleTapDetails) + 'static,
-    ) -> Arc<Self> {
+    ) -> Rc<Self> {
         self.callbacks.borrow_mut().on_double_tap_cancel = Some(Rc::new(callback));
         self
     }
@@ -433,11 +430,15 @@ impl DoubleTapGestureRecognizer {
     /// Check if timeout for second tap has expired
     /// Should be called periodically
     pub fn check_timeout(&self) -> bool {
+        self.check_timeout_at(self.state.now())
+    }
+
+    fn check_timeout_at(&self, now: Instant) -> bool {
         let expired = {
             let state = self.gesture_state.lock();
             state.phase == DoubleTapPhase::WaitingForSecond
                 && state.first_tap_time.is_some_and(|first_time| {
-                    self.state.now().duration_since(first_time) > self.double_tap_timeout()
+                    now.duration_since(first_time) >= self.double_tap_timeout()
                 })
         };
         if expired {
@@ -514,7 +515,7 @@ impl DoubleTapGestureRecognizer {
     /// [`DoubleTapDetails::kind`] reports the actual device rather than a
     /// hard-coded guess.
     pub fn add_pointer_with_kind(
-        self: &Arc<Self>,
+        self: &Rc<Self>,
         pointer: PointerId,
         position: Offset<f64>,
         global_position: Offset<f64>,
@@ -587,7 +588,7 @@ impl DoubleTapGestureRecognizer {
 
 impl GestureRecognizer for DoubleTapGestureRecognizer {
     fn add_pointer(
-        self: &Arc<Self>,
+        self: &Rc<Self>,
         pointer: PointerId,
         position: Offset<f64>,
         global_position: Offset<f64>,
@@ -598,7 +599,7 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
         self.add_pointer_with_kind(pointer, position, global_position, PointerType::Touch);
     }
 
-    fn add_pointer_down(self: &Arc<Self>, dispatch: PointerDispatch<'_>) {
+    fn add_pointer_down(self: &Rc<Self>, dispatch: PointerDispatch<'_>) {
         let event = dispatch.local;
         // Primary button only: a right- or middle-click has its own tap
         // family and must not register a double tap.
@@ -678,7 +679,7 @@ impl GestureArenaMember for DoubleTapGestureRecognizer {
         // We won the arena - gesture is accepted
     }
 
-    fn poll_deadline(&self) {
+    fn poll_deadline(&self, now: Instant) {
         // Frame-driven give-up check: after a completed first tap, the
         // inter-tap window must eventually expire if no second tap arrives.
         // Without this poll, `poll_deadlines()` never drives the timeout, so a
@@ -686,27 +687,10 @@ impl GestureArenaMember for DoubleTapGestureRecognizer {
         // single-tap forever holding the arena. `check_timeout` is idempotent
         // (it only fires once the window has elapsed in the `WaitingForSecond`
         // phase) and drops the gesture_state lock before releasing the arena.
-        self.check_timeout();
+        self.check_timeout_at(now);
     }
 
-    fn has_pending_deadline(&self) -> bool {
-        // Armed exactly while `check_timeout` could still fire: the first tap
-        // completed and the inter-tap window is still open. Must check BOTH
-        // conditions `next_deadline` checks, not just `phase` -- checking
-        // `phase` alone let this answer `true` in a state `next_deadline`
-        // would answer `None` for (`first_tap_time` absent), breaking the
-        // `GestureArenaMember` contract that the two must agree. Every
-        // production path that sets `WaitingForSecond` also sets
-        // `first_tap_time` in the same locked scope (`handle_up`), so this
-        // divergence has no reachable production trigger today -- the guard
-        // is here so a future edit to one can't silently desync it from the
-        // other, mirroring `LongPressGestureRecognizer`'s own dual-condition
-        // check on `phase`/`down_time`.
-        let state = self.gesture_state.lock();
-        state.phase == DoubleTapPhase::WaitingForSecond && state.first_tap_time.is_some()
-    }
-
-    fn next_deadline(&self) -> Option<Instant> {
+    fn deadline(&self) -> Option<Instant> {
         // Same guard as `has_pending_deadline`. The deadline is exactly what
         // `check_timeout` compares `now` against: `first_tap_time +
         // double_tap_timeout()`.
@@ -716,7 +700,7 @@ impl GestureArenaMember for DoubleTapGestureRecognizer {
         }
         state
             .first_tap_time
-            .map(|first_time| first_time + self.double_tap_timeout())
+            .and_then(|first_time| first_time.checked_add(self.double_tap_timeout()))
     }
 
     fn reject_gesture(&self, _pointer: PointerId) {

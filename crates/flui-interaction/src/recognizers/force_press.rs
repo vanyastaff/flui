@@ -245,16 +245,13 @@ enum ArenaStep {
 
 impl ForcePressGestureRecognizer {
     /// Create a new force press recognizer with gesture arena
-    pub fn new(arena: crate::arena::GestureArena) -> Arc<Self> {
+    pub fn new(arena: crate::arena::GestureArena) -> Rc<Self> {
         Self::with_settings(arena, GestureSettings::default())
     }
 
     /// Create a new force press recognizer with custom settings
-    pub fn with_settings(
-        arena: crate::arena::GestureArena,
-        settings: GestureSettings,
-    ) -> Arc<Self> {
-        Arc::new(Self {
+    pub fn with_settings(arena: crate::arena::GestureArena, settings: GestureSettings) -> Rc<Self> {
+        Rc::new(Self {
             state: RecognizerBase::new(arena),
             callbacks: Rc::new(RefCell::new(ForcePressCallbacks::default())),
             gesture_state: Arc::new(Mutex::new(ForcePressState::default())),
@@ -280,7 +277,7 @@ impl ForcePressGestureRecognizer {
     ///
     /// Default is 0.4 (40% of max pressure). A non-finite value is ignored.
     /// The threshold is shared by every handle to this recognizer.
-    pub fn with_start_pressure(self: Arc<Self>, pressure: f64) -> Arc<Self> {
+    pub fn with_start_pressure(self: Rc<Self>, pressure: f64) -> Rc<Self> {
         if pressure.is_finite() {
             self.thresholds.lock().start = pressure.clamp(0.0, 1.0);
         }
@@ -292,7 +289,7 @@ impl ForcePressGestureRecognizer {
     /// Default is 0.85 (85% of max pressure). A non-finite value is ignored.
     /// A peak at or below the start threshold fires `on_peak` together with
     /// `on_start`.
-    pub fn with_peak_pressure(self: Arc<Self>, pressure: f64) -> Arc<Self> {
+    pub fn with_peak_pressure(self: Rc<Self>, pressure: f64) -> Rc<Self> {
         if pressure.is_finite() {
             self.thresholds.lock().peak = pressure.clamp(0.0, 1.0);
         }
@@ -304,9 +301,9 @@ impl ForcePressGestureRecognizer {
     /// Called once the pressure has crossed the start threshold and the arena
     /// accepted this recognizer.
     pub fn with_on_start(
-        self: Arc<Self>,
+        self: Rc<Self>,
         callback: impl Fn(ForcePressDetails) + 'static,
-    ) -> Arc<Self> {
+    ) -> Rc<Self> {
         let old = self
             .callbacks
             .borrow_mut()
@@ -320,9 +317,9 @@ impl ForcePressGestureRecognizer {
     ///
     /// Called for each pressure sample while the force press is active.
     pub fn with_on_update(
-        self: Arc<Self>,
+        self: Rc<Self>,
         callback: impl Fn(ForcePressDetails) + 'static,
-    ) -> Arc<Self> {
+    ) -> Rc<Self> {
         let old = self
             .callbacks
             .borrow_mut()
@@ -336,9 +333,9 @@ impl ForcePressGestureRecognizer {
     ///
     /// Called once when pressure first reaches the peak threshold.
     pub fn with_on_peak(
-        self: Arc<Self>,
+        self: Rc<Self>,
         callback: impl Fn(ForcePressDetails) + 'static,
-    ) -> Arc<Self> {
+    ) -> Rc<Self> {
         let old = self
             .callbacks
             .borrow_mut()
@@ -352,10 +349,7 @@ impl ForcePressGestureRecognizer {
     ///
     /// Called when a started press ends: pressure falls below the start
     /// threshold, the contact drifts past slop, lifts, or is cancelled.
-    pub fn with_on_end(
-        self: Arc<Self>,
-        callback: impl Fn(ForcePressDetails) + 'static,
-    ) -> Arc<Self> {
+    pub fn with_on_end(self: Rc<Self>, callback: impl Fn(ForcePressDetails) + 'static) -> Rc<Self> {
         let old = self
             .callbacks
             .borrow_mut()
@@ -564,7 +558,7 @@ impl ForcePressGestureRecognizer {
 
 impl GestureRecognizer for ForcePressGestureRecognizer {
     fn add_pointer(
-        self: &Arc<Self>,
+        self: &Rc<Self>,
         pointer: PointerId,
         position: Offset<f64>,
         global_position: Offset<f64>,

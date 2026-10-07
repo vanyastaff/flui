@@ -464,18 +464,18 @@ struct HorizontalDragCallbacks {
 struct Recognizers {
     /// Tap recognizer — added to the arena FIRST so it is the front member that
     /// wins an ambiguous quick tap on sweep.
-    tap: Arc<TapGestureRecognizer>,
+    tap: Rc<TapGestureRecognizer>,
     /// Long-press recognizer — wins when its hold deadline fires (binding-polled).
-    long_press: Arc<LongPressGestureRecognizer>,
+    long_press: Rc<LongPressGestureRecognizer>,
     /// Double-tap recognizer — completes purely from the event stream; its
     /// give-up timer is binding-polled.
-    double_tap: Arc<DoubleTapGestureRecognizer>,
+    double_tap: Rc<DoubleTapGestureRecognizer>,
     /// Pan/drag recognizer (free axis) — wins by attrition when a move past the
     /// slop makes the tap reject itself.
-    drag: Arc<DragGestureRecognizer>,
+    drag: Rc<DragGestureRecognizer>,
     /// Horizontal-drag recognizer (axis-constrained) — mutually exclusive with
     /// `drag` on one detector, see [`GestureDetector`]'s conflict doc.
-    horizontal_drag: Arc<DragGestureRecognizer>,
+    horizontal_drag: Rc<DragGestureRecognizer>,
 }
 
 /// Persistent gesture state: the recognizers + their shared arena survive
@@ -949,11 +949,11 @@ impl GestureDetectorState {
     fn make_listener(&self, recognizers: &Recognizers) -> Listener {
         let group = RecognizerGroup {
             mounted: Rc::clone(&self.mounted),
-            tap: Arc::clone(&recognizers.tap),
-            long_press: Arc::clone(&recognizers.long_press),
-            double_tap: Arc::clone(&recognizers.double_tap),
-            drag: Arc::clone(&recognizers.drag),
-            horizontal_drag: Arc::clone(&recognizers.horizontal_drag),
+            tap: Rc::clone(&recognizers.tap),
+            long_press: Rc::clone(&recognizers.long_press),
+            double_tap: Rc::clone(&recognizers.double_tap),
+            drag: Rc::clone(&recognizers.drag),
+            horizontal_drag: Rc::clone(&recognizers.horizontal_drag),
             tap_slot: Rc::clone(&self.tap_slot),
             secondary_tap_slot: Rc::clone(&self.secondary_tap_slot),
             long_press_slot: Rc::clone(&self.long_press_slot),
@@ -987,11 +987,11 @@ impl GestureDetectorState {
 #[derive(Clone)]
 struct RecognizerGroup {
     mounted: Rc<Cell<bool>>,
-    tap: Arc<TapGestureRecognizer>,
-    long_press: Arc<LongPressGestureRecognizer>,
-    double_tap: Arc<DoubleTapGestureRecognizer>,
-    drag: Arc<DragGestureRecognizer>,
-    horizontal_drag: Arc<DragGestureRecognizer>,
+    tap: Rc<TapGestureRecognizer>,
+    long_press: Rc<LongPressGestureRecognizer>,
+    double_tap: Rc<DoubleTapGestureRecognizer>,
+    drag: Rc<DragGestureRecognizer>,
+    horizontal_drag: Rc<DragGestureRecognizer>,
     tap_slot: Rc<RefCell<Option<GestureCallback>>>,
     secondary_tap_slot: Rc<RefCell<Option<GestureCallback>>>,
     long_press_slot: Rc<RefCell<Option<GestureCallback>>>,

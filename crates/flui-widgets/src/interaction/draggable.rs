@@ -427,7 +427,7 @@ pub struct DraggableState<T: Clone + Send + Sync + 'static> {
     /// [`DragConfig`]; see [`FeedbackConfig`] for why the two are separate.
     feedback_config: Rc<RefCell<FeedbackConfig>>,
     /// Built once in `init_state` against the presentation arena.
-    recognizer: Option<Arc<MultiDragGestureRecognizer>>,
+    recognizer: Option<Rc<MultiDragGestureRecognizer>>,
     /// Ties this state to `Draggable<T>` even though no field stores a `T`
     /// directly (see [`DragConfig`]'s docs on why the session drops it).
     _data: std::marker::PhantomData<T>,
@@ -1384,9 +1384,9 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
         let max = view.max_simultaneous_drags;
         let active_count = Arc::clone(&self.active_count);
 
-        let down_recognizer = Arc::clone(&recognizer);
-        let move_recognizer = Arc::clone(&recognizer);
-        let up_recognizer = Arc::clone(&recognizer);
+        let down_recognizer = Rc::clone(&recognizer);
+        let move_recognizer = Rc::clone(&recognizer);
+        let up_recognizer = Rc::clone(&recognizer);
         let cancel_recognizer = recognizer;
 
         let listener = Listener::new()
