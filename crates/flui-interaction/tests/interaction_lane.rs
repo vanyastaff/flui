@@ -68,6 +68,11 @@ fn explicit_pointer_capture_contract() {
             "released_tail",
             capture_released_tail_waits_for_a_fresh_down,
         ),
+        ("wake_failure", capture_wake_failure_preserves_release_debt),
+        (
+            "wake_during_unwind",
+            capture_wake_during_unwind_preserves_the_earlier_failure,
+        ),
     ];
     for &(name, row) in rows {
         if let Err(payload) = std::panic::catch_unwind(row) {
@@ -136,6 +141,134 @@ fn capture_release_delivers_accepted_motion_before_loss() {
 }
 fn capture_released_tail_waits_for_a_fresh_down() {
     assert_capture_route(CaptureCase::ReleasedTail);
+}
+
+struct CaptureWakeWindow(std::sync::atomic::AtomicUsize);
+
+impl flui_platform_api::PlatformWindow for CaptureWakeWindow {
+    fn id(&self) -> flui_platform_api::WindowId {
+        flui_platform_api::WindowId::new(21)
+    }
+    fn physical_size(&self) -> flui_foundation::geometry::Size<i32> {
+        flui_foundation::geometry::Size::new(80, 80)
+    }
+    fn logical_size(&self) -> flui_foundation::geometry::Size<f64> {
+        flui_foundation::geometry::Size::new(80.0, 80.0)
+    }
+    fn scale_factor(&self) -> f64 {
+        1.0
+    }
+    fn request_redraw(&self) {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        panic!("capture wake failure");
+    }
+    fn is_focused(&self) -> bool {
+        true
+    }
+    fn is_visible(&self) -> bool {
+        true
+    }
+    fn set_cursor(
+        &self,
+        _: flui_platform_api::CursorIcon,
+    ) -> Result<(), flui_platform_api::CursorError> {
+        Ok(())
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+fn capture_wake_failure_preserves_release_debt() {
+    assert_capture_wake_failure(false);
+}
+fn capture_wake_during_unwind_preserves_the_earlier_failure() {
+    assert_capture_wake_failure(true);
+}
+
+fn assert_capture_wake_failure(active_unwind: bool) {
+    use flui_foundation::geometry::Offset;
+    use flui_interaction::events::{PointerEvent, PointerKind, make_down_event};
+    use flui_interaction::{GestureBinding, HitTestResult, PointerCapture};
+    use std::{
+        cell::{Cell, RefCell},
+        panic::{AssertUnwindSafe, catch_unwind},
+        rc::Rc,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
+
+    let lane = InteractionLane::try_new().expect("lane");
+    let binding = GestureBinding::new();
+    let window = Arc::new(CaptureWakeWindow(AtomicUsize::new(0)));
+    let capability: Arc<dyn flui_platform_api::PlatformWindow> = window.clone();
+    binding.set_pointer_capture_wake(Arc::downgrade(&capability));
+    let held = Rc::new(RefCell::new(None::<PointerCapture>));
+    let store = held.clone();
+    let lost = Rc::new(Cell::new(0));
+    let callbacks = lost.clone();
+    lane.enter(|| {
+        let target = lane
+            .dispatch_handle()
+            .register_pointer(move |dispatch| match dispatch.global {
+                PointerEvent::Down(_) => {
+                    *store.borrow_mut() = Some(dispatch.capture().expect("real Down"))
+                }
+                PointerEvent::Cancel(cancel) => {
+                    assert_eq!(
+                        cancel.reason,
+                        flui_platform_api::pointer::CancelReason::CaptureLost
+                    );
+                    callbacks.set(callbacks.get() + 1);
+                }
+                _ => {}
+            })
+            .expect("target");
+        let down = make_down_event(Offset::new(5.0, 5.0), PointerKind::Touch).expect("down");
+        binding.handle_pointer_event(&down, |_| {
+            let mut path = HitTestResult::new();
+            path.add(hit_entry(target));
+            path
+        });
+        let token = held.borrow_mut().take().expect("retained token");
+        let failed = catch_unwind(AssertUnwindSafe(|| {
+            if active_unwind {
+                let _capture = token;
+                panic!("earlier capture failure");
+            }
+            drop(token);
+        }))
+        .expect_err("wake failure or earlier unwind propagates");
+        assert_eq!(
+            flui_foundation::panic::payload_text(&*failed),
+            Some(if active_unwind {
+                "earlier capture failure"
+            } else {
+                "capture wake failure"
+            })
+        );
+        assert_eq!(
+            window.0.load(Ordering::Relaxed),
+            1,
+            "release attempts the owning presentation wake once"
+        );
+        assert_eq!(
+            lost.get(),
+            0,
+            "wake failure does not invoke event callbacks from token Drop"
+        );
+        binding.flush_pending_moves();
+        binding.flush_pending_moves();
+        assert_eq!(
+            lost.get(),
+            1,
+            "committed loss remains deliverable after failed wake"
+        );
+        assert_eq!(binding.active_pointer_count(), 0);
+        assert!(binding.arena().is_empty());
+    });
 }
 
 fn assert_capture_route(case: CaptureCase) {
