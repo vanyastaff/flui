@@ -167,3 +167,36 @@ fn pointer_state(touch: &UITouch, phase: TouchPhase, scale: f64) -> PointerState
         scale_factor: scale,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_touch_readings_keep_sensor_presence_and_pen_angles() {
+        let position = PointerPosition::try_new(flui_foundation::geometry::Point::new(1.25, 2.5))
+            .expect("finite position");
+        let time = flui_platform_api::EventTime::from_nanos(10);
+        for (has_force, force, maximum, expected) in [
+            (false, 1.0, 1.0, None),
+            (true, 0.0, 4.0, Some(0.0)),
+            (true, 2.0, 4.0, Some(0.5)),
+            (true, 2.0, 0.0, None),
+            (true, f64::INFINITY, 4.0, None),
+        ] {
+            let sample = touch_sample(position, time, has_force, force, maximum, 3.25, None);
+            assert_eq!(sample.pressure.map(Pressure::get), expected);
+            let extent = sample.contact_size.expect("reported radius");
+            assert_eq!((extent.width(), extent.height()), (6.5, 6.5));
+            assert_eq!(sample.orientation, None);
+            assert_eq!(sample.tangential_pressure, None);
+            assert_eq!(sample.twist, None);
+        }
+        let pen = touch_sample(position, time, true, 1.0, 4.0, 0.0,
+            Some((std::f64::consts::FRAC_PI_4, std::f64::consts::FRAC_PI_2)));
+        let orientation = pen.orientation.expect("reported Pencil angles");
+        assert_eq!(orientation.altitude(), Some(std::f64::consts::FRAC_PI_4));
+        assert_eq!(orientation.azimuth(), Some(std::f64::consts::FRAC_PI_2));
+        assert_eq!(pen.contact_size, None);
+    }
+}
