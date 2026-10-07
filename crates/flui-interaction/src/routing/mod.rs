@@ -37,8 +37,8 @@ pub use focus_scope::{
     ResolvedStep, TraversalEdgeBehavior,
 };
 pub use hit_test::{
-    EventPropagation, HitTestBehavior, HitTestEntry, HitTestResult, HitTestable, RenderId,
-    TransformGuard,
+    CursorRequest, EventPropagation, HitTestBehavior, HitTestEntry, HitTestResult, HitTestable,
+    RenderId, TransformGuard,
 };
 #[doc(hidden)]
 pub use interaction_lane::DispatchCustody;

@@ -5,7 +5,7 @@ use std::rc::Rc;
 use flui_foundation::geometry::Offset;
 use flui_objects::RenderMouseRegion;
 use flui_rendering::hit_testing::{
-    CursorIcon, DeviceId, HitTestBehavior, MouseEnterCallback, MouseExitCallback,
+    CursorIcon, CursorRequest, DeviceId, HitTestBehavior, MouseEnterCallback, MouseExitCallback,
     MouseHoverCallback, MouseRegionCallbacks,
 };
 use flui_rendering::protocol::BoxProtocol;
@@ -52,7 +52,7 @@ pub struct MouseRegion {
     on_enter: Option<MouseCallback>,
     on_hover: Option<MouseCallback>,
     on_exit: Option<MouseCallback>,
-    cursor: CursorIcon,
+    cursor: CursorRequest,
     opaque: bool,
     behavior: HitTestBehavior,
     child: Child,
@@ -64,7 +64,7 @@ impl Default for MouseRegion {
             on_enter: None,
             on_hover: None,
             on_exit: None,
-            cursor: CursorIcon::Default,
+            cursor: CursorRequest::Defer,
             opaque: true,
             behavior: HitTestBehavior::Opaque,
             child: Child::empty(),
@@ -86,7 +86,7 @@ impl std::fmt::Debug for MouseRegion {
 }
 
 impl MouseRegion {
-    /// Creates an opaque mouse region with no callbacks and the default cursor.
+    /// Creates an opaque mouse region with no callbacks and a deferring cursor.
     pub fn new() -> Self {
         Self::default()
     }
@@ -127,7 +127,7 @@ impl MouseRegion {
     /// Sets the mouse cursor reported while this region is active.
     #[must_use]
     pub fn cursor(mut self, cursor: CursorIcon) -> Self {
-        self.cursor = cursor;
+        self.cursor = CursorRequest::Icon(cursor);
         self
     }
 

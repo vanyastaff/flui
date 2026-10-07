@@ -17,7 +17,7 @@
 //!   - `transform: Option<Matrix4>` (lazy globalization),
 //!   - `pointer_target: Option<PointerTarget>` (data-only owner-lane identity),
 //!   - `scroll_handler: Option<ScrollEventHandler>`,
-//!   - `cursor: CursorIcon`.
+//!   - `cursor: CursorRequest` (defer or an explicit icon).
 //!
 //! The interaction-side entry covers every responsibility the
 //! rendering-side one expressed (transform + local target identity)

@@ -42,7 +42,7 @@ impl CustomHitTestable for MyWidget {
         // mapping as the walk descends, so callers must never push the
         // forward offset directly (that's what the raw `push_offset`/
         // `pop_transform` pair does, and it does NOT invert for you).
-        result.with_paint_offset(self.offset, |result| {
+        let _ = result.with_paint_offset(self.offset, |result| {
             for child in &self.children {
                 child.hit_test(position, result);
             }

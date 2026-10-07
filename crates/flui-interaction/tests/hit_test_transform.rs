@@ -26,7 +26,7 @@ fn assert_point(actual: (f64, f64), expected: (f64, f64)) {
 fn refused_transform(transform: Matrix4) {
     let called = Cell::new(false);
     let mut result = HitTestResult::new();
-    result.with_paint_offset(Offset::new(10.0, 20.0), |result| {
+    let _ = result.with_paint_offset(Offset::new(10.0, 20.0), |result| {
         let outcome = result.with_paint_transform(transform, |result| {
             called.set(true);
             result.add(HitTestEntry::new(RenderId::new(1)));
@@ -74,10 +74,10 @@ fn determinant_overflow_skips_the_callback() {
 fn refused_offset(offset: Offset) {
     let called = Cell::new(false);
     let mut result = HitTestResult::new();
-    result.with_paint_offset(Offset::new(10.0, 20.0), |result| {
+    let _ = result.with_paint_offset(Offset::new(10.0, 20.0), |result| {
         // Refusal is observed through the subtree, not the scope's return
         // value, so the contract holds whatever shape that value takes.
-        result.with_paint_offset(offset, |result| {
+        let _ = result.with_paint_offset(offset, |result| {
             called.set(true);
             result.add(HitTestEntry::new(RenderId::new(1)));
         });
@@ -111,7 +111,7 @@ fn tiny_invertible_paint_transform_maps_local_coordinates() {
 
 fn paint_transform_unwind_restores_the_next_scope() {
     let mut result = HitTestResult::new();
-    result.with_paint_offset(Offset::new(10.0, 20.0), |result| {
+    let _ = result.with_paint_offset(Offset::new(10.0, 20.0), |result| {
         let failure: Result<Option<()>, _> = catch_unwind(AssertUnwindSafe(|| {
             result.with_paint_transform(Matrix4::scaling(2.0, 3.0, 1.0), |result| {
                 result.add(HitTestEntry::new(RenderId::new(1)));
@@ -144,7 +144,7 @@ fn refused_callback_retirement_failure_preserves_the_next_scope() {
     let called = Cell::new(false);
     let retirements = Cell::new(0);
     let mut result = HitTestResult::new();
-    result.with_paint_offset(Offset::new(10.0, 20.0), |result| {
+    let _ = result.with_paint_offset(Offset::new(10.0, 20.0), |result| {
         let capture = Capture(&retirements);
         let called_ref = &called;
         let failure = catch_unwind(AssertUnwindSafe(|| {
