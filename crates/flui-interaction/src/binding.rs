@@ -1428,7 +1428,55 @@ impl GestureBinding {
                     panic.resume();
                 }
             }
-            PointerEvent::ButtonChange(_) | PointerEvent::ScrollInertiaCancel(_) => {
+            PointerEvent::ButtonChange(_) => {
+                let cached = self
+                    .hit_tests
+                    .get(&pointer_id)
+                    .map(|cached| (cached.sequence, cached.token));
+                let mut first_panic = None;
+                if let Some((sequence, token)) = cached {
+                    // Take the older accepted packet before any callback. A
+                    // callback may enqueue its successor or replace this contact;
+                    // neither belongs to the button edge admitted here.
+                    let pending = self
+                        .pending_moves
+                        .remove(&pointer_id)
+                        .map(|(_, state)| state);
+                    if let Some(PendingMove::Contact {
+                        event: movement,
+                        sequence: admitted,
+                    }) = pending.as_ref().and_then(|state| state.pending.as_ref())
+                        && *admitted == sequence
+                        && self.is_current_sequence(pointer_id, sequence)
+                    {
+                        let delivered = self.dispatch_event(movement, token);
+                        RoutePanic::preserve_first(
+                            &mut first_panic,
+                            delivered,
+                            "button pending Move dispatch",
+                        );
+                    }
+                    // A failed movement still owes the accepted edge, but an
+                    // ended or replaced sequence must not receive stale input.
+                    if self.is_current_sequence(pointer_id, sequence) {
+                        let delivered = self.dispatch_event(event, token);
+                        RoutePanic::preserve_first(
+                            &mut first_panic,
+                            delivered,
+                            "pointer button edge dispatch",
+                        );
+                    }
+                } else {
+                    let result = event
+                        .position()
+                        .map_or_else(HitTestResult::new, hit_test_fn);
+                    first_panic = self.dispatch_ephemeral(event, &result);
+                }
+                if let Some(panic) = first_panic {
+                    panic.resume();
+                }
+            }
+            PointerEvent::ScrollInertiaCancel(_) => {
                 let panic = if self.hit_tests.contains_key(&pointer_id) {
                     self.dispatch_on_cached_route(pointer_id, event)
                 } else {
