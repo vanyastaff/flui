@@ -2360,6 +2360,7 @@ dependencies = [
  "flui-scheduler",
  "flui-view",
  "flui-widgets",
+ "trybuild",
 ]
 
 [[package]]

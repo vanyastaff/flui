@@ -18,6 +18,12 @@ topology is not part of any package manifest.
 - **Facade paths.** A module that the facade also has sits at the facade's path and holds a
   subset of it; an item the facade does not expose goes into an Evolving module, never into a
   facade-named one.
+- **The composition-root seam is private.** The SDK's `view` module shadows
+  `flui_view::__runtime`. `trybuild_ui::ui_tests` in
+  `tests/compiler_guards.rs` checks the exact E0603 diagnostic when a package
+  imports that module, and a passing fixture names the actual runtime trait
+  through `flui-view` together with the public SDK view trait. An unrelated
+  unresolved import cannot satisfy that diagnostic snapshot.
 - **The list is pinned.** `tests/surface.rs` (`the_public_surface_is_the_measured_list`) compares
   the `pub use`/`pub mod` lines of `src/lib.rs` with a pinned list, so adding an item is a
   visible decision, and its `measured` module names every measured item through its SDK path,
