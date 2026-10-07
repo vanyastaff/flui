@@ -120,6 +120,51 @@ fn periodic_angles_are_wrapped() {
     assert!((0.0..TAU).contains(&twist), "{twist}");
 }
 
+fn partial_pen_orientation_preserves_only_reported_angles() {
+    let cases = [
+        (
+            PenOrientation::try_altitude(0.0).expect("reported altitude"),
+            Some(0.0),
+            None,
+        ),
+        (
+            PenOrientation::try_altitude(FRAC_PI_2).expect("perpendicular"),
+            Some(FRAC_PI_2),
+            None,
+        ),
+        (
+            PenOrientation::try_azimuth(-FRAC_PI_2).expect("reported azimuth"),
+            None,
+            Some(3.0 * FRAC_PI_2),
+        ),
+        (
+            PenOrientation::try_new(FRAC_PI_2, -FRAC_PI_2).expect("both angles"),
+            Some(FRAC_PI_2),
+            Some(3.0 * FRAC_PI_2),
+        ),
+    ];
+    for (orientation, altitude, azimuth) in cases {
+        let sample = PointerSample::new(T0, position(1.0, 2.0))
+            .with_orientation(orientation);
+        let reported = sample.orientation.expect("at least one reported angle");
+        assert_eq!(reported.altitude(), altitude);
+        assert_eq!(reported.azimuth(), azimuth);
+        assert_eq!(sample.time, T0);
+    }
+    assert_eq!(
+        PenOrientation::try_altitude(f64::NAN).map(drop),
+        non_finite(Quantity::Altitude),
+    );
+    assert!(matches!(
+        PenOrientation::try_altitude(FRAC_PI_2 + 0.001),
+        Err(InputValueError::OutOfRange { quantity: Quantity::Altitude, .. }),
+    ));
+    assert_eq!(
+        PenOrientation::try_azimuth(f64::INFINITY).map(drop),
+        non_finite(Quantity::Azimuth),
+    );
+}
+
 fn a_negative_or_non_finite_contact_size_is_refused() {
     assert!(ContactSize::try_new(Size::new(-1.0, 2.0)).is_err());
     assert_eq!(
@@ -362,6 +407,10 @@ fn input_vocabulary_contract() {
                 an_out_of_range_reading_is_refused_or_saturated,
             ),
             ("periodic_angles_are_wrapped", periodic_angles_are_wrapped),
+            (
+                "partial_pen_orientation_preserves_only_reported_angles",
+                partial_pen_orientation_preserves_only_reported_angles,
+            ),
             (
                 "a_negative_or_non_finite_contact_size_is_refused",
                 a_negative_or_non_finite_contact_size_is_refused,
