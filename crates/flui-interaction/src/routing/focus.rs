@@ -285,8 +285,10 @@ impl FocusManager {
             &self.notification_depth,
             &self.pending_focus_transitions,
         );
-        Self::notify_focus_nodes(previous.as_ref(), node.as_ref());
-        self.notify_listeners(previous, node);
+        let mut failure = FocusClosePanic::for_rejection(self.close_mode.mode());
+        Self::notify_focus_nodes(previous.as_ref(), node.as_ref(), &mut failure);
+        self.notify_listeners(previous, node, &mut failure);
+        failure.finish();
     }
 
     /// Whether `a` and `b` name the identical focus node (or both `None`).
@@ -419,10 +421,12 @@ impl FocusManager {
                 &self.notification_depth,
                 &self.pending_focus_transitions,
             );
-            Self::notify_focus_path_change(previous_focus_path, current_focus_path);
+            let mut failure = FocusClosePanic::for_rejection(self.close_mode.mode());
+            Self::notify_focus_path_change(previous_focus_path, current_focus_path, &mut failure);
             if !Self::focus_identity_eq(current.as_ref(), Some(&previous_primary)) {
-                self.notify_listeners(Some(previous_primary), current);
+                self.notify_listeners(Some(previous_primary), current, &mut failure);
             }
+            failure.finish();
         }
         if self.notification_depth.get() == 0 {
             self.drain_pending_focus_transitions();
@@ -496,7 +500,12 @@ impl FocusManager {
         self.listeners.borrow().len()
     }
 
-    fn notify_listeners(&self, previous: Option<Rc<FocusNode>>, new: Option<Rc<FocusNode>>) {
+    fn notify_listeners(
+        &self,
+        previous: Option<Rc<FocusNode>>,
+        new: Option<Rc<FocusNode>>,
+        failure: &mut FocusClosePanic,
+    ) {
         let ids: Vec<_> = self.listeners.borrow().iter().map(|(id, _)| *id).collect();
         for id in ids {
             // A listener already dispatched in this loop may have removed
@@ -509,15 +518,18 @@ impl FocusManager {
                 .find(|(registered, _)| *registered == id)
                 .map(|(_, listener)| Rc::clone(listener));
             if let Some(listener) = listener {
-                let mut failure = FocusClosePanic::for_rejection(self.close_mode.mode());
+                failure.adopt(self.close_mode.mode());
                 let _ = failure.invoke(|| listener(previous.clone(), new.clone()));
                 failure.retire(listener);
-                failure.finish();
             }
         }
     }
 
-    fn notify_focus_nodes(previous: Option<&Rc<FocusNode>>, new: Option<&Rc<FocusNode>>) {
+    fn notify_focus_nodes(
+        previous: Option<&Rc<FocusNode>>,
+        new: Option<&Rc<FocusNode>>,
+        failure: &mut FocusClosePanic,
+    ) {
         let previous_path: Vec<_> = previous
             .into_iter()
             .flat_map(|node| node.ancestors())
@@ -544,13 +556,14 @@ impl FocusManager {
             }
         }
         for node in changed {
-            node.notify_listeners();
+            node.notify_listeners_in_round(failure);
         }
     }
 
     fn notify_focus_path_change(
         previous_path: Vec<Rc<FocusNode>>,
         current_path: Vec<Rc<FocusNode>>,
+        failure: &mut FocusClosePanic,
     ) {
         let previous_ids: HashSet<_> = previous_path.iter().map(|node| node.id()).collect();
         let current_ids: HashSet<_> = current_path.iter().map(|node| node.id()).collect();
@@ -567,7 +580,7 @@ impl FocusManager {
             .collect::<Vec<_>>();
 
         for node in changed {
-            node.notify_listeners_after_tree_change();
+            node.notify_tree_change_in_round(failure);
         }
     }
 

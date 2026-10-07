@@ -783,13 +783,19 @@ impl FocusNode {
     }
 
     pub(crate) fn notify_listeners(&self) {
+        let mut failure = FocusClosePanic::for_rejection(self.close_mode());
+        self.notify_listeners_in_round(&mut failure);
+        failure.finish();
+    }
+
+    pub(super) fn notify_listeners_in_round(&self, failure: &mut FocusClosePanic) {
         if self.parent.borrow().is_none() {
             return;
         }
-        self.notify_listeners_after_tree_change();
+        self.notify_tree_change_in_round(failure);
     }
 
-    pub(crate) fn notify_listeners_after_tree_change(&self) {
+    pub(super) fn notify_tree_change_in_round(&self, failure: &mut FocusClosePanic) {
         let ids: Vec<_> = self.listeners.borrow().iter().map(|(id, _)| *id).collect();
         for id in ids {
             // Mirrors `FocusManager::notify_listeners`: a listener removed
@@ -802,10 +808,9 @@ impl FocusNode {
                 .find(|(registered, _)| *registered == id)
                 .map(|(_, listener)| Rc::clone(listener));
             if let Some(listener) = listener {
-                let mut failure = FocusClosePanic::for_rejection(self.close_mode());
+                failure.adopt(self.close_mode());
                 let _ = failure.invoke(|| listener());
                 failure.retire(listener);
-                failure.finish();
             }
         }
     }
