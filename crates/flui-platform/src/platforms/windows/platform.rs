@@ -1116,6 +1116,13 @@ impl WindowsPlatform {
                         });
                         let last_window_closed = removed.as_ref().is_some_and(|(_, empty)| *empty);
                         drop(removed);
+                        // After the callbacks released the surface above, so
+                        // a log orders the surface's release before this.
+                        tracing::debug!(
+                            target: "flui.platform",
+                            event = "native_window_destroyed",
+                            window_id = ctx.window_id.0,
+                        );
                         // The last tracked window is gone: the owner decides,
                         // on its own turn, whether the loop ends. Not here —
                         // this `WM_DESTROY` may be nested inside embedder

@@ -309,6 +309,10 @@ mod native_windows {
             closed_window_retires_tracking,
         ),
         (
+            "closed_window_traces_its_native_destruction",
+            closed_window_traces_its_native_destruction,
+        ),
+        (
             "close_callback_releases_external_owner",
             close_callback_releases_external_owner,
         ),
@@ -1592,6 +1596,68 @@ mod native_windows {
                 "closed window retained by platform registry"
             );
         }
+    }
+
+    /// Records the `window_id` of every `native_window_destroyed` event on
+    /// the `flui.platform` target.
+    struct DestroyedWindows(Arc<Mutex<Vec<u64>>>);
+
+    impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for DestroyedWindows {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            #[derive(Default)]
+            struct Fields {
+                destroyed: bool,
+                window_id: Option<u64>,
+            }
+            impl tracing::field::Visit for Fields {
+                fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+                    if field.name() == "event" {
+                        self.destroyed = value == "native_window_destroyed";
+                    }
+                }
+                fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
+                    if field.name() == "window_id" {
+                        self.window_id = Some(value);
+                    }
+                }
+                fn record_debug(&mut self, _: &tracing::field::Field, _: &dyn std::fmt::Debug) {}
+            }
+            if event.metadata().target() != "flui.platform" {
+                return;
+            }
+            let mut fields = Fields::default();
+            event.record(&mut fields);
+            if fields.destroyed {
+                self.0
+                    .lock()
+                    .expect("recorder lock")
+                    .push(fields.window_id.expect("the event names its window"));
+            }
+        }
+    }
+
+    // Each case runs in a process of its own and the subscriber is scoped to
+    // this thread, so no other test can observe or feed the recorder.
+    fn closed_window_traces_its_native_destruction() {
+        use tracing_subscriber::layer::SubscriberExt as _;
+
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let window = open(&platform, true);
+        let sibling = open(&platform, true);
+        let destroyed = Arc::new(Mutex::new(Vec::new()));
+        let subscriber =
+            tracing_subscriber::registry().with(DestroyedWindows(Arc::clone(&destroyed)));
+        tracing::subscriber::with_default(subscriber, || window.close());
+        assert_eq!(
+            *destroyed.lock().expect("recorder lock"),
+            [window.id().0],
+            "closing one window traces its destruction, under its own identity, once"
+        );
+        sibling.close();
     }
 
     fn close_callback_releases_external_owner() {
