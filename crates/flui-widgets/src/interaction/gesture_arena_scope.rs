@@ -5,6 +5,7 @@
 //! FLUI is non-singleton, so there is no ambient arena: it is handed down
 //! explicitly as inherited data, scoped to a subtree.
 
+use flui_interaction::GestureSettings;
 use flui_interaction::arena::{GestureArena, SweepModel};
 use flui_view::prelude::*;
 use flui_view::{BoxedView, InheritedView, impl_inherited_view};
@@ -40,6 +41,8 @@ pub struct GestureArenaScope {
     /// The shared arena handed to descendants. Cloning the scope clones this
     /// `Arc`-backed handle, so all clones observe the same arena state + clock.
     arena: GestureArena,
+    /// Authored settings captured when descendant recognizers are mounted.
+    settings: GestureSettings,
     /// The wrapped subtree the arena is provided to.
     child: BoxedView,
 }
@@ -62,8 +65,24 @@ impl GestureArenaScope {
         );
         Self {
             arena,
+            settings: GestureSettings::default(),
             child: BoxedView(Box::new(child.into_view())),
         }
+    }
+
+    /// Configure the settings descendant recognizers capture at mount.
+    ///
+    /// A presentation supplies its binding's settings here. This immutable
+    /// configuration does not update recognizers that are already mounted.
+    #[must_use]
+    pub fn settings(mut self, settings: GestureSettings) -> Self {
+        self.settings = settings;
+        self
+    }
+
+    pub(crate) fn settings_of(ctx: &dyn BuildContext) -> GestureSettings {
+        ctx.get::<Self, _>(|scope| scope.settings.clone())
+            .expect("BUG: gesture consumers must acquire settings beneath GestureArenaScope")
     }
 
     /// Resolve the presentation's exact shared arena without registering an
