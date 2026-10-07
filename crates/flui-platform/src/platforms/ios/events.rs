@@ -60,6 +60,14 @@ impl TouchInputState {
         recognizer: &UIHoverGestureRecognizer,
         view: &UIView,
     ) -> Vec<PlatformInput> {
+        if self
+            .contacts
+            .values()
+            .any(|contact| contact.id.get() == NonZeroU64::MIN)
+        {
+            // Contact samples own this Pencil while its tip is down.
+            return Vec::new();
+        }
         // SAFETY: UIKit invokes this target with a live gesture recognizer;
         // `state` is its documented enum-valued getter (omitted by the bindings).
         let state: UIGestureRecognizerState = unsafe { msg_send![recognizer, state] };
@@ -123,14 +131,20 @@ impl TouchInputState {
             if self.contacts.contains_key(&address) {
                 return Vec::new();
             }
-            let Some(id) = self.next_id else {
-                return Vec::new();
-            };
-            self.next_id = id.get().checked_add(1).and_then(NonZeroU64::new);
             let role = if self.contacts.values().any(|contact| contact.kind == kind) {
                 PointerRole::Additional
             } else {
                 PointerRole::Primary
+            };
+            let id = if matches!(kind, PointerKind::Pen { .. }) && role == PointerRole::Primary {
+                // The primary Pencil retains its hover identity across contact.
+                NonZeroU64::MIN
+            } else {
+                let Some(id) = self.next_id else {
+                    return Vec::new();
+                };
+                self.next_id = id.get().checked_add(1).and_then(NonZeroU64::new);
+                id
             };
             let info = PointerInfo::new(PointerId::new(id), kind).with_role(role);
             // Validate position before admitting an undeliverable contact.
