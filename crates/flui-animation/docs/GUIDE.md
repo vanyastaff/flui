@@ -270,7 +270,6 @@ use flui_animation::{Cubic, Curve};
 # let curve = Cubic::new(0.42, 0.0, 1.0, 1.0);
 
 let flipped = curve.flipped();   // 180° rotation: 1.0 - curve(1.0 - t)
-let reversed = curve.reversed(); // curve(1.0 - t)
 ```
 
 ---

@@ -257,9 +257,7 @@ let spline = CatmullRomCurve::with_points(vec![
 use flui_animation::{Curve, Curves};
 
 let flipped = Curves::EaseIn.flipped();   // 180° rotation: 1.0 - curve(1.0 - t)
-let reversed = Curves::EaseIn.reversed(); // Input: curve(1.0 - t)
 assert!((flipped.transform(0.0) - 0.0).abs() < 1e-9);
-assert!((reversed.transform(0.0) - 1.0).abs() < 1e-9);
 ```
 
 ---
@@ -759,7 +757,7 @@ Each implemented from the canonical published source:
 |---|---|---|
 | Frame-rate-independent smoothing (half-life exponential decay) | Holmér, "lerp smoothing is broken" | `smoothing::exp_decay`, `Smoothed` |
 | Critically damped follower with max-speed clamp | Unity `SmoothDamp` / Game Programming Gems 4 ch. 1.10 | `smoothing::SmoothDamp` |
-| Perceptually uniform color interpolation | Ottosson, Oklab (2020) | `OklabColorTween`, `Color::lerp_oklab` |
+| Perceptually uniform color interpolation | Ottosson, Oklab (2020) | `ColorTween`, `Color::lerp` (premultiplied alpha, ADR-0149) |
 | M3 emphasized easing + full Penner catalog | Material 3 / Penner | `Curves::EaseInOutCubicEmphasized`, `ThreePointCubic`, `Split` |
 | Interruptible springs with velocity-preserving retarget | analytic closed forms | `AnimatedValue`, `#[derive(Animatable)]` |
 

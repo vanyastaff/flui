@@ -39,7 +39,6 @@ the early return of a settled controller.
 | `controller/status_fan_out/4` | 355 ns |
 | `controller/status_fan_out/8` | 531 ns |
 | `controller/forward` | 206 ns |
-| `spring/animated_value_color_frame` | 100.5 ns |
 | `smoothing/smooth_damp_step` | 7.6 ns |
 
 A steady-state frame (`Vsync::tick_all` on a running controller with four
@@ -57,8 +56,6 @@ idle machine would show.
 |-------|-------:|
 | `tween_transform/f64` | 1.42 ns |
 | `tween_transform/offset` | 3.95 ns |
-| `tween_transform/color` | 21.6 ns |
-| `tween_transform/color_oklab` | 288 ns |
 | `curve_eval/linear` | 1.09 ns |
 | `curve_eval/elastic_out` | 24.6 ns |
 | `curve_eval/ease_in_out` | 31.0 ns |
@@ -69,9 +66,10 @@ idle machine would show.
 The cubic-curve solve (`EaseInOut` and every other `Cubic`) inverts the
 bezier x-coordinate to find the parameter, using Newton-Raphson with a
 bisection fallback (the WebKit `UnitBezier` solver), which converges in 2–4
-iterations on the common path. Oklab interpolation converts both endpoints
-to Oklab and the result back to sRGB on every call, which is why it costs an
-order of magnitude more than componentwise sRGB.
+iterations on the common path. Colour interpolation now uses premultiplied
+Oklab throughout (ADR-0149). Earlier sRGB and separate Oklab-tween timings
+are omitted because those APIs and the colour-spring representation changed;
+run the current colour cases in `animation_bench` to measure the new paths.
 
 ## Vsync registry indexing (#1060)
 

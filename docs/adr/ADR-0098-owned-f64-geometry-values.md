@@ -4,6 +4,8 @@
   unit types, and keep FLUI's own value types over kurbo and glam rather than exposing either.
   Acceptance waits on the review of this record.
 - **Date:** 2026-09-28
+- **Superseded-by:** [ADR-0149](ADR-0149-interpolation-contracts.md), in part: §7's `Color::lerp`
+  bullet (colour now interpolates in Oklab, premultiplied)
 - **Related:** [ADR-0089](ADR-0089-upstream-types-in-stable-signatures.md) (kept as is: this
   record needs no exception to it), [ADR-0077](ADR-0077-migrate-to-parley.md),
   [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md),

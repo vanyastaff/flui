@@ -1320,7 +1320,7 @@ fn split_owned_curves_retire_independently() {
             assert_eq!(
                 flui_foundation::panic::payload_text(payload.as_ref()),
                 Some(if invalid {
-                    "split must be in range [0.0, 1.0]"
+                    "curve parameter `split` is not finite"
                 } else if incoming {
                     "split incoming"
                 } else {
@@ -1659,7 +1659,7 @@ fn split_partial_deserialization_preserves_errors_and_wire_name() {
     assert_eq!(SERDE_CURVE_DROPS.load(Ordering::SeqCst), 0);
     let failure = decode(f64::NAN, "bomb first", SerdeInput::Text("bomb second"))
         .expect_err("invalid decoded range");
-    assert_eq!(failure.to_string(), "split must be in range [0.0, 1.0]");
+    assert_eq!(failure.to_string(), "curve parameter `split` is not finite");
     assert_eq!(SERDE_CURVE_DROPS.load(Ordering::SeqCst), 0);
     let split = decode(0.5, "bomb first", SerdeInput::Text("bomb second")).expect("valid split");
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(split)))

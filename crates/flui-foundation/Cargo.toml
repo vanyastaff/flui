@@ -71,6 +71,10 @@ serde_json = { workspace = true }
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "=0.3.77"
 
+# Property tests run natively only; the wasm32 runner executes `tests/wasm32.rs`.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+proptest = { workspace = true }
+
 [[test]]
 name = "foundation_it"
 path = "tests/main.rs"

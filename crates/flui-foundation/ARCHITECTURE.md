@@ -328,6 +328,30 @@ is promised. Public family `circle_line_intersection_requires_a_computed_directi
 checks refusals followed by a healthy crossing and intersections outside the
 endpoint segment.
 
+### `Matrix4::lerp` decomposes in `f64` and borrows orientation for a collapsed axis
+
+[ADR-0149](../../docs/adr/ADR-0149-interpolation-contracts.md) item 3.
+`Matrix4::lerp` does its own decomposition (`geometry/matrix4_decompose.rs`)
+rather than glam's scale/rotation/translation split, which divides by a zero
+scale (NaN on every interior frame of a scale-in from zero) and drops skew and
+perspective. Gram–Schmidt on the linear block's columns gives scale, shear and
+an orthonormal rotation (a quaternion, slerped along the shorter arc); the
+bottom row gives perspective. A column whose residual is within `1e-12` of the
+longest column is a collapsed axis: that endpoint keeps its scales, translation
+and perspective and takes the other endpoint's rotation and skew, so a
+scale-in grows in place. This rule is FLUI's own; CSS has no such case. `m33 = 0`, an `m33` whose division overflows,
+or a perspective row over a singular block switch at `t = 0.5`. Locked by
+`matrix4_lerp_decomposes_like_css_transforms` and the property test
+`matrix4_lerp_endpoints_and_finiteness`.
+
+### `Angle` keeps whole turns
+
+[ADR-0149](../../docs/adr/ADR-0149-interpolation-contracts.md) item 4. `Angle`
+is not reduced modulo a turn, so its `Lerp` is numeric and a multi-turn rotation
+is a value. `nearest_equivalent` reduces the difference to a reference into
+`(-½, ½]` turn; the exact half turn goes to the increasing angle. Locked by
+`angle_nearest_equivalent_takes_the_shorter_arc`.
+
 ### Closed signal graph
 
 Once a presentation closes, its signal graph refuses reads, writes and new

@@ -30,6 +30,9 @@ mod ownership;
 #[path = "contracts/status_delivery.rs"]
 mod status_delivery;
 
+#[path = "contracts/curve.rs"]
+mod curve;
+
 #[path = "contracts/curved.rs"]
 mod curved;
 
@@ -37,6 +40,9 @@ mod curved;
 mod curves;
 
 mod derive_animatable;
+
+#[path = "contracts/motion_clock.rs"]
+mod motion_clock;
 
 #[path = "contracts/proxy.rs"]
 mod proxy;

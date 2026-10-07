@@ -729,6 +729,10 @@ fn fling_velocity_follows_event_timestamps_not_dispatch_time() {
 fn gesture_lifecycle_matrix() {
     let cases: &[(&str, fn())] = &[
         (
+            "ignored_accept_candidate_drops_outside_the_slot_lock",
+            ignored_accept_candidate_drops_outside_the_slot_lock,
+        ),
+        (
             "panicking_window_end_still_admits_the_far_contact",
             panicking_window_end_still_admits_the_far_contact,
         ),
@@ -1233,4 +1237,61 @@ fn panicking_window_end_still_admits_the_far_contact() {
         1,
         "the far contact became the next first tap despite the panic"
     );
+}
+
+/// A candidate that is not a member and whose destructor reaches back into
+/// the arena.
+struct ClosesOnDrop {
+    arena: GestureArena,
+    pointer: PointerId,
+    closed: Rc<Cell<bool>>,
+}
+
+impl CustomGestureRecognizer for ClosesOnDrop {
+    fn on_arena_accept(&self, _pointer: PointerId) {}
+    fn on_arena_reject(&self, _pointer: PointerId) {}
+}
+
+impl Drop for ClosesOnDrop {
+    fn drop(&mut self) {
+        self.arena.close(self.pointer);
+        self.closed.set(true);
+    }
+}
+
+/// An ignored accept candidate that is its own last owner is dropped after
+/// the slot lock is released, so its destructor can use the arena (holding
+/// the lock across it deadlocks).
+fn ignored_accept_candidate_drops_outside_the_slot_lock() {
+    // On a worker with a deadline: a regression deadlocks instead of failing,
+    // and must not hang the whole test binary.
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let arena = GestureArena::new();
+        let pointer = id(2);
+        let closed = counter_flag();
+        arena.add(pointer, Arc::new(Verdicts::default()));
+        #[expect(
+            clippy::arc_with_non_send_sync,
+            reason = "the arena takes members as Arc; this one is owner-local by design"
+        )]
+        let candidate = Arc::new(ClosesOnDrop {
+            arena: arena.clone(),
+            pointer,
+            closed: Rc::clone(&closed),
+        });
+        arena.accept(pointer, candidate);
+        assert!(
+            closed.get(),
+            "the destructor ran and its call into the arena returned"
+        );
+        let _ = done.send(());
+    });
+    finished
+        .recv_timeout(Duration::from_secs(5))
+        .expect("accept returned: the candidate was not dropped under the slot lock");
+}
+
+fn counter_flag() -> Rc<Cell<bool>> {
+    Rc::new(Cell::new(false))
 }

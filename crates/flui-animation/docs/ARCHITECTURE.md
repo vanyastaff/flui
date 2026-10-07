@@ -105,12 +105,11 @@ Maps unit interval to unit interval:
 
 ```rust
 pub trait Curve {
-    /// Transform t ∈ [0,1] → output ∈ [0,1]
-    /// Contract: transform(0) = 0, transform(1) = 1
+    /// Eased progress; exact at 0 and 1, clamps outside [0,1], NaN → NaN
+    /// (the full input policy is in the `Curve` rustdoc)
     fn transform(&self, t: f64) -> f64;
     
     fn flipped(self) -> FlippedCurve<Self>;
-    fn reversed(self) -> ReverseCurve<Self>;
 }
 ```
 
