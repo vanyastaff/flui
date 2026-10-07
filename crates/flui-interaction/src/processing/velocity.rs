@@ -139,24 +139,6 @@ fn signed_ms(time: Instant, reference: Instant) -> f64 {
     }
 }
 
-/// The memoized, buffer-pure result of a least-squares fit.
-#[derive(Debug, Clone, Copy)]
-struct Fit {
-    estimate: VelocityEstimate,
-    /// Second derivative of the fit at the newest sample, px/s²; zero for a
-    /// linear or degenerate fit.
-    acceleration: Offset<f64>,
-}
-
-impl Fit {
-    const fn without_acceleration(estimate: VelocityEstimate) -> Self {
-        Self {
-            estimate,
-            acceleration: Offset::ZERO,
-        }
-    }
-}
-
 /// The estimate reported once the pointer is known to have stopped: zero
 /// velocity with full confidence.
 const STOPPED: VelocityEstimate =
@@ -250,7 +232,7 @@ pub struct VelocityTracker {
     /// fit is returned only while the pointer is still moving. This collapses
     /// repeated velocity and estimate queries over unchanged samples from
     /// two O(N) QR solves to one.
-    cached_fit: Option<Fit>,
+    cached_fit: Option<VelocityEstimate>,
 }
 
 impl Default for VelocityTracker {
@@ -391,12 +373,12 @@ impl VelocityTracker {
         // Reuse the memoized fit if the sample buffer hasn't changed since it
         // was computed. `VelocityEstimate` is `Copy`, so this is a cheap read.
         if let Some(cached) = self.cached_fit {
-            return Some(cached.estimate);
+            return Some(cached);
         }
 
         let fit = self.compute_estimate()?;
         self.cached_fit = Some(fit);
-        Some(fit.estimate)
+        Some(fit)
     }
 
     /// Walk the circular buffer back from the newest sample while the samples
@@ -447,7 +429,7 @@ impl VelocityTracker {
     /// time-dependent stationary gate, nor the memo cache — which is exactly
     /// what makes the cache in [`Self::get_velocity_estimate`] sound. O(N)
     /// where N ≤ `HISTORY_SIZE` (the buffer is bounded at 20 samples).
-    fn compute_estimate(&self) -> Option<Fit> {
+    fn compute_estimate(&self) -> Option<VelocityEstimate> {
         let mut xs = [0.0f64; HISTORY_SIZE];
         let mut ys = [0.0f64; HISTORY_SIZE];
         let mut ts = [0.0f64; HISTORY_SIZE];
@@ -482,12 +464,12 @@ impl VelocityTracker {
                 reason = "too_few_contiguous_samples",
                 "velocity estimate: no fling"
             );
-            return Some(Fit::without_acceleration(VelocityEstimate::new(
+            return Some(VelocityEstimate::new(
                 Offset::ZERO,
                 Offset::ZERO,
                 duration,
                 1.0,
-            )));
+            ));
         }
 
         // Guard: if the total time window is effectively zero (all samples at
@@ -513,12 +495,7 @@ impl VelocityTracker {
                 reason = "degenerate_time_span",
                 "velocity estimate: no fling"
             );
-            return Some(Fit::without_acceleration(VelocityEstimate::new(
-                offset,
-                Offset::ZERO,
-                duration,
-                0.0,
-            )));
+            return Some(VelocityEstimate::new(offset, Offset::ZERO, duration, 0.0));
         }
 
         // Fit a quadratic in milliseconds; velocity in px/ms is the linear
@@ -540,41 +517,15 @@ impl VelocityTracker {
                 reason = "unsolvable_time_span",
                 "velocity estimate: no fling"
             );
-            return Some(Fit::without_acceleration(VelocityEstimate::new(
-                offset,
-                Offset::ZERO,
-                duration,
-                0.0,
-            )));
+            return Some(VelocityEstimate::new(offset, Offset::ZERO, duration, 0.0));
         };
         let slope = |fit: &PolynomialFit| fit.coefficients[1] * 1000.0;
-        // x(t) = c0 + c1·t + c2·t² in ms, so x''(t) = 2·c2 px/ms² = 2e6·c2 px/s².
-        let curvature = |fit: &PolynomialFit| fit.coefficients[2] * 2.0e6;
-        let acceleration = Offset::new(curvature(&x_fit), curvature(&y_fit));
-        Some(Fit {
-            estimate: VelocityEstimate::new(
-                offset,
-                bounded(Offset::new(slope(&x_fit), slope(&y_fit))),
-                duration,
-                x_fit.confidence * y_fit.confidence,
-            ),
-            acceleration: if acceleration.dx.is_finite() && acceleration.dy.is_finite() {
-                acceleration
-            } else {
-                Offset::ZERO
-            },
-        })
-    }
-
-    /// The acceleration of the current fit, in px/s², zero when the fit is
-    /// linear, degenerate or the pointer has stopped (wall-clock gate, like
-    /// [`Self::get_velocity_estimate`]). Finite, but not bounded: callers
-    /// bound what they derive from it.
-    pub(crate) fn acceleration(&mut self) -> Offset<f64> {
-        if self.get_velocity_estimate() == Some(STOPPED) {
-            return Offset::ZERO;
-        }
-        self.cached_fit.map_or(Offset::ZERO, |fit| fit.acceleration)
+        Some(VelocityEstimate::new(
+            offset,
+            bounded(Offset::new(slope(&x_fit), slope(&y_fit))),
+            duration,
+            x_fit.confidence * y_fit.confidence,
+        ))
     }
 
     /// The most recent velocity as a [`Velocity`].
