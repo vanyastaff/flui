@@ -45,6 +45,11 @@ Retaining the hit targets this way keeps render data
 `Send + Sync`. If a target unmounts after Down, new hit tests will miss it, but
 the active route keeps the owner-local handler cell alive until Up/Cancel.
 
+Recognizer attachments inside that handler are weak. Retaining a route keeps
+its dispatch infrastructure available, but does not keep an unmounted
+recognizer alive. Each attachment upgrades immediately before invocation;
+Down admission filters do not gate a previously admitted contact's terminal tail.
+
 Per-target panics are isolated: later targets still receive the event, cleanup
 runs, then the first panic is resumed by the dispatch owner.
 
@@ -77,7 +82,8 @@ INVERSE of its own forward (paint-direction) offset/matrix — prefer the
 scope helpers, which invert and pop for you:
 
 ```rust
-use flui_interaction::prelude::*;
+use flui_interaction::{HitTestEntry, HitTestResult};
+use flui_foundation::RenderId;
 use flui_foundation::geometry::{Matrix4, Offset};
 
 let mut result = HitTestResult::new();
@@ -85,15 +91,19 @@ let mut result = HitTestResult::new();
 // `with_paint_offset` takes the forward paint offset and pushes its
 // inverse (negated) internally.
 let _ = result.with_paint_offset(Offset::new(10.0, 20.0), |result| {
-    child.hit_test(position, result);
+    result.add(HitTestEntry::new(RenderId::new(1)));
 });
+assert_eq!(result.path()[0].transform.expect("entry transform")
+    .transform_point(10.0, 20.0), (0.0, 0.0));
 
 // `with_paint_transform` takes the forward paint matrix and pushes its
 // inverse internally. Refusal skips the closure and returns None.
 let rotation = Matrix4::rotation_z(std::f64::consts::FRAC_PI_4);
 let hit = result.with_paint_transform(rotation, |result| {
-    child.hit_test(position, result)
+    result.add(HitTestEntry::new(RenderId::new(2)));
+    true
 }).unwrap_or(false);
+assert!(hit);
 ```
 
 `push_offset`/`push_transform` are the raw primitives underneath — they push

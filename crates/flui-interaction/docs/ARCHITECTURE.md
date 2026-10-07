@@ -6,20 +6,20 @@ Crate-level design notes for `flui_interaction`: subsystems, ownership, mapping 
 
 | Subsystem | One-paragraph description |
 |---|---|
-| `arena` | Owner-local conflict resolution between competing recognisers. Tracks per-pointer `SmallVec<[Arc<dyn GestureArenaMember>; 4]>` (inline for ≤ 4 members), exact generational slots, held generations detached across pointer-ID reuse, and a lifecycle (Open → Held → Closed → Resolved). Eager acceptors win when the arena closes; teams enable multi-winner resolution. |
-| `recognizers` | Ten recogniser types (tap, double tap, long press, drag, scale, force press, multi-tap, multi-drag, eager, tap-and-drag) plus the `vertical_drag` / `horizontal_drag` / `pan` constructors in `drag_variants`. Each implements `GestureRecognizer` (the `add_pointer` / `handle_event` / `dispose` lifecycle) and implements the sealed `GestureArenaMember` directly; the `CustomGestureRecognizer` blanket impl is the extension point for recognisers outside the crate. State machines are private per-file enums (`TapState`, `LongPressPhase`, `DragPhase`, …). |
+| `arena` | Owner-local conflict resolution between competing recognizers. Per-pointer members are `Weak<dyn GestureArenaMember>` in an inline-four `SmallVec`. Generational slots keep held competitions separate across pointer-ID reuse. Eager acceptors win when the arena closes; each notification upgrades its weak participant immediately before invoking it. |
+| `recognizers` | Ten recognizer types (tap, double tap, long press, drag, scale, force press, multi-tap, multi-drag, eager, tap-and-drag) and drag-axis builders. Each implements the open `GestureRecognizer` and `GestureArenaMember` traits. Builders configure immutable callbacks before returning `Rc` ownership. `ArenaMembership` names an exact weak allocation; `PrimaryContact` owns one admitted sequence, its settings snapshot, identity and deadline. `RecognizerSet` shares ordered weak attachments with listeners. |
 | `processing` | Per-pointer derived data: `VelocityTracker` (LSQ fit on 20-sample circular buffer, 100 ms horizon, 40 ms stationary gate), `PointerEventResampler` (frame-rate adaptation with 100-event cap and 1 ms minimum sample interval), `InputPredictor` (velocity extrapolation with optional acceleration and prediction smoothing), `RawInputHandler` (low-level stream adapter), the crate-internal `lsq_solver` (used by `VelocityTracker` only) and `sampling_clock`. |
 | `routing` | Event dispatch infrastructure: `EventRouter`, `PointerRouter`, the presentation-owned `FocusManager` (`FocusManager::new` returns an `Rc<Self>`; there is no thread-local focus state), `FocusScopeNode` / reading-order Tab traversal, `MouseTracker` (enter/exit/hover), hit testing, the `InteractionLane` that resolves and invokes pointer routes, and the `TransformGuard` stack-RAII for the transform stack. Route resolution on Down and cached-route invocation on every Move/Up are on the per-pointer hot path (`benches/pointer_route_bench.rs`). |
 | `binding` | `GestureBinding` — owner-local glue that hosts the arena, resolves and retains the Down hit route, coalesces/resamples Moves, and runs route → arena lifecycle ordering. Contact generations prevent frame-delayed samples from crossing a reused platform pointer ID. |
-| `observability` | Observability substrate. `GestureEvent` is a typed `Display` enum of recogniser / arena event names; `SPAN_RECOGNIZER` and `SPAN_ARENA` are span-name constants; `pointer_event_kind` summarises a `PointerEvent` to a short string for span fields. `RecognizerBase::start_tracking` and public arena methods carry spans. Rejection and terminal tracking commit local withdrawal before emitting diagnostics, because subscribers can reenter or panic. |
+| `observability` | `GestureEvent` gives typed event names; `SPAN_RECOGNIZER` and `SPAN_ARENA` name spans, and `pointer_event_kind` describes a pointer event for tracing. Rejection and terminal tracking commit local withdrawal before diagnostics, because subscribers can reenter or panic. The app installs the subscriber. |
 
 ## Ownership and synchronization
 
 The synchronous pointer pipeline belongs to one `UiRealm`. `GestureBinding`,
 `GestureArena`, recognizers, pointer routes, and executable callbacks are
 intentionally `!Send + !Sync`; callbacks may capture `Rc` widget state.
-`Arc` in recognizer and arena internals provides stable identity, not a
-cross-thread execution contract.
+Strong `Rc` ownership belongs to widget state. Arena membership and cached
+recognizer attachments are weak, so they cannot keep unmounted recognizers alive.
 
 The data plane is separate. Pointer events, hit paths, IDs, transforms, and
 opaque route targets remain `Send + Sync` where the renderer or embedder needs
@@ -27,15 +27,15 @@ them. Compile-time assertions in `src/lib.rs` cover only those data types.
 
 | Site | Primitive | Reason |
 |---|---|---|
-| Arena slots | keyed maps + per-slot `parking_lot::Mutex` | exact slot transactions and callback-free state mutation; callbacks run after unlocking |
-| Recognizer state | small `parking_lot::Mutex` fields | interior mutation behind stable `Arc` identity on the owner lane |
+| Arena slots | `Rc<RefCell<BTreeMap<..>>>` and per-slot `RefCell` | exact owner-local slot transactions; callbacks and user destruction run after releasing borrows |
+| Recognizer state | `Cell` / `RefCell` behind `Rc` identity | synchronous owner-local mutation; callback configuration is immutable |
 | Pointer router / interaction lane | `Rc` + `RefCell` | explicitly owner-local executable callbacks |
 | Pointer resampler | `Arc<parking_lot::Mutex<ResamplerInner>>` | bounded data queue; sampling materializes a batch and unlocks before dispatch |
 | Focus manager | `Rc` + `RefCell` / `Cell`, one per presentation | owner-local focus tree and listeners |
 
-There is no `unsafe impl Send/Sync` in this crate. The sealed extension traits
-preserve lifecycle invariants, while negative compile-time assertions prevent
-the executable gesture graph from accidentally becoming cross-thread.
+Negative compiler fixtures reject transfer of executable recognizers, builders
+and attachments to another thread. Gesture extension traits are open; their
+implementations cannot change arena ordering or bypass exact membership checks.
 
 ## Mapping decisions
 
@@ -56,13 +56,37 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   `released_region_destructor_reenters_tracker` pin these contracts.
 
 - **Focus node identities are never reissued.** The allocator admits its final nonzero identity once and then refuses every new `FocusNode` with a panic, permanently, even after that panic is caught. Wrapping would hand a retired identity, and the focus authority it names, to a new node; refusing keeps every attached node's requests and listeners intact.
-- **Recogniser is a `Clone` struct; the lifecycle lives on `RecognizerBase`.** Multiple consumers can hold `Arc<Self>` cheaply. The trade-off: users get a stable struct API but cannot observe field changes without an explicit notifier (deferred; `flui-foundation::Notifier` is the candidate).
+- **Configure before sharing; cancel before releasing.** Builders return `Rc`
+  recognizers whose callbacks are immutable. Explicit `cancel` delivers an
+  active sequence's cancellation and leaves admission reusable. Last-owner Drop
+  silently withdraws exact membership and retires captures without gesture
+  callbacks. The `PrimaryContact` helper refuses overlapping admission and
+  gives each sequence a non-reissued `ContactId`; multi-contact recognizers use
+  `ArenaMembership` independently for each pointer.
+  `public_recognizer_extension_contracts` pins overlapping admission, settings
+  freezing, cancellation of every owner, silent Drop and later recovery.
 - **Pointer event types are W3C `ui-events`, not a local re-implementation.** Pointer events are `ui_events::pointer::*` (W3C-compliant), with a `DeviceId = i32` shim at the `InputEvent` enum layer. This keeps the crate aligned with the platform layer's event types and follows the workspace preference for a mature crate over a hand-rolled one.
 - **`TapButton` is a typed enum, not integer button constants.** `TapButton` (`src/recognizers/tap.rs`) maps pointer buttons explicitly through `from_pointer_button`, so the type system enforces the choice. It is `#[non_exhaustive]` so a future fourth button slot can be added without breaking downstream.
-- **`ArenaEntryData` is a `pub(crate)` struct.** The per-pointer state is a `pub(crate)` `SmallVec<[Arc<dyn GestureArenaMember>; 4]>` to keep the hot path alloc-free for ≤ 4 members (the typical tap + drag + long-press + double-tap case). The inline-4 capacity is justified by the bench: the `add_busy` case in `benches/gesture_arena_bench.rs` measures the heap-fallback cost separately.
-- **Sealed extension traits.** `GestureArenaMember` and `HitTestable` are sealed (supertrait `sealed::Sealed`). The blanket impl via `CustomGestureRecognizer` / `CustomHitTestable` is the only sanctioned extension point. The rationale is the same as the flui-foundation `sealed::Sealed` precedent: API evolution without breaking changes.
+- **Weak arena membership.** The inline-four member list stores weak identities,
+  not lifetime ownership. Dead members withdraw; queued verdicts recheck
+  liveness at each invocation. `gesture_arena_bench` measures empty and busy
+  admission separately. `gesture_lifecycle_matrix` pins withdrawal, generation
+  isolation, first-failure authority and subsequent recovery.
+  The generated operation sequences in
+  `arena_settles_every_member_exactly_once` assert terminal verdict uniqueness
+  and settlement across pointer reuse.
+- **Gesture extension points are open.** External recognizers implement the same
+  dyn-compatible `GestureRecognizer` and `GestureArenaMember` traits as built-ins.
+  Arbitration and deadlines use one path, with no marker-trait bridge losing
+  deadline behavior. `public_recognizer_extension_contracts` drives external
+  implementations through the same attachment and arbitration path.
+  Hit-test contracts are a separate surface.
 - **`pending_up` deferral for `on_tap_up`.** Before the fix, `handle_tap_up` fired `on_tap_up` and `on_tap` unconditionally on pointer up, even though every arena member receives Up events. The fix stores a `pending_up` until `accept_gesture` confirms arena victory; only the eventual winner fires the user callback. The same pattern was extended to per-button slots.
-- **A fired long press resolves its own arena.** `LongPressGestureRecognizer::try_fire_timer` is the single deadline path, shared by `check_timer`, `handle_move` and `did_exceed_deadline`. It snapshots and advances `Possible → Started` under the `gesture_state` lock, releases the lock, stops deadline polling, accepts the tracked arena entry, and only then invokes the user callbacks. A second fire after `Started` returns `false` without refiring.
+- **A fired long press resolves its own arena.** Deadline delivery commits the
+  started state and disarms the deadline before accepting exact membership and
+  invoking callbacks outside the state borrow. A repeated poll cannot refire
+  the sequence. The arena queries `deadline()` and supplies its single clock
+  reading to `poll_deadline(now)` only when due.
 - **Focus scope identity is explicit.** A `FocusScopeNode` owns an inner `FocusNode`, and that backing node carries a `Weak<FocusScopeNode>` owner link. This keeps enclosing-scope lookup, focused-child history, and `FocusManager::focus_next` / `focus_previous` rooted in the same tree instead of relying on a parallel manager structure. `descendants_are_focusable=false` gates descendant requests; a true-to-false transition evicts focus held by the node or its subtree while leaving the node eligible for a later explicit request. FLUI clears primary focus to `None` rather than selecting a previously focused child.
 - **`processing::lsq_solver` is crate-internal.** `VelocityTracker` is its only user; the resampler interpolates linearly and does not fit a polynomial.
 - **Observability is crate-public.** `pub mod observability` exports `GestureEvent`, `SPAN_RECOGNIZER`, `SPAN_ARENA`, `pointer_event_kind`. Downstream `flui-app` configures the subscriber and surfaces these to the devtools; the recognisers / arena emit them unconditionally.
@@ -87,8 +111,8 @@ Local design choices and why. Each entry names the conflict, the choice, and the
 | Command | Purpose |
 |---|---|
 | `cargo test -p flui-interaction --all-features` | Unit, integration, feature-gated testing helpers, and doctests across arena / recognisers / processing / routing / timer. |
-| `cargo test --doc -p flui-interaction` | Runnable public examples; illustrative `rust,ignore` snippets stay excluded until their surrounding framework fixtures exist. |
-| `cargo bench -p flui-interaction` | 5 Criterion benches (see [PERFORMANCE.md](PERFORMANCE.md)). No baseline numbers are recorded. |
+| `cargo test --doc -p flui-interaction` | Public source-documentation examples; standalone Markdown snippets also need inclusion in a rustdoc test target to run. |
+| `cargo bench -p flui-interaction` | Criterion workloads and saved-baseline comparisons (see [PERFORMANCE.md](PERFORMANCE.md)). |
 | `cargo clippy -p flui-interaction --lib --tests --benches -- -D warnings` | Lint gate — zero warnings. |
 | `cargo fmt -p flui-interaction --check` | Format gate. |
 
@@ -97,23 +121,23 @@ Local design choices and why. Each entry names the conflict, the choice, and the
 The observability substrate lives at [`crate::observability`](../src/observability.rs) (re-exported at
 the crate root as `flui_interaction::observability::*` and the three
 `GestureEvent` / `SPAN_RECOGNIZER` / `SPAN_ARENA` / `pointer_event_kind`
-items). `RecognizerBase::start_tracking` and `GestureArena::add` / `close` /
-`resolve` / `sweep` carry `#[tracing::instrument]` spans;
-`start_tracking` also records a typed `event = %GestureEvent::*` field. Configure your subscriber at
+items). Arena admission and resolution emit tracing spans and typed gesture
+events. Configure your subscriber at
 the app boundary; the crate does not install one. Filter via
 `RUST_LOG=flui_interaction::arena=debug,flui_interaction::recognizers=trace`.
 
 ## Friction log
 
 - **`is_resolved(pointer)` is a state query.** Callback failure is handled at
-  resolution boundaries; `parking_lot::Mutex` does not poison. Catching an
-  unwind is not a query for poisoned state.
+  resolution boundaries. Catching an unwind is not a query for poisoned state.
 - **`make_*_event` test helpers are `#[cfg(any(test, feature = "testing"))]`.** The benches depend on the `testing` feature being enabled in `dev-dependencies`. Documented at `Cargo.toml`; the gates will surface any missing opt-in.
 
 ## Outstanding refactors
 
-- **Doc-test sweep: convert the remaining 50 `rust,ignore` snippets to runnable.** The `processing::InputPredictor` and `routing::FocusManager` doc-tests are the next highest-value targets. The `testing` module builders (`ModifiersBuilder`, `KeyEventBuilder`) are the third tier. Land as a follow-up PR.
-- **Property tests for the gesture arena** (deferred). `proptest` over a sequence of `add` / `close` / `sweep` operations, asserting: every reachable pointer has a state, no arena has two winners, `is_resolved` ⇔ `winner_count >= 1` after `close`. Bench time + property-cost justifies a separate `flui-interaction/tests/proptest_arena.rs` file.
+- **Documentation validation includes source and Markdown.** Find remaining
+  excluded Rust examples with `rg 'rust,ignore' crates/flui-interaction/src`;
+  counts depend on the checked revision. An example is executable only when
+  its containing document is included by a rustdoc target.
 - **Concurrency models must match ownership.** The executable arena is
   owner-local; a parallel `add` / `resolve` model would test an unsupported
   execution contract. Deferred data-plane synchronization needs its own model.
@@ -267,11 +291,11 @@ close, and a later call that a closed owner rejects, drop them normally.
 
 ## Terminal drag ownership
 
-The physical shared drag callback owner guards independently owned callbacks
-and the start strategy. Replacement commits the incoming callback before retiring
-the old one outside all borrows. Disposal closes callback admission before
-resetting contact state and retiring outgoing callbacks. Callback invocation
-keeps its separate owner guarded across self-disposal and incoming unwind.
+The drag builder owns independently configured callbacks and the start strategy
+until construction. Built callbacks are immutable. Last-owner destruction
+withdraws contact state before retiring outgoing captures outside borrows.
+Callback invocation protects its owner across reentrant cancellation or owner
+release and incoming unwind.
 Rejection withdraws the exact arena entry and local contact before diagnostic
 subscribers run. Terminal tracking withdraws local state before arena sweep; a
 reentrant same-pointer contact belongs to its new generation and is not cleared
