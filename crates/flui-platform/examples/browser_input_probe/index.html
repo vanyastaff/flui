@@ -120,6 +120,8 @@ document.getElementById('fractional').onclick = () => check('fractional-check', 
     const wheel = new WheelEvent('wheel', { clientX: 100, clientY: 100, bubbles: true, deltaY: 1 });
     equal({ clientX: wheel.clientX, clientY: wheel.clientY }, { clientX: 100, clientY: 100 });
     report('wheel-source', JSON.stringify({ clientX: wheel.clientX, clientY: wheel.clientY, left: wheelRect.left, top: wheelRect.top, border: 2, padding: 3 }));
+    canvas.dispatchEvent(new PointerEvent('pointermove', { clientX: 100, clientY: 100, pointerId: 1, pointerType: 'mouse', bubbles: true }));
+    equal(JSON.parse(document.getElementById('move')?.textContent ?? 'null'), { x: 89.75, y: 46.25 });
     canvas.dispatchEvent(wheel);
     equal(JSON.parse(document.getElementById('scroll')?.textContent ?? 'null'), { x: 89.75, y: 46.25 });
     // A viewport rectangle cannot invert a transformed canvas. The browser's
