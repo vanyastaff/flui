@@ -202,7 +202,11 @@ pub(crate) fn lerp_outside_the_segment_saturates_and_nan_keeps_begin() {
     for t in [1e30, f64::MAX] {
         assert_eq!(black.lerp_to(&white, t), white, "black to white at t = {t}");
         assert_eq!(white.lerp_to(&black, t), black, "white to black at t = {t}");
-        assert_eq!(black.lerp_to(&white, -t), black, "black to white at t = -{t}");
+        assert_eq!(
+            black.lerp_to(&white, -t),
+            black,
+            "black to white at t = -{t}"
+        );
         assert_eq!(opaque.lerp_to(&clear, t).a, 0, "opaque to clear at t = {t}");
     }
     assert_eq!(Color::lerp(opaque, clear, f64::NAN), opaque);
