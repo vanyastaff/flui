@@ -187,6 +187,7 @@ fn known_hardware_and_fallback_contact_do_not_alias_and_callbacks_reenter() {
 
 #[test]
 fn pointer_source_contracts() {
+    let mut failures = Vec::new();
     for (name, row) in [
         (
             "borrowed raw source and reentry",
@@ -201,7 +202,13 @@ fn pointer_source_contracts() {
             known_hardware_and_fallback_contact_do_not_alias_and_callbacks_reenter,
         ),
     ] {
-        row();
-        let _ = name;
+        if let Err(payload) = std::panic::catch_unwind(row) {
+            flui_foundation::panic::retain_opaque_payload(payload);
+            failures.push(name);
+        }
     }
+    assert!(
+        failures.is_empty(),
+        "pointer source cases failed: {failures:?}"
+    );
 }
