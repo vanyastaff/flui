@@ -57,6 +57,133 @@ fn assert_scale(actual: f64, expected: f64) {
     );
 }
 
+/// Native pan is part of the same transform stream as native scale.
+pub(crate) fn viewer_native_pan_moves_the_scene_under_the_focal_point() {
+    use flui_widgets::TransformationController;
+    let controller = TransformationController::new();
+    let laid = lay_out(
+        viewer(controller.clone(), Rc::new(RefCell::new(Vec::new()))),
+        tight(100.0, 100.0),
+    );
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::Start));
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::Update(
+        PanZoomTransform::try_new(Offset::new(20.0, 10.0), 1.0, 0.0).expect("finite native pan"),
+    )));
+    let scene = controller.to_scene(Offset::new(70.0, 60.0));
+    assert_scale(scene.dx, 50.0);
+    assert_scale(scene.dy, 50.0);
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::End));
+}
+
+/// Start/end belong to a source session, rather than to every scale packet.
+pub(crate) fn viewer_native_session_reports_one_start_and_one_terminal() {
+    use flui_widgets::{GestureEndReason, InteractiveViewer};
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let starts = log.clone();
+    let updates = log.clone();
+    let ends = log.clone();
+    let laid = lay_out(
+        InteractiveViewer::new()
+            .boundary_margin(EdgeInsets::all(1000.0))
+            .on_interaction_start(move |_, _| starts.borrow_mut().push("start"))
+            .on_interaction_update(move |_, _| updates.borrow_mut().push("update"))
+            .on_interaction_end(move |_, details| {
+                ends.borrow_mut().push(match details.reason {
+                    GestureEndReason::Completed => "completed",
+                    GestureEndReason::Cancelled => "cancelled",
+                    _ => panic!("unexpected terminal reason"),
+                });
+            })
+            .child(SizedBox::new(100.0, 100.0)),
+        tight(100.0, 100.0),
+    );
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::Start));
+    laid.dispatch_pointer_event(&zoom_update(1.2));
+    laid.dispatch_pointer_event(&zoom_update(1.5));
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::End));
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::Start));
+    laid.dispatch_pointer_event(&zoom_update(1.1));
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::Cancelled));
+    assert_eq!(
+        *log.borrow(),
+        [
+            "start",
+            "update",
+            "update",
+            "completed",
+            "start",
+            "update",
+            "cancelled"
+        ]
+    );
+}
+
+/// A pan that has already won can acquire a second contact without restarting.
+pub(crate) fn viewer_pan_transitions_to_pinch_without_contact_count_jumps() {
+    use flui_interaction::events::{
+        make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
+    };
+    use flui_widgets::{InteractiveViewer, TransformationController};
+    let controller = TransformationController::new();
+    let lifecycle = Rc::new(RefCell::new(Vec::new()));
+    let start_log = lifecycle.clone();
+    let end_log = lifecycle.clone();
+    let laid = lay_out(
+        InteractiveViewer::new()
+            .controller(controller.clone())
+            .boundary_margin(EdgeInsets::all(1000.0))
+            .on_interaction_start(move |_, _| start_log.borrow_mut().push("start"))
+            .on_interaction_end(move |_, _| end_log.borrow_mut().push("end"))
+            .child(SizedBox::new(200.0, 200.0)),
+        tight(200.0, 200.0),
+    );
+    let first = PointerId::try_from(21_u64).expect("nonzero contact");
+    let second = PointerId::try_from(22_u64).expect("nonzero contact");
+    let down = |id, x| {
+        make_down_event_for_id(id, Offset::new(x, 50.0), PointerKind::Touch)
+            .expect("finite contact down")
+    };
+    let movement = |id, x| {
+        make_move_event_for_id(id, Offset::new(x, 50.0), PointerKind::Touch)
+            .expect("finite contact move")
+    };
+    let up = |id, x| {
+        make_up_event_for_id(id, Offset::new(x, 50.0), PointerKind::Touch)
+            .expect("finite contact up")
+    };
+    laid.dispatch_pointer_event(&down(first, 20.0));
+    laid.dispatch_pointer_event(&movement(first, 50.0));
+    let panned = controller.value();
+    assert_ne!(
+        panned,
+        flui_foundation::geometry::Matrix4::identity(),
+        "first contact really pans"
+    );
+    laid.dispatch_pointer_event(&down(second, 90.0));
+    assert_eq!(
+        controller.value(),
+        panned,
+        "adding a contact does not move the scene"
+    );
+    laid.dispatch_pointer_event(&movement(first, 30.0));
+    laid.dispatch_pointer_event(&movement(second, 110.0));
+    assert_scale(scale_of(&controller), 2.0);
+    let pinched = controller.value();
+    laid.dispatch_pointer_event(&up(first, 30.0));
+    assert_eq!(
+        controller.value(),
+        pinched,
+        "removing a contact rebases without a jump"
+    );
+    assert_eq!(
+        *lifecycle.borrow(),
+        ["start"],
+        "remaining contact owns the session"
+    );
+    laid.dispatch_pointer_event(&up(second, 110.0));
+    assert_eq!(*lifecycle.borrow(), ["start", "end"]);
+}
+
 fn mouse() -> PointerInfo {
     PointerInfo::new(
         PointerId::try_from(7_u64).expect("valid pointer"),
