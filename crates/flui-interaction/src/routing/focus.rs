@@ -77,6 +77,9 @@ pub struct FocusManager {
     /// `closed`, so a later close still retires what the manager holds.
     retired: Cell<bool>,
     close_mode: CloseTombstone,
+    /// Failure policy while observer or queued-retirement user code is running.
+    /// Nested calls restore the previous policy rather than clearing an outer failure.
+    notification_failure: Cell<CloseMode>,
     /// Depth of the commit+notify transaction currently publishing a focus
     /// transition. Zero between transitions; `>0` while node or manager
     /// listeners for that transition are running, including reentrant
@@ -116,6 +119,27 @@ impl Drop for NotificationDepthGuard<'_> {
     }
 }
 
+/// Makes a caught failure visible to nested owner cleanup without retaining
+/// that policy after the observer call has returned to its caller.
+pub(super) struct NotificationFailureGuard<'a> {
+    mode: &'a Cell<CloseMode>,
+    previous: CloseMode,
+}
+
+impl NotificationFailureGuard<'_> {
+    pub(super) fn preserve(&self, preserving: bool) {
+        if preserving {
+            self.mode.set(CloseMode::PreservingFailure);
+        }
+    }
+}
+
+impl Drop for NotificationFailureGuard<'_> {
+    fn drop(&mut self) {
+        self.mode.set(self.previous);
+    }
+}
+
 impl FocusManager {
     /// Maximum reentrant focus transitions applied per outermost
     /// `request_focus`/`unfocus`/`close` call.
@@ -147,6 +171,7 @@ impl FocusManager {
             closed: Cell::new(false),
             retired: Cell::new(false),
             close_mode: CloseTombstone::default(),
+            notification_failure: Cell::new(CloseMode::Ordinary),
             notification_depth: Cell::new(0),
             pending_focus_transitions: RefCell::new(VecDeque::new()),
         })
@@ -162,6 +187,26 @@ impl FocusManager {
     #[inline]
     pub fn primary_focus(&self) -> Option<Rc<FocusNode>> {
         self.primary_focus.borrow().clone()
+    }
+
+    pub(super) fn notification_failure_mode(&self) -> CloseMode {
+        if self.notification_failure.get() == CloseMode::PreservingFailure {
+            CloseMode::PreservingFailure
+        } else {
+            self.close_mode.mode()
+        }
+    }
+
+    pub(super) fn notification_failure_scope(
+        &self,
+        failure: &FocusClosePanic,
+    ) -> NotificationFailureGuard<'_> {
+        let guard = NotificationFailureGuard {
+            mode: &self.notification_failure,
+            previous: self.notification_failure.get(),
+        };
+        guard.preserve(failure.preserving());
+        guard
     }
 
     /// Whether this manager currently has primary focus.
@@ -227,7 +272,7 @@ impl FocusManager {
             self.pending_focus_transitions.borrow_mut().push_back(node);
             return;
         }
-        let mut failure = FocusClosePanic::for_rejection(self.close_mode.mode());
+        let mut failure = FocusClosePanic::for_rejection(self.notification_failure_mode());
         self.apply_focus_transition(node, &mut failure);
         self.drain_pending_focus_transitions(&mut failure);
         failure.finish();
@@ -289,6 +334,7 @@ impl FocusManager {
     fn drain_pending_focus_transitions(&self, failure: &mut FocusClosePanic) {
         let mut applied = 0usize;
         loop {
+            let failure_guard = self.notification_failure_scope(failure);
             if self.closed.get() {
                 let pending = std::mem::take(&mut *self.pending_focus_transitions.borrow_mut());
                 for node in pending {
@@ -308,6 +354,7 @@ impl FocusManager {
                         "skipping a queued focus transition whose target is no longer eligible"
                     );
                 });
+                failure_guard.preserve(failure.preserving());
                 failure.retire(node);
                 continue;
             }
@@ -335,6 +382,7 @@ impl FocusManager {
                          dropping the rest of the queue"
                     );
                 });
+                failure_guard.preserve(failure.preserving());
                 failure.retire(node);
                 for node in pending {
                     failure.retire(node);
@@ -503,8 +551,10 @@ impl FocusManager {
                 .find(|(registered, _)| *registered == id)
                 .map(|(_, listener)| Rc::clone(listener));
             if let Some(listener) = listener {
+                let failure_guard = self.notification_failure_scope(failure);
                 failure.adopt(self.close_mode.mode());
                 let _ = failure.invoke(|| listener(previous.clone(), new.clone()));
+                failure_guard.preserve(failure.preserving());
                 failure.retire(listener);
             }
         }
@@ -789,6 +839,11 @@ impl FocusManager {
     }
 
     pub(crate) fn close_with_mode(&self, mode: CloseMode) {
+        let mode = if self.notification_failure_mode() == CloseMode::PreservingFailure {
+            CloseMode::PreservingFailure
+        } else {
+            mode
+        };
         let mut failure = FocusClosePanic::for_close(mode, self.close_mode.clone());
         if self.retired.replace(true) {
             return;

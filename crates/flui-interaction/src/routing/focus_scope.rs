@@ -808,8 +808,15 @@ impl FocusNode {
                 .find(|(registered, _)| *registered == id)
                 .map(|(_, listener)| Rc::clone(listener));
             if let Some(listener) = listener {
+                let owner = self.manager();
+                let failure_guard = owner
+                    .as_ref()
+                    .map(|owner| owner.notification_failure_scope(failure));
                 failure.adopt(self.close_mode());
                 let _ = failure.invoke(|| listener());
+                if let Some(guard) = &failure_guard {
+                    guard.preserve(failure.preserving());
+                }
                 failure.retire(listener);
             }
         }
@@ -834,6 +841,9 @@ impl FocusNode {
     fn close_mode(&self) -> CloseMode {
         match &*self.manager_binding.borrow() {
             ManagerBinding::Closed(tombstone) => tombstone.mode(),
+            ManagerBinding::Bound(owner) => owner.upgrade().map_or(CloseMode::Ordinary, |owner| {
+                owner.notification_failure_mode()
+            }),
             _ => CloseMode::Ordinary,
         }
     }
