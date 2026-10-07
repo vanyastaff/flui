@@ -789,7 +789,11 @@ impl ArenaEntryData {
         branch: Option<&CompositionBranch>,
     ) -> bool {
         if self.is_open && !self.is_resolved {
-            if branch.is_some()
+            if (branch.is_some()
+                || self
+                    .branches
+                    .iter()
+                    .any(|(existing, _)| Weak::ptr_eq(existing, &Rc::downgrade(member))))
                 && self
                     .members
                     .iter()
@@ -1987,8 +1991,13 @@ impl GestureArena {
 
     /// Check if an arena has an eager winner.
     pub fn has_eager_winner(&self, pointer: PointerId) -> bool {
-        self.inspection_slot(pointer)
-            .is_some_and(|slot| slot.data.borrow().eager_winner.is_some())
+        self.inspection_slot(pointer).is_some_and(|slot| {
+            let entry = slot.data.borrow();
+            entry
+                .eager_winner
+                .as_ref()
+                .is_some_and(|winner| !entry.is_blocked(winner))
+        })
     }
 
     /// Check if sweep is pending for an arena.
