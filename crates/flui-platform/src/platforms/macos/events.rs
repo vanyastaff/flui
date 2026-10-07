@@ -476,3 +476,59 @@ fn extract_mouse_buttons() -> PointerButtons {
     }
     buttons
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_scroll_phases_preserve_momentum_and_unphased_wheels() {
+        for (phase, momentum, expected) in [
+            (NSEventPhase::None, NSEventPhase::None, None),
+            (NSEventPhase::MayBegin, NSEventPhase::None, None),
+            (NSEventPhase::Began, NSEventPhase::None, Some(ScrollPhase::Began)),
+            (NSEventPhase::Changed, NSEventPhase::None, Some(ScrollPhase::Changed)),
+            (NSEventPhase::Ended, NSEventPhase::None, Some(ScrollPhase::Ended)),
+            (NSEventPhase::Cancelled, NSEventPhase::None, Some(ScrollPhase::Cancelled)),
+            (NSEventPhase::None, NSEventPhase::Began, Some(ScrollPhase::MomentumBegan)),
+            (NSEventPhase::None, NSEventPhase::Changed, Some(ScrollPhase::MomentumChanged)),
+            (NSEventPhase::Ended, NSEventPhase::Ended, Some(ScrollPhase::MomentumEnded)),
+        ] {
+            assert_eq!(scroll_phase(phase, momentum), expected);
+        }
+    }
+
+    #[test]
+    fn native_pinch_and_rotation_share_one_cumulative_gesture() {
+        let mut state = MacInputState::default();
+        let at = PointerPosition::try_new(flui_foundation::geometry::Point::new(10.25, 20.5)).expect("finite");
+        let time = EventTime::from_nanos(10);
+        let modifiers = flui_platform_api::keyboard::Modifiers::NONE;
+        assert!(state.gesture(1, NSEventPhase::Changed, 1.1, 0.0, at, time, modifiers).is_empty());
+        let first = state.gesture(1, NSEventPhase::Began, 1.1, 0.0, at, time, modifiers);
+        assert_eq!(first.len(), 2);
+        assert_eq!(first[0].phase, PanZoomPhase::Start);
+        let id = first[0].pointer().id;
+        let joined = state.gesture(2, NSEventPhase::Began, 1.0, -std::f64::consts::FRAC_PI_6, at, time, modifiers);
+        assert_eq!(joined.len(), 1);
+        let PanZoomPhase::Update(transform) = joined[0].phase else { panic!("update") };
+        assert_eq!(joined[0].pointer().id, id);
+        assert_eq!(transform.scale(), 1.1);
+        assert_eq!(transform.rotation(), -std::f64::consts::FRAC_PI_6);
+        let ended_component = state.gesture(1, NSEventPhase::Ended, 1.2, 0.0, at, time, modifiers);
+        assert_eq!(ended_component.len(), 1);
+        let last = state.gesture(2, NSEventPhase::Ended, 1.0, -std::f64::consts::FRAC_PI_6, at, time, modifiers);
+        assert_eq!(last.len(), 2);
+        let PanZoomPhase::Update(transform) = last[0].phase else { panic!("update") };
+        assert!((transform.scale() - 1.32).abs() < 1e-12);
+        assert_eq!(transform.rotation(), -std::f64::consts::FRAC_PI_3);
+        assert_eq!(last[1].phase, PanZoomPhase::End);
+        assert_eq!(last[1].pointer().id, id);
+        let next = state.gesture(1, NSEventPhase::Began, 1.0, 0.0, at, time, modifiers);
+        assert_ne!(next[0].pointer().id, id);
+        let cancelled = state.gesture(1, NSEventPhase::Cancelled, f64::NAN, 0.0, at, time, modifiers);
+        assert_eq!(cancelled.len(), 1);
+        assert_eq!(cancelled[0].phase, PanZoomPhase::Cancelled);
+        assert!(state.gesture(1, NSEventPhase::Changed, 1.1, 0.0, at, time, modifiers).is_empty());
+    }
+}
