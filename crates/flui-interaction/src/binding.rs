@@ -1755,7 +1755,7 @@ impl std::fmt::Debug for GestureBinding {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::rc::Rc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
@@ -1962,10 +1962,10 @@ mod tests {
         use std::cell::Cell;
 
         let binding = GestureBinding::new();
-        let old_member = Arc::new(CountingArenaMember::default());
+        let old_member = Rc::new(CountingArenaMember::default());
         let down = make_down_event(Offset::new(1.0, 2.0), PointerType::Touch);
         binding.handle_pointer_event(&down, |_| {
-            binding.arena().add(PointerId::PRIMARY, old_member.clone());
+            binding.arena().add(PointerId::PRIMARY, &old_member);
             HitTestResult::new()
         });
         let move_event = make_move_event(Offset::new(3.0, 4.0), PointerType::Touch);
@@ -2182,7 +2182,7 @@ mod tests {
         let handle = lane.dispatch_handle();
         let binding = Rc::new(GestureBinding::new());
         let log = Rc::new(RefCell::new(Vec::new()));
-        let arena_member = Arc::new(CountingArenaMember::default());
+        let arena_member = Rc::new(CountingArenaMember::default());
 
         lane.enter(|| {
             let sink = Rc::clone(&log);
@@ -2203,7 +2203,7 @@ mod tests {
             let binding_for_down = Rc::clone(&binding);
             let member = arena_member.clone();
             binding.handle_pointer_event(&down, move |_| {
-                binding_for_down.arena().add(PointerId::PRIMARY, member);
+                binding_for_down.arena().add(PointerId::PRIMARY, &member);
                 result
             });
             assert_eq!(&*log.borrow(), &["down"]);
@@ -2396,13 +2396,13 @@ mod tests {
                 })
                 .expect("register later target");
 
+            let mut members = Vec::new();
             for pointer in [first_pointer, later_pointer] {
-                binding
-                    .arena()
-                    .add(pointer, Arc::new(CountingArenaMember::default()));
-                binding
-                    .arena()
-                    .add(pointer, Arc::new(CountingArenaMember::default()));
+                for _ in 0..2 {
+                    let member = Rc::new(CountingArenaMember::default());
+                    binding.arena().add(pointer, &member);
+                    members.push(member);
+                }
             }
 
             let first_down =
@@ -2532,12 +2532,13 @@ mod tests {
             let mut result = HitTestResult::new();
             result.add(HitTestEntry::new(RenderId::new(1)).pointer_target(unregistering_target));
             result.add(HitTestEntry::new(RenderId::new(2)).pointer_target(later_target));
-            binding
-                .arena()
-                .add(PointerId::PRIMARY, Arc::new(CountingArenaMember::default()));
-            binding
-                .arena()
-                .add(PointerId::PRIMARY, Arc::new(CountingArenaMember::default()));
+            let members = [
+                Rc::new(CountingArenaMember::default()),
+                Rc::new(CountingArenaMember::default()),
+            ];
+            for member in &members {
+                binding.arena().add(PointerId::PRIMARY, member);
+            }
 
             let down = make_down_event(Offset::new(6.0, 6.0), PointerType::Touch);
             binding.handle_pointer_event(&down, |_| result);
@@ -2570,13 +2571,15 @@ mod tests {
         lane.enter(|| {
             let probe = SetOnDrop(Rc::clone(&handler_dropped));
             let arena = binding.arena().clone();
+            let accepting_member = Rc::new(PanickingAcceptArenaMember);
+            let competing_member = Rc::new(CountingArenaMember::default());
             let target = handle
                 .register_pointer(move |dispatch| {
                     let event = dispatch.local;
                     let _keep_probe_alive = &probe;
                     if matches!(event, PointerEvent::Down(_)) {
-                        arena.add(PointerId::PRIMARY, Arc::new(PanickingAcceptArenaMember));
-                        arena.add(PointerId::PRIMARY, Arc::new(CountingArenaMember::default()));
+                        arena.add(PointerId::PRIMARY, &accepting_member);
+                        arena.add(PointerId::PRIMARY, &competing_member);
                     }
                 })
                 .expect("register hit target");
