@@ -21,7 +21,7 @@ use parking_lot::Mutex;
 
 use super::{
     recognizer::{GestureRecognizer, RecognizerBase},
-    scale::{finish_containment, invoke_callback, retire_callback},
+    recognizer::{finish_containment, invoke_callback, retire_callback},
 };
 use crate::{
     arena::{GestureArenaEntry, GestureArenaMember, GestureDisposition, SweepModel},
@@ -193,15 +193,18 @@ impl ForcePressState {
         )
     }
 
-    /// Record one pressure sample. Non-finite samples are ignored.
-    fn record_pressure(&mut self, pressure: f64) {
+    /// Record one pressure sample. A non-finite sample is ignored and reported
+    /// as not admitted, so the caller makes no transition from it.
+    #[must_use]
+    fn record_pressure(&mut self, pressure: f64) -> bool {
         if !pressure.is_finite() {
-            return;
+            return false;
         }
         if pressure != SENSORLESS_ACTIVE_PRESSURE && pressure != 0.0 {
             self.sensor = true;
         }
         self.pressure = pressure;
+        true
     }
 
     /// Enter `Started`, plus `Peaked` when the pressure is already there.
@@ -409,7 +412,7 @@ impl ForcePressGestureRecognizer {
             Notice::End(d) => (callbacks.on_end.clone(), d),
         };
         drop(callbacks);
-        invoke_callback(callback, |cb| cb(details));
+        invoke_callback(callback, || {}, |cb| cb(details));
     }
 
     /// End the tracked sequence: reset the state, clear the base's tracking
@@ -456,10 +459,19 @@ impl ForcePressGestureRecognizer {
         if global_position.is_finite() {
             state.global_position = global_position;
         }
-        state.record_pressure(pressure);
+        if !state.record_pressure(pressure) {
+            // An ignored sample makes no transition: no update or peak from a
+            // stale pressure paired with the new position.
+            return;
+        }
 
         let mut step = ArenaStep::None;
         match state.phase {
+            // A pressure fall before the claim is accepted withdraws it, as a
+            // fall before the start does.
+            ForcePressPhase::Claiming if state.pressure < thresholds.start => {
+                step = self.retire_sequence(&mut state, &mut notices);
+            }
             ForcePressPhase::Possible if state.sensor && state.pressure >= thresholds.start => {
                 if state.won {
                     state.start(thresholds.peak, &mut notices);
@@ -526,6 +538,10 @@ impl GestureRecognizer for ForcePressGestureRecognizer {
             Some(current) if current != pointer => return,
             Some(_) => self.handle_release(None, None),
             None => {}
+        }
+        // The retired sequence's `on_end` may have disposed this recognizer.
+        if self.state.is_disposed() {
+            return;
         }
         self.state
             .start_tracking(pointer, position, global_position, self);

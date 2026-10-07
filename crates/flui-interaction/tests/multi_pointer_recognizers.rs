@@ -493,6 +493,10 @@ fn scale_publishes_finite_continuous_values_and_owns_its_contacts() {
         "scale",
         &[
             (
+                "extreme finite contacts",
+                scale_measures_extreme_finite_contacts,
+            ),
+            (
                 "zero horizontal baseline",
                 scale_axis_with_zero_baseline_holds_finite,
             ),
@@ -538,6 +542,7 @@ fn scale_publishes_finite_continuous_values_and_owns_its_contacts() {
 #[derive(Default)]
 struct PressLog {
     starts: Cell<usize>,
+    updates: Cell<usize>,
     peaks: Cell<usize>,
     ends: Cell<usize>,
     panic_start: Cell<bool>,
@@ -545,13 +550,14 @@ struct PressLog {
 
 fn press_on(rig: &Rig) -> (Arc<ForcePressGestureRecognizer>, Rc<PressLog>) {
     let log = Rc::new(PressLog::default());
-    let (s, p, e) = (log.clone(), log.clone(), log.clone());
+    let (s, p, u, e) = (log.clone(), log.clone(), log.clone(), log.clone());
     let recognizer = ForcePressGestureRecognizer::new(rig.binding.arena().clone())
         .with_on_start(move |_| {
             s.starts.set(s.starts.get() + 1);
             trip(&s.panic_start, "force press start callback panic");
         })
         .with_on_peak(move |_| p.peaks.set(p.peaks.get() + 1))
+        .with_on_update(move |_| u.updates.set(u.updates.get() + 1))
         .with_on_end(move |_| e.ends.set(e.ends.get() + 1));
     (recognizer, log)
 }
@@ -686,6 +692,10 @@ fn force_press_needs_a_sensor_and_the_arena() {
             ),
             ("cancel", force_press_cancel_ends_once),
             ("dispose from start", force_press_disposed_from_its_start),
+            (
+                "non-finite pressure ignored",
+                force_press_ignores_a_non_finite_pressure_sample,
+            ),
         ],
     );
 }
@@ -1010,4 +1020,47 @@ fn eager_wins_at_close_and_forgets_a_finished_contact() {
         "the cancelled contact is over"
     );
     assert_eq!(taps.get(), 0, "the eager member won every contact");
+}
+
+/// A non-finite pressure sample during an active press makes no transition: no
+/// update (or peak) from the stale pressure paired with the new position.
+fn force_press_ignores_a_non_finite_pressure_sample() {
+    let updates_after = |pressures: &[f32]| {
+        let rig = Rig::new();
+        let (press_rec, log) = press_on(&rig);
+        rig.attach(&press_rec, None);
+        press(&rig, 1, pressures);
+        log.updates.get()
+    };
+    assert_eq!(
+        updates_after(&[0.7, 0.7, f32::NAN]),
+        updates_after(&[0.7, 0.7]),
+        "the NaN sample published nothing"
+    );
+}
+
+/// Contacts at large finite coordinates whose centroid is finite still measure:
+/// the scale starts and publishes a finite focal point.
+fn scale_measures_extreme_finite_contacts() {
+    let rig = Rig::new();
+    let (_scale, log) = scale_on(&rig);
+    let far = 1.0e308;
+    rig.down(1, far - 2.0e292, far);
+    rig.down(2, far, far);
+    rig.frame();
+    rig.move_to(1, far - 4.0e292, far);
+    rig.move_to(2, far, far);
+    assert_eq!(
+        log.starts.get(),
+        1,
+        "the scale started from a real measurement"
+    );
+    let updates = log.updates.borrow();
+    assert!(!updates.is_empty(), "the gesture published updates");
+    assert!(
+        updates
+            .iter()
+            .all(|update| update.focal_point.dx > 1.0e307 && update.focal_point.dy.is_finite()),
+        "every focal point is the contacts' real, finite centroid"
+    );
 }

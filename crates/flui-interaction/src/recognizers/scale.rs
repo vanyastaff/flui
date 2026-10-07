@@ -22,65 +22,17 @@ use std::{
 use flui_foundation::geometry::Offset;
 use parking_lot::Mutex;
 
-use super::recognizer::{GestureRecognizer, RecognizerBase};
+use super::recognizer::{
+    GestureRecognizer, RecognizerBase, finish_containment, invoke_callback, retire_callback,
+};
 use crate::{
     arena::{GestureArenaEntry, GestureArenaMember, GestureDisposition, SweepModel},
     events::{PointerEvent, PointerType},
     ids::PointerId,
     processing::VelocityTracker,
-    retain::Retain,
     routing::{PointerDispatch, RoutePanic},
     settings::GestureSettings,
 };
-
-// ============================================================================
-// Callback containment shared by the multi-pointer recognizers
-// ============================================================================
-
-/// Run one user callback after the caller has committed its own state and
-/// released every lock and `RefCell` borrow.
-///
-/// The callback may reenter the recognizer (dispose it, replace a callback,
-/// feed it an event). A panic from the callback propagates to the caller once
-/// the callback's `Rc` has been released; when this thread is already
-/// unwinding, the callback is not run and its owner is retained instead of
-/// destroyed, so a capture's `Drop` cannot turn one panic into an abort.
-pub(super) fn invoke_callback<T: ?Sized>(callback: Option<Rc<T>>, invoke: impl FnOnce(&T)) {
-    let incoming_failure = std::thread::panicking();
-    let mut first = None;
-    if !incoming_failure && let Some(callback) = callback.as_ref() {
-        first = RoutePanic::capture(|| invoke(callback.as_ref()));
-    }
-    retire_callback(callback, &mut first);
-    finish_containment(first, incoming_failure);
-}
-
-/// Release one callback owner. After a failure (an earlier captured panic or
-/// an unwinding thread) a last owner is retained rather than destroyed; on the
-/// healthy path a panicking capture `Drop` is captured as the first failure.
-pub(super) fn retire_callback<T: ?Sized>(callback: Option<Rc<T>>, first: &mut Option<RoutePanic>) {
-    if first.is_some() || std::thread::panicking() {
-        callback.retain();
-    } else {
-        RoutePanic::preserve_first(
-            first,
-            RoutePanic::capture(|| drop(callback)),
-            "recognizer callback retirement",
-        );
-    }
-}
-
-/// Resume the first captured panic, or retain it when the thread was already
-/// unwinding before the containment began.
-pub(super) fn finish_containment(first: Option<RoutePanic>, incoming_failure: bool) {
-    if let Some(panic) = first {
-        if incoming_failure {
-            panic.retain();
-        } else {
-            panic.resume();
-        }
-    }
-}
 
 // ============================================================================
 // Public surface
@@ -281,11 +233,12 @@ impl Measure {
             return None;
         }
         let count = contacts.len() as f64;
-        let mut sum = Offset::ZERO;
+        // Each position is divided before summing, so large finite positions
+        // whose centroid is finite do not overflow on the way there.
+        let mut focal = Offset::ZERO;
         for contact in contacts {
-            sum += contact.position;
+            focal += Offset::new(contact.position.dx / count, contact.position.dy / count);
         }
-        let focal = Offset::new(sum.dx / count, sum.dy / count);
         let (mut span, mut horizontal, mut vertical) = (0.0, 0.0, 0.0);
         for contact in contacts {
             let delta = contact.position - focal;
@@ -466,6 +419,9 @@ impl ScaleState {
         {
             return None;
         }
+        // Never start from a stale focal point: the contacts must measure.
+        let measure = Measure::of(&self.contacts)?;
+        self.focal_point = measure.focal;
         self.phase = ScalePhase::Started;
         Some(ScaleStartDetails {
             focal_point: self.focal_point,
@@ -609,19 +565,19 @@ impl ScaleGestureRecognizer {
             Outcome::Nothing => {}
             Outcome::Start(details) => {
                 let callback = self.callbacks.borrow().on_start.clone();
-                invoke_callback(callback, |cb| cb(details));
+                invoke_callback(callback, || {}, |cb| cb(details));
             }
             Outcome::Update(details) => {
                 let callback = self.callbacks.borrow().on_update.clone();
-                invoke_callback(callback, |cb| cb(details));
+                invoke_callback(callback, || {}, |cb| cb(details));
             }
             Outcome::End(details) => {
                 let callback = self.callbacks.borrow().on_end.clone();
-                invoke_callback(callback, |cb| cb(details));
+                invoke_callback(callback, || {}, |cb| cb(details));
             }
             Outcome::Cancel => {
                 let callback = self.callbacks.borrow().on_cancel.clone();
-                invoke_callback(callback, |cb| cb());
+                invoke_callback(callback, || {}, |cb| cb());
             }
         }
     }

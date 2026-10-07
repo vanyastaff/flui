@@ -45,7 +45,7 @@ use web_time::Instant;
 
 use super::{
     recognizer::{GestureRecognizer, RecognizerBase},
-    scale::{finish_containment, invoke_callback, retire_callback},
+    recognizer::{finish_containment, invoke_callback, retire_callback},
 };
 use crate::{
     arena::{GestureArenaEntry, GestureArenaMember, GestureDisposition, SweepModel},
@@ -520,32 +520,32 @@ impl TapAndDragGestureRecognizer {
             Notice::TapDown(d) => {
                 let cb = callbacks.on_tap_down.clone();
                 drop(callbacks);
-                invoke_callback(cb, |cb| cb(d));
+                invoke_callback(cb, || {}, |cb| cb(d));
             }
             Notice::TapUp(d) => {
                 let cb = callbacks.on_tap_up.clone();
                 drop(callbacks);
-                invoke_callback(cb, |cb| cb(d));
+                invoke_callback(cb, || {}, |cb| cb(d));
             }
             Notice::DragStart(d) => {
                 let cb = callbacks.on_drag_start.clone();
                 drop(callbacks);
-                invoke_callback(cb, |cb| cb(d));
+                invoke_callback(cb, || {}, |cb| cb(d));
             }
             Notice::DragUpdate(d) => {
                 let cb = callbacks.on_drag_update.clone();
                 drop(callbacks);
-                invoke_callback(cb, |cb| cb(d));
+                invoke_callback(cb, || {}, |cb| cb(d));
             }
             Notice::DragEnd(d) => {
                 let cb = callbacks.on_drag_end.clone();
                 drop(callbacks);
-                invoke_callback(cb, |cb| cb(d));
+                invoke_callback(cb, || {}, |cb| cb(d));
             }
             Notice::Cancel => {
                 let cb = callbacks.on_cancel.clone();
                 drop(callbacks);
-                invoke_callback(cb, |cb| cb());
+                invoke_callback(cb, || {}, |cb| cb());
             }
         }
     }
@@ -718,6 +718,10 @@ impl GestureRecognizer for TapAndDragGestureRecognizer {
                 .map_or(ArenaStep::None, ArenaStep::Withdraw);
             self.clear_base_tracking();
             self.finish(step, notices);
+            // The retired sequence's `on_cancel` may have disposed this recognizer.
+            if self.state.is_disposed() {
+                return;
+            }
         }
 
         let now = self.state.now();
