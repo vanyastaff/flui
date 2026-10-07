@@ -1490,7 +1490,6 @@ mod native_windows {
             if !unsafe { PeekMessageW(&raw mut message, Some(hwnd), 0, 0, PM_REMOVE) }.as_bool() {
                 return;
             }
-            trace_native_pointer(&message);
             // SAFETY: translate and dispatch the message this thread's queue
             // returned.
             unsafe {
@@ -2645,11 +2644,13 @@ mod native_windows {
                 (POINTER_FLAG_UP, 0),
             ] {
                 let mut current_origin = POINT { x: 40, y: 40 };
-                // SAFETY: diagnostic queries for this live ephemeral window;
-                // they do not redirect or fabricate the native injected target.
+                // SAFETY: queries for this live ephemeral window do not redirect
+                // or fabricate the native injected target.
                 unsafe {
                     assert!(ClientToScreen(hwnd, &mut current_origin).as_bool());
-                    eprintln!("NATIVE_TARGET before injection owned={hwnd:?} requested={target:?} current_client40={current_origin:?} hit={:?} foreground={:?} flags={flags:?}", WindowFromPoint(target), windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow());
+                    assert_eq!((current_origin.x, current_origin.y), (target.x, target.y), "owned target must not move during injection");
+                    assert_eq!(WindowFromPoint(target), hwnd, "native injection must still hit the owned target");
+                    assert_eq!(windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow(), hwnd, "owned target must remain foreground during injection");
                 }
                 let info = POINTER_INFO { pointerType: native_kind, pointerId: 1, pointerFlags: flags, ptPixelLocation: target, ptPixelLocationRaw: target, ..Default::default() };
                 let packet = if native_kind == PT_TOUCH {
@@ -2676,7 +2677,7 @@ mod native_windows {
                     std::thread::sleep(Duration::from_millis(2));
                 }
                 // SAFETY: read the actual hit target after native queue pumping.
-                eprintln!("NATIVE_TARGET after pump owned={hwnd:?} hit={:?} foreground={:?}", unsafe { WindowFromPoint(target) }, unsafe { windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() });
+                assert_eq!(unsafe { WindowFromPoint(target) }, hwnd, "owned target must remain hit-testable after native dispatch");
             }
             if !supported { continue; }
             let log = events.lock().expect("pointer log");
@@ -2715,34 +2716,6 @@ mod native_windows {
         window.close();
     }
 
-    #[expect(unsafe_code, reason = "read-only native pointer queries after actual queue retrieval before owner-thread dispatch")]
-    fn trace_native_pointer(message: &MSG) {
-        use windows::Win32::UI::{Input::Pointer::*, WindowsAndMessaging::*};
-            if matches!(message.message, WM_POINTERDOWN | WM_POINTERUP | WM_POINTERUPDATE | WM_POINTERENTER | WM_POINTERLEAVE | WM_POINTERCAPTURECHANGED | WM_POINTERWHEEL | WM_POINTERHWHEEL) {
-                let raw = (message.wParam.0 & 0xffff) as u32;
-                let mut info = POINTER_INFO::default();
-                // SAFETY: initialized native output, current message's raw ID.
-                let current = unsafe { GetPointerInfo(raw, &mut info) };
-                eprintln!("NATIVE_POINTER message={} raw={} queue_tick={} retrieved_tick={} current={:?} info={info:?}", message.message, raw, unsafe { GetMessageTime() }, message.time, current);
-                if current.is_ok() {
-                    let mut count = info.historyCount.max(1);
-                    if info.pointerType == PT_TOUCH {
-                        let mut reading = POINTER_TOUCH_INFO::default();
-                        let mut history = vec![POINTER_TOUCH_INFO::default(); count as usize];
-                        // SAFETY: initialized current/history buffers sized by
-                        // this packet's count; no owner state is touched.
-                        let (current, historical) = unsafe { (GetPointerTouchInfo(raw, &mut reading), GetPointerTouchInfoHistory(raw, &mut count, Some(history.as_mut_ptr()))) };
-                        eprintln!("NATIVE_TOUCH current={current:?} reading={reading:?} history={historical:?} count={count} history_head={:?}", history.first());
-                    } else if info.pointerType == PT_PEN {
-                        let mut reading = POINTER_PEN_INFO::default();
-                        let mut history = vec![POINTER_PEN_INFO::default(); count as usize];
-                        // SAFETY: same owned initialized output-buffer contract.
-                        let (current, historical) = unsafe { (GetPointerPenInfo(raw, &mut reading), GetPointerPenInfoHistory(raw, &mut count, Some(history.as_mut_ptr()))) };
-                        eprintln!("NATIVE_PEN current={current:?} reading={reading:?} history={historical:?} count={count} history_head={:?}", history.first());
-                    }
-                }
-            }
-    }
 
     #[expect(unsafe_code, reason = "drains actual native pointer broker messages on the child window's owner thread")]
     fn pump_pointer_thread() {
@@ -2751,8 +2724,6 @@ mod native_windows {
             // SAFETY: this child owns every window on this thread, including
             // the platform's message-only broker. No HWND filter excludes it.
             if !unsafe { PeekMessageW(&mut message, None, 0, 0, PM_REMOVE) }.as_bool() { return; }
-            eprintln!("NATIVE_QUEUE hwnd={:?} message={} tick={}", message.hwnd, message.message, message.time);
-            trace_native_pointer(&message);
             // SAFETY: dispatch the actual message retrieved by this thread.
             unsafe { let _ = TranslateMessage(&message); DispatchMessageW(&message); }
         }

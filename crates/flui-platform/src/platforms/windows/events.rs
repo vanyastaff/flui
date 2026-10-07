@@ -1,4 +1,4 @@
-//! Win32 message conversion to W3C ui-events (0.3 API).
+//! Win32 message conversion to owned platform input.
 //!
 //! `window_proc` unpacks every mouse and keyboard message through these
 //! functions:
@@ -281,9 +281,7 @@ fn native_history(raw: u32) -> Option<Vec<NativeReading>> {
     // obtained from the message; Windows rejects stale or invented IDs.
     unsafe {
         let mut info = POINTER_INFO::default();
-        let current = GetPointerInfo(raw, &mut info);
-        eprintln!("WIN32_POINTER_QUERY raw={raw} current={current:?} info={info:?}");
-        current.ok()?;
+        GetPointerInfo(raw, &mut info).ok()?;
         let count = info.historyCount.max(1);
         match info.pointerType {
             PT_PEN => read_history(count, |count, buffer| GetPointerPenInfoHistory(raw, count, Some(buffer)))
@@ -300,9 +298,7 @@ fn read_history<T: Default + Clone>(mut count: u32, query: impl FnOnce(*mut u32,
     let mut values = Vec::new();
     values.try_reserve_exact(count as usize).ok()?;
     values.resize(count as usize, T::default());
-    let result = query(&mut count, values.as_mut_ptr());
-    eprintln!("WIN32_POINTER_HISTORY result={result:?} count={count}");
-    result.ok()?;
+    query(&mut count, values.as_mut_ptr()).ok()?;
     if count as usize > values.len() { return None; }
     values.truncate(count as usize);
     Some(values)
@@ -339,7 +335,6 @@ pub(super) fn native_pointer_input(
     let mut samples = Vec::new();
     for reading in readings.into_iter().rev() {
         let time = EventTime::from_nanos(clock.rebase_at(reading.info().dwTime, now));
-        eprintln!("WIN32_POINTER_CLOCK raw={raw} tick={} now={now} age={} anchor={} epoch={} stamp={}", reading.info().dwTime, (now as u32).wrapping_sub(reading.info().dwTime), clock.uptime_ms, clock.epoch_ns, time.as_nanos());
         let Some(decoded) = decode_native_reading(reading, offset, scale, time) else {
             return registry.borrow_mut().cancel(raw, cancel_time, CancelReason::InvalidInput);
         };
