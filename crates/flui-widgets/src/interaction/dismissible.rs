@@ -1115,10 +1115,15 @@ fn handle_drag_update(
 }
 
 /// The release speed in `move_controller` units per second: the gesture's
-/// px/s over the dismiss axis's extent, since the controller's 0 → 1 spans
-/// that extent. The card then leaves at the finger's speed whatever its
-/// size. An extent that is not positive and finite (unbounded constraints,
-/// already caught in debug builds) yields one unit per second.
+/// px/s over the same dismiss-axis extent `handle_drag_update` divides drag
+/// deltas by, so the controller keeps the rate the drag gave it and the card
+/// leaves as fast as it was moving. Under tight constraints (the common
+/// case) that extent is the card's, and the card leaves at the finger's
+/// speed whatever its size. Under loose ones it is the maximum, not the
+/// laid-out child, so drag and fling alike move the card slower than the
+/// finger by the same factor (module docs divergence #4: no laid-out size
+/// accessor). An extent that is not positive and finite (unbounded
+/// constraints, already caught in debug builds) yields one unit per second.
 fn fling_speed(
     primary_velocity: f64,
     constraints: BoxConstraints,

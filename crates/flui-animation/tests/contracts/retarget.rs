@@ -55,6 +55,17 @@ fn eased_slope(curve: (f64, f64, f64, f64), t: f64) -> f64 {
     bezier_derivative(curve.1, curve.3, s) / bezier_derivative(curve.0, curve.2, s)
 }
 
+/// The terminal slope of `curve`, as the limit of `y'(s)/x'(s)` at `s = 1`:
+/// the last control leg's direction, or the middle leg's when the last one
+/// is degenerate (an end control point at `(1, 1)`).
+fn terminal_slope(curve: (f64, f64, f64, f64)) -> f64 {
+    if curve.2 < 1.0 {
+        (1.0 - curve.3) / (1.0 - curve.2)
+    } else {
+        (curve.3 - curve.1) / (curve.2 - curve.0)
+    }
+}
+
 fn curve_spec(curve: (f64, f64, f64, f64), millis: u64) -> MotionSpec {
     MotionSpec::Curve {
         duration: Duration::from_millis(millis),
@@ -218,7 +229,7 @@ proptest! {
 
     /// A curve segment that inherits a velocity starts with it, lands on its
     /// target exactly after its duration, and strays from the plain curve by
-    /// at most `|r|·D·4/27`, `r = v0 − Δ·c'(0)/D`.
+    /// at most `(|r|·D + |a|)·4/27`, `r = v0 − Δ·c'(0)/D`, `a = Δ·c'(1)`.
     #[test]
     fn a_curve_segment_lands_on_time_and_bounds_its_overshoot(
         curve in 0..CUBICS.len(),
@@ -238,7 +249,8 @@ proptest! {
         value.animate_to(second);
         let span = second - x0;
         let excess = v0 - span * eased_slope(control, 0.0) / duration;
-        let bound = excess.abs() * duration * 4.0 / 27.0;
+        let arrival = span * terminal_slope(control);
+        let bound = (excess.abs() * duration + arrival.abs()) * 4.0 / 27.0;
         for step in 1..100 {
             let t = duration * f64::from(step) / 100.0;
             let mut probe = value.clone();
@@ -475,6 +487,101 @@ fn a_retarget_elsewhere_runs_the_full_duration() {
     assert_eq!(value.value(), 10.0);
 }
 
+fn linear_spec(millis: u64) -> MotionSpec {
+    MotionSpec::Curve {
+        duration: Duration::from_millis(millis),
+        curve: ArcCurve::new(Curves::Linear),
+    }
+}
+
+/// Finite steps whose sum overflows saturate time instead of publishing a
+/// non-finite value, and a spring whose phase or polynomial term overflows
+/// reads as its limit: the target, at rest.
+fn time_steps_that_overflow_publish_the_limit() {
+    for spec in [
+        MotionSpec::Spring(spring(10.0, 0.5)),
+        MotionSpec::Spring(spring(10.0, 1.0)),
+        MotionSpec::Spring(spring(10.0, 2.0)),
+        linear_spec(200),
+    ] {
+        let mut value = AnimatedValue::with_motion(0.0_f64, spec.clone());
+        value.animate_to(1.0);
+        value.advance(0.01);
+        value.advance(f64::MAX);
+        value.advance(f64::MAX);
+        let (x, v) = (value.value(), value.velocity()[0]);
+        assert!(x.is_finite() && v.is_finite(), "{spec:?}: x {x}, v {v}");
+        assert!(close(x, 1.0, 1e-9), "{spec:?}: x {x}");
+        assert!(value.is_settled(), "{spec:?} never settled");
+    }
+}
+
+/// A near-overflow velocity handed to a long curve segment: the Hermite
+/// correction is in range although `excess · duration` alone is not.
+fn a_large_finite_curve_correction_stays_finite() {
+    let mut value = AnimatedValue::with_motion(0.0_f64, linear_spec(1));
+    value.animate_to(1e305);
+    value.advance(0.0005);
+    assert!(value.velocity()[0] >= 1e308, "v {}", value.velocity()[0]);
+    value.set_motion(linear_spec(10_000));
+    for t in [0.1, 2.5, 5.0, 7.5, 9.9] {
+        let mut probe = value.clone();
+        probe.advance(t);
+        let (x, v) = (probe.value(), probe.velocity()[0]);
+        assert!(x.is_finite() && v.is_finite(), "at {t}: x {x}, v {v}");
+    }
+}
+
+/// A curve with a non-zero terminal slope still arrives at rest: its velocity
+/// tends to zero before arrival, so a retarget one tick early and one on the
+/// completing frame inherit the same momentum.
+fn a_curve_arrives_with_zero_velocity() {
+    let mode = Mode::Curve {
+        curve: 0,
+        millis: 200,
+    };
+    let mut value = AnimatedValue::with_motion(0.0_f64, linear_spec(200));
+    value.animate_to(100.0);
+    value.advance(0.2 - 1e-6);
+    let early = value.velocity()[0];
+    assert!(early.abs() <= 0.1, "{early} units/s just before arrival");
+    assert_velocity_is_the_derivative(&value, 0, &mode, 100.0);
+    value.advance(1e-6);
+    assert_eq!(value.value(), 100.0);
+    assert_eq!(value.velocity()[0], 0.0);
+}
+
+/// A reversal early enough to shorten the segment below a millisecond keeps
+/// the seam's value and velocity.
+fn an_early_reversal_is_continuous() {
+    let mode = Mode::Curve {
+        curve: 0,
+        millis: 200,
+    };
+    let mut value = AnimatedValue::with_motion(0.0_f64, linear_spec(200));
+    value.animate_to(100.0);
+    value.advance(0.0005);
+    seam(&mut value, 0.0, &mode, 100.0);
+    assert!(!value.is_settled());
+    value.advance(0.01);
+    assert!(value.is_settled());
+    assert_eq!(value.value(), 0.0);
+}
+
+/// Assigning a curve its current target leaves the segment running on its
+/// schedule instead of restarting the full duration.
+fn retargeting_a_curve_to_its_target_keeps_its_schedule() {
+    let mut value = AnimatedValue::with_motion(0.0_f64, curve_spec(CUBICS[0], 200));
+    value.animate_to(10.0);
+    value.advance(0.1);
+    let (x, v) = (value.value(), value.velocity()[0]);
+    value.animate_to(10.0);
+    assert_eq!((value.value(), value.velocity()[0]), (x, v));
+    value.advance(0.1);
+    assert!(value.is_settled());
+    assert_eq!(value.value(), 10.0);
+}
+
 #[test]
 fn retarget_seams() {
     crate::run_table(&[
@@ -503,6 +610,26 @@ fn retarget_seams() {
         (
             "a_retarget_elsewhere_runs_the_full_duration",
             a_retarget_elsewhere_runs_the_full_duration,
+        ),
+        (
+            "time_steps_that_overflow_publish_the_limit",
+            time_steps_that_overflow_publish_the_limit,
+        ),
+        (
+            "a_large_finite_curve_correction_stays_finite",
+            a_large_finite_curve_correction_stays_finite,
+        ),
+        (
+            "a_curve_arrives_with_zero_velocity",
+            a_curve_arrives_with_zero_velocity,
+        ),
+        (
+            "an_early_reversal_is_continuous",
+            an_early_reversal_is_continuous,
+        ),
+        (
+            "retargeting_a_curve_to_its_target_keeps_its_schedule",
+            retargeting_a_curve_to_its_target_keeps_its_schedule,
         ),
     ]);
 }

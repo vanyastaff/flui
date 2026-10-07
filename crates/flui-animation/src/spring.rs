@@ -187,9 +187,15 @@ impl<T: TwoWayConverter> AnimatedValue<T> {
     /// back to the current segment's reversing-adjusted start (where the
     /// segment before it was headed from) shortens the new segment by the
     /// eased fraction already travelled. A non-finite target component
-    /// leaves that component at rest where it is.
+    /// leaves that component at rest where it is. The current target leaves
+    /// the motion untouched: a curve keeps its schedule instead of restarting
+    /// its duration.
     pub fn animate_to(&mut self, target: T) {
         let goal = target.to_vector();
+        if goal.as_ref() == self.target.to_vector().as_ref() {
+            self.target = target;
+            return;
+        }
         let shortening = self.reversal_shortening(&goal);
         let current = self.current_vector();
         self.restart(&goal, shortening);
@@ -235,10 +241,11 @@ impl<T: TwoWayConverter> AnimatedValue<T> {
     }
 
     /// Advance time by `dt` seconds. Zero, negative or non-finite `dt` does
-    /// not move time.
+    /// not move time. Steps whose sum overflows saturate at `f64::MAX`
+    /// seconds.
     pub fn advance(&mut self, dt: f64) {
         if dt.is_finite() && dt > 0.0 {
-            self.elapsed += dt;
+            self.elapsed = (self.elapsed + dt).min(f64::MAX);
         }
     }
 

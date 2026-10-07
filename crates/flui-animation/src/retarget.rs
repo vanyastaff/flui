@@ -14,12 +14,16 @@
 //!   final jump. As `t → ∞` the value reaches the target and the velocity
 //!   zero, and both stay finite for every `t`.
 //! - A **curve** segment follows `x0 + Δ·c(τ)` over the duration, `τ = t / D`,
-//!   bent by a Hermite term `r·D·τ(1 − τ)²` with
-//!   `r = v0 − Δ·c'(0) / D`. The term is zero at both ends and its derivative
-//!   is `r` at the start and zero at the end, so the segment starts with the
-//!   inherited velocity, arrives exactly at `D` with the velocity the curve
-//!   itself gives there, and strays from the plain curve by at most
-//!   `|r|·D·4/27`. With no inherited excess velocity it is the plain curve.
+//!   bent by two Hermite terms, `r·D·τ(1 − τ)²` with `r = v0 − Δ·c'(0) / D`
+//!   and `a·τ²(1 − τ)` with `a = Δ·c'(1)`. Both are zero at both ends; the
+//!   first has derivative `r` at the start and zero at the end, the second
+//!   zero at the start and `−a/D` at the end. So the segment starts with the
+//!   inherited velocity, arrives exactly at `D` with zero velocity (the rest
+//!   that follows is reached C¹ even for a curve such as linear whose own
+//!   terminal slope is not zero), and strays from the plain curve by at most
+//!   `(|r|·D + |a|)·4/27`. With no inherited excess velocity and a curve that
+//!   ends flat it is the plain curve. A sample whose exact value is not
+//!   representable reads as the target (value) or zero (velocity).
 
 use std::time::Duration;
 
@@ -53,7 +57,8 @@ pub enum MotionSpec {
     /// it still arrives at the target exactly after `duration`. Reversing
     /// toward where the previous segment started shortens the duration by
     /// the eased fraction already travelled (CSS Transitions, "Faster
-    /// reversing of interrupted transitions").
+    /// reversing of interrupted transitions"), but not below one
+    /// millisecond. Every segment arrives at rest, with zero velocity.
     Curve {
         /// How long a full segment takes. Below one millisecond a segment
         /// jumps to its target.
@@ -65,8 +70,9 @@ pub enum MotionSpec {
     Spring(SpringDescription),
 }
 
-/// Below this duration a curve segment jumps straight to its target: the
-/// Hermite term's `r = v0 − Δ·c'(0)/D` would grow without bound as `D → 0`.
+/// Below this configured duration a curve segment jumps straight to its
+/// target, and a reversal never shortens a segment below it: the Hermite
+/// term's `r = v0 − Δ·c'(0)/D` would grow without bound as `D → 0`.
 const MIN_CURVE_SECONDS: f64 = 1e-3;
 
 /// One component's motion from a seam to its target.
@@ -92,8 +98,9 @@ pub(crate) enum Segment {
     Curve(CurveSegment),
 }
 
-/// A curve segment: `from + span·c(τ) + excess·duration·τ(1 − τ)²`, exactly
-/// `to` from `duration` on.
+/// A curve segment:
+/// `from + span·c(τ) + excess·duration·τ(1 − τ)² + arrival·τ²(1 − τ)`,
+/// exactly `to` from `duration` on.
 #[derive(Clone, Debug)]
 pub(crate) struct CurveSegment {
     from: f64,
@@ -103,6 +110,9 @@ pub(crate) struct CurveSegment {
     duration: f64,
     /// The inherited velocity the curve does not account for, per second.
     excess: f64,
+    /// `span·c'(1)`: the arrival velocity the curve itself would have, times
+    /// the duration, which the second Hermite term cancels.
+    arrival: f64,
     curve: ArcCurve,
 }
 
@@ -144,12 +154,16 @@ impl Segment {
                 } else {
                     1.0
                 };
-                let duration = duration.as_secs_f64() * scale;
-                if duration < MIN_CURVE_SECONDS {
+                let full = duration.as_secs_f64();
+                if full < MIN_CURVE_SECONDS {
                     return Self::Rest(target);
                 }
-                let excess = v0 - span * curve.slope(0.0) / duration;
-                if !excess.is_finite() {
+                // A reversal shortens, but never below the floor: the seam's
+                // value and velocity are kept however early it reverses.
+                let duration = (full * scale).max(MIN_CURVE_SECONDS);
+                let excess = v0 - span / duration * curve.slope(0.0);
+                let arrival = span * curve.slope(1.0);
+                if !(excess.is_finite() && arrival.is_finite()) {
                     return Self::Rest(target);
                 }
                 Self::Curve(CurveSegment {
@@ -158,6 +172,7 @@ impl Segment {
                     span,
                     duration,
                     excess,
+                    arrival,
                     curve: curve.clone(),
                 })
             }
@@ -170,7 +185,12 @@ impl Segment {
         match self {
             Self::Rest(value) => *value,
             Self::Spring { x0, .. } if t == 0.0 => *x0,
-            Self::Spring { simulation, .. } => simulation.x(t),
+            // A non-finite sample means the phase or the polynomial term
+            // overflowed long after the exponential decayed to zero: the
+            // spring's limit, its target.
+            Self::Spring { simulation, .. } => {
+                finite_or(simulation.x(t), simulation.end_position())
+            }
             Self::Curve(curve) => curve.x(t),
         }
     }
@@ -181,7 +201,7 @@ impl Segment {
         match self {
             Self::Rest(_) => 0.0,
             Self::Spring { v0, .. } if t == 0.0 => *v0,
-            Self::Spring { simulation, .. } => simulation.dx(t),
+            Self::Spring { simulation, .. } => finite_or(simulation.dx(t), 0.0),
             Self::Curve(curve) => curve.dx(t),
         }
     }
@@ -193,7 +213,11 @@ impl Segment {
         let t = seam_time(t);
         match self {
             Self::Rest(_) => true,
-            Self::Spring { simulation, .. } => t > 0.0 && simulation.is_done(t),
+            Self::Spring { simulation, .. } => {
+                t > 0.0
+                    && (simulation.is_done(t)
+                        || !(simulation.x(t).is_finite() && simulation.dx(t).is_finite()))
+            }
             Self::Curve(curve) => t >= curve.duration,
         }
     }
@@ -210,8 +234,15 @@ impl CurveSegment {
             return self.to;
         }
         let tau = t / self.duration;
-        let hermite = tau * (1.0 - tau) * (1.0 - tau);
-        self.from + self.span * self.curve.transform(tau) + self.excess * self.duration * hermite
+        let u = 1.0 - tau;
+        // `excess · τ(1 − τ)²` first: it is at most `excess`, so the product
+        // with the duration overflows only when the correction itself does.
+        let departure = self.excess * (tau * u * u) * self.duration;
+        let arrival = self.arrival * (tau * tau * u);
+        finite_or(
+            self.from + self.span * self.curve.transform(tau) + departure + arrival,
+            self.to,
+        )
     }
 
     fn dx(&self, t: f64) -> f64 {
@@ -219,7 +250,15 @@ impl CurveSegment {
             return 0.0;
         }
         let tau = t / self.duration;
-        let hermite_slope = (1.0 - tau) * (1.0 - 3.0 * tau);
-        self.span * self.curve.slope(tau) / self.duration + self.excess * hermite_slope
+        let curve = self.span / self.duration * self.curve.slope(tau);
+        let departure = self.excess * (1.0 - tau) * (1.0 - 3.0 * tau);
+        let arrival = self.arrival / self.duration * (tau * (2.0 - 3.0 * tau));
+        finite_or(curve + departure + arrival, 0.0)
     }
+}
+
+/// `value` if finite, else `fallback`: a sample of finite admitted state
+/// whose exact value is not representable never publishes inf or NaN.
+fn finite_or(value: f64, fallback: f64) -> f64 {
+    if value.is_finite() { value } else { fallback }
 }
