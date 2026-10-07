@@ -279,7 +279,7 @@ fn coalescing_preserves_the_latest_dispatch_and_real_history() {
         sampled_at(20),
     )
     .with_modifiers(Modifiers::SHIFT)
-        .with_coalesced(vec![old_current, changed_sensor, sampled_at(18)])
+    .with_coalesced(vec![old_current, changed_sensor, sampled_at(18)])
     .with_predicted(vec![sampled_at(25)]);
     let accepted_older = older.clone();
     newer.try_coalesce(&older).expect("same pointer metadata");
@@ -298,6 +298,8 @@ fn coalescing_preserves_the_latest_dispatch_and_real_history() {
             sampled_at(5),
             changed_sensor,
             old_current,
+            old_current,
+            changed_sensor,
             sampled_at(18)
         ]
     );
@@ -331,7 +333,10 @@ fn coalescing_keeps_distinct_current_time_readings_and_excludes_future_history()
     let mut newer = PointerMove::new(mouse(), PointerButtons::NONE, current)
         .with_coalesced(vec![sampled_at(10)]);
     newer.try_coalesce(&older).expect("same pointer metadata");
-    assert_eq!(newer.coalesced(), &[sampled_at(10), same_time_sensor]);
+    assert_eq!(
+        newer.coalesced(),
+        &[sampled_at(10), sampled_at(10), same_time_sensor]
+    );
     assert_eq!(*newer.current(), current);
 }
 
