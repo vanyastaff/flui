@@ -538,22 +538,34 @@ impl Matrix4 {
         ];
         // Changing screen depth moves along inverse column 2. Eliminate
         // screen depth in homogeneous coordinates before dividing by w.
-        let depth = m[10];
-        if depth == 0.0 {
+        if m[10] == 0.0 {
             return None;
         }
+        // Normalize the elimination pair independently. Otherwise an admitted
+        // anisotropic inverse can square a tiny depth coefficient into zero
+        // even though the local projective quotient is finite.
+        let elimination_scale = m[10].abs().max(ray[2].abs());
+        let depth = m[10] / elimination_scale;
+        let ray_depth = ray[2] / elimination_scale;
         let weight_at_origin = ray[3] * depth;
-        let weight_along_ray = m[11] * ray[2];
+        let weight_along_ray = m[11] * ray_depth;
         let weight = weight_at_origin - weight_along_ray;
         let ray_weight_bound = (m[3] * sx).abs() + (m[7] * sy).abs() + (m[15] * sw).abs();
         let ray_depth_bound = (m[2] * sx).abs() + (m[6] * sy).abs() + (m[14] * sw).abs();
-        let uncertainty = f64::EPSILON
-            * (ray_weight_bound * depth.abs() + m[11].abs() * ray_depth_bound);
-        if weight.abs() <= uncertainty || weight.is_sign_positive() != depth.is_sign_positive() {
+        let depth_uncertainty = if m[11] == 0.0 {
+            0.0
+        } else {
+            (m[11].abs() * ray_depth_bound) / elimination_scale
+        };
+        let uncertainty = f64::EPSILON * (ray_weight_bound * depth.abs() + depth_uncertainty);
+        if !uncertainty.is_finite()
+            || weight.abs() <= uncertainty
+            || weight.is_sign_positive() != depth.is_sign_positive()
+        {
             return None;
         }
-        let local_x = (ray[0] * depth - m[8] * ray[2]) / weight;
-        let local_y = (ray[1] * depth - m[9] * ray[2]) / weight;
+        let local_x = (ray[0] * depth - m[8] * ray_depth) / weight;
+        let local_y = (ray[1] * depth - m[9] * ray_depth) / weight;
         (local_x.is_finite() && local_y.is_finite()).then_some((local_x, local_y))
     }
 

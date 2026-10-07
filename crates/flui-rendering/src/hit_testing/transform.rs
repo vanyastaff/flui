@@ -44,10 +44,10 @@ impl MatrixTransformPart {
                 position.dx - offset.dx,
                 position.dy - offset.dy,
             )),
-            Self::Matrix(m) => m.try_inverse().map(|inverse| {
-                let (x, y) = inverse.transform_point(position.dx, position.dy);
-                Offset::new(x, y)
-            }),
+            Self::Matrix(m) => {
+                let (x, y) = m.try_inverse()?.unproject_to_plane(position.dx, position.dy)?;
+                Some(Offset::new(x, y))
+            }
         }
     }
 

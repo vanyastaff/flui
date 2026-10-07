@@ -664,7 +664,9 @@ impl RenderBox for RenderAnimatedTransform {
                     return false;
                 };
                 let position = ctx.position();
-                let (x, y) = inverse.transform_point(position.dx, position.dy);
+                let Some((x, y)) = inverse.unproject_to_plane(position.dx, position.dy) else {
+                    return false;
+                };
                 ctx.hit_test_child(0, Offset::new(x, y))
             }
         }
