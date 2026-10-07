@@ -68,7 +68,7 @@ RA6 recognizer измерения сохранены; итоговый gate за
 
 | ID | Задача |
 |---|---|
-| S1 | Публичная поверхность: один `PointerEventExt`, настоящая запечатка, приватные конструкторы `FocusNodeId`/`HandlerId`, `DeviceId` без коллизий, `#[non_exhaustive]`, дубли `Key`/`Keyboard`, `get_`-префиксы и `bool`-параметр, `#[must_use]`, `__runtime` скрыт от внешних крейтов, маркер в `lib.rs:137` |
+| S1 | Публичная поверхность: один `PointerEventExt`, настоящая запечатка, приватные конструкторы `FocusNodeId`/`HandlerId`, `DeviceId` без коллизий, `#[non_exhaustive]`, дубли `Key`/`Keyboard`, `get_`-префиксы и `bool`-параметр, `#[must_use]`, `__runtime` — doc-hidden public runtime-шов по ADR-0081 §4.2, скрытый на путях facade/SDK, маркер в `lib.rs:137` |
 | S2 | Неподключённый `pub` (≈125 в арене/распознавателях, ≈30 в routing, processing): подключить или удалить — по scope-решению |
 | S3 | Документация крейта: GESTURES/ARCHITECTURE/PERFORMANCE/HIT_TESTING/README под код; доктесты вместо `ignore` |
 | S4 | Бенчи: исправить resampler-бенч, цифры до/после в PERFORMANCE.md, аллокации dispatch |
