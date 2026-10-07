@@ -48,6 +48,14 @@ fn nan_stays_nan() {
     );
 }
 
+fn opposite_extreme_angles_stay_finite() {
+    let reference = Angle::from_radians(-f64::MAX);
+    let result = Angle::from_radians(f64::MAX).nearest_equivalent(reference);
+    assert!(result.radians().is_finite(), "{result:?}");
+    // Within half a turn of the reference, which is all f64 can resolve at MAX.
+    assert_eq!(result.radians(), reference.radians());
+}
+
 fn numeric_interpolation_keeps_whole_turns() {
     // CSS Transforms 1 §10: rotate(45deg) -> rotate(1215deg) spins 3.25 turns.
     let begin = Angle::from_degrees(45.0);
@@ -78,6 +86,10 @@ fn angle_nearest_equivalent_takes_the_shorter_arc() {
         ),
         ("whole turns are dropped", whole_turns_are_dropped),
         ("nan stays nan", nan_stays_nan),
+        (
+            "opposite extreme angles stay finite",
+            opposite_extreme_angles_stay_finite,
+        ),
         (
             "numeric interpolation keeps whole turns",
             numeric_interpolation_keeps_whole_turns,
