@@ -252,6 +252,8 @@ pub use processing::{
     RawInputHandler, RawPointerEvent, Velocity, VelocityEstimate, VelocityTracker,
 };
 pub use recognizers::{
+    ArenaMembership, BeginContactError, CancelOutcome, ContactId, ContactSnapshot,
+    PrimaryContact, RecognizerSet, cancel_all,
     DoubleTapDetails, DoubleTapGestureRecognizer, DragCancelCallback, DragDownCallback,
     DragDownDetails, DragEndCallback, DragEndDetails, DragGestureRecognizer, DragStartCallback,
     DragStartDetails, DragUpdateCallback, DragUpdateDetails, EagerGestureRecognizer,
@@ -262,6 +264,13 @@ pub use recognizers::{
     TapDragEndCallback, TapDragEndDetails, TapDragStartCallback, TapDragStartDetails,
     TapDragUpCallback, TapDragUpDetails, TapDragUpdateCallback, TapDragUpdateDetails,
     TapGestureRecognizer,
+};
+pub use recognizers::{
+    DoubleTapGestureRecognizerBuilder, DragGestureRecognizerBuilder,
+    EagerGestureRecognizerBuilder, ForcePressGestureRecognizerBuilder,
+    LongPressGestureRecognizerBuilder, MultiDragGestureRecognizerBuilder,
+    MultiTapGestureRecognizerBuilder, ScaleGestureRecognizerBuilder,
+    TapAndDragGestureRecognizerBuilder, TapGestureRecognizerBuilder,
 };
 // Re-exports for the drag axis sub-recognisers (vertical, horizontal, pan).
 // Aliased to `DragGestureRecognizer` so a recogniser's axis is fixed at the
@@ -284,7 +293,7 @@ pub use routing::{
     RouteResolutionMiss, ScrollTarget, ShaderMaskTarget, TransformGuard, TraversalEdgeBehavior,
     resolve_local_payload, resolve_path_clip_target, resolve_shader_mask_target,
 };
-pub use sealed::{CustomGestureRecognizer, CustomHitTestable};
+pub use sealed::CustomHitTestable;
 pub use settings::{
     DEFAULT_DOUBLE_TAP_SLOP, DEFAULT_DOUBLE_TAP_TIMEOUT, DEFAULT_LONG_PRESS_TIMEOUT,
     DEFAULT_MAX_FLING_VELOCITY, DEFAULT_MIN_FLING_VELOCITY, DEFAULT_MOUSE_PAN_SLOP,
@@ -305,7 +314,7 @@ pub use testing::ModifiersBuilder;
 // Re-exports: Traits
 // ============================================================================
 pub use traits::{
-    Disposable, DragAxis, GestureCallback, GestureRecognizerExt, HitTestTarget,
+    DragAxis, HitTestTarget,
     PointerEventExtTrait as PointerEventExt,
 };
 
@@ -339,13 +348,13 @@ pub mod prelude {
         HitTestable, PointerRouter, RenderId, TransformGuard,
     };
     // Extension traits for custom types
-    pub use crate::sealed::{CustomGestureRecognizer, CustomHitTestable};
+    pub use crate::sealed::CustomHitTestable;
     // Testing (feature-gated)
     #[cfg(any(test, feature = "testing"))]
     pub use crate::testing::ModifiersBuilder;
     // Traits
     pub use crate::traits::{
-        Disposable, DragAxis, GestureCallback, GestureRecognizerExt, HitTestTarget,
+        DragAxis, HitTestTarget,
         PointerEventExtTrait as PointerEventExt,
     };
     pub use crate::{

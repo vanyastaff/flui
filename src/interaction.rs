@@ -22,11 +22,11 @@ pub use flui_interaction::recognizers::multi_tap::MultiTapDetails;
 pub use flui_interaction::recognizers::scale::{
     ScaleEndDetails, ScaleStartDetails, ScaleUpdateDetails,
 };
-pub use flui_interaction::recognizers::{GestureRecognizerState, RecognizerBase};
+pub use flui_interaction::recognizers::{ArenaMembership, BeginContactError, CancelOutcome, ContactId, ContactSnapshot, GestureRecognizerState, PrimaryContact, RecognizerSet, cancel_all};
 pub use flui_interaction::{
-    CustomGestureRecognizer, DoubleTapGestureRecognizer, DragAxis, DragDownDetails, DragEndDetails,
+    DoubleTapGestureRecognizer, DragAxis, DragDownDetails, DragEndDetails,
     DragGestureRecognizer, DragStartDetails, DragUpdateDetails, EagerGestureRecognizer,
-    ForcePressGestureRecognizer, GestureEndReason, GestureRecognizer, GestureRecognizerExt,
+    ForcePressGestureRecognizer, GestureEndReason, GestureRecognizer,
     GestureSettings, GestureSettingsError, HorizontalDragGestureRecognizer,
     LongPressGestureRecognizer, MultiDragAxis, MultiDragEndDetails, MultiDragGestureRecognizer,
     MultiDragHandle, MultiDragUpdateDetails, MultiTapGestureRecognizer, PanGestureRecognizer,
