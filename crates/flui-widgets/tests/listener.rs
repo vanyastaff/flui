@@ -198,7 +198,9 @@ pub(crate) fn listener_capture_retains_one_target_and_drop_delivers_loss() {
                     })
                     .on_pointer_move(move |_, _| child_move.borrow_mut().push("child move"))
                     .on_pointer_cancel(move |_, dispatch| {
-                        let PointerEvent::Cancel(cancel) = dispatch.global else { panic!("cancel callback"); };
+                        let PointerEvent::Cancel(cancel) = dispatch.global else {
+                            panic!("cancel callback");
+                        };
                         assert_eq!(cancel.reason, CancelReason::CaptureLost);
                         child_cancel.borrow_mut().push("child cancel");
                     })
@@ -211,14 +213,28 @@ pub(crate) fn listener_capture_retains_one_target_and_drop_delivers_loss() {
     assert_eq!(&*log.borrow(), &["child down", "parent down", "child move"]);
     let released = token.borrow_mut().take().expect("retained token");
     drop(released);
-    assert_eq!(log.borrow().last(), Some(&"child move"), "Drop invokes no event callback");
+    assert_eq!(
+        log.borrow().last(),
+        Some(&"child move"),
+        "Drop invokes no event callback"
+    );
     laid.dispatch_pointer_up(200.0, 200.0);
-    assert_eq!(&*log.borrow(), &["child down", "parent down", "child move", "child cancel"]);
+    assert_eq!(
+        &*log.borrow(),
+        &["child down", "parent down", "child move", "child cancel"]
+    );
     laid.dispatch_pointer_down(40.0, 40.0);
     laid.dispatch_pointer_up(40.0, 40.0);
     let terminal_token = token.borrow_mut().take().expect("next contact token");
     drop(terminal_token);
-    assert_eq!(log.borrow().iter().filter(|event| **event == "child cancel").count(), 1, "terminal invalidates retained capture authority");
+    assert_eq!(
+        log.borrow()
+            .iter()
+            .filter(|event| **event == "child cancel")
+            .count(),
+        1,
+        "terminal invalidates retained capture authority"
+    );
 }
 
 pub(crate) fn listener_admission_keeps_terminal_delivery_and_weak_ownership() {
