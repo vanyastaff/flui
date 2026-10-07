@@ -348,6 +348,117 @@ fn reentrant_listener_replacement_survives_a_failed_notification() {
     drop(attachment);
 }
 
+struct QueuedNodeContext {
+    manager: Weak<FocusManager>,
+    dropped: Rc<Cell<bool>>,
+}
+
+impl Drop for QueuedNodeContext {
+    fn drop(&mut self) {
+        self.dropped.set(true);
+        self.manager.upgrade().expect("live manager").unfocus();
+        std::panic::panic_any("queued node retirement failure");
+    }
+}
+
+fn queued_retirement_failure_keeps_the_accepted_tail_deliverable() {
+    assert_queued_retirement_recovery(false);
+}
+
+fn earlier_observer_failure_retains_the_retired_queued_last_owner() {
+    assert_queued_retirement_recovery(true);
+}
+
+fn assert_queued_retirement_recovery(earlier_failure: bool) {
+    use flui_interaction::routing::FocusRequestOutcome;
+
+    let manager = FocusManager::new();
+    let first = FocusNode::with_debug_label("first");
+    let last = FocusNode::with_debug_label("last");
+    let attachments = [
+        manager
+            .root_scope()
+            .attach_node(&first)
+            .expect("attach first"),
+        manager
+            .root_scope()
+            .attach_node(&last)
+            .expect("attach last"),
+    ];
+    let queued = FocusNode::with_debug_label("queued stale target");
+    let queued_attachment = manager
+        .root_scope()
+        .attach_node(&queued)
+        .expect("attach queued");
+    let dropped = Rc::new(Cell::new(false));
+    queued
+        .register_context(Rc::new(QueuedNodeContext {
+            manager: Rc::downgrade(&manager),
+            dropped: Rc::clone(&dropped),
+        }))
+        .relinquish();
+    let queued_owner = RefCell::new(Some((queued, queued_attachment)));
+    let last_probe = Rc::downgrade(&last);
+    let first_id = first.id();
+    manager.add_listener(Rc::new(move |_, new| {
+        if !new.as_ref().is_some_and(|node| node.id() == first_id) {
+            return;
+        }
+        let Some((queued, attachment)) = queued_owner.borrow_mut().take() else {
+            return;
+        };
+        assert_eq!(queued.request_focus(), FocusRequestOutcome::Focused);
+        assert_eq!(
+            last_probe.upgrade().expect("live last").request_focus(),
+            FocusRequestOutcome::Focused
+        );
+        attachment.detach();
+        drop((queued, attachment));
+        if earlier_failure {
+            std::panic::panic_any("earlier observer failure");
+        }
+    }));
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let edge_log = Rc::clone(&log);
+    manager.add_listener(Rc::new(move |previous, new| {
+        edge_log.borrow_mut().push((
+            previous.as_ref().map(|node| node.id()),
+            new.as_ref().map(|node| node.id()),
+        ));
+    }));
+    let payload = catch_unwind(AssertUnwindSafe(|| first.request_focus()))
+        .expect_err("first failure propagates after queued retirement");
+    assert_eq!(
+        payload.downcast_ref::<&str>(),
+        Some(&if earlier_failure {
+            "earlier observer failure"
+        } else {
+            "queued node retirement failure"
+        })
+    );
+    assert_eq!(dropped.get(), !earlier_failure);
+    let last_id = last.id();
+    let expected = if earlier_failure {
+        vec![(None, Some(first_id)), (Some(first_id), Some(last_id))]
+    } else {
+        vec![
+            (None, Some(first_id)),
+            (Some(first_id), None),
+            (None, Some(last_id)),
+        ]
+    };
+    assert_eq!(
+        *log.borrow(),
+        expected,
+        "healthy accepted tail survives retirement"
+    );
+    assert!(last.has_primary_focus());
+    log.borrow_mut().clear();
+    manager.unfocus();
+    assert_eq!(*log.borrow(), [(Some(last_id), None)]);
+    drop(attachments);
+}
+
 fn node_failure_keeps_accepted_focus_requests_deliverable() {
     assert_queued_focus_recovery(true, false);
 }
@@ -457,6 +568,14 @@ fn assert_queued_focus_recovery(from_node: bool, competing: bool) {
 #[test]
 fn caught_callback_failures_leave_captures_with_their_owner() {
     let cases: &[(&str, fn())] = &[
+        (
+            "queued retirement failure and accepted tail",
+            queued_retirement_failure_keeps_the_accepted_tail_deliverable,
+        ),
+        (
+            "earlier observer failure and queued retirement",
+            earlier_observer_failure_retains_the_retired_queued_last_owner,
+        ),
         (
             "accepted focus requests after node failure",
             node_failure_keeps_accepted_focus_requests_deliverable,
