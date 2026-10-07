@@ -1755,7 +1755,6 @@ impl std::fmt::Debug for GestureBinding {
 
 #[cfg(test)]
 mod tests {
-    use std::rc::Rc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
