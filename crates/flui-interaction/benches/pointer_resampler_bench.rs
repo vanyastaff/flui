@@ -154,10 +154,12 @@ impl Witness {
                     .chain(std::iter::once(event.current()))
                 {
                     self.readings += 1;
+                    // Interpolated EventTime rounds down to integer nanos;
+                    // at 1000 px/s that accounts for at most 0.000001 px.
                     assert!(
                         (sample.position.get().x - sample.time.as_nanos() as f64 / 1_000_000.0)
                             .abs()
-                            < 1e-9,
+                            < 1.1e-6,
                         "delivered values follow the independent linear trajectory"
                     );
                     assert_eq!(sample.position.get().y, 25.5);
