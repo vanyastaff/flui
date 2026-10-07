@@ -210,7 +210,7 @@ IntTween::new(0, 255)      // Rounds to nearest
 StepTween::new(0, 10)      // Floors to integer
 
 // Geometric
-ColorTween::new(Color::RED, Color::BLUE)
+ColorTween::new(Color::RED, Color::BLUE) // Oklab, premultiplied alpha
 SizeTween::new(Size::new(0.0, 0.0), Size::new(100.0, 100.0))
 OffsetTween::new(Offset::ZERO, Offset::new(50.0, 50.0))
 RectTween::new(rect1, rect2)
@@ -600,7 +600,7 @@ Each implemented from the canonical published source:
 
 | Capability | Source | API |
 |---|---|---|
-| Perceptually uniform color interpolation | Ottosson, Oklab (2020) | `OklabColorTween`, `Color::lerp_oklab` |
+| Perceptually uniform color interpolation, premultiplied | Ottosson, Oklab (2020); CSS Color 4 | `ColorTween`, `Color::lerp` |
 | M3 emphasized easing + full Penner catalog | Material 3 / Penner | `Curves::EaseInOutCubicEmphasized`, `ThreePointCubic`, `Split` |
 | Interruptible springs with velocity-preserving retarget | analytic closed forms | `AnimatedValue`, `#[derive(Animatable)]` |
 

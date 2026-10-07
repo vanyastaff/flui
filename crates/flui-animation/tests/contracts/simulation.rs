@@ -4,6 +4,7 @@ use flui_animation::simulation::{
     BouncingScrollSimulation, BoundedFrictionSimulation, FrictionSimulation, Simulation,
     SimulationBounds, SimulationError, SimulationParameter, SpringDescription, Tolerance,
 };
+use flui_painting::styling::Color;
 
 fn friction(drag: f64, position: f64, velocity: f64) -> FrictionSimulation {
     FrictionSimulation::new(drag, position, velocity, Tolerance::DEFAULT)
@@ -334,6 +335,30 @@ fn device_pixel_ratio_scales_the_rest() {
     assert!(!at(2.0).is_done(4.8335) && at(2.0).is_done(4.8336));
 }
 
+fn color_spring_fades_to_transparent_without_darkening() {
+    // Springs run in premultiplied Oklab (ADR-0149): a fade to transparent black
+    // keeps the opaque end's red instead of passing through dark red.
+    let red = Color::rgb(255, 0, 0);
+    let spring =
+        SpringDescription::with_response_and_damping(std::time::Duration::from_millis(300), 1.0)
+            .expect("a critically damped 300 ms spring is valid");
+    let mut v = flui_animation::AnimatedValue::new(red, spring).expect("finite colour");
+    assert_eq!(v.value(), red);
+    v.animate_to(Color::TRANSPARENT).expect("finite colour");
+    for frame in 0..120 {
+        v.advance(std::time::Duration::from_secs_f64(1.0 / 60.0));
+        let color = v.value();
+        if color.a > 0 {
+            assert!(
+                color.r >= 250 && color.g <= 5 && color.b <= 5,
+                "frame {frame}: {color:?} darkened on the way out"
+            );
+        }
+    }
+    assert!(v.is_settled());
+    assert_eq!(v.value().a, 0);
+}
+
 #[test]
 fn tolerance_constructors_validate_and_scale_with_dpr() {
     crate::run_table(&[
@@ -342,6 +367,10 @@ fn tolerance_constructors_validate_and_scale_with_dpr() {
         (
             "device pixel ratio scales the rest",
             device_pixel_ratio_scales_the_rest,
+        ),
+        (
+            "color spring fades to transparent without darkening",
+            color_spring_fades_to_transparent_without_darkening,
         ),
     ]);
 }
