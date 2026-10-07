@@ -769,7 +769,10 @@ impl ViewState<GestureDetector> for GestureDetectorState {
         let old_horizontal = std::mem::replace(&mut recognizers.horizontal_drag, horizontal_drag);
         *self.drag_attachment.target.borrow_mut() = Rc::downgrade(&recognizers.drag);
         *self.horizontal_drag_attachment.target.borrow_mut() = Rc::downgrade(&recognizers.horizontal_drag);
-        cancel_all(&[&*old_drag, &*old_horizontal]);
+        cancel_all([
+            &*old_drag as &dyn GestureRecognizer,
+            &*old_horizontal as &dyn GestureRecognizer,
+        ]);
     }
 
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
