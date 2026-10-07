@@ -384,12 +384,9 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// `point` from `ancestor`'s space (the render root's, when `None`) into
     /// `id`'s local space.
     ///
-    /// FLUI's transforms are affine 2-D
-    /// (`Matrix4::translation`/`scaling`/`rotation_z`/`skew_2d`), so a
-    /// plain inverse is exact for every matrix any render object here produces.
-    /// **A perspective transform would need an un-projection through the
-    /// perspective divide onto the local z = 0 plane**; none exists in this
-    /// repository, and one arriving must revisit this method.
+    /// Intersects the point's screen ray with the object's local `z = 0` plane,
+    /// including perspective. A parallel ray, an intersection at infinity or
+    /// a point behind the camera returns `None`.
     ///
     /// `None` when the transform is missing or **singular** — a zero-scale
     /// `FittedBox`, for instance, which maps every local point to one global
@@ -404,7 +401,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     ) -> Option<flui_foundation::geometry::Point> {
         let ancestor = ancestor.or(self.root_id)?;
         let inverse = self.transform_to(id, ancestor)?.try_inverse()?;
-        let (x, y) = inverse.transform_point(point.x, point.y);
+        let (x, y) = inverse.unproject_to_plane(point.x, point.y)?;
         Some(flui_foundation::geometry::Point::new(x, y))
     }
 
