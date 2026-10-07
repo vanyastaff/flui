@@ -1578,12 +1578,14 @@ impl WindowsPlatform {
                 }
 
                 WM_LBUTTONDOWN | WM_LBUTTONUP | WM_RBUTTONDOWN | WM_RBUTTONUP | WM_MBUTTONDOWN
-                | WM_MBUTTONUP => {
+                | WM_MBUTTONUP | windows::Win32::UI::WindowsAndMessaging::WM_XBUTTONDOWN
+                | windows::Win32::UI::WindowsAndMessaging::WM_XBUTTONUP => {
                     use super::events::{
                         button_message, capture_on_press, mouse_button_event, release_capture_after,
                     };
-                    let (button, is_down) =
-                        button_message(msg).expect("BUG: the arm matches only button messages");
+                    let Some((button, is_down)) = button_message(msg, wparam) else {
+                        return LRESULT(0);
+                    };
                     let timed_context = ctx.map(|ctx| (ctx, ctx.message_clock.message_time()));
                     // The capture follows the native button state even with
                     // no context to deliver to, and is settled before user
@@ -1608,7 +1610,7 @@ impl WindowsPlatform {
                             ctx.callbacks.dispatch_input(event);
                         }
                     }
-                    LRESULT(0)
+                    LRESULT(isize::from(matches!(msg, windows::Win32::UI::WindowsAndMessaging::WM_XBUTTONDOWN | windows::Win32::UI::WindowsAndMessaging::WM_XBUTTONUP)))
                 }
 
                 WM_CAPTURECHANGED => {

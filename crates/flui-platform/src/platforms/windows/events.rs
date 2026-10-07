@@ -34,11 +34,11 @@ use windows::Win32::{
     UI::{
         Input::KeyboardAndMouse::{
             GetCapture, GetKeyState, ReleaseCapture, SetCapture, VIRTUAL_KEY, VK_CONTROL,
-            VK_LBUTTON, VK_LWIN, VK_MBUTTON, VK_MENU, VK_RBUTTON, VK_RWIN, VK_SHIFT,
+            VK_LBUTTON, VK_LWIN, VK_MBUTTON, VK_MENU, VK_RBUTTON, VK_RWIN, VK_SHIFT, VK_XBUTTON1, VK_XBUTTON2,
         },
         WindowsAndMessaging::{
             GetMessageTime, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP,
-            WM_RBUTTONDOWN, WM_RBUTTONUP,
+            WM_RBUTTONDOWN, WM_RBUTTONUP, WM_XBUTTONDOWN, WM_XBUTTONUP,
         },
     },
 };
@@ -639,12 +639,18 @@ fn held_buttons(wparam: WPARAM) -> PointerButtons {
     if mask & MK_MBUTTON != 0 {
         buttons.insert(PointerButton::Auxiliary);
     }
+    if mask & 0x0020 != 0 {
+        buttons.insert(PointerButton::X1);
+    }
+    if mask & 0x0040 != 0 {
+        buttons.insert(PointerButton::X2);
+    }
     buttons
 }
 
 /// The button a button message reports and whether it is a press, or `None`
 /// for any other message.
-pub(super) fn button_message(msg: u32) -> Option<(PointerButton, bool)> {
+pub(super) fn button_message(msg: u32, wparam: WPARAM) -> Option<(PointerButton, bool)> {
     match msg {
         WM_LBUTTONDOWN => Some((PointerButton::Primary, true)),
         WM_LBUTTONUP => Some((PointerButton::Primary, false)),
@@ -652,6 +658,14 @@ pub(super) fn button_message(msg: u32) -> Option<(PointerButton, bool)> {
         WM_RBUTTONUP => Some((PointerButton::Secondary, false)),
         WM_MBUTTONDOWN => Some((PointerButton::Auxiliary, true)),
         WM_MBUTTONUP => Some((PointerButton::Auxiliary, false)),
+        WM_XBUTTONDOWN | WM_XBUTTONUP => {
+            let button = match (wparam.0 >> 16) & 0xffff {
+                1 => PointerButton::X1,
+                2 => PointerButton::X2,
+                _ => return None,
+            };
+            Some((button, msg == WM_XBUTTONDOWN))
+        }
         _ => None,
     }
 }
@@ -705,7 +719,7 @@ pub(super) fn capture_changed_event(
     time: u64,
 ) -> Option<PlatformInput> {
     let gaining = HWND(lparam.0 as *mut core::ffi::c_void);
-    let held = [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON]
+    let held = [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON, VK_XBUTTON1, VK_XBUTTON2]
         .into_iter()
         .any(key_down_in_queue);
     (gaining != hwnd && held)
