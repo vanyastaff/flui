@@ -735,9 +735,17 @@ fn cubic_slope_matches_differences_of_the_css_reference() {
 /// Next to `EaseInOutExpo`'s vertical tangent a `1e-4`-step difference
 /// straddles the tangent and is off by a large factor; the exact cubic
 /// derivative is not. Analytic: s = 0.5 + cbrt((x − 0.5)/4),
-/// dy/dx = y'(s)/x'(s) = 6s(1 − s) / (12 (s − 0.5)²).
+/// dy/dx = y'(s)/x'(s) = 6s(1 − s) / (12 (s − 0.5)²). One ulp either side of
+/// the tangent the solved `s` is within the solver's tolerance, but `x'(s)`
+/// there is rounding rather than slope; the slope still matches within 0.1 %.
 fn cubic_slope_is_exact_where_a_difference_is_not() {
-    for dx in [1e-6_f64, -1e-6, 1e-5] {
+    for dx in [
+        1e-6_f64,
+        -1e-6,
+        1e-5,
+        f64::EPSILON / 2.0,
+        -f64::EPSILON / 4.0,
+    ] {
         let x = 0.5 + dx;
         let s = 0.5 + ((x - 0.5) / 4.0).cbrt();
         let want = 6.0 * s * (1.0 - s) / (12.0 * (s - 0.5) * (s - 0.5));

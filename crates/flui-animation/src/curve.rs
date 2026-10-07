@@ -838,14 +838,50 @@ impl Cubic {
             }
         }
     }
+
+    /// `dy/dx` at `x` where `x'` nearly vanishes inside the curve. About the
+    /// stationary point `c` of `x'` the x polynomial is exactly
+    /// `x(c) + p·u + a·u³` with `u = s − c` and `p = x'(c) ≥ 0`, so `u` is
+    /// solved from the small offset `x − x(c)` to full relative precision and
+    /// `x'(s) = p + 3a·u²` follows from it, rather than from an `s` rounding
+    /// has moved onto the tangent. `None` when x has no such point (`a ≤ 0`).
+    fn tangent_slope(&self, x: f64) -> Option<f64> {
+        let cubed = self.x.a;
+        if cubed <= 0.0 {
+            return None;
+        }
+        let centre = (-self.x.b / (3.0 * cubed)).clamp(0.0, 1.0);
+        let rate = self.x.slope(centre).max(0.0);
+        let offset = x - self.x.at(centre);
+        // `a·u³ + p·u` increases in `u`: bisect it over the parameter range.
+        let (mut lo, mut hi) = (-1.0_f64, 1.0_f64);
+        loop {
+            let mid = f64::midpoint(lo, hi);
+            if mid <= lo || mid >= hi {
+                break;
+            }
+            if (cubed * mid).mul_add(mid, rate) * mid < offset {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        let shift = f64::midpoint(lo, hi);
+        Some(self.y.slope(centre + shift) / (3.0 * cubed * shift).mul_add(shift, rate))
+    }
 }
 
 impl Curve for Cubic {
     builtin_value!(Cubic(self));
 
     /// `dy/dx = y'(s) / x'(s)` at the solved parameter `s` whenever `x'(s)` is
-    /// nonzero and the quotient finite, however small `x'(s)` is. Where
-    /// `x'(s) = 0` exactly and `y'(s) = 0` too (a flat start such as
+    /// nonzero and the quotient finite. At the ends `s` is exact, so however
+    /// small `x'(s)` is it is the true derivative. Inside, `s` is known only to
+    /// within the solver's reach `r`, which moves `x'` by up to
+    /// `|x''|·r + 3|a|·r²`; an `x'(s)` below that is rounding, not slope, and
+    /// the slope comes from the parameter re-solved about the stationary
+    /// point of `x'` instead ([`Cubic::tangent_slope`]). Where `x'(s) = 0`
+    /// exactly and `y'(s) = 0` too (a flat start such as
     /// `cubic-bezier(0, 0, …)`), the limit `y''(s) / x''(s)`; at a vertical
     /// tangent, or where the quotient overflows, the finite secant of the
     /// default difference.
@@ -853,6 +889,7 @@ impl Curve for Cubic {
         if let Some(settled) = settled_slope(t) {
             return settled;
         }
+        let interior = t > 0.0 && t < 1.0;
         let s = if t <= 0.0 {
             0.0
         } else if t >= 1.0 {
@@ -862,7 +899,11 @@ impl Curve for Cubic {
         };
         let dx = self.x.slope(s);
         let dy = self.y.slope(s);
-        let ratio = if dx != 0.0 {
+        let reach = OUTPUT_TOLERANCE / self.y_slope_bound;
+        let x_error = self.x.curvature(s).abs() * reach + 3.0 * self.x.a.abs() * reach * reach;
+        let ratio = if interior && dx.abs() <= x_error {
+            self.tangent_slope(t).unwrap_or(f64::NAN)
+        } else if dx != 0.0 {
             dy / dx
         } else if dy == 0.0 {
             self.y.curvature(s) / self.x.curvature(s)
