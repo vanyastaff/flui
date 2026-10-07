@@ -188,8 +188,9 @@ mod native_windows {
         UI::Input::KeyboardAndMouse::{
             ACTIVATE_KEYBOARD_LAYOUT_FLAGS, ActivateKeyboardLayout, GetCapture, GetKeyState,
             GetKeyboardLayout, GetKeyboardState, HKL, KLF_ACTIVATE, LoadKeyboardLayoutW,
-            ReleaseCapture, SetCapture, SetKeyboardState, VIRTUAL_KEY, VK_CONTROL, VK_LBUTTON,
-            VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_MBUTTON, VK_MENU, VK_RBUTTON, VK_RMENU, VK_SHIFT,
+            ReleaseCapture, SetCapture, SetKeyboardState, ToUnicodeEx, VIRTUAL_KEY, VK_CONTROL,
+            VK_LBUTTON, VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_MBUTTON, VK_MENU, VK_RBUTTON,
+            VK_RMENU, VK_SHIFT,
         },
         UI::WindowsAndMessaging::{
             CWPSTRUCT, CallNextHookEx, DispatchMessageW, GetClientRect, IsIconic, IsWindowVisible,
@@ -1308,6 +1309,7 @@ mod native_windows {
             _ => ("00020409", 0xDE, 0x28),
         };
         let layout = ThreadLayout::activate(layout_id);
+        flush_dead_key_state();
         let altgr = matches!(case, DeadKeyCase::FrenchAltGrTilde).then(|| {
             ThreadKeyboardState::with_keys(&[
                 (VK_CONTROL, true),
@@ -1357,6 +1359,8 @@ mod native_windows {
         deliver(up, key_up);
         drop(switched);
         drop(altgr);
+        // Leave no composition pending for the rows that follow.
+        flush_dead_key_state();
         drop(layout);
         let dead = keyboard_types::Key::Named(keyboard_types::NamedKey::Dead);
         let expected = if matches!(case, DeadKeyCase::FocusLostWhileHeld) {
@@ -1378,6 +1382,32 @@ mod native_windows {
             "a dead key reports Dead on its press and on the release that \
              belongs to that press, and nothing else does"
         );
+    }
+
+    /// Clear a dead key a previous row left pending in the keyboard layout's
+    /// composition state, which outlives the row's process: translate a space
+    /// until it yields plain text.
+    #[expect(unsafe_code, reason = "keyboard layout composition state")]
+    fn flush_dead_key_state() {
+        let state = [0u8; 256];
+        let mut buffer = [0u16; 8];
+        for _ in 0..4 {
+            // SAFETY: live locals of the sizes the call requires; the layout is
+            // this thread's own.
+            let produced = unsafe {
+                ToUnicodeEx(
+                    0x20,
+                    0x39,
+                    &state,
+                    &mut buffer,
+                    0,
+                    Some(GetKeyboardLayout(0)),
+                )
+            };
+            if produced >= 0 {
+                return;
+            }
+        }
     }
 
     /// Pump this HWND's queue the way the platform loop does: translate, then

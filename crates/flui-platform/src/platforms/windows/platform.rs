@@ -2742,10 +2742,13 @@ fn drain_dead_char(hwnd: HWND, keydown: u32) -> bool {
 fn take_translated_sys_chars(hwnd: HWND) -> Vec<(WPARAM, LPARAM)> {
     let mut held = Vec::new();
     let mut msg = MSG::default();
+    // Posted messages only, as in `drain_translated_chars`: no pending sent
+    // message is dispatched before this keystroke's dead-key state is recorded.
+    let flags = PEEK_MESSAGE_REMOVE_TYPE(PM_REMOVE.0 | PM_QS_POSTMESSAGE.0);
     // SAFETY: as in `drain_translated_chars`: a live writable local, and
     // `PM_REMOVE` touches only this thread's own queue.
     unsafe {
-        while PeekMessageW(&raw mut msg, Some(hwnd), WM_SYSCHAR, WM_SYSCHAR, PM_REMOVE).as_bool() {
+        while PeekMessageW(&raw mut msg, Some(hwnd), WM_SYSCHAR, WM_SYSCHAR, flags).as_bool() {
             held.push((msg.wParam, msg.lParam));
         }
     }
