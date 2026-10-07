@@ -59,7 +59,7 @@ pub(crate) fn motion_device(
     event: &android_activity::input::MotionEvent<'_>,
     cached: Option<CachedDevice>,
 ) -> DeviceReading {
-    use jni::{JavaVM, jni_sig, jni_str, objects::JValue};
+    use jni::{JValue, JavaVM, jni_sig, jni_str};
 
     // SAFETY: AndroidApp owns the running Android VM for its entire lifetime.
     // JavaVM is a borrowed VM handle; constructing it does not destroy the VM.
