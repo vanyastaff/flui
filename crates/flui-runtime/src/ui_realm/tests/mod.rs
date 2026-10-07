@@ -417,6 +417,10 @@ fn realm_and_presentation_isolation_matrix() {
         &[
             ("exhausted_incarnations_never_alias_previous_realms", crate::realm_services::exhausted_incarnations_never_alias_previous_realms as fn()),
             ("addressed_input_routing::input_stamped_for_b_never_reaches_as_arena", addressed_input_routing::input_stamped_for_b_never_reaches_as_arena as fn()),
+            ("addressed_input_routing::focus_loss_drops_a_held_open_contact_before_it_replays", addressed_input_routing::focus_loss_drops_a_held_open_contact_before_it_replays as fn()),
+            ("addressed_input_routing::host_pause_drops_a_held_open_contact_before_it_replays", addressed_input_routing::host_pause_drops_a_held_open_contact_before_it_replays as fn()),
+            ("addressed_input_routing::focus_loss_keeps_a_held_complete_tap_for_replay", addressed_input_routing::focus_loss_keeps_a_held_complete_tap_for_replay as fn()),
+            ("addressed_input_routing::host_pause_cancels_a_routed_contact_with_a_delivered_cancel", addressed_input_routing::host_pause_cancels_a_routed_contact_with_a_delivered_cancel as fn()),
             ("async_completion_isolation::async_completion_after_presentation_teardown_fails_closed_no_sibling_reach", async_completion_isolation::async_completion_after_presentation_teardown_fails_closed_no_sibling_reach as fn()),
             ("closing_one_presentation_is_invisible_to_siblings::closing_presentation_a_leaves_sibling_layer_tree_identical", closing_one_presentation_is_invisible_to_siblings::closing_presentation_a_leaves_sibling_layer_tree_identical as fn()),
             ("closing_one_presentation_is_invisible_to_siblings::presentation_close_retirement_failures_preserve_focus_ime_and_siblings", closing_one_presentation_is_invisible_to_siblings::presentation_close_retirement_failures_preserve_focus_ime_and_siblings as fn()),
@@ -442,6 +446,7 @@ fn frame_pacing_and_pump_matrix() {
             ("frame_pipeline_and_vsync::surface_lost_keeps_needs_redraw_armed_for_a_retry", frame_pipeline_and_vsync::surface_lost_keeps_needs_redraw_armed_for_a_retry as fn()),
             ("pump_transaction::pump_post_frame_callback_observes_this_frames_committed_layout", pump_transaction::pump_post_frame_callback_observes_this_frames_committed_layout as fn()),
             ("presentation_text_input::a_text_store_lock_requested_during_a_frame_is_granted_after_the_drive_returns", presentation_text_input::a_text_store_lock_requested_during_a_frame_is_granted_after_the_drive_returns as fn()),
+            ("presentation_text_input::a_window_with_a_text_store_host_takes_input_through_it", presentation_text_input::a_window_with_a_text_store_host_takes_input_through_it as fn()),
         ],
     );
 }

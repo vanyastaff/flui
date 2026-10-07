@@ -1,8 +1,10 @@
 # ADR-0142: Text store owner notification, commit gate and owner-code containment
 
 - **Status:** Accepted (2026-10-06). Items 1–3 and 8 are implemented; items 4–7 land with the
-  Win32 text-services host, the widget's composition handling and the runtime's anchor debt, and
-  are not yet in the code.
+  Win32 text-services host, the widget's composition handling and the runtime's anchor debt. Of
+  those, the host contract, the owner's `complete_composition` with the `Abandoned` path, and the
+  removal of `active_store` are in the code
+  ([ADR-0135](ADR-0135-win32-text-services-hold-the-text-store-on-the-owner-thread.md)).
 - **Date:** 2026-10-06
 - **Supersedes:** [ADR-0090](ADR-0090-ime-pull-text-store-contract.md), in part: §1's rule that
   a read-write session is one change notification to the widget (the owner now hears only of a
@@ -108,7 +110,17 @@ framework does not control is contained.
    does not clear it.
 6. **The commit gate is open only while the realm is in its slot and not driving a frame.** A
    platform entry while the realm is checked out (a frame, the end of a session) is refused a
-   synchronous lock and queues an asynchronous one; no user code runs.
+   synchronous lock and queues an asynchronous one; no user code runs. A presentation's close is
+   its last turn and opens the gate for good: no anchor follows it, so a completion queued in a
+   frame the close cuts short commits (item 4) before its store is retired. An accepted
+   composition commit is completed and the rest of the queued tail is cancelled: a pull host's
+   queued completion runs through the host (in place if it abandons it), and a store whose
+   in-place commit was queued as a grant (behind the shut gate, or behind a grant running on the
+   store when the completion was asked for from inside it, which may fail and leave it queued;
+   the owner records the debt from the request's outcome, not from the gate) runs its queued
+   grants, in request order, so the commit lands behind the grants accepted before it; every
+   other store's queued grants are dropped with the store. Each runs inside the close's
+   containment, and after a failure the rest are retired, not run.
 7. **ADR-0090 §3's platform mapping follows a pull host.** The Win32 backend receives the focused
    store from the presentation through an owner-thread host rather than reading
    `TextInputOwner::active_store`, which is removed.
@@ -116,8 +128,9 @@ framework does not control is contained.
    presentation runs code it does not control — a grant's body, a settle, `on_changed`, the
    controller's listeners, an owner listener, the observer (the flush after a request's grants
    included, which yields to a failure their settle parked), `on_session_start`, the projection,
-   a store installing a gate, diagnostics (a `tracing` subscriber is user code), and the
-   destruction of any snapshot, refused or queued grant, replaced value, client or store — goes
+   a store installing a gate, a pull host's focus and completion calls from the presentation's
+   queue (ADR-0135 §4), diagnostics (a `tracing` subscriber is user code), and the destruction of
+   any snapshot, refused or queued grant, replaced value, client, store or host clone — goes
    through `text_store::OwnerCalls`, whose module doc lists them; a gate whose last clone goes
    with a failure no owner took retains it. What the code is owed (obligations with their values,
    the gate a failure belongs to) is read before it runs, never after, since it may reenter,
@@ -128,24 +141,24 @@ framework does not control is contained.
    the first failure in time is authoritative: a settle parks its failure in the admitting gate
    the moment it is caught, ahead of any session the owner's later code opens; a failure a call
    parked in a gate before its own panic came first, so it is taken first, while one the gate
-   already held waits for its owner's turn (a dispatch, an anchor, a close); a later one is
-   retained (ADR-0127). The gate records whether the thread was unwinding when a failure was
-   parked: one parked while it was (a guard's `Drop` in the call's cleanup requested a grant whose
-   settle failed) came after the panic that started that unwind, and is kept behind the call's
-   own. When a panic began is not observable from outside it (the panic hook is process-global
-   and the application's), so a failure parked during an unwind the call caught itself and then
-   outlived is ordered behind the call's panic too; that is the conservative order, and both are
-   kept. An operation completes its own state changes before it raises a failure
-   it caught: attach admits the client and returns its token, and a failure after that point
-   waits in the gate for the owner's next turn unless the owner closed meanwhile; an update, a
-   key edit, a semantic edit, the cursor-area loop and dispose each finish their steps. Work
-   stays deliverable: an asynchronous request behind a failing queued grant is queued, and a
-   synchronous one, or one refused because the flush before it failed, is retained rather than
-   destroyed during the unwind. A snapshot retires inside the scope: dropped while the scope is
-   healthy, retained once it has failed or while the thread unwinds. Nested work runs in the
-   caller's scope, so it sees the caller's failure. A session the field was unmounted under is
-   not written back. Presentation close keeps its own containment (ADR-0123) under the same
-   retention rule.
+   already held waits for its owner's turn (a dispatch, an anchor, a completion, a close); a
+   later one is retained (ADR-0127). The gate records whether the thread was unwinding when a
+   failure was parked: one parked while it was (a guard's `Drop` in the call's cleanup requested a
+   grant whose settle failed) came after the panic that started that unwind, and is kept behind
+   the call's own. When a panic began is not observable from outside it (the panic hook is
+   process-global and the application's), so a failure parked during an unwind the call caught
+   itself and then outlived is ordered behind the call's panic too; that is the conservative
+   order, and both are kept. An operation completes its own state changes before it raises a
+   failure it caught: attach admits the client and returns its token, and a failure after that
+   point waits in the gate for the owner's next turn unless the owner closed meanwhile; an
+   update, a key edit, a semantic edit, the cursor-area loop and dispose each finish their
+   steps. Work stays deliverable: an asynchronous request behind a failing queued grant is
+   queued, and a synchronous one, or one refused because the flush before it failed, is retained
+   rather than destroyed during the unwind. A snapshot retires inside the scope: dropped while
+   the scope is healthy, retained once it has failed or while the thread unwinds. Nested work
+   runs in the caller's scope, so it sees the caller's failure. A session the field was unmounted
+   under is not written back. Presentation close keeps its own containment (ADR-0123) under the
+   same retention rule.
 
 ## Alternatives considered
 
@@ -193,8 +206,8 @@ In place:
 
 Outstanding:
 
-- Items 4–7, with their tests: the Win32 text-services host and the removal of `active_store`
-  (item 7), the widget's committing of a composition on blur, paste, undo and unmount (item 4),
-  the runtime's pointer-down and close hooks, anchor debt and the gate's realm rule (items 4–6),
-  and a failure the gate holds being reported through the anchor debt when no dispatch or anchor
-  follows (items 2 and 5).
+- Items 4–7, with their tests: the Win32 window offering its text-services host (item 7; the
+  host contract and the removal of `active_store` are ADR-0135's), the widget's committing of a
+  composition on blur, paste, undo and unmount (item 4), the runtime's pointer-down and close
+  hooks, anchor debt and the gate's realm rule (items 4–6), and a failure the gate holds being
+  reported through the anchor debt when no dispatch or anchor follows (items 2 and 5).

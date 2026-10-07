@@ -1,7 +1,6 @@
 //! [`Shortcuts`], [`CallbackShortcuts`], the intent/action bridge, Tab
-//! traversal and activation keys against a mounted tree. The pure
-//! `SingleActivator` matching test stays a unit test in
-//! `src/interaction/shortcuts.rs`.
+//! traversal and activation keys against a mounted tree. `activator_tests`
+//! pins `SingleActivator` matching on its own.
 
 pub(crate) mod intent_tests {
 
@@ -575,5 +574,48 @@ pub(crate) mod event_cx_tests {
 
         assert!(press_ctrl_s(&harness, &node));
         assert_eq!(probe.value(), Ok(9));
+    }
+}
+
+pub(crate) mod activator_tests {
+    use flui_interaction::events::{Key, KeyEvent, KeyState, Modifiers};
+    use flui_widgets::interaction::SingleActivator;
+
+    fn down(character: &str, modifiers: Modifiers) -> KeyEvent {
+        KeyEvent {
+            state: KeyState::Down,
+            key: Key::Character(character.into()),
+            modifiers,
+            ..KeyEvent::default()
+        }
+    }
+
+    /// A character Shift produces (`?` is Shift+/ on a US keyboard) is
+    /// reachable with `ignoring_shift`, while the other modifiers still match
+    /// exactly; without it the exact-Shift rule keeps `?` unreachable there.
+    pub(crate) fn a_shift_produced_character_matches_when_shift_is_ignored() {
+        let question = SingleActivator::character("?").ignoring_shift();
+        assert!(
+            question.matches(&down("?", Modifiers::SHIFT)),
+            "US layout: Shift+/"
+        );
+        assert!(
+            question.matches(&down("?", Modifiers::empty())),
+            "a layout with a ? key"
+        );
+        assert!(
+            !question.matches(&down("?", Modifiers::SHIFT | Modifiers::CONTROL)),
+            "Ctrl+? is a different shortcut"
+        );
+        assert!(
+            !question.matches(&down("/", Modifiers::SHIFT)),
+            "the character decides"
+        );
+
+        let exact = SingleActivator::character("?");
+        assert!(
+            !exact.matches(&down("?", Modifiers::SHIFT)),
+            "the exact rule is unchanged for activators that do not opt out"
+        );
     }
 }

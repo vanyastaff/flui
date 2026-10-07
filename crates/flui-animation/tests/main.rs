@@ -18,6 +18,18 @@ mod builder;
 #[path = "contracts/controller_sources.rs"]
 mod controller_sources;
 
+#[path = "contracts/controller_robustness.rs"]
+mod controller_robustness;
+
+#[path = "contracts/frame_path.rs"]
+mod frame_path;
+
+#[path = "contracts/ownership.rs"]
+mod ownership;
+
+#[path = "contracts/status_delivery.rs"]
+mod status_delivery;
+
 #[path = "contracts/curved.rs"]
 mod curved;
 

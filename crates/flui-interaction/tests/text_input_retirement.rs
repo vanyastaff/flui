@@ -7,7 +7,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_foundation::geometry::Bounds;
-use flui_interaction::{ClientToken, TextInputClient, TextInputError, TextInputOwner};
+use flui_interaction::{
+    ClientToken, TextInputBackend, TextInputClient, TextInputError, TextInputOwner,
+};
 use flui_platform_api::PlatformTextInput;
 use flui_platform_api::text_store::{
     CommitGate, InMemoryTextStore, LockGrant, LockOutcome, LockTiming, TextStore, TextStoreError,
@@ -37,7 +39,10 @@ impl Drop for OnDrop {
 
 fn owner() -> (Rc<TextInputOwner>, Arc<Platform>) {
     let platform = Arc::new(Platform::default());
-    (TextInputOwner::new(Some(platform.clone())), platform)
+    (
+        TextInputOwner::new(TextInputBackend::Push(platform.clone())),
+        platform,
+    )
 }
 
 fn client() -> TextInputClient {
@@ -539,7 +544,7 @@ impl TextStore for ClosingStore {
 fn store_closing_its_owner_while_gated_releases_the_platform_outside_the_unwind() {
     let released = Arc::new(parking_lot::Mutex::new(None));
     let platform: Arc<dyn PlatformTextInput> = Arc::new(UnwindProbePlatform(Arc::clone(&released)));
-    let owner = TextInputOwner::new(Some(platform));
+    let owner = TextInputOwner::new(TextInputBackend::Push(platform));
     let handle = owner.handle();
     let store = Rc::new(ClosingStore {
         inner: InMemoryTextStore::new(""),
@@ -607,7 +612,7 @@ fn retired_store_closing_its_owner_releases_the_platform_outside_the_unwind() {
         let released = Arc::new(parking_lot::Mutex::new(None));
         let platform: Arc<dyn PlatformTextInput> =
             Arc::new(UnwindProbePlatform(Arc::clone(&released)));
-        let owner = TextInputOwner::new(Some(platform));
+        let owner = TextInputOwner::new(TextInputBackend::Push(platform));
         let handle = owner.handle();
         let store = Rc::new(CloseOnDropStore {
             inner: InMemoryTextStore::new(""),
@@ -638,6 +643,72 @@ fn retired_store_closing_its_owner_releases_the_platform_outside_the_unwind() {
         );
         assert_eq!(handle.ensure_open(), Err(TextInputError::Closed));
     }
+}
+
+/// The text-store host a pull-model window offers, recording what it was told.
+#[derive(Default)]
+struct PullHost(RefCell<Vec<bool>>);
+
+impl flui_platform_api::text_store::TextStoreHost for PullHost {
+    fn focus_store(&self, store: Option<Rc<dyn TextStore>>) {
+        self.0.borrow_mut().push(store.is_some());
+    }
+
+    fn complete_composition(
+        &self,
+        _: &Rc<dyn TextStore>,
+    ) -> Result<
+        flui_platform_api::text_store::CompositionEnd,
+        flui_platform_api::text_store::TextStoreHostError,
+    > {
+        Ok(flui_platform_api::text_store::CompositionEnd::Committed)
+    }
+}
+
+/// Issue #1052 on a pull-model owner: a retired client's capture detaches
+/// its own, already stale, token during replacement, detach and close. Each
+/// sees `Stale` or `Closed`, not a borrow panic, and the host still hears
+/// every focus change once, in order.
+fn pull_host_hears_each_focus_change_when_a_capture_detaches_on_retirement() {
+    let host = Rc::new(PullHost::default());
+    let owner = TextInputOwner::new(TextInputBackend::Pull(host.clone()));
+    let handle = owner.handle();
+    let detaching_client = |answer: Rc<Cell<Option<Result<(), TextInputError>>>>| {
+        let token = Rc::new(Cell::new(None::<ClientToken>));
+        let reentrant = handle.clone();
+        let own = Rc::clone(&token);
+        let client = callback_client(move || {
+            if let Some(token) = own.get() {
+                answer.set(Some(reentrant.detach(token).map(|_| ())));
+            }
+        });
+        (client, token)
+    };
+
+    let replaced = Rc::new(Cell::new(None));
+    let (first, first_token) = detaching_client(Rc::clone(&replaced));
+    first_token.set(Some(handle.attach(first).expect("first")));
+    let second = handle.attach(client()).expect("replacement");
+    assert_eq!(replaced.get(), Some(Ok(())), "the stale detach is answered");
+    assert!(owner.is_attached(second));
+
+    let detached = Rc::new(Cell::new(None));
+    let (third, third_token) = detaching_client(Rc::clone(&detached));
+    let third = handle.attach(third).expect("third");
+    third_token.set(Some(third));
+    let _ = handle.detach(third).expect("detach");
+    assert_eq!(detached.get(), Some(Ok(())));
+
+    let closed = Rc::new(Cell::new(None));
+    let (last, last_token) = detaching_client(Rc::clone(&closed));
+    last_token.set(Some(handle.attach(last).expect("last")));
+    owner.close();
+    assert_eq!(closed.get(), Some(Err(TextInputError::Closed)));
+    assert_eq!(
+        *host.0.borrow(),
+        [true, true, true, false, true, false],
+        "focus A, B, C, none, D, and none on close"
+    );
 }
 
 fn callback_client_with_store(
@@ -699,6 +770,10 @@ fn text_input_retirement_allows_reentry_and_preserves_recovery() {
         (
             "retired store closes owner",
             retired_store_closing_its_owner_releases_the_platform_outside_the_unwind,
+        ),
+        (
+            "pull host and reentrant retirement",
+            pull_host_hears_each_focus_change_when_a_capture_detaches_on_retirement,
         ),
     ];
     let failed = RefCell::new(Vec::new());

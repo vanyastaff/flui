@@ -23,6 +23,8 @@ mod android_exit_path;
 mod contract;
 #[path = "file_store.rs"]
 mod file_store;
+#[path = "text_input_mapping.rs"]
+mod text_input_mapping;
 #[path = "window_callback_unwind.rs"]
 mod window_callback_unwind;
 

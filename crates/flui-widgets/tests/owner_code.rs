@@ -6,7 +6,9 @@
 //! One row per point and failure shape: a panic in the owner code, a
 //! snapshot whose last owner the code released and whose captured value
 //! panics when destroyed, and an ownership change (moving the store, a
-//! rebuild, a detach, a cleared observer) followed by a panic. Each row then
+//! rebuild, a detach, a cleared observer, a close) followed by a panic. A
+//! pull host's calls are platform code that reaches application code, so
+//! they are points here too. Each row then
 //! performs the next operation on the same owner and checks it succeeds.
 //! A row can abort the process when its point is not contained, so each runs
 //! in a child process.
@@ -17,10 +19,11 @@ use std::sync::Arc;
 
 use flui_foundation::geometry::Bounds;
 use flui_interaction::routing::FocusNode;
-use flui_interaction::{TextInputClient, TextInputOwner};
+use flui_interaction::{TextInputBackend, TextInputClient, TextInputOwner};
 use flui_platform_api::text_store::{
-    CommitGate, InMemoryTextStore, LockGrant, LockOutcome, LockTiming, TextChange, TextStore,
-    TextStoreError, TextStoreObserver, TextStoreStatus,
+    CommitGate, CompositionEnd, InMemoryTextStore, LockGrant, LockOutcome, LockTiming, TextChange,
+    TextStore, TextStoreError, TextStoreHost, TextStoreHostError, TextStoreObserver,
+    TextStoreStatus, project_ime_event,
 };
 use flui_platform_api::{ImeEvent, PlatformTextInput};
 use flui_widgets::{EditableText, TextEditingController};
@@ -513,7 +516,7 @@ impl PlatformTextInput for Platform {
 }
 
 fn owner() -> Rc<TextInputOwner> {
-    TextInputOwner::new(Some(Arc::new(Platform)))
+    TextInputOwner::new(TextInputBackend::Push(Arc::new(Platform)))
 }
 
 /// A store that runs `on_drop` when destroyed.
@@ -730,6 +733,611 @@ fn dispatched_client_retirement_after_a_failure() {
 }
 
 // ----------------------------------------------------------------------------
+// TextInputOwner on a pull host: the host's calls from the owner's queue
+// ----------------------------------------------------------------------------
+
+type Log = Rc<RefCell<Vec<&'static str>>>;
+
+/// What a row runs inside the host's focus call, given the focused store.
+type InsideFocus = Box<dyn FnOnce(&Rc<dyn TextStore>)>;
+
+/// A pull host that logs its calls, runs what a row hands it inside them (as
+/// a text service reaching application code does), then panics when told.
+/// It abandons every composition it is asked to end, so the owner commits
+/// in place whenever a completion returns.
+#[derive(Default)]
+struct Host {
+    log: Log,
+    inside_focus: RefCell<Option<InsideFocus>>,
+    inside_complete: RefCell<Option<Box<dyn FnOnce()>>>,
+    /// Calls (`"focus"`, `"complete"`) that panic once each, after their
+    /// effect.
+    panics: RefCell<Vec<&'static str>>,
+    _capture: Option<PanicsOnDrop>,
+}
+
+impl Host {
+    fn panic_if_told(&self, call: &'static str) {
+        let told = {
+            let mut panics = self.panics.borrow_mut();
+            let position = panics.iter().position(|&told| told == call);
+            position.map(|position| panics.remove(position))
+        };
+        if let Some(call) = told {
+            panic!("{call} failure");
+        }
+    }
+}
+
+impl TextStoreHost for Host {
+    fn focus_store(&self, store: Option<Rc<dyn TextStore>>) {
+        self.log
+            .borrow_mut()
+            .push(if store.is_some() { "focus" } else { "unfocus" });
+        let inside = self.inside_focus.borrow_mut().take();
+        if let (Some(inside), Some(store)) = (inside, &store) {
+            inside(store);
+        }
+        self.panic_if_told("focus");
+    }
+
+    fn complete_composition(
+        &self,
+        _: &Rc<dyn TextStore>,
+    ) -> Result<CompositionEnd, TextStoreHostError> {
+        self.log.borrow_mut().push("complete");
+        let inside = self.inside_complete.borrow_mut().take();
+        if let Some(inside) = inside {
+            inside();
+        }
+        self.panic_if_told("complete");
+        Ok(CompositionEnd::Abandoned)
+    }
+}
+
+fn pull_owner(host: Rc<Host>) -> Rc<TextInputOwner> {
+    TextInputOwner::new(TextInputBackend::Pull(host))
+}
+
+/// Type "かな" after "ab", leaving it composing.
+fn composing_store() -> Rc<InMemoryTextStore> {
+    let store = InMemoryTextStore::new("ab");
+    store.set_commit_gate(CommitGate::new());
+    let applied = project_ime_event(
+        &*store,
+        &ImeEvent::Preedit {
+            text: "かな".to_owned(),
+            cursor: Some((0, 0)),
+        },
+    );
+    assert_eq!(applied, Ok(LockOutcome::Granted), "preedit applies");
+    store
+}
+
+fn the_pull_owner_keeps_working(owner: &Rc<TextInputOwner>, log: &Log) {
+    log.borrow_mut().clear();
+    let store = composing_store();
+    let token = owner
+        .handle()
+        .attach(TextInputClient::new(store.clone()))
+        .expect("the next attach");
+    assert_eq!(
+        raised(|| owner.complete_composition()),
+        None,
+        "the next completion"
+    );
+    assert!(store.composition().is_none(), "the next completion commits");
+    let _ = owner.handle().detach(token).expect("the next detach");
+    assert_eq!(*log.borrow(), ["focus", "complete", "unfocus"]);
+    assert_eq!(
+        raised(|| {
+            let _ = owner.run_deferred_grants();
+        }),
+        None,
+        "nothing is reported twice"
+    );
+}
+
+/// Queue a focus change and a completion inside a frame, with a deferred
+/// grant behind them, and fail the host calls `panics` names at the anchor:
+/// `failure` is reported, the queue behind it and the grant still run.
+fn host_operations_panicking_at_the_anchor(panics: &[&'static str], failure: &str) {
+    let host = Rc::new(Host::default());
+    let log = Rc::clone(&host.log);
+    let owner = pull_owner(Rc::clone(&host));
+    let store = composing_store();
+    owner.set_transaction_open(true);
+    let _token = owner
+        .handle()
+        .attach(TextInputClient::new(store.clone()))
+        .expect("attach in a frame");
+    owner.complete_composition();
+    let granted = Rc::new(Cell::new(false));
+    let grant = Rc::clone(&granted);
+    assert_eq!(
+        store.request_lock(LockGrant::read(move |_| grant.set(true)), LockTiming::Async),
+        Ok(LockOutcome::Deferred)
+    );
+    host.panics.borrow_mut().extend(panics);
+    owner.set_transaction_open(false);
+    assert_eq!(
+        raised(|| {
+            let _ = owner.run_deferred_grants();
+        })
+        .as_deref(),
+        Some(failure),
+        "the first failure is authoritative"
+    );
+    assert_eq!(
+        *log.borrow(),
+        ["focus", "complete"],
+        "the completion behind the failure ran"
+    );
+    assert_eq!(
+        store.composition().is_some(),
+        panics.contains(&"complete"),
+        "a completion with no answer is not committed in its place"
+    );
+    assert!(granted.get(), "the deferred grant ran");
+    the_pull_owner_keeps_working(&owner, &log);
+}
+
+fn host_focus_panicking_the_queue_behind_it_runs() {
+    host_operations_panicking_at_the_anchor(&["focus"], "focus failure");
+}
+
+fn host_focus_and_completion_panicking_at_the_anchor() {
+    host_operations_panicking_at_the_anchor(&["focus", "complete"], "focus failure");
+}
+
+fn host_panicking_after_a_parked_failure() {
+    let host = Rc::new(Host::default());
+    let log = Rc::clone(&host.log);
+    let owner = pull_owner(Rc::clone(&host));
+    let store = InMemoryTextStore::new("");
+    let _token = owner
+        .handle()
+        .attach(TextInputClient::new(store.clone()))
+        .expect("attach");
+    park_through(&store, "parked owner failure");
+    host.panics.borrow_mut().push("complete");
+    assert_eq!(
+        raised(|| owner.complete_composition()).as_deref(),
+        Some("parked owner failure"),
+        "the failure parked before the host call is authoritative"
+    );
+    the_pull_owner_keeps_working(&owner, &log);
+}
+
+fn host_parking_then_panicking() {
+    let host = Rc::new(Host::default());
+    let log = Rc::clone(&host.log);
+    let owner = pull_owner(Rc::clone(&host));
+    let store = InMemoryTextStore::new("");
+    store.set_owner_listener(Some(Rc::new(|| panic!("parked by the host"))));
+    *host.inside_focus.borrow_mut() = Some(Box::new(|store: &Rc<dyn TextStore>| {
+        assert_eq!(edit(&**store, "a"), Ok(LockOutcome::Granted));
+    }));
+    host.panics.borrow_mut().push("focus");
+    let mut attached = None;
+    assert_eq!(
+        raised(|| attached = Some(owner.handle().attach(TextInputClient::new(store.clone())))),
+        None,
+        "the client is active, so the attach returns its token"
+    );
+    let token = attached
+        .expect("the attach returned")
+        .expect("the token is the caller's");
+    assert!(owner.is_attached(token), "the client is active");
+    store.set_owner_listener(None);
+    assert_eq!(store.text(), "a", "the host's grant stands");
+    assert_eq!(
+        raised(|| {
+            let _ = owner.run_deferred_grants();
+        })
+        .as_deref(),
+        Some("parked by the host"),
+        "the next turn reports the failure parked inside the host call, which came before the call's own"
+    );
+    the_pull_owner_keeps_working(&owner, &log);
+}
+
+fn host_detach_after_a_parked_failure() {
+    let host = Rc::new(Host::default());
+    let log = Rc::clone(&host.log);
+    let owner = pull_owner(Rc::clone(&host));
+    let store = InMemoryTextStore::new("");
+    let token = owner
+        .handle()
+        .attach(TextInputClient::new(store.clone()))
+        .expect("attach");
+    park_through(&store, "parked owner failure");
+    // The host's unfocus call panics.
+    host.panics.borrow_mut().push("focus");
+    assert_eq!(
+        raised(|| {
+            let _ = owner.handle().detach(token);
+        })
+        .as_deref(),
+        Some("focus failure"),
+        "the detach raises its own failure"
+    );
+    assert!(!owner.is_attached(token), "the detach completed");
+    assert_eq!(
+        raised(|| {
+            let _ = owner.run_deferred_grants();
+        })
+        .as_deref(),
+        Some("parked owner failure"),
+        "the failure parked before the detach waited for the owner's next turn"
+    );
+    the_pull_owner_keeps_working(&owner, &log);
+}
+
+fn host_detaching_then_panicking() {
+    let host = Rc::new(Host::default());
+    let log = Rc::clone(&host.log);
+    let owner = pull_owner(Rc::clone(&host));
+    let store = Rc::new(DropHook {
+        inner: InMemoryTextStore::new(""),
+        on_drop: RefCell::new(Some(Box::new(|| {
+            panic!("store destroyed after the failure")
+        }))),
+    });
+    let token = owner
+        .handle()
+        .attach(TextInputClient::new(store))
+        .expect("attach");
+    let handle = owner.handle();
+    *host.inside_complete.borrow_mut() = Some(Box::new(move || {
+        let _ = handle.detach(token);
+    }));
+    host.panics.borrow_mut().push("complete");
+    assert_eq!(
+        raised(|| owner.complete_composition()).as_deref(),
+        Some("complete failure"),
+        "the completed store is retained, not destroyed, after the failure"
+    );
+    assert_eq!(
+        *log.borrow(),
+        ["focus", "complete", "unfocus"],
+        "the detach reached the host once its call returned"
+    );
+    the_pull_owner_keeps_working(&owner, &log);
+}
+
+fn host_closing_then_panicking_released_last() {
+    let host = Rc::new(Host {
+        _capture: Some(PanicsOnDrop("host capture destroyed")),
+        ..Host::default()
+    });
+    let log = Rc::clone(&host.log);
+    let owner = pull_owner(Rc::clone(&host));
+    let _token = owner
+        .handle()
+        .attach(TextInputClient::new(InMemoryTextStore::new("")))
+        .expect("attach");
+    let closing = Rc::downgrade(&owner);
+    *host.inside_complete.borrow_mut() = Some(Box::new(move || {
+        if let Some(owner) = closing.upgrade() {
+            owner.close();
+        }
+    }));
+    host.panics.borrow_mut().push("complete");
+    // The owner's clone becomes the host's last owner once the close
+    // releases the backend.
+    drop(host);
+    assert_eq!(
+        raised(|| owner.complete_composition()).as_deref(),
+        Some("complete failure"),
+        "the host call's failure, not its capture's"
+    );
+    assert_eq!(*log.borrow(), ["focus", "complete", "unfocus"]);
+    assert_eq!(
+        owner
+            .handle()
+            .attach(TextInputClient::new(InMemoryTextStore::new("")))
+            .err(),
+        Some(flui_interaction::TextInputError::Closed),
+        "the next operation sees the close"
+    );
+    assert_eq!(
+        raised(|| {
+            let _ = owner.run_deferred_grants();
+        }),
+        None
+    );
+}
+
+/// A pull owner whose client follows its gate, and a host whose completion
+/// panics holding a guard that, during that panic's unwind, edits the client
+/// and so parks a failure in the owner's gate.
+fn host_completion_parking_while_it_unwinds() -> (Rc<TextInputOwner>, Rc<InMemoryTextStore>, Log) {
+    let host = Rc::new(Host::default());
+    let log = Rc::clone(&host.log);
+    let owner = pull_owner(Rc::clone(&host));
+    let store = InMemoryTextStore::new("");
+    let _token = owner
+        .handle()
+        .attach(TextInputClient::new(store.clone()))
+        .expect("attach");
+    let cleanup = Rc::clone(&store);
+    *host.inside_complete.borrow_mut() = Some(Box::new(move || {
+        let _cleanup = ParksWhenDropped(cleanup);
+        panic!("complete failure");
+    }));
+    (owner, store, log)
+}
+
+/// The failure the host call's unwind parked came after the call's own
+/// panic, which started that unwind: the completion raises the host's.
+fn host_completion_whose_unwind_parks_a_failure() {
+    let (owner, store, log) = host_completion_parking_while_it_unwinds();
+    assert_eq!(
+        raised(|| owner.complete_composition()).as_deref(),
+        Some("complete failure"),
+        "the host call's own panic came before what its unwind's cleanup parked"
+    );
+    assert_eq!(store.text(), "a", "the cleanup's grant stands");
+    the_pull_owner_keeps_working(&owner, &log);
+}
+
+/// A close runs the completion queued in a frame; its unwind's parked failure
+/// is ordered behind the host call's panic as at any other turn.
+fn host_close_completion_whose_unwind_parks_a_failure() {
+    let (owner, store, log) = host_completion_parking_while_it_unwinds();
+    owner.set_transaction_open(true);
+    owner.complete_composition();
+    owner.set_transaction_open(false);
+    assert_eq!(
+        raised(|| owner.close()).as_deref(),
+        Some("complete failure"),
+        "the close raises the host call's panic, not what its unwind parked"
+    );
+    assert_eq!(store.text(), "a", "the cleanup's grant stands");
+    assert_eq!(
+        *log.borrow(),
+        ["focus", "complete", "unfocus"],
+        "the close still takes the store away from the host"
+    );
+    assert_eq!(
+        owner
+            .handle()
+            .attach(TextInputClient::new(InMemoryTextStore::new("")))
+            .err(),
+        Some(flui_interaction::TextInputError::Closed),
+        "the close completed"
+    );
+    assert_eq!(
+        raised(|| {
+            let _ = owner.run_deferred_grants();
+        }),
+        None,
+        "nothing is reported twice"
+    );
+}
+
+/// A field composing "かな" whose completion is queued inside a frame, and
+/// whose presentation closes before that frame's anchor: the host abandons
+/// the composition, and the close commits it in place before it retires the
+/// store, so the controller the field keeps holds no composing range.
+fn host_close_before_the_anchor_commits_a_queued_completion() {
+    let controller = TextEditingController::new();
+    let node = FocusNode::with_debug_label("closed before the anchor");
+    let harness = focused(
+        EditableText::new(controller.clone(), Rc::clone(&node)),
+        &node,
+    );
+    let field = field(&harness);
+    assert_eq!(
+        project_ime_event(
+            &*field,
+            &ImeEvent::Preedit {
+                text: "かな".to_owned(),
+                cursor: Some((0, 0)),
+            },
+        ),
+        Ok(LockOutcome::Granted),
+        "preedit applies"
+    );
+    assert!(controller.composing_range().is_some(), "the field composes");
+    let host = Rc::new(Host::default());
+    let log = Rc::clone(&host.log);
+    let owner = pull_owner(host);
+    let _token = owner
+        .handle()
+        .attach(TextInputClient::new(Rc::clone(&field)))
+        .expect("the field moves to the closing presentation");
+    owner.set_transaction_open(true);
+    owner.complete_composition();
+    assert_eq!(raised(|| owner.close()), None, "the close fails nothing");
+    assert_eq!(*log.borrow(), ["focus", "complete", "unfocus"]);
+    assert_eq!(
+        controller.composing_range(),
+        None,
+        "the close committed the abandoned composition before retiring the store"
+    );
+    assert_eq!(controller.text(), "かな", "the composed text stays");
+    drop(harness);
+}
+
+/// A field composing "かな", moved to a push presentation whose completion
+/// is asked for inside a frame: the in-place commit is queued in the store
+/// behind the shut gate, beside a grant the platform queued before it.
+fn push_completion_queued_in_a_frame(
+    earlier_grant: impl Fn(&Log) + 'static,
+) -> (
+    Harness,
+    TextEditingController,
+    Rc<dyn TextStore>,
+    Rc<TextInputOwner>,
+    Log,
+) {
+    let controller = TextEditingController::new();
+    let node = FocusNode::with_debug_label("push, closed before the anchor");
+    let harness = focused(
+        EditableText::new(controller.clone(), Rc::clone(&node)),
+        &node,
+    );
+    let field = field(&harness);
+    assert_eq!(
+        project_ime_event(
+            &*field,
+            &ImeEvent::Preedit {
+                text: "かな".to_owned(),
+                cursor: Some((0, 0)),
+            },
+        ),
+        Ok(LockOutcome::Granted),
+        "preedit applies"
+    );
+    let owner = owner();
+    let _token = owner
+        .handle()
+        .attach(TextInputClient::new(Rc::clone(&field)))
+        .expect("the field moves to the push presentation");
+    owner.set_transaction_open(true);
+    let log: Log = Rc::default();
+    let earlier = Rc::clone(&log);
+    assert_eq!(
+        field.request_lock(
+            LockGrant::read(move |_| earlier_grant(&earlier)),
+            LockTiming::Async,
+        ),
+        Ok(LockOutcome::Deferred),
+        "the platform's grant waits for the anchor"
+    );
+    owner.complete_composition();
+    assert!(
+        controller.composing_range().is_some(),
+        "the commit waits behind the shut gate"
+    );
+    (harness, controller, field, owner, log)
+}
+
+/// A push presentation that closes before the anchor runs the commit it
+/// accepted, behind the grant queued ahead of it in the same store, before
+/// it retires the store.
+fn push_close_before_the_anchor_commits_a_queued_completion() {
+    let (harness, controller, _field, owner, log) =
+        push_completion_queued_in_a_frame(|log| log.borrow_mut().push("earlier grant"));
+    assert_eq!(raised(|| owner.close()), None, "the close fails nothing");
+    assert_eq!(
+        controller.composing_range(),
+        None,
+        "the close committed the queued completion before retiring the store"
+    );
+    assert_eq!(controller.text(), "かな", "the composed text stays");
+    assert_eq!(*log.borrow(), ["earlier grant"], "in the order accepted");
+    drop(harness);
+}
+
+/// The same, when the grant ahead of the commit panics: the close runs it
+/// inside its containment and raises its failure once the close is done;
+/// the owner is closed, and the field keeps working.
+fn push_close_whose_earlier_grant_panics() {
+    let (harness, _controller, field, owner, _log) =
+        push_completion_queued_in_a_frame(|_| panic!("queued grant failure"));
+    assert_eq!(
+        raised(|| owner.close()).as_deref(),
+        Some("queued grant failure"),
+        "the close raises the grant's failure"
+    );
+    assert!(owner.handle().ensure_open().is_err(), "the owner is closed");
+    assert_eq!(
+        edit(&*field, "z"),
+        Ok(LockOutcome::Granted),
+        "the field's next edit"
+    );
+    drop(harness);
+}
+
+/// A grant on a composing store asks its presentation for the completion,
+/// outside any frame, and then panics: the in-place commit the arbiter queued
+/// behind the locked store is accepted work, so a close before any anchor
+/// runs it before retiring the store.
+fn completion_inside_a_failing_grant_then_closed(owner: &Rc<TextInputOwner>) {
+    let store = composing_store();
+    let _token = owner
+        .handle()
+        .attach(TextInputClient::new(store.clone()))
+        .expect("attach");
+    let completing = Rc::downgrade(owner);
+    assert_eq!(
+        raised(|| {
+            let _ = store.request_lock(
+                LockGrant::read(move |_| {
+                    if let Some(owner) = completing.upgrade() {
+                        owner.complete_composition();
+                    }
+                    panic!("grant failure");
+                }),
+                LockTiming::Sync,
+            );
+        })
+        .as_deref(),
+        Some("grant failure"),
+        "the grant's own failure reaches its requester"
+    );
+    assert!(
+        store.composition().is_some(),
+        "the commit waits behind the failed grant"
+    );
+    assert_eq!(raised(|| owner.close()), None, "the close fails nothing");
+    assert_eq!(
+        store.composition(),
+        None,
+        "the close ran the commit it accepted"
+    );
+    assert_eq!(store.text(), "abかな", "the composed text stays");
+    assert_eq!(
+        edit(&*store, "z"),
+        Ok(LockOutcome::Granted),
+        "the store's next edit"
+    );
+}
+
+fn push_completion_inside_a_failing_grant_then_closed() {
+    completion_inside_a_failing_grant_then_closed(&owner());
+}
+
+/// The same on a pull host that abandons the composition, so the owner
+/// commits it in place behind the running grant.
+fn host_completion_inside_a_failing_grant_then_closed() {
+    let host = Rc::new(Host::default());
+    let log = Rc::clone(&host.log);
+    completion_inside_a_failing_grant_then_closed(&pull_owner(host));
+    assert_eq!(*log.borrow(), ["focus", "complete", "unfocus"]);
+}
+
+/// An owner dropped without a close, holding the last owners of two stores
+/// that owe a queued commit, both of whose destructors panic: they retire one
+/// at a time, the second retained behind the first, so the drop neither
+/// aborts nor raises.
+fn owner_dropped_with_two_completing_stores_whose_drops_panic() {
+    let owner = owner();
+    for message in [
+        "first completing store destroyed",
+        "second completing store destroyed",
+    ] {
+        let token = owner
+            .handle()
+            .attach(TextInputClient::new(store_panicking_on_drop(message)))
+            .expect("attach");
+        owner.set_transaction_open(true);
+        owner.complete_composition();
+        owner.set_transaction_open(false);
+        let _ = owner.handle().detach(token).expect("detach");
+    }
+    assert_eq!(
+        raised(|| drop(owner)),
+        None,
+        "a dropped owner contains its stores' failures"
+    );
+    the_owner_keeps_working(&self::owner());
+}
+
+// ----------------------------------------------------------------------------
 // The matrix
 // ----------------------------------------------------------------------------
 
@@ -802,6 +1410,63 @@ const ROWS: &[(&str, fn())] = &[
     (
         "dispatched client: retirement after a failure",
         dispatched_client_retirement_after_a_failure,
+    ),
+    (
+        "host: a panicking focus change, the queue behind it runs",
+        host_focus_panicking_the_queue_behind_it_runs,
+    ),
+    (
+        "host: focus change and completion panicking at the anchor",
+        host_focus_and_completion_panicking_at_the_anchor,
+    ),
+    (
+        "host: panicking after a parked failure",
+        host_panicking_after_a_parked_failure,
+    ),
+    ("host: parking, then panicking", host_parking_then_panicking),
+    (
+        "host: a detach after a parked failure",
+        host_detach_after_a_parked_failure,
+    ),
+    (
+        "host: detaching, then panicking",
+        host_detaching_then_panicking,
+    ),
+    (
+        "host: closing, then panicking, released last",
+        host_closing_then_panicking_released_last,
+    ),
+    (
+        "host: a completion whose unwind parks a failure",
+        host_completion_whose_unwind_parks_a_failure,
+    ),
+    (
+        "host: a close completion whose unwind parks a failure",
+        host_close_completion_whose_unwind_parks_a_failure,
+    ),
+    (
+        "host: a completion queued in a frame, closed before the anchor",
+        host_close_before_the_anchor_commits_a_queued_completion,
+    ),
+    (
+        "push: a completion queued in a frame, closed before the anchor",
+        push_close_before_the_anchor_commits_a_queued_completion,
+    ),
+    (
+        "push: a close whose grant ahead of a queued completion panics",
+        push_close_whose_earlier_grant_panics,
+    ),
+    (
+        "push: a completion inside a failing grant, closed before the anchor",
+        push_completion_inside_a_failing_grant_then_closed,
+    ),
+    (
+        "host: a completion inside a failing grant, closed before the anchor",
+        host_completion_inside_a_failing_grant_then_closed,
+    ),
+    (
+        "drop: two completing stores whose destructors panic",
+        owner_dropped_with_two_completing_stores_whose_drops_panic,
     ),
     (
         "arbiter: a refused grant during an unwind",
@@ -2145,7 +2810,7 @@ impl PlatformTextInput for FailsToEnable {
 }
 
 fn attach_whose_platform_enable_panics() {
-    let owner = TextInputOwner::new(Some(Arc::new(FailsToEnable(
+    let owner = TextInputOwner::new(TextInputBackend::Push(Arc::new(FailsToEnable(
         std::sync::atomic::AtomicBool::new(false),
     ))));
     let token = owner
@@ -2205,7 +2870,9 @@ impl FailsToEnableOnce {
 /// platform, which nothing else would until the client detached.
 fn attach_replacing_a_client_whose_platform_enable_panicked() {
     let platform = Arc::new(FailsToEnableOnce::default());
-    let owner = TextInputOwner::new(Some(Arc::clone(&platform) as Arc<dyn PlatformTextInput>));
+    let owner = TextInputOwner::new(TextInputBackend::Push(
+        Arc::clone(&platform) as Arc<dyn PlatformTextInput>
+    ));
     let _first = owner
         .handle()
         .attach(TextInputClient::new(InMemoryTextStore::new("")))
@@ -2286,7 +2953,7 @@ fn close_raising(owner: &TextInputOwner, first: &str) {
 }
 
 fn close_whose_platform_disable_parks_while_unwinding() {
-    let owner = TextInputOwner::new(Some(Arc::new(FailsToDisable)));
+    let owner = TextInputOwner::new(TextInputBackend::Push(Arc::new(FailsToDisable)));
     let store = InMemoryTextStore::new("");
     let _client = owner
         .handle()
@@ -2377,7 +3044,7 @@ impl Drop for ClosesOnCursor {
 }
 
 fn cursor_area_whose_platform_closes_the_owner_and_panics() {
-    let owner = TextInputOwner::new(Some(Arc::new(ClosesOnCursor)));
+    let owner = TextInputOwner::new(TextInputBackend::Push(Arc::new(ClosesOnCursor)));
     CLOSING_OWNER.with(|slot| *slot.borrow_mut() = Some(Rc::downgrade(&owner)));
     let _client = owner
         .handle()
@@ -2894,7 +3561,7 @@ impl tracing::Subscriber for ClosesThenFails {
 }
 
 fn stale_detach_whose_diagnostic_closes_the_owner_and_panics() {
-    let owner = TextInputOwner::new(Some(Arc::new(PanicsWhenDestroyed)));
+    let owner = TextInputOwner::new(TextInputBackend::Push(Arc::new(PanicsWhenDestroyed)));
     let token = owner
         .handle()
         .attach(TextInputClient::new(InMemoryTextStore::new("")))

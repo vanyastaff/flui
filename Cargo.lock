@@ -2070,6 +2070,7 @@ dependencies = [
  "flui-platform-api",
  "flui-testing",
  "parking_lot",
+ "proptest",
  "serde",
  "smallvec",
  "static_assertions",
@@ -2230,6 +2231,7 @@ dependencies = [
  "web-sys",
  "web-time",
  "windows 0.62.2",
+ "windows-core 0.62.2",
  "winit",
 ]
 
