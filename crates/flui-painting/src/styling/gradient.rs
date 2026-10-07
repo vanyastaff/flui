@@ -328,7 +328,8 @@ impl RadialGradient {
     /// Linearly interpolate between two radial gradients. Colours and stops
     /// combine as in [`LinearGradient::lerp`], the radii never go below
     /// zero, and a missing focal radius counts as `0.0`.
-    /// Non-finite geometry or negative input radii are rejected.
+    /// Non-finite geometry, negative input radii, or input/output radii above
+    /// `f32::MAX` are rejected before resolving them against paint bounds.
     ///
     /// A focal point on one side only moves to or from the other side's
     /// *center*, because a gradient without a focal point is focused on its
@@ -525,14 +526,17 @@ fn lost_span(a: f64, b: f64, mixed: f64, t: f64) -> bool {
 }
 
 fn valid_radius(value: f64) -> bool {
-    value.is_finite() && value >= 0.0
+    // Radii are relative to the paint bounds. Keep them in the renderer's
+    // numeric range before scaling; f64 finiteness alone admits radii whose
+    // normalization reciprocal vanishes when packed as f32.
+    (0.0..=f64::from(f32::MAX)).contains(&value)
 }
 
 fn lerp_radius(a: f64, b: f64, t: f64) -> Option<f64> {
     // Admitted radii are nonnegative, so subtraction cannot overflow.
     // Clamp negative infinity before checking the published radius.
     let value = (b - a).mul_add(t, a).max(0.0);
-    value.is_finite().then_some(value)
+    valid_radius(value).then_some(value)
 }
 
 fn lerp_alignment(a: Alignment, b: Alignment, t: f64) -> Option<Alignment> {

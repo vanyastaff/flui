@@ -1008,7 +1008,9 @@ hard edge interpolated toward black.
 
 Finite gradient positions, focal points and signed sweep angles extrapolate
 outside `0..=1`, consistent with the unbounded geometry contract in ADR-0149.
-Radii extrapolate with a zero lower bound. Colors saturate through `Color::lerp`;
+Radii extrapolate within `0..=f32::MAX`, before resolving against paint bounds;
+the engine still validates the resolved normalization and equation. Colors
+saturate through `Color::lerp`;
 stop positions retain the sampled union rather than inventing correspondence
 between lists of different lengths. Arithmetic preserves representable results
 when endpoint subtraction overflows, and refuses non-finite output.

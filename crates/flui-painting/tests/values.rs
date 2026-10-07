@@ -364,6 +364,53 @@ pub(crate) fn gradient_domains_keep_zero_radii_and_signed_angles() {
 }
 
 pub(crate) fn radial_overshoot_refuses_coincident_nonzero_circles() {
+    for focal_radius in [false, true] {
+        let mut a = RadialGradient::circular(vec![Color::RED, Color::BLUE]);
+        let mut b = a.clone();
+        if focal_radius {
+            a.focal_radius = Some(1.0);
+            b.focal_radius = Some(2.0);
+        } else {
+            a.radius = 1.0;
+            b.radius = 2.0;
+        }
+        for (start, end, t) in [(&a, &b, 1e100), (&b, &a, -1e100)] {
+            assert!(RadialGradient::lerp(start, end, t).is_none());
+            let start = BoxDecoration::<f64>::with_gradient(Gradient::Radial(start.clone()));
+            let end = BoxDecoration::with_gradient(Gradient::Radial(end.clone()));
+            let mixed = BoxDecoration::lerp(&start, &end, t);
+            assert_eq!(&mixed, if t < 0.0 { &start } else { &end });
+            let mut canvas = flui_painting::Canvas::new();
+            flui_painting::paint_box_decoration(
+                &mut canvas,
+                Rect::from_ltrb(0.0, 0.0, 100.0, 100.0),
+                &mixed,
+                flui_painting::DecorationPaintOptions::default(),
+            );
+            let list = canvas.finish();
+            let flui_painting::DrawOp::Rect { paint, .. } =
+                &list.iter().next().expect("painted bounded gradient").op
+            else {
+                panic!("rectangular decoration must paint a rect");
+            };
+            let Some(flui_painting::paint::Shader::RadialGradient {
+                radius,
+                focal_radius: resolved_focal_radius,
+                ..
+            }) = &paint.shader
+            else {
+                panic!("radial decoration must record a radial shader");
+            };
+            assert_eq!(*radius, if focal_radius { 50.0 } else { 200.0 });
+            assert_eq!(*resolved_focal_radius, focal_radius.then_some(200.0));
+        }
+    }
+    let mut oversized = RadialGradient::circular(vec![Color::RED, Color::BLUE]);
+    oversized.radius = 1e100;
+    assert!(RadialGradient::lerp(&oversized, &oversized, 0.5).is_none());
+    oversized.radius = f64::from(f32::MAX);
+    assert!(RadialGradient::lerp(&oversized, &oversized, 0.5).is_some());
+
     for focal in [None, Some(Alignment::CENTER)] {
         let mut coincident = RadialGradient::circular(vec![Color::RED, Color::BLUE]);
         coincident.radius = 1.0;
