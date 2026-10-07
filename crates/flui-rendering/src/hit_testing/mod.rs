@@ -4,8 +4,7 @@
 //! `flui_interaction::routing`.
 //! The canonical `HitTestResult` / `HitTestEntry` / `HitTestBehavior`
 //! types live in `flui-interaction`; this module re-exports them for caller
-//! convenience and owns the rendering-protocol-specific
-//! `MatrixTransformPart` helper.
+//! convenience.
 //!
 //! # Key Types
 //!
@@ -18,8 +17,6 @@
 //! - [`HitTestBehavior`]: re-exported from
 //!   [`flui_interaction::routing::HitTestBehavior`] -- standard
 //!   `DeferToChild` / `Opaque` / `Translucent` enum.
-//! - [`MatrixTransformPart`]: protocol-specific transform helper
-//!   used by the box/sliver hit-test capability types.
 //!
 //! # Protocol-Specific Types
 //!
@@ -44,7 +41,6 @@
 
 mod entry;
 mod result;
-mod transform;
 
 // Canonical types re-exported from flui-interaction. These re-exports
 // replaced the in-crate `HitTestEntry` + `HitTestResult` structs, so
@@ -68,4 +64,3 @@ pub use flui_interaction::routing::{
     resolve_path_clip_target, resolve_shader_mask_target,
 };
 pub use result::HitTestResult;
-pub use transform::MatrixTransformPart;
