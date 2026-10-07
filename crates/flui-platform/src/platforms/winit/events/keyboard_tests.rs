@@ -9,7 +9,7 @@
 //! Declared with `#[path]` from `events.rs` as a sibling of its inline
 //! test modules, so these tests read as
 //! `platforms::winit::events::keyboard_tests::*`. Both modules below use
-//! only `pub` items from `ui_events`, `ui_events_winit`, `winit`, and
+//! only `pub` items from `keyboard_types`, `ui_events_winit`, `winit`, and
 //! `crate::shared`, so nothing here needs `use super::*`.
 
 #[cfg(test)]
@@ -27,7 +27,7 @@ mod keyboard_conversion_tests {
     //! for exactly what that leaves unpinned.
     use std::collections::BTreeSet;
 
-    use ui_events::keyboard::Code;
+    use keyboard_types::Code;
     use ui_events_winit::keyboard::from_winit_code;
     use winit::keyboard::{KeyCode, PhysicalKey};
 
