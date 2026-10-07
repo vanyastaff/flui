@@ -25,6 +25,7 @@ fn navigator_failure_containment_and_reentrancy() {
             ("hero_seam::an_observer_may_push_from_did_push_without_deadlocking", crate::hero_seam::an_observer_may_push_from_did_push_without_deadlocking),
             ("transition_route::status_listener_does_not_hold_a_lock_across_the_binding_call", crate::transition_route::status_listener_does_not_hold_a_lock_across_the_binding_call),
             ("transition_route::pop_mid_push_cancels_the_push_future_inside_the_flush_and_ends_popping", crate::transition_route::pop_mid_push_cancels_the_push_future_inside_the_flush_and_ends_popping),
+            ("transition_route::dispose_releases_the_controller_slot_before_disposing_it", crate::transition_route::dispose_releases_the_controller_slot_before_disposing_it),
         ],
     );
 }
@@ -184,6 +185,7 @@ fn focus_actions_and_shortcuts() {
             ("actions::callback_action_writes_through_the_key_events_cx", crate::actions::callback_action_writes_through_the_key_events_cx),
             ("actions::a_refused_write_in_a_callback_action_is_reported_not_panicked", crate::actions::a_refused_write_in_a_callback_action_is_reported_not_panicked),
             ("shortcuts::activation_tests::enter_space_and_select_activate_the_focused_control", crate::shortcuts::activation_tests::enter_space_and_select_activate_the_focused_control),
+            ("shortcuts::activator_tests::a_shift_produced_character_matches_when_shift_is_ignored", crate::shortcuts::activator_tests::a_shift_produced_character_matches_when_shift_is_ignored),
             ("shortcuts::intent_tests::a_shortcut_dispatches_its_intent_through_the_actions_chain", crate::shortcuts::intent_tests::a_shortcut_dispatches_its_intent_through_the_actions_chain),
             ("shortcuts::tab_tests::tab_and_shift_tab_move_the_focus_through_the_actions_chain", crate::shortcuts::tab_tests::tab_and_shift_tab_move_the_focus_through_the_actions_chain),
             ("shortcuts::tab_tests::tab_traversal_preserves_failure_before_policy_and_candidate_retirement", crate::shortcuts::tab_tests::tab_traversal_preserves_failure_before_policy_and_candidate_retirement),
@@ -211,6 +213,7 @@ fn semantics_translation_and_routing() {
             ("semantics::a_set_text_request_without_a_payload_is_dropped_rather_than_emptied", crate::semantics::a_set_text_request_without_a_payload_is_dropped_rather_than_emptied as fn()),
             ("semantics::a_tap_handler_round_trips_from_a_platform_click_to_the_callback", crate::semantics::a_tap_handler_round_trips_from_a_platform_click_to_the_callback),
             ("semantics::merge_semantics_collapses_its_descendants_in_the_a11y_tree", crate::semantics::merge_semantics_collapses_its_descendants_in_the_a11y_tree),
+            ("semantics::published_bounds_are_physical_and_follow_the_scale_factor", crate::semantics::published_bounds_are_physical_and_follow_the_scale_factor),
             ("semantics::a_covered_retained_form_stays_absent_after_a_late_controller_update", crate::semantics::a_covered_retained_form_stays_absent_after_a_late_controller_update),
             ("semantics::rebuilding_with_fresh_handlers_keeps_the_configuration_and_runs_the_new_one", crate::semantics::rebuilding_with_fresh_handlers_keeps_the_configuration_and_runs_the_new_one),
             ("semantics::unmounting_a_node_releases_its_action_table", crate::semantics::unmounting_a_node_releases_its_action_table),
@@ -245,6 +248,10 @@ fn scroll_physics_and_activity() {
             ("scroll::reversing_a_pull_consumes_it_before_scrolling_content", crate::scroll::reversing_a_pull_consumes_it_before_scrolling_content as fn()),
             ("scroll::a_refresh_controller_swap_retires_the_old_fling_and_drives_the_new_position", crate::scroll::a_refresh_controller_swap_retires_the_old_fling_and_drives_the_new_position as fn()),
             ("scroll::rebuilding_refresh_content_with_the_same_position_preserves_its_fling", crate::scroll::rebuilding_refresh_content_with_the_same_position_preserves_its_fling as fn()),
+            (
+                "scroll::shift_wheel_scrolls_the_horizontal_axis",
+                crate::scroll::shift_wheel_scrolls_the_horizontal_axis as fn(),
+            ),
             (
                 "scroll::a_wheel_tick_over_nested_scrollables_moves_only_the_inner",
                 crate::scroll::a_wheel_tick_over_nested_scrollables_moves_only_the_inner as fn(),
@@ -318,6 +325,7 @@ fn route_transitions() {
             ("page_route::page_route_occludes_the_route_below_once_its_transition_completes", crate::page_route::page_route_occludes_the_route_below_once_its_transition_completes),
             ("page_route::secondary_animation_runs_on_the_previous_page_route_when_pushing_and_popping", crate::page_route::secondary_animation_runs_on_the_previous_page_route_when_pushing_and_popping),
             ("transition_route::push_transition_parks_the_entry_in_pushing_until_the_controller_completes", crate::transition_route::push_transition_parks_the_entry_in_pushing_until_the_controller_completes),
+            ("transition_route::hopping_route_dropped_without_dispose_frees_proxy", crate::transition_route::hopping_route_dropped_without_dispose_frees_proxy),
         ],
     );
 }

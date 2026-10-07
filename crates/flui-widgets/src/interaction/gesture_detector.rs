@@ -11,7 +11,7 @@ use std::{
 use flui_interaction::{
     DoubleTapDetails, DoubleTapGestureRecognizer, DragAxis, DragDownDetails, DragEndDetails,
     DragGestureRecognizer, DragStartDetails, DragUpdateDetails, GestureRecognizer,
-    LongPressGestureRecognizer, PointerDispatch, PointerEventExt, TapGestureRecognizer,
+    LongPressGestureRecognizer, PointerDispatch, TapGestureRecognizer,
 };
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_view::prelude::*;
@@ -1054,54 +1054,25 @@ impl RecognizerGroup {
         if !self.mounted.get() {
             return;
         }
-        let event = dispatch.local;
-        let pointer = event.pointer_id();
-        let position = event.position();
-        // Carried, not discarded: a recognizer cannot recover it, because the
-        // event it is handed has already been localised (issue #908).
-        let global_position = dispatch.global.position();
+        // Each recognizer is admitted from the Down itself: it reads the
+        // device kind (slop tier) and the button from the event, and stays
+        // out of the arena for a button it does not answer — a right-click
+        // does not start a pan or a long press, and does not register a
+        // double tap.
         if self.tap_active() {
-            self.tap.add_pointer(pointer, position, global_position);
-            // Forward the real Down so the recognizer refines the provisional
-            // Primary button `add_pointer` staged to the actual button
-            // (Primary / Secondary / Tertiary).
-            if self.mounted.get() {
-                self.tap.handle_event(dispatch);
-            }
+            self.tap.add_pointer_down(dispatch);
         }
         if self.long_press_active() {
-            self.long_press
-                .add_pointer(pointer, position, global_position);
+            self.long_press.add_pointer_down(dispatch);
         }
-        // Primary button (or no button info at all -- touch/pen contacts
-        // carry none, and default to allowed) only: a Secondary/Auxiliary
-        // mouse-down must not register a double-tap. `TapButton`'s own
-        // Secondary/Tertiary slots exist precisely so right-/middle-click
-        // has its own gesture family, not this one -- two quick
-        // right-clicks firing `on_double_tap_down` on a wrapped
-        // `EditableText` would select a word from a context-menu gesture.
-        if self.double_tap_active() && is_primary_button_down(event) {
-            // `add_pointer_with_kind`, not the trait's `add_pointer`: this
-            // call site holds the real originating event, so
-            // `DoubleTapDetails::kind` should report the actual device
-            // rather than falling back to `PointerType::Touch`.
-            //
-            // Fully-qualified, not a `use` import: `events::PointerEventExt`
-            // and the `PointerEventExtTrait` already imported above (as
-            // `PointerEventExt`) both define `position()` for the same
-            // `PointerEvent` type -- importing the former too would make
-            // `event.position()` two lines up ambiguous (E0034).
-            let kind = flui_interaction::events::PointerEventExt::pointer_type(event)
-                .unwrap_or(flui_interaction::events::PointerType::Touch);
-            self.double_tap
-                .add_pointer_with_kind(pointer, position, global_position, kind);
+        if self.double_tap_active() {
+            self.double_tap.add_pointer_down(dispatch);
         }
         if self.drag_active() {
-            self.drag.add_pointer(pointer, position, global_position);
+            self.drag.add_pointer_down(dispatch);
         }
         if self.horizontal_drag_active() {
-            self.horizontal_drag
-                .add_pointer(pointer, position, global_position);
+            self.horizontal_drag.add_pointer_down(dispatch);
         }
     }
 
@@ -1142,22 +1113,6 @@ impl RecognizerGroup {
         if self.horizontal_drag_active() {
             self.horizontal_drag.handle_event(dispatch);
         }
-    }
-}
-
-/// Whether a `PointerEvent::Down` is the Primary mouse button (or carries
-/// no button info at all — touch and pen contacts don't, and default to
-/// allowed, matching `TapGestureRecognizer::down_button`'s own
-/// `unwrap_or(TapButton::Primary)` convention). Anything else (`Down` with
-/// `Some(Secondary)`/`Some(Auxiliary)`) is a right- or middle-click, which
-/// has its own gesture family (`TapButton::Secondary`/`Tertiary`) and must
-/// not also register as a double-tap.
-fn is_primary_button_down(event: &flui_interaction::events::PointerEvent) -> bool {
-    if let flui_interaction::events::PointerEvent::Down(data) = event {
-        data.button
-            .is_none_or(|button| button == flui_interaction::events::PointerButton::Primary)
-    } else {
-        true
     }
 }
 

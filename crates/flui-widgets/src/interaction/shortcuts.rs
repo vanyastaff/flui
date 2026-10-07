@@ -58,10 +58,19 @@ pub type ShortcutCallback = Rc<dyn Fn(&mut EventCx<'_>)>;
 pub struct SingleActivator {
     trigger: Key,
     control: bool,
-    shift: bool,
+    shift: ShiftRule,
     alt: bool,
     meta: bool,
     include_repeats: bool,
+}
+
+/// How an activator treats the Shift modifier.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ShiftRule {
+    Released,
+    Held,
+    /// Shift is part of producing the character, not a chord.
+    Either,
 }
 
 impl SingleActivator {
@@ -71,7 +80,7 @@ impl SingleActivator {
         Self {
             trigger,
             control: false,
-            shift: false,
+            shift: ShiftRule::Released,
             alt: false,
             meta: false,
             include_repeats: true,
@@ -100,7 +109,20 @@ impl SingleActivator {
     /// Require the Shift modifier (`:497`).
     #[must_use]
     pub fn shift(mut self) -> Self {
-        self.shift = true;
+        self.shift = ShiftRule::Held;
+        self
+    }
+
+    /// Match the trigger character whether or not Shift is held.
+    ///
+    /// For a character that Shift *produces* on some layouts (`?`, `+`, `!`)
+    /// the exact-Shift rule makes `character("?")` unreachable on a US
+    /// keyboard, where `?` is Shift+/. With this, the shortcut follows the
+    /// character the user typed on any layout; the other modifiers still
+    /// match exactly, so Ctrl+`?` stays a different shortcut.
+    #[must_use]
+    pub fn ignoring_shift(mut self) -> Self {
+        self.shift = ShiftRule::Either;
         self
     }
 
@@ -139,7 +161,11 @@ impl SingleActivator {
             && (self.include_repeats || !event.repeat)
             && trigger_matches(&self.trigger, &event.key)
             && event.modifiers.ctrl() == self.control
-            && event.modifiers.shift() == self.shift
+            && match self.shift {
+                ShiftRule::Released => !event.modifiers.shift(),
+                ShiftRule::Held => event.modifiers.shift(),
+                ShiftRule::Either => true,
+            }
             && event.modifiers.alt() == self.alt
             && event.modifiers.meta() == self.meta
     }
