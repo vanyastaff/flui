@@ -864,6 +864,224 @@ fn advance_scroll_run(laid: &mut LaidOut) {
     }
 }
 
+fn dispatch_typed_wheel(
+    laid: &LaidOut,
+    precision: flui_platform_api::pointer::ScrollPrecision,
+    dy: f64,
+) {
+    use flui_foundation::geometry::Point;
+    use flui_platform_api::EventTime;
+    use flui_platform_api::pointer::{
+        PointerEvent, PointerId, PointerInfo, PointerKind, PointerPosition, ScrollDelta,
+        ScrollEvent, ScrollUnit,
+    };
+    let event = ScrollEvent::new(
+        PointerInfo::new(
+            PointerId::try_from(1_u64).expect("nonzero mouse"),
+            PointerKind::Mouse,
+        ),
+        EventTime::from_nanos(0),
+        PointerPosition::try_new(Point::new(150.0, 100.0)).expect("finite wheel position"),
+        ScrollDelta::try_new(ScrollUnit::Pixels, 0.0, dy).expect("finite wheel distance"),
+    )
+    .with_precision(precision);
+    laid.dispatch_pointer_event(&PointerEvent::Scroll(event));
+}
+
+pub(crate) fn notched_wheel_accumulates_distance_and_eases_out_in_150ms() {
+    use flui_platform_api::pointer::ScrollPrecision::Notched;
+    let scroll = ScrollController::new();
+    let vsync = Vsync::new();
+    let mut laid = crate::common::lay_out_animated(
+        animated_scroll_content(&scroll, &vsync),
+        tight(300.0, 300.0),
+        vsync,
+    );
+    dispatch_typed_wheel(&laid, Notched, 50.0);
+    dispatch_typed_wheel(&laid, Notched, 50.0);
+    assert_eq!(
+        scroll.pixels(),
+        0.0,
+        "notches start a trajectory without jumping"
+    );
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(Duration::from_millis(75));
+    assert!(
+        scroll.pixels() > 50.0 && scroll.pixels() < 100.0,
+        "ease-out covers more than half the accepted distance halfway through: {}",
+        scroll.pixels()
+    );
+    dispatch_typed_wheel(&laid, Notched, 50.0);
+    dispatch_typed_wheel(&laid, Notched, -25.0);
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(Duration::from_millis(150));
+    assert_eq!(
+        scroll.pixels(),
+        125.0,
+        "all accepted ticks accumulate, including reversal"
+    );
+    assert!(
+        !scroll.position().is_scrolling(),
+        "the settled wheel activity ends"
+    );
+    dispatch_typed_wheel(&laid, Notched, -25.0);
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(Duration::from_millis(150));
+    assert_eq!(
+        scroll.pixels(),
+        100.0,
+        "a healthy next wheel trajectory completes"
+    );
+}
+
+pub(crate) fn precise_and_unknown_wheels_interrupt_synthetic_motion_once() {
+    use flui_platform_api::pointer::ScrollPrecision::{Notched, Precise, Unknown};
+    for precision in [Precise, Unknown] {
+        let scroll = ScrollController::new();
+        let vsync = Vsync::new();
+        let mut laid = crate::common::lay_out_animated(
+            animated_scroll_content(&scroll, &vsync),
+            tight(300.0, 300.0),
+            vsync,
+        );
+        dispatch_typed_wheel(&laid, precision, 20.0);
+        assert_eq!(scroll.pixels(), 20.0, "{precision:?}: immediate control");
+        laid.pump_for(Duration::from_millis(200));
+        assert_eq!(scroll.pixels(), 20.0, "{precision:?}: no duplicated motion");
+        dispatch_typed_wheel(&laid, Notched, 100.0);
+        laid.pump_for(Duration::ZERO);
+        laid.pump_for(Duration::from_millis(60));
+        let before = scroll.pixels();
+        assert!(
+            before > 20.0 && before < 120.0,
+            "notched motion is still live"
+        );
+        dispatch_typed_wheel(&laid, precision, 10.0);
+        assert_eq!(
+            scroll.pixels(),
+            before + 10.0,
+            "immediate input starts at current pixels"
+        );
+        laid.pump_for(Duration::from_millis(200));
+        assert_eq!(
+            scroll.pixels(),
+            before + 10.0,
+            "interrupted target cannot overwrite input"
+        );
+        dispatch_typed_wheel(&laid, Notched, 30.0);
+        laid.pump_for(Duration::ZERO);
+        laid.pump_for(Duration::from_millis(150));
+        assert_eq!(
+            scroll.pixels(),
+            before + 40.0,
+            "old accepted target was retired"
+        );
+    }
+}
+
+pub(crate) fn replacing_or_unmounting_a_scrollable_retires_its_notched_motion() {
+    use flui_platform_api::pointer::ScrollPrecision::Notched;
+    let old = ScrollController::new();
+    let new = ScrollController::new();
+    let vsync = Vsync::new();
+    let mut laid = crate::common::lay_out_animated(
+        animated_scroll_content(&old, &vsync),
+        tight(300.0, 300.0),
+        vsync.clone(),
+    );
+    dispatch_typed_wheel(&laid, Notched, 100.0);
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(Duration::from_millis(60));
+    let retired = old.pixels();
+    assert!(
+        retired > 0.0 && retired < 100.0,
+        "the old owner's motion is live"
+    );
+    laid.pump_widget(animated_scroll_content(&new, &vsync));
+    dispatch_typed_wheel(&laid, Notched, 50.0);
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(Duration::from_millis(150));
+    assert_eq!(
+        old.pixels(),
+        retired,
+        "replacement does not keep driving the old owner"
+    );
+    assert_eq!(
+        new.pixels(),
+        50.0,
+        "replacement starts with its own accepted target"
+    );
+    dispatch_typed_wheel(&laid, Notched, 100.0);
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(Duration::from_millis(60));
+    let unmounted = new.pixels();
+    laid.pump_widget(SizedBox::new(300.0, 300.0));
+    laid.pump_for(Duration::from_millis(200));
+    assert_eq!(
+        new.pixels(),
+        unmounted,
+        "unmount retires motion before future frames"
+    );
+}
+
+pub(crate) fn dragging_interrupts_notched_motion_and_windows_progress_independently() {
+    use flui_platform_api::pointer::ScrollPrecision::Notched;
+    let scroll = ScrollController::new();
+    let other = ScrollController::new();
+    let vsync = Vsync::new();
+    let mut laid = crate::common::lay_out_animated(
+        animated_scroll_content(&scroll, &vsync),
+        tight(300.0, 300.0),
+        vsync,
+    );
+    let other_vsync = Vsync::new();
+    let mut independent = crate::common::lay_out_animated(
+        animated_scroll_content(&other, &other_vsync),
+        tight(300.0, 300.0),
+        other_vsync,
+    );
+    dispatch_typed_wheel(&laid, Notched, 100.0);
+    dispatch_typed_wheel(&independent, Notched, 200.0);
+    laid.pump_for(Duration::ZERO);
+    independent.pump_for(Duration::ZERO);
+    laid.pump_for(Duration::from_millis(60));
+    assert_eq!(
+        other.pixels(),
+        0.0,
+        "another owner's clock has not advanced"
+    );
+    let grabbed = scroll.pixels();
+    assert!(
+        grabbed > 0.0 && grabbed < 100.0,
+        "the grabbed motion is live"
+    );
+    laid.dispatch_pointer_down(150.0, 200.0);
+    laid.dispatch_pointer_move(150.0, 180.0);
+    let dragged = scroll.pixels();
+    assert!(dragged > grabbed, "drag starts from the displayed position");
+    laid.dispatch_pointer_cancel();
+    laid.pump_for(Duration::from_millis(200));
+    assert_eq!(
+        scroll.pixels(),
+        dragged,
+        "the cancelled drag leaves no old wheel motion"
+    );
+    independent.pump_for(Duration::from_millis(150));
+    assert_eq!(
+        other.pixels(),
+        200.0,
+        "the independent owner's trajectory survives"
+    );
+    dispatch_typed_wheel(&laid, Notched, 25.0);
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(Duration::from_millis(150));
+    assert_eq!(
+        scroll.pixels(),
+        dragged + 25.0,
+        "next wheel uses the new drag position"
+    );
+}
+
 pub(crate) fn a_scrollable_swap_stops_old_motion_and_retires_its_jump_hook() {
     let old = ScrollController::new();
     let new = ScrollController::new();
