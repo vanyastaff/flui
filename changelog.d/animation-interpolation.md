@@ -10,6 +10,8 @@
   perspective, stays finite when an endpoint has a zero scale axis (that endpoint takes the
   other's rotation), switches at `t = 0.5` between matrices that cannot be decomposed, and
   returns the endpoints exactly.
+- **`AnimatedValue<Color>`** (`flui-animation`) springs in premultiplied Oklab, like
+  `Tween<Color>`: a fade to transparent keeps its hue instead of darkening.
 - **`IntTween`/`StepTween`** (`flui-animation`) return `begin` for a NaN `t` instead of `0`.
 
 ### Added
@@ -30,5 +32,7 @@
 
 - **`AnimatedContainer`** with an overshooting curve (`Curves::EaseOutBack` from 16 to 0, say) no
   longer hands a negative padding or margin to layout, which panicked in debug builds; width and
-  height clamp at zero too.
+  height clamp at zero too (a NaN passes through). When one property restarts the shared
+  controller, the others continue from their current value instead of replaying from their start
+  (`AnimatedContainer`, `AnimatedAlign`).
 - **Hero flights** along an overshooting `Hero::curve` keep a non-negative shuttle size.

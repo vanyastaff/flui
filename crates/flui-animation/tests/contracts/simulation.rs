@@ -4,6 +4,7 @@ use flui_animation::{
     AnimatedValue, FrictionSimulation, GravitySimulation, Simulation, SmoothDamp,
     SpringDescription, SpringSimulation, SpringType,
 };
+use flui_painting::styling::Color;
 
 fn weak_drag_preserves_frame_motion() {
     // Only public simulation operations: constant velocity is the
@@ -263,6 +264,27 @@ fn spring_retarget_preserves_velocity() {
     );
 }
 
+fn color_spring_fades_to_transparent_without_darkening() {
+    // Springs run in premultiplied Oklab (ADR-0149): a fade to transparent black
+    // keeps the opaque end's red instead of passing through dark red.
+    let red = Color::rgb(255, 0, 0);
+    let mut v = AnimatedValue::new(red, SpringDescription::with_response_and_damping(0.3, 1.0));
+    assert_eq!(v.value(), red);
+    v.animate_to(Color::TRANSPARENT);
+    for frame in 0..120 {
+        v.advance(1.0 / 60.0);
+        let color = v.value();
+        if color.a > 0 {
+            assert!(
+                color.r >= 250 && color.g <= 5 && color.b <= 5,
+                "frame {frame}: {color:?} darkened on the way out"
+            );
+        }
+    }
+    assert!(v.is_settled());
+    assert_eq!(v.value().a, 0);
+}
+
 #[test]
 fn simulation_contract() {
     crate::run_table(&[
@@ -281,6 +303,10 @@ fn simulation_contract() {
         (
             "spring retarget preserves velocity",
             spring_retarget_preserves_velocity,
+        ),
+        (
+            "color spring fades to transparent without darkening",
+            color_spring_fades_to_transparent_without_darkening,
         ),
     ]);
 }
