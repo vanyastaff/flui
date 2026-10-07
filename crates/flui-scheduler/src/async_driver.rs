@@ -329,6 +329,17 @@ impl TaskStore {
             return None;
         }
 
+        // Polling is user code and may retire the owner through another
+        // handle. A pending future must never reopen that closed store.
+        if self.closed.get() {
+            flags.cancelled.store(true, Ordering::Release);
+            flags.retired.store(true, Ordering::Release);
+            if let Err(payload) = release_opaque(future) {
+                resume_unwind(payload);
+            }
+            return Some(TaskToken::refused());
+        }
+
         self.tasks.borrow_mut().insert(
             id,
             Task {
@@ -486,16 +497,42 @@ impl TaskStore {
             .count()
     }
 
-    /// Close the store and drop every remaining task, then the frame hook, on
-    /// this (the owner) thread, each under its own catch. Returns the first
-    /// panic a destructor raised; later ones are retained, not dropped.
-    /// During an existing unwind the futures and the hook are retained
-    /// without running their destructors: catching cannot contain an
-    /// aggregate whose drop glue panics twice. Idempotent.
-    pub(crate) fn retire(&self) -> Option<RetirePanic> {
+    /// Close admission and wake delivery, returning ownership without running
+    /// any opaque destructor. All task flags are closed before user code can
+    /// reenter. Repeated calls detach nothing.
+    pub(crate) fn detach_for_retirement(&self) -> RetiringTasks {
         self.closed.set(true);
         let tasks = mem::take(&mut *self.tasks.borrow_mut());
+        for task in tasks.values() {
+            task.flags.cancelled.store(true, Ordering::Release);
+            task.flags.retired.store(true, Ordering::Release);
+        }
+        let hook = self.shared.request_frame.lock().take();
         self.shared.ready.lock().clear();
+        RetiringTasks { tasks, hook }
+    }
+
+    #[cfg(any(test, feature = "testing"))]
+    pub(crate) fn is_unlocked(&self) -> bool {
+        self.tasks.try_borrow_mut().is_ok()
+            && self.spare.try_borrow_mut().is_ok()
+            && self.shared.ready.try_lock().is_some()
+            && self.shared.request_frame.try_lock().is_some()
+            && self.shared.wake_delivery.is_unlocked()
+    }
+}
+
+/// Outgoing ownership detached from the closed store before user code runs.
+pub(crate) struct RetiringTasks {
+    tasks: BTreeMap<TaskId, Task>,
+    hook: Option<RequestFrame>,
+}
+
+impl RetiringTasks {
+    /// Drop tasks then the hook, preserving the first failure. During an
+    /// existing unwind retain opaque values: an outer catch cannot rescue
+    /// double-panicking aggregate drop glue.
+    pub(crate) fn retire(self) -> Option<RetirePanic> {
         let mut first: Option<RetirePanic> = None;
         let mut keep = |result: Result<(), RetirePanic>| {
             if let Err(payload) = result {
@@ -506,29 +543,16 @@ impl TaskStore {
                 }
             }
         };
-        for (_, mut task) in tasks {
-            task.flags.cancelled.store(true, Ordering::Release);
-            task.flags.retired.store(true, Ordering::Release);
+        for (_, mut task) in self.tasks {
             if let Some(future) = task.future.take() {
                 keep(release_opaque(future));
             }
         }
-        // The hook is user code too: a waker reaching `shared` after this
-        // finds no hook, and its captures die here, not with the last waker.
-        let hook = self.shared.request_frame.lock().take();
-        if let Some(hook) = hook {
+        // Its captures die here, not with the last outstanding waker.
+        if let Some(hook) = self.hook {
             keep(release_opaque(hook));
         }
         first
-    }
-
-    #[cfg(any(test, feature = "testing"))]
-    pub(crate) fn is_unlocked(&self) -> bool {
-        self.tasks.try_borrow_mut().is_ok()
-            && self.spare.try_borrow_mut().is_ok()
-            && self.shared.ready.try_lock().is_some()
-            && self.shared.request_frame.try_lock().is_some()
-            && self.shared.wake_delivery.is_unlocked()
     }
 }
 

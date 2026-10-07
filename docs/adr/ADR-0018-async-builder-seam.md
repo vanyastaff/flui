@@ -44,6 +44,14 @@ the same channel.
 
 ### D3. A frame-driven driver in `flui-scheduler`, not a runtime
 
+**Superseded-by:** [ADR-0136 §2](ADR-0136-owner-local-ui-surfaces.md) for ownership
+and task bounds in D3 and D5; other decisions remain in force.
+
+The ownership and task bounds in this section are superseded by
+[ADR-0136 §2](ADR-0136-owner-local-ui-surfaces.md): the realm's `OwnerFrame` holds
+the owner-local futures, `AsyncDriver` is a weak handle, and only wake capabilities
+cross threads. Begin-frame polling and inline eager subscription keep the order below.
+
 `AsyncDriver` (`std::future`/`std::task` only; no `tokio`, no `futures` executor) is polled
 once per frame by `Scheduler::handle_begin_frame`, in the `MidFrameMicrotasks` slot: after
 transient callbacks, before the persistent (build/layout/paint) phase, so a completion is seen
@@ -82,7 +90,9 @@ FutureBuilder::keyed(key: Option<K>, make: FutureFactory<T, E>, builder: Snapsho
 StreamBuilder::keyed(key: Option<K>, make: StreamFactory<T, E>, builder: SnapshotBuilder<T, E>)
 ```
 
-`K: Clone + PartialEq + Send + Sync + 'static`. Same key: no resubscribe (Flutter's early
+`K: Clone + PartialEq + Debug + 'static` (the owner-local bounds supersede the former
+`Send + Sync` requirement under [ADR-0136 §2](ADR-0136-owner-local-ui-surfaces.md)).
+Same key: no resubscribe (Flutter's early
 return). Different key: unsubscribe, `in_state(None)`, resubscribe, `Waiting`. `None`: no
 subscription. The factory is an `Fn` called once per subscription, and `initial_data` is an
 `Fn() -> T` factory, so the view stays `Clone` without `T: Clone`.

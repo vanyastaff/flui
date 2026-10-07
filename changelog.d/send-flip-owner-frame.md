@@ -1,5 +1,9 @@
 ### Changed
 
+- Owner-frame retirement closes task admission and all task wakes before callback captures
+  are released. Eager polling cannot re-admit work after reentrant retirement; a foreign
+  owner is rejected before a frame consumes pending demand.
+
 - **Async tasks are owner-local** (`flui-scheduler`, `flui::view`;
   [ADR-0136](/docs/adr/ADR-0136-owner-local-ui-surfaces.md) §2). A widget's future may now hold
   `Rc` state, `Signal<T>` or a `WriterSource`; only its `Waker` crosses threads. The realm owns

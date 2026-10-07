@@ -1237,7 +1237,9 @@ cancelled token. Only `Waker`s and `FrameWaker` cross threads, each through a
 that polls or drains nothing — and an owner frame made for another scheduler
 is neither polled nor drained.
 
-**Teardown order:** `OwnerFrame::retire` drops the post-frame queue, then the
+**Teardown order:** `OwnerFrame::retire` closes both admission lanes, detaches their
+ownership and disables every task waker and the frame hook before user destruction.
+It drops the post-frame queue, then the
 tasks, each under its own catch, keeping the first panic; the realm calls it
 after closing its presentations and before resuming any earlier failure.
 During an existing unwind the values are retained instead, the same limit
@@ -1249,6 +1251,8 @@ During an existing unwind the values are retained instead, the same limit
 `a_leaked_async_driver_holds_no_task_after_the_realm`);
 `retirement_drops_every_task_and_keeps_the_first_panic` and
 `retirement_drops_queued_callbacks_and_closes_the_queue` here;
+`async_driver_unwind_matrix` covers reentrant callback destruction, sibling wakes,
+eager-poll retirement and foreign-owner rejection without consuming frame demand;
 `frame_waker_wakes_the_realm_from_a_worker` in `flui-runtime`.
 
 ### `AsyncDriver` indexes ready tasks instead of scanning every resident one

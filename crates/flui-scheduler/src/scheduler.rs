@@ -1262,10 +1262,17 @@ impl UpdateScheduler {
     ///
     /// Executes transient callbacks (animation tickers) with the vsync
     /// timestamp, flushes microtasks, then polls `owner`'s ready async tasks
-    /// in the mid-frame slot. An `owner` made for another scheduler is not
-    /// polled (and the mismatch is logged).
+    /// in the mid-frame slot.
+    ///
+    /// # Panics
+    ///
+    /// Panics before consuming frame demand if `owner` belongs to another scheduler.
     #[tracing::instrument(skip(self, owner))]
     pub fn handle_begin_frame(&self, vsync_time: Instant, owner: &crate::OwnerFrame) -> FrameId {
+        assert!(
+            owner.belongs_to(self),
+            "BUG: frame owner belongs to another scheduler"
+        );
         // Store vsync time for all tickers to use
         *self.inner.frame.current_vsync_time.lock() = Some(vsync_time);
 
@@ -1378,15 +1385,7 @@ impl UpdateScheduler {
         // The begin frame owns the step and takes the owner frame as a parameter,
         // so no frame driver can forget it, run it twice, or poll some other
         // realm's tasks.
-        if owner.belongs_to(self) {
-            owner.poll_ready();
-        } else {
-            tracing::error!(
-                driving_scheduler = self.debug_ptr(),
-                "an OwnerFrame was handed to a begin frame on a scheduler it does not belong \
-                 to; its tasks are not polled here — its own scheduler's next frame polls them"
-            );
-        }
+        owner.poll_ready();
 
         frame_id
     }
@@ -1843,6 +1842,10 @@ impl UpdateScheduler {
     ) -> (FrameId, R) {
         use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
+        assert!(
+            owner.belongs_to(self),
+            "BUG: frame owner belongs to another scheduler"
+        );
         *self.inner.frame.idle_deadline.lock() = Some(deadline.0);
 
         // Entered for the whole frame, the panic path included: on a panic

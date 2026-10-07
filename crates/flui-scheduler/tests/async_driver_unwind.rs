@@ -297,6 +297,134 @@ fn hook_retirement() {
     assert_eq!(drops.load(Ordering::Relaxed), 1);
 }
 
+struct ReenterOnDrop(Option<Box<dyn FnOnce()>>);
+
+impl Drop for ReenterOnDrop {
+    fn drop(&mut self) {
+        if let Some(callback) = self.0.take() {
+            callback();
+        }
+    }
+}
+
+fn callback_retirement_closes_task_admission() {
+    let scheduler = UpdateScheduler::new();
+    let frame = OwnerFrame::new(&scheduler).expect("owner frame");
+    let driver = frame.async_driver();
+    let polls = Rc::new(std::cell::Cell::new(0));
+    let observed = Rc::clone(&polls);
+    let capture = ReenterOnDrop(Some(Box::new(move || {
+        let token = driver.spawn_local_eager(Box::pin(async move {
+            observed.set(observed.get() + 1);
+        }));
+        assert!(token.expect("refused task token").is_cancelled());
+    })));
+    frame
+        .local_post_frame_handle()
+        .schedule_local(move |_| {
+            drop(capture);
+        })
+        .expect("queued callback");
+    assert!(frame.retire().is_none());
+    assert_eq!(polls.get(), 0, "retirement must refuse even inline polling");
+    assert_eq!(frame.pending_task_count(), 0);
+}
+
+fn task_retirement_disarms_sibling_wakers() {
+    let scheduler = UpdateScheduler::new();
+    let frame = OwnerFrame::new(&scheduler).expect("owner frame");
+    let driver = frame.async_driver();
+    let observed = Arc::new(Mutex::new(None::<Waker>));
+    let sibling_waker = Arc::clone(&observed);
+    let capture = ReenterOnDrop(Some(Box::new(move || {
+        sibling_waker
+            .lock()
+            .expect("sibling waker")
+            .as_ref()
+            .expect("polled sibling")
+            .wake_by_ref();
+    })));
+    let first = driver.spawn_local(Box::pin(async move {
+        let _capture = capture;
+        std::future::pending::<()>().await;
+    }));
+    let second = driver
+        .spawn_local_eager(probe(
+            Outcome::Pending,
+            0,
+            &Arc::new(AtomicUsize::new(0)),
+            &observed,
+            None,
+        ))
+        .expect("pending sibling");
+    frame.poll_ready();
+    let wakes = Arc::new(AtomicUsize::new(0));
+    let count = Arc::clone(&wakes);
+    driver.set_request_frame(move || {
+        count.fetch_add(1, Ordering::Relaxed);
+    });
+    let before = wakes.load(Ordering::Relaxed);
+    assert!(frame.retire().is_none());
+    assert_eq!(
+        wakes.load(Ordering::Relaxed),
+        before,
+        "no sibling can request a frame during retirement"
+    );
+    assert!(first.is_cancelled());
+    assert!(second.is_cancelled());
+}
+
+fn eager_poll_cannot_reopen_retired_owner() {
+    let scheduler = UpdateScheduler::new();
+    let frame = Rc::new(OwnerFrame::new(&scheduler).expect("owner frame"));
+    let driver = frame.async_driver();
+    let owner = Rc::clone(&frame);
+    let token = driver
+        .spawn_local_eager(Box::pin(async move {
+            assert!(owner.retire().is_none());
+            std::future::pending::<()>().await;
+        }))
+        .expect("refused task token");
+    assert!(token.is_cancelled());
+    assert_eq!(frame.pending_task_count(), 0);
+    assert_eq!(frame.poll_ready(), 0);
+}
+
+fn foreign_frame_preserves_pending_demand() {
+    for direct in [false, true] {
+        let scheduler = UpdateScheduler::new();
+        let owner = OwnerFrame::new(&scheduler).expect("owner frame");
+        let foreign_scheduler = UpdateScheduler::new();
+        let foreign = OwnerFrame::new(&foreign_scheduler).expect("foreign owner frame");
+        let driver = owner.async_driver();
+        let ran = Rc::new(std::cell::Cell::new(false));
+        let observed = Rc::clone(&ran);
+        let token = driver.spawn_local(Box::pin(async move {
+            observed.set(true);
+        }));
+        assert!(scheduler.has_scheduled_frame());
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| {
+                if direct {
+                    scheduler.handle_begin_frame(std::time::Instant::now(), &foreign);
+                } else {
+                    scheduler.execute_frame(&foreign);
+                }
+            }))
+            .is_err()
+        );
+        assert!(
+            scheduler.has_scheduled_frame(),
+            "rejected owner must not consume demand"
+        );
+        assert!(!ran.get());
+        assert_eq!(scheduler.frame_count(), 0);
+        scheduler.execute_frame(&owner);
+        assert!(ran.get());
+        assert!(!token.is_cancelled());
+    }
+}
+
 /// During an existing unwind the hook's captures are retained, not dropped:
 /// a capture panicking in `Drop` then would abort the process.
 fn hook_retirement_during_unwind() {
@@ -405,6 +533,22 @@ fn async_driver_unwind_matrix() {
         ("lazy_spawn_hook", lazy_spawn_hook),
         ("eager_spawn_hook", eager_spawn_hook),
         ("hook_retirement", hook_retirement),
+        (
+            "foreign_frame_preserves_pending_demand",
+            foreign_frame_preserves_pending_demand,
+        ),
+        (
+            "callback_retirement_closes_task_admission",
+            callback_retirement_closes_task_admission,
+        ),
+        (
+            "task_retirement_disarms_sibling_wakers",
+            task_retirement_disarms_sibling_wakers,
+        ),
+        (
+            "eager_poll_cannot_reopen_retired_owner",
+            eager_poll_cannot_reopen_retired_owner,
+        ),
         (
             "hook_retirement_during_unwind",
             hook_retirement_during_unwind,

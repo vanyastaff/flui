@@ -172,6 +172,7 @@ impl OwnerFrame {
     pub fn retire(&self) -> Option<RetirePanic> {
         self.post_frame.closed.set(true);
         let callbacks = self.post_frame.queue.take();
+        let tasks = self.tasks.detach_for_retirement();
         let mut first: Option<RetirePanic> = None;
         for entry in callbacks {
             if std::thread::panicking() {
@@ -182,7 +183,7 @@ impl OwnerFrame {
                 keep_first(&mut first, payload);
             }
         }
-        if let Some(payload) = self.tasks.retire() {
+        if let Some(payload) = tasks.retire() {
             keep_first(&mut first, payload);
         }
         first

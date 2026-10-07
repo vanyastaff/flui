@@ -1,10 +1,12 @@
 # ADR-0136: UI surfaces are owner-local; one thread-boundary ledger
 
-- **Status:** Proposed
+- **Status:** Accepted (§2; the other sections are not decisions until adopted)
 - **Date:** 2026-10-06
-- **Amends (on acceptance):** [ADR-0018](ADR-0018-async-builder-seam.md) D3 (where the driver's
+- **Supersedes:** [ADR-0018](ADR-0018-async-builder-seam.md) D3 and D5 (where the driver's
   tasks live and what may be spawned), [ADR-0027](ADR-0027-owner-affine-ui-realms.md) §2
-  (which UI capabilities are `!Send`)
+  (which UI capabilities are `!Send`), [ADR-0035](ADR-0035-lifecycle-consolidation-and-frames-enabled.md)
+  §3's async pump API and [ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md)'s
+  lane-specific frame entry API. Their other decisions remain in force.
 - **Related:** [ADR-0035](ADR-0035-lifecycle-consolidation-and-frames-enabled.md),
   [ADR-0047](ADR-0047-unified-execution-services.md),
   [ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md),
@@ -66,8 +68,10 @@ and the repository allows no `unsafe impl Send`, so owner-local state cannot liv
   are gone, so no entry point polls or drains nothing. Tasks are polled in exactly two places:
   `MidFrameMicrotasks` inside `handle_begin_frame`, and `UiRealm::pump_background`, which
   calls `finish_async_pump()` and then `OwnerFrame::poll_ready()`. An owner frame handed to
-  another scheduler's drive is neither polled nor drained.
-- **Teardown retires explicitly, in its own order.** `OwnerFrame::retire` drops the queued
+  another scheduler's drive is rejected before consuming pending frame demand.
+- **Teardown retires explicitly, in its own order.** `OwnerFrame::retire` first closes both
+  admission lanes, detaches their outgoing ownership, marks every task retired and removes
+  the frame hook before invoking any destructor. It then drops the queued
   post-frame callbacks, then every task, on the owner thread, each under its own catch, keeps
   the first panic and retains later ones, and admits nothing afterwards. `UiRealm`'s `Drop`
   calls it after closing its presentations and before it resumes any earlier failure, so the
