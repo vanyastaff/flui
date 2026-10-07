@@ -53,11 +53,14 @@
 //! `ScrollPosition` is merged into `ScrollController` (v1 restriction: one
 //! position per controller).
 
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use flui_animation::{Animation, AnimationController, AnimationStatus, Vsync, VsyncRegistration};
+use flui_animation::{
+    Animation, AnimationController, AnimationStatus, Curves, Vsync, VsyncRegistration,
+};
 use flui_foundation::geometry::Axis;
 use flui_foundation::{Listenable, ListenerId};
 use flui_rendering::constraints::AxisDirection;
@@ -76,7 +79,7 @@ use crate::{GestureDetector, Listener, Semantics, SingleChildScrollView};
 use flui_interaction::routing::EventPropagation;
 use flui_platform_api::{
     keyboard::Modifiers,
-    pointer::{ScrollEvent, ScrollUnit},
+    pointer::{ScrollEvent, ScrollPrecision, ScrollUnit},
 };
 use flui_scheduler::PostFrameHandle;
 
@@ -265,6 +268,13 @@ impl Scrollable {
 // State
 // ---------------------------------------------------------------------------
 
+/// An accepted wheel destination; identity also protects against reentrant
+/// replacement while stopping or starting the shared animation controller.
+struct WheelMotion {
+    target: f64,
+    generation: Cell<Option<u64>>,
+}
+
 /// Persistent state for [`Scrollable`].
 ///
 /// Owns the ballistic fling [`AnimationController`] and its vsync
@@ -289,6 +299,8 @@ pub struct ScrollableState {
     /// Created once in `create_state`; registered with the ambient
     /// `VsyncScope` in `init_state`; disposed in `dispose`.
     fling_controller: AnimationController,
+    /// Owner-local accepted wheel work, independent of the displayed pixels.
+    wheel_motion: Rc<RefCell<Option<Rc<WheelMotion>>>>,
     /// Value-listener ID on `fling_controller` that pushes pixels into
     /// `scroll_controller` each tick. Installed by
     /// [`install_fling_listener`](ScrollableState::install_fling_listener)
@@ -368,6 +380,7 @@ impl StatefulView for Scrollable {
             scroll_controller: self.controller.clone(),
             stop_hook: None,
             fling_controller,
+            wheel_motion: Rc::new(RefCell::new(None)),
             fling_listener_id: None,
             fling_status_listener_id: None,
             post_frame: None,
@@ -572,6 +585,7 @@ impl ViewState<Scrollable> for ScrollableState {
             // Clones for the gesture callbacks; each closure needs its own
             // `Arc`-counted handle (no refcount bump at call time).
             let fling_stop = fling_controller.clone();
+            let wheel_drag = Rc::clone(&self.wheel_motion);
             let ctrl_update = scroll_controller.clone();
             let phys_update = physics.clone();
             let fling_start = fling_controller.clone();
@@ -616,6 +630,7 @@ impl ViewState<Scrollable> for ScrollableState {
             let gestures = GestureDetector::new()
                 .behavior(HitTestBehavior::Opaque)
                 .on_pan_start(move |_cx, _details| {
+                    wheel_drag.borrow_mut().take();
                     // Grab: halt any in-flight fling so the list stops at the
                     // finger's contact position.
                     let _ = fling_stop.stop();
@@ -708,8 +723,11 @@ impl ViewState<Scrollable> for ScrollableState {
                 })
                 .child(scroll_view);
 
-            // Wheel / trackpad pointer-scroll: an immediate scroll with no
-            // drag semantics — no slop, no arena hold-and-release. The tick
+            // Wheel / trackpad scrolling has no drag semantics: no slop or
+            // arena hold-and-release. Known notches animate; precise and
+            // unknown packets apply immediately. Every accepted destination
+            // accumulates independently of the displayed intermediate pixels.
+            // The tick
             // clamps HARD to the extents (a wheel never overscrolls), pulses the
             // scroll activity with the USER direction around the pixel write, and
             // ends the pulse after the frame that consumes it.
@@ -722,6 +740,7 @@ impl ViewState<Scrollable> for ScrollableState {
             let ctrl_wheel = scroll_controller;
             let post_frame_wheel = post_frame.clone();
             let fling_wheel = fling_controller.clone();
+            let wheel_motion = Rc::clone(&self.wheel_motion);
             let listener = Listener::new()
                 .on_scroll_claim(move |data: &ScrollEvent| {
                     // Deliberately modifier-agnostic: a ctrl+wheel tick over a
@@ -746,7 +765,22 @@ impl ViewState<Scrollable> for ScrollableState {
                         return EventPropagation::Continue;
                     }
                     let position = ctrl_wheel.position();
-                    let target = (ctrl_wheel.pixels() + delta)
+                    let pixels = ctrl_wheel.pixels();
+                    let notched = data.precision == ScrollPrecision::Notched;
+                    let accepted = wheel_motion.borrow().clone();
+                    let base = if notched {
+                        accepted
+                            .filter(|motion| {
+                                motion.generation.get().is_none_or(|generation| {
+                                    generation == fling_wheel.run_generation()
+                                        && fling_wheel.status().is_running()
+                                })
+                            })
+                            .map_or(pixels, |motion| motion.target)
+                    } else {
+                        pixels
+                    };
+                    let target = (base + delta)
                         .clamp(position.min_scroll_extent(), position.max_scroll_extent());
                     tracing::trace!(
                         delta,
@@ -754,28 +788,90 @@ impl ViewState<Scrollable> for ScrollableState {
                         pixels = ctrl_wheel.pixels(),
                         "pointer-scroll tick"
                     );
-                    if target == ctrl_wheel.pixels() {
+                    if target == base {
                         return EventPropagation::Continue;
                     }
+                    // Commit admission before callbacks. A nested tick inherits
+                    // this destination and replaces its owner; the older handler
+                    // then stops without overwriting the newer accepted work.
+                    let motion = Rc::new(WheelMotion {
+                        target,
+                        generation: Cell::new(None),
+                    });
+                    *wheel_motion.borrow_mut() = Some(Rc::clone(&motion));
+                    let is_current = || {
+                        wheel_motion
+                            .borrow()
+                            .as_ref()
+                            .is_some_and(|current| Rc::ptr_eq(current, &motion))
+                    };
                     // A wheel tick interrupts whatever animation is driving
                     // the position — otherwise the fling controller's value
                     // listener overwrites the wheel write on its next tick
                     // (the same cancel the drag-grab and `jump_to` paths do).
                     let _ = fling_wheel.stop();
+                    if !is_current() {
+                        return EventPropagation::Stop;
+                    }
+                    if notched {
+                        // Start at the displayed position, never at the previous
+                        // destination or a stale programmatic animation value.
+                        fling_wheel.set_value(pixels);
+                        if !is_current() {
+                            return EventPropagation::Stop;
+                        }
+                        let started = fling_wheel.animate_to_curved(
+                            target,
+                            Some(Duration::from_millis(150)),
+                            Arc::new(Curves::EaseOut),
+                        );
+                        if is_current() {
+                            if started.is_ok() && fling_wheel.status().is_running() {
+                                motion.generation.set(Some(fling_wheel.run_generation()));
+                                position.set_is_scrolling(true);
+                                if !is_current() {
+                                    return EventPropagation::Stop;
+                                }
+                                position.set_user_scroll_direction(if delta > 0.0 {
+                                    ScrollDirection::Reverse
+                                } else {
+                                    ScrollDirection::Forward
+                                });
+                            } else {
+                                wheel_motion.borrow_mut().take();
+                            }
+                        }
+                        return EventPropagation::Stop;
+                    }
                     // The wheel pulse: direction is only recordable
                     // while an activity is live, so raise first.
                     position.set_is_scrolling(true);
+                    if !is_current() {
+                        return EventPropagation::Stop;
+                    }
                     position.set_user_scroll_direction(if delta > 0.0 {
                         ScrollDirection::Reverse
                     } else {
                         ScrollDirection::Forward
                     });
+                    if !is_current() {
+                        return EventPropagation::Stop;
+                    }
                     position.set_pixels(target);
+                    if !is_current() {
+                        return EventPropagation::Stop;
+                    }
+                    wheel_motion.borrow_mut().take();
                     match &post_frame_wheel {
                         Some(post_frame) => {
                             let pulse_end = position;
+                            let motion_end = fling_wheel.clone();
                             post_frame.schedule(move |_timing| {
-                                pulse_end.set_is_scrolling(false);
+                                // A subsequent notch may have started after
+                                // this immediate tick but before the frame.
+                                if !motion_end.status().is_running() {
+                                    pulse_end.set_is_scrolling(false);
+                                }
                             });
                         }
                         // No post-frame capability (a bare harness without
@@ -812,6 +908,7 @@ impl ViewState<Scrollable> for ScrollableState {
         }
         // Stop the retired trajectory while its listeners still target the
         // old position; its metrics must never drive the incoming position.
+        self.wheel_motion.borrow_mut().take();
         let _ = self.fling_controller.stop();
         self.scroll_controller.position().set_is_scrolling(false);
         self.remove_command_listener();
@@ -824,6 +921,7 @@ impl ViewState<Scrollable> for ScrollableState {
     }
 
     fn dispose(&mut self) {
+        self.wheel_motion.borrow_mut().take();
         // An unmount mid-drag or mid-ballistic-run must not leave the shared
         // position claiming a scroll is underway — end the activity FIRST,
         // while this state still knows which position it was driving (the
