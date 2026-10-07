@@ -68,7 +68,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use flui_animation::{Animation, Curve, Vsync};
+use flui_animation::{Animation, AnimationController, AnimationError, Curve, TickerFuture, Vsync};
 use parking_lot::Mutex;
 
 use super::modal_route::ModalHandle;
@@ -274,9 +274,29 @@ pub(crate) type RouteModals = Arc<super::lifecycle::TerminalMap<RouteId, ModalHa
 /// the same erased-`Animatable`-transform shape ADR-0021 §8 already
 /// sanctions for `Hero::create_rect_tween`.
 #[derive(Clone)]
-pub(crate) struct PopPacing {
-    pub(crate) duration: Duration,
-    pub(crate) curve: Arc<dyn Curve + Send + Sync>, // see the struct doc — erased easing-curve transform, ADR-0021 §8 shape
+pub(crate) enum PopPacing {
+    /// Over a fixed duration along a curve.
+    Curved {
+        duration: Duration,
+        curve: Arc<dyn Curve + Send + Sync>, // see the type doc — erased easing-curve transform, ADR-0021 §8 shape
+    },
+    /// A fling settle starting at `velocity` controller units per second.
+    Fling { velocity: f64 },
+}
+
+impl PopPacing {
+    /// Starts the paced exit run on `controller`, toward 0.
+    pub(crate) fn animate_back(
+        self,
+        controller: &AnimationController,
+    ) -> Result<TickerFuture, AnimationError> {
+        match self {
+            Self::Curved { duration, curve } => {
+                controller.animate_back_curved(0.0, Some(duration), curve)
+            }
+            Self::Fling { velocity } => controller.fling(velocity),
+        }
+    }
 }
 
 /// `RouteId -> PopPacing`, a one-shot override the navigator sets immediately

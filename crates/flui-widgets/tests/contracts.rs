@@ -401,6 +401,7 @@ fn animation_and_visibility() {
             ("dismissible::cancelling_a_fully_slid_card_restores_it_without_dismissal", crate::dismissible::cancelling_a_fully_slid_card_restores_it_without_dismissal as fn()),
             ("dismissible::a_cancelled_horizontal_dismiss_restores_the_card", crate::dismissible::a_cancelled_horizontal_dismiss_restores_the_card as fn()),
             ("dismissible::a_cancelled_vertical_dismiss_restores_the_card", crate::dismissible::a_cancelled_vertical_dismiss_restores_the_card as fn()),
+            ("dismissible::a_dismissible_release_keeps_finger_speed_on_any_width", crate::dismissible::a_dismissible_release_keeps_finger_speed_on_any_width as fn()),
             ("animated_size::animated_size_interpolates_to_a_new_child_size_over_frames", crate::animated_size::animated_size_interpolates_to_a_new_child_size_over_frames as fn()),
             ("implicit_animations::animated_container_interpolates_size_over_frames", crate::implicit_animations::animated_container_interpolates_size_over_frames),
             ("implicit_animations::animated_opacity_retargets_from_the_current_value_midflight", crate::implicit_animations::animated_opacity_retargets_from_the_current_value_midflight),
