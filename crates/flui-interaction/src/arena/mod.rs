@@ -65,6 +65,10 @@ use crate::ids::PointerId;
 use crate::retain::Retain;
 use flui_foundation::{MonotonicClock, SystemClock};
 
+mod composition;
+use composition::CompositionBranch;
+pub use composition::{CompositionError, GestureBranches, GestureCompetition};
+
 // ============================================================================
 // GestureDisposition enum
 // ============================================================================
@@ -909,6 +913,7 @@ pub fn run_pointer_lifecycle(arena: &GestureArena, event: &crate::events::Pointe
 /// ```
 #[derive(Clone)]
 pub struct GestureArena {
+    branch: Option<CompositionBranch>,
     owner_closed: Rc<Cell<bool>>,
     close_mode: CloseTombstone,
     /// Active exact-generation slots, visited in ascending pointer order.
@@ -1058,6 +1063,7 @@ impl GestureArena {
     #[inline]
     pub fn with_clock(clock: Arc<dyn MonotonicClock>) -> Self {
         Self {
+            branch: None,
             entries: Rc::new(RefCell::new(BTreeMap::new())),
             retained: Rc::new(RefCell::new(BTreeMap::new())),
             deferred: Rc::new(RefCell::new(VecDeque::new())),
@@ -1080,6 +1086,7 @@ impl GestureArena {
     #[inline]
     pub fn binding_driven(clock: Arc<dyn MonotonicClock>) -> Self {
         Self {
+            branch: None,
             entries: Rc::new(RefCell::new(BTreeMap::new())),
             retained: Rc::new(RefCell::new(BTreeMap::new())),
             deferred: Rc::new(RefCell::new(VecDeque::new())),
@@ -1096,6 +1103,7 @@ impl GestureArena {
     #[inline]
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
+            branch: None,
             entries: Rc::new(RefCell::new(BTreeMap::new())),
             retained: Rc::new(RefCell::new(BTreeMap::new())),
             deferred: Rc::new(RefCell::new(VecDeque::with_capacity(capacity))),
