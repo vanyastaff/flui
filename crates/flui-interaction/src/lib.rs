@@ -16,9 +16,8 @@
 //!
 //! This crate makes extensive use of Rust's advanced type system:
 //!
-//! - **Sealed traits**: `HitTestable` and `GestureArenaMember` cannot be
-//!   implemented outside this crate, allowing API evolution without breaking
-//!   changes
+//! - **Open gesture traits**: external recognizers implement the same
+//!   dyn-compatible arbitration and event-delivery contracts as built-ins
 //! - **Canonical pointer id**: [`PointerId`] is re-exported from the
 //!   `ui-events` crate (`NonZeroU64`-backed). [`FocusNodeId`] and
 //!   [`HandlerId`] are crate-local `NonZeroU64` newtypes that prevent
@@ -34,13 +33,13 @@
 //! ```text
 //! Platform (winit, Win32, etc.)
 //!     ↓
-//! PointerEvent/KeyEvent
+//! PointerEvent/KeyboardEvent
 //!     ↓
-//! EventRouter (event routing)
-//!     ├─ Hit Testing (spatial)
-//!     └─ Focus Management (keyboard)
+//! GestureBinding (pointers) / FocusManager (keyboard)
+//!     ├─ Hit Testing → InteractionLane route
+//!     └─ RecognizerSet attachments
 //!         ↓
-//! Handlers (closures in Layers)
+//! Owner-local handlers (render storage keeps data-only route identities)
 //!     ↓
 //! GestureRecognizers (gesture recognition)
 //!     ├─ GestureArena (conflict resolution)
@@ -58,20 +57,21 @@
 //! // 1. The recogniser set lives behind a single shared `GestureArena`.
 //! let arena = GestureArena::new();
 //!
-//! // 2. Construct the recogniser; the builder returns an `Arc<Self>`.
-//! let recognizer = TapGestureRecognizer::new(arena)
-//!     .with_on_tap(|details| {
+//! // 2. Configure callbacks before sharing the recognizer as an `Rc`.
+//! let recognizer = TapGestureRecognizer::builder(arena)
+//!     .on_tap(|details| {
 //!         // The user callback fires only after the arena confirms
 //!         // this recogniser won (`pending_up` deferral).
 //!         let _pos = details.global_position;
-//!     });
+//!     })
+//!     .build();
 //! // `recognizer` is now ready to receive pointer events via
 //! // `flui_interaction::GestureBinding` at runtime.
 //! ```
 //!
 //! # Example: Keyboard Focus
 //!
-//! ```rust,ignore
+//! ```rust
 //! use flui_interaction::{FocusManager, FocusNode};
 //!
 //! let manager = FocusManager::new();
@@ -90,15 +90,10 @@
 //!
 //! # Example: Type-Safe IDs
 //!
-//! ```rust,ignore
-//! use flui_interaction::ids::{PointerId, FocusNodeId};
-//!
-//! let pointer = PointerId::PRIMARY;
-//! let focus = FocusNodeId::new(42);
-//!
-//! // These are different types - cannot mix!
-//! // fn process(id: PointerId) { ... }
-//! // process(focus); // Compile error!
+//! ```compile_fail
+//! use flui_interaction::{PointerId, FocusNodeId};
+//! fn process_pointer(id: PointerId) {}
+//! process_pointer(FocusNodeId::new(42)); // A focus identity cannot name a pointer.
 //! ```
 //!
 //! # Modules
@@ -106,7 +101,7 @@
 //! ## Core Infrastructure
 //! - [`ids`] - Type-safe identifiers (PointerId, FocusNodeId, etc.)
 //! - [`traits`] - Core traits and extension traits
-//! - [`sealed`] - Sealed trait infrastructure (internal)
+//! - [`sealed`] - Hit-test extension bridge; gesture traits are open
 //!
 //! ## Event Routing
 //! - [`routing`] - Event routing, hit testing, focus management
@@ -134,12 +129,10 @@
 //! - ✅ Clear separation of concerns (SOLID principles)
 //! - ✅ Smaller compile times and dependencies
 
-// Ship bar (wave 2): every public item is documented; keep it that way.
+// Public items keep their contract documentation at the API boundary.
 #![deny(missing_docs)]
-// ADR-0027: gesture arenas and recognizers are owner-local, but this crate still
-// exposes `Arc`-shaped handles at the arena/member seams. Do not restore
-// `Send + Sync` to executable callbacks to satisfy this lint; a future focused
-// pass can migrate the owner-local handle graph to `Rc`.
+// ADR-0027: executable callbacks are owner-local. An Arc-shaped data-plane seam
+// does not authorize adding Send + Sync bounds to those callbacks.
 #![expect(clippy::arc_with_non_send_sync)]
 
 // ============================================================================
@@ -326,7 +319,7 @@ pub use traits::{
 ///
 /// # Usage
 ///
-/// ```rust,ignore
+/// ```rust
 /// use flui_interaction::prelude::*;
 /// ```
 pub mod prelude {

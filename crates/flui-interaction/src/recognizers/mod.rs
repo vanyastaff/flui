@@ -20,6 +20,10 @@
 //!
 //! Arena membership and contact tracking are composed values. Both extension
 //! traits use `&self` receivers and support heterogeneous trait objects.
+//! Builders configure immutable callbacks before returning an `Rc` owner.
+//! Explicit cancellation delivers cancellation and leaves the recognizer reusable;
+//! last-owner destruction withdraws contacts silently. Arena membership and
+//! listener attachments hold weak references rather than lifetime ownership.
 //!
 //! # Available Recognizers
 //!
@@ -33,12 +37,12 @@
 //!
 //! # Example
 //!
-//! ```rust,ignore
-//! use flui_interaction::prelude::*;
+//! ```rust
+//! use flui_interaction::{GestureArena, TapGestureRecognizer};
 //!
 //! let arena = GestureArena::new();
 //! let recognizer = TapGestureRecognizer::builder(arena)
-//!     .on_tap(|| println!("Tapped"))
+//!     .on_tap(|details| println!("Tapped at {:?}", details.local_position))
 //!     .build();
 //! ```
 
