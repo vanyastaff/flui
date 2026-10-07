@@ -2,25 +2,16 @@
 //!
 //! This module provides the core event routing system:
 //!
-//! - [`EventRouter`] - Main event dispatcher
 //! - [`HitTestResult`] - Spatial hit testing
 //! - [`FocusManager`] - Keyboard focus management
 //! - [`FocusScopeNode`] - Groups focusable elements for keyboard navigation
 //! - [`FocusTraversalPolicy`] - Determines Tab/Shift+Tab navigation order
 //! - [`PointerRouter`] - Centralized pointer event routing
 //!
-//! # Architecture
-//!
-//! ```text
-//! Platform Events
-//!       ↓
-//! EventRouter (dispatches based on event type)
-//!       ├─ Pointer Events → HitTest → Handlers
-//!       ├─ Key Events → FocusManager → FocusScope → Focused Element
-//!       └─ Scroll Events → HitTest → Scroll Handlers
-//! ```
+//! [`crate::GestureBinding`] retains pointer hit routes resolved by
+//! [`InteractionLane`]. [`FocusManager`] owns keyboard dispatch for the
+//! presentation.
 
-pub(crate) mod event_router;
 mod focus;
 pub mod focus_scope;
 mod hit_test;
@@ -28,7 +19,6 @@ mod interaction_lane;
 pub(crate) mod mouse_tracker;
 mod pointer_router;
 
-pub use event_router::EventRouter;
 pub use focus::{FocusChangeCallback, FocusManager, KeyEventCallback};
 pub use focus_scope::{
     FocusAttachment, FocusDetachOutcome, FocusNode, FocusNodeChangeCallback, FocusNodeId,
@@ -37,8 +27,8 @@ pub use focus_scope::{
     ResolvedStep, TraversalEdgeBehavior,
 };
 pub use hit_test::{
-    CursorRequest, EventPropagation, HitTestBehavior, HitTestEntry, HitTestResult, HitTestable,
-    RenderId, TransformGuard,
+    CursorRequest, EventPropagation, HitTestBehavior, HitTestEntry, HitTestResult, RenderId,
+    TransformGuard,
 };
 #[doc(hidden)]
 pub use interaction_lane::DispatchCustody;

@@ -1,33 +1,11 @@
-//! Hit-test targets, pointer event conveniences and drag constraints.
+//! Pointer event conveniences and drag constraints.
 
 use flui_foundation::geometry::Offset;
 
 use crate::{
     events::{PointerEvent, PointerEventExt as EventsPointerEventExt},
     ids::PointerId,
-    routing::HitTestEntry,
 };
-
-// ============================================================================
-// HitTestTarget trait
-// ============================================================================
-
-/// Trait for types that can be hit test targets.
-///
-/// Any render object that can receive pointer events should implement this
-/// trait.
-pub trait HitTestTarget: Send + Sync {
-    /// Handles a pointer event dispatched to this target.
-    ///
-    /// Called when a pointer event should be delivered to this target.
-    /// The `entry` contains the hit test result including local position
-    /// and transform information.
-    ///
-    /// # Arguments
-    /// * `event` - The pointer event to handle
-    /// * `entry` - The hit test entry containing position and transform info
-    fn handle_event(&self, event: &PointerEvent, entry: &HitTestEntry);
-}
 
 // ============================================================================
 // PointerEventExtTrait extension trait (additional methods)
@@ -104,14 +82,4 @@ pub enum DragAxis {
     /// Free drag (any direction).
     #[default]
     Free,
-}
-
-// ============================================================================
-// HitTestTarget implementations for wrapper types
-// ============================================================================
-
-impl<T: HitTestTarget + ?Sized> HitTestTarget for Box<T> {
-    fn handle_event(&self, event: &PointerEvent, entry: &HitTestEntry) {
-        (**self).handle_event(event, entry);
-    }
 }

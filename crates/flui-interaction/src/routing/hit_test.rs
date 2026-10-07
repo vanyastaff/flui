@@ -803,31 +803,6 @@ impl Drop for TransformGuard<'_> {
 }
 
 // ============================================================================
-// HIT TESTABLE TRAIT
-// ============================================================================
-
-/// Trait for objects that can be hit-tested.
-pub trait HitTestable: crate::sealed::hit_testable::Sealed {
-    /// Performs hit testing at the given position.
-    fn hit_test(&self, position: Offset<f64>, result: &mut HitTestResult) -> bool;
-
-    /// Returns the hit test behavior.
-    fn hit_test_behavior(&self) -> HitTestBehavior {
-        HitTestBehavior::DeferToChild
-    }
-}
-
-impl<T: crate::sealed::CustomHitTestable> HitTestable for T {
-    fn hit_test(&self, position: Offset<f64>, result: &mut HitTestResult) -> bool {
-        self.perform_hit_test(position, result)
-    }
-
-    fn hit_test_behavior(&self) -> HitTestBehavior {
-        self.get_hit_test_behavior()
-    }
-}
-
-// ============================================================================
 // HELPER FUNCTIONS
 // ============================================================================
 
