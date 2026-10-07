@@ -1,488 +1,235 @@
 # Gesture Recognition Guide
 
-Internal documentation for gesture recognition in `flui_interaction`.
+How the recognizers in `flui_interaction::recognizers` behave. Every position,
+delta, scale, pressure and velocity field is `f64` (`Offset<f64>` for points);
+times are `Instant`/`Duration`.
 
-## Gesture Recognizer Architecture
+## Traits
 
 ```
-GestureArenaMember (trait)
-    │
-    ├── GestureRecognizer (trait) - base with add_pointer, handle_event
-    │       │
-    │       └── OneSequenceGestureRecognizer (trait) - single pointer tracking
-    │               │
-    │               └── PrimaryPointerGestureRecognizer (trait) - state machine + deadline
-    │
-    └── Concrete Recognizers
-        ├── TapGestureRecognizer
-        ├── LongPressGestureRecognizer
-        ├── DoubleTapGestureRecognizer
-        ├── DragGestureRecognizer
-        ├── ScaleGestureRecognizer
-        ├── MultiTapGestureRecognizer
-        └── ForcePressGestureRecognizer
+GestureArenaMember (sealed)
+ └── GestureRecognizer            add_pointer(self: &Arc<Self>, ..) / handle_event / dispose / primary_pointer
+      ├── OneSequenceGestureRecognizer
+      └── PrimaryPointerGestureRecognizer   deadline hook (did_exceed_deadline)
 ```
 
-## Available Recognizers
+Built-in recognizers implement `GestureArenaMember` directly. Code outside the
+crate implements `CustomGestureRecognizer`, whose blanket impl supplies
+`GestureArenaMember` (`src/arena/mod.rs`).
 
-### TapGestureRecognizer
+Built-in recognizers: `TapGestureRecognizer`, `DoubleTapGestureRecognizer`,
+`LongPressGestureRecognizer`, `DragGestureRecognizer` (plus the
+`vertical_drag`, `horizontal_drag` and `pan` constructors in `drag_variants`),
+`ScaleGestureRecognizer`, `ForcePressGestureRecognizer`,
+`MultiTapGestureRecognizer`, `MultiDragGestureRecognizer`,
+`EagerGestureRecognizer` and `TapAndDragGestureRecognizer`.
 
-Single tap detection with slop tolerance.
+## Construction
+
+`new(arena)` (drag: `new(arena, axis)`, multi-tap: `new(arena, count)`) and
+`with_settings(arena, .., settings)` return `Arc<Self>`. Each `with_on_*`
+builder takes and returns that `Arc`. `set_settings(&self, settings)` replaces
+the settings later. Callbacks are stored as owner-local `Rc<dyn Fn>`.
 
 ```rust
-let recognizer = TapGestureRecognizer::new(arena)
-    .with_on_tap_down(|details| { /* pointer contact */ })
-    .with_on_tap_move(|details| { /* movement within slop */ })
-    .with_on_tap_up(|details| { /* pointer released */ })
-    .with_on_tap(|details| { /* successful tap */ })
-    .with_on_tap_cancel(|details| { /* cancelled */ });
+let tap = TapGestureRecognizer::new(arena.clone())
+    .with_on_tap_down(|d: TapDetails| { /* contact */ })
+    .with_on_tap_up(|d| { /* release, after the arena win */ })
+    .with_on_tap(|d| { /* tap */ })
+    .with_on_tap_cancel(|d| { /* cancelled */ });
 ```
 
-**State Machine:**
-```
-Ready → Down (on pointer_down)
-Down → Ready (on pointer_up within slop → tap success)
-Down → Cancelled (on move beyond TAP_SLOP → cancel)
-```
+Tap also has `with_on_secondary_tap*` and `with_on_tertiary_tap*` per button
+(`TapButton`).
 
-**Details Struct:**
-```rust
-pub struct TapDetails {
-    pub global_position: Offset,
-    pub local_position: Offset,
-    pub kind: PointerType,
-}
-```
+## Recognizers
 
-### DoubleTapGestureRecognizer
+State names below are the private phase enums in each file.
 
-Two taps in quick succession within distance tolerance.
+### Tap (`tap.rs`, `TapState`)
 
-```rust
-let recognizer = DoubleTapGestureRecognizer::new(arena)
-    .with_on_double_tap(|details| { /* double tap recognized */ })
-    .with_on_double_tap_cancel(|details| { /* cancelled */ });
-```
+`Ready → Down` on pointer down. Up within slop fires `on_tap_up` and `on_tap`
+once the recognizer wins the arena (the release is held in `pending_up` until
+`accept_gesture`). Moving beyond the kind-specific slop goes to `Cancelled`.
+`TapDetails { global_position, local_position, kind }`.
 
-**State Machine:**
-```
-Ready → FirstDown (first pointer_down)
-FirstDown → WaitingForSecond (first pointer_up)
-WaitingForSecond → Ready (timeout expired)
-WaitingForSecond → FirstDown (second tap too far)
-WaitingForSecond → SecondDown (second pointer_down within slop/timeout)
-SecondDown → Completed (second pointer_up → success)
-SecondDown → Cancelled (movement beyond slop)
-```
+### Double tap (`double_tap.rs`, `DoubleTapPhase`)
 
-**Timing/Distance Constants (from GestureSettings):**
-- `double_tap_timeout()`: 300ms between taps
-- `double_tap_slop()`: 100px max distance between taps
+Phases: `Ready`, `FirstDown`, `WaitingForSecond`, `SecondDown`, `Completed`,
+`Cancelled`. The first up holds the first arena entry and waits.
 
-### LongPressGestureRecognizer
+- A second down within `double_tap_timeout()` and within `double_tap_slop()` of
+  the first goes to `SecondDown`.
+- A second down farther than `double_tap_slop()` is ignored: the first entry
+  stays held and the phase stays `WaitingForSecond`.
+- After the window expires, `check_timeout()` releases the held entry (so a
+  competing single tap can win), fires `on_double_tap_cancel`, and returns to
+  `Ready`; a new contact then counts as a first tap.
+- Movement beyond slop during `FirstDown` or `SecondDown` cancels.
 
-Pointer held for duration without movement.
+Builders: `with_on_double_tap`, `with_on_double_tap_down`,
+`with_on_double_tap_cancel`.
 
-```rust
-let recognizer = LongPressGestureRecognizer::new(arena)
-    .with_on_long_press_down(|details| { /* initial contact */ })
-    .with_on_long_press(|| { /* timer elapsed - simple */ })
-    .with_on_long_press_start(|details| { /* timer elapsed - with details */ })
-    .with_on_long_press_move_update(|details| { /* movement after start */ })
-    .with_on_long_press_up(|details| { /* released */ })
-    .with_on_long_press_end(|details| { /* ended */ })
-    .with_on_long_press_cancel(|details| { /* cancelled */ });
-```
+### Long press (`long_press.rs`, `LongPressPhase`)
 
-**State Machine:**
-```
-Ready → Possible (pointer_down)
-Possible → Started (timer elapsed, within slop)
-Possible → Cancelled (movement beyond slop)
-Started → Ready (pointer_up → success)
-```
+`Ready → Possible` on down; `Possible → Started` when `long_press_timeout()`
+elapses within slop; movement beyond slop before that cancels. Firing goes
+through one path, `try_fire_timer`, which is reached from frame deadline
+polling, `handle_move`, and the public `check_timer()`. It accepts the arena
+entry before invoking `on_long_press` / `on_long_press_start`, so a competing
+tap on the same region is already rejected when the callbacks run.
 
-**Timer Polling:**
-```rust
-// Call periodically in event loop
-if recognizer.check_timer() {
-    // Timer elapsed, long press started — and the arena is already
-    // resolved in this recognizer's favour, so competing members (a tap
-    // on the same region) have been rejected. Do not resolve it again.
-}
-```
+Builders: `with_on_long_press_down`, `with_on_long_press`,
+`with_on_long_press_start`, `with_on_long_press_move_update`,
+`with_on_long_press_up`, `with_on_long_press_end`, `with_on_long_press_cancel`.
 
-**Duration Constant (from GestureSettings):**
-- `long_press_timeout()`: 500ms
+### Drag (`drag.rs`, `DragPhase`)
 
-### DragGestureRecognizer
-
-Pointer movement beyond slop threshold.
+`Ready → Possible` on down. The drag starts (`Started`) when the recognizer
+wins its pointer's arena; moving past `pan_slop_for(kind)` along the axis
+claims the win while competitors remain. `DragStartBehavior::Start` (default)
+reports the position at acceptance, `Down` the down position. Up or an accepted
+Cancel ends the drag; rejection before acceptance fires `on_cancel`.
 
 ```rust
-let recognizer = DragGestureRecognizer::new(arena, DragAxis::Vertical)
-    .with_on_down(|details| { /* pointer contact before drag */ })
-    .with_on_start(|details| { /* drag started */ })
-    .with_on_update(|details| { /* position changed */ })
-    .with_on_end(|details| { /* drag ended with velocity */ })
-    .with_on_cancel(|| { /* cancelled */ });
+pub enum DragAxis { Vertical, Horizontal, Free }
+
+pub struct DragDownDetails   { global_position, local_position, kind }
+pub struct DragStartDetails  { global_position, local_position, kind, timestamp: Instant }
+pub struct DragUpdateDetails { global_position, local_position, delta, primary_delta: f64, kind }
+pub struct DragEndDetails    { reason: GestureEndReason, velocity: Velocity,
+                               global_position, local_position, primary_velocity: f64 }
 ```
 
-**Axis Constraints:**
-```rust
-pub enum DragAxis {
-    Vertical,   // up/down only
-    Horizontal, // left/right only
-    Free,       // any direction (pan)
-}
-```
+`delta` and `primary_delta` are per update, not cumulative.
+`DragEndDetails::reason` is `Completed` for pointer Up and `Cancelled` for an
+accepted pointer Cancel; the measured velocity is kept in both cases
+(ADR-0112). `DragGestureRecognizer::is_fling(&velocity)` compares speed with
+`min_fling_velocity()`.
 
-**State Machine:**
-```
-Ready → Possible (pointer_down)
-Possible → Started (movement beyond DRAG_SLOP)
-Started → Ready (pointer_up → end with velocity)
-Started → Cancelled (arena rejection)
-```
+### Scale (`scale.rs`, `ScalePhase`)
 
-**Details Structs:**
-```rust
-pub struct DragDownDetails {
-    pub global_position: Offset,
-    pub local_position: Offset,
-    pub kind: PointerType,
-}
+`Ready → Possible` when a second pointer goes down, which captures the
+baseline (span, per-axis spans, focal point, rotation). `Possible → Started`
+when any one of these holds (`should_accept`):
 
-pub struct DragStartDetails {
-    pub global_position: Offset,
-    pub local_position: Offset,
-    pub kind: PointerType,
-    pub timestamp: Instant,
-}
+- `|span − initial_span| > span_slop_for(kind)`;
+- the ratio `span / initial_span` crosses `scale_slop()` (5% by default);
+- the focal point moved more than `pan_slop_for(kind)` (two-finger pan).
 
-pub struct DragUpdateDetails {
-    pub global_position: Offset,
-    pub local_position: Offset,
-    pub delta: Offset,           // since last update
-    pub primary_delta: f32,      // axis-aligned delta
-    pub kind: PointerType,
-}
+Calculations (`calculate_spans`, `calculate_rotation`):
 
-pub struct DragEndDetails {
-    pub velocity: Velocity,
-    pub global_position: Offset,
-    pub local_position: Offset,
-    pub primary_velocity: f32,   // axis-aligned velocity
-}
-```
+- focal point: mean of the active pointer positions;
+- span: mean distance from each pointer to the focal point (half the pointer
+  distance for two pointers); horizontal and vertical spans use `|dx|` and `|dy|`;
+- `scale = span / initial_span`, likewise per axis;
+- rotation: the line angle between the two pointers (the mean angle about the
+  focal point for more), minus the baseline angle.
 
-**Velocity Tracking:**
-The recognizer uses `VelocityTracker` to estimate fling velocity:
-```rust
-if recognizer.is_fling(&details.velocity) {
-    // velocity exceeds MIN_FLING_VELOCITY
-}
-```
+Dropping below two pointers ends a started gesture. `ScaleEndDetails` carries
+`focal_point`, `scale`, `rotation` and `velocity` (scale units per second).
 
-### ScaleGestureRecognizer
+### Force press (`force_press.rs`, `ForcePressPhase`)
 
-Pinch-to-zoom with 2+ pointers.
+Down with pressure `0.0` means the device reports no pressure: `Ended`
+immediately. Otherwise `Possible`, then `Started` at `start_pressure`
+(`FORCE_PRESS_START_PRESSURE = 0.4`) and `Peaked` at `peak_pressure`
+(`FORCE_PRESS_PEAK_PRESSURE = 0.85`); both are configurable with
+`with_start_pressure` / `with_peak_pressure`. Dropping below the start pressure
+from `Peaked`, pointer Up, or movement beyond `hit_slop(kind)` ends a started
+press; movement beyond slop while `Possible` rejects it silently.
+`ForcePressDetails { global_position, local_position, pressure, max_pressure }`.
 
-```rust
-let recognizer = ScaleGestureRecognizer::new(arena)
-    .with_on_scale_start(|details| { /* 2+ pointers, scale changing */ })
-    .with_on_scale_update(|details| { /* scale/rotation updated */ })
-    .with_on_scale_end(|details| { /* gesture ended */ })
-    .with_on_scale_cancel(|| { /* cancelled */ });
-```
+### Multi-tap (`multi_tap.rs`, `MultiTapPhase`)
 
-**State Machine:**
-```
-Ready → Possible (2 pointers down)
-Possible → Started (scale delta > min_scale_delta)
-Started → Ready (< 2 pointers → end)
-```
+`new(arena, n)` recognizes `n` simultaneous contacts that stay within slop and
+are all released. Each contact is tracked by its own pointer identity
+(`multi_contact_events_keep_independent_pointer_identity`).
 
-**Details Structs:**
-```rust
-pub struct ScaleStartDetails {
-    pub focal_point: Offset,
-    pub local_focal_point: Offset,
-    pub pointer_count: usize,
-}
+### Trackpad pan-zoom (`pan_zoom.rs`)
 
-pub struct ScaleUpdateDetails {
-    pub focal_point: Offset,
-    pub local_focal_point: Offset,
-    pub scale: f32,             // 1.0 = no change
-    pub horizontal_scale: f32,
-    pub vertical_scale: f32,
-    pub rotation: f32,          // radians, positive = clockwise
-    pub pointer_count: usize,
-}
+`convert_gesture` / `from_w3c_event` map an upstream `PointerGesture` to a
+`PointerPanZoomEvent::Update`. The upstream event carries one tick, so `scale`
+(`1.0 + pinch`) and `rotation` are per-tick deltas, not values accumulated
+since a `Start`; `pan` and `pan_delta` are always zero.
 
-pub struct ScaleEndDetails {
-    pub focal_point: Offset,
-    pub scale: f32,
-    pub rotation: f32,
-    pub velocity: f32,          // scale velocity
-}
-```
+## GestureSettings (`settings.rs`)
 
-**Calculations:**
-- **Focal point**: Center of all active pointers
-- **Span**: Average distance between pointer pairs
-- **Scale**: current_span / initial_span
-- **Rotation**: Angle change from initial pointer configuration
+| Accessor | Default (touch) |
+|---|---|
+| `touch_slop()` | 18.0 (`hit_slop(kind)` gives a mouse 1.0) |
+| `pan_slop()` | 18.0 (`pan_slop_for(kind)` is per kind) |
+| `scale_slop()` | 0.05 (a ratio) |
+| `double_tap_slop()` | 100.0 |
+| `double_tap_timeout()` | 300 ms |
+| `long_press_timeout()` | 500 ms |
+| `min_fling_velocity()` | 50.0 px/s |
+| `max_fling_velocity()` | 8000.0 px/s |
 
-### ForcePressGestureRecognizer
+Presets: `touch_defaults`, `mouse_defaults`, `pen_defaults`, `android_defaults`
+(400 ms long press), `ios_defaults`, `for_device`, `for_platform`, `native`.
+Builders: `with_touch_slop`, `with_pan_slop`, `with_double_tap_timeout`,
+`with_long_press_timeout`, `with_min_fling_velocity`, `with_max_fling_velocity`
+and others.
 
-Pressure-sensitive touch (3D Touch, Force Touch).
+## Arena integration
+
+A recognizer joins the arena from `add_pointer`, which receives the owning
+`Arc` so the registered identity is the recognizer itself
+(`RecognizerBase::start_tracking(pointer, position, global_position, self)`).
+`GestureArena::add` returns a `GestureArenaEntry` whose `resolve`, `hold`,
+`release` and `sweep` act on that one membership. The arena calls
+`accept_gesture` / `reject_gesture` after releasing its own locks.
+
+At runtime `GestureBinding` hit-tests on Down, calls `add_pointer` along the
+route, closes the arena, sweeps on Up, and does not sweep on Cancel.
+
+## Velocity tracking (`processing/velocity.rs`)
 
 ```rust
-let recognizer = ForcePressGestureRecognizer::new(arena)
-    .with_start_pressure(0.4)   // 40% threshold
-    .with_peak_pressure(0.85)   // 85% peak
-    .with_on_start(|details| { /* pressure exceeded start */ })
-    .with_on_update(|details| { /* pressure changed */ })
-    .with_on_peak(|details| { /* pressure exceeded peak */ })
-    .with_on_end(|details| { /* pressure dropped or released */ });
+let mut tracker = VelocityTracker::with_kind(PointerDeviceKind::Touch);
+tracker.add_position(time, position);       // Offset<f64>
+let v: Velocity = tracker.get_velocity();   // pixels_per_second: Offset<f64>
+let fling = tracker.get_fling_velocity(false);
+let estimate = tracker.get_velocity_estimate(); // Option<VelocityEstimate>
 ```
 
-**State Machine:**
-```
-Ready → Possible (pointer_down with pressure > 0)
-Ready → Ended (pointer_down with pressure = 0, no support)
-Possible → Started (pressure >= start_threshold)
-Started → Peaked (pressure >= peak_threshold)
-Started/Peaked → Ended (pressure < start_threshold or pointer_up)
-```
+A quadratic least-squares fit over at most 20 samples within a 100 ms horizon;
+fewer than 3 samples gives no fit, and a pointer still for 40 ms reports zero.
+`IosFlingVelocityTracker`, `MacosFlingVelocityTracker` and
+`ImpulseVelocityTracker` are alternative strategies with the same shape.
 
-**Pressure Constants:**
-- `FORCE_PRESS_START_PRESSURE`: 0.4 (40%)
-- `FORCE_PRESS_PEAK_PRESSURE`: 0.85 (85%)
+## Custom recognizers
 
-**Details Struct:**
-```rust
-pub struct ForcePressDetails {
-    pub global_position: Offset,
-    pub local_position: Offset,
-    pub pressure: f32,
-    pub max_pressure: f32,      // always 1.0 for normalized
-}
-
-impl ForcePressDetails {
-    pub fn normalized_pressure(&self) -> f32;
-}
-```
-
-### MultiTapGestureRecognizer
-
-Configurable N-finger tap detection.
+Implement `CustomGestureRecognizer` (`on_arena_accept`, `on_arena_reject`) and
+`GestureRecognizer`. In `add_pointer`, pass `self` (the `&Arc<Self>`) to the
+arena. Building a new `Arc` from a clone registers a different allocation:
+its entry handle goes stale once the arena resolves, and timers after
+resolution cannot reach the recognizer (`GestureRecognizer::add_pointer` docs).
 
 ```rust
-let recognizer = MultiTapGestureRecognizer::new(arena, 3) // 3-finger tap
-    .with_on_multi_tap(|details| { /* N fingers tapped */ });
-```
-
-## Slop Constants
-
-Touch slop values from `GestureSettings`:
-
-| Constant | Default | Description |
-|----------|---------|-------------|
-| `touch_slop()` | 18.0 | Max movement for tap |
-| `double_tap_slop()` | 100.0 | Max distance between double-tap locations |
-| `pan_slop()` | 18.0 | Min movement to start drag |
-| `scale_slop()` | 18.0 | Min pointer distance change for scale |
-
-## GestureSettings
-
-Device-specific gesture thresholds:
-
-```rust
-pub struct GestureSettings {
-    touch_slop: f32,            // 18.0
-    double_tap_slop: f32,       // 100.0
-    double_tap_timeout: Duration, // 300ms
-    long_press_timeout: Duration, // 500ms
-    pan_slop: f32,              // 18.0
-    scale_slop: f32,            // 18.0
-    min_fling_velocity: f32,    // 50.0 px/s
-}
-
-// Apply custom settings
-let recognizer = TapGestureRecognizer::with_settings(arena, settings);
-recognizer.set_settings(new_settings);
-```
-
-## Gesture Arena Integration
-
-All recognizers implement `GestureArenaMember`:
-
-```rust
-impl GestureArenaMember for TapGestureRecognizer {
-    fn accept_gesture(&self, pointer: PointerId) {
-        // Won arena - gesture accepted
+impl GestureRecognizer for TripleTap {
+    fn add_pointer(self: &Arc<Self>, pointer: PointerId,
+                   position: Offset<f64>, global: Offset<f64>) {
+        self.base.start_tracking(pointer, position, global, self);
     }
-    
-    fn reject_gesture(&self, pointer: PointerId) {
-        // Lost arena - cancel gesture
+    fn handle_event(&self, dispatch: PointerDispatch<'_>) {
+        // measure with dispatch.local; report dispatch.global
     }
+    fn dispose(&self) { self.base.mark_disposed(); }
+    fn primary_pointer(&self) -> Option<PointerId> { self.base.primary_pointer() }
 }
-```
-
-### Entry Handle Pattern
-
-```rust
-// Preferred: Use entry handle for resolution
-let entry = arena.add(pointer, recognizer.clone());
-
-// Later, when recognizer decides:
-entry.resolve(GestureDisposition::Accepted);
-// or
-entry.resolve(GestureDisposition::Rejected);
-```
-
-### Lifecycle
-
-1. **Pointer down** → `add_pointer(pointer, position)`
-2. **Arena adds** → Recognizer stored in arena entry
-3. **Events** → `handle_event(&event)` called for each
-4. **Resolution** → Arena calls `accept_gesture` or `reject_gesture`
-5. **Cleanup** → `dispose()` or arena sweep
-
-## Velocity Tracking
-
-```rust
-let mut tracker = VelocityTracker::new();
-
-// Add samples during drag
-tracker.add_position(Instant::now(), position);
-
-// Get velocity at end
-let velocity = tracker.velocity();
-println!("Speed: {} px/s", velocity.pixels_per_second.distance());
-```
-
-## Custom Recognizers
-
-Implement `CustomGestureRecognizer` (blanket impl provides `GestureArenaMember`):
-
-```rust
-use flui_interaction::sealed::CustomGestureRecognizer;
-
-struct TripleTapRecognizer {
-    state: GestureRecognizerState,
-    tap_count: AtomicU32,
-}
-
-impl CustomGestureRecognizer for TripleTapRecognizer {
-    fn on_arena_accept(&self, pointer: PointerId) {
-        // Handle winning arena
-    }
-    
-    fn on_arena_reject(&self, pointer: PointerId) {
-        // Handle losing arena
-    }
-}
-
-impl GestureRecognizer for TripleTapRecognizer {
-    fn add_pointer(&self, pointer: PointerId, position: Offset) {
-        let arc = Arc::new(self.clone());
-        self.state.start_tracking(pointer, position, &arc);
-    }
-    
-    fn handle_event(&self, event: &PointerEvent) {
-        // Process events, increment tap_count
-    }
-    
-    fn dispose(&self) {
-        self.state.mark_disposed();
-    }
-    
-    fn primary_pointer(&self) -> Option<PointerId> {
-        self.state.primary_pointer()
-    }
-}
-```
-
-## Common Patterns
-
-### Combining Recognizers
-
-```rust
-// Multiple recognizers on same widget
-let arena = GestureArena::new();
-
-let tap = TapGestureRecognizer::new(arena.clone());
-let long_press = LongPressGestureRecognizer::new(arena.clone());
-let drag = DragGestureRecognizer::new(arena.clone(), DragAxis::Free);
-
-// Arena resolves conflicts - only one wins per pointer
-```
-
-### Fling Detection
-
-```rust
-DragGestureRecognizer::new(arena, DragAxis::Free)
-    .with_on_end(|details| {
-        if details.velocity.pixels_per_second.distance() >= 50.0 {
-            // Fling gesture - apply momentum
-            start_fling_animation(details.velocity);
-        }
-    });
-```
-
-### Gesture Disambiguation
-
-```rust
-// For overlapping gestures (tap vs double-tap)
-DoubleTapGestureRecognizer::new(arena.clone())
-    .with_on_double_tap(|_| { /* zoom in */ });
-
-// Single tap delayed until double-tap times out
-TapGestureRecognizer::new(arena.clone())
-    .with_on_tap(|_| { /* select item */ });
-
-// Arena waits for double-tap timeout before awarding to tap
 ```
 
 ## Ownership and threading
 
-Gesture recognizers are owner-runtime objects under ADR-0027:
+Recognizers, the arena and their callbacks are owner-local (ADR-0027):
+callbacks are `Rc<dyn Fn>` and may capture `Rc<Cell<_>>` state. Pointer
+events, IDs and settings stay `Send + Sync` where they cross runtime
+boundaries.
 
-- user gesture callbacks are owner-local `Rc<dyn Fn>` payloads and may capture
-  `Rc<Cell<_>>` / other `!Send` UI state;
-- data-plane identifiers, pointer events, gesture settings, and arena routing
-  remain thread-safe where they cross runtime boundaries;
-- executable UI callbacks must not be moved into render storage or a generic
-  cross-thread executor.
+## See also
 
-## Testing
-
-```rust
-#[test]
-fn test_tap_recognition() {
-    let arena = GestureArena::new();
-    let tapped = Arc::new(Mutex::new(false));
-    
-    let recognizer = TapGestureRecognizer::new(arena)
-        .with_on_tap({
-            let tapped = tapped.clone();
-            move |_| *tapped.lock() = true
-        });
-    
-    // Simulate tap
-    recognizer.add_pointer(PointerId::new(1), Offset::new(100.0, 100.0));
-    recognizer.handle_event(&make_up_event(Offset::new(100.0, 100.0), PointerType::Touch));
-    
-    assert!(*tapped.lock());
-}
-```
-
-## See Also
-
-- [ARCHITECTURE.md](ARCHITECTURE.md) - Core architecture
-- [HIT_TESTING.md](HIT_TESTING.md) - Hit testing system
-- [PERFORMANCE.md](PERFORMANCE.md) - Performance guide
+- [ARCHITECTURE.md](ARCHITECTURE.md)
+- [HIT_TESTING.md](HIT_TESTING.md)
+- [PERFORMANCE.md](PERFORMANCE.md)

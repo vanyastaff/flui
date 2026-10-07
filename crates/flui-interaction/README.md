@@ -4,39 +4,34 @@ Event routing, hit testing, focus management, and gesture recognition for FLUI.
 
 ## Core Concepts
 
-Multi-tap recognition uses the event's pointer identity for each contact's
-motion and release. Only a tracked contact can cancel the pair. The public
-`multi_contact_events_keep_independent_pointer_identity` test covers release
-order, secondary-contact slop, unrelated cancellation and a new pair after
-cancellation. This does not change arena arbitration or callback unwind policy.
-
 ### Event Flow
 
 ```
-Platform (winit, etc.)
+Platform events (ui-events PointerEvent / KeyboardEvent)
     ↓
-PointerEvent / KeyboardEvent
-    ↓
-EventRouter
-    ├─ HitTestResult (spatial dispatch)
-    └─ FocusManager (keyboard routing)
-        ↓
-GestureRecognizers
-    ├─ GestureArena (conflict resolution)
-    └─ TapRecognizer, DragRecognizer, etc.
+GestureBinding (pointers)              FocusManager (keys)
+    ├─ hit test → route (InteractionLane)     └─ focused node's handlers
+    ├─ recognizers' add_pointer / handle_event
+    └─ GestureArena (conflict resolution)
         ↓
 User callbacks
 ```
+
+`EventRouter` is a simpler standalone router over a `HitTestable` root and a
+`FocusManager`.
 
 ### Hit Testing
 
 Determines which UI elements are under a point, with full transform support.
 
+`HitTestable` is sealed; implement `CustomHitTestable` and the blanket impl
+provides `HitTestable`.
+
 ```rust
 use flui_interaction::prelude::*;
 
-impl HitTestable for MyWidget {
-    fn hit_test(&self, position: Offset, result: &mut HitTestResult) -> bool {
+impl CustomHitTestable for MyWidget {
+    fn perform_hit_test(&self, position: Offset<f64>, result: &mut HitTestResult) -> bool {
         if !self.bounds.contains(position) {
             return false;
         }
@@ -54,7 +49,7 @@ impl HitTestable for MyWidget {
         });
 
         // Add self
-        result.add(HitTestEntry::new(self.id, position, self.bounds));
+        result.add(HitTestEntry::new(self.id));
         true
     }
     
@@ -124,30 +119,28 @@ Uses W3C-compliant event types from `ui-events`:
 use flui_interaction::PointerEvent;
 
 match event {
-    PointerEvent::Down(data) => {
-        let pos = data.position;
-        let pointer_id = data.pointer_id;
-        let pointer_type = data.pointer_type;  // Mouse, Touch, Pen
+    PointerEvent::Down(e) | PointerEvent::Up(e) => {
+        let pos = e.state.position;
+        let pointer_id = e.pointer.pointer_id;      // Option<PointerId>
+        let pointer_type = e.pointer.pointer_type;  // Mouse, Touch, Pen
     }
-    PointerEvent::Move(data) => { /* ... */ }
-    PointerEvent::Up(data) => { /* ... */ }
-    PointerEvent::Cancel(data) => { /* ... */ }
+    PointerEvent::Move(update) => { let pos = update.current.position; }
+    PointerEvent::Cancel(info) => { /* ... */ }
+    PointerEvent::Enter(_) | PointerEvent::Leave(_) => { /* ... */ }
+    PointerEvent::Scroll(_) | PointerEvent::Gesture(_) => { /* ... */ }
 }
 ```
 
 ### KeyboardEvent
 
 ```rust
-use flui_interaction::KeyboardEvent;
+use flui_interaction::events::{KeyState, KeyboardEvent};
 
-match event {
-    KeyboardEvent::KeyDown(data) => {
-        let key = &data.key;
-        let code = &data.code;
-        let modifiers = &data.modifiers;
-    }
-    KeyboardEvent::KeyUp(data) => { /* ... */ }
-}
+// A struct, not an enum: `state` tells down from up.
+let pressed = event.state == KeyState::Down;
+let key = &event.key;
+let code = event.code;
+let modifiers = event.modifiers;
 ```
 
 ---
@@ -348,7 +341,7 @@ virtual clock this crate has no driver for. See `flui_testing::replay`:
 `HeadlessBinding::replay` advances the binding's `ManualClock` to each one.
 
 This crate's part of that contract is that every recogniser samples the
-**arena's** clock (`RecognizerState::now()`) rather than `Instant::now()`, so a
+**arena's** clock (`RecognizerBase::now()`) rather than `Instant::now()`, so a
 replayed gesture's own sample spacing decides the velocity it carries.
 
 ---
@@ -414,10 +407,12 @@ FLUI separates executable UI ownership from data-plane routing:
 | `routing` | Hit testing, event dispatch, focus management |
 | `recognizers` | Tap, drag, scale, long press, etc. |
 | `arena` | Gesture conflict resolution |
-| `processing` | Velocity tracking, resampling, prediction |
-| `testing` | Recording, playback, builders |
-| `mouse_tracker` | Mouse enter/exit/hover detection |
+| `processing` | Velocity tracking, resampling, prediction, filtering |
+| `binding` | `GestureBinding`: hit-test routes, arena lifecycle, resampling |
+| `testing` | Event builders (`testing::input`, `testing` feature) |
 | `ids` | Type-safe identifiers |
+
+Mouse enter/exit/hover lives in `routing::MouseTracker`.
 
 ---
 
@@ -426,6 +421,7 @@ FLUI separates executable UI ownership from data-plane routing:
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — Internal design
 - [docs/HIT_TESTING.md](docs/HIT_TESTING.md) — Hit testing guide
 - [docs/GESTURES.md](docs/GESTURES.md) — Gesture recognition details
+- [docs/PERFORMANCE.md](docs/PERFORMANCE.md) — Bounds and benchmarks
 
 ---
 
