@@ -512,8 +512,9 @@ impl DragGestureRecognizer {
         kind: PointerType,
         stamp: Option<u64>,
     ) {
+        let now = self.state.now();
         let mut state = self.drag_state.lock();
-        let now = state.timeline.instant(stamp, self.state.now());
+        let now = state.timeline.instant(stamp, now);
 
         match state.state {
             DragPhase::Possible => {
@@ -662,10 +663,11 @@ impl DragGestureRecognizer {
         _kind: PointerType,
         stamp: Option<u64>,
     ) {
+        let now = self.state.now();
         let mut state = self.drag_state.lock();
 
         if state.state == DragPhase::Started {
-            let now = state.timeline.instant(stamp, self.state.now());
+            let now = state.timeline.instant(stamp, now);
             let velocity = state.velocity_tracker.velocity_at(now);
             let primary_velocity = self.calculate_primary_velocity(velocity.pixels_per_second);
 

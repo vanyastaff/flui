@@ -595,10 +595,11 @@ impl TapAndDragGestureRecognizer {
             // test and takes the plain tier.
             (settings.pan_slop_for(kind), settings.hit_slop(kind))
         };
+        let now = self.state.now();
         let mut notices = Vec::new();
         let mut step = ArenaStep::None;
         let mut state = self.gesture_state.lock();
-        let now = state.timeline.instant(stamp, self.state.now());
+        let now = state.timeline.instant(stamp, now);
         state.kind = kind;
         state.last = position;
         if global_position.is_finite() {
@@ -836,9 +837,10 @@ impl GestureRecognizer for TapAndDragGestureRecognizer {
 
         match event {
             PointerEvent::Down(data) => {
+                let now = self.state.now();
                 let mut state = self.gesture_state.lock();
                 state.kind = data.pointer.pointer_type;
-                state.timeline.instant(event_time(event), self.state.now());
+                state.timeline.instant(event_time(event), now);
             }
             PointerEvent::Move(data) => {
                 let pos = data.current.position;

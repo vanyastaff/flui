@@ -380,12 +380,13 @@ impl MultiDragGestureRecognizer {
         kind: PointerType,
         stamp: Option<u64>,
     ) {
+        let now = self.state.now();
         let (client, update, arena_entry) = {
             let mut map = self.pointers.lock();
             let Some(state) = map.get_mut(&pointer) else {
                 return;
             };
-            let timestamp = state.timeline.instant(stamp, self.state.now());
+            let timestamp = state.timeline.instant(stamp, now);
             let delta = (position - state.last_position).to_delta();
             state.last_position = position;
             state.last_global_position = global_position;

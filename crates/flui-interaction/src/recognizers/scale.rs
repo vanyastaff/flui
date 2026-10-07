@@ -776,11 +776,12 @@ impl ScaleGestureRecognizer {
         if !position.is_finite() {
             return;
         }
+        let now = self.state.now();
         let mut state = self.gesture_state.lock();
         let Some(index) = state.index_of(pointer) else {
             return;
         };
-        let now = state.timeline.instant(stamp, self.state.now());
+        let now = state.timeline.instant(stamp, now);
         let baseline = state.baseline;
         state.contacts[index].position = position;
         let Some(measure) = state.sample() else {
@@ -815,11 +816,12 @@ impl ScaleGestureRecognizer {
 
     /// Handle a tracked contact lifting.
     fn handle_pointer_up(&self, pointer: PointerId, stamp: Option<u64>) {
+        let now = self.state.now();
         let mut state = self.gesture_state.lock();
         let Some(index) = state.index_of(pointer) else {
             return;
         };
-        let now = state.timeline.instant(stamp, self.state.now());
+        let now = state.timeline.instant(stamp, now);
         let contact = state.contacts.remove(index);
         // A contact that lifts before the scale started gives its arena up,
         // so a competitor (a tap) wins it on the sweep instead of this
@@ -1076,6 +1078,7 @@ impl GestureArenaMember for ScaleGestureRecognizer {
     fn reject_gesture(&self, pointer: PointerId) {
         // The contact's arena went to a competitor: it no longer belongs to
         // this scale.
+        let now = self.state.now();
         let mut state = self.gesture_state.lock();
         let Some(index) = state.index_of(pointer) else {
             return;
@@ -1089,7 +1092,7 @@ impl GestureArenaMember for ScaleGestureRecognizer {
             return;
         }
         state.contacts.remove(index);
-        let now = state.timeline.instant(None, self.state.now());
+        let now = state.timeline.instant(None, now);
         let outcome = if state.after_contact_removed(now).is_some() {
             Outcome::Cancel
         } else {
