@@ -207,11 +207,11 @@ pub(crate) fn animated_container_interpolates_size_over_frames() {
 // without restarting it (a restart is strictly gated on a genuine target
 // change). Both probes below
 // start a genuine 0->target run under `Curves::Linear`, advance it to raw
-// progress `0.4`, then swap ONLY the curve to `Threshold(0.5)` (target held
+// progress `0.4`, then swap ONLY the curve to a step at `0.5` (target held
 // fixed) — a run-restart would also produce a value change, so the "target
 // unchanged" half of each probe's second `pump()` is what isolates a curve
 // swap from a retarget. Under Linear at `0.4` the eased value tracks the raw
-// progress; the instant `Threshold(0.5)` applies at that SAME raw progress
+// progress; the instant a step at `0.5` applies at that SAME raw progress
 // (still `< 0.5`), the value must snap back to the run's `begin`.
 // ----------------------------------------------------------------------------
 
