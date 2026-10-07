@@ -353,6 +353,69 @@ struct QueuedNodeContext {
     dropped: Rc<Cell<bool>>,
 }
 
+struct NestedCloseContext {
+    dropped: Rc<Cell<bool>>,
+    panics: bool,
+}
+
+impl Drop for NestedCloseContext {
+    fn drop(&mut self) {
+        self.dropped.set(true);
+        if self.panics {
+            std::panic::panic_any("nested close retirement failure");
+        }
+    }
+}
+
+fn nested_close_after_observer_failure_retains_healthy_captures() {
+    assert_nested_close_preserves_observer_failure(false);
+}
+
+fn nested_close_retirement_cannot_compete_with_the_earlier_observer_failure() {
+    assert_nested_close_preserves_observer_failure(true);
+}
+
+fn assert_nested_close_preserves_observer_failure(panicking_retirement: bool) {
+    use flui_interaction::routing::FocusRequestOutcome;
+
+    let manager = FocusManager::new();
+    let node = FocusNode::with_debug_label("nested close destination");
+    let attachment = manager.root_scope().attach_node(&node).expect("attach");
+    let dropped = Rc::new(Cell::new(false));
+    node.register_context(Rc::new(NestedCloseContext {
+        dropped: Rc::clone(&dropped),
+        panics: panicking_retirement,
+    }))
+    .relinquish();
+    manager.add_listener(Rc::new(move |_, new| {
+        if new.is_some() {
+            std::panic::panic_any("earlier observer failure");
+        }
+    }));
+    let manager_probe = Rc::downgrade(&manager);
+    manager.add_listener(Rc::new(move |_, new| {
+        if new.is_some() {
+            manager_probe.upgrade().expect("live manager").close();
+        }
+    }));
+    let payload = catch_unwind(AssertUnwindSafe(|| node.request_focus()))
+        .expect_err("earlier observer failure propagates");
+    assert_eq!(
+        payload.downcast_ref::<&str>(),
+        Some(&"earlier observer failure")
+    );
+    assert!(manager.is_closed());
+    assert!(manager.primary_focus().is_none());
+    assert!(
+        !dropped.get(),
+        "nested terminal cleanup retains opaque captures after first failure"
+    );
+    assert_eq!(node.request_focus(), FocusRequestOutcome::OwnerClosed);
+    manager.close();
+    assert!(!dropped.get());
+    drop(attachment);
+}
+
 struct StaleFocusDiagnosticPanic;
 
 impl tracing::Subscriber for StaleFocusDiagnosticPanic {
@@ -675,6 +738,14 @@ fn assert_queued_focus_recovery(from_node: bool, competing: bool) {
 #[test]
 fn caught_callback_failures_leave_captures_with_their_owner() {
     let cases: &[(&str, fn())] = &[
+        (
+            "nested close preserves healthy captures after observer failure",
+            nested_close_after_observer_failure_retains_healthy_captures,
+        ),
+        (
+            "nested close preserves competing captures after observer failure",
+            nested_close_retirement_cannot_compete_with_the_earlier_observer_failure,
+        ),
         (
             "queued diagnostic failure and accepted tail",
             queued_diagnostic_failure_keeps_the_accepted_tail_deliverable,
