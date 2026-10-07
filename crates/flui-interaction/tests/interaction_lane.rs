@@ -13,6 +13,129 @@ fn hit_entry(target: PointerTarget) -> HitTestEntry {
 }
 
 #[test]
+fn explicit_pointer_capture_contract() {
+    let rows: &[(&str, fn())] = &[
+        ("implicit_route", capture_keeps_the_full_implicit_down_route),
+        ("exclusive_route", capture_selects_one_target_after_the_down_round),
+        ("first_claim", capture_cannot_be_stolen_by_a_later_down_target),
+        ("drop_loss", capture_drop_defers_exactly_one_loss_to_owner_entry),
+        ("release_loss", capture_release_defers_exactly_one_loss_to_owner_entry),
+        ("native_terminal", capture_native_terminal_invalidates_the_token),
+        ("reused_identity", capture_old_token_cannot_cancel_a_replacement_down),
+    ];
+    for &(name, row) in rows {
+        if let Err(payload) = std::panic::catch_unwind(row) {
+            eprintln!("capture contract row `{name}` failed");
+            std::panic::resume_unwind(payload);
+        }
+    }
+}
+
+fn capture_keeps_the_full_implicit_down_route() { assert_capture_route(0); }
+fn capture_selects_one_target_after_the_down_round() { assert_capture_route(1); }
+fn capture_cannot_be_stolen_by_a_later_down_target() { assert_capture_route(2); }
+fn capture_drop_defers_exactly_one_loss_to_owner_entry() { assert_capture_route(3); }
+fn capture_release_defers_exactly_one_loss_to_owner_entry() { assert_capture_route(4); }
+fn capture_native_terminal_invalidates_the_token() { assert_capture_route(5); }
+fn capture_old_token_cannot_cancel_a_replacement_down() { assert_capture_route(6); }
+
+fn assert_capture_route(mode: u8) {
+    use flui_foundation::geometry::Offset;
+    use flui_interaction::{GestureBinding, HitTestResult, PointerCapture, PointerDispatch};
+    use flui_interaction::events::{PointerEvent, PointerKind, make_down_event, make_move_event, make_up_event};
+    use flui_platform_api::pointer::CancelReason;
+    use std::{cell::RefCell, rc::Rc};
+
+    let lane = InteractionLane::try_new().expect("lane");
+    let handle = lane.dispatch_handle();
+    let binding = GestureBinding::new();
+    let tokens = Rc::new(RefCell::new(Vec::<PointerCapture>::new()));
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let down = make_down_event(Offset::new(5.0, 5.0), PointerKind::Touch).expect("down");
+    assert!(PointerDispatch::at_root(&down).capture().is_err(), "synthetic dispatch has no capture authority");
+    lane.enter(|| {
+        let held = tokens.clone();
+        let first_log = log.clone();
+        let first = handle.register_pointer(move |dispatch| {
+            first_log.borrow_mut().push((1, match dispatch.global {
+                PointerEvent::Down(_) => "down",
+                PointerEvent::Move(_) => "move",
+                PointerEvent::Up(_) => "up",
+                PointerEvent::Cancel(cancel) => {
+                    assert_eq!(cancel.reason, CancelReason::CaptureLost);
+                    "lost"
+                }
+                _ => "other",
+            }));
+            if mode != 0 && matches!(dispatch.global, PointerEvent::Down(_)) {
+                let token = dispatch.capture().expect("real Down target can capture");
+                held.borrow_mut().push(token);
+            } else if matches!(dispatch.global, PointerEvent::Move(_)) {
+                assert!(dispatch.capture().is_err(), "Move cannot mint capture authority");
+            }
+        }).expect("first target");
+        let later_log = log.clone();
+        let second = handle.register_pointer(move |dispatch| {
+            later_log.borrow_mut().push((2, match dispatch.global {
+                PointerEvent::Down(_) => "down",
+                PointerEvent::Move(_) => "move",
+                PointerEvent::Up(_) => "up",
+                PointerEvent::Cancel(_) => "lost",
+                _ => "other",
+            }));
+            if mode == 2 && matches!(dispatch.global, PointerEvent::Down(_)) {
+                assert!(dispatch.capture().is_err(), "first claimant keeps exclusive authority");
+            }
+        }).expect("second target");
+        let path = || {
+            let mut result = HitTestResult::new();
+            result.add(hit_entry(first));
+            result.add(hit_entry(second));
+            result
+        };
+        binding.handle_pointer_event(&down, |_| path());
+        assert_eq!(&*log.borrow(), &[(1, "down"), (2, "down")], "capture does not truncate the committed Down round");
+        if mode == 6 {
+            binding.handle_pointer_event(&down, |_| path());
+            let stale = tokens.borrow_mut().remove(0);
+            drop(stale);
+        }
+        if mode == 3 || mode == 4 {
+            let token = tokens.borrow_mut().pop().expect("retained token");
+            if mode == 4 { token.release(); } else { drop(token); }
+            assert_eq!(log.borrow().last(), Some(&(2, "down")), "release runs no event callback inline");
+            binding.flush_pending_moves();
+            assert_eq!(log.borrow().last(), Some(&(1, "lost")));
+            assert_eq!(binding.active_pointer_count(), 0);
+            binding.flush_pending_moves();
+            assert_eq!(log.borrow().iter().filter(|(_, event)| *event == "lost").count(), 1);
+            assert!(binding.arena().is_empty());
+            return;
+        }
+        let movement = make_move_event(Offset::new(200.0, 200.0), PointerKind::Touch).expect("outside move");
+        binding.handle_pointer_event(&movement, |_| panic!("touch contact retains its Down route"));
+        binding.flush_pending_moves();
+        let terminal = if mode == 5 {
+            let PointerEvent::Down(press) = &down else { unreachable!() };
+            PointerEvent::Cancel(flui_platform_api::pointer::PointerCancel::new(
+                press.pointer,
+                flui_platform_api::EventTime::from_nanos(1),
+                CancelReason::CaptureLost,
+            ))
+        } else {
+            make_up_event(Offset::new(200.0, 200.0), PointerKind::Touch).expect("up")
+        };
+        binding.handle_pointer_event(&terminal, |_| panic!("terminal retains its Down route"));
+        let tail = if mode == 0 { vec![(1, "move"), (2, "move"), (1, "up"), (2, "up")] } else if mode == 5 { vec![(1, "move"), (1, "lost")] } else { vec![(1, "move"), (1, "up")] };
+        assert!(log.borrow().ends_with(&tail), "later delivery uses the claimed target, or the entire implicit route");
+        tokens.borrow_mut().clear();
+        binding.flush_pending_moves();
+        assert_eq!(log.borrow().iter().filter(|(_, event)| *event == "lost").count(), usize::from(mode == 5), "native terminal and stale tokens cannot add cancellation");
+        assert_eq!(binding.active_pointer_count(), 0);
+    });
+}
+
+#[test]
 fn binding_input_contract_matrix() {
     let cases: &[(&str, fn())] = &[
         (

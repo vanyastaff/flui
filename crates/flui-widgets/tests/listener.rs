@@ -165,6 +165,62 @@ pub(crate) fn listener_routes_down_and_up_to_their_own_callbacks() {
     assert_eq!(downs.get(), 1, "up does not re-invoke on_pointer_down");
 }
 
+pub(crate) fn listener_capture_retains_one_target_and_drop_delivers_loss() {
+    use flui_interaction::PointerCapture;
+    use flui_platform_api::pointer::{CancelReason, PointerEvent};
+    use std::cell::RefCell;
+
+    let token = Rc::new(RefCell::new(None::<PointerCapture>));
+    let held = token.clone();
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let child_down = log.clone();
+    let child_move = log.clone();
+    let child_cancel = log.clone();
+    let parent_down = log.clone();
+    let parent_move = log.clone();
+    let parent_cancel = log.clone();
+    let laid = lay_out(
+        Listener::new()
+            .behavior(HitTestBehavior::Opaque)
+            .on_pointer_down(move |_, dispatch| {
+                parent_down.borrow_mut().push("parent down");
+                assert!(dispatch.capture().is_err(), "nested child claimed first");
+            })
+            .on_pointer_move(move |_, _| parent_move.borrow_mut().push("parent move"))
+            .on_pointer_cancel(move |_, _| parent_cancel.borrow_mut().push("parent cancel"))
+            .child(
+                Listener::new()
+                    .behavior(HitTestBehavior::Opaque)
+                    .on_pointer_down(move |_, dispatch| {
+                        child_down.borrow_mut().push("child down");
+                        let capture = dispatch.capture().expect("actual Listener Down authority");
+                        *held.borrow_mut() = Some(capture);
+                    })
+                    .on_pointer_move(move |_, _| child_move.borrow_mut().push("child move"))
+                    .on_pointer_cancel(move |_, dispatch| {
+                        let PointerEvent::Cancel(cancel) = dispatch.global else { panic!("cancel callback"); };
+                        assert_eq!(cancel.reason, CancelReason::CaptureLost);
+                        child_cancel.borrow_mut().push("child cancel");
+                    })
+                    .child(SizedBox::new(80.0, 80.0)),
+            ),
+        tight(80.0, 80.0),
+    );
+    laid.dispatch_pointer_down(40.0, 40.0);
+    laid.dispatch_pointer_move(200.0, 200.0);
+    assert_eq!(&*log.borrow(), &["child down", "parent down", "child move"]);
+    let released = token.borrow_mut().take().expect("retained token");
+    drop(released);
+    assert_eq!(log.borrow().last(), Some(&"child move"), "Drop invokes no event callback");
+    laid.dispatch_pointer_up(200.0, 200.0);
+    assert_eq!(&*log.borrow(), &["child down", "parent down", "child move", "child cancel"]);
+    laid.dispatch_pointer_down(40.0, 40.0);
+    laid.dispatch_pointer_up(40.0, 40.0);
+    let terminal_token = token.borrow_mut().take().expect("next contact token");
+    drop(terminal_token);
+    assert_eq!(log.borrow().iter().filter(|event| **event == "child cancel").count(), 1, "terminal invalidates retained capture authority");
+}
+
 pub(crate) fn listener_admission_keeps_terminal_delivery_and_weak_ownership() {
     use flui_interaction::{CancelOutcome, GestureArenaMember, GestureRecognizer, PointerId};
     use std::cell::RefCell;

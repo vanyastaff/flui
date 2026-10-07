@@ -185,6 +185,7 @@ fn pointer_and_gesture_recognition() {
             ("gesture_detector_advanced::long_press_fires_when_held_past_the_deadline", crate::gesture_detector_advanced::long_press_fires_when_held_past_the_deadline),
             ("absorb_pointer::absorbing_true_blocks_the_tap_from_reaching_a_child_gesture_detector", crate::absorb_pointer::absorbing_true_blocks_the_tap_from_reaching_a_child_gesture_detector),
             ("listener::listener_routes_down_and_up_to_their_own_callbacks", crate::listener::listener_routes_down_and_up_to_their_own_callbacks),
+            ("listener::listener_capture_retains_one_target_and_drop_delivers_loss", crate::listener::listener_capture_retains_one_target_and_drop_delivers_loss),
             ("listener::listener_admission_keeps_terminal_delivery_and_weak_ownership", crate::listener::listener_admission_keeps_terminal_delivery_and_weak_ownership),
             ("listener::listener_raw_observer_panic_still_delivers_the_recognizer_event", crate::listener::listener_raw_observer_panic_still_delivers_the_recognizer_event),
             ("listener::custom_recognizer_competes_through_a_listener", crate::listener::custom_recognizer_competes_through_a_listener),
