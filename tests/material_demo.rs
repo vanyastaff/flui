@@ -36,7 +36,7 @@ use std::time::Duration;
 
 use flui_foundation::RenderId;
 use flui_foundation::geometry::{Offset, Size};
-use flui_interaction::events::{PointerType, make_down_event, make_up_event};
+use flui_interaction::events::{PointerKind, make_down_event, make_up_event};
 use flui_material::back_button::back_arrow_icon_data;
 use flui_material::{Theme, ThemeData};
 use flui_rendering::constraints::BoxConstraints;
@@ -128,14 +128,18 @@ impl MountedDemo {
 
     /// Hit-test at root-local `(x, y)` and dispatch a synthetic pointer-down.
     fn tap_down(&self, x: f64, y: f64) {
-        self.dispatch_pointer(make_down_event(offset(x, y), PointerType::Mouse));
+        self.dispatch_pointer(
+            make_down_event(offset(x, y), PointerKind::Mouse).expect("finite pointer fixture"),
+        );
     }
 
     /// Hit-test at root-local `(x, y)` and dispatch a synthetic pointer-up —
     /// paired with [`tap_down`](Self::tap_down) at the same position, this
     /// completes a tap.
     fn tap_up(&self, x: f64, y: f64) {
-        self.dispatch_pointer(make_up_event(offset(x, y), PointerType::Mouse));
+        self.dispatch_pointer(
+            make_up_event(offset(x, y), PointerKind::Mouse).expect("finite pointer fixture"),
+        );
     }
 
     fn hit_test(&self, position: Offset) -> HitTestResult {

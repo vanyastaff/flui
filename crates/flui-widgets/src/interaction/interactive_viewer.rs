@@ -69,7 +69,7 @@ use flui_painting::Alignment;
 use flui_painting::paint::Clip;
 use flui_platform_api::{
     keyboard::Modifiers,
-    pointer::{ScrollEvent, ScrollUnit},
+    pointer::{PanZoomEvent, PanZoomPhase, PointerId, ScrollEvent, ScrollUnit},
 };
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::pipeline::PipelineCell;
@@ -421,6 +421,7 @@ impl StatefulView for InteractiveViewer {
             gesture: Rc::new(GestureTracking {
                 pan_start_local: Cell::new(None),
                 current_axis: Cell::new(None),
+                pan_zoom_scale: Cell::new(None),
             }),
             pipeline_cell: None,
             writer: None,
@@ -446,6 +447,8 @@ struct GestureTracking {
     /// the first non-zero movement of the gesture. `None` before that, and
     /// reset to `None` at the end of every gesture.
     current_axis: Cell<Option<Axis>>,
+    /// Cumulative trackpad scale, preserved across widget rebuilds.
+    pan_zoom_scale: Cell<Option<(PointerId, f64)>>,
 }
 
 /// Persistent state for [`InteractiveViewer`].
@@ -751,10 +754,8 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
             // would do this instead, which V1 scopes out; see this module's
             // own docs.)
             //
-            // The pan-zoom lane delivers per-tick updates whose `scale` is
-            // the tick's own factor (each converted gesture is a one-tick
-            // "cumulative" — see `convert_gesture`'s doc), so composing is
-            // a straight multiply per update, with the identical
+            // The owned pan-zoom stream is cumulative. Convert each update
+            // to its factor since the previous update, with the identical
             // clamp-and-keep-the-focal-point-fixed steps the wheel branch
             // uses. Ticks that change nothing (pure rotation, scale 1.0)
             // fire the interaction callbacks and leave the transform alone.
@@ -765,14 +766,39 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
             let on_update_pinch = on_update.clone();
             let on_end_pinch = on_end.clone();
             let pinch_writer = writer.clone();
-            let pan_zoom = move |event: &flui_interaction::PointerPanZoomEvent| {
-                pinch_writer.write(|cx| {
-                    let flui_interaction::PointerPanZoomEvent::Update {
-                        position, scale, ..
-                    } = *event
-                    else {
+            let pinch_gesture = gesture.clone();
+            let pan_zoom = move |event: &PanZoomEvent| {
+                let pointer = event.pointer().id;
+                let scale_change = match event.phase {
+                    PanZoomPhase::Start => {
+                        pinch_gesture.pan_zoom_scale.set(Some((pointer, 1.0)));
                         return EventPropagation::Continue;
-                    };
+                    }
+                    PanZoomPhase::Update(transform) => {
+                        let previous = pinch_gesture
+                            .pan_zoom_scale
+                            .replace(Some((pointer, transform.scale())))
+                            .filter(|(previous_pointer, _)| *previous_pointer == pointer)
+                            .map_or(1.0, |(_, scale)| scale);
+                        // Two checked finite scales can have an unrepresentable
+                        // ratio. Saturate the step before publishing callbacks.
+                        (transform.scale() / previous).clamp(f64::from_bits(1), f64::MAX)
+                    }
+                    PanZoomPhase::End | PanZoomPhase::Cancelled => {
+                        if pinch_gesture
+                            .pan_zoom_scale
+                            .get()
+                            .is_some_and(|(active, _)| active == pointer)
+                        {
+                            pinch_gesture.pan_zoom_scale.set(None);
+                        }
+                        return EventPropagation::Continue;
+                    }
+                    _ => return EventPropagation::Continue,
+                };
+                let point = event.position.get();
+                let position = Offset::new(point.x, point.y);
+                pinch_writer.write(|cx| {
                     if let Some(callback) = &on_start_pinch {
                         callback(
                             cx,
@@ -782,7 +808,6 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
                             },
                         );
                     }
-                    let scale_change = scale;
                     let value_before_zoom = controller_pinch.value();
                     if scale_enabled
                         && scale_change != 1.0

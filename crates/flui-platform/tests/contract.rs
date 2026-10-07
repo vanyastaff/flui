@@ -1114,7 +1114,9 @@ mod native_windows {
             window.on_input(Box::new(move |event| {
                 assert_eq!(
                     event.as_keyboard().expect("native key event").key,
-                    keyboard_types::Key::Named(keyboard_types::NamedKey::F4)
+                    flui_platform_api::keyboard::Key::Named(
+                        flui_platform_api::keyboard::NamedKey::F4
+                    )
                 );
                 let first = input_observations.fetch_add(1, Ordering::SeqCst) == 0;
                 if mode == "deferred" && first {
@@ -1292,8 +1294,8 @@ mod native_windows {
             .expect("Win32 backend")
             .hwnd();
         let keys = Arc::new(Mutex::new(Vec::<(
-            keyboard_types::KeyState,
-            keyboard_types::Key,
+            flui_platform_api::keyboard::KeyState,
+            flui_platform_api::keyboard::Key,
         )>::new()));
         let observed = Arc::clone(&keys);
         window.on_input(Box::new(move |event| {
@@ -1302,11 +1304,11 @@ mod native_windows {
             if let Some(keyboard) = event.as_keyboard()
                 && !matches!(
                     keyboard.key,
-                    keyboard_types::Key::Named(
-                        keyboard_types::NamedKey::Control
-                            | keyboard_types::NamedKey::Alt
-                            | keyboard_types::NamedKey::AltGraph
-                            | keyboard_types::NamedKey::Shift
+                    flui_platform_api::keyboard::Key::Named(
+                        flui_platform_api::keyboard::NamedKey::Control
+                            | flui_platform_api::keyboard::NamedKey::Alt
+                            | flui_platform_api::keyboard::NamedKey::AltGraph
+                            | flui_platform_api::keyboard::NamedKey::Shift
                     )
                 )
             {
@@ -1378,18 +1380,22 @@ mod native_windows {
         // Leave no composition pending for the rows that follow.
         flush_dead_key_state();
         drop(layout);
-        let dead = keyboard_types::Key::Named(keyboard_types::NamedKey::Dead);
+        let dead =
+            flui_platform_api::keyboard::Key::Named(flui_platform_api::keyboard::NamedKey::Dead);
         let expected = if matches!(case, DeadKeyCase::FocusLostWhileHeld) {
-            let apostrophe = keyboard_types::Key::Character("'".into());
+            let apostrophe = flui_platform_api::keyboard::Key::character("'");
             vec![
-                (keyboard_types::KeyState::Down, dead),
-                (keyboard_types::KeyState::Down, apostrophe.clone()),
-                (keyboard_types::KeyState::Up, apostrophe),
+                (flui_platform_api::keyboard::KeyState::Down, dead),
+                (
+                    flui_platform_api::keyboard::KeyState::Down,
+                    apostrophe.clone(),
+                ),
+                (flui_platform_api::keyboard::KeyState::Up, apostrophe),
             ]
         } else {
             vec![
-                (keyboard_types::KeyState::Down, dead.clone()),
-                (keyboard_types::KeyState::Up, dead),
+                (flui_platform_api::keyboard::KeyState::Down, dead.clone()),
+                (flui_platform_api::keyboard::KeyState::Up, dead),
             ]
         };
         assert_eq!(
@@ -1523,13 +1529,13 @@ mod native_windows {
         let typed_observations = Arc::clone(&typed);
         window.on_input(Box::new(move |event| {
             if let Some(keyboard) = event.as_keyboard()
-                && keyboard.state == keyboard_types::KeyState::Down
-                && let keyboard_types::Key::Character(text) = &keyboard.key
+                && keyboard.state == flui_platform_api::keyboard::KeyState::Down
+                && let flui_platform_api::keyboard::Key::Character(text) = &keyboard.key
             {
                 typed_observations
                     .lock()
                     .expect("typed characters")
-                    .push(text.clone());
+                    .push(text.as_str().to_owned());
             }
             DispatchEventResult::resolved(true, false)
         }));
@@ -1662,7 +1668,7 @@ mod native_windows {
         window.on_input(Box::new(move |event| {
             if event
                 .as_keyboard()
-                .is_some_and(|key| key.state == keyboard_types::KeyState::Down)
+                .is_some_and(|key| key.state == flui_platform_api::keyboard::KeyState::Down)
             {
                 keydown_observations.fetch_add(1, Ordering::SeqCst);
                 if pump {
@@ -1899,8 +1905,10 @@ mod native_windows {
         }
         assert!(
             observed.lock().expect("keys").iter().any(|event| event.key
-                == keyboard_types::Key::Character("+".into())
-                && event.modifiers.shift()),
+                == flui_platform_api::keyboard::Key::character("+")
+                && event
+                    .modifiers
+                    .contains(flui_platform_api::keyboard::Modifiers::SHIFT)),
             "native character translation retains the Shift that produced the character"
         );
         window.close();
@@ -2257,7 +2265,7 @@ mod native_windows {
     /// Every pointer event `window` delivers, in order.
     fn record_pointer(
         window: &Arc<dyn HostWindow>,
-    ) -> Arc<Mutex<Vec<ui_events::pointer::PointerEvent>>> {
+    ) -> Arc<Mutex<Vec<flui_platform_api::pointer::PointerEvent>>> {
         let events = Arc::new(Mutex::new(Vec::new()));
         let recorded = Arc::clone(&events);
         window.on_input(Box::new(move |input| {
@@ -2269,8 +2277,8 @@ mod native_windows {
         events
     }
 
-    fn kinds(events: &Mutex<Vec<ui_events::pointer::PointerEvent>>) -> Vec<&'static str> {
-        use ui_events::pointer::PointerEvent;
+    fn kinds(events: &Mutex<Vec<flui_platform_api::pointer::PointerEvent>>) -> Vec<&'static str> {
+        use flui_platform_api::pointer::PointerEvent;
         events
             .lock()
             .expect("pointer log")
@@ -2278,6 +2286,12 @@ mod native_windows {
             .map(|event| match event {
                 PointerEvent::Down(_) => "down",
                 PointerEvent::Up(_) => "up",
+                PointerEvent::ButtonChange(flui_platform_api::pointer::ButtonChange::Pressed(
+                    _,
+                )) => "button_down",
+                PointerEvent::ButtonChange(flui_platform_api::pointer::ButtonChange::Released(
+                    _,
+                )) => "button_up",
                 PointerEvent::Move(_) => "move",
                 PointerEvent::Cancel(_) => "cancel",
                 _ => "other",
@@ -2324,7 +2338,7 @@ mod native_windows {
     /// released outside the client area still reaches the window — at the
     /// sign-extended client coordinates of that outside point.
     fn press_captures_the_mouse_until_the_last_release() {
-        use ui_events::pointer::PointerEvent;
+        use flui_platform_api::pointer::PointerEvent;
         let platform = WindowsPlatform::new().expect("native Windows platform");
         let window = open(&platform, true);
         let hwnd = hwnd_of(&window);
@@ -2347,14 +2361,14 @@ mod native_windows {
         send_mouse(hwnd, WM_RBUTTONUP, 0, mouse_lparam(-40, -30));
         assert!(captured().is_invalid(), "the last release lets go");
 
-        assert_eq!(kinds(&events), ["down", "down", "up", "up"]);
+        assert_eq!(kinds(&events), ["down", "button_down", "button_up", "up"]);
         let scale = window.scale_factor();
         let log = events.lock().expect("pointer log");
         let PointerEvent::Up(last) = log.last().expect("last release") else {
             unreachable!("kinds checked above");
         };
         assert_eq!(
-            (last.state.position.x, last.state.position.y),
+            (last.sample.position.get().x, last.sample.position.get().y),
             (-40.0 / scale, -30.0 / scale),
             "an outside release keeps its negative client coordinates"
         );
@@ -2399,7 +2413,7 @@ mod native_windows {
         reason = "queues and dispatches mouse messages for an owned window"
     )]
     fn queued_mouse_samples_keep_native_message_time() {
-        use ui_events::pointer::PointerEvent;
+        use flui_platform_api::pointer::PointerEvent;
         let platform = WindowsPlatform::new().expect("native Windows platform");
         // A hidden native window excludes unrelated physical cursor traffic
         // while retaining the actual queue and window-procedure producer.
@@ -2448,7 +2462,7 @@ mod native_windows {
         let times: Vec<_> = log
             .iter()
             .filter_map(|event| match event {
-                PointerEvent::Move(update) => Some(update.current.time),
+                PointerEvent::Move(update) => Some(update.current().time.as_nanos()),
                 _ => None,
             })
             .collect();
@@ -2474,18 +2488,18 @@ mod native_windows {
         send_mouse(hwnd, WM_MOUSEMOVE, 0, mouse_lparam(6, 6));
 
         let log = events.lock().expect("pointer log");
-        let modifiers: Vec<keyboard_types::Modifiers> = log
+        let modifiers: Vec<flui_platform_api::keyboard::Modifiers> = log
             .iter()
             .map(|event| match event {
-                ui_events::pointer::PointerEvent::Move(update) => update.current.modifiers,
+                flui_platform_api::pointer::PointerEvent::Move(update) => update.modifiers,
                 _ => unreachable!("only moves were sent"),
             })
             .collect();
         assert_eq!(
             modifiers,
             [
-                keyboard_types::Modifiers::SHIFT,
-                keyboard_types::Modifiers::empty()
+                flui_platform_api::keyboard::Modifiers::SHIFT,
+                flui_platform_api::keyboard::Modifiers::NONE
             ]
         );
         drop(log);

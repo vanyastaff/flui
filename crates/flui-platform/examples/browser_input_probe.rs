@@ -9,7 +9,7 @@ mod browser {
     use flui_platform::platforms::web::WebPlatform;
     use flui_platform::{DispatchEventResult, Platform, WindowOptions};
     use flui_platform_api::PlatformInput;
-    use ui_events::pointer::{PointerButton, PointerEvent};
+    use flui_platform_api::pointer::{PointerButton, PointerButtons, PointerEvent};
     use wasm_bindgen::prelude::*;
 
     fn publish(name: &str, value: &str) {
@@ -38,13 +38,19 @@ mod browser {
             .map_err(|error| JsValue::from_str(&error.to_string()))?;
         window.on_input(Box::new(|input| {
             if let PlatformInput::Pointer(event) = input {
-                let (kind, state) = match &event {
-                    PointerEvent::Down(event) => ("down", Some(&event.state)),
-                    PointerEvent::Up(event) => ("up", Some(&event.state)),
-                    PointerEvent::Move(event) => ("move", Some(&event.current)),
-                    PointerEvent::Scroll(event) => ("scroll", Some(&event.state)),
-                    PointerEvent::Cancel(_) => ("cancel", None),
-                    _ => ("other", None),
+                let (kind, position, buttons) = match &event {
+                    PointerEvent::Down(event) => {
+                        ("down", Some(event.sample.position), event.buttons())
+                    }
+                    PointerEvent::Up(event) => ("up", Some(event.sample.position), event.buttons()),
+                    PointerEvent::Move(event) => {
+                        ("move", Some(event.current().position), event.buttons)
+                    }
+                    PointerEvent::Scroll(event) => {
+                        ("scroll", Some(event.position), PointerButtons::NONE)
+                    }
+                    PointerEvent::Cancel(_) => ("cancel", None, PointerButtons::NONE),
+                    _ => ("other", None, PointerButtons::NONE),
                 };
                 let document = web_sys::window()
                     .expect("browser window")
@@ -58,18 +64,16 @@ mod browser {
                 if kind == "cancel" {
                     publish("cancel-event", "delivered");
                 }
-                if let Some(state) = state {
-                    // FLUI's contract is logical even though ui-events names this
-                    // storage PhysicalPosition; consumers read these values directly.
+                if let Some(position) = position {
+                    let point = position.get();
                     publish(
                         kind,
                         &format!(
-                            r#"{{"x":{},"y":{},"scale":{},"x1":{},"x2":{}}}"#,
-                            state.position.x,
-                            state.position.y,
-                            state.scale_factor,
-                            state.buttons.contains(PointerButton::X1),
-                            state.buttons.contains(PointerButton::X2),
+                            r#"{{"x":{},"y":{},"x1":{},"x2":{}}}"#,
+                            point.x,
+                            point.y,
+                            buttons.contains(PointerButton::BACK),
+                            buttons.contains(PointerButton::FORWARD),
                         ),
                     );
                 }
