@@ -68,9 +68,11 @@ use crate::{
 /// appropriate instead — pass your own offset to [`PointerEventResampler::sample`].
 pub const DEFAULT_RESAMPLE_LOOKBACK: Duration = Duration::from_millis(38);
 
-/// Number of buffered events above which moves are coalesced. Non-move
-/// events are always queued, so the queue exceeds this only by the
-/// terminal events a caller adds without ever sampling.
+/// Number of buffered events past which the queue makes room for each new
+/// one: adjacent moves are folded together, else the oldest event that is not
+/// a sequence boundary is dropped. Boundaries (`Down`, `Up`, `Cancel`,
+/// `Enter`, `Leave`) are never dropped, so the queue exceeds this only by the
+/// boundaries a caller adds without ever sampling.
 const MAX_BUFFERED_EVENTS: usize = 100;
 
 /// Most `coalesced` samples one move keeps when the queue folds older moves
@@ -168,6 +170,19 @@ fn raise_time(event: &mut PointerEvent, floor: u64) -> u64 {
     *time
 }
 
+/// An event that opens, closes or re-scopes a pointer sequence; the queue
+/// never drops one, so its consumer always sees the sequence's shape.
+fn is_sequence_boundary(event: &PointerEvent) -> bool {
+    matches!(
+        event,
+        PointerEvent::Down(_)
+            | PointerEvent::Up(_)
+            | PointerEvent::Cancel(_)
+            | PointerEvent::Enter(_)
+            | PointerEvent::Leave(_)
+    )
+}
+
 impl ResamplerInner {
     fn enqueue(&mut self, event: PointerEvent, stamp: Stamp) {
         match &event {
@@ -184,13 +199,14 @@ impl ResamplerInner {
             _ => {}
         }
 
-        if matches!(event, PointerEvent::Move(_))
+        if !is_sequence_boundary(&event)
             && self.event_queue.len() >= MAX_BUFFERED_EVENTS
             && !self.coalesce_one_move()
+            && !self.drop_oldest_droppable()
         {
             tracing::debug!(
                 pointer_id = ?self.pointer_id,
-                "resampler queue full of non-move events; queueing the move past the cap"
+                "resampler queue full of sequence boundaries; queueing past the cap"
             );
         }
         self.event_queue.push_back(BufferedEvent { event, stamp });
@@ -208,6 +224,20 @@ impl ResamplerInner {
             Some(floor) => raw.max(floor),
             None => raw,
         }
+    }
+
+    /// Drop the oldest event that is not a sequence boundary. Returns `false`
+    /// when every queued event is one.
+    fn drop_oldest_droppable(&mut self) -> bool {
+        let Some(index) = self
+            .event_queue
+            .iter()
+            .position(|buffered| !is_sequence_boundary(&buffered.event))
+        else {
+            return false;
+        };
+        self.event_queue.remove(index);
+        true
     }
 
     /// Make room for one more move: fold the oldest move that has a newer

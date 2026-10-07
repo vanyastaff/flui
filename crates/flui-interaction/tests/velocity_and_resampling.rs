@@ -9,7 +9,7 @@ use std::{cell::RefCell, rc::Rc, time::Duration};
 use flui_foundation::geometry::Offset;
 use flui_interaction::events::{
     PointerEvent, PointerType, make_cancel_event_for_id, make_down_event_for_id,
-    make_move_event_for_id, make_pinch_gesture_event, make_up_event_for_id,
+    make_move_event_for_id, make_pinch_gesture_event, make_scroll_event, make_up_event_for_id,
 };
 use flui_interaction::processing::{
     ImpulseVelocityTracker, InputPredictor, IosFlingVelocityTracker, MacosFlingVelocityTracker,
@@ -541,6 +541,38 @@ fn manual_clock_does_not_starve_moves() {
     binding.pointer_router().remove_route(contact(), &handler);
 }
 
+/// Moves interleaved with scrolls never sit next to each other, so folding
+/// moves cannot make room; the queue still stays bounded and keeps the
+/// sequence boundaries.
+fn interleaved_non_moves_stay_bounded() {
+    let t0 = origin();
+    let resampler = PointerEventResampler::new(contact());
+    resampler.add_event_at(
+        make_down_event_for_id(contact(), Offset::ZERO, PointerType::Touch),
+        t0,
+    );
+    for i in 1..=500_u32 {
+        let x = f64::from(i);
+        resampler.add_event_at(
+            make_scroll_event(Offset::new(x, 0.0), Offset::new(0.0, 1.0)),
+            t0 + ms(x),
+        );
+        resampler.add_event_at(move_to(x), t0 + ms(x));
+    }
+    resampler.add_event_at(
+        make_up_event_for_id(contact(), Offset::new(500.0, 0.0), PointerType::Touch),
+        t0 + ms(501.0),
+    );
+    assert!(
+        resampler.pending_event_count() <= 102,
+        "an unsampled queue stays bounded: {}",
+        resampler.pending_event_count()
+    );
+    let emitted = sample_all(&resampler, t0 + ms(600.0));
+    assert!(matches!(emitted.first(), Some(PointerEvent::Down(_))));
+    assert!(matches!(emitted.last(), Some(PointerEvent::Up(_))));
+}
+
 #[test]
 fn resampler_interpolates_on_event_time_and_never_drops_terminals() {
     run_rows(
@@ -556,6 +588,10 @@ fn resampler_interpolates_on_event_time_and_never_drops_terminals() {
                 overflow_keeps_terminals_and_the_newest_move,
             ),
             ("manual clock", manual_clock_does_not_starve_moves),
+            (
+                "interleaved non-moves stay bounded",
+                interleaved_non_moves_stay_bounded,
+            ),
         ],
     );
 }

@@ -67,7 +67,7 @@ resampler.sample(now, next_frame, |resampled| {
 - Stylus input smoothing
 
 **Constants:**
-- `MAX_BUFFERED_EVENTS`: 100 events
+- `MAX_BUFFERED_EVENTS`: 100 events; past it, adjacent moves fold and then the oldest non-boundary event is dropped (Down, Up, Cancel, Enter and Leave are kept)
 - `MIN_SAMPLE_INTERVAL`: 1ms
 
 The resampler owns a bounded queue behind `Arc<Mutex<_>>`. Sampling computes
