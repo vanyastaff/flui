@@ -14,11 +14,10 @@ use crate::{
         GestureArena, GestureArenaEntry, GestureArenaMember, GestureDeadlineRegistration,
         GestureDisposition, SweepModel,
     },
-    events::{PointerEvent, PointerType},
+    events::{PointerEvent, PointerEventExt, PointerType},
     ids::PointerId,
     routing::{PointerDispatch, RoutePanic},
     settings::GestureSettings,
-    traits::PointerEventExtTrait,
 };
 
 use super::callback_containment::withdraw_cancelled;

@@ -3532,13 +3532,23 @@ impl TextStoreObserver for FailsOnStatus {
 
 /// One rebuild obscures the field, whose observer panics on the status
 /// change, and replaces its focused node, whose listener panics on the
-/// focus loss and so cuts the focus notifications short. The update still
+/// focus loss. The update still
 /// moves the field onto the replacement node and ends the old node's IME
 /// session before it raises the observer's failure, the first. The frame
-/// recovers from the update's panic by retiring the field, which releases
-/// the replacement node it now holds; the harness does not raise a
-/// recovered panic, so the row checks what the update left behind.
+/// recovers from the update's panic by retiring the field. A focus ancestor's
+/// scheduled rebuild can mount a fresh field on the replacement node in the
+/// same frame; the retired owner must stay detached while that new owner works.
 fn editable_update_whose_observer_and_focus_listener_panic() {
+    static OBSERVER_FAILURE_RECOVERED: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+
+    struct ClearErrorBuilder;
+    impl Drop for ClearErrorBuilder {
+        fn drop(&mut self) {
+            flui_view::view::clear_error_view_builder();
+        }
+    }
+
     let controller = TextEditingController::new();
     let (old, new) = (
         FocusNode::with_debug_label("replaced node"),
@@ -3556,34 +3566,55 @@ fn editable_update_whose_observer_and_focus_listener_panic() {
         assert!(listener.replace(true), "focus listener failure");
     }));
     let previous_elements = harness.elements_of_type(std::any::TypeId::of::<EditableText>());
+    assert_eq!(previous_elements.len(), 1);
+    // This row runs in its own child process, so the public global error
+    // factory cannot interfere with another case. Recovery must report the
+    // observer's earlier failure rather than the competing focus listener.
+    flui_view::view::set_error_view_builder(|error| {
+        assert_eq!(error.message, "observer failure on status");
+        OBSERVER_FAILURE_RECOVERED.store(true, std::sync::atomic::Ordering::Relaxed);
+        Box::new(flui_view::ErrorView::from_error(error))
+    });
+    let clear_error_builder = ClearErrorBuilder;
     harness.swap_root(EditableText::new(controller.clone(), Rc::clone(&new)).obscure_text(true));
-    eprintln!(
-        "editable update recovery: editable_elements={}, active_store={}, old_attached={}, replacement_attached={}",
-        harness.elements_of_type(std::any::TypeId::of::<EditableText>()).len(),
-        harness.active_text_store().is_some(),
-        old.is_attached(),
-        new.is_attached(),
+    drop(clear_error_builder);
+    assert!(
+        OBSERVER_FAILURE_RECOVERED.load(std::sync::atomic::Ordering::Relaxed),
+        "the observer's first failure reached frame recovery"
     );
     let current_elements = harness.elements_of_type(std::any::TypeId::of::<EditableText>());
-    let retired_grant = field.request_lock(LockGrant::read(|_| {}), LockTiming::Sync);
-    let focused_replacement = new.request_focus();
-    let current_store = harness.active_text_store();
-    eprintln!(
-        "editable identities: previous={previous_elements:?}, current={current_elements:?}, retired_grant={retired_grant:?}, focus={focused_replacement:?}, same_store={:?}, current_grant={:?}",
-        current_store.as_ref().map(|current| Rc::ptr_eq(&field, current)),
-        current_store.as_ref().map(|current| current.request_lock(LockGrant::read(|_| {}), LockTiming::Sync)),
+    assert_eq!(current_elements.len(), 1);
+    assert_ne!(
+        previous_elements[0], current_elements[0],
+        "a fresh field owns the replacement"
+    );
+    assert_eq!(
+        field.request_lock(LockGrant::read(|_| {}), LockTiming::Sync),
+        Err(TextStoreError::Detached),
+        "the retired field cannot grant new text transactions"
     );
     field.set_observer(None);
     assert!(heard.get(), "the old node heard its focus loss");
     assert!(!old.is_attached(), "the old node was replaced");
     assert!(
-        !new.is_attached(),
-        "the field holds the replacement's attachment, so recovering from the \
-         update's failure releases it"
-    );
-    assert!(
         harness.active_text_store().is_none(),
         "the old node's IME session ended with its focus"
+    );
+    assert_eq!(
+        new.request_focus(),
+        flui_interaction::routing::FocusRequestOutcome::Focused
+    );
+    let current_store = harness
+        .active_text_store()
+        .expect("the remounted field starts its own IME session");
+    assert!(
+        !Rc::ptr_eq(&field, &current_store),
+        "the remounted field has a new text store owner"
+    );
+    assert_eq!(
+        current_store.request_lock(LockGrant::read(|_| {}), LockTiming::Sync),
+        Ok(LockOutcome::Granted),
+        "the remounted field grants text transactions"
     );
     assert_eq!(raised(|| harness.tick()), None, "the next frame");
     let next = FocusNode::with_debug_label("next field");

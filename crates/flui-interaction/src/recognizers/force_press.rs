@@ -16,11 +16,10 @@ use super::{
 use crate::{
     ForcePressDetails,
     arena::{GestureArena, GestureArenaEntry, GestureArenaMember, GestureDisposition},
-    events::{PointerEvent, PointerType},
+    events::{PointerEvent, PointerEventExt, PointerType},
     ids::PointerId,
     routing::{PointerDispatch, RoutePanic},
     settings::GestureSettings,
-    traits::PointerEventExtTrait,
 };
 
 /// Default pressure needed to start a force press.

@@ -4,6 +4,8 @@
 - **Date:** 2026-07-11
 - **Absorbs:** ADR-0026
 - **Superseded in part by:** ADR-0079 (§4's `Actions(Shortcuts(child))` nesting rule)
+- **Superseded-by:** [ADR-0160](ADR-0160-focus-reading-order.md) (§2's required
+  traversal-policy signature only; its sorted-list resolver remains in force)
 
 ## Context
 
@@ -48,7 +50,8 @@ Reference: Flutter `widgets/focus_scope.dart` (`Focus`, `FocusScope`, `_FocusSta
 
 ### 2. The sorted list is the traversal primitive
 
-`FocusTraversalPolicy` has one required method, `sort_descendants`.
+`FocusTraversalPolicy` originally required `sort_descendants`; its signature
+is superseded by [ADR-0160](ADR-0160-focus-reading-order.md).
 `FocusScopeNode::sorted_traversal_order(cursor)`, with the cursor force-included even when it
 is `skip_traversal` or disabled, is the only traversal primitive. Next and previous are
 positional lookups; "at the edge" means the cursor is last or first. One pure resolver,

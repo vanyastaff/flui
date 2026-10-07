@@ -16,6 +16,46 @@ fn hit_entry(target: PointerTarget) -> HitTestEntry {
 fn binding_input_contract_matrix() {
     let cases: &[(&str, fn())] = &[
         (
+            "non_finite_hover_move_is_refused",
+            non_finite_hover_move_is_refused,
+        ),
+        (
+            "non_finite_contact_move_is_refused",
+            non_finite_contact_move_is_refused,
+        ),
+        (
+            "non_finite_wheel_position_is_refused",
+            non_finite_wheel_position_is_refused,
+        ),
+        (
+            "non_finite_pinch_position_is_refused",
+            non_finite_pinch_position_is_refused,
+        ),
+        (
+            "non_finite_captured_pinch_position_is_refused",
+            non_finite_captured_pinch_position_is_refused,
+        ),
+        (
+            "frame_coalescing_preserves_hardware_history",
+            frame_coalescing_preserves_hardware_history,
+        ),
+        (
+            "frame_coalesced_history_reaches_drag_velocity",
+            frame_coalesced_history_reaches_drag_velocity,
+        ),
+        (
+            "frame_coalesced_history_reaches_multi_drag_velocity",
+            frame_coalesced_history_reaches_multi_drag_velocity,
+        ),
+        (
+            "frame_coalesced_history_reaches_scale_velocity",
+            frame_coalesced_history_reaches_scale_velocity,
+        ),
+        (
+            "frame_coalesced_history_reaches_tap_drag_velocity",
+            frame_coalesced_history_reaches_tap_drag_velocity,
+        ),
+        (
             "non_finite_down_refuses_its_continuation",
             non_finite_down_refuses_its_continuation,
         ),
@@ -144,6 +184,392 @@ fn non_finite_down_refuses_its_continuation() {
             );
         }
     }
+}
+
+#[derive(Clone, Copy)]
+enum NonFiniteInput {
+    HoverMove,
+    ContactMove,
+    Wheel,
+    Pinch,
+    CapturedPinch,
+}
+
+fn assert_non_finite_motion_or_signal_is_refused(input: NonFiniteInput) {
+    use flui_foundation::geometry::Offset;
+    use flui_interaction::events::{
+        PointerType, make_down_event_for_id, make_move_event_for_id, make_pinch_gesture_event,
+        make_scroll_event, make_up_event_for_id,
+    };
+    use flui_interaction::{GestureBinding, HitTestResult, PointerId};
+    use std::{cell::Cell, rc::Rc};
+
+    for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        for position in [Offset::new(bad, 0.0), Offset::new(0.0, bad)] {
+            let binding = GestureBinding::new();
+            let hits = Cell::new(0);
+            let deliveries = Rc::new(Cell::new(0));
+            let log = Rc::clone(&deliveries);
+            binding
+                .pointer_router()
+                .add_global_handler(Rc::new(move |_| log.set(log.get() + 1)));
+            let pointer = if matches!(input, NonFiniteInput::CapturedPinch) {
+                PointerId::new(u64::MAX).expect("synthetic pinch identity")
+            } else {
+                PointerId::PRIMARY
+            };
+            let route = |_| {
+                hits.set(hits.get() + 1);
+                HitTestResult::new()
+            };
+            let captured = matches!(
+                input,
+                NonFiniteInput::ContactMove | NonFiniteInput::CapturedPinch
+            );
+            if captured {
+                binding.handle_pointer_event(
+                    &make_down_event_for_id(pointer, Offset::ZERO, PointerType::Touch),
+                    route,
+                );
+                assert_eq!(deliveries.get(), 1, "healthy contact was admitted");
+            }
+            hits.set(0);
+            deliveries.set(0);
+            let event = |position| match input {
+                NonFiniteInput::HoverMove | NonFiniteInput::ContactMove => {
+                    make_move_event_for_id(pointer, position, PointerType::Touch)
+                }
+                NonFiniteInput::Wheel => make_scroll_event(position, Offset::new(0.0, 10.0)),
+                NonFiniteInput::Pinch | NonFiniteInput::CapturedPinch => {
+                    make_pinch_gesture_event(position, 0.1)
+                }
+            };
+            binding.handle_pointer_event(&event(position), route);
+            binding.flush_pending_moves();
+            assert_eq!(hits.get(), 0, "invalid position must not reach hit testing");
+            assert_eq!(
+                deliveries.get(),
+                0,
+                "invalid position must not reach pointer consumers"
+            );
+
+            binding.handle_pointer_event(&event(Offset::new(2.0, 0.0)), route);
+            binding.flush_pending_moves();
+            assert_eq!(deliveries.get(), 1, "healthy input follows refused input");
+            if captured {
+                assert_eq!(
+                    hits.get(),
+                    0,
+                    "the admitted contact retains its capture route"
+                );
+                binding.handle_pointer_event(
+                    &make_up_event_for_id(pointer, Offset::ZERO, PointerType::Touch),
+                    route,
+                );
+                assert_eq!(
+                    deliveries.get(),
+                    2,
+                    "the admitted contact still delivers its terminal event"
+                );
+            } else {
+                assert_eq!(hits.get(), 1, "healthy input performs a fresh hit test");
+            }
+        }
+    }
+}
+
+fn non_finite_hover_move_is_refused() {
+    assert_non_finite_motion_or_signal_is_refused(NonFiniteInput::HoverMove);
+}
+fn non_finite_contact_move_is_refused() {
+    assert_non_finite_motion_or_signal_is_refused(NonFiniteInput::ContactMove);
+}
+fn non_finite_wheel_position_is_refused() {
+    assert_non_finite_motion_or_signal_is_refused(NonFiniteInput::Wheel);
+}
+fn non_finite_pinch_position_is_refused() {
+    assert_non_finite_motion_or_signal_is_refused(NonFiniteInput::Pinch);
+}
+fn non_finite_captured_pinch_position_is_refused() {
+    assert_non_finite_motion_or_signal_is_refused(NonFiniteInput::CapturedPinch);
+}
+
+fn hardware_trace_event(
+    mut event: flui_interaction::events::PointerEvent,
+    nanos: u64,
+) -> flui_interaction::events::PointerEvent {
+    use flui_interaction::events::PointerEvent;
+    match &mut event {
+        PointerEvent::Down(data) | PointerEvent::Up(data) => data.state.time = nanos,
+        PointerEvent::Move(data) => data.current.time = nanos,
+        _ => {}
+    }
+    event
+}
+
+fn curved_hardware_moves() -> Vec<flui_interaction::events::PointerEvent> {
+    use flui_foundation::geometry::Offset;
+    use flui_interaction::{
+        PointerId,
+        events::{PointerEvent, PointerType, make_move_event_for_id},
+    };
+    // x = 20_000 t², in logical pixels and seconds. The hardware's last
+    // velocity is 2_000 px/s; retaining only the endpoints loses the curvature.
+    let mut moves: Vec<_> = [(20_u64, 8.0), (30, 18.0), (40, 32.0), (50, 50.0)]
+        .into_iter()
+        .map(|(millis, x)| {
+            hardware_trace_event(
+                make_move_event_for_id(PointerId::PRIMARY, Offset::new(x, 0.0), PointerType::Touch),
+                1_000_000_000 + millis * 1_000_000,
+            )
+        })
+        .collect();
+    let earlier = hardware_trace_event(
+        make_move_event_for_id(
+            PointerId::PRIMARY,
+            Offset::new(2.0, 0.0),
+            PointerType::Touch,
+        ),
+        1_010_000_000,
+    );
+    if let (PointerEvent::Move(first), PointerEvent::Move(earlier)) = (&mut moves[0], earlier) {
+        first.coalesced.push(earlier.current);
+    }
+    moves
+}
+
+fn frame_coalescing_preserves_hardware_history() {
+    use flui_foundation::geometry::Offset;
+    use flui_interaction::{
+        GestureBinding, HitTestResult, PointerId,
+        events::{PointerEvent, PointerType, make_down_event_for_id, make_up_event_for_id},
+    };
+    use std::{cell::RefCell, rc::Rc};
+    let binding = GestureBinding::new();
+    let observed = Rc::new(RefCell::new(Vec::new()));
+    let log = Rc::clone(&observed);
+    binding
+        .pointer_router()
+        .add_global_handler(Rc::new(move |event| {
+            if let PointerEvent::Move(movement) = event {
+                let history: Vec<_> = movement
+                    .coalesced
+                    .iter()
+                    .map(|sample| (sample.time, sample.position.x))
+                    .collect();
+                log.borrow_mut().push((
+                    movement.current.time,
+                    movement.current.position.x,
+                    history,
+                ));
+            }
+        }));
+    for flush_each in [true, false, true] {
+        observed.borrow_mut().clear();
+        binding.handle_pointer_event(
+            &hardware_trace_event(
+                make_down_event_for_id(PointerId::PRIMARY, Offset::ZERO, PointerType::Touch),
+                1_000_000_000,
+            ),
+            |_| HitTestResult::new(),
+        );
+        for event in curved_hardware_moves() {
+            binding.handle_pointer_event(&event, |_| HitTestResult::new());
+            if flush_each {
+                binding.flush_pending_moves();
+            }
+        }
+        binding.flush_pending_moves();
+        binding.handle_pointer_event(
+            &hardware_trace_event(
+                make_up_event_for_id(
+                    PointerId::PRIMARY,
+                    Offset::new(50.0, 0.0),
+                    PointerType::Touch,
+                ),
+                1_050_000_000,
+            ),
+            |_| HitTestResult::new(),
+        );
+        let collected = observed.borrow();
+        assert_eq!(
+            collected.len(),
+            if flush_each { 4 } else { 1 },
+            "one dispatch per frame"
+        );
+        if flush_each {
+            assert_eq!(
+                collected[0].2,
+                [(1_010_000_000, 2.0)],
+                "backend history survives ordinary delivery"
+            );
+        } else {
+            assert_eq!(collected[0].0, 1_050_000_000);
+            assert_eq!(collected[0].1, 50.0);
+            assert_eq!(
+                collected[0].2,
+                [
+                    (1_010_000_000, 2.0),
+                    (1_020_000_000, 8.0),
+                    (1_030_000_000, 18.0),
+                    (1_040_000_000, 32.0)
+                ],
+                "earlier hardware samples survive frame replacement in time order"
+            );
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum HardwareVelocityProducer {
+    Drag,
+    MultiDrag,
+    Scale,
+    TapDrag,
+}
+
+fn velocity_for_hardware_trace(producer: HardwareVelocityProducer, flush_each: bool) -> f64 {
+    use flui_foundation::geometry::Offset;
+    use flui_interaction::{
+        DragAxis, DragGestureRecognizer, GestureBinding, GestureRecognizer, HitTestResult,
+        ManualClock, MultiDragAxis, MultiDragEndDetails, MultiDragGestureRecognizer,
+        MultiDragHandle, MultiDragUpdateDetails, PointerId, ScaleGestureRecognizer,
+        TapAndDragGestureRecognizer,
+        events::{PointerEvent, PointerType, make_down_event_for_id, make_up_event_for_id},
+        routing::PointerDispatch,
+    };
+    use std::{cell::RefCell, rc::Rc, sync::Arc};
+    let binding = GestureBinding::with_clock(Arc::new(ManualClock::new()));
+    let velocities = Rc::new(RefCell::new(Vec::new()));
+    let log = Rc::clone(&velocities);
+    struct DragClient(Rc<RefCell<Vec<f64>>>);
+    impl MultiDragHandle for DragClient {
+        fn update(&self, _: MultiDragUpdateDetails) {}
+        fn end(&self, details: MultiDragEndDetails) {
+            self.0
+                .borrow_mut()
+                .push(details.velocity.pixels_per_second.dx);
+        }
+        fn cancel(&self) {}
+    }
+    let drag: Rc<dyn GestureRecognizer> = match producer {
+        HardwareVelocityProducer::Drag => {
+            DragGestureRecognizer::builder(binding.arena().clone(), DragAxis::Horizontal)
+                .on_end(move |details| log.borrow_mut().push(details.primary_velocity))
+                .build()
+        }
+        HardwareVelocityProducer::MultiDrag => {
+            MultiDragGestureRecognizer::builder(binding.arena().clone(), MultiDragAxis::Horizontal)
+                .on_start(move |_, _| Some(Rc::new(DragClient(Rc::clone(&log)))))
+                .build()
+        }
+        HardwareVelocityProducer::Scale => ScaleGestureRecognizer::builder(binding.arena().clone())
+            .on_end(move |details| log.borrow_mut().push(details.velocity))
+            .build(),
+        HardwareVelocityProducer::TapDrag => {
+            TapAndDragGestureRecognizer::builder(binding.arena().clone())
+                .on_drag_end(move |details| {
+                    log.borrow_mut().push(details.velocity.pixels_per_second.dx);
+                })
+                .build()
+        }
+    };
+    binding
+        .pointer_router()
+        .add_global_handler(Rc::new(move |event| {
+            let dispatch = PointerDispatch::at_root(event);
+            if matches!(event, PointerEvent::Down(_)) {
+                drag.add_pointer(dispatch);
+            } else {
+                drag.handle_event(dispatch);
+            }
+        }));
+    binding.handle_pointer_event(
+        &hardware_trace_event(
+            make_down_event_for_id(PointerId::PRIMARY, Offset::ZERO, PointerType::Touch),
+            1_000_000_000,
+        ),
+        |_| HitTestResult::new(),
+    );
+    let second_pointer = PointerId::new(2).expect("nonzero pointer");
+    if matches!(producer, HardwareVelocityProducer::Scale) {
+        binding.handle_pointer_event(
+            &hardware_trace_event(
+                make_down_event_for_id(second_pointer, Offset::new(100.0, 0.0), PointerType::Touch),
+                1_000_000_000,
+            ),
+            |_| HitTestResult::new(),
+        );
+    }
+    for event in curved_hardware_moves() {
+        binding.handle_pointer_event(&event, |_| HitTestResult::new());
+        if flush_each {
+            binding.flush_pending_moves();
+        }
+    }
+    binding.flush_pending_moves();
+    binding.handle_pointer_event(
+        &hardware_trace_event(
+            make_up_event_for_id(
+                PointerId::PRIMARY,
+                Offset::new(50.0, 0.0),
+                PointerType::Touch,
+            ),
+            1_050_000_000,
+        ),
+        |_| HitTestResult::new(),
+    );
+    if matches!(producer, HardwareVelocityProducer::Scale) {
+        binding.handle_pointer_event(
+            &hardware_trace_event(
+                make_up_event_for_id(second_pointer, Offset::new(100.0, 0.0), PointerType::Touch),
+                1_050_000_000,
+            ),
+            |_| HitTestResult::new(),
+        );
+    }
+    let values = velocities.borrow();
+    assert_eq!(values.len(), 1, "one healthy accepted drag ends");
+    assert!(
+        binding.arena().is_empty(),
+        "terminal delivery retires the arena"
+    );
+    values[0]
+}
+
+fn frame_coalesced_history_reaches_drag_velocity() {
+    assert_frame_coalesced_velocity(HardwareVelocityProducer::Drag, 2_000.0);
+}
+
+fn frame_coalesced_history_reaches_multi_drag_velocity() {
+    assert_frame_coalesced_velocity(HardwareVelocityProducer::MultiDrag, 2_000.0);
+}
+
+fn frame_coalesced_history_reaches_scale_velocity() {
+    assert_frame_coalesced_velocity(HardwareVelocityProducer::Scale, -20.0);
+}
+
+fn frame_coalesced_history_reaches_tap_drag_velocity() {
+    assert_frame_coalesced_velocity(HardwareVelocityProducer::TapDrag, 2_000.0);
+}
+
+fn assert_frame_coalesced_velocity(producer: HardwareVelocityProducer, expected: f64) {
+    let ordinary = velocity_for_hardware_trace(producer, true);
+    let tolerance = expected.abs() * 0.01;
+    assert!(
+        ordinary.is_finite() && (ordinary - expected).abs() < tolerance,
+        "ordinary producer proves the hardware curve: {ordinary}"
+    );
+    let batched = velocity_for_hardware_trace(producer, false);
+    let later_ordinary = velocity_for_hardware_trace(producer, true);
+    assert!(
+        (later_ordinary - ordinary).abs() < 0.01,
+        "healthy later dispatch remains reproducible"
+    );
+    assert!(
+        batched.is_finite() && (batched - ordinary).abs() < tolerance,
+        "same hardware samples must yield the same end velocity at frame cadence: ordinary={ordinary}, coalesced={batched}"
+    );
 }
 
 fn capped_contact_never_becomes_hover() {

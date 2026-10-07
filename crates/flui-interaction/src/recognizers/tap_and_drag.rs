@@ -53,12 +53,11 @@ use super::{
 };
 use crate::{
     arena::{GestureArenaEntry, GestureArenaMember, GestureDisposition, SweepModel},
-    events::{PointerEvent, PointerType},
+    events::{PointerEvent, PointerEventExt, PointerType},
     ids::PointerId,
     processing::{Velocity, VelocityTracker},
     routing::{PointerDispatch, RoutePanic},
     settings::GestureSettings,
-    traits::PointerEventExtTrait,
 };
 
 // ============================================================================

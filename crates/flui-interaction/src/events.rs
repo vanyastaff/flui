@@ -451,13 +451,16 @@ fn get_pointer_state(event: &PointerEvent) -> Option<&PointerState> {
 }
 
 // ============================================================================
-// Helper trait for extracting position from pointer events
+// Pointer event geometry and identity queries
 // ============================================================================
 
-/// Extension trait for extracting position from pointer events.
+/// Canonical geometry and identity queries for pointer events.
 pub trait PointerEventExt {
     /// Returns the position of the pointer event.
     fn position(&self) -> Offset<f64>;
+
+    /// Returns the pointer identity.
+    fn pointer_id(&self) -> PointerId;
 
     /// Returns the pointer type if available.
     fn pointer_type(&self) -> Option<PointerType>;
@@ -475,6 +478,11 @@ impl PointerEventExt for PointerEvent {
         } else {
             Offset::ZERO
         }
+    }
+
+    #[inline]
+    fn pointer_id(&self) -> PointerId {
+        extract_pointer_id(self)
     }
 
     #[inline]

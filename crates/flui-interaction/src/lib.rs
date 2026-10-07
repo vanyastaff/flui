@@ -3,7 +3,7 @@
 //! This crate provides the complete event handling and gesture infrastructure
 //! for FLUI:
 //!
-//! - **EventRouter**: Routes pointer/keyboard events via hit testing
+//! - **GestureBinding**: Routes presentation-owned pointer streams via hit testing
 //! - **HitTest**: Determines which UI elements are under cursor/touch
 //! - **FocusManager**: Manages keyboard focus for one presentation
 //! - **FocusScope**: Groups focusable elements for keyboard navigation
@@ -101,7 +101,6 @@
 //! ## Core Infrastructure
 //! - [`ids`] - Type-safe identifiers (PointerId, FocusNodeId, etc.)
 //! - [`traits`] - Core traits and extension traits
-//! - [`sealed`] - Hit-test extension bridge; gesture traits are open
 //!
 //! ## Event Routing
 //! - [`routing`] - Event routing, hit testing, focus management
@@ -143,7 +142,6 @@
 pub mod __runtime;
 
 pub mod ids;
-pub mod sealed;
 pub mod traits;
 
 // ============================================================================
@@ -223,7 +221,7 @@ pub use flui_foundation::{ManualClock, MonotonicClock, SystemClock};
 // ============================================================================
 
 // Re-export commonly used event types at crate root
-pub use events::{CursorIcon, KeyboardEvent, PointerEvent};
+pub use events::{CursorIcon, KeyboardEvent, PointerEvent, PointerEventExt};
 // Re-export observability surface — typed event names + span constants.
 pub use observability::{GestureEvent, SPAN_ARENA, SPAN_RECOGNIZER, pointer_event_kind};
 // Trackpad pan/zoom module — canonical public entry point for the
@@ -246,24 +244,22 @@ pub use processing::{
 };
 pub use recognizers::{
     ArenaMembership, BeginContactError, CancelOutcome, ContactId, ContactSnapshot,
-    PrimaryContact, RecognizerSet, cancel_all,
     DoubleTapDetails, DoubleTapGestureRecognizer, DragCancelCallback, DragDownCallback,
     DragDownDetails, DragEndCallback, DragEndDetails, DragGestureRecognizer, DragStartCallback,
     DragStartDetails, DragUpdateCallback, DragUpdateDetails, EagerGestureRecognizer,
     ForcePressGestureRecognizer, GestureEndReason, GestureRecognizer, LongPressGestureRecognizer,
     MultiDragAxis, MultiDragEndDetails, MultiDragGestureRecognizer, MultiDragHandle,
-    MultiDragStartCallback, MultiDragUpdateDetails, MultiTapGestureRecognizer,
-    ScaleGestureRecognizer, TapAndDragGestureRecognizer, TapDragDownCallback, TapDragDownDetails,
-    TapDragEndCallback, TapDragEndDetails, TapDragStartCallback, TapDragStartDetails,
-    TapDragUpCallback, TapDragUpDetails, TapDragUpdateCallback, TapDragUpdateDetails,
-    TapGestureRecognizer,
+    MultiDragStartCallback, MultiDragUpdateDetails, MultiTapGestureRecognizer, PrimaryContact,
+    RecognizerSet, ScaleGestureRecognizer, TapAndDragGestureRecognizer, TapDragDownCallback,
+    TapDragDownDetails, TapDragEndCallback, TapDragEndDetails, TapDragStartCallback,
+    TapDragStartDetails, TapDragUpCallback, TapDragUpDetails, TapDragUpdateCallback,
+    TapDragUpdateDetails, TapGestureRecognizer, cancel_all,
 };
 pub use recognizers::{
-    DoubleTapGestureRecognizerBuilder, DragGestureRecognizerBuilder,
-    EagerGestureRecognizerBuilder, ForcePressGestureRecognizerBuilder,
-    LongPressGestureRecognizerBuilder, MultiDragGestureRecognizerBuilder,
-    MultiTapGestureRecognizerBuilder, ScaleGestureRecognizerBuilder,
-    TapAndDragGestureRecognizerBuilder, TapGestureRecognizerBuilder,
+    DoubleTapGestureRecognizerBuilder, DragGestureRecognizerBuilder, EagerGestureRecognizerBuilder,
+    ForcePressGestureRecognizerBuilder, LongPressGestureRecognizerBuilder,
+    MultiDragGestureRecognizerBuilder, MultiTapGestureRecognizerBuilder,
+    ScaleGestureRecognizerBuilder, TapAndDragGestureRecognizerBuilder, TapGestureRecognizerBuilder,
 };
 // Re-exports for the drag axis sub-recognisers (vertical, horizontal, pan).
 // Aliased to `DragGestureRecognizer` so a recogniser's axis is fixed at the
@@ -275,18 +271,17 @@ pub use recognizers::drag_variants::{
 // Re-exports: Event Routing
 // ============================================================================
 pub use routing::{
-    EventPropagation, EventRouter, FocusAttachment, FocusChangeCallback, FocusDetachOutcome,
-    FocusManager, FocusNode, FocusNodeChangeCallback, FocusNodeRegistration, FocusRequestOutcome,
-    FocusScopeNode, FocusTraversalPolicy, FocusTreeError, GlobalPointerHandler, HitTestBehavior,
-    HitTestEntry, HitTestHandle, HitTestProbe, HitTestResult, HitTestSnapshot, HitTestable,
-    InteractionDispatchError, InteractionDispatchHandle, InteractionLane, KeyEventCallback,
-    KeyEventHandler, KeyEventResult, LocalPayloadTarget, NodeContext, PathClipTarget,
-    PointerDispatch, PointerRouteHandler, PointerRouter, PointerTarget, ReadingOrderPolicy,
-    RectProvider, RenderId, ResolvedRouteToken, ResolvedStep, RoutePanic, RouteResolution,
-    RouteResolutionMiss, ScrollTarget, ShaderMaskTarget, TransformGuard, TraversalEdgeBehavior,
-    resolve_local_payload, resolve_path_clip_target, resolve_shader_mask_target,
+    EventPropagation, FocusAttachment, FocusChangeCallback, FocusDetachOutcome, FocusManager,
+    FocusNode, FocusNodeChangeCallback, FocusNodeRegistration, FocusRequestOutcome, FocusScopeNode,
+    FocusTraversalPolicy, FocusTreeError, GlobalPointerHandler, HitTestBehavior, HitTestEntry,
+    HitTestHandle, HitTestProbe, HitTestResult, HitTestSnapshot, InteractionDispatchError,
+    InteractionDispatchHandle, InteractionLane, KeyEventCallback, KeyEventHandler, KeyEventResult,
+    LocalPayloadTarget, NodeContext, PathClipTarget, PointerDispatch, PointerRouteHandler,
+    PointerRouter, PointerTarget, ReadingOrderPolicy, RectProvider, RenderId, ResolvedRouteToken,
+    ResolvedStep, RoutePanic, RouteResolution, RouteResolutionMiss, ScrollTarget, ShaderMaskTarget,
+    TransformGuard, TraversalEdgeBehavior, resolve_local_payload, resolve_path_clip_target,
+    resolve_shader_mask_target,
 };
-pub use sealed::CustomHitTestable;
 pub use settings::{
     DEFAULT_DOUBLE_TAP_SLOP, DEFAULT_DOUBLE_TAP_TIMEOUT, DEFAULT_LONG_PRESS_TIMEOUT,
     DEFAULT_MAX_FLING_VELOCITY, DEFAULT_MIN_FLING_VELOCITY, DEFAULT_MOUSE_PAN_SLOP,
@@ -306,10 +301,7 @@ pub use testing::ModifiersBuilder;
 // ============================================================================
 // Re-exports: Traits
 // ============================================================================
-pub use traits::{
-    DragAxis, HitTestTarget,
-    PointerEventExtTrait as PointerEventExt,
-};
+pub use traits::DragAxis;
 
 // ============================================================================
 // Prelude
@@ -330,26 +322,21 @@ pub mod prelude {
     // Gesture recognition
     pub use crate::arena::*;
     // Events (W3C-compliant)
-    pub use crate::events::{CursorIcon, KeyboardEvent, PointerEvent};
+    pub use crate::events::{CursorIcon, KeyboardEvent, PointerEvent, PointerEventExt};
     // Advanced interaction
     pub use crate::routing::{MouseTracker, MouseTrackerAnnotation, PointerMotionKind};
     // Input processing
     pub use crate::processing::{InputPredictor, PointerEventResampler, Velocity, VelocityTracker};
     // Event routing
     pub use crate::routing::{
-        EventPropagation, EventRouter, FocusManager, HitTestBehavior, HitTestEntry, HitTestResult,
-        HitTestable, PointerRouter, RenderId, TransformGuard,
+        EventPropagation, FocusManager, HitTestBehavior, HitTestEntry, HitTestResult,
+        PointerRouter, RenderId, TransformGuard,
     };
-    // Extension traits for custom types
-    pub use crate::sealed::CustomHitTestable;
     // Testing (feature-gated)
     #[cfg(any(test, feature = "testing"))]
     pub use crate::testing::ModifiersBuilder;
     // Traits
-    pub use crate::traits::{
-        DragAxis, HitTestTarget,
-        PointerEventExtTrait as PointerEventExt,
-    };
+    pub use crate::traits::DragAxis;
     pub use crate::{
         arena::{GestureArenaTeam, PointerSignalResolver, SignalPriority, TeamEntry},
         ids::{DeviceId, FocusNodeId, HandlerId, PointerId, RegionId},

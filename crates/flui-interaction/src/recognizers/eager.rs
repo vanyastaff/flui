@@ -2,11 +2,10 @@
 use super::{ArenaMembership, CancelOutcome, GestureRecognizer, PrimaryContact};
 use crate::{
     arena::{GestureArena, GestureArenaMember},
-    events::PointerEvent,
+    events::{PointerEvent, PointerEventExt},
     ids::PointerId,
     routing::PointerDispatch,
     settings::GestureSettings,
-    traits::PointerEventExtTrait,
 };
 use std::rc::{Rc, Weak};
 
