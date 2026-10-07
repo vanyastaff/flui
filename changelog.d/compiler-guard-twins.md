@@ -15,3 +15,4 @@
 - Typed field-mask examples share the same setup, so the passing and failing callers differ only in their selector type.
 - Runtime pipeline thread ownership and private draw-step guards pin exact diagnostics alongside valid local-pipeline and frame-pump callers.
 - Platform owner-thread and hidden-token compiler guards pin exact diagnostics; each retired platform name is checked independently.
+- Diagnostic derive shape and field-attribute compiler examples have matching valid companions.
