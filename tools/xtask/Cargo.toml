@@ -43,6 +43,10 @@ windows = { workspace = true, features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 
+[dev-dependencies]
+# Authoritative source for the generated owned key vocabulary.
+keyboard-types.workspace = true
+
 [lints]
 workspace = true
 

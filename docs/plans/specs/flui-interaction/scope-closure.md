@@ -88,15 +88,15 @@ PR #1467 (held Down на blur), #1476 (контрактные тесты hover/h
 | M3-F6 | Modal focus trap | partial / broken | spec send-flip T6d (N6: wire or delete `traps_focus`) |
 | M3-R1 | RTL in focus traversal | absent | spec send-flip T6d (I6 handoff, with M3-F2) |
 | M2-X1 | System timings from the OS | absent | spec platform-layer LY8 |
-| M1-10 | Predicted events | absent (unwired) | spec flui-interaction S2 |
+| M1-10 | Predicted events | withdrawn (local extrapolator) | S2: неподключённый `InputPredictor` удалён; аппаратные predicted samples сохраняются в owned-событиях и локализации по pointer-vocabulary P2/P3. Синтез будущих samples не поддерживается |
 | M1-24 | Click count / interval from the OS | partial | spec flui-interaction I11 |
-| M2-A5 | Arena teams | partial (unwired) | spec flui-interaction S2 |
-| M2-A7 | Pointer-signal arbitration | partial (unwired) | spec flui-interaction S2 |
+| M2-A5 | Arena teams | withdrawn | S2: неподключённые team/TeamEntry и multiple-winner resolution удалены; NEW recognizer-composition остаётся будущей задачей, её поведение не объявляется реализованным |
+| M2-A7 | Pointer-signal arbitration | withdrawn (standalone priority resolver) | S2: отдельный неподключённый resolver удалён. Действующая арбитрация widget hit-path сохраняется: `a_wheel_tick_over_nested_scrollables_moves_only_the_inner` проверяет ближайшего claimant и отсутствие двойного scroll |
 | M2-T6 | Multi-finger tap semantics | partial | spec flui-interaction S3 (record as a mapping decision) |
 | M2-D2 | Pan slop value | partial | spec flui-interaction I11 |
 | M2-D6 | Mouse drag threshold from the OS | absent | spec flui-interaction I11 (after LY8) |
 | M2-V2 | Estimator choice per platform reaches production | partial (unwired) | spec flui-interaction S2 |
-| M2-R2 | Prediction | partial | spec flui-interaction S2 |
+| M2-R2 | Prediction | withdrawn (local extrapolation) | S2: локальный extrapolator удалён; сохранение аппаратных predicted samples не означает реализацию синтезированной prediction для ink/drag |
 | M2-X2 | Settings profile reaches recognizers | broken | spec flui-interaction I11 |
 | M2-X5 | Cheapest sound ownership on the gesture path | partial | spec flui-interaction I10 (settings `Cell` — I11) |
 | M3-C1 | Re-hit-test after layout per presentation | partial | spec flui-interaction S5 |

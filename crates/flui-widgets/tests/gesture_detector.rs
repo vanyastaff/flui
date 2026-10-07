@@ -10,6 +10,181 @@ use crate::common::{lay_out, tight};
 use flui_painting::styling::Color;
 use flui_widgets::{ColoredBox, GestureDetector};
 
+#[derive(Clone, flui_view::prelude::StatefulView)]
+struct ConfiguredGesture {
+    settings: flui_interaction::GestureSettings,
+    detector: GestureDetector,
+}
+
+struct ConfiguredGestureState {
+    arena: Option<flui_interaction::GestureArena>,
+}
+
+impl flui_view::StatefulView for ConfiguredGesture {
+    type State = ConfiguredGestureState;
+
+    fn create_state(&self) -> Self::State {
+        ConfiguredGestureState { arena: None }
+    }
+}
+
+impl flui_view::ViewState<ConfiguredGesture> for ConfiguredGestureState {
+    fn init_state(&mut self, ctx: &dyn flui_view::LifecycleContext) {
+        self.arena = Some(flui_widgets::GestureArenaScope::of(ctx));
+    }
+
+    fn build(
+        &self,
+        view: &ConfiguredGesture,
+        _: &dyn flui_view::BuildContext,
+    ) -> impl flui_view::IntoView {
+        flui_widgets::GestureArenaScope::new(
+            self.arena
+                .as_ref()
+                .expect("mounted presentation arena")
+                .clone(),
+            view.detector.clone(),
+        )
+        .settings(view.settings.clone())
+    }
+}
+
+pub(crate) fn scoped_settings_control_touch_recognition_thresholds() {
+    use std::{cell::Cell, rc::Rc};
+
+    use flui_foundation::geometry::Offset;
+    use flui_interaction::events::{
+        PointerKind, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
+    };
+    use flui_interaction::{GestureSettings, PointerId};
+
+    for family in ["tap", "pan", "horizontal drag"] {
+        for configured in [false, true] {
+            let callbacks = Rc::new(Cell::new(0));
+            let observed = Rc::clone(&callbacks);
+            let competing_taps = Rc::new(Cell::new(0));
+            let detector = match family {
+                "tap" => GestureDetector::new().on_tap(move |_| observed.set(observed.get() + 1)),
+                "pan" => GestureDetector::new()
+                    .on_pan_start(move |_, _| observed.set(observed.get() + 1)),
+                _ => GestureDetector::new()
+                    .on_horizontal_drag_start(move |_, _| observed.set(observed.get() + 1)),
+            };
+            // A sole arena member is accepted by default before its slop
+            // decision. A competing tap keeps drag admission undecided until
+            // movement distinguishes the configured threshold.
+            let detector = if family == "tap" {
+                detector
+            } else {
+                let taps = Rc::clone(&competing_taps);
+                detector.on_tap(move |_| taps.set(taps.get() + 1))
+            }
+            .child(ColoredBox::new(Color::rgb(10, 20, 30)));
+            let settings = if configured {
+                GestureSettings::default()
+                    .try_with_touch_slop(60.0)
+                    .expect("valid touch slop")
+                    .try_with_pan_slop(10.0)
+                    .expect("valid pan slop")
+                    .try_with_pan_slop_horizontal(10.0)
+                    .expect("valid horizontal slop")
+            } else {
+                GestureSettings::default()
+            };
+            let laid = lay_out(
+                ConfiguredGesture { settings, detector },
+                tight(150.0, 100.0),
+            );
+            let pointer = PointerId::try_from(1_u64).expect("authored touch contact");
+            let start = Offset::new(40.0, 40.0);
+            let end = Offset::new(if family == "tap" { 70.0 } else { 52.0 }, 40.0);
+            for event in [
+                make_down_event_for_id(pointer, start, PointerKind::Touch).expect("finite Down"),
+                make_move_event_for_id(pointer, end, PointerKind::Touch).expect("finite Move"),
+                make_up_event_for_id(pointer, end, PointerKind::Touch).expect("finite Up"),
+            ] {
+                laid.dispatch_pointer_event(&event);
+            }
+            assert_eq!(
+                callbacks.get(),
+                usize::from(configured),
+                "{family}, configured={configured}"
+            );
+            if family != "tap" {
+                assert_eq!(
+                    competing_taps.get(),
+                    usize::from(!configured),
+                    "the competing tap wins only below the drag threshold"
+                );
+            }
+        }
+    }
+}
+
+pub(crate) fn scoped_settings_control_gesture_deadlines() {
+    use std::{cell::Cell, rc::Rc, time::Duration};
+
+    use flui_foundation::geometry::Offset;
+    use flui_interaction::GestureSettings;
+    use flui_interaction::events::{PointerKind, make_down_event_for_id, make_up_event_for_id};
+
+    for family in ["long press", "double tap"] {
+        for configured in [false, true] {
+            let callbacks = Rc::new(Cell::new(0));
+            let observed = Rc::clone(&callbacks);
+            let detector = if family == "long press" {
+                GestureDetector::new().on_long_press(move |_| observed.set(observed.get() + 1))
+            } else {
+                GestureDetector::new().on_double_tap(move |_| observed.set(observed.get() + 1))
+            }
+            .child(ColoredBox::new(Color::rgb(10, 20, 30)));
+            let settings = if configured {
+                GestureSettings::default()
+                    .with_long_press_timeout(Duration::from_millis(100))
+                    .with_double_tap_timeout(Duration::from_millis(100))
+            } else {
+                GestureSettings::default()
+            };
+            let mut laid = lay_out(
+                ConfiguredGesture { settings, detector },
+                tight(100.0, 100.0),
+            );
+            let contacts = flui_testing::widgets::PointerContacts::new();
+            let position = Offset::new(40.0, 40.0);
+            let first = contacts.begin();
+            laid.dispatch_pointer_event(
+                &make_down_event_for_id(first, position, PointerKind::Touch).expect("finite Down"),
+            );
+            if family == "double tap" {
+                laid.dispatch_pointer_event(
+                    &make_up_event_for_id(first, position, PointerKind::Touch).expect("finite Up"),
+                );
+            }
+            laid.pump_for(Duration::from_millis(200));
+            if family == "double tap" {
+                let second = contacts.begin();
+                laid.dispatch_pointer_event(
+                    &make_down_event_for_id(second, position, PointerKind::Touch)
+                        .expect("finite Down"),
+                );
+                laid.dispatch_pointer_event(
+                    &make_up_event_for_id(second, position, PointerKind::Touch).expect("finite Up"),
+                );
+            }
+            let expected = if family == "long press" {
+                configured
+            } else {
+                !configured
+            };
+            assert_eq!(
+                callbacks.get(),
+                usize::from(expected),
+                "{family}, configured={configured}"
+            );
+        }
+    }
+}
+
 pub(crate) fn clearing_pan_callbacks_mid_drag_still_finishes_the_drag() {
     use crate::common::{ProbeSignals, SignalProbe};
     use flui_foundation::geometry::Offset;

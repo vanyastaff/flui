@@ -8,7 +8,7 @@ Crate-level design notes for `flui_interaction`: subsystems, ownership, mapping 
 |---|---|
 | `arena` | Owner-local conflict resolution between competing recognizers. Per-pointer members are `Weak<dyn GestureArenaMember>` in an inline-four `SmallVec`. Generational slots keep held competitions separate across pointer-ID reuse. Eager acceptors win when the arena closes; each notification upgrades its weak participant immediately before invoking it. |
 | `recognizers` | Ten recognizer types (tap, double tap, long press, drag, scale, force press, multi-tap, multi-drag, eager, tap-and-drag) and drag-axis builders. Each implements the open `GestureRecognizer` and `GestureArenaMember` traits. Builders configure immutable callbacks before returning `Rc` ownership. `ArenaMembership` names an exact weak allocation; `PrimaryContact` owns one admitted sequence, its settings snapshot, identity and deadline. `RecognizerSet` shares ordered weak attachments with listeners. |
-| `processing` | Per-pointer derived data: `VelocityTracker` (LSQ fit on 20-sample circular buffer, 100 ms horizon, 40 ms stationary gate), `PointerEventResampler` (frame-rate adaptation with 100-event cap and 1 ms minimum sample interval), `InputPredictor` (velocity extrapolation with optional acceleration and prediction smoothing), `RawInputHandler` (low-level stream adapter), the crate-internal `lsq_solver` (used by `VelocityTracker` only) and `sampling_clock`. |
+| `processing` | Per-pointer derived data: `VelocityTracker` (LSQ fit on 20-sample circular buffer, 100 ms horizon, 40 ms stationary gate), `PointerEventResampler` (frame-rate adaptation with 100-event cap and 1 ms minimum sample interval), standalone OneEuro filters, the crate-internal `lsq_solver` (used by `VelocityTracker` only) and `sampling_clock`. |
 | `routing` | Event dispatch infrastructure: `PointerRouter`, the presentation-owned `FocusManager` (`FocusManager::new` returns an `Rc<Self>`; there is no thread-local focus state), `FocusScopeNode` / reading-order Tab traversal, `MouseTracker` (enter/exit/hover), hit testing, the `InteractionLane` that resolves and invokes pointer routes, and the `TransformGuard` stack-RAII for the transform stack. Route resolution on Down and cached-route invocation on every Move/Up are on the per-pointer hot path (`benches/pointer_route_bench.rs`). |
 | `binding` | `GestureBinding` — owner-local glue that hosts the arena, resolves and retains the Down hit route, coalesces/resamples Moves, and runs route → arena lifecycle ordering. Contact generations prevent frame-delayed samples from crossing a reused platform pointer ID. |
 | `observability` | `GestureEvent` gives typed event names; `SPAN_RECOGNIZER` and `SPAN_ARENA` name spans, and `pointer_event_kind` describes a pointer event for tracing. Rejection and terminal tracking commit local withdrawal before diagnostics, because subscribers can reenter or panic. The app installs the subscriber. |
@@ -75,9 +75,9 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   runtime replay and widget callbacks share `flui-platform-api`'s pointer and
   keyboard types. Pointer and hardware IDs remain distinct; absent device or
   sensor metadata is not fabricated. Localized measured and predicted sample
-  families preserve their source metadata. Raw input borrows this same source
-  instead of flattening it into another enum. `pointer_source_contracts` pins
-  raw source preservation, reentry, device-only delivery and identity fallback;
+  families preserve their source metadata. Listener callbacks borrow this
+  same source instead of flattening it into another enum.
+  `pointer_source_contracts` pins mouse source identity fallback and reentry;
   the mounted `pointer_delivery_preserves_source_and_sample_families` and
   `scroll_claim_preserves_owned_source_units_and_phase` rows pin the widget edge.
 - **`TapButton` is a typed enum, not integer button constants.** `TapButton` (`src/recognizers/tap.rs`) maps pointer buttons explicitly through `from_pointer_button`, so the type system enforces the choice. It is `#[non_exhaustive]` so a future fourth button slot can be added without breaking downstream.
@@ -154,7 +154,7 @@ for crate in flui_interaction flui_foundation flui_platform_api web_time; do
     ' "$artifacts")
     externs+=(--extern "$crate=$library")
     if [[ "$crate" == flui_interaction ]]; then
-        dependency_dir=$(dirname "$library")
+        dependency_dir="$(dirname "$library")/deps"
     fi
 done
 

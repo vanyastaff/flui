@@ -1,9 +1,21 @@
 //! DOM event → PlatformInput mapping
 //!
 //! Registers DOM event listeners on the canvas and converts browser events
-//! through private W3C translations into FLUI's owned PlatformInput types.
+//! into FLUI's owned PlatformInput types. Keyboard and wheel translations
+//! still use private W3C transport helpers.
 
-use std::{cell::RefCell, collections::HashSet, rc::Rc, sync::Arc};
+use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc};
+
+use flui_foundation::geometry::{Point, Size};
+use flui_platform_api::{
+    EventTime,
+    pointer::{
+        ButtonChange, CancelReason, ContactSize, PenOrientation, PenTool, PointerButton,
+        PointerButtons, PointerCancel, PointerEvent, PointerId, PointerInfo, PointerKind,
+        PointerMove, PointerPosition, PointerPress, PointerRelease, PointerRole, PointerSample,
+        Pressure, TangentialPressure, Twist,
+    },
+};
 
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
@@ -77,18 +89,23 @@ fn register_layout_events(window: &WebWindow) {
 // ==================== Pointer Events ====================
 
 fn register_pointer_events(canvas: &web_sys::HtmlCanvasElement, callbacks: &Arc<WindowCallbacks>) {
-    let active = Rc::new(RefCell::new(HashSet::new()));
+    let active = Rc::new(RefCell::new(HashMap::new()));
+    // DOM getters and application callbacks can synchronously dispatch another
+    // pointer event. Listener captures are immutable; mutable state is scoped
+    // inside the active-pointer cell instead of the JavaScript closure.
     // pointerdown
     {
         let callbacks = Arc::clone(callbacks);
         let active = Rc::clone(&active);
         let capture = canvas.clone();
-        let closure = Closure::<dyn FnMut(web_sys::Event)>::new(move |e: web_sys::Event| {
+        let closure = Closure::<dyn Fn(web_sys::Event)>::new(move |e: web_sys::Event| {
             let pe: web_sys::PointerEvent = e.unchecked_into();
-            active.borrow_mut().insert(pe.pointer_id());
+            let id = pe.pointer_id();
+            let buttons = pe.buttons();
+            active.borrow_mut().insert(id, buttons);
             // Admission precedes application callbacks, which can remove the
             // canvas or synchronously dispatch another terminal event.
-            if let Err(error) = capture.set_pointer_capture(pe.pointer_id()) {
+            if let Err(error) = capture.set_pointer_capture(id) {
                 tracing::debug!(?error, "browser pointer capture was not admitted");
             }
             let input = convert_pointer_down(&pe);
@@ -104,9 +121,16 @@ fn register_pointer_events(canvas: &web_sys::HtmlCanvasElement, callbacks: &Arc<
     // pointermove
     {
         let callbacks = Arc::clone(callbacks);
-        let closure = Closure::<dyn FnMut(web_sys::Event)>::new(move |e: web_sys::Event| {
+        let active = Rc::clone(&active);
+        let closure = Closure::<dyn Fn(web_sys::Event)>::new(move |e: web_sys::Event| {
             let pe: web_sys::PointerEvent = e.unchecked_into();
-            let input = convert_pointer_move(&pe);
+            let id = pe.pointer_id();
+            let buttons = pe.buttons();
+            let previous = active
+                .borrow_mut()
+                .get_mut(&id)
+                .map(|held| std::mem::replace(held, buttons));
+            let input = convert_pointer_move(&pe, previous);
             if let Some(input) = input {
                 callbacks.dispatch_input(input);
             }
@@ -121,13 +145,14 @@ fn register_pointer_events(canvas: &web_sys::HtmlCanvasElement, callbacks: &Arc<
         let callbacks = Arc::clone(callbacks);
         let active = Rc::clone(&active);
         let capture = canvas.clone();
-        let closure = Closure::<dyn FnMut(web_sys::Event)>::new(move |e: web_sys::Event| {
+        let closure = Closure::<dyn Fn(web_sys::Event)>::new(move |e: web_sys::Event| {
             let pe: web_sys::PointerEvent = e.unchecked_into();
-            let was_active = active.borrow_mut().remove(&pe.pointer_id());
+            let id = pe.pointer_id();
+            let was_active = active.borrow_mut().remove(&id).is_some();
             if !was_active {
                 return;
             }
-            release_pointer_capture(&capture, pe.pointer_id());
+            release_pointer_capture(&capture, id);
             let input = convert_pointer_up(&pe);
             if let Some(input) = input {
                 callbacks.dispatch_input(input);
@@ -144,17 +169,15 @@ fn register_pointer_events(canvas: &web_sys::HtmlCanvasElement, callbacks: &Arc<
         let callbacks = Arc::clone(callbacks);
         let active = Rc::clone(&active);
         let capture = canvas.clone();
-        let closure = Closure::<dyn FnMut(web_sys::Event)>::new(move |e: web_sys::Event| {
+        let closure = Closure::<dyn Fn(web_sys::Event)>::new(move |e: web_sys::Event| {
             let pe: web_sys::PointerEvent = e.unchecked_into();
-            let was_active = active.borrow_mut().remove(&pe.pointer_id());
+            let id = pe.pointer_id();
+            let was_active = active.borrow_mut().remove(&id).is_some();
             if !was_active {
                 return;
             }
-            release_pointer_capture(&capture, pe.pointer_id());
-            if let Some(input) = pointer_input(
-                ui_events::pointer::PointerEvent::Cancel(make_pointer_info(&pe)),
-                (pe.time_stamp() * 1_000_000.0) as u64,
-            ) {
+            release_pointer_capture(&capture, id);
+            if let Some(input) = convert_pointer_cancel(&pe, CancelReason::Platform) {
                 callbacks.dispatch_input(input);
             }
         });
@@ -165,16 +188,14 @@ fn register_pointer_events(canvas: &web_sys::HtmlCanvasElement, callbacks: &Arc<
 
     {
         let callbacks = Arc::clone(callbacks);
-        let closure = Closure::<dyn FnMut(web_sys::Event)>::new(move |e: web_sys::Event| {
+        let closure = Closure::<dyn Fn(web_sys::Event)>::new(move |e: web_sys::Event| {
             let pe: web_sys::PointerEvent = e.unchecked_into();
+            let id = pe.pointer_id();
             // Up/cancel removes admission before releasing capture. The loss
             // notification following that terminal edge must stay inert.
-            let was_active = active.borrow_mut().remove(&pe.pointer_id());
+            let was_active = active.borrow_mut().remove(&id).is_some();
             if was_active {
-                if let Some(input) = pointer_input(
-                    ui_events::pointer::PointerEvent::Cancel(make_pointer_info(&pe)),
-                    (pe.time_stamp() * 1_000_000.0) as u64,
-                ) {
+                if let Some(input) = convert_pointer_cancel(&pe, CancelReason::CaptureLost) {
                     callbacks.dispatch_input(input);
                 }
             }
@@ -324,6 +345,22 @@ extern "C" {
     fn client_x_f64(this: &PreciseMouseEvent) -> f64;
     #[wasm_bindgen(method, getter, js_name = clientY)]
     fn client_y_f64(this: &PreciseMouseEvent) -> f64;
+
+    type ExtendedPointerEvent;
+    #[wasm_bindgen(method, getter, js_name = width)]
+    fn width_f64(this: &ExtendedPointerEvent) -> f64;
+    #[wasm_bindgen(method, getter, js_name = height)]
+    fn height_f64(this: &ExtendedPointerEvent) -> f64;
+    #[wasm_bindgen(method, getter, catch, js_name = altitudeAngle)]
+    fn altitude_angle(this: &ExtendedPointerEvent) -> Result<f64, JsValue>;
+    #[wasm_bindgen(method, getter, catch, js_name = azimuthAngle)]
+    fn azimuth_angle(this: &ExtendedPointerEvent) -> Result<f64, JsValue>;
+    #[wasm_bindgen(method, getter, catch, js_name = twist)]
+    fn twist_degrees(this: &ExtendedPointerEvent) -> Result<f64, JsValue>;
+    #[wasm_bindgen(method, catch, js_name = getCoalescedEvents)]
+    fn coalesced_events(this: &ExtendedPointerEvent) -> Result<js_sys::Array, JsValue>;
+    #[wasm_bindgen(method, catch, js_name = getPredictedEvents)]
+    fn predicted_events(this: &ExtendedPointerEvent) -> Result<js_sys::Array, JsValue>;
 }
 
 fn pointer_position(event: &web_sys::MouseEvent) -> dpi::PhysicalPosition<f64> {
@@ -377,21 +414,26 @@ fn untransformed_wheel_position(
     ))
 }
 
-fn make_pointer_info(pe: &web_sys::PointerEvent) -> ui_events::pointer::PointerInfo {
-    use ui_events::pointer::{PointerId, PointerInfo, PointerType};
-
-    let pointer_type = match pe.pointer_type().as_str() {
-        "mouse" => PointerType::Mouse,
-        "pen" => PointerType::Pen,
-        "touch" => PointerType::Touch,
-        _ => PointerType::Unknown,
+fn make_pointer_info(pe: &web_sys::PointerEvent) -> Option<PointerInfo> {
+    let id = PointerId::try_from(u64::try_from(pe.pointer_id()).ok()?).ok()?;
+    let kind = match pe.pointer_type().as_str() {
+        "mouse" => PointerKind::Mouse,
+        "pen" => PointerKind::Pen {
+            tool: if pe.button() == 5 || pe.buttons() & 32 != 0 {
+                PenTool::Eraser
+            } else {
+                PenTool::Tip
+            },
+        },
+        "touch" => PointerKind::Touch,
+        _ => PointerKind::Unknown,
     };
-
-    PointerInfo {
-        pointer_id: PointerId::new(pe.pointer_id() as u64),
-        persistent_device_id: None,
-        pointer_type,
-    }
+    let role = if pe.is_primary() {
+        PointerRole::Primary
+    } else {
+        PointerRole::Additional
+    };
+    Some(PointerInfo::new(id, kind).with_role(role))
 }
 
 /// Translate the DOM `MouseEvent.buttons` bitmask into `PointerButtons`.
@@ -403,7 +445,7 @@ fn make_pointer_info(pe: &web_sys::PointerEvent) -> ui_events::pointer::PointerI
 ///
 /// Bit values are fixed by the UI Events spec: 1 primary, 2 secondary,
 /// 4 auxiliary, 8 back and 16 forward.
-fn buttons_from_mask(mask: u16) -> ui_events::pointer::PointerButtons {
+fn upstream_buttons_from_mask(mask: u16) -> ui_events::pointer::PointerButtons {
     use ui_events::pointer::{PointerButton, PointerButtons};
 
     let mut buttons = PointerButtons::default();
@@ -425,81 +467,163 @@ fn buttons_from_mask(mask: u16) -> ui_events::pointer::PointerButtons {
     buttons
 }
 
-/// `count` is the W3C click count — `1` on Down/Up, `0` on motion (the
-/// cross-wire contract in flui-interaction's module doc). `time` converts
-/// the DOM event's millisecond `timeStamp` (page-load base) to the
-/// contract's nanoseconds.
-fn make_pointer_state(pe: &web_sys::PointerEvent, count: u8) -> ui_events::pointer::PointerState {
-    use dpi::PhysicalSize;
-    use ui_events::pointer::{PointerOrientation, PointerState};
-
-    let modifiers = extract_modifiers_from_mouse(pe);
-
-    PointerState {
-        time: (pe.time_stamp() * 1_000_000.0) as u64,
-        position: pointer_position(pe),
-        buttons: buttons_from_mask(pe.buttons()),
-        modifiers,
-        count,
-        contact_geometry: PhysicalSize::new(pe.width().max(1) as f64, pe.height().max(1) as f64),
-        orientation: PointerOrientation::default(),
-        pressure: pe.pressure(),
-        tangential_pressure: pe.tangential_pressure(),
-        scale_factor: web_sys::window().map_or(1.0, |w| w.device_pixel_ratio()),
-    }
+fn buttons_from_mask(mask: u16) -> PointerButtons {
+    [
+        (1, PointerButton::PRIMARY),
+        (2, PointerButton::SECONDARY),
+        (4, PointerButton::AUXILIARY),
+        (8, PointerButton::BACK),
+        (16, PointerButton::FORWARD),
+        (32, PointerButton::PRIMARY),
+    ]
+    .into_iter()
+    .filter(|(bit, _)| mask & bit != 0)
+    .map(|(_, button)| button)
+    .collect()
 }
 
-fn map_button(button: i16) -> Option<ui_events::pointer::PointerButton> {
-    use ui_events::pointer::PointerButton;
-
+fn map_button(button: i16) -> Option<PointerButton> {
     match button {
-        0 => Some(PointerButton::Primary),
-        1 => Some(PointerButton::Auxiliary),
-        2 => Some(PointerButton::Secondary),
-        3 => Some(PointerButton::X1),
-        4 => Some(PointerButton::X2),
+        0 | 5 => Some(PointerButton::PRIMARY),
+        1 => Some(PointerButton::AUXILIARY),
+        2 => Some(PointerButton::SECONDARY),
+        3 => Some(PointerButton::BACK),
+        4 => Some(PointerButton::FORWARD),
         _ => None,
     }
 }
 
-fn convert_pointer_down(pe: &web_sys::PointerEvent) -> Option<PlatformInput> {
-    use ui_events::pointer::{PointerButtonEvent, PointerEvent};
+fn pointer_time(pe: &web_sys::PointerEvent) -> EventTime {
+    EventTime::from_nanos((pe.time_stamp() * 1_000_000.0) as u64)
+}
 
-    pointer_input(
-        PointerEvent::Down(PointerButtonEvent {
-            button: map_button(pe.button()),
-            pointer: make_pointer_info(pe),
-            state: make_pointer_state(pe, 1),
-        }),
-        (pe.time_stamp() * 1_000_000.0) as u64,
-    )
+fn pointer_sample(pe: &web_sys::PointerEvent) -> Option<PointerSample> {
+    let point = pointer_position(pe);
+    let position = PointerPosition::try_new(Point::new(point.x, point.y)).ok()?;
+    let mut sample = PointerSample::new(pointer_time(pe), position);
+    // DOM has no per-device sensor capability query. Keep its reported touch
+    // and pen pressure, including zero, without treating a mouse fallback as force.
+    if matches!(pe.pointer_type().as_str(), "touch" | "pen") {
+        sample.pressure = Pressure::saturating(pe.pressure()).ok();
+        let extended: &ExtendedPointerEvent = pe.unchecked_ref();
+        sample.contact_size =
+            ContactSize::try_new(Size::new(extended.width_f64(), extended.height_f64())).ok();
+        if pe.pointer_type() == "pen" {
+            sample.tangential_pressure =
+                TangentialPressure::saturating(pe.tangential_pressure()).ok();
+            let altitude = extended
+                .altitude_angle()
+                .ok()
+                .and_then(|value| PenOrientation::try_altitude(value).ok());
+            let azimuth = extended
+                .azimuth_angle()
+                .ok()
+                .and_then(|value| PenOrientation::try_azimuth(value).ok());
+            sample.orientation = match (altitude, azimuth) {
+                (Some(altitude), Some(azimuth)) => altitude
+                    .altitude()
+                    .zip(azimuth.azimuth())
+                    .and_then(|(altitude, azimuth)| {
+                        PenOrientation::try_new(altitude, azimuth).ok()
+                    }),
+                (altitude, azimuth) => altitude.or(azimuth),
+            };
+            sample.twist = extended
+                .twist_degrees()
+                .ok()
+                .and_then(|degrees| Twist::try_new(degrees.to_radians()).ok());
+        }
+    }
+    Some(sample)
+}
+
+fn pointer_modifiers(pe: &web_sys::PointerEvent) -> flui_platform_api::keyboard::Modifiers {
+    crate::shared::input_vocabulary::modifiers(extract_modifiers_from_mouse(pe))
+}
+
+fn convert_pointer_down(pe: &web_sys::PointerEvent) -> Option<PlatformInput> {
+    let pointer = make_pointer_info(pe)?;
+    let button = map_button(pe.button())?;
+    let held = buttons_from_mask(pe.buttons());
+    let press = PointerPress::new(pointer, button, held, pointer_sample(pe)?)
+        .with_modifiers(pointer_modifiers(pe));
+    Some(PlatformInput::Pointer(if held.without(button).is_empty() {
+        PointerEvent::Down(press)
+    } else {
+        PointerEvent::ButtonChange(ButtonChange::Pressed(press))
+    }))
 }
 
 fn convert_pointer_up(pe: &web_sys::PointerEvent) -> Option<PlatformInput> {
-    use ui_events::pointer::{PointerButtonEvent, PointerEvent};
-
-    pointer_input(
-        PointerEvent::Up(PointerButtonEvent {
-            button: map_button(pe.button()),
-            pointer: make_pointer_info(pe),
-            state: make_pointer_state(pe, 1),
-        }),
-        (pe.time_stamp() * 1_000_000.0) as u64,
-    )
+    let pointer = make_pointer_info(pe)?;
+    let Some(sample) = pointer_sample(pe) else {
+        return convert_pointer_cancel(pe, CancelReason::InvalidInput);
+    };
+    let button = map_button(pe.button())?;
+    let held = buttons_from_mask(pe.buttons());
+    let release =
+        PointerRelease::new(pointer, button, held, sample).with_modifiers(pointer_modifiers(pe));
+    Some(PlatformInput::Pointer(if held.without(button).is_empty() {
+        PointerEvent::Up(release)
+    } else {
+        PointerEvent::ButtonChange(ButtonChange::Released(release))
+    }))
 }
 
-fn convert_pointer_move(pe: &web_sys::PointerEvent) -> Option<PlatformInput> {
-    use ui_events::pointer::{PointerEvent, PointerUpdate};
+fn convert_pointer_cancel(
+    pe: &web_sys::PointerEvent,
+    reason: CancelReason,
+) -> Option<PlatformInput> {
+    Some(PlatformInput::Pointer(PointerEvent::Cancel(
+        PointerCancel::new(make_pointer_info(pe)?, pointer_time(pe), reason),
+    )))
+}
 
-    pointer_input(
-        PointerEvent::Move(PointerUpdate {
-            pointer: make_pointer_info(pe),
-            current: make_pointer_state(pe, 0),
-            coalesced: Vec::new(),
-            predicted: Vec::new(),
-        }),
-        (pe.time_stamp() * 1_000_000.0) as u64,
-    )
+fn pointer_samples(
+    pe: &web_sys::PointerEvent,
+    values: Result<js_sys::Array, JsValue>,
+) -> Vec<PointerSample> {
+    let Ok(values) = values else {
+        return Vec::new();
+    };
+    let kind = pe.pointer_type();
+    values
+        .iter()
+        .filter_map(|value| value.dyn_into::<web_sys::PointerEvent>().ok())
+        .filter(|sample| sample.pointer_id() == pe.pointer_id() && sample.pointer_type() == kind)
+        .filter_map(|sample| pointer_sample(&sample))
+        .collect()
+}
+
+fn convert_pointer_move(
+    pe: &web_sys::PointerEvent,
+    previous: Option<u16>,
+) -> Option<PlatformInput> {
+    let pointer = make_pointer_info(pe)?;
+    let sample = pointer_sample(pe)?;
+    let held = buttons_from_mask(pe.buttons());
+    let modifiers = pointer_modifiers(pe);
+    if let Some(previous) = previous
+        && let Some(button) = map_button(pe.button())
+        && buttons_from_mask(previous).contains(button) != held.contains(button)
+    {
+        let change = if held.contains(button) {
+            ButtonChange::Pressed(
+                PointerPress::new(pointer, button, held, sample).with_modifiers(modifiers),
+            )
+        } else {
+            ButtonChange::Released(
+                PointerRelease::new(pointer, button, held, sample).with_modifiers(modifiers),
+            )
+        };
+        return Some(PlatformInput::Pointer(PointerEvent::ButtonChange(change)));
+    }
+    let extended: &ExtendedPointerEvent = pe.unchecked_ref();
+    let event = PointerMove::new(pointer, held, sample)
+        .with_modifiers(modifiers)
+        .with_coalesced(pointer_samples(pe, extended.coalesced_events()))
+        .with_predicted(pointer_samples(pe, extended.predicted_events()));
+    Some(PlatformInput::Pointer(PointerEvent::Move(event)))
 }
 
 /// Convert a DOM `WheelEvent` to a W3C `PointerEvent::Scroll`.
@@ -534,7 +658,7 @@ fn convert_wheel_event(
             state: PointerState {
                 time: (we.time_stamp() * 1_000_000.0) as u64,
                 position: wheel_position(we, canvas),
-                buttons: buttons_from_mask(we.buttons()),
+                buttons: upstream_buttons_from_mask(we.buttons()),
                 modifiers,
                 count: 0,
                 contact_geometry: dpi::PhysicalSize::new(1.0, 1.0),

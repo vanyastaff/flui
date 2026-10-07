@@ -49,7 +49,7 @@ use flui_objects::{
 use flui_painting::Alignment;
 use flui_painting::paint::Clip;
 use flui_painting::styling::BorderRadius;
-use flui_platform_api::InMemoryClipboard;
+use flui_platform_api::{EventTime, InMemoryClipboard};
 use flui_rendering::constraints::{BoxConstraints, SliverGeometry};
 use flui_rendering::pipeline::PipelineCell;
 use flui_rendering::storage::IntrinsicDimension;
@@ -192,6 +192,34 @@ impl PointerContacts {
 /// on how much real time the test process happened to be scheduled between
 /// calls.
 pub const POINTER_SAMPLE_INTERVAL: Duration = Duration::from_millis(8);
+
+/// Synthetic readings use the same virtual time as the realm's frame and
+/// gesture clocks. Explicit hardware events bypass this producer.
+fn dispatch_synthetic_pointer(host: &WidgetHost, mut event: PointerEvent) {
+    let nanos = u64::try_from(host.clock().elapsed().as_nanos())
+        .expect("BUG: headless pointer time exceeds the nanosecond range");
+    let time = EventTime::from_nanos(nanos);
+    match &mut event {
+        PointerEvent::Down(down) => down.sample.time = time,
+        PointerEvent::Up(up) => up.sample.time = time,
+        PointerEvent::Move(movement) => {
+            let mut sample = *movement.current();
+            sample.time = time;
+            *movement = flui_interaction::events::PointerMove::new(
+                movement.pointer,
+                movement.buttons,
+                sample,
+            )
+            .with_modifiers(movement.modifiers)
+            .with_coalesced(movement.coalesced().to_vec())
+            .with_predicted(movement.predicted().to_vec());
+        }
+        PointerEvent::Cancel(cancel) => cancel.time = time,
+        PointerEvent::Scroll(scroll) => scroll.time = time,
+        _ => unreachable!("synthetic pointer helpers produce measured contacts or scrolls"),
+    }
+    host.dispatch_pointer(&event);
+}
 
 /// Loose constraints from `0` up to `max × max` on both axes.
 pub fn loose(max: f64) -> BoxConstraints {
@@ -1495,10 +1523,8 @@ impl LaidOut {
     /// Advance the realm's virtual clock by `dt` before a synthetic Move
     /// that records a new velocity sample.
     ///
-    /// `DragGestureRecognizer` timestamps its velocity samples from
-    /// `RecognizerBase::now()`, which reads the SAME clock-bound
-    /// `GestureArena` the realm hands the tree via its root
-    /// `GestureArenaScope`, on the realm's clock. Advancing that clock explicitly,
+    /// Synthetic readings carry the realm clock's elapsed time as their
+    /// hardware timestamp. Advancing that clock explicitly,
     /// instead of spin-waiting on `Instant::now()` to tick, means consecutive
     /// samples get a fixed, deterministic spacing no matter how much real
     /// wall-clock time the test process happens to be scheduled between
@@ -1537,7 +1563,7 @@ impl LaidOut {
     pub fn dispatch_pointer_down(&self, x: f64, y: f64) {
         let event = make_down_event_for_id(self.begin_contact(), offset(x, y), PointerKind::Mouse)
             .expect("headless pointer positions must be finite");
-        self.host.dispatch_pointer(&event);
+        dispatch_synthetic_pointer(&self.host, event);
     }
 
     /// As [`dispatch_pointer_down`](Self::dispatch_pointer_down), but a
@@ -1545,7 +1571,7 @@ impl LaidOut {
     pub fn dispatch_pointer_up(&self, x: f64, y: f64) {
         let event = make_up_event_for_id(self.current_contact(), offset(x, y), PointerKind::Mouse)
             .expect("headless pointer positions must be finite");
-        self.host.dispatch_pointer(&event);
+        dispatch_synthetic_pointer(&self.host, event);
         self.contacts.end();
     }
 
@@ -1567,7 +1593,7 @@ impl LaidOut {
         let event =
             make_move_event_for_id(self.current_contact(), offset(x, y), PointerKind::Mouse)
                 .expect("headless pointer positions must be finite");
-        self.host.dispatch_pointer(&event);
+        dispatch_synthetic_pointer(&self.host, event);
     }
 
     /// A mouse hover move to `(x, y)` with no active contact.
@@ -1592,7 +1618,7 @@ impl LaidOut {
             unreachable!("the test move constructor must produce PointerEvent::Move");
         };
         update.buttons = PointerButtons::NONE;
-        self.dispatch_pointer_event(&event);
+        dispatch_synthetic_pointer(&self.host, event);
     }
 
     /// A mouse-wheel / trackpad pointer-scroll at `(x, y)` with a PIXEL
@@ -1603,7 +1629,7 @@ impl LaidOut {
     pub fn dispatch_scroll(&self, x: f64, y: f64, dx: f64, dy: f64) {
         let event = flui_interaction::events::make_scroll_event(offset(x, y), offset(dx, dy))
             .expect("headless scroll positions and deltas must be finite");
-        self.dispatch_pointer_event(&event);
+        dispatch_synthetic_pointer(&self.host, event);
     }
 
     /// As [`dispatch_scroll`](Self::dispatch_scroll), with a modifier chord
@@ -1622,13 +1648,13 @@ impl LaidOut {
             modifiers,
         )
         .expect("headless scroll positions and deltas must be finite");
-        self.dispatch_pointer_event(&event);
+        dispatch_synthetic_pointer(&self.host, event);
     }
 
     /// Cancel the in-flight contact on its cached Down route.
     pub fn dispatch_pointer_cancel(&self) {
         let event = make_cancel_event_for_id(self.current_contact(), PointerKind::Mouse);
-        self.dispatch_pointer_event(&event);
+        dispatch_synthetic_pointer(&self.host, event);
         self.contacts.end();
     }
 
@@ -1647,7 +1673,7 @@ impl LaidOut {
             PointerButton::SECONDARY,
         )
         .expect("headless pointer positions must be finite");
-        self.host.dispatch_pointer(&event);
+        dispatch_synthetic_pointer(&self.host, event);
     }
 
     /// As [`dispatch_secondary_down`](Self::dispatch_secondary_down), but a
@@ -1662,7 +1688,7 @@ impl LaidOut {
             PointerButton::SECONDARY,
         )
         .expect("headless pointer positions must be finite");
-        self.host.dispatch_pointer(&event);
+        dispatch_synthetic_pointer(&self.host, event);
         self.contacts.end();
     }
 }

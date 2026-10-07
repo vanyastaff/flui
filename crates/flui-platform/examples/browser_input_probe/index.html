@@ -2,8 +2,8 @@
 <meta charset="utf-8">
 <title>FLUI browser contracts</title>
 <style>
-body { font: 16px monospace; }
-nav { position: fixed; right: 12px; top: 12px; z-index: 9999; background: white; padding: 12px; }
+body { font: 16px monospace; padding-top: 96px; }
+nav { position: fixed; left: 12px; right: 12px; top: 12px; z-index: 9999; background: white; padding: 12px; display: flex; flex-wrap: wrap; gap: 4px; }
 pre { position: relative; z-index: 9999; background: white; width: max-content; }
 </style>
 <nav>
@@ -12,8 +12,13 @@ pre { position: relative; z-index: 9999; background: white; width: max-content; 
   <button id="cancel">Check browser cancellation</button>
   <button id="capture-loss">Check capture loss</button>
   <button id="fractional">Check fractional positions</button>
+  <button id="owned-wheel">Check wheel units and precision</button>
+  <button id="owned-keyboard">Check native key vocabulary</button>
   <button id="pen-samples">Check pen samples</button>
   <button id="chord">Check native pointer chord</button>
+  <button id="sensor-validation">Check pen sensor validation</button>
+  <button id="native-samples">Arm trusted mouse samples</button>
+  <button id="getter-reentry">Check getter reentry (fresh page)</button>
   <button id="capture">Arm trusted capture check</button>
   <button id="display">Check display</button>
   <button id="created">Check created callback</button>
@@ -104,6 +109,40 @@ document.getElementById('cancel').onclick = () => check('cancel-check', () => {
   canvas.dispatchEvent(new PointerEvent('pointerdown', { ...common, button: 0, buttons: 1 }));
   canvas.dispatchEvent(new PointerEvent('pointerup', { ...common, button: 0, buttons: 0 }));
   equal({ sequence: document.getElementById('sequence')?.textContent }, { sequence: 'down,cancel,down,up,' });
+});
+document.getElementById('owned-wheel').onclick = () => check('owned-wheel-check', () => {
+  const canvas = document.querySelector('canvas');
+  if (!canvas) throw new Error('Install input first');
+  for (const [deltaMode, unit] of [[0, 'Pixels'], [1, 'Lines'], [2, 'Pages']]) {
+    canvas.dispatchEvent(new WheelEvent('wheel', {
+      bubbles: true, clientX: 80, clientY: 40, deltaMode,
+      deltaX: 1.000000000123, deltaY: -2.000000000456, shiftKey: true,
+    }));
+    equal(JSON.parse(document.getElementById('scroll-data').textContent), {
+      unit, x: 1.000000000123, y: -2.000000000456, precision: 'Unknown', shift: true,
+    });
+  }
+});
+document.getElementById('owned-keyboard').onclick = () => check('owned-keyboard-check', () => {
+  for (const [key, code, location, expectedLocation] of [
+    ['Dead', 'Quote', 0, 'Standard'],
+    ['AudioVolumeUp', 'AudioVolumeUp', 0, 'Standard'],
+    ['Enter', 'NumpadEnter', 3, 'Numpad'],
+    ['ж', 'KeyA', 0, 'Standard'],
+  ]) {
+    window.dispatchEvent(new KeyboardEvent('keydown', {
+      key, code, location, repeat: true, isComposing: true, shiftKey: true,
+    }));
+    equal(JSON.parse(document.getElementById('keyboard').textContent), {
+      key, code, state: 'Down', location: expectedLocation,
+      repeat: 'AutoRepeat', composition: 'Active', shift: true,
+    });
+    window.dispatchEvent(new KeyboardEvent('keyup', { key, code, location }));
+    equal(JSON.parse(document.getElementById('keyboard').textContent), {
+      key, code, state: 'Up', location: expectedLocation,
+      repeat: 'First', composition: 'Inactive', shift: false,
+    });
+  }
 });
 document.getElementById('fractional').onclick = () => check('fractional-check', () => {
   const canvas = document.querySelector('canvas');
@@ -226,10 +265,124 @@ document.getElementById('chord').onclick = () => check('chord-check', () => {
   canvas.dispatchEvent(new PointerEvent('pointerdown', { ...common, button: 0, buttons: 1 }));
   // W3C emits pointermove for further mouse-button edges while contact remains.
   canvas.dispatchEvent(new PointerEvent('pointermove', { ...common, button: 2, buttons: 3 }));
+  equal({ sequence: document.getElementById('sequence')?.textContent }, { sequence: 'down,button-press,' });
   equal(JSON.parse(document.getElementById('button-press')?.textContent ?? 'null'), { primary: true, secondary: true });
   canvas.dispatchEvent(new PointerEvent('pointermove', { ...common, button: 2, buttons: 1 }));
+  equal({ sequence: document.getElementById('sequence')?.textContent }, { sequence: 'down,button-press,button-release,' });
   equal(JSON.parse(document.getElementById('button-release')?.textContent ?? 'null'), { primary: true, secondary: false });
   canvas.dispatchEvent(new PointerEvent('pointerup', { ...common, button: 0, buttons: 0 }));
   equal({ sequence: document.getElementById('sequence')?.textContent }, { sequence: 'down,button-press,button-release,up,' });
+});
+
+document.getElementById('sensor-validation').onclick = () => check('sensor-validation-check', () => {
+  const canvas = document.querySelector('canvas');
+  if (!canvas) throw new Error('Install input first');
+  const rect = canvas.getBoundingClientRect();
+  const make = (readings = {}) => {
+    const event = new PointerEvent('pointermove', {
+      pointerId: 1, pointerType: 'pen', isPrimary: false, bubbles: true,
+      clientX: rect.left + 60.25, clientY: rect.top + 40.5,
+      button: -1, buttons: 0, pressure: 0, tangentialPressure: 0,
+    });
+    // Deliberately malformed/absent source readings exercise the public DOM
+    // boundary. Verify the source before checking the resulting owned sample.
+    for (const [name, value] of Object.entries(readings)) Object.defineProperty(event, name, { value });
+    return event;
+  };
+  const deliver = event => {
+    canvas.dispatchEvent(event);
+    return JSON.parse(document.getElementById('samples')?.textContent ?? 'null');
+  };
+  const near = (actual, expected) => { if (actual === null || Math.abs(actual - expected) > 1e-12) throw new Error(`angle: expected ${expected}, got ${actual}`); };
+  for (const [altitude, azimuth, expectedAltitude, expectedAzimuth] of [
+    [NaN, Math.PI / 2, null, Math.PI / 2],
+    [Math.PI / 4, undefined, Math.PI / 4, null],
+    [undefined, undefined, null, null],
+  ]) {
+    const event = make({ altitudeAngle: altitude, azimuthAngle: azimuth });
+    if (!Object.is(event.altitudeAngle, altitude) || !Object.is(event.azimuthAngle, azimuth)) throw new Error('source angle precondition');
+    const actual = deliver(event);
+    equal(actual, { role: 'Additional' });
+    equal(actual.current, { pressure: 0, tangential: 0 });
+    if (expectedAltitude === null) equal(actual.current, { altitude: null }); else near(actual.current.altitude, expectedAltitude);
+    if (expectedAzimuth === null) equal(actual.current, { azimuth: null }); else near(actual.current.azimuth, expectedAzimuth);
+  }
+  const malformed = make({ pressure: Infinity, tangentialPressure: NaN, twist: NaN, width: NaN });
+  if (!Number.isNaN(malformed.twist) || malformed.pressure !== Infinity) throw new Error('source nonfinite precondition');
+  equal(deliver(malformed).current, { pressure: null, tangential: null, twist: null, width: null, height: null });
+  const wrapped = make({ twist: 450 });
+  equal(wrapped, { twist: 450 });
+  near(deliver(wrapped).current.twist, Math.PI / 2);
+  const absentMethods = make({ getCoalescedEvents: undefined, getPredictedEvents: () => { throw new Error('source list unavailable'); } });
+  const recovered = deliver(absentMethods);
+  equal({ coalesced: recovered.coalesced.length, predicted: recovered.predicted.length }, { coalesced: 0, predicted: 0 });
+  const eraser = new PointerEvent('pointermove', { pointerId: 19, pointerType: 'pen', isPrimary: true, bubbles: true, button: -1, buttons: 32, pressure: 0, clientX: rect.left + 60.25, clientY: rect.top + 40.5 });
+  equal(eraser, { buttons: 32, isPrimary: true });
+  equal(deliver(eraser), { kind: 'Pen { tool: Eraser }', role: 'Primary' });
+  equal(JSON.parse(document.getElementById('move')?.textContent ?? 'null'), { primary: true, secondary: false });
+});
+
+document.getElementById('native-samples').onclick = () => {
+  const canvas = document.querySelector('canvas');
+  if (!canvas) return report('native-samples-check', 'FAIL: Install input first');
+  report('native-samples-check', 'Move the real pointer over the canvas');
+  canvas.addEventListener('pointermove', event => check('native-samples-check', () => {
+    if (!event.isTrusted || event.pointerType !== 'mouse') throw new Error('trusted mouse source required');
+    const rect = canvas.getBoundingClientRect();
+    const style = getComputedStyle(canvas);
+    if (style.transform !== 'none') throw new Error('trusted source fixture requires an untransformed canvas');
+    const reading = source => {
+      const expectedX = source.clientX - rect.left - parseFloat(style.borderLeftWidth);
+      const expectedY = source.clientY - rect.top - parseFloat(style.borderTopWidth);
+      if (Math.abs(source.offsetX - expectedX) > 1e-9 || Math.abs(source.offsetY - expectedY) > 1e-9) throw new Error('native sample must retain canvas-local source coordinates');
+      return { time: Math.trunc(source.timeStamp * 1000000), x: expectedX, y: expectedY };
+    };
+    const current = reading(event);
+    const coalesced = event.getCoalescedEvents?.() ?? [];
+    const predicted = event.getPredictedEvents?.() ?? [];
+    report('native-sample-source', JSON.stringify({ trusted: event.isTrusted, coalescedAPI: typeof event.getCoalescedEvents, predictedAPI: typeof event.getPredictedEvents, current, coalesced: coalesced.map(reading), predicted: predicted.map(reading) }));
+    const expected = (sources, before) => sources.map(reading).filter(sample =>
+      (before ? sample.time <= current.time : sample.time >= current.time) &&
+      !(sample.time === current.time && sample.x === current.x && sample.y === current.y)
+    ).sort((a, b) => a.time - b.time);
+    const actual = JSON.parse(document.getElementById('samples')?.textContent ?? 'null');
+    equal(actual.current, { ...current, pressure: null });
+    const positions = samples => samples.map(({ time, x, y }) => ({ time, x, y }));
+    for (const [family, sources, before] of [['coalesced', coalesced, true], ['predicted', predicted, false]]) {
+      if (JSON.stringify(positions(actual[family])) !== JSON.stringify(expected(sources, before))) throw new Error(`${family} differs from trusted native source`);
+    }
+  }), { once: true });
+};
+
+document.getElementById('getter-reentry').onclick = () => check('getter-reentry-check', () => {
+  const canvas = document.querySelector('canvas');
+  if (!canvas) throw new Error('Install input first');
+  report('sequence', '');
+  report('getter-error', 'none');
+  const common = { pointerType: 'touch', bubbles: true, clientX: 80, clientY: 40, button: 0 };
+  const inner = new PointerEvent('pointerdown', { ...common, pointerId: 22, buttons: 1 });
+  const outer = new PointerEvent('pointerdown', { ...common, pointerId: 21, buttons: 1 });
+  let entered = false;
+  Object.defineProperty(outer, 'buttons', { get() {
+    if (!entered) {
+      entered = true;
+      report('getter-stage', 'nested native DOM dispatch');
+      canvas.dispatchEvent(inner);
+    }
+    return 1;
+  } });
+  const onerror = error => report('getter-error', error.message);
+  window.addEventListener('error', onerror);
+  try {
+    canvas.dispatchEvent(outer);
+    if (!entered) throw new Error('source getter was not reached');
+    equal({ sequence: document.getElementById('sequence')?.textContent }, { sequence: 'down,down,' });
+    canvas.dispatchEvent(new PointerEvent('pointerup', { ...common, pointerId: 22, buttons: 0 }));
+    canvas.dispatchEvent(new PointerEvent('pointerup', { ...common, pointerId: 21, buttons: 0 }));
+    equal({ sequence: document.getElementById('sequence')?.textContent }, { sequence: 'down,down,up,up,' });
+    equal({ error: document.getElementById('getter-error')?.textContent }, { error: 'none' });
+  } finally {
+    window.removeEventListener('error', onerror);
+  }
 });
 </script>

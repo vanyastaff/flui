@@ -62,7 +62,27 @@ mod browser {
             .open_window(WindowOptions::default())
             .map_err(|error| JsValue::from_str(&error.to_string()))?;
         window.on_input(Box::new(|input| {
+            if let PlatformInput::Keyboard(event) = &input {
+                let key = match &event.key {
+                    flui_platform_api::keyboard::Key::Named(key) => key.as_str(),
+                    flui_platform_api::keyboard::Key::Character(text) => text.as_str(),
+                    _ => "unknown",
+                };
+                publish("keyboard", &format!(
+                    r#"{{"key":"{}","code":"{}","state":"{:?}","location":"{:?}","repeat":"{:?}","composition":"{:?}","shift":{}}}"#,
+                    key, event.code.as_str(), event.state(), event.location,
+                    event.repeat(), event.composition,
+                    event.modifiers.contains(flui_platform_api::keyboard::Modifiers::SHIFT),
+                ));
+            }
             if let PlatformInput::Pointer(event) = input {
+                if let PointerEvent::Scroll(event) = &event {
+                    publish("scroll-data", &format!(
+                        r#"{{"unit":"{:?}","x":{},"y":{},"precision":"{:?}","shift":{}}}"#,
+                        event.delta.unit(), event.delta.x(), event.delta.y(), event.precision,
+                        event.modifiers.contains(flui_platform_api::keyboard::Modifiers::SHIFT),
+                    ));
+                }
                 if let PointerEvent::Move(event) = &event {
                     let readings = |samples: &[PointerSample]| samples.iter().map(sample_json).collect::<Vec<_>>().join(",");
                     publish("samples", &format!(

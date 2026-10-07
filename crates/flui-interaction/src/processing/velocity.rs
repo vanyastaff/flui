@@ -248,9 +248,8 @@ pub struct VelocityTracker {
     /// Only the buffer-pure computation is cached; the time-dependent
     /// "stationary for 40 ms" gate is re-evaluated on every call, so a cached
     /// fit is returned only while the pointer is still moving. This collapses
-    /// the repeated queries on the drag-end path — most visibly
-    /// [`super::InputPredictor::predict`], which asks for both the velocity
-    /// and the estimate in one call — from two O(N) QR solves to one.
+    /// repeated velocity and estimate queries over unchanged samples from
+    /// two O(N) QR solves to one.
     cached_fit: Option<Fit>,
 }
 

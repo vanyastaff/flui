@@ -19,8 +19,8 @@
 //! - **Open gesture traits**: external recognizers implement the same
 //!   dyn-compatible arbitration and event-delivery contracts as built-ins
 //! - **Canonical pointer id**: [`PointerId`] is re-exported from the
-//!   `flui-platform-api` crate (`NonZeroU64`-backed). [`FocusNodeId`] and
-//!   [`HandlerId`] are crate-local `NonZeroU64` newtypes that prevent
+//!   `flui-platform-api` crate (`NonZeroU64`-backed). [`FocusNodeId`] is a
+//!   crate-local `NonZeroU64` newtype that prevents
 //!   mixing up different ID types at compile time
 //! - **Niche optimization**: `Option<FocusNodeId>` is the same size as
 //!   `FocusNodeId`
@@ -118,7 +118,6 @@
 //!
 //! ## Other
 //! - [`routing::MouseTracker`] — Mouse enter/exit/hover tracking
-//! - [`PointerSignalResolver`] — Pointer signal conflict resolution
 //!
 //! # Separation from Rendering
 //!
@@ -197,8 +196,8 @@ pub mod velocity;
 // Re-exports: Gesture Recognition
 // ============================================================================
 pub use arena::{
-    GestureArena, GestureArenaEntry, GestureArenaMember, GestureArenaTeam, GestureDisposition,
-    PointerSignalResolver, SignalPriority, SweepModel, TeamEntry, run_pointer_lifecycle,
+    GestureArena, GestureArenaEntry, GestureArenaMember, GestureDisposition, SweepModel,
+    run_pointer_lifecycle,
 };
 // ============================================================================
 // Re-exports: Other
@@ -220,26 +219,23 @@ pub use flui_foundation::{ManualClock, MonotonicClock, SystemClock};
 // Re-export commonly used event types at crate root
 pub use events::{CursorIcon, KeyEvent, PointerEvent, PointerEventExt};
 // Re-export observability surface — typed event names + span constants.
-pub use observability::{GestureEvent, SPAN_ARENA, SPAN_RECOGNIZER, pointer_event_kind};
 pub use flui_platform_api::pointer::{
     ButtonChange, CancelReason, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenTool,
     PointerButton, PointerButtons, PointerInfo, PointerKind, PointerMove, PointerPosition,
     PointerPress, PointerRelease, PointerRole, PointerSample, ScrollDelta, ScrollEvent,
     ScrollPhase, ScrollPrecision, ScrollUnit,
 };
+pub use observability::{GestureEvent, SPAN_ARENA, SPAN_RECOGNIZER, pointer_event_kind};
 // ============================================================================
 // Re-exports: geometry from flui_foundation
 // ============================================================================
 pub use flui_foundation::geometry::{Offset, Rect};
 pub use flui_platform_api::ImeEvent;
-pub use ids::{DeviceId, FocusNodeId, HandlerId, PointerId};
+pub use ids::{DeviceId, FocusNodeId, PointerId};
 // ============================================================================
 // Re-exports: Input Processing
 // ============================================================================
-pub use processing::{
-    InputMode, InputPredictor, PointerEventResampler, PredictedPosition, PredictionConfig,
-    RawInputHandler, RawPointerEvent, Velocity, VelocityEstimate, VelocityTracker,
-};
+pub use processing::{PointerEventResampler, Velocity, VelocityEstimate, VelocityTracker};
 pub use recognizers::{
     ArenaMembership, BeginContactError, CancelOutcome, ContactId, ContactSnapshot,
     DoubleTapDetails, DoubleTapGestureRecognizer, DragCancelCallback, DragDownCallback,
@@ -325,7 +321,7 @@ pub mod prelude {
     // Advanced interaction
     pub use crate::routing::{MouseTracker, MouseTrackerAnnotation, PointerMotionKind};
     // Input processing
-    pub use crate::processing::{InputPredictor, PointerEventResampler, Velocity, VelocityTracker};
+    pub use crate::processing::{PointerEventResampler, Velocity, VelocityTracker};
     // Event routing
     pub use crate::routing::{
         EventPropagation, FocusManager, HitTestBehavior, HitTestEntry, HitTestResult,
@@ -337,8 +333,7 @@ pub mod prelude {
     // Traits
     pub use crate::traits::DragAxis;
     pub use crate::{
-        arena::{GestureArenaTeam, PointerSignalResolver, SignalPriority, TeamEntry},
-        ids::{DeviceId, FocusNodeId, HandlerId, PointerId, RegionId},
+        ids::{DeviceId, FocusNodeId, PointerId, RegionId},
         recognizers::{
             DoubleTapGestureRecognizer, DragGestureRecognizer, ForcePressGestureRecognizer,
             LongPressGestureRecognizer, MultiTapGestureRecognizer, ScaleGestureRecognizer,
@@ -368,7 +363,6 @@ mod static_assertions {
     // IDs should be Send + Sync (they are Copy)
     impl AssertSendSync for PointerId {}
     impl AssertSendSync for FocusNodeId {}
-    impl AssertSendSync for HandlerId {}
     impl AssertSendSync for ScrollTarget {}
     impl AssertSendSync for PathClipTarget {}
     impl AssertSendSync for ShaderMaskTarget {}

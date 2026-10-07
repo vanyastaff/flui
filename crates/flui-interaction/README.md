@@ -139,29 +139,10 @@ errors rather than publishing non-finite positions. Coalesced measured samples
 and predicted samples remain distinct. Velocity uses actual measurement
 history, while predictions travel as separate source data.
 
-`RawInputHandler` offers a borrowed view of the same owned event. Its callback
-can inspect the complete source with `RawPointerEvent::event()`; identity,
-position, time and computed delta queries return `Option` where the source
-does not supply a value. The event cannot escape its synchronous callback:
-
-```rust
-use flui_interaction::{CancelReason, PointerEvent, PointerId, PointerInfo, PointerKind,
-    RawInputHandler};
-use flui_platform_api::{EventTime, pointer::PointerCancel};
-
-let pointer = PointerInfo::new(PointerId::try_from(1_u64).expect("nonzero id"),
-    PointerKind::Touch);
-let event = PointerEvent::Cancel(PointerCancel::new(pointer, EventTime::from_nanos(0),
-    CancelReason::Platform));
-let raw = RawInputHandler::new();
-raw.set_callback(|dispatch| {
-    assert!(matches!(dispatch.event(), PointerEvent::Cancel(_)));
-    assert!(dispatch.position().is_none());
-});
-let dispatched = raw.handle_event(&event).expect("enabled raw delivery");
-assert_eq!(dispatched.pointer(), Some(pointer.id));
-assert_eq!(dispatched.timestamp(), Some(EventTime::from_nanos(0)));
-```
+`Listener` callbacks in `flui-widgets` receive `PointerDispatch` over this
+same owned event: `local` carries localized positions and sample histories,
+while `global` preserves the original source. Sensor absence remains `None`;
+callbacks do not need a second raw-event adapter or input-mode switch.
 
 ## Ownership and threading
 

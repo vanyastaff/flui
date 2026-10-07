@@ -357,6 +357,7 @@ impl WindowsWindow {
                 callbacks: WindowCallbacks::counting_frames(frames.counter()),
                 scale_factor: std::cell::Cell::new(scale_factor),
                 message_clock: super::events::MessageClock::new(),
+                pointer_registry: std::cell::RefCell::default(),
                 mode: std::cell::Cell::new(WindowMode::Normal),
                 last_size: std::cell::Cell::new(initial_size),
                 config,

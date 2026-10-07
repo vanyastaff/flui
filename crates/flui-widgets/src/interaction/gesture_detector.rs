@@ -708,6 +708,7 @@ impl ViewState<GestureDetector> for GestureDetectorState {
             mounted: Rc::clone(&self.mounted),
         }));
         let arena = GestureArenaScope::of(ctx);
+        let settings = GestureArenaScope::settings_of(ctx);
         self.rebuild = Some(ctx.rebuild_handle());
         self.local_post_frame = ctx.local_post_frame_handle();
 
@@ -721,6 +722,7 @@ impl ViewState<GestureDetector> for GestureDetectorState {
             let primary_writer = writer.clone();
             let secondary_writer = writer.clone();
             TapGestureRecognizer::builder(arena.clone())
+                .settings(settings.clone())
                 .on_tap(move |_details| {
                     let handler = primary_slot.borrow().clone();
                     if let Some(handler) = handler {
@@ -740,6 +742,7 @@ impl ViewState<GestureDetector> for GestureDetectorState {
             let slot = Rc::clone(&self.long_press_slot);
             let writer = writer.clone();
             LongPressGestureRecognizer::builder(arena.clone())
+                .settings(settings.clone())
                 .on_long_press(move || {
                     let handler = slot.borrow().clone();
                     if let Some(handler) = handler {
@@ -755,6 +758,7 @@ impl ViewState<GestureDetector> for GestureDetectorState {
             let tap_writer = writer.clone();
             let down_writer = writer.clone();
             DoubleTapGestureRecognizer::builder(arena.clone())
+                .settings(settings.clone())
                 .on_double_tap(move |_details| {
                     let handler = slot.borrow().clone();
                     if let Some(handler) = handler {
@@ -778,6 +782,7 @@ impl ViewState<GestureDetector> for GestureDetectorState {
             let update_writer = writer.clone();
             let end_writer = writer.clone();
             DragGestureRecognizer::builder(arena.clone(), DragAxis::Free)
+                .settings(settings.clone())
                 .on_start(move |details| {
                     let callback = start_slot.borrow().start.clone();
                     if let Some(callback) = callback {
@@ -811,6 +816,7 @@ impl ViewState<GestureDetector> for GestureDetectorState {
             let end_writer = writer.clone();
             let cancel_writer = writer;
             DragGestureRecognizer::builder(arena, DragAxis::Horizontal)
+                .settings(settings)
                 .on_down(move |details| {
                     let callback = down_slot.borrow().down.clone();
                     if let Some(callback) = callback {

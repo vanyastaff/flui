@@ -13,8 +13,8 @@ use flui_interaction::events::{
     pointer::ScrollUnit,
 };
 use flui_interaction::processing::{
-    ImpulseVelocityTracker, InputPredictor, IosFlingVelocityTracker, MacosFlingVelocityTracker,
-    PointerEventResampler, PredictionConfig, RawInputHandler, SamplingClock, VelocityTracker,
+    ImpulseVelocityTracker, IosFlingVelocityTracker, MacosFlingVelocityTracker,
+    PointerEventResampler, SamplingClock, VelocityTracker,
 };
 use flui_interaction::{
     DEFAULT_MAX_FLING_VELOCITY, GestureBinding, GestureSettings, GestureSettingsError,
@@ -798,54 +798,8 @@ proptest! {
 }
 
 // ----------------------------------------------------------------------------
-// Raw input, prediction and pan/zoom
+// Checked pan/zoom transport
 // ----------------------------------------------------------------------------
-
-/// A raw-input callback may replace or clear itself; the next event uses the
-/// replacement.
-fn raw_input_callback_can_replace_itself() {
-    let handler = RawInputHandler::new();
-    let seen = Rc::new(RefCell::new(Vec::new()));
-    let reentrant = handler.clone();
-    let first = Rc::clone(&seen);
-    let second = Rc::clone(&seen);
-    handler.set_callback(move |_| {
-        first.borrow_mut().push("first");
-        let second = Rc::clone(&second);
-        reentrant.set_callback(move |_| second.borrow_mut().push("second"));
-    });
-    let down = make_down_event_for_id(contact(), Offset::ZERO, PointerKind::Touch)
-        .expect("valid fixture sample");
-    handler.handle_event(&down);
-    handler.handle_event(&move_to(4.0));
-    assert_eq!(*seen.borrow(), ["first", "second"]);
-}
-
-/// An out-of-range smoothing factor and noisy acceleration still give a
-/// finite prediction no further ahead than the fling bound allows.
-fn prediction_stays_finite_and_bounded() {
-    let t0 = origin();
-    let mut predictor = InputPredictor::with_config(PredictionConfig {
-        max_prediction_time: Duration::from_secs(10),
-        use_acceleration: true,
-        smoothing: 2.0,
-    });
-    let mut worst: f64 = 0.0;
-    for i in 0..200_u32 {
-        let jitter = if i % 2 == 0 { 3.0 } else { -3.0 };
-        let position = Offset::new(f64::from(i) * 2.0 + jitter, 0.0);
-        predictor.add_sample(t0 + ms(2.0 * f64::from(i)), position);
-        let predicted = predictor.predict(Duration::from_millis(25));
-        assert!(predicted.position.dx.is_finite() && predicted.position.dy.is_finite());
-        assert!(predicted.confidence.is_finite());
-        worst = worst.max((predicted.position - position).distance());
-    }
-    let reach = 2.0 * DEFAULT_MAX_FLING_VELOCITY * 0.025;
-    assert!(
-        worst <= reach,
-        "prediction overshoots {worst} px past the {reach} px bound"
-    );
-}
 
 fn pinch_scale_is_finite_and_positive() {
     use flui_interaction::events::{PanZoomEvent, PanZoomPhase, PanZoomTransform};
@@ -894,13 +848,9 @@ fn pinch_scale_is_finite_and_positive() {
 }
 
 #[test]
-fn raw_input_prediction_and_pan_zoom_stay_consistent() {
+fn checked_pan_zoom_reaches_its_actual_target() {
     run_rows(
         "processing",
-        &[
-            ("raw input reentry", raw_input_callback_can_replace_itself),
-            ("prediction bounds", prediction_stays_finite_and_bounded),
-            ("pinch scale", pinch_scale_is_finite_and_positive),
-        ],
+        &[("pinch scale", pinch_scale_is_finite_and_positive)],
     );
 }
