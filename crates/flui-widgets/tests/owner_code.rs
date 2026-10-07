@@ -199,7 +199,7 @@ fn in_memory_listener_replaced_then_panicking() {
 
 fn focused(view: impl flui_view::View, node: &Rc<FocusNode>) -> Harness {
     let mut harness = mount_with_ime(view);
-    node.request_focus();
+    let _ = node.request_focus();
     harness.tick();
     harness
 }
@@ -1362,7 +1362,7 @@ fn composing_field(
             assert!(hear.borrow().len() != 1, "on_changed failure");
         }),
     );
-    node.request_focus();
+    let _ = node.request_focus();
     harness.tick();
     preedit(&harness);
     assert!(controller.is_composing(), "the preedit is composing");
@@ -1397,7 +1397,7 @@ fn editable_blur_during_preedit(
     assert!(detached(&harness), "the client detached after the failure");
     assert_eq!(raised(|| harness.tick()), None, "nothing is reported twice");
 
-    node.request_focus();
+    let _ = node.request_focus();
     harness.tick();
     preedit(&harness);
     node.unfocus();
@@ -2154,7 +2154,10 @@ fn editable_key_edit_whose_listener_retirement_fails() {
     .with_state(flui_interaction::events::KeyState::Down)
     .build();
     let _ = raised(|| {
-        let _ = harness.focus_manager().dispatch_key_event(&key);
+        let _ = harness
+            .focus_manager()
+            .dispatch_key_event(&key)
+            .is_handled();
     });
     assert_eq!(controller.text(), "a");
     assert_eq!(
@@ -2611,7 +2614,10 @@ fn editable_key_edit_whose_on_changed_panics() {
     .with_state(flui_interaction::events::KeyState::Down)
     .build();
     let _ = raised(|| {
-        let _ = harness.focus_manager().dispatch_key_event(&key);
+        let _ = harness
+            .focus_manager()
+            .dispatch_key_event(&key)
+            .is_handled();
     });
     assert_eq!(controller.text(), "a");
     assert_eq!(
@@ -2736,7 +2742,7 @@ fn key_edit_whose_listener_rebuilds_the_field(
     let manager = harness.borrow().focus_manager();
     assert_eq!(
         raised(|| {
-            let _ = manager.dispatch_key_event(&key);
+            let _ = manager.dispatch_key_event(&key).is_handled();
         }),
         None
     );
@@ -3619,7 +3625,7 @@ fn editable_update_whose_observer_and_focus_listener_panic() {
     assert_eq!(raised(|| harness.tick()), None, "the next frame");
     let next = FocusNode::with_debug_label("next field");
     harness.swap_root(EditableText::new(controller, Rc::clone(&next)));
-    next.request_focus();
+    let _ = next.request_focus();
     harness.tick();
     let field = self::field(&harness);
     the_field_keeps_working(&mut harness, &field);

@@ -58,7 +58,11 @@ pub type NodeContext = Rc<dyn std::any::Any>;
 pub type FocusNodeChangeCallback = Rc<dyn Fn()>;
 
 /// Result of one focus-node key handler.
+///
+/// These three outcomes form the closed propagation algebra: continue, consume,
+/// or stop without consuming.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[must_use]
 pub enum KeyEventResult {
     /// Stop propagation and consume the event.
     Handled,
@@ -69,6 +73,12 @@ pub enum KeyEventResult {
 }
 
 impl KeyEventResult {
+    /// Whether native default handling should be prevented.
+    #[must_use]
+    pub const fn is_handled(self) -> bool {
+        matches!(self, Self::Handled)
+    }
+
     /// Combine several handler channels on one node.
     #[must_use]
     pub fn combine(self, other: Self) -> Self {
@@ -83,6 +93,7 @@ impl KeyEventResult {
 
 /// A structural focus-tree mutation failed.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum FocusTreeError {
     /// The mutation would create a parent cycle.
     #[error(
@@ -146,6 +157,8 @@ pub enum FocusTreeError {
 
 /// Result of a node-level focus request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+#[must_use]
 pub enum FocusRequestOutcome {
     /// Accepted — applied immediately, or, when requested from inside a
     /// focus-change listener, queued and applied after the in-flight
@@ -164,6 +177,8 @@ pub enum FocusRequestOutcome {
 
 /// Result of detaching through a [`FocusAttachment`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+#[must_use]
 pub enum FocusDetachOutcome {
     /// The live attachment was detached.
     Detached,
@@ -1270,7 +1285,7 @@ impl FocusNode {
 
     fn fulfill_pending_subtree(node: &Rc<FocusNode>) {
         if node.pending_focus_request.replace(false) {
-            node.request_focus();
+            let _ = node.request_focus();
         }
         for child in node.children() {
             Self::fulfill_pending_subtree(&child);
@@ -1435,8 +1450,8 @@ pub(crate) fn focus_node_identity_exhaustion_preserves_notifications() {
                 .push((name, node.has_primary_focus()));
         }));
     }
-    first.request_focus();
-    last.request_focus();
+    let _ = first.request_focus();
+    let _ = last.request_focus();
     for _ in 0..8 {
         let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             FocusNode::create_with_counter(None, None, &counter)
@@ -1444,7 +1459,7 @@ pub(crate) fn focus_node_identity_exhaustion_preserves_notifications() {
         .expect_err("exhausted allocator must permanently refuse");
         flui_foundation::panic::retain_opaque_payload(failure);
     }
-    first.request_focus();
+    let _ = first.request_focus();
     assert_eq!(
         *notifications.borrow(),
         vec![
@@ -1466,7 +1481,7 @@ pub(crate) fn focus_node_identity_exhaustion_preserves_notifications() {
         .root_scope()
         .attach_node(&fresh)
         .expect("fresh node attaches");
-    fresh.request_focus();
+    let _ = fresh.request_focus();
     assert!(Rc::ptr_eq(
         &manager.primary_focus().expect("fresh focus"),
         &fresh
@@ -1789,8 +1804,9 @@ impl FocusScopeNode {
     pub fn resolve_traversal(
         &self,
         current: Option<&Rc<FocusNode>>,
-        forward: bool,
+        direction: TraversalDirection,
     ) -> ResolvedStep {
+        let forward = matches!(direction, TraversalDirection::Forward);
         let order = self.sorted_traversal_order(current);
 
         let Some(current) = current else {
@@ -1843,21 +1859,25 @@ impl FocusScopeNode {
 
     /// Focus the next node in this scope.
     pub fn focus_next_in_scope(&self, current: &Rc<FocusNode>) -> bool {
-        self.perform(self.step(Some(current), true))
+        self.perform(self.step(Some(current), TraversalDirection::Forward))
     }
 
     /// Focus the previous node in this scope.
     pub fn focus_previous_in_scope(&self, current: &Rc<FocusNode>) -> bool {
-        self.perform(self.step(Some(current), false))
+        self.perform(self.step(Some(current), TraversalDirection::Backward))
     }
 
     /// Resolve a step, following parent-scope edge behavior.
-    pub fn step(&self, current: Option<&Rc<FocusNode>>, forward: bool) -> ResolvedStep {
+    pub fn step(
+        &self,
+        current: Option<&Rc<FocusNode>>,
+        direction: TraversalDirection,
+    ) -> ResolvedStep {
         let mut scope: Option<Rc<FocusScopeNode>> = None;
         loop {
             let step = scope.as_ref().map_or_else(
-                || self.resolve_traversal(current, forward),
-                |scope| scope.resolve_traversal(current, forward),
+                || self.resolve_traversal(current, direction),
+                |scope| scope.resolve_traversal(current, direction),
             );
             if !matches!(step, ResolvedStep::RetryInParent) {
                 return step;
@@ -1934,6 +1954,15 @@ impl std::fmt::Debug for FocusScopeNode {
             .field("focused_child", &self.focused_child().map(|node| node.id()))
             .finish_non_exhaustive()
     }
+}
+
+/// The direction through the scope's ordered traversal candidates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TraversalDirection {
+    /// Move toward the following candidate.
+    Forward,
+    /// Move toward the preceding candidate.
+    Backward,
 }
 
 /// What traversal does when it runs off a scope edge.

@@ -91,12 +91,14 @@ fn semantic_mount(log: &Proposals) -> LaidOut {
     laid
 }
 fn key(laid: &LaidOut, named: NamedKey) -> bool {
-    laid.focus_manager().dispatch_key_event(
-        &KeyEventBuilder::new(Code::Unidentified)
-            .with_state(KeyState::Down)
-            .with_key(Key::Named(named))
-            .build(),
-    )
+    laid.focus_manager()
+        .dispatch_key_event(
+            &KeyEventBuilder::new(Code::Unidentified)
+                .with_state(KeyState::Down)
+                .with_key(Key::Named(named))
+                .build(),
+        )
+        .is_handled()
 }
 
 pub(crate) fn slider_uses_allocated_fractional_bounds_for_paint_and_pointer_mapping() {
@@ -319,24 +321,29 @@ pub(crate) fn slider_focus_keys_and_semantic_actions_share_controlled_proposals(
         flui_interaction::events::Modifiers::SHIFT,
     ] {
         assert!(
-            laid.focus_manager().dispatch_key_event(
-                &KeyEventBuilder::new(Code::Unidentified)
-                    .with_state(KeyState::Down)
-                    .with_key(Key::character("+"))
-                    .with_modifiers(modifiers)
-                    .build()
-            )
+            laid.focus_manager()
+                .dispatch_key_event(
+                    &KeyEventBuilder::new(Code::Unidentified)
+                        .with_state(KeyState::Down)
+                        .with_key(Key::character("+"))
+                        .with_modifiers(modifiers)
+                        .build()
+                )
+                .is_handled()
         );
         assert_eq!(log.borrow().last(), Some(&35.0));
     }
     assert!(
-        !laid.focus_manager().dispatch_key_event(
-            &KeyEventBuilder::new(Code::Unidentified)
-                .with_state(KeyState::Down)
-                .with_key(Key::Named(NamedKey::ArrowRight))
-                .with_modifiers(flui_interaction::events::Modifiers::SHIFT)
-                .build()
-        )
+        !laid
+            .focus_manager()
+            .dispatch_key_event(
+                &KeyEventBuilder::new(Code::Unidentified)
+                    .with_state(KeyState::Down)
+                    .with_key(Key::Named(NamedKey::ArrowRight))
+                    .with_modifiers(flui_interaction::events::Modifiers::SHIFT)
+                    .build()
+            )
+            .is_handled()
     );
     log.borrow_mut().truncate(4);
     let listener = laid

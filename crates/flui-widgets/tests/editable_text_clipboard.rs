@@ -39,7 +39,7 @@ fn mount_field(
         controller.clone(),
         Rc::clone(&focus_node),
     )));
-    focus_node.request_focus();
+    let _ = focus_node.request_focus();
     assert!(focus_node.has_primary_focus(), "precondition: focused");
     (harness, focus_node)
 }
@@ -55,7 +55,8 @@ pub(crate) fn copy_then_paste_round_trips_text_in_an_editable_text() {
 
     let consumed = harness
         .focus_manager()
-        .dispatch_key_event(&chord("c", command()));
+        .dispatch_key_event(&chord("c", command()))
+        .is_handled();
     assert!(consumed, "copy consumes the chord");
     assert_eq!(harness.clipboard().read_text().as_deref(), Some("abc"));
     assert_eq!(controller.selection(), 0..3, "copy keeps the selection");
@@ -63,7 +64,8 @@ pub(crate) fn copy_then_paste_round_trips_text_in_an_editable_text() {
     controller.set_caret_byte_offset(3);
     harness
         .focus_manager()
-        .dispatch_key_event(&chord("v", command()));
+        .dispatch_key_event(&chord("v", command()))
+        .is_handled();
     assert_eq!(controller.text(), "abcabc");
     assert_eq!(controller.caret_byte_offset(), 6);
 }
@@ -79,7 +81,8 @@ pub(crate) fn copy_and_cut_on_an_obscured_field_leave_the_clipboard_untouched_an
     for key in ["c", "x"] {
         let consumed = harness
             .focus_manager()
-            .dispatch_key_event(&chord(key, command()));
+            .dispatch_key_event(&chord(key, command()))
+            .is_handled();
         assert!(
             !consumed,
             "{key}: a disabled action leaves the key unconsumed"
@@ -124,6 +127,7 @@ fn select_all_replacement(obscured: bool) {
             harness
                 .focus_manager()
                 .dispatch_key_event(&chord(&scalar.to_string(), Modifiers::NONE))
+                .is_handled()
         );
     }
     let edits = changes.get();
@@ -136,6 +140,7 @@ fn select_all_replacement(obscured: bool) {
         !harness
             .focus_manager()
             .dispatch_key_event(&chord("a", other_command))
+            .is_handled()
     );
     assert!(
         !controller.has_selection(),
@@ -144,7 +149,8 @@ fn select_all_replacement(obscured: bool) {
     assert!(
         harness
             .focus_manager()
-            .dispatch_key_event(&chord("A", command())),
+            .dispatch_key_event(&chord("A", command()))
+            .is_handled(),
         "Caps Lock does not defeat select all"
     );
     assert_eq!(
@@ -159,6 +165,7 @@ fn select_all_replacement(obscured: bool) {
         harness
             .focus_manager()
             .dispatch_key_event(&chord("文", Modifiers::NONE))
+            .is_handled()
     );
     assert_eq!(
         controller.text(),
@@ -184,6 +191,7 @@ pub(crate) fn select_all_without_a_focused_text_field_leaves_the_key_unconsumed(
         !harness
             .focus_manager()
             .dispatch_key_event(&chord("a", command()))
+            .is_handled()
     );
     assert!(!controller.has_selection());
     assert_eq!(controller.text(), "retained");
@@ -196,7 +204,7 @@ pub(crate) fn select_all_defers_to_an_active_composition_and_recovers_after_comm
         controller.clone(),
         Rc::clone(&node),
     ));
-    node.request_focus();
+    let _ = node.request_focus();
     harness.dispatch_ime(&flui_platform_api::ImeEvent::Preedit {
         text: "東京".to_owned(),
         cursor: Some(("東京".len(), "東京".len())),
@@ -207,6 +215,7 @@ pub(crate) fn select_all_defers_to_an_active_composition_and_recovers_after_comm
         !harness
             .focus_manager()
             .dispatch_key_event(&chord("a", command()))
+            .is_handled()
     );
     assert_eq!(controller.selection(), before, "IME retains its selection");
     assert_eq!(controller.text(), "東京");
@@ -216,6 +225,7 @@ pub(crate) fn select_all_defers_to_an_active_composition_and_recovers_after_comm
         harness
             .focus_manager()
             .dispatch_key_event(&chord("a", command()))
+            .is_handled()
     );
     assert_eq!(
         controller.selection(),
@@ -232,7 +242,7 @@ pub(crate) fn paste_rechecks_focus_after_committing_composition() {
         EditableText::new(controller.clone(), node.clone())
             .on_changed(move |_cx, _text| retiring.unfocus()),
     );
-    node.request_focus();
+    let _ = node.request_focus();
     harness.clipboard().write_text("paste".into());
     harness.dispatch_ime(&flui_platform_api::ImeEvent::Preedit {
         text: "composition".into(),
@@ -244,7 +254,8 @@ pub(crate) fn paste_rechecks_focus_after_committing_composition() {
     );
     harness
         .focus_manager()
-        .dispatch_key_event(&chord("v", command()));
+        .dispatch_key_event(&chord("v", command()))
+        .is_handled();
     assert_eq!(
         controller.text(),
         "composition",

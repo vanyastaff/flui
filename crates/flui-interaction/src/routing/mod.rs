@@ -19,12 +19,12 @@ mod interaction_lane;
 pub(crate) mod mouse_tracker;
 mod pointer_router;
 
-pub use focus::{FocusChangeCallback, FocusManager, KeyEventCallback};
+pub use focus::{FocusChangeCallback, FocusManager};
 pub use focus_scope::{
     FocusAttachment, FocusDetachOutcome, FocusNode, FocusNodeChangeCallback, FocusNodeId,
     FocusNodeRegistration, FocusRequestOutcome, FocusScopeNode, FocusTraversalPolicy,
     FocusTreeError, KeyEventHandler, KeyEventResult, NodeContext, ReadingOrderPolicy, RectProvider,
-    ResolvedStep, TraversalEdgeBehavior,
+    ResolvedStep, TraversalDirection, TraversalEdgeBehavior,
 };
 pub use hit_test::{
     CursorRequest, EventPropagation, HitTestBehavior, HitTestEntry, HitTestResult, RenderId,

@@ -54,13 +54,20 @@ pub(crate) mod intent_tests {
             })),
         );
         let manager = harness.focus_manager();
-        field.request_focus();
+        let _ = field.request_focus();
 
-        assert!(manager.dispatch_key_event(&ctrl_s()), "consumed");
+        assert!(
+            manager.dispatch_key_event(&ctrl_s()).is_handled(),
+            "consumed"
+        );
         assert_eq!(saves.load(Ordering::SeqCst), 1, "the action ran");
 
         // Bare "s" does not match the activator: unhandled, nothing runs.
-        assert!(!manager.dispatch_key_event(&ctrl_s().with_modifiers(Modifiers::NONE)));
+        assert!(
+            !manager
+                .dispatch_key_event(&ctrl_s().with_modifiers(Modifiers::NONE))
+                .is_handled()
+        );
         assert_eq!(saves.load(Ordering::SeqCst), 1);
     }
 }
@@ -159,27 +166,33 @@ pub(crate) mod tab_tests {
             ]),
         ));
         let manager = harness.focus_manager();
-        left.request_focus();
+        let _ = left.request_focus();
 
-        assert!(manager.dispatch_key_event(&tab(false)), "Tab is consumed");
+        assert!(
+            manager.dispatch_key_event(&tab(false)).is_handled(),
+            "Tab is consumed"
+        );
         assert!(
             middle.has_primary_focus(),
             "Tab moved the focus to the next node in reading order"
         );
 
-        assert!(manager.dispatch_key_event(&tab(true)), "Shift+Tab too");
+        assert!(
+            manager.dispatch_key_event(&tab(true)).is_handled(),
+            "Shift+Tab too"
+        );
         assert!(left.has_primary_focus(), "and it stepped back");
 
         // Begin inside the order so the outgoing-policy assertion does not
         // depend on what happens when traversal reaches a scope edge.
-        middle.request_focus();
+        let _ = middle.request_focus();
         assert!(middle.has_primary_focus());
         let retired = Rc::new(Cell::new(false));
         scope.set_traversal_policy(Rc::new(ReplacingPolicy {
             scope: Rc::downgrade(&scope),
             retired: Rc::clone(&retired),
         }));
-        assert!(manager.dispatch_key_event(&tab(false)));
+        assert!(manager.dispatch_key_event(&tab(false)).is_handled());
         assert!(
             left.has_primary_focus(),
             "the current key uses the outgoing reverse reading-order policy"
@@ -188,7 +201,7 @@ pub(crate) mod tab_tests {
             retired.get(),
             "policy destruction can reenter the same scope"
         );
-        assert!(manager.dispatch_key_event(&tab(false)));
+        assert!(manager.dispatch_key_event(&tab(false)).is_handled());
         assert!(
             middle.has_primary_focus(),
             "the next key uses the replacement reading-order policy"
@@ -332,7 +345,7 @@ pub(crate) mod tab_tests {
                 ]),
             ));
             let manager = harness.focus_manager();
-            left.request_focus();
+            let _ = left.request_focus();
 
             let policy_drops = Rc::new(Cell::new(0));
             let candidate_drops = Rc::new(Cell::new(0));
@@ -355,8 +368,9 @@ pub(crate) mod tab_tests {
                 },
             }));
 
-            let outcome =
-                catch_unwind(AssertUnwindSafe(|| manager.dispatch_key_event(&tab(false))));
+            let outcome = catch_unwind(AssertUnwindSafe(|| {
+                manager.dispatch_key_event(&tab(false)).is_handled()
+            }));
             let payload = outcome.expect_err("the first traversal failure propagates");
             assert_eq!(
                 flui_foundation::panic::payload_text(payload.as_ref()),
@@ -373,12 +387,12 @@ pub(crate) mod tab_tests {
                 left.has_primary_focus(),
                 "the failed sort published no focus step"
             );
-            assert!(manager.dispatch_key_event(&tab(false)));
+            assert!(manager.dispatch_key_event(&tab(false)).is_handled());
             assert!(
                 middle.has_primary_focus(),
                 "the replacement policy serves the next key"
             );
-            assert!(manager.dispatch_key_event(&tab(true)));
+            assert!(manager.dispatch_key_event(&tab(true)).is_handled());
             assert!(left.has_primary_focus());
         }
     }
@@ -424,7 +438,7 @@ pub(crate) mod activation_tests {
                 })),
         );
         let manager = harness.focus_manager();
-        button.request_focus();
+        let _ = button.request_focus();
 
         for key in [
             Key::Named(NamedKey::Enter),
@@ -432,7 +446,9 @@ pub(crate) mod activation_tests {
             Key::Named(NamedKey::Select),
         ] {
             assert!(
-                manager.dispatch_key_event(&key_down(key.clone())),
+                manager
+                    .dispatch_key_event(&key_down(key.clone()))
+                    .is_handled(),
                 "{key:?} is consumed"
             );
         }
@@ -478,8 +494,11 @@ pub(crate) mod event_cx_tests {
     }
 
     fn press_ctrl_s(harness: &Harness, node: &Rc<FocusNode>) -> bool {
-        node.request_focus();
-        harness.focus_manager().dispatch_key_event(&ctrl_s())
+        let _ = node.request_focus();
+        harness
+            .focus_manager()
+            .dispatch_key_event(&ctrl_s())
+            .is_handled()
     }
 
     pub(crate) fn callback_shortcut_writes_a_signal_and_rebuilds_its_reader() {

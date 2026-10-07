@@ -1009,7 +1009,7 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
         .root_scope()
         .attach_node(&focused)
         .expect("focus node attaches");
-    focused.request_focus();
+    let _ = focused.request_focus();
     assert!(focused.has_primary_focus());
 
     let input = realm.text_input_handle();
@@ -1188,7 +1188,7 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
                 };
                 target_focus.add_global_key_handler(Rc::new(move |_| {
                     let _ = (&bundle.first, &bundle.second);
-                    false
+                    flui_interaction::KeyEventResult::Ignored
                 }));
             }));
         });

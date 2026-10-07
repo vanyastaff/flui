@@ -57,8 +57,8 @@ pub use flui_interaction::routing::{
     FocusAttachment, FocusChangeCallback, FocusDetachOutcome, FocusManager, FocusNode,
     FocusNodeChangeCallback, FocusNodeId, FocusNodeRegistration, FocusRequestOutcome,
     FocusScopeNode, FocusTraversalPolicy, FocusTreeError, HitTestEntry, HitTestHandle,
-    HitTestSnapshot, InteractionDispatchError, KeyEventCallback, KeyEventHandler, KeyEventResult,
-    ReadingOrderPolicy, RectProvider, ResolvedStep, TraversalEdgeBehavior,
+    HitTestSnapshot, InteractionDispatchError, KeyEventHandler, KeyEventResult, ReadingOrderPolicy,
+    RectProvider, ResolvedStep, TraversalDirection, TraversalEdgeBehavior,
 };
 pub use flui_interaction::text_input::{
     ClientToken, DetachOutcome, TextInputClient, TextInputError, TextInputHandle,

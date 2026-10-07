@@ -42,7 +42,7 @@ impl EditableTextFixture {
                     }
                 }),
         );
-        focus_node.request_focus();
+        let _ = focus_node.request_focus();
         harness.tick();
         Self {
             harness,

@@ -15,6 +15,38 @@ use flui_platform_api::{
     keyboard::{Code, Key, KeyEvent, KeyState},
 };
 
+fn key_dispatch_preserves_propagation_outcomes() {
+    for outcome in [
+        KeyEventResult::Ignored,
+        KeyEventResult::Handled,
+        KeyEventResult::SkipRemainingHandlers,
+    ] {
+        let manager = FocusManager::new();
+        let node = FocusNode::new();
+        let _attachment = manager.root_scope().attach_node(&node).expect("attach");
+        let _ = node.request_focus();
+        let calls = Rc::new(Cell::new(0));
+        let observed = Rc::clone(&calls);
+        node.set_on_key_event(Rc::new(move |_| {
+            observed.set(observed.get() + 1);
+            KeyEventResult::Handled
+        }));
+        manager.add_global_key_handler(Rc::new(move |_| outcome));
+        assert_eq!(
+            manager.dispatch_key_event(&key_event()),
+            if outcome == KeyEventResult::Ignored {
+                KeyEventResult::Handled
+            } else {
+                outcome
+            }
+        );
+        assert_eq!(calls.get(), usize::from(outcome == KeyEventResult::Ignored));
+        manager.clear_global_key_handlers();
+        node.set_on_key_event(Rc::new(move |_| outcome));
+        assert_eq!(manager.dispatch_key_event(&key_event()), outcome);
+    }
+}
+
 fn key_event() -> KeyEvent {
     KeyEvent::new(
         KeyState::Down,
@@ -47,7 +79,7 @@ fn focus_listener_capture_dies_with_its_manager() {
         assert!(new.is_none(), "focus listener");
     }));
     expect_failure(|| {
-        node.request_focus();
+        let _ = node.request_focus();
     });
     drop((attachment, node, manager));
     assert!(
@@ -64,7 +96,7 @@ fn global_key_handler_capture_dies_with_its_manager() {
         panic!("global key handler");
     }));
     expect_failure(|| {
-        manager.dispatch_key_event(&key_event());
+        let _ = manager.dispatch_key_event(&key_event()).is_handled();
     });
     drop(manager);
     assert!(probe.upgrade().is_none(), "the handler capture is released");
@@ -78,7 +110,7 @@ fn node_key_handler_capture_dies_with_its_node() {
         panic!("node key handler");
     }));
     expect_failure(|| {
-        node.handle_key_event(&key_event());
+        let _ = node.handle_key_event(&key_event());
     });
     drop(node);
     assert!(probe.upgrade().is_none(), "the handler capture is released");
@@ -89,9 +121,9 @@ fn node_key_handler_capture_dies_with_its_node() {
 /// closed manager, is released with the caller.
 fn closing_manager_leaves_shared_callbacks_with_their_caller() {
     let (capture, probe) = capture();
-    let handler: Rc<dyn Fn(&KeyEvent) -> bool> = Rc::new(move |_| {
+    let handler: Rc<dyn Fn(&KeyEvent) -> KeyEventResult> = Rc::new(move |_| {
         let _ = &capture;
-        false
+        KeyEventResult::Ignored
     });
     let manager = FocusManager::new();
     manager.add_global_key_handler(Rc::clone(&handler));
@@ -487,9 +519,9 @@ fn assert_queued_diagnostic_recovery(earlier_failure: bool) {
         let Some((queued, attachment)) = queued_owner.borrow_mut().take() else {
             return;
         };
-        queued.request_focus();
-        last_probe.upgrade().expect("live last").request_focus();
-        attachment.detach();
+        let _ = queued.request_focus();
+        let _ = last_probe.upgrade().expect("live last").request_focus();
+        let _ = attachment.detach();
         if earlier_failure {
             std::panic::panic_any("earlier observer failure");
         }
@@ -586,7 +618,7 @@ fn assert_queued_retirement_recovery(earlier_failure: bool) {
             last_probe.upgrade().expect("live last").request_focus(),
             FocusRequestOutcome::Focused
         );
-        attachment.detach();
+        let _ = attachment.detach();
         drop((queued, attachment));
         if earlier_failure {
             std::panic::panic_any("earlier observer failure");
@@ -742,6 +774,10 @@ fn assert_queued_focus_recovery(from_node: bool, competing: bool) {
 #[test]
 fn caught_callback_failures_leave_captures_with_their_owner() {
     let cases: &[(&str, fn())] = &[
+        (
+            "key dispatch propagation outcomes",
+            key_dispatch_preserves_propagation_outcomes,
+        ),
         (
             "nested close preserves healthy captures after observer failure",
             nested_close_after_observer_failure_retains_healthy_captures,

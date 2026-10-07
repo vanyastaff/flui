@@ -724,7 +724,7 @@ impl FocusState {
             .and_then(|parent| parent.as_scope().or_else(|| parent.enclosing_scope()))
             .unwrap_or_else(|| Rc::clone(self.manager().root_scope()));
         if scope.focused_child().is_none() {
-            self.node.request_focus();
+            let _ = self.node.request_focus();
         }
     }
 }

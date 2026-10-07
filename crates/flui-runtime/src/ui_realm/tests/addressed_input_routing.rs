@@ -118,7 +118,7 @@ pub(crate) fn panicking_keyboard_dispatch_keeps_priority_over_a_panicking_wake()
     let mut backend = ScriptedSink::always_presents();
     realm.render_frame(&mut backend);
     realm.notify_presentation_focus_gained(b_id);
-    node.request_focus();
+    let _ = node.request_focus();
     let _ = realm.take_redraw_request();
     let _ = realm
         .presentations

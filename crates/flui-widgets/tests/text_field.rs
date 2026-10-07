@@ -49,7 +49,7 @@ impl FocusGuard {
 
     /// Focus this node so key dispatch is routed to its handler.
     fn request_focus(&self) {
-        self.node.request_focus();
+        let _ = self.node.request_focus();
     }
 }
 
@@ -130,13 +130,13 @@ pub(crate) fn focused_character_key_inserts_into_controller() {
         Rc::clone(&node),
         make_editable_text_handler(controller.clone()),
     );
-    guard.request_focus();
+    let _ = guard.request_focus();
 
     let event = KeyEventBuilder::new(Code::KeyH)
         .with_key(Key::character("h"))
         .with_state(KeyState::Down)
         .build();
-    manager.dispatch_key_event(&event);
+    let _ = manager.dispatch_key_event(&event).is_handled();
 
     assert_eq!(
         controller.text(),
@@ -161,7 +161,7 @@ pub(crate) fn unfocused_field_does_not_receive_key_events() {
         .with_key(Key::character("x"))
         .with_state(KeyState::Down)
         .build();
-    manager.dispatch_key_event(&event);
+    let _ = manager.dispatch_key_event(&event).is_handled();
 
     assert_eq!(
         controller.text(),

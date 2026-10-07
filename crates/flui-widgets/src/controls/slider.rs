@@ -144,14 +144,14 @@ impl Live {
     }
     fn request_focus(&self, cx: &EventCx<'_>) {
         if self.usable() && self.admits_context(cx) {
-            self.focus.request_focus();
+            let _ = self.focus.request_focus();
         }
     }
     fn at_pointer(&self, cx: &mut EventCx<'_>, x: f64) {
         if !self.pointer_usable() || !self.admits_context(cx) || !x.is_finite() {
             return;
         }
-        self.request_focus(cx);
+        let _ = self.request_focus(cx);
         // Focus notification may update this control or close its focus manager.
         if !self.pointer_usable() || !self.admits_context(cx) || !self.focus.is_attached() {
             return;

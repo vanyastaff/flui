@@ -290,7 +290,8 @@ impl UiRealm {
                 let dispatch = catch_unwind(AssertUnwindSafe(|| {
                     handled = presentation
                         .focus_manager()
-                        .dispatch_key_event(&keyboard_event);
+                        .dispatch_key_event(&keyboard_event)
+                        .is_handled();
                 }));
                 self.finish_addressed_input_dispatch(presentation, dispatch);
                 handled
