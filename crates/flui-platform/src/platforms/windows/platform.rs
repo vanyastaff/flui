@@ -29,16 +29,17 @@ use windows::{
                 DispatchMessageW, GWLP_USERDATA, GetClassNameW, GetClientRect, GetForegroundWindow,
                 GetMessageW, GetWindowLongPtrW, GetWindowThreadProcessId, HICON, HTCLIENT,
                 HWND_MESSAGE, IDC_ARROW, IsWindowVisible, MSG, MWMO_INPUTAVAILABLE,
-                MsgWaitForMultipleObjectsEx, PM_REMOVE, PeekMessageW, PostMessageW,
-                PostQuitMessage, QS_ALLINPUT, RegisterClassW, SC_KEYMENU, SW_SHOWNORMAL,
-                SWP_NOACTIVATE, SWP_NOZORDER, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos,
-                TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CAPTURECHANGED, WM_CHAR,
-                WM_CLOSE, WM_CREATE, WM_DEADCHAR, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND,
-                WM_INPUTLANGCHANGE, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN,
-                WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
-                WM_MOUSEWHEEL, WM_MOVE, WM_PAINT, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP,
-                WM_SETCURSOR, WM_SETFOCUS, WM_SETTINGCHANGE, WM_SHOWWINDOW, WM_SIZE, WM_SYSCHAR,
-                WM_SYSCOMMAND, WM_SYSDEADCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP, WNDCLASSW,
+                MsgWaitForMultipleObjectsEx, PEEK_MESSAGE_REMOVE_TYPE, PM_QS_POSTMESSAGE,
+                PM_REMOVE, PeekMessageW, PostMessageW, PostQuitMessage, QS_ALLINPUT,
+                RegisterClassW, SC_KEYMENU, SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOZORDER,
+                SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, TranslateMessage,
+                WINDOW_EX_STYLE, WINDOW_STYLE, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_CREATE,
+                WM_DEADCHAR, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_INPUTLANGCHANGE,
+                WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
+                WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_PAINT,
+                WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETTINGCHANGE,
+                WM_SHOWWINDOW, WM_SIZE, WM_SYSCHAR, WM_SYSCOMMAND, WM_SYSDEADCHAR, WM_SYSKEYDOWN,
+                WM_SYSKEYUP, WNDCLASSW,
             },
         },
     },
@@ -2718,10 +2719,14 @@ fn drain_dead_char(hwnd: HWND, keydown: u32) -> bool {
     };
     let mut msg = MSG::default();
     let mut found = false;
-    // SAFETY: `msg` is a live, writable local; `PM_REMOVE` touches only this
-    // thread's own queue (re-entrancy as in `drain_translated_chars`).
+    // `PM_QS_POSTMESSAGE` restricts the peek to posted messages, so a pending
+    // cross-thread sent message (another keydown) is not dispatched from here
+    // and cannot take this keystroke's notification first.
+    let flags = PEEK_MESSAGE_REMOVE_TYPE(PM_REMOVE.0 | PM_QS_POSTMESSAGE.0);
+    // SAFETY: `msg` is a live, writable local; the peek removes only from
+    // this thread's own queue and dispatches nothing.
     unsafe {
-        while PeekMessageW(&raw mut msg, Some(hwnd), kind, kind, PM_REMOVE).as_bool() {
+        while PeekMessageW(&raw mut msg, Some(hwnd), kind, kind, flags).as_bool() {
             found = true;
         }
     }
