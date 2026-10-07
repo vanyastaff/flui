@@ -228,7 +228,7 @@ pub(super) fn install_exit_policy_hook(policy: ExitPolicy) {
         owner.shared().set_exit_policy_hook(Box::new(move || {
             let (should_exit, removed) =
                 APP_RUNTIME.with(|slot| slot.borrow_mut().should_exit(policy));
-            drop(removed);
+            super::owner_dispatch::complete_registry_retirement(removed);
             if !should_exit {
                 return false;
             }
@@ -236,7 +236,7 @@ pub(super) fn install_exit_policy_hook(policy: ExitPolicy) {
             // ui_runtimes have dropped, then fence the same ingress as senders.
             let (should_exit, removed) =
                 APP_RUNTIME.with(|slot| slot.borrow_mut().should_exit(policy));
-            drop(removed);
+            super::owner_dispatch::complete_registry_retirement(removed);
             #[cfg(all(
                 not(target_os = "android"),
                 not(target_os = "ios"),

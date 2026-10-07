@@ -20,15 +20,35 @@ the dispatch layer moves there too.
   retry debt reliably even when telemetry acks are full; the UI runtime retains epochs
   and requests a paced full repaint (ADR-0101). Pinned by
   `transient_and_hard_failures_map_consistently_in_lane_and_direct_sink`.
-- **A runner's frame is gate → pump → pacing.** Each runner's frame wake is a
-  `RuntimeTask::Pump`: one `UiRuntime::enter` holds the owner-inbox drain
+- **A runner's frame is gate → pump → pacing.** Each runner's frame wake carries
+  `RuntimeTask::Frame` with its installed surface binding. The concrete driver
+  owns its backend resources across wakes; one `UiRuntime::enter` holds the owner-inbox drain
   (`UiRuntime::drain_owner_inbox`), the pre-frame runner work and the wake gate
   (`wake_action`, `frame_is_dirty`, `FallbackGate`, ADR-0058), which stays per
   backend here; the render arm calls `UiRuntime::pump` (ADR-0083 §1), the
   background arm `UiRuntime::pump_background`; the pacing after it only reads
   flags. No runner drives scheduler phases itself (pinned by
   `runner_frame_ordering`'s source scan over every runner file, `ios.rs`
-  included).
+  included). A driver lease restores its resources without consulting TLS;
+  closing its originating presentation retires them even if another presentation
+  becomes the logical primary. Close admission also refuses later async renderer
+  publication, while an earlier accepted frame can still finish.
+  `installed_frame_driver_contract` exercises product scene submission, stale
+  binding refusal, reentrant teardown, competing failures and close-time
+  publication through a private driver seam without requiring a native GPU.
+  Android and web register native close and platform quit through
+  `install_single_window_terminal_wiring`; the same table invokes both callbacks
+  through the headless platform and refuses publication after either terminal
+  notification. This tests callback wiring, not native GPU destruction or browser
+  execution.
+- **Native retirement follows registry mutation.** The close-request router
+  returns removed handlers without invoking their destructors. App completion
+  releases handlers and frame drivers individually through `NativeRetirement`,
+  outside TLS and store borrows, preserving the first failure.
+  `native_owners_retire_independently_after_registry_removal` covers ordinary
+  close and full teardown, including competing destructor failures and the next
+  scene. `retiring_a_handler_preserves_its_reentrant_registration` pins that a
+  handler installed during an outgoing capture's destruction remains registered.
 - **Owner events describe observations, not executable callbacks.**
   `RuntimeTask::Event(RuntimeEvent)` carries native input/lifecycle/metrics and
   host font or surface-restoration notifications through the same addressed
@@ -36,8 +56,8 @@ the dispatch layer moves there too.
   requests a full repaint of the primary, which owns the current UI runtime sink.
   Native surface callbacks release their raster-lane guard before dispatch.
   `TestCallback` exists only under `cfg(test)` for private failure injection.
-  The runner's `Pump` still carries its backend frame protocol; closing that
-  vocabulary and extracting the owner host remain ADR-0083's migration work.
+  The installed driver executes its backend frame protocol; extracting the owner
+  host remains ADR-0083's migration work.
   `owner_dispatch_matrix` pins font registration fan-out/reentry and
   `recovered_surface_notification_resubmits_the_scene` pins a real scene
   submission after an idle frame, rather than a dirty-flag change.

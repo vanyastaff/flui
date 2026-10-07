@@ -515,6 +515,9 @@ pub(super) enum QuitNotification {
 /// the UI runtime's `next_identity` (`flui_runtime`) already mints from a shape that never needed to
 /// change for this to land.
 pub(crate) struct AppRuntime {
+    /// Native frame resources; logical runtime membership stays independent.
+    pub(super) frame_drivers: super::runner::FrameDrivers,
+    pub(super) native_retirement: super::runner::NativeRetirement,
     /// Every hosted UI runtime, keyed by `UiRuntimeId`, in mount (insertion) order.
     /// Replaces the single `Option<UiRuntime>` slot (plus its four sibling
     /// flat fields `queue`/`draining`/`address`/`surface_applier`) this
@@ -764,8 +767,11 @@ impl AppRuntime {
     /// (the `OnceCell`) staying unresolved is what that contract depends on,
     /// and this change does not touch it.
     pub(super) fn new() -> Self {
+        let native_retirement = super::runner::NativeRetirement::default();
         Self {
             ui_runtimes: RuntimeRegistry::new(),
+            frame_drivers: super::runner::FrameDrivers::new(native_retirement.clone()),
+            native_retirement,
             owner_turn_queue: VecDeque::new(),
             owner_turn_draining: false,
             owner_turn_continuation: None,
@@ -1275,8 +1281,10 @@ impl AppRuntime {
     /// discipline for why that drop happens outside this function, not
     /// inside it).
     fn apply_uninstall(&mut self, id: UiRuntimeId) -> Option<RuntimeSlot> {
+        self.frame_drivers.retire_runtime(id);
         self.registry.remove_ui_runtime(id);
-        self.close_requests.forget_ui_runtime(id);
+        self.native_retirement
+            .close_handlers(self.close_requests.take_ui_runtime(id));
         self.ui_runtimes.remove(&id)
     }
 

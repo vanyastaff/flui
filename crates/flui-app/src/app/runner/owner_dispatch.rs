@@ -191,8 +191,6 @@ pub(in crate::app) enum RuntimeEvent {
         not(target_arch = "wasm32")
     ))]
     SynchronizeLifecycle,
-    #[cfg(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))]
-    Shutdown,
     /// The OS light/dark appearance changed (winit's `ThemeChanged`, or the
     /// equivalent per-backend signal). Republishes
     /// `MediaQueryData::platform_brightness` through the root media query.
@@ -227,16 +225,16 @@ pub(in crate::app) enum RuntimeEvent {
 /// Events carry observations; pumps own the host's frame execution protocol.
 /// This enum never crosses a thread (ADR-0037 §3).
 ///
-/// `Pump` is a runner's frame wake. Like `ClosePresentation` it needs
+/// `Frame` addresses an installed driver. Like `ClosePresentation` it needs
 /// `&mut UiRuntime` — [`UiRuntime::pump`](crate::app::ui_runtime::UiRuntime::pump)
 /// takes the UI runtime exclusively and enters it itself — so the drain loop runs
-/// it on the checked-out UI runtime without entering it first; the closure enters
-/// the UI runtime explicitly for whatever runner work precedes the pump.
+/// it on the checked-out UI runtime without entering it first; the driver enters
+/// the UI runtime explicitly for its backend gate and prelude.
 pub(in crate::app) enum RuntimeTask {
     Event(RuntimeEvent),
     #[cfg(test)]
     TestCallback(Box<dyn FnOnce(&crate::app::ui_runtime::UiRuntime)>),
-    Pump(Box<dyn FnOnce(&mut crate::app::ui_runtime::UiRuntime)>),
+    Frame(super::frame_driver::FrameBinding),
     /// Commit the owner inbox, then poll async work without running a frame.
     #[cfg(any(test, target_os = "ios"))]
     BackgroundPump,
@@ -273,8 +271,8 @@ impl RuntimeTask {
             Self::BackgroundPump => unreachable!(
                 "BUG: background pumps require exclusive ui_runtime access in the dispatcher"
             ),
-            Self::Pump(_) => unreachable!(
-                "BUG: RuntimeTask::Pump reached RuntimeTask::run -- dispatch_platform_ui_runtime's drain \
+            Self::Frame(_) => unreachable!(
+                "BUG: RuntimeTask::Frame reached RuntimeTask::run -- dispatch_platform_ui_runtime's drain \
                  loop must match this variant out before calling run, so it can hand the pump \
                  &mut UiRuntime instead"
             ),
@@ -454,8 +452,6 @@ impl RuntimeEvent {
                 not(target_arch = "wasm32")
             ))]
             Self::SynchronizeLifecycle => ui_runtime.synchronize_window_lifecycle(),
-            #[cfg(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))]
-            Self::Shutdown => ui_runtime.stop_presentations(),
             Self::Lifecycle(new) => {
                 #[cfg(all(
                     not(target_os = "android"),
@@ -533,6 +529,7 @@ pub(super) fn install_platform_ui_runtime(
     };
     let (displaced, stale_owner_turns) = APP_RUNTIME.with(|slot| {
         let mut state = slot.borrow_mut();
+        state.frame_drivers.retire_all();
         // Every ui_runtime hosted here may already be installed — a reinstall
         // without an intervening `teardown_platform_ui_runtime` (the
         // panic-recovery path: a mid-`on_ready` failure leaves the old
@@ -618,8 +615,21 @@ pub(super) fn install_platform_ui_runtime(
     // Destructors may re-enter platform/framework code (the same invariant
     // `teardown_platform_ui_runtime` honors) — drop only after the TLS borrow
     // above has released.
-    drop(displaced);
-    drop(stale_owner_turns);
+    let mut first_panic = None;
+    drop_removed_ui_runtimes(
+        displaced.into_iter().map(|(_, slot)| slot).collect(),
+        &mut first_panic,
+    );
+    drop_queued_turns(stale_owner_turns, &mut first_panic);
+    let retirement = APP_RUNTIME.with(|slot| {
+        let mut state = slot.borrow_mut();
+        state.frame_drivers.sweep_retired();
+        state.native_retirement.clone()
+    });
+    retirement.drain(&mut first_panic);
+    if let Some(payload) = first_panic {
+        std::panic::resume_unwind(payload);
+    }
     PresentationDispatcher {
         owner_thread,
         address,
@@ -940,14 +950,6 @@ pub(super) fn install_presentation_alongside(
 /// one of several (removes just this one, siblings and UI runtime survive) —
 /// #555 closes with this slice; there is no further slice deferring this.
 /// Also exercised directly by this module's own tests.
-#[cfg_attr(
-    not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
-    expect(
-        dead_code,
-        reason = "close_this_window (its one production caller) is desktop-only -- \
-                  android/wasm32 have no caller outside this module's own tests"
-    )
-)]
 fn close_presentation(
     dispatcher: PresentationDispatcher,
     id: flui_foundation::PresentationId,
@@ -966,18 +968,22 @@ fn close_presentation(
 /// survive otherwise — never `request_ui_runtime_uninstall` directly, which
 /// would tear down an ENTIRE `WindowPolicy::Shared` group out from under a still-open
 /// sibling window.
-#[cfg_attr(
-    not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
-    expect(
-        dead_code,
-        reason = "its production callers (run_desktop, open_secondary_window) are desktop-only \
-                  -- android/wasm32 have no caller outside this module's own tests"
-    )
-)]
 pub(super) fn close_this_window(dispatcher: PresentationDispatcher) {
     if let Err(error) = close_presentation(dispatcher, dispatcher.address.presentation_id) {
         tracing::warn!(?dispatcher, ?error, "close_this_window: dispatch refused");
     }
+}
+
+/// The single-window backends end the binding on either native close or quit.
+/// Admission revokes async publication before deferred lifecycle observers run.
+#[cfg(any(test, target_os = "android", target_arch = "wasm32"))]
+pub(super) fn install_single_window_terminal_wiring(
+    window: &std::sync::Arc<dyn flui_platform::traits::PlatformWindow>,
+    platform: &flui_platform::SharedPlatform,
+    dispatcher: PresentationDispatcher,
+) {
+    window.on_close(Box::new(move || close_this_window(dispatcher)));
+    platform.on_quit(Box::new(move || close_this_window(dispatcher)));
 }
 
 /// Route every input event of `window` to its UI runtime: the one input wiring
@@ -1037,6 +1043,11 @@ pub(super) fn dispatch_platform_ui_runtime(
     let (starts_drain, queued_fallback, carried_callback) = APP_RUNTIME.with(|slot| {
         let mut state = slot.borrow_mut();
         validate_dispatch_admission(&state, dispatcher)?;
+        if let Some(RuntimeTask::Frame(binding)) = event.as_ref()
+            && binding.address() != dispatcher.address
+        {
+            return Err(DispatchError::StalePresentation);
+        }
         if let Some(RuntimeTask::ClosePresentation(presentation_id)) = event.as_ref() {
             let closing_address = flui_foundation::PresentationAddress {
                 ui_runtime_id: dispatcher.address.ui_runtime_id,
@@ -1048,6 +1059,7 @@ pub(super) fn dispatch_platform_ui_runtime(
             if !state.closing_presentations.insert(closing_address) {
                 return Err(DispatchError::PresentationClosing);
             }
+            state.frame_drivers.fence_presentation(closing_address);
         } else if state.closing_presentations.contains(&dispatcher.address) {
             return Err(DispatchError::PresentationClosing);
         }
@@ -1462,6 +1474,7 @@ fn dispatch_platform_ui_runtime_now(
 
     // Never hold the TLS RefCell borrow across user/platform callbacks. Catch
     // only to restore the host invariants; the original panic is resumed.
+    let native_retirement = APP_RUNTIME.with(|slot| slot.borrow().native_retirement.clone());
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut next = Some(first);
         while let Some((task_presentation_id, event)) = next {
@@ -1474,6 +1487,14 @@ fn dispatch_platform_ui_runtime_now(
             // needing interior mutability on the forest itself.
             match event {
                 RuntimeTask::ClosePresentation(id) => {
+                    APP_RUNTIME.with(|slot| {
+                        slot.borrow_mut().frame_drivers.retire_presentation(
+                            flui_foundation::PresentationAddress {
+                                ui_runtime_id,
+                                presentation_id: id,
+                            },
+                        );
+                    });
                     if ui_runtime.is_sole_presentation(id) {
                         // Reentrant events must fail admission before terminal observers run.
                         APP_RUNTIME.with(|slot| {
@@ -1483,9 +1504,10 @@ fn dispatch_platform_ui_runtime_now(
                                 .closing_presentations
                                 .retain(|address| address.ui_runtime_id != ui_runtime_id);
                         });
-                        APP_RUNTIME
+                        let handlers = APP_RUNTIME
                             .with(|slot| slot.borrow().close_requests())
-                            .forget_ui_runtime(ui_runtime_id);
+                            .take_ui_runtime(ui_runtime_id);
+                        native_retirement.close_handlers(handlers);
                         // Closing the ui_runtime's ONLY presentation IS closing
                         // the ui_runtime. Dispatch Detached FIRST, through this
                         // exact ui_runtime, before requesting the uninstall --
@@ -1564,9 +1586,10 @@ fn dispatch_platform_ui_runtime_now(
                         // #558): this presentation can no longer be asked
                         // about, nor closed programmatically, once its
                         // routable address is gone.
-                        APP_RUNTIME
+                        let handler = APP_RUNTIME
                             .with(|slot| slot.borrow().close_requests())
-                            .forget(address);
+                            .take(address);
+                        native_retirement.close_handlers(handler);
 
                         // Re-stamp this ui_runtime's tracked routable address
                         // (`RuntimeSlot::address`) to the surviving primary
@@ -1611,8 +1634,14 @@ fn dispatch_platform_ui_runtime_now(
                     }
                 }
                 // Not entered here: the pump enters the ui_runtime itself, and a
-                // runner's pump closure enters it explicitly for its gate.
-                RuntimeTask::Pump(run) => run(&mut ui_runtime),
+                // installed driver enters it explicitly for its gate.
+                RuntimeTask::Frame(binding) => {
+                    let driver =
+                        APP_RUNTIME.with(|slot| slot.borrow().frame_drivers.checkout(binding));
+                    if let Some(mut driver) = driver {
+                        driver.wake(&mut ui_runtime);
+                    }
+                }
                 #[cfg(any(test, target_os = "ios"))]
                 RuntimeTask::BackgroundPump => {
                     // There is no frame gate to consume the redraw report. Async
@@ -1687,12 +1716,15 @@ fn dispatch_platform_ui_runtime_now(
             .flatten();
         #[cfg(target_arch = "wasm32")]
         let reevaluate_exit: Option<std::sync::Arc<dyn Fn() + Send + Sync>> = None;
-        (removed, reevaluate_exit)
+        state.frame_drivers.sweep_retired();
+        (removed, reevaluate_exit, state.native_retirement.clone())
     });
-    let (removed, reevaluate_exit) = removed;
+    let (removed, reevaluate_exit, current_retirement) = removed;
     // Destructors may re-enter platform/framework code — drop only after the
     // TLS borrow above has released.
     let mut first_panic = result.err();
+    current_retirement.drain(&mut first_panic);
+    native_retirement.drain(&mut first_panic);
     drop_removed_ui_runtimes(removed, &mut first_panic);
     // Fired after the borrow AND after those destructors: the hook this wakes
     // borrows `APP_RUNTIME`, and a ui_runtime dropped by `removed` must be gone
@@ -1749,10 +1781,45 @@ fn drop_removed_ui_runtimes(
     removed: Vec<RuntimeSlot>,
     first_panic: &mut Option<Box<dyn std::any::Any + Send>>,
 ) {
-    for ui_runtime in removed {
+    for slot in removed {
+        let RuntimeSlot {
+            ui_runtime,
+            queue,
+            surface_applier,
+            ..
+        } = slot;
         let failure =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(ui_runtime))).err();
-        preserve_first_lifecycle_panic(first_panic, failure, "removed ui_runtime cleanup");
+        preserve_first_lifecycle_panic(first_panic, failure, "removed UI runtime");
+        for (_, task) in queue {
+            let failure =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(task))).err();
+            preserve_first_lifecycle_panic(first_panic, failure, "removed runtime operation");
+        }
+        let failure =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(surface_applier))).err();
+        preserve_first_lifecycle_panic(first_panic, failure, "removed surface applier");
+    }
+}
+
+/// Complete registry-owned retirement after the caller has released app TLS.
+pub(super) fn complete_registry_retirement(removed: Vec<RuntimeSlot>) {
+    let retirement = APP_RUNTIME.with(|slot| slot.borrow().native_retirement.clone());
+    let mut first_panic = None;
+    drop_removed_ui_runtimes(removed, &mut first_panic);
+    retirement.drain(&mut first_panic);
+    if let Some(payload) = first_panic {
+        std::panic::resume_unwind(payload);
+    }
+}
+
+fn drop_queued_turns(
+    turns: VecDeque<(PresentationDispatcher, RuntimeTask)>,
+    first_panic: &mut Option<Box<dyn std::any::Any + Send>>,
+) {
+    for (_, task) in turns {
+        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(task))).err();
+        preserve_first_lifecycle_panic(first_panic, failure, "retired owner operation");
     }
 }
 
@@ -1806,6 +1873,7 @@ fn drop_removed_ui_runtimes(
     )
 ))]
 fn for_each_installed_ui_runtime(mut f: impl FnMut(&crate::app::ui_runtime::UiRuntime)) {
+    let native_retirement = APP_RUNTIME.with(|slot| slot.borrow().native_retirement.clone());
     let ids = APP_RUNTIME.with(|slot| {
         let mut state = slot.borrow_mut();
         debug_assert!(
@@ -1867,6 +1935,7 @@ fn for_each_installed_ui_runtime(mut f: impl FnMut(&crate::app::ui_runtime::UiRu
         state.drain_pending_ui_runtime_mutations()
     });
     drop_removed_ui_runtimes(removed, &mut panic_payload);
+    native_retirement.drain(&mut panic_payload);
     let owner_turns =
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(continue_owner_turns)).err();
     preserve_first_lifecycle_panic(
@@ -2004,6 +2073,7 @@ const SERVICE_SHUTDOWN_DEADLINE: std::time::Duration = std::time::Duration::from
 pub(super) fn teardown_platform_ui_runtime() {
     let (ui_runtimes, queued_turns) = APP_RUNTIME.with(|slot| {
         let mut state = slot.borrow_mut();
+        state.frame_drivers.retire_all();
         // Registry removal first (ADR-0037 §2): stop new routing before the
         // queued old-generation events below are dropped, and before the
         // registry is cleared. The teardown real read: assert the removed
@@ -2032,7 +2102,9 @@ pub(super) fn teardown_platform_ui_runtime() {
         // leaves entries no ui_runtime removal ever names — and this same
         // `AppRuntime` serves a SECOND `Platform::run` on this thread, so a
         // survivor would be consulted by the next loop's windows.
-        state.close_requests().clear();
+        state
+            .native_retirement
+            .close_handlers(state.close_requests().take_all());
         state.owner_thread = None;
         state.dispatched_scheduler = None;
         state.dispatched_ui_runtime_id = None;
@@ -2055,8 +2127,18 @@ pub(super) fn teardown_platform_ui_runtime() {
     // Runtime and queued-task destructors may re-enter platform/framework
     // code. Drop both only after the TLS borrow and incarnation identity have
     // been released.
-    drop(ui_runtimes);
-    drop(queued_turns);
+    let mut first_panic = None;
+    drop_removed_ui_runtimes(
+        ui_runtimes.into_iter().map(|(_, slot)| slot).collect(),
+        &mut first_panic,
+    );
+    drop_queued_turns(queued_turns, &mut first_panic);
+    let retirement = APP_RUNTIME.with(|slot| {
+        let mut state = slot.borrow_mut();
+        state.frame_drivers.sweep_retired();
+        state.native_retirement.clone()
+    });
+    retirement.drain(&mut first_panic);
 
     // Service-lifecycle shutdown (issue #558) BEFORE the pools close: the
     // registry cancels every application service cooperatively and joins
@@ -2065,28 +2147,34 @@ pub(super) fn teardown_platform_ui_runtime() {
     // execution shutdown below cancels the pools' root token and
     // hard-drops any future still running at its next await point, so a
     // service joined AFTER that would lose its flush window every time.
-    let report = APP_RUNTIME.with(|slot| {
-        slot.borrow_mut()
-            .shutdown_lifecycles(SERVICE_SHUTDOWN_DEADLINE)
-    });
-    let incomplete: Vec<&'static str> = report
-        .entries
-        .iter()
-        .filter(|entry| entry.outcome != crate::app::lifecycle::ServiceShutdownOutcome::Completed)
-        .map(|entry| entry.name)
-        .collect();
-    if incomplete.is_empty() {
-        tracing::debug!(
-            services = report.entries.len(),
-            "application services shut down cleanly"
-        );
-    } else {
-        tracing::warn!(
-            services = report.entries.len(),
-            ?incomplete,
-            "some application services did not complete by the shutdown deadline"
-        );
-    }
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let report = APP_RUNTIME.with(|slot| {
+            slot.borrow_mut()
+                .shutdown_lifecycles(SERVICE_SHUTDOWN_DEADLINE)
+        });
+        let incomplete: Vec<&'static str> = report
+            .entries
+            .iter()
+            .filter(|entry| {
+                entry.outcome != crate::app::lifecycle::ServiceShutdownOutcome::Completed
+            })
+            .map(|entry| entry.name)
+            .collect();
+        if incomplete.is_empty() {
+            tracing::debug!(
+                services = report.entries.len(),
+                "application services shut down cleanly"
+            );
+        } else {
+            tracing::warn!(
+                services = report.entries.len(),
+                ?incomplete,
+                "some application services did not complete by the shutdown deadline"
+            );
+        }
+    }))
+    .err();
+    preserve_first_lifecycle_panic(&mut first_panic, failure, "service shutdown");
 
     // Execution-services shutdown (issue #557): the whole loop is exiting,
     // so stop background admission, cancel outstanding work, join running
@@ -2099,10 +2187,14 @@ pub(super) fn teardown_platform_ui_runtime() {
     // ui_runtime keeps its pools. A teardown path that skips this (panic
     // mid-teardown) still tears the pools down non-blockingly via
     // `ExecutionServices`' own `Drop`.
-    APP_RUNTIME.with(|slot| {
-        slot.borrow_mut()
-            .shutdown_execution(EXECUTION_SHUTDOWN_GRACE);
-    });
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        APP_RUNTIME.with(|slot| {
+            slot.borrow_mut()
+                .shutdown_execution(EXECUTION_SHUTDOWN_GRACE);
+        });
+    }))
+    .err();
+    preserve_first_lifecycle_panic(&mut first_panic, failure, "execution shutdown");
 
     // ADR-0038 §9's install/teardown symmetry: the event loop has exited (this
     // runs from both `run_desktop` and `run_android`, after their respective
@@ -2112,17 +2204,24 @@ pub(super) fn teardown_platform_ui_runtime() {
     // process's life. `Drop for AppRuntime` is the last-resort third clear
     // if this explicit path is ever skipped (a panic mid-teardown, for
     // instance) — see that impl's doc.
-    let released = APP_RUNTIME.with(|slot| {
-        let state = slot.borrow();
-        state.clear_platform_clipboard();
-        state.clear_redraw_window()
-    });
-    // Ordinarily `None` already: the window-close path released this pin
-    // (`release_redraw_window_for`) while the event loop was still alive,
-    // which is the order the platform teardown contract wants. Dropped here
-    // outside the TLS borrow for the paths that never closed a window (an
-    // OS-level quit with the window still open).
-    drop(released);
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let released = APP_RUNTIME.with(|slot| {
+            let state = slot.borrow();
+            state.clear_platform_clipboard();
+            state.clear_redraw_window()
+        });
+        // Ordinarily `None` already: the window-close path released this pin
+        // (`release_redraw_window_for`) while the event loop was still alive,
+        // which is the order the platform teardown contract wants. Dropped here
+        // outside the TLS borrow for the paths that never closed a window (an
+        // OS-level quit with the window still open).
+        drop(released);
+    }))
+    .err();
+    preserve_first_lifecycle_panic(&mut first_panic, failure, "native shutdown");
+    if let Some(payload) = first_panic {
+        std::panic::resume_unwind(payload);
+    }
 }
 
 #[path = "owner_dispatch/tests.rs"]

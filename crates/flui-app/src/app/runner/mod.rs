@@ -23,10 +23,12 @@ mod device_recovery;
 ))]
 mod first_reveal;
 mod fonts;
+mod frame_driver;
 mod frame_pacing;
 mod host;
 #[cfg(target_os = "ios")]
 pub(super) mod ios;
+mod native_retirement;
 
 mod owner_dispatch;
 // Unconditional, like `device_recovery` above: the backoff's trait and
@@ -56,9 +58,11 @@ pub use android::{run_app_android, run_app_android_with_config};
 ))]
 use desktop::run_desktop;
 pub use fonts::{FontRegistrationError, register_font};
+pub(in crate::app) use frame_driver::FrameDrivers;
 pub(crate) use host::{OwnerHostClearGuard, install_owner_platform, with_owner_platform};
 #[cfg(target_os = "ios")]
 pub use ios::{run_app_ios, run_app_ios_with_config};
+pub(in crate::app) use native_retirement::NativeRetirement;
 pub(in crate::app) use owner_dispatch::{PresentationDispatcher, RuntimeTask, SurfaceApplier};
 #[cfg(all(
     not(target_os = "android"),
@@ -150,7 +154,7 @@ pub(crate) fn install_close_request_wiring(
     use crate::app::close_request::CloseResponse;
 
     let router = host::APP_RUNTIME.with(|slot| slot.borrow().close_requests());
-    router.register(address, window, handler);
+    let previous = router.register(address, window, handler);
 
     let consulting = std::sync::Arc::clone(&router);
     window.on_should_close(Box::new(move || {
@@ -158,6 +162,7 @@ pub(crate) fn install_close_request_wiring(
         tracing::debug!(?address, ?response, "window close requested");
         matches!(response, CloseResponse::Close)
     }));
+    drop(previous);
 }
 
 /// Close the window at `address` programmatically, bypassing its

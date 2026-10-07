@@ -11,7 +11,8 @@ use super::host::{
 };
 use super::owner_dispatch::{
     RuntimeEvent, RuntimeTask, dispatch_platform_ui_runtime, install_input_wiring,
-    install_platform_ui_runtime, install_surface_applier, teardown_platform_ui_runtime,
+    install_platform_ui_runtime, install_single_window_terminal_wiring, install_surface_applier,
+    teardown_platform_ui_runtime,
 };
 use super::surface_lifecycle::{
     SurfaceLifecycleOutcome, SurfaceRecreationRetry, report_surface_settlement,
@@ -281,181 +282,19 @@ where
         // 5. Register input callback -> entered ui_runtime input dispatch
         install_input_wiring(owner_dispatch, window.as_ref());
 
-        // 6. Register frame callback -- with hot-reload plugin override
-        let lane_frame = Arc::clone(&lane);
-        let hot_reload_frame = hot_reload;
-        // Reuses the SAME backoff constructed at step 0b (already wired
-        // into the wake-deadline hook above) — not a fresh one.
+        let frame = super::frame_driver::install_frame_driver(
+            owner_dispatch,
+            super::frame_driver::FrameDriver::Android(AndroidFrameDriver {
+                lane: Arc::clone(&lane),
+                hot_reload,
+                device_recovery_backoff,
+                surface_recreation_retry,
+            }),
+        )?;
+        let binding = frame.binding;
         window.on_request_frame(Box::new(move || {
             let _owner_callback = super::owner_dispatch::begin_owner_callback();
-            let lane_frame = Arc::clone(&lane_frame);
-            let hot_reload_frame = hot_reload_frame.clone();
-            let device_recovery_backoff = Arc::clone(&device_recovery_backoff);
-            let surface_recreation_retry = Arc::clone(&surface_recreation_retry);
-            let _ = dispatch_platform_ui_runtime(
-                owner_dispatch,
-                RuntimeTask::Pump(Box::new(move |ui_runtime| {
-                    // The gate half of the wake runs inside one ui_runtime entry
-                    // and decides; the pump below enters the ui_runtime itself.
-                    let (action, now) = ui_runtime.enter(|ui_runtime| {
-                        let now = web_time::Instant::now();
-                        // Owner-inbox drain: commands and worker results commit HERE,
-                        // at the frame boundary while the scheduler phase is Idle —
-                        // never inside the frame transaction below. Runs before
-                        // everything else in this callback, including the hot-reload
-                        // plugin scene fast path below, so a command-driven redraw
-                        // request is observed by the very frame its wake produced
-                        // regardless of which rendering path this frame takes.
-                        let inbox_redraw = ui_runtime.drain_owner_inbox();
-
-                        // If a scene plugin is live it owns this presentation frame,
-                        // but the callback still executes inside the ui_runtime entry
-                        // scope. Always `false` without an installed development
-                        // reload hook. The plugin renders through the backend directly
-                        // (its own diagnostic scene, not a ui_runtime-produced frame),
-                        // so it goes through the lane's scoped backend access —
-                        // per ADR-0045 decision 6 the plugin path is one of the
-                        // named inline-only lanes.
-                        {
-                            let Some(mut lane) = lane_frame.try_lock() else {
-                                tracing::error!(
-                                    "frame skipped: raster lane already held by an outer \
-                                 frame dispatch"
-                                );
-                                return (WakeAction::Skip, now);
-                            };
-                            let plugin_rendered = lane.with_backend(|r| {
-                                let (w, h) = r.size();
-                                hot_reload_frame.try_render_frame(r, w as f64, h as f64)
-                            });
-                            if plugin_rendered {
-                                return (WakeAction::Skip, now);
-                            }
-                        }
-
-                        let has_pending = ui_runtime.has_pending_work();
-                        // See the desktop closure's matching comment: a wake-
-                        // deadline source (here, `set_wake_deadline_hook` forces
-                        // a dispatch once due — `flui-platform`'s
-                        // `platforms/android/mod.rs`'s own `run` loop) that is
-                        // absent from `dirty` reaches `WakeAction::Skip` and
-                        // returns before this closure ever calls
-                        // `pump_with_device_recovery`, no matter how faithfully the
-                        // platform actuates the wake. Calls the shared
-                        // `frame_is_dirty` — see that function's own doc for why
-                        // this must not be reimplemented locally.
-                        //
-                        // The surface-retry deadline joins the device-recovery one
-                        // here for the same reason that one must be present.
-                        let retry_deadline = super::host::merge_wake_deadlines(
-                            device_recovery_backoff.next_attempt_at(),
-                            surface_recreation_retry.next_attempt_at(),
-                        );
-                        let dirty = frame_is_dirty(
-                            inbox_redraw,
-                            ui_runtime.needs_redraw(),
-                            has_pending,
-                            retry_deadline,
-                            // Android's wake-deadline hook carries only the retry
-                            // deadlines, so no fallback deferral exists to consult
-                            // (ADR-0058): its backgrounded pump sleeps.
-                            FallbackGate::default(),
-                        );
-                        let scheduler = ui_runtime.scheduler();
-                        let action = wake_action(
-                            scheduler.frames_enabled(),
-                            dirty,
-                            scheduler.is_frame_scheduled(),
-                            FallbackGate::default(),
-                        );
-                        if action != WakeAction::Render {
-                            return (action, now);
-                        }
-
-                        // A retry owed by a genuine surface-recreation failure gets
-                        // its gated attempt here, BEFORE the frame, through the shared
-                        // helper (its own lane-lock scope, released before the ui_runtime
-                        // half). This closure already runs as the ui_runtime's Pump task, so
-                        // the full-repaint mark goes to `ui_runtime` directly and the frame
-                        // about to run is the one that repaints into the new surface —
-                        // re-dispatching it as another task would queue it behind
-                        // this one (the dispatcher is mid-phase) and land it a frame late.
-                        match retry_surface_recreation(&lane_frame, &surface_recreation_retry, now)
-                        {
-                            Some(SurfaceLifecycleOutcome::Recreated) => {
-                                ui_runtime.mark_primary_needs_full_repaint();
-                            }
-                            Some(SurfaceLifecycleOutcome::Failed(source)) => {
-                                tracing::warn!(
-                                    platform = "Android",
-                                    ?source,
-                                    "surface recreation retry failed; the deadline-paced retry \
-                                 continues"
-                                );
-                            }
-                            Some(SurfaceLifecycleOutcome::Released) | None => {}
-                        }
-                        (action, now)
-                    });
-
-                    match action {
-                        WakeAction::Skip => return,
-                        WakeAction::PumpAsync => {
-                            // Frames disabled: pump only the async driver — no
-                            // frame, no tickers, no pipeline, no present. See
-                            // `wake_action`'s doc for why this is the only thing
-                            // keeping a spawned future progressing while
-                            // backgrounded, and `UiRuntime::pump_background` for
-                            // the latch-first order it keeps.
-                            ui_runtime.pump_background();
-                            // Unconditional throttle: a self-re-arming task has
-                            // no vsync/present call to bound it here either, and
-                            // this arm has no gate-open signal to make the pace
-                            // conditional the way desktop's does — see
-                            // `BACKGROUNDED_PUMP_PACE`'s doc. Android keeps the
-                            // sleep the desktop path dropped (ADR-0058): its frame
-                            // source has no wake-deadline hook to arm instead.
-                            std::thread::sleep(BACKGROUNDED_PUMP_PACE);
-                            return;
-                        }
-                        WakeAction::Render => {}
-                    }
-
-                    // The frame: `UiRuntime::pump` at `now`, with device-loss
-                    // recovery around it, same shape as the desktop path — see
-                    // `pump_with_device_recovery`.
-                    //
-                    // No sleep here, unlike an earlier version of this
-                    // closure: both retries pace their ATTEMPT via a
-                    // non-blocking deadline check (see `RetryBackoff`'s
-                    // doc), never by blocking this thread.
-                    // `AndroidPlatform::run`'s poll loop calls
-                    // `process_input_events`/`dispatch_request_frame`
-                    // inline on this SAME thread, so a sleep here — even
-                    // one bounded to the backoff's own growing interval —
-                    // would stall input and `MainEvent` lifecycle delivery
-                    // (Pause/Destroy/Resize) for its duration, which is ANR
-                    // territory at the backoff's one-second cap. The
-                    // deadline is carried by the wake hook wired at step 0c
-                    // instead: this backend has no `ControlFlow::WaitUntil`,
-                    // so `AndroidPlatform::run`'s own ~16 ms idle poll
-                    // consults the hook every iteration and forces a
-                    // dispatch once the deadline is due (`flui-platform`'s
-                    // `platforms/android/mod.rs`).
-                    let Some(mut lane) = lane_frame.try_lock() else {
-                        tracing::error!(
-                            "frame skipped: raster lane already held by an outer frame dispatch"
-                        );
-                        return;
-                    };
-                    let _ = pump_with_device_recovery(
-                        ui_runtime,
-                        &mut *lane,
-                        &device_recovery_backoff,
-                        now,
-                    );
-                })),
-            );
+            let _ = dispatch_platform_ui_runtime(owner_dispatch, RuntimeTask::Frame(binding));
         }));
 
         // 7. Register resize callback -> typed Resized event; the applier
@@ -472,34 +311,10 @@ where
         // Detached is ui_runtime-dispatched so interrupted gesture state is drained
         // before lifecycle observers run.
 
-        // Platform quit -> Detached (frames disabled, listeners notified).
+        // Native close and quit both revoke this binding before observers run.
         owner_platform_installed(|owner| {
-            owner.shared().on_quit(Box::new(move || {
-                tracing::info!("Platform quit");
-                debug_assert_eq!(
-                    std::thread::current().id(),
-                    owner_dispatch.owner_thread,
-                    "platform on_quit must fire on the ui_runtime's owner thread"
-                );
-                if let Err(error) = dispatch_platform_ui_runtime(
-                    owner_dispatch,
-                    RuntimeTask::Event(RuntimeEvent::Shutdown),
-                ) {
-                    // Trace-only: the scheduler died WITH the ui_runtime now (each
-                    // ui_runtime owns its own), so there is no process-global
-                    // scheduler left to notify as a fallback.
-                    tracing::warn!(
-                        ?error,
-                        "ui_runtime unavailable during Detached lifecycle dispatch"
-                    );
-                }
-            }));
+            install_single_window_terminal_wiring(&window, &owner.shared(), owner_dispatch);
         });
-
-        // Window close (fired by Android Destroy event)
-        window.on_close(Box::new(move || {
-            tracing::info!("Window closed");
-        }));
 
         // Window active status. On Android this one callback conflates real
         // window focus (`MainEvent::GainedFocus`/`LostFocus`) with the app's
@@ -677,5 +492,174 @@ where
     // exited.
     if let Err(err) = result {
         panic!("android bootstrap failed: {err:?}");
+    }
+}
+
+pub(super) struct AndroidFrameDriver {
+    lane: std::sync::Arc<
+        parking_lot::Mutex<crate::app::raster_lane::RasterLane<flui_engine::Renderer>>,
+    >,
+    hot_reload: crate::app::hot_reload::ScenePlugin,
+    device_recovery_backoff: std::sync::Arc<super::device_recovery::DeviceRecoveryBackoff>,
+    surface_recreation_retry: std::sync::Arc<SurfaceRecreationRetry>,
+}
+
+impl AndroidFrameDriver {
+    pub(super) fn wake(&mut self, ui_runtime: &mut crate::app::ui_runtime::UiRuntime) {
+        let lane_frame = &self.lane;
+        let hot_reload_frame = &self.hot_reload;
+        let device_recovery_backoff = &self.device_recovery_backoff;
+        let surface_recreation_retry = &self.surface_recreation_retry;
+        // The gate half of the wake runs inside one ui_runtime entry
+        // and decides; the pump below enters the ui_runtime itself.
+        let (action, now) = ui_runtime.enter(|ui_runtime| {
+            let now = web_time::Instant::now();
+            // Owner-inbox drain: commands and worker results commit HERE,
+            // at the frame boundary while the scheduler phase is Idle —
+            // never inside the frame transaction below. Runs before
+            // everything else in this callback, including the hot-reload
+            // plugin scene fast path below, so a command-driven redraw
+            // request is observed by the very frame its wake produced
+            // regardless of which rendering path this frame takes.
+            let inbox_redraw = ui_runtime.drain_owner_inbox();
+
+            // If a scene plugin is live it owns this presentation frame,
+            // but the callback still executes inside the ui_runtime entry
+            // scope. Always `false` without an installed development
+            // reload hook. The plugin renders through the backend directly
+            // (its own diagnostic scene, not a ui_runtime-produced frame),
+            // so it goes through the lane's scoped backend access —
+            // per ADR-0045 decision 6 the plugin path is one of the
+            // named inline-only lanes.
+            {
+                let Some(mut lane) = lane_frame.try_lock() else {
+                    tracing::error!(
+                        "frame skipped: raster lane already held by an outer \
+                                 frame dispatch"
+                    );
+                    return (WakeAction::Skip, now);
+                };
+                let plugin_rendered = lane.with_backend(|r| {
+                    let (w, h) = r.size();
+                    hot_reload_frame.try_render_frame(r, w as f64, h as f64)
+                });
+                if plugin_rendered {
+                    return (WakeAction::Skip, now);
+                }
+            }
+
+            let has_pending = ui_runtime.has_pending_work();
+            // See the desktop closure's matching comment: a wake-
+            // deadline source (here, `set_wake_deadline_hook` forces
+            // a dispatch once due — `flui-platform`'s
+            // `platforms/android/mod.rs`'s own `run` loop) that is
+            // absent from `dirty` reaches `WakeAction::Skip` and
+            // returns before this closure ever calls
+            // `pump_with_device_recovery`, no matter how faithfully the
+            // platform actuates the wake. Calls the shared
+            // `frame_is_dirty` — see that function's own doc for why
+            // this must not be reimplemented locally.
+            //
+            // The surface-retry deadline joins the device-recovery one
+            // here for the same reason that one must be present.
+            let retry_deadline = super::host::merge_wake_deadlines(
+                device_recovery_backoff.next_attempt_at(),
+                surface_recreation_retry.next_attempt_at(),
+            );
+            let dirty = frame_is_dirty(
+                inbox_redraw,
+                ui_runtime.needs_redraw(),
+                has_pending,
+                retry_deadline,
+                // Android's wake-deadline hook carries only the retry
+                // deadlines, so no fallback deferral exists to consult
+                // (ADR-0058): its backgrounded pump sleeps.
+                FallbackGate::default(),
+            );
+            let scheduler = ui_runtime.scheduler();
+            let action = wake_action(
+                scheduler.frames_enabled(),
+                dirty,
+                scheduler.is_frame_scheduled(),
+                FallbackGate::default(),
+            );
+            if action != WakeAction::Render {
+                return (action, now);
+            }
+
+            // A retry owed by a genuine surface-recreation failure gets
+            // its gated attempt here, BEFORE the frame, through the shared
+            // helper (its own lane-lock scope, released before the ui_runtime
+            // half). This closure already runs as the ui_runtime's Pump task, so
+            // the full-repaint mark goes to `ui_runtime` directly and the frame
+            // about to run is the one that repaints into the new surface —
+            // re-dispatching it as another task would queue it behind
+            // this one (the dispatcher is mid-phase) and land it a frame late.
+            match retry_surface_recreation(lane_frame, surface_recreation_retry, now) {
+                Some(SurfaceLifecycleOutcome::Recreated) => {
+                    ui_runtime.mark_primary_needs_full_repaint();
+                }
+                Some(SurfaceLifecycleOutcome::Failed(source)) => {
+                    tracing::warn!(
+                        platform = "Android",
+                        ?source,
+                        "surface recreation retry failed; the deadline-paced retry \
+                                 continues"
+                    );
+                }
+                Some(SurfaceLifecycleOutcome::Released) | None => {}
+            }
+            (action, now)
+        });
+
+        match action {
+            WakeAction::Skip => return,
+            WakeAction::PumpAsync => {
+                // Frames disabled: pump only the async driver — no
+                // frame, no tickers, no pipeline, no present. See
+                // `wake_action`'s doc for why this is the only thing
+                // keeping a spawned future progressing while
+                // backgrounded, and `UiRuntime::pump_background` for
+                // the latch-first order it keeps.
+                ui_runtime.pump_background();
+                // Unconditional throttle: a self-re-arming task has
+                // no vsync/present call to bound it here either, and
+                // this arm has no gate-open signal to make the pace
+                // conditional the way desktop's does — see
+                // `BACKGROUNDED_PUMP_PACE`'s doc. Android keeps the
+                // sleep the desktop path dropped (ADR-0058): its frame
+                // source has no wake-deadline hook to arm instead.
+                std::thread::sleep(BACKGROUNDED_PUMP_PACE);
+                return;
+            }
+            WakeAction::Render => {}
+        }
+
+        // The frame: `UiRuntime::pump` at `now`, with device-loss
+        // recovery around it, same shape as the desktop path — see
+        // `pump_with_device_recovery`.
+        //
+        // No sleep here, unlike an earlier version of this
+        // closure: both retries pace their ATTEMPT via a
+        // non-blocking deadline check (see `RetryBackoff`'s
+        // doc), never by blocking this thread.
+        // `AndroidPlatform::run`'s poll loop calls
+        // `process_input_events`/`dispatch_request_frame`
+        // inline on this SAME thread, so a sleep here — even
+        // one bounded to the backoff's own growing interval —
+        // would stall input and `MainEvent` lifecycle delivery
+        // (Pause/Destroy/Resize) for its duration, which is ANR
+        // territory at the backoff's one-second cap. The
+        // deadline is carried by the wake hook wired at step 0c
+        // instead: this backend has no `ControlFlow::WaitUntil`,
+        // so `AndroidPlatform::run`'s own ~16 ms idle poll
+        // consults the hook every iteration and forces a
+        // dispatch once the deadline is due (`flui-platform`'s
+        // `platforms/android/mod.rs`).
+        let Some(mut lane) = lane_frame.try_lock() else {
+            tracing::error!("frame skipped: raster lane already held by an outer frame dispatch");
+            return;
+        };
+        let _ = pump_with_device_recovery(ui_runtime, &mut *lane, device_recovery_backoff, now);
     }
 }

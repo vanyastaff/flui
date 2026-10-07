@@ -284,14 +284,6 @@ struct PresentationCloseEntry {
     /// alive past the teardown ordering issue #713's Wayland crash
     /// established.
     window: Weak<dyn PlatformWindow>,
-    #[cfg_attr(
-        all(target_arch = "wasm32", not(test)),
-        expect(
-            dead_code,
-            reason = "reached through the loop-exit teardown (desktop/android/iOS); wasm32 has \
-                      no loop-exit teardown at all"
-        )
-    )]
     handler: Option<CloseRequestHandler>,
     /// The thread that registered this entry. Every `PlatformWindow`
     /// callback must be invoked on the thread that registered it (see the
@@ -361,36 +353,50 @@ impl CloseRequestRouter {
         address: PresentationAddress,
         window: &Arc<dyn PlatformWindow>,
         handler: Option<CloseRequestHandler>,
-    ) {
+    ) -> Option<CloseRequestHandler> {
         let entry = PresentationCloseEntry {
             address,
             window: Arc::downgrade(window),
             handler,
             owner_thread: std::thread::current().id(),
         };
-        let mut entries = self.entries.lock();
-        match entries.iter_mut().find(|e| e.address == address) {
-            Some(existing) => *existing = entry,
-            None => entries.push(entry),
-        }
+        let replaced = {
+            let mut entries = self.entries.lock();
+            if let Some(existing) = entries.iter_mut().find(|e| e.address == address) {
+                Some(std::mem::replace(existing, entry))
+            } else {
+                entries.push(entry);
+                None
+            }
+        };
+        replaced.and_then(|entry| entry.handler)
     }
 
-    /// Drop the entry for exactly this presentation.
-    pub(crate) fn forget(&self, address: PresentationAddress) {
-        let mut entries = std::mem::take(&mut *self.entries.lock());
-        entries.retain(|e| e.address != address);
-        let _prev = std::mem::replace(&mut *self.entries.lock(), entries);
+    /// Remove the entry and return its handler for retirement outside host borrows.
+    pub(crate) fn take(&self, address: PresentationAddress) -> Option<CloseRequestHandler> {
+        let removed = {
+            let mut entries = self.entries.lock();
+            let index = entries.iter().position(|entry| entry.address == address)?;
+            entries.remove(index)
+        };
+        removed.handler
     }
 
-    /// Drop every entry belonging to `ui_runtime` — the UI runtime-wide uninstall
-    /// counterpart of [`Self::forget`].
-    pub(crate) fn forget_ui_runtime(&self, ui_runtime: UiRuntimeId) {
-        let mut entries = std::mem::take(&mut *self.entries.lock());
-        entries.retain(|e| e.address.ui_runtime_id != ui_runtime);
-        let _prev = std::mem::replace(&mut *self.entries.lock(), entries);
+    /// Remove a runtime's entries and hand their owners to the completion executor.
+    pub(crate) fn take_ui_runtime(&self, ui_runtime: UiRuntimeId) -> Vec<CloseRequestHandler> {
+        let removed = {
+            let mut entries = self.entries.lock();
+            entries
+                .extract_if(.., |entry| entry.address.ui_runtime_id == ui_runtime)
+                .collect::<Vec<_>>()
+        };
+        removed
+            .into_iter()
+            .filter_map(|entry| entry.handler)
+            .collect()
     }
 
-    /// Drop every registration, for full loop-exit teardown.
+    /// Remove every registration and return its handlers for loop-exit retirement.
     ///
     /// Not reachable by UI runtime-by-UI runtime removal: an explicit platform quit,
     /// or a bootstrap that fails after a window is wired but before its
@@ -406,8 +412,12 @@ impl CloseRequestRouter {
                       no loop-exit teardown at all"
         )
     )]
-    pub(crate) fn clear(&self) {
-        let _prev = std::mem::take(&mut *self.entries.lock());
+    pub(crate) fn take_all(&self) -> Vec<CloseRequestHandler> {
+        let removed = std::mem::take(&mut *self.entries.lock());
+        removed
+            .into_iter()
+            .filter_map(|entry| entry.handler)
+            .collect()
     }
 
     /// Ask the application whether the window at `address` may close.
@@ -564,19 +574,19 @@ mod tests {
 
         let keeps_open_asked = Arc::new(AtomicUsize::new(0));
         let asked = Arc::clone(&keeps_open_asked);
-        router.register(
+        drop(router.register(
             keeps_open,
             &window(1),
             Some(CloseRequestHandler::new(move |_| {
                 asked.fetch_add(1, Ordering::SeqCst);
                 CloseResponse::KeepOpen
             })),
-        );
-        router.register(
+        ));
+        drop(router.register(
             closes,
             &window(2),
             Some(CloseRequestHandler::new(|_| CloseResponse::Close)),
-        );
+        ));
 
         assert_eq!(
             router.consult(closes, CloseReason::User),
@@ -610,7 +620,7 @@ mod tests {
         let panics = Arc::new(std::sync::atomic::AtomicBool::new(true));
         let panics_in_handler = Arc::clone(&panics);
 
-        router.register(
+        drop(router.register(
             a,
             &window(1),
             Some(CloseRequestHandler::new(move |_| {
@@ -620,7 +630,7 @@ mod tests {
                 );
                 CloseResponse::Close
             })),
-        );
+        ));
 
         // A quiet hook is exactly why the payload has to be carried into
         // the `tracing` field: with the default output suppressed, the
@@ -665,14 +675,14 @@ mod tests {
         let a = address(1, 1);
         let reasons = Arc::new(Mutex::new(Vec::new()));
         let seen = Arc::clone(&reasons);
-        router.register(
+        drop(router.register(
             a,
             &window(1),
             Some(CloseRequestHandler::new(move |request| {
                 seen.lock().push(request.reason());
                 CloseResponse::KeepOpen
             })),
-        );
+        ));
 
         router.consult(a, CloseReason::Program);
         router.consult(a, CloseReason::User);
@@ -694,10 +704,62 @@ mod tests {
                     one_presentations_veto_does_not_reach_its_sibling as fn(),
                 ),
                 (
+                    "retiring_a_handler_preserves_its_reentrant_registration",
+                    retiring_a_handler_preserves_its_reentrant_registration as fn(),
+                ),
+                (
                     "a_panicking_handler_vetoes_and_stays_registered",
                     a_panicking_handler_vetoes_and_stays_registered as fn(),
                 ),
             ],
         );
+    }
+
+    struct RegisterOnDrop {
+        router: Weak<CloseRequestRouter>,
+        window: Arc<dyn PlatformWindow>,
+        address: PresentationAddress,
+    }
+
+    impl Drop for RegisterOnDrop {
+        fn drop(&mut self) {
+            let router = self.router.upgrade().expect("router still owned");
+            drop(router.register(
+                self.address,
+                &self.window,
+                Some(CloseRequestHandler::new(|_| CloseResponse::KeepOpen)),
+            ));
+        }
+    }
+
+    fn retiring_a_handler_preserves_its_reentrant_registration() {
+        for whole_runtime in [false, true] {
+            let router = Arc::new(CloseRequestRouter::new());
+            let old = address(1, 1);
+            let next = address(2, 2);
+            let capture = RegisterOnDrop {
+                router: Arc::downgrade(&router),
+                window: window(2),
+                address: next,
+            };
+            drop(router.register(
+                old,
+                &window(1),
+                Some(CloseRequestHandler::new(move |_| {
+                    let _ = &capture;
+                    CloseResponse::Close
+                })),
+            ));
+            if whole_runtime {
+                drop(router.take_ui_runtime(old.ui_runtime_id));
+            } else {
+                drop(router.take(old));
+            }
+            assert_eq!(
+                router.consult(next, CloseReason::User),
+                CloseResponse::KeepOpen,
+                "a handler registered during retirement survives; whole_runtime={whole_runtime}"
+            );
+        }
     }
 }

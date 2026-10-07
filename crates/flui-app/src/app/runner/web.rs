@@ -7,7 +7,7 @@ use super::host::{
 };
 use super::owner_dispatch::{
     RuntimeEvent, RuntimeTask, dispatch_platform_ui_runtime, install_input_wiring,
-    install_platform_ui_runtime, install_surface_applier,
+    install_platform_ui_runtime, install_single_window_terminal_wiring, install_surface_applier,
 };
 use crate::app::AppConfig;
 
@@ -25,10 +25,6 @@ where
     use flui_engine::Renderer;
     use flui_platform::WindowOptions;
     use parking_lot::Mutex;
-
-    use flui_runtime::pump::SampledClock;
-
-    use crate::app::raster_lane::DirectSink;
 
     tracing::info!("Starting web platform via flui-platform");
     crate::app::dev_agent::log_undriven(&config, "web");
@@ -85,30 +81,6 @@ where
         //    adapter is available. `Option` lets the frame callback skip frames that
         //    arrive before the renderer is ready.
         let renderer: Arc<Mutex<Option<Renderer>>> = Arc::new(Mutex::new(None));
-
-        let phys_size = window.physical_size();
-        let renderer_init = Arc::clone(&renderer);
-        let renderer_window = Arc::clone(&window);
-
-        // The future owns a strong window reference. This is required because the
-        // browser platform installs RAF and returns immediately, and startup can
-        // also return early before the window reaches AppRuntime's redraw-poke slot.
-        wasm_bindgen_futures::spawn_local(async move {
-            // `Renderer::new` takes ownership of a `WindowTarget` (issue
-            // #1043) — `Arc::clone` gives it its own strong ref rather than
-            // a borrow of `renderer_window` (which the future already owns,
-            // per the comment above).
-            let mut r = match Renderer::new(Arc::clone(&renderer_window)).await {
-                Ok(r) => r,
-                Err(e) => {
-                    tracing::error!("GPU init failed: {:?}", e);
-                    return;
-                }
-            };
-            r.resize(phys_size.width as u32, phys_size.height as u32);
-            tracing::info!("WebGPU renderer initialized");
-            let _prev = renderer_init.lock().replace(r);
-        });
 
         // 3. Mount root widget at the LOGICAL size; the paint root's DPR
         // transform maps to the physical canvas. `UiRuntime::new` applies the
@@ -170,163 +142,46 @@ where
         // 4. Register input callback
         install_input_wiring(owner_dispatch, window.as_ref());
 
-        // 5. Register frame callback
-        let renderer_frame = Arc::clone(&renderer);
+        let frame = super::frame_driver::install_frame_driver(
+            owner_dispatch,
+            super::frame_driver::FrameDriver::Web(WebFrameDriver {
+                renderer: Arc::clone(&renderer),
+            }),
+        )?;
+        let binding = frame.binding;
+        let initialization_authority = frame.liveness;
+        let renderer_init = Arc::clone(&renderer);
+        let renderer_window = Arc::clone(&window);
+        let phys_size = window.physical_size();
+        wasm_bindgen_futures::spawn_local(async move {
+            if !initialization_authority.is_live() {
+                return;
+            }
+            // The future keeps the native target alive without granting it
+            // authority to publish into a retired registration.
+            let mut renderer = match Renderer::new(Arc::clone(&renderer_window)).await {
+                Ok(renderer) => renderer,
+                Err(error) => {
+                    tracing::error!(%error, "GPU initialization failed");
+                    return;
+                }
+            };
+            if !initialization_authority.is_live() {
+                return;
+            }
+            renderer.resize(phys_size.width as u32, phys_size.height as u32);
+            match initialization_authority.publish(&renderer_init, renderer) {
+                Ok(previous) => drop(previous),
+                Err(renderer) => {
+                    drop(renderer);
+                    return;
+                }
+            }
+            tracing::info!("WebGPU renderer initialized");
+        });
         window.on_request_frame(Box::new(move || {
             let _owner_callback = super::owner_dispatch::begin_owner_callback();
-            let renderer_frame = Arc::clone(&renderer_frame);
-            let _ = dispatch_platform_ui_runtime(
-                owner_dispatch,
-                RuntimeTask::Pump(Box::new(move |ui_runtime| {
-                    let action = ui_runtime.enter(|ui_runtime| {
-                        // Owner-inbox drain: commands and worker results commit
-                        // HERE, at the frame boundary while the scheduler phase
-                        // is Idle — never inside the frame transaction below.
-                        // Runs before the dirty gate so a command-driven redraw
-                        // request is observed by the very frame its wake
-                        // produced.
-                        let inbox_redraw = ui_runtime.drain_owner_inbox();
-
-                        let has_pending = ui_runtime.has_pending_work();
-                        let dirty = inbox_redraw || ui_runtime.needs_redraw() || has_pending;
-                        let scheduler = ui_runtime.scheduler();
-                        wake_action(
-                            scheduler.frames_enabled(),
-                            dirty,
-                            scheduler.is_frame_scheduled(),
-                            // No deferral on web: this callback is driven by the
-                            // browser's own `requestAnimationFrame` loop, which
-                            // already paces at the display's rate — the exact job
-                            // ADR-0058's deadline does for the native backends.
-                            FallbackGate::default(),
-                        )
-                    });
-                    match action {
-                        WakeAction::Skip => return,
-                        WakeAction::PumpAsync => {
-                            // Frames disabled: pump only the async driver — see
-                            // `wake_action`'s doc for why this is the only thing
-                            // keeping a spawned future progressing while
-                            // backgrounded, and `UiRuntime::pump_background` for
-                            // the latch-first order it keeps.
-                            //
-                            // No `NO_PRESENT_FALLBACK_PACE` sleep here, unlike
-                            // desktop/Android: this callback is driven by the
-                            // browser's `requestAnimationFrame` loop
-                            // (`start_raf_loop`, `flui-platform`'s web backend),
-                            // which fires unconditionally once per animation
-                            // frame regardless of whether a redraw was
-                            // requested — the browser's own vsync-paced RAF
-                            // cadence already bounds this arm's re-wake rate, so
-                            // an additional sleep would be redundant. It would
-                            // also be unsound here: `wasm32-unknown-unknown` has
-                            // no real OS threads, and blocking the single JS
-                            // thread with `std::thread::sleep` would hang the
-                            // page rather than pace it.
-                            ui_runtime.pump_background();
-                            return;
-                        }
-                        WakeAction::Render => {}
-                    }
-
-                    let now = web_time::Instant::now();
-                    {
-                        // No frame runs before the renderer exists: the ui_runtime
-                        // stays dirty, and the first animation frame after the
-                        // renderer arrives renders.
-                        let mut slot = renderer_frame.lock();
-                        let Some(r) = slot.as_mut() else {
-                            return;
-                        };
-
-                        let _ = ui_runtime.pump(&mut SampledClock(now), &mut DirectSink::new(r));
-
-                        if r.is_device_lost() {
-                            drop(slot);
-                            let renderer_recover = Arc::clone(&renderer_frame);
-                            // A cloned, `'static` wake handle: the spawned
-                            // future outlives this callback's `&UiRuntime`
-                            // borrow, so it cannot capture `ui_runtime` itself.
-                            let wake = ui_runtime.wake_handle();
-                            wasm_bindgen_futures::spawn_local(async move {
-                                // Never hold the renderer mutex across `.await`.
-                                let Some(mut renderer) = renderer_recover.lock().take() else {
-                                    return;
-                                };
-                                let result = renderer.recover().await;
-                                let _prev = renderer_recover.lock().replace(renderer);
-                                match result {
-                                    Ok(()) => {
-                                        tracing::warn!("GPU device lost — recovered successfully");
-                                        wake();
-                                    }
-                                    Err(e @ flui_engine::EngineError::SurfaceTargetUnavailable {
-                                        ..
-                                    }) => {
-                                        // The window owner reports its native
-                                        // handle is gone or suspended (issue
-                                        // #1043). `HandleError::Unavailable` is
-                                        // `Recoverability::Recoverable` — a
-                                        // backgrounded tab's canvas can report
-                                        // this transiently — but
-                                        // `HandleError::NotSupported` is
-                                        // `Fatal` (the owner can never answer
-                                        // this handle kind). This arm does not
-                                        // branch on that classification: the
-                                        // retry wake below fires either way,
-                                        // same as any other failure; only the
-                                        // log severity is lower, since the
-                                        // common case is expected to clear on
-                                        // its own.
-                                        tracing::warn!(
-                                            error = ?e,
-                                            "GPU device recovery failed — window target unavailable; retry armed for the next wake regardless"
-                                        );
-                                        wake();
-                                    }
-                                    Err(e) => {
-                                        // Driver may still be resetting. Arm
-                                        // the retry wake in the failure arm
-                                        // too — RAF alone re-pumps an ACTIVE
-                                        // tab, but a backgrounded tab's RAF
-                                        // is suspended, and without this wake
-                                        // the recovery is never retried once
-                                        // the tab comes back to the front.
-                                        //
-                                        // No `DeviceRecoveryBackoff` here —
-                                        // web stays un-unified with the
-                                        // desktop/Android `DeviceRecovery`
-                                        // seam (its `recover()` is async,
-                                        // driven through `spawn_local`, not
-                                        // a synchronous call that trait
-                                        // could wrap) — and needs no backoff
-                                        // of its own either: the renderer
-                                        // slot stays `None` for the
-                                        // duration of this `.await`, so the
-                                        // outer closure's own `let Some(r)
-                                        // = slot.as_mut() else { return; }`
-                                        // above already refuses to spawn a
-                                        // second recovery while one is in
-                                        // flight, and once it returns the
-                                        // browser's own `requestAnimationFrame`
-                                        // cadence bounds how often a new one
-                                        // can start (~16ms, the same order
-                                        // as desktop/Android's base backoff
-                                        // interval) — see the `PumpAsync`
-                                        // arm's own comment above for why
-                                        // RAF is a sufficient pacer here.
-                                        tracing::error!(
-                                            error = ?e,
-                                            "GPU device recovery failed; retry armed for the next wake"
-                                        );
-                                        wake();
-                                    }
-                                }
-                            });
-                        }
-                    }
-                })),
-            );
+            let _ = dispatch_platform_ui_runtime(owner_dispatch, RuntimeTask::Frame(binding));
         }));
 
         window.on_resize(Box::new(move |size, scale_factor| {
@@ -336,37 +191,10 @@ where
             );
         }));
 
-        // 6. Lifecycle callbacks
-        //
-        // Detached is ui_runtime-dispatched so interrupted gesture state is drained
-        // before lifecycle observers run.
+        // 6. Terminal callbacks close the binding before lifecycle observers.
         owner_platform_installed(|owner| {
-            owner.shared().on_quit(Box::new(move || {
-                tracing::info!("Web platform quit");
-                debug_assert_eq!(
-                    std::thread::current().id(),
-                    owner_dispatch.owner_thread,
-                    "platform on_quit must fire on the ui_runtime's owner thread"
-                );
-                if let Err(error) = dispatch_platform_ui_runtime(
-                    owner_dispatch,
-                    RuntimeTask::Event(RuntimeEvent::Shutdown),
-                ) {
-                    // Trace-only: the scheduler died WITH the ui_runtime now (each
-                    // ui_runtime owns its own), so there is no process-global
-                    // scheduler left to notify as a fallback.
-                    tracing::warn!(
-                        ?error,
-                        "ui_runtime unavailable during Detached lifecycle dispatch"
-                    );
-                }
-            }));
+            install_single_window_terminal_wiring(&window, &owner.shared(), owner_dispatch);
         });
-
-        window.on_close(Box::new(move || {
-            tracing::info!("Canvas window closed");
-            // On web, no explicit quit mechanism needed
-        }));
 
         // No `on_visibility_status_change` registration on web (yet): there is
         // no occlusion signal wired for this backend in this PR (winit's
@@ -430,5 +258,180 @@ where
     // page in that case.
     if let Err(err) = result {
         panic!("web bootstrap failed: {err:?}");
+    }
+}
+
+pub(super) struct WebFrameDriver {
+    renderer: std::sync::Arc<parking_lot::Mutex<Option<flui_engine::Renderer>>>,
+}
+
+impl WebFrameDriver {
+    pub(super) fn wake(
+        &mut self,
+        ui_runtime: &mut crate::app::ui_runtime::UiRuntime,
+        liveness: super::frame_driver::FrameLiveness,
+    ) {
+        use crate::app::raster_lane::DirectSink;
+        use flui_runtime::pump::SampledClock;
+        use std::sync::Arc;
+        let renderer_frame = &self.renderer;
+        let action = ui_runtime.enter(|ui_runtime| {
+            // Owner-inbox drain: commands and worker results commit
+            // HERE, at the frame boundary while the scheduler phase
+            // is Idle — never inside the frame transaction below.
+            // Runs before the dirty gate so a command-driven redraw
+            // request is observed by the very frame its wake
+            // produced.
+            let inbox_redraw = ui_runtime.drain_owner_inbox();
+
+            let has_pending = ui_runtime.has_pending_work();
+            let dirty = inbox_redraw || ui_runtime.needs_redraw() || has_pending;
+            let scheduler = ui_runtime.scheduler();
+            wake_action(
+                scheduler.frames_enabled(),
+                dirty,
+                scheduler.is_frame_scheduled(),
+                // No deferral on web: this callback is driven by the
+                // browser's own `requestAnimationFrame` loop, which
+                // already paces at the display's rate — the exact job
+                // ADR-0058's deadline does for the native backends.
+                FallbackGate::default(),
+            )
+        });
+        match action {
+            WakeAction::Skip => return,
+            WakeAction::PumpAsync => {
+                // Frames disabled: pump only the async driver — see
+                // `wake_action`'s doc for why this is the only thing
+                // keeping a spawned future progressing while
+                // backgrounded, and `UiRuntime::pump_background` for
+                // the latch-first order it keeps.
+                //
+                // No `NO_PRESENT_FALLBACK_PACE` sleep here, unlike
+                // desktop/Android: this callback is driven by the
+                // browser's `requestAnimationFrame` loop
+                // (`start_raf_loop`, `flui-platform`'s web backend),
+                // which fires unconditionally once per animation
+                // frame regardless of whether a redraw was
+                // requested — the browser's own vsync-paced RAF
+                // cadence already bounds this arm's re-wake rate, so
+                // an additional sleep would be redundant. It would
+                // also be unsound here: `wasm32-unknown-unknown` has
+                // no real OS threads, and blocking the single JS
+                // thread with `std::thread::sleep` would hang the
+                // page rather than pace it.
+                ui_runtime.pump_background();
+                return;
+            }
+            WakeAction::Render => {}
+        }
+
+        let now = web_time::Instant::now();
+        {
+            // No frame runs before the renderer exists: the ui_runtime
+            // stays dirty, and the first animation frame after the
+            // renderer arrives renders.
+            let mut slot = renderer_frame.lock();
+            let Some(r) = slot.as_mut() else {
+                return;
+            };
+
+            let _ = ui_runtime.pump(&mut SampledClock(now), &mut DirectSink::new(r));
+
+            if r.is_device_lost() {
+                drop(slot);
+                let renderer_recover = Arc::clone(renderer_frame);
+                // A cloned, `'static` wake handle: the spawned
+                // future outlives this callback's `&UiRuntime`
+                // borrow, so it cannot capture `ui_runtime` itself.
+                let wake = ui_runtime.wake_handle();
+                let recovery_authority = liveness;
+                wasm_bindgen_futures::spawn_local(async move {
+                    if !recovery_authority.is_live() {
+                        return;
+                    }
+                    // Never hold the renderer mutex across `.await`.
+                    let Some(mut renderer) = renderer_recover.lock().take() else {
+                        return;
+                    };
+                    let result = renderer.recover().await;
+                    if !recovery_authority.is_live() {
+                        return;
+                    }
+                    match recovery_authority.publish(&renderer_recover, renderer) {
+                        Ok(previous) => drop(previous),
+                        Err(renderer) => {
+                            drop(renderer);
+                            return;
+                        }
+                    }
+                    match result {
+                        Ok(()) => {
+                            tracing::warn!("GPU device lost — recovered successfully");
+                            wake();
+                        }
+                        Err(e @ flui_engine::EngineError::SurfaceTargetUnavailable { .. }) => {
+                            // The window owner reports its native
+                            // handle is gone or suspended (issue
+                            // #1043). `HandleError::Unavailable` is
+                            // `Recoverability::Recoverable` — a
+                            // backgrounded tab's canvas can report
+                            // this transiently — but
+                            // `HandleError::NotSupported` is
+                            // `Fatal` (the owner can never answer
+                            // this handle kind). This arm does not
+                            // branch on that classification: the
+                            // retry wake below fires either way,
+                            // same as any other failure; only the
+                            // log severity is lower, since the
+                            // common case is expected to clear on
+                            // its own.
+                            tracing::warn!(
+                                error = ?e,
+                                "GPU device recovery failed — window target unavailable; retry armed for the next wake regardless"
+                            );
+                            wake();
+                        }
+                        Err(e) => {
+                            // Driver may still be resetting. Arm
+                            // the retry wake in the failure arm
+                            // too — RAF alone re-pumps an ACTIVE
+                            // tab, but a backgrounded tab's RAF
+                            // is suspended, and without this wake
+                            // the recovery is never retried once
+                            // the tab comes back to the front.
+                            //
+                            // No `DeviceRecoveryBackoff` here —
+                            // web stays un-unified with the
+                            // desktop/Android `DeviceRecovery`
+                            // seam (its `recover()` is async,
+                            // driven through `spawn_local`, not
+                            // a synchronous call that trait
+                            // could wrap) — and needs no backoff
+                            // of its own either: the renderer
+                            // slot stays `None` for the
+                            // duration of this `.await`, so the
+                            // outer closure's own `let Some(r)
+                            // = slot.as_mut() else { return; }`
+                            // above already refuses to spawn a
+                            // second recovery while one is in
+                            // flight, and once it returns the
+                            // browser's own `requestAnimationFrame`
+                            // cadence bounds how often a new one
+                            // can start (~16ms, the same order
+                            // as desktop/Android's base backoff
+                            // interval) — see the `PumpAsync`
+                            // arm's own comment above for why
+                            // RAF is a sufficient pacer here.
+                            tracing::error!(
+                                error = ?e,
+                                "GPU device recovery failed; retry armed for the next wake"
+                            );
+                            wake();
+                        }
+                    }
+                });
+            }
+        }
     }
 }

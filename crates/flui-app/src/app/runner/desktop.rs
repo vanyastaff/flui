@@ -83,9 +83,8 @@ where
     // 0c. This window's device-recovery backoff, constructed here (not
     // down at step 6 alongside the renderer it paces) so the
     // wake-deadline hook below can be wired to it from the start — one
-    // instance for the whole closure's life, `Arc`'d because a fresh
-    // clone is threaded into each `RuntimeTask::Pump` the frame closure
-    // builds while the underlying counters/deadline must persist. See
+    // instance shared by the installed frame driver and deadline hook,
+    // so the underlying counters/deadline persist across deliveries. See
     // `DeviceRecoveryBackoff`'s own doc.
     let device_recovery_backoff = Arc::new(new_device_recovery_backoff());
 
@@ -342,210 +341,24 @@ where
     // 5. Register input callback -> entered ui_runtime input dispatch
     install_input_wiring(owner_dispatch, window.as_ref());
 
-    // 6. Register frame callback -> the wake gate, then UiRuntime::pump
-    let lane_frame = Arc::clone(&lane);
-    let worker_reload_frame = worker_reload;
-    // Reuses the SAME backoff constructed at step 0c (already wired
-    // into the wake-deadline hook above) — not a fresh one.
-    let frame_fallback = Arc::clone(&fallback);
-    let frame_first_reveal = Arc::clone(&first_reveal);
-    // Weak: this closure lives inside the window's own handler table, and
-    // a strong capture would cycle it alive past close (the same shape
-    // `on_appearance_changed` below uses).
-    let frame_reveal_window = Arc::downgrade(&window);
+    // Install frame resources once; native deliveries carry only their binding.
+    let frame = super::frame_driver::install_frame_driver(
+        owner_dispatch,
+        super::frame_driver::FrameDriver::Desktop(DesktopFrameDriver {
+            lane: Arc::clone(&lane),
+            worker_reload,
+            device_recovery_backoff,
+            fallback: Arc::clone(&fallback),
+            first_reveal: Arc::clone(&first_reveal),
+            reveal_window: Arc::downgrade(&window),
+        }),
+    )
+    .map_err(|error| crate::app::AppWindowError::Mount {
+        source: Arc::new(error),
+    })?;
+    let binding = frame.binding;
     window.on_request_frame(Box::new(move || {
-        let lane_frame = Arc::clone(&lane_frame);
-        let worker_reload_frame = worker_reload_frame.clone();
-        let device_recovery_backoff = Arc::clone(&device_recovery_backoff);
-        let fallback = Arc::clone(&frame_fallback);
-        let first_reveal = Arc::clone(&frame_first_reveal);
-        let reveal_window = frame_reveal_window.clone();
-        let _ = dispatch_platform_ui_runtime(
-            owner_dispatch,
-            RuntimeTask::Pump(Box::new(move |ui_runtime| {
-                // The gate half of the wake runs inside one ui_runtime entry and
-                // decides; the pump below enters the ui_runtime itself.
-                let (action, now) = ui_runtime.enter(|ui_runtime| {
-                    worker_reload_frame.poll_and_apply(ui_runtime);
-
-                    let scheduler = ui_runtime.scheduler();
-
-                    // Every fire of this callback is a genuine platform-delivered
-                    // frame-request signal on this backend (`WinitWindowEvent::
-                    // RedrawRequested` -> `dispatch_request_frame` -> here; see
-                    // `docs/adr/ADR-0044-driver-loop-hybrid.md`'s per-platform table for which backends
-                    // pace this via the compositor vs. deliver it immediately).
-                    // Recorded unconditionally, before the dirty/wake_action gate below
-                    // decides whether anything actually runs this pump: pacing
-                    // feedback is about observing the PLATFORM's own delivery timing,
-                    // independent of whether this particular delivery ends up idle.
-                    // `now` is read ONCE here and is also the pump's frame
-                    // timestamp below (`pump_with_device_recovery` hands it to
-                    // `UiRuntime::pump` as a `SampledClock`) — this wake's
-                    // pacing-feedback sample and its frame's timestamp must agree.
-                    let now = web_time::Instant::now();
-                    ui_runtime.record_compositor_tick(now);
-
-                    // Owner-inbox drain: commands and worker results
-                    // commit HERE, at the frame boundary while the scheduler phase is
-                    // Idle — never inside the frame transaction below. Runs before the
-                    // dirty gate so a command-driven redraw request is observed by the
-                    // very frame its wake produced.
-                    //
-                    // The runtime is TAKEN out of the slot for the drain (and restored
-                    // after) so drained user closures never run under the RefCell
-                    // borrow: a command that re-enters this frame callback through a
-                    // nested platform pump then finds an empty slot and skips the
-                    // drain, instead of panicking the borrow.
-                    let inbox_redraw = ui_runtime.drain_owner_inbox();
-
-                    // `device_recovery_backoff.next_attempt_at().is_some()` is a
-                    // REQUIRED fourth dirty source, not an optional extra: a
-                    // deadline wired into the wake-deadline hook (installed
-                    // below, after this ui_runtime exists) but absent from THIS
-                    // predicate reaches `WakeAction::Skip` and returns before
-                    // `pump_with_device_recovery` is ever called, no
-                    // matter how faithfully the platform actuates the wake —
-                    // see `DeviceRecoveryBackoff`'s own doc for the two paired
-                    // obligations a wake-deadline source carries and the
-                    // dropped-attempt trace that motivated this line. Calls
-                    // the shared `frame_is_dirty` (not a local reimplementation)
-                    // for the same reason `wake_action` itself is a named
-                    // function here and not inlined: this closure's own
-                    // `dirty` computation and the tests that pin it must run
-                    // the identical code, or a regression in one is invisible
-                    // to the other.
-                    // The frame-pacing deferral (ADR-0058), read ONCE per wake:
-                    // `gate` consumes a due deadline, so this is both the
-                    // "is a deferral pending" question the gate below asks and
-                    // the "this wake IS the deferred one" answer that makes it
-                    // dirty. Reading it twice would consume it in the first read
-                    // and skip the very wake it asked for.
-                    let fallback_gate = fallback.gate(now);
-                    let dirty = frame_is_dirty(
-                        inbox_redraw,
-                        ui_runtime.needs_redraw(),
-                        ui_runtime.has_pending_work(),
-                        // The reveal fallback joins the device-recovery deadline
-                        // here for the same reason that one must be present.
-                        merge_wake_deadlines(
-                            device_recovery_backoff.next_attempt_at(),
-                            first_reveal.next_deadline(),
-                        ),
-                        fallback_gate,
-                    );
-                    let action = wake_action(
-                        scheduler.frames_enabled(),
-                        dirty,
-                        scheduler.is_frame_scheduled(),
-                        fallback_gate,
-                    );
-                    (action, now)
-                });
-
-                match action {
-                    WakeAction::Skip => return,
-                    WakeAction::PumpAsync => {
-                        // Frames disabled (Hidden/Paused/Detached): no frame
-                        // runs, so the mid-frame async poll never does either
-                        // — this background pump is the ONLY thing keeping a
-                        // spawned future progressing while backgrounded. It
-                        // clears the frame latch before polling; see
-                        // `UiRuntime::pump_background` for why that order is
-                        // load-bearing.
-                        ui_runtime.pump_background();
-                        // A backgrounded wake with dirty/pending work
-                        // re-requesting another wake every loop tick has the
-                        // identical busy-spin risk an un-presented frame with an
-                        // open gate has, and nothing else paces it while frames
-                        // are disabled — so it takes the same bound (ADR-0058),
-                        // as a deferral rather than a sleep. The wake-deadline
-                        // hook gates this source on `frames_enabled`, so the
-                        // deadline is not reported while backgrounded; what
-                        // bounds this arm is the deferral being consulted by the
-                        // dirty gate above on the next wake, which is where a
-                        // backgrounded self-re-arming task would otherwise spin.
-                        let keeps_gate_open = keeps_frame_gate_open(
-                            ui_runtime.needs_redraw(),
-                            ui_runtime.scheduler().is_frame_scheduled(),
-                            ui_runtime.has_pending_work(),
-                        );
-                        if keeps_gate_open {
-                            fallback.arm_after_no_present(web_time::Instant::now());
-                        }
-                        return;
-                    }
-                    WakeAction::Render => {}
-                }
-
-                // The frame: `UiRuntime::pump` at `now` (apply commands ->
-                // begin -> persistent callbacks -> the pipeline and submit ->
-                // post-frame callbacks -> Idle, as the text-store transaction
-                // with its commit anchor after it), with a lost GPU device
-                // rebuilt around it: BEFORE the pump when the loss predates
-                // the frame (the frame runs anyway, see
-                // `pump_with_device_recovery`'s doc for why), and AFTER when
-                // the wgpu device-lost callback fired mid-frame.
-                let outcome = if let Some(mut lane) = lane_frame.try_lock() {
-                    pump_with_device_recovery(ui_runtime, &mut *lane, &device_recovery_backoff, now)
-                } else {
-                    // A reentrant frame dispatch that slipped past the
-                    // empty-slot drain protection upstream: skip this nested
-                    // frame rather than deadlock mid-pump; the outer dispatch
-                    // still completes its own. The pacing tail below still
-                    // arms its fallback for it.
-                    tracing::error!(
-                        "frame skipped: raster lane already held by an outer frame dispatch"
-                    );
-                    FrameRecoveryOutcome {
-                        presented: false,
-                        just_failed: false,
-                        next_attempt_at: None,
-                    }
-                };
-
-                // Frame-pacing fallback (ADR-0058), replacing the fixed
-                // 16 ms sleep this thread used to take here. A frame that
-                // reached `present()` needs no bound: the present either
-                // blocked at vsync or the compositor is pacing our redraws
-                // (Wayland, after `pre_present_notify`). A frame that did
-                // NOT present — no damage, occluded surface, surface lost —
-                // got neither, so with a ticker still re-requesting a frame
-                // every wake, nothing would pace the loop; the deferral
-                // below bounds it to one pipeline pass per display period,
-                // as a wake deadline rather than a sleep, so input stays
-                // responsive throughout. A still-lost device armed for a
-                // LATER retry does not feed this: `DeviceRecoveryBackoff`
-                // paces the ATTEMPT itself and reaches the loop through the
-                // same wake-deadline hook.
-                let keeps_gate_open = keeps_frame_gate_open(
-                    ui_runtime.needs_redraw(),
-                    ui_runtime.scheduler().is_frame_scheduled(),
-                    ui_runtime.has_pending_work(),
-                );
-                let pace_now = web_time::Instant::now();
-                // The deferred first reveal: handed to the window on the
-                // first presented frame, or at the fallback bound after a
-                // frame that ran and presented nothing (`FirstReveal`).
-                if first_reveal.after_frame(outcome.presented, pace_now)
-                    && let Some(window) = reveal_window.upgrade()
-                {
-                    window.reveal_after_first_frame();
-                }
-                if outcome.presented {
-                    fallback.record_present(pace_now);
-                } else if keeps_gate_open {
-                    let deadline = fallback.arm_after_no_present(pace_now);
-                    tracing::trace!(
-                        target: "flui.pace",
-                        event = "fallback_armed",
-                        in_us = deadline.saturating_duration_since(pace_now).as_micros() as u64,
-                        "frame presented nothing with the gate open; deferring the next \
-                         ticker wake"
-                    );
-                }
-            })),
-        );
+        let _ = dispatch_platform_ui_runtime(owner_dispatch, RuntimeTask::Frame(binding));
     }));
 
     // 7. Register resize callback -> typed Resized event; the applier
@@ -753,5 +566,204 @@ where
         .run()
     {
         panic!("desktop bootstrap failed: {error}");
+    }
+}
+
+pub(super) struct DesktopFrameDriver {
+    lane: Arc<Mutex<crate::app::raster_lane::RasterLane<Renderer>>>,
+    worker_reload: WorkerReload,
+    device_recovery_backoff: Arc<super::device_recovery::DeviceRecoveryBackoff>,
+    fallback: Arc<FallbackWake>,
+    first_reveal: Arc<FirstReveal>,
+    reveal_window: std::sync::Weak<dyn PlatformWindow>,
+}
+
+impl DesktopFrameDriver {
+    pub(super) fn wake(&mut self, ui_runtime: &mut crate::app::ui_runtime::UiRuntime) {
+        let lane_frame = &self.lane;
+        let worker_reload_frame = &self.worker_reload;
+        let device_recovery_backoff = &self.device_recovery_backoff;
+        let fallback = &self.fallback;
+        let first_reveal = &self.first_reveal;
+        let reveal_window = &self.reveal_window;
+        // The gate half of the wake runs inside one ui_runtime entry and
+        // decides; the pump below enters the ui_runtime itself.
+        let (action, now) = ui_runtime.enter(|ui_runtime| {
+            worker_reload_frame.poll_and_apply(ui_runtime);
+
+            let scheduler = ui_runtime.scheduler();
+
+            // Every fire of this callback is a genuine platform-delivered
+            // frame-request signal on this backend (`WinitWindowEvent::
+            // RedrawRequested` -> `dispatch_request_frame` -> here; see
+            // `docs/adr/ADR-0044-driver-loop-hybrid.md`'s per-platform table for which backends
+            // pace this via the compositor vs. deliver it immediately).
+            // Recorded unconditionally, before the dirty/wake_action gate below
+            // decides whether anything actually runs this pump: pacing
+            // feedback is about observing the PLATFORM's own delivery timing,
+            // independent of whether this particular delivery ends up idle.
+            // `now` is read ONCE here and is also the pump's frame
+            // timestamp below (`pump_with_device_recovery` hands it to
+            // `UiRuntime::pump` as a `SampledClock`) — this wake's
+            // pacing-feedback sample and its frame's timestamp must agree.
+            let now = web_time::Instant::now();
+            ui_runtime.record_compositor_tick(now);
+
+            // Owner-inbox drain: commands and worker results
+            // commit HERE, at the frame boundary while the scheduler phase is
+            // Idle — never inside the frame transaction below. Runs before the
+            // dirty gate so a command-driven redraw request is observed by the
+            // very frame its wake produced.
+            //
+            // The runtime is TAKEN out of the slot for the drain (and restored
+            // after) so drained user closures never run under the RefCell
+            // borrow: a command that re-enters this frame callback through a
+            // nested platform pump then finds an empty slot and skips the
+            // drain, instead of panicking the borrow.
+            let inbox_redraw = ui_runtime.drain_owner_inbox();
+
+            // `device_recovery_backoff.next_attempt_at().is_some()` is a
+            // REQUIRED fourth dirty source, not an optional extra: a
+            // deadline wired into the wake-deadline hook (installed
+            // below, after this ui_runtime exists) but absent from THIS
+            // predicate reaches `WakeAction::Skip` and returns before
+            // `pump_with_device_recovery` is ever called, no
+            // matter how faithfully the platform actuates the wake —
+            // see `DeviceRecoveryBackoff`'s own doc for the two paired
+            // obligations a wake-deadline source carries and the
+            // dropped-attempt trace that motivated this line. Calls
+            // the shared `frame_is_dirty` (not a local reimplementation)
+            // for the same reason `wake_action` itself is a named
+            // function here and not inlined: this closure's own
+            // `dirty` computation and the tests that pin it must run
+            // the identical code, or a regression in one is invisible
+            // to the other.
+            // The frame-pacing deferral (ADR-0058), read ONCE per wake:
+            // `gate` consumes a due deadline, so this is both the
+            // "is a deferral pending" question the gate below asks and
+            // the "this wake IS the deferred one" answer that makes it
+            // dirty. Reading it twice would consume it in the first read
+            // and skip the very wake it asked for.
+            let fallback_gate = fallback.gate(now);
+            let dirty = frame_is_dirty(
+                inbox_redraw,
+                ui_runtime.needs_redraw(),
+                ui_runtime.has_pending_work(),
+                // The reveal fallback joins the device-recovery deadline
+                // here for the same reason that one must be present.
+                merge_wake_deadlines(
+                    device_recovery_backoff.next_attempt_at(),
+                    first_reveal.next_deadline(),
+                ),
+                fallback_gate,
+            );
+            let action = wake_action(
+                scheduler.frames_enabled(),
+                dirty,
+                scheduler.is_frame_scheduled(),
+                fallback_gate,
+            );
+            (action, now)
+        });
+
+        match action {
+            WakeAction::Skip => return,
+            WakeAction::PumpAsync => {
+                // Frames disabled (Hidden/Paused/Detached): no frame
+                // runs, so the mid-frame async poll never does either
+                // — this background pump is the ONLY thing keeping a
+                // spawned future progressing while backgrounded. It
+                // clears the frame latch before polling; see
+                // `UiRuntime::pump_background` for why that order is
+                // load-bearing.
+                ui_runtime.pump_background();
+                // A backgrounded wake with dirty/pending work
+                // re-requesting another wake every loop tick has the
+                // identical busy-spin risk an un-presented frame with an
+                // open gate has, and nothing else paces it while frames
+                // are disabled — so it takes the same bound (ADR-0058),
+                // as a deferral rather than a sleep. The wake-deadline
+                // hook gates this source on `frames_enabled`, so the
+                // deadline is not reported while backgrounded; what
+                // bounds this arm is the deferral being consulted by the
+                // dirty gate above on the next wake, which is where a
+                // backgrounded self-re-arming task would otherwise spin.
+                let keeps_gate_open = keeps_frame_gate_open(
+                    ui_runtime.needs_redraw(),
+                    ui_runtime.scheduler().is_frame_scheduled(),
+                    ui_runtime.has_pending_work(),
+                );
+                if keeps_gate_open {
+                    fallback.arm_after_no_present(web_time::Instant::now());
+                }
+                return;
+            }
+            WakeAction::Render => {}
+        }
+
+        // The frame: `UiRuntime::pump` at `now` (apply commands ->
+        // begin -> persistent callbacks -> the pipeline and submit ->
+        // post-frame callbacks -> Idle, as the text-store transaction
+        // with its commit anchor after it), with a lost GPU device
+        // rebuilt around it: BEFORE the pump when the loss predates
+        // the frame (the frame runs anyway, see
+        // `pump_with_device_recovery`'s doc for why), and AFTER when
+        // the wgpu device-lost callback fired mid-frame.
+        let outcome = if let Some(mut lane) = lane_frame.try_lock() {
+            pump_with_device_recovery(ui_runtime, &mut *lane, device_recovery_backoff, now)
+        } else {
+            // A reentrant frame dispatch that slipped past the
+            // empty-slot drain protection upstream: skip this nested
+            // frame rather than deadlock mid-pump; the outer dispatch
+            // still completes its own. The pacing tail below still
+            // arms its fallback for it.
+            tracing::error!("frame skipped: raster lane already held by an outer frame dispatch");
+            FrameRecoveryOutcome {
+                presented: false,
+                just_failed: false,
+                next_attempt_at: None,
+            }
+        };
+
+        // Frame-pacing fallback (ADR-0058), replacing the fixed
+        // 16 ms sleep this thread used to take here. A frame that
+        // reached `present()` needs no bound: the present either
+        // blocked at vsync or the compositor is pacing our redraws
+        // (Wayland, after `pre_present_notify`). A frame that did
+        // NOT present — no damage, occluded surface, surface lost —
+        // got neither, so with a ticker still re-requesting a frame
+        // every wake, nothing would pace the loop; the deferral
+        // below bounds it to one pipeline pass per display period,
+        // as a wake deadline rather than a sleep, so input stays
+        // responsive throughout. A still-lost device armed for a
+        // LATER retry does not feed this: `DeviceRecoveryBackoff`
+        // paces the ATTEMPT itself and reaches the loop through the
+        // same wake-deadline hook.
+        let keeps_gate_open = keeps_frame_gate_open(
+            ui_runtime.needs_redraw(),
+            ui_runtime.scheduler().is_frame_scheduled(),
+            ui_runtime.has_pending_work(),
+        );
+        let pace_now = web_time::Instant::now();
+        // The deferred first reveal: handed to the window on the
+        // first presented frame, or at the fallback bound after a
+        // frame that ran and presented nothing (`FirstReveal`).
+        if first_reveal.after_frame(outcome.presented, pace_now)
+            && let Some(window) = reveal_window.upgrade()
+        {
+            window.reveal_after_first_frame();
+        }
+        if outcome.presented {
+            fallback.record_present(pace_now);
+        } else if keeps_gate_open {
+            let deadline = fallback.arm_after_no_present(pace_now);
+            tracing::trace!(
+                target: "flui.pace",
+                event = "fallback_armed",
+                in_us = deadline.saturating_duration_since(pace_now).as_micros() as u64,
+                "frame presented nothing with the gate open; deferring the next \
+                 ticker wake"
+            );
+        }
     }
 }

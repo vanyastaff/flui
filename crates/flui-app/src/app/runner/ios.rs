@@ -350,109 +350,18 @@ where
     // 5. Input -> entered ui_runtime input dispatch.
     install_input_wiring(owner_dispatch, window.as_ref());
 
-    // 6. Frame callback — the `CADisplayLink` tick lands here.
-    let lane_frame = Arc::clone(&lane);
-    let worker_reload_frame = worker_reload.clone();
+    let frame = super::frame_driver::install_frame_driver(
+        owner_dispatch,
+        super::frame_driver::FrameDriver::Ios(IosFrameDriver {
+            lane: Arc::clone(&lane),
+            worker_reload: worker_reload.clone(),
+            device_recovery_backoff,
+            surface_recreation_retry,
+        }),
+    )?;
+    let binding = frame.binding;
     window.on_request_frame(Box::new(move || {
-        let lane_frame = Arc::clone(&lane_frame);
-        let device_recovery_backoff = Arc::clone(&device_recovery_backoff);
-        let surface_recreation_retry = Arc::clone(&surface_recreation_retry);
-        let worker_reload_frame = worker_reload_frame.clone();
-        let _ = dispatch_platform_ui_runtime(
-            owner_dispatch,
-            RuntimeTask::Pump(Box::new(move |ui_runtime| {
-                // The gate half of the wake runs inside one ui_runtime entry and
-                // decides; the pump below enters the ui_runtime itself.
-                let (action, now) = ui_runtime.enter(|ui_runtime| {
-                    let now = web_time::Instant::now();
-                    // Development reload: applies a queued rebuild at the frame
-                    // boundary (the `dlopen` stays owner-thread), exactly as the
-                    // desktop runner does.
-                    worker_reload_frame.poll_and_apply(ui_runtime);
-
-                    let inbox_redraw = ui_runtime.drain_owner_inbox();
-
-                    let has_pending = ui_runtime.has_pending_work();
-                    // The surface-retry deadline joins the device-recovery one in
-                    // the `dirty` predicate, for the same reason that one must be
-                    // present: a deadline the platform faithfully actuates still
-                    // reaches `WakeAction::Skip` and returns before the retry is
-                    // consulted if it is absent from this gate.
-                    let retry_deadline = super::host::merge_wake_deadlines(
-                        device_recovery_backoff.next_attempt_at(),
-                        surface_recreation_retry.next_attempt_at(),
-                    );
-                    let dirty = frame_is_dirty(
-                        inbox_redraw,
-                        ui_runtime.needs_redraw(),
-                        has_pending,
-                        retry_deadline,
-                        FallbackGate::default(),
-                    );
-                    let scheduler = ui_runtime.scheduler();
-                    let action = wake_action(
-                        scheduler.frames_enabled(),
-                        dirty,
-                        scheduler.is_frame_scheduled(),
-                        FallbackGate::default(),
-                    );
-                    if action != WakeAction::Render {
-                        return (action, now);
-                    }
-
-                    // A retry owed by a genuine surface-recreation failure gets
-                    // its gated attempt here, BEFORE the frame, through the shared
-                    // helper (its own lane-lock scope, released before the ui_runtime
-                    // half). This closure already runs as the ui_runtime's Pump task, so
-                    // the full-repaint mark goes to `ui_runtime` directly and the frame
-                    // about to run is the one that repaints into the new surface —
-                    // re-dispatching it as another task would queue it behind
-                    // this one (the dispatcher is mid-phase) and land it a frame late.
-                    match retry_surface_recreation(&lane_frame, &surface_recreation_retry, now) {
-                        Some(SurfaceLifecycleOutcome::Recreated) => {
-                            ui_runtime.mark_primary_needs_full_repaint();
-                        }
-                        Some(SurfaceLifecycleOutcome::Failed(source)) => {
-                            tracing::warn!(
-                                platform = "iOS",
-                                ?source,
-                                "surface recreation retry failed; the deadline-paced retry \
-                             continues"
-                            );
-                        }
-                        Some(SurfaceLifecycleOutcome::Released) | None => {}
-                    }
-                    (action, now)
-                });
-
-                match action {
-                    WakeAction::Skip => return,
-                    WakeAction::PumpAsync => {
-                        // Frames disabled (backgrounded): pump only the async
-                        // driver, then sleep to bound a self-re-arming task.
-                        ui_runtime.pump_background();
-                        std::thread::sleep(BACKGROUNDED_PUMP_PACE);
-                        return;
-                    }
-                    WakeAction::Render => {}
-                }
-
-                // The frame: `UiRuntime::pump` at `now`, with device-loss
-                // recovery around it (`pump_with_device_recovery`).
-                let Some(mut lane) = lane_frame.try_lock() else {
-                    tracing::error!(
-                        "frame skipped: raster lane already held by an outer frame dispatch"
-                    );
-                    return;
-                };
-                let _ = pump_with_device_recovery(
-                    ui_runtime,
-                    &mut *lane,
-                    &device_recovery_backoff,
-                    now,
-                );
-            })),
-        );
+        let _ = dispatch_platform_ui_runtime(owner_dispatch, RuntimeTask::Frame(binding));
     }));
 
     // 7. Resize -> typed Resized event; the applier installed above touches
@@ -553,4 +462,103 @@ where
         agent.window_opened(window);
     }
     Ok(owner_dispatch)
+}
+
+pub(super) struct IosFrameDriver {
+    lane: Arc<parking_lot::Mutex<crate::app::raster_lane::RasterLane<flui_engine::Renderer>>>,
+    worker_reload: WorkerReload,
+    device_recovery_backoff: Arc<super::device_recovery::DeviceRecoveryBackoff>,
+    surface_recreation_retry: Arc<SurfaceRecreationRetry>,
+}
+
+impl IosFrameDriver {
+    pub(super) fn wake(&mut self, ui_runtime: &mut crate::app::ui_runtime::UiRuntime) {
+        let lane_frame = &self.lane;
+        let worker_reload_frame = &self.worker_reload;
+        let device_recovery_backoff = &self.device_recovery_backoff;
+        let surface_recreation_retry = &self.surface_recreation_retry;
+        // The gate half of the wake runs inside one ui_runtime entry and
+        // decides; the pump below enters the ui_runtime itself.
+        let (action, now) = ui_runtime.enter(|ui_runtime| {
+            let now = web_time::Instant::now();
+            // Development reload: applies a queued rebuild at the frame
+            // boundary (the `dlopen` stays owner-thread), exactly as the
+            // desktop runner does.
+            worker_reload_frame.poll_and_apply(ui_runtime);
+
+            let inbox_redraw = ui_runtime.drain_owner_inbox();
+
+            let has_pending = ui_runtime.has_pending_work();
+            // The surface-retry deadline joins the device-recovery one in
+            // the `dirty` predicate, for the same reason that one must be
+            // present: a deadline the platform faithfully actuates still
+            // reaches `WakeAction::Skip` and returns before the retry is
+            // consulted if it is absent from this gate.
+            let retry_deadline = super::host::merge_wake_deadlines(
+                device_recovery_backoff.next_attempt_at(),
+                surface_recreation_retry.next_attempt_at(),
+            );
+            let dirty = frame_is_dirty(
+                inbox_redraw,
+                ui_runtime.needs_redraw(),
+                has_pending,
+                retry_deadline,
+                FallbackGate::default(),
+            );
+            let scheduler = ui_runtime.scheduler();
+            let action = wake_action(
+                scheduler.frames_enabled(),
+                dirty,
+                scheduler.is_frame_scheduled(),
+                FallbackGate::default(),
+            );
+            if action != WakeAction::Render {
+                return (action, now);
+            }
+
+            // A retry owed by a genuine surface-recreation failure gets
+            // its gated attempt here, BEFORE the frame, through the shared
+            // helper (its own lane-lock scope, released before the ui_runtime
+            // half). This closure already runs as the ui_runtime's Pump task, so
+            // the full-repaint mark goes to `ui_runtime` directly and the frame
+            // about to run is the one that repaints into the new surface —
+            // re-dispatching it as another task would queue it behind
+            // this one (the dispatcher is mid-phase) and land it a frame late.
+            match retry_surface_recreation(lane_frame, surface_recreation_retry, now) {
+                Some(SurfaceLifecycleOutcome::Recreated) => {
+                    ui_runtime.mark_primary_needs_full_repaint();
+                }
+                Some(SurfaceLifecycleOutcome::Failed(source)) => {
+                    tracing::warn!(
+                        platform = "iOS",
+                        ?source,
+                        "surface recreation retry failed; the deadline-paced retry \
+                             continues"
+                    );
+                }
+                Some(SurfaceLifecycleOutcome::Released) | None => {}
+            }
+            (action, now)
+        });
+
+        match action {
+            WakeAction::Skip => return,
+            WakeAction::PumpAsync => {
+                // Frames disabled (backgrounded): pump only the async
+                // driver, then sleep to bound a self-re-arming task.
+                ui_runtime.pump_background();
+                std::thread::sleep(BACKGROUNDED_PUMP_PACE);
+                return;
+            }
+            WakeAction::Render => {}
+        }
+
+        // The frame: `UiRuntime::pump` at `now`, with device-loss
+        // recovery around it (`pump_with_device_recovery`).
+        let Some(mut lane) = lane_frame.try_lock() else {
+            tracing::error!("frame skipped: raster lane already held by an outer frame dispatch");
+            return;
+        };
+        let _ = pump_with_device_recovery(ui_runtime, &mut *lane, device_recovery_backoff, now);
+    }
 }

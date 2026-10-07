@@ -1027,26 +1027,37 @@ fn recovered_surface_notification_resubmits_the_scene() {
         .attach_root_widget(&flui_widgets::SizedBox::new(10.0, 10.0))
         .expect("root mounts");
     let dispatcher = install_platform_ui_runtime(ui_runtime, &test_window());
-    let sink = Rc::new(RefCell::new(
-        flui_runtime::testing::ScriptedSink::always_presents(),
-    ));
-    let clock = flui_foundation::ManualClock::default();
+    use super::super::frame_driver::{FrameDriver, TestFrameDriver, install_frame_driver};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let submits = Arc::new(AtomicUsize::new(0));
+    let sink = flui_runtime::testing::ScriptedSink::new({
+        let submits = Arc::clone(&submits);
+        move |_, _| {
+            submits.fetch_add(1, Ordering::SeqCst);
+            flui_runtime::sink::SubmitVerdict::Presented
+        }
+    });
+    let frame = install_frame_driver(
+        dispatcher,
+        FrameDriver::Test(TestFrameDriver {
+            sink,
+            prelude: None,
+        }),
+    )
+    .expect("install the frame driver");
     let pump = || {
-        clock.advance(std::time::Duration::from_millis(20));
-        let mut clock = clock.clone();
-        let sink = Rc::clone(&sink);
-        dispatch_platform_ui_runtime(
-            dispatcher,
-            RuntimeTask::Pump(Box::new(move |ui_runtime| {
-                let _ = ui_runtime.pump(&mut clock, &mut *sink.borrow_mut());
-            })),
-        )
-        .expect("frame dispatches");
+        dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(frame.binding))
+            .expect("frame dispatches");
     };
     pump();
-    assert_eq!(sink.borrow().submit_calls, 1, "initial scene submitted");
+    assert_eq!(submits.load(Ordering::SeqCst), 1, "initial scene submitted");
     pump();
-    assert_eq!(sink.borrow().submit_calls, 1, "idle pump submits nothing");
+    assert_eq!(
+        submits.load(Ordering::SeqCst),
+        1,
+        "idle pump submits nothing"
+    );
     dispatch_platform_ui_runtime(
         dispatcher,
         RuntimeTask::Event(RuntimeEvent::PrimarySurfaceRestored),
@@ -1054,7 +1065,7 @@ fn recovered_surface_notification_resubmits_the_scene() {
     .expect("surface notification accepted");
     pump();
     assert_eq!(
-        sink.borrow().submit_calls,
+        submits.load(Ordering::SeqCst),
         2,
         "recovered surface gets a scene"
     );
