@@ -28,7 +28,7 @@ pub(crate) fn presentation_resampling_uses_the_owner_frame_clock() {
         let seen = Rc::clone(&observed);
         let terminal = Rc::new(Cell::new(0));
         let ends = Rc::clone(&terminal);
-        let view = Listener::new(SizedBox::square(200.0))
+        let view = Listener::new().child(SizedBox::square(200.0))
             .behavior(HitTestBehavior::Opaque)
             .on_pointer_move(move |_, event| {
                 let PointerEvent::Move(event) = event.global else {
