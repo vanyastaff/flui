@@ -205,8 +205,9 @@ impl LinearGradient {
         let end = lerp_alignment(a.end, b.end, t)?;
         if !(end.x - begin.x).is_finite()
             || !(end.y - begin.y).is_finite()
-            || distorted_span(a.end.x - a.begin.x, b.end.x - b.begin.x, end.x - begin.x, t)
-            || distorted_span(a.end.y - a.begin.y, b.end.y - b.begin.y, end.y - begin.y, t)
+            || distorted_span(a.begin.x, a.end.x, b.begin.x, b.end.x, end.x - begin.x, t)
+            || distorted_span(a.begin.y, a.end.y, b.begin.y, b.end.y, end.y - begin.y, t)
+            || !valid_linear_projection(begin, end)
         {
             return None;
         }
@@ -369,16 +370,20 @@ impl RadialGradient {
         let b_focal = b.focal.unwrap_or(b.center);
         let mixed_focal = focal.unwrap_or(center);
         if distorted_span(
-            a_focal.x - a.center.x,
-            b_focal.x - b.center.x,
+            a.center.x,
+            a_focal.x,
+            b.center.x,
+            b_focal.x,
             mixed_focal.x - center.x,
             t,
         ) || distorted_span(
-            a_focal.y - a.center.y,
-            b_focal.y - b.center.y,
+            a.center.y,
+            a_focal.y,
+            b.center.y,
+            b_focal.y,
             mixed_focal.y - center.y,
             t,
-        ) || !valid_normalized_radii(radius, focal_radius.unwrap_or(0.0))
+        ) || !valid_normalized_circles(center, mixed_focal, radius, focal_radius.unwrap_or(0.0))
         {
             return None;
         }
@@ -501,8 +506,10 @@ impl SweepGradient {
         let packed_span = packed_end - phase as f32;
         if !span.is_finite()
             || distorted_span(
-                a.end_angle - a.start_angle,
-                b.end_angle - b.start_angle,
+                a.start_angle,
+                a.end_angle,
+                b.start_angle,
+                b.end_angle,
                 span,
                 t,
             )
@@ -539,17 +546,34 @@ fn valid_alignment(value: Alignment) -> bool {
 // Coordinate interpolation can distort a span under a large common translation.
 // Compare independently interpolated spans, allowing rounding below the
 // renderer's relative f32 precision rather than rejecting ordinary f64 noise.
-fn distorted_span(a: f64, b: f64, mixed: f64, t: f64) -> bool {
+fn distorted_span(a_start: f64, a_end: f64, b_start: f64, b_end: f64, mixed: f64, t: f64) -> bool {
     if !mixed.is_finite() {
         return true;
     }
-    let Some(span) = lerp_finite(a, b, t) else {
+    let Some((a, a_error)) = span_parts(a_end, a_start) else {
         return false;
     };
-    // Opposite extreme endpoint spans can cancel to zero after their own
-    // subtraction lost low bits. Keep the finite coordinate interpolation in
-    // that case (for example, a midpoint between -f64::MAX and f64::MAX).
-    span != 0.0 && (span - mixed).abs() > span.abs().max(mixed.abs()) * f64::from(f32::EPSILON)
+    let Some((b, b_error)) = span_parts(b_end, b_start) else {
+        return false;
+    };
+    let Some((span, error)) = lerp_finite(a, b, t).zip(lerp_finite(a_error, b_error, t)) else {
+        return true;
+    };
+    let span = span + error;
+    !span.is_finite()
+        || (span - mixed).abs() > span.abs().max(mixed.abs()) * f64::from(f32::EPSILON)
+}
+
+// Error-free TwoDiff decomposition: keep the low part when opposite large
+// endpoint spans cancel, so their finite residual is not mistaken for zero.
+fn span_parts(end: f64, start: f64) -> Option<(f64, f64)> {
+    let span = end - start;
+    if !span.is_finite() {
+        return None;
+    }
+    let virtual_start = end - span;
+    let virtual_end = span + virtual_start;
+    Some((span, (end - virtual_end) + (virtual_start - start)))
 }
 
 fn valid_radius(value: f64) -> bool {
@@ -560,14 +584,64 @@ fn valid_radius(value: f64) -> bool {
     clippy::cast_possible_truncation,
     reason = "validate normalized renderer packing"
 )]
-fn valid_normalized_radii(radius: f64, focal_radius: f64) -> bool {
+fn valid_normalized_circles(
+    center: Alignment,
+    focal: Alignment,
+    radius: f64,
+    focal_radius: f64,
+) -> bool {
     // Normalize relative to a unit paint box, using the engine's shared circle
     // scale. A raw radius above f32::MAX can still pack successfully. Actual
-    // bounds, focal positions and the radial equation remain engine checks.
-    let scale = radius.max(focal_radius).max(1.0);
-    [radius / scale, focal_radius / scale, scale.recip()]
+    // bounds and the radial equation remain engine checks.
+    let positions = [center.x, center.y, focal.x, focal.y].map(|value| value.mul_add(0.5, 0.5));
+    let scale = positions
+        .iter()
+        .fold(radius.max(focal_radius).max(1.0), |scale, value| {
+            scale.max(value.abs())
+        });
+    let values = [
+        positions[0] / scale,
+        positions[1] / scale,
+        radius / scale,
+        positions[2] / scale,
+        positions[3] / scale,
+        focal_radius / scale,
+        scale.recip(),
+    ];
+    if !values
         .into_iter()
         .all(|value| (value as f32).is_finite() && (value == 0.0 || value as f32 != 0.0))
+    {
+        return false;
+    }
+    let packed = values.map(|value| value as f32);
+    [(0, 3), (1, 4), (2, 5)].into_iter().all(|(outer, inner)| {
+        values[outer] - values[inner] == 0.0 || packed[outer] - packed[inner] != 0.0
+    })
+}
+
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "validate renderer projection packing"
+)]
+fn valid_linear_projection(begin: Alignment, end: Alignment) -> bool {
+    // Preflight the engine's bounds-local projection in a unit paint box;
+    // final coefficients and arithmetic still depend on the actual bounds.
+    let delta = [(end.x - begin.x) * 0.5, (end.y - begin.y) * 0.5];
+    let scale = delta[0].abs().max(delta[1].abs());
+    if scale == 0.0 {
+        return true;
+    }
+    let normalized = delta.map(|value| value / scale);
+    let norm = normalized[0] * normalized[0] + normalized[1] * normalized[1];
+    if scale <= 0.01 && scale * scale * norm <= 0.0001 {
+        return true;
+    }
+    let [a, b] = normalized.map(|value| (value / norm) / scale);
+    let c = -(begin.x.mul_add(0.5, 0.5) * a + begin.y.mul_add(0.5, 0.5) * b);
+    [a, b, c].into_iter().all(|value| {
+        value.is_finite() && (value as f32).is_finite() && (value == 0.0 || value as f32 != 0.0)
+    })
 }
 
 fn lerp_radius(a: f64, b: f64, t: f64) -> Option<f64> {

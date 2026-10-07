@@ -186,6 +186,29 @@ pub(crate) fn gradient_geometry_rejects_invalid_inputs_before_equal_shortcuts() 
 }
 
 pub(crate) fn gradient_geometry_checks_intermediate_and_output_overflow() {
+    let mut zero_a = SweepGradient::centered(vec![Color::RED, Color::BLUE]);
+    zero_a.start_angle = 0.0;
+    zero_a.end_angle = 0.5;
+    let mut zero_b = zero_a.clone();
+    zero_b.start_angle = 4_503_599_627_370_496.0;
+    zero_b.end_angle = zero_b.start_angle + 1.0;
+    assert!(SweepGradient::lerp(&zero_a, &zero_b, -1.0).is_none());
+    let start = BoxDecoration::<f64>::with_gradient(Gradient::Sweep(zero_a));
+    let end = BoxDecoration::with_gradient(Gradient::Sweep(zero_b));
+    assert_eq!(BoxDecoration::lerp(&start, &end, -1.0), start);
+    let large_a = LinearGradient::new(
+        Alignment::CENTER,
+        Alignment::CENTER_RIGHT,
+        vec![Color::RED, Color::BLUE],
+        None,
+        TileMode::Clamp,
+    );
+    let mut large_b = large_a.clone();
+    large_b.end.x = 2.0;
+    assert!(LinearGradient::lerp(&large_a, &large_b, 1e100).is_none());
+    let start = BoxDecoration::<f64>::with_gradient(Gradient::Linear(large_a));
+    let end = BoxDecoration::with_gradient(Gradient::Linear(large_b));
+    assert_eq!(BoxDecoration::lerp(&start, &end, 1e100), end);
     let linear_a = LinearGradient::new(
         Alignment::CENTER,
         Alignment::CENTER_RIGHT,
@@ -367,6 +390,33 @@ pub(crate) fn gradient_domains_keep_zero_radii_and_signed_angles() {
 }
 
 pub(crate) fn radial_overshoot_refuses_coincident_nonzero_circles() {
+    for focal_only in [false, true] {
+        let mut a = RadialGradient::circular(vec![Color::RED, Color::BLUE]);
+        let mut b = a.clone();
+        if focal_only {
+            a.focal = Some(Alignment::CENTER);
+            b.focal = Some(Alignment::CENTER_RIGHT);
+        } else {
+            b.center = Alignment::CENTER_RIGHT;
+        }
+        assert!(RadialGradient::lerp(&a, &b, 1e100).is_none());
+        let start = BoxDecoration::<f64>::with_gradient(Gradient::Radial(a));
+        let end = BoxDecoration::with_gradient(Gradient::Radial(b));
+        assert_eq!(BoxDecoration::lerp(&start, &end, 1e100), end);
+    }
+    let mut a = RadialGradient::circular(vec![Color::RED, Color::BLUE]);
+    a.radius = 1.0;
+    a.focal_radius = Some(0.0);
+    let mut b = a.clone();
+    b.radius = 2.0;
+    b.focal_radius = Some(1.0);
+    assert!(RadialGradient::lerp(&a, &b, 9_007_199_254_740_994.0).is_none());
+    let start = BoxDecoration::<f64>::with_gradient(Gradient::Radial(a));
+    let end = BoxDecoration::with_gradient(Gradient::Radial(b));
+    assert_eq!(
+        BoxDecoration::lerp(&start, &end, 9_007_199_254_740_994.0),
+        end
+    );
     let mut infinite_offset = RadialGradient::circular(vec![Color::RED, Color::BLUE]);
     infinite_offset.center.x = -f64::MAX;
     infinite_offset.focal = Some(Alignment::new(f64::MAX, 0.0));

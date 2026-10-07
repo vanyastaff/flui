@@ -1008,15 +1008,19 @@ hard edge interpolated toward black.
 
 Finite gradient positions, focal points and signed sweep angles extrapolate
 outside `0..=1`, consistent with the unbounded geometry contract in ADR-0149.
-Radii extrapolate with a zero lower bound. Their shared normalized values and
-reciprocal scale must remain representable in `f32`, rather than the raw radii;
+Radii extrapolate with a zero lower bound. Circle positions, radii, reciprocal
+scale and circle differences must survive `f32` packing after shared unit-box
+normalization, rather than restricting the raw radii;
 the engine still validates the resolved bounds, normalization and equation. Colors
 saturate through `Color::lerp`;
 stop positions retain the sampled union rather than inventing correspondence
 between lists of different lengths. Arithmetic preserves representable results
 when endpoint subtraction overflows, and refuses non-finite output.
-Independent interpolation of nonzero direction, angle and focal-center spans
+Independent interpolation of direction, angle and focal-center spans
 detects translation-induced distortion beyond the renderer's relative precision.
+Compensated endpoint differences retain finite residuals when large spans cancel,
+so zero intended spans are validated too. Linear projections are checked in a
+unit paint box before the engine validates their actual bounds-local coefficients.
 `BoxDecoration::lerp` forwards the raw fraction for paired gradient geometry;
 its other fields keep their bounded interpolation and exact endpoint behavior.
 If extrapolation is unrepresentable, the infallible decoration producer falls
