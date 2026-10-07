@@ -501,13 +501,20 @@ mod native_windows {
 
     #[expect(unsafe_code, reason = "keeps only the ephemeral injected-input target above unrelated host windows")]
     fn open_pointer_target(platform: &WindowsPlatform) -> (Arc<dyn HostWindow>, ClosePointerTarget) {
-        use windows::Win32::UI::WindowsAndMessaging::HWND_TOPMOST;
+        use windows::Win32::UI::WindowsAndMessaging::{HWND_TOPMOST, SetForegroundWindow, GetForegroundWindow};
         let window = open_shown(platform);
         let close = ClosePointerTarget(Arc::clone(&window));
         // SAFETY: the fixture's exact live owner-thread HWND. It is destroyed
         // by the RAII owner on success, early refusal, or assertion unwind;
         // no pre-existing host window's z-order or style is changed.
         unsafe { SetWindowPos(hwnd_of(&window), Some(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE) }.expect("keep ephemeral pointer target above host windows");
+        // SAFETY: only this fixture's live HWND is activated; its RAII owner
+        // destroys it on failure as well. Pump activation before real input
+        // so a first contact cannot be consumed merely to activate the target.
+        assert!(unsafe { SetForegroundWindow(hwnd_of(&window)) }.as_bool(), "foreground activation of owned native input target refused");
+        for _ in 0..25 { pump_pointer_thread(); std::thread::sleep(Duration::from_millis(2)); }
+        // SAFETY: observes desktop activation without retaining a native handle.
+        assert_eq!(unsafe { GetForegroundWindow() }, hwnd_of(&window), "native input target must be foreground before injection");
         (window, close)
     }
 
