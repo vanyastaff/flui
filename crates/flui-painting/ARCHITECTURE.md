@@ -1010,8 +1010,11 @@ Finite gradient positions, focal points and signed sweep angles extrapolate
 outside `0..=1`, consistent with the unbounded geometry contract in ADR-0149.
 Radii extrapolate with a zero lower bound. Circle positions, radii, reciprocal
 scale and circle differences must survive `f32` packing after shared unit-box
-normalization, rather than restricting the raw radii;
-the engine still validates the resolved bounds, normalization and equation. Colors
+normalization, rather than restricting the raw radii. Fragment-coordinate
+subtraction and the radial quadratic must retain their nonzero values and
+equation sign. Sweep centers must pack in the unit box, and extrapolated sweep
+spans must retain their scale after phase-reduced packing.
+The engine still validates the resolved bounds, normalization and equation. Colors
 saturate through `Color::lerp`;
 stop positions retain the sampled union rather than inventing correspondence
 between lists of different lengths. Arithmetic preserves representable results
@@ -1020,13 +1023,26 @@ Independent interpolation of direction, angle and focal-center spans
 detects translation-induced distortion beyond the renderer's relative precision.
 Compensated endpoint differences retain finite residuals when large spans cancel,
 so zero intended spans are validated too. Linear projections are checked in a
-unit paint box before the engine validates their actual bounds-local coefficients.
+unit paint box. A successfully extrapolated decoration retains its bounded
+endpoint until paint can check the actual bounds-local linear coefficients and
+shader arithmetic, normalized radial circles and equation, or sweep center.
+If those checks fail, paint resolves the bounded endpoint.
+The fallback travels with cloned and serialized decorations; replacing the
+gradient through its setter clears it, and direct field replacement is checked
+against the original extrapolated gradient before the fallback is used.
 `BoxDecoration::lerp` forwards the raw fraction for paired gradient geometry;
 its other fields keep their bounded interpolation and exact endpoint behavior.
 If extrapolation is unrepresentable, the infallible decoration producer falls
 back to bounded gradient interpolation. Radial interpolation refuses coincident
 nonzero circles, which the renderer cannot represent; negative radius overflow
 still reaches the finite zero lower bound.
+`gradient_packing_preserves_extrapolated_geometry` covers the sweep-center,
+sweep-span, radial quadratic and fragment-coordinate cases.
+`decoration_gradient_falls_back_after_bounds_scaling` records the public paint
+producer's raw overshoot in a small box and bounded endpoint in a tall box,
+including replacement and serialization behavior.
+`decoration_gradient_centers_fall_back_after_bounds_scaling` covers sweep-center
+packing and radial quadratic underflow after resolving tall paint boxes.
 The public `value_contract` rows `gradient_geometry_preserves_overshoot`,
 `decoration_gradient_geometry_preserves_overshoot`,
 `gradient_geometry_rejects_invalid_inputs_before_equal_shortcuts`,

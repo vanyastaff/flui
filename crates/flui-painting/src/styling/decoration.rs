@@ -166,6 +166,16 @@ pub struct BoxDecoration<T: Unit> {
     /// If this is specified, `color` has no effect.
     pub gradient: Option<Gradient>,
 
+    // Retain the bounded endpoint until paint bounds are available. The raw
+    // gradient is also retained so direct writes to the public gradient field
+    // cannot accidentally use a stale fallback. Box this rare state rather
+    // than adding two full gradient values to every decoration.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub(crate) gradient_fallback: Option<Box<(Gradient, Gradient)>>,
+
     /// The shape to fill the background, gradient, and image into, and
     /// to cast as the box shadow.
     ///
@@ -199,6 +209,7 @@ impl<T: Unit> BoxDecoration<T> {
             border_radius: None,
             box_shadow: None,
             gradient: None,
+            gradient_fallback: None,
             shape: BoxShape::Rectangle,
         }
     }
@@ -213,6 +224,7 @@ impl<T: Unit> BoxDecoration<T> {
             border_radius: None,
             box_shadow: None,
             gradient: None,
+            gradient_fallback: None,
             shape: BoxShape::Rectangle,
         }
     }
@@ -227,6 +239,7 @@ impl<T: Unit> BoxDecoration<T> {
             border_radius: None,
             box_shadow: None,
             gradient: Some(gradient),
+            gradient_fallback: None,
             shape: BoxShape::Rectangle,
         }
     }
@@ -241,6 +254,7 @@ impl<T: Unit> BoxDecoration<T> {
             border_radius: None,
             box_shadow: None,
             gradient: None,
+            gradient_fallback: None,
             shape: BoxShape::Rectangle,
         }
     }
@@ -277,6 +291,7 @@ impl<T: Unit> BoxDecoration<T> {
     #[inline]
     pub fn set_gradient(mut self, gradient: Option<Gradient>) -> Self {
         self.gradient = gradient;
+        self.gradient_fallback = None;
         self
     }
 
@@ -296,6 +311,8 @@ where
     ///
     /// The exact endpoints return `a` and `b`. A paired gradient's geometry
     /// extrapolates with `t`; other fields clamp `t` to `0..=1`.
+    /// Extrapolation retains a bounded endpoint for painting when the resolved
+    /// geometry cannot be represented at the actual box size.
     /// A field set on only one side fades toward nothing: a lone
     /// color or gradient scales its alpha, a lone border, radius or shadow
     /// list scales its geometry (by `1 - t` for `a`'s, `t` for `b`'s). The
@@ -315,6 +332,12 @@ where
             if let (Some(a_gradient), Some(b_gradient)) = (&a.gradient, &b.gradient)
                 && let Some(gradient) = Gradient::lerp(a_gradient, b_gradient, gradient_t)
             {
+                if let Some(bounded) = &endpoint.gradient
+                    && &gradient != bounded
+                {
+                    endpoint.gradient_fallback =
+                        Some(Box::new((gradient.clone(), bounded.clone())));
+                }
                 endpoint.gradient = Some(gradient);
             }
             return endpoint;
@@ -376,6 +399,7 @@ where
             border_radius,
             box_shadow,
             gradient,
+            gradient_fallback: None,
             shape,
         }
     }

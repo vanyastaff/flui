@@ -504,6 +504,9 @@ impl SweepGradient {
         let phase = start_angle.rem_euclid(std::f64::consts::TAU);
         let packed_end = (phase + span) as f32;
         let packed_span = packed_end - phase as f32;
+        // Extrapolation must not amplify packing error into a changed angular
+        // scale. Bounded interpolation and unchanged gradients retain the
+        // renderer's existing small-span representation.
         if !span.is_finite()
             || distorted_span(
                 a.start_angle,
@@ -515,7 +518,15 @@ impl SweepGradient {
             )
             || !packed_end.is_finite()
             || !packed_span.is_finite()
+            || ![center.x, center.y].into_iter().all(|value| {
+                let local = value.mul_add(0.5, 0.5);
+                (local as f32).is_finite() && (local == 0.0 || local as f32 != 0.0)
+            })
             || (span != 0.0 && packed_span == 0.0)
+            || (!(0.0..=1.0).contains(&t)
+                && (a.start_angle != b.start_angle || a.end_angle != b.end_angle)
+                && (f64::from(packed_span) - span).abs()
+                    > span.abs().max(f64::from(packed_span).abs()) * f64::from(f32::EPSILON))
         {
             return None;
         }
@@ -580,10 +591,6 @@ fn valid_radius(value: f64) -> bool {
     value.is_finite() && value >= 0.0
 }
 
-#[expect(
-    clippy::cast_possible_truncation,
-    reason = "validate normalized renderer packing"
-)]
 fn valid_normalized_circles(
     center: Alignment,
     focal: Alignment,
@@ -592,13 +599,34 @@ fn valid_normalized_circles(
 ) -> bool {
     // Normalize relative to a unit paint box, using the engine's shared circle
     // scale. A raw radius above f32::MAX can still pack successfully. Actual
-    // bounds and the radial equation remain engine checks.
+    // bounds remain engine checks.
     let positions = [center.x, center.y, focal.x, focal.y].map(|value| value.mul_add(0.5, 0.5));
-    let scale = positions
-        .iter()
-        .fold(radius.max(focal_radius).max(1.0), |scale, value| {
-            scale.max(value.abs())
-        });
+    valid_circles(positions, radius, focal_radius, [1.0, 1.0])
+}
+
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "validate normalized renderer packing"
+)]
+fn valid_circles(positions: [f64; 4], radius: f64, focal_radius: f64, bounds: [f64; 2]) -> bool {
+    if !positions.into_iter().chain(bounds).all(f64::is_finite)
+        || !valid_radius(radius)
+        || !valid_radius(focal_radius)
+        || (radius != 0.0
+            && radius == focal_radius
+            && positions[0] == positions[2]
+            && positions[1] == positions[3])
+    {
+        return false;
+    }
+    let scale = positions.iter().fold(
+        radius
+            .max(focal_radius)
+            .max(bounds[0].abs())
+            .max(bounds[1].abs()),
+        |scale, value| scale.max(value.abs()),
+    );
+    let scale = if scale == 0.0 { 1.0 } else { scale };
     let values = [
         positions[0] / scale,
         positions[1] / scale,
@@ -615,19 +643,107 @@ fn valid_normalized_circles(
         return false;
     }
     let packed = values.map(|value| value as f32);
+    if ![(bounds[0], packed[3]), (bounds[1], packed[4])]
+        .into_iter()
+        .all(|(dimension, focal)| {
+            let normalized = dimension as f32 * packed[6];
+            normalized.is_finite()
+                && (dimension == 0.0 || (normalized != 0.0 && normalized - focal != -focal))
+        })
+    {
+        return false;
+    }
+    let dx = packed[0] - packed[3];
+    let dy = packed[1] - packed[4];
+    let dr = packed[2] - packed[5];
+    let quadratic = dx * dx + dy * dy - dr * dr;
+    let native_dx = values[0] - values[3];
+    let native_dy = values[1] - values[4];
+    let native_dr = values[2] - values[5];
+    let native_quadratic = native_dx * native_dx + native_dy * native_dy - native_dr * native_dr;
+    if !quadratic.is_finite()
+        || (native_quadratic == 0.0) != (quadratic == 0.0)
+        || (native_quadratic > 0.0 && quadratic < 0.0)
+        || (native_quadratic < 0.0 && quadratic > 0.0)
+    {
+        return false;
+    }
     [(0, 3), (1, 4), (2, 5)].into_iter().all(|(outer, inner)| {
         values[outer] - values[inner] == 0.0 || packed[outer] - packed[inner] != 0.0
     })
+}
+
+fn valid_linear_projection(begin: Alignment, end: Alignment) -> bool {
+    valid_resolved_linear_projection(
+        [begin.x.mul_add(0.5, 0.5), begin.y.mul_add(0.5, 0.5)],
+        [(end.x - begin.x) * 0.5, (end.y - begin.y) * 0.5],
+        [1.0, 1.0],
+    )
+}
+
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "validate bounds-local renderer packing"
+)]
+pub(crate) fn valid_bounds(
+    gradient: &Gradient,
+    bounds: flui_foundation::geometry::Rect<f64>,
+) -> bool {
+    let center = bounds.center();
+    let local = |alignment: Alignment| {
+        [
+            (center.x + alignment.x * (bounds.width() / 2.0)) - bounds.left(),
+            (center.y + alignment.y * (bounds.height() / 2.0)) - bounds.top(),
+        ]
+    };
+    match gradient {
+        Gradient::Linear(linear) => valid_linear_bounds(linear, bounds),
+        Gradient::Radial(radial) => {
+            let center = local(radial.center);
+            let focal = local(radial.focal.unwrap_or(radial.center));
+            let half_side = (bounds.width() / 2.0).min(bounds.height() / 2.0);
+            valid_circles(
+                [center[0], center[1], focal[0], focal[1]],
+                radial.radius * half_side * 2.0,
+                radial.focal_radius.unwrap_or(0.0) * half_side * 2.0,
+                [bounds.width(), bounds.height()],
+            )
+        }
+        Gradient::Sweep(sweep) => local(sweep.center).into_iter().all(|value| {
+            value.is_finite() && (value as f32).is_finite() && (value == 0.0 || value as f32 != 0.0)
+        }),
+    }
+}
+
+// The decoration producer knows the real paint box, unlike interpolation.
+fn valid_linear_bounds(
+    gradient: &LinearGradient,
+    bounds: flui_foundation::geometry::Rect<f64>,
+) -> bool {
+    let center = bounds.center();
+    let at = |alignment: Alignment| {
+        [
+            center.x + alignment.x * (bounds.width() / 2.0),
+            center.y + alignment.y * (bounds.height() / 2.0),
+        ]
+    };
+    let from = at(gradient.begin);
+    let to = at(gradient.end);
+    valid_resolved_linear_projection(
+        [from[0] - bounds.left(), from[1] - bounds.top()],
+        [to[0] - from[0], to[1] - from[1]],
+        [bounds.width(), bounds.height()],
+    )
 }
 
 #[expect(
     clippy::cast_possible_truncation,
     reason = "validate renderer projection packing"
 )]
-fn valid_linear_projection(begin: Alignment, end: Alignment) -> bool {
-    // Preflight the engine's bounds-local projection in a unit paint box;
-    // final coefficients and arithmetic still depend on the actual bounds.
-    let delta = [(end.x - begin.x) * 0.5, (end.y - begin.y) * 0.5];
+fn valid_resolved_linear_projection(start: [f64; 2], delta: [f64; 2], bounds: [f64; 2]) -> bool {
+    if !start.into_iter().chain(delta).all(f64::is_finite) {
+        return false;
+    }
     let scale = delta[0].abs().max(delta[1].abs());
     if scale == 0.0 {
         return true;
@@ -638,10 +754,18 @@ fn valid_linear_projection(begin: Alignment, end: Alignment) -> bool {
         return true;
     }
     let [a, b] = normalized.map(|value| (value / norm) / scale);
-    let c = -(begin.x.mul_add(0.5, 0.5) * a + begin.y.mul_add(0.5, 0.5) * b);
-    [a, b, c].into_iter().all(|value| {
+    let c = -(start[0] * a + start[1] * b);
+    let coefficients = [a, b, c];
+    if !coefficients.into_iter().all(|value| {
         value.is_finite() && (value as f32).is_finite() && (value == 0.0 || value as f32 != 0.0)
-    })
+    }) {
+        return false;
+    }
+    let packed = coefficients.map(|value| value as f32);
+    let bound = f64::from(packed[0]).abs() * f64::from(bounds[0] as f32)
+        + f64::from(packed[1]).abs() * f64::from(bounds[1] as f32)
+        + f64::from(packed[2]).abs();
+    bound.is_finite() && bound <= f64::from(f32::MAX) * 0.5
 }
 
 fn lerp_radius(a: f64, b: f64, t: f64) -> Option<f64> {

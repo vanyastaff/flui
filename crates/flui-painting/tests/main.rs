@@ -168,6 +168,18 @@ fn value_contract() {
                 values::gradient_geometry_checks_intermediate_and_output_overflow,
             ),
             (
+                "gradient_packing_preserves_extrapolated_geometry",
+                values::gradient_packing_preserves_extrapolated_geometry,
+            ),
+            (
+                "decoration_gradient_falls_back_after_bounds_scaling",
+                values::decoration_gradient_falls_back_after_bounds_scaling,
+            ),
+            (
+                "decoration_gradient_centers_fall_back_after_bounds_scaling",
+                values::decoration_gradient_centers_fall_back_after_bounds_scaling,
+            ),
+            (
                 "gradient_domains_keep_zero_radii_and_signed_angles",
                 values::gradient_domains_keep_zero_radii_and_signed_angles,
             ),
