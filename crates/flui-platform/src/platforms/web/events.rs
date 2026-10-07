@@ -3,7 +3,7 @@
 //! Registers DOM event listeners on the canvas and converts browser events
 //! to FLUI's W3C-based PlatformInput types.
 
-use std::sync::Arc;
+use std::{cell::RefCell, collections::HashSet, rc::Rc, sync::Arc};
 
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
@@ -76,11 +76,20 @@ fn register_layout_events(window: &WebWindow) {
 // ==================== Pointer Events ====================
 
 fn register_pointer_events(canvas: &web_sys::HtmlCanvasElement, callbacks: &Arc<WindowCallbacks>) {
+    let active = Rc::new(RefCell::new(HashSet::new()));
     // pointerdown
     {
         let callbacks = Arc::clone(callbacks);
+        let active = Rc::clone(&active);
+        let capture = canvas.clone();
         let closure = Closure::<dyn FnMut(web_sys::Event)>::new(move |e: web_sys::Event| {
             let pe: web_sys::PointerEvent = e.unchecked_into();
+            active.borrow_mut().insert(pe.pointer_id());
+            // Admission precedes application callbacks, which can remove the
+            // canvas or synchronously dispatch another terminal event.
+            if let Err(error) = capture.set_pointer_capture(pe.pointer_id()) {
+                tracing::debug!(?error, "browser pointer capture was not admitted");
+            }
             let input = convert_pointer_down(&pe);
             callbacks.dispatch_input(input);
         });
@@ -105,8 +114,15 @@ fn register_pointer_events(canvas: &web_sys::HtmlCanvasElement, callbacks: &Arc<
     // pointerup
     {
         let callbacks = Arc::clone(callbacks);
+        let active = Rc::clone(&active);
+        let capture = canvas.clone();
         let closure = Closure::<dyn FnMut(web_sys::Event)>::new(move |e: web_sys::Event| {
             let pe: web_sys::PointerEvent = e.unchecked_into();
+            let was_active = active.borrow_mut().remove(&pe.pointer_id());
+            if !was_active {
+                return;
+            }
+            release_pointer_capture(&capture, pe.pointer_id());
             let input = convert_pointer_up(&pe);
             callbacks.dispatch_input(input);
         });
@@ -119,8 +135,15 @@ fn register_pointer_events(canvas: &web_sys::HtmlCanvasElement, callbacks: &Arc<
     // will follow. Deliver it through the same public input callback.
     {
         let callbacks = Arc::clone(callbacks);
+        let active = Rc::clone(&active);
+        let capture = canvas.clone();
         let closure = Closure::<dyn FnMut(web_sys::Event)>::new(move |e: web_sys::Event| {
             let pe: web_sys::PointerEvent = e.unchecked_into();
+            let was_active = active.borrow_mut().remove(&pe.pointer_id());
+            if !was_active {
+                return;
+            }
+            release_pointer_capture(&capture, pe.pointer_id());
             callbacks.dispatch_input(PlatformInput::Pointer(
                 ui_events::pointer::PointerEvent::Cancel(make_pointer_info(&pe)),
             ));
@@ -128,6 +151,34 @@ fn register_pointer_events(canvas: &web_sys::HtmlCanvasElement, callbacks: &Arc<
         let _ = canvas
             .add_event_listener_with_callback("pointercancel", closure.as_ref().unchecked_ref());
         closure.forget();
+    }
+
+    {
+        let callbacks = Arc::clone(callbacks);
+        let closure = Closure::<dyn FnMut(web_sys::Event)>::new(move |e: web_sys::Event| {
+            let pe: web_sys::PointerEvent = e.unchecked_into();
+            // Up/cancel removes admission before releasing capture. The loss
+            // notification following that terminal edge must stay inert.
+            let was_active = active.borrow_mut().remove(&pe.pointer_id());
+            if was_active {
+                callbacks.dispatch_input(PlatformInput::Pointer(
+                    ui_events::pointer::PointerEvent::Cancel(make_pointer_info(&pe)),
+                ));
+            }
+        });
+        let _ = canvas.add_event_listener_with_callback(
+            "lostpointercapture",
+            closure.as_ref().unchecked_ref(),
+        );
+        closure.forget();
+    }
+}
+
+fn release_pointer_capture(canvas: &web_sys::HtmlCanvasElement, pointer: i32) {
+    if canvas.has_pointer_capture(pointer)
+        && let Err(error) = canvas.release_pointer_capture(pointer)
+    {
+        tracing::debug!(?error, "browser pointer capture release failed");
     }
 }
 
@@ -313,7 +364,7 @@ fn buttons_from_mask(mask: u16) -> ui_events::pointer::PointerButtons {
 /// the DOM event's millisecond `timeStamp` (page-load base) to the
 /// contract's nanoseconds.
 fn make_pointer_state(pe: &web_sys::PointerEvent, count: u8) -> ui_events::pointer::PointerState {
-    use dpi::{PhysicalPosition, PhysicalSize};
+    use dpi::PhysicalSize;
     use ui_events::pointer::{PointerOrientation, PointerState};
 
     let modifiers = extract_modifiers_from_mouse(pe);
