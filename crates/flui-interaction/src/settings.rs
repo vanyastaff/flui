@@ -6,7 +6,7 @@
 //!
 //! # Example
 //!
-//! ```rust,ignore
+//! ```rust
 //! use flui_interaction::settings::GestureSettings;
 //! use flui_platform_api::pointer::PointerKind;
 //!
@@ -122,10 +122,11 @@ pub const DEFAULT_MAX_FLING_VELOCITY: f64 = 8000.0;
 ///
 /// # Example
 ///
-/// ```rust,ignore
+/// ```rust
 /// use flui_interaction::settings::GestureSettings;
 ///
 /// let settings = GestureSettings::default();
+/// let distance = 10.0;
 ///
 /// // Check touch slop
 /// if distance < settings.touch_slop() {
@@ -412,7 +413,7 @@ impl GestureSettings {
     ///
     /// # Example
     ///
-    /// ```rust,ignore
+    /// ```rust
     /// use flui_interaction::settings::GestureSettings;
     /// use flui_platform_api::pointer::PointerKind;
     ///
