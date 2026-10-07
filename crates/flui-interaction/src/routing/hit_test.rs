@@ -865,7 +865,7 @@ pub(crate) fn transform_pointer_event(
 /// Refuse a local coordinate that cannot be represented by the checked vocabulary.
 fn transform_position(position: PointerPosition, transform: &Matrix4) -> Option<PointerPosition> {
     let point = position.get();
-    let (x, y) = transform.transform_point(point.x, point.y);
+    let (x, y) = transform.unproject_to_plane(point.x, point.y)?;
     PointerPosition::try_new(Point::new(x, y)).ok()
 }
 

@@ -502,6 +502,61 @@ impl Matrix4 {
         }
     }
 
+    /// Unprojects a screen point onto the local `z = 0` plane.
+    ///
+    /// **The receiver is the inverse global-to-local matrix**, usually obtained
+    /// from the forward paint transform with [`Self::try_inverse`]. A projected
+    /// screen point does not specify its depth: this method intersects its ray
+    /// with the local plane instead of assuming that screen depth is zero.
+    ///
+    /// Returns `None` for a non-finite matrix or point, a parallel ray, an
+    /// intersection at infinity, a point behind the camera (forward homogeneous
+    /// `w <= 0`), or arithmetic that cannot publish finite local coordinates.
+    /// Homogeneous cancellation within floating-point precision is refused.
+    /// [`Self::transform_point`] retains its separate forward projection semantics.
+    #[must_use]
+    pub fn unproject_to_plane(&self, x: f64, y: f64) -> Option<(f64, f64)> {
+        if !x.is_finite() || !y.is_finite() || self.m.iter().any(|value| !value.is_finite()) {
+            return None;
+        }
+        let matrix_scale = self.m.iter().fold(0.0_f64, |scale, value| scale.max(value.abs()));
+        if matrix_scale == 0.0 {
+            return None;
+        }
+        // Both normalizations are positive, so they preserve visibility and the
+        // final projective quotient while keeping every product bounded.
+        let m = self.m.map(|value| value / matrix_scale);
+        let point_scale = x.abs().max(y.abs()).max(1.0);
+        let sx = x / point_scale;
+        let sy = y / point_scale;
+        let sw = 1.0 / point_scale;
+        let ray = [
+            m[0] * sx + m[4] * sy + m[12] * sw,
+            m[1] * sx + m[5] * sy + m[13] * sw,
+            m[2] * sx + m[6] * sy + m[14] * sw,
+            m[3] * sx + m[7] * sy + m[15] * sw,
+        ];
+        // Changing screen depth moves along inverse column 2. Eliminate
+        // screen depth in homogeneous coordinates before dividing by w.
+        let depth = m[10];
+        if depth == 0.0 {
+            return None;
+        }
+        let weight_at_origin = ray[3] * depth;
+        let weight_along_ray = m[11] * ray[2];
+        let weight = weight_at_origin - weight_along_ray;
+        let ray_weight_bound = (m[3] * sx).abs() + (m[7] * sy).abs() + (m[15] * sw).abs();
+        let ray_depth_bound = (m[2] * sx).abs() + (m[6] * sy).abs() + (m[14] * sw).abs();
+        let uncertainty = f64::EPSILON
+            * (ray_weight_bound * depth.abs() + m[11].abs() * ray_depth_bound);
+        if weight.abs() <= uncertainty || weight.is_sign_positive() != depth.is_sign_positive() {
+            return None;
+        }
+        let local_x = (ray[0] * depth - m[8] * ray[2]) / weight;
+        let local_y = (ray[1] * depth - m[9] * ray[2]) / weight;
+        (local_x.is_finite() && local_y.is_finite()).then_some((local_x, local_y))
+    }
+
     /// Transforms a rectangle by this matrix, returning the bounding box of the
     /// result.
     ///
