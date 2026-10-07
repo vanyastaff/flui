@@ -598,6 +598,7 @@ fn scale_publishes_finite_continuous_values_and_owns_its_contacts() {
     run_rows(
         "scale",
         &[
+            ("native pan zoom lifecycle", scale_recognizes_native_pan_zoom_source_lifecycle as fn()),
             (
                 "extreme finite contacts",
                 scale_measures_extreme_finite_contacts,
