@@ -230,17 +230,23 @@ impl ViewState<AnimatedContainer> for AnimatedContainerState {
         // change, which decides whether to restart below.
         self.controller.set_curve(new_view.curve.clone());
         let t = self.controller.value();
-        // Re-anchor every property at the same instant; `|=` (not `||`) so each
-        // property's tween is updated even after an earlier one already changed.
-        let mut any_target_changed = false;
-        any_target_changed |= self.alignment.retarget(new_view.alignment, t);
-        any_target_changed |= self.padding.retarget(new_view.padding, t);
-        any_target_changed |= self.color.retarget(new_view.color, t);
-        any_target_changed |= self.width.retarget(new_view.width, t);
-        any_target_changed |= self.height.retarget(new_view.height, t);
-        any_target_changed |= self.margin.retarget(new_view.margin, t);
-        any_target_changed |= self.transform.retarget(new_view.transform, t);
-        if any_target_changed {
+        // All properties share the controller, so a change to any one restarts it
+        // and re-anchors every property at the same instant.
+        let restart = self.alignment.animates_toward(new_view.alignment.as_ref())
+            || self.padding.animates_toward(new_view.padding.as_ref())
+            || self.color.animates_toward(new_view.color.as_ref())
+            || self.width.animates_toward(new_view.width.as_ref())
+            || self.height.animates_toward(new_view.height.as_ref())
+            || self.margin.animates_toward(new_view.margin.as_ref())
+            || self.transform.animates_toward(new_view.transform.as_ref());
+        self.alignment.retarget(new_view.alignment, t, restart);
+        self.padding.retarget(new_view.padding, t, restart);
+        self.color.retarget(new_view.color, t, restart);
+        self.width.retarget(new_view.width, t, restart);
+        self.height.retarget(new_view.height, t, restart);
+        self.margin.retarget(new_view.margin, t, restart);
+        self.transform.retarget(new_view.transform, t, restart);
+        if restart {
             // Restart from zero, gated strictly on a target change — a
             // curve-only change never restarts.
             self.controller.restart_from_zero();

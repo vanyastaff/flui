@@ -15,6 +15,7 @@ use std::time::Duration;
 use crate::common::{LaidOut, lay_out_animated, loose, tight};
 use flui_animation::{Curves, Vsync};
 use flui_foundation::geometry::{Angle, EdgeInsets, Matrix4};
+use flui_painting::styling::Color;
 use flui_view::prelude::{BuildContext, StatefulView};
 use flui_view::{IntoView, ViewState};
 use flui_widgets::{
@@ -337,6 +338,7 @@ pub(crate) fn overshooting_size_stays_non_negative() {
 struct TransformProbe {
     vsync: Vsync,
     transform: Arc<Mutex<Matrix4>>,
+    color: Arc<Mutex<Color>>,
 }
 
 struct TransformProbeState {
@@ -359,6 +361,7 @@ impl ViewState<TransformProbe> for TransformProbeState {
             self.probe.vsync.clone(),
             AnimatedContainer::new(SizedBox::new(10.0, 10.0))
                 .transform(*self.probe.transform.lock())
+                .color(*self.probe.color.lock())
                 .duration(RUN)
                 .curve(Curves::Linear),
         )
@@ -374,6 +377,7 @@ pub(crate) fn animated_container_animates_its_transform() {
     let probe = TransformProbe {
         vsync: vsync.clone(),
         transform: Arc::clone(&transform),
+        color: Arc::new(Mutex::new(Color::BLACK)),
     };
     let mut laid = lay_out_animated(probe, loose(200.0), vsync);
     *transform.lock() = Matrix4::IDENTITY;
@@ -400,6 +404,46 @@ pub(crate) fn animated_container_animates_its_transform() {
     assert!(
         scales.windows(2).all(|pair| pair[1] > pair[0]),
         "the scale grows: {scales:?}"
+    );
+}
+
+/// The layer's uniform scale, from the one transform layer.
+#[track_caller]
+fn layer_scale(laid: &mut LaidOut) -> f64 {
+    let matrices = laid.transform_layer_matrices();
+    let [matrix] = matrices.as_slice() else {
+        panic!("one transform layer expected, got {matrices:?}");
+    };
+    matrix.m[0]
+}
+
+/// A change to another property restarts the shared controller; the running
+/// transform re-anchors at the scale shown now instead of snapping back to its start.
+pub(crate) fn animated_container_reanchors_unchanged_properties_on_restart() {
+    let vsync = Vsync::new();
+    let transform = Arc::new(Mutex::new(Matrix4::scaling(0.0, 0.0, 1.0)));
+    let color = Arc::new(Mutex::new(Color::BLACK));
+    let probe = TransformProbe {
+        vsync: vsync.clone(),
+        transform: Arc::clone(&transform),
+        color: Arc::clone(&color),
+    };
+    let mut laid = lay_out_animated(probe, loose(200.0), vsync);
+    *transform.lock() = Matrix4::IDENTITY;
+    laid.pump();
+    laid.pump_for(FRAME); // detection
+    laid.pump_for(FRAME);
+    laid.pump_for(FRAME);
+    let before = layer_scale(&mut laid);
+    assert!(before > 0.3 && before < 1.0, "half way: scale {before}");
+    *color.lock() = Color::WHITE;
+    laid.pump();
+    laid.pump_for(FRAME); // detection
+    laid.pump_for(FRAME);
+    let after = layer_scale(&mut laid);
+    assert!(
+        after >= before && after < 1.0,
+        "the transform continues from {before}: now {after}"
     );
 }
 
