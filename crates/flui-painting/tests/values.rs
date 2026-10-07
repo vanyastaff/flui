@@ -211,16 +211,19 @@ pub(crate) fn gradient_geometry_checks_intermediate_and_output_overflow() {
         (Gradient::Linear(linear_a), Gradient::Linear(linear_b)),
         (Gradient::Sweep(sweep_a), Gradient::Sweep(sweep_b)),
     ] {
-        assert!(
-            Gradient::lerp(&a, &b, 1e16).is_none(),
-            "a unit span lost to translation must be refused: {b:?}"
-        );
-        let mixed = BoxDecoration::<f64>::lerp(
-            &BoxDecoration::with_gradient(a.clone()),
-            &BoxDecoration::with_gradient(b.clone()),
-            1e16,
-        );
-        assert_eq!(mixed.gradient, Some(b.clone()));
+        for t in [1e16, 9_007_199_254_740_994.0] {
+            assert!(
+                Gradient::lerp(&a, &b, t).is_none(),
+                "a unit span distorted by translation must be refused: {b:?}"
+            );
+            let mixed = BoxDecoration::<f64>::lerp(
+                &BoxDecoration::with_gradient(a.clone()),
+                &BoxDecoration::with_gradient(b.clone()),
+                t,
+            );
+            assert_eq!(mixed.gradient, Some(b.clone()));
+        }
+        assert!(Gradient::lerp(&a, &b, 0.3).is_some());
         let mut reversed = b;
         match &mut reversed {
             Gradient::Linear(g) => g.end.x = 0.0,
@@ -364,6 +367,32 @@ pub(crate) fn gradient_domains_keep_zero_radii_and_signed_angles() {
 }
 
 pub(crate) fn radial_overshoot_refuses_coincident_nonzero_circles() {
+    let mut infinite_offset = RadialGradient::circular(vec![Color::RED, Color::BLUE]);
+    infinite_offset.center.x = -f64::MAX;
+    infinite_offset.focal = Some(Alignment::new(f64::MAX, 0.0));
+    assert!(RadialGradient::lerp(&infinite_offset, &infinite_offset, 0.5).is_none());
+    for axis in [true, false] {
+        let mut a = RadialGradient::circular(vec![Color::RED, Color::BLUE]);
+        a.focal = Some(if axis {
+            Alignment::CENTER_RIGHT
+        } else {
+            Alignment::BOTTOM_CENTER
+        });
+        let mut b = a.clone();
+        b.center = a.focal.expect("configured focal");
+        b.focal = Some(if axis {
+            Alignment::new(2.0, 0.0)
+        } else {
+            Alignment::new(0.0, 2.0)
+        });
+        assert!(RadialGradient::lerp(&a, &b, 9_007_199_254_740_992.0).is_none());
+        let start = BoxDecoration::<f64>::with_gradient(Gradient::Radial(a));
+        let end = BoxDecoration::with_gradient(Gradient::Radial(b));
+        assert_eq!(
+            BoxDecoration::lerp(&start, &end, 9_007_199_254_740_992.0),
+            end
+        );
+    }
     for focal_radius in [false, true] {
         let mut a = RadialGradient::circular(vec![Color::RED, Color::BLUE]);
         let mut b = a.clone();
@@ -410,6 +439,16 @@ pub(crate) fn radial_overshoot_refuses_coincident_nonzero_circles() {
     assert!(RadialGradient::lerp(&oversized, &oversized, 0.5).is_none());
     oversized.radius = f64::from(f32::MAX);
     assert!(RadialGradient::lerp(&oversized, &oversized, 0.5).is_some());
+    oversized.radius = 1e40;
+    assert_eq!(
+        RadialGradient::lerp(&oversized, &oversized, 0.5),
+        Some(oversized.clone())
+    );
+    let decoration = BoxDecoration::<f64>::with_gradient(Gradient::Radial(oversized));
+    assert_eq!(
+        BoxDecoration::lerp(&decoration, &decoration, 0.5),
+        decoration
+    );
 
     for focal in [None, Some(Alignment::CENTER)] {
         let mut coincident = RadialGradient::circular(vec![Color::RED, Color::BLUE]);

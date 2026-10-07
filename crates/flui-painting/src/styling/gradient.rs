@@ -205,8 +205,8 @@ impl LinearGradient {
         let end = lerp_alignment(a.end, b.end, t)?;
         if !(end.x - begin.x).is_finite()
             || !(end.y - begin.y).is_finite()
-            || lost_span(a.end.x - a.begin.x, b.end.x - b.begin.x, end.x - begin.x, t)
-            || lost_span(a.end.y - a.begin.y, b.end.y - b.begin.y, end.y - begin.y, t)
+            || distorted_span(a.end.x - a.begin.x, b.end.x - b.begin.x, end.x - begin.x, t)
+            || distorted_span(a.end.y - a.begin.y, b.end.y - b.begin.y, end.y - begin.y, t)
         {
             return None;
         }
@@ -328,8 +328,8 @@ impl RadialGradient {
     /// Linearly interpolate between two radial gradients. Colours and stops
     /// combine as in [`LinearGradient::lerp`], the radii never go below
     /// zero, and a missing focal radius counts as `0.0`.
-    /// Non-finite geometry, negative input radii, or input/output radii above
-    /// `f32::MAX` are rejected before resolving them against paint bounds.
+    /// Non-finite geometry, negative input radii, and unrepresentable
+    /// normalized circle values are rejected before paint-bounds resolution.
     ///
     /// A focal point on one side only moves to or from the other side's
     /// *center*, because a gradient without a focal point is focused on its
@@ -365,6 +365,23 @@ impl RadialGradient {
             (None, None) => None,
             (a_r, b_r) => Some(lerp_radius(a_r.unwrap_or(0.0), b_r.unwrap_or(0.0), t)?),
         };
+        let a_focal = a.focal.unwrap_or(a.center);
+        let b_focal = b.focal.unwrap_or(b.center);
+        let mixed_focal = focal.unwrap_or(center);
+        if distorted_span(
+            a_focal.x - a.center.x,
+            b_focal.x - b.center.x,
+            mixed_focal.x - center.x,
+            t,
+        ) || distorted_span(
+            a_focal.y - a.center.y,
+            b_focal.y - b.center.y,
+            mixed_focal.y - center.y,
+            t,
+        ) || !valid_normalized_radii(radius, focal_radius.unwrap_or(0.0))
+        {
+            return None;
+        }
         if focal.unwrap_or(center) == center
             && focal_radius.unwrap_or(0.0) == radius
             && radius != 0.0
@@ -483,7 +500,7 @@ impl SweepGradient {
         let packed_end = (phase + span) as f32;
         let packed_span = packed_end - phase as f32;
         if !span.is_finite()
-            || lost_span(
+            || distorted_span(
                 a.end_angle - a.start_angle,
                 b.end_angle - b.start_angle,
                 span,
@@ -519,17 +536,38 @@ fn valid_alignment(value: Alignment) -> bool {
     value.x.is_finite() && value.y.is_finite()
 }
 
-// Coordinate interpolation can erase a nonzero span under a large common
-// translation. Interpolating endpoint spans separately detects that loss.
-fn lost_span(a: f64, b: f64, mixed: f64, t: f64) -> bool {
-    lerp_finite(a, b, t).is_some_and(|span| span != 0.0 && mixed == 0.0)
+// Coordinate interpolation can distort a span under a large common translation.
+// Compare independently interpolated spans, allowing rounding below the
+// renderer's relative f32 precision rather than rejecting ordinary f64 noise.
+fn distorted_span(a: f64, b: f64, mixed: f64, t: f64) -> bool {
+    if !mixed.is_finite() {
+        return true;
+    }
+    let Some(span) = lerp_finite(a, b, t) else {
+        return false;
+    };
+    // Opposite extreme endpoint spans can cancel to zero after their own
+    // subtraction lost low bits. Keep the finite coordinate interpolation in
+    // that case (for example, a midpoint between -f64::MAX and f64::MAX).
+    span != 0.0 && (span - mixed).abs() > span.abs().max(mixed.abs()) * f64::from(f32::EPSILON)
 }
 
 fn valid_radius(value: f64) -> bool {
-    // Radii are relative to the paint bounds. Keep them in the renderer's
-    // numeric range before scaling; f64 finiteness alone admits radii whose
-    // normalization reciprocal vanishes when packed as f32.
-    (0.0..=f64::from(f32::MAX)).contains(&value)
+    value.is_finite() && value >= 0.0
+}
+
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "validate normalized renderer packing"
+)]
+fn valid_normalized_radii(radius: f64, focal_radius: f64) -> bool {
+    // Normalize relative to a unit paint box, using the engine's shared circle
+    // scale. A raw radius above f32::MAX can still pack successfully. Actual
+    // bounds, focal positions and the radial equation remain engine checks.
+    let scale = radius.max(focal_radius).max(1.0);
+    [radius / scale, focal_radius / scale, scale.recip()]
+        .into_iter()
+        .all(|value| (value as f32).is_finite() && (value == 0.0 || value as f32 != 0.0))
 }
 
 fn lerp_radius(a: f64, b: f64, t: f64) -> Option<f64> {
