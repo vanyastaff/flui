@@ -97,14 +97,14 @@ fn foreign_device_does_not_consume_the_captured_contact(edge: ForeignEdge) {
         binding.handle_pointer_event_with_result(&started, &path);
         binding.handle_pointer_event_with_result(&movement, &HitTestResult::new());
         assert!(
-            binding.has_pending_moves(),
+            binding.has_pending_motion(),
             "own Move was accepted for the next frame"
         );
         binding.handle_pointer_event(&foreign_event(edge, foreign), |_| {
             panic!("a foreign event must not acquire a fresh route for an existing contact")
         });
         let active_after_foreign = binding.active_pointer_count();
-        let pending_after_foreign = binding.has_pending_moves();
+        let pending_after_foreign = binding.has_pending_motion();
         let finished = up(own, 40);
         binding.handle_pointer_event_with_result(&finished, &HitTestResult::new());
         // Also exercise the next independent contact after the valid terminal.
@@ -125,7 +125,7 @@ fn foreign_device_does_not_consume_the_captured_contact(edge: ForeignEdge) {
             [started, movement, finished, recovered_down, recovered_up]
         );
         assert_eq!(binding.active_pointer_count(), 0);
-        assert!(!binding.has_pending_moves());
+        assert!(!binding.has_pending_motion());
     });
 }
 
