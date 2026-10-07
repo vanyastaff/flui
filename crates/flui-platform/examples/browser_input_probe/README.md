@@ -64,3 +64,9 @@ the first event's buttons getter. Run it on a fresh page: a recursive mutable
 JavaScript closure or an active-state borrow held across that getter can abort
 the wasm instance. Both presses and their releases must reach the public input
 callback, with no browser window error.
+
+Keyboard and wheel getter reentry each have a fresh-page check. A native key
+or delta getter synchronously dispatches an inner event of the same family;
+the public callback must receive the inner event before the outer one, then
+deliver a healthy follow-up. These listeners capture immutable handles, so
+their wasm closures do not acquire a recursive `FnMut` guard.

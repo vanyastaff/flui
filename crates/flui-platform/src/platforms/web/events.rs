@@ -225,7 +225,7 @@ fn register_keyboard_events(callbacks: &Arc<WindowCallbacks>) {
     // keydown
     {
         let callbacks = Arc::clone(callbacks);
-        let closure = Closure::<dyn FnMut(web_sys::Event)>::new(move |e: web_sys::Event| {
+        let closure = Closure::<dyn Fn(web_sys::Event)>::new(move |e: web_sys::Event| {
             let ke: web_sys::KeyboardEvent = e.unchecked_into();
             let input = convert_keyboard_event(&ke, KeyState::Down);
             callbacks.dispatch_input(input);
@@ -238,7 +238,7 @@ fn register_keyboard_events(callbacks: &Arc<WindowCallbacks>) {
     // keyup
     {
         let callbacks = Arc::clone(callbacks);
-        let closure = Closure::<dyn FnMut(web_sys::Event)>::new(move |e: web_sys::Event| {
+        let closure = Closure::<dyn Fn(web_sys::Event)>::new(move |e: web_sys::Event| {
             let ke: web_sys::KeyboardEvent = e.unchecked_into();
             let input = convert_keyboard_event(&ke, KeyState::Up);
             callbacks.dispatch_input(input);
@@ -300,7 +300,7 @@ fn register_focus_events(canvas: &web_sys::HtmlCanvasElement, callbacks: &Arc<Wi
 fn register_wheel_events(canvas: &web_sys::HtmlCanvasElement, callbacks: &Arc<WindowCallbacks>) {
     let callbacks = Arc::clone(callbacks);
     let target = canvas.clone();
-    let closure = Closure::<dyn FnMut(web_sys::Event)>::new(move |e: web_sys::Event| {
+    let closure = Closure::<dyn Fn(web_sys::Event)>::new(move |e: web_sys::Event| {
         e.prevent_default();
         let we: web_sys::WheelEvent = e.unchecked_into();
         let input = convert_wheel_event(&we, &target);
