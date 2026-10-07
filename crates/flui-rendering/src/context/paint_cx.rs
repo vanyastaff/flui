@@ -340,13 +340,23 @@ impl FragmentRecorder {
 /// time: `Leaf` objects have **no** `paint_child` method at all.
 ///
 /// ```compile_fail
-/// use flui_rendering::context::{FragmentRecorder, PaintCx};
-/// use flui_foundation::Leaf;
-/// use flui_foundation::geometry::{Offset, Size};
+/// use flui_rendering::context::PaintCx;
+/// use flui_foundation::{Leaf, Single};
 ///
-/// let mut rec = FragmentRecorder::new(Offset::ZERO, 1.0);
-/// let mut cx = PaintCx::<Leaf>::new(&mut rec, 0, Size::ZERO);
-/// cx.paint_child(); // Leaf has no children to paint
+/// fn paint(cx: &mut PaintCx<'_, Leaf>) {
+///     cx.paint_child();
+/// }
+/// ```
+///
+/// The same call is available to a single-child render object's paint method:
+///
+/// ```
+/// use flui_rendering::context::PaintCx;
+/// use flui_foundation::{Leaf, Single};
+///
+/// fn paint(cx: &mut PaintCx<'_, Single>) {
+///     cx.paint_child();
+/// }
 /// ```
 pub struct PaintCx<'a, A: Arity> {
     rec: &'a mut FragmentRecorder,

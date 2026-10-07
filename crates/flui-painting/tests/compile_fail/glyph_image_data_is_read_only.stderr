@@ -1,0 +1,5 @@
+error[E0594]: cannot assign to data in a `&` reference
+ --> tests/compile_fail/glyph_image_data_is_read_only.rs:7:5
+  |
+7 |     image.data()[0] = 0;
+  |     ^^^^^^^^^^^^^^^^^^^ cannot assign

@@ -246,11 +246,14 @@ fn plan(lane: &Lane, host: Host, targets: &BTreeSet<String>, have_hack: bool) ->
         }
     }
     if lane.platform {
+        steps.push(super::platform_compiler_tests().into());
         steps.push(if host == Host::Linux {
-            super::platform_suite_linux().into()
+            super::platform_suite_linux()
+                .args(["-E", "not (group(trybuild))"])
+                .into()
         } else {
             Step::Note(
-                "check-changed: flui-platform is in scope, but its suite needs xvfb-run (Linux); CI runs it"
+                "check-changed: flui-platform is in scope, but its native suite needs xvfb-run (Linux); CI runs it"
                     .to_owned(),
             )
         });
@@ -430,6 +433,31 @@ mod tests {
         }
     }
 
+    fn platform_compiler_checks_run_only_when_in_scope_on_every_host() {
+        for host in [Host::Linux, Host::Windows, Host::MacOs, Host::Other] {
+            let mut lane = material();
+            for in_scope in [false, true] {
+                lane.platform = in_scope;
+                let commands = lines(&plan(&lane, host, &all_targets(), true));
+                assert_eq!(
+                    commands
+                        .iter()
+                        .filter(|line| line.contains("-p flui-platform --test compiler_guards"))
+                        .count(),
+                    usize::from(in_scope),
+                    "{host:?} in scope {in_scope}: {commands:?}"
+                );
+                if in_scope && host == Host::Linux {
+                    let native = commands
+                        .iter()
+                        .find(|line| line.contains("xvfb-run"))
+                        .expect("Linux native suite remains scheduled");
+                    assert!(native.ends_with("-E 'not (group(trybuild))'"), "{native}");
+                }
+            }
+        }
+    }
+
     fn a_target_dir_outside_the_checkout_is_refused() {
         let scratch = std::env::temp_dir().join(format!("xtask-checkout-{}", std::process::id()));
         let checkout = scratch.join("flui");
@@ -490,6 +518,10 @@ mod tests {
                 (
                     "a_target_dir_outside_the_checkout_is_refused",
                     a_target_dir_outside_the_checkout_is_refused as fn(),
+                ),
+                (
+                    "platform_compiler_checks_run_only_when_in_scope_on_every_host",
+                    platform_compiler_checks_run_only_when_in_scope_on_every_host as fn(),
                 ),
             ],
         );

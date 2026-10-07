@@ -6,6 +6,8 @@
 //!
 //! Input prediction and velocity tracking belong to the interaction layer.
 //! The unused platform tracker and embedder abstraction are retired (ADR-0082 §5).
+//! `trybuild_ui::ui_tests` checks each absent name separately, so one retired
+//! export cannot return unnoticed while another import still fails.
 //!
 //! ```compile_fail,E0432
 //! use flui_platform::traits::{

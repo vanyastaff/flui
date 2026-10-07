@@ -1,0 +1,5 @@
+error[E0277]: the trait bound `PipelineOwner: std::default::Default` is not satisfied
+ --> tests/compile_fail/default_pipeline.rs:4:33
+  |
+4 |     let _owner: PipelineOwner = Default::default();
+  |                                 ^^^^^^^^^^^^^^^^^^ the trait `std::default::Default` is not implemented for `PipelineOwner`

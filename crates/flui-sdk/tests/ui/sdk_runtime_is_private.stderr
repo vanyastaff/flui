@@ -1,0 +1,11 @@
+error[E0603]: module `__runtime` is private
+ --> tests/ui/sdk_runtime_is_private.rs:1:21
+  |
+1 | use flui_sdk::view::__runtime;
+  |                     ^^^^^^^^^ private module
+  |
+note: the module `__runtime` is defined here
+ --> src/lib.rs
+  |
+  |     mod __runtime {}
+  |     ^^^^^^^^^^^^^

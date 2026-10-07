@@ -1,0 +1,15 @@
+error[E0603]: struct `OwnerThreadToken` is private
+ --> tests/ui/owner_thread_token_is_private.rs:1:28
+  |
+1 | use flui_platform::traits::OwnerThreadToken;
+  |                            ^^^^^^^^^^^^^^^^ private struct
+  |
+note: the struct `OwnerThreadToken` is defined here
+ --> src/traits/mod.rs
+  |
+  | pub(crate) use host_window::OwnerThreadToken;
+  |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: import `OwnerThreadToken` directly
+  |
+1 | use flui_platform::traits::host_window::sealed::OwnerThreadToken;
+  |                            +++++++++++++++++++++
