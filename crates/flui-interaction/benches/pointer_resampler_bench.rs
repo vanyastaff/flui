@@ -256,6 +256,32 @@ fn bench_frame_traces(c: &mut Criterion) {
     group.finish();
 }
 
+fn admission_fixture() -> Fixture {
+    let fixture = Fixture::new();
+    fixture.resampler.add_event(down());
+    fixture
+}
+
+fn bench_source_time_admission(c: &mut Criterion) {
+    let event = movement(51_000_000);
+    let probe = admission_fixture();
+    probe.resampler.add_event(event.clone());
+    probe
+        .resampler
+        .add_event(terminal(Terminal::Up, 52_000_000, 51.0));
+    let mut witness = Witness::default();
+    probe.resampler.stop(|event| witness.observe(event));
+    assert_eq!(witness.moves, 1);
+    witness.finished(Terminal::Up, 52_000_000, (51_000_000, 51.0));
+    c.bench_function("resampler/add_event/source_time", |b| {
+        b.iter_batched_ref(
+            admission_fixture,
+            |fixture| fixture.resampler.add_event(black_box(event.clone())),
+            BatchSize::SmallInput,
+        );
+    });
+}
+
 fn sample_fixture(kind: Terminal) -> Fixture {
     let fixture = Fixture::new();
     fixture.add(down());
@@ -383,6 +409,7 @@ fn bench_capacity(c: &mut Criterion) {
 
 criterion_group!(
     resampler_benches,
+    bench_source_time_admission,
     bench_frame_traces,
     bench_sample_and_stop,
     bench_capacity
