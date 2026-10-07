@@ -729,6 +729,10 @@ fn fling_velocity_follows_event_timestamps_not_dispatch_time() {
 fn gesture_lifecycle_matrix() {
     let cases: &[(&str, fn())] = &[
         (
+            "nonmember_resolution_candidate_retires_after_detachment",
+            nonmember_resolution_candidate_retires_after_detachment,
+        ),
+        (
             "ignored_accept_candidate_drops_outside_the_slot_lock",
             ignored_accept_candidate_drops_outside_the_slot_lock,
         ),
@@ -1294,4 +1298,31 @@ fn ignored_accept_candidate_drops_outside_the_slot_lock() {
 
 fn counter_flag() -> Rc<Cell<bool>> {
     Rc::new(Cell::new(false))
+}
+
+fn nonmember_resolution_candidate_retires_after_detachment() {
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let arena = GestureArena::new();
+        let pointer = id(2);
+        let closed = counter_flag();
+        let member = Arc::new(Verdicts::default());
+        arena.add(pointer, member.clone());
+        #[expect(
+            clippy::arc_with_non_send_sync,
+            reason = "the public arena member API is Arc-backed and owner-local"
+        )]
+        let candidate = Arc::new(ClosesOnDrop {
+            arena: arena.clone(),
+            pointer,
+            closed: Rc::clone(&closed),
+        });
+        arena.resolve(pointer, Some(candidate));
+        assert!(closed.get(), "candidate destructor reentered the arena");
+        assert!(arena.is_empty());
+        let _ = done.send(());
+    });
+    finished.recv_timeout(Duration::from_secs(5)).expect(
+        "resolution candidate must retire after the slot borrow and map entry are released",
+    );
 }
