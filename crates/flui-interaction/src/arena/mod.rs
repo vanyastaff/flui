@@ -394,6 +394,31 @@ impl GestureArenaEntry {
         );
     }
 
+    /// Retire membership without executing user code from an owner's destructor.
+    /// The weak identity remains comparable after its owner starts dropping.
+    pub(crate) fn withdraw_deferred(&self) {
+        if self.arena.owner_closed.get() {
+            return;
+        }
+        let Some(slot) = self.slot.upgrade() else {
+            return;
+        };
+        if slot.generation != self.generation || !self.arena.is_live_slot(self.pointer, &slot) {
+            return;
+        }
+        let follow_up = slot.data.borrow_mut().withdraw(&self.member);
+        match follow_up {
+            ArenaFollowUp::RemoveEmpty => {
+                slot.data.borrow_mut().is_resolved = true;
+                self.arena.remove_exact_slot(self.pointer, &slot);
+            }
+            ArenaFollowUp::DeferDefault | ArenaFollowUp::ResolveInFavorOf(_) => {
+                self.arena.queue_default_resolution(self.pointer, &slot);
+            }
+            ArenaFollowUp::None => {}
+        }
+    }
+
     /// Hold this exact arena generation against a pointer-up sweep.
     pub fn hold(&self) {
         if self.arena.owner_closed.get() {
@@ -659,6 +684,29 @@ impl ArenaEntryData {
         }
     }
 
+    fn withdraw(&mut self, member: &Weak<dyn GestureArenaMember>) -> ArenaFollowUp {
+        if self.is_resolved {
+            return ArenaFollowUp::None;
+        }
+        let Some(index) = self
+            .members
+            .iter()
+            .position(|entry| Weak::ptr_eq(entry, member))
+        else {
+            return ArenaFollowUp::None;
+        };
+        self.members.remove(index);
+        if self
+            .eager_winner
+            .as_ref()
+            .is_some_and(|eager| Weak::ptr_eq(eager, member))
+        {
+            self.eager_winner = None;
+        }
+        self.prune_departed();
+        self.follow_up()
+    }
+
     fn prune_departed(&mut self) {
         self.members.retain(|member| member.strong_count() != 0);
         if self
@@ -671,9 +719,12 @@ impl ArenaEntryData {
     }
 
     /// Add a member to this arena.
-    fn add(&mut self, member: Rc<dyn GestureArenaMember>) {
+    fn add(&mut self, member: &Rc<dyn GestureArenaMember>) -> bool {
         if self.is_open && !self.is_resolved {
-            self.members.push(Rc::downgrade(&member));
+            self.members.push(Rc::downgrade(member));
+            true
+        } else {
+            false
         }
     }
 
@@ -1162,15 +1213,23 @@ impl GestureArena {
         pointer: PointerId,
         member: &Rc<dyn GestureArenaMember>,
     ) -> GestureArenaEntry {
-        if self.owner_closed.get() {
-            let inert = GestureArenaEntry {
+        self.try_add_erased(pointer, member)
+            .unwrap_or_else(|| GestureArenaEntry {
                 arena: self.clone(),
                 pointer,
                 generation: ArenaGeneration(0),
                 slot: Weak::new(),
                 member: Rc::downgrade(member),
-            };
-            return inert;
+            })
+    }
+
+    pub(crate) fn try_add_erased(
+        &self,
+        pointer: PointerId,
+        member: &Rc<dyn GestureArenaMember>,
+    ) -> Option<GestureArenaEntry> {
+        if self.owner_closed.get() {
+            return None;
         }
 
         let slot = match self.current_slot(pointer) {
@@ -1181,9 +1240,12 @@ impl GestureArena {
                 slot
             }
         };
-        slot.data.borrow_mut().add(member.clone());
+        let admitted = slot.data.borrow_mut().add(member);
+        if !admitted {
+            return None;
+        }
 
-        GestureArenaEntry::new(self.clone(), pointer, &slot, member)
+        Some(GestureArenaEntry::new(self.clone(), pointer, &slot, member))
     }
 
     /// Close the arena for a pointer (no more members can be added).
@@ -1910,10 +1972,11 @@ impl GestureArena {
             let pending = {
                 let mut entry = slot.data.borrow_mut();
                 entry.prune_departed();
-                if entry.is_open || entry.is_resolved || entry.members.len() != 1 {
-                    continue;
-                }
-                let winner = entry.members[0].upgrade();
+                let winner = match entry.follow_up() {
+                    ArenaFollowUp::DeferDefault => entry.members[0].upgrade(),
+                    ArenaFollowUp::ResolveInFavorOf(winner) => winner.upgrade(),
+                    ArenaFollowUp::None | ArenaFollowUp::RemoveEmpty => continue,
+                };
                 entry.resolve(winner.as_ref())
             };
             self.remove_exact_slot(token.pointer, &slot);
