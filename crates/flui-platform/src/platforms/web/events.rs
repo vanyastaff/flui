@@ -700,7 +700,9 @@ fn extract_modifiers_from_mouse(e: &web_sys::MouseEvent) -> Modifiers {
 
 /// DOM named keys use the same W3C spellings as the generated owned table.
 fn map_key_value(key: &str) -> Key {
-    if let Some(named) = NamedKey::from_w3c(key) {
+    if matches!(key, "Hyper" | "Super") {
+        Key::Named(NamedKey::Meta)
+    } else if let Some(named) = NamedKey::from_w3c(key) {
         Key::Named(named)
     } else if key.chars().count() == 1 {
         Key::character(key)
