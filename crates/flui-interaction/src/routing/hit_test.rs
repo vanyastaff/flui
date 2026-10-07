@@ -895,21 +895,21 @@ pub(crate) fn transform_pointer_event(event: &PointerEvent, transform: &Matrix4)
                 pointer: e.pointer,
                 state: new_state,
                 delta: match e.delta {
-                    ui_events::pointer::ScrollDelta::PixelDelta(delta) => {
+                    ui_events::ScrollDelta::PixelDelta(delta) => {
                         let local = transform_delta(transform, Offset::new(delta.x, delta.y));
-                        ui_events::pointer::ScrollDelta::PixelDelta(dpi::PhysicalPosition::new(
+                        ui_events::ScrollDelta::PixelDelta(dpi::PhysicalPosition::new(
                             local.dx, local.dy,
                         ))
                     }
-                    ui_events::pointer::ScrollDelta::LineDelta(x, y) => {
+                    ui_events::ScrollDelta::LineDelta(x, y) => {
                         let local =
                             transform_delta(transform, Offset::new(f64::from(x), f64::from(y)));
-                        ui_events::pointer::ScrollDelta::LineDelta(local.dx as f32, local.dy as f32)
+                        ui_events::ScrollDelta::LineDelta(local.dx as f32, local.dy as f32)
                     }
-                    ui_events::pointer::ScrollDelta::PageDelta(x, y) => {
+                    ui_events::ScrollDelta::PageDelta(x, y) => {
                         let local =
                             transform_delta(transform, Offset::new(f64::from(x), f64::from(y)));
-                        ui_events::pointer::ScrollDelta::PageDelta(local.dx as f32, local.dy as f32)
+                        ui_events::ScrollDelta::PageDelta(local.dx as f32, local.dy as f32)
                     }
                 },
             })

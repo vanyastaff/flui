@@ -2079,6 +2079,7 @@ dependencies = [
  "static_assertions",
  "thiserror 2.0.20",
  "tracing",
+ "trybuild",
  "ui-events",
  "web-time",
 ]
