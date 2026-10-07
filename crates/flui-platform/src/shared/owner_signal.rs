@@ -119,13 +119,22 @@ impl OwnerSignal {
             shared: SharedTurnSlot::default(),
         })
     }
-    #[cfg(any(target_os = "macos", feature = "winit-backend"))]
+    #[cfg(any(
+        target_os = "macos",
+        all(
+            feature = "winit-backend",
+            any(target_os = "windows", target_os = "linux")
+        )
+    ))]
     pub(crate) fn fence(&self) {
         let mut state = self.state.lock();
         state.accepting = false;
         state.pending = false;
     }
-    #[cfg(feature = "winit-backend")]
+    #[cfg(all(
+        feature = "winit-backend",
+        any(target_os = "windows", target_os = "macos", target_os = "linux")
+    ))]
     pub(crate) fn quitting(&self) -> bool {
         self.state.lock().quit
     }

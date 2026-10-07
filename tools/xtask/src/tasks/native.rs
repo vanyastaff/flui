@@ -22,6 +22,13 @@ use crate::file_length::modules;
 /// Names selected for each native target, sorted for reproducible plans.
 pub(super) type Packages = BTreeMap<&'static str, BTreeSet<String>>;
 
+/// Required Cargo target features, or every feature of the selected packages.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum FeatureSet {
+    RequiredTargets,
+    All,
+}
+
 /// A predicate's native targets. `None` means it has no platform predicate;
 /// negating an unrelated feature must not admit every native platform.
 fn targets(meta: &Meta) -> Option<BTreeSet<&'static str>> {
@@ -180,6 +187,7 @@ pub(super) fn plans(
     root: &Path,
     scope: &str,
     host: Host,
+    feature_set: FeatureSet,
 ) -> anyhow::Result<BTreeMap<&'static str, Step>> {
     let metadata = crate::util::metadata(root)?;
     let selected = discover(&metadata, scope)?;
@@ -218,7 +226,9 @@ pub(super) fn plans(
             }
         }
         cmd = cmd.args(["--all-targets", "--locked", "--target", target]);
-        if !features.is_empty() {
+        if feature_set == FeatureSet::All {
+            cmd = cmd.args(["--all-features"]);
+        } else if !features.is_empty() {
             cmd = cmd.args([
                 "--features",
                 &features.into_iter().collect::<Vec<_>>().join(","),
@@ -249,8 +259,9 @@ pub(super) fn plan(
     scope: &str,
     host: Host,
     only: Option<&str>,
+    feature_set: FeatureSet,
 ) -> anyhow::Result<Vec<Step>> {
-    Ok(plans(root, scope, host)?
+    Ok(plans(root, scope, host, feature_set)?
         .into_iter()
         .filter(|(target, _)| only.is_none_or(|only| only == *target))
         .map(|(_, step)| step)

@@ -240,7 +240,12 @@ pub(super) fn run(runner: Runner, base: &str) -> anyhow::Result<ExitCode> {
     let have_hack = !lane.hack_args.is_empty() && installed("cargo", &["hack", "--version"]);
     let targets = installed_targets();
     let mut native_steps = Vec::new();
-    for (target, step) in native::plans(&repo_root(), &lane.packages, Host::current())? {
+    for (target, step) in native::plans(
+        &repo_root(),
+        &lane.packages,
+        Host::current(),
+        native::FeatureSet::RequiredTargets,
+    )? {
         if targets.contains(target) {
             native_steps.push(step);
         } else {

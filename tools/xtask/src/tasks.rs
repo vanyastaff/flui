@@ -360,7 +360,16 @@ fn lint_plan() -> Vec<Step> {
 /// workspace, including tests, benches and examples. No linking or execution:
 /// green means the selected configurations type-check under workspace lints.
 fn cross_typecheck_plan(host: Host) -> anyhow::Result<Vec<Step>> {
-    native::plan(&crate::util::repo_root(), "", host, None)
+    let root = crate::util::repo_root();
+    let mut steps = native::plan(&root, "", host, None, native::FeatureSet::RequiredTargets)?;
+    steps.extend(native::plan(
+        &root,
+        "",
+        host,
+        None,
+        native::FeatureSet::All,
+    )?);
+    Ok(steps)
 }
 
 /// CI's `test-features` job: the suites behind features the default run never
@@ -913,6 +922,9 @@ pub(crate) struct CrossTypecheckArgs {
     /// Check only this native triple (CI runs the triples in parallel).
     #[arg(long, value_parser = PLATFORM_TARGETS)]
     pub(crate) target: Option<String>,
+    /// Enable every feature of the selected packages (Apple targets need a genuine SDK).
+    #[arg(long)]
+    pub(crate) all_features: bool,
 }
 
 /// `cargo xtask cross-typecheck`: lint discovered native workspace targets without linking.
@@ -925,6 +937,11 @@ pub(crate) fn cross_typecheck(args: &CrossTypecheckArgs) -> anyhow::Result<ExitC
         "",
         Host::current(),
         args.target.as_deref(),
+        if args.all_features {
+            native::FeatureSet::All
+        } else {
+            native::FeatureSet::RequiredTargets
+        },
     )?))
 }
 

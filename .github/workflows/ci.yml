@@ -3,7 +3,7 @@ name: CI
 # Runtime CI runs on Linux. Ordinary PRs take docs/tooling/wide lanes; main and merge
 # queue add Linux full checks. Nightly/manual runs use the same Linux jobs.
 # No label enables native Windows/macOS or GPU jobs. Platform typechecking
-# uses Linux cross tools and a macOS iOS SDK leg; OS runtime checks are local commands.
+# uses Linux cross tools and macOS SDK legs; OS runtime checks are local commands.
 # test-nested and test-trybuild run independently, restoring the test cache.
 # All jobs except the notification are gated by the ci aggregator.
 
@@ -976,8 +976,8 @@ jobs:
   # cross-typecheck — source-derived native package selection, including
   # each selected package's tests, examples and benches. Clippy does not
   # execute native targets, but C build scripts still need target headers.
-  # Linux uses MSVC cross tools, Zig's Darwin libc and the bundled NDK.
-  # iOS uses a macOS runner's genuine Xcode SDK (including os/log.h).
+  # Linux uses MSVC cross tools and the bundled NDK. Both Apple targets use
+  # genuine Xcode SDKs, including os/log.h for optional macOS logging.
   # Runtime and GPU validation remain local; a green leg proves compilation
   # under the enabled features, not native runtime behavior.
   # ─────────────────────────────────────────────────────────────────────────
@@ -994,7 +994,7 @@ jobs:
           - target: x86_64-pc-windows-msvc
             os: ubuntu-26.04
           - target: aarch64-apple-darwin
-            os: ubuntu-26.04
+            os: macos-26
           - target: aarch64-linux-android
             os: ubuntu-26.04
           - target: aarch64-apple-ios
@@ -1030,25 +1030,13 @@ jobs:
         with:
           tool: cargo-xwin@0.23.1
 
-      - name: Install Darwin C cross tools
-        if: matrix.target == 'aarch64-apple-darwin'
-        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
-        with:
-          tool: cargo-zigbuild@0.23.4
-
-      - name: Install pinned Zig
-        if: matrix.target == 'aarch64-apple-darwin'
-        env:
-          ZIG_SHA256: 1cbe9df9f27e6b78d14ccbca43b6703a404ef79ef1c463de901d7f088d4e2026
-        run: |
-          curl --fail --location --silent --show-error https://ziglang.org/download/0.17.0/zig-x86_64-linux-0.17.0.tar.xz --output "$RUNNER_TEMP/zig.tar.xz"
-          printf '%s  %s\n' "$ZIG_SHA256" "$RUNNER_TEMP/zig.tar.xz" | sha256sum --check
-          mkdir "$RUNNER_TEMP/zig"
-          tar --extract --xz --file "$RUNNER_TEMP/zig.tar.xz" --directory "$RUNNER_TEMP/zig" --strip-components=1
-          echo "$RUNNER_TEMP/zig" >> "$GITHUB_PATH"
-
       - name: Lint source-derived native targets
         run: cargo xtask cross-typecheck --target "$NATIVE_TARGET"
+        env:
+          NATIVE_TARGET: ${{ matrix.target }}
+
+      - name: Lint optional native features
+        run: cargo xtask cross-typecheck --target "$NATIVE_TARGET" --all-features
         env:
           NATIVE_TARGET: ${{ matrix.target }}
 

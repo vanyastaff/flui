@@ -19,6 +19,12 @@ trait depends on `flui-platform-api` instead.
 
 ## Invariants
 
+- **The winit fallback is a desktop backend.** Its module, public re-exports
+  and `arboard` clipboard dependency are available only on Windows, macOS and
+  Linux. Enabling every feature on Android or iOS keeps the native backend;
+  it does not enable desktop clipboard code. The required-target and
+  all-features `cargo xtask cross-typecheck` configurations compile this
+  boundary, including the selected packages' tests, examples and benches.
 - **A window leaves a backend as an `Arc<dyn HostWindow>`.**
   `HostWindow: PlatformWindow` adds the one AccessKit-speaking accessor,
   `accessibility()`. `Platform::open_window`, `WindowOpen::Ready` and
