@@ -255,6 +255,7 @@ pub struct ContactSnapshot { pub id: ContactId, pub pointer: PointerId, pub kind
     pub local: Offset<f64>, pub global: Offset<f64>, pub settings: GestureSettings /* Copy после I11 */ }
 #[derive(Debug, thiserror::Error)] #[non_exhaustive]
 pub enum BeginContactError { #[error("already tracking {current:?}")] Busy { current: PointerId },
+    #[error("contact admission requires Down")] NotDown,
     #[error("down position is not finite")] NonFinite, #[error("arena refused the member")] ArenaClosed }
 impl PrimaryContact {
     pub fn new(membership: ArenaMembership) -> Self;
