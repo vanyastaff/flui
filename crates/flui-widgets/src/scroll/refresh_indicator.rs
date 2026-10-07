@@ -472,6 +472,35 @@ impl StatefulView for RefreshIndicator {
     }
 }
 
+/// Calls `on_flip` whenever `controller`'s refresh flag flips relative to
+/// `snapshot`, the phase the caller last built against. After registering it
+/// catches up with a change made between the snapshot and the registration,
+/// which no notification would report.
+fn listen_for_phase_flips(
+    controller: &RefreshController,
+    snapshot: Phase,
+    on_flip: impl Fn() + Send + Sync + 'static,
+) -> ListenerId {
+    let tracker = Arc::new(PhaseTracker(Mutex::new(snapshot)));
+    let on_flip = Arc::new(on_flip);
+    let id = controller.inner.add_listener(Arc::new({
+        let watched = controller.clone();
+        let tracker = Arc::clone(&tracker);
+        let on_flip = Arc::clone(&on_flip);
+        move || {
+            // Ordered by the mutation's epoch, not by which notification
+            // finishes first.
+            if tracker.advance(watched.phase()) {
+                on_flip();
+            }
+        }
+    }));
+    if tracker.advance(controller.phase()) {
+        on_flip();
+    }
+    id
+}
+
 impl RefreshIndicatorState {
     fn install_fling_listener(&mut self) {
         if let Some(id) = self.fling_listener_id.take() {
@@ -492,15 +521,9 @@ impl RefreshIndicatorState {
         let Some(rebuild) = self.rebuild.clone() else {
             return;
         };
-        let watched = controller.clone();
-        let last_phase = PhaseTracker(Mutex::new(controller.phase()));
-        let id = controller.inner.add_listener(Arc::new(move || {
-            // Ordered by the mutation's epoch, not by which notification
-            // finishes first.
-            if last_phase.advance(watched.phase()) {
-                rebuild.schedule(RebuildReason::StateChange);
-            }
-        }));
+        let id = listen_for_phase_flips(controller, controller.phase(), move || {
+            rebuild.schedule(RebuildReason::StateChange);
+        });
         self.phase_subscription = Some((controller.clone(), id));
     }
 
@@ -709,6 +732,38 @@ mod tests {
         assert!(
             tracker.advance(restarted),
             "the next refresh must still schedule a rebuild"
+        );
+    }
+
+    // `finish` ran between the subscriber's phase snapshot (refreshing) and
+    // its registration, so no notification reports it. The catch-up read
+    // after registration must, or the next refresh flips nothing and its
+    // indicator never shows. A private seam: the public surface cannot run a
+    // mutation inside the subscription.
+    #[test]
+    fn phase_change_before_registration_is_caught_up() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let controller = RefreshController::new();
+        controller.begin_refresh();
+        let stale = controller.phase();
+        controller.finish();
+        let flips = Arc::new(AtomicUsize::new(0));
+        let _id = listen_for_phase_flips(&controller, stale, {
+            let flips = Arc::clone(&flips);
+            move || {
+                flips.fetch_add(1, Ordering::SeqCst);
+            }
+        });
+        assert_eq!(
+            flips.load(Ordering::SeqCst),
+            1,
+            "the missed finish must flip"
+        );
+        controller.begin_refresh();
+        assert_eq!(
+            flips.load(Ordering::SeqCst),
+            2,
+            "the next refresh must flip"
         );
     }
 }

@@ -208,9 +208,9 @@ impl Register {
         }
     }
 
-    /// Publishes `entry` unless a newer-or-equal generation already is;
-    /// returns whether it was published.
-    fn publish(&self, entry: Versioned) -> bool {
+    /// Publishes `entry` unless a newer-or-equal generation already is.
+    /// Returns the generation it replaced, or `None` when it was discarded.
+    fn publish(&self, entry: Versioned) -> Option<u64> {
         while self
             .writing
             .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
@@ -222,8 +222,8 @@ impl Register {
         let newest = self.slots[current]
             .try_read()
             .expect("BUG: only the `writing` holder writes a slot, and never the current one");
-        let published = entry.generation > newest.generation;
-        if published {
+        let published = (entry.generation > newest.generation).then_some(newest.generation);
+        if published.is_some() {
             let next = 1 - current;
             self.slots[next].write(entry);
             self.current.store(next, Ordering::Release);
@@ -313,7 +313,10 @@ fn matrix(kind: Kind, (first, second): (f64, f64), size: Size) -> Matrix4 {
             Matrix4::translation(dx * size.width, second * size.height, 0.0)
         }
         Kind::Scale => about_centre(Matrix4::scaling(first, first, 1.0)),
-        Kind::Rotation => about_centre(Matrix4::rotation_z(first * TAU)),
+        // Reduced to one turn first: rotation is periodic, and a large finite
+        // turn count would overflow the multiplication into a non-finite
+        // (degenerate) matrix.
+        Kind::Rotation => about_centre(Matrix4::rotation_z(first.rem_euclid(1.0) * TAU)),
     }
 }
 
@@ -434,17 +437,22 @@ fn commit(
     };
     let entry = Versioned { generation, value };
     // Published first: a mark may run (or wake) the frame that reads it.
-    if !cell.published.publish(entry) {
+    let Some(replaced) = cell.published.publish(entry) else {
         return false;
-    }
-    let old = cell.delivered.load().value;
-    if old.0.to_bits() == value.0.to_bits() && old.1.to_bits() == value.1.to_bits() {
+    };
+    let delivered = cell.delivered.load();
+    let old = delivered.value;
+    // A replaced publication newer than the delivery record is in flight (or
+    // its marks failed): a frame may already show it, so equality with the
+    // delivered value proves nothing and the class it painted is unknown.
+    let in_flight = replaced > delivered.generation;
+    if !in_flight && old.0.to_bits() == value.0.to_bits() && old.1.to_bits() == value.1.to_bits() {
         return false;
     }
     let size = cell.size();
     let before = classify(kind, old, size);
     let after = classify(kind, value, size);
-    let layer_mark = if before != after {
+    let layer_mark = if in_flight || before != after {
         handle.mark_needs_paint()
     } else if after == Class::Layered {
         handle.mark_needs_composited_layer_update()
@@ -461,7 +469,7 @@ fn commit(
     }
     // Ordered like the published sample: an older commit finishing late
     // cannot replace a newer delivery record.
-    cell.delivered.publish(entry);
+    let _ = cell.delivered.publish(entry);
     true
 }
 
@@ -476,11 +484,16 @@ fn commit(
 /// let proxy = ProxyAnimation::new(Arc::new(controller) as Arc<dyn Animation<f64>>);
 /// let node = RenderAnimatedTransform::new(TransformMotion::Scale { scale: proxy });
 /// ```
-#[derive(Debug)]
 pub struct RenderAnimatedTransform {
     source: Source,
     kind: Kind,
     cell: Arc<SampleCell>,
+    /// The sample `hit_test_transform` chose for the current hit-test visit,
+    /// consumed by the `hit_test` that follows it, so a tick between the two
+    /// hooks cannot pair one matrix on the hit entry with another for the
+    /// child's position.
+    hit_sample: Slot,
+    hit_sample_armed: AtomicBool,
     transform_hit_tests: bool,
     has_child: bool,
     listener_id: Option<ListenerId>,
@@ -512,6 +525,8 @@ impl RenderAnimatedTransform {
             source,
             kind,
             cell: Arc::new(SampleCell::new(seed)),
+            hit_sample: Slot::default(),
+            hit_sample_armed: AtomicBool::new(false),
             transform_hit_tests: true,
             has_child: false,
             listener_id: None,
@@ -544,8 +559,48 @@ impl RenderAnimatedTransform {
     /// approved for one sample with the (possibly overflowed) matrix of the
     /// next.
     fn current(&self, size: Size) -> (Class, Matrix4) {
-        let m = matrix(self.kind, self.cell.sample(), size);
+        Self::class_and_matrix(self.kind, self.cell.sample(), size)
+    }
+
+    fn class_and_matrix(kind: Kind, sample: (f64, f64), size: Size) -> (Class, Matrix4) {
+        let m = matrix(kind, sample, size);
         (classify_matrix(&m), m)
+    }
+
+    /// Records the sample this hit-test visit uses; see `hit_sample`.
+    fn arm_hit_sample(&self) -> (f64, f64) {
+        let sample = self.cell.sample();
+        self.hit_sample.write(Versioned {
+            generation: 0,
+            value: sample,
+        });
+        self.hit_sample_armed.store(true, Ordering::Release);
+        sample
+    }
+
+    /// The sample `hit_test_transform` recorded for this visit, or a fresh
+    /// read when `hit_test` runs alone.
+    fn take_hit_sample(&self) -> (f64, f64) {
+        if self.hit_sample_armed.swap(false, Ordering::AcqRel)
+            && let Some(entry) = self.hit_sample.try_read()
+        {
+            return entry.value;
+        }
+        self.cell.sample()
+    }
+}
+
+impl std::fmt::Debug for RenderAnimatedTransform {
+    // From the cache alone: formatting the proxy would run the animation's
+    // own `value()`/`status()`, which this node reads only in `attach` and
+    // the tick listener.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RenderAnimatedTransform")
+            .field("kind", &self.kind)
+            .field("sample", &self.cell.sample())
+            .field("transform_hit_tests", &self.transform_hit_tests)
+            .field("has_child", &self.has_child)
+            .finish_non_exhaustive()
     }
 }
 
@@ -597,7 +652,7 @@ impl RenderBox for RenderAnimatedTransform {
             return ctx.hit_test_child(0, *ctx.position());
         }
         let size = ctx.own_size();
-        let (class, matrix) = self.current(size);
+        let (class, matrix) = Self::class_and_matrix(self.kind, self.take_hit_sample(), size);
         match class {
             Class::Degenerate => false,
             Class::Identity => ctx.hit_test_child(0, *ctx.position()),
@@ -658,7 +713,7 @@ impl RenderBox for RenderAnimatedTransform {
         if !self.transform_hit_tests {
             return None;
         }
-        let (class, matrix) = self.current(size);
+        let (class, matrix) = Self::class_and_matrix(self.kind, self.arm_hit_sample(), size);
         (class == Class::Layered).then_some(matrix)
     }
 
@@ -800,6 +855,128 @@ mod tests {
                 "older finishes last = {older_finishes_last}: delivery must record the newer commit"
             );
         }
+    }
+
+    // A (delivered) -> B -> A: B's commit published and marked, then stalled
+    // before recording delivery; the frame it woke may already show B. The
+    // final A equals the stale delivery record yet must still mark, and B's
+    // late record must not replace A's.
+    #[test]
+    fn restoring_a_delivered_value_while_a_newer_one_is_in_flight_still_marks() {
+        let (_owner, handle) = owner_with_handle(|| {});
+        let cell = scale_cell();
+        let a = (0.5, 0.0);
+        let b = (0.25, 0.0);
+        assert!(commit(&cell, Kind::Scale, cell.ticket(), a, &handle));
+        let stalled = Versioned {
+            generation: cell.ticket(),
+            value: b,
+        };
+        assert!(cell.published.publish(stalled).is_some());
+        assert!(
+            commit(&cell, Kind::Scale, cell.ticket(), a, &handle),
+            "the restored value owes marks while B's delivery is in flight"
+        );
+        assert!(cell.delivered.publish(stalled).is_none());
+        assert_eq!(cell.delivered.load().value, a);
+    }
+
+    fn rotation_node(turns: f64) -> RenderAnimatedTransform {
+        let controller = AnimationController::unbounded_without_ticker(Duration::from_millis(1));
+        controller.set_value(turns);
+        RenderAnimatedTransform::new(TransformMotion::Rotation {
+            turns: ProxyAnimation::new(Arc::new(controller) as Arc<dyn Animation<f64>>),
+        })
+    }
+
+    // Rotation is periodic: a huge finite turn count is a whole number of
+    // turns, so the child stays visible and untransformed rather than the
+    // TAU multiplication overflowing into a degenerate matrix.
+    #[test]
+    fn huge_finite_turns_stay_visible() {
+        let node = rotation_node(f64::MAX);
+        let size = Size::new(40.0, 40.0);
+        node.cell.store_size(size);
+        let (class, m) = node.current(size);
+        assert_ne!(class, Class::Degenerate, "{m:?}");
+        assert!(is_finite(&m));
+    }
+
+    // A tick between `hit_test_transform` and `hit_test` must not change the
+    // matrix `hit_test` positions the child with: both use the visit's one
+    // sample.
+    #[test]
+    fn one_sample_per_hit_test_visit() {
+        let controller = AnimationController::unbounded_without_ticker(Duration::from_millis(1));
+        controller.set_value(0.25);
+        let node = RenderAnimatedTransform::new(TransformMotion::Rotation {
+            turns: ProxyAnimation::new(Arc::new(controller.clone()) as Arc<dyn Animation<f64>>),
+        });
+        let (_owner, handle) = owner_with_handle(|| {});
+        let mut node = node;
+        node.attach(handle);
+        let size = Size::new(40.0, 40.0);
+        let entry = node
+            .hit_test_transform(size)
+            .expect("a quarter turn is layered");
+        controller.set_value(0.125);
+        assert_eq!(
+            node.cell.sample(),
+            (0.125, 0.0),
+            "the tick reached the cache"
+        );
+        let used = matrix(node.kind, node.take_hit_sample(), size);
+        assert_eq!(used, entry, "hit_test must reuse the visit's sample");
+        node.detach();
+    }
+
+    #[derive(Debug)]
+    struct Probe(Arc<AtomicBool>, flui_foundation::ChangeNotifier);
+
+    impl Listenable for Probe {
+        fn add_listener(&self, callback: flui_foundation::ListenerCallback) -> ListenerId {
+            self.1.add_listener(callback)
+        }
+        fn remove_listener(&self, id: ListenerId) {
+            self.1.remove_listener(id);
+        }
+        fn remove_all_listeners(&self) {
+            self.1.remove_all_listeners();
+        }
+    }
+
+    impl Animation<f64> for Probe {
+        fn value(&self) -> f64 {
+            self.0.store(true, Ordering::SeqCst);
+            1.0
+        }
+        fn status(&self) -> flui_animation::AnimationStatus {
+            self.0.store(true, Ordering::SeqCst);
+            flui_animation::AnimationStatus::Dismissed
+        }
+        fn add_status_listener(&self, _: flui_animation::StatusCallback) -> ListenerId {
+            self.1.add_listener(Arc::new(|| {}))
+        }
+        fn remove_status_listener(&self, _: ListenerId) {}
+    }
+
+    // Debug formats the cache, never the animation.
+    #[test]
+    fn debug_does_not_read_the_animation() {
+        let called = Arc::new(AtomicBool::new(false));
+        let node = RenderAnimatedTransform::new(TransformMotion::Scale {
+            scale: ProxyAnimation::new(Arc::new(Probe(
+                Arc::clone(&called),
+                flui_foundation::ChangeNotifier::default(),
+            )) as Arc<dyn Animation<f64>>),
+        });
+        called.store(false, Ordering::SeqCst);
+        let text = format!("{node:?}");
+        assert!(text.contains("sample"), "{text}");
+        assert!(
+            !called.load(Ordering::SeqCst),
+            "Debug ran the animation: {text}"
+        );
     }
 
     // A writer preempted mid-write must not stall a paint-time read: it owns
