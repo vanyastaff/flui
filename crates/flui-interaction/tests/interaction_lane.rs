@@ -23,6 +23,8 @@ fn explicit_pointer_capture_contract() {
         ("native_terminal", capture_native_terminal_invalidates_the_token),
         ("reused_identity", capture_old_token_cannot_cancel_a_replacement_down),
         ("callback_release", capture_release_inside_motion_defers_loss_until_next_entry),
+        ("loss_failure", capture_loss_callback_failure_still_retires_contact),
+        ("competing_loss_failure", capture_loss_preserves_first_failure_and_next_contact),
     ];
     for &(name, row) in rows {
         if let Err(payload) = std::panic::catch_unwind(row) {
@@ -40,6 +42,8 @@ fn capture_release_defers_exactly_one_loss_to_owner_entry() { assert_capture_rou
 fn capture_native_terminal_invalidates_the_token() { assert_capture_route(5); }
 fn capture_old_token_cannot_cancel_a_replacement_down() { assert_capture_route(6); }
 fn capture_release_inside_motion_defers_loss_until_next_entry() { assert_capture_route(7); }
+fn capture_loss_callback_failure_still_retires_contact() { assert_capture_route(8); }
+fn capture_loss_preserves_first_failure_and_next_contact() { assert_capture_route(9); }
 
 fn assert_capture_route(mode: u8) {
     use flui_foundation::geometry::Offset;
@@ -56,6 +60,11 @@ fn assert_capture_route(mode: u8) {
     let down = make_down_event(Offset::new(5.0, 5.0), PointerKind::Touch).expect("down");
     assert!(PointerDispatch::at_root(&down).capture().is_err(), "synthetic dispatch has no capture authority");
     lane.enter(|| {
+        if mode == 9 {
+            binding.pointer_router().add_global_handler(Rc::new(|event| {
+                assert!(!matches!(event, PointerEvent::Cancel(_)), "second capture loss failure");
+            }));
+        }
         let held = tokens.clone();
         let first_log = log.clone();
         let first = handle.register_pointer(move |dispatch| {
@@ -69,6 +78,9 @@ fn assert_capture_route(mode: u8) {
                 }
                 _ => "other",
             }));
+            if mode >= 8 && matches!(dispatch.global, PointerEvent::Cancel(_)) {
+                panic!("first capture loss failure");
+            }
             if mode != 0 && matches!(dispatch.global, PointerEvent::Down(_)) {
                 let token = dispatch.capture().expect("real Down target can capture");
                 held.borrow_mut().push(token);
@@ -107,16 +119,31 @@ fn assert_capture_route(mode: u8) {
             let stale = tokens.borrow_mut().remove(0);
             drop(stale);
         }
-        if mode == 3 || mode == 4 {
+        if mode == 3 || mode == 4 || mode >= 8 {
             let token = tokens.borrow_mut().pop().expect("retained token");
             if mode == 4 { token.release(); } else { drop(token); }
             assert_eq!(log.borrow().last(), Some(&(2, "down")), "release runs no event callback inline");
-            binding.flush_pending_moves();
+            let drained = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| binding.flush_pending_moves()));
+            if mode >= 8 {
+                let payload = drained.expect_err("loss failure propagates after mandatory cleanup");
+                assert_eq!(flui_foundation::panic::payload_text(&*payload), Some("first capture loss failure"));
+            } else {
+                drained.expect("healthy release");
+            }
             assert_eq!(log.borrow().last(), Some(&(1, "lost")));
             assert_eq!(binding.active_pointer_count(), 0);
             binding.flush_pending_moves();
             assert_eq!(log.borrow().iter().filter(|(_, event)| *event == "lost").count(), 1);
             assert!(binding.arena().is_empty());
+            if mode >= 8 {
+                binding.handle_pointer_event(&down, |_| path());
+                let up = make_up_event(Offset::new(5.0, 5.0), PointerKind::Touch).expect("healthy up");
+                binding.handle_pointer_event(&up, |_| panic!("healthy terminal retains route"));
+                let token = tokens.borrow_mut().pop().expect("replacement contact capture");
+                drop(token);
+                binding.flush_pending_moves();
+                assert_eq!(log.borrow().last(), Some(&(1, "up")), "next contact completes after containment");
+            }
             return;
         }
         let movement = make_move_event(Offset::new(200.0, 200.0), PointerKind::Touch).expect("outside move");
