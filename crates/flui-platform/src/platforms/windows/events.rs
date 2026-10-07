@@ -18,14 +18,10 @@
 //! - Mouse samples retain the retrieved message's generation time, rebased
 //!   onto the shared monotonic epoch before any reentrant callbacks run.
 
-use dpi::{PhysicalPosition, PhysicalSize};
-use keyboard_types::{Key, Modifiers as KeyboardModifiers, NamedKey};
-use ui_events::{
-    keyboard::{Code, KeyState, KeyboardEvent, Location},
-    pointer::{
-        PointerButton, PointerButtonEvent, PointerButtons, PointerEvent, PointerOrientation,
-        PointerState, PointerUpdate,
-    },
+use flui_platform_api::{
+    EventTime, Modifiers as KeyboardModifiers,
+    keyboard::{Code, Key, KeyEvent, KeyRepeat, KeyState, Location, NamedKey},
+    pointer::{ButtonChange, CancelReason, PointerButton, PointerButtons, PointerCancel, PointerEvent, PointerMove, PointerPosition, PointerPress, PointerRelease, PointerSample, ScrollEvent},
 };
 use windows::Win32::{
     Foundation::{HWND, LPARAM, POINT, WPARAM},
@@ -182,10 +178,9 @@ use super::util::{get_x_lparam, get_y_lparam};
 use crate::{
     shared::events::{event_timestamp_ns, primary_mouse_info},
     shared::{
-        input_vocabulary::{keyboard_input, pointer_input},
         keys,
     },
-    traits::{PlatformInput, device_to_logical},
+    traits::PlatformInput,
 };
 
 /// Snapshot the OS query before committing state or calling presentation code.
@@ -350,7 +345,7 @@ pub(super) fn native_pointer_input(
     let time = EventTime::from_nanos(clock.rebase_at(current.info().dwTime, now));
     let Some(decoded) = decode_native_reading(current, offset, scale, time) else { return Vec::new(); };
     let output = registry.borrow_mut().commit(&current.info(), decoded, message);
-    let modifiers = crate::shared::input_vocabulary::modifiers(message_modifiers());
+    let modifiers = message_modifiers();
     output.into_iter().map(|input| match input {
         PlatformInput::Pointer(PointerEvent::Move(movement)) => PlatformInput::Pointer(PointerEvent::Move(
             if message == WM_POINTERUPDATE { movement.with_modifiers(modifiers).with_coalesced(std::mem::take(&mut samples)) } else { movement.with_modifiers(modifiers) }
@@ -913,7 +908,7 @@ fn key_down_in_queue(key: VIRTUAL_KEY) -> bool {
 /// The keyboard modifiers held when the message being processed was
 /// generated (see the module doc for why this is not `GetAsyncKeyState`).
 pub(super) fn message_modifiers() -> KeyboardModifiers {
-    let mut mods = KeyboardModifiers::empty();
+    let mut mods = KeyboardModifiers::NONE;
     for (key, modifier) in [
         (VK_SHIFT, KeyboardModifiers::SHIFT),
         (VK_CONTROL, KeyboardModifiers::CONTROL),
@@ -955,21 +950,21 @@ fn held_buttons(wparam: WPARAM) -> PointerButtons {
     const MK_MBUTTON: usize = 0x0010;
 
     let mask = wparam.0 & 0xffff;
-    let mut buttons = PointerButtons::default();
+    let mut buttons = PointerButtons::NONE;
     if mask & MK_LBUTTON != 0 {
-        buttons.insert(PointerButton::Primary);
+        buttons = buttons.with(PointerButton::PRIMARY);
     }
     if mask & MK_RBUTTON != 0 {
-        buttons.insert(PointerButton::Secondary);
+        buttons = buttons.with(PointerButton::SECONDARY);
     }
     if mask & MK_MBUTTON != 0 {
-        buttons.insert(PointerButton::Auxiliary);
+        buttons = buttons.with(PointerButton::AUXILIARY);
     }
     if mask & 0x0020 != 0 {
-        buttons.insert(PointerButton::X1);
+        buttons = buttons.with(PointerButton::BACK);
     }
     if mask & 0x0040 != 0 {
-        buttons.insert(PointerButton::X2);
+        buttons = buttons.with(PointerButton::FORWARD);
     }
     buttons
 }
@@ -978,16 +973,16 @@ fn held_buttons(wparam: WPARAM) -> PointerButtons {
 /// for any other message.
 pub(super) fn button_message(msg: u32, wparam: WPARAM) -> Option<(PointerButton, bool)> {
     match msg {
-        WM_LBUTTONDOWN => Some((PointerButton::Primary, true)),
-        WM_LBUTTONUP => Some((PointerButton::Primary, false)),
-        WM_RBUTTONDOWN => Some((PointerButton::Secondary, true)),
-        WM_RBUTTONUP => Some((PointerButton::Secondary, false)),
-        WM_MBUTTONDOWN => Some((PointerButton::Auxiliary, true)),
-        WM_MBUTTONUP => Some((PointerButton::Auxiliary, false)),
+        WM_LBUTTONDOWN => Some((PointerButton::PRIMARY, true)),
+        WM_LBUTTONUP => Some((PointerButton::PRIMARY, false)),
+        WM_RBUTTONDOWN => Some((PointerButton::SECONDARY, true)),
+        WM_RBUTTONUP => Some((PointerButton::SECONDARY, false)),
+        WM_MBUTTONDOWN => Some((PointerButton::AUXILIARY, true)),
+        WM_MBUTTONUP => Some((PointerButton::AUXILIARY, false)),
         WM_XBUTTONDOWN | WM_XBUTTONUP => {
             let button = match (wparam.0 >> 16) & 0xffff {
-                1 => PointerButton::X1,
-                2 => PointerButton::X2,
+                1 => PointerButton::BACK,
+                2 => PointerButton::FORWARD,
                 _ => return None,
             };
             Some((button, msg == WM_XBUTTONDOWN))
@@ -1015,7 +1010,7 @@ pub(super) fn capture_on_press(hwnd: HWND) {
 /// the released button). The release itself sends `WM_CAPTURECHANGED`, which
 /// [`capture_changed_event`] recognizes as the sequence's own end.
 pub(super) fn release_capture_after(hwnd: HWND, wparam: WPARAM) {
-    if held_buttons(wparam) != PointerButtons::default() {
+    if !held_buttons(wparam).is_empty() {
         return;
     }
     // SAFETY: plain calls on the window's owner thread; the capture is only
@@ -1049,67 +1044,13 @@ pub(super) fn capture_changed_event(
         .into_iter()
         .any(key_down_in_queue);
     if gaining == hwnd || !held { return None; }
-    use flui_platform_api::{EventTime, pointer::{CancelReason, PointerCancel, PointerEvent as OwnedEvent, PointerId, PointerInfo, PointerKind, PointerRole}};
-    let pointer = PointerInfo::new(PointerId::try_from(1_u64).expect("BUG: primary legacy mouse identity is nonzero"), PointerKind::Mouse).with_role(PointerRole::Primary);
-    Some(PlatformInput::Pointer(OwnedEvent::Cancel(PointerCancel::new(pointer, EventTime::from_nanos(time), CancelReason::CaptureLost))))
+    Some(PlatformInput::Pointer(PointerEvent::Cancel(PointerCancel::new(primary_mouse_info(), EventTime::from_nanos(time), CancelReason::CaptureLost))))
 }
 
-/// Build a `PointerState` from LPARAM coordinates and scale factor.
-///
-/// `buttons` is the held set from [`held_buttons`]; it is a required argument
-/// rather than a defaulted field so a new message arm cannot silently ship an
-/// empty set.
-#[inline]
-fn pointer_state(
-    lparam: LPARAM,
-    scale_factor: f64,
-    pressure: f64,
-    buttons: PointerButtons,
-    count: u8,
-    time: u64,
-) -> PointerState {
-    pointer_state_at(
-        get_x_lparam(lparam),
-        get_y_lparam(lparam),
-        scale_factor,
-        pressure,
-        buttons,
-        count,
-        time,
-    )
-}
-
-/// [`pointer_state`] with the CLIENT-space device coordinates already in
-/// hand — for the wheel messages, whose `lParam` needs a screen-to-client
-/// conversion first (see [`wheel_pointer_state`]).
-///
-/// `count` is the W3C click count — `1` on Down/Up transitions, `0`
-/// elsewhere (the cross-wire contract in flui-interaction's module doc).
-#[inline]
-fn pointer_state_at(
-    x: i32,
-    y: i32,
-    scale_factor: f64,
-    pressure: f64,
-    buttons: PointerButtons,
-    count: u8,
-    time: u64,
-) -> PointerState {
-    let logical_x = device_to_logical(x as f64, scale_factor);
-    let logical_y = device_to_logical(y as f64, scale_factor);
-
-    PointerState {
-        time,
-        position: PhysicalPosition::new(logical_x as f64, logical_y as f64),
-        buttons,
-        modifiers: message_modifiers(),
-        count,
-        contact_geometry: PhysicalSize::new(1.0, 1.0),
-        orientation: PointerOrientation::default(),
-        pressure: pressure as f32,
-        tangential_pressure: 0.0,
-        scale_factor,
-    }
+fn mouse_sample(x: i32, y: i32, scale: f64, time: u64) -> Option<PointerSample> {
+    if !scale.is_finite() || scale <= 0.0 { return None; }
+    let position = PointerPosition::try_new(flui_foundation::geometry::Point::new(f64::from(x) / scale, f64::from(y) / scale)).ok()?;
+    Some(PointerSample::new(EventTime::from_nanos(time), position))
 }
 
 /// Convert a `WM_[LRM]BUTTONDOWN`/`UP` (see [`button_message`]) to a W3C
@@ -1122,27 +1063,22 @@ pub fn mouse_button_event(
     scale_factor: f64,
     time: u64,
 ) -> Option<PlatformInput> {
-    let state = pointer_state(
-        lparam,
-        scale_factor,
-        if is_down { 0.5 } else { 0.0 },
-        held_buttons(wparam),
-        1,
-        time,
-    );
-    let event = PointerButtonEvent {
-        pointer: primary_mouse_info(),
-        state,
-        button: Some(button),
+    let sample = match mouse_sample(get_x_lparam(lparam), get_y_lparam(lparam), scale_factor, time) {
+        Some(sample) => sample,
+        None if !is_down => return Some(PlatformInput::Pointer(PointerEvent::Cancel(PointerCancel::new(primary_mouse_info(), EventTime::from_nanos(time), CancelReason::InvalidInput)))),
+        None => return None,
     };
-    pointer_input(
-        if is_down {
-            PointerEvent::Down(event)
-        } else {
-            PointerEvent::Up(event)
-        },
-        time,
-    )
+    let held = held_buttons(wparam);
+    let event = if is_down {
+        let press = PointerPress::new(primary_mouse_info(), button, held, sample)
+            .with_modifiers(message_modifiers())
+            .with_click_count(std::num::NonZeroU8::new(1).expect("BUG: one click is nonzero"));
+        if held.without(button).is_empty() { PointerEvent::Down(press) } else { PointerEvent::ButtonChange(ButtonChange::Pressed(press)) }
+    } else {
+        let release = PointerRelease::new(primary_mouse_info(), button, held, sample).with_modifiers(message_modifiers());
+        if release.buttons().is_empty() { PointerEvent::Up(release) } else { PointerEvent::ButtonChange(ButtonChange::Released(release)) }
+    };
+    Some(PlatformInput::Pointer(event))
 }
 
 /// Convert WM_MOUSEMOVE to a W3C pointer Move.
@@ -1152,23 +1088,11 @@ pub fn mouse_move_event(
     scale_factor: f64,
     time: u64,
 ) -> Option<PlatformInput> {
-    let held = held_buttons(wparam);
-    // Sensor-less pressure rule: 0.5 while any button is held (a drag),
-    // 0.0 on a hover.
-    let pressure = if held == PointerButtons::default() {
-        0.0
-    } else {
-        0.5
+    let event = match mouse_sample(get_x_lparam(lparam), get_y_lparam(lparam), scale_factor, time) {
+        Some(sample) => PointerEvent::Move(PointerMove::new(primary_mouse_info(), held_buttons(wparam), sample).with_modifiers(message_modifiers())),
+        None => PointerEvent::Cancel(PointerCancel::new(primary_mouse_info(), EventTime::from_nanos(time), CancelReason::InvalidInput)),
     };
-    pointer_input(
-        PointerEvent::Move(PointerUpdate {
-            pointer: primary_mouse_info(),
-            current: pointer_state(lparam, scale_factor, pressure, held, 0, time),
-            coalesced: Vec::new(),
-            predicted: Vec::new(),
-        }),
-        time,
-    )
+    Some(PlatformInput::Pointer(event))
 }
 
 /// The signed scroll distance both wheel messages carry in the high word of
@@ -1177,23 +1101,22 @@ fn wheel_distance(wparam: WPARAM) -> i16 {
     ((wparam.0 as i32) >> 16) as i16
 }
 
-/// Build the pointer state for a wheel message.
+/// Decode the hit-tested position for a wheel message.
 ///
 /// Unlike every other client-area mouse message, `WM_MOUSEWHEEL` and
 /// `WM_MOUSEHWHEEL` deliver the cursor position in SCREEN coordinates
 /// (both messages' `lParam` docs:
 /// <https://learn.microsoft.com/en-us/windows/win32/inputdev/wm-mousewheel>),
 /// so the point is converted to client space here before the shared
-/// [`pointer_state_at`] path DPI-scales it — otherwise scroll hit-testing
+/// logical sample path DPI-scales it — otherwise scroll hit-testing
 /// targets the wrong child whenever the window's client origin is not the
 /// desktop origin.
-fn wheel_pointer_state(
+fn wheel_sample(
     hwnd: HWND,
-    wparam: WPARAM,
     lparam: LPARAM,
     scale_factor: f64,
     time: u64,
-) -> PointerState {
+) -> Option<PointerSample> {
     let mut point = POINT {
         x: get_x_lparam(lparam),
         y: get_y_lparam(lparam),
@@ -1203,19 +1126,9 @@ fn wheel_pointer_state(
     // `point` unchanged.
     let converted = unsafe { ScreenToClient(hwnd, &raw mut point) };
     if !converted.as_bool() {
-        tracing::warn!(
-            "ScreenToClient failed for a wheel message; scroll position stays in screen space"
-        );
+        return None;
     }
-    pointer_state_at(
-        point.x,
-        point.y,
-        scale_factor,
-        0.0,
-        held_buttons(wparam),
-        0,
-        time,
-    )
+    mouse_sample(point.x, point.y, scale_factor, time)
 }
 
 /// Convert WM_MOUSEWHEEL to a W3C pointer Scroll.
@@ -1224,7 +1137,7 @@ fn wheel_pointer_state(
 /// inverse of the cross-backend convention — positive = content scrolls down —
 /// so `from_win32_wheel` negates it at this boundary; see
 /// `crate::shared::scroll` for the sign/unit table and citations. The cursor
-/// position arrives in screen coordinates; see [`wheel_pointer_state`].
+/// position arrives in screen coordinates; see [`wheel_sample`].
 pub fn mouse_wheel_event(
     hwnd: HWND,
     wparam: WPARAM,
@@ -1232,14 +1145,8 @@ pub fn mouse_wheel_event(
     scale_factor: f64,
     time: u64,
 ) -> Option<PlatformInput> {
-    pointer_input(
-        PointerEvent::Scroll(ui_events::pointer::PointerScrollEvent {
-            pointer: primary_mouse_info(),
-            state: wheel_pointer_state(hwnd, wparam, lparam, scale_factor, time),
-            delta: crate::shared::scroll::from_win32_wheel(wheel_distance(wparam)),
-        }),
-        time,
-    )
+    let sample = wheel_sample(hwnd, lparam, scale_factor, time)?;
+    Some(PlatformInput::Pointer(PointerEvent::Scroll(ScrollEvent::new(primary_mouse_info(), sample.time, sample.position, crate::shared::scroll::from_win32_wheel(wheel_distance(wparam))).with_modifiers(message_modifiers()))))
 }
 
 /// Convert WM_MOUSEHWHEEL to a W3C pointer Scroll.
@@ -1248,7 +1155,7 @@ pub fn mouse_wheel_event(
 /// the cross-backend convention — positive = content scrolls right — so only
 /// the `WHEEL_DELTA` division applies; see `crate::shared::scroll`. The
 /// cursor position arrives in screen coordinates; see
-/// [`wheel_pointer_state`].
+/// [`wheel_sample`].
 pub fn mouse_hwheel_event(
     hwnd: HWND,
     wparam: WPARAM,
@@ -1256,14 +1163,8 @@ pub fn mouse_hwheel_event(
     scale_factor: f64,
     time: u64,
 ) -> Option<PlatformInput> {
-    pointer_input(
-        PointerEvent::Scroll(ui_events::pointer::PointerScrollEvent {
-            pointer: primary_mouse_info(),
-            state: wheel_pointer_state(hwnd, wparam, lparam, scale_factor, time),
-            delta: crate::shared::scroll::from_win32_hwheel(wheel_distance(wparam)),
-        }),
-        time,
-    )
+    let sample = wheel_sample(hwnd, lparam, scale_factor, time)?;
+    Some(PlatformInput::Pointer(PointerEvent::Scroll(ScrollEvent::new(primary_mouse_info(), sample.time, sample.position, crate::shared::scroll::from_win32_hwheel(wheel_distance(wparam))).with_modifiers(message_modifiers()))))
 }
 
 // ============================================================================
@@ -1318,18 +1219,10 @@ pub fn key_down_event(
         )
     };
 
-    keyboard_input(
-        KeyboardEvent {
-            state: KeyState::Down,
-            key,
-            code,
-            location: keys::location_for_code(code),
-            modifiers,
-            repeat: is_repeat,
-            is_composing: false,
-        },
-        event_timestamp_ns(),
-    )
+    PlatformInput::Keyboard(KeyEvent::new(KeyState::Down, key, code, EventTime::from_nanos(event_timestamp_ns()))
+        .with_location(keys::location_for_code(code))
+        .with_modifiers(modifiers)
+        .with_repeat(if is_repeat { KeyRepeat::AutoRepeat } else { KeyRepeat::First }))
 }
 
 /// Convert WM_KEYUP to W3C KeyboardEvent.
@@ -1353,18 +1246,8 @@ pub fn key_up_event(wparam: WPARAM, lparam: LPARAM, held_dead: &mut HeldDeadKeys
     };
     let code = keys::scancode_to_code(scan_code, extended);
 
-    keyboard_input(
-        KeyboardEvent {
-            state: KeyState::Up,
-            key,
-            code,
-            location: keys::location_for_code(code),
-            modifiers,
-            repeat: false,
-            is_composing: false,
-        },
-        event_timestamp_ns(),
-    )
+    PlatformInput::Keyboard(KeyEvent::new(KeyState::Up, key, code, EventTime::from_nanos(event_timestamp_ns()))
+        .with_location(keys::location_for_code(code)).with_modifiers(modifiers))
 }
 
 /// Build the KeyboardEvent for an out-of-band `WM_CHAR` — one that reached
@@ -1375,18 +1258,10 @@ pub fn key_up_event(wparam: WPARAM, lparam: LPARAM, held_dead: &mut HeldDeadKeys
 pub fn stray_char_event(text: String) -> PlatformInput {
     let modifiers = message_modifiers();
 
-    keyboard_input(
-        KeyboardEvent {
-            state: KeyState::Down,
-            key: Key::Character(text),
-            code: Code::Unidentified,
-            location: Location::Standard,
-            modifiers,
-            repeat: false,
-            is_composing: false,
-        },
-        event_timestamp_ns(),
-    )
+    PlatformInput::Keyboard(KeyEvent::new(KeyState::Down,
+        Key::character(text).expect("BUG: assembled WM_CHAR text is nonempty"),
+        Code::Unidentified, EventTime::from_nanos(event_timestamp_ns()))
+        .with_location(Location::Standard).with_modifiers(modifiers))
 }
 
 /// What `TranslateMessage` produced for one keydown.

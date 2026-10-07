@@ -345,7 +345,7 @@ pub(super) struct WindowContext {
     /// Is mouse hovering over this window? (T034)
     pub is_hovered: std::cell::Cell<bool>,
     /// Current keyboard modifiers (T035)
-    pub modifiers: std::cell::Cell<keyboard_types::Modifiers>,
+    pub modifiers: std::cell::Cell<flui_platform_api::Modifiers>,
     /// Cursor selected by this exact window's presentation.
     pub cursor: std::cell::Cell<CursorIcon>,
     /// Window style bits before fullscreen (Windows-specific: WS_OVERLAPPEDWINDOW, etc.)
