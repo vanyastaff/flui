@@ -705,6 +705,10 @@ fn force_press_needs_a_sensor_and_the_arena() {
                 a_mouse_at_full_pressure_never_force_presses,
             ),
             (
+                "touch at constant full pressure",
+                a_touch_at_constant_full_pressure_never_force_presses,
+            ),
+            (
                 "non-finite pressure ignored",
                 force_press_ignores_a_non_finite_pressure_sample,
             ),
@@ -1133,4 +1137,18 @@ fn a_mouse_at_full_pressure_never_force_presses() {
     rig.move_with(1, 100.0, 100.0, PointerType::Mouse, 1.0);
     rig.up_with(1, 100.0, 100.0, PointerType::Mouse);
     assert_eq!(log.starts.get(), 0, "a mouse is not a pressure sensor");
+}
+
+/// An Android touch reports a constant 1.0 while pressed; a constant is not a
+/// sensor, so a plain touch does not force press.
+fn a_touch_at_constant_full_pressure_never_force_presses() {
+    let rig = Rig::new();
+    let (press_rec, log) = press_on(&rig);
+    rig.attach(&press_rec, None);
+    rig.down_with(1, 100.0, 100.0, PointerType::Touch, 1.0);
+    rig.frame();
+    rig.move_with(1, 100.0, 100.0, PointerType::Touch, 1.0);
+    rig.move_with(1, 100.0, 100.0, PointerType::Touch, 1.0);
+    rig.up_with(1, 100.0, 100.0, PointerType::Touch);
+    assert_eq!(log.starts.get(), 0, "a constant pressure is not a sensor");
 }

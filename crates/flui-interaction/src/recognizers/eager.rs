@@ -65,7 +65,7 @@ use parking_lot::Mutex;
 
 use super::recognizer::{GestureRecognizer, RecognizerBase};
 use crate::{
-    arena::{GestureArena, GestureArenaMember, GestureDisposition},
+    arena::{GestureArena, GestureArenaMember, GestureDisposition, SweepModel},
     events::PointerEvent,
     ids::PointerId,
     routing::PointerDispatch,
@@ -171,7 +171,18 @@ impl GestureRecognizer for EagerGestureRecognizer {
         }
         match event {
             PointerEvent::Up(_) => self.state.stop_tracking(),
-            PointerEvent::Cancel(_) => self.state.reject(),
+            PointerEvent::Cancel(_) => {
+                // A cancelled contact may leave its arena open and now empty; a
+                // self-driven arena has no binding to sweep it, so the entry
+                // sweeps it here, as the Up path does through `stop_tracking`.
+                let entry = self.state.tracked_entry();
+                self.state.reject();
+                if self.state.arena().sweep_model() == SweepModel::SelfDriven
+                    && let Some(entry) = entry
+                {
+                    entry.sweep();
+                }
+            }
             _ => {}
         }
     }

@@ -343,13 +343,37 @@ fn wrap_angle(angle: f64) -> f64 {
 
 /// The ratio of `current` to `baseline`, or `None` while the baseline is
 /// degenerate.
-fn ratio(current: f64, baseline: f64) -> Option<f64> {
-    (baseline > DEGENERATE_SPAN).then(|| current / baseline)
+/// `carried * current / baseline`, the factor reached so far times the ratio
+/// since the last baseline, or `None` for a degenerate baseline. The two
+/// orders of evaluation are tried so an intermediate quotient or product that
+/// overflows does not hide a finite result.
+fn carried_ratio(carried: f64, current: f64, baseline: f64) -> Option<f64> {
+    if baseline <= DEGENERATE_SPAN {
+        return None;
+    }
+    let direct = carried * (current / baseline);
+    if direct.is_finite() {
+        return Some(direct);
+    }
+    Some((carried * current) / baseline)
 }
 
 impl ScaleState {
     fn index_of(&self, pointer: PointerId) -> Option<usize> {
         self.contacts.iter().position(|c| c.pointer == pointer)
+    }
+
+    /// The update the current factors publish.
+    fn update_details(&self) -> ScaleUpdateDetails {
+        ScaleUpdateDetails {
+            focal_point: self.focal_point,
+            local_focal_point: self.focal_point,
+            scale: self.current.scale,
+            horizontal_scale: self.current.horizontal,
+            vertical_scale: self.current.vertical,
+            rotation: self.rotation,
+            pointer_count: self.contacts.len(),
+        }
     }
 
     /// Angle of the line between the two earliest contacts, or `None` while
@@ -358,9 +382,19 @@ impl ScaleState {
         let [first, second, ..] = self.contacts.as_slice() else {
             return None;
         };
-        let delta = second.position - first.position;
-        let length = delta.distance();
-        (length.is_finite() && length > DEGENERATE_SPAN).then(|| delta.dy.atan2(delta.dx))
+        // In coordinates divided by the largest magnitude, so contacts at
+        // opposite extremes do not overflow the difference; the angle is
+        // unchanged by the scaling.
+        let unit = [first.position, second.position]
+            .iter()
+            .fold(0.0_f64, |largest, p| {
+                largest.max(p.dx.abs()).max(p.dy.abs())
+            });
+        if !unit.is_finite() || unit == 0.0 {
+            return None;
+        }
+        let delta = second.position / unit - first.position / unit;
+        (delta.distance() > DEGENERATE_SPAN / unit).then(|| delta.dy.atan2(delta.dx))
     }
 
     /// Re-measure the baseline after the contact set changed, carrying the
@@ -391,12 +425,16 @@ impl ScaleState {
             }
         }
         let current = Ratios {
-            scale: ratio(measure.span, baseline.span)
-                .map_or(self.current.scale, |r| self.carried.scale * r),
-            horizontal: ratio(measure.horizontal, baseline.horizontal)
-                .map_or(self.current.horizontal, |r| self.carried.horizontal * r),
-            vertical: ratio(measure.vertical, baseline.vertical)
-                .map_or(self.current.vertical, |r| self.carried.vertical * r),
+            scale: carried_ratio(self.carried.scale, measure.span, baseline.span)
+                .unwrap_or(self.current.scale),
+            horizontal: carried_ratio(
+                self.carried.horizontal,
+                measure.horizontal,
+                baseline.horizontal,
+            )
+            .unwrap_or(self.current.horizontal),
+            vertical: carried_ratio(self.carried.vertical, measure.vertical, baseline.vertical)
+                .unwrap_or(self.current.vertical),
         };
         let angle = self.pair_angle();
         let rotation = match (angle, self.rotation_reference) {
@@ -620,9 +658,9 @@ impl ScaleGestureRecognizer {
             RoutePanic::capture(|| self.deliver(outcome)),
             "scale callback",
         );
-        if let Some(panic) = first {
-            panic.resume();
-        }
+        // Entered while the thread is already unwinding, the failure is retained
+        // rather than resumed: a second unwind would abort.
+        finish_containment(first, std::thread::panicking());
     }
 
     /// Claim every listed arena, then start if that won the gesture.
@@ -635,10 +673,15 @@ impl ScaleGestureRecognizer {
                 "scale arena claim",
             );
         }
-        let start = {
+        // The move that crossed the slop already committed its factors; after the
+        // start, an update publishes them, so `End` never reports a factor no
+        // update showed.
+        let (start, update) = {
             let mut state = self.gesture_state.lock();
             state.claiming = false;
-            state.try_start()
+            let start = state.try_start();
+            let update = start.is_some().then(|| state.update_details());
+            (start, update)
         };
         if let Some(details) = start {
             RoutePanic::preserve_first(
@@ -647,9 +690,16 @@ impl ScaleGestureRecognizer {
                 "scale start callback",
             );
         }
-        if let Some(panic) = first {
-            panic.resume();
+        if let Some(details) = update {
+            RoutePanic::preserve_first(
+                &mut first,
+                RoutePanic::capture(|| self.deliver(Outcome::Update(details))),
+                "scale update callback",
+            );
         }
+        // Entered while the thread is already unwinding, the failure is retained
+        // rather than resumed: a second unwind would abort.
+        finish_containment(first, std::thread::panicking());
     }
 
     /// Whether the gesture has moved enough to claim the arena.
@@ -677,7 +727,7 @@ impl ScaleGestureRecognizer {
         // A degenerate initial span means the pointers started coincident;
         // the ratio is undefined there, so leave that arm to the two distance
         // tiers.
-        if let Some(ratio) = ratio(current.span, baseline.span)
+        if let Some(ratio) = carried_ratio(1.0, current.span, baseline.span)
             && settings.exceeds_scale_slop(ratio)
         {
             return true;
@@ -722,15 +772,7 @@ impl ScaleGestureRecognizer {
                 state
                     .scale_velocity_tracker
                     .add_position(now, Offset::new(scale, 0.0));
-                let details = ScaleUpdateDetails {
-                    focal_point: state.focal_point,
-                    local_focal_point: state.focal_point,
-                    scale,
-                    horizontal_scale: state.current.horizontal,
-                    vertical_scale: state.current.vertical,
-                    rotation: state.rotation,
-                    pointer_count: state.contacts.len(),
-                };
+                let details = state.update_details();
                 drop(state);
                 self.deliver(Outcome::Update(details));
             }
@@ -748,13 +790,25 @@ impl ScaleGestureRecognizer {
         // A contact that lifts before the scale started gives its arena up,
         // so a competitor (a tap) wins it on the sweep instead of this
         // recognizer as the front member. An accepted entry ignores this.
-        let withdraw = (state.phase != ScalePhase::Started).then_some(contact.entry);
+        let started = state.phase == ScalePhase::Started;
+        let (withdraw, accepted) = if started {
+            (None, Some(contact.entry))
+        } else {
+            (Some(contact.entry), None)
+        };
         let outcome = state
             .after_contact_removed()
             .map_or(Outcome::Nothing, Outcome::End);
         let primary = state.contacts.first().map(|c| c.pointer);
         drop(state);
         self.sync_primary(primary);
+        // An accepted contact's arena in a self-driven arena has no binding to
+        // sweep it on Up; its entry does, so the slot does not outlive it.
+        if let Some(entry) = accepted
+            && self.state.arena().sweep_model() == SweepModel::SelfDriven
+        {
+            entry.sweep();
+        }
         self.withdraw_then_deliver(withdraw.into_iter().collect(), outcome);
     }
 
@@ -839,9 +893,9 @@ impl GestureRecognizer for ScaleGestureRecognizer {
                 "scale start callback",
             );
         }
-        if let Some(panic) = first {
-            panic.resume();
-        }
+        // Entered while the thread is already unwinding, the failure is retained
+        // rather than resumed: a second unwind would abort.
+        finish_containment(first, std::thread::panicking());
     }
 
     fn handle_event(&self, dispatch: PointerDispatch<'_>) {

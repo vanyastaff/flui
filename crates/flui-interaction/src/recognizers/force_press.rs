@@ -38,11 +38,6 @@ pub const FORCE_PRESS_START_PRESSURE: f64 = 0.4;
 /// Default pressure threshold for peak force press (85%)
 pub const FORCE_PRESS_PEAK_PRESSURE: f64 = 0.85;
 
-/// The pressure a W3C pointer reports while a button or contact is active on
-/// hardware without a pressure sensor. Every platform translation stamps it
-/// (see the pointer field contract in [`crate::events`]).
-const SENSORLESS_ACTIVE_PRESSURE: f64 = 0.5;
-
 /// Callback for force press start events
 pub type ForcePressStartCallback = Rc<dyn Fn(ForcePressDetails)>;
 
@@ -59,13 +54,11 @@ pub type ForcePressEndCallback = Rc<dyn Fn(ForcePressDetails)>;
 ///
 /// # Which devices can force press
 ///
-/// `PointerEvent` carries a normalized pressure but no sensor range. A
-/// sensor-less device (a mouse, a touch screen without force, a trackpad
-/// whose force is not translated) reports exactly `0.5` while active and
-/// `0.0` otherwise — the W3C default every platform translation stamps. A
-/// force press therefore starts only after the contact has reported a
-/// pressure that is neither `0.5` nor `0.0`: proof of a real sensor. A sensor
-/// that happens to read exactly `0.5` starts on its next distinct sample.
+/// `PointerEvent` carries a normalized pressure but no sensor range, and a
+/// sensor-less device reports a constant while pressed: `0.5` on the W3C
+/// convention, `1.0` for an Android touch or mouse. A force press therefore
+/// starts only after the contact has reported two different non-zero
+/// pressures, which only a real sensor produces, and never for a mouse.
 /// Non-finite pressure samples are ignored.
 ///
 /// # Arena
@@ -159,8 +152,10 @@ struct ForcePressState {
     entry: Option<GestureArenaEntry>,
     /// The arena accepted this recognizer for the tracked contact.
     won: bool,
-    /// The contact reported a pressure only a real sensor produces.
+    /// The contact reported pressures only a real sensor produces.
     sensor: bool,
+    /// The contact's first non-zero pressure, compared against later ones.
+    first_reading: Option<f64>,
     position: Offset<f64>,
     global_position: Offset<f64>,
     pressure: f64,
@@ -174,6 +169,7 @@ impl Default for ForcePressState {
             entry: None,
             won: false,
             sensor: false,
+            first_reading: None,
             position: Offset::ZERO,
             global_position: Offset::ZERO,
             pressure: 0.0,
@@ -196,19 +192,20 @@ impl ForcePressState {
     /// Record one pressure sample. A non-finite sample is ignored and reported
     /// as not admitted, so the caller makes no transition from it.
     ///
-    /// A mouse is never evidence of a pressure sensor, whatever it reports:
-    /// platforms give a pressed mouse a constant (0.5 on the W3C convention,
-    /// 1.0 on Android), and only a pen or a touch surface can measure force.
+    /// A sensor is proven by a non-zero pressure different from the contact's
+    /// first one: platforms give sensor-less contacts a constant (0.5 on the
+    /// W3C convention, 1.0 on Android). A mouse is never a sensor.
     #[must_use]
     fn record_pressure(&mut self, pressure: f64, kind: Option<PointerType>) -> bool {
         if !pressure.is_finite() {
             return false;
         }
-        if kind != Some(PointerType::Mouse)
-            && pressure != SENSORLESS_ACTIVE_PRESSURE
-            && pressure != 0.0
-        {
-            self.sensor = true;
+        if kind != Some(PointerType::Mouse) && pressure != 0.0 {
+            match self.first_reading {
+                None => self.first_reading = Some(pressure),
+                Some(first) if first != pressure => self.sensor = true,
+                Some(_) => {}
+            }
         }
         self.pressure = pressure;
         true
@@ -405,9 +402,9 @@ impl ForcePressGestureRecognizer {
                 "force press callback",
             );
         }
-        if let Some(panic) = first {
-            panic.resume();
-        }
+        // Entered while the thread is already unwinding, the failure is retained
+        // rather than resumed: a second unwind would abort.
+        finish_containment(first, std::thread::panicking());
     }
 
     fn deliver(&self, notice: Notice) {
@@ -546,8 +543,9 @@ impl GestureRecognizer for ForcePressGestureRecognizer {
             Some(_) => self.handle_release(None, None),
             None => {}
         }
-        // The retired sequence's `on_end` may have disposed this recognizer.
-        if self.state.is_disposed() {
+        // The retired sequence's `on_end` may have disposed this recognizer or
+        // admitted a contact of its own; either way this admission is void.
+        if self.state.is_disposed() || self.gesture_state.lock().pointer.is_some() {
             return;
         }
         self.state

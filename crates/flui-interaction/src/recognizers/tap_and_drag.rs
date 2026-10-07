@@ -509,9 +509,9 @@ impl TapAndDragGestureRecognizer {
                 "tap and drag callback",
             );
         }
-        if let Some(panic) = first {
-            panic.resume();
-        }
+        // Entered while the thread is already unwinding, the failure is retained
+        // rather than resumed: a second unwind would abort.
+        finish_containment(first, std::thread::panicking());
     }
 
     fn deliver(&self, notice: Notice) {
@@ -718,8 +718,10 @@ impl GestureRecognizer for TapAndDragGestureRecognizer {
                 .map_or(ArenaStep::None, ArenaStep::Withdraw);
             self.clear_base_tracking();
             self.finish(step, notices);
-            // The retired sequence's `on_cancel` may have disposed this recognizer.
-            if self.state.is_disposed() {
+            // The retired sequence's `on_cancel` may have disposed this
+            // recognizer or admitted a contact of its own; either way this
+            // admission is void.
+            if self.state.is_disposed() || self.gesture_state.lock().phase != Phase::Ready {
                 return;
             }
         }
