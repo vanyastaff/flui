@@ -21,6 +21,13 @@ The probe keeps no browser preference changes: reset device emulation and close
 the page after collecting its results. This manual browser contract is not
 claimed as an automatically executed CI lane.
 
+The wheel-unit button sends DOM Pixels, Lines and Pages deltas with fractional
+double precision and checks the public event's exact units, values and modifiers.
+The keyboard button checks actual DOM delivery of named keys, Cyrillic text,
+physical codes, locations, repeat/composition and normalized releases. These
+constructor-driven probes establish translation behavior, not physical keyboard
+layout or wheel hardware fidelity.
+
 The cancellation and capture-loss buttons check one terminal cancellation and
 the next healthy sequence. The fractional-position button checks genuine DOM
 pointer and wheel events at fractional CSS coordinates. The trusted capture
