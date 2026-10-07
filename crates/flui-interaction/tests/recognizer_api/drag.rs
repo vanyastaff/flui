@@ -184,7 +184,7 @@ fn continuation_cancel_commits_before_reentry_and_retains_the_first_failure() {
                 }
             }).build();
         *slot.borrow_mut() = Rc::downgrade(&drag);
-        for id in [2, 3] {
+        for id in [2_u64, 3] {
             let down = make_down_event_for_id(PointerId::try_from(id).expect("nonzero contact"), Offset::ZERO, PointerKind::Touch).expect("finite touch");
             drag.add_pointer(PointerDispatch::at_root(&down));
             run_pointer_lifecycle(&arena, &down);
@@ -215,7 +215,7 @@ fn continuation_does_not_take_a_rejected_or_other_device_contact() {
         let drag = DragGestureRecognizer::builder(arena.clone(), DragAxis::Horizontal)
             .pointer_strategy(DragPointerStrategy::ContinueWithRemaining)
             .on_end(move |_| e.set(e.get() + 1)).build();
-        for (id, device) in [(2, Some(1)), (3, secondary_device)] {
+        for (id, device) in [(2_u64, Some(1)), (3, secondary_device)] {
             let mut down = make_down_event_for_id(PointerId::try_from(id).expect("nonzero contact"), Offset::ZERO, PointerKind::Touch).expect("finite touch");
             if let PointerEvent::Down(press) = &mut down && let Some(device) = device {
                 press.pointer = press.pointer.with_device(DeviceId::try_from(device).expect("nonzero device"));
@@ -237,7 +237,7 @@ fn continuation_does_not_take_a_rejected_or_other_device_contact() {
     let drag = DragGestureRecognizer::builder(arena.clone(), DragAxis::Horizontal)
         .pointer_strategy(DragPointerStrategy::ContinueWithRemaining)
         .on_end(move |_| e.set(e.get() + 1)).build();
-    let send_down = |id| {
+    let send_down = |id: u64| {
         let down = make_down_event_for_id(PointerId::try_from(id).expect("nonzero contact"), Offset::ZERO, PointerKind::Touch).expect("finite touch");
         drag.add_pointer(PointerDispatch::at_root(&down));
         run_pointer_lifecycle(&arena, &down);
