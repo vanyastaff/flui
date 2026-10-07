@@ -1,0 +1,320 @@
+error[E0277]: `Rc<RefCell<tap::TapCallbacks>>` cannot be sent between threads safely
+ --> tests/compile_fail/recognizer_stays_on_its_thread.rs:6:19
+  |
+6 |     assert_send::<TapGestureRecognizer>();
+  |                   ^^^^^^^^^^^^^^^^^^^^ `Rc<RefCell<tap::TapCallbacks>>` cannot be sent between threads safely
+  |
+  = help: within `TapGestureRecognizer`, the trait `Send` is not implemented for `Rc<RefCell<tap::TapCallbacks>>`
+note: required because it appears within the type `TapGestureRecognizer`
+ --> src/recognizers/tap.rs
+  |
+  | pub struct TapGestureRecognizer {
+  |            ^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `assert_send`
+ --> tests/compile_fail/recognizer_stays_on_its_thread.rs:3:19
+  |
+3 | fn assert_send<T: Send>() {}
+  |                   ^^^^ required by this bound in `assert_send`
+
+error[E0277]: `Rc<RefCell<tap::TapSequences>>` cannot be sent between threads safely
+ --> tests/compile_fail/recognizer_stays_on_its_thread.rs:6:19
+  |
+6 |     assert_send::<TapGestureRecognizer>();
+  |                   ^^^^^^^^^^^^^^^^^^^^ `Rc<RefCell<tap::TapSequences>>` cannot be sent between threads safely
+  |
+  = help: within `TapGestureRecognizer`, the trait `Send` is not implemented for `Rc<RefCell<tap::TapSequences>>`
+note: required because it appears within the type `TapGestureRecognizer`
+ --> src/recognizers/tap.rs
+  |
+  | pub struct TapGestureRecognizer {
+  |            ^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `assert_send`
+ --> tests/compile_fail/recognizer_stays_on_its_thread.rs:3:19
+  |
+3 | fn assert_send<T: Send>() {}
+  |                   ^^^^ required by this bound in `assert_send`
+
+error[E0277]: `Rc<std::cell::Cell<bool>>` cannot be sent between threads safely
+ --> tests/compile_fail/recognizer_stays_on_its_thread.rs:6:19
+  |
+6 |     assert_send::<TapGestureRecognizer>();
+  |                   ^^^^^^^^^^^^^^^^^^^^ `Rc<std::cell::Cell<bool>>` cannot be sent between threads safely
+  |
+  = help: within `TapGestureRecognizer`, the trait `Send` is not implemented for `Rc<std::cell::Cell<bool>>`
+note: required because it appears within the type `GestureArena`
+ --> src/arena/mod.rs
+  |
+  | pub struct GestureArena {
+  |            ^^^^^^^^^^^^
+note: required because it appears within the type `RecognizerBase`
+ --> src/recognizers/recognizer.rs
+  |
+  | pub struct RecognizerBase {
+  |            ^^^^^^^^^^^^^^
+note: required because it appears within the type `TapGestureRecognizer`
+ --> src/recognizers/tap.rs
+  |
+  | pub struct TapGestureRecognizer {
+  |            ^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `assert_send`
+ --> tests/compile_fail/recognizer_stays_on_its_thread.rs:3:19
+  |
+3 | fn assert_send<T: Send>() {}
+  |                   ^^^^ required by this bound in `assert_send`
+
+error[E0277]: `Rc<RefCell<BTreeMap<PointerId, Arc<arena::ArenaSlot>>>>` cannot be sent between threads safely
+ --> tests/compile_fail/recognizer_stays_on_its_thread.rs:6:19
+  |
+6 |     assert_send::<TapGestureRecognizer>();
+  |                   ^^^^^^^^^^^^^^^^^^^^ `Rc<RefCell<BTreeMap<PointerId, Arc<arena::ArenaSlot>>>>` cannot be sent between threads safely
+  |
+  = help: within `TapGestureRecognizer`, the trait `Send` is not implemented for `Rc<RefCell<BTreeMap<PointerId, Arc<arena::ArenaSlot>>>>`
+note: required because it appears within the type `GestureArena`
+ --> src/arena/mod.rs
+  |
+  | pub struct GestureArena {
+  |            ^^^^^^^^^^^^
+note: required because it appears within the type `RecognizerBase`
+ --> src/recognizers/recognizer.rs
+  |
+  | pub struct RecognizerBase {
+  |            ^^^^^^^^^^^^^^
+note: required because it appears within the type `TapGestureRecognizer`
+ --> src/recognizers/tap.rs
+  |
+  | pub struct TapGestureRecognizer {
+  |            ^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `assert_send`
+ --> tests/compile_fail/recognizer_stays_on_its_thread.rs:3:19
+  |
+3 | fn assert_send<T: Send>() {}
+  |                   ^^^^ required by this bound in `assert_send`
+
+error[E0277]: `Rc<RefCell<BTreeMap<arena::ArenaGeneration, Arc<arena::ArenaSlot>>>>` cannot be sent between threads safely
+ --> tests/compile_fail/recognizer_stays_on_its_thread.rs:6:19
+  |
+6 |     assert_send::<TapGestureRecognizer>();
+  |                   ^^^^^^^^^^^^^^^^^^^^ `Rc<RefCell<BTreeMap<arena::ArenaGeneration, Arc<arena::ArenaSlot>>>>` cannot be sent between threads safely
+  |
+  = help: within `TapGestureRecognizer`, the trait `Send` is not implemented for `Rc<RefCell<BTreeMap<arena::ArenaGeneration, Arc<arena::ArenaSlot>>>>`
+note: required because it appears within the type `GestureArena`
+ --> src/arena/mod.rs
+  |
+  | pub struct GestureArena {
+  |            ^^^^^^^^^^^^
+note: required because it appears within the type `RecognizerBase`
+ --> src/recognizers/recognizer.rs
+  |
+  | pub struct RecognizerBase {
+  |            ^^^^^^^^^^^^^^
+note: required because it appears within the type `TapGestureRecognizer`
+ --> src/recognizers/tap.rs
+  |
+  | pub struct TapGestureRecognizer {
+  |            ^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `assert_send`
+ --> tests/compile_fail/recognizer_stays_on_its_thread.rs:3:19
+  |
+3 | fn assert_send<T: Send>() {}
+  |                   ^^^^ required by this bound in `assert_send`
+
+error[E0277]: `Rc<RefCell<VecDeque<arena::DeferredResolution>>>` cannot be sent between threads safely
+ --> tests/compile_fail/recognizer_stays_on_its_thread.rs:6:19
+  |
+6 |     assert_send::<TapGestureRecognizer>();
+  |                   ^^^^^^^^^^^^^^^^^^^^ `Rc<RefCell<VecDeque<arena::DeferredResolution>>>` cannot be sent between threads safely
+  |
+  = help: within `TapGestureRecognizer`, the trait `Send` is not implemented for `Rc<RefCell<VecDeque<arena::DeferredResolution>>>`
+note: required because it appears within the type `GestureArena`
+ --> src/arena/mod.rs
+  |
+  | pub struct GestureArena {
+  |            ^^^^^^^^^^^^
+note: required because it appears within the type `RecognizerBase`
+ --> src/recognizers/recognizer.rs
+  |
+  | pub struct RecognizerBase {
+  |            ^^^^^^^^^^^^^^
+note: required because it appears within the type `TapGestureRecognizer`
+ --> src/recognizers/tap.rs
+  |
+  | pub struct TapGestureRecognizer {
+  |            ^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `assert_send`
+ --> tests/compile_fail/recognizer_stays_on_its_thread.rs:3:19
+  |
+3 | fn assert_send<T: Send>() {}
+  |                   ^^^^ required by this bound in `assert_send`
+
+error[E0277]: `Rc<arena::DeadlineRegistry>` cannot be sent between threads safely
+ --> tests/compile_fail/recognizer_stays_on_its_thread.rs:6:19
+  |
+6 |     assert_send::<TapGestureRecognizer>();
+  |                   ^^^^^^^^^^^^^^^^^^^^ `Rc<arena::DeadlineRegistry>` cannot be sent between threads safely
+  |
+  = help: within `TapGestureRecognizer`, the trait `Send` is not implemented for `Rc<arena::DeadlineRegistry>`
+note: required because it appears within the type `GestureArena`
+ --> src/arena/mod.rs
+  |
+  | pub struct GestureArena {
+  |            ^^^^^^^^^^^^
+note: required because it appears within the type `RecognizerBase`
+ --> src/recognizers/recognizer.rs
+  |
+  | pub struct RecognizerBase {
+  |            ^^^^^^^^^^^^^^
+note: required because it appears within the type `TapGestureRecognizer`
+ --> src/recognizers/tap.rs
+  |
+  | pub struct TapGestureRecognizer {
+  |            ^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `assert_send`
+ --> tests/compile_fail/recognizer_stays_on_its_thread.rs:3:19
+  |
+3 | fn assert_send<T: Send>() {}
+  |                   ^^^^ required by this bound in `assert_send`
+
+error[E0277]: `Rc<std::cell::Cell<u64>>` cannot be sent between threads safely
+ --> tests/compile_fail/recognizer_stays_on_its_thread.rs:6:19
+  |
+6 |     assert_send::<TapGestureRecognizer>();
+  |                   ^^^^^^^^^^^^^^^^^^^^ `Rc<std::cell::Cell<u64>>` cannot be sent between threads safely
+  |
+  = help: within `TapGestureRecognizer`, the trait `Send` is not implemented for `Rc<std::cell::Cell<u64>>`
+note: required because it appears within the type `GestureArena`
+ --> src/arena/mod.rs
+  |
+  | pub struct GestureArena {
+  |            ^^^^^^^^^^^^
+note: required because it appears within the type `RecognizerBase`
+ --> src/recognizers/recognizer.rs
+  |
+  | pub struct RecognizerBase {
+  |            ^^^^^^^^^^^^^^
+note: required because it appears within the type `TapGestureRecognizer`
+ --> src/recognizers/tap.rs
+  |
+  | pub struct TapGestureRecognizer {
+  |            ^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `assert_send`
+ --> tests/compile_fail/recognizer_stays_on_its_thread.rs:3:19
+  |
+3 | fn assert_send<T: Send>() {}
+  |                   ^^^^ required by this bound in `assert_send`
+
+error[E0277]: `(dyn GestureArenaMember + 'static)` cannot be shared between threads safely
+ --> tests/compile_fail/recognizer_stays_on_its_thread.rs:6:19
+  |
+6 |     assert_send::<TapGestureRecognizer>();
+  |                   ^^^^^^^^^^^^^^^^^^^^ `(dyn GestureArenaMember + 'static)` cannot be shared between threads safely
+  |
+  = help: the trait `Sync` is not implemented for `(dyn GestureArenaMember + 'static)`
+  = note: required for `std::sync::Weak<(dyn GestureArenaMember + 'static)>` to implement `Send`
+note: required because it appears within the type `GestureArenaEntry`
+ --> src/arena/mod.rs
+  |
+  | pub struct GestureArenaEntry {
+  |            ^^^^^^^^^^^^^^^^^
+note: required because it appears within the type `Option<GestureArenaEntry>`
+ --> $RUST/core/src/option.rs
+  |
+  | pub enum Option<T> {
+  |          ^^^^^^
+  = note: required for `lock_api::mutex::Mutex<parking_lot::raw_mutex::RawMutex, Option<GestureArenaEntry>>` to implement `Sync`
+  = note: 1 redundant requirement hidden
+  = note: required for `Arc<lock_api::mutex::Mutex<parking_lot::raw_mutex::RawMutex, Option<GestureArenaEntry>>>` to implement `Send`
+note: required because it appears within the type `RecognizerBase`
+ --> src/recognizers/recognizer.rs
+  |
+  | pub struct RecognizerBase {
+  |            ^^^^^^^^^^^^^^
+note: required because it appears within the type `TapGestureRecognizer`
+ --> src/recognizers/tap.rs
+  |
+  | pub struct TapGestureRecognizer {
+  |            ^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `assert_send`
+ --> tests/compile_fail/recognizer_stays_on_its_thread.rs:3:19
+  |
+3 | fn assert_send<T: Send>() {}
+  |                   ^^^^ required by this bound in `assert_send`
+
+error[E0277]: `(dyn GestureArenaMember + 'static)` cannot be sent between threads safely
+ --> tests/compile_fail/recognizer_stays_on_its_thread.rs:6:19
+  |
+6 |     assert_send::<TapGestureRecognizer>();
+  |                   ^^^^^^^^^^^^^^^^^^^^ `(dyn GestureArenaMember + 'static)` cannot be sent between threads safely
+  |
+  = help: the trait `Send` is not implemented for `(dyn GestureArenaMember + 'static)`
+  = note: required for `std::sync::Weak<(dyn GestureArenaMember + 'static)>` to implement `Send`
+note: required because it appears within the type `GestureArenaEntry`
+ --> src/arena/mod.rs
+  |
+  | pub struct GestureArenaEntry {
+  |            ^^^^^^^^^^^^^^^^^
+note: required because it appears within the type `Option<GestureArenaEntry>`
+ --> $RUST/core/src/option.rs
+  |
+  | pub enum Option<T> {
+  |          ^^^^^^
+  = note: required for `lock_api::mutex::Mutex<parking_lot::raw_mutex::RawMutex, Option<GestureArenaEntry>>` to implement `Sync`
+  = note: 1 redundant requirement hidden
+  = note: required for `Arc<lock_api::mutex::Mutex<parking_lot::raw_mutex::RawMutex, Option<GestureArenaEntry>>>` to implement `Send`
+note: required because it appears within the type `RecognizerBase`
+ --> src/recognizers/recognizer.rs
+  |
+  | pub struct RecognizerBase {
+  |            ^^^^^^^^^^^^^^
+note: required because it appears within the type `TapGestureRecognizer`
+ --> src/recognizers/tap.rs
+  |
+  | pub struct TapGestureRecognizer {
+  |            ^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `assert_send`
+ --> tests/compile_fail/recognizer_stays_on_its_thread.rs:3:19
+  |
+3 | fn assert_send<T: Send>() {}
+  |                   ^^^^ required by this bound in `assert_send`
+
+error[E0277]: `RefCell<arena::ArenaEntryData>` cannot be shared between threads safely
+ --> tests/compile_fail/recognizer_stays_on_its_thread.rs:6:19
+  |
+6 |     assert_send::<TapGestureRecognizer>();
+  |                   ^^^^^^^^^^^^^^^^^^^^ `RefCell<arena::ArenaEntryData>` cannot be shared between threads safely
+  |
+  = help: within `arena::ArenaSlot`, the trait `Sync` is not implemented for `RefCell<arena::ArenaEntryData>`
+  = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::RwLock` instead
+note: required because it appears within the type `arena::ArenaSlot`
+ --> src/arena/mod.rs
+  |
+  | struct ArenaSlot {
+  |        ^^^^^^^^^
+  = note: required for `std::sync::Weak<arena::ArenaSlot>` to implement `Send`
+note: required because it appears within the type `GestureArenaEntry`
+ --> src/arena/mod.rs
+  |
+  | pub struct GestureArenaEntry {
+  |            ^^^^^^^^^^^^^^^^^
+note: required because it appears within the type `Option<GestureArenaEntry>`
+ --> $RUST/core/src/option.rs
+  |
+  | pub enum Option<T> {
+  |          ^^^^^^
+  = note: required for `lock_api::mutex::Mutex<parking_lot::raw_mutex::RawMutex, Option<GestureArenaEntry>>` to implement `Sync`
+  = note: 1 redundant requirement hidden
+  = note: required for `Arc<lock_api::mutex::Mutex<parking_lot::raw_mutex::RawMutex, Option<GestureArenaEntry>>>` to implement `Send`
+note: required because it appears within the type `RecognizerBase`
+ --> src/recognizers/recognizer.rs
+  |
+  | pub struct RecognizerBase {
+  |            ^^^^^^^^^^^^^^
+note: required because it appears within the type `TapGestureRecognizer`
+ --> src/recognizers/tap.rs
+  |
+  | pub struct TapGestureRecognizer {
+  |            ^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `assert_send`
+ --> tests/compile_fail/recognizer_stays_on_its_thread.rs:3:19
+  |
+3 | fn assert_send<T: Send>() {}
+  |                   ^^^^ required by this bound in `assert_send`
