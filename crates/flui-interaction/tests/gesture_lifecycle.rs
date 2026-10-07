@@ -973,6 +973,10 @@ fn gesture_lifecycle_matrix() {
             nonmember_resolution_candidate_retires_after_detachment,
         ),
         (
+            "arena_retirement_preserves_the_first_failure_and_recovers",
+            arena_retirement_preserves_the_first_failure_and_recovers,
+        ),
+        (
             "ignored_accept_candidate_drops_outside_the_slot_lock",
             ignored_accept_candidate_drops_outside_the_slot_lock,
         ),
@@ -1589,4 +1593,90 @@ fn nonmember_resolution_candidate_retires_after_detachment() {
     finished.recv_timeout(Duration::from_secs(5)).expect(
         "resolution candidate must retire after the slot borrow and map entry are released",
     );
+}
+
+struct RetirementMember {
+    dropped: Rc<Cell<u32>>,
+    rejected: Rc<Cell<u32>>,
+    panic_on_reject: bool,
+    panic_on_drop: bool,
+}
+
+impl CustomGestureRecognizer for RetirementMember {
+    fn on_arena_accept(&self, _: PointerId) {}
+
+    fn on_arena_reject(&self, _: PointerId) {
+        self.rejected.set(self.rejected.get() + 1);
+        assert!(!self.panic_on_reject, "member rejection failed");
+    }
+}
+
+impl Drop for RetirementMember {
+    fn drop(&mut self) {
+        self.dropped.set(self.dropped.get() + 1);
+        assert!(!self.panic_on_drop, "candidate retirement failed");
+    }
+}
+
+fn arena_retirement_preserves_the_first_failure_and_recovers() {
+    for (candidate_panics, rejection_panics, expected_failure) in [
+        (true, false, "candidate retirement failed"),
+        (false, true, "member rejection failed"),
+        (true, true, "candidate retirement failed"),
+    ] {
+        let arena = GestureArena::new();
+        let pointer = id(2);
+        let retired = counter();
+        let rejected = counter();
+        #[expect(
+            clippy::arc_with_non_send_sync,
+            reason = "the public arena member API is Arc-backed and owner-local"
+        )]
+        let member = Arc::new(RetirementMember {
+            dropped: Rc::clone(&retired),
+            rejected: Rc::clone(&rejected),
+            panic_on_reject: rejection_panics,
+            panic_on_drop: false,
+        });
+        arena.add(pointer, member);
+        let candidate_retired = counter();
+        #[expect(
+            clippy::arc_with_non_send_sync,
+            reason = "the public arena member API is Arc-backed and owner-local"
+        )]
+        let candidate = Arc::new(RetirementMember {
+            dropped: Rc::clone(&candidate_retired),
+            rejected: counter(),
+            panic_on_reject: false,
+            panic_on_drop: candidate_panics,
+        });
+
+        let failure = catch_unwind(AssertUnwindSafe(|| {
+            arena.resolve(pointer, Some(candidate));
+        }))
+        .expect_err("a failing candidate or rejection must propagate");
+        assert_eq!(
+            flui_foundation::panic::payload_text(failure.as_ref()),
+            Some(expected_failure),
+        );
+        assert_eq!(candidate_retired.get(), 1);
+        assert_eq!(
+            rejected.get(),
+            1,
+            "accepted notifications remain deliverable"
+        );
+        assert_eq!(
+            retired.get(),
+            0,
+            "member ownership is retained after failure"
+        );
+        assert!(arena.is_empty(), "failed contest was detached");
+
+        let fresh = Arc::new(Verdicts::default());
+        arena.add(pointer, fresh.clone());
+        arena.close(pointer);
+        assert_eq!(arena.drain_deferred_resolutions(), 1);
+        assert_eq!(fresh.get(), (1, 0));
+        assert!(arena.is_empty());
+    }
 }
