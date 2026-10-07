@@ -60,7 +60,10 @@ impl ArenaMembership {
         &self.arena
     }
 
-    fn register_deadline(&self, pointer: PointerId) -> Option<GestureDeadlineRegistration> {
+    pub(crate) fn register_deadline(
+        &self,
+        pointer: PointerId,
+    ) -> Option<GestureDeadlineRegistration> {
         let member = self.this.upgrade()?;
         Some(self.arena.register_deadline_member(pointer, &member))
     }
