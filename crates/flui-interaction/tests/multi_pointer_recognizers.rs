@@ -131,7 +131,7 @@ impl Rig {
             .expect("valid fixture sample");
         if let PointerEvent::Down(data) = &mut event {
             data.sample.pressure = Some(
-                flui_platform_api::pointer::Pressure::try_new(f64::from(pressure))
+                flui_platform_api::pointer::Pressure::try_new(pressure)
                     .expect("valid pressure fixture"),
             );
         }
@@ -148,7 +148,7 @@ impl Rig {
         if let PointerEvent::Move(data) = &mut event {
             {
                 let sample = data.current().with_pressure(
-                    flui_platform_api::pointer::Pressure::try_new(f64::from(pressure))
+                    flui_platform_api::pointer::Pressure::try_new(pressure)
                         .expect("valid pressure fixture"),
                 );
                 *data =
@@ -626,12 +626,35 @@ fn press_on(rig: &Rig) -> (Rc<ForcePressGestureRecognizer>, Rc<PressLog>) {
 
 /// A pen with a real sensor pressing at `pressures`, in place.
 fn press(rig: &Rig, pointer: u64, pressures: &[f32]) {
-    rig.down_with(pointer, 100.0, 100.0, PointerKind::Pen, 0.2);
+    rig.down_with(
+        pointer,
+        100.0,
+        100.0,
+        PointerKind::Pen {
+            tool: flui_platform_api::pointer::PenTool::Tip,
+        },
+        0.2,
+    );
     rig.frame();
     for &pressure in pressures {
-        rig.move_with(pointer, 100.0, 100.0, PointerKind::Pen, pressure);
+        rig.move_with(
+            pointer,
+            100.0,
+            100.0,
+            PointerKind::Pen {
+                tool: flui_platform_api::pointer::PenTool::Tip,
+            },
+            pressure,
+        );
     }
-    rig.up_with(pointer, 100.0, 100.0, PointerKind::Pen);
+    rig.up_with(
+        pointer,
+        100.0,
+        100.0,
+        PointerKind::Pen {
+            tool: flui_platform_api::pointer::PenTool::Tip,
+        },
+    );
 }
 
 fn sensorless_contacts_never_force_press() {
@@ -681,12 +704,35 @@ fn force_press_start_panic_then_next_press() {
     let (press_rec, log) = press_on(&rig);
     rig.attach(&press_rec, None);
     log.panic_start.set(true);
-    rig.down_with(1, 100.0, 100.0, PointerKind::Pen, 0.2);
+    rig.down_with(
+        1,
+        100.0,
+        100.0,
+        PointerKind::Pen {
+            tool: flui_platform_api::pointer::PenTool::Tip,
+        },
+        0.2,
+    );
     rig.frame();
     expect_panic("on_start", || {
-        rig.move_with(1, 100.0, 100.0, PointerKind::Pen, 0.7);
+        rig.move_with(
+            1,
+            100.0,
+            100.0,
+            PointerKind::Pen {
+                tool: flui_platform_api::pointer::PenTool::Tip,
+            },
+            0.7,
+        );
     });
-    rig.up_with(1, 100.0, 100.0, PointerKind::Pen);
+    rig.up_with(
+        1,
+        100.0,
+        100.0,
+        PointerKind::Pen {
+            tool: flui_platform_api::pointer::PenTool::Tip,
+        },
+    );
     press(&rig, 2, &[0.7]);
     assert_eq!(log.starts.get(), 2);
     assert_eq!(log.ends.get(), 2);
@@ -697,13 +743,36 @@ fn force_press_start_panic_still_delivers_peak_and_end() {
     let (press_rec, log) = press_on(&rig);
     rig.attach(&press_rec, None);
     log.panic_start.set(true);
-    rig.down_with(1, 100.0, 100.0, PointerKind::Pen, 0.2);
+    rig.down_with(
+        1,
+        100.0,
+        100.0,
+        PointerKind::Pen {
+            tool: flui_platform_api::pointer::PenTool::Tip,
+        },
+        0.2,
+    );
     rig.frame(); // the lone member wins by default
     // Start and peak are one transition; the start's panic must not drop the peak.
     expect_panic("on_start", || {
-        rig.move_with(1, 100.0, 100.0, PointerKind::Pen, 0.9);
+        rig.move_with(
+            1,
+            100.0,
+            100.0,
+            PointerKind::Pen {
+                tool: flui_platform_api::pointer::PenTool::Tip,
+            },
+            0.9,
+        );
     });
-    rig.up_with(1, 100.0, 100.0, PointerKind::Pen);
+    rig.up_with(
+        1,
+        100.0,
+        100.0,
+        PointerKind::Pen {
+            tool: flui_platform_api::pointer::PenTool::Tip,
+        },
+    );
     assert_eq!(
         (log.starts.get(), log.peaks.get(), log.ends.get()),
         (1, 1, 1)
@@ -714,9 +783,25 @@ fn force_press_cancel_ends_once() {
     let rig = Rig::new();
     let (press_rec, log) = press_on(&rig);
     rig.attach(&press_rec, None);
-    rig.down_with(1, 100.0, 100.0, PointerKind::Pen, 0.2);
+    rig.down_with(
+        1,
+        100.0,
+        100.0,
+        PointerKind::Pen {
+            tool: flui_platform_api::pointer::PenTool::Tip,
+        },
+        0.2,
+    );
     rig.frame();
-    rig.move_with(1, 100.0, 100.0, PointerKind::Pen, 0.7);
+    rig.move_with(
+        1,
+        100.0,
+        100.0,
+        PointerKind::Pen {
+            tool: flui_platform_api::pointer::PenTool::Tip,
+        },
+        0.7,
+    );
     rig.cancel(1);
     assert_eq!((log.starts.get(), log.ends.get()), (1, 1));
     press(&rig, 2, &[0.7]);
@@ -737,8 +822,14 @@ fn force_press_released_from_its_start_publishes_no_peak() {
                     .expect("valid fixture sample");
                 recognizer.handle_event(PointerDispatch::at_root(&up));
                 let at = Offset::new(100.0, 100.0);
-                let down = make_down_event_for_id(id(1), at, PointerKind::Pen)
-                    .expect("valid fixture sample");
+                let down = make_down_event_for_id(
+                    id(1),
+                    at,
+                    PointerKind::Pen {
+                        tool: flui_platform_api::pointer::PenTool::Tip,
+                    },
+                )
+                .expect("valid fixture sample");
                 recognizer.add_pointer(PointerDispatch::at_root(&down));
             }
         })
@@ -747,10 +838,26 @@ fn force_press_released_from_its_start_publishes_no_peak() {
         .build();
     rig.attach(&recognizer, None);
     *slot.borrow_mut() = Some(Rc::clone(&recognizer));
-    rig.down_with(1, 100.0, 100.0, PointerKind::Pen, 0.2);
+    rig.down_with(
+        1,
+        100.0,
+        100.0,
+        PointerKind::Pen {
+            tool: flui_platform_api::pointer::PenTool::Tip,
+        },
+        0.2,
+    );
     rig.frame(); // the lone member wins by default
     // Start and peak in one sample; the start retires the press.
-    rig.move_with(1, 100.0, 100.0, PointerKind::Pen, 0.9);
+    rig.move_with(
+        1,
+        100.0,
+        100.0,
+        PointerKind::Pen {
+            tool: flui_platform_api::pointer::PenTool::Tip,
+        },
+        0.9,
+    );
     assert_eq!(
         (log.starts.get(), log.peaks.get(), log.ends.get()),
         (1, 0, 1),
@@ -1301,7 +1408,7 @@ fn eager_cancel_in_a_self_driven_arena_awards_no_rival() {
 /// publish an update or peak from a stale pressure paired with a new position.
 fn force_press_ignores_a_non_finite_pressure_sample() {
     assert!(
-        flui_platform_api::pointer::Pressure::try_new(f64::NAN).is_err(),
+        flui_platform_api::pointer::Pressure::try_new(f32::NAN).is_err(),
         "the checked sensor boundary refuses NaN before dispatch"
     );
     let updates_after = |pressures: &[f32]| {
@@ -1435,7 +1542,13 @@ fn a_touch_at_constant_full_pressure_never_force_presses() {
 }
 
 fn declared_constant_pressure_sensor_force_presses() {
-    for kind in [PointerKind::Mouse, PointerKind::Touch, PointerKind::Pen] {
+    for kind in [
+        PointerKind::Mouse,
+        PointerKind::Touch,
+        PointerKind::Pen {
+            tool: flui_platform_api::pointer::PenTool::Tip,
+        },
+    ] {
         let rig = Rig::new();
         let (recognizer, log) = press_on(&rig);
         rig.attach(&recognizer, None);
