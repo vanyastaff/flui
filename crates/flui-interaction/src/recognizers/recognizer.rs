@@ -184,6 +184,21 @@ pub(crate) fn finish_containment(first: Option<RoutePanic>, incoming_failure: bo
     }
 }
 
+/// Give up `entry` after its contact was cancelled.
+///
+/// In a self-driven arena the recognizer closes the generation itself, and a
+/// cancelled contact has no winner: the generation is abandoned rather than
+/// swept, since a sweep awards it to the first remaining member as a pointer
+/// up does. In a binding-driven arena the entry is rejected; the binding
+/// abandons the sequence on the cancel.
+pub(crate) fn withdraw_cancelled(entry: &GestureArenaEntry, arena: &GestureArena) {
+    if arena.sweep_model() == crate::arena::SweepModel::SelfDriven {
+        entry.abandon();
+    } else {
+        entry.resolve(GestureDisposition::Rejected);
+    }
+}
+
 /// Run `before` (the recognizer's own state commit), then the user callback.
 ///
 /// The callback runs only when `before` completed. Its capture is retired
