@@ -217,6 +217,15 @@ pub(crate) fn gradient_domains_keep_zero_radii_and_signed_angles() {
 }
 
 pub(crate) fn radial_overshoot_refuses_coincident_nonzero_circles() {
+    for focal in [None, Some(Alignment::CENTER)] {
+        let mut coincident = RadialGradient::circular(vec![Color::RED, Color::BLUE]);
+        coincident.radius = 1.0;
+        coincident.focal_radius = Some(1.0);
+        coincident.focal = focal;
+        assert!(RadialGradient::lerp(&coincident, &coincident, 0.5).is_none());
+        let gradient = Gradient::Radial(coincident);
+        assert!(Gradient::lerp(&gradient, &gradient, 0.5).is_none());
+    }
     let mut a = RadialGradient::circular(vec![Color::RED, Color::BLUE]);
     a.radius = 1.0;
     a.focal_radius = Some(0.0);

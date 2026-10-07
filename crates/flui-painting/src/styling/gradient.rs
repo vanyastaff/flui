@@ -344,17 +344,8 @@ impl RadialGradient {
         {
             return None;
         }
-        // Equal gradients short-circuit to `a`.
-        if a == b {
-            return Some(a.clone());
-        }
         let center = lerp_alignment(a.center, b.center, t)?;
         let radius = lerp_radius(a.radius, b.radius, t)?;
-        let (colors, stops) = interpolate_colors_and_stops(
-            (&a.colors, a.stops.as_deref()),
-            (&b.colors, b.stops.as_deref()),
-            t,
-        )?;
 
         let focal = match (a.focal, b.focal) {
             (Some(a_focal), Some(b_focal)) => Some(lerp_alignment(a_focal, b_focal, t)?),
@@ -372,6 +363,15 @@ impl RadialGradient {
         {
             return None;
         }
+        // Equal gradients preserve their representation after validating geometry.
+        if a == b {
+            return Some(a.clone());
+        }
+        let (colors, stops) = interpolate_colors_and_stops(
+            (&a.colors, a.stops.as_deref()),
+            (&b.colors, b.stops.as_deref()),
+            t,
+        )?;
         Some(Self {
             center,
             radius,
