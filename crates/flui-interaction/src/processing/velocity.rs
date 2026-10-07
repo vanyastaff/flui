@@ -617,25 +617,16 @@ impl VelocityTracker {
     /// Velocity estimate. The `pixels_per_second` is the weighted sum of
     /// 2-point velocities; the `confidence` is always 1.0 (the algorithm
     /// makes no claim about fit quality); `duration` and `offset` are
-    /// computed from the newest and oldest non-null samples.
+    /// computed from the newest and oldest eligible samples.
     fn compute_weighted(&self, weights: [f64; 3]) -> Option<VelocityEstimate> {
-        let estimated_velocity = bounded(self.estimated_weighted_velocity(weights));
-        let newest = self.samples[self.index]?;
-        // Walk forward through the buffer to find the oldest non-null sample.
-        let mut oldest: Option<PointAtTime> = None;
-        for i in 1..=HISTORY_SIZE {
-            let slot = self.samples[(self.index + i) % HISTORY_SIZE];
-            if let Some(s) = slot {
-                oldest = Some(s);
-                break;
-            }
-        }
-        let oldest = oldest.expect("BUG: newest sample guarantees a nonempty buffer");
+        let (newest, oldest, eligible_samples) = self.walk_window(|_, _| {})?;
+        let estimated_velocity =
+            bounded(self.estimated_weighted_velocity(weights, eligible_samples));
 
         Some(VelocityEstimate::new(
             finite_offset(newest.position, oldest.position),
             estimated_velocity,
-            newest.time.saturating_duration_since(oldest.time),
+            time_between(newest.time, oldest.time),
             1.0,
         ))
     }
@@ -643,12 +634,19 @@ impl VelocityTracker {
     /// The raw weighted-average velocity, regardless of the
     /// "stationary for 40 ms" gate. Each two-point velocity is bounded
     /// before weighting, so the sum cannot overflow.
-    fn estimated_weighted_velocity(&self, weights: [f64; 3]) -> Offset<f64> {
-        let v = |offset: isize| {
+    fn estimated_weighted_velocity(
+        &self,
+        weights: [f64; 3],
+        eligible_samples: usize,
+    ) -> Offset<f64> {
+        let v = |offset: isize, required_samples| {
+            if eligible_samples < required_samples {
+                return Offset::ZERO;
+            }
             let (dx, dy) = self.two_sample_velocity_at_f64(offset);
             bounded(Offset::new(dx, dy))
         };
-        let (a, b, c) = (v(-2), v(-1), v(0));
+        let (a, b, c) = (v(-2, 4), v(-1, 3), v(0, 2));
         let dx = a.dx * weights[0] + b.dx * weights[1] + c.dx * weights[2];
         let dy = a.dy * weights[0] + b.dy * weights[1] + c.dy * weights[2];
         Offset::new(dx, dy)
