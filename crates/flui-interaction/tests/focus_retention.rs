@@ -353,6 +353,113 @@ struct QueuedNodeContext {
     dropped: Rc<Cell<bool>>,
 }
 
+struct StaleFocusDiagnosticPanic;
+
+impl tracing::Subscriber for StaleFocusDiagnosticPanic {
+    fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+        metadata.target().ends_with("::focus") && *metadata.level() == tracing::Level::TRACE
+    }
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
+    fn event(&self, event: &tracing::Event<'_>) {
+        struct Message(bool);
+        impl tracing::field::Visit for Message {
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                if field.name() == "message" {
+                    self.0 = format!("{value:?}").contains("skipping a queued focus transition");
+                }
+            }
+        }
+        let mut message = Message(false);
+        event.record(&mut message);
+        if message.0 {
+            std::panic::panic_any("queued focus diagnostic failure");
+        }
+    }
+}
+
+fn queued_diagnostic_failure_keeps_the_accepted_tail_deliverable() {
+    assert_queued_diagnostic_recovery(false);
+}
+
+fn earlier_observer_failure_survives_a_queued_diagnostic_failure() {
+    assert_queued_diagnostic_recovery(true);
+}
+
+fn assert_queued_diagnostic_recovery(earlier_failure: bool) {
+    let manager = FocusManager::new();
+    let first = FocusNode::with_debug_label("first");
+    let last = FocusNode::with_debug_label("last");
+    let attachments = [
+        manager
+            .root_scope()
+            .attach_node(&first)
+            .expect("attach first"),
+        manager
+            .root_scope()
+            .attach_node(&last)
+            .expect("attach last"),
+    ];
+    let queued = FocusNode::with_debug_label("stale diagnostic target");
+    let queued_attachment = manager
+        .root_scope()
+        .attach_node(&queued)
+        .expect("attach queued");
+    let queued_owner = RefCell::new(Some((queued, queued_attachment)));
+    let last_probe = Rc::downgrade(&last);
+    let first_id = first.id();
+    manager.add_listener(Rc::new(move |_, new| {
+        if !new.as_ref().is_some_and(|node| node.id() == first_id) {
+            return;
+        }
+        let Some((queued, attachment)) = queued_owner.borrow_mut().take() else {
+            return;
+        };
+        queued.request_focus();
+        last_probe.upgrade().expect("live last").request_focus();
+        attachment.detach();
+        if earlier_failure {
+            std::panic::panic_any("earlier observer failure");
+        }
+    }));
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let edge_log = Rc::clone(&log);
+    manager.add_listener(Rc::new(move |previous, new| {
+        edge_log.borrow_mut().push((
+            previous.as_ref().map(|node| node.id()),
+            new.as_ref().map(|node| node.id()),
+        ));
+    }));
+    flui_testing::log_capture::disarm_interest_cache();
+    let payload = tracing::subscriber::with_default(StaleFocusDiagnosticPanic, || {
+        catch_unwind(AssertUnwindSafe(|| first.request_focus()))
+    })
+    .expect_err("first failure propagates after diagnostics and delivery");
+    assert_eq!(
+        payload.downcast_ref::<&str>(),
+        Some(&if earlier_failure {
+            "earlier observer failure"
+        } else {
+            "queued focus diagnostic failure"
+        })
+    );
+    let last_id = last.id();
+    assert_eq!(
+        *log.borrow(),
+        [(None, Some(first_id)), (Some(first_id), Some(last_id))]
+    );
+    assert!(last.has_primary_focus());
+    log.borrow_mut().clear();
+    manager.unfocus();
+    assert_eq!(*log.borrow(), [(Some(last_id), None)]);
+    drop(attachments);
+}
+
 impl Drop for QueuedNodeContext {
     fn drop(&mut self) {
         self.dropped.set(true);
@@ -568,6 +675,14 @@ fn assert_queued_focus_recovery(from_node: bool, competing: bool) {
 #[test]
 fn caught_callback_failures_leave_captures_with_their_owner() {
     let cases: &[(&str, fn())] = &[
+        (
+            "queued diagnostic failure and accepted tail",
+            queued_diagnostic_failure_keeps_the_accepted_tail_deliverable,
+        ),
+        (
+            "earlier observer failure and queued diagnostic",
+            earlier_observer_failure_survives_a_queued_diagnostic_failure,
+        ),
         (
             "queued retirement failure and accepted tail",
             queued_retirement_failure_keeps_the_accepted_tail_deliverable,
