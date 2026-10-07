@@ -536,9 +536,13 @@ impl ArenaEntryData {
 
     /// Accept gesture for a member.
     /// If arena is open, store as eager winner. If closed, resolve immediately.
+    ///
+    /// Only a current member can win: an accept from a member that already
+    /// withdrew (or never joined) is ignored, since resolving in its favour
+    /// would reject every remaining member and accept no one.
     #[must_use]
     fn accept(&mut self, member: Arc<dyn GestureArenaMember>) -> ArenaFollowUp {
-        if self.is_resolved {
+        if self.is_resolved || !self.members.iter().any(|entry| Arc::ptr_eq(entry, &member)) {
             return ArenaFollowUp::None;
         }
 
@@ -753,7 +757,9 @@ pub enum SweepModel {
 /// their own route (hit-test dispatch) step *first*, then call this kernel
 /// — the route-before-sweep order is load-bearing (it lets a double-tap's
 /// first-up `hold` run before the sweep, so the sweep observes the hold
-/// and defers).
+/// and defers). A held arena leaves the pointer's active slot on that sweep,
+/// so the pointer's next Down opens a fresh arena.
+///
 /// No workspace code calls it: `GestureBinding` runs the same sequence inline
 /// (`binding.rs`). Kept public for standalone arena users and tests.
 pub fn run_pointer_lifecycle(arena: &GestureArena, event: &crate::events::PointerEvent) {
@@ -1375,14 +1381,14 @@ impl GestureArena {
         let pending = {
             let mut entry = slot.data.lock();
             if entry.is_held {
+                // The pointer is up: its held generation leaves the active
+                // map, so the pointer's next Down opens a fresh arena instead
+                // of being refused by this closed one. Exact entry handles and
+                // `release(pointer)` still reach it among the retained slots.
                 entry.has_pending_sweep = true;
-                if !self
-                    .entries
-                    .get(&slot.pointer)
-                    .is_some_and(|current| Arc::ptr_eq(current.value(), slot))
-                {
-                    self.retained.insert(slot.generation, Arc::clone(slot));
-                }
+                drop(entry);
+                self.remove_current_slot(slot.pointer, slot);
+                self.retained.insert(slot.generation, Arc::clone(slot));
                 return;
             }
             entry.sweep()

@@ -1107,6 +1107,21 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     pub fn set_device_pixel_ratio(&mut self, dpr: f64) {
         if dpr.is_finite() && dpr > 0.0 {
             self.device_pixel_ratio = dpr;
+            // Assistive technology reads bounds in physical pixels: the
+            // semantics owner republishes its root under the new scale, and
+            // the root is marked so a frame with nothing else dirty still
+            // runs the semantics pass that flushes it.
+            if let Some(owner) = self.semantics_owner.as_mut() {
+                #[expect(
+                    clippy::float_cmp,
+                    reason = "an unchanged ratio is bit-identical, not approximately equal"
+                )]
+                let changed = owner.device_pixel_ratio() != dpr;
+                owner.set_device_pixel_ratio(dpr);
+                if changed && let Some(root_id) = self.root_id {
+                    self.mark_needs_semantics(root_id);
+                }
+            }
         } else {
             tracing::warn!(
                 dpr,
@@ -1603,7 +1618,9 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                     .semantics_update_callback
                     .clone()
                     .unwrap_or_else(no_op_semantics_update_callback);
-                self.semantics_owner = Some(flui_semantics::SemanticsOwner::new(callback));
+                let mut owner = flui_semantics::SemanticsOwner::new(callback);
+                owner.set_device_pixel_ratio(self.device_pixel_ratio);
+                self.semantics_owner = Some(owner);
             }
             self.notifier.read().fire_semantics_owner_created();
             if let Some(root_id) = self.root_id {
@@ -1680,7 +1697,13 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// wants to observe `flush()`'s callback invocations directly. Call
     /// this *before* `set_semantics_enabled(true)` — the enable path only
     /// lazily creates a no-op-callback owner when none is installed yet.
-    pub fn set_semantics_owner(&mut self, owner: Option<flui_semantics::SemanticsOwner>) {
+    ///
+    /// An installed owner is given this pipeline's device pixel ratio, so it
+    /// publishes physical bounds like a lazily created one.
+    pub fn set_semantics_owner(&mut self, mut owner: Option<flui_semantics::SemanticsOwner>) {
+        if let Some(owner) = owner.as_mut() {
+            owner.set_device_pixel_ratio(self.device_pixel_ratio);
+        }
         self.semantics_owner = owner;
     }
 

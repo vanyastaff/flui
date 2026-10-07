@@ -1,13 +1,15 @@
+use std::cell::Cell;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use flui_foundation::geometry::Offset;
-use flui_interaction::events::{PointerType, make_down_event};
+use flui_interaction::events::{PointerType, make_down_event, make_up_event};
 use flui_interaction::routing::{FocusNode, KeyEventResult};
 use flui_interaction::testing::input::KeyEventBuilder;
+use flui_rendering::hit_testing::HitTestBehavior;
 use flui_view::{Signal, SignalWriteExt};
-use flui_widgets::{Focus, SizedBox};
+use flui_widgets::{Focus, Listener, SizedBox};
 
 use super::*;
 
@@ -166,3 +168,155 @@ pub(crate) fn panicking_keyboard_dispatch_keeps_priority_over_a_panicking_wake()
 // `PlatformToUi::run` (the `if focused` check around the call to
 // `notify_presentation_focus_gained`), which a direct `UiRealm`-level
 // test cannot reach or mutate.
+
+/// Pointer contacts the primary's `Listener` observed, by phase.
+#[derive(Default)]
+struct ContactLog {
+    downs: Cell<usize>,
+    ups: Cell<usize>,
+    cancels: Cell<usize>,
+}
+
+/// A primary presentation with a contact-logging `Listener`, its window
+/// shown, running and focused. With `hold_input`, the first reveal is
+/// deferred: the tree is laid out and painted but not presented, so pointer
+/// input waits in the held queue until [`commit_and_count_open_routes`].
+fn listener_realm(hold_input: bool) -> (UiRealm, PresentationId, Rc<ContactLog>) {
+    let realm = UiRealm::for_test();
+    let id = realm.presentation_id();
+    let log = Rc::new(ContactLog::default());
+    let (down, up, cancel) = (Rc::clone(&log), Rc::clone(&log), Rc::clone(&log));
+    realm
+        .attach_root_widget(
+            &Listener::new()
+                .behavior(HitTestBehavior::Opaque)
+                .on_pointer_down(move |_, _| down.downs.set(down.downs.get() + 1))
+                .on_pointer_up(move |_, _| up.ups.set(up.ups.get() + 1))
+                .on_pointer_cancel(move |_, _| cancel.cancels.set(cancel.cancels.get() + 1))
+                .child(SizedBox::new(40.0, 40.0)),
+        )
+        .expect("root attaches");
+    realm.synchronize_window_snapshot(
+        id,
+        flui_platform_api::WindowExecutionState::Running,
+        true,
+        true,
+    );
+    if hold_input {
+        realm.defer_first_frame();
+    }
+    realm.enter(|realm| realm.render_frame(&mut ScriptedSink::always_presents()));
+    (realm, id, log)
+}
+
+fn press(realm: &UiRealm, id: PresentationId) {
+    realm.enter(|realm| {
+        realm.handle_input_addressed(
+            id,
+            PlatformInput::Pointer(make_down_event(Offset::new(4.0, 6.0), PointerType::Touch)),
+        );
+    });
+}
+
+fn press_held(realm: &UiRealm, id: PresentationId) {
+    press(realm, id);
+    assert!(
+        !realm
+            .presentations
+            .get(id)
+            .expect("installed")
+            .held_pointer_input()
+            .borrow()
+            .is_empty(),
+        "the Down waits for the first commit"
+    );
+}
+
+fn release(realm: &UiRealm, id: PresentationId) {
+    realm.enter(|realm| {
+        realm.handle_input_addressed(
+            id,
+            PlatformInput::Pointer(make_up_event(Offset::new(4.0, 6.0), PointerType::Touch)),
+        );
+    });
+}
+
+/// Present the deferred first frame, which replays held input, and report
+/// how many contact routes stay open afterwards.
+fn commit_and_count_open_routes(realm: &UiRealm, id: PresentationId) -> usize {
+    let presentation = realm.presentations.get(id).expect("installed");
+    realm.allow_first_frame();
+    assert!(realm.enter(|realm| realm.render_frame(&mut ScriptedSink::always_presents())));
+    assert!(
+        presentation.held_pointer_input().borrow().is_empty(),
+        "the commit replays or drops everything held"
+    );
+    presentation.gestures().active_pointer_count()
+}
+
+/// A Down held before the first commit, then a focus loss before its Up:
+/// the Up goes to whichever window took focus, so replaying the Down at
+/// commit would open a route nothing ever closes.
+pub(crate) fn focus_loss_drops_a_held_open_contact_before_it_replays() {
+    let (realm, id, log) = listener_realm(true);
+    press_held(&realm, id);
+    realm.update_window_focus(id, false);
+
+    assert_eq!(commit_and_count_open_routes(&realm, id), 0);
+    assert_eq!(
+        log.downs.get(),
+        0,
+        "the abandoned Down never reaches a widget"
+    );
+    assert_eq!(log.cancels.get(), 0);
+}
+
+/// A host pause (the app is backgrounded mid-touch) cancels the same way:
+/// the held Down is gone once the app resumes and commits.
+pub(crate) fn host_pause_drops_a_held_open_contact_before_it_replays() {
+    let (realm, id, log) = listener_realm(true);
+    press_held(&realm, id);
+    realm.update_host_lifecycle(flui_scheduler::AppLifecycleState::Paused);
+    realm.update_host_lifecycle(flui_scheduler::AppLifecycleState::Resumed);
+
+    assert_eq!(commit_and_count_open_routes(&realm, id), 0);
+    assert_eq!(
+        log.downs.get(),
+        0,
+        "the abandoned Down never reaches a widget"
+    );
+}
+
+/// A tap that completed before the window lost focus is the user's
+/// finished input: it still replays, Down and Up, at commit.
+pub(crate) fn focus_loss_keeps_a_held_complete_tap_for_replay() {
+    let (realm, id, log) = listener_realm(true);
+    press_held(&realm, id);
+    release(&realm, id);
+    realm.update_window_focus(id, false);
+
+    assert_eq!(commit_and_count_open_routes(&realm, id), 0);
+    assert_eq!((log.downs.get(), log.ups.get()), (1, 1));
+}
+
+/// A touch already routed when the host pauses the app (backgrounded
+/// mid-touch) is cancelled through its route: the widget sees a Cancel, and
+/// no route survives to the resume.
+pub(crate) fn host_pause_cancels_a_routed_contact_with_a_delivered_cancel() {
+    let (realm, id, log) = listener_realm(false);
+    press(&realm, id);
+    let gestures = || {
+        realm
+            .presentations
+            .get(id)
+            .expect("installed")
+            .gestures()
+            .active_pointer_count()
+    };
+    assert_eq!((gestures(), log.downs.get()), (1, 1));
+
+    realm.enter(|realm| realm.update_host_lifecycle(flui_scheduler::AppLifecycleState::Paused));
+
+    assert_eq!(gestures(), 0);
+    assert_eq!((log.cancels.get(), log.ups.get()), (1, 0));
+}

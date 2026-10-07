@@ -4644,6 +4644,29 @@ fn harness_render_animated_size_interpolates_over_several_frames_not_snap() {
     );
 }
 
+/// A parent that rebuilds with the same built-in curve (a fresh
+/// `ArcCurve::new(Curves::EaseIn)` each build) must not relayout or rebuild
+/// the curved animation; a different curve must.
+fn harness_render_animated_size_equal_curve_is_not_a_change() {
+    let (controller, _driver) = animated_size_controller(100);
+    let mut ro = RenderAnimatedSize::new(
+        controller,
+        ArcCurve::new(Curves::EaseIn),
+        Alignment::CENTER,
+        Clip::HardEdge,
+    );
+    assert_eq!(
+        ro.set_curve(ArcCurve::new(Curves::EaseIn)),
+        flui_rendering::RenderUpdateImpact::NONE,
+        "an equal built-in curve rebuilt by the parent is not a change",
+    );
+    assert_eq!(
+        ro.set_curve(ArcCurve::new(Curves::EaseOut)),
+        flui_rendering::RenderUpdateImpact::LAYOUT,
+        "a different curve is a change",
+    );
+}
+
 fn harness_render_animated_size_retarget_mid_flight_has_no_discontinuous_jump() {
     let (controller, driver) = animated_size_controller(100);
     let ro = RenderAnimatedSize::new(
@@ -6108,6 +6131,10 @@ fn family_animation() {
             (
                 "render_animated_size_interpolates_over_several_frames_not_snap",
                 harness_render_animated_size_interpolates_over_several_frames_not_snap,
+            ),
+            (
+                "render_animated_size_equal_curve_is_not_a_change",
+                harness_render_animated_size_equal_curve_is_not_a_change,
             ),
             (
                 "render_animated_size_retarget_mid_flight_has_no_discontinuous_jump",
