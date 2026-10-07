@@ -1209,7 +1209,7 @@ impl GestureBinding {
                 // the path's pan-zoom targets lets exactly one of them act.
                 // Without the second channel a pinch over nested consumers
                 // (two enabled `InteractiveViewer`s, say) transforms both.
-                let path = if self.hit_tests.contains_key(&pointer_id) {
+                let (path, mut first_panic) = if self.hit_tests.contains_key(&pointer_id) {
                     // Snapshot the cached path BEFORE dispatching, and only
                     // when it actually carries a claimant: a handler must
                     // never run while this map reference is alive (the same
@@ -1226,10 +1226,8 @@ impl GestureBinding {
                                 .then(|| cached.result.clone())
                         })
                     };
-                    if let Some(panic) = self.dispatch_on_cached_route(pointer_id, event) {
-                        panic.resume();
-                    }
-                    cached
+                    let delivered = self.dispatch_on_cached_route(pointer_id, event);
+                    (cached, delivered)
                 } else {
                     // `ui_events::PointerEvent::Gesture` is a complete
                     // high-level gesture tick, not an explicit
@@ -1241,20 +1239,28 @@ impl GestureBinding {
                         px_f32(gesture.state.position.y),
                     );
                     let result = hit_test_fn(position);
-                    if let Some(panic) = self.dispatch_ephemeral(event, &result) {
-                        panic.resume();
-                    }
-                    Some(result)
+                    let delivered = self.dispatch_ephemeral(event, &result);
+                    (Some(result), delivered)
                 };
                 if let Some(path) = path
                     && let Some(pan_zoom) = crate::pan_zoom::from_w3c_event(event)
                 {
-                    let claimed = path.dispatch_pan_zoom(&pan_zoom);
-                    tracing::trace!(
-                        claimed,
-                        pan_zoom_targets = path.entries_with_pan_zoom_targets().count(),
-                        "pan-zoom arbitration"
+                    let claim = RoutePanic::capture(|| {
+                        let claimed = path.dispatch_pan_zoom(&pan_zoom);
+                        tracing::trace!(
+                            claimed,
+                            pan_zoom_targets = path.entries_with_pan_zoom_targets().count(),
+                            "pan-zoom arbitration"
+                        );
+                    });
+                    RoutePanic::preserve_first(
+                        &mut first_panic,
+                        claim,
+                        "pan-zoom claim after pointer dispatch",
                     );
+                }
+                if let Some(panic) = first_panic {
+                    panic.resume();
                 }
             }
             PointerEvent::Scroll(scroll) => {
@@ -1273,16 +1279,24 @@ impl GestureBinding {
                 // happens, even mid-contact — so a wheel tick during a drag reaches the widgets under
                 // the cursor, not the route captured at Down.
                 let fresh_result = hit_test_fn(position);
-                if let Some(panic) = self.dispatch_ephemeral(event, &fresh_result) {
+                let mut first_panic = self.dispatch_ephemeral(event, &fresh_result);
+                let scroll_data = ScrollEventData::from(scroll);
+                let claim = RoutePanic::capture(|| {
+                    let claimed = fresh_result.dispatch_scroll(&scroll_data);
+                    tracing::trace!(
+                        claimed,
+                        scroll_targets = fresh_result.entries_with_scroll_targets().count(),
+                        "pointer-signal arbitration"
+                    );
+                });
+                RoutePanic::preserve_first(
+                    &mut first_panic,
+                    claim,
+                    "scroll claim after pointer dispatch",
+                );
+                if let Some(panic) = first_panic {
                     panic.resume();
                 }
-                let scroll_data = ScrollEventData::from(scroll);
-                let claimed = fresh_result.dispatch_scroll(&scroll_data);
-                tracing::trace!(
-                    claimed,
-                    scroll_targets = fresh_result.entries_with_scroll_targets().count(),
-                    "pointer-signal arbitration"
-                );
             }
         }
     }
