@@ -1219,6 +1219,13 @@ impl ServiceRegistry {
     /// alongside the exit-policy hook itself; a later install replaces the
     /// earlier one (the platform request it wraps is idempotent and
     /// coalesced, so which instance fires is immaterial).
+    #[cfg_attr(
+        all(test, target_os = "android"),
+        expect(
+            dead_code,
+            reason = "desktop exit-policy wiring tests are excluded on Android"
+        )
+    )]
     pub(crate) fn set_exit_notifier(&mut self, notifier: Arc<dyn Fn() + Send + Sync>) {
         let _prev = self.exit_notifier.lock().replace(notifier);
     }

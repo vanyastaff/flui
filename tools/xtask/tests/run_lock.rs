@@ -9,6 +9,36 @@ use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+/// Dependencies can compile a library without checking its target-specific
+/// tests, examples and benches. The public plan must select those packages
+/// directly, including packages outside the platform backend list.
+#[test]
+fn native_typecheck_selects_target_gated_workspace_targets() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .args(["cross-typecheck", "--dry-run"])
+        .env("FLUI_XTASK_LOCK_FILE", dir.path().join("heavy.lock"))
+        .output()
+        .expect("run the public cross-typecheck plan");
+    assert!(output.status.success(), "{output:?}");
+    let plan = String::from_utf8(output.stdout).expect("UTF-8 command plan");
+    for (package, target) in [
+        ("flui-engine", "aarch64-apple-darwin"),
+        ("flui-widgets", "aarch64-apple-darwin"),
+        ("flui-hot-reload", "x86_64-pc-windows-msvc"),
+    ] {
+        assert!(
+            plan.lines().any(|line| {
+                let args: Vec<_> = line.split_whitespace().collect();
+                args.windows(2).any(|pair| pair == ["-p", package])
+                    && args.windows(2).any(|pair| pair == ["--target", target])
+                    && args.contains(&"--all-targets")
+            }),
+            "missing direct all-targets coverage for {package} on {target}:\n{plan}"
+        );
+    }
+}
+
 /// Kills the child if the test fails before it exits.
 struct Reaped(Child);
 

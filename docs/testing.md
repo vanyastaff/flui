@@ -1070,7 +1070,7 @@ what it needs. One row per job in `.github/workflows/ci.yml`:
 | `miri` | `cargo xtask miri` | nightly + miri |
 | `feature-matrix` | `cargo xtask feature-matrix` (runs `facade-combos` too) | CI runs `--slice 1/3`, `2/3`, `3/3` and `combinations` in parallel; locally it is one run over the workspace |
 | `wasm-check` | `cargo xtask wasm-check`, `cargo xtask wasm-link`, `cargo xtask wasm-test` | `wasm-test` needs the `wasm-bindgen-cli` version `Cargo.lock` pins (`cargo xtask doctor full` names it) |
-| `cross-typecheck` | `cargo xtask cross-typecheck` | needs the four targets (`cargo xtask doctor full`) |
+| `cross-typecheck` | `cargo xtask cross-typecheck --target <triple>` (omit the filter for every target) | needs Rust target standard libraries and native C tools; see below |
 | `ci` | — | CI only: the single check a ruleset would require. `cargo xtask ci-verify` verifies that every gated job ran and passed, and that the jobs which skipped are exactly those the lane skips |
 | `notify-main-red` | — | CI only: opens or updates the "CI is red on main" issue after a red run on main or nightly |
 
@@ -1089,20 +1089,46 @@ every day and blocks on them.
 
 A change cannot be merged if any of these fail. If you encounter a flaky test, file a fix issue rather than retrying CI.
 
-### Linux-only CI policy
+### Runtime and native compilation coverage
 
-CI validation runs on Linux only, including nightly and manual dispatch.
+CI runtime validation runs on Linux, including nightly and manual dispatch.
 The Windows/macOS and hosted GPU jobs, the native device-check workflow and
 the full-ci label workflow are removed. `cargo xtask affected` accepts no
 full-ci label flag, and plan does not read PR labels. Native runtime checks
 remain local commands. `cargo xtask gpu-test` sets `FLUI_REQUIRE_GPU=1` for
 both the engine and facade readback suites; a missing adapter or device fails
-the gate instead of producing successful skips. Cross-typecheck on Linux verifies platform compilation;
+the gate instead of producing successful skips. Native compilation uses Linux
+cross tools for Windows, macOS and Android, and a macOS runner with Xcode's
+genuine SDK for iOS. These legs run clippy, not native tests or applications;
 OS runtime regressions need local platform evidence.
 
-The aggregator requires each lane's Linux jobs to pass and every other job
+The aggregator requires each lane's planned jobs to pass and every other job
 to skip. The two nested jobs restore the existing test cache without writing
 additional entries.
+
+`cross-typecheck` discovers native cfg predicates in the module trees of every
+workspace Cargo target and in target-specific dependency declarations. It
+selects packages directly with `--all-targets`, including their tests,
+examples and benches; indirect dependency compilation does not cover those
+targets. Required target features and declared `testing`/`a11y` features are
+enabled together. This is not an exhaustive optional-feature matrix or a
+macro expansion: generated `include!` output needs an explicit target-specific
+manifest dependency to participate in discovery.
+
+On a Windows host, Windows checks use the installed MSVC tools. Other hosts
+use `cargo-xwin` (CI pins 0.23.1) with clang/LLVM and its MSVC SDK/CRT
+provisioning. On a macOS host, Apple checks use Xcode; macOS checks elsewhere
+use `cargo-zigbuild clippy` (CI pins 0.23.4) and Zig (0.17.0). iOS needs a
+genuine Apple SDK: generic Darwin libc headers are insufficient for native
+logging dependencies. Android needs the NDK's target compiler and archiver,
+for example `CC_aarch64_linux_android` set to its API-21 clang wrapper and
+`AR_aarch64_linux_android` to `llvm-ar`. CI uses its bundled NDK. Explicit
+target, `TARGET_CC`/`TARGET_AR`, and global compiler settings are preserved.
+
+The macOS `flui-log/apple-unified-logging` configuration also needs genuine
+Apple SDK logging headers. The generic Zig check does not enable that optional
+feature; SDK-host optional-feature compilation remains follow-up work tracked
+in [the native coverage issue](https://github.com/vanyastaff/flui/issues/1271).
 
 ## See Also
 

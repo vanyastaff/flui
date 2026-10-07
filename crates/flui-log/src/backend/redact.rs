@@ -460,18 +460,6 @@ mod tests {
         fn events(&self) -> Vec<CapturedEvent> {
             self.events.lock().expect("BUG: test-local mutex").clone()
         }
-        fn span_attributes(&self) -> Vec<SeenFields> {
-            self.span_attributes
-                .lock()
-                .expect("BUG: test-local mutex")
-                .clone()
-        }
-        fn span_records(&self) -> Vec<SeenFields> {
-            self.span_records
-                .lock()
-                .expect("BUG: test-local mutex")
-                .clone()
-        }
     }
 
     impl<S> Layer<S> for CaptureSink

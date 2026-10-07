@@ -283,6 +283,25 @@ pub(crate) fn doctor(args: &DoctorArgs) -> anyhow::Result<ExitCode> {
     );
 
     // `cargo xtask ci-full`
+    if os != "windows" {
+        doctor.check_cargo_sub(Scope::Full, "xwin", "cargo install --locked cargo-xwin --version 0.23.1 (also needs clang/LLVM and MSVC SDK/CRT provisioning)");
+    }
+    if os == "macos" {
+        doctor.check_bin(
+            Scope::Full,
+            "xcrun",
+            "install Xcode with the iOS SDK",
+            &["--sdk", "iphoneos", "--show-sdk-path"],
+        );
+    } else {
+        doctor.check_bin(
+            Scope::Full,
+            "cargo-zigbuild",
+            "cargo install --locked cargo-zigbuild --version 0.23.4",
+            &["--version"],
+        );
+        doctor.check_bin(Scope::Full, "zig", "install Zig 0.17.0 (macOS cross C headers); iOS checks require a genuine Apple SDK on macOS", &["version"]);
+    }
     for (sub, install) in ci_full_cargo_subs() {
         doctor.check_cargo_sub(Scope::Full, sub, &install);
     }

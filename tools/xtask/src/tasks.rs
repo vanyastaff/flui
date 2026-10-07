@@ -13,6 +13,7 @@ mod checks;
 mod deps;
 mod exec;
 pub(crate) mod facade;
+mod native;
 mod web;
 
 use std::path::Path;
@@ -116,86 +117,6 @@ impl RunOpts {
 /// `-- -D warnings`: every lint step denies warnings, as CI does.
 fn deny_warnings(cmd: Cmd) -> Cmd {
     cmd.args(["--", "-D", "warnings"])
-}
-
-/// Clippy of one flui-platform backend. `--features a11y`: the UIA /
-/// NSAccessibility bridges are feature-gated and this is the only gate that
-/// compiles them; the a11y-off configuration is a strict subset (no
-/// `cfg(not(a11y))` code exists), so checking with the feature supersedes
-/// checking without. `--all-targets` so the per-OS test targets compile too.
-fn platform_clippy(target: &str) -> Cmd {
-    deny_warnings(Cmd::cargo([
-        "clippy",
-        "-p",
-        "flui-platform",
-        "--locked",
-        "--all-targets",
-        "--features",
-        "a11y",
-        "--target",
-        target,
-    ]))
-}
-
-/// The flui-app / flui Android runner (`cfg(target_os = "android")`, so no
-/// flui-platform line compiles it). `psm`'s C shim (via `stacker`) is
-/// cross-compiled by the host clang when told the triple: a compile-only lint
-/// needs no NDK. Library targets only: the tests are host-run.
-fn android_runner() -> Cmd {
-    deny_warnings(
-        Cmd::cargo([
-            "clippy",
-            "-p",
-            "flui-app",
-            "-p",
-            "flui",
-            "--locked",
-            "--target",
-            ANDROID_TARGET,
-        ])
-        .env("CC_aarch64_linux_android", "clang")
-        .env(
-            "CFLAGS_aarch64_linux_android",
-            "--target=aarch64-linux-android21",
-        )
-        .env("AR_aarch64_linux_android", "ar"),
-    )
-}
-
-/// The flui-app / flui iOS runner. Needs macOS: `psm`'s shim finds the Apple
-/// SDK through `xcrun`.
-fn ios_runner() -> Cmd {
-    deny_warnings(Cmd::cargo([
-        "clippy", "-p", "flui-app", "-p", "flui", "--locked", "--target", IOS_TARGET,
-    ]))
-}
-
-/// flui-desktop-mcp's UI Automation, capture and input backends, which sit
-/// behind `cfg(windows)` / `cfg(target_os = "macos")`: on Linux only its
-/// unsupported fallbacks compile.
-fn desktop_mcp_clippy(target: &str) -> Cmd {
-    deny_warnings(Cmd::cargo([
-        "clippy",
-        "-p",
-        "flui-desktop-mcp",
-        "--locked",
-        "--all-targets",
-        "--target",
-        target,
-    ]))
-}
-
-/// flui-cli's Windows paths, which no Linux job compiles.
-fn cli_windows() -> Cmd {
-    deny_warnings(Cmd::cargo([
-        "clippy",
-        "-p",
-        "flui-cli",
-        "--locked",
-        "--all-targets",
-        "--target",
-        WINDOWS_TARGET,
-    ]))
 }
 
 /// The facade's `hot-reload` feature on wasm32: it has no web runner, but
@@ -435,32 +356,11 @@ fn lint_plan() -> Vec<Step> {
     ]
 }
 
-/// CI's `cross-typecheck` job: clippy (not check: `cfg(windows)` / `macos` /
-/// `android` code is invisible to every other lint gate, and check-only let
-/// ~100 deny-level violations accumulate unseen) of flui-platform's per-OS
-/// backends, the mobile runners, flui-cli's Windows paths and flui-desktop-mcp's
-/// Windows and macOS backends. No link, no
-/// tests: green means "compiles clean under the workspace lints", nothing more.
-/// The iOS runner needs a local macOS host, so it is skipped
-/// with a message elsewhere.
-fn cross_typecheck_plan(host: Host) -> Vec<Step> {
-    let mut steps: Vec<Step> = PLATFORM_TARGETS
-        .into_iter()
-        .map(|target| platform_clippy(target).into())
-        .collect();
-    steps.push(if host == Host::MacOs {
-        ios_runner().into()
-    } else {
-        Step::Note(
-            "cross-typecheck: skipped the iOS runner (its C shim needs xcrun: macOS only; run it locally on macOS)"
-                .to_owned(),
-        )
-    });
-    steps.push(android_runner().into());
-    steps.push(cli_windows().into());
-    steps.push(desktop_mcp_clippy(WINDOWS_TARGET).into());
-    steps.push(desktop_mcp_clippy(MACOS_TARGET).into());
-    steps
+/// Native cfg arms and target-specific Cargo edges discovered across the
+/// workspace, including tests, benches and examples. No linking or execution:
+/// green means the selected configurations type-check under workspace lints.
+fn cross_typecheck_plan(host: Host) -> anyhow::Result<Vec<Step>> {
+    native::plan(&crate::util::repo_root(), "", host, None)
 }
 
 /// CI's `test-features` job: the suites behind features the default run never
@@ -900,7 +800,7 @@ pub(crate) fn ci_full(args: &CiFullArgs) -> anyhow::Result<ExitCode> {
     web::check(runner)?;
     web::link(runner)?;
     web::test(runner)?;
-    runner.steps(&cross_typecheck_plan(Host::current()))?;
+    runner.steps(&cross_typecheck_plan(Host::current())?)?;
     runner.steps(&bench_compile_plan())?;
     deps::run(runner, None, false)?;
     runner.steps(&workflow_lint_plan(|program| {
@@ -1010,18 +910,22 @@ pub(crate) fn facade_combos(args: &FacadeCombosArgs) -> anyhow::Result<ExitCode>
 pub(crate) struct CrossTypecheckArgs {
     #[command(flatten)]
     pub(crate) run: RunOpts,
+    /// Check only this native triple (CI runs the triples in parallel).
+    #[arg(long, value_parser = PLATFORM_TARGETS)]
+    pub(crate) target: Option<String>,
 }
 
-/// `cargo xtask cross-typecheck`: clippy the Win32, AppKit, Android and iOS backends without linking.
+/// `cargo xtask cross-typecheck`: lint discovered native workspace targets without linking.
 ///
 /// Needs `rustup target add x86_64-pc-windows-msvc aarch64-apple-darwin
 /// aarch64-linux-android aarch64-apple-ios`.
 pub(crate) fn cross_typecheck(args: &CrossTypecheckArgs) -> anyhow::Result<ExitCode> {
-    done(
-        args.run
-            .runner()
-            .steps(&cross_typecheck_plan(Host::current())),
-    )
+    done(args.run.runner().steps(&native::plan(
+        &crate::util::repo_root(),
+        "",
+        Host::current(),
+        args.target.as_deref(),
+    )?))
 }
 
 /// Arguments for `cargo xtask wasm-check`.

@@ -135,8 +135,8 @@ The root `ARCHITECTURE.md` is the facade's. `docs/architecture.md` describes the
   rest follow `docs/testing.md`, "Bounding disk use of agent worktrees".
 - **Commits** `area: what changed`, one logical change each. **PRs** are one task each, with
   `cargo xtask check-changed` green first; CI is the proof. Review your own branch against
-  `main` before asking for review. CI runs Linux (and wasm32) only; Windows, macOS, Android and
-  iOS code is type-checked by `cross-typecheck` and never executed there, and no label enables
+  `main` before asking for review. Runtime CI runs Linux (and wasm32); Windows, macOS, Android and
+  iOS code is type-checked by `cross-typecheck` (iOS uses a macOS SDK runner) and never executed there, and no label enables
   native or GPU jobs, so run the platform or GPU commands locally when a change needs them. Use
   `Refs #N`; `Closes`/`Fixes #N` only when merging should close it (GitHub's linker ignores
   negation around it). A consumer-visible change adds `changelog.d/<branch-slug>.md` (a

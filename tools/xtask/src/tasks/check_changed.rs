@@ -15,9 +15,7 @@ use anyhow::{Context, bail};
 
 use super::exec::{Cmd, Host, Runner, Step, installed, installed_targets};
 use super::{
-    ANDROID_TARGET, IOS_TARGET, MACOS_TARGET, PLATFORM_TARGETS, WASM_TARGET, WINDOWS_TARGET,
-    android_runner, cli_windows, desktop_mcp_clippy, driver_tests, engine_testing_clippy,
-    hack_passes, ios_runner, platform_clippy, wasm_facade_check,
+    WASM_TARGET, driver_tests, engine_testing_clippy, hack_passes, native, wasm_facade_check,
 };
 use crate::change_scope;
 use crate::util::repo_root;
@@ -35,11 +33,6 @@ struct Lane {
     test_args: String,
     features: String,
     platform: bool,
-    cross_platform: bool,
-    cross_app: bool,
-    cross_cli: bool,
-    cross_desktop_mcp: bool,
-    cross_ios: bool,
     wasm_args: String,
     wasm_facade: bool,
     hack_args: String,
@@ -72,11 +65,6 @@ impl Lane {
             test_args: text("test_args")?,
             features: text("features")?,
             platform: flag("platform", text("platform")?)?,
-            cross_platform: flag("cross_platform", text("cross_platform")?)?,
-            cross_app: flag("cross_app", text("cross_app")?)?,
-            cross_cli: flag("cross_cli", text("cross_cli")?)?,
-            cross_desktop_mcp: flag("cross_desktop_mcp", text("cross_desktop_mcp")?)?,
-            cross_ios: flag("cross_ios", text("cross_ios")?)?,
             wasm_args: text("wasm_args")?,
             wasm_facade: flag("wasm_facade", text("wasm_facade")?)?,
             hack_args: text("hack_args")?,
@@ -125,7 +113,13 @@ fn outside_checkout(target: &Path, cwd: &Path, checkout: &Path) -> bool {
 
 /// The compiling steps for `lane`, after `cargo fmt`. `targets` are the installed rustup targets; `have_hack` says whether
 /// cargo-hack is.
-fn plan(lane: &Lane, host: Host, targets: &BTreeSet<String>, have_hack: bool) -> Vec<Step> {
+fn plan(
+    lane: &Lane,
+    host: Host,
+    targets: &BTreeSet<String>,
+    have_hack: bool,
+    native: &[Step],
+) -> Vec<Step> {
     let have = |target: &str| targets.contains(target);
     let mut steps: Vec<Step> = vec![
         Cmd::cargo(["clippy"])
@@ -167,56 +161,7 @@ fn plan(lane: &Lane, host: Host, targets: &BTreeSet<String>, have_hack: bool) ->
                 .into(),
         );
     }
-    // cfg-gated code this host's build never compiles (the cross-typecheck commands)
-    if lane.cross_platform {
-        for target in PLATFORM_TARGETS {
-            steps.push(if have(target) {
-                platform_clippy(target).into()
-            } else {
-                Step::Note(format!(
-                    "check-changed: skipped flui-platform on {target} (rustup target add {target}; CI runs it)"
-                ))
-            });
-        }
-    }
-    if lane.cross_app {
-        steps.push(if have(ANDROID_TARGET) {
-            android_runner().into()
-        } else {
-            Step::Note(format!(
-                "check-changed: skipped the android runner (rustup target add {ANDROID_TARGET}; CI runs it)"
-            ))
-        });
-    }
-    if lane.cross_cli {
-        steps.push(if have(WINDOWS_TARGET) {
-            cli_windows().into()
-        } else {
-            Step::Note(format!(
-                "check-changed: skipped flui-cli on windows (rustup target add {WINDOWS_TARGET}; CI runs it)"
-            ))
-        });
-    }
-    if lane.cross_desktop_mcp {
-        for target in [WINDOWS_TARGET, MACOS_TARGET] {
-            steps.push(if have(target) {
-                desktop_mcp_clippy(target).into()
-            } else {
-                Step::Note(format!(
-                    "check-changed: skipped flui-desktop-mcp on {target} (rustup target add {target}; CI runs it)"
-                ))
-            });
-        }
-    }
-    if lane.cross_ios {
-        steps.push(if host == Host::MacOs && have(IOS_TARGET) {
-            ios_runner().into()
-        } else {
-            Step::Note(format!(
-                "check-changed: skipped the iOS runner (needs macOS + rustup target add {IOS_TARGET}; run it locally on macOS)"
-            ))
-        });
-    }
+    steps.extend_from_slice(native);
     if !lane.wasm_args.is_empty() {
         if have(WASM_TARGET) {
             steps.push(
@@ -293,11 +238,23 @@ pub(super) fn run(runner: Runner, base: &str) -> anyhow::Result<ExitCode> {
         }
     );
     let have_hack = !lane.hack_args.is_empty() && installed("cargo", &["hack", "--version"]);
+    let targets = installed_targets();
+    let mut native_steps = Vec::new();
+    for (target, step) in native::plans(&repo_root(), &lane.packages, Host::current())? {
+        if targets.contains(target) {
+            native_steps.push(step);
+        } else {
+            native_steps.push(Step::Note(format!(
+                "check-changed: skipped native source checks on {target} (rustup target add {target}; CI runs it)"
+            )));
+        }
+    }
     runner.steps(&plan(
         &lane,
         Host::current(),
-        &installed_targets(),
+        &targets,
         have_hack,
+        &native_steps,
     ))?;
     Ok(ExitCode::SUCCESS)
 }
@@ -322,11 +279,6 @@ mod tests {
                 .to_owned(),
             features: "--features flui/cupertino".to_owned(),
             platform: false,
-            cross_platform: false,
-            cross_app: true,
-            cross_cli: false,
-            cross_desktop_mcp: false,
-            cross_ios: true,
             wasm_args: "-p flui -p flui-material -p flui-web-counter --lib --bins".to_owned(),
             wasm_facade: true,
             hack_args: "-p flui-material".to_owned(),
@@ -337,7 +289,7 @@ mod tests {
     }
 
     fn all_targets() -> BTreeSet<String> {
-        PLATFORM_TARGETS
+        super::super::PLATFORM_TARGETS
             .into_iter()
             .chain([WASM_TARGET])
             .map(str::to_owned)
@@ -346,32 +298,34 @@ mod tests {
 
     fn a_package_change_runs_the_scoped_commands() {
         assert_eq!(
-            lines(&plan(&material(), Host::Linux, &all_targets(), true)),
+            lines(&plan(&material(), Host::Linux, &all_targets(), true, &[])),
             [
                 "$ cargo clippy -p flui -p flui-material -p flui-web-counter --all-targets --locked -- -D warnings",
                 "$ cargo nextest run -p flui -p flui-material -p flui-web-counter --lib --bins --tests --locked --no-fail-fast --no-tests=pass --features flui/cupertino",
                 "$ RUSTDOCFLAGS='-D warnings' cargo doc -p flui -p flui-material -p flui-web-counter --features flui/testing --no-deps --locked --document-private-items",
                 "$ cargo test -p flui -p flui-material --locked --doc",
-                "$ CC_aarch64_linux_android=clang CFLAGS_aarch64_linux_android=--target=aarch64-linux-android21 AR_aarch64_linux_android=ar cargo clippy -p flui-app -p flui --locked --target aarch64-linux-android -- -D warnings",
-                "check-changed: skipped the iOS runner (needs macOS + rustup target add aarch64-apple-ios; run it locally on macOS)",
                 "$ cargo clippy -p flui -p flui-material -p flui-web-counter --lib --bins --locked --target wasm32-unknown-unknown -- -D warnings",
                 "$ cargo check -p flui --locked --target wasm32-unknown-unknown --no-default-features --features hot-reload",
                 "$ cargo hack clippy -p flui-material --locked --each-feature --keep-going -- -D warnings",
                 "$ cargo hack clippy -p flui-material --locked --each-feature --keep-going --tests --benches --examples -- -D warnings",
             ]
         );
-        let on_mac = lines(&plan(&material(), Host::MacOs, &all_targets(), true));
-        assert!(on_mac.contains(
-            &"$ cargo clippy -p flui-app -p flui --locked --target aarch64-apple-ios -- -D warnings"
-                .to_owned()
+        let native = [Step::Note("discovered native coverage".to_owned())];
+        let on_mac = lines(&plan(
+            &material(),
+            Host::MacOs,
+            &all_targets(),
+            true,
+            &native,
         ));
+        assert!(on_mac.contains(&"discovered native coverage".to_owned()));
     }
 
     fn the_whole_workspace_also_lints_the_engine_testing_code() {
         let mut lane = material();
         lane.packages = String::new();
         lane.pkg_args = "--workspace".to_owned();
-        let steps = lines(&plan(&lane, Host::Linux, &all_targets(), true));
+        let steps = lines(&plan(&lane, Host::Linux, &all_targets(), true, &[]));
         assert_eq!(
             &steps[..2],
             [
@@ -408,7 +362,7 @@ mod tests {
         lane.pkg_args = "--workspace".to_owned();
         lane.test_args = "--workspace --exclude flui-platform --lib --bins --tests".to_owned();
         let nextest = |host| {
-            lines(&plan(&lane, host, &all_targets(), true))
+            lines(&plan(&lane, host, &all_targets(), true, &[]))
                 .into_iter()
                 .filter(|line| line.starts_with("$ cargo nextest run"))
                 .collect::<Vec<_>>()
