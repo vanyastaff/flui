@@ -24,6 +24,10 @@ fn binding_input_contract_matrix() {
             capped_contact_never_becomes_hover,
         ),
         (
+            "refusal_saturation_preserves_admitted_contacts_and_resets_with_lifecycle",
+            refusal_saturation_preserves_admitted_contacts_and_resets_with_lifecycle,
+        ),
+        (
             "wheel_listener_failure_keeps_claim_delivery",
             wheel_listener_failure_keeps_claim_delivery,
         ),
@@ -176,6 +180,115 @@ fn capped_contact_never_becomes_hover() {
     );
     assert_eq!(hits.get(), 33, "a released slot accepts the next sequence");
     binding.handle_lifecycle_pause();
+}
+
+fn refusal_saturation_preserves_admitted_contacts_and_resets_with_lifecycle() {
+    use flui_foundation::geometry::Offset;
+    use flui_interaction::events::{
+        PointerType, make_cancel_event_for_id, make_down_event_for_id, make_move_event_for_id,
+        make_up_event_for_id,
+    };
+    use flui_interaction::{GestureBinding, HitTestResult, PointerId};
+    use std::{cell::Cell, rc::Rc};
+
+    let binding = GestureBinding::new();
+    let delivered = Rc::new(Cell::new(0));
+    let log = Rc::clone(&delivered);
+    binding
+        .pointer_router()
+        .add_global_handler(Rc::new(move |_| log.set(log.get() + 1)));
+    for raw in 1..=65 {
+        binding.handle_pointer_event(
+            &make_down_event_for_id(
+                PointerId::new(raw).expect("nonzero pointer"),
+                Offset::ZERO,
+                PointerType::Touch,
+            ),
+            |_| HitTestResult::new(),
+        );
+    }
+    delivered.set(0);
+    binding.handle_pointer_event(
+        &make_move_event_for_id(PointerId::PRIMARY, Offset::ZERO, PointerType::Touch),
+        |_| HitTestResult::new(),
+    );
+    binding.flush_pending_moves();
+    assert_eq!(
+        delivered.get(),
+        1,
+        "saturation preserves an admitted contact's Move"
+    );
+    delivered.set(0);
+    let unknown = PointerId::new(200).expect("nonzero pointer");
+    binding.handle_pointer_event(
+        &make_move_event_for_id(unknown, Offset::ZERO, PointerType::Touch),
+        |_| HitTestResult::new(),
+    );
+    binding.flush_pending_moves();
+    binding.handle_pointer_event(
+        &make_up_event_for_id(unknown, Offset::ZERO, PointerType::Touch),
+        |_| HitTestResult::new(),
+    );
+    binding.handle_pointer_event(
+        &make_cancel_event_for_id(unknown, PointerType::Touch),
+        |_| HitTestResult::new(),
+    );
+    assert_eq!(
+        delivered.get(),
+        0,
+        "saturation suppresses every untracked tail"
+    );
+    binding.handle_pointer_event(
+        &make_up_event_for_id(PointerId::PRIMARY, Offset::ZERO, PointerType::Touch),
+        |_| HitTestResult::new(),
+    );
+    binding.handle_pointer_event(
+        &make_down_event_for_id(unknown, Offset::ZERO, PointerType::Touch),
+        |_| HitTestResult::new(),
+    );
+    binding.handle_pointer_event(
+        &make_move_event_for_id(unknown, Offset::ZERO, PointerType::Touch),
+        |_| HitTestResult::new(),
+    );
+    binding.flush_pending_moves();
+    binding.handle_pointer_event(
+        &make_up_event_for_id(unknown, Offset::ZERO, PointerType::Touch),
+        |_| HitTestResult::new(),
+    );
+    assert_eq!(
+        delivered.get(),
+        4,
+        "saturation still admits a fresh Down and delivers its full sequence"
+    );
+    binding.handle_pointer_event(
+        &make_up_event_for_id(
+            PointerId::new(33).expect("nonzero pointer"),
+            Offset::ZERO,
+            PointerType::Touch,
+        ),
+        |_| HitTestResult::new(),
+    );
+    binding.handle_pointer_event(
+        &make_move_event_for_id(unknown, Offset::ZERO, PointerType::Touch),
+        |_| HitTestResult::new(),
+    );
+    binding.flush_pending_moves();
+    assert_eq!(
+        delivered.get(),
+        4,
+        "an unknown terminal event cannot lift saturation"
+    );
+    binding.handle_lifecycle_pause();
+    binding.handle_pointer_event(
+        &make_move_event_for_id(unknown, Offset::ZERO, PointerType::Touch),
+        |_| HitTestResult::new(),
+    );
+    binding.flush_pending_moves();
+    assert_eq!(
+        delivered.get(),
+        5,
+        "lifecycle reset restores ordinary hover admission"
+    );
 }
 
 #[derive(Clone, Copy)]
