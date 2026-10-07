@@ -16,3 +16,4 @@
 - Runtime pipeline thread ownership and private draw-step guards pin exact diagnostics alongside valid local-pipeline and frame-pump callers.
 - Platform owner-thread and hidden-token compiler guards pin exact diagnostics; each retired platform name is checked independently.
 - Diagnostic derive shape and field-attribute compiler examples have matching valid companions.
+- The app's shared-platform window-opening compiler example has a matching valid owner-capability callback.
