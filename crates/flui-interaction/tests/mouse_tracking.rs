@@ -16,6 +16,7 @@ use flui_interaction::routing::{
     MouseTracker, MouseTrackerAnnotation, PointerMotionKind,
 };
 use flui_interaction::{CursorIcon, EventPropagation, HitTestEntry, HitTestResult, PointerId};
+use flui_platform_api::pointer::PenTool;
 
 const MOUSE: u64 = 2;
 const PEN: u64 = 3;
@@ -68,14 +69,24 @@ fn logging_region(
     handle
         .register_mouse_region(MouseRegionCallbacks {
             on_enter: Some(Rc::new(move |device, _| {
-                entered
-                    .borrow_mut()
-                    .push(format!("enter {name} {}", device.get().get()));
+                entered.borrow_mut().push(format!(
+                    "enter {name} {}",
+                    device
+                        .device
+                        .expect("fixture reports hardware identity")
+                        .get()
+                        .get()
+                ));
             })),
             on_exit: Some(Rc::new(move |device, _| {
-                exited
-                    .borrow_mut()
-                    .push(format!("exit {name} {}", device.get().get()));
+                exited.borrow_mut().push(format!(
+                    "exit {name} {}",
+                    device
+                        .device
+                        .expect("fixture reports hardware identity")
+                        .get()
+                        .get()
+                ));
             })),
             ..MouseRegionCallbacks::default()
         })
@@ -103,12 +114,12 @@ fn shared_region_exits_once_per_device() {
             &over,
         );
         tracker.update_with_motion(
-            &hover(PEN, PointerKind::Pen, at, 2),
+            &hover(PEN, PointerKind::Pen { tool: PenTool::Tip }, at, 2),
             PointerMotionKind::Hover,
             &over,
         );
         tracker.update_with_motion(
-            &hover(PEN, PointerKind::Pen, at, 3),
+            &hover(PEN, PointerKind::Pen { tool: PenTool::Tip }, at, 3),
             PointerMotionKind::Hover,
             &away,
         );
@@ -225,7 +236,7 @@ fn refresh_callback_panic_reaches_every_device() {
             &regions_at(mouse_at),
         );
         tracker.update_with_motion(
-            &hover(PEN, PointerKind::Pen, pen_at, 2),
+            &hover(PEN, PointerKind::Pen { tool: PenTool::Tip }, pen_at, 2),
             PointerMotionKind::Hover,
             &regions_at(pen_at),
         );
@@ -268,7 +279,7 @@ fn refresh_hit_test_panic_keeps_the_device_for_the_next_refresh() {
             &path(&[(1, mouse_region)]),
         );
         tracker.update_with_motion(
-            &hover(PEN, PointerKind::Pen, pen_at, 2),
+            &hover(PEN, PointerKind::Pen { tool: PenTool::Tip }, pen_at, 2),
             PointerMotionKind::Hover,
             &path(&[(2, pen_region)]),
         );
@@ -315,7 +326,7 @@ fn refresh_hit_test_failure_precedes_a_competing_callback_failure() {
             &path(&[(1, mouse_region)]),
         );
         tracker.update_with_motion(
-            &hover(PEN, PointerKind::Pen, pen_at, 2),
+            &hover(PEN, PointerKind::Pen { tool: PenTool::Tip }, pen_at, 2),
             PointerMotionKind::Hover,
             &HitTestResult::new(),
         );
