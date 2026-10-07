@@ -707,12 +707,12 @@ pub(crate) fn decoration_gradient_centers_fall_back_after_bounds_scaling() {
         else {
             panic!("expected rect fill");
         };
-        let center = match &paint.shader {
-            Some(
-                flui_painting::paint::Shader::SweepGradient { center, .. }
-                | flui_painting::paint::Shader::RadialGradient { center, .. },
-            ) => center,
-            _ => panic!("expected centered gradient"),
+        let Some(
+            flui_painting::paint::Shader::SweepGradient { center, .. }
+            | flui_painting::paint::Shader::RadialGradient { center, .. },
+        ) = &paint.shader
+        else {
+            panic!("expected centered gradient");
         };
         assert_eq!(center.dy, height, "bounded center in actual paint box");
     }
