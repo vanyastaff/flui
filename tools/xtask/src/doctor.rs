@@ -189,6 +189,21 @@ impl Doctor {
             );
         }
     }
+
+    fn check_full_targets(&mut self, installed: &[String]) {
+        for triple in [
+            "wasm32-unknown-unknown",
+            "x86_64-pc-windows-msvc",
+            "aarch64-apple-darwin",
+            "aarch64-linux-android",
+            "aarch64-apple-ios",
+        ] {
+            if triple == "aarch64-apple-ios" && !self.macos {
+                continue;
+            }
+            self.check_target(Scope::Full, triple, installed);
+        }
+    }
 }
 
 /// Probe the configured compiler's Android target and sysroot, without an object file.
@@ -399,15 +414,7 @@ pub(crate) fn doctor(args: &DoctorArgs) -> anyhow::Result<ExitCode> {
     let zizmor = doctor.brew_or("zizmor", "cargo install --locked zizmor");
     doctor.check_bin(Scope::Full, "zizmor", &zizmor, &["--version"]);
     let installed = output_lines("rustup", &["target", "list", "--installed"]);
-    for triple in [
-        "wasm32-unknown-unknown",
-        "x86_64-pc-windows-msvc",
-        "aarch64-apple-darwin",
-        "aarch64-linux-android",
-        "aarch64-apple-ios",
-    ] {
-        doctor.check_target(Scope::Full, triple, &installed);
-    }
+    doctor.check_full_targets(&installed);
     match succeeded_first_line("rustup", &["run", "nightly", "cargo", "miri", "--version"]) {
         Some(version) => doctor.row(Scope::Full, "nightly + miri", true, &version, ""),
         None => doctor.row(
@@ -507,11 +514,31 @@ mod tests {
         );
     }
 
+    fn only_apple_hosts_require_the_ios_target() {
+        let installed = [
+            "wasm32-unknown-unknown",
+            "x86_64-pc-windows-msvc",
+            "aarch64-apple-darwin",
+            "aarch64-linux-android",
+        ]
+        .map(str::to_owned);
+        for macos in [false, true] {
+            let mut full = doctor(Mode::Full);
+            full.macos = macos;
+            full.check_full_targets(&installed);
+            assert_eq!(full.missing_required, usize::from(macos));
+        }
+    }
+
     #[test]
     fn doctor_contract() {
         crate::table_test::run_table(
             "doctor_contract",
             &[
+                (
+                    "only_apple_hosts_require_the_ios_target",
+                    only_apple_hosts_require_the_ios_target as fn(),
+                ),
                 (
                     "a_version_only_compiler_does_not_supply_android_headers",
                     a_version_only_compiler_does_not_supply_android_headers as fn(),
