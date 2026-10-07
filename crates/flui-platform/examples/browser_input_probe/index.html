@@ -179,16 +179,16 @@ document.getElementById('pen-samples').onclick = () => check('samples-check', ()
   const make = (time, x, pressure) => {
     const event = new PointerEvent('pointermove', {
       pointerId: 11, pointerType: 'pen', isPrimary: true, bubbles: true,
-      clientX: rect.left + x, clientY: rect.top + 30.5, buttons: 1,
+      clientX: rect.left + x, clientY: rect.top + 30.5, button: -1, buttons: 1,
       pressure, tangentialPressure: 0, altitudeAngle: Math.PI / 4,
-      azimuthAngle: Math.PI / 2, twist: 270, width: 7, height: 9,
+      azimuthAngle: Math.PI / 2, twist: 270, width: 7.25, height: 9.5,
     });
     Object.defineProperty(event, 'timeStamp', { value: time });
     // Dispatch each real sample object once so its browser-owned target and
     // local coordinates match the parent event's canvas. This fixture supplies
     // source lists; it does not claim physical hardware generated the lists.
     canvas.dispatchEvent(event);
-    equal(event, { timeStamp: time, pressure, tangentialPressure: 0, twist: 270, width: 7, height: 9 });
+    equal(event, { timeStamp: time, pressure, tangentialPressure: 0, twist: 270, width: 7.25, height: 9.5, altitudeAngle: Math.PI / 4, azimuthAngle: Math.PI / 2 });
     equal({ x: event.offsetX, y: event.offsetY }, { x, y: 30.5 });
     return event;
   };
@@ -206,7 +206,7 @@ document.getElementById('pen-samples').onclick = () => check('samples-check', ()
   const actual = JSON.parse(document.getElementById('samples')?.textContent ?? 'null');
   if (!actual) throw new Error('no public samples');
   equal(actual, { kind: 'Pen { tool: Tip }', role: 'Primary' });
-  equal(actual.current, { time: 30000000, x: 50.75, y: 30.5, pressure: .375, tangential: 0, width: 7, height: 9 });
+  equal(actual.current, { time: 30000000, x: 50.75, y: 30.5, pressure: .375, tangential: 0, width: 7.25, height: 9.5 });
   const near = (actual, expected) => { if (Math.abs(actual - expected) > 1e-12) throw new Error(`angle: expected ${expected}, got ${actual}`); };
   if (actual.current.altitude === null || actual.current.azimuth === null || actual.current.twist === null) throw new Error('pen angles missing');
   near(actual.current.altitude, Math.PI / 4); near(actual.current.azimuth, Math.PI / 2); near(actual.current.twist, 3 * Math.PI / 2);
