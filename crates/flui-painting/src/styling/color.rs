@@ -7,6 +7,10 @@ use super::srgb_tables::{
     LINEAR_BUCKET_CODES, LINEAR_BUCKETS, LINEAR_ROUNDING_THRESHOLDS, SRGB_TO_LINEAR,
 };
 
+/// The largest extrapolation weight [`Color::lerp_unclamped`] feeds its f32 mix; larger
+/// weights give the same saturated colour.
+const MAX_EXTRAPOLATION: f64 = 1e6;
+
 /// An RGBA color with four 8-bit channels and straight (unmultiplied) alpha.
 ///
 /// Channels are in sRGB gamma space. The
@@ -309,12 +313,14 @@ impl Color {
         if t == 1.0 {
             return b;
         }
-        // The animation parameter narrows to the f32 colour math (ADR-0098 §2).
+        // The animation parameter narrows to the f32 colour math (ADR-0098 §2). Every
+        // channel has saturated long before |t| = 1e6, and bounding it there keeps the
+        // mixed components, and the cubes Oklab decodes them through, finite in f32.
         #[expect(
             clippy::cast_possible_truncation,
-            reason = "t is a finite interpolation weight; f32 is the colour math's precision"
+            reason = "t is bounded to ±1e6 first; f32 is the colour math's precision"
         )]
-        let t = t as f32;
+        let t = t.clamp(-MAX_EXTRAPOLATION, MAX_EXTRAPOLATION) as f32;
         let mix = |from: f32, to: f32| from + (to - from) * t;
         let (la, lb) = a.to_oklab_pair(b);
         if a.a == b.a {
