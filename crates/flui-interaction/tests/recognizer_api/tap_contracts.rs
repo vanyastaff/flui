@@ -1,0 +1,107 @@
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
+
+use flui_foundation::geometry::Offset;
+use flui_interaction::{
+    CancelOutcome, DoubleTapGestureRecognizer, GestureArena, GestureRecognizer,
+    TapGestureRecognizer,
+    events::{PointerEventExt, PointerType, make_down_event, make_up_event},
+    routing::PointerDispatch,
+};
+
+#[test]
+fn tap_builder_lifecycle_contract() {
+    for (name, row) in [
+        ("cancel_reuses_tap", cancel_reuses_tap as fn()),
+        (
+            "cancel_during_up_suppresses_tap",
+            cancel_during_up_suppresses_tap,
+        ),
+        ("cancel_reuses_double_tap", cancel_reuses_double_tap),
+    ] {
+        if let Err(payload) = std::panic::catch_unwind(row) {
+            eprintln!("tap contract `{name}` failed");
+            std::panic::resume_unwind(payload);
+        }
+    }
+}
+
+fn cancel_reuses_tap() {
+    let arena = GestureArena::new();
+    let taps = Rc::new(Cell::new(0));
+    let cancels = Rc::new(Cell::new(0));
+    let recognizer = TapGestureRecognizer::builder(arena.clone())
+        .on_tap({
+            let taps = taps.clone();
+            move |_| taps.set(taps.get() + 1)
+        })
+        .on_tap_cancel({
+            let cancels = cancels.clone();
+            move |_| cancels.set(cancels.get() + 1)
+        })
+        .build();
+    let down = make_down_event(Offset::ZERO, PointerType::Touch);
+    let up = make_up_event(Offset::ZERO, PointerType::Touch);
+    recognizer.add_pointer(PointerDispatch::at_root(&down));
+    assert_eq!(recognizer.cancel(), CancelOutcome::Cancelled);
+    assert_eq!(recognizer.cancel(), CancelOutcome::Idle);
+    recognizer.add_pointer(PointerDispatch::at_root(&down));
+    arena.close(down.pointer_id());
+    recognizer.handle_event(PointerDispatch::at_root(&up));
+    arena.drain_deferred_resolutions();
+    assert_eq!(taps.get(), 1);
+    assert_eq!(cancels.get(), 1);
+}
+
+fn cancel_during_up_suppresses_tap() {
+    let arena = GestureArena::new();
+    let holder = Rc::new(RefCell::new(None::<Rc<TapGestureRecognizer>>));
+    let taps = Rc::new(Cell::new(0));
+    let recognizer = TapGestureRecognizer::builder(arena.clone())
+        .on_tap_up({
+            let holder = holder.clone();
+            move |_| {
+                holder.borrow().as_ref().expect("recognizer owner").cancel();
+            }
+        })
+        .on_tap({
+            let taps = taps.clone();
+            move |_| taps.set(taps.get() + 1)
+        })
+        .build();
+    *holder.borrow_mut() = Some(recognizer.clone());
+    let down = make_down_event(Offset::ZERO, PointerType::Touch);
+    let up = make_up_event(Offset::ZERO, PointerType::Touch);
+    recognizer.add_pointer(PointerDispatch::at_root(&down));
+    arena.close(down.pointer_id());
+    arena.drain_deferred_resolutions();
+    recognizer.handle_event(PointerDispatch::at_root(&up));
+    assert_eq!(taps.get(), 0);
+    holder.borrow_mut().take();
+}
+
+fn cancel_reuses_double_tap() {
+    let arena = GestureArena::new();
+    let doubles = Rc::new(Cell::new(0));
+    let recognizer = DoubleTapGestureRecognizer::builder(arena.clone())
+        .on_double_tap({
+            let doubles = doubles.clone();
+            move |_| doubles.set(doubles.get() + 1)
+        })
+        .build();
+    let down = make_down_event(Offset::ZERO, PointerType::Touch);
+    let up = make_up_event(Offset::ZERO, PointerType::Touch);
+    recognizer.add_pointer(PointerDispatch::at_root(&down));
+    assert_eq!(recognizer.cancel(), CancelOutcome::Cancelled);
+    assert_eq!(recognizer.cancel(), CancelOutcome::Idle);
+    for _ in 0..2 {
+        recognizer.add_pointer(PointerDispatch::at_root(&down));
+        arena.close(down.pointer_id());
+        recognizer.handle_event(PointerDispatch::at_root(&up));
+        arena.sweep(down.pointer_id());
+    }
+    assert_eq!(doubles.get(), 1);
+    assert_eq!(recognizer.cancel(), CancelOutcome::Idle);
+}
