@@ -16,6 +16,7 @@ pre { position: relative; z-index: 9999; background: white; width: max-content; 
   <button id="chord">Check native pointer chord</button>
   <button id="sensor-validation">Check pen sensor validation</button>
   <button id="native-samples">Arm trusted mouse samples</button>
+  <button id="getter-reentry">Check getter reentry (fresh page)</button>
   <button id="capture">Arm trusted capture check</button>
   <button id="display">Check display</button>
   <button id="created">Check created callback</button>
@@ -316,4 +317,36 @@ document.getElementById('native-samples').onclick = () => {
     }
   }), { once: true });
 };
+
+document.getElementById('getter-reentry').onclick = () => check('getter-reentry-check', () => {
+  const canvas = document.querySelector('canvas');
+  if (!canvas) throw new Error('Install input first');
+  report('sequence', '');
+  report('getter-error', 'none');
+  const common = { pointerType: 'touch', bubbles: true, clientX: 80, clientY: 40, button: 0 };
+  const inner = new PointerEvent('pointerdown', { ...common, pointerId: 22, buttons: 1 });
+  const outer = new PointerEvent('pointerdown', { ...common, pointerId: 21, buttons: 1 });
+  let entered = false;
+  Object.defineProperty(outer, 'buttons', { get() {
+    if (!entered) {
+      entered = true;
+      report('getter-stage', 'nested native DOM dispatch');
+      canvas.dispatchEvent(inner);
+    }
+    return 1;
+  } });
+  const onerror = error => report('getter-error', error.message);
+  window.addEventListener('error', onerror);
+  try {
+    canvas.dispatchEvent(outer);
+    if (!entered) throw new Error('source getter was not reached');
+    equal({ sequence: document.getElementById('sequence')?.textContent }, { sequence: 'down,down,' });
+    canvas.dispatchEvent(new PointerEvent('pointerup', { ...common, pointerId: 22, buttons: 0 }));
+    canvas.dispatchEvent(new PointerEvent('pointerup', { ...common, pointerId: 21, buttons: 0 }));
+    equal({ sequence: document.getElementById('sequence')?.textContent }, { sequence: 'down,down,up,up,' });
+    equal({ error: document.getElementById('getter-error')?.textContent }, { error: 'none' });
+  } finally {
+    window.removeEventListener('error', onerror);
+  }
+});
 </script>
