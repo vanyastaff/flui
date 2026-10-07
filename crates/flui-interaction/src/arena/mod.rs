@@ -1551,13 +1551,13 @@ impl GestureArena {
         let Some(slot) = self.current_slot(pointer) else {
             return;
         };
-        if let Some(winner) = &winner {
+        if let Some(candidate) = &winner {
             let follow_up = {
                 let mut entry = slot.data.borrow_mut();
                 entry.prune_departed();
                 entry
-                    .is_blocked(&Rc::downgrade(winner))
-                    .then(|| entry.accept(winner))
+                    .is_blocked(&Rc::downgrade(candidate))
+                    .then(|| entry.accept(candidate))
             };
             if let Some(follow_up) = follow_up {
                 let pending = self.collect_follow_up(pointer, &slot, follow_up);
