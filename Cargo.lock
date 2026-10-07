@@ -2216,6 +2216,7 @@ dependencies = [
  "flui-foundation",
  "flui-platform-api",
  "flui-semantics",
+ "jni",
  "keyboard-types",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
