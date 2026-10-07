@@ -57,7 +57,7 @@ use super::lifecycle::{
 };
 use super::runner::{FontRegistrationError, PresentationDispatcher, RuntimeTask, SurfaceApplier};
 use super::ui_runtime::UiRuntime;
-use super::window_registry::{RegistryError, WindowRegistry};
+use super::window_registry::{PreparedWindowRegistration, RegistryError, WindowRegistry};
 #[cfg(not(target_arch = "wasm32"))]
 use flui_runtime::execution::SpawnError;
 use flui_runtime::execution::{ExecutionServices, HostExecutors};
@@ -235,24 +235,8 @@ impl RuntimeRegistry {
         self.slots.is_empty()
     }
 
-    /// A read-only checkout: unlike [`Self::get_mut`] (the checkout-based
-    /// dispatch/visit pattern every OTHER call site uses), this never removes
-    /// `ui_runtime` from its slot — so it is exactly what a peek that must not
-    /// disturb an in-flight checkout needs. First production caller: the
-    /// desktop wake-deadline hook's `frames_enabled` lookup
-    /// (`runner.rs`'s `bootstrap_desktop`, step 3d) reads a UI runtime's
-    /// scheduler state from a callback the platform invokes independently of
-    /// any dispatch, where a `get_mut`-style checkout would be both
-    /// unnecessary and wrong (it has nothing to mutate, and checking a UI runtime
-    /// out here would make it briefly invisible to a real dispatch racing
-    /// against this read).
-    // Its only production caller is the desktop wake-deadline hook, which
-    // neither the mobile runners nor wasm build.
-    #[cfg(any(test, not(target_arch = "wasm32")))]
-    #[cfg_attr(
-        all(not(test), any(target_os = "android", target_os = "ios")),
-        expect(dead_code, reason = "consumed only by the desktop wake-deadline hook")
-    )]
+    /// Read a slot without changing its checkout state. Used for scheduler
+    /// snapshots and capturing presentation assembly capabilities.
     pub(super) fn get(&self, id: &UiRuntimeId) -> Option<&RuntimeSlot> {
         self.slots
             .iter()
@@ -334,7 +318,7 @@ impl RuntimeRegistry {
 enum RuntimeMapMutation {
     /// Add a newly-constructed UI runtime to the registry (never displaces a
     /// sibling — see `install_ui_runtime_alongside` in `super::runner`), plus the
-    /// window whose id mints its `WindowRegistry` mapping. Boxed: `RuntimeSlot`
+    /// prepared native identity for its `WindowRegistry` mapping. Boxed: `RuntimeSlot`
     /// owns a whole `UiRuntime`, over a kilobyte, next to `Uninstall`'s bare
     /// `UiRuntimeId` -- boxing keeps this enum (and every `Vec<RuntimeMapMutation>`
     /// queueing it) from paying that size for every entry regardless of
@@ -347,7 +331,7 @@ enum RuntimeMapMutation {
                       (runner.rs::install_ui_runtime_alongside) is desktop-only"
         )
     )]
-    Install(UiRuntimeId, Box<RuntimeSlot>, Arc<dyn PlatformWindow>),
+    Install(UiRuntimeId, Box<RuntimeSlot>, PreparedWindowRegistration),
     /// Remove one UI runtime from the registry (a window closing while siblings
     /// stay open — see `request_ui_runtime_uninstall` in `super::runner`).
     Uninstall(UiRuntimeId),
@@ -1240,14 +1224,12 @@ impl AppRuntime {
     }
 
     /// The un-deferred application of an `Install` mutation: registers
-    /// `window` in the `WindowRegistry` FIRST, strictly (never replacing an
+    /// a prepared native identity in the `WindowRegistry` first, strictly (never replacing an
     /// existing mapping — an id collision is refused, not silently
     /// re-routed onto a sibling UI runtime's window), and only inserts `slot`
-    /// into `ui_runtimes` once that registration succeeds. Hands `window` to
-    /// [`super::window_registry::WindowRegistry::try_register_window`]
-    /// rather than deriving its id here: `WindowId` is the registry's own
-    /// single-authority concern (ADR-0037 §2) — `AppRuntime` never names or
-    /// touches it directly.
+    /// into `ui_runtimes` once that registration succeeds. Preparation already
+    /// read the window identity outside app borrows; publication calls no window
+    /// method. `WindowId` stays inside the registry module (ADR-0037 §2).
     ///
     /// On `Err`, hands `slot` BACK rather than dropping it here: this method
     /// is always called while some caller's `APP_RUNTIME` `RefCell` borrow is
@@ -1262,9 +1244,9 @@ impl AppRuntime {
         &mut self,
         id: UiRuntimeId,
         slot: RuntimeSlot,
-        window: &Arc<dyn PlatformWindow>,
+        registration: PreparedWindowRegistration,
     ) -> Result<(), (RegistryError, Box<RuntimeSlot>)> {
-        if let Err(error) = self.registry.try_register_window(window, slot.address) {
+        if let Err(error) = self.registry.try_register(registration, slot.address) {
             return Err((error, Box::new(slot)));
         }
         self.ui_runtimes.insert(id, slot);
@@ -1343,14 +1325,18 @@ impl AppRuntime {
         &mut self,
         id: UiRuntimeId,
         slot: RuntimeSlot,
-        window: Arc<dyn PlatformWindow>,
+        registration: PreparedWindowRegistration,
     ) -> Result<(), (RegistryError, Box<RuntimeSlot>)> {
         if self.dispatched_ui_runtime_id.is_some() || self.iterating_all_ui_runtimes {
             self.pending_ui_runtime_mutations
-                .push(RuntimeMapMutation::Install(id, Box::new(slot), window));
+                .push(RuntimeMapMutation::Install(
+                    id,
+                    Box::new(slot),
+                    registration,
+                ));
             return Ok(());
         }
-        self.apply_install(id, slot, &window)
+        self.apply_install(id, slot, registration)
     }
 
     /// Requests uninstalling one UI runtime — a single window closing while
@@ -1414,8 +1400,8 @@ impl AppRuntime {
         let mut removed = Vec::new();
         for mutation in pending {
             match mutation {
-                RuntimeMapMutation::Install(id, slot, window) => {
-                    if let Err((error, slot)) = self.apply_install(id, *slot, &window) {
+                RuntimeMapMutation::Install(id, slot, registration) => {
+                    if let Err((error, slot)) = self.apply_install(id, *slot, registration) {
                         // The collided slot is routed through `removed`, the
                         // SAME bucket a rejected/removed `Uninstall` slot
                         // uses below -- never dropped here, inside this

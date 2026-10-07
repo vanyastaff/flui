@@ -12,6 +12,7 @@ use super::host::APP_RUNTIME;
 use super::secondary_window::drain_pending_secondary_window_completions;
 use crate::app::lifecycle_state::preserve_first_lifecycle_panic;
 use crate::app::runtime::RuntimeSlot;
+use crate::app::window_registry::PreparedWindowRegistration;
 
 /// A registration-lifetime renderer-surface applier: `FnMut(size,
 /// scale_factor)`. Named so [`RuntimeSlot`]'s `surface_applier` field
@@ -527,95 +528,94 @@ pub(super) fn install_platform_ui_runtime(
         ui_runtime_id: ui_runtime.id(),
         presentation_id: ui_runtime.presentation_id(),
     };
-    let (displaced, stale_owner_turns) = APP_RUNTIME.with(|slot| {
-        let mut state = slot.borrow_mut();
-        state.frame_drivers.retire_all();
-        // Every ui_runtime hosted here may already be installed — a reinstall
-        // without an intervening `teardown_platform_ui_runtime` (the
-        // panic-recovery path: a mid-`on_ready` failure leaves the old
-        // registry/queue/applier/window-registry mappings in place, and
-        // bootstrap tries again on the same thread). Remove every registry
-        // mapping addressed to EACH displaced ui_runtime — not just the window
-        // being installed now — in this same borrow, before registering the
-        // new window: otherwise a displaced ui_runtime's own window(s) survive as
-        // dead entries no later teardown ever reaches (this legacy entry
-        // point is the only one that clears the whole registry at once).
-        let mut removed_window_mappings = 0;
-        let displaced = state.ui_runtimes.clear();
-        // A panicking old-incarnation task can leave later owner turns in
-        // the global FIFO after its drain guard releases. They are addressed
-        // to the registry being replaced here, so retain neither their stale
-        // work nor captures into the fresh loop. Return them beside the
-        // displaced slots so arbitrary capture destructors run only after
-        // this TLS borrow has ended.
-        let stale_owner_turns = std::mem::take(&mut state.owner_turn_queue);
-        state.owner_turn_continuation = None;
-        state.owner_turn_continuation_failed = false;
-        state.owner_turn_callback_budget = None;
-        state.owner_turn_callback_active = false;
-        state.owner_turn_draining = false;
-        state.closing_presentations.clear();
-        for (displaced_id, _) in &displaced {
-            removed_window_mappings += state.registry.remove_ui_runtime(*displaced_id).len();
-        }
-        state.registry.register_window(window, address);
-
-        if !displaced.is_empty() {
-            tracing::warn!(
-                displaced_ui_runtimes = displaced.len(),
-                new_address = ?address,
-                removed_window_mappings,
-                "install_platform_ui_runtime: replacing ui_runtime(s) that were never torn down"
+    let registration = PreparedWindowRegistration::new(window);
+    let (displaced, stale_owner_turns, removed_window_mappings, replaced_mapping) = APP_RUNTIME
+        .with(|slot| {
+            let mut state = slot.borrow_mut();
+            state.frame_drivers.retire_all();
+            // Every ui_runtime hosted here may already be installed — a reinstall
+            // without an intervening `teardown_platform_ui_runtime` (the
+            // panic-recovery path: a mid-`on_ready` failure leaves the old
+            // registry/queue/applier/window-registry mappings in place, and
+            // bootstrap tries again on the same thread). Remove every registry
+            // mapping addressed to EACH displaced ui_runtime — not just the window
+            // being installed now — in this same borrow, before registering the
+            // new window: otherwise a displaced ui_runtime's own window(s) survive as
+            // dead entries no later teardown ever reaches (this legacy entry
+            // point is the only one that clears the whole registry at once).
+            let mut removed_window_mappings = 0;
+            let displaced = state.ui_runtimes.clear();
+            // A panicking old-incarnation task can leave later owner turns in
+            // the global FIFO after its drain guard releases. They are addressed
+            // to the registry being replaced here, so retain neither their stale
+            // work nor captures into the fresh loop. Return them beside the
+            // displaced slots so arbitrary capture destructors run only after
+            // this TLS borrow has ended.
+            let stale_owner_turns = std::mem::take(&mut state.owner_turn_queue);
+            state.owner_turn_continuation = None;
+            state.owner_turn_continuation_failed = false;
+            state.owner_turn_callback_budget = None;
+            state.owner_turn_callback_active = false;
+            state.owner_turn_draining = false;
+            state.closing_presentations.clear();
+            for (displaced_id, _) in &displaced {
+                removed_window_mappings += state.registry.remove_ui_runtime(*displaced_id).len();
+            }
+            let replaced_mapping = state.registry.register(registration, address);
+            state.ui_runtimes.insert(
+                address.ui_runtime_id,
+                RuntimeSlot {
+                    ui_runtime: Some(ui_runtime),
+                    queue: VecDeque::new(),
+                    draining: false,
+                    address,
+                    surface_applier: None,
+                    surface_owner: None,
+                },
             );
-        }
-        state.ui_runtimes.insert(
-            address.ui_runtime_id,
-            RuntimeSlot {
-                ui_runtime: Some(ui_runtime),
-                queue: VecDeque::new(),
-                draining: false,
-                address,
-                surface_applier: None,
-                surface_owner: None,
-            },
-        );
-        state.owner_thread = Some(owner_thread);
-        // Defensive: a reinstall-without-teardown only reaches this path
-        // when the displaced incarnation's own dispatch never restored its
-        // slot's `ui_runtime` (the panic-recovery scenario this function's doc
-        // already documents) — `dispatched_scheduler`/`dispatched_ui_runtime_id`,
-        // if the displaced incarnation left either stashed, belong to that
-        // dead incarnation and must not leak into the fresh one's fence-(c)
-        // reads.
-        state.dispatched_scheduler = None;
-        state.dispatched_ui_runtime_id = None;
-        // Explicit, known-point resolution: a ui_runtime is actually being
-        // installed, so this thread genuinely needs `SharedEngineServices`
-        // -- unlike `install_owner_platform`, which every backend calls
-        // (including `run_direct`, which never installs a ui_runtime and never
-        // needs these services). Idempotent (`ensure_services` caches), so
-        // it does not matter whether a prior ui_runtime on this thread already
-        // triggered it.
-        let _ = state.ensure_services();
-        // Same known-point discipline for the loop-scoped execution
-        // services (issue #557): resolved here (host-injected if the
-        // bootstrap stashed `AppConfig::executors`, default pools
-        // otherwise), never ambiently. Cheap — default pools start worker
-        // threads on first background spawn, not here.
-        let _ = state.ensure_execution();
-        // And for the service registry (issue #558): a PRIOR loop's
-        // teardown closed its admission; this loop hosting a ui_runtime reopens
-        // it so config-declared services can start. Running services are
-        // untouched — mid-loop reinstalls (hot-restart, panic recovery)
-        // find admission already open and their services still owned.
-        #[cfg(not(target_arch = "wasm32"))]
-        state.reopen_lifecycles();
-        (displaced, stale_owner_turns)
-    });
+            state.owner_thread = Some(owner_thread);
+            // Defensive: a reinstall-without-teardown only reaches this path
+            // when the displaced incarnation's own dispatch never restored its
+            // slot's `ui_runtime` (the panic-recovery scenario this function's doc
+            // already documents) — `dispatched_scheduler`/`dispatched_ui_runtime_id`,
+            // if the displaced incarnation left either stashed, belong to that
+            // dead incarnation and must not leak into the fresh one's fence-(c)
+            // reads.
+            state.dispatched_scheduler = None;
+            state.dispatched_ui_runtime_id = None;
+            // Explicit, known-point resolution: a ui_runtime is actually being
+            // installed, so this thread genuinely needs `SharedEngineServices`
+            // -- unlike `install_owner_platform`, which every backend calls
+            // (including `run_direct`, which never installs a ui_runtime and never
+            // needs these services). Idempotent (`ensure_services` caches), so
+            // it does not matter whether a prior ui_runtime on this thread already
+            // triggered it.
+            let _ = state.ensure_services();
+            // Same known-point discipline for the loop-scoped execution
+            // services (issue #557): resolved here (host-injected if the
+            // bootstrap stashed `AppConfig::executors`, default pools
+            // otherwise), never ambiently. Cheap — default pools start worker
+            // threads on first background spawn, not here.
+            let _ = state.ensure_execution();
+            // And for the service registry (issue #558): a PRIOR loop's
+            // teardown closed its admission; this loop hosting a ui_runtime reopens
+            // it so config-declared services can start. Running services are
+            // untouched — mid-loop reinstalls (hot-restart, panic recovery)
+            // find admission already open and their services still owned.
+            #[cfg(not(target_arch = "wasm32"))]
+            state.reopen_lifecycles();
+            (
+                displaced,
+                stale_owner_turns,
+                removed_window_mappings,
+                replaced_mapping,
+            )
+        });
     // Destructors may re-enter platform/framework code (the same invariant
     // `teardown_platform_ui_runtime` honors) — drop only after the TLS borrow
     // above has released.
     let mut first_panic = None;
+    let displaced_count = displaced.len();
     drop_removed_ui_runtimes(
         displaced.into_iter().map(|(_, slot)| slot).collect(),
         &mut first_panic,
@@ -627,6 +627,19 @@ pub(super) fn install_platform_ui_runtime(
         state.native_retirement.clone()
     });
     retirement.drain(&mut first_panic);
+    if displaced_count != 0 || replaced_mapping.is_some() {
+        let diagnostic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            tracing::warn!(
+                displaced_ui_runtimes = displaced_count,
+                new_address = ?address,
+                removed_window_mappings,
+                ?replaced_mapping,
+                "install_platform_ui_runtime: replacing an earlier registration"
+            );
+        }))
+        .err();
+        preserve_first_lifecycle_panic(&mut first_panic, diagnostic, "replacement diagnostic");
+    }
     if let Some(payload) = first_panic {
         std::panic::resume_unwind(payload);
     }
@@ -650,7 +663,7 @@ pub(super) fn install_platform_ui_runtime(
 /// `Err(RegistryError::WindowAlreadyMapped)` only when applied immediately
 /// (no dispatch/visit in flight) and `window`'s id already maps to a live
 /// entry — refused, never silently re-routed onto whichever sibling UI runtime
-/// already owns that id (`WindowRegistry::register_window`'s replace
+/// already owns that id (`WindowRegistry::register`'s replace
 /// semantics is exactly the wrong tool for two UI runtimes meant to coexist). A
 /// deferred install that later collides is traced and dropped instead (see
 /// `AppRuntime::drain_pending_ui_runtime_mutations`), since the caller has
@@ -678,7 +691,7 @@ pub(super) fn install_ui_runtime_alongside(
         ui_runtime_id: ui_runtime.id(),
         presentation_id: ui_runtime.presentation_id(),
     };
-    let window = std::sync::Arc::clone(window);
+    let registration = PreparedWindowRegistration::new(window);
     let result = APP_RUNTIME.with(|slot| {
         let mut state = slot.borrow_mut();
         state.owner_thread.get_or_insert(owner_thread);
@@ -693,7 +706,7 @@ pub(super) fn install_ui_runtime_alongside(
                 surface_applier: None,
                 surface_owner: None,
             },
-            window,
+            registration,
         )
     });
     // On a refused collision, `result` carries the rejected `RuntimeSlot` (and
@@ -814,8 +827,7 @@ pub(super) enum InstallPresentationError {
 /// inside a dispatched callback, so there is nothing forcing that
 /// generalization today. Extending the deferral queue to
 /// presentation-install requests is follow-up work, not silently skipped:
-/// this refuses loudly (a `debug_assert!` in debug builds) rather than
-/// corrupting `AppRuntime` state.
+/// this returns `DispatchInFlight` without changing `AppRuntime` state.
 #[cfg_attr(
     not(any(
         test,
@@ -836,21 +848,11 @@ pub(super) fn install_presentation_alongside(
     window: impl Into<crate::app::presentation::PresentationWindow>,
 ) -> Result<PresentationDispatcher, InstallPresentationError> {
     let presentation_window = window.into();
+    let registration = PreparedWindowRegistration::new(presentation_window.window());
     let ui_runtime_id = dispatcher.address.ui_runtime_id;
     let owner_thread = dispatcher.owner_thread;
-    APP_RUNTIME.with(|slot| {
-        let mut state = slot.borrow_mut();
+    let authorize = |state: &crate::app::runtime::AppRuntime| {
         if state.dispatched_ui_runtime_id.is_some() || state.iterating_all_ui_runtimes {
-            debug_assert!(
-                false,
-                "BUG: install_presentation_alongside called while a dispatch/hot-restart visit \
-                 is in flight -- this path has no defer-to-idle queue yet (a named, stated gap, \
-                 not a silent one); call only from outside any dispatched callback"
-            );
-            tracing::error!(
-                ?ui_runtime_id,
-                "rejecting install_presentation_alongside while a dispatch is in flight"
-            );
             return Err(InstallPresentationError::DispatchInFlight);
         }
         if !state.ui_runtimes.contains_key(&ui_runtime_id) {
@@ -866,11 +868,6 @@ pub(super) fn install_presentation_alongside(
         // `state.ui_runtimes` mutably below, exactly like `dispatch_platform_
         // ui_runtime` checks `state.registry` before `state.ui_runtimes.get_mut`.
         if !state.registry.contains_address(dispatcher.address) {
-            tracing::debug!(
-                ?dispatcher,
-                "rejecting install_presentation_alongside: the dispatcher's own presentation is \
-                 no longer registered, even though its ui_runtime survives"
-            );
             return Err(InstallPresentationError::StalePresentation);
         }
         // A close becomes terminal when admitted, not when the bounded
@@ -879,31 +876,36 @@ pub(super) fn install_presentation_alongside(
         // interval would change the admitted close from a whole-ui_runtime close
         // into a partial close and leave the new presentation alive.
         if state.closing_presentations.contains(&dispatcher.address) {
-            tracing::debug!(
-                ?dispatcher,
-                "rejecting install_presentation_alongside: the dispatcher's presentation has a \
-                 terminal close pending"
-            );
             return Err(InstallPresentationError::PresentationClosing);
         }
+        Ok(())
+    };
+    let factory = APP_RUNTIME.with(|slot| {
+        let state = slot.borrow();
+        authorize(&state)?;
         let ui_runtime_slot = state
             .ui_runtimes
-            .get_mut(&ui_runtime_id)
+            .get(&ui_runtime_id)
             .expect("BUG: presence just checked above via contains_key");
-        let Some(ui_runtime) = ui_runtime_slot.ui_runtime.as_mut() else {
+        let Some(ui_runtime) = ui_runtime_slot.ui_runtime.as_ref() else {
             return Err(InstallPresentationError::RuntimeUnavailable);
         };
-        // Assemble WITHOUT installing yet -- see this function's own doc
-        // for why the ordering matters. `presentation` is dropped (no
-        // forest membership, so nothing to roll back) if registration
-        // below fails.
-        let window = std::sync::Arc::clone(presentation_window.window());
-        let presentation = ui_runtime.assemble_presentation(presentation_window);
-        let address = flui_foundation::PresentationAddress {
-            ui_runtime_id,
-            presentation_id: presentation.id(),
-        };
-        state.registry.try_register_window(&window, address)?;
+        Ok(ui_runtime.presentation_factory())
+    })?;
+    // Platform callbacks may close the authorizer or replace the whole host.
+    // Keep unpublished ownership outside TLS, including every refusal path.
+    let presentation = factory
+        .assemble(presentation_window)
+        .map_err(|_| InstallPresentationError::RuntimeUnavailable)?;
+    let address = flui_foundation::PresentationAddress {
+        ui_runtime_id,
+        presentation_id: presentation.id(),
+    };
+    let mut presentation = Some(presentation);
+    APP_RUNTIME.with(|slot| {
+        let mut state = slot.borrow_mut();
+        authorize(&state)?;
+        state.registry.try_register(registration, address)?;
         let ui_runtime_slot = state
             .ui_runtimes
             .get_mut(&ui_runtime_id)
@@ -912,7 +914,11 @@ pub(super) fn install_presentation_alongside(
             .ui_runtime
             .as_mut()
             .expect("BUG: presence checked above, and nothing between here and there took it");
-        ui_runtime.install_presentation(presentation);
+        ui_runtime.install_presentation(
+            presentation
+                .take()
+                .expect("BUG: unpublished presentation is owned until commit"),
+        );
         Ok(PresentationDispatcher {
             owner_thread,
             address,

@@ -9,6 +9,14 @@ the dispatch layer moves there too.
 
 ## Invariants
 
+- **Prepare windows before publishing membership.** Native identity reads and
+  presentation assembly run outside `APP_RUNTIME` borrows. Assembly can reenter
+  the host, so shared installation revalidates the exact authorizing presentation
+  before publishing either membership. Refused presentations remain owned outside
+  the registry borrow. `native_identity_is_observed_before_registry_publication`
+  and `presentation_assembly_reentry_revalidates_its_authorizer` exercise platform
+  callbacks, authorizer closure with and without a surviving sibling, and reuse
+  of the refused window's native identity by the next installation.
 - **The engine stays here.** The UI runtime renders through a
   `flui_runtime::sink::FrameSink` and names no engine type. This crate's two
   sinks are `RasterLane<B>` (the desktop, Android and iOS runners, ADR-0045)

@@ -5,10 +5,10 @@
 //! registry, or a platform callback. This module is that authority's home.
 //! `WindowId` (the platform-internal native-handle key) is confined to this
 //! file within `flui-app` — every other module addresses a presentation
-//! through [`PresentationAddress`] only, minted here. Every write path
-//! (`register_window`, `try_register_window`) takes a `&Arc<dyn
-//! PlatformWindow>` and derives the id itself; no caller outside this file
-//! ever names or passes a bare `WindowId`: no routing API elsewhere in
+//! through [`PresentationAddress`] only. [`PreparedWindowRegistration`] reads
+//! the native identity before the caller borrows either registry. Publication
+//! consumes that opaque value and invokes no window method or diagnostic hook.
+//! No caller outside this file names or passes a bare `WindowId`: no routing API elsewhere in
 //! `flui-app` accepts or returns one. The exceptions are structural — the
 //! test-only `PlatformWindow` mock restating `fn id(&self) -> WindowId`, and
 //! `AppRuntime::release_redraw_window_for`, which compares a window's own id.
@@ -35,7 +35,20 @@ use std::sync::Arc;
 use flui_foundation::{PresentationAddress, UiRuntimeId};
 use flui_platform::traits::{PlatformWindow, WindowId};
 
-/// Errors from [`WindowRegistry::try_register_window`].
+/// A native identity sampled before entering a registry publication interval.
+/// The window itself is not retained by a deferred logical/native install.
+#[derive(Debug)]
+pub(crate) struct PreparedWindowRegistration {
+    id: WindowId,
+}
+
+impl PreparedWindowRegistration {
+    pub(crate) fn new(window: &Arc<dyn PlatformWindow>) -> Self {
+        Self { id: window.id() }
+    }
+}
+
+/// Errors from [`WindowRegistry::try_register`].
 ///
 /// Reached from `AppRuntime::apply_install`
 /// (`crates/flui-app/src/app/runtime.rs`): the strict, refuse-on-collision
@@ -45,8 +58,8 @@ use flui_platform::traits::{PlatformWindow, WindowId};
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub(crate) enum RegistryError {
-    /// The window already has a mapped address; `try_register_window` never
-    /// replaces (use `WindowRegistry::register_window` — the Android/web
+    /// The window already has a mapped address; `try_register` never
+    /// replaces (use `WindowRegistry::register` — the Android/web
     /// replace-semantics install, not linked because it is target-gated).
     #[error("window is already mapped to {existing:?}")]
     WindowAlreadyMapped {
@@ -76,17 +89,14 @@ impl WindowRegistry {
         }
     }
 
-    /// Registers `window` at `address`, **replacing** any existing mapping
+    /// Publishes a prepared native identity at `address`, replacing any mapping
     /// for the same window and returning the displaced address.
     ///
     /// Replacement (not a hard error) keeps install recoverable after a
     /// mid-`on_ready` panic: `OwnerHostClearGuard` only clears
     /// `AppRuntime.owner_platform`, not the UI runtime-facing fields this
-    /// registry lives alongside, and the web host never tears down at all — a hard error here
-    /// would brick reinstall on either path. A replacement is traced at
-    /// `warn` with both addresses so a genuine double-install bug is still
-    /// visible; [`Self::try_register_window`] is the strict alternative for
-    /// a caller that wants a hard error instead.
+    /// registry lives alongside. [`Self::try_register`] is the strict alternative
+    /// for a caller that must refuse a collision.
     ///
     /// This only replaces the mapping for the exact same `WindowId` — it
     /// does **not** remove any *other* window mapped to a UI runtime this
@@ -94,17 +104,14 @@ impl WindowRegistry {
     /// under a fresh window must call [`Self::remove_ui_runtime`] for the
     /// displaced UI runtime first (see `install_platform_ui_runtime`'s use of both).
     ///
-    /// Calls `window.id()` internally so callers never need to name
-    /// [`WindowId`] themselves. Performs the install-time self-check read
-    /// immediately after inserting: the very next [`Self::resolve`] must
-    /// see exactly what was just written.
+    /// Returns the displaced address for diagnostics after registry borrows end.
     #[cfg(any(test, target_os = "android", target_arch = "wasm32"))]
-    pub(crate) fn register_window(
+    pub(crate) fn register(
         &mut self,
-        window: &Arc<dyn PlatformWindow>,
+        registration: PreparedWindowRegistration,
         address: PresentationAddress,
     ) -> Option<PresentationAddress> {
-        let id = window.id();
+        let id = registration.id;
         let displaced = if let Some(entry) = self
             .entries
             .iter_mut()
@@ -115,14 +122,6 @@ impl WindowRegistry {
             self.entries.push((id, address));
             None
         };
-        if let Some(displaced) = displaced {
-            tracing::warn!(
-                ?id,
-                new_address = ?address,
-                displaced_address = ?displaced,
-                "window_registry: replacing an existing window mapping"
-            );
-        }
         debug_assert_eq!(
             self.resolve(id),
             Some(address),
@@ -131,39 +130,18 @@ impl WindowRegistry {
         displaced
     }
 
-    /// The strict alternative to `Self::register_window` (target-gated, so
+    /// The strict alternative to `Self::register` (target-gated, so
     /// not linked): refuses instead
     /// of replacing when `window`'s id is already mapped. See
     /// [`RegistryError`]'s doc for its one production caller.
     ///
-    /// Calls `window.id()` internally, exactly like `Self::register_window`
-    /// does — so a caller outside this file (`AppRuntime::apply_install`,
-    /// specifically) derives and pairs a window's id with an address without
-    /// ever naming [`WindowId`] itself. Before this method existed,
-    /// `apply_install` called `window.id()` directly and passed the raw
-    /// `WindowId` across the module boundary to [`Self::try_register`] (the
-    /// bare, id-taking primitive below) — a second native-window-lookup path
-    /// this module's own single-authority contract (ADR-0037 §2) forbids.
-    pub(crate) fn try_register_window(
+    /// Preparation already sampled the native identity outside registry borrows.
+    pub(crate) fn try_register(
         &mut self,
-        window: &Arc<dyn PlatformWindow>,
+        registration: PreparedWindowRegistration,
         address: PresentationAddress,
     ) -> Result<(), RegistryError> {
-        self.try_register(window.id(), address)
-    }
-
-    /// The bare, `WindowId`-taking primitive [`Self::try_register_window`]
-    /// wraps. Private: only this module's own test submodule (which
-    /// constructs a `WindowId` directly to probe collision handling without
-    /// needing a real `PlatformWindow`) can reach it, since a nested `mod
-    /// tests` sees its parent module's private items. Every OTHER caller, in
-    /// or out of this file, goes through `try_register_window` instead,
-    /// never naming `WindowId` itself.
-    fn try_register(
-        &mut self,
-        id: WindowId,
-        address: PresentationAddress,
-    ) -> Result<(), RegistryError> {
+        let id = registration.id;
         if let Some(existing) = self.resolve(id) {
             return Err(RegistryError::WindowAlreadyMapped { existing });
         }

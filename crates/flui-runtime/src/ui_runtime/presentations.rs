@@ -1,8 +1,7 @@
 //! Presentations hosted by a `UiRuntime`: installation, entry, per-presentation access, hide and close.
 
 use super::UiRuntime;
-use super::commands::UiCommandSender;
-use crate::presentation::{PresentationState, PresentationWindow, RuntimeCapabilities};
+use crate::presentation::{PresentationState, PresentationWindow};
 use flui_foundation::PresentationId;
 #[cfg(any(test, feature = "test-support"))]
 use flui_interaction::FocusManager;
@@ -11,6 +10,7 @@ use flui_view::__runtime::GlobalKeyRegistryComposite;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 #[cfg(any(test, feature = "test-support"))]
 use std::rc::Rc;
+#[cfg(test)]
 use std::sync::Arc;
 
 impl UiRuntime {
@@ -140,34 +140,9 @@ impl UiRuntime {
         &self,
         window: impl Into<PresentationWindow>,
     ) -> PresentationState {
-        let window = window.into();
-        let (_, presentation_id) = crate::runtime_services::next_identity();
-        let device_pixel_ratio = window.window().scale_factor();
-        // The prototype is stamped for the PRIMARY presentation; this
-        // presentation's accessibility actions must address ITSELF, or the
-        // drain would resolve them against a sibling's semantics tree.
-        let command_sender = UiCommandSender {
-            presentation_id,
-            ..self.sender_prototype.clone()
-        };
-        PresentationState::new(
-            presentation_id,
-            Some(device_pixel_ratio),
-            window,
-            RuntimeCapabilities {
-                global_key_scope: self.global_key_scope.clone(),
-                async_driver: self.owner_frame.async_driver(),
-                local_post_frame_handle: self.owner_frame.local_post_frame_handle(),
-                interaction_dispatch_handle: self.interaction_lane.dispatch_handle(),
-                scheduler: &self.scheduler,
-                wake: Arc::clone(&self.wake),
-                command_sender,
-                clipboard: Arc::clone(&self.clipboard),
-                storage: self.storage.clone(),
-                clock: &self.clock,
-                text: self.text.clone(),
-            },
-        )
+        self.presentation_factory()
+            .assemble(window.into())
+            .unwrap_or_else(|_| unreachable!("BUG: a borrowed UI runtime owns its scheduler"))
     }
 
     /// Install an already-[`assembled`](Self::assemble_presentation)

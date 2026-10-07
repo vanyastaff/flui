@@ -9,6 +9,9 @@
 
 ### Fixed
 
+- Allow window identity and presentation assembly callbacks to reenter the host
+  without a registry borrow panic. Refuse shared installation if its authorizing
+  presentation closes during assembly.
 - Tie frame resources and asynchronous renderer publication to the presentation
   that installed them. Native close and quit revoke publication before terminal
   lifecycle observers run.

@@ -11,6 +11,14 @@ host.
 
 ## Invariants
 
+- **Assembly is separate from publication.** `UiRuntime::presentation_factory`
+  captures the capabilities for assembling another presentation without keeping
+  the runtime borrowed. Its scheduler reference is weak; assembly temporarily
+  upgrades it and may invoke platform callbacks. A successful assembly grants no
+  publication authority: the host checks its exact authorizer again before
+  installing the result. The app's
+  `presentation_assembly_reentry_revalidates_its_authorizer` pins that reentry
+  cannot publish through a presentation that closed during assembly.
 - **No host, platform or GPU edge.** The crate's normal dependency closure
   names none of `flui-platform`, `winit`, `android-activity`, `ndk`,
   `windows`, `objc2-app-kit`, `objc2-ui-kit`, `wgpu`, `flui-engine` or

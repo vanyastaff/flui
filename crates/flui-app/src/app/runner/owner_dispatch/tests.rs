@@ -24,6 +24,188 @@ use crate::app::runtime::{ExitPolicy, WindowPolicy};
 
 static_assertions::assert_impl_all!(RuntimeEvent: Send);
 
+struct ReentrantIdentityWindow {
+    inner: crate::app::window_test_support::TestWindow,
+    probe: flui_foundation::PresentationAddress,
+    queried: Arc<std::sync::atomic::AtomicBool>,
+    on_scale: Option<Arc<dyn Fn() + Send + Sync>>,
+}
+
+impl PlatformWindow for ReentrantIdentityWindow {
+    fn id(&self) -> flui_platform::traits::WindowId {
+        self.queried
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        assert!(matches!(
+            crate::request_presentation_close(self.probe),
+            Err(crate::CloseRequestError::UnknownPresentation { .. }
+                | crate::CloseRequestError::NoHostedRuntime)
+        ));
+        self.inner.id()
+    }
+
+    fn physical_size(&self) -> flui_foundation::geometry::Size<i32> {
+        self.inner.physical_size()
+    }
+    fn logical_size(&self) -> flui_foundation::geometry::Size<f64> {
+        self.inner.logical_size()
+    }
+    fn scale_factor(&self) -> f64 {
+        if let Some(on_scale) = &self.on_scale {
+            on_scale();
+        }
+        self.inner.scale_factor()
+    }
+    fn request_redraw(&self) {
+        self.inner.request_redraw();
+    }
+    fn is_focused(&self) -> bool {
+        self.inner.is_focused()
+    }
+    fn is_visible(&self) -> bool {
+        self.inner.is_visible()
+    }
+    fn set_cursor(
+        &self,
+        cursor: flui_platform_api::CursorIcon,
+    ) -> Result<(), flui_platform_api::CursorError> {
+        self.inner.set_cursor(cursor)
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+fn native_identity_is_observed_before_registry_publication() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    enum Install {
+        ReplaceRuntime,
+        IndependentRuntime,
+        SharedPresentation,
+    }
+    for mode in [
+        Install::ReplaceRuntime,
+        Install::IndependentRuntime,
+        Install::SharedPresentation,
+    ] {
+        let _clear = OwnerHostClearGuard::arm();
+        let primary = install_test_ui_runtime();
+        let uninstalled = crate::app::ui_runtime::UiRuntime::for_test();
+        let probe = flui_foundation::PresentationAddress {
+            ui_runtime_id: uninstalled.id(),
+            presentation_id: uninstalled.presentation_id(),
+        };
+        drop(uninstalled);
+        let queried = Arc::new(AtomicBool::new(false));
+        let window: Arc<dyn PlatformWindow> = Arc::new(ReentrantIdentityWindow {
+            inner: crate::app::window_test_support::TestWindow::new().with_id(100),
+            probe,
+            queried: Arc::clone(&queried),
+            on_scale: None,
+        });
+        let installed = match mode {
+            Install::ReplaceRuntime => {
+                install_platform_ui_runtime(crate::app::ui_runtime::UiRuntime::for_test(), &window)
+            }
+            Install::IndependentRuntime => {
+                install_ui_runtime_alongside(crate::app::ui_runtime::UiRuntime::for_test(), &window)
+                    .expect("independent runtime installs")
+            }
+            Install::SharedPresentation => install_presentation_alongside(primary, window)
+                .expect("shared presentation installs"),
+        };
+        assert!(
+            queried.load(Ordering::SeqCst),
+            "identity callback was exercised"
+        );
+        dispatch_platform_ui_runtime(
+            installed,
+            RuntimeTask::Event(RuntimeEvent::WindowFocus(true)),
+        )
+        .expect("published target accepts its window observation");
+        teardown_platform_ui_runtime();
+    }
+}
+
+fn presentation_assembly_reentry_revalidates_its_authorizer() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    for (close_authorizer, keep_sibling) in [(false, false), (true, false), (true, true)] {
+        let _clear = OwnerHostClearGuard::arm();
+        let primary = install_test_ui_runtime();
+        let sibling = keep_sibling.then(|| {
+            let window: Arc<dyn PlatformWindow> =
+                Arc::new(crate::app::window_test_support::TestWindow::new().with_id(99));
+            install_presentation_alongside(primary, window).expect("initial sibling installs")
+        });
+        let uninstalled = crate::app::ui_runtime::UiRuntime::for_test();
+        let probe = flui_foundation::PresentationAddress {
+            ui_runtime_id: uninstalled.id(),
+            presentation_id: uninstalled.presentation_id(),
+        };
+        drop(uninstalled);
+        let assembled = Arc::new(AtomicBool::new(false));
+        let observed = Arc::clone(&assembled);
+        let window: Arc<dyn PlatformWindow> = Arc::new(ReentrantIdentityWindow {
+            inner: crate::app::window_test_support::TestWindow::new().with_id(100),
+            probe,
+            queried: Arc::new(AtomicBool::new(false)),
+            on_scale: Some(Arc::new(move || {
+                if observed.swap(true, Ordering::SeqCst) {
+                    return;
+                }
+                assert!(matches!(
+                    crate::request_presentation_close(probe),
+                    Err(crate::CloseRequestError::UnknownPresentation { .. }
+                        | crate::CloseRequestError::NoHostedRuntime)
+                ));
+                if close_authorizer {
+                    close_this_window(primary);
+                }
+            })),
+        });
+        let result = install_presentation_alongside(primary, Arc::clone(&window));
+        assert!(
+            assembled.load(Ordering::SeqCst),
+            "assembly called the window"
+        );
+        if close_authorizer {
+            assert_eq!(
+                result.expect_err("assembly cannot publish through a closed authorizer"),
+                if keep_sibling {
+                    InstallPresentationError::StalePresentation
+                } else {
+                    InstallPresentationError::RuntimeUnavailable
+                }
+            );
+            let replacement = install_ui_runtime_alongside(
+                crate::app::ui_runtime::UiRuntime::for_test(),
+                &window,
+            )
+            .expect("refused assembly left no native registration");
+            dispatch_platform_ui_runtime(
+                replacement,
+                RuntimeTask::Event(RuntimeEvent::WindowFocus(true)),
+            )
+            .expect("next installation is usable");
+        } else {
+            let installed = result.expect("reentrant observation permits a live authorizer");
+            dispatch_platform_ui_runtime(
+                installed,
+                RuntimeTask::Event(RuntimeEvent::WindowFocus(true)),
+            )
+            .expect("assembled presentation is dispatchable");
+        }
+        if let Some(sibling) = sibling {
+            dispatch_platform_ui_runtime(
+                sibling,
+                RuntimeTask::Event(RuntimeEvent::WindowFocus(true)),
+            )
+            .expect("existing sibling survives the refused installation");
+        }
+        teardown_platform_ui_runtime();
+    }
+}
+
 fn down_input(offset: f64) -> PlatformInput {
     PlatformInput::Pointer(make_down_event(
         Offset::new(offset, offset),
@@ -366,7 +548,7 @@ fn panic_restores_dispatch_host_for_next_event() {
 /// mints window ids from an instance-local counter, so two windows from
 /// two SEPARATE `headless_platform()` calls can alias the same id —
 /// fatal for two UI runtimes meant to coexist, since `WindowRegistry::
-/// register_window` REPLACES on a matching id, silently dropping ui_runtime
+/// register` REPLACES on a matching id, silently dropping ui_runtime
 /// A's window mapping the moment UI runtime B's aliased-id window installs.
 fn install_two_test_ui_runtimes() -> (PresentationDispatcher, PresentationDispatcher) {
     let platform = flui_platform::headless_platform();
@@ -1281,6 +1463,14 @@ fn owner_dispatch_matrix() {
     crate::table_test::run_table(
         "owner_dispatch_matrix",
         &[
+            (
+                "native_identity_is_observed_before_registry_publication",
+                native_identity_is_observed_before_registry_publication as fn(),
+            ),
+            (
+                "presentation_assembly_reentry_revalidates_its_authorizer",
+                presentation_assembly_reentry_revalidates_its_authorizer as fn(),
+            ),
             (
                 "recovered_surface_notification_resubmits_the_scene",
                 recovered_surface_notification_resubmits_the_scene as fn(),
