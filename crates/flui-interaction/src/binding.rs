@@ -69,8 +69,8 @@
 //!     PointerButtons::NONE, sample));
 //!
 //! binding.handle_pointer_event(&event, |position| {
-//!     assert_eq!(position.x, 12.0);
-//!     assert_eq!(position.y, 24.0);
+//!     assert_eq!(position.dx, 12.0);
+//!     assert_eq!(position.dy, 24.0);
 //!     // An embedding's render tree supplies entries here.
 //!     HitTestResult::new()
 //! });
