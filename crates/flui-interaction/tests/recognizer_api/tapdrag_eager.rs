@@ -12,7 +12,9 @@ use std::{cell::RefCell, rc::Rc};
 fn cancelling_tapdrag_from_tap_down_invalidates_the_queued_tap_up() {
     let arena = GestureArena::new();
     let log = Rc::new(RefCell::new(Vec::new()));
-    let owner = Rc::new(RefCell::new(std::rc::Weak::<TapAndDragGestureRecognizer>::new()));
+    let owner = Rc::new(RefCell::new(
+        std::rc::Weak::<TapAndDragGestureRecognizer>::new(),
+    ));
     let cancellation = owner.clone();
     let down_log = log.clone();
     let up_log = log.clone();
@@ -20,7 +22,10 @@ fn cancelling_tapdrag_from_tap_down_invalidates_the_queued_tap_up() {
     let recognizer = TapAndDragGestureRecognizer::builder(arena.clone())
         .on_tap_down(move |_| {
             down_log.borrow_mut().push("down");
-            let recognizer = cancellation.borrow().upgrade().expect("live callback owner");
+            let recognizer = cancellation
+                .borrow()
+                .upgrade()
+                .expect("live callback owner");
             assert_eq!(recognizer.cancel(), CancelOutcome::Cancelled);
         })
         .on_tap_up(move |_| up_log.borrow_mut().push("up"))
