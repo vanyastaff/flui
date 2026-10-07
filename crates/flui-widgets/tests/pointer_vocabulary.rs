@@ -4,7 +4,7 @@ use std::{cell::RefCell, rc::Rc};
 
 use crate::common::{lay_out, tight};
 use flui_foundation::geometry::{EdgeInsets, Offset, Point};
-use flui_interaction::routing::EventPropagation;
+use flui_interaction::routing::{EventPropagation, HitTestBehavior};
 use flui_platform_api::{
     EventTime,
     keyboard::Modifiers,
@@ -75,6 +75,7 @@ pub(crate) fn scroll_claim_preserves_owned_source_units_and_phase() {
     let sink = observed.clone();
     let laid = lay_out(
         Listener::new()
+            .behavior(HitTestBehavior::Opaque)
             .on_scroll_claim(move |event| {
                 // A claim receives the platform vocabulary itself, not a second
                 // structure that silently discards device identity or units.
@@ -118,6 +119,7 @@ pub(crate) fn pointer_delivery_preserves_source_and_sample_families() {
     let sink = observed.clone();
     let laid = lay_out(
         Listener::new()
+            .behavior(HitTestBehavior::Opaque)
             .on_pointer_move(move |_, dispatch| {
                 if let PointerEvent::Move(event) = dispatch.local {
                     sink.borrow_mut().push(event.clone());
