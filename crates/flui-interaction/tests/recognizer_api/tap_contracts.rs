@@ -7,14 +7,19 @@ use flui_foundation::geometry::Offset;
 use flui_interaction::{
     CancelOutcome, DoubleTapGestureRecognizer, GestureArena, GestureRecognizer,
     TapGestureRecognizer,
-    events::{PointerEventExt, PointerType, make_down_event, make_up_event},
+    events::{PointerType, make_down_event, make_up_event},
     routing::PointerDispatch,
+    traits::PointerEventExtTrait,
 };
 
 #[test]
 fn tap_builder_lifecycle_contract() {
     for (name, row) in [
         ("cancel_reuses_tap", cancel_reuses_tap as fn()),
+        (
+            "panicking_cancel_callback_cannot_strand_tap_tracking",
+            panicking_cancel_callback_cannot_strand_tap_tracking,
+        ),
         (
             "cancel_during_up_suppresses_tap",
             cancel_during_up_suppresses_tap,
@@ -26,6 +31,37 @@ fn tap_builder_lifecycle_contract() {
             std::panic::resume_unwind(payload);
         }
     }
+}
+
+fn panicking_cancel_callback_cannot_strand_tap_tracking() {
+    let arena = GestureArena::new();
+    let cancels = Rc::new(Cell::new(0));
+    let taps = Rc::new(Cell::new(0));
+    let recognizer = TapGestureRecognizer::builder(arena.clone())
+        .on_tap_cancel({
+            let cancels = cancels.clone();
+            move |_| {
+                cancels.set(cancels.get() + 1);
+                panic!("tap cancel panic");
+            }
+        })
+        .on_tap({
+            let taps = taps.clone();
+            move |_| taps.set(taps.get() + 1)
+        })
+        .build();
+    let down = make_down_event(Offset::ZERO, PointerType::Touch);
+    let up = make_up_event(Offset::ZERO, PointerType::Touch);
+    recognizer.add_pointer(PointerDispatch::at_root(&down));
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| recognizer.cancel()));
+    assert!(failure.is_err());
+    assert_eq!(recognizer.cancel(), CancelOutcome::Idle);
+    recognizer.add_pointer(PointerDispatch::at_root(&down));
+    arena.close(down.pointer_id());
+    recognizer.handle_event(PointerDispatch::at_root(&up));
+    arena.drain_deferred_resolutions();
+    assert_eq!(cancels.get(), 1);
+    assert_eq!(taps.get(), 1);
 }
 
 fn cancel_reuses_tap() {
