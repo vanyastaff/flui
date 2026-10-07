@@ -8,15 +8,15 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use flui_interaction::{
-    DoubleTapDetails, DoubleTapGestureRecognizer, DragAxis, DragDownDetails, DragEndDetails,
-    DragGestureRecognizer, DragPointerStrategy, DragStartDetails, DragUpdateDetails, GestureRecognizer,
-    LongPressGestureRecognizer, TapGestureRecognizer, cancel_all,
-};
 use flui_interaction::recognizers::scale::{
     ScaleEndDetails, ScaleGestureRecognizer, ScaleStartDetails, ScaleStartMode, ScaleUpdateDetails,
 };
 use flui_interaction::routing::{EventPropagation, PanZoomDispatch};
+use flui_interaction::{
+    DoubleTapDetails, DoubleTapGestureRecognizer, DragAxis, DragDownDetails, DragEndDetails,
+    DragGestureRecognizer, DragPointerStrategy, DragStartDetails, DragUpdateDetails,
+    GestureRecognizer, LongPressGestureRecognizer, TapGestureRecognizer, cancel_all,
+};
 use flui_interaction::{PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerInfo};
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_view::prelude::*;
@@ -625,18 +625,27 @@ fn claim_native_scale(
                     });
                 }
             }
-            if recognizer.handle_pan_zoom(dispatch) {
+            let handled = recognizer.handle_pan_zoom(dispatch);
+            if handled || active.is_some() {
                 EventPropagation::Stop
             } else {
+                let mut route = route.borrow_mut();
+                if route
+                    .active
+                    .is_some_and(|active| same_native_source(&active, event.pointer()))
+                {
+                    route.active = None;
+                }
                 EventPropagation::Continue
             }
         }
         PanZoomPhase::End | PanZoomPhase::Cancelled => {
             let active = {
                 let mut route = route.borrow_mut();
-                if route.pending.is_some_and(|(local, _)| {
-                    same_native_source(local.pointer(), event.pointer())
-                }) {
+                if route
+                    .pending
+                    .is_some_and(|(local, _)| same_native_source(local.pointer(), event.pointer()))
+                {
                     route.pending = None;
                 }
                 let active = route
@@ -647,7 +656,8 @@ fn claim_native_scale(
                 }
                 active
             };
-            if active && recognizer.handle_pan_zoom(dispatch) {
+            if active {
+                recognizer.handle_pan_zoom(dispatch);
                 EventPropagation::Stop
             } else {
                 EventPropagation::Continue
@@ -696,27 +706,39 @@ struct RecognizerConfiguration {
 
 // The mounted Listener retains this stable weak attachment while a view
 // policy replaces its recognizer. Never hold the target borrow across dispatch.
-#[derive(Default)]
-struct DragAttachment {
-    target: RefCell<Weak<DragGestureRecognizer>>,
+struct RecognizerAttachment<R> {
+    target: RefCell<Weak<R>>,
 }
-impl flui_interaction::GestureArenaMember for DragAttachment {
+impl<R> Default for RecognizerAttachment<R> {
+    fn default() -> Self {
+        Self {
+            target: RefCell::new(Weak::new()),
+        }
+    }
+}
+impl<R: GestureRecognizer> flui_interaction::GestureArenaMember for RecognizerAttachment<R> {
     // Attachments never join an arena; their targets own exact contact members.
     fn accept_gesture(&self, _: flui_interaction::PointerId) {}
     fn reject_gesture(&self, _: flui_interaction::PointerId) {}
 }
-impl GestureRecognizer for DragAttachment {
+impl<R: GestureRecognizer> GestureRecognizer for RecognizerAttachment<R> {
     fn add_pointer(&self, dispatch: flui_interaction::PointerDispatch<'_>) {
         let target = self.target.borrow().upgrade();
-        if let Some(target) = target { target.add_pointer(dispatch); }
+        if let Some(target) = target {
+            target.add_pointer(dispatch);
+        }
     }
     fn handle_event(&self, dispatch: flui_interaction::PointerDispatch<'_>) {
         let target = self.target.borrow().upgrade();
-        if let Some(target) = target { target.handle_event(dispatch); }
+        if let Some(target) = target {
+            target.handle_event(dispatch);
+        }
     }
     fn cancel(&self) -> flui_interaction::CancelOutcome {
         let target = self.target.borrow().upgrade();
-        target.map_or(flui_interaction::CancelOutcome::Idle, |target| target.cancel())
+        target.map_or(flui_interaction::CancelOutcome::Idle, |target| {
+            target.cancel()
+        })
     }
 }
 
@@ -725,8 +747,9 @@ impl GestureRecognizer for DragAttachment {
 pub struct GestureDetectorState {
     drag_pointer_strategy: DragPointerStrategy,
     recognizer_configuration: Option<RecognizerConfiguration>,
-    drag_attachment: Rc<DragAttachment>,
-    horizontal_drag_attachment: Rc<DragAttachment>,
+    drag_attachment: Rc<RecognizerAttachment<DragGestureRecognizer>>,
+    horizontal_drag_attachment: Rc<RecognizerAttachment<DragGestureRecognizer>>,
+    scale_attachment: Rc<RecognizerAttachment<ScaleGestureRecognizer>>,
     /// Shared admission authority for captured pointer and semantics delivery.
     mounted: Rc<Cell<bool>>,
     /// The live `on_tap`, refreshed each `build`. The recognizer reads THIS slot
@@ -844,8 +867,9 @@ impl StatefulView for GestureDetector {
         GestureDetectorState {
             drag_pointer_strategy: self.drag_pointer_strategy,
             recognizer_configuration: None,
-            drag_attachment: Rc::new(DragAttachment::default()),
-            horizontal_drag_attachment: Rc::new(DragAttachment::default()),
+            drag_attachment: Rc::new(RecognizerAttachment::default()),
+            horizontal_drag_attachment: Rc::new(RecognizerAttachment::default()),
+            scale_attachment: Rc::new(RecognizerAttachment::default()),
             mounted: Rc::new(Cell::new(true)),
             tap_slot: Rc::new(RefCell::new(self.on_tap.clone())),
             secondary_tap_slot: Rc::new(RefCell::new(self.on_secondary_tap.clone())),
@@ -965,20 +989,46 @@ impl ViewState<GestureDetector> for GestureDetectorState {
     }
 
     fn did_update_view(&mut self, old_view: &GestureDetector, new_view: &GestureDetector) {
-        if old_view.drag_pointer_strategy == new_view.drag_pointer_strategy { return; }
-        self.drag_pointer_strategy = new_view.drag_pointer_strategy;
-        let (drag, horizontal_drag) = self.make_drag_recognizers(self.drag_pointer_strategy);
-        let Some(recognizers) = self.recognizers.as_mut() else { return; };
+        let replace_drag = old_view.drag_pointer_strategy != new_view.drag_pointer_strategy;
+        let replace_scale = old_view.scale_start_mode != new_view.scale_start_mode;
+        if !replace_drag && !replace_scale {
+            return;
+        }
+        let incoming_drag =
+            replace_drag.then(|| self.make_drag_recognizers(new_view.drag_pointer_strategy));
+        let incoming_scale =
+            replace_scale.then(|| self.make_scale_recognizer(new_view.scale_start_mode));
+        let Some(recognizers) = self.recognizers.as_mut() else {
+            return;
+        };
         // Both new owners and the already mounted Listener's weak targets
         // become visible before retiring user-controlled outgoing callbacks.
-        let old_drag = std::mem::replace(&mut recognizers.drag, drag);
-        let old_horizontal = std::mem::replace(&mut recognizers.horizontal_drag, horizontal_drag);
-        *self.drag_attachment.target.borrow_mut() = Rc::downgrade(&recognizers.drag);
-        *self.horizontal_drag_attachment.target.borrow_mut() = Rc::downgrade(&recognizers.horizontal_drag);
-        cancel_all([
-            &*old_drag as &dyn GestureRecognizer,
-            &*old_horizontal as &dyn GestureRecognizer,
-        ]);
+        let outgoing_drag = incoming_drag.map(|(drag, horizontal)| {
+            self.drag_pointer_strategy = new_view.drag_pointer_strategy;
+            let old_drag = std::mem::replace(&mut recognizers.drag, drag);
+            let old_horizontal = std::mem::replace(&mut recognizers.horizontal_drag, horizontal);
+            *self.drag_attachment.target.borrow_mut() = Rc::downgrade(&recognizers.drag);
+            *self.horizontal_drag_attachment.target.borrow_mut() =
+                Rc::downgrade(&recognizers.horizontal_drag);
+            (old_drag, old_horizontal)
+        });
+        let outgoing_scale = incoming_scale.map(|scale| {
+            self.scale_start_mode = new_view.scale_start_mode;
+            let old = std::mem::replace(&mut recognizers.scale, scale);
+            *self.scale_attachment.target.borrow_mut() = Rc::downgrade(&recognizers.scale);
+            *self.native_scale_route.borrow_mut() = NativeScaleRoute::default();
+            old
+        });
+        cancel_all(
+            outgoing_drag
+                .iter()
+                .flat_map(|(drag, horizontal)| [&**drag as &dyn GestureRecognizer, &**horizontal])
+                .chain(
+                    outgoing_scale
+                        .iter()
+                        .map(|scale| &**scale as &dyn GestureRecognizer),
+                ),
+        );
     }
 
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
@@ -991,7 +1041,11 @@ impl ViewState<GestureDetector> for GestureDetectorState {
         }));
         let arena = GestureArenaScope::of(ctx);
         let settings = GestureArenaScope::settings_of(ctx);
-        self.recognizer_configuration = Some(RecognizerConfiguration { arena: arena.clone(), settings: settings.clone(), writer: writer.clone() });
+        self.recognizer_configuration = Some(RecognizerConfiguration {
+            arena: arena.clone(),
+            settings: settings.clone(),
+            writer: writer.clone(),
+        });
         self.rebuild = Some(ctx.rebuild_handle());
         self.local_post_frame = ctx.local_post_frame_handle();
 
@@ -1057,44 +1111,8 @@ impl ViewState<GestureDetector> for GestureDetectorState {
                 .build()
         };
 
-        let scale = {
-            let start_slot = Rc::clone(&self.scale_slot);
-            let update_slot = Rc::clone(&self.scale_slot);
-            let end_slot = Rc::clone(&self.scale_slot);
-            let cancel_slot = Rc::clone(&self.scale_slot);
-            let start_writer = writer.clone();
-            let update_writer = writer.clone();
-            let end_writer = writer.clone();
-            let cancel_writer = writer.clone();
-            ScaleGestureRecognizer::builder(arena.clone())
-                .settings(settings.clone())
-                .start_mode(self.scale_start_mode)
-                .on_start(move |details| {
-                    let callback = start_slot.borrow().start.clone();
-                    if let Some(callback) = callback {
-                        start_writer.write(|cx| callback(cx, details));
-                    }
-                })
-                .on_update(move |details| {
-                    let callback = update_slot.borrow().update.clone();
-                    if let Some(callback) = callback {
-                        update_writer.write(|cx| callback(cx, details));
-                    }
-                })
-                .on_end(move |details| {
-                    let callback = end_slot.borrow().end.clone();
-                    if let Some(callback) = callback {
-                        end_writer.write(|cx| callback(cx, details));
-                    }
-                })
-                .on_cancel(move || {
-                    let callback = cancel_slot.borrow().cancel.clone();
-                    if let Some(callback) = callback {
-                        cancel_writer.write(|cx| callback(cx));
-                    }
-                })
-                .build()
-        };
+        let scale = self.make_scale_recognizer(self.scale_start_mode);
+        *self.scale_attachment.target.borrow_mut() = Rc::downgrade(&scale);
 
         let (drag, horizontal_drag) = self.make_drag_recognizers(self.drag_pointer_strategy);
         *self.drag_attachment.target.borrow_mut() = Rc::downgrade(&drag);
@@ -1213,8 +1231,57 @@ fn assert_no_pan_horizontal_drag_conflict(view: &GestureDetector) {
 }
 
 impl GestureDetectorState {
-    fn make_drag_recognizers(&self, strategy: DragPointerStrategy) -> (Rc<DragGestureRecognizer>, Rc<DragGestureRecognizer>) {
-        let configuration = self.recognizer_configuration.as_ref().expect("BUG: drag configuration acquired during init_state");
+    fn make_scale_recognizer(&self, mode: ScaleStartMode) -> Rc<ScaleGestureRecognizer> {
+        let configuration = self
+            .recognizer_configuration
+            .as_ref()
+            .expect("BUG: recognizer configuration acquired during init_state");
+        let start_slot = Rc::clone(&self.scale_slot);
+        let update_slot = Rc::clone(&self.scale_slot);
+        let end_slot = Rc::clone(&self.scale_slot);
+        let cancel_slot = Rc::clone(&self.scale_slot);
+        let start_writer = configuration.writer.clone();
+        let update_writer = configuration.writer.clone();
+        let end_writer = configuration.writer.clone();
+        let cancel_writer = configuration.writer.clone();
+        ScaleGestureRecognizer::builder(configuration.arena.clone())
+            .settings(configuration.settings.clone())
+            .start_mode(mode)
+            .on_start(move |details| {
+                let callback = start_slot.borrow().start.clone();
+                if let Some(callback) = callback {
+                    start_writer.write(|cx| callback(cx, details));
+                }
+            })
+            .on_update(move |details| {
+                let callback = update_slot.borrow().update.clone();
+                if let Some(callback) = callback {
+                    update_writer.write(|cx| callback(cx, details));
+                }
+            })
+            .on_end(move |details| {
+                let callback = end_slot.borrow().end.clone();
+                if let Some(callback) = callback {
+                    end_writer.write(|cx| callback(cx, details));
+                }
+            })
+            .on_cancel(move || {
+                let callback = cancel_slot.borrow().cancel.clone();
+                if let Some(callback) = callback {
+                    cancel_writer.write(|cx| callback(cx));
+                }
+            })
+            .build()
+    }
+
+    fn make_drag_recognizers(
+        &self,
+        strategy: DragPointerStrategy,
+    ) -> (Rc<DragGestureRecognizer>, Rc<DragGestureRecognizer>) {
+        let configuration = self
+            .recognizer_configuration
+            .as_ref()
+            .expect("BUG: drag configuration acquired during init_state");
         let arena = configuration.arena.clone();
         let settings = configuration.settings.clone();
         let writer = configuration.writer.clone();
@@ -1324,7 +1391,7 @@ impl GestureDetectorState {
         // this point except in the pair's global half — a recogniser handed
         // only the local event has no way to report a global position and can
         // only restate the local one under that name (issue #908).
-        
+
         Listener::new()
             .contact_recognizers()
             .recognizer_when(&recognizers.tap, {
@@ -1347,18 +1414,22 @@ impl GestureDetectorState {
                 let gates = Rc::clone(&gates);
                 move |_| gates.horizontal_drag_active()
             })
-            .recognizer_when(&recognizers.scale, {
+            .recognizer_when(&self.scale_attachment, {
                 let gates = Rc::clone(&gates);
                 move |_| gates.scale_active()
             })
             .on_pointer_pan_zoom_claim({
-                let recognizer = Rc::downgrade(&recognizers.scale);
+                let attachment = Rc::downgrade(&self.scale_attachment);
                 let route = Rc::clone(&self.native_scale_route);
                 move |dispatch| {
                     if !gates.mounted.get() {
                         return EventPropagation::Continue;
                     }
-                    let Some(recognizer) = recognizer.upgrade() else {
+                    let Some(attachment) = attachment.upgrade() else {
+                        return EventPropagation::Continue;
+                    };
+                    let recognizer = attachment.target.borrow().upgrade();
+                    let Some(recognizer) = recognizer else {
                         return EventPropagation::Continue;
                     };
                     claim_native_scale(&recognizer, &gates, &route, dispatch)
