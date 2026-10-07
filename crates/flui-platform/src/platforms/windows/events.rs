@@ -363,7 +363,13 @@ pub(super) struct NativePointerRegistry {
 
 struct NativeContact {
     info: flui_platform_api::pointer::PointerInfo,
-    buttons: flui_platform_api::pointer::PointerButtons,
+    phase: NativeContactPhase,
+}
+
+#[derive(Clone, Copy)]
+enum NativeContactPhase {
+    Hover,
+    Contact,
 }
 
 impl Default for NativePointerRegistry {
@@ -398,7 +404,7 @@ impl NativePointerRegistry {
                     output.push(PlatformInput::Pointer(PointerEvent::DeviceAdded(PointerDeviceChange::new(device, decoded.kind, time))));
                 }
             }
-            self.contacts.insert(native.pointerId, NativeContact { info, buttons: PointerButtons::NONE });
+            self.contacts.insert(native.pointerId, NativeContact { info, phase: NativeContactPhase::Hover });
         }
         let contact = self.contacts.get_mut(&native.pointerId).expect("BUG: contact was admitted");
         // A native ID reused with different hardware cannot inherit the old owner's sequence.
@@ -409,8 +415,7 @@ impl NativePointerRegistry {
         for (flag, button) in [(POINTER_FLAG_FIRSTBUTTON, PointerButton::PRIMARY), (POINTER_FLAG_SECONDBUTTON, PointerButton::SECONDARY), (POINTER_FLAG_THIRDBUTTON, PointerButton::AUXILIARY), (POINTER_FLAG_FOURTHBUTTON, PointerButton::BACK), (POINTER_FLAG_FIFTHBUTTON, PointerButton::FORWARD)] {
             if native.pointerFlags.0 & flag.0 != 0 { buttons = buttons.with(button); }
         }
-        let before = contact.buttons;
-        contact.buttons = buttons;
+        let in_contact = matches!(contact.phase, NativeContactPhase::Contact);
         let info = contact.info;
         let changed = match native.ButtonChangeType.0 {
             3 | 4 => PointerButton::SECONDARY,
@@ -430,11 +435,14 @@ impl NativePointerRegistry {
             PointerEvent::Leave(PointerSignal::new(info, time).with_position(decoded.sample.position))
         } else if pressed {
             let press = PointerPress::new(info, changed, buttons, decoded.sample);
-            contact.buttons = press.buttons();
-            if before.is_empty() { PointerEvent::Down(press) } else { PointerEvent::ButtonChange(ButtonChange::Pressed(press)) }
+            contact.phase = NativeContactPhase::Contact;
+            if !in_contact { PointerEvent::Down(press) } else { PointerEvent::ButtonChange(ButtonChange::Pressed(press)) }
         } else if released {
             let release = PointerRelease::new(info, changed, buttons, decoded.sample);
-            contact.buttons = release.buttons();
+            if !in_contact {
+                self.contacts.remove(&native.pointerId);
+                return output;
+            }
             if release.buttons().is_empty() {
                 self.contacts.remove(&native.pointerId);
                 PointerEvent::Up(release)
@@ -1027,9 +1035,10 @@ pub(super) fn capture_changed_event(
     let held = [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON, VK_XBUTTON1, VK_XBUTTON2]
         .into_iter()
         .any(key_down_in_queue);
-    (gaining != hwnd && held)
-        .then(|| pointer_input(PointerEvent::Cancel(primary_mouse_info()), time))
-        .flatten()
+    if gaining == hwnd || !held { return None; }
+    use flui_platform_api::{EventTime, pointer::{CancelReason, PointerCancel, PointerEvent as OwnedEvent, PointerId, PointerInfo, PointerKind, PointerRole}};
+    let pointer = PointerInfo::new(PointerId::try_from(1_u64).expect("BUG: primary legacy mouse identity is nonzero"), PointerKind::Mouse).with_role(PointerRole::Primary);
+    Some(PlatformInput::Pointer(OwnedEvent::Cancel(PointerCancel::new(pointer, EventTime::from_nanos(time), CancelReason::CaptureLost))))
 }
 
 /// Build a `PointerState` from LPARAM coordinates and scale factor.
