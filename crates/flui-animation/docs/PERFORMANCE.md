@@ -340,7 +340,7 @@ steps and two probes on the common path.
 |-------|------------|------|
 | `FloatTween` | 1 lerp | ~1ns |
 | `IntTween` | 1 lerp + round | ~2ns |
-| `ColorTween` | 4 lerps | ~4ns |
+| `ColorTween` | 2 Oklab conversions + 4 lerps (premultiplied) | ~175ns |
 | `SizeTween` | 2 lerps | ~2ns |
 | `TweenSequence` | Segment lookup + lerp | ~10ns |
 

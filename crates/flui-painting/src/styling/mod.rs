@@ -15,13 +15,16 @@ pub mod gradient;
 pub mod hsl_hsv;
 pub mod physical_model;
 pub mod shadow;
+mod srgb_tables;
 pub mod table_border;
 
 // Re-exports for convenience
 pub use border::{BorderPosition, BorderSide, BorderStyle};
 pub use border_radius::{BorderRadius, BorderRadiusDirectional, BorderRadiusExt};
 pub use box_border::{Border, BorderDirectional, BoxBorder};
-pub use color::{Color, Oklab, ParseColorError, linear_to_srgb, srgb_to_linear};
+pub use color::{
+    Color, Oklab, ParseColorError, PremultipliedOklab, linear_to_srgb, srgb_to_linear,
+};
 pub use decoration::{
     BlendMode, BoxDecoration, BoxFit, ColorFilter, Decoration, DecorationImage, ImageRepeat,
 };
