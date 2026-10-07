@@ -250,7 +250,7 @@ impl ArenaMembership {
 }
 pub struct PrimaryContact { /* membership, RefCell<Option<Contact>>, Cell<u64>, Cell<Option<Instant>> */ }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)] pub struct ContactId(NonZeroU64);
-#[derive(Debug, Clone, Copy)] #[non_exhaustive]
+#[derive(Debug, Clone)] #[non_exhaustive]
 pub struct ContactSnapshot { pub id: ContactId, pub pointer: PointerId, pub kind: PointerType,
     pub local: Offset<f64>, pub global: Offset<f64>, pub settings: GestureSettings /* Copy после I11 */ }
 #[derive(Debug, thiserror::Error)] #[non_exhaustive]
