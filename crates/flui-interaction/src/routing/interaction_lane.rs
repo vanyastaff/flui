@@ -21,7 +21,7 @@ use flui_foundation::geometry::{Offset, Rect, Size};
 use flui_painting::paint::{Path, Shader};
 
 use super::hit_test::{EventPropagation, HitTestEntry, HitTestResult, transform_pointer_event};
-use crate::events::{PanZoomEvent, PointerEvent, PointerEventExt, PointerInfo, ScrollEventData};
+use crate::events::{PanZoomEvent, PointerEvent, PointerEventExt, PointerInfo, ScrollEvent};
 use crate::retain::Retain;
 
 static NEXT_LANE_ID: AtomicU64 = AtomicU64::new(1);
@@ -343,7 +343,7 @@ impl<'a> PointerDispatch<'a> {
 }
 
 type PointerHandler = Rc<dyn Fn(PointerDispatch<'_>) + 'static>;
-type ScrollHandler = Rc<dyn Fn(&ScrollEventData) -> EventPropagation + 'static>;
+type ScrollHandler = Rc<dyn Fn(&ScrollEvent) -> EventPropagation + 'static>;
 type PanZoomHandler = Rc<dyn Fn(&PanZoomEvent) -> EventPropagation + 'static>;
 type PathClipper = Rc<dyn Fn(Size) -> Path + 'static>;
 type ShaderMaskFactory = Rc<dyn Fn(Rect<f64>) -> Shader + 'static>;
@@ -1606,7 +1606,7 @@ impl InteractionDispatchHandle {
     /// Register a scroll/pointer-signal handler in the active owner lane.
     pub fn register_scroll(
         &self,
-        handler: impl Fn(&ScrollEventData) -> EventPropagation + 'static,
+        handler: impl Fn(&ScrollEvent) -> EventPropagation + 'static,
     ) -> Result<ScrollTarget, InteractionDispatchError> {
         let handler = self.admit(handler)?;
         let lane = self.active_lane()?;
@@ -1625,7 +1625,7 @@ impl InteractionDispatchHandle {
     pub fn replace_scroll(
         &self,
         target: ScrollTarget,
-        handler: impl Fn(&ScrollEventData) -> EventPropagation + 'static,
+        handler: impl Fn(&ScrollEvent) -> EventPropagation + 'static,
     ) -> Result<(), InteractionDispatchError> {
         let handler = self.admit(handler)?;
         let lane = self.active_lane()?;
@@ -1659,7 +1659,7 @@ impl InteractionDispatchHandle {
     pub fn invoke_scroll_target(
         &self,
         target: ScrollTarget,
-        event: &ScrollEventData,
+        event: &ScrollEvent,
     ) -> Result<EventPropagation, InteractionDispatchError> {
         let lane = self.active_lane()?;
         self.validate_lane(target.lane_id)?;

@@ -85,7 +85,7 @@ use smallvec::SmallVec;
 
 use crate::{
     arena::{DetachedArenaBatch, GestureArena},
-    events::ScrollEventData,
+    events::ScrollEvent,
     ids::PointerId,
     processing::{PointerEventResampler, SamplingClock},
     routing::{
@@ -1406,9 +1406,8 @@ impl GestureBinding {
                 // the cursor, not the route captured at Down.
                 let fresh_result = hit_test_fn(position);
                 let mut first_panic = self.dispatch_ephemeral(event, &fresh_result);
-                let scroll_data = ScrollEventData::from(scroll);
                 let claim = RoutePanic::capture(|| {
-                    let claimed = fresh_result.dispatch_scroll(&scroll_data);
+                    let claimed = fresh_result.dispatch_scroll(scroll);
                     tracing::trace!(
                         claimed,
                         scroll_targets = fresh_result.entries_with_scroll_targets().count(),

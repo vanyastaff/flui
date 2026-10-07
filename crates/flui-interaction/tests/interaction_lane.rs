@@ -2529,7 +2529,7 @@ fn non_pointer_invocation_retains_its_snapshot_across_a_reentrant_close() {
     use flui_interaction::__runtime::{CloseMode, close_dispatch, presentation_dispatch};
     use flui_interaction::PointerId;
     use flui_interaction::events::{
-        PanZoomEvent, PanZoomPhase, PointerInfo, PointerKind, PointerPosition, ScrollEventData,
+        PanZoomEvent, PanZoomPhase, PointerInfo, PointerKind, PointerPosition, ScrollEvent,
     };
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::rc::Rc;
@@ -2557,7 +2557,7 @@ fn non_pointer_invocation_retains_its_snapshot_across_a_reentrant_close() {
                     else {
                         unreachable!()
                     };
-                    let event = ScrollEventData::from(&scroll);
+                    let event = scroll;
                     let _ = owner.invoke_scroll_target(target, &event);
                 }
                 "pan-zoom" => {
