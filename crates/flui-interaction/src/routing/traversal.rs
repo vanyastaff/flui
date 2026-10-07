@@ -62,6 +62,7 @@ pub(super) struct GroupConfig {
 
 struct GroupSnapshot {
     id: FocusNodeId,
+    node: Rc<FocusNode>,
     config: GroupConfig,
 }
 
@@ -78,6 +79,7 @@ impl GroupOrderSnapshot {
             .filter_map(|node| {
                 node.traversal_group_snapshot().map(|config| GroupSnapshot {
                     id: node.id(),
+                    node,
                     config,
                 })
             })
@@ -151,6 +153,7 @@ impl GroupOrderSnapshot {
     pub(super) fn retire(self, failure: &mut FocusClosePanic) {
         for group in self.groups {
             failure.retire(group.config.policy);
+            failure.retire(group.node);
         }
     }
 }
@@ -181,18 +184,25 @@ fn eligible(manager: &FocusManager, node: &Rc<FocusNode>) -> bool {
             .is_some_and(|owner| std::ptr::eq(owner.as_ref(), manager))
 }
 
-fn group_order(group: &Rc<FocusNode>, config: GroupConfig) -> Vec<Rc<FocusNode>> {
+fn belongs_to(node: &Rc<FocusNode>, boundary: &Rc<FocusNode>) -> bool {
+    node.ancestors().any(|parent| Rc::ptr_eq(&parent, boundary))
+}
+
+fn group_order(
+    group: &Rc<FocusNode>,
+    config: GroupConfig,
+    failure: &mut FocusClosePanic,
+) -> Vec<Rc<FocusNode>> {
     let mut nodes: Vec<_> = group
         .descendants()
         .filter(|node| !node.is_scope() && node.can_request_focus() && !node.skip_traversal())
         .collect();
     let snapshot = GroupOrderSnapshot::new(&nodes, group);
-    let mut failure = FocusClosePanic::for_rejection(group.traversal_close_mode());
     failure.run(|| config.policy.order(&mut nodes, config.direction));
-    snapshot.order(&mut nodes, &mut failure);
-    snapshot.retire(&mut failure);
+    snapshot.order(&mut nodes, failure);
+    snapshot.retire(failure);
     failure.retire(config.policy);
-    failure.finish_with(nodes)
+    nodes
 }
 
 pub(super) fn linear_step(
@@ -215,7 +225,8 @@ pub(super) fn linear_step(
                 break;
             };
             let edge = config.edge;
-            let nodes = group_order(&group, config);
+            let mut failure = FocusClosePanic::for_rejection(group.traversal_close_mode());
+            let nodes = group_order(&group, config, &mut failure);
             let index = nodes.iter().position(|node| Rc::ptr_eq(node, current));
             let next = match direction {
                 TraversalDirection::Forward => index.and_then(|index| nodes.get(index + 1)),
@@ -239,15 +250,25 @@ pub(super) fn linear_step(
                     TraversalEdgeBehavior::ParentScope => ResolvedStep::RetryInParent,
                 }
             };
-            let mut failure = FocusClosePanic::for_rejection(group.traversal_close_mode());
             for node in nodes {
                 failure.retire(node);
             }
-            failure.finish();
-            if !matches!(step, ResolvedStep::RetryInParent) {
-                return step;
+            let valid = match &step {
+                ResolvedStep::Focus(target) => {
+                    eligible(manager, target) && belongs_to(target, &group)
+                }
+                _ => true,
+            };
+            let mut parent = group_of(&group);
+            failure.retire(group);
+            if !matches!(step, ResolvedStep::RetryInParent) || failure.preserving() {
+                failure.retire(parent.take());
             }
-            boundary = group_of(&group);
+            let step = failure.finish_with(step);
+            if !matches!(step, ResolvedStep::RetryInParent) {
+                return if valid { step } else { ResolvedStep::None };
+            }
+            boundary = parent;
         }
     }
     scope.step(current, direction)
@@ -355,9 +376,11 @@ fn spatial_target(
     direction: FocusDirection,
     wrap: bool,
 ) -> Option<Rc<FocusNode>> {
-    let candidates: Vec<_> = boundary
-        .descendants()
+    let retained: Vec<_> = boundary.descendants().collect();
+    let candidates: Vec<_> = retained
+        .iter()
         .filter(|node| eligible(manager, node) && !Rc::ptr_eq(node, current))
+        .cloned()
         .collect();
     let mut failure = FocusClosePanic::for_rejection(boundary.traversal_close_mode());
     let source = geometry(current, direction, &mut failure);
@@ -395,7 +418,14 @@ fn spatial_target(
     for node in candidates {
         failure.retire(node);
     }
-    failure.finish_with(best.map(|(node, _)| node))
+    for node in retained {
+        failure.retire(node);
+    }
+    failure
+        .finish_with(best.map(|(node, _)| node))
+        .filter(|node| {
+            eligible(manager, node) && belongs_to(node, boundary) && belongs_to(current, boundary)
+        })
 }
 
 pub(super) fn directional_step(
@@ -405,8 +435,28 @@ pub(super) fn directional_step(
 ) -> ResolvedStep {
     let mut group = group_of(current);
     let mut scope = current.enclosing_scope();
+    let mut failure = FocusClosePanic::for_rejection(current.traversal_close_mode());
+    let step = if failure.preserving() {
+        ResolvedStep::None
+    } else {
+        failure
+            .invoke(|| directional_step_inner(manager, current, direction, &mut group, &mut scope))
+            .unwrap_or_default()
+    };
+    failure.retire(group);
+    failure.retire(scope);
+    failure.finish_with(step)
+}
+
+fn directional_step_inner(
+    manager: &FocusManager,
+    current: &Rc<FocusNode>,
+    direction: FocusDirection,
+    group: &mut Option<Rc<FocusNode>>,
+    scope: &mut Option<Rc<FocusScopeNode>>,
+) -> ResolvedStep {
     loop {
-        let (boundary, edge) = if let Some(group) = &group {
+        let (boundary, edge) = if let Some(group) = group.as_ref() {
             let Some(config) = group.traversal_group_snapshot() else {
                 return ResolvedStep::None;
             };
@@ -415,7 +465,7 @@ pub(super) fn directional_step(
             failure.retire(config.policy);
             failure.finish();
             (Rc::clone(group), edge)
-        } else if let Some(scope) = &scope {
+        } else if let Some(scope) = scope.as_ref() {
             (
                 Rc::clone(scope.as_focus_node()),
                 scope.traversal_edge_behavior(),
@@ -435,9 +485,9 @@ pub(super) fn directional_step(
             }
             TraversalEdgeBehavior::ParentScope => {
                 if let Some(previous) = group.take() {
-                    group = group_of(&previous);
+                    *group = group_of(&previous);
                 } else if let Some(previous) = scope.take() {
-                    scope = previous.as_focus_node().enclosing_scope();
+                    *scope = previous.as_focus_node().enclosing_scope();
                     if scope.is_none() {
                         return spatial_target(manager, current, &boundary, direction, true)
                             .map_or(ResolvedStep::None, ResolvedStep::Focus);

@@ -2113,16 +2113,25 @@ pub enum TraversalEdgeBehavior {
 }
 
 /// A typed traversal intent.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub enum ResolvedStep {
     /// Move primary focus to this node.
     Focus(Rc<FocusNode>),
     /// Release primary focus.
     Unfocus,
     /// No focus change.
+    #[default]
     None,
     /// Re-resolve the step in the enclosing scope.
     RetryInParent,
+}
+
+impl crate::retain::Retain for ResolvedStep {
+    fn retain(self) {
+        if let Self::Focus(node) = self {
+            crate::retain::Retain::retain(node);
+        }
+    }
 }
 
 impl std::fmt::Debug for ResolvedStep {
