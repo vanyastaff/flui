@@ -619,10 +619,18 @@ fn public_recognizer_extension_contracts() {
             multi_tap_drop_releases_a_pending_sweep_without_inline_notifications,
         ),
     ];
+    let mut first = None;
     for &(name, case) in cases {
         if let Err(payload) = catch_unwind(AssertUnwindSafe(case)) {
             eprintln!("public recognizer contract failed: {name}");
-            resume_unwind(payload);
+            if first.is_none() {
+                first = Some(payload);
+            } else {
+                flui_foundation::panic::retain_opaque_payload(payload);
+            }
         }
+    }
+    if let Some(payload) = first {
+        resume_unwind(payload);
     }
 }
