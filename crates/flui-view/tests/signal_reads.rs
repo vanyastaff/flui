@@ -7,7 +7,7 @@
 //! - a handle of the wrong type is a typed error on every path, never a panic,
 //!   and a write through one marks no reader.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -106,6 +106,141 @@ impl ViewState<Bystander> for BystanderState {
 }
 
 const FRAME: Duration = Duration::from_millis(16);
+
+#[derive(Clone, StatelessView)]
+struct ManyReader {
+    signals: Rc<Vec<Signal<u32>>>,
+    trigger: Signal<u32>,
+    count: Rc<Cell<usize>>,
+    id: Rc<Cell<Option<ElementId>>>,
+    order: Rc<RefCell<Vec<usize>>>,
+    label: usize,
+}
+
+impl StatelessView for ManyReader {
+    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+        self.id.set(Some(ctx.element_id()));
+        self.order.borrow_mut().push(self.label);
+        let _ = self.trigger.get(ctx);
+        for signal in self.signals.iter().take(self.count.get()) {
+            // Repeated reads must remain one subscription.
+            let _ = signal.get(ctx);
+            let _ = signal.get(ctx);
+        }
+        Leaf
+    }
+}
+
+#[derive(Clone)]
+struct ReaderRow(Vec<ManyReader>);
+
+impl RenderView for ReaderRow {
+    type Protocol = BoxProtocol;
+    type RenderObject = RenderSizedBox;
+
+    fn create_render_object(&self, _ctx: &RenderObjectContext<'_>) -> Self::RenderObject {
+        RenderSizedBox::shrink()
+    }
+
+    fn update_render_object(
+        &self,
+        _ctx: &RenderObjectContext<'_>,
+        _render_object: &mut Self::RenderObject,
+    ) -> RenderUpdateImpact {
+        RenderUpdateImpact::NONE
+    }
+
+    fn has_children(&self) -> bool {
+        !self.0.is_empty()
+    }
+
+    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
+        for reader in &self.0 {
+            visitor(reader);
+        }
+    }
+}
+
+impl View for ReaderRow {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::render_variable(self)
+    }
+}
+
+pub(crate) fn changing_read_sets_preserves_peer_rebuild_order() {
+    let owners = MountOwners::fresh();
+    let graph = owners.build_owner.reactive().clone();
+    let signals = Rc::new((0..9).map(|_| graph.signal(0u32)).collect::<Vec<_>>());
+    let order = Rc::new(RefCell::new(Vec::new()));
+    let readers = (0..9)
+        .map(|label| ManyReader {
+            signals: Rc::clone(&signals),
+            trigger: graph.signal(0u32),
+            count: Rc::new(Cell::new(9)),
+            id: Rc::new(Cell::new(None)),
+            order: Rc::clone(&order),
+            label,
+        })
+        .collect::<Vec<_>>();
+    let mut binding = HeadlessBinding::new();
+    binding.mount_root(
+        &ReaderRow(readers.clone()),
+        owners,
+        MountOptions::tight(100.0, 100.0),
+    );
+    binding.pump_frame(FRAME);
+    let mut expected = (0..9).collect::<Vec<_>>();
+
+    for round in 0..24 {
+        // Moving one reader to the end exercises repeated unlink/reinsert
+        // while both membership directions have more than four entries.
+        let label = (round * 5) % readers.len();
+        readers[label]
+            .trigger
+            .set(&graph, round as u32)
+            .expect("live");
+        binding.pump_frame(FRAME);
+        expected.retain(|value| *value != label);
+        expected.push(label);
+        order.borrow_mut().clear();
+        signals[8].set(&graph, round as u32).expect("live");
+        binding.pump_frame(FRAME);
+        assert_eq!(*order.borrow(), expected, "peer order after re-reading");
+        assert_eq!(
+            graph.readers_of(signals[8].slot()),
+            expected
+                .iter()
+                .map(|label| readers[*label].id.get().expect("mounted"))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    // Shrink each read set and shared reader set, then grow them again.
+    // Formerly read slots must not schedule an element after it opts out.
+    for count in [2, 0, 9] {
+        for reader in &readers {
+            reader.count.set(count);
+            reader.trigger.set(&graph, count as u32).expect("live");
+        }
+        binding.pump_frame(FRAME);
+        order.borrow_mut().clear();
+        signals[8].set(&graph, count as u32).expect("live");
+        binding.pump_frame(FRAME);
+        let expected = if count == 9 {
+            (0..9).collect()
+        } else {
+            Vec::new()
+        };
+        assert_eq!(*order.borrow(), expected, "read-set change to {count}");
+    }
+    graph.release(signals[8].slot());
+    let replacement = graph.signal(42u32);
+    assert_eq!(graph.readers_of(replacement.slot()), [] as [ElementId; 0]);
+    order.borrow_mut().clear();
+    replacement.set(&graph, 43).expect("replacement is live");
+    binding.pump_frame(FRAME);
+    assert!(order.borrow().is_empty(), "slot reuse inherits no readers");
+}
 
 struct ReleaseProbe {
     graph: flui_view::Reactive,

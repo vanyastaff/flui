@@ -94,6 +94,9 @@ use smallvec::SmallVec;
 use crate::owner::ExternalBuildInbox;
 use crate::owner::ExternalBuildScheduler;
 
+mod membership;
+use membership::Membership;
+
 mod writer;
 pub use writer::{
     EventContextError, EventCx, EventError, EventOutcome, WriteTarget, Writer, WriterSource,
@@ -113,7 +116,7 @@ struct Node {
     /// holds it on loan (see the module docs on re-entrancy).
     value: Option<Box<dyn Any>>,
     /// Elements that read this slot during their last build.
-    element_readers: SmallVec<[ElementId; 4]>,
+    element_readers: Membership<ElementId>,
 }
 
 #[derive(Default)]
@@ -123,7 +126,7 @@ struct Inner {
     nodes: Vec<Node>,
     free: Vec<u32>,
     /// Slots each element read during its last build.
-    element_reads: HashMap<ElementId, SmallVec<[u32; 4]>>,
+    element_reads: HashMap<ElementId, Membership<u32>>,
     /// Slots created on behalf of an element (full handles, so a slot that
     /// was released and reused in between is recognised by generation).
     owned_by_element: HashMap<ElementId, SmallVec<[SignalSlot; 2]>>,
@@ -283,7 +286,7 @@ impl Reactive {
                 generation: 0,
                 live: true,
                 value,
-                element_readers: SmallVec::new(),
+                element_readers: Membership::default(),
             });
             (inner.nodes.len() - 1) as u32
         }
@@ -447,9 +450,9 @@ impl Reactive {
 
     fn release_index(inner: &mut Inner, index: u32) -> Option<Box<dyn Any>> {
         let readers = std::mem::take(&mut inner.nodes[index as usize].element_readers);
-        for element in readers {
-            if let Some(reads) = inner.element_reads.get_mut(&element) {
-                reads.retain(|slot| *slot != index);
+        for element in readers.iter() {
+            if let Some(reads) = inner.element_reads.get_mut(element) {
+                reads.remove(&index);
             }
         }
         let node = &mut inner.nodes[index as usize];
@@ -498,7 +501,7 @@ impl Reactive {
         inner.previous_reads = inner
             .element_reads
             .get(&element)
-            .cloned()
+            .map(Membership::snapshot)
             .unwrap_or_default();
         Self::forget_element_reads(&mut inner, element);
         inner.building = Some(element);
@@ -527,13 +530,9 @@ impl Reactive {
             if !node.live {
                 continue;
             }
-            if !node.element_readers.contains(&element) {
-                node.element_readers.push(element);
-            }
+            node.element_readers.insert(element);
             let reads = inner.element_reads.entry(element).or_default();
-            if !reads.contains(&index) {
-                reads.push(index);
-            }
+            reads.insert(index);
         }
     }
 
@@ -541,9 +540,9 @@ impl Reactive {
         let Some(reads) = inner.element_reads.remove(&element) else {
             return;
         };
-        for index in reads {
-            if let Some(node) = inner.nodes.get_mut(index as usize) {
-                node.element_readers.retain(|reader| *reader != element);
+        for index in reads.iter() {
+            if let Some(node) = inner.nodes.get_mut(*index as usize) {
+                node.element_readers.remove(&element);
             }
         }
     }
@@ -555,13 +554,9 @@ impl Reactive {
             return;
         }
         let node = &mut inner.nodes[slot.index() as usize];
-        if !node.element_readers.contains(&element) {
-            node.element_readers.push(element);
-        }
+        node.element_readers.insert(element);
         let reads = inner.element_reads.entry(element).or_default();
-        if !reads.contains(&slot.index()) {
-            reads.push(slot.index());
-        }
+        reads.insert(slot.index());
     }
 
     /// The element unmounted: it reads nothing any more, and every slot
@@ -997,7 +992,9 @@ impl Reactive {
                 return;
             };
             (
-                inner.nodes[slot.index() as usize].element_readers.clone(),
+                inner.nodes[slot.index() as usize]
+                    .element_readers
+                    .snapshot(),
                 inner.scheduler.clone(),
             )
         };
@@ -1318,20 +1315,43 @@ mod tests {
     }
 
     fn a_build_that_unwinds_keeps_its_previous_read_set() {
-        let (r, inbox) = graph_with_inbox();
-        let a = r.signal(0u8);
-        let e1 = ElementId::new(1);
-        r.begin_element_build(e1);
-        r.register_element_reader(a.slot(), e1);
-        r.end_element_build(e1, true);
+        for count in [1, 9] {
+            for partial_read in [false, true] {
+                let (r, inbox) = graph_with_inbox();
+                let signals = (0..count).map(|_| r.signal(0u8)).collect::<Vec<_>>();
+                let elements = (1..=count).map(ElementId::new).collect::<Vec<_>>();
+                for element in &elements {
+                    r.begin_element_build(*element);
+                    for signal in &signals {
+                        r.register_element_reader(signal.slot(), *element);
+                    }
+                    r.end_element_build(*element, true);
+                }
 
-        // The next build panics before reading `a`.
-        r.begin_element_build(e1);
-        r.end_element_build(e1, false);
-
-        assert_eq!(r.readers_of(a.slot()), vec![e1], "still subscribed");
-        a.set(&r, 1).unwrap();
-        assert_eq!(scheduled(&inbox).len(), 1, "the write still rebuilds it");
+                // A failure before or after a partial read restores every old
+                // dependency, including large forward and reverse read sets.
+                let element = elements[0];
+                r.begin_element_build(element);
+                if partial_read {
+                    r.register_element_reader(signals[0].slot(), element);
+                }
+                r.end_element_build(element, false);
+                let expected = elements[1..]
+                    .iter()
+                    .copied()
+                    .chain(std::iter::once(element))
+                    .collect::<Vec<_>>();
+                for signal in &signals {
+                    assert_eq!(r.readers_of(signal.slot()), expected, "still subscribed");
+                    signal.set(&r, 1).unwrap();
+                }
+                assert_eq!(
+                    scheduled(&inbox),
+                    elements,
+                    "all readers remain deliverable"
+                );
+            }
+        }
     }
 
     fn writes_and_creations_during_build_are_refused() {
