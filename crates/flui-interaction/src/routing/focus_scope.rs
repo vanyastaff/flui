@@ -13,6 +13,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering as AtomicOrdering},
 };
 
+use super::traversal::{FocusTraversalOverrides, GroupConfig, GroupOrderSnapshot};
 use flui_foundation::ListenerId;
 use flui_foundation::geometry::Rect;
 use flui_painting::typography::TextDirection;
@@ -327,6 +328,8 @@ enum FocusNodeRegistrationKind {
     KeyHandler,
     RectProvider,
     Context,
+    TraversalGroup,
+    TraversalOverrides,
 }
 
 /// Generation-checked ownership of one replaceable [`FocusNode`] property.
@@ -377,6 +380,12 @@ impl FocusNodeRegistration {
                         FocusNodeRegistrationKind::Context => {
                             node.context_generation.get() == self.generation
                         }
+                        FocusNodeRegistrationKind::TraversalGroup => {
+                            node.traversal_group_generation.get() == self.generation
+                        }
+                        FocusNodeRegistrationKind::TraversalOverrides => {
+                            node.traversal_overrides_generation.get() == self.generation
+                        }
                     }
             })
     }
@@ -407,6 +416,14 @@ impl FocusNodeRegistration {
             }
             FocusNodeRegistrationKind::Context => {
                 node.clear_context_generation(self.generation);
+            }
+            FocusNodeRegistrationKind::TraversalGroup => {
+                node.clear_traversal_group_generation(self.generation)
+            }
+            FocusNodeRegistrationKind::TraversalOverrides => {
+                if node.traversal_overrides_generation.get() == self.generation {
+                    *node.traversal_overrides.borrow_mut() = FocusTraversalOverrides::default();
+                }
             }
         }
     }
@@ -452,6 +469,10 @@ pub struct FocusNode {
     pending_focus_request: Cell<bool>,
     attachment_generation: Cell<u64>,
     on_key_event_generation: Cell<u64>,
+    traversal_group: RefCell<Option<GroupConfig>>,
+    traversal_group_generation: Cell<u64>,
+    traversal_overrides: RefCell<FocusTraversalOverrides>,
+    traversal_overrides_generation: Cell<u64>,
 }
 
 pub(super) struct ClosedFocusNode {
@@ -460,6 +481,7 @@ pub(super) struct ClosedFocusNode {
     rect_provider: Option<RectProvider>,
     context: Option<NodeContext>,
     policy: Option<Rc<dyn FocusTraversalPolicy>>,
+    group_policy: Option<Rc<dyn FocusTraversalPolicy>>,
 }
 
 impl ClosedFocusNode {
@@ -470,6 +492,7 @@ impl ClosedFocusNode {
             rect_provider,
             context,
             policy,
+            group_policy,
         } = self;
         // The order a healthy close always kept: key handler, listeners,
         // rect provider, context.
@@ -481,6 +504,7 @@ impl ClosedFocusNode {
         failure.retire(rect_provider);
         failure.retire(context);
         failure.retire(policy);
+        failure.retire(group_policy);
         failure.retire(node);
     }
 }
@@ -529,6 +553,10 @@ impl FocusNode {
             pending_focus_request: Cell::new(false),
             attachment_generation: Cell::new(1),
             on_key_event_generation: Cell::new(0),
+            traversal_group: RefCell::new(None),
+            traversal_group_generation: Cell::new(0),
+            traversal_overrides: RefCell::new(FocusTraversalOverrides::default()),
+            traversal_overrides_generation: Cell::new(0),
         })
     }
 
@@ -780,6 +808,75 @@ impl FocusNode {
             .expect("BUG: focus-node property generation exhausted");
         generation.set(next);
         next
+    }
+
+    /// Install weak linear traversal links with generation-checked cleanup.
+    pub fn register_traversal_overrides(
+        self: &Rc<Self>,
+        overrides: FocusTraversalOverrides,
+    ) -> FocusNodeRegistration {
+        let generation = Self::next_property_generation(&self.traversal_overrides_generation);
+        if !self.is_closed() {
+            *self.traversal_overrides.borrow_mut() = overrides;
+        }
+        FocusNodeRegistration::new(
+            self,
+            generation,
+            FocusNodeRegistrationKind::TraversalOverrides,
+        )
+    }
+
+    /// Establish a policy boundary without introducing a focus scope or history.
+    pub fn register_traversal_group(
+        self: &Rc<Self>,
+        policy: Rc<dyn FocusTraversalPolicy>,
+        direction: TextDirection,
+        edge: TraversalEdgeBehavior,
+    ) -> FocusNodeRegistration {
+        let generation = Self::next_property_generation(&self.traversal_group_generation);
+        let mut failure = FocusClosePanic::for_rejection(self.close_mode());
+        if self.is_closed() {
+            failure.retire(policy);
+        } else {
+            let previous = self.traversal_group.borrow_mut().replace(GroupConfig {
+                policy,
+                direction,
+                edge,
+            });
+            if let Some(previous) = previous {
+                failure.retire(previous.policy);
+            }
+        }
+        failure.finish();
+        FocusNodeRegistration::new(self, generation, FocusNodeRegistrationKind::TraversalGroup)
+    }
+
+    fn clear_traversal_group_generation(&self, generation: u64) {
+        if self.traversal_group_generation.get() != generation {
+            return;
+        }
+        let previous = self.traversal_group.borrow_mut().take();
+        let mut failure = FocusClosePanic::for_rejection(self.close_mode());
+        if let Some(previous) = previous {
+            failure.retire(previous.policy);
+        }
+        failure.finish();
+    }
+
+    pub(super) fn traversal_group_snapshot(&self) -> Option<GroupConfig> {
+        self.traversal_group.borrow().clone()
+    }
+    pub(super) fn traversal_override_target(
+        &self,
+        direction: TraversalDirection,
+    ) -> Option<Rc<FocusNode>> {
+        self.traversal_overrides.borrow().target(direction)
+    }
+    pub(super) fn traversal_close_mode(&self) -> CloseMode {
+        self.close_mode()
+    }
+    pub(super) fn traversal_geometry_snapshot(&self) -> (Option<RectProvider>, Rect<f64>) {
+        (self.rect_provider.borrow().clone(), self.rect.get())
     }
 
     /// Register a listener for focus or focusability changes on this node.
@@ -1406,6 +1503,12 @@ impl FocusNode {
             let key_handler = node.on_key_event.borrow_mut().take();
             let rect_provider = node.rect_provider.borrow_mut().take();
             let context = node.context.borrow_mut().take();
+            let group_policy = node
+                .traversal_group
+                .borrow_mut()
+                .take()
+                .map(|group| group.policy);
+            *node.traversal_overrides.borrow_mut() = FocusTraversalOverrides::default();
             let policy = node.as_scope().map(|scope| {
                 scope.pending_first_focus.set(false);
                 scope.focus_history.borrow_mut().clear();
@@ -1420,6 +1523,7 @@ impl FocusNode {
                 rect_provider,
                 context,
                 policy,
+                group_policy,
             });
         }
         retired
@@ -1818,10 +1922,13 @@ impl FocusScopeNode {
         {
             nodes.push(Rc::clone(cursor));
         }
+        let groups = GroupOrderSnapshot::new(&nodes, &self.inner);
         let policy = Rc::clone(&self.traversal_policy.borrow());
         let direction = self.text_direction.get();
         let mut failure = FocusClosePanic::for_rejection(self.close_mode());
         failure.run(|| policy.order(&mut nodes, direction));
+        groups.order(&mut nodes, &mut failure);
+        groups.retire(&mut failure);
         failure.retire(policy);
         failure.finish_with(nodes)
     }

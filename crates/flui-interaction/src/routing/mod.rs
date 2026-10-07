@@ -18,6 +18,9 @@ mod hit_test;
 mod interaction_lane;
 pub(crate) mod mouse_tracker;
 mod pointer_router;
+mod traversal;
+
+pub use traversal::{FocusDirection, FocusTraversalOverrides};
 
 pub use focus::{FocusChangeCallback, FocusManager};
 pub use focus_scope::{
