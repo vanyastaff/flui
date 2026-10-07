@@ -7,3 +7,4 @@
 - Spring construction and borrowed asset-name compiler examples have passing companions that pin valid constructor and owner-lifetime paths.
 - Clip-token privacy examples reject destructuring without relying on an invalid field type; clip-token and semantics expansion examples have passing companions.
 - Pipeline constructor and phase compiler guards pin exact diagnostics, including a mutable idle caller that cannot mask an exposed paint method.
+- Render-subtree relocation compiler examples pair forbidden token cloning and frame-phase operations with matching move and idle-owner callers.
