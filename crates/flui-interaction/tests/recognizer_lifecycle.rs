@@ -1,7 +1,7 @@
 //! Public recognizer cancellation, ownership, and containment contracts.
 
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
     panic::{AssertUnwindSafe, catch_unwind},
     rc::Rc,
     sync::Arc,
@@ -13,25 +13,27 @@ use flui_interaction::{GestureArena, GestureArenaMember, ManualClock, PointerId}
 use web_time::Instant;
 
 struct Member {
-    accepted: Cell<u32>,
-    rejected: Cell<u32>,
+    accepted: Rc<Cell<u32>>,
+    rejected: Rc<Cell<u32>>,
     retired: Rc<Cell<u32>>,
     deadline: Cell<Option<Instant>>,
     queries: Cell<u32>,
     polls: Cell<u32>,
     query_failure: Cell<Option<&'static str>>,
+    on_reject: RefCell<Option<Box<dyn Fn()>>>,
 }
 
 impl Member {
     fn new(deadline: Option<Instant>) -> Rc<Self> {
         Rc::new(Self {
-            accepted: Cell::new(0),
-            rejected: Cell::new(0),
+            accepted: Rc::new(Cell::new(0)),
+            rejected: Rc::new(Cell::new(0)),
             retired: Rc::new(Cell::new(0)),
             deadline: Cell::new(deadline),
             queries: Cell::new(0),
             polls: Cell::new(0),
             query_failure: Cell::new(None),
+            on_reject: RefCell::new(None),
         })
     }
 
@@ -51,6 +53,10 @@ impl GestureArenaMember for Member {
 
     fn reject_gesture(&self, _: PointerId) {
         self.rejected.set(self.rejected.get() + 1);
+        let callback = self.on_reject.borrow_mut().take();
+        if let Some(callback) = callback {
+            callback();
+        }
     }
 
     fn deadline(&self) -> Option<Instant> {
@@ -125,6 +131,62 @@ fn custom_member_owns_a_deadline() {
     );
 }
 
+fn a_verdict_callback_can_drop_a_later_notification_owner() {
+    for later_wins in [false, true] {
+        let arena = GestureArena::new();
+        let pointer = PointerId::PRIMARY;
+        let first = Member::new(None);
+        let later = Member::new(None);
+        let survivor = Member::new(None);
+        let accepted = Rc::clone(&later.accepted);
+        let rejected = Rc::clone(&later.rejected);
+        let retired = Rc::clone(&later.retired);
+        arena.add(pointer, &first);
+        arena.add(pointer, &later);
+        arena.add(pointer, &survivor);
+        let owner = Rc::new(RefCell::new(Some(later)));
+        let dropped_by_callback = Rc::clone(&owner);
+        *first.on_reject.borrow_mut() = Some(Box::new(move || {
+            drop(dropped_by_callback.borrow_mut().take());
+        }));
+        arena.close(pointer);
+        let winner: Rc<dyn GestureArenaMember> = if later_wins {
+            owner
+                .borrow()
+                .as_ref()
+                .expect("later member is still owned")
+                .clone()
+        } else {
+            survivor.clone()
+        };
+
+        arena.resolve(pointer, Some(winner));
+        assert!(
+            owner.borrow().is_none(),
+            "first loser removed the later owner"
+        );
+        assert_eq!(first.rejected.get(), 1);
+        assert_eq!(retired.get(), 1, "the departed member is destroyed");
+        assert_eq!(
+            accepted.get(),
+            0,
+            "dead winner receives no acceptance callback"
+        );
+        assert_eq!(
+            rejected.get(),
+            0,
+            "dead loser receives no rejection callback"
+        );
+        assert!(arena.is_empty());
+
+        let fresh = Member::new(None);
+        arena.add(pointer, &fresh);
+        arena.close(pointer);
+        arena.drain_deferred_resolutions();
+        assert_eq!(fresh.accepted.get(), 1, "next contest makes progress");
+    }
+}
+
 fn panicking_deadline_query_does_not_hide_other_deadlines() {
     for competing in [false, true] {
         for pending_query in [false, true] {
@@ -177,6 +239,10 @@ fn panicking_deadline_query_does_not_hide_other_deadlines() {
 #[test]
 fn arena_member_lifecycle_contract() {
     let cases: &[(&str, fn())] = &[
+        (
+            "a_verdict_callback_can_drop_a_later_notification_owner",
+            a_verdict_callback_can_drop_a_later_notification_owner,
+        ),
         (
             "dropped_member_without_cancel_leaves_the_arena",
             dropped_member_without_cancel_leaves_the_arena,
