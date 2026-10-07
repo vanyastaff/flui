@@ -97,9 +97,13 @@ fn seam<T: flui_animation::TwoWayConverter>(
 ) {
     let before = value.value().to_vector();
     let velocity_before = value.velocity();
+    let goal = target.to_vector();
     value.animate_to(target);
     let after = value.value().to_vector();
     let velocity_after = value.velocity();
+    let mut probe = value.clone();
+    probe.advance(2e-5);
+    let probed = probe.value().to_vector();
     for component in 0..before.as_ref().len() {
         let (x0, x1) = (before.as_ref()[component], after.as_ref()[component]);
         let (v0, v1) = (
@@ -112,7 +116,17 @@ fn seam<T: flui_animation::TwoWayConverter>(
         );
         assert!(close(x1, x0, 1e-12), "C0 broken: {x0} -> {x1}");
         assert!(close(v1, v0, 1e-9), "C1 broken: {v0} -> {v1}");
-        assert_velocity_is_the_derivative(value, component, mode, range);
+        // A spring that starts within its tolerance of the target snaps onto
+        // it on the first sample after the seam: the spring's arrival, a jump
+        // of at most the 1e-3 distance tolerance, which no finite difference
+        // across it can match.
+        let goal = goal.as_ref()[component];
+        let arrives = matches!(mode, Mode::Spring { .. })
+            && probed.as_ref()[component] == goal
+            && (goal - x1).abs() <= 1e-3;
+        if !arrives {
+            assert_velocity_is_the_derivative(value, component, mode, range);
+        }
     }
 }
 
@@ -174,7 +188,11 @@ fn frame_dt() -> impl Strategy<Value = f64> {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(256))]
+    #![proptest_config(ProptestConfig {
+        cases: 256,
+        failure_persistence: None,
+        ..ProptestConfig::default()
+    })]
 
     /// Retargeting every frame for 120 frames keeps value and velocity
     /// continuous at every seam, publishes only finite values, and the last
@@ -194,12 +212,16 @@ proptest! {
             seam(&mut planar, Offset::new(x * 100.0, y * 100.0), &mode, 200.0);
         }
         let last = targets[targets.len() - 1];
+        // The slowest generated spring decays as e^(-0.1 t) (omega = 1 at
+        // zeta = 0.1, or the overdamped slow root at zeta = 4): a 200-unit
+        // swing takes about 125 s to reach the 1e-3 tolerance, so the budget
+        // is 600 s of 10 ms steps.
         for _ in 0..60_000 {
             if scalar.is_settled() && planar.is_settled() {
                 break;
             }
-            scalar.advance(1e-3);
-            planar.advance(1e-3);
+            scalar.advance(1e-2);
+            planar.advance(1e-2);
             prop_assert!(scalar.value().is_finite());
         }
         prop_assert!(scalar.is_settled() && planar.is_settled(), "never settled");
@@ -284,6 +306,24 @@ fn seam_at_zero() {
         assert_eq!(value.value(), 5.0);
         assert_eq!(value.velocity()[0], 0.0);
     }
+}
+
+/// A spring retargeted by less than its distance tolerance, from rest, starts
+/// where it is and reaches the target on the next frame instead of jumping
+/// there at the seam.
+fn a_retarget_within_the_spring_tolerance_starts_at_the_seam() {
+    let mode = Mode::Spring {
+        omega: 1.0,
+        zeta: 0.1,
+    };
+    let mut value = AnimatedValue::with_motion(Offset::new(0.0, 0.0), mode.spec());
+    let target = Offset::new(0.0, -1.463_116_746_455_488e-4);
+    seam(&mut value, target, &mode, 1e-3);
+    assert_eq!(value.value(), Offset::new(0.0, 0.0));
+    assert!(!value.is_settled(), "settled away from its target");
+    value.advance(1.0 / 60.0);
+    assert!(value.is_settled());
+    assert_eq!(value.value(), target);
 }
 
 fn seam_on_the_completing_frame() {
@@ -407,6 +447,10 @@ fn a_retarget_elsewhere_runs_the_full_duration() {
 fn retarget_seams() {
     crate::run_table(&[
         ("seam_at_zero", seam_at_zero),
+        (
+            "a_retarget_within_the_spring_tolerance_starts_at_the_seam",
+            a_retarget_within_the_spring_tolerance_starts_at_the_seam,
+        ),
         ("seam_on_the_completing_frame", seam_on_the_completing_frame),
         (
             "time_that_does_not_move_forward_samples_the_seam",

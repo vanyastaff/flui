@@ -74,7 +74,16 @@ pub(crate) enum Segment {
     /// At rest at a value.
     Rest(f64),
     /// A spring from the seam's value and velocity.
-    Spring(SpringSimulation),
+    ///
+    /// The simulation snaps to its target once within tolerance, which a
+    /// small retarget from rest already is at the seam; the seam itself
+    /// reads `x0` and `v0` and is never done, so the snap lands on the next
+    /// sample like any spring's arrival instead of breaking C⁰ at the seam.
+    Spring {
+        simulation: SpringSimulation,
+        x0: f64,
+        v0: f64,
+    },
     /// A curve with a Hermite velocity correction.
     Curve(CurveSegment),
 }
@@ -120,9 +129,11 @@ impl Segment {
             return Self::Rest(target);
         }
         match motion {
-            MotionSpec::Spring(spring) => {
-                Self::Spring(SpringSimulation::new(*spring, x0, target, v0).with_snap_to_end(true))
-            }
+            MotionSpec::Spring(spring) => Self::Spring {
+                simulation: SpringSimulation::new(*spring, x0, target, v0).with_snap_to_end(true),
+                x0,
+                v0,
+            },
             MotionSpec::Curve { duration, curve } => {
                 let scale = if shortening.is_finite() {
                     shortening.clamp(0.0, 1.0)
@@ -154,7 +165,8 @@ impl Segment {
         let t = seam_time(t);
         match self {
             Self::Rest(value) => *value,
-            Self::Spring(spring) => spring.x(t),
+            Self::Spring { x0, .. } if t == 0.0 => *x0,
+            Self::Spring { simulation, .. } => simulation.x(t),
             Self::Curve(curve) => curve.x(t),
         }
     }
@@ -164,7 +176,8 @@ impl Segment {
         let t = seam_time(t);
         match self {
             Self::Rest(_) => 0.0,
-            Self::Spring(spring) => spring.dx(t),
+            Self::Spring { v0, .. } if t == 0.0 => *v0,
+            Self::Spring { simulation, .. } => simulation.dx(t),
             Self::Curve(curve) => curve.dx(t),
         }
     }
@@ -174,7 +187,7 @@ impl Segment {
         let t = seam_time(t);
         match self {
             Self::Rest(_) => true,
-            Self::Spring(spring) => spring.is_done(t),
+            Self::Spring { simulation, .. } => t > 0.0 && simulation.is_done(t),
             Self::Curve(curve) => t >= curve.duration,
         }
     }
