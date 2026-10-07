@@ -670,6 +670,9 @@ impl FocusNode {
     }
 
     /// Current traversal geometry.
+    ///
+    /// Providers may replace themselves reentrantly. Snapshot retirement runs
+    /// outside the provider borrow and preserves the first provider failure.
     pub fn rect(&self) -> Rect<f64> {
         let provider = self.rect_provider.borrow().clone();
         let mut failure = FocusClosePanic::for_rejection(self.close_mode());
