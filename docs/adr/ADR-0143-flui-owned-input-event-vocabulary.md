@@ -203,6 +203,12 @@ adapters; their removal or target-feature selection cannot change the authoritat
 
 ## Verification
 
+The source audit for the pointer bridge uses
+`rg -n 'ui_events::pointer|ui_events::ScrollDelta|input_vocabulary' crates/flui-platform/src crates/flui-interaction/src`.
+Runtime dependency inspection uses `cargo tree -p flui-platform-api -e normal`;
+backend adapters are inspected separately so a legitimate keyboard mapping or
+Winit physical geometry dependency is not mistaken for a Stable signature leak.
+
 - `flui-platform-api`'s `input_vocabulary_contract`: sanitization, "no sensor", clamping and
   wrapping, button sets, coalesced ordering, scroll units and phases, pan-zoom transform
   validity, key events, generated spellings.
