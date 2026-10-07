@@ -493,6 +493,24 @@ mod native_windows {
             .expect("create actual shown Win32 window")
     }
 
+    struct ClosePointerTarget(Arc<dyn HostWindow>);
+
+    impl Drop for ClosePointerTarget {
+        fn drop(&mut self) { self.0.close(); }
+    }
+
+    #[expect(unsafe_code, reason = "keeps only the ephemeral injected-input target above unrelated host windows")]
+    fn open_pointer_target(platform: &WindowsPlatform) -> (Arc<dyn HostWindow>, ClosePointerTarget) {
+        use windows::Win32::UI::WindowsAndMessaging::HWND_TOPMOST;
+        let window = open_shown(platform);
+        let close = ClosePointerTarget(Arc::clone(&window));
+        // SAFETY: the fixture's exact live owner-thread HWND. It is destroyed
+        // by the RAII owner on success, early refusal, or assertion unwind;
+        // no pre-existing host window's z-order or style is changed.
+        unsafe { SetWindowPos(hwnd_of(&window), Some(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE) }.expect("keep ephemeral pointer target above host windows");
+        (window, close)
+    }
+
     fn deadline_rearms_independent_windows_without_input() {
         run_deadline_windows("rearm");
     }
@@ -2584,7 +2602,7 @@ mod native_windows {
             matches!(error.code().0 as u32, 0x8007_0005 | 0x8007_0032 | 0x8007_0078 | 0x8000_4001)
         }
         let platform = WindowsPlatform::new().expect("native Windows platform");
-        let window = open_shown(&platform);
+        let (window, _close) = open_pointer_target(&platform);
         let hwnd = hwnd_of(&window);
         pump_pointer_thread();
         let mut target = POINT { x: 40, y: 40 };
@@ -2743,7 +2761,7 @@ mod native_windows {
             }
         }
         let platform = WindowsPlatform::new().expect("native Windows platform");
-        let window = open_shown(&platform);
+        let (window, _close) = open_pointer_target(&platform);
         let hwnd = hwnd_of(&window);
         let mut target = POINT { x: 40, y: 40 };
         let mut original = POINT::default();
