@@ -10,6 +10,15 @@ behaviour taxonomy and remains a sibling appendix.
 
 ## Mapping decisions
 
+### Clean widget frames report no builds
+
+The binding's draw-frame entry clears build telemetry even when no build work is pending.
+Dirty frames reset the same report through `BuildOwner::build_scope`; lazy child service
+adds its builds to that frame's report. A realm pump producing no draw frame retains the
+most recent actual frame report. Clearing telemetry does not route build work or change
+the scheduler's drain budget. Pinned by
+`tests/build_owner_tests.rs::clean_binding_frames_report_no_builds`.
+
 ### Owner and key envelopes retire after authority is withdrawn
 
 **Rule:** the build owner's reactive graph, tree observer and scheduled-build
