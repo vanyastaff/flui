@@ -36,7 +36,7 @@ fn assert_button_contacts(move_panics: bool, edge_panics: bool, resampling: bool
     binding
         .set_resampling_enabled(resampling)
         .expect("no active contact");
-    binding.set_sampling_clock(flui_interaction::SamplingClock::Manual {
+    binding.set_sampling_clock(flui_interaction::processing::SamplingClock::Manual {
         period: std::time::Duration::from_millis(16),
     });
     let observed = Rc::new(RefCell::new(Vec::new()));
