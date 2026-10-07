@@ -11,14 +11,14 @@
 //! virtual time: the verdict flips on the script's timing alone, with the same
 //! event sequence on both sides.
 
-use std::sync::Arc;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use flui_foundation::geometry::Offset;
 use flui_interaction::settings::GestureSettings;
-use flui_interaction::{GestureRecognizer, LongPressGestureRecognizer, PointerId};
+use flui_interaction::{LongPressGestureRecognizer, PointerDispatch, RecognizerSet};
 use flui_testing::HeadlessBinding;
 use flui_testing::replay::PointerScript;
 
@@ -34,32 +34,35 @@ fn long_press_probe(
 ) -> (Rc<LongPressGestureRecognizer>, Arc<AtomicBool>) {
     let fired = Arc::new(AtomicBool::new(false));
     let in_callback = Arc::clone(&fired);
-    let recognizer = LongPressGestureRecognizer::with_settings(
-        binding.arena().clone(),
-        GestureSettings::touch_defaults().with_long_press_timeout(timeout),
-    )
-    .with_on_long_press_start(move |_details| in_callback.store(true, Ordering::SeqCst));
+    let recognizer = LongPressGestureRecognizer::builder(binding.arena().clone())
+        .settings(GestureSettings::touch_defaults().with_long_press_timeout(timeout))
+        .on_long_press_start(move |_details| in_callback.store(true, Ordering::SeqCst))
+        .build();
     (recognizer, fired)
 }
 
-/// Replay `script`, enrolling `recognizer` for the contact when the replay
-/// hit-tests its Down.
-///
-/// The hit test is where a contact acquires its targets in production too, so
-/// this is the same seam a mounted tree fills — a bare recognizer just answers
-/// it directly instead of through a render-tree walk. The route is captured
-/// once per contact, so the enrollment happens on the Down and the rest of the
-/// contact's events follow the captured route.
+/// Replay the actual script events through weak recognizer attachment.
+/// Down admission keeps device kind, buttons and timestamps; terminal events
+/// finish the same contact rather than reconstructing it from hit-test geometry.
 fn replay_against(
     binding: &mut HeadlessBinding,
     recognizer: &Rc<LongPressGestureRecognizer>,
     script: &PointerScript,
 ) {
-    let recognizer = Rc::clone(recognizer);
-    binding.replay_with(script, move |_, position| {
-        recognizer.add_pointer(PointerId::PRIMARY, position, position);
-        flui_interaction::HitTestResult::new()
+    let mut recognizers = RecognizerSet::default();
+    recognizers.attach(recognizer);
+    let route: flui_interaction::routing::GlobalPointerHandler = Rc::new(move |event| {
+        recognizers.dispatch(PointerDispatch::at_root(event));
     });
+    binding
+        .gestures()
+        .pointer_router()
+        .add_global_handler(Rc::clone(&route));
+    binding.replay(script);
+    binding
+        .gestures()
+        .pointer_router()
+        .remove_global_handler(&route);
 }
 
 pub(crate) fn a_long_press_script_held_past_the_deadline_fires_it() {
