@@ -315,6 +315,50 @@ pub(crate) fn viewer_focal_fling_advances_then_stops_on_new_input() {
     );
 }
 
+/// Native cumulative scale and focal motion have different release units.
+pub(crate) fn viewer_reports_scale_velocity_separately_from_focal_velocity() {
+    use flui_widgets::InteractiveViewer;
+    let ends = Rc::new(RefCell::new(Vec::new()));
+    let log = ends.clone();
+    let laid = lay_out(
+        InteractiveViewer::new()
+            .boundary_margin(EdgeInsets::all(1000.0))
+            .on_interaction_end(move |_, details| log.borrow_mut().push(details))
+            .child(SizedBox::new(200.0, 200.0)),
+        tight(200.0, 200.0),
+    );
+    let packet = |millis: u64, phase| {
+        PointerEvent::PanZoom(PanZoomEvent::new(
+            mouse(),
+            EventTime::from_nanos(millis * 1_000_000),
+            position(50.0, 50.0),
+            phase,
+        ))
+    };
+    laid.dispatch_pointer_event(&packet(0, PanZoomPhase::Start));
+    for (millis, pan, scale) in [(10, 20.0, 1.2), (20, 40.0, 1.5), (30, 60.0, 1.9)] {
+        laid.dispatch_pointer_event(&packet(
+            millis,
+            PanZoomPhase::Update(
+                PanZoomTransform::try_new(Offset::new(pan, 0.0), scale, 0.0)
+                    .expect("finite authored native history"),
+            ),
+        ));
+    }
+    laid.dispatch_pointer_event(&packet(31, PanZoomPhase::End));
+    let observed = ends.borrow();
+    assert_eq!(observed.len(), 1, "one source release");
+    assert!(
+        observed[0].scale_velocity > 5.0,
+        "scale units per second remain observable"
+    );
+    assert!(
+        observed[0].velocity.pixels_per_second.dx > 1000.0,
+        "pan carries measured logical pixels per second"
+    );
+    assert!(observed[0].velocity.pixels_per_second.dy.abs() < 1e-9);
+}
+
 fn mouse() -> PointerInfo {
     PointerInfo::new(
         PointerId::try_from(7_u64).expect("valid pointer"),
