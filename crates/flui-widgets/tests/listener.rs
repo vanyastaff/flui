@@ -49,6 +49,55 @@ pub(crate) fn listener_routes_down_and_up_to_their_own_callbacks() {
     assert_eq!(downs.get(), 1, "up does not re-invoke on_pointer_down");
 }
 
+pub(crate) fn listener_admission_keeps_terminal_delivery_and_weak_ownership() {
+    use std::cell::RefCell;
+    use flui_interaction::{CancelOutcome, GestureArenaMember, GestureRecognizer, PointerId};
+
+    struct ContactObserver(Rc<RefCell<Vec<&'static str>>>);
+    impl GestureArenaMember for ContactObserver {
+        fn accept_gesture(&self, _: PointerId) {}
+        fn reject_gesture(&self, _: PointerId) {}
+    }
+    impl GestureRecognizer for ContactObserver {
+        fn add_pointer(&self, _: PointerDispatch<'_>) {
+            self.0.borrow_mut().push("down");
+        }
+        fn handle_event(&self, dispatch: PointerDispatch<'_>) {
+            use flui_rendering::hit_testing::PointerEvent;
+            self.0.borrow_mut().push(match dispatch.local {
+                PointerEvent::Up(_) => "up",
+                PointerEvent::Move(_) => "move",
+                _ => "other",
+            });
+        }
+        fn cancel(&self) -> CancelOutcome { CancelOutcome::Idle }
+    }
+
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let recognizer = Rc::new(ContactObserver(Rc::clone(&events)));
+    let admitted = Rc::new(Cell::new(true));
+    let predicate = Rc::clone(&admitted);
+    let raw = Rc::clone(&events);
+    let laid = lay_out(
+        Listener::new()
+            .behavior(HitTestBehavior::Opaque)
+            .on_pointer_down(move |_, _| raw.borrow_mut().push("raw"))
+            .recognizer_when(&recognizer, move |_| predicate.get())
+            .child(SizedBox::new(80.0, 80.0)),
+        tight(80.0, 80.0),
+    );
+    laid.dispatch_pointer_down(40.0, 40.0);
+    admitted.set(false);
+    laid.dispatch_pointer_move(41.0, 40.0);
+    laid.dispatch_pointer_up(41.0, 40.0);
+    assert_eq!(&*events.borrow(), &["raw", "down", "move", "up"]);
+    events.borrow_mut().clear();
+    drop(recognizer);
+    laid.dispatch_pointer_down(40.0, 40.0);
+    laid.dispatch_pointer_up(40.0, 40.0);
+    assert_eq!(&*events.borrow(), &["raw"], "the cached handler owns no recognizer");
+}
+
 // ============================================================================
 // Event context (ADR-0086): the listener takes the owner's writer source
 // from its render-object context and opens one write per event.
