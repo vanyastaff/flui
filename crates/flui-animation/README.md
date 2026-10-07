@@ -126,62 +126,72 @@ controller.dispose();  // Stop animation, release ticker
 
 ## Curves
 
-A `Curve` maps `t ∈ [0, 1]` to an output in `[0, 1]`. Used for easing.
+A `Curve` maps animation progress `t` to eased progress. Used for easing.
 
-**Contract**: `transform(0.0) == 0.0` and `transform(1.0) == 1.0`.
+**Contract** (the `Curve` trait docs): `transform(0.0) == 0.0` and
+`transform(1.0) == 1.0` exactly; inside `[0, 1]` the output is finite and may
+overshoot (`Back`, `Elastic`); `t` outside `[0, 1]` clamps to the nearest end;
+`transform(NaN)` is NaN.
 
 ### Predefined Curves
 
-```rust,ignore
-use flui_animation::Curves;
+```rust
+use flui_animation::{Curve, Curves};
 
-Curves::Linear        // Identity
-Curves::EaseIn        // Slow start
-Curves::EaseOut       // Slow end
-Curves::EaseInOut     // Slow start and end
-Curves::FastOutSlowIn // Material Design standard
+let _ = Curves::Linear;        // Identity
+let _ = Curves::EaseIn;        // Slow start
+let _ = Curves::EaseOut;       // Slow end
+let _ = Curves::EaseInOut;     // Slow start and end
+let _ = Curves::FastOutSlowIn; // Material Design standard
 
-Curves::BounceIn      // Bounce at start
-Curves::BounceOut     // Bounce at end
-Curves::BounceInOut   // Bounce both
+let _ = Curves::BounceIn;      // Bounce at start
+let _ = Curves::BounceOut;     // Bounce at end
+let _ = Curves::BounceInOut;   // Bounce both
 
-Curves::ElasticIn     // Overshoot at start
-Curves::ElasticOut    // Overshoot at end
-Curves::ElasticInOut  // Overshoot both
+let _ = Curves::ElasticIn;     // Overshoot at start
+let _ = Curves::ElasticOut;    // Overshoot at end
+let _ = Curves::ElasticInOut;  // Overshoot both
 
-Curves::Decelerate    // Fast start, gradual stop
+let _ = Curves::Decelerate;    // Fast start, gradual stop
+
+assert_eq!(Curves::EaseInOut.transform(0.5), 0.5);
 ```
 
 ### Custom Curves
 
-```rust,ignore
-// Cubic bezier (CSS-style)
-let curve = Cubic::new(0.25, 0.1, 0.25, 1.0);
+Parameters are validated however a curve is made: `new` panics (a compile
+error in a `const`), `try_new` returns a `CurveError`, and serde decoding
+rejects what `try_new` rejects.
 
-// Elastic with custom period
+```rust
+use flui_animation::{Cubic, CurveError, Curves, ElasticOutCurve, Interval};
+
+// Cubic bezier (CSS `cubic-bezier`); x1 and x2 must lie in [0, 1]
+const EASE: Cubic = Cubic::new(0.25, 0.1, 0.25, 1.0);
+assert!(matches!(
+    Cubic::try_new(1.5, 0.0, 0.5, 1.0),
+    Err(CurveError::OutOfRange { parameter: "x1", .. })
+));
+
+// Elastic with custom period (finite, > 0)
 let elastic = ElasticOutCurve::new(0.3);
 
 // Interval: active only in [0.2, 0.8]
 let interval = Interval::new(0.2, 0.8, Curves::EaseIn);
-
-// Threshold: step function at t=0.5
-let step = Threshold::new(0.5);
-
-// Catmull-Rom spline through points
-let spline = CatmullRomCurve::with_points(vec![
-    (0.0, 0.0),
-    (0.3, 0.8),
-    (0.7, 0.2),
-    (1.0, 1.0),
-]);
 ```
 
 ### Curve Modifiers
 
-```rust,ignore
-let flipped = curve.flipped();   // Output: 1.0 - curve(t)
-let reversed = curve.reversed(); // Input: curve(1.0 - t)
+```rust
+use flui_animation::{Curve, Curves};
+
+// The 180° rotation 1.0 - curve(1.0 - t): an ease-in becomes an ease-out.
+let flipped = Curves::EaseIn.flipped();
+assert!((flipped.transform(0.25) - (1.0 - Curves::EaseIn.transform(0.75))).abs() < 1e-12);
 ```
+
+To run a curve backwards in time, reverse the animation that drives it
+(`ReverseAnimation`, `AnimationExt::reversed`), not the curve.
 
 ---
 
@@ -576,8 +586,11 @@ panic instead:
 | `SpringDescription::with_damping_ratio` | mass, stiffness or ratio is NaN, infinite or ≤ 0 |
 | `SpringSimulation::new` | start, end or velocity is not finite |
 | `TweenSequenceItem::new` | weight ≤ 0, weight is infinite |
-| `Interval::new` | begin/end outside [0,1], end < begin |
-| `Threshold::new` | threshold outside [0,1] |
+| `Interval::new` | begin/end not finite or outside [0,1], end < begin |
+| `Cubic::new` | any argument not finite, x1 or x2 outside [0,1] |
+| `ThreePointCubic::new` | midpoint not strictly inside the unit square, a control x outside its segment, a coordinate not finite |
+| `Elastic{In,Out,InOut}Curve::new` | period not finite or ≤ 0 |
+| `Split::with_curves` | split not finite or outside [0,1] |
 
 ---
 

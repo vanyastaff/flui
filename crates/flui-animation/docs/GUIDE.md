@@ -156,12 +156,18 @@ controller.dispose();
 
 ### Using Predefined Curves
 
-```rust,ignore
-use flui_animation::Curves;
+```rust
+use flui_animation::{Curve, Curves};
 
-let value = Curves::EaseIn.transform(0.5);
-let value = Curves::BounceOut.transform(t);
-let value = Curves::ElasticOut.transform(t);
+let t = 0.3;
+let eased = Curves::EaseIn.transform(0.5);
+let bounced = Curves::BounceOut.transform(t);
+let springy = Curves::ElasticOut.transform(t);
+
+// The input policy every curve follows (see the `Curve` trait docs):
+assert_eq!(Curves::EaseIn.transform(0.0), 0.0); // exact ends
+assert_eq!(Curves::EaseIn.transform(1.5), 1.0); // outside [0, 1] clamps
+assert!(Curves::EaseIn.transform(f64::NAN).is_nan()); // NaN stays NaN
 ```
 
 ### Available Curves
@@ -179,12 +185,15 @@ let value = Curves::ElasticOut.transform(t);
 | Bounce | `BounceIn`, `BounceOut`, `BounceInOut` |
 | Other | `Decelerate` |
 
+Every constant is monotone except the `Back`, `Elastic` and `Bounce` families.
+`Cubic` constants are solved to within `1e-7` of the exact bezier output.
+
 ### Custom Curves
 
-```rust,ignore
-use flui_animation::{Cubic, ElasticOutCurve, Interval, Threshold};
+```rust
+use flui_animation::{Cubic, CurveError, Curves, ElasticOutCurve, Interval};
 
-// Cubic bezier (CSS-style control points)
+// Cubic bezier (CSS `cubic-bezier` control points; x1 and x2 in [0, 1])
 let curve = Cubic::new(0.25, 0.1, 0.25, 1.0);
 
 // Elastic with custom period
@@ -193,13 +202,17 @@ let elastic = ElasticOutCurve::new(0.3);
 // Active only in [0.2, 0.8]
 let interval = Interval::new(0.2, 0.8, Curves::EaseIn);
 
-// Step at threshold
-let step = Threshold::new(0.5);
+// Parameters from data: `try_new` reports what is wrong instead of panicking
+let error = ElasticOutCurve::try_new(0.0).expect_err("period must be > 0");
+assert!(matches!(error, CurveError::OutOfRange { parameter: "period", .. }));
 ```
 
 ### Splines
 
-```rust,ignore
+`CatmullRomCurve` spaces its points evenly in progress and ignores their x
+coordinates:
+
+```rust
 use flui_animation::CatmullRomCurve;
 
 let spline = CatmullRomCurve::with_points(vec![
@@ -212,10 +225,16 @@ let spline = CatmullRomCurve::with_points(vec![
 
 ### Modifiers
 
-```rust,ignore
-let flipped = curve.flipped();   // 1.0 - curve(t)
-let reversed = curve.reversed(); // curve(1.0 - t)
+```rust
+use flui_animation::{Curve, Curves};
+
+// The 180° rotation 1.0 - curve(1.0 - t): ease-in becomes ease-out.
+let flipped = Curves::EaseIn.flipped();
+assert_eq!(flipped.transform(1.0), 1.0);
 ```
+
+To play a curve backwards in time, reverse the driving animation
+(`AnimationExt::reversed`), not the curve.
 
 ---
 

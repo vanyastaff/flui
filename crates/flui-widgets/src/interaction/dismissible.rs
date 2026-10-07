@@ -935,7 +935,8 @@ impl ViewState<Dismissible> for DismissibleState {
 
         let resize_controller = self.drag.resize_controller.borrow_mut().take();
         if let Some(resize_controller) = resize_controller {
-            if let Some(id) = self.drag.resize_listener_id.borrow_mut().take() {
+            let resize_listener_id = self.drag.resize_listener_id.borrow_mut().take();
+            if let Some(id) = resize_listener_id {
                 resize_controller.remove_listener(id);
             }
             if let (Some(vsync), Some(registration)) =

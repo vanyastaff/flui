@@ -25,6 +25,7 @@ fn navigator_failure_containment_and_reentrancy() {
             ("hero_seam::an_observer_may_push_from_did_push_without_deadlocking", crate::hero_seam::an_observer_may_push_from_did_push_without_deadlocking),
             ("transition_route::status_listener_does_not_hold_a_lock_across_the_binding_call", crate::transition_route::status_listener_does_not_hold_a_lock_across_the_binding_call),
             ("transition_route::pop_mid_push_cancels_the_push_future_inside_the_flush_and_ends_popping", crate::transition_route::pop_mid_push_cancels_the_push_future_inside_the_flush_and_ends_popping),
+            ("transition_route::dispose_releases_the_controller_slot_before_disposing_it", crate::transition_route::dispose_releases_the_controller_slot_before_disposing_it),
         ],
     );
 }
@@ -333,6 +334,7 @@ fn route_transitions() {
             ("page_route::page_route_occludes_the_route_below_once_its_transition_completes", crate::page_route::page_route_occludes_the_route_below_once_its_transition_completes),
             ("page_route::secondary_animation_runs_on_the_previous_page_route_when_pushing_and_popping", crate::page_route::secondary_animation_runs_on_the_previous_page_route_when_pushing_and_popping),
             ("transition_route::push_transition_parks_the_entry_in_pushing_until_the_controller_completes", crate::transition_route::push_transition_parks_the_entry_in_pushing_until_the_controller_completes),
+            ("transition_route::hopping_route_dropped_without_dispose_frees_proxy", crate::transition_route::hopping_route_dropped_without_dispose_frees_proxy),
         ],
     );
 }
