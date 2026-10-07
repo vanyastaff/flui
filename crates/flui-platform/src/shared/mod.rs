@@ -30,6 +30,8 @@ pub mod hwnd_affinity;
 // values convert through it, each on its own target, and its tests run on
 // any host.
 pub mod input_vocabulary;
+#[cfg(any(feature = "winit-backend", target_os = "android"))]
+pub(crate) mod keyboard_adapter;
 pub mod keys;
 pub mod keys_macos;
 pub mod panic_boundary;

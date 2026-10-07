@@ -21,7 +21,7 @@ use flui_platform_api::{
 use keyboard_types::{Key, KeyState, Modifiers, NamedKey};
 use ui_events::keyboard::KeyboardEvent;
 
-use crate::{shared::input_vocabulary::keyboard_input, traits::PlatformInput};
+use crate::{shared::keyboard_adapter::keyboard_input, traits::PlatformInput};
 
 #[derive(Clone, Copy)]
 pub(crate) struct DeviceCapabilities {

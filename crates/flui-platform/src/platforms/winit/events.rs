@@ -10,7 +10,7 @@ use std::collections::{HashMap, HashSet};
 use winit::event::{ElementState, MouseButton, MouseScrollDelta};
 
 use crate::{
-    shared::events::event_timestamp_ns, shared::input_vocabulary::keyboard_input,
+    shared::events::event_timestamp_ns, shared::keyboard_adapter::keyboard_input,
     traits::PlatformInput,
 };
 
@@ -211,7 +211,7 @@ fn pan_zoom_input(
             position,
             phase,
         )
-        .with_modifiers(crate::shared::input_vocabulary::modifiers(modifiers)),
+        .with_modifiers(crate::shared::keyboard_adapter::modifiers(modifiers)),
     ))
 }
 
@@ -458,7 +458,7 @@ impl NativePointerState {
         if let Some((device, delta, phase)) = GestureDelta::from_native(event, scale) {
             return self.gesture((window, device), delta, phase, modifiers);
         }
-        let mods = crate::shared::input_vocabulary::modifiers(modifiers);
+        let mods = crate::shared::keyboard_adapter::modifiers(modifiers);
         match event {
             WindowEvent::CursorMoved { device_id, .. }
             | WindowEvent::TouchpadPressure { device_id, .. }

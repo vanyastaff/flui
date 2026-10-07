@@ -10,16 +10,15 @@ use std::time::Duration;
 use flui_foundation::geometry::{Offset, Point};
 use flui_platform_api::EventTime;
 use flui_platform_api::keyboard::Modifiers as OwnedModifiers;
+use flui_platform_api::keyboard::{Key, KeyEvent, KeyRepeat, KeyState, Modifiers, NamedKey};
 use flui_platform_api::pointer::{
     ButtonChange, CancelReason, PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerButton,
     PointerButtons, PointerCancel, PointerEvent, PointerId, PointerInfo, PointerKind, PointerMove,
     PointerPosition, PointerPress, PointerRelease, PointerRole, PointerSample, PointerSignal,
     Pressure, ScrollDelta, ScrollEvent, ScrollPhase, ScrollPrecision, ScrollUnit,
 };
-use keyboard_types::{Key, Modifiers, NamedKey};
 use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventPhase, NSEventType};
 use objc2_foundation::NSProcessInfo;
-use ui_events::keyboard::{KeyState, KeyboardEvent};
 
 use crate::traits::PlatformInput;
 
@@ -72,25 +71,30 @@ impl MacInputState {
         if event_type == NSEventType::KeyDown || event_type == NSEventType::KeyUp {
             let key_code = event.keyCode();
             let code = crate::shared::keys_macos::keycode_to_code(key_code);
-            return vec![crate::shared::input_vocabulary::keyboard_input(
-                KeyboardEvent {
-                    state: if event_type == NSEventType::KeyDown {
+            return vec![PlatformInput::Keyboard(
+                KeyEvent::new(
+                    if event_type == NSEventType::KeyDown {
                         KeyState::Down
                     } else {
                         KeyState::Up
                     },
-                    key: extract_key(event, key_code),
+                    extract_key(event, key_code),
                     code,
-                    location: crate::shared::keys::location_for_code(code),
-                    modifiers: extract_modifiers(event),
-                    repeat: event_type == NSEventType::KeyDown && event.isARepeat(),
-                    is_composing: false,
-                },
-                time.as_nanos(),
+                    time,
+                )
+                .with_location(crate::shared::keys::location_for_code(code))
+                .with_modifiers(extract_modifiers(event))
+                .with_repeat(
+                    if event_type == NSEventType::KeyDown && event.isARepeat() {
+                        KeyRepeat::AutoRepeat
+                    } else {
+                        KeyRepeat::First
+                    },
+                ),
             )];
         }
         let pointer = mouse_info();
-        let modifiers = crate::shared::input_vocabulary::modifiers(extract_modifiers(event));
+        let modifiers = extract_modifiers(event);
         let location = event.locationInWindow();
         let position =
             PointerPosition::try_new(Point::new(location.x, view_height - location.y)).ok();
@@ -412,7 +416,7 @@ fn extract_key(event: &NSEvent, key_code: u16) -> Key {
     if chars_str.is_empty() {
         return Key::Named(NamedKey::Unidentified);
     }
-    Key::Character(chars_str)
+    Key::character(chars_str)
 }
 
 /// Extract modifiers from NSEvent
@@ -423,7 +427,7 @@ fn extract_key(event: &NSEvent, key_code: u16) -> Key {
 fn extract_modifiers(event: &NSEvent) -> Modifiers {
     let flags = event.modifierFlags();
 
-    let mut modifiers = Modifiers::empty();
+    let mut modifiers = Modifiers::NONE;
     if flags.contains(NSEventModifierFlags::Shift) {
         modifiers.insert(Modifiers::SHIFT);
     }
