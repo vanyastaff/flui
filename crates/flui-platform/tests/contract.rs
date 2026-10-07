@@ -186,17 +186,18 @@ mod native_windows {
         Graphics::Gdi::{ClientToScreen, UpdateWindow},
         System::Threading::GetCurrentThreadId,
         UI::Input::KeyboardAndMouse::{
-            GetCapture, GetKeyState, GetKeyboardState, ReleaseCapture, SetCapture,
-            SetKeyboardState, VIRTUAL_KEY, VK_LBUTTON, VK_LMENU, VK_LSHIFT, VK_MBUTTON, VK_MENU,
-            VK_RBUTTON, VK_SHIFT,
+            ACTIVATE_KEYBOARD_LAYOUT_FLAGS, ActivateKeyboardLayout, GetCapture, GetKeyState,
+            GetKeyboardLayout, GetKeyboardState, HKL, KLF_ACTIVATE, LoadKeyboardLayoutW,
+            ReleaseCapture, SetCapture, SetKeyboardState, VIRTUAL_KEY, VK_LBUTTON, VK_LMENU,
+            VK_LSHIFT, VK_MBUTTON, VK_MENU, VK_RBUTTON, VK_SHIFT,
         },
         UI::WindowsAndMessaging::{
             CWPSTRUCT, CallNextHookEx, DispatchMessageW, GetClientRect, IsIconic, IsWindowVisible,
             MSG, PM_REMOVE, PeekMessageW, PostMessageW, SW_MINIMIZE, SWP_NOACTIVATE, SWP_NOMOVE,
             SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetWindowPos, SetWindowsHookExW, ShowWindow,
-            TranslateMessage, UnhookWindowsHookEx, WH_CALLWNDPROC, WM_CHAR, WM_CLOSE, WM_DEADCHAR,
-            WM_ENTERMENULOOP, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
-            WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSCHAR, WM_SYSDEADCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP,
+            TranslateMessage, UnhookWindowsHookEx, WH_CALLWNDPROC, WM_CHAR, WM_CLOSE,
+            WM_ENTERMENULOOP, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+            WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP,
         },
     };
 
@@ -1203,14 +1204,12 @@ mod native_windows {
 
     // A dead key (an accent on an international layout) arrives as
     // `NamedKey::Dead`, not as its unshifted character, so a shortcut bound
-    // to that character does not fire mid-composition. `TranslateMessage`
-    // queues `WM_DEADCHAR` for it; the row posts one before the keydown.
+    // to that character does not fire mid-composition.
     fn dead_key_is_reported_as_dead() {
         dead_keydown_reports_dead(DeadKeyPath::Plain);
     }
 
-    // With Alt held the same key is a system keydown, and `TranslateMessage`
-    // queues `WM_SYSDEADCHAR` for it instead.
+    // With Alt held the same key arrives as a system keydown and keyup.
     fn system_dead_key_is_reported_as_dead() {
         dead_keydown_reports_dead(DeadKeyPath::System);
     }
@@ -1221,65 +1220,97 @@ mod native_windows {
         System,
     }
 
-    #[expect(
-        unsafe_code,
-        reason = "owned Win32 keyboard dispatch and message pumping"
-    )]
+    #[expect(unsafe_code, reason = "owned Win32 keyboard dispatch")]
     fn dead_keydown_reports_dead(path: DeadKeyPath) {
+        // US-International: VK_OEM_7 (apostrophe) is the acute-accent dead key.
+        // The layout is activated for this thread only and restored below;
+        // each row runs in its own child process.
         let platform = WindowsPlatform::new().expect("native Windows platform");
         let window = open_shown(&platform);
+        let layout = ThreadLayout::activate("00020409");
         let hwnd = window
             .as_any()
             .downcast_ref::<WindowsWindow>()
             .expect("Win32 backend")
             .hwnd();
-        let keys = Arc::new(Mutex::new(Vec::<keyboard_types::Key>::new()));
+        let keys = Arc::new(Mutex::new(Vec::<(
+            keyboard_types::KeyState,
+            keyboard_types::Key,
+        )>::new()));
         let observed = Arc::clone(&keys);
         window.on_input(Box::new(move |event| {
-            if let Some(keyboard) = event.as_keyboard()
-                && keyboard.state == keyboard_types::KeyState::Down
-            {
-                observed.lock().expect("keys").push(keyboard.key.clone());
+            if let Some(keyboard) = event.as_keyboard() {
+                observed
+                    .lock()
+                    .expect("keys")
+                    .push((keyboard.state, keyboard.key.clone()));
             }
             DispatchEventResult::resolved(true, false)
         }));
-        // VK_OEM_7 (apostrophe), the acute-accent dead key on US-International.
         let (vk, scan) = (0xDE_usize, 0x28_isize);
-        let (dead, down, context) = match path {
-            DeadKeyPath::Plain => (WM_DEADCHAR, WM_KEYDOWN, 0),
-            DeadKeyPath::System => (WM_SYSDEADCHAR, WM_SYSKEYDOWN, 1 << 29),
+        let (down, up, context) = match path {
+            DeadKeyPath::Plain => (WM_KEYDOWN, WM_KEYUP, 0),
+            DeadKeyPath::System => (WM_SYSKEYDOWN, WM_SYSKEYUP, 1 << 29),
         };
         // SAFETY: integer key data for the fixture's own HWND on this thread;
-        // dispatch is synchronous.
+        // dispatch is synchronous. Bits 30 and 31 mark the key-up.
         unsafe {
-            PostMessageW(
-                Some(hwnd),
-                dead,
-                WPARAM(0x27),
-                LPARAM(1 | (scan << 16) | context),
-            )
-            .expect("queue dead char");
             SendMessageW(
                 hwnd,
                 down,
                 Some(WPARAM(vk)),
                 Some(LPARAM(1 | (scan << 16) | context)),
             );
+            SendMessageW(
+                hwnd,
+                up,
+                Some(WPARAM(vk)),
+                Some(LPARAM(1 | (scan << 16) | context | (1 << 30) | (1 << 31))),
+            );
         }
-        for _ in 0..64 {
-            let mut message = MSG::default();
-            // SAFETY: only the fixture's owner-thread HWND is selected.
-            if !unsafe { PeekMessageW(&raw mut message, Some(hwnd), 0, 0, PM_REMOVE) }.as_bool() {
-                break;
-            }
-            // SAFETY: dispatch the message returned by this thread's queue.
-            unsafe { DispatchMessageW(&raw const message) };
-        }
+        drop(layout);
+        let dead = keyboard_types::Key::Named(keyboard_types::NamedKey::Dead);
         assert_eq!(
-            keys.lock().expect("keys").first(),
-            Some(&keyboard_types::Key::Named(keyboard_types::NamedKey::Dead)),
-            "a dead keydown must not report its fallback character"
+            *keys.lock().expect("keys"),
+            vec![
+                (keyboard_types::KeyState::Down, dead.clone()),
+                (keyboard_types::KeyState::Up, dead),
+            ],
+            "a dead key must report Dead on both its press and its release, \
+             not its fallback character"
         );
+    }
+
+    /// The calling thread's keyboard layout, switched for the duration of a
+    /// row and restored on drop.
+    struct ThreadLayout {
+        previous: HKL,
+    }
+
+    impl ThreadLayout {
+        #[expect(unsafe_code, reason = "thread-local keyboard layout switch")]
+        fn activate(id: &str) -> Self {
+            let wide: Vec<u16> = id.encode_utf16().chain(Some(0)).collect();
+            // SAFETY: `wide` is a NUL-terminated UTF-16 layout id that outlives
+            // the call; the layout is activated for this thread only.
+            let previous = unsafe {
+                let previous = GetKeyboardLayout(0);
+                LoadKeyboardLayoutW(windows::core::PCWSTR(wide.as_ptr()), KLF_ACTIVATE)
+                    .expect("load the US-International layout");
+                previous
+            };
+            Self { previous }
+        }
+    }
+
+    impl Drop for ThreadLayout {
+        #[expect(unsafe_code, reason = "restore the thread's keyboard layout")]
+        fn drop(&mut self) {
+            // SAFETY: `previous` was this thread's active layout handle.
+            let _ = unsafe {
+                ActivateKeyboardLayout(self.previous, ACTIVATE_KEYBOARD_LAYOUT_FLAGS::default())
+            };
+        }
     }
 
     // Counts WM_ENTERMENULOOP sent on this thread while the menu-key rows run.

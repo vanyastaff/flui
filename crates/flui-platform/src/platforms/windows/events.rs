@@ -30,8 +30,9 @@ use windows::Win32::{
     Graphics::Gdi::ScreenToClient,
     UI::{
         Input::KeyboardAndMouse::{
-            GetCapture, GetKeyState, ReleaseCapture, SetCapture, VIRTUAL_KEY, VK_CONTROL,
-            VK_LBUTTON, VK_LWIN, VK_MBUTTON, VK_MENU, VK_RBUTTON, VK_RWIN, VK_SHIFT,
+            GetCapture, GetKeyState, MAPVK_VK_TO_CHAR, MapVirtualKeyW, ReleaseCapture, SetCapture,
+            VIRTUAL_KEY, VK_CONTROL, VK_LBUTTON, VK_LWIN, VK_MBUTTON, VK_MENU, VK_RBUTTON, VK_RWIN,
+            VK_SHIFT,
         },
         WindowsAndMessaging::{
             WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_RBUTTONDOWN,
@@ -375,42 +376,38 @@ pub fn mouse_hwheel_event(
 // Keyboard events (simple wrappers)
 // ============================================================================
 
-/// What `TranslateMessage` produced for one keydown.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Keystroke {
-    /// The drained `WM_CHAR` burst, or `None` for a key with no typeable
-    /// translation (navigation keys, Ctrl chords).
-    Text(Option<String>),
-    /// A dead key: an accent held for the next keystroke (`WM_DEADCHAR`).
-    DeadKey,
-}
-
 /// Convert WM_KEYDOWN to W3C KeyboardEvent.
 ///
-/// `stroke` carries the drained `WM_CHAR` burst for this keydown (see
+/// `translated_text` is the drained `WM_CHAR` burst for this keydown (see
 /// `window_proc`'s `WM_KEYDOWN` arm and `crate::shared::keys`'s module doc
 /// for the pairing model); when present and typeable it becomes the event's
 /// `Key::Character`, otherwise the layout-independent virtual-key fallback
 /// applies.
-pub fn key_down_event(wparam: WPARAM, lparam: LPARAM, stroke: Keystroke) -> PlatformInput {
+pub fn key_down_event(
+    wparam: WPARAM,
+    lparam: LPARAM,
+    translated_text: Option<String>,
+) -> PlatformInput {
     let vk = wparam.0 as u16;
     let (scan_code, extended, is_repeat) = keys::parse_key_lparam(lparam.0);
 
     let modifiers = message_modifiers();
     let fallback = keys::vk_to_key(vk, modifiers.contains(KeyboardModifiers::SHIFT));
     let code = keys::scancode_to_code(scan_code, extended);
-    // A dead key is reported as one, not as its unshifted fallback character:
-    // otherwise a shortcut bound to that character fires while the user is
-    // composing an accented letter.
-    let key = match stroke {
-        Keystroke::DeadKey => Key::Named(NamedKey::Dead),
-        Keystroke::Text(translated_text) => keys::key_for_keydown(
+    // A dead key with nothing typed yet is reported as one, not as its
+    // unshifted fallback character: otherwise a shortcut bound to that
+    // character fires while the user composes an accented letter. Its second
+    // press (or a space after it) types the accent itself and arrives as text.
+    let key = if translated_text.is_none() && is_dead_key(vk) {
+        Key::Named(NamedKey::Dead)
+    } else {
+        keys::key_for_keydown(
             fallback,
             translated_text,
             modifiers.contains(KeyboardModifiers::ALT),
             modifiers.contains(KeyboardModifiers::CONTROL),
             code,
-        ),
+        )
     };
 
     PlatformInput::Keyboard(KeyboardEvent {
@@ -435,7 +432,13 @@ pub fn key_up_event(wparam: WPARAM, lparam: LPARAM) -> PlatformInput {
     let (scan_code, extended, _) = keys::parse_key_lparam(lparam.0);
 
     let modifiers = message_modifiers();
-    let key = keys::vk_to_key(vk, modifiers.contains(KeyboardModifiers::SHIFT));
+    // The release of a dead key is `Dead` too (W3C UI Events dead-key
+    // sequence), so a pressed-key set sees the same identity go down and up.
+    let key = if is_dead_key(vk) {
+        Key::Named(NamedKey::Dead)
+    } else {
+        keys::vk_to_key(vk, modifiers.contains(KeyboardModifiers::SHIFT))
+    };
     let code = keys::scancode_to_code(scan_code, extended);
 
     PlatformInput::Keyboard(KeyboardEvent {
@@ -466,4 +469,16 @@ pub fn stray_char_event(text: String) -> PlatformInput {
         repeat: false,
         is_composing: false,
     })
+}
+
+/// Whether `vk` is a dead key in the calling thread's active keyboard layout.
+///
+/// `MapVirtualKeyW(.., MAPVK_VK_TO_CHAR)` sets the top bit of its result for a
+/// dead key. Asking the layout, rather than looking for the `WM_DEADCHAR`
+/// `TranslateMessage` queued, gives the same answer for key-down and key-up
+/// and cannot be fooled by a stale queued message during a nested dispatch.
+fn is_dead_key(vk: u16) -> bool {
+    // SAFETY: a pure layout query with integer arguments; no pointers.
+    let mapped = unsafe { MapVirtualKeyW(u32::from(vk), MAPVK_VK_TO_CHAR) };
+    mapped & 0x8000_0000 != 0
 }
