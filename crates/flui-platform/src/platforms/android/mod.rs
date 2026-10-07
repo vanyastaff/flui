@@ -610,12 +610,20 @@ impl Platform for AndroidPlatform {
         &self,
         _options: WindowOptions,
     ) -> Result<Arc<dyn crate::traits::HostWindow>, OpenWindowError> {
-        self.cancel_input_contacts(flui_platform_api::pointer::CancelReason::CaptureLost);
+        let cancelled = self
+            .input_state
+            .lock()
+            .cancel_contacts(flui_platform_api::pointer::CancelReason::CaptureLost);
         let window = Arc::new(AndroidWindow::new(
             self.app.clone(),
             Arc::clone(&self.execution_resumed),
         ));
-        let _prev = self.window.lock().replace(Arc::clone(&window));
+        let previous = self.window.lock().replace(Arc::clone(&window));
+        if let Some(previous) = previous {
+            for event in cancelled {
+                previous.callbacks().dispatch_input(event);
+            }
+        }
         tracing::info!("Android window created (wrapping ANativeWindow)");
         Ok(window)
     }

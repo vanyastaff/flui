@@ -218,12 +218,13 @@ impl AndroidInputState {
             DeviceReading::Unavailable => false,
         };
         if replacement && let Some(old) = self.devices.remove(&native_device) {
-            let retired: Vec<_> = self
+            let mut retired: Vec<_> = self
                 .contacts
                 .values()
                 .map(|contact| contact.info)
                 .filter(|info| info.device == Some(old.id))
                 .collect();
+            retired.sort_by_key(|info| info.id);
             for info in retired {
                 self.contacts.remove(&info.id);
                 output.push(PlatformInput::Pointer(PointerEvent::Cancel(
@@ -261,12 +262,13 @@ impl AndroidInputState {
         let action = event.action();
         if matches!(action, MotionAction::Cancel) {
             let native = u64::from(u32::from_ne_bytes(native_device.to_ne_bytes()));
-            let retired: Vec<_> = self
+            let mut retired: Vec<_> = self
                 .contacts
                 .values()
                 .map(|contact| contact.info)
                 .filter(|info| (info.id.get().get() - 1) >> 32 == native)
                 .collect();
+            retired.sort_by_key(|info| info.id);
             for info in retired {
                 self.contacts.remove(&info.id);
                 output.push(PlatformInput::Pointer(PointerEvent::Cancel(
