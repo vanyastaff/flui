@@ -76,11 +76,14 @@ impl MessageClock {
     }
 
     fn rebase_at(&self, tick: u32, now_ms: u64) -> u64 {
-        // GetMessageTime carries the low 32 bits of uptime. Subtract in
-        // that domain before extending, including across its 49.7-day wrap.
-        // A message older than one complete wrap cannot be distinguished.
-        let age_ms = (now_ms as u32).wrapping_sub(tick);
-        let sample_ms = now_ms.saturating_sub(u64::from(age_ms));
+        // Native timestamps carry the low 32 bits of uptime. Extend the
+        // nearest signed offset, including across the 49.7-day wrap. The
+        // coarse GetTickCount64 reference can lag a native sample by a few
+        // milliseconds; unsigned age would mistake that lead for a full wrap.
+        // Timestamps at least half a wrap from the reference are ambiguous;
+        // this contract admits samples within the nearer half-wrap interval.
+        let offset_ms = tick.wrapping_sub(now_ms as u32) as i32;
+        let sample_ms = now_ms.saturating_add_signed(i64::from(offset_ms));
         if sample_ms >= self.uptime_ms {
             self.epoch_ns.saturating_add(
                 sample_ms
