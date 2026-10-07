@@ -22,6 +22,7 @@ fn explicit_pointer_capture_contract() {
         ("release_loss", capture_release_defers_exactly_one_loss_to_owner_entry),
         ("native_terminal", capture_native_terminal_invalidates_the_token),
         ("reused_identity", capture_old_token_cannot_cancel_a_replacement_down),
+        ("callback_release", capture_release_inside_motion_defers_loss_until_next_entry),
     ];
     for &(name, row) in rows {
         if let Err(payload) = std::panic::catch_unwind(row) {
@@ -38,6 +39,7 @@ fn capture_drop_defers_exactly_one_loss_to_owner_entry() { assert_capture_route(
 fn capture_release_defers_exactly_one_loss_to_owner_entry() { assert_capture_route(4); }
 fn capture_native_terminal_invalidates_the_token() { assert_capture_route(5); }
 fn capture_old_token_cannot_cancel_a_replacement_down() { assert_capture_route(6); }
+fn capture_release_inside_motion_defers_loss_until_next_entry() { assert_capture_route(7); }
 
 fn assert_capture_route(mode: u8) {
     use flui_foundation::geometry::Offset;
@@ -72,6 +74,11 @@ fn assert_capture_route(mode: u8) {
                 held.borrow_mut().push(token);
             } else if matches!(dispatch.global, PointerEvent::Move(_)) {
                 assert!(dispatch.capture().is_err(), "Move cannot mint capture authority");
+                if mode == 7 {
+                    let token = held.borrow_mut().pop().expect("callback owns capture");
+                    drop(token);
+                    assert_eq!(first_log.borrow().last(), Some(&(1, "move")), "release within delivery invokes no nested cancellation");
+                }
             }
         }).expect("first target");
         let later_log = log.clone();
@@ -126,11 +133,11 @@ fn assert_capture_route(mode: u8) {
             make_up_event(Offset::new(200.0, 200.0), PointerKind::Touch).expect("up")
         };
         binding.handle_pointer_event(&terminal, |_| panic!("terminal retains its Down route"));
-        let tail = if mode == 0 { vec![(1, "move"), (2, "move"), (1, "up"), (2, "up")] } else if mode == 5 { vec![(1, "move"), (1, "lost")] } else { vec![(1, "move"), (1, "up")] };
+        let tail = if mode == 0 { vec![(1, "move"), (2, "move"), (1, "up"), (2, "up")] } else if mode == 5 || mode == 7 { vec![(1, "move"), (1, "lost")] } else { vec![(1, "move"), (1, "up")] };
         assert!(log.borrow().ends_with(&tail), "later delivery uses the claimed target, or the entire implicit route");
         tokens.borrow_mut().clear();
         binding.flush_pending_moves();
-        assert_eq!(log.borrow().iter().filter(|(_, event)| *event == "lost").count(), usize::from(mode == 5), "native terminal and stale tokens cannot add cancellation");
+        assert_eq!(log.borrow().iter().filter(|(_, event)| *event == "lost").count(), usize::from(mode == 5 || mode == 7), "native terminal and stale tokens cannot add cancellation");
         assert_eq!(binding.active_pointer_count(), 0);
     });
 }
