@@ -24,8 +24,8 @@ where
     F: Fn(&mut EventCx<'_>, PointerInfo, Offset) -> R + 'static,
     R: EventOutcome,
 {
-    Rc::new(move |cx: &mut EventCx<'_>, device, position| {
-        callback(cx, device, position).report();
+    Rc::new(move |cx: &mut EventCx<'_>, pointer, position| {
+        callback(cx, pointer, position).report();
     })
 }
 
@@ -33,7 +33,7 @@ where
 fn in_write(writer: &WriterSource, callback: &MouseCallback) -> Rc<dyn Fn(PointerInfo, Offset)> {
     let writer = writer.clone();
     let callback = Rc::clone(callback);
-    Rc::new(move |device, position| writer.write(|cx| callback(cx, device, position)))
+    Rc::new(move |pointer, position| writer.write(|cx| callback(cx, pointer, position)))
 }
 
 /// Calls callbacks when the mouse enters, hovers within, or exits its bounds.
