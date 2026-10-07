@@ -12,7 +12,12 @@ pub use flui_interaction::arena::{
     PointerSignalResolver, SignalPriority, SweepModel, TeamEntry,
 };
 pub use flui_interaction::events::{
-    CursorIcon, PointerButtons, PointerEvent, PointerEventExt, PointerType,
+    CursorIcon, PointerButtons, PointerEvent, PointerEventExt, PointerKind,
+};
+pub use flui_platform_api::pointer::{
+    ButtonChange, CancelReason, DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenTool,
+    PointerButton, PointerInfo, PointerMove, PointerPosition, PointerPress, PointerRelease,
+    PointerRole, PointerSample, ScrollDelta, ScrollEvent, ScrollPhase, ScrollPrecision, ScrollUnit,
 };
 pub use flui_interaction::recognizers::double_tap::DoubleTapDetails;
 pub use flui_interaction::recognizers::long_press::{
@@ -30,18 +35,18 @@ pub use flui_interaction::{
     GestureSettings, GestureSettingsError, HorizontalDragGestureRecognizer,
     LongPressGestureRecognizer, MultiDragAxis, MultiDragEndDetails, MultiDragGestureRecognizer,
     MultiDragHandle, MultiDragUpdateDetails, MultiTapGestureRecognizer, PanGestureRecognizer,
-    PointerId, PointerPanZoomEvent, ScaleGestureRecognizer, TapAndDragGestureRecognizer,
+    PointerId, ScaleGestureRecognizer, TapAndDragGestureRecognizer,
     TapDragDownDetails, TapDragEndDetails, TapDragStartDetails, TapDragUpDetails,
     TapDragUpdateDetails, TapGestureRecognizer, VerticalDragGestureRecognizer,
 };
 pub use flui_interaction::{
-    ForcePressDetails, LongPressEndDetails, LongPressMoveUpdateDetails, PointerDeviceKind,
+    ForcePressDetails, LongPressEndDetails, LongPressMoveUpdateDetails,
     TapDownDetails, TapUpDetails, Velocity, VelocityEstimate,
 };
 
 pub use flui_interaction::events::KeyEvent;
 pub use flui_interaction::events::keyboard::{
-    Code, Key, KeyState, KeyboardEvent, Location, Modifiers, NamedKey,
+    Code, Key, KeyState, Location, Modifiers, NamedKey,
 };
 pub use flui_interaction::routing::{
     FocusAttachment, FocusChangeCallback, FocusDetachOutcome, FocusManager, FocusNode,

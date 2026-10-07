@@ -19,7 +19,7 @@
 //! - **Open gesture traits**: external recognizers implement the same
 //!   dyn-compatible arbitration and event-delivery contracts as built-ins
 //! - **Canonical pointer id**: [`PointerId`] is re-exported from the
-//!   `ui-events` crate (`NonZeroU64`-backed). [`FocusNodeId`] and
+//!   `flui-platform-api` crate (`NonZeroU64`-backed). [`FocusNodeId`] and
 //!   [`HandlerId`] are crate-local `NonZeroU64` newtypes that prevent
 //!   mixing up different ID types at compile time
 //! - **Niche optimization**: `Option<FocusNodeId>` is the same size as
@@ -33,7 +33,7 @@
 //! ```text
 //! Platform (winit, Win32, etc.)
 //!     ↓
-//! PointerEvent/KeyboardEvent
+//! PointerEvent/KeyEvent
 //!     ↓
 //! GestureBinding (pointers) / FocusManager (keyboard)
 //!     ├─ Hit Testing → InteractionLane route
@@ -184,9 +184,7 @@ pub mod events;
 pub mod binding;
 pub mod clipboard;
 pub mod details;
-pub mod device_kind;
 pub mod observability;
-pub mod pan_zoom;
 pub mod settings;
 pub mod text_input;
 pub mod velocity;
@@ -211,30 +209,30 @@ pub use details::{
     ForcePressDetails, LongPressEndDetails, LongPressMoveUpdateDetails, TapDownDetails,
     TapUpDetails,
 };
-pub use device_kind::PointerDeviceKind;
 // The monotonic clock primitive now lives in `flui-foundation`; re-exported here
 // because the gesture arena's public API takes a `MonotonicClock` (and tests /
 // the headless binding construct `ManualClock`/`SystemClock` against the arena).
 pub use flui_foundation::{ManualClock, MonotonicClock, SystemClock};
 // ============================================================================
-// Re-exports: Events (W3C-compliant types)
+// Re-exports: Owned input contracts
 // ============================================================================
 
 // Re-export commonly used event types at crate root
-pub use events::{CursorIcon, KeyboardEvent, PointerEvent, PointerEventExt};
+pub use events::{CursorIcon, KeyEvent, PointerEvent, PointerEventExt};
 // Re-export observability surface — typed event names + span constants.
 pub use observability::{GestureEvent, SPAN_ARENA, SPAN_RECOGNIZER, pointer_event_kind};
-// Trackpad pan/zoom module — canonical public entry point for the
-// `PointerPanZoomEvent` type and its W3C conversion helpers
-// (`from_w3c_event`, `convert_gesture`). Re-exported at the crate root so
-// `use crate::PointerPanZoomEvent` is the single import path.
-pub use pan_zoom::{PointerPanZoomEvent, convert_gesture, from_w3c_event};
+pub use flui_platform_api::pointer::{
+    ButtonChange, CancelReason, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenTool,
+    PointerButton, PointerButtons, PointerInfo, PointerKind, PointerMove, PointerPosition,
+    PointerPress, PointerRelease, PointerRole, PointerSample, ScrollDelta, ScrollEvent,
+    ScrollPhase, ScrollPrecision, ScrollUnit,
+};
 // ============================================================================
 // Re-exports: geometry from flui_foundation
 // ============================================================================
 pub use flui_foundation::geometry::{Offset, Rect};
 pub use flui_platform_api::ImeEvent;
-pub use ids::{FocusNodeId, HandlerId, PointerId};
+pub use ids::{DeviceId, FocusNodeId, HandlerId, PointerId};
 // ============================================================================
 // Re-exports: Input Processing
 // ============================================================================
@@ -321,8 +319,9 @@ pub mod prelude {
 
     // Gesture recognition
     pub use crate::arena::*;
-    // Events (W3C-compliant)
-    pub use crate::events::{CursorIcon, KeyboardEvent, PointerEvent, PointerEventExt};
+    // Owned input contracts
+    pub use crate::events::{CursorIcon, KeyEvent, PointerEvent, PointerEventExt};
+    pub use flui_platform_api::pointer::{PanZoomEvent, PanZoomPhase, PointerKind};
     // Advanced interaction
     pub use crate::routing::{MouseTracker, MouseTrackerAnnotation, PointerMotionKind};
     // Input processing

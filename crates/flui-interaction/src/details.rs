@@ -3,14 +3,12 @@
 //! Recognizer-independent gesture detail payloads: tap, long-press
 //! move-update/end, and force press. The drag, scale, and long-press
 //! down/start payloads are defined next to their recognizers in
-//! `flui-interaction` instead — they carry the W3C pointer vocabulary
-//! (`ui_events::pointer::PointerType`) and the recognizer clock
-//! (`Instant`), neither of which this dependency-free vocabulary crate
-//! knows about.
+//! `flui-interaction` instead. Device kind is the owned platform vocabulary
+//! (`PointerKind`); timestamps use the recognizer's clock.
 
 use flui_foundation::geometry::Offset;
 
-use crate::{PointerDeviceKind, Velocity};
+use crate::{PointerKind, Velocity};
 
 // ============================================================================
 // Tap Gesture Details
@@ -28,7 +26,7 @@ pub struct TapDownDetails {
     pub local_position: Offset<f64>,
 
     /// The kind of device that triggered the tap
-    pub kind: PointerDeviceKind,
+    pub kind: PointerKind,
 }
 
 impl TapDownDetails {
@@ -38,13 +36,13 @@ impl TapDownDetails {
         Self {
             global_position,
             local_position,
-            kind: PointerDeviceKind::Touch,
+            kind: PointerKind::Touch,
         }
     }
 
     /// Builder method to set the device kind
     #[inline]
-    pub fn with_kind(mut self, kind: PointerDeviceKind) -> Self {
+    pub fn with_kind(mut self, kind: PointerKind) -> Self {
         self.kind = kind;
         self
     }
@@ -62,7 +60,7 @@ pub struct TapUpDetails {
     pub local_position: Offset<f64>,
 
     /// The kind of device that triggered the tap
-    pub kind: PointerDeviceKind,
+    pub kind: PointerKind,
 }
 
 impl TapUpDetails {
@@ -72,13 +70,13 @@ impl TapUpDetails {
         Self {
             global_position,
             local_position,
-            kind: PointerDeviceKind::Touch,
+            kind: PointerKind::Touch,
         }
     }
 
     /// Builder method to set the device kind
     #[inline]
-    pub fn with_kind(mut self, kind: PointerDeviceKind) -> Self {
+    pub fn with_kind(mut self, kind: PointerKind) -> Self {
         self.kind = kind;
         self
     }
