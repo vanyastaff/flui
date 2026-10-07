@@ -354,11 +354,17 @@ mod native_pointer_contracts {
                 ..info()
             },
             touchMask: TOUCH_MASK_CONTACTAREA | TOUCH_MASK_PRESSURE,
-            rcContact: windows::Win32::Foundation::RECT {
+            rcContactRaw: windows::Win32::Foundation::RECT {
                 left: 100,
                 top: 200,
                 right: 140,
                 bottom: 260,
+            },
+            rcContact: windows::Win32::Foundation::RECT {
+                left: 100,
+                top: 200,
+                right: 180,
+                bottom: 320,
             },
             pressure: 512,
             ..Default::default()
