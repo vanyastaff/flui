@@ -6,9 +6,7 @@ use std::sync::Arc;
 
 use flui_foundation::geometry::Offset;
 use flui_foundation::{ManualClock, PresentationId};
-use flui_interaction::events::{
-    PointerEvent, PointerType, make_down_event, make_move_event,
-};
+use flui_interaction::events::{PointerEvent, PointerType, make_down_event, make_move_event};
 use flui_interaction::{GestureArenaMember, PointerId};
 use flui_platform_api::{PlatformInput, PlatformWindow, WindowExecutionState};
 use flui_rendering::hit_testing::HitTestBehavior;
@@ -19,7 +17,10 @@ use flui_view::prelude::*;
 use flui_widgets::{Align, Listener, MouseRegion, SizedBox};
 
 fn pump(realm: &mut UiRealm) {
-    let _ = realm.pump(&mut ManualClock::default(), &mut ScriptedSink::always_presents());
+    let _ = realm.pump(
+        &mut ManualClock::default(),
+        &mut ScriptedSink::always_presents(),
+    );
 }
 
 fn dispatch(realm: &UiRealm, id: PresentationId, event: PointerEvent) {
@@ -47,20 +48,34 @@ pub(crate) fn a_secondary_contact_move_is_delivered_by_the_next_frame() {
     let secondary = install_secondary(&mut realm);
     let moves = Rc::new(Cell::new(0));
     let seen = moves.clone();
-    realm.attach_root_widget_to_for_test(
-        secondary,
-        &Listener::new()
-            .behavior(HitTestBehavior::Opaque)
-            .on_pointer_move(move |_, _| seen.set(seen.get() + 1))
-            .child(SizedBox::new(40.0, 40.0)),
-    ).expect("secondary root attaches");
+    realm
+        .attach_root_widget_to_for_test(
+            secondary,
+            &Listener::new()
+                .behavior(HitTestBehavior::Opaque)
+                .on_pointer_move(move |_, _| seen.set(seen.get() + 1))
+                .child(SizedBox::new(40.0, 40.0)),
+        )
+        .expect("secondary root attaches");
     realm.synchronize_window_snapshot(secondary, WindowExecutionState::Running, true, true);
     pump(&mut realm);
-    dispatch(&realm, secondary, make_down_event(Offset::new(4.0, 6.0), PointerType::Touch));
-    dispatch(&realm, secondary, make_move_event(Offset::new(8.0, 9.0), PointerType::Touch));
+    dispatch(
+        &realm,
+        secondary,
+        make_down_event(Offset::new(4.0, 6.0), PointerType::Touch),
+    );
+    dispatch(
+        &realm,
+        secondary,
+        make_move_event(Offset::new(8.0, 9.0), PointerType::Touch),
+    );
     assert_eq!(moves.get(), 0, "motion waits for frame cadence");
     pump(&mut realm);
-    assert_eq!(moves.get(), 1, "the secondary contact receives its queued motion");
+    assert_eq!(
+        moves.get(),
+        1,
+        "the secondary contact receives its queued motion"
+    );
     pump(&mut realm);
     assert_eq!(moves.get(), 1, "a later frame cannot duplicate motion");
 }
@@ -83,9 +98,17 @@ pub(crate) fn a_secondary_deferred_arena_verdict_is_delivered_by_the_next_frame(
     let arena = realm.presentation_gestures_for_test(secondary).arena();
     let _entry = arena.add(PointerId::PRIMARY, &member);
     arena.close(PointerId::PRIMARY);
-    assert_eq!(accepted.get(), 0, "the lone verdict waits for an owner boundary");
+    assert_eq!(
+        accepted.get(),
+        0,
+        "the lone verdict waits for an owner boundary"
+    );
     pump(&mut realm);
-    assert_eq!(accepted.get(), 1, "the frame drains the secondary arena's accepted work");
+    assert_eq!(
+        accepted.get(),
+        1,
+        "the frame drains the secondary arena's accepted work"
+    );
     pump(&mut realm);
     assert_eq!(accepted.get(), 1, "the verdict is delivered exactly once");
 }
@@ -95,12 +118,14 @@ fn queued_hover_after_transition(paused: bool) {
     let primary = realm.presentation_id();
     let hovers = Rc::new(Cell::new(0));
     let seen = hovers.clone();
-    realm.attach_root_widget(
-        &Listener::new()
-            .behavior(HitTestBehavior::Opaque)
-            .on_pointer_hover(move |_, _| seen.set(seen.get() + 1))
-            .child(SizedBox::new(40.0, 40.0)),
-    ).expect("root attaches");
+    realm
+        .attach_root_widget(
+            &Listener::new()
+                .behavior(HitTestBehavior::Opaque)
+                .on_pointer_hover(move |_, _| seen.set(seen.get() + 1))
+                .child(SizedBox::new(40.0, 40.0)),
+        )
+        .expect("root attaches");
     realm.synchronize_window_snapshot(primary, WindowExecutionState::Running, true, true);
     pump(&mut realm);
     dispatch(&realm, primary, hover());
@@ -112,10 +137,18 @@ fn queued_hover_after_transition(paused: bool) {
         realm.update_window_focus(primary, false);
     }
     pump(&mut realm);
-    assert_eq!(hovers.get(), usize::from(!paused), "pause discards pending input; blur preserves hover");
+    assert_eq!(
+        hovers.get(),
+        usize::from(!paused),
+        "pause discards pending input; blur preserves hover"
+    );
     dispatch(&realm, primary, hover());
     pump(&mut realm);
-    assert_eq!(hovers.get(), 1 + usize::from(!paused), "fresh hovering still works after the transition");
+    assert_eq!(
+        hovers.get(),
+        1 + usize::from(!paused),
+        "fresh hovering still works after the transition"
+    );
 }
 
 pub(crate) fn host_pause_discards_a_queued_hover_before_resume() {
@@ -154,26 +187,46 @@ impl StatelessView for ShrinkingHoverRegion {
 pub(crate) fn a_secondary_layout_refreshes_its_stationary_hover() {
     let mut realm = UiRealm::for_test();
     let secondary = install_secondary(&mut realm);
-    let graph = realm.presentation_widgets_for_test(secondary)
+    let graph = realm
+        .presentation_widgets_for_test(secondary)
         .with_build_owner(|owner| owner.reactive().clone());
     let enters = Rc::new(Cell::new(0));
     let exits = Rc::new(Cell::new(0));
-    realm.attach_root_widget_to_for_test(secondary, &ShrinkingHoverRegion {
-        width: graph.signal(20.0),
-        enters: enters.clone(),
-        exits: exits.clone(),
-    }).expect("secondary root attaches");
+    realm
+        .attach_root_widget_to_for_test(
+            secondary,
+            &ShrinkingHoverRegion {
+                width: graph.signal(20.0),
+                enters: enters.clone(),
+                exits: exits.clone(),
+            },
+        )
+        .expect("secondary root attaches");
     realm.synchronize_window_snapshot(secondary, WindowExecutionState::Running, true, true);
     pump(&mut realm);
     dispatch(&realm, secondary, hover());
     // Establish the mouse position independently of frame motion flushing:
     // this row isolates the committed-layout refresh contract.
     realm.enter(|realm| {
-        realm.presentation_gestures_for_test(secondary).flush_pending_moves();
+        realm
+            .presentation_gestures_for_test(secondary)
+            .flush_pending_moves();
     });
-    assert_eq!((enters.get(), exits.get()), (1, 0), "the cursor enters before layout shrinks");
+    assert_eq!(
+        (enters.get(), exits.get()),
+        (1, 0),
+        "the cursor enters before layout shrinks"
+    );
     pump(&mut realm);
-    assert_eq!((enters.get(), exits.get()), (1, 1), "the committed smaller region releases its stationary cursor");
+    assert_eq!(
+        (enters.get(), exits.get()),
+        (1, 1),
+        "the committed smaller region releases its stationary cursor"
+    );
     pump(&mut realm);
-    assert_eq!((enters.get(), exits.get()), (1, 1), "ambient refresh does not duplicate exit");
+    assert_eq!(
+        (enters.get(), exits.get()),
+        (1, 1),
+        "ambient refresh does not duplicate exit"
+    );
 }

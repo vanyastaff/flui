@@ -821,19 +821,22 @@ impl UiRealm {
         // Each window refreshes from its own acknowledged tree. A sibling's
         // failed segment cannot substitute its tree or suppress this work.
         let mut hover_panic = None;
-        for presentation in self.presentations.iter().filter(|presentation| {
-            presentation.frame_commit_state() == FrameCommitState::Committed
-        }) {
+        for presentation in self
+            .presentations
+            .iter()
+            .filter(|presentation| presentation.frame_commit_state() == FrameCommitState::Committed)
+        {
             let refresh = catch_unwind(AssertUnwindSafe(|| {
-                presentation.gestures().mouse_tracker().update_all_devices(|position| {
-                    let mut result = flui_interaction::routing::HitTestResult::new();
-                    presentation.renderer().hit_test_in_view(
-                        &mut result,
-                        position,
-                        0,
-                    );
-                    result
-                });
+                presentation
+                    .gestures()
+                    .mouse_tracker()
+                    .update_all_devices(|position| {
+                        let mut result = flui_interaction::routing::HitTestResult::new();
+                        presentation
+                            .renderer()
+                            .hit_test_in_view(&mut result, position, 0);
+                        result
+                    });
             }))
             .err();
             super::input::preserve_first_input_panic(
