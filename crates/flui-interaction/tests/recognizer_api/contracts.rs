@@ -14,8 +14,11 @@ use std::{
 use flui_foundation::MonotonicClock;
 use flui_foundation::geometry::Offset;
 use flui_interaction::{
-    ArenaMembership, BeginContactError, CancelOutcome, GestureArena, GestureArenaMember,
-    GestureRecognizer, GestureSettings, PointerId, PrimaryContact, RecognizerSet, cancel_all,
+    ArenaMembership, BeginContactError, CancelOutcome, DoubleTapGestureRecognizer, GestureArena,
+    GestureArenaMember, GestureRecognizer, GestureSettings, MultiTapGestureRecognizer, PointerId,
+    PrimaryContact, RecognizerSet,
+    arena::run_pointer_lifecycle,
+    cancel_all,
     events::{
         PointerButton, PointerEvent, PointerType, make_down_event_for_id_with_button,
         make_up_event_for_id,
@@ -501,6 +504,69 @@ fn diagnostic_panic_cannot_replace_first_delivery_failure_or_skip_a_peer() {
     assert!(third.contact.current().is_none());
 }
 
+fn double_tap_drop_releases_a_pending_sweep_without_inline_notifications() {
+    held_recognizer_drop_releases_pending_sweep(
+        |arena| DoubleTapGestureRecognizer::builder(arena).build(),
+        false,
+    );
+}
+
+fn multi_tap_drop_releases_a_pending_sweep_without_inline_notifications() {
+    held_recognizer_drop_releases_pending_sweep(
+        |arena| MultiTapGestureRecognizer::builder(arena).build(),
+        true,
+    );
+}
+
+fn held_recognizer_drop_releases_pending_sweep(
+    make_owner: fn(GestureArena) -> Rc<dyn GestureRecognizer>,
+    second_contact: bool,
+) {
+    let arena = GestureArena::binding_driven(Arc::new(flui_interaction::ManualClock::new()));
+    let owner = make_owner(arena.clone());
+    let first_log = Log::default();
+    let second_log = Log::default();
+    let first = Extension::new(arena.clone(), "first rival", first_log.clone());
+    let second = Extension::new(arena.clone(), "second rival", second_log.clone());
+    let event = down(pointer(83));
+    owner.add_pointer(PointerDispatch::at_root(&event));
+    let _first_entry = arena.add(pointer(83), &first);
+    let _second_entry = arena.add(pointer(83), &second);
+    run_pointer_lifecycle(&arena, &event);
+    if second_contact {
+        let another = down(pointer(84));
+        owner.add_pointer(PointerDispatch::at_root(&another));
+        run_pointer_lifecycle(&arena, &another);
+    }
+    let up = make_up_event_for_id(pointer(83), Offset::new(3.0, 4.0), PointerType::Touch);
+    owner.handle_event(PointerDispatch::at_root(&up));
+    run_pointer_lifecycle(&arena, &up);
+    assert!(arena.is_held(pointer(83)), "actual recognizer owns a hold");
+    assert!(
+        arena.has_pending_sweep(pointer(83)),
+        "Up accepted deferred sweep debt"
+    );
+    assert!(first_log.borrow().is_empty());
+    assert!(second_log.borrow().is_empty());
+    drop(owner);
+    assert!(
+        first_log.borrow().is_empty(),
+        "Drop must not notify a rival"
+    );
+    assert!(
+        second_log.borrow().is_empty(),
+        "Drop must not notify a rival"
+    );
+    arena.drain_deferred_resolutions();
+    assert_eq!(
+        *first_log.borrow(),
+        ["accepted"],
+        "pending sweep chooses the surviving front member"
+    );
+    assert_eq!(*second_log.borrow(), ["rejected"]);
+    assert!(arena.is_empty());
+}
+
 #[test]
 fn public_recognizer_extension_contracts() {
     let cases: &[(&str, fn())] = &[
@@ -543,6 +609,14 @@ fn public_recognizer_extension_contracts() {
         (
             "diagnostic_panic_cannot_replace_first_delivery_failure_or_skip_a_peer",
             diagnostic_panic_cannot_replace_first_delivery_failure_or_skip_a_peer,
+        ),
+        (
+            "double_tap_drop_releases_a_pending_sweep_without_inline_notifications",
+            double_tap_drop_releases_a_pending_sweep_without_inline_notifications,
+        ),
+        (
+            "multi_tap_drop_releases_a_pending_sweep_without_inline_notifications",
+            multi_tap_drop_releases_a_pending_sweep_without_inline_notifications,
         ),
     ];
     for &(name, case) in cases {
