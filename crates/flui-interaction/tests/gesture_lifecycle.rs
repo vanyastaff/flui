@@ -969,6 +969,10 @@ fn tap_and_drag_release_uses_terminal_event_time() {
 fn gesture_lifecycle_matrix() {
     let cases: &[(&str, fn())] = &[
         (
+            "arena_polls_pointer_deadlines_in_identity_order",
+            arena_polls_pointer_deadlines_in_identity_order,
+        ),
+        (
             "nonmember_resolution_candidate_retires_after_detachment",
             nonmember_resolution_candidate_retires_after_detachment,
         ),
@@ -1679,4 +1683,38 @@ fn arena_retirement_preserves_the_first_failure_and_recovers() {
         assert_eq!(fresh.get(), (1, 0));
         assert!(arena.is_empty());
     }
+}
+
+fn arena_polls_pointer_deadlines_in_identity_order() {
+    let clock = ManualClock::new();
+    let arena = GestureArena::binding_driven(Arc::new(clock.clone()));
+    let fired = Rc::new(RefCell::new(Vec::new()));
+    let mut recognizers = Vec::new();
+    for raw in (1..=8).rev() {
+        let pointer = id(raw);
+        let log = Rc::clone(&fired);
+        let recognizer = LongPressGestureRecognizer::new(arena.clone())
+            .with_on_long_press(move |_| log.borrow_mut().push(raw));
+        let event = down(pointer, at(0.0, 0.0), PointerType::Touch);
+        recognizer.add_pointer_down(PointerDispatch::at_root(&event));
+        arena.add(pointer, Arc::new(Verdicts::default()));
+        arena.close(pointer);
+        recognizers.push(recognizer);
+    }
+
+    clock.advance(Duration::from_secs(1));
+    arena.poll_deadlines();
+    assert_eq!(
+        *fired.borrow(),
+        [1, 2, 3, 4, 5, 6, 7, 8],
+        "simultaneously due active pointers are polled in identity order",
+    );
+    arena.poll_deadlines();
+    assert_eq!(fired.borrow().len(), 8, "each deadline fires once");
+    for (raw, recognizer) in (1..=8).rev().zip(recognizers) {
+        let event = up(id(raw), at(0.0, 0.0), PointerType::Touch);
+        recognizer.handle_event(PointerDispatch::at_root(&event));
+    }
+    assert!(arena.is_empty());
+    assert!(!arena.has_pending_deadlines());
 }
