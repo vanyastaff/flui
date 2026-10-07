@@ -551,7 +551,7 @@ impl TapAndDragGestureRecognizer {
         position: Offset<f64>,
         global_position: Offset<f64>,
         stamp: Option<u64>,
-        history: &[(Option<u64>, Offset<f64>)],
+        history: impl Iterator<Item = (Option<u64>, Offset<f64>)>,
     ) {
         if !position.is_finite() {
             return;
@@ -573,7 +573,7 @@ impl TapAndDragGestureRecognizer {
         let mut notices = Vec::new();
         let mut step = ArenaStep::None;
         let mut state = self.gesture_state.borrow_mut();
-        for &(stamp, position) in history {
+        for (stamp, position) in history {
             let timestamp = state.timeline.instant(stamp, now);
             state.velocity_tracker.add_position(timestamp, position);
         }
@@ -786,7 +786,7 @@ impl GestureRecognizer for TapAndDragGestureRecognizer {
                     Offset::new(pos.x, pos.y),
                     global_position,
                     event_time(event),
-                    &history,
+                    history,
                 );
             }
             PointerEvent::Up(data) => {
