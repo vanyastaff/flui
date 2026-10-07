@@ -6,7 +6,7 @@ use std::{
     rc::{Rc, Weak},
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -443,6 +443,64 @@ fn clock_reentry_cannot_arm_a_replacement_contact() {
     assert!(owner.contact.arm_deadline(Duration::from_secs(1)).is_some());
 }
 
+fn diagnostic_panic_cannot_replace_first_delivery_failure_or_skip_a_peer() {
+    struct DiagnosticPanic(Arc<AtomicUsize>);
+    impl tracing::Subscriber for DiagnosticPanic {
+        fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+            *metadata.level() == tracing::Level::ERROR
+        }
+        fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+        fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+        fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+        fn event(&self, _: &tracing::Event<'_>) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            panic!("secondary failure diagnostic panicked");
+        }
+        fn enter(&self, _: &tracing::span::Id) {}
+        fn exit(&self, _: &tracing::span::Id) {}
+    }
+
+    let log = Log::default();
+    let arena = GestureArena::new();
+    let first = Extension::new(arena.clone(), "first", log.clone());
+    let second = Extension::new(arena.clone(), "second", log.clone());
+    let third = Extension::new(arena, "third", log.clone());
+    first.fail_delivery.set(true);
+    second.fail_delivery.set(true);
+    let mut set = RecognizerSet::default();
+    set.attach(&first);
+    set.attach(&second);
+    set.attach(&third);
+    let diagnostic_calls = Arc::new(AtomicUsize::new(0));
+    let event = down(pointer(82));
+    let failure =
+        tracing::subscriber::with_default(DiagnosticPanic(diagnostic_calls.clone()), || {
+            catch_unwind(AssertUnwindSafe(|| {
+                set.dispatch(PointerDispatch::at_root(&event))
+            }))
+        })
+        .expect_err("first delivery failure resumes");
+    assert_eq!(
+        failure.downcast_ref::<String>().map(String::as_str),
+        Some("first")
+    );
+    assert_eq!(
+        diagnostic_calls.load(Ordering::Relaxed),
+        1,
+        "real diagnostic ran"
+    );
+    assert_eq!(*log.borrow(), ["first", "second", "third"]);
+    first.fail_delivery.set(false);
+    second.fail_delivery.set(false);
+    let up = make_up_event_for_id(pointer(82), Offset::ZERO, PointerType::Touch);
+    set.dispatch(PointerDispatch::at_root(&up));
+    assert!(first.contact.current().is_none());
+    assert!(second.contact.current().is_none());
+    assert!(third.contact.current().is_none());
+}
+
 #[test]
 fn public_recognizer_extension_contracts() {
     let cases: &[(&str, fn())] = &[
@@ -481,6 +539,10 @@ fn public_recognizer_extension_contracts() {
         (
             "clock_reentry_cannot_arm_a_replacement_contact",
             clock_reentry_cannot_arm_a_replacement_contact,
+        ),
+        (
+            "diagnostic_panic_cannot_replace_first_delivery_failure_or_skip_a_peer",
+            diagnostic_panic_cannot_replace_first_delivery_failure_or_skip_a_peer,
         ),
     ];
     for &(name, case) in cases {
