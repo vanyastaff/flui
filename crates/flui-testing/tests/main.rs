@@ -103,6 +103,7 @@ fn containment_and_isolation_matrix() {
             ("runtime_input_lifecycle::host_pause_discards_a_queued_hover_before_resume", runtime_input_lifecycle::host_pause_discards_a_queued_hover_before_resume as fn()),
             ("runtime_input_lifecycle::window_blur_keeps_a_queued_hover", runtime_input_lifecycle::window_blur_keeps_a_queued_hover as fn()),
             ("runtime_input_lifecycle::a_secondary_layout_refreshes_its_stationary_hover", runtime_input_lifecycle::a_secondary_layout_refreshes_its_stationary_hover as fn()),
+            ("runtime_input_lifecycle::a_secondary_deferred_arena_verdict_is_delivered_by_the_next_frame", runtime_input_lifecycle::a_secondary_deferred_arena_verdict_is_delivered_by_the_next_frame as fn()),
             ("lifecycle_panic_containment::lifecycle_panic_containment_init_state_paints_exact_error_slot", lifecycle_panic_containment::lifecycle_panic_containment_init_state_paints_exact_error_slot as fn()),
             ("owner_scope::interaction_targets_are_isolated_between_headless_bindings", owner_scope::interaction_targets_are_isolated_between_headless_bindings as fn()),
             ("owner_scope::pointer_route_panic_still_runs_the_down_arena_lifecycle", owner_scope::pointer_route_panic_still_runs_the_down_arena_lifecycle as fn()),
