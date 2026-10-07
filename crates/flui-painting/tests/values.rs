@@ -5,9 +5,194 @@ use flui_foundation::geometry::{Point, RRect, Rect};
 use flui_painting::Alignment;
 use flui_painting::paint::{Path, PathCommand};
 use flui_painting::styling::{
-    Color, Gradient, LinearGradient, RadialGradient, SweepGradient, TileMode,
+    BoxDecoration, Color, Gradient, LinearGradient, RadialGradient, SweepGradient, TileMode,
 };
 use flui_painting::typography::FontWeight;
+
+fn gradient_geometry_extrapolates(through_decoration: bool) {
+    let colors = vec![Color::RED, Color::BLUE];
+    let pairs = [
+        (
+            Gradient::Linear(LinearGradient::new(
+                Alignment::CENTER,
+                Alignment::CENTER_RIGHT,
+                colors.clone(),
+                None,
+                TileMode::Clamp,
+            )),
+            Gradient::Linear(LinearGradient::new(
+                Alignment::new(1.0, 2.0),
+                Alignment::new(2.0, 2.0),
+                colors.clone(),
+                None,
+                TileMode::Clamp,
+            )),
+        ),
+        (
+            Gradient::Radial(RadialGradient::new(
+                Alignment::CENTER,
+                0.5,
+                colors.clone(),
+                None,
+                TileMode::Clamp,
+                None,
+                None,
+            )),
+            Gradient::Radial(RadialGradient::new(
+                Alignment::new(1.0, 2.0),
+                1.0,
+                colors.clone(),
+                None,
+                TileMode::Clamp,
+                None,
+                None,
+            )),
+        ),
+        (
+            Gradient::Sweep(SweepGradient::new(
+                Alignment::CENTER,
+                colors.clone(),
+                None,
+                TileMode::Clamp,
+                0.25,
+                1.25,
+            )),
+            Gradient::Sweep(SweepGradient::new(
+                Alignment::new(1.0, 2.0),
+                colors,
+                None,
+                TileMode::Clamp,
+                1.25,
+                2.25,
+            )),
+        ),
+    ];
+    for (a, b) in pairs {
+        for (t, expected, expected_radius, expected_angles) in [
+            (-0.25, Alignment::new(-0.25, -0.5), 0.375, (0.0, 1.0)),
+            (1.25, Alignment::new(1.25, 2.5), 1.125, (1.5, 2.5)),
+        ] {
+            let mixed = if through_decoration {
+                BoxDecoration::<f64>::lerp(
+                    &BoxDecoration::with_gradient(a.clone()),
+                    &BoxDecoration::with_gradient(b.clone()),
+                    t,
+                )
+                .gradient
+                .expect("interpolated decoration gradient")
+            } else {
+                Gradient::lerp(&a, &b, t).expect("finite gradient geometry")
+            };
+            match mixed {
+                Gradient::Linear(g) => {
+                    assert_eq!(g.begin, expected, "linear begin at {t}");
+                    assert_eq!(
+                        g.end,
+                        Alignment::new(expected.x + 1.0, expected.y),
+                        "linear end at {t}"
+                    );
+                }
+                Gradient::Radial(g) => {
+                    assert_eq!(g.center, expected, "radial center at {t}");
+                    assert_eq!(g.radius, expected_radius, "radial radius at {t}");
+                }
+                Gradient::Sweep(g) => {
+                    assert_eq!(g.center, expected, "sweep center at {t}");
+                    assert_eq!(
+                        (g.start_angle, g.end_angle),
+                        expected_angles,
+                        "sweep angles at {t}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+pub(crate) fn gradient_geometry_preserves_overshoot() {
+    gradient_geometry_extrapolates(false);
+}
+
+pub(crate) fn decoration_gradient_geometry_preserves_overshoot() {
+    gradient_geometry_extrapolates(true);
+}
+
+pub(crate) fn gradient_geometry_rejects_invalid_inputs_before_equal_shortcuts() {
+    let colors = vec![Color::RED, Color::BLUE];
+    let mut linear = LinearGradient::horizontal(colors.clone());
+    linear.begin.x = f64::INFINITY;
+    let mut radial = RadialGradient::circular(colors.clone());
+    radial.radius = -1.0;
+    let mut focal = RadialGradient::circular(colors.clone());
+    focal.focal = Some(Alignment::new(f64::INFINITY, 0.0));
+    let mut focal_radius = RadialGradient::circular(colors.clone());
+    focal_radius.focal_radius = Some(f64::INFINITY);
+    let mut sweep = SweepGradient::centered(colors);
+    sweep.end_angle = f64::INFINITY;
+    for bad in [
+        Gradient::Linear(linear),
+        Gradient::Radial(radial),
+        Gradient::Radial(focal),
+        Gradient::Radial(focal_radius),
+        Gradient::Sweep(sweep),
+    ] {
+        rejects_invalid_gradient(&bad);
+    }
+    for healthy in [
+        Gradient::Linear(LinearGradient::horizontal(vec![Color::RED, Color::BLUE])),
+        Gradient::Radial(RadialGradient::circular(vec![Color::RED, Color::BLUE])),
+        Gradient::Sweep(SweepGradient::centered(vec![Color::RED, Color::BLUE])),
+    ] {
+        for t in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(
+                Gradient::lerp(&healthy, &healthy, t).is_none(),
+                "fraction {t}"
+            );
+        }
+        assert!(Gradient::lerp(&healthy, &healthy, 0.5).is_some());
+    }
+}
+
+pub(crate) fn gradient_geometry_checks_intermediate_and_output_overflow() {
+    let colors = vec![Color::RED, Color::BLUE];
+    let mut a = LinearGradient::horizontal(colors);
+    let mut b = a.clone();
+    a.begin.x = -f64::MAX;
+    b.begin.x = f64::MAX;
+    let Gradient::Linear(midpoint) = Gradient::lerp(
+        &Gradient::Linear(a.clone()),
+        &Gradient::Linear(b.clone()),
+        0.5,
+    )
+    .expect("opposite finite extremes have a finite midpoint") else {
+        panic!("linear interpolation must remain linear");
+    };
+    assert_eq!(midpoint.begin.x, 0.0);
+    assert!(Gradient::lerp(&Gradient::Linear(a), &Gradient::Linear(b), 2.0).is_none());
+    let healthy = Gradient::Linear(LinearGradient::horizontal(vec![Color::RED, Color::BLUE]));
+    assert!(Gradient::lerp(&healthy, &healthy, 0.5).is_some());
+}
+
+pub(crate) fn gradient_domains_keep_zero_radii_and_signed_angles() {
+    let mut a = RadialGradient::circular(vec![Color::RED, Color::BLUE]);
+    a.radius = 1.0;
+    a.focal_radius = Some(1.0);
+    let mut b = a.clone();
+    b.radius = 0.0;
+    b.focal_radius = Some(0.0);
+    let mixed = RadialGradient::lerp(&a, &b, 2.0).expect("finite extrapolated radius");
+    assert_eq!(mixed.radius, 0.0);
+    assert_eq!(mixed.focal_radius, Some(0.0));
+
+    let mut a = SweepGradient::centered(vec![Color::RED, Color::BLUE]);
+    a.start_angle = 0.25;
+    a.end_angle = 1.25;
+    let mut b = a.clone();
+    b.start_angle = 1.25;
+    b.end_angle = 2.25;
+    let mixed = SweepGradient::lerp(&a, &b, -0.5).expect("finite signed angles");
+    assert_eq!((mixed.start_angle, mixed.end_angle), (-0.25, 0.75));
+}
 
 fn healthy_gradient_like(gradient: &Gradient) -> Gradient {
     let colors = vec![Color::RED, Color::BLUE];

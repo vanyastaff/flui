@@ -982,8 +982,9 @@ draw nothing, while a visible neighboring edge spans the full box height.
 ### 22. Gradient interpolation validates its inputs and preserves discontinuities
 
 All three gradient kinds reject empty colors, stop/color count mismatches,
-stops outside the documented closed `0..=1` range, descending stops, and a NaN
-interpolation fraction before the equal-input shortcut. Ordered repeated stops
+stops outside the documented closed `0..=1` range, descending stops, non-finite
+geometry or interpolation fractions, and negative input radii before the
+equal-input shortcut. Ordered repeated stops
 within the range are valid. Their left and
 right colors remain separate output stops at the same position; interpolation
 samples both limits with `slice::partition_point`, rather than approximating a
@@ -1002,6 +1003,20 @@ endpoints whose subtraction would overflow outside the admitted range.
 `radial_interpolation_keeps_hard_transitions` and
 `sweep_interpolation_keeps_hard_transitions` pin both colors of a red-to-blue
 hard edge interpolated toward black.
+
+Finite gradient positions, focal points and signed sweep angles extrapolate
+outside `0..=1`, consistent with the unbounded geometry contract in ADR-0149.
+Radii extrapolate with a zero lower bound. Colors saturate through `Color::lerp`;
+stop positions retain the sampled union rather than inventing correspondence
+between lists of different lengths. Arithmetic preserves representable results
+when endpoint subtraction overflows, and refuses non-finite output.
+`BoxDecoration::lerp` forwards the raw fraction for paired gradient geometry;
+its other fields keep their bounded interpolation and exact endpoint behavior.
+The public `value_contract` rows `gradient_geometry_preserves_overshoot`,
+`decoration_gradient_geometry_preserves_overshoot`,
+`gradient_geometry_rejects_invalid_inputs_before_equal_shortcuts`,
+`gradient_geometry_checks_intermediate_and_output_overflow` and
+`gradient_domains_keep_zero_radii_and_signed_angles` pin these boundaries.
 
 ### 23. Text styles reach Parley's spacing and OpenType setting properties
 

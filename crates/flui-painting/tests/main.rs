@@ -156,6 +156,26 @@ fn value_contract() {
         "value",
         &[
             (
+                "gradient_geometry_rejects_invalid_inputs_before_equal_shortcuts",
+                values::gradient_geometry_rejects_invalid_inputs_before_equal_shortcuts,
+            ),
+            (
+                "gradient_geometry_checks_intermediate_and_output_overflow",
+                values::gradient_geometry_checks_intermediate_and_output_overflow,
+            ),
+            (
+                "gradient_domains_keep_zero_radii_and_signed_angles",
+                values::gradient_domains_keep_zero_radii_and_signed_angles,
+            ),
+            (
+                "gradient_geometry_preserves_overshoot",
+                values::gradient_geometry_preserves_overshoot,
+            ),
+            (
+                "decoration_gradient_geometry_preserves_overshoot",
+                values::decoration_gradient_geometry_preserves_overshoot,
+            ),
+            (
                 "negative_linear_stops_are_rejected",
                 values::negative_linear_stops_are_rejected,
             ),

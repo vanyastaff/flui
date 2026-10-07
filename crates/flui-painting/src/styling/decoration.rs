@@ -294,20 +294,22 @@ where
 {
     /// Linearly interpolate between two box decorations.
     ///
-    /// `t` is clamped to `0..=1`, and the endpoints return `a` and `b`
-    /// exactly. A field set on only one side fades toward nothing: a lone
+    /// The exact endpoints return `a` and `b`. A paired gradient's geometry
+    /// extrapolates with `t`; other fields clamp `t` to `0..=1`.
+    /// A field set on only one side fades toward nothing: a lone
     /// color or gradient scales its alpha, a lone border, radius or shadow
     /// list scales its geometry (by `1 - t` for `a`'s, `t` for `b`'s). The
     /// image and shape are not interpolated and switch at `t = 0.5`.
     #[inline]
     pub fn lerp(a: &Self, b: &Self, t: f64) -> Self {
-        let t = t.clamp(0.0, 1.0);
         if t == 0.0 {
             return a.clone();
         }
         if t == 1.0 {
             return b.clone();
         }
+        let gradient_t = t;
+        let t = t.clamp(0.0, 1.0);
         let (fade_a, fade_b) = (1.0 - t, t);
 
         let color = match (a.color, b.color) {
@@ -341,7 +343,7 @@ where
             (None, None) => None,
         };
         let gradient = match (&a.gradient, &b.gradient) {
-            (Some(a_grad), Some(b_grad)) => Gradient::lerp(a_grad, b_grad, t),
+            (Some(a_grad), Some(b_grad)) => Gradient::lerp(a_grad, b_grad, gradient_t),
             (Some(gradient), None) => Some(scale_gradient(gradient, fade_a)),
             (None, Some(gradient)) => Some(scale_gradient(gradient, fade_b)),
             (None, None) => None,

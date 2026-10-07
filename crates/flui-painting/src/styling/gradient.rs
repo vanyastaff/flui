@@ -45,7 +45,6 @@ impl Gradient {
     /// side cannot be sampled (see [`LinearGradient::lerp`]).
     #[inline]
     pub fn lerp(a: &Self, b: &Self, t: f64) -> Option<Self> {
-        let t = t.clamp(0.0, 1.0);
         match (a, b) {
             (Gradient::Linear(a), Gradient::Linear(b)) => {
                 LinearGradient::lerp(a, b, t).map(Gradient::Linear)
@@ -187,10 +186,16 @@ impl LinearGradient {
     ///
     /// Returns `None` if either side has no colours, explicit stops do not
     /// match its colours one for one, stops are outside `0..=1` or descending, or
-    /// `t` is NaN. Repeated stops preserve a hard transition.
+    /// geometry or `t` is non-finite, or extrapolated geometry overflows.
+    /// Geometry extrapolates outside `0..=1`; colors saturate at the endpoints.
+    /// Repeated stops preserve a hard transition.
     #[inline]
     pub fn lerp(a: &Self, b: &Self, t: f64) -> Option<Self> {
-        if t.is_nan()
+        if !t.is_finite()
+            || !valid_alignment(a.begin)
+            || !valid_alignment(a.end)
+            || !valid_alignment(b.begin)
+            || !valid_alignment(b.end)
             || !valid_stops(&a.colors, a.stops.as_deref())
             || !valid_stops(&b.colors, b.stops.as_deref())
         {
@@ -200,15 +205,16 @@ impl LinearGradient {
         if a == b {
             return Some(a.clone());
         }
-        let t = t.clamp(0.0, 1.0);
+        let begin = lerp_alignment(a.begin, b.begin, t)?;
+        let end = lerp_alignment(a.end, b.end, t)?;
         let (colors, stops) = interpolate_colors_and_stops(
             (&a.colors, a.stops.as_deref()),
             (&b.colors, b.stops.as_deref()),
             t,
         )?;
         Some(Self {
-            begin: Alignment::lerp(a.begin, b.begin, t),
-            end: Alignment::lerp(a.end, b.end, t),
+            begin,
+            end,
             colors,
             stops: Some(stops),
             tile_mode: if t < 0.5 { a.tile_mode } else { b.tile_mode },
@@ -315,6 +321,7 @@ impl RadialGradient {
     /// Linearly interpolate between two radial gradients. Colours and stops
     /// combine as in [`LinearGradient::lerp`], the radii never go below
     /// zero, and a missing focal radius counts as `0.0`.
+    /// Non-finite geometry or negative input radii are rejected.
     ///
     /// A focal point on one side only moves to or from the other side's
     /// *center*, because a gradient without a focal point is focused on its
@@ -323,7 +330,15 @@ impl RadialGradient {
     /// anywhere else.
     #[inline]
     pub fn lerp(a: &Self, b: &Self, t: f64) -> Option<Self> {
-        if t.is_nan()
+        if !t.is_finite()
+            || !valid_alignment(a.center)
+            || !valid_alignment(b.center)
+            || !valid_radius(a.radius)
+            || !valid_radius(b.radius)
+            || a.focal.is_some_and(|focal| !valid_alignment(focal))
+            || b.focal.is_some_and(|focal| !valid_alignment(focal))
+            || a.focal_radius.is_some_and(|radius| !valid_radius(radius))
+            || b.focal_radius.is_some_and(|radius| !valid_radius(radius))
             || !valid_stops(&a.colors, a.stops.as_deref())
             || !valid_stops(&b.colors, b.stops.as_deref())
         {
@@ -333,7 +348,8 @@ impl RadialGradient {
         if a == b {
             return Some(a.clone());
         }
-        let t = t.clamp(0.0, 1.0);
+        let center = lerp_alignment(a.center, b.center, t)?;
+        let radius = lerp_finite(a.radius, b.radius, t)?.max(0.0);
         let (colors, stops) = interpolate_colors_and_stops(
             (&a.colors, a.stops.as_deref()),
             (&b.colors, b.stops.as_deref()),
@@ -341,18 +357,18 @@ impl RadialGradient {
         )?;
 
         let focal = match (a.focal, b.focal) {
-            (Some(a_focal), Some(b_focal)) => Some(Alignment::lerp(a_focal, b_focal, t)),
-            (Some(a_focal), None) => Some(Alignment::lerp(a_focal, b.center, t)),
-            (None, Some(b_focal)) => Some(Alignment::lerp(a.center, b_focal, t)),
+            (Some(a_focal), Some(b_focal)) => Some(lerp_alignment(a_focal, b_focal, t)?),
+            (Some(a_focal), None) => Some(lerp_alignment(a_focal, b.center, t)?),
+            (None, Some(b_focal)) => Some(lerp_alignment(a.center, b_focal, t)?),
             (None, None) => None,
         };
         let focal_radius = match (a.focal_radius, b.focal_radius) {
             (None, None) => None,
-            (a_r, b_r) => Some(lerp_f32(a_r.unwrap_or(0.0), b_r.unwrap_or(0.0), t).max(0.0)),
+            (a_r, b_r) => Some(lerp_finite(a_r.unwrap_or(0.0), b_r.unwrap_or(0.0), t)?.max(0.0)),
         };
         Some(Self {
-            center: Alignment::lerp(a.center, b.center, t),
-            radius: lerp_f32(a.radius, b.radius, t).max(0.0),
+            center,
+            radius,
             colors,
             stops: Some(stops),
             tile_mode: if t < 0.5 { a.tile_mode } else { b.tile_mode },
@@ -422,10 +438,16 @@ impl SweepGradient {
     }
 
     /// Linearly interpolate between two sweep gradients. Colours and stops
-    /// combine as in [`LinearGradient::lerp`]; the angles never go below zero.
+    /// combine as in [`LinearGradient::lerp`]; finite signed angles extrapolate.
     #[inline]
     pub fn lerp(a: &Self, b: &Self, t: f64) -> Option<Self> {
-        if t.is_nan()
+        if !t.is_finite()
+            || !valid_alignment(a.center)
+            || !valid_alignment(b.center)
+            || !a.start_angle.is_finite()
+            || !b.start_angle.is_finite()
+            || !a.end_angle.is_finite()
+            || !b.end_angle.is_finite()
             || !valid_stops(&a.colors, a.stops.as_deref())
             || !valid_stops(&b.colors, b.stops.as_deref())
         {
@@ -435,25 +457,56 @@ impl SweepGradient {
         if a == b {
             return Some(a.clone());
         }
-        let t = t.clamp(0.0, 1.0);
+        let center = lerp_alignment(a.center, b.center, t)?;
+        let start_angle = lerp_finite(a.start_angle, b.start_angle, t)?;
+        let end_angle = lerp_finite(a.end_angle, b.end_angle, t)?;
         let (colors, stops) = interpolate_colors_and_stops(
             (&a.colors, a.stops.as_deref()),
             (&b.colors, b.stops.as_deref()),
             t,
         )?;
         Some(Self {
-            center: Alignment::lerp(a.center, b.center, t),
+            center,
             colors,
             stops: Some(stops),
             tile_mode: if t < 0.5 { a.tile_mode } else { b.tile_mode },
-            start_angle: lerp_f32(a.start_angle, b.start_angle, t).max(0.0),
-            end_angle: lerp_f32(a.end_angle, b.end_angle, t).max(0.0),
+            start_angle,
+            end_angle,
         })
     }
 }
 
-fn lerp_f32(a: f64, b: f64, t: f64) -> f64 {
-    a + (b - a) * t
+fn valid_alignment(value: Alignment) -> bool {
+    value.x.is_finite() && value.y.is_finite()
+}
+
+fn valid_radius(value: f64) -> bool {
+    value.is_finite() && value >= 0.0
+}
+
+fn lerp_alignment(a: Alignment, b: Alignment, t: f64) -> Option<Alignment> {
+    Some(Alignment::new(
+        lerp_finite(a.x, b.x, t)?,
+        lerp_finite(a.y, b.y, t)?,
+    ))
+}
+
+fn lerp_finite(a: f64, b: f64, t: f64) -> Option<f64> {
+    let value = if t == 0.0 || a == b {
+        a
+    } else if t == 1.0 {
+        b
+    } else {
+        let span = b - a;
+        if span.is_finite() {
+            span.mul_add(t, a)
+        } else {
+            // Opposite finite extremes can overflow the subtraction even
+            // though their weighted interpolation is representable.
+            a * (1.0 - t) + b * t
+        }
+    };
+    value.is_finite().then_some(value)
 }
 
 fn valid_stops(colors: &[Color], stops: Option<&[f64]>) -> bool {
