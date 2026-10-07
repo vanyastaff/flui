@@ -128,7 +128,7 @@ pub(crate) fn viewer_pan_transitions_to_pinch_without_contact_count_jumps() {
     let lifecycle = Rc::new(RefCell::new(Vec::new()));
     let start_log = lifecycle.clone();
     let end_log = lifecycle.clone();
-    let laid = lay_out(
+    let mut laid = lay_out(
         InteractiveViewer::new()
             .controller(controller.clone())
             .boundary_margin(EdgeInsets::all(1000.0))
@@ -153,6 +153,7 @@ pub(crate) fn viewer_pan_transitions_to_pinch_without_contact_count_jumps() {
     };
     laid.dispatch_pointer_event(&down(first, 20.0));
     laid.dispatch_pointer_event(&movement(first, 50.0));
+    laid.pump();
     let panned = controller.value();
     assert_ne!(
         panned,
@@ -166,7 +167,9 @@ pub(crate) fn viewer_pan_transitions_to_pinch_without_contact_count_jumps() {
         "adding a contact does not move the scene"
     );
     laid.dispatch_pointer_event(&movement(first, 30.0));
+    laid.pump();
     laid.dispatch_pointer_event(&movement(second, 110.0));
+    laid.pump();
     assert_scale(scale_of(&controller), 2.0);
     let pinched = controller.value();
     laid.dispatch_pointer_event(&up(first, 30.0));
