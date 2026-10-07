@@ -63,9 +63,6 @@ winit = { workspace = true, optional = true }
 # to `deny.toml`'s `sources.allow-git`) rather than reviving a hand table.
 ui-events-winit = { version = "0.3", optional = true }
 
-# Clipboard (for winit backend)
-arboard = { workspace = true, optional = true }
-
 # Error handling & logging. `anyhow` is deliberately absent here: the
 # public API is typed (`PlatformError`/`OpenWindowError`, thiserror), and
 # only tests/examples still consume `anyhow` (see [dev-dependencies]).
@@ -89,6 +86,11 @@ bitflags = "2.6"
 # `#[cfg(test)]` — so this must be a real dependency, not dev-only, or the
 # assertions never expand outside this crate's own test builds.
 static_assertions = { workspace = true }
+
+# The winit fallback uses a desktop clipboard; mobile backends own their
+# native clipboard implementations even when every feature is enabled.
+[target.'cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))'.dependencies]
+arboard = { workspace = true, optional = true }
 
 # Windows platform
 [target.'cfg(target_os = "windows")'.dependencies]

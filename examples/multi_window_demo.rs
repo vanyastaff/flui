@@ -1,86 +1,12 @@
-//! Minimal multi-window demo: primary window from `run_app`, secondary opened
-//! by clicking a button through `flui::app::open_window`.
+//! Multi-window desktop example.
 
-use flui::app::AppWindowError;
-use flui::prelude::*;
-use flui::view::StateCell;
-
-#[derive(Clone, StatelessView)]
-struct App;
-
-impl StatelessView for App {
-    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
-        Theme::new(ThemeData::light(), Root)
-    }
-}
-
-#[derive(Clone, StatefulView)]
-struct Root;
-
-struct RootState {
-    opened: StateCell<bool>,
-}
-
-impl StatefulView for Root {
-    type State = RootState;
-    fn create_state(&self) -> Self::State {
-        RootState {
-            opened: StateCell::new(false),
-        }
-    }
-}
-
-impl ViewState<Root> for RootState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.opened.bind(ctx);
-    }
-
-    fn build(&self, _view: &Root, _ctx: &dyn BuildContext) -> impl IntoView {
-        let opened = self.opened.clone();
-        let label = if opened.get() {
-            "Secondary opened"
-        } else {
-            "Open secondary"
-        };
-
-        Center::new().child(
-            Column::new(flui::widgets::column![
-                Text::new("Primary window"),
-                ElevatedButton::new(Text::new(label)).on_pressed(move |_cx| {
-                    if opened.get() {
-                        return;
-                    }
-                    let result = flui::app::open_window(
-                        flui::AppConfig::new().with_title("Secondary"),
-                        flui::WindowPolicy::Isolated,
-                        Secondary,
-                    );
-                    match result {
-                        Ok(()) => opened.set(true),
-                        Err(AppWindowError::AdmissionClosed) => {
-                            eprintln!("the application is quitting; no new window");
-                        }
-                        Err(error) => eprintln!("open_window failed: {error}"),
-                    }
-                }),
-            ])
-            .main_axis_alignment(MainAxisAlignment::Center),
-        )
-    }
-}
-
-#[derive(Clone, StatelessView)]
-struct Secondary;
-
-impl StatelessView for Secondary {
-    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
-        // A real content window with its own pipeline and frame pump.
-        // This is the whole point of `open_window`: a secondary native
-        // window with a fully mounted widget tree and its own GPU surface.
-        Center::new().child(Text::new("Secondary window says hello"))
-    }
-}
+#[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
+#[path = "multi_window_demo/desktop.rs"]
+mod desktop;
 
 fn main() {
-    flui::run_app(App);
+    #[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
+    desktop::run();
+    #[cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))]
+    eprintln!("multi_window_demo requires a desktop application host");
 }

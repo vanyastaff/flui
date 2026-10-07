@@ -226,7 +226,10 @@ pub use platforms::WebPlatform;
 pub use platforms::WindowsPlatform;
 // winit fallback backend — primary on Linux until native Wayland/X11 lands
 // (roadmap Cross.P)
-#[cfg(feature = "winit-backend")]
+#[cfg(all(
+    feature = "winit-backend",
+    any(target_os = "windows", target_os = "macos", target_os = "linux")
+))]
 pub use platforms::WinitPlatform;
 // Re-export shared infrastructure
 pub use shared::{PlatformHandlers, WindowCallbacks};

@@ -107,7 +107,7 @@ pub(super) struct FrameRecoveryOutcome {
     // web runners pace from their own frame sources and do not consult it.
     #[cfg_attr(
         all(
-            not(test),
+            not(all(test, not(any(target_os = "android", target_os = "ios")))),
             any(target_os = "android", target_os = "ios", target_arch = "wasm32")
         ),
         expect(
@@ -130,7 +130,7 @@ pub(super) struct FrameRecoveryOutcome {
     /// on the struct anyway because it is what makes the wake-on-failure-
     /// only contract independently checkable per call.
     #[cfg_attr(
-        not(test),
+        not(all(test, not(any(target_os = "android", target_os = "ios")))),
         expect(
             dead_code,
             reason = "read by this module's own tests only -- see field doc"
@@ -144,7 +144,7 @@ pub(super) struct FrameRecoveryOutcome {
     /// [`Self::just_failed`] — production callers consult
     /// `DeviceRecoveryBackoff::next_attempt_at` directly instead.
     #[cfg_attr(
-        not(test),
+        not(all(test, not(any(target_os = "android", target_os = "ios")))),
         expect(
             dead_code,
             reason = "read by this module's own tests only -- see field doc"

@@ -223,6 +223,13 @@ pub(crate) fn install_owner_platform(
                   never call this"
     )
 )]
+#[cfg_attr(
+    all(test, target_os = "android"),
+    expect(
+        dead_code,
+        reason = "desktop exit-policy tests are excluded on Android"
+    )
+)]
 pub(super) fn install_exit_policy_hook(policy: ExitPolicy) {
     let shared = with_owner_platform(|owner| {
         owner.shared().set_exit_policy_hook(Box::new(move || {
@@ -350,6 +357,13 @@ pub(super) fn install_platform_quit_hook() {
         dead_code,
         reason = "run_desktop (its one caller) is desktop-only -- android/wasm32 bootstraps \
                   never call this"
+    )
+)]
+#[cfg_attr(
+    all(test, any(target_os = "android", target_os = "ios")),
+    expect(
+        dead_code,
+        reason = "desktop wake-deadline tests are excluded on mobile"
     )
 )]
 pub(super) fn install_wake_deadline_hook(

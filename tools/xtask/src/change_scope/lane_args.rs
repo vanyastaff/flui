@@ -16,8 +16,7 @@
 //! - the facade's catalogs and `persist`, none on by default, join the run
 //!   when `flui` is in scope (`--features flui/material,flui/cupertino,flui/persist`);
 //! - cfg-gated code the Linux lane would never compile gets a check on its own
-//!   target: flui-platform's four backends, the flui-app/flui mobile runner,
-//!   the flui-cli Windows paths (mirroring the cross-typecheck job), and wasm32
+//!   target: source-derived native Cargo targets (mirroring cross-typecheck), and wasm32
 //!   for the wasm-capable packages in scope (mirroring wasm-check; a package
 //!   opts out with `[package.metadata.flui] wasm = false`);
 //! - the per-feature clippy pass (feature-matrix's `cargo hack --each-feature`)
