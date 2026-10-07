@@ -783,7 +783,7 @@ impl FocusNode {
     }
 
     /// Register a listener for focus or focusability changes on this node.
-    pub fn add_listener(&self, callback: FocusNodeChangeCallback) -> ListenerId {
+    pub(super) fn add_listener(&self, callback: FocusNodeChangeCallback) -> ListenerId {
         let id = ListenerId::new(self.next_listener_id.get());
         let next = self
             .next_listener_id
@@ -810,7 +810,7 @@ impl FocusNode {
     }
 
     /// Remove one node listener.
-    pub fn remove_listener(&self, id: ListenerId) {
+    pub(super) fn remove_listener(&self, id: ListenerId) {
         let removed = {
             let mut listeners = self.listeners.borrow_mut();
             listeners
@@ -823,13 +823,6 @@ impl FocusNode {
             failure.retire(callback);
         }
         failure.finish();
-    }
-
-    /// Number of node listeners, for deterministic lifecycle tests.
-    #[cfg(any(test, feature = "testing"))]
-    #[must_use]
-    pub fn listener_count(&self) -> usize {
-        self.listeners.borrow().len()
     }
 
     pub(crate) fn notify_listeners(&self) {

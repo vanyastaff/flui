@@ -3568,7 +3568,7 @@ fn editable_update_whose_observer_and_focus_listener_panic() {
     field.set_observer(Some(Rc::new(FailsOnStatus)));
     let heard = Rc::new(Cell::new(false));
     let listener = Rc::clone(&heard);
-    let _listening = old.add_listener(Rc::new(move || {
+    let _listening = old.subscribe(Rc::new(move || {
         assert!(listener.replace(true), "focus listener failure");
     }));
     let previous_elements = harness.elements_of_type(std::any::TypeId::of::<EditableText>());

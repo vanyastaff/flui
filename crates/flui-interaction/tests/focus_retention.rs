@@ -379,17 +379,18 @@ fn assert_focus_notification_recovery(node_panics: bool, manager_panics: usize) 
     let log = Rc::new(RefCell::new(Vec::new()));
     let fail = Rc::new(Cell::new(true));
 
+    let mut subscriptions = Vec::new();
     for (label, panics) in [("node first", node_panics), ("node later", false)] {
         let log = Rc::clone(&log);
         let fail = Rc::clone(&fail);
         let node_probe = Rc::downgrade(&node);
-        node.add_listener(Rc::new(move || {
+        subscriptions.push(node.subscribe(Rc::new(move || {
             let focused = node_probe.upgrade().expect("live node").has_primary_focus();
             log.borrow_mut().push((label, focused));
             if panics && fail.get() {
                 std::panic::panic_any("first node failure");
             }
-        }));
+        })));
     }
     for (index, label) in ["manager first", "manager second", "manager later"]
         .into_iter()
@@ -457,21 +458,27 @@ fn reentrant_listener_replacement_survives_a_failed_notification() {
     let node = FocusNode::with_debug_label("reentrant listener");
     let attachment = manager.root_scope().attach_node(&node).expect("attach");
     let log = Rc::new(RefCell::new(Vec::new()));
-    let listener_id = Rc::new(Cell::new(None));
+    let subscription = Rc::new(RefCell::new(None));
     let node_probe = Rc::downgrade(&node);
     let callback_log = Rc::clone(&log);
-    let callback_id = Rc::clone(&listener_id);
-    let id = node.add_listener(Rc::new(move || {
+    let callback_subscription = Rc::clone(&subscription);
+    let guard = node.subscribe(Rc::new(move || {
         callback_log.borrow_mut().push("reentrant");
         let node = node_probe.upgrade().expect("live node");
-        node.remove_listener(callback_id.get().expect("registered listener"));
+        let previous = callback_subscription
+            .borrow_mut()
+            .take()
+            .expect("registered listener");
+        drop(previous);
         let late_log = Rc::clone(&callback_log);
-        node.add_listener(Rc::new(move || late_log.borrow_mut().push("late")));
+        *callback_subscription.borrow_mut() =
+            Some(node.subscribe(Rc::new(move || late_log.borrow_mut().push("late"))));
         std::panic::panic_any("reentrant listener failure");
     }));
-    listener_id.set(Some(id));
+    *subscription.borrow_mut() = Some(guard);
     let stable_log = Rc::clone(&log);
-    node.add_listener(Rc::new(move || stable_log.borrow_mut().push("stable")));
+    let _stable_subscription =
+        node.subscribe(Rc::new(move || stable_log.borrow_mut().push("stable")));
     let edge_log = Rc::clone(&log);
     manager.add_listener(Rc::new(move |_, _| edge_log.borrow_mut().push("manager")));
 
@@ -822,9 +829,9 @@ fn assert_queued_focus_recovery(from_node: bool, competing: bool) {
         std::panic::panic_any("first queued focus failure");
     });
     let first_id = nodes[0].id();
-    if from_node {
+    let _node_subscription = if from_node {
         let first_probe = Rc::downgrade(&nodes[0]);
-        nodes[0].add_listener(Rc::new(move || {
+        Some(nodes[0].subscribe(Rc::new(move || {
             if first_probe
                 .upgrade()
                 .expect("live first")
@@ -832,14 +839,15 @@ fn assert_queued_focus_recovery(from_node: bool, competing: bool) {
             {
                 queue_then_fail();
             }
-        }));
+        })))
     } else {
         manager.add_listener(Rc::new(move |_, new| {
             if new.as_ref().is_some_and(|node| node.id() == first_id) {
                 queue_then_fail();
             }
         }));
-    }
+        None
+    };
     let second_id = nodes[1].id();
     let later_failure = Rc::clone(&fail);
     manager.add_listener(Rc::new(move |_, new| {
@@ -1030,7 +1038,7 @@ fn healthy_close_retires_children_before_their_parent() {
     }
     // Within one node: key handler, then listeners, then context.
     let recorder = DropRecorder("nested listener", Rc::clone(&log));
-    nested.add_listener(Rc::new(move || {
+    let _subscription = nested.subscribe(Rc::new(move || {
         let _ = &recorder;
     }));
     let recorder = DropRecorder("nested key handler", Rc::clone(&log));
