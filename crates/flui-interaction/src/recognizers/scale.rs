@@ -58,6 +58,7 @@ pub type ScaleCancelCallback = Rc<dyn Fn()>;
 
 /// Details about scale gesture start
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct ScaleStartDetails {
     /// Focal point (centroid of the tracked contacts).
     pub focal_point: Offset<f64>,
@@ -72,6 +73,7 @@ pub struct ScaleStartDetails {
 /// Every value is finite. A sample whose arithmetic would produce a
 /// non-finite value is not published.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct ScaleUpdateDetails {
     /// Focal point: the centroid of the contacts currently down.
     ///
@@ -113,6 +115,7 @@ pub struct ScaleUpdateDetails {
 
 /// Details about scale gesture end
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct ScaleEndDetails {
     /// Last published focal point
     pub focal_point: Offset<f64>,

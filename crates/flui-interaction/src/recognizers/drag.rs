@@ -34,6 +34,7 @@ pub enum DragStartBehavior {
 }
 /// Details about a newly admitted drag contact.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct DragDownDetails {
     /// Root-space contact position.
     pub global_position: Offset<f64>,
@@ -44,6 +45,7 @@ pub struct DragDownDetails {
 }
 /// Details about an accepted drag.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct DragStartDetails {
     /// Root-space initial position.
     pub global_position: Offset<f64>,
@@ -56,6 +58,7 @@ pub struct DragStartDetails {
 }
 /// Details about movement during an accepted drag.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct DragUpdateDetails {
     /// Root-space observed position.
     pub global_position: Offset<f64>,
@@ -68,6 +71,26 @@ pub struct DragUpdateDetails {
     /// Admitted device kind.
     pub kind: PointerKind,
 }
+
+impl DragUpdateDetails {
+    /// Create an update from observed positions and axis movement.
+    #[must_use]
+    pub const fn new(
+        global_position: Offset<f64>,
+        local_position: Offset<f64>,
+        delta: Offset<f64>,
+        primary_delta: f64,
+        kind: PointerKind,
+    ) -> Self {
+        Self {
+            global_position,
+            local_position,
+            delta,
+            primary_delta,
+            kind,
+        }
+    }
+}
 /// Why an accepted drag ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GestureEndReason {
@@ -78,6 +101,7 @@ pub enum GestureEndReason {
 }
 /// Details about an accepted drag's terminal notification.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct DragEndDetails {
     /// Completion or cancellation.
     pub reason: GestureEndReason,

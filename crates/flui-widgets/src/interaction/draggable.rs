@@ -1150,13 +1150,13 @@ impl MultiDragHandle for DragSession {
                 Some(Axis::Vertical) => details.delta.dy,
                 None => 0.0,
             };
-            let update = DragUpdateDetails {
-                global_position: details.global_position,
-                local_position: details.local_position,
-                delta: details.delta,
+            let update = DragUpdateDetails::new(
+                details.global_position,
+                details.local_position,
+                details.delta,
                 primary_delta,
-                kind: details.kind,
-            };
+                details.kind,
+            );
             self.writer.write(|cx| callback(cx, update));
         }
     }
