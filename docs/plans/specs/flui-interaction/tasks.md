@@ -79,8 +79,8 @@
 
 | ID | Сценарий | Файл |
 |---|---|---|
-| R1 | `on_start` снимает контакт при давлении выше пика: `Start → End → Peak`; так же `on_peak` перед `Update` | `recognizers/force_press.rs` |
-| R2 | `on_start` снимает контакт при захвате: `Start → End → Update` | `recognizers/scale.rs` |
-| R3 | `on_tap_down` допускает следующий контакт — поколение растёт и уже принятый `TapUp` теряется (счёт 2 без первого Up) | `recognizers/tap_and_drag.rs` |
-| R4 | Самоуправляемая арена с соперником: Cancel у Eager делает sweep с семантикой Up и награждает соперника; отмена должна снимать поколение без победителя (и в других путях withdraw-and-sweep) | `recognizers/eager.rs`, `arena/**` |
+| R1 ✅ | `on_start` снимает контакт при давлении выше пика: `Start → End → Peak`; так же `on_peak` перед `Update` | `recognizers/force_press.rs` |
+| R2 ✅ | `on_start` снимает контакт при захвате: `Start → End → Update` | `recognizers/scale.rs` |
+| R3 ✅ | `on_tap_down` допускает следующий контакт — поколение растёт и уже принятый `TapUp` теряется (счёт 2 без первого Up) | `recognizers/tap_and_drag.rs` |
+| R4 ✅ | Самоуправляемая арена с соперником: Cancel у Eager делает sweep с семантикой Up и награждает соперника; отмена должна снимать поколение без победителя (и в других путях withdraw-and-sweep) | `recognizers/eager.rs`, `arena/**` |
 | R5 | Повторный допуск того же указателя из cancel-колбэка drag запускает жест дважды | `recognizers/drag.rs` |
