@@ -107,7 +107,7 @@ runtime is spread through `flui-app`, whose `ui_realm` imports widget-layer scop
 **Decision.** Extract `flui-runtime` in tier K, **above** `flui-widgets`. `flui-app` drives it
 with the platform clock and raster lane, and `flui-testing` with a virtual clock. The second
 implementation is deleted. "One transaction" is defined by
-type: the phase entry points (`drive_frame_with_lane`, `crates/flui-scheduler/src/scheduler.rs:1874`,
+type: the phase entry points (`UpdateScheduler::drive_frame` in `crates/flui-scheduler/src/scheduler.rs`,
 and the scheduler's begin/draw handlers) become unreachable outside `flui-runtime`.
 
 **Alternatives rejected.** The runtime below widgets (needs moves first); the runtime inside

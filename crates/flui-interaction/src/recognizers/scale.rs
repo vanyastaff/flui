@@ -24,6 +24,7 @@ use parking_lot::Mutex;
 
 use super::recognizer::{
     GestureRecognizer, RecognizerBase, finish_containment, invoke_callback, retire_callback,
+    withdraw_cancelled,
 };
 use crate::{
     arena::{GestureArenaEntry, GestureArenaMember, GestureDisposition, SweepModel},
@@ -288,6 +289,9 @@ impl Ratios {
 
 #[derive(Debug)]
 struct ScaleState {
+    /// Counts starts and survives resets, so an update queued with a start is
+    /// dropped when a callback ended (or restarted) that gesture reentrantly.
+    starts: u64,
     phase: ScalePhase,
     /// Tracked contacts in arrival order.
     contacts: Vec<Contact>,
@@ -319,6 +323,7 @@ struct ScaleState {
 impl Default for ScaleState {
     fn default() -> Self {
         Self {
+            starts: 0,
             phase: ScalePhase::Idle,
             contacts: Vec::new(),
             won: false,
@@ -463,6 +468,14 @@ impl ScaleState {
         Some(measure)
     }
 
+    /// Forget the sequence, keeping the start count.
+    fn reset(&mut self) {
+        *self = Self {
+            starts: self.starts,
+            ..Self::default()
+        };
+    }
+
     /// Start if the recognizer owns the gesture and has two contacts.
     fn try_start(&mut self) -> Option<ScaleStartDetails> {
         if self.phase != ScalePhase::Possible
@@ -477,6 +490,8 @@ impl ScaleState {
         self.focal_point = measure.focal;
         self.published_focal = measure.focal;
         self.phase = ScalePhase::Started;
+        // Only compared for change; wrapping after 2^64 starts is harmless.
+        self.starts = self.starts.wrapping_add(1);
         Some(ScaleStartDetails {
             focal_point: self.focal_point,
             local_focal_point: self.focal_point,
@@ -505,7 +520,7 @@ impl ScaleState {
         let ended = (self.phase == ScalePhase::Started && self.contacts.len() < 2)
             .then(|| self.end_details());
         if self.contacts.is_empty() {
-            *self = Self::default();
+            self.reset();
         } else if ended.is_some() {
             // The next scale on the remaining contacts measures from here.
             self.phase = ScalePhase::Possible;
@@ -682,12 +697,12 @@ impl ScaleGestureRecognizer {
         // The move that crossed the slop already committed its factors; after the
         // start, an update publishes them, so `End` never reports a factor no
         // update showed.
-        let (start, update) = {
+        let (start, update, starts) = {
             let mut state = self.gesture_state.lock();
             state.claiming = false;
             let start = state.try_start();
             let update = start.is_some().then(|| state.update_details());
-            (start, update)
+            (start, update, state.starts)
         };
         if let Some(details) = start {
             RoutePanic::preserve_first(
@@ -696,7 +711,13 @@ impl ScaleGestureRecognizer {
                 "scale start callback",
             );
         }
-        if let Some(details) = update {
+        // `on_start` may have ended (or ended and restarted) the gesture
+        // reentrantly; its update then belongs to a gesture that is over.
+        let live = || {
+            let state = self.gesture_state.lock();
+            state.phase == ScalePhase::Started && state.starts == starts
+        };
+        if let Some(details) = update.filter(|_| live()) {
             RoutePanic::preserve_first(
                 &mut first,
                 RoutePanic::capture(|| self.deliver(Outcome::Update(details))),
@@ -825,11 +846,11 @@ impl ScaleGestureRecognizer {
             return;
         }
         let started = state.phase == ScalePhase::Started;
-        let entries = std::mem::take(&mut state.contacts)
+        let entries: Vec<_> = std::mem::take(&mut state.contacts)
             .into_iter()
             .map(|c| c.entry)
             .collect();
-        *state = ScaleState::default();
+        state.reset();
         drop(state);
         self.sync_primary(None);
         let outcome = if started {
@@ -837,7 +858,23 @@ impl ScaleGestureRecognizer {
         } else {
             Outcome::Nothing
         };
-        self.withdraw_then_deliver(entries, outcome);
+        // A cancelled sequence's arenas end without a winner.
+        let mut first = None;
+        for entry in &entries {
+            RoutePanic::preserve_first(
+                &mut first,
+                RoutePanic::capture(|| withdraw_cancelled(entry, self.state.arena())),
+                "scale arena withdrawal",
+            );
+        }
+        RoutePanic::preserve_first(
+            &mut first,
+            RoutePanic::capture(|| self.deliver(outcome)),
+            "scale callback",
+        );
+        // Entered while the thread is already unwinding, the failure is retained
+        // rather than resumed: a second unwind would abort.
+        finish_containment(first, std::thread::panicking());
     }
 }
 
@@ -936,7 +973,7 @@ impl GestureRecognizer for ScaleGestureRecognizer {
         let contacts = {
             let mut state = self.gesture_state.lock();
             let contacts = std::mem::take(&mut state.contacts);
-            *state = ScaleState::default();
+            state.reset();
             contacts
         };
         self.sync_primary(None);

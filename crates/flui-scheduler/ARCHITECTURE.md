@@ -58,8 +58,8 @@ tail survival, mixed-queue FIFO, and consumption of the failed entry.
 
 ### One recovery boundary closes phase/completion state before any pre-pipeline panic propagates
 
-**Rule:** a caller that catches a panic out of `drive_frame`/`drive_frame_with_lane`/
-`execute_frame`/`execute_frame_with_lane` must find the scheduler's own
+**Rule:** a caller that catches a panic out of `drive_frame`/
+`execute_frame` must find the scheduler's own
 bookkeeping — phase, `frame_scheduled`, frame count, and every registered
 completion waiter — closed, regardless of which phase inside that call
 raised the panic.
@@ -73,7 +73,7 @@ ever opens — escaped straight past `abort_frame` and left the phase machine
 stuck at whatever phase it reached (`TransientCallbacks`,
 `MidFrameMicrotasks`, or `PersistentCallbacks`), `frame_scheduled` in
 whatever state it happened to be, and every `end_of_frame()` waiter
-unresolved forever. `execute_frame`/`execute_frame_with_lane` had the
+unresolved forever. `execute_frame` had the
 identical gap: they called `handle_begin_frame`/`handle_draw_frame`/
 `end_frame` directly, sharing no recovery boundary with `drive_frame` at
 all.
@@ -81,11 +81,11 @@ all.
 **Choice:** `drive_frame_impl` now wraps `handle_begin_frame`,
 `handle_draw_frame`, AND `pipeline` in ONE `catch_unwind`; a panic from any
 of the three still runs `abort_frame` before the payload resumes.
-`execute_frame`/`execute_frame_with_lane` route through the SAME
+`execute_frame` routes through the SAME
 `drive_frame_impl` with a no-op pipeline (returning the `FrameId`
 `handle_begin_frame` minted alongside the pipeline's own result, since
-`drive_frame_impl` now returns `(FrameId, R)` internally — `drive_frame`/
-`drive_frame_with_lane` discard the id to keep their existing `-> R`
+`drive_frame_impl` now returns `(FrameId, R)` internally — `drive_frame`
+discards the id to keep its existing `-> R`
 signature) rather than hand-rolling a second, unguarded sequence that could
 silently reopen the same gap later.
 
@@ -351,7 +351,7 @@ narrower-purpose registration API standing.
 follow, the no-lock-held rule.** A shared test oracle
 (`scheduler/lock_discipline_tests.rs`'s `assert_no_scheduler_lock_held`,
 `#[cfg(test)]`, exhaustively destructuring `FrameState`/`CallbackState`/
-`BindingState` plus a `TaskQueue`/`AsyncDriver` probe so a new lock cannot
+`BindingState` plus a `TaskQueue` probe so a new lock cannot
 be added to any of them without this oracle noticing) `try_lock()`s every
 mutex a callback could legally observe and asserts each is free. It is
 invoked from inside a transient callback and a frame-completion waker
@@ -1006,9 +1006,10 @@ and a next independent frame through the consumer API.
 **The teardown lifetime guarantee remains partial:** any live
 strong `UpdateScheduler` handle defers `Drop for SchedulerInner`, the same as
 any other `Arc`. A task on an external executor that owns a clone does not
-hang — dropping the executor drops the task, the clone, then the scheduler —
-but the scheduler's own async driver holding a task future that captured a
-clone is a true self-cycle no `Drop` impl here can break.
+hang — dropping the executor drops the task, the clone, then the scheduler.
+A task on the realm's own `OwnerFrame` that captured a clone holds the
+scheduler until the realm retires the owner frame at teardown; the owner
+frame is not part of the scheduler, so that is no longer a self-cycle.
 
 **Ordering: the same issue also closed a `finish_async_pump` wake-loss hazard,
 and it needed `SeqCst`, not `Acquire`/`Release`.** A live `end_of_frame`
@@ -1223,9 +1224,40 @@ different registrants racing a resolution is not a contract. This removes the
 wasm special case entirely — there is no blocking path left to fail on a
 target with no thread to park.
 
+### The realm owns its async tasks: `OwnerFrame` holds them, `AsyncDriver` is `Weak`
+
+**Rule:** a realm's async tasks and owner-local post-frame callbacks live in
+its `OwnerFrame` (ADR-0136 §2), of which the realm (`UiRealm`) and the
+headless binding are the only strong owners. Futures are not `Send`: they
+are created, polled and dropped on the owner thread. Widgets reach the tasks
+through `AsyncDriver`, a `Weak` handle, so a leaked handle keeps nothing alive
+and spawning through a dead one drops the future at once and returns a
+cancelled token. Only `Waker`s and `FrameWaker` cross threads, each through a
+`Weak`. Every frame entry point takes the owner frame — there is no entry
+that polls or drains nothing — and an owner frame made for another scheduler
+is neither polled nor drained.
+
+**Teardown order:** `OwnerFrame::retire` closes both admission lanes, detaches their
+ownership and disables every task waker and the frame hook before user destruction.
+It drops the post-frame queue, then the
+tasks, each under its own catch, keeping the first panic; the realm calls it
+after closing its presentations and before resuming any earlier failure.
+During an existing unwind the values are retained instead, the same limit
+`TaskToken`'s `Drop` states.
+
+**Tests:** `owner_local_task_matrix` in
+`crates/flui-testing/tests/async_driver.rs` (`owner_local_future_completes_after_a_worker_wake`,
+`late_completion_after_realm_drop_drops_captures_on_the_owner`,
+`a_leaked_async_driver_holds_no_task_after_the_realm`);
+`retirement_drops_every_task_and_keeps_the_first_panic` and
+`retirement_drops_queued_callbacks_and_closes_the_queue` here;
+`async_driver_unwind_matrix` covers reentrant callback destruction, sibling wakes,
+eager-poll retirement and foreign-owner rejection without consuming frame demand;
+`frame_waker_wakes_the_realm_from_a_worker` in `flui-runtime`.
+
 ### `AsyncDriver` indexes ready tasks instead of scanning every resident one
 
-**Rule:** `AsyncDriver::poll_ready`'s cost scales with **ready** work (`R`),
+**Rule:** `OwnerFrame::poll_ready`'s cost scales with **ready** work (`R`),
 never with resident tasks (`N`). An idle driver holding 100,000 dormant tasks
 touches none of them; a mid-pump panic must not lose a sibling task that pump
 never reached; and a genuinely-ready-but-stale index entry (a cancelled or
@@ -1245,17 +1277,16 @@ since both sides share that one methodology.) Readiness was recorded per task
 (an `AtomicBool`) but never indexed independently of storage, so discovering
 it meant re-deriving it from every task, every time.
 
-**Choice:** `Inner` holds one field, `store: Mutex<TaskStore { tasks:
-BTreeMap<TaskId, Task>, ready: Vec<TaskId>, spare: Vec<TaskId> }>` — one
-mutex guarding an index beside the map it indexes. Every path that sets a
-task's `ready` flag `true` (`spawn_local`,
-`TaskWaker::wake_by_ref`'s false→true edge, `spawn_local_eager`'s post-poll
-check) also pushes the id into `store.ready` in the same locked section, so
-`poll_ready` only ever drains that `Vec` — an idle driver drains an empty one.
-`ready` is wake-arrival order, sorted and deduplicated once per drain (the
-dedup exists because `spawn_local_eager`'s inline poll and a concurrent
-`wake_by_ref` can both observe the pre-poll flag and each push the same id
-before either sees the other's write — a real race, not a hypothetical one).
+**Choice:** the owner-local `TaskStore` keeps `tasks: RefCell<BTreeMap<TaskId,
+Task>>` beside an index of ready ids, `ready: Mutex<Vec<TaskId>>`, in the
+store's cross-thread half (the only part a `Waker` reaches). Every path that
+sets a task's `ready` flag `true` (`spawn_local`, `TaskWaker::wake_by_ref`'s
+false→true edge once the task is admitted, `spawn_local_eager`'s post-poll
+check) also pushes the id into `ready`, so `poll_ready` only ever drains that
+`Vec` — an idle driver drains an empty one. `ready` is wake-arrival order,
+sorted and deduplicated once per drain (the dedup exists because a
+cross-thread wake racing an eager spawn's admission and the spawn itself can
+each push the same id — a real race, not a hypothetical one).
 
 **`PumpGuard` owns one pump's whole drained batch, not just the id being
 polled.** The naive fix — take a future out of its slot, poll it with no lock

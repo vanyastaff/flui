@@ -769,6 +769,15 @@ impl SpringSimulation {
         c * self.x0 + s * self.position_s
     }
 
+    /// The analytic trajectory used by interruptible motion, without the
+    /// standalone simulation's final correction at its rest boundary.
+    pub(crate) fn analytic_sample(&self, time: f64) -> (f64, f64) {
+        (
+            saturate(self.end + self.displacement(time)),
+            saturate(self.velocity(time)),
+        )
+    }
+
     /// The analytic velocity at `t â‰¥ 0`, ignoring rest.
     fn velocity(&self, t: f64) -> f64 {
         let (c, s) = self.propagator(t);

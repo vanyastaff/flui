@@ -1,4 +1,5 @@
 mod animated_opacity;
+mod animated_transform;
 mod backdrop_filter;
 mod clip;
 mod colored_box;
@@ -17,6 +18,7 @@ mod subtree_anchor;
 mod visibility;
 
 pub use animated_opacity::*;
+pub use animated_transform::{RenderAnimatedTransform, TransformMotion};
 pub use backdrop_filter::*;
 pub use clip::*;
 pub use colored_box::*;

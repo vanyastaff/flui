@@ -1,5 +1,6 @@
 //! Friction, bounds and the bouncing scroll fling.
 
+use flui_animation::AnimatedValue;
 use flui_animation::simulation::{
     BouncingScrollSimulation, BoundedFrictionSimulation, FrictionSimulation, Simulation,
     SimulationBounds, SimulationError, SimulationParameter, SpringDescription, Tolerance,
@@ -359,11 +360,34 @@ fn color_spring_fades_to_transparent_without_darkening() {
     assert_eq!(v.value().a, 0);
 }
 
+fn transparent_color_keeps_its_identity_at_rest() {
+    let spring =
+        SpringDescription::with_response_and_damping(std::time::Duration::from_millis(300), 1.0)
+            .expect("valid spring");
+    let clear_red = Color::rgba(255, 0, 0, 0);
+    assert_eq!(
+        AnimatedValue::new(clear_red, spring)
+            .expect("finite color")
+            .value(),
+        clear_red
+    );
+    let clear_blue = Color::rgba(0, 0, 255, 0);
+    let mut v = AnimatedValue::new(Color::rgb(0, 0, 255), spring).expect("finite color");
+    v.animate_to(clear_blue).expect("finite color");
+    v.advance(std::time::Duration::from_secs(5));
+    assert!(v.is_settled());
+    assert_eq!(v.value(), clear_blue, "settled at a transparent target");
+}
+
 #[test]
 fn tolerance_constructors_validate_and_scale_with_dpr() {
     crate::run_table(&[
         ("valid tolerances", valid_tolerances),
         ("refused tolerances", refused_tolerances),
+        (
+            "transparent color keeps its identity at rest",
+            transparent_color_keeps_its_identity_at_rest,
+        ),
         (
             "device pixel ratio scales the rest",
             device_pixel_ratio_scales_the_rest,

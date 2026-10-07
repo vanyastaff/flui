@@ -2,22 +2,23 @@
 
 use std::sync::Arc;
 
-use flui_animation::Animation;
-use flui_foundation::Listenable;
-use flui_view::prelude::BuildContext;
-use flui_view::{
-    AnimatedView, BoxedView, IntoView, StatefulView, ViewExt, ViewState, impl_animated_view,
-};
+use flui_animation::{Animation, ProxyAnimation};
+use flui_objects::TransformMotion;
+use flui_painting::typography::TextDirection;
+use flui_view::prelude::{BuildContext, StatefulView};
+use flui_view::{BoxedView, IntoView, ViewExt, ViewState};
 
-use crate::Transform;
+use super::transform_view::AnimatedTransformView;
 
 /// Scales its child about its center as an [`Animation<f64>`] (the scale factor)
 /// changes.
 ///
-/// Wraps a center-aligned `Transform::scale`. `1.0` is the
-/// child's natural size, `0.0` collapses it to a point. Scaling is paint-only;
-/// the child is laid out as if untransformed.
-#[derive(Clone)]
+/// Backed by `RenderAnimatedTransform`, which listens to `scale` itself: a tick
+/// patches the node's transform layer without rebuilding the element tree.
+/// `1.0` is the child's natural size; `0.0` collapses it — nothing is painted
+/// and nothing is hit. Scaling is paint-only; the child is laid out as if
+/// untransformed.
+#[derive(Clone, StatefulView)]
 pub struct ScaleTransition {
     scale: Arc<dyn Animation<f64>>,
     child: BoxedView,
@@ -41,16 +42,31 @@ impl std::fmt::Debug for ScaleTransition {
     }
 }
 
-/// State for [`ScaleTransition`] — the scale lives on the animation, not here.
+/// State for [`ScaleTransition`]: the proxy the render object listens to,
+/// kept across rebuilds so a new `scale` retargets it in place.
 #[derive(Debug)]
-pub struct ScaleTransitionState;
+pub struct ScaleTransitionState {
+    proxy: ProxyAnimation<f64>,
+    scale: Arc<dyn Animation<f64>>,
+}
 
 impl ViewState<ScaleTransition> for ScaleTransitionState {
     fn build(&self, view: &ScaleTransition, _ctx: &dyn BuildContext) -> impl IntoView {
-        let scale = view.scale.value();
-        // `Transform` applies the matrix about its alignment, which defaults to
-        // the center.
-        Transform::scale(scale, scale).child(view.child.clone())
+        AnimatedTransformView {
+            motion: TransformMotion::Scale {
+                scale: self.proxy.clone(),
+            },
+            transform_hit_tests: true,
+            text_direction: TextDirection::Ltr,
+            child: view.child.clone(),
+        }
+    }
+
+    fn did_update_view(&mut self, _old_view: &ScaleTransition, new_view: &ScaleTransition) {
+        if !Arc::ptr_eq(&self.scale, &new_view.scale) {
+            self.scale = Arc::clone(&new_view.scale);
+            self.proxy.set_parent(Arc::clone(&new_view.scale));
+        }
     }
 }
 
@@ -58,14 +74,9 @@ impl StatefulView for ScaleTransition {
     type State = ScaleTransitionState;
 
     fn create_state(&self) -> Self::State {
-        ScaleTransitionState
+        ScaleTransitionState {
+            proxy: ProxyAnimation::new(Arc::clone(&self.scale)),
+            scale: Arc::clone(&self.scale),
+        }
     }
 }
-
-impl AnimatedView for ScaleTransition {
-    fn listenable(&self) -> Arc<dyn Listenable> {
-        self.scale.clone() as Arc<dyn Listenable>
-    }
-}
-
-impl_animated_view!(ScaleTransition);

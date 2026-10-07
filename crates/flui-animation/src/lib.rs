@@ -24,15 +24,21 @@
 //!
 //! Animation objects are **persistent** ([`Arc`]-based) and survive widget rebuilds:
 //!
-//! ```rust,ignore
+//! ```
+//! # use std::sync::Arc;
+//! # use std::time::Duration;
+//! # use flui_animation::{AnimationController, FloatTween, TweenAnimation};
+//! # use flui_scheduler::UpdateScheduler;
+//! # let scheduler = UpdateScheduler::new();
+//! # let tween = FloatTween::new(0.0, 100.0);
 //! // Create once (outside widget build)
 //! let controller = AnimationController::new(
 //!     Duration::from_millis(300),
 //!     &scheduler,
 //! );
 //!
-//! // Use many times (in widget build)
-//! let animation = TweenAnimation::new(tween, controller.clone());
+//! // Use many times (in widget build); `clone()` shares the controller
+//! let animation = TweenAnimation::new(tween, Arc::new(controller.clone()));
 //!
 //! // Cleanup when done
 //! controller.dispose();
@@ -81,6 +87,19 @@
 
 // Every public item is documented; keep it that way.
 #![deny(missing_docs)]
+// Crate-local bars above the workspace lint table (a member using
+// `[lints] workspace = true` cannot add its own `[lints.clippy]` entries).
+// `missing_panics_doc`, `missing_errors_doc`, `allow_attributes_without_reason`,
+// `cast_possible_truncation`, `cast_sign_loss` and `clone_on_ref_ptr` still
+// have hits in the controller, vsync, proxy, switch and compound modules; they
+// turn on here once those modules are reworked.
+#![warn(
+    clippy::derive_partial_eq_without_eq,
+    clippy::return_self_not_must_use,
+    clippy::lossy_float_literal,
+    clippy::unwrap_in_result,
+    clippy::fallible_impl_from
+)]
 
 // Core animation modules
 // Derive expansions use the same absolute owner path in library and integration targets.
@@ -101,7 +120,9 @@ pub mod controller;
 pub mod curved;
 pub mod error;
 pub mod ext;
+pub mod motion;
 pub mod proxy;
+pub mod retarget;
 pub mod reverse;
 pub mod simulation;
 pub mod spring;
@@ -123,7 +144,9 @@ pub use controller::AnimationController;
 pub use curved::CurvedAnimation;
 pub use error::AnimationError;
 pub use ext::{AnimatableExt, AnimationExt};
+pub use motion::{AnimationTime, FrameTick, InvalidPlaybackRate, MotionClock, PlaybackRate};
 pub use proxy::ProxyAnimation;
+pub use retarget::MotionSpec;
 pub use reverse::ReverseAnimation;
 pub use simulation::{
     BouncingScrollSimulation, BoundedFrictionSimulation, FrictionSimulation, Simulation,
@@ -194,8 +217,7 @@ pub mod prelude {
     };
 }
 
-// Keep standalone prose examples inside the existing workspace doctest gate.
-// Context-dependent fragments in these files are explicitly `rust,ignore`.
+// Every `rust` block in the crate's prose docs compiles as a doctest.
 #[cfg(doctest)]
 #[doc = include_str!("../README.md")]
 mod readme_examples {}

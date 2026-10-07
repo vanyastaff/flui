@@ -249,7 +249,16 @@ impl Parts {
     /// Interpolates every part linearly except the rotation, which is slerped along the
     /// shorter arc. `t` extrapolates.
     pub(super) fn interpolate(&self, other: &Parts, t: f64) -> Parts {
-        let mix = |a: f64, b: f64| a + (b - a) * t;
+        // Finite components on opposite sides of the range overflow `b - a`; the
+        // weighted sum stays finite wherever the result is representable.
+        let mix = |a: f64, b: f64| {
+            let span = b - a;
+            if span.is_finite() {
+                a + span * t
+            } else {
+                a * (1.0 - t) + b * t
+            }
+        };
         Parts {
             perspective: std::array::from_fn(|i| mix(self.perspective[i], other.perspective[i])),
             translation: std::array::from_fn(|i| mix(self.translation[i], other.translation[i])),
@@ -304,19 +313,20 @@ impl Parts {
 /// Spherical interpolation of unit quaternions along the shorter arc; `t` extrapolates
 /// along the same great circle.
 fn slerp(a: [f64; 4], b: [f64; 4], t: f64) -> [f64; 4] {
-    let mut cos = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
-    let b = if cos < 0.0 {
-        cos = -cos;
-        b.map(|v| -v)
-    } else {
-        b
-    };
-    let (wa, wb) = if cos > 1.0 - 1e-12 {
-        // Nearly the same rotation: the chord is the arc to within rounding.
+    let cos = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
+    let b = if cos < 0.0 { b.map(|v| -v) } else { b };
+    // The angle from the chord and the sum keeps its precision for nearly equal
+    // rotations, where `acos(cos)` loses it, so extrapolation stays on the great
+    // circle however far `t` carries a tiny arc.
+    let norm = |v: [f64; 4]| v.iter().map(|c| c * c).sum::<f64>().sqrt();
+    let chord = norm(std::array::from_fn(|i| a[i] - b[i]));
+    let sum = norm(std::array::from_fn(|i| a[i] + b[i]));
+    let theta = 2.0 * chord.atan2(sum);
+    let sin = theta.sin();
+    let (wa, wb) = if sin == 0.0 {
+        // The same rotation: every weighting of it is that rotation.
         (1.0 - t, t)
     } else {
-        let theta = cos.min(1.0).acos();
-        let sin = theta.sin();
         (((1.0 - t) * theta).sin() / sin, (t * theta).sin() / sin)
     };
     normalized(std::array::from_fn(|i| wa * a[i] + wb * b[i]))

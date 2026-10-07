@@ -55,6 +55,9 @@ fn linear_swipe(
 /// fill cost is measured separately by `bench_add_position`.)
 fn bench_estimate_lsq(c: &mut Criterion) {
     let samples = black_box(linear_swipe(20, 100, 1000.0));
+    // Query on the samples' own clock, right after the newest one, so a
+    // slow batch setup can never trip the stop gate and time a no-op.
+    let query = samples.last().expect("non-empty swipe").0;
     c.bench_function("VelocityTracker::estimate (LSQ, 20 samples)", |b| {
         b.iter_batched(
             || {
@@ -64,7 +67,7 @@ fn bench_estimate_lsq(c: &mut Criterion) {
                 }
                 tracker
             },
-            |mut tracker| black_box(tracker.estimate()),
+            |mut tracker| black_box(tracker.estimate_at(query)),
             criterion::BatchSize::SmallInput,
         );
     });
@@ -75,6 +78,9 @@ fn bench_estimate_lsq(c: &mut Criterion) {
 /// measured.
 fn bench_estimate_short(c: &mut Criterion) {
     let samples = black_box(linear_swipe(3, 30, 500.0));
+    // Query on the samples' own clock, right after the newest one, so a
+    // slow batch setup can never trip the stop gate and time a no-op.
+    let query = samples.last().expect("non-empty swipe").0;
     c.bench_function("VelocityTracker::estimate (LSQ, 3 samples)", |b| {
         b.iter_batched(
             || {
@@ -84,7 +90,7 @@ fn bench_estimate_short(c: &mut Criterion) {
                 }
                 tracker
             },
-            |mut tracker| black_box(tracker.estimate()),
+            |mut tracker| black_box(tracker.estimate_at(query)),
             criterion::BatchSize::SmallInput,
         );
     });
@@ -99,6 +105,9 @@ fn bench_estimate_short(c: &mut Criterion) {
 /// intervening `add_position`.
 fn bench_estimate_repeated(c: &mut Criterion) {
     let samples = black_box(linear_swipe(20, 100, 1000.0));
+    // Query on the samples' own clock, right after the newest one, so a
+    // slow batch setup can never trip the stop gate and time a no-op.
+    let query = samples.last().expect("non-empty swipe").0;
     c.bench_function("VelocityTracker::estimate (LSQ, 4 repeated queries)", |b| {
         b.iter_batched(
             || {
@@ -110,10 +119,10 @@ fn bench_estimate_repeated(c: &mut Criterion) {
             },
             |mut tracker| {
                 // Four queries against the same buffer: 1 solve + 3 cache hits.
-                black_box(tracker.estimate());
-                black_box(tracker.estimate());
-                black_box(tracker.estimate());
-                black_box(tracker.estimate())
+                black_box(tracker.estimate_at(query));
+                black_box(tracker.estimate_at(query));
+                black_box(tracker.estimate_at(query));
+                black_box(tracker.estimate_at(query))
             },
             criterion::BatchSize::SmallInput,
         );

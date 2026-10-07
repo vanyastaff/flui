@@ -12,9 +12,7 @@
 //!
 //! - The caller (the `flui_engine` frame loop, a custom shell, a test)
 //!   chooses *one* sample frequency, not per-resampler. Centralising
-//!   the cadence in a clock means: resampler, velocity tracker, and
-//!   predictor all read the same wall-clock anchor, no drift between
-//!   consumers.
+//!   the cadence in a clock means every resampler is paced alike.
 //! - Mismatched input/display rates (e.g. 120Hz touch sensor against
 //!   a 60Hz display) need a deliberate up- or down-sampling step. The
 //!   clock is the place that policy lives.
@@ -68,9 +66,11 @@ pub enum SamplingClock {
 
     /// Caller-supplied monotonic clock, used by tests and replay.
     ///
-    /// `tick()` returns `(*now, *now + period)` and advances `*now` by
-    /// `period`. Caller is responsible for keeping the underlying
-    /// value monotonic; the resampler assumes `next > now` strictly.
+    /// [`SamplingClock::tick_manual`] returns `(*now, *now + period)` and
+    /// advances `*now` by `period`. Caller is responsible for keeping the
+    /// underlying value monotonic; the resampler assumes `next > now`
+    /// strictly. Where no time store is supplied, [`SamplingClock::tick`]
+    /// paces at `period` on the wall clock.
     Manual {
         /// Sample period. Must be > 0.
         period: Duration,
@@ -105,28 +105,23 @@ impl SamplingClock {
         }
     }
 
-    /// Compute `(now, next)` for a [`SamplingClock::Fixed`] clock.
+    /// Compute a `(now, now + period)` window anchored at the wall clock.
     ///
-    /// Returns `None` for [`SamplingClock::Manual`], whose ticks
-    /// require a mutable `*mut Instant` parameter — use
-    /// [`Self::tick_manual`] for that variant.
+    /// Both variants answer: a [`SamplingClock::Manual`] clock owns no time
+    /// store of its own, so a caller that cannot supply one (the gesture
+    /// binding's `flush_pending_moves`) still gets a window paced at the
+    /// manual period instead of none — which would hold every resampled move
+    /// until the pointer lifts. Callers that own the manual time use
+    /// [`Self::tick_manual`] (or pass explicit windows) for determinism.
+    ///
+    /// Returns `None` only if `now + period` overflows `Instant`.
     pub fn tick(&self) -> Option<(Instant, Instant)> {
-        match *self {
-            Self::Fixed { period } => {
-                let period = if period.is_zero() {
-                    DEFAULT_SAMPLE_PERIOD
-                } else {
-                    period
-                };
-                let now = Instant::now();
-                // Propagate overflow as `None` (the caller falls back to direct
-                // dispatch) rather than returning an invalid `(now, now)` window
-                // that violates the documented `next > now` invariant.
-                let next = now.checked_add(period)?;
-                Some((now, next))
-            }
-            Self::Manual { .. } => None,
-        }
+        let now = Instant::now();
+        // Propagate overflow as `None` (the caller falls back to direct
+        // dispatch) rather than returning an invalid `(now, now)` window
+        // that violates the documented `next > now` invariant.
+        let next = now.checked_add(self.period())?;
+        Some((now, next))
     }
 
     /// Advance a manual clock by one period.

@@ -102,9 +102,6 @@ const MIN_FLING_VELOCITY: f64 = 700.0;
 /// velocity must clear the cross-axis velocity by at least this much, or the
 /// gesture is not "generally in the right direction".
 const MIN_FLING_VELOCITY_DELTA: f64 = 400.0;
-/// Pointer velocity
-/// (px/s) is scaled into the `AnimationController.fling` velocity domain.
-const FLING_VELOCITY_SCALE: f64 = 1.0 / 300.0;
 /// The default fraction of
 /// `overall_drag_axis_extent` that must be crossed to dismiss.
 const DEFAULT_DISMISS_THRESHOLD: f64 = 0.4;
@@ -1118,6 +1115,34 @@ fn handle_drag_update(
     }
 }
 
+/// The release speed in `move_controller` units per second: the gesture's
+/// px/s over the same dismiss-axis extent `handle_drag_update` divides drag
+/// deltas by, so the controller keeps the rate the drag gave it and the card
+/// leaves as fast as it was moving. Under tight constraints (the common
+/// case) that extent is the card's, and the card leaves at the finger's
+/// speed whatever its size. Under loose ones it is the maximum, not the
+/// laid-out child, so drag and fling alike move the card slower than the
+/// finger by the same factor (module docs divergence #4: no laid-out size
+/// accessor). An extent that is not positive and finite (unbounded
+/// constraints, already caught in debug builds) yields one unit per second.
+fn fling_speed(
+    primary_velocity: f64,
+    constraints: BoxConstraints,
+    direction: DismissDirection,
+) -> f64 {
+    let extent = if direction_is_x_axis(direction) {
+        constraints.max_width
+    } else {
+        constraints.max_height
+    };
+    let speed = primary_velocity.abs() / extent;
+    if extent > 0.0 && speed.is_finite() {
+        speed
+    } else {
+        1.0
+    }
+}
+
 /// Ends a drag: fling, threshold, or spring back.
 #[expect(clippy::too_many_arguments)] // the release handler receives its captured state and terminal details
 fn handle_drag_end(
@@ -1161,6 +1186,7 @@ fn handle_drag_end(
     // — re-register now so `Vsync`'s tick anchor lines up with the run's true
     // start (see `unregister_move_controller_vsync`'s doc).
     ensure_move_controller_registered(drag, move_controller, vsync);
+    let fling_speed = fling_speed(primary_velocity, constraints, resolved.direction);
     match describe_fling_gesture(
         drag.drag_extent.get(),
         resolved.direction,
@@ -1173,12 +1199,12 @@ fn handle_drag_end(
                 let _ = move_controller.reverse();
             } else {
                 drag.drag_extent.set(primary_velocity.signum());
-                let _ = move_controller.fling(primary_velocity.abs() * FLING_VELOCITY_SCALE);
+                let _ = move_controller.fling(fling_speed);
             }
         }
         FlingGestureKind::Reverse => {
             drag.drag_extent.set(primary_velocity.signum());
-            let _ = move_controller.fling(-primary_velocity.abs() * FLING_VELOCITY_SCALE);
+            let _ = move_controller.fling(-fling_speed);
         }
         FlingGestureKind::None => {
             if !move_controller.is_dismissed() {

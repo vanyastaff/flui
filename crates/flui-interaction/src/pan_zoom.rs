@@ -3,8 +3,8 @@
 //! A single trackpad gesture source is exposed as three distinct
 //! [`PointerPanZoomEvent`] variants — `Start`, `Update`, `End` — each carrying
 //! the information its stage needs. The `Update` variant carries the running
-//! pan offset, the per-event pan delta, the cumulative scale, and the
-//! cumulative rotation in radians.
+//! pan offset, the per-event pan delta, the per-event scale factor, and the
+//! per-event rotation in radians.
 //!
 //! Upstream `ui_events::PointerEvent::Gesture` is too coarse: its
 //! [`ui_events::pointer::PointerGesture`] enum holds only `Pinch(f64)` and
@@ -79,8 +79,8 @@ fn px_f32(v: f64) -> f64 {
 /// Sum type over three stages. The `Start` and `End` stages
 /// only carry pointer identity, current position, and a wall-clock
 /// timestamp; the `Update` stage additionally carries the cumulative pan
-/// offset, the per-event pan delta, the cumulative scale (1.0 = no zoom),
-/// and the cumulative rotation in radians.
+/// offset, the per-event pan delta, the per-event scale factor (1.0 = no zoom),
+/// and the per-event rotation in radians.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub enum PointerPanZoomEvent {
@@ -106,8 +106,9 @@ pub enum PointerPanZoomEvent {
     /// Trackpad pan/zoom update on this pointer.
     ///
     /// Carries the
-    /// cumulative `pan` offset, the per-event `pan_delta`, the cumulative
-    /// `scale` (1.0 = identity), and the cumulative `rotation` in radians.
+    /// cumulative `pan` offset, the per-event `pan_delta`, and the per-event
+    /// `scale` factor (1.0 = identity) and `rotation` in radians — each tick's
+    /// change, which a consumer multiplies / adds into its own transform.
     Update {
         /// Stable pointer id.
         pointer_id: PointerId,
@@ -117,10 +118,12 @@ pub enum PointerPanZoomEvent {
         pan: Offset<f64>,
         /// Pan offset change since the previous `Update` event.
         pan_delta: Offset<f64>,
-        /// Cumulative scale factor since the `Start`. `1.0` = no zoom,
-        /// `> 1.0` = zoomed in, `< 1.0` = zoomed out.
+        /// Scale factor of this tick relative to the previous one. `1.0` =
+        /// no change, `> 1.0` = zooming in, `< 1.0` = zooming out. Always
+        /// finite and positive.
         scale: f64,
-        /// Cumulative rotation in radians since the `Start`.
+        /// Rotation of this tick in radians relative to the previous one.
+        /// Always finite.
         rotation: f64,
         /// Wall-clock timestamp in nanoseconds.
         timestamp_nanos: u64,
@@ -235,8 +238,10 @@ impl PointerPanZoomEvent {
 /// when one becomes available. This conversion is a *type-level*
 /// un-collapse, not a magic source of pan data.
 ///
-/// `Pinch` maps to `scale = 1.0 + pinch`. `Rotate` passes through as the cumulative rotation in
-/// radians. The `Start` / `End` transition is signalled by the upstream
+/// `Pinch` maps to the per-tick `scale = 1.0 + pinch`. `Rotate` passes
+/// through as the per-tick rotation in radians. A tick that is not a usable
+/// zoom factor (non-finite, or `pinch <= -1`) or a non-finite rotation
+/// becomes the identity (`scale = 1.0`, `rotation = 0.0`). The `Start` / `End` transition is signalled by the upstream
 /// `PointerButtons` state (pressed vs released) which on most platforms
 /// is *not* a reliable indicator for trackpad gestures — so the default
 /// mapping emits [`PointerPanZoomEvent::Update`] for every gesture tick.
@@ -270,9 +275,24 @@ pub fn convert_gesture(event: &ui_events::pointer::PointerGestureEvent) -> Point
         .pointer_id
         .and_then(|nz| crate::ids::PointerId::new(nz.get_inner().get()))
         .unwrap_or(crate::ids::PointerId::PRIMARY);
+    // Both are per-tick deltas upstream. A tick that cannot be a zoom factor
+    // (NaN, infinite, or `pinch <= -1`, which would scale to zero or flip
+    // the content) or a non-finite rotation is published as "no change"
+    // rather than poisoning every consumer's accumulated transform.
     let (scale, rotation) = match event.gesture {
-        PointerGesture::Pinch(pinch) => (1.0_f64 + f64::from(pinch), 0.0_f64),
-        PointerGesture::Rotate(rot) => (1.0_f64, f64::from(rot)),
+        PointerGesture::Pinch(pinch) => {
+            let scale = 1.0_f64 + f64::from(pinch);
+            let scale = if scale.is_finite() && scale > 0.0 {
+                scale
+            } else {
+                1.0
+            };
+            (scale, 0.0_f64)
+        }
+        PointerGesture::Rotate(rot) => {
+            let rot = f64::from(rot);
+            (1.0_f64, if rot.is_finite() { rot } else { 0.0 })
+        }
     };
     PointerPanZoomEvent::Update {
         pointer_id,
