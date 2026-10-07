@@ -71,7 +71,7 @@ use flui_view::{
 use crate::animated::VsyncScope;
 use crate::localization::axis_direction_from_axis_reverse_and_directionality;
 use crate::scroll::{ClampingScrollPhysics, ScrollController, ScrollMetrics, SharedScrollPhysics};
-use crate::{GestureDetector, Listener, SingleChildScrollView};
+use crate::{GestureDetector, Listener, Semantics, SingleChildScrollView};
 use flui_interaction::events::ScrollEventData;
 use flui_interaction::routing::EventPropagation;
 use flui_scheduler::PostFrameHandle;
@@ -522,6 +522,7 @@ impl ViewState<Scrollable> for ScrollableState {
 
     fn build(&self, view: &Scrollable, ctx: &dyn BuildContext) -> impl IntoView {
         let scroll_controller = view.controller.clone();
+        let a11y_controller = view.controller.clone();
         let physics = view.physics.clone();
         let scroll_direction = view.scroll_direction;
         // No explicit override: resolve the same way the `.child()` fast
@@ -696,7 +697,7 @@ impl ViewState<Scrollable> for ScrollableState {
             let ctrl_wheel = scroll_controller;
             let post_frame_wheel = post_frame;
             let fling_wheel = fling_controller;
-            Listener::new()
+            let listener = Listener::new()
                 .on_scroll_claim(move |data: &ScrollEventData| {
                     // Deliberately modifier-agnostic: a ctrl+wheel tick over a
                     // plain list scrolls like any other. The ctrl+wheel-zooms contract needs no
@@ -758,7 +759,13 @@ impl ViewState<Scrollable> for ScrollableState {
                     }
                     EventPropagation::Stop
                 })
-                .child(gestures)
+                .child(gestures);
+            scroll_semantics(
+                a11y_controller,
+                scroll_direction,
+                axis_direction.is_reversed(),
+            )
+            .child(listener)
         }
     }
 
@@ -818,6 +825,48 @@ impl ViewState<Scrollable> for ScrollableState {
     }
 }
 
+/// Fraction of the viewport one assistive-technology scroll step moves, so
+/// the last line before the step stays on screen after it.
+const A11Y_SCROLL_STEP: f64 = 0.8;
+
+/// The semantics node that lets assistive technology scroll this scrollable.
+///
+/// It advertises the two scroll actions along `axis`; each moves the position by
+/// [`A11Y_SCROLL_STEP`] of the viewport, clamped to the extents, through the
+/// same controller a drag or wheel tick drives. "Down"/"right" reveal the
+/// content below or to the right of the viewport on screen, so on a reversed
+/// axis (a reversed list, or a horizontal list under right-to-left text) they
+/// decrease the position instead of increasing it. The actions are advertised even at an extent,
+/// where they do nothing: the extents are only known after layout and the
+/// offset changes without a rebuild, so build cannot tell which way is open.
+fn scroll_semantics(controller: ScrollController, axis: Axis, reversed: bool) -> Semantics {
+    let semantics = Semantics::new().container(true);
+    let step = move |controller: &ScrollController, towards_end: bool| {
+        let viewport = controller.position().viewport_dimension();
+        let delta = viewport * A11Y_SCROLL_STEP;
+        let delta = if towards_end == reversed {
+            -delta
+        } else {
+            delta
+        };
+        let target = (controller.pixels() + delta).clamp(
+            controller.min_scroll_extent(),
+            controller.max_scroll_extent(),
+        );
+        if target != controller.pixels() {
+            controller.jump_to(target);
+        }
+    };
+    let (forward, backward) = (controller.clone(), controller);
+    match axis {
+        Axis::Vertical => semantics
+            .on_scroll_down(move |_cx| step(&forward, true))
+            .on_scroll_up(move |_cx| step(&backward, false)),
+        Axis::Horizontal => semantics
+            .on_scroll_right(move |_cx| step(&forward, true))
+            .on_scroll_left(move |_cx| step(&backward, false)),
+    }
+}
 /// The part of a wheel tick that moves a scrollable along `axis`.
 ///
 /// A plain mouse wheel only reports vertical ticks. With Shift held, a tick
