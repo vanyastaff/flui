@@ -20,3 +20,12 @@ containment.
 The probe keeps no browser preference changes: reset device emulation and close
 the page after collecting its results. This manual browser contract is not
 claimed as an automatically executed CI lane.
+
+The cancellation and capture-loss buttons check one terminal cancellation and
+the next healthy sequence. The fractional-position button checks genuine DOM
+pointer and wheel events at fractional CSS coordinates. The trusted capture
+button arms a physical/browser-automation drag: press the canvas, move beyond
+its rectangle and release. Set a bounded canvas CSS size first when the page
+uses the default full-viewport canvas. `capture-admission` must report PASS and
+the outside release must reach `capture-check`; synthetic DOM pointer events
+cannot prove capture admission because they do not create an active pointer.

@@ -10,6 +10,7 @@ pre { position: relative; z-index: 9999; background: white; width: max-content; 
   <button id="input">Install input</button>
   <button id="events">Check pointer and wheel events</button>
   <button id="cancel">Check browser cancellation</button>
+  <button id="capture-loss">Check capture loss</button>
   <button id="fractional">Check fractional positions</button>
   <button id="capture">Arm trusted capture check</button>
   <button id="display">Check display</button>
@@ -114,6 +115,18 @@ document.getElementById('fractional').onclick = () => check('fractional-check', 
     if (!actual) throw new Error(`${kind} was not delivered`);
     equal(actual, { x: 80.25, y: 40.75 });
   }
+});
+document.getElementById('capture-loss').onclick = () => check('capture-loss-check', () => {
+  const canvas = document.querySelector('canvas');
+  if (!canvas) throw new Error('Install input first');
+  report('sequence', '');
+  const common = { pointerId: 9, pointerType: 'mouse', bubbles: true, clientX: 80, clientY: 40 };
+  canvas.dispatchEvent(new PointerEvent('pointerdown', { ...common, button: 0, buttons: 1 }));
+  canvas.dispatchEvent(new PointerEvent('lostpointercapture', common));
+  canvas.dispatchEvent(new PointerEvent('lostpointercapture', common));
+  canvas.dispatchEvent(new PointerEvent('pointerdown', { ...common, button: 0, buttons: 1 }));
+  canvas.dispatchEvent(new PointerEvent('pointerup', { ...common, button: 0, buttons: 0 }));
+  equal({ sequence: document.getElementById('sequence')?.textContent }, { sequence: 'down,cancel,down,up,' });
 });
 document.getElementById('capture').onclick = () => {
   const canvas = document.querySelector('canvas');
