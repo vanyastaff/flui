@@ -114,6 +114,21 @@ fn register_pointer_events(canvas: &web_sys::HtmlCanvasElement, callbacks: &Arc<
             canvas.add_event_listener_with_callback("pointerup", closure.as_ref().unchecked_ref());
         closure.forget();
     }
+
+    // A browser gesture takeover is a terminal event even when no release
+    // will follow. Deliver it through the same public input callback.
+    {
+        let callbacks = Arc::clone(callbacks);
+        let closure = Closure::<dyn FnMut(web_sys::Event)>::new(move |e: web_sys::Event| {
+            let pe: web_sys::PointerEvent = e.unchecked_into();
+            callbacks.dispatch_input(PlatformInput::Pointer(
+                ui_events::pointer::PointerEvent::Cancel(make_pointer_info(&pe)),
+            ));
+        });
+        let _ = canvas
+            .add_event_listener_with_callback("pointercancel", closure.as_ref().unchecked_ref());
+        closure.forget();
+    }
 }
 
 // ==================== Keyboard Events ====================
@@ -228,6 +243,23 @@ fn register_context_menu_block(canvas: &web_sys::HtmlCanvasElement) {
 
 // ==================== Event Conversion ====================
 
+// CSSOM View defines these offsets as doubles. web-sys exposes the older
+// integer signature, which discards subpixel positions before Rust receives
+// them. Bind the actual DOM getters with their floating-point result type.
+#[wasm_bindgen]
+extern "C" {
+    type PreciseMouseEvent;
+    #[wasm_bindgen(method, getter, js_name = offsetX)]
+    fn offset_x_f64(this: &PreciseMouseEvent) -> f64;
+    #[wasm_bindgen(method, getter, js_name = offsetY)]
+    fn offset_y_f64(this: &PreciseMouseEvent) -> f64;
+}
+
+fn pointer_position(event: &web_sys::MouseEvent) -> dpi::PhysicalPosition<f64> {
+    let event: &PreciseMouseEvent = event.unchecked_ref();
+    dpi::PhysicalPosition::new(event.offset_x_f64(), event.offset_y_f64())
+}
+
 fn make_pointer_info(pe: &web_sys::PointerEvent) -> ui_events::pointer::PointerInfo {
     use ui_events::pointer::{PointerId, PointerInfo, PointerType};
 
@@ -288,7 +320,7 @@ fn make_pointer_state(pe: &web_sys::PointerEvent, count: u8) -> ui_events::point
 
     PointerState {
         time: (pe.time_stamp() * 1_000_000.0) as u64,
-        position: PhysicalPosition::new(pe.offset_x() as f64, pe.offset_y() as f64),
+        position: pointer_position(pe),
         buttons: buttons_from_mask(pe.buttons()),
         modifiers,
         count,
@@ -353,7 +385,6 @@ fn convert_pointer_move(pe: &web_sys::PointerEvent) -> PlatformInput {
 /// boundary appears in the same sign/unit table (and executing contract
 /// tests) as the backends that DO have to flip or rescale.
 fn convert_wheel_event(we: &web_sys::WheelEvent) -> PlatformInput {
-    use dpi::PhysicalPosition;
     use ui_events::pointer::{
         PointerEvent, PointerInfo, PointerOrientation, PointerScrollEvent, PointerState,
         PointerType,
@@ -372,7 +403,7 @@ fn convert_wheel_event(we: &web_sys::WheelEvent) -> PlatformInput {
         delta,
         state: PointerState {
             time: (we.time_stamp() * 1_000_000.0) as u64,
-            position: PhysicalPosition::new(we.offset_x() as f64, we.offset_y() as f64),
+            position: pointer_position(we),
             buttons: buttons_from_mask(we.buttons()),
             modifiers,
             count: 0,
