@@ -153,10 +153,22 @@ are all released. Each contact is tracked by its own pointer identity
 
 ### Trackpad pan-zoom (`pan_zoom.rs`)
 
-`convert_gesture` / `from_w3c_event` map an upstream `PointerGesture` to a
-`PointerPanZoomEvent::Update`. The upstream event carries one tick, so `scale`
-(`1.0 + pinch`) and `rotation` are per-tick deltas, not values accumulated
-since a `Start`; `pan` and `pan_delta` are always zero.
+`PointerEvent::PanZoom` carries the canonical `PanZoomEvent`. Its phase is
+`Start`, `Update(PanZoomTransform)`, `End` or `Cancelled`. Pan offset, scale
+and rotation in an Update are cumulative since Start; consumers subtract pan
+and rotation or divide scales to derive one step. `PanZoomEvent` always reports
+`PointerKind::Trackpad` and keeps its pointer identity, production time,
+logical focal position and modifiers.
+
+`InteractiveViewer` retains the last cumulative transform across rebuilds and
+resets it at the next Start. Its public rows
+`viewer_cumulative_zoom_survives_rebuild_and_resets` and
+`viewer_unstarted_pinch_updates_remain_independent_steps` pin both cumulative
+delivery and its explicit fallback for native sources that only report ticks.
+Existing private backend adapters can emit relative updates without Start.
+The viewer treats each such unstarted update as an independent step; native
+Start/End production and accumulation belong to the platform enrichment work.
+Once Start is delivered, subsequent Update values follow the cumulative contract.
 
 ## GestureSettings (`settings.rs`)
 
@@ -202,9 +214,9 @@ route, closes the arena, sweeps on Up, and does not sweep on Cancel.
 ```rust
 use web_time::Instant;
 use flui_foundation::geometry::Offset;
-use flui_interaction::{PointerDeviceKind, Velocity, VelocityTracker};
+use flui_interaction::{PointerKind, Velocity, VelocityTracker};
 
-let mut tracker = VelocityTracker::with_kind(PointerDeviceKind::Touch);
+let mut tracker = VelocityTracker::with_kind(PointerKind::Touch);
 tracker.add_position(Instant::now(), Offset::ZERO);
 let v: Velocity = tracker.get_velocity();   // pixels_per_second: Offset<f64>
 let fling = tracker.get_fling_velocity(false);
@@ -215,6 +227,12 @@ A quadratic least-squares fit over at most 20 samples within a 100 ms horizon;
 fewer than 3 samples gives no fit, and a pointer still for 40 ms reports zero.
 `IosFlingVelocityTracker`, `MacosFlingVelocityTracker` and
 `ImpulseVelocityTracker` are alternative strategies with the same shape.
+
+Owned `PointerMove` exposes current, coalesced and predicted samples separately.
+Recognizers consume measured history in source order and never feed predictions
+into velocity estimation. Device timestamps, including epoch zero, remain
+valid `EventTime` values. Button changes are mid-contact state, not a second
+Down; device-only events do not invent a pointer contact.
 
 ## Custom recognizers
 

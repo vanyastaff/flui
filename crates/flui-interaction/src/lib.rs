@@ -172,7 +172,7 @@ mod retain;
 pub mod testing;
 
 // ============================================================================
-// Events (W3C-compliant types from ui-events and cursor-icon)
+// Events (owned platform contracts and cursor-icon)
 // ============================================================================
 
 pub mod events;
