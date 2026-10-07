@@ -358,9 +358,12 @@ unexercised for slivers.
 **Known gap:** neither opacity render object has an `always_include_semantics`
 field. Both report semantics unconditionally on a visibility flip.
 
-**`RenderTransform`.** A transform change is also served as a layer update, so
-a `ScaleTransition` or `RotationTransition` does not repaint its subtree on
-every animation frame.
+**`RenderTransform`.** A transform change is also served as a layer update.
+The transitions (`SlideTransition`, `ScaleTransition`, `RotationTransition`)
+no longer build a `RenderTransform`: they drive `RenderAnimatedTransform`
+(`flui-objects`), which takes the same layer-update path from its tick
+listener and, unlike `RenderTransform`, gives a moving pure translation a
+layer too (see that crate's `## Mapping decisions`).
 
 FLUI reports `COMPOSITED_LAYER_UPDATE` for a matrix change that stays within the
 layered range, on the same flat-capture argument as the opacity cases: the
@@ -382,8 +385,10 @@ Two things this costs, both deliberate:
    reports no transform, `paint` applies a plain child offset), so translation ↔
    non-translation is a layer-count change and the setters report `PAINT`
    across it, as they do across singular ↔ non-singular. This is what keeps
-   `Transform.translate` and every `SlideTransition` from paying for a
-   compositing layer per frame.
+   a static `Transform.translate` from paying for a compositing layer. An
+   animated translation is the opposite case and lives in a different object:
+   `RenderAnimatedTransform` keeps the layer, because patching it on every
+   frame is cheaper than repainting the moved subtree.
 
 **Tests:** pixel equivalence against a forced repaint,
 `the_transform_update_path_and_a_repaint_produce_the_same_pixels`

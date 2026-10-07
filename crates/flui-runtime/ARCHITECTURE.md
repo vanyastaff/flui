@@ -238,12 +238,20 @@ and on the realm side by `surface_lost_keeps_needs_redraw_armed_for_a_retry` and
 ### `Vsync` controllers tick at the frame's timestamp
 
 The realm's `Vsync` registry ticks at the timestamp the
-pump's `FrameClockSource` returned (`now_secs` reads it for the frame's
-duration, relative to the realm's start), so a controller advances by frame
-time, not by whenever the tick happened to read the wall clock. A frame
+pump's `FrameClockSource` returned (`raw_frame_time` reads it for the
+frame's duration, relative to the realm's start), so a controller advances by
+frame time, not by whenever the tick happened to read the wall clock. A frame
 driven outside a pump (a bare `draw_frame`/`render_frame` in a test) falls
 back to the wall clock, and a test can still override it with
-`set_now_secs_for_test`. **Unasserted:** no test pins this.
+`set_now_secs_for_test`. **Unasserted:** no test pins the pump timestamp.
+
+Each presentation maps that one raw time through its own
+`flui_animation::MotionClock` before ticking its registry, so the time a
+registry sees is finite and never runs backwards: an override that is not a
+duration, or a raw time earlier than the last, holds the animation
+(`an_invalid_or_backwards_frame_time_holds_the_animation`). The clock runs at
+its default rate while `AnimationController` still applies the scheduler's
+process-wide time dilation, so slow motion has one source.
 
 This covers the realm's `Vsync` registry only. A controller built on the
 scheduler (`AnimationController::new(d, realm.scheduler())`) is ticked by a

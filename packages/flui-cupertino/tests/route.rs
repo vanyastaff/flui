@@ -43,48 +43,29 @@ fn seeded_navigator() -> NavigatorHandle {
     navigator
 }
 
-/// Parses `RenderFractionalTranslation`'s `"translation"` diagnostic
-/// (`format!("({}, {})", dx, dy)`, `fractional_translation.rs`) back into
-/// its two components.
-fn parse_translation(property: &str) -> (f64, f64) {
-    let trimmed = property.trim_matches(['(', ')']);
-    let mut parts = trimmed.split(", ");
-    let dx: f64 = parts
-        .next()
-        .expect("translation has a dx component")
-        .parse()
-        .expect("dx is a float");
-    let dy: f64 = parts
-        .next()
-        .expect("translation has a dy component")
-        .parse()
-        .expect("dy is a float");
-    (dx, dy)
-}
-
-/// `cupertino_page_transitions` mounts exactly two `RenderFractionalTranslation`
-/// nodes for a route nothing else covers: the **primary** (this page's own
-/// entrance, tweened `1.0 -> 0.0`) and the **secondary** (the parallax a
-/// covering page would apply — pinned at `(0, 0)` here, since nothing covers
-/// this route). The primary is whichever of the two reads the larger `|dx|`
-/// at any given moment — true by construction, since the secondary never
-/// moves in this scenario.
+/// `cupertino_page_transitions` mounts exactly two `SlideTransition`s for a
+/// route nothing else covers: the **primary** (this page's own entrance,
+/// tweened `1.0 -> 0.0`) and the **secondary** (the parallax a covering page
+/// would apply — pinned at `0` here, since nothing covers this route). Each
+/// one's horizontal fraction is read back from where its child is painted:
+/// the child's origin mapped into the transition, over the transition's
+/// width. The primary is whichever reads the larger `|dx|`.
 fn primary_slide_dx(laid: &common::LaidOut) -> f64 {
-    let nodes = laid.find_all_by_render_type("RenderFractionalTranslation");
+    let nodes = laid.find_all_by_render_type("RenderAnimatedTransform");
     assert_eq!(
         nodes.len(),
         2,
-        "the primary and secondary SlideTransition each mount one FractionalTranslation"
+        "the primary and secondary SlideTransition each mount one animated transform"
     );
     nodes
         .into_iter()
         .map(|id| {
-            parse_translation(
-                &laid
-                    .render_property(id, "translation")
-                    .expect("FractionalTranslation always reports its translation"),
-            )
-            .0
+            let child = laid.only_child(id);
+            let matrix = laid
+                .pipeline_owner()
+                .with(|owner| owner.transform_to(child, id))
+                .expect("the transition's child is laid out");
+            matrix.transform_point(0.0, 0.0).0 / laid.size(id).width
         })
         .fold(0.0_f64, |largest, dx| {
             if dx.abs() > largest.abs() {

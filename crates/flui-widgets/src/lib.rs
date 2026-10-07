@@ -155,9 +155,10 @@ pub use localization::{
 
 pub use animated::{
     AnimatedAlign, AnimatedAlignState, AnimatedContainer, AnimatedContainerState, AnimatedOpacity,
-    AnimatedOpacityState, AnimatedPadding, AnimatedPaddingState, AnimatedSize, AnimatedSizeState,
-    AnimatedSwitcher, AnimatedSwitcherLayoutBuilder, AnimatedSwitcherState,
-    AnimatedSwitcherTransitionBuilder, TickerMode, TickerModeState, VsyncScope,
+    AnimatedOpacityState, AnimatedPadding, AnimatedPaddingState, AnimatedRotation,
+    AnimatedRotationState, AnimatedSize, AnimatedSizeState, AnimatedSwitcher,
+    AnimatedSwitcherLayoutBuilder, AnimatedSwitcherState, AnimatedSwitcherTransitionBuilder,
+    RotationPath, TickerMode, TickerModeState, VsyncScope,
 };
 pub use clip::{ClipOval, ClipPath, ClipRRect, ClipRect, Oval};
 // `Image` widget over `RenderImage`; provider types live in the same module.
