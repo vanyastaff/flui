@@ -20,7 +20,8 @@
 use std::sync::Arc;
 
 use flui_animation::simulation::{
-    BoundedFrictionSimulation, ScrollSpringSimulation, Simulation, SpringDescription,
+    BouncingScrollSimulation, BoundedFrictionSimulation, Simulation, SimulationBounds,
+    SpringDescription, SpringSimulation, Tolerance,
 };
 use flui_rendering::view::ScrollPosition;
 
@@ -50,10 +51,16 @@ pub struct ScrollMetrics {
     pub max_scroll_extent: f64,
     /// The viewport's length along the scroll axis.
     pub viewport_dimension: f64,
+    /// Device pixels per logical pixel where the scroll is presented. A
+    /// ballistic simulation rests within half a device pixel. `1.0` unless
+    /// the caller knows the presentation's ratio
+    /// ([`with_device_pixel_ratio`](Self::with_device_pixel_ratio)).
+    pub device_pixel_ratio: f64,
 }
 
 impl ScrollMetrics {
-    /// Builds a metrics snapshot directly from its four fields — for a test
+    /// Builds a metrics snapshot at a device pixel ratio of `1.0` from its
+    /// four extent fields — for a test
     /// fixture or a caller assembling metrics from values that don't come
     /// from a live [`ScrollPosition`] (e.g. a hypothetical "what if" probe).
     /// Prefer [`ScrollMetrics::from`] when a [`ScrollPosition`] is at hand.
@@ -76,7 +83,39 @@ impl ScrollMetrics {
             min_scroll_extent,
             max_scroll_extent,
             viewport_dimension,
+            device_pixel_ratio: 1.0,
         }
+    }
+
+    /// This snapshot, presented at `device_pixel_ratio` device pixels per
+    /// logical pixel.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_widgets::ScrollMetrics;
+    ///
+    /// let metrics = ScrollMetrics::new(0.0, 0.0, 500.0, 300.0).with_device_pixel_ratio(2.0);
+    /// assert_eq!(metrics.device_pixel_ratio, 2.0);
+    /// ```
+    #[must_use]
+    pub fn with_device_pixel_ratio(self, device_pixel_ratio: f64) -> Self {
+        Self {
+            device_pixel_ratio,
+            ..self
+        }
+    }
+
+    /// The rest tolerance for a ballistic run under these metrics (ADR-0155): half a
+    /// device pixel. `None` for a ratio that is not finite and positive.
+    pub(crate) fn ballistic_tolerance(&self) -> Option<Tolerance> {
+        Tolerance::for_device_pixel_ratio(self.device_pixel_ratio).ok()
+    }
+
+    /// The scroll range, or `None` when the extents are unordered or not
+    /// finite.
+    pub(crate) fn bounds(&self) -> Option<SimulationBounds> {
+        SimulationBounds::new(self.min_scroll_extent, self.max_scroll_extent).ok()
     }
 
     /// The current fractional "page" at `viewport_fraction`, defensively
@@ -131,6 +170,7 @@ impl From<&ScrollPosition> for ScrollMetrics {
             min_scroll_extent: snapshot.min_scroll_extent,
             max_scroll_extent: snapshot.max_scroll_extent,
             viewport_dimension: snapshot.viewport_dimension,
+            device_pixel_ratio: 1.0,
         }
     }
 }
@@ -246,13 +286,16 @@ impl ScrollPhysics for ClampingScrollPhysics {
         {
             return None;
         }
-        Some(Box::new(BoundedFrictionSimulation::new(
+        // Unordered extents, a NaN position or an invalid drag: no fling.
+        let simulation = BoundedFrictionSimulation::new(
             self.fling_drag_coefficient,
             metrics.pixels,
             velocity_px_per_sec,
-            metrics.min_scroll_extent,
-            metrics.max_scroll_extent,
-        )))
+            metrics.bounds()?,
+            metrics.ballistic_tolerance()?,
+        )
+        .ok()?;
+        Some(Box::new(simulation))
     }
 }
 
@@ -264,16 +307,17 @@ impl ScrollPhysics for ClampingScrollPhysics {
 /// boundary on release. Motion toward the edge is unrestricted.
 ///
 /// During a drag, positions past `[min, max]` are allowed but dampened by the
-/// `overscroll_spring_coefficient` (default 0.52). On release, a
-/// `ScrollSpringSimulation` returns the position to the nearest valid edge.
+/// `overscroll_spring_coefficient` (default 0.52). On release past an edge,
+/// a spring returns the position to the nearest edge; a fling inside the
+/// range that friction would carry past an edge overscrolls on the same
+/// spring and returns ([`BouncingScrollSimulation`]).
 #[derive(Debug, Clone, Copy)]
 pub struct BouncingScrollPhysics {
     /// Resistance applied when dragging past the edge, default 0.52.
     /// Range `(0, 1)`: smaller = stiffer.
     pub overscroll_spring_coefficient: f64,
     /// Spring configuration used for the snap-back animation. The default is
-    /// `SpringDescription::with_damping_ratio(1.0, 500.0, 0.75)` (the "bouncy"
-    /// preset).
+    /// `SpringDescription::with_damping_ratio(1.0, 500.0, 0.75)`.
     pub spring: SpringDescription,
     /// Below this absolute velocity (px/s) no fling is started.
     pub min_fling_velocity_px_per_sec: f64,
@@ -325,34 +369,42 @@ impl ScrollPhysics for BouncingScrollPhysics {
         metrics: &ScrollMetrics,
         velocity_px_per_sec: f64,
     ) -> Option<Box<dyn Simulation>> {
+        let bounds = metrics.bounds()?;
+        let tolerance = metrics.ballistic_tolerance()?;
         // If the position is past an edge, spring back regardless of velocity.
-        if metrics.pixels < metrics.min_scroll_extent {
-            return Some(Box::new(ScrollSpringSimulation::new(
+        let edge = if metrics.pixels < metrics.min_scroll_extent {
+            Some(metrics.min_scroll_extent)
+        } else if metrics.pixels > metrics.max_scroll_extent {
+            Some(metrics.max_scroll_extent)
+        } else {
+            None
+        };
+        if let Some(edge) = edge {
+            let spring = SpringSimulation::try_new(
                 self.spring,
                 metrics.pixels,
-                metrics.min_scroll_extent,
+                edge,
                 velocity_px_per_sec,
-            )));
+                tolerance,
+            )
+            .ok()?;
+            return Some(Box::new(spring));
         }
-        if metrics.pixels > metrics.max_scroll_extent {
-            return Some(Box::new(ScrollSpringSimulation::new(
-                self.spring,
-                metrics.pixels,
-                metrics.max_scroll_extent,
-                velocity_px_per_sec,
-            )));
-        }
-        // Within bounds: fling if velocity is above the threshold.
+        // Within bounds: fling if velocity is above the threshold. A fling
+        // the friction would carry past an edge overscrolls and springs back.
         if velocity_px_per_sec.abs() < self.min_fling_velocity_px_per_sec {
             return None;
         }
-        Some(Box::new(BoundedFrictionSimulation::new(
+        let simulation = BouncingScrollSimulation::new(
+            self.spring,
             self.fling_drag_coefficient,
             metrics.pixels,
             velocity_px_per_sec,
-            metrics.min_scroll_extent,
-            metrics.max_scroll_extent,
-        )))
+            bounds,
+            tolerance,
+        )
+        .ok()?;
+        Some(Box::new(simulation))
     }
 }
 

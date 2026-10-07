@@ -28,7 +28,10 @@
 use std::time::Duration;
 
 use crate::curve::{ArcCurve, Curve};
-use crate::simulation::{Simulation, SpringDescription, SpringSimulation};
+use crate::simulation::{
+    Simulation, SimulationError, SimulationParameter, SpringDescription, SpringSimulation,
+    Tolerance,
+};
 
 /// How a value moves toward a new target.
 ///
@@ -121,29 +124,33 @@ impl Segment {
     ///
     /// `shortening` (in `(0, 1]`, clamped) scales a curve's duration; it is 1
     /// except for a reversal. A non-finite `x0` or `target`, or a span that
-    /// overflows, rests at the target (or at `x0` if only the target is
-    /// unusable); a non-finite `v0` counts as zero.
+    /// overflows, is refused; a non-finite `v0` counts as zero.
     pub(crate) fn start(
         x0: f64,
         v0: f64,
         target: f64,
         motion: &MotionSpec,
         shortening: f64,
-    ) -> Self {
-        if !target.is_finite() {
-            return Self::Rest(if x0.is_finite() { x0 } else { 0.0 });
+    ) -> Result<Self, SimulationError> {
+        for position in [x0, target] {
+            if !position.is_finite() {
+                return Err(SimulationError::OutOfRange {
+                    parameter: SimulationParameter::Position,
+                    value: position,
+                });
+            }
         }
         let span = target - x0;
         if !span.is_finite() {
-            return Self::Rest(target);
+            return Err(SimulationError::Overflow);
         }
         let v0 = if v0.is_finite() { v0 } else { 0.0 };
         if span == 0.0 && v0 == 0.0 {
-            return Self::Rest(target);
+            return Ok(Self::Rest(target));
         }
-        match motion {
+        Ok(match motion {
             MotionSpec::Spring(spring) => Self::Spring {
-                simulation: SpringSimulation::new(*spring, x0, target, v0),
+                simulation: SpringSimulation::try_new(*spring, x0, target, v0, Tolerance::DEFAULT)?,
                 x0,
                 v0,
             },
@@ -155,7 +162,7 @@ impl Segment {
                 };
                 let full = duration.as_secs_f64();
                 if full < MIN_CURVE_SECONDS {
-                    return Self::Rest(target);
+                    return Ok(Self::Rest(target));
                 }
                 // A reversal shortens, but never below the floor: the seam's
                 // value and velocity are kept however early it reverses.
@@ -163,7 +170,7 @@ impl Segment {
                 let start_slope = curve.slope(0.0);
                 let end_slope = curve.slope(1.0);
                 if !(start_slope.is_finite() && end_slope.is_finite()) {
-                    return Self::Rest(target);
+                    return Err(SimulationError::Overflow);
                 }
                 Self::Curve(CurveSegment {
                     from: x0,
@@ -176,7 +183,7 @@ impl Segment {
                     curve: curve.clone(),
                 })
             }
-        }
+        })
     }
 
     /// The value `t` seconds after the seam.
@@ -189,7 +196,7 @@ impl Segment {
             // overflowed long after the exponential decayed to zero: the
             // spring's limit, its target.
             Self::Spring { simulation, .. } => {
-                finite_or(simulation.x(t), simulation.end_position())
+                finite_or(simulation.analytic_sample(t).0, simulation.x(f64::INFINITY))
             }
             Self::Curve(curve) => curve.x(t),
         }
@@ -201,7 +208,7 @@ impl Segment {
         match self {
             Self::Rest(_) => 0.0,
             Self::Spring { v0, .. } if t == 0.0 => *v0,
-            Self::Spring { simulation, .. } => finite_or(simulation.dx(t), 0.0),
+            Self::Spring { simulation, .. } => finite_or(simulation.analytic_sample(t).1, 0.0),
             Self::Curve(curve) => curve.dx(t),
         }
     }

@@ -39,7 +39,6 @@ the early return of a settled controller.
 | `controller/status_fan_out/4` | 355 ns |
 | `controller/status_fan_out/8` | 531 ns |
 | `controller/forward` | 206 ns |
-| `smoothing/smooth_damp_step` | 7.6 ns |
 
 A steady-state frame (`Vsync::tick_all` on a running controller with four
 value listeners and one status listener) performs no heap allocation; the
@@ -60,7 +59,6 @@ idle machine would show.
 | `curve_eval/elastic_out` | 24.6 ns |
 | `curve_eval/ease_in_out` | 31.0 ns |
 | `curve_eval/three_point_cubic_emphasized` | 84.8 ns |
-| `smoothing/exp_decay_half_life` | 10.9 ns |
 | `spring/simulation_x_dx` | 54.7 ns |
 
 The cubic-curve solve (`EaseInOut` and every other `Cubic`) inverts the

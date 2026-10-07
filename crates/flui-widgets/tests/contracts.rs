@@ -282,6 +282,15 @@ fn scroll_physics_and_activity() {
                 "scroll::scrollable_jump_to_during_animate_to_cancels_it_synchronously",
                 crate::scroll::scrollable_jump_to_during_animate_to_cancels_it_synchronously,
             ),
+            (
+                "scroll::scroll_fling_rest_scales_with_device_pixel_ratio",
+                crate::scroll::scroll_fling_rest_scales_with_device_pixel_ratio,
+            ),
+            ("scroll::inverted_extents_do_not_fling", crate::scroll::inverted_extents_do_not_fling),
+            (
+                "scroll::bouncing_fling_into_the_edge_overscrolls_and_returns",
+                crate::scroll::bouncing_fling_into_the_edge_overscrolls_and_returns,
+            ),
         ],
     );
 }

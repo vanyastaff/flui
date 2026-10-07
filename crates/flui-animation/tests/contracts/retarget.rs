@@ -87,7 +87,7 @@ fn right_derivative<T: flui_animation::TwoWayConverter>(
 ) -> f64 {
     let at = |dt: f64| {
         let mut probe = value.clone();
-        probe.advance(dt);
+        probe.advance(Duration::from_secs_f64(dt));
         probe.value().to_vector().as_ref()[component]
     };
     let x0 = value.value().to_vector().as_ref()[component];
@@ -108,7 +108,7 @@ fn seam<T: flui_animation::TwoWayConverter>(
 ) {
     let before = value.value().to_vector();
     let velocity_before = value.velocity();
-    value.animate_to(target);
+    value.animate_to(target).expect("finite motion");
     let after = value.value().to_vector();
     let velocity_after = value.velocity();
     for component in 0..before.as_ref().len() {
@@ -200,11 +200,11 @@ proptest! {
         dt in frame_dt(),
         targets in prop::collection::vec((-1.0..1.0_f64, -1.0..1.0_f64), 120),
     ) {
-        let mut scalar = AnimatedValue::with_motion(0.0_f64, mode.spec());
-        let mut planar = AnimatedValue::with_motion(Offset::new(0.0, 0.0), mode.spec());
+        let mut scalar = AnimatedValue::with_motion(0.0_f64, mode.spec()).expect("finite motion");
+        let mut planar = AnimatedValue::with_motion(Offset::new(0.0, 0.0), mode.spec()).expect("finite motion");
         for &(x, y) in &targets {
-            scalar.advance(dt);
-            planar.advance(dt);
+            scalar.advance(Duration::from_secs_f64(dt));
+            planar.advance(Duration::from_secs_f64(dt));
             seam(&mut scalar, x * 100.0, &mode, 200.0);
             seam(&mut planar, Offset::new(x * 100.0, y * 100.0), &mode, 200.0);
         }
@@ -217,8 +217,8 @@ proptest! {
             if scalar.is_settled() && planar.is_settled() {
                 break;
             }
-            scalar.advance(1e-2);
-            planar.advance(1e-2);
+            scalar.advance(Duration::from_secs_f64(1e-2));
+            planar.advance(Duration::from_secs_f64(1e-2));
             prop_assert!(scalar.value().is_finite());
         }
         prop_assert!(scalar.is_settled() && planar.is_settled(), "never settled");
@@ -241,12 +241,12 @@ proptest! {
         prop_assume!((second - first).abs() > 1e-3 && second.abs() > 1e-3);
         let control = CUBICS[curve];
         let duration = millis as f64 / 1e3;
-        let mut value = AnimatedValue::with_motion(0.0_f64, curve_spec(control, millis));
-        value.animate_to(first);
-        value.advance(seam_fraction * duration);
+        let mut value = AnimatedValue::with_motion(0.0_f64, curve_spec(control, millis)).expect("finite motion");
+        value.animate_to(first).expect("finite motion");
+        value.advance(Duration::from_secs_f64(seam_fraction * duration));
         let x0 = value.value();
         let v0 = value.velocity()[0];
-        value.animate_to(second);
+        value.animate_to(second).expect("finite motion");
         let span = second - x0;
         let excess = v0 - span * eased_slope(control, 0.0) / duration;
         let arrival = span * terminal_slope(control);
@@ -254,7 +254,7 @@ proptest! {
         for step in 1..100 {
             let t = duration * f64::from(step) / 100.0;
             let mut probe = value.clone();
-            probe.advance(t);
+            probe.advance(Duration::from_secs_f64(t));
             let plain = x0 + span * eased(control, t / duration);
             prop_assert!(
                 (probe.value() - plain).abs() <= bound + 1e-9 * (1.0 + span.abs()),
@@ -262,7 +262,7 @@ proptest! {
             );
             prop_assert!(!probe.is_settled(), "settled early at {t}");
         }
-        value.advance(duration);
+        value.advance(Duration::from_secs_f64(duration));
         prop_assert_eq!(value.value(), second);
         prop_assert!(value.is_settled());
     }
@@ -274,11 +274,11 @@ proptest! {
         to in mode(),
         elapsed in 0.0..0.2_f64,
     ) {
-        let mut value = AnimatedValue::with_motion(0.0_f64, from.spec());
-        value.animate_to(100.0);
-        value.advance(elapsed);
+        let mut value = AnimatedValue::with_motion(0.0_f64, from.spec()).expect("finite motion");
+        value.animate_to(100.0).expect("finite motion");
+        value.advance(Duration::from_secs_f64(elapsed));
         let (x, v) = (value.value(), value.velocity()[0]);
-        value.set_motion(to.spec());
+        value.set_motion(to.spec()).expect("finite motion");
         prop_assert!(close(value.value(), x, 1e-12));
         prop_assert!(close(value.velocity()[0], v, 1e-9));
         assert_velocity_is_the_derivative(&value, 0, &to, 100.0);
@@ -298,8 +298,8 @@ fn seam_at_zero() {
             millis: 200,
         },
     ] {
-        let mut value = AnimatedValue::with_motion(5.0_f64, mode.spec());
-        value.animate_to(50.0);
+        let mut value = AnimatedValue::with_motion(5.0_f64, mode.spec()).expect("finite motion");
+        value.animate_to(50.0).expect("finite motion");
         seam(&mut value, -20.0, &mode, 70.0);
         assert_eq!(value.value(), 5.0);
         assert_eq!(value.velocity()[0], 0.0);
@@ -314,12 +314,13 @@ fn a_retarget_within_the_spring_tolerance_starts_at_the_seam() {
         omega: 1.0,
         zeta: 0.1,
     };
-    let mut value = AnimatedValue::with_motion(Offset::new(0.0, 0.0), mode.spec());
+    let mut value =
+        AnimatedValue::with_motion(Offset::new(0.0, 0.0), mode.spec()).expect("finite motion");
     let target = Offset::new(0.0, -1.463_116_746_455_488e-4);
     seam(&mut value, target, &mode, 1e-3);
     assert_eq!(value.value(), Offset::new(0.0, 0.0));
     assert!(!value.is_settled(), "settled away from its target");
-    value.advance(1.0 / 60.0);
+    value.advance(Duration::from_secs_f64(1.0 / 60.0));
     assert!(value.is_settled());
     let y = value.value().dy;
     assert!(y < 0.0 && y > target.dy, "not converging continuously: {y}");
@@ -335,26 +336,26 @@ fn the_spring_rest_boundary_is_c1() {
         omega: 10.0,
         zeta: 1.0,
     };
-    let mut value = AnimatedValue::with_motion(0.0_f64, mode.spec());
-    value.animate_to(1.0);
+    let mut value = AnimatedValue::with_motion(0.0_f64, mode.spec()).expect("finite motion");
+    value.animate_to(1.0).expect("finite motion");
     let frame = 1.0 / 60.0;
     let mut frames = 0;
     while !value.is_settled() {
-        value.advance(frame);
+        value.advance(Duration::from_secs_f64(frame));
         frames += 1;
         assert!(frames < 600, "never settled");
     }
     // Step back to the last unsettled frame and straddle the boundary with a
     // central difference.
-    let mut before = AnimatedValue::with_motion(0.0_f64, mode.spec());
-    before.animate_to(1.0);
-    before.advance(frame * f64::from(frames - 1));
+    let mut before = AnimatedValue::with_motion(0.0_f64, mode.spec()).expect("finite motion");
+    before.animate_to(1.0).expect("finite motion");
+    before.advance(Duration::from_secs_f64(frame * f64::from(frames - 1)));
     assert!(!before.is_settled());
     let mut after = before.clone();
-    after.advance(frame);
+    after.advance(Duration::from_secs_f64(frame));
     assert!(after.is_settled());
     let mut middle = before.clone();
-    middle.advance(frame / 2.0);
+    middle.advance(Duration::from_secs_f64(frame / 2.0));
     let difference = (after.value() - before.value()) / frame;
     let v = middle.velocity()[0];
     // Central-difference truncation for this spring is |x'''|·h²/24, far
@@ -371,9 +372,10 @@ fn the_spring_rest_boundary_is_c1() {
 }
 
 fn seam_on_the_completing_frame() {
-    let mut value = AnimatedValue::with_motion(0.0_f64, curve_spec(CUBICS[0], 200));
-    value.animate_to(10.0);
-    value.advance(0.2);
+    let mut value =
+        AnimatedValue::with_motion(0.0_f64, curve_spec(CUBICS[0], 200)).expect("finite motion");
+    value.animate_to(10.0).expect("finite motion");
+    value.advance(Duration::from_secs_f64(0.2));
     assert!(value.is_settled());
     seam(
         &mut value,
@@ -389,15 +391,14 @@ fn seam_on_the_completing_frame() {
 }
 
 fn time_that_does_not_move_forward_samples_the_seam() {
-    let mut value = AnimatedValue::with_motion(0.0_f64, MotionSpec::Spring(spring(10.0, 0.5)));
-    value.animate_to(1.0);
-    value.advance(0.05);
+    let mut value = AnimatedValue::with_motion(0.0_f64, MotionSpec::Spring(spring(10.0, 0.5)))
+        .expect("finite motion");
+    value.animate_to(1.0).expect("finite motion");
+    value.advance(Duration::from_secs_f64(0.05));
     let x = value.value();
-    for dt in [0.0, -1.0, f64::NAN, f64::NEG_INFINITY] {
-        value.advance(dt);
-        assert_eq!(value.value(), x, "dt {dt} moved time");
-    }
-    value.advance(1e6);
+    value.advance(Duration::from_secs_f64(0.0));
+    assert_eq!(value.value(), x, "zero duration moved time");
+    value.advance(Duration::from_secs_f64(1e6));
     assert_eq!(value.value(), 1.0);
     assert!(value.value().is_finite() && value.velocity()[0].is_finite());
 }
@@ -405,19 +406,20 @@ fn time_that_does_not_move_forward_samples_the_seam() {
 /// Same target, same spring: the seams are invisible. Reference values from
 /// the closed form `e^{−5t}(cos ω_d t + (5/ω_d) sin ω_d t)`, ω_d = √75.
 fn retargeting_to_the_same_target_is_invisible() {
-    let mut value = AnimatedValue::with_motion(1.0_f64, MotionSpec::Spring(spring(10.0, 0.5)));
-    value.animate_to(0.0);
-    value.advance(0.1);
-    value.animate_to(0.0);
-    value.advance(0.07);
-    value.animate_to(0.0);
-    value.advance(0.08);
+    let mut value = AnimatedValue::with_motion(1.0_f64, MotionSpec::Spring(spring(10.0, 0.5)))
+        .expect("finite motion");
+    value.animate_to(0.0).expect("finite motion");
+    value.advance(Duration::from_secs_f64(0.1));
+    value.animate_to(0.0).expect("finite motion");
+    value.advance(Duration::from_secs_f64(0.07));
+    value.animate_to(0.0).expect("finite motion");
+    value.advance(Duration::from_secs_f64(0.08));
     let at_quarter = value.value();
     assert!(
         (at_quarter - -0.023_359_579_906_692_3).abs() <= 1e-12,
         "x(0.25) = {at_quarter}"
     );
-    value.advance(0.75);
+    value.advance(Duration::from_secs_f64(0.75));
     let at_one = value.value();
     assert!(
         (at_one - -0.002_170_116_739_326_20).abs() <= 1e-12,
@@ -431,13 +433,13 @@ fn reversal_shortens_by_the_eased_fraction() {
         duration: Duration::from_millis(200),
         curve: ArcCurve::new(Curves::Linear),
     };
-    let mut value = AnimatedValue::with_motion(0.0_f64, linear);
-    value.animate_to(100.0);
-    value.advance(0.05);
-    value.animate_to(0.0);
-    value.advance(0.049);
+    let mut value = AnimatedValue::with_motion(0.0_f64, linear).expect("finite motion");
+    value.animate_to(100.0).expect("finite motion");
+    value.advance(Duration::from_secs_f64(0.05));
+    value.animate_to(0.0).expect("finite motion");
+    value.advance(Duration::from_secs_f64(0.049));
     assert!(!value.is_settled(), "a reversal at 50 ms lasts 50 ms");
-    value.advance(0.001);
+    value.advance(Duration::from_secs_f64(0.001));
     assert!(value.is_settled(), "a reversal at 50 ms lasts 50 ms");
     assert_eq!(value.value(), 0.0);
 
@@ -447,29 +449,31 @@ fn reversal_shortens_by_the_eased_fraction() {
         (shortened - 0.408_510_591_355_396).abs() <= 1e-12,
         "S' = {shortened}"
     );
-    let mut value = AnimatedValue::with_motion(0.0_f64, curve_spec(ease, 200));
-    value.animate_to(100.0);
-    value.advance(0.05);
-    value.animate_to(0.0);
+    let mut value =
+        AnimatedValue::with_motion(0.0_f64, curve_spec(ease, 200)).expect("finite motion");
+    value.animate_to(100.0).expect("finite motion");
+    value.advance(Duration::from_secs_f64(0.05));
+    value.animate_to(0.0).expect("finite motion");
     let first = 0.2 * shortened;
-    value.advance(first - 1e-9);
+    value.advance(Duration::from_secs_f64(first - 1e-9));
     assert!(!value.is_settled(), "settled before {first} s");
-    value.advance(2e-9);
+    value.advance(Duration::from_secs_f64(2e-9));
     assert!(value.is_settled(), "not settled by {first} s");
 
     // A second reversal uses the first one's shortening as S.
-    let mut value = AnimatedValue::with_motion(0.0_f64, curve_spec(ease, 200));
-    value.animate_to(100.0);
-    value.advance(0.05);
-    value.animate_to(0.0);
+    let mut value =
+        AnimatedValue::with_motion(0.0_f64, curve_spec(ease, 200)).expect("finite motion");
+    value.animate_to(100.0).expect("finite motion");
+    value.advance(Duration::from_secs_f64(0.05));
+    value.animate_to(0.0).expect("finite motion");
     let into_first = first * 0.5;
-    value.advance(into_first);
-    value.animate_to(100.0);
+    value.advance(Duration::from_secs_f64(into_first));
+    value.animate_to(100.0).expect("finite motion");
     let twice = (eased(ease, into_first / first) * shortened + (1.0 - shortened)).abs();
     let second = 0.2 * twice;
-    value.advance(second - 1e-9);
+    value.advance(Duration::from_secs_f64(second - 1e-9));
     assert!(!value.is_settled(), "settled before {second} s");
-    value.advance(2e-9);
+    value.advance(Duration::from_secs_f64(2e-9));
     assert!(value.is_settled(), "not settled by {second} s");
     assert_eq!(value.value(), 100.0);
 }
@@ -477,13 +481,14 @@ fn reversal_shortens_by_the_eased_fraction() {
 /// A segment whose target is not the reversing-adjusted start runs its full
 /// duration.
 fn a_retarget_elsewhere_runs_the_full_duration() {
-    let mut value = AnimatedValue::with_motion(0.0_f64, curve_spec(CUBICS[0], 200));
-    value.animate_to(100.0);
-    value.advance(0.05);
-    value.animate_to(10.0);
-    value.advance(0.2 - 1e-9);
+    let mut value =
+        AnimatedValue::with_motion(0.0_f64, curve_spec(CUBICS[0], 200)).expect("finite motion");
+    value.animate_to(100.0).expect("finite motion");
+    value.advance(Duration::from_secs_f64(0.05));
+    value.animate_to(10.0).expect("finite motion");
+    value.advance(Duration::from_secs_f64(0.2 - 1e-9));
     assert!(!value.is_settled());
-    value.advance(2e-9);
+    value.advance(Duration::from_secs_f64(2e-9));
     assert_eq!(value.value(), 10.0);
 }
 
@@ -504,11 +509,11 @@ fn time_steps_that_overflow_publish_the_limit() {
         MotionSpec::Spring(spring(10.0, 2.0)),
         linear_spec(200),
     ] {
-        let mut value = AnimatedValue::with_motion(0.0_f64, spec.clone());
-        value.animate_to(1.0);
-        value.advance(0.01);
-        value.advance(f64::MAX);
-        value.advance(f64::MAX);
+        let mut value = AnimatedValue::with_motion(0.0_f64, spec.clone()).expect("finite motion");
+        value.animate_to(1.0).expect("finite motion");
+        value.advance(Duration::from_secs_f64(0.01));
+        value.advance(Duration::MAX);
+        value.advance(Duration::MAX);
         let (x, v) = (value.value(), value.velocity()[0]);
         assert!(x.is_finite() && v.is_finite(), "{spec:?}: x {x}, v {v}");
         assert!(close(x, 1.0, 1e-9), "{spec:?}: x {x}");
@@ -526,10 +531,11 @@ fn a_large_span_with_a_steep_start_keeps_its_seam() {
             duration: Duration::from_secs(2),
             curve: ArcCurve::new(Cubic::new(0.5, 1.0, 0.75, 1.0)),
         },
-    );
-    value.animate_to(1e308);
+    )
+    .expect("finite motion");
+    value.animate_to(1e308).expect("finite motion");
     assert!(!value.is_settled(), "snapped to the target at the seam");
-    value.advance(0.5);
+    value.advance(Duration::from_secs_f64(0.5));
     let (x, v) = (value.value(), value.velocity()[0]);
     assert!(x.is_finite() && v.is_finite(), "x {x}, v {v}");
     assert!(x > 0.0 && x < 1e308, "x {x} is not between the ends");
@@ -546,11 +552,12 @@ fn a_large_span_over_a_short_curve_keeps_its_seam() {
             duration: Duration::from_millis(500),
             curve: ArcCurve::new(Cubic::new(0.25, 0.125, 0.75, 1.0)),
         },
-    );
-    value.animate_to(1e308);
+    )
+    .expect("finite motion");
+    value.animate_to(1e308).expect("finite motion");
     assert!(!value.is_settled(), "snapped to the target at the seam");
     assert_eq!(value.value(), 0.0, "the seam keeps the start value");
-    value.advance(0.25);
+    value.advance(Duration::from_secs_f64(0.25));
     let (x, v) = (value.value(), value.velocity()[0]);
     assert!(x.is_finite() && v.is_finite(), "x {x}, v {v}");
     assert!(x > 0.0 && x < 1e308, "x {x} is not between the ends");
@@ -559,14 +566,16 @@ fn a_large_span_over_a_short_curve_keeps_its_seam() {
 /// A near-overflow velocity handed to a long curve segment: the Hermite
 /// correction is in range although `excess · duration` alone is not.
 fn a_large_finite_curve_correction_stays_finite() {
-    let mut value = AnimatedValue::with_motion(0.0_f64, linear_spec(1));
-    value.animate_to(1e305);
-    value.advance(0.0005);
+    let mut value = AnimatedValue::with_motion(0.0_f64, linear_spec(1)).expect("finite motion");
+    value.animate_to(1e305).expect("finite motion");
+    value.advance(Duration::from_secs_f64(0.0005));
     assert!(value.velocity()[0] >= 1e308, "v {}", value.velocity()[0]);
-    value.set_motion(linear_spec(10_000));
+    value
+        .set_motion(linear_spec(10_000))
+        .expect("finite motion");
     for t in [0.1, 2.5, 5.0, 7.5, 9.9] {
         let mut probe = value.clone();
-        probe.advance(t);
+        probe.advance(Duration::from_secs_f64(t));
         let (x, v) = (probe.value(), probe.velocity()[0]);
         assert!(x.is_finite() && v.is_finite(), "at {t}: x {x}, v {v}");
     }
@@ -580,13 +589,13 @@ fn a_curve_arrives_with_zero_velocity() {
         curve: 0,
         millis: 200,
     };
-    let mut value = AnimatedValue::with_motion(0.0_f64, linear_spec(200));
-    value.animate_to(100.0);
-    value.advance(0.2 - 1e-6);
+    let mut value = AnimatedValue::with_motion(0.0_f64, linear_spec(200)).expect("finite motion");
+    value.animate_to(100.0).expect("finite motion");
+    value.advance(Duration::from_secs_f64(0.2 - 1e-6));
     let early = value.velocity()[0];
     assert!(early.abs() <= 0.1, "{early} units/s just before arrival");
     assert_velocity_is_the_derivative(&value, 0, &mode, 100.0);
-    value.advance(1e-6);
+    value.advance(Duration::from_secs_f64(1e-6));
     assert_eq!(value.value(), 100.0);
     assert_eq!(value.velocity()[0], 0.0);
 }
@@ -598,12 +607,12 @@ fn an_early_reversal_is_continuous() {
         curve: 0,
         millis: 200,
     };
-    let mut value = AnimatedValue::with_motion(0.0_f64, linear_spec(200));
-    value.animate_to(100.0);
-    value.advance(0.0005);
+    let mut value = AnimatedValue::with_motion(0.0_f64, linear_spec(200)).expect("finite motion");
+    value.animate_to(100.0).expect("finite motion");
+    value.advance(Duration::from_secs_f64(0.0005));
     seam(&mut value, 0.0, &mode, 100.0);
     assert!(!value.is_settled());
-    value.advance(0.01);
+    value.advance(Duration::from_secs_f64(0.01));
     assert!(value.is_settled());
     assert_eq!(value.value(), 0.0);
 }
@@ -611,13 +620,14 @@ fn an_early_reversal_is_continuous() {
 /// Assigning a curve its current target leaves the segment running on its
 /// schedule instead of restarting the full duration.
 fn retargeting_a_curve_to_its_target_keeps_its_schedule() {
-    let mut value = AnimatedValue::with_motion(0.0_f64, curve_spec(CUBICS[0], 200));
-    value.animate_to(10.0);
-    value.advance(0.1);
+    let mut value =
+        AnimatedValue::with_motion(0.0_f64, curve_spec(CUBICS[0], 200)).expect("finite motion");
+    value.animate_to(10.0).expect("finite motion");
+    value.advance(Duration::from_secs_f64(0.1));
     let (x, v) = (value.value(), value.velocity()[0]);
-    value.animate_to(10.0);
+    value.animate_to(10.0).expect("finite motion");
     assert_eq!((value.value(), value.velocity()[0]), (x, v));
-    value.advance(0.1);
+    value.advance(Duration::from_secs_f64(0.1));
     assert!(value.is_settled());
     assert_eq!(value.value(), 10.0);
 }
@@ -691,12 +701,12 @@ fn retarget_seams() {
 }
 
 fn a_large_retarget_keeps_modest_velocity() {
-    let mut value = AnimatedValue::with_motion(0.0_f64, linear_spec(1000));
-    value.animate_to(1.0);
-    value.advance(0.5);
+    let mut value = AnimatedValue::with_motion(0.0_f64, linear_spec(1000)).expect("finite motion");
+    value.animate_to(1.0).expect("finite motion");
+    value.advance(Duration::from_secs_f64(0.5));
     assert_eq!(value.velocity()[0], 1.5);
     let before = value.value();
-    value.animate_to(1e308);
+    value.animate_to(1e308).expect("finite motion");
     assert_eq!(value.value(), before);
     assert_eq!(
         value.velocity()[0],
@@ -712,19 +722,20 @@ fn a_large_arrival_correction_is_weighted_before_scaling() {
             duration: Duration::from_secs(1),
             curve: ArcCurve::new(Cubic::new(0.25, 0.0, 0.75, 0.5)),
         },
-    );
-    value.animate_to(1e308);
+    )
+    .expect("finite motion");
+    value.animate_to(1e308).expect("finite motion");
     assert_eq!(
         value.value(),
         0.0,
         "an overflowing unweighted coefficient must not snap the segment"
     );
     assert!(!value.is_settled());
-    value.advance(0.5);
+    value.advance(Duration::from_secs_f64(0.5));
     // At Bézier parameter 1/2, x = 1/2 and y = 5/16. The endpoint slope is 2,
     // so its zero-velocity arrival correction adds 2 * (1/2)^2 * (1/2) = 1/4.
     assert!(close(value.value() / 1e308, 0.5625, 1e-8));
-    value.advance(0.5);
+    value.advance(Duration::from_secs_f64(0.5));
     assert_eq!(value.value(), 1e308);
     assert_eq!(value.velocity()[0], 0.0);
     assert!(value.is_settled());

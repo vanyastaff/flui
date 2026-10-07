@@ -140,7 +140,7 @@ pub(crate) fn scrollable_fling_advances_offset_past_release() {
 
 /// Bouncing physics allows the drag to carry the scroll position past
 /// `max_scroll_extent` with spring damping. On release, a
-/// `ScrollSpringSimulation` springs the position back to the boundary. After
+/// spring springs the position back to the boundary. After
 /// enough frames the position must be within 1 px of `max_scroll_extent`.
 pub(crate) fn bouncing_physics_fling_springs_back_after_overscroll() {
     let controller = ScrollController::new();
@@ -165,7 +165,7 @@ pub(crate) fn bouncing_physics_fling_springs_back_after_overscroll() {
     // by the overscroll spring coefficient 0.52):
     //   proposed = 480 − (−60) = 540 → clamped = 500 + 40×0.52 = 520.8
     // on_pan_end sees pixels = 520.8 > max_extent and returns a
-    // ScrollSpringSimulation that springs the position back to max_extent.
+    // spring simulation that springs the position back to max_extent.
     scoped.dispatch_pointer_down(150.0, 250.0);
     scoped.dispatch_pointer_move(150.0, 180.0); // 70 px upward: slop-crossing
     scoped.dispatch_pointer_move(150.0, 120.0); // 60 px more upward: on_pan_update
@@ -1014,6 +1014,147 @@ pub(crate) fn cancelling_a_threshold_refresh_pull_does_not_refresh() {
     laid.dispatch_pointer_move(150.0, 140.0);
     laid.dispatch_pointer_up(150.0, 140.0);
     assert_eq!(calls.get(), 1, "normal release still starts refresh");
+}
+
+// ============================================================================
+// Ballistic rest — device pixel ratio, extents, overscroll
+// ============================================================================
+
+/// Clamping physics that records the metrics each release hands it.
+#[derive(Debug, Default)]
+struct RecordingPhysics {
+    ratios: std::sync::Mutex<Vec<f64>>,
+}
+
+impl flui_widgets::ScrollPhysics for RecordingPhysics {
+    fn apply_boundary_conditions(
+        &self,
+        metrics: &flui_widgets::ScrollMetrics,
+        proposed_pixels: f64,
+    ) -> f64 {
+        ClampingScrollPhysics::new().apply_boundary_conditions(metrics, proposed_pixels)
+    }
+
+    fn create_ballistic_simulation(
+        &self,
+        metrics: &flui_widgets::ScrollMetrics,
+        velocity_px_per_sec: f64,
+    ) -> Option<Box<dyn flui_animation::Simulation>> {
+        self.ratios
+            .lock()
+            .expect("recording lock")
+            .push(metrics.device_pixel_ratio);
+        ClampingScrollPhysics::new().create_ballistic_simulation(metrics, velocity_px_per_sec)
+    }
+}
+
+/// A release hands the physics the presentation's device pixel ratio, and a
+/// fling rests once half a device pixel of glide remains: 8000 px/s at drag
+/// 0.135 rests at 4.4874 s at a ratio of 1 and at 4.8336 s at a ratio of 2
+/// (`8000·0.135ᵗ / |ln 0.135| = 0.5 / ratio`).
+pub(crate) fn scroll_fling_rest_scales_with_device_pixel_ratio() {
+    use flui_widgets::{ScrollMetrics, ScrollPhysics};
+
+    let controller = ScrollController::new();
+    controller.update_dimensions(300.0, 0.0, 4700.0);
+    let recording = Arc::new(RecordingPhysics::default());
+    let physics: SharedScrollPhysics = recording.clone();
+    let widget = Scrollable::new()
+        .controller(controller)
+        .physics(physics)
+        .child(SizedBox::new(300.0, 5000.0));
+    let scoped = fling_scoped(widget, Vsync::new(), tight(300.0, 300.0));
+    scoped
+        .pipeline_owner()
+        .with_mut(|owner| owner.set_device_pixel_ratio(2.0));
+    scoped.dispatch_pointer_down(150.0, 250.0);
+    scoped.dispatch_pointer_move(150.0, 180.0);
+    scoped.dispatch_pointer_move(150.0, 150.0);
+    scoped.dispatch_pointer_up(150.0, 150.0);
+    assert_eq!(
+        *recording.ratios.lock().expect("recording lock"),
+        [2.0],
+        "the release reads the presentation's device pixel ratio"
+    );
+
+    let fling = |ratio: f64| {
+        ClampingScrollPhysics::new()
+            .create_ballistic_simulation(
+                &ScrollMetrics::new(0.0, 0.0, 1e9, 300.0).with_device_pixel_ratio(ratio),
+                8000.0,
+            )
+            .expect("a fling")
+    };
+    let (single, double) = (fling(1.0), fling(2.0));
+    assert!(!single.is_done(4.4874) && single.is_done(4.4875));
+    assert!(!double.is_done(4.8335) && double.is_done(4.8336));
+    let bouncing = BouncingScrollPhysics::new().create_ballistic_simulation(
+        &ScrollMetrics::new(0.0, 0.0, 1e9, 300.0).with_device_pixel_ratio(2.0),
+        8000.0,
+    );
+    let bouncing = bouncing.expect("a fling");
+    assert!(!bouncing.is_done(4.8335) && bouncing.is_done(4.8336));
+}
+
+/// Unordered or non-finite extents start no ballistic run, under every
+/// physics, instead of panicking.
+pub(crate) fn inverted_extents_do_not_fling() {
+    use flui_widgets::{PageScrollPhysics, ScrollMetrics, ScrollPhysics};
+
+    let physics: [&dyn ScrollPhysics; 3] = [
+        &ClampingScrollPhysics::new(),
+        &BouncingScrollPhysics::new(),
+        &PageScrollPhysics::new(1.0),
+    ];
+    for metrics in [
+        ScrollMetrics::new(50.0, 100.0, 0.0, 300.0),
+        ScrollMetrics::new(f64::NAN, 0.0, 100.0, 300.0),
+        ScrollMetrics::new(50.0, 0.0, 100.0, 300.0).with_device_pixel_ratio(f64::NAN),
+    ] {
+        for physics in physics {
+            assert!(
+                physics
+                    .create_ballistic_simulation(&metrics, 4000.0)
+                    .is_none(),
+                "{physics:?} under {metrics:?}"
+            );
+        }
+    }
+}
+
+/// A fling inside the range that friction carries past the edge overscrolls,
+/// then springs back and rests exactly on the edge.
+pub(crate) fn bouncing_fling_into_the_edge_overscrolls_and_returns() {
+    let controller = ScrollController::new();
+    let max_extent = 500.0_f64;
+    controller.update_dimensions(300.0, 0.0, max_extent);
+    let physics: SharedScrollPhysics = Arc::new(BouncingScrollPhysics::new());
+    let widget = Scrollable::new()
+        .controller(controller.clone())
+        .physics(physics)
+        .child(SizedBox::new(300.0, 800.0));
+    let mut scoped = fling_scoped(widget, Vsync::new(), tight(300.0, 300.0));
+    controller.set_pixels(300.0);
+
+    scoped.dispatch_pointer_down(150.0, 250.0);
+    scoped.dispatch_pointer_move(150.0, 180.0);
+    scoped.dispatch_pointer_move(150.0, 150.0);
+    scoped.dispatch_pointer_up(150.0, 150.0);
+    assert!(
+        controller.pixels() < max_extent,
+        "released inside the range"
+    );
+
+    let mut furthest = controller.pixels();
+    for _ in 0..240 {
+        scoped.pump_for(Duration::from_millis(16));
+        furthest = furthest.max(controller.pixels());
+    }
+    assert!(
+        furthest > max_extent + 1.0,
+        "the fling overscrolls past the edge; furthest {furthest:.3}"
+    );
+    assert_eq!(controller.pixels(), max_extent, "rests exactly on the edge");
 }
 
 // ============================================================================

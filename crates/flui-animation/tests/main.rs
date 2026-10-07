@@ -52,6 +52,9 @@ mod proxy;
 #[path = "contracts/simulation.rs"]
 mod simulation;
 
+#[path = "contracts/spring.rs"]
+mod spring;
+
 #[path = "contracts/tween.rs"]
 mod tween;
 
