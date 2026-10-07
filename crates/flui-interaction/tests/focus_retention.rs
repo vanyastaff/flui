@@ -7,18 +7,21 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::{Rc, Weak};
 
 use flui_interaction::__runtime::{CloseMode, close_focus};
-use flui_interaction::events::{Key, KeyEvent, KeyState, Modifiers};
 use flui_interaction::routing::{
     FocusManager, FocusNode, FocusScopeNode, FocusTraversalPolicy, KeyEventResult,
 };
+use flui_platform_api::{
+    EventTime,
+    keyboard::{Code, Key, KeyEvent, KeyState},
+};
 
 fn key_event() -> KeyEvent {
-    KeyEvent {
-        state: KeyState::Down,
-        key: Key::Character("a".into()),
-        modifiers: Modifiers::default(),
-        ..KeyEvent::default()
-    }
+    KeyEvent::new(
+        KeyState::Down,
+        Key::character("a"),
+        Code::KeyA,
+        EventTime::from_nanos(0),
+    )
 }
 
 /// A capture the callback owns, and a weak probe that outlives it.
