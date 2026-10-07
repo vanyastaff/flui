@@ -294,9 +294,14 @@ pub(crate) fn a_directionality_update_changes_tab_order_without_replacing_focus_
     let scope = FocusScopeNode::with_debug_label("changing-direction-tab-scope");
     let nodes = [
         FocusNode::with_debug_label("left"),
+        FocusNode::with_debug_label("middle"),
         FocusNode::with_debug_label("right"),
     ];
-    let geometry = [(0.0, 0.0, 10.0, 10.0), (30.0, 0.0, 10.0, 10.0)];
+    let geometry = [
+        (0.0, 0.0, 10.0, 10.0),
+        (30.0, 0.0, 10.0, 10.0),
+        (60.0, 0.0, 10.0, 10.0),
+    ];
     let mut harness = mount(reading_order_tree(Ltr, &scope, &nodes, &geometry));
     let manager = harness.focus_manager();
     harness.enter_owner_scope(|| nodes[0].request_focus());
