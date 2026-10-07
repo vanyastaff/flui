@@ -119,7 +119,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::Arc;
 use std::time::Duration;
 
-use flui_animation::{AnimationController, Vsync};
+use flui_animation::{AnimationController, MotionClock, Vsync};
 use flui_foundation::PresentationId;
 use flui_interaction::ManualClock;
 use flui_interaction::arena::GestureArena;
@@ -208,6 +208,10 @@ pub struct HeadlessBinding {
     /// registry to a widget subtree so an implicitly-animated widget registers
     /// its controller here. See [`vsync`](Self::vsync) / [`adopt_vsync`](Self::adopt_vsync).
     vsync: Vsync,
+    /// Maps [`clock`](Self::clock)'s elapsed time to the animation time
+    /// [`vsync`](Self::vsync) is ticked with; see
+    /// [`motion_clock_mut`](Self::motion_clock_mut).
+    motion_clock: MotionClock,
     /// The mounted tree this binding rebuilds + renders each frame. `None` for a
     /// gesture-only binding ([`new`](Self::new)); `Some` once tree-bound.
     tree: Option<TreeBinding>,
@@ -310,6 +314,7 @@ impl HeadlessBinding {
             clock,
             gestures,
             vsync: Vsync::new(),
+            motion_clock: MotionClock::new(),
             tree: None,
             scheduler,
             owner_frame,
@@ -801,6 +806,41 @@ impl HeadlessBinding {
         &self.clock
     }
 
+    /// The animation clock [`pump_frame`](Self::pump_frame) ticks this
+    /// binding's [`vsync`](Self::vsync) through: it maps the virtual
+    /// [`clock`](Self::clock)'s elapsed time to animation time.
+    ///
+    /// Set its rate to run animations slower, faster or paused against the
+    /// virtual clock, or step it to move animation time by an exact amount;
+    /// the next [`pump_frame`](Self::pump_frame) ticks controllers at the new
+    /// time. Gestures and deadlines keep reading the virtual clock.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use flui_animation::{Animation as _, AnimationController, PlaybackRate};
+    /// use flui_scheduler::UpdateScheduler;
+    /// use flui_testing::HeadlessBinding;
+    ///
+    /// let mut binding = HeadlessBinding::new();
+    /// let controller = AnimationController::new(Duration::from_secs(1), &UpdateScheduler::new());
+    /// binding.vsync().register(controller.clone());
+    /// controller.forward().expect("a fresh controller forwards");
+    /// binding.pump_frame(Duration::ZERO);
+    ///
+    /// binding.motion_clock_mut().set_rate(PlaybackRate::PAUSED);
+    /// binding.pump_frame(Duration::from_millis(500));
+    /// assert_eq!(controller.value(), 0.0);
+    ///
+    /// binding.motion_clock_mut().step(Duration::from_millis(250));
+    /// binding.pump_frame(Duration::ZERO);
+    /// assert!((controller.value() - 0.25).abs() < 1e-9);
+    /// ```
+    pub fn motion_clock_mut(&mut self) -> &mut MotionClock {
+        &mut self.motion_clock
+    }
+
     /// Route a pointer event through the complete binding-owned input pipeline.
     ///
     /// `hit_test` returns the canonical data-only path at the requested
@@ -988,6 +1028,7 @@ impl HeadlessBinding {
         let Self {
             clock,
             gestures,
+            motion_clock,
             vsync,
             tree,
             scheduler,
@@ -1015,9 +1056,10 @@ impl HeadlessBinding {
             // 4. Tick the registered controllers on the virtual timeline. The
             //    registry is restart-aware: it re-anchors each controller's run on a
             //    `run_generation` bump and ticks only running controllers with the
-            //    raw seconds elapsed since that run's anchor.
-            let now_secs = clock.elapsed().as_secs_f64();
-            vsync.tick_all(now_secs);
+            //    seconds elapsed since that run's anchor. The motion clock maps the
+            //    virtual elapsed time to animation time (its rate and steps).
+            let tick = motion_clock.frame(clock.elapsed());
+            vsync.tick_all(tick.now().as_duration().as_secs_f64());
 
             // 5-8. THE shared frame ordering:
             //

@@ -1,25 +1,23 @@
 //! [`RotationTransition`] — animates its child's rotation from an
 //! [`Animation<f64>`] of turns.
 
-use std::f64::consts::TAU;
 use std::sync::Arc;
 
-use flui_animation::Animation;
-use flui_foundation::Listenable;
-use flui_view::prelude::BuildContext;
-use flui_view::{
-    AnimatedView, BoxedView, IntoView, StatefulView, ViewExt, ViewState, impl_animated_view,
-};
+use flui_animation::{Animation, ProxyAnimation};
+use flui_objects::TransformMotion;
+use flui_painting::typography::TextDirection;
+use flui_view::prelude::{BuildContext, StatefulView};
+use flui_view::{BoxedView, IntoView, ViewExt, ViewState};
 
-use crate::Transform;
+use super::transform_view::AnimatedTransformView;
 
 /// Rotates its child about its center as an [`Animation<f64>`] of *turns*
 /// changes (`1.0` turn = a full 360° revolution).
 ///
-/// Wraps a center-aligned `Transform::rotate`, where the animation value is
-/// measured in turns. Rotation is paint-only; the child is laid out as if
-/// unrotated.
-#[derive(Clone)]
+/// Backed by `RenderAnimatedTransform`, which listens to `turns` itself: a tick
+/// patches the node's transform layer without rebuilding the element tree.
+/// Rotation is paint-only; the child is laid out as if unrotated.
+#[derive(Clone, StatefulView)]
 pub struct RotationTransition {
     turns: Arc<dyn Animation<f64>>,
     child: BoxedView,
@@ -43,14 +41,31 @@ impl std::fmt::Debug for RotationTransition {
     }
 }
 
-/// State for [`RotationTransition`] — the angle lives on the animation.
+/// State for [`RotationTransition`]: the proxy the render object listens to,
+/// kept across rebuilds so a new `turns` retargets it in place.
 #[derive(Debug)]
-pub struct RotationTransitionState;
+pub struct RotationTransitionState {
+    proxy: ProxyAnimation<f64>,
+    turns: Arc<dyn Animation<f64>>,
+}
 
 impl ViewState<RotationTransition> for RotationTransitionState {
     fn build(&self, view: &RotationTransition, _ctx: &dyn BuildContext) -> impl IntoView {
-        // Turns → radians; `Transform` rotates about its center by default.
-        Transform::rotation(view.turns.value() * TAU).child(view.child.clone())
+        AnimatedTransformView {
+            motion: TransformMotion::Rotation {
+                turns: self.proxy.clone(),
+            },
+            transform_hit_tests: true,
+            text_direction: TextDirection::Ltr,
+            child: view.child.clone(),
+        }
+    }
+
+    fn did_update_view(&mut self, _old_view: &RotationTransition, new_view: &RotationTransition) {
+        if !Arc::ptr_eq(&self.turns, &new_view.turns) {
+            self.turns = Arc::clone(&new_view.turns);
+            self.proxy.set_parent(Arc::clone(&new_view.turns));
+        }
     }
 }
 
@@ -58,14 +73,9 @@ impl StatefulView for RotationTransition {
     type State = RotationTransitionState;
 
     fn create_state(&self) -> Self::State {
-        RotationTransitionState
+        RotationTransitionState {
+            proxy: ProxyAnimation::new(Arc::clone(&self.turns)),
+            turns: Arc::clone(&self.turns),
+        }
     }
 }
-
-impl AnimatedView for RotationTransition {
-    fn listenable(&self) -> Arc<dyn Listenable> {
-        self.turns.clone() as Arc<dyn Listenable>
-    }
-}
-
-impl_animated_view!(RotationTransition);

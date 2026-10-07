@@ -14,7 +14,7 @@
 
 use crate::simulation::{Simulation, SpringDescription, SpringSimulation};
 use flui_foundation::geometry::{Offset, Size};
-use flui_painting::styling::Color;
+use flui_painting::styling::{Color, PremultipliedOklab};
 use smallvec::SmallVec;
 
 /// A value that can be decomposed into, and rebuilt from, a fixed-width vector
@@ -23,7 +23,7 @@ use smallvec::SmallVec;
 /// Mirrors the role of Jetpack Compose's `TwoWayConverter`. Implement it (or, in
 /// future, derive it) for any type you want to spring-animate.
 pub trait TwoWayConverter: Clone {
-    /// The scalar-component representation, e.g. `[f64; 4]` for an RGBA color.
+    /// The scalar-component representation, e.g. `[f64; 4]` for a colour.
     /// `Copy` so it can be used as a scratch buffer; `AsRef`/`AsMut<[f64]>` so
     /// the spring core can iterate components generically.
     type Vector: AsRef<[f64]> + AsMut<[f64]> + Copy;
@@ -71,23 +71,26 @@ impl TwoWayConverter for Size<f64> {
     }
 }
 
+/// Springs a colour in premultiplied Oklab (`L·α`, `a·α`, `b·α`, `α`), the space
+/// `Tween<Color>` mixes in (ADR-0149): each component's spring carries its own
+/// velocity, and a fade to transparent keeps the opaque end's hue.
 impl TwoWayConverter for Color {
     type Vector = [f64; 4];
     #[inline]
     fn to_vector(&self) -> Self::Vector {
-        [
-            f64::from(self.r),
-            f64::from(self.g),
-            f64::from(self.b),
-            f64::from(self.a),
-        ]
+        let p = self.to_premultiplied_oklab();
+        [p.l, p.a, p.b, p.alpha].map(f64::from)
     }
     #[inline]
     fn from_vector(v: Self::Vector) -> Self {
-        // The `clamp(0.0, 255.0).round()` pins the value into the exact u8 range
-        // before the cast, so the truncation/sign-loss lints do not apply.
-        let to_u8 = |c: f64| c.clamp(0.0, 255.0).round() as u8;
-        Color::rgba(to_u8(v[0]), to_u8(v[1]), to_u8(v[2]), to_u8(v[3]))
+        // f32 is the colour math's precision (ADR-0098 §2); an overshoot past
+        // f32's range saturates like any out-of-gamut channel.
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "spring components narrow to the f32 colour math"
+        )]
+        let [l, a, b, alpha] = v.map(|c| c as f32);
+        Color::from_premultiplied_oklab(PremultipliedOklab { l, a, b, alpha })
     }
 }
 
@@ -160,6 +163,11 @@ impl<T: TwoWayConverter> AnimatedValue<T> {
     /// The current animated value.
     #[must_use]
     pub fn value(&self) -> T {
+        // At rest the value is the target itself: the vector form can be lossy (a
+        // transparent colour's components premultiply away).
+        if self.is_settled() {
+            return self.target.clone();
+        }
         let mut buffer = self.target.to_vector();
         for (slot, sim) in buffer.as_mut().iter_mut().zip(&self.components) {
             *slot = sim.x(self.elapsed);
@@ -177,42 +185,5 @@ impl<T: TwoWayConverter> AnimatedValue<T> {
     #[must_use]
     pub fn is_settled(&self) -> bool {
         self.components.iter().all(|sim| sim.is_done(self.elapsed))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn spring() -> SpringDescription {
-        SpringDescription::with_response_and_damping(0.3, 1.0)
-    }
-
-    #[test]
-    fn retarget_preserves_velocity() {
-        // Animate toward 100; midway (moving fast) retarget to 0. With velocity
-        // preserved the value must briefly continue PAST its position toward 100
-        // before the new spring pulls it back — momentum is not discarded.
-        let mut v = AnimatedValue::new(0.0_f64, spring());
-        v.animate_to(100.0);
-        for _ in 0..6 {
-            v.advance(1.0 / 60.0);
-        }
-        let position = v.value();
-        assert!(
-            position > 0.0 && position < 100.0,
-            "mid-flight pos={position}"
-        );
-
-        v.animate_to(0.0);
-        let v_after = {
-            v.advance(1.0 / 60.0);
-            v.value()
-        };
-        // Momentum carried it further from 0 than where it was when retargeted.
-        assert!(
-            v_after > position,
-            "velocity not preserved: {v_after} should overshoot past {position}"
-        );
     }
 }

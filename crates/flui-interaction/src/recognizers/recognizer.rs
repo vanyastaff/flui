@@ -3,20 +3,215 @@
 //! Defines the core `GestureRecognizer` trait and common types used by all
 //! recognizers.
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, AtomicU64, Ordering},
+use std::{
+    rc::Rc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
 };
 
 use flui_foundation::geometry::Offset;
 use parking_lot::Mutex;
 use tracing::instrument;
+use web_time::{Duration, Instant};
 
 use crate::{
     arena::{GestureArena, GestureArenaEntry, GestureArenaMember, GestureDisposition},
+    events::{PointerButton, PointerEvent},
     ids::PointerId,
-    routing::PointerDispatch,
+    retain::Retain,
+    routing::{PointerDispatch, RoutePanic},
+    traits::PointerEventExtTrait,
 };
+
+/// Whether a `Down` presses the primary button.
+///
+/// A `Down` that carries no button (touch and pen contacts may not) counts as
+/// primary. Any other event answers `false`.
+pub(crate) fn is_primary_down(event: &PointerEvent) -> bool {
+    matches!(event, PointerEvent::Down(data)
+        if data.button.is_none_or(|button| button == PointerButton::Primary))
+}
+
+/// The event's own timestamp in nanoseconds, if it carries one.
+///
+/// The wire stamps `0` when it has no time (a synthetic event); that
+/// convention ends here.
+pub(crate) fn event_time(event: &PointerEvent) -> Option<u64> {
+    let nanos = match event {
+        PointerEvent::Down(data) | PointerEvent::Up(data) => data.state.time,
+        PointerEvent::Move(data) => data.current.time,
+        PointerEvent::Scroll(data) => data.state.time,
+        PointerEvent::Gesture(data) => data.state.time,
+        PointerEvent::Cancel(_) | PointerEvent::Enter(_) | PointerEvent::Leave(_) => 0,
+    };
+    (nanos != 0).then_some(nanos)
+}
+
+/// Places a pointer sequence's event timestamps on the arena clock.
+///
+/// Velocity is a ratio of distance to the time between samples, so samples
+/// must be stamped when the device produced them, not when dispatch got to
+/// them: events that queued up behind one frame are dispatched back to back.
+/// The first stamped event of a sequence anchors its hardware time to the
+/// arena clock's reading at dispatch; every later event lands at the anchor
+/// plus its own hardware offset. An event without a timestamp is stamped at
+/// dispatch. Every returned instant is at least the previous one, so a
+/// sequence that mixes stamped and unstamped events never runs backwards;
+/// when a stamped event would land before an unstamped one, the hardware
+/// timeline is re-anchored there, so the stamped events after it keep their
+/// own spacing instead of collapsing onto one instant.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct EventTimeline {
+    anchor: Option<(u64, Instant)>,
+    last: Option<Instant>,
+}
+
+impl EventTimeline {
+    /// The arena-clock instant at which an event stamped `event_nanos` happened,
+    /// given the arena clock reads `now` at dispatch.
+    pub(crate) fn instant(&mut self, event_nanos: Option<u64>, now: Instant) -> Instant {
+        let raw = match (event_nanos, self.anchor) {
+            (None, _) => now,
+            (Some(event_nanos), None) => {
+                self.anchor = Some((event_nanos, now));
+                now
+            }
+            (Some(event_nanos), Some((anchor_nanos, anchor))) => {
+                let offset = Duration::from_nanos(event_nanos.saturating_sub(anchor_nanos));
+                anchor.checked_add(offset).unwrap_or(now)
+            }
+        };
+        let instant = match (self.last, event_nanos) {
+            (Some(last), Some(event_nanos)) if raw < last => {
+                // An unstamped event ran ahead of the hardware timeline: carry the
+                // stamped events on from it.
+                self.anchor = Some((event_nanos, last));
+                last
+            }
+            (Some(last), _) => raw.max(last),
+            (None, _) => raw,
+        };
+        self.last = Some(instant);
+        instant
+    }
+}
+
+/// Drop one outgoing user callback, preserving the first failure.
+///
+/// Once a failure is recorded, or while the thread is already unwinding, the
+/// capture is retained rather than destroyed: a second panic from its
+/// destructor would replace the first failure or abort.
+pub(crate) fn retire_callback<T: ?Sized>(callback: Option<Rc<T>>, first: &mut Option<RoutePanic>) {
+    if first.is_some() || std::thread::panicking() {
+        callback.retain();
+    } else {
+        RoutePanic::preserve_first(
+            first,
+            RoutePanic::capture(|| drop(callback)),
+            "recognizer callback retirement",
+        );
+    }
+}
+
+/// Several user callbacks that one transition fires back to back.
+///
+/// Each callback runs even when an earlier one panicked: they report the same
+/// committed transition, and a consumer listening on a later one must not miss
+/// it because another listener failed. Each capture retires after its call;
+/// [`finish`](Self::finish) resumes the first failure. Entered while the
+/// thread is already unwinding, no callback runs and every capture is
+/// retained.
+pub(crate) struct CallbackSequence {
+    first: Option<RoutePanic>,
+    incoming_failure: bool,
+}
+
+impl CallbackSequence {
+    pub(crate) fn new() -> Self {
+        Self {
+            first: None,
+            incoming_failure: std::thread::panicking(),
+        }
+    }
+
+    /// Invoke `callback` (if any) and retire its capture.
+    pub(crate) fn call<T: ?Sized>(&mut self, callback: Option<Rc<T>>, invoke: impl FnOnce(&T)) {
+        if self.incoming_failure {
+            callback.retain();
+            return;
+        }
+        if let Some(callback) = callback.as_ref() {
+            let candidate = RoutePanic::capture(|| invoke(callback.as_ref()));
+            RoutePanic::preserve_first(&mut self.first, candidate, "recognizer callback");
+        }
+        retire_callback(callback, &mut self.first);
+    }
+
+    /// Retire one capture without invoking it, preserving the first failure:
+    /// disposal drops each capture on its own, so two panicking destructors
+    /// never unwind at once.
+    pub(crate) fn retire<T: ?Sized>(&mut self, callback: Option<Rc<T>>) {
+        if self.incoming_failure {
+            callback.retain();
+        } else {
+            retire_callback(callback, &mut self.first);
+        }
+    }
+
+    /// Resume the first failure, if any.
+    pub(crate) fn finish(self) {
+        if let Some(panic) = self.first {
+            if self.incoming_failure {
+                panic.retain();
+            } else {
+                panic.resume();
+            }
+        }
+    }
+}
+
+/// Resume the first captured panic, or retain it when the thread was already
+/// unwinding before the containment began.
+pub(crate) fn finish_containment(first: Option<RoutePanic>, incoming_failure: bool) {
+    if let Some(panic) = first {
+        if incoming_failure {
+            panic.retain();
+        } else {
+            panic.resume();
+        }
+    }
+}
+
+/// Run `before` (the recognizer's own state commit), then the user callback.
+///
+/// The callback runs only when `before` completed. Its capture is retired
+/// afterwards and the first failure resumes once everything is settled; a
+/// failure arriving while the thread is already unwinding is retained.
+pub(crate) fn invoke_callback<T: ?Sized>(
+    callback: Option<Rc<T>>,
+    before: impl FnOnce(),
+    invoke: impl FnOnce(&T),
+) {
+    let incoming_failure = std::thread::panicking();
+    // The opaque capture owner stays outside the catch around its body.
+    let mut first = RoutePanic::capture(before);
+    if first.is_none()
+        && !incoming_failure
+        && let Some(callback) = callback.as_ref()
+    {
+        first = RoutePanic::capture(|| invoke(callback.as_ref()));
+    }
+    retire_callback(callback, &mut first);
+    if let Some(panic) = first {
+        if incoming_failure {
+            panic.retain();
+        } else {
+            panic.resume();
+        }
+    }
+}
 
 /// Base trait for all gesture recognizers
 ///
@@ -50,6 +245,32 @@ pub trait GestureRecognizer: GestureArenaMember {
         position: Offset<f64>,
         global_position: Offset<f64>,
     );
+
+    /// Admit a pointer from the `Down` dispatch that started it.
+    ///
+    /// The event-carrying form of [`add_pointer`](Self::add_pointer), and the
+    /// one a caller holding the `Down` should use: the device kind (which
+    /// selects the slop tier) and the pressed button exist only on the event.
+    /// A recognizer that answers only some buttons — drag and long press
+    /// admit the primary button, tap its primary, secondary and tertiary
+    /// families — leaves a `Down` it does not admit out of the arena
+    /// entirely, so a right-button press neither scrolls a list nor fires a
+    /// long press. A `Down` without button information (touch, pen) counts as
+    /// the primary button. Events other than `Down` are ignored.
+    ///
+    /// The default filters nothing: it admits every `Down`, whatever its
+    /// button, by forwarding the dispatch's position pair to `add_pointer`.
+    /// The button and kind rules above belong to the recognizers that
+    /// override it.
+    fn add_pointer_down(self: &Arc<Self>, dispatch: PointerDispatch<'_>) {
+        if let PointerEvent::Down(_) = dispatch.local {
+            self.add_pointer(
+                dispatch.local.pointer_id(),
+                dispatch.local.position(),
+                dispatch.global.position(),
+            );
+        }
+    }
 
     /// Handle a pointer event.
     ///
@@ -254,6 +475,13 @@ impl RecognizerBase {
             return false;
         }
         true
+    }
+
+    /// Which contact is tracked: bumped by every [`start_tracking`](Self::start_tracking).
+    /// A caller compares it around user code to tell whether that code admitted
+    /// a contact of its own, even on the same pointer id.
+    pub(crate) fn contact_generation(&self) -> u64 {
+        self.contact.load(Ordering::Acquire)
     }
 
     /// Start tracking a pointer
@@ -467,4 +695,33 @@ pub mod constants {
 
     /// Minimum distance for fling
     pub const MIN_FLING_DISTANCE: f64 = 50.0;
+}
+
+#[cfg(test)]
+mod event_timeline_tests {
+    use super::EventTimeline;
+    use std::time::{Duration, Instant};
+
+    /// A stamped event whose hardware offset lands before an unstamped event
+    /// dispatched in between is clamped to it: the timeline never runs
+    /// backwards, so velocity never sees a reversed gap.
+    #[test]
+    fn mixed_stamped_and_unstamped_events_stay_monotonic() {
+        let start = Instant::now();
+        let mut timeline = EventTimeline::default();
+        assert_eq!(timeline.instant(Some(0), start), start);
+        let unstamped = timeline.instant(None, start + Duration::from_millis(100));
+        let stamped = timeline.instant(Some(10_000_000), start + Duration::from_millis(101));
+        assert!(
+            stamped >= unstamped,
+            "{stamped:?} ran back before {unstamped:?}"
+        );
+        // The stamped events after it keep their own 10 ms spacing.
+        let next = timeline.instant(Some(20_000_000), start + Duration::from_millis(102));
+        assert_eq!(
+            next - stamped,
+            Duration::from_millis(10),
+            "the timeline did not collapse"
+        );
+    }
 }

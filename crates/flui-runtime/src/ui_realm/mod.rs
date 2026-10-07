@@ -170,9 +170,9 @@ pub struct UiRealm {
     /// [`FocusCoordinator`]'s own doc.
     focus_coordinator: FocusCoordinator,
     host_lifecycle: Cell<HostLifecycle>,
-    /// Wall-clock origin for the production `now_secs` computation, moved
+    /// Wall-clock origin for the production `raw_frame_time` computation, moved
     /// here from the retired `AppBinding`: frame times are realm-relative.
-    /// `now_secs()` = `start.elapsed().as_secs_f64()`, stored once here so
+    /// `raw_frame_time()` = `start.elapsed()`, stored once here so
     /// every frame this realm produces shares one monotonically-increasing
     /// origin instead of drifting between the Vsync tick and elsewhere.
     start: web_time::Instant,
@@ -183,7 +183,7 @@ pub struct UiRealm {
     /// [`FrameClock`]: flui_scheduler::FrameClock
     clock: flui_scheduler::ClockSource,
     /// The timestamp of the frame [`Self::pump`] is running, published for
-    /// the frame's duration so `now_secs` (the `Vsync` tick) reads the frame
+    /// the frame's duration so `raw_frame_time` (the `Vsync` tick) reads the frame
     /// clock instead of the wall clock. `None` outside a pump; a drop guard
     /// clears it, so a panic unwinding out of the frame does too.
     frame_time: Cell<Option<web_time::Instant>>,
@@ -222,7 +222,7 @@ pub struct UiRealm {
     /// realm and its presentations.
     text: flui_rendering::TextContextHandle,
     /// Test-only injectable clock, stored as the f64 bits in a u64 atomic
-    /// (rather than an `Option<f64>`/`Cell<f64>`) so [`Self::now_secs`] can
+    /// (rather than an `Option<f64>`/`Cell<f64>`) so [`Self::raw_frame_time`] can
     /// read it with a single relaxed load; `0u64` is the "not set" sentinel
     /// (see [`Self::set_now_secs_for_test`] for why a genuine `t=0.0` is
     /// nudged to the smallest positive subnormal instead).

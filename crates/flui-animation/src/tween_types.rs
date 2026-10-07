@@ -93,7 +93,8 @@ impl<V: Lerp> Animatable<V> for Tween<V> {
 pub type FloatTween = Tween<f64>;
 
 /// A tween that linearly interpolates between two integers, rounding to the
-/// nearest integer.
+/// nearest integer (half away from zero). `t` is clamped to `[0, 1]`; a NaN `t`
+/// returns `begin`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct IntTween {
@@ -112,15 +113,22 @@ impl IntTween {
 }
 
 impl Animatable<i32> for IntTween {
-    #[expect(clippy::cast_possible_truncation)] // rounded f64->i32, saturating cast
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "rounded f64 to i32; the cast saturates"
+    )]
     fn transform(&self, t: f64) -> i32 {
+        if t.is_nan() {
+            return self.begin;
+        }
         let t = t.clamp(0.0, 1.0);
         (f64::from(self.begin) + (f64::from(self.end) - f64::from(self.begin)) * t).round() as i32
     }
 }
 
 /// A tween that linearly interpolates between two integers, flooring to the
-/// nearest integer.
+/// integer below (toward negative infinity). `t` is clamped to `[0, 1]`; a NaN `t`
+/// returns `begin`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct StepTween {
@@ -139,8 +147,14 @@ impl StepTween {
 }
 
 impl Animatable<i32> for StepTween {
-    #[expect(clippy::cast_possible_truncation)] // floored f64->i32, saturating cast
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "floored f64 to i32; the cast saturates"
+    )]
     fn transform(&self, t: f64) -> i32 {
+        if t.is_nan() {
+            return self.begin;
+        }
         let t = t.clamp(0.0, 1.0);
         (f64::from(self.begin) + (f64::from(self.end) - f64::from(self.begin)) * t).floor() as i32
     }
@@ -200,63 +214,9 @@ impl<T, A: Animatable<T>> Animatable<T> for ReverseTween<T, A> {
 // Geometric Tweens
 // ============================================================================
 
-/// A tween that linearly interpolates between two colors.
-/// Tween between two colors. Alias for `Tween<Color>`.
+/// Tween between two colors. Alias for `Tween<Color>`: interpolates in Oklab with
+/// premultiplied alpha (`Color`'s `Lerp`, ADR-0149).
 pub type ColorTween = Tween<Color>;
-
-/// A color tween that interpolates through Oklab space (perceptually
-/// uniform) instead of componentwise sRGB.
-///
-/// `Color::lerp` averages gamma-encoded channels,
-/// so cross-hue transitions pass through dark, gray midpoints (blue→yellow
-/// goes through mud). Interpolating in Oklab keeps perceived lightness and
-/// chroma steady across the whole transition.
-///
-/// Costs two color-space conversions per `transform` (`powf`/`cbrt` per
-/// channel); prefer [`ColorTween`] for near-identical endpoints or very hot
-/// paths. `t` is clamped to `[0, 1]` — extrapolating outside the segment in
-/// Oklab leaves the sRGB gamut almost immediately.
-///
-/// # Examples
-///
-/// ```
-/// use flui_animation::{Animatable, OklabColorTween};
-/// use flui_painting::styling::Color;
-///
-/// let tween = OklabColorTween::new(Color::rgb(0, 0, 255), Color::rgb(255, 255, 0));
-/// let perceptual_mid = tween.transform(0.5);
-/// let srgb_mid = Color::lerp(Color::rgb(0, 0, 255), Color::rgb(255, 255, 0), 0.5);
-/// // The perceptual path differs from the muddy componentwise-sRGB midpoint.
-/// assert_ne!(perceptual_mid, srgb_mid);
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct OklabColorTween {
-    /// The color at the start of the animation.
-    pub begin: Color,
-    /// The color at the end of the animation.
-    pub end: Color,
-}
-
-impl OklabColorTween {
-    /// Creates a new perceptual color tween between `begin` and `end`.
-    #[must_use]
-    pub const fn new(begin: Color, end: Color) -> Self {
-        Self { begin, end }
-    }
-}
-
-impl Animatable<Color> for OklabColorTween {
-    fn transform(&self, t: f64) -> Color {
-        if t == 0.0 {
-            return self.begin;
-        }
-        if t == 1.0 {
-            return self.end;
-        }
-        Color::lerp_oklab(self.begin, self.end, t)
-    }
-}
 
 /// A tween that linearly interpolates between two sizes.
 /// Tween between two sizes. Alias for `Tween<Size>`.
@@ -619,43 +579,3 @@ pub trait CurveExt: Curve + Sized {
 
 // Blanket implementation for all Curve types
 impl<C: Curve> CurveExt for C {}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn test_color_tween() {
-        let tween = ColorTween::new(Color::RED, Color::BLUE);
-        let mid = tween.transform(0.5);
-        // 255 * 0.5 = 127.5 -> rounds to 128 (the old code truncated to 127).
-        assert_eq!(mid.r, 128);
-        assert_eq!(mid.b, 128);
-    }
-
-    fn test_tween_sequence_weighted() {
-        let items = vec![
-            TweenSequenceItem::new(FloatTween::new(0.0, 50.0), 1.0),
-            TweenSequenceItem::new(FloatTween::new(50.0, 100.0), 3.0),
-        ];
-        let sequence = TweenSequence::new(items);
-
-        assert_eq!(sequence.transform(0.0), 0.0);
-        // 25% through total = end of first item
-        assert_eq!(sequence.transform(0.25), 50.0);
-        // 62.5% through total = 50% through second item
-        assert!((sequence.transform(0.625) - 75.0).abs() < 1e-5);
-        assert_eq!(sequence.transform(1.0), 100.0);
-    }
-
-    // ========================================================================
-    // Tests for new types: CurveTween, ChainedTween, extension traits
-    // ========================================================================
-
-    #[test]
-    fn tween_types_contract() {
-        crate::test_cases::run_cases(&[
-            ("test color tween", test_color_tween),
-            ("test tween sequence weighted", test_tween_sequence_weighted),
-        ]);
-    }
-}

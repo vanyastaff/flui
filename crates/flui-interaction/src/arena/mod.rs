@@ -536,21 +536,29 @@ impl ArenaEntryData {
 
     /// Accept gesture for a member.
     /// If arena is open, store as eager winner. If closed, resolve immediately.
+    ///
+    /// Only a current member can win: an accept from a member that already
+    /// withdrew (or never joined) is ignored, since resolving in its favour
+    /// would reject every remaining member and accept no one.
     #[must_use]
-    fn accept(&mut self, member: Arc<dyn GestureArenaMember>) -> ArenaFollowUp {
-        if self.is_resolved {
+    ///
+    /// The candidate is borrowed: the caller still owns it, so an ignored
+    /// candidate that is its own last owner is dropped after the slot lock is
+    /// released, never inside it.
+    fn accept(&mut self, member: &Arc<dyn GestureArenaMember>) -> ArenaFollowUp {
+        if self.is_resolved || !self.members.iter().any(|entry| Arc::ptr_eq(entry, member)) {
             return ArenaFollowUp::None;
         }
 
         if self.is_open {
             // Store as eager winner - will win when arena closes
             if self.eager_winner.is_none() {
-                self.eager_winner = Some(member);
+                self.eager_winner = Some(Arc::clone(member));
             }
             // If already have eager winner, ignore subsequent accepts
             ArenaFollowUp::None
         } else {
-            ArenaFollowUp::ResolveInFavorOf(member)
+            ArenaFollowUp::ResolveInFavorOf(Arc::clone(member))
         }
     }
 
@@ -753,8 +761,8 @@ pub enum SweepModel {
 /// their own route (hit-test dispatch) step *first*, then call this kernel
 /// — the route-before-sweep order is load-bearing (it lets a double-tap's
 /// first-up `hold` run before the sweep, so the sweep observes the hold
-/// and defers).
-/// Shared by the headless binding and the production `GestureBinding`.
+/// and defers). A held arena leaves the pointer's active slot on that sweep,
+/// so the pointer's next Down opens a fresh arena.
 pub fn run_pointer_lifecycle(arena: &GestureArena, event: &crate::events::PointerEvent) {
     use crate::events::PointerEvent;
     let pointer = crate::events::extract_pointer_id(event);
@@ -1189,15 +1197,35 @@ impl GestureArena {
             failure.finish();
             return;
         }
-        let (mut pending, follow_up) = {
+        let (mut pending, follow_up, candidate) = {
             let mut entry = slot.data.lock();
             match disposition {
-                GestureDisposition::Accepted => (PendingNotifications::new(), entry.accept(member)),
-                GestureDisposition::Rejected => entry.reject(member),
+                GestureDisposition::Accepted => {
+                    let follow_up = entry.accept(&member);
+                    (PendingNotifications::new(), follow_up, Some(member))
+                }
+                GestureDisposition::Rejected => {
+                    let (pending, follow_up) = entry.reject(member);
+                    (pending, follow_up, None)
+                }
             }
         };
         pending.extend(self.collect_follow_up(pointer, slot, follow_up));
+        let candidate_failure = Self::retire_candidate(candidate);
         Self::dispatch_pending(pending, pointer);
+        if let Some(payload) = candidate_failure {
+            std::panic::resume_unwind(payload);
+        }
+    }
+
+    /// Drop the caller's accept candidate after the slot lock is released and
+    /// before any callback runs, so a panicking callback can never leave it as
+    /// the last owner to be destroyed during that unwind. A panic from its own
+    /// destructor is held and resumed once the callbacks were dispatched.
+    fn retire_candidate(
+        candidate: Option<Arc<dyn GestureArenaMember>>,
+    ) -> Option<Box<dyn std::any::Any + Send>> {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(candidate))).err()
     }
 
     /// Accept gesture for a member - the member wants to handle this gesture.
@@ -1218,9 +1246,13 @@ impl GestureArena {
         let Some(slot) = self.current_slot(pointer) else {
             return;
         };
-        let follow_up = slot.data.lock().accept(member);
+        let follow_up = slot.data.lock().accept(&member);
         let pending = self.collect_follow_up(pointer, &slot, follow_up);
+        let candidate_failure = Self::retire_candidate(Some(member));
         Self::dispatch_pending(pending, pointer);
+        if let Some(payload) = candidate_failure {
+            std::panic::resume_unwind(payload);
+        }
     }
 
     /// Reject gesture for a member - the member doesn't want this gesture.
@@ -1238,36 +1270,10 @@ impl GestureArena {
         self.resolve_entry(pointer, &slot, member.clone(), GestureDisposition::Rejected);
     }
 
-    /// Hold the arena open for a pointer (delay resolution).
-    ///
-    /// Used when a recognizer needs more time to decide.
-    pub fn hold(&self, pointer: PointerId) {
-        if let Some(slot) = self.current_slot(pointer) {
-            slot.data.lock().hold();
-        }
-    }
-
     fn hold_slot(slot: &Arc<ArenaSlot>) {
         let mut entry = slot.data.lock();
         if !entry.is_resolved {
             entry.hold();
-        }
-    }
-
-    /// Release the hold on an arena.
-    ///
-    /// If a sweep was attempted while held, the deferred sweep runs now.
-    /// Releasing never closes membership; `close` always does that during
-    /// Down dispatch, independent of the hold state.
-    pub fn release(&self, pointer: PointerId) {
-        let retained = self
-            .retained
-            .iter()
-            .filter(|entry| entry.value().pointer == pointer)
-            .min_by_key(|entry| entry.key().0)
-            .map(|entry| Arc::clone(entry.value()));
-        if let Some(slot) = retained.or_else(|| self.current_slot(pointer)) {
-            self.release_slot(&slot);
         }
     }
 
@@ -1374,14 +1380,14 @@ impl GestureArena {
         let pending = {
             let mut entry = slot.data.lock();
             if entry.is_held {
+                // The pointer is up: its held generation leaves the active
+                // map, so the pointer's next Down opens a fresh arena instead
+                // of being refused by this closed one. Exact entry handles and
+                // `release(pointer)` still reach it among the retained slots.
                 entry.has_pending_sweep = true;
-                if !self
-                    .entries
-                    .get(&slot.pointer)
-                    .is_some_and(|current| Arc::ptr_eq(current.value(), slot))
-                {
-                    self.retained.insert(slot.generation, Arc::clone(slot));
-                }
+                drop(entry);
+                self.remove_current_slot(slot.pointer, slot);
+                self.retained.insert(slot.generation, Arc::clone(slot));
                 return;
             }
             entry.sweep()

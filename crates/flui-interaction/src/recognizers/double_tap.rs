@@ -15,12 +15,12 @@ use web_time::{Duration, Instant};
 use flui_foundation::geometry::Offset;
 use parking_lot::Mutex;
 
-use super::recognizer::{GestureRecognizer, RecognizerBase};
+use super::recognizer::{CallbackSequence, GestureRecognizer, RecognizerBase, is_primary_down};
 use crate::{
     arena::{GestureArenaEntry, GestureArenaMember, GestureDisposition},
     events::{PointerEvent, PointerEventExt, PointerType},
     ids::PointerId,
-    routing::PointerDispatch,
+    routing::{PointerDispatch, RoutePanic},
     settings::GestureSettings,
 };
 
@@ -84,6 +84,20 @@ struct DoubleTapCallbacks {
     on_double_tap_cancel: Option<DoubleTapCallback>,
 }
 
+impl DoubleTapCallbacks {
+    /// Retire every capture one by one (see [`CallbackSequence::retire`]).
+    fn retire(self, sequence: &mut CallbackSequence) {
+        let Self {
+            on_double_tap,
+            on_double_tap_down,
+            on_double_tap_cancel,
+        } = self;
+        sequence.retire(on_double_tap);
+        sequence.retire(on_double_tap_down);
+        sequence.retire(on_double_tap_cancel);
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DoubleTapPhase {
     /// Ready to start
@@ -94,8 +108,6 @@ enum DoubleTapPhase {
     WaitingForSecond,
     /// Second tap down
     SecondDown,
-    /// Completed
-    Completed,
     /// Cancelled
     Cancelled,
 }
@@ -289,7 +301,7 @@ impl DoubleTapGestureRecognizer {
         if matches!(
             state.phase,
             DoubleTapPhase::FirstDown | DoubleTapPhase::SecondDown
-        ) && self.check_slop(position)
+        ) && self.check_slop(position, kind)
         {
             // Moved too far, cancel. Release the lock and let
             // `handle_cancel` itself drive the phase transition -- it
@@ -336,8 +348,11 @@ impl DoubleTapGestureRecognizer {
                 *self.first_entry.lock() = first_entry;
             }
             DoubleTapPhase::SecondDown => {
-                // Second tap completed — a double tap.
-                state.phase = DoubleTapPhase::Completed;
+                // Second tap completed — a double tap. Every state change
+                // commits before the user callback runs, so a callback that
+                // panics or disposes leaves the recognizer ready for the next
+                // gesture and no arena held.
+                *state = DoubleTapState::default();
                 drop(state);
 
                 // Resolve BOTH contended entries in favour of the double-tap so
@@ -354,28 +369,22 @@ impl DoubleTapGestureRecognizer {
                 }
                 self.state.accept_tracked();
 
+                // Release the first entry's hold (drains any deferred sweep)
+                // and retire the second contact.
+                if let Some(entry) = first_entry {
+                    entry.release();
+                }
+                self.state.stop_tracking();
+
                 // Fire the double-tap callback once.
-                if let Some(callback) = self.callbacks.borrow().on_double_tap.clone() {
+                let callback = self.callbacks.borrow().on_double_tap.clone();
+                if let Some(callback) = callback {
                     callback(DoubleTapDetails {
                         global_position,
                         local_position: position,
                         kind,
                     });
                 }
-
-                // Release the first entry's hold (drains any deferred sweep) and
-                // reset.
-                if let Some(entry) = first_entry {
-                    entry.release();
-                }
-                {
-                    let mut state = self.gesture_state.lock();
-                    state.phase = DoubleTapPhase::Ready;
-                    state.first_tap_position = None;
-                    state.first_tap_global_position = None;
-                    state.first_tap_time = None;
-                }
-                self.state.stop_tracking();
             }
             _ => {}
         }
@@ -414,62 +423,68 @@ impl DoubleTapGestureRecognizer {
         }
     }
 
-    /// Check if pointer moved too far (beyond slop tolerance)
-    fn check_slop(&self, current_position: Offset<f64>) -> bool {
-        if let Some(initial_pos) = self.state.initial_position() {
-            let delta = current_position - initial_pos;
-            let distance = delta.distance();
-
-            if self.settings.lock().exceeds_touch_slop(distance) {
-                return true; // Moved too far
-            }
-        }
-        false
+    /// Whether a contact drifted beyond the hit slop of its device kind.
+    fn check_slop(&self, current_position: Offset<f64>, kind: PointerType) -> bool {
+        self.state.initial_position().is_some_and(|initial| {
+            (current_position - initial).distance() > self.settings.lock().hit_slop(kind)
+        })
     }
 
     /// Check if timeout for second tap has expired
     /// Should be called periodically
     pub fn check_timeout(&self) -> bool {
-        let mut state = self.gesture_state.lock();
-
-        if state.phase == DoubleTapPhase::WaitingForSecond
-            && let Some(first_time) = state.first_tap_time
-        {
-            let elapsed = self.state.now().duration_since(first_time);
-            if elapsed > self.double_tap_timeout() {
-                // Window expired with no second contact: fire the cancel
-                // callback, withdraw the double-tap from the held first entry,
-                // and release the hold.
-                let position = state.first_tap_position.take().unwrap_or(Offset::ZERO);
-                let global_position = state.first_tap_global_position.take().unwrap_or(position);
-                let kind = state.device_kind.unwrap_or(PointerType::Touch);
-                state.phase = DoubleTapPhase::Ready;
-                state.first_tap_time = None;
-                drop(state); // Release lock before callback + arena release
-
-                if let Some(callback) = self.callbacks.borrow().on_double_tap_cancel.clone() {
-                    callback(DoubleTapDetails {
-                        global_position,
-                        local_position: position,
-                        kind,
-                    });
-                }
-                // Withdraw the double-tap from the held first entry. The entry
-                // was closed as `[tap1, double_tap]`; removing the double-tap
-                // leaves the lone tap, which the closed-arena single-member rule
-                // resolves the winner — so the held tap finally fires. Then
-                // release the hold to drain any deferred sweep (idempotent — the
-                // entry is already resolved or removed).
-                let first_entry = self.first_entry.lock().take();
-                self.state.reject();
-                if let Some(entry) = first_entry {
-                    entry.release();
-                }
-                return true;
-            }
+        let expired = {
+            let state = self.gesture_state.lock();
+            state.phase == DoubleTapPhase::WaitingForSecond
+                && state.first_tap_time.is_some_and(|first_time| {
+                    self.state.now().duration_since(first_time) > self.double_tap_timeout()
+                })
+        };
+        if expired {
+            self.give_up_first_tap();
         }
+        expired
+    }
 
-        false
+    /// End a waiting first tap that will not become a double tap.
+    ///
+    /// The double tap withdraws from the held first entry and releases the
+    /// hold — the entry was closed as `[tap1, double_tap]`, so the lone tap
+    /// wins and finally fires — then reports `on_double_tap_cancel`. The arena
+    /// work happens first: a cancel callback that panics or disposes must not
+    /// leave the first contact's arena held.
+    fn give_up_first_tap(&self) {
+        let (position, global_position, kind) = {
+            let mut state = self.gesture_state.lock();
+            if state.phase != DoubleTapPhase::WaitingForSecond {
+                return;
+            }
+            let position = state.first_tap_position.take().unwrap_or(Offset::ZERO);
+            let global_position = state.first_tap_global_position.take().unwrap_or(position);
+            let kind = state.device_kind.unwrap_or(PointerType::Touch);
+            *state = DoubleTapState::default();
+            (position, global_position, kind)
+        };
+        let first_entry = self.first_entry.lock().take();
+        self.state.reject();
+        if let Some(entry) = first_entry {
+            entry.release();
+        }
+        let callback = self.callbacks.borrow().on_double_tap_cancel.clone();
+        if let Some(callback) = callback {
+            callback(DoubleTapDetails {
+                global_position,
+                local_position: position,
+                kind,
+            });
+        }
+    }
+
+    /// The contact being tracked, in both spaces, for a cancel no event drives.
+    fn contact_positions(&self) -> (Offset<f64>, Offset<f64>) {
+        let local = self.state.initial_position().unwrap_or(Offset::ZERO);
+        let global = self.state.initial_global_position().unwrap_or(local);
+        (local, global)
     }
 
     /// Extract position and pointer type from a PointerEvent
@@ -509,50 +524,64 @@ impl DoubleTapGestureRecognizer {
             return;
         }
 
-        // Pre-registration checks for contacts arriving while we hold the first
-        // entry. Expired-window and out-of-slop contacts are handled *before* the new pointer is registered
-        // in the arena so that `reject`/`release` on the first entry runs while
-        // `primary_pointer` is still the first pointer — not yet updated by
-        // `start_tracking` for the new contact.
-        {
-            let state = self.gesture_state.lock();
-            if state.phase == DoubleTapPhase::WaitingForSecond {
-                let settings = self.settings.lock().clone();
-
-                let window_expired = state.first_tap_time.is_some_and(|first_time| {
-                    self.state.now().duration_since(first_time) > settings.double_tap_timeout()
-                });
-
-                let out_of_slop = state.first_tap_position.is_some_and(|first_pos| {
-                    (position - first_pos).distance() > settings.double_tap_slop()
-                });
-
-                // Release the lock before any re-entrant path (check_timeout re-acquires it).
-                drop(state);
-
-                if window_expired {
-                    // The inter-tap window has expired. Release the held first
-                    // entry (so the lone tap can fire) and fire
-                    // `on_double_tap_cancel`. check_timeout() handles all of
-                    // this, identical to the periodic poll path, and resets
-                    // phase to Ready. Afterwards, start_tracking + handle_down
-                    // treat this contact as the new first tap.
-                    self.check_timeout();
-                    // Fall through: phase is now Ready.
-                } else if out_of_slop {
-                    // Out-of-slop contacts are ignored — keep the first entry
-                    // held and stay in WaitingForSecond.
+        // Pre-registration checks. They run *before* the new pointer is
+        // registered, so `reject`/`release` on the first entry runs while
+        // `primary_pointer` still names the first contact.
+        // A panic from a callback the restart runs is held until this contact
+        // is admitted: the contact still becomes the next first tap.
+        let mut failure = None;
+        let phase = self.gesture_state.lock().phase;
+        match phase {
+            DoubleTapPhase::FirstDown | DoubleTapPhase::SecondDown => {
+                // A contact is down. Another finger is not admitted; the same
+                // pointer again means its Up/Cancel never arrived, so that
+                // attempt is cancelled before this contact starts afresh.
+                if self.state.primary_pointer() != Some(pointer) {
                     return;
                 }
-                // In-window + in-slop: fall through to register normally.
-            } else {
-                drop(state);
+                let (local, global) = self.contact_positions();
+                failure = RoutePanic::capture(|| self.handle_cancel(local, global, kind));
             }
+            DoubleTapPhase::WaitingForSecond => {
+                let settings = self.settings.lock().clone();
+                let (window_expired, out_of_slop) = {
+                    let state = self.gesture_state.lock();
+                    (
+                        state.first_tap_time.is_some_and(|first_time| {
+                            self.state.now().duration_since(first_time)
+                                > settings.double_tap_timeout()
+                        }),
+                        state.first_tap_position.is_some_and(|first_pos| {
+                            (position - first_pos).distance() > settings.double_tap_slop()
+                        }),
+                    )
+                };
+                // A contact after the window, or too far from the first tap,
+                // cannot complete this double tap. The first tap is given up
+                // now — its single tap fires instead of waiting out the
+                // window — and this contact becomes the next first tap.
+                if window_expired || out_of_slop {
+                    failure = RoutePanic::capture(|| self.give_up_first_tap());
+                }
+            }
+            DoubleTapPhase::Ready | DoubleTapPhase::Cancelled => {}
         }
-
-        self.state
-            .start_tracking(pointer, position, global_position, self);
-        self.handle_down(position, global_position, kind);
+        // A callback above may have disposed this recognizer or admitted a
+        // contact of its own; either way this admission is void.
+        // A contact admitted from inside one of those callbacks leaves a contact
+        // down; the restart itself never does.
+        let reentered = matches!(
+            self.gesture_state.lock().phase,
+            DoubleTapPhase::FirstDown | DoubleTapPhase::SecondDown
+        );
+        if !self.state.is_disposed() && !reentered {
+            self.state
+                .start_tracking(pointer, position, global_position, self);
+            self.handle_down(position, global_position, kind);
+        }
+        if let Some(panic) = failure {
+            panic.resume();
+        }
     }
 }
 
@@ -569,13 +598,32 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
         self.add_pointer_with_kind(pointer, position, global_position, PointerType::Touch);
     }
 
+    fn add_pointer_down(self: &Arc<Self>, dispatch: PointerDispatch<'_>) {
+        let event = dispatch.local;
+        // Primary button only: a right- or middle-click has its own tap
+        // family and must not register a double tap.
+        let PointerEvent::Down(data) = event else {
+            return;
+        };
+        if !is_primary_down(event) {
+            return;
+        }
+        self.add_pointer_with_kind(
+            crate::events::extract_pointer_id(event),
+            event.position(),
+            dispatch.global.position(),
+            data.pointer.pointer_type,
+        );
+    }
+
     fn handle_event(&self, dispatch: PointerDispatch<'_>) {
         let event = dispatch.local;
         if !self.state.assert_not_disposed("handle_event") {
             return;
         }
-        // Only process if we're tracking a pointer
-        if self.state.primary_pointer().is_none() {
+        // Only the contact this recognizer follows: another finger's Up must
+        // not complete or cancel this gesture.
+        if self.state.primary_pointer() != Some(crate::events::extract_pointer_id(event)) {
             return;
         }
 
@@ -612,9 +660,12 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
         if let Some(entry) = entry {
             entry.release();
         }
-        self.callbacks.borrow_mut().on_double_tap = None;
-        self.callbacks.borrow_mut().on_double_tap_down = None;
-        self.callbacks.borrow_mut().on_double_tap_cancel = None;
+        // Captures are dropped outside the cell, so a capture whose destructor
+        // reaches this recognizer finds it unborrowed.
+        let callbacks = std::mem::take(&mut *self.callbacks.borrow_mut());
+        let mut retirement = CallbackSequence::new();
+        callbacks.retire(&mut retirement);
+        retirement.finish();
     }
 
     fn primary_pointer(&self) -> Option<PointerId> {
@@ -707,7 +758,7 @@ impl std::fmt::Debug for DoubleTapGestureRecognizer {
 mod tests {
 
     use super::*;
-    use crate::{arena::GestureArena, events::make_up_event};
+    use crate::{arena::GestureArena, events::make_up_event_for_id};
 
     #[test]
     fn test_double_tap_timing() {
@@ -725,7 +776,7 @@ mod tests {
 
         // First tap
         recognizer.add_pointer(pointer, position, position);
-        let up_event = make_up_event(position, PointerType::Touch);
+        let up_event = make_up_event_for_id(pointer, position, PointerType::Touch);
         recognizer.handle_event(PointerDispatch::at_root(&up_event));
 
         // Should be waiting for second tap
@@ -735,7 +786,7 @@ mod tests {
 
         // Second tap (need to add pointer again for new sequence)
         recognizer.handle_down(position, position, PointerType::Touch);
-        let up_event = make_up_event(position, PointerType::Touch);
+        let up_event = make_up_event_for_id(pointer, position, PointerType::Touch);
         recognizer.handle_event(PointerDispatch::at_root(&up_event));
 
         // Should have called callback

@@ -90,10 +90,12 @@ impl UiRealm {
         // registry now (the registry moved off this realm's former
         // `vsync_slot`, one per surface), off the SAME realm-relative `now`
         // every presentation observes, so there is no clock drift between
-        // siblings sharing this one pump.
-        let now = self.now_secs();
+        // siblings sharing this one pump. Each presentation's motion clock
+        // maps that raw time to its own monotonic animation time.
+        let raw = self.raw_frame_time();
         for presentation in self.presentations.iter() {
             let vsync = presentation.vsync();
+            let tick = presentation.motion_tick(raw);
             // Sampled BEFORE `tick_all`, not after: the tick that completes
             // a controller still delivers that controller's final value and
             // status change (a ticker's tick calls its callback
@@ -117,7 +119,7 @@ impl UiRealm {
             // nothing else keeps `needs_redraw`/`has_pending_work()` true
             // once that clobber happens.
             let was_running = vsync.has_running();
-            vsync.tick_all(now);
+            vsync.tick_all(tick.now().as_duration().as_secs_f64());
 
             if was_running {
                 // A running controller with no OTHER tree-visible effect

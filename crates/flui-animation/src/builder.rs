@@ -284,36 +284,3 @@ impl AnimationController {
         AnimationControllerBuilder::new(duration, scheduler)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// #1183: `.bounds()` duplicates `with_bounds_inner`'s validation, so it
-    /// must adopt the same "bounded means finite" rule -- red before the
-    /// fix, since the old `lower >= upper` check accepts `NaN` (`NaN >=
-    /// upper` is always `false`) and any infinite pair with `lower < upper`.
-    #[test]
-    fn bounds_rejects_non_finite_endpoints() {
-        let scheduler = UpdateScheduler::new();
-        // Same list `controller::tests::bounds_constructors_reject_non_finite_bounds`
-        // uses, plus the finite-endpoints-infinite-range case.
-        let cases: &[(f64, f64)] = &[
-            (f64::NAN, 1.0),
-            (0.0, f64::NAN),
-            (f64::NEG_INFINITY, f64::INFINITY),
-            (f64::NEG_INFINITY, 5.0),
-            (5.0, f64::INFINITY),
-            (f64::NEG_INFINITY, f64::NEG_INFINITY),
-            (-f64::MAX, f64::MAX),
-        ];
-        for &(lower, upper) in cases {
-            let result = AnimationControllerBuilder::new(Duration::from_millis(100), &scheduler)
-                .bounds(lower, upper);
-            assert!(
-                matches!(result, Err(AnimationError::InvalidBounds(_))),
-                "bounds({lower}, {upper}) must be rejected"
-            );
-        }
-    }
-}

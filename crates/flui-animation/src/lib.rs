@@ -12,9 +12,8 @@
 //! - [`CurvedAnimation`] - Applies easing curves to animations
 //! - [`Curve`] - Easing curve trait with predefined curves in [`Curves`]
 //!   (full Penner catalog, M3 [`ThreePointCubic`] emphasized set, [`Split`])
-//! - [`Tween`] - Maps animation values to any type T;
-//!   [`OklabColorTween`] interpolates colors perceptually (Oklab) instead of
-//!   componentwise sRGB
+//! - [`Tween`] - Maps animation values to any type T; [`ColorTween`]
+//!   interpolates colors in Oklab with premultiplied alpha
 //! - [`smoothing`] - Frame-rate-independent followers:
 //!   [`exp_decay`]/[`Smoothed`] (half-life exponential decay) and
 //!   [`SmoothDamp`] (critically damped, max-speed-clamped)
@@ -81,7 +80,7 @@
 //! [`Listenable`]: flui_foundation::Listenable
 //! [`Arc`]: std::sync::Arc
 
-// Ship bar (wave 3): every public item is documented; keep it that way.
+// Every public item is documented; keep it that way.
 #![deny(missing_docs)]
 
 // Core animation modules
@@ -103,6 +102,7 @@ pub mod controller;
 pub mod curved;
 pub mod error;
 pub mod ext;
+pub mod motion;
 pub mod proxy;
 pub mod reverse;
 pub mod simulation;
@@ -126,6 +126,7 @@ pub use controller::AnimationController;
 pub use curved::CurvedAnimation;
 pub use error::AnimationError;
 pub use ext::{AnimatableExt, AnimationExt};
+pub use motion::{AnimationTime, FrameTick, InvalidPlaybackRate, MotionClock, PlaybackRate};
 pub use proxy::ProxyAnimation;
 pub use reverse::ReverseAnimation;
 pub use simulation::{
@@ -146,16 +147,15 @@ pub use vsync::{Vsync, VsyncRegistration, VsyncRegistrationError};
 // Re-exports from data type modules
 pub use curve::{
     ArcCurve, BounceInCurve, BounceInOutCurve, BounceOutCurve, CatmullRomCurve, CatmullRomSpline,
-    Cubic, Curve, Curve2D, Curve2DSample, Curves, DecelerateCurve, ElasticInCurve,
-    ElasticInOutCurve, ElasticOutCurve, FlippedCurve, Interval, Linear, ParametricCurve,
-    ReverseCurve, SawTooth, Split, ThreePointCubic, Threshold,
+    Cubic, Curve, Curve2D, Curve2DSample, CurveError, Curves, DecelerateCurve, ElasticInCurve,
+    ElasticInOutCurve, ElasticOutCurve, FlippedCurve, Interval, Linear, ParametricCurve, Split,
+    ThreePointCubic,
 };
 pub use status::{AnimationBehavior, AnimationStatus};
 pub use tween_types::{
     AlignmentTween, Animatable, BorderRadiusTween, ChainedTween, ColorTween, ConstantTween,
     CurveExt, CurveTween, EdgeInsetsTween, FloatTween, IntTween, Matrix4Tween, OffsetTween,
-    OklabColorTween, RectTween, ReverseTween, SizeTween, StepTween, Tween, TweenSequence,
-    TweenSequenceItem,
+    RectTween, ReverseTween, SizeTween, StepTween, Tween, TweenSequence, TweenSequenceItem,
 };
 
 // Re-export scheduler types for convenience.

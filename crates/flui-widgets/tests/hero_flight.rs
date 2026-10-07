@@ -10,7 +10,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use flui_animation::Threshold;
+use flui_animation::{Curves, Interval};
 use flui_foundation::ValueKey;
 use flui_foundation::geometry::Rect;
 use flui_view::ViewExt;
@@ -230,7 +230,7 @@ fn assert_rect_close(actual: Rect, expected: Rect, what: &str) {
 }
 
 /// `Hero::curve` shapes the flight, and a push eases on the **destination** hero's
-/// curve. `Threshold(0.9)` reads 0.0 until 90% of the transition —
+/// curve. `Interval::linear(0.9, 1.0)` reads 0.0 until 90% of the transition —
 /// so halfway through, the shuttle has not left its begin rect.
 ///
 /// Red-check: resolve the curve from `from_hero` for a push in `MeasurementPass::launch`
@@ -248,7 +248,7 @@ pub(crate) fn a_push_eases_on_the_destination_hero_curve() {
         hero_page("shared", 30.0, 20.0),
         hero_page_with("shared", 60.0, 45.0, move |hero| {
             configure_calls_for_page.set(configure_calls_for_page.get() + 1);
-            hero.curve(Threshold::new(0.9))
+            hero.curve(Interval::linear(0.9, 1.0))
         }),
     );
     harness.enter_owner_scope(|| transition.controller().expect("installed").set_value(0.5));
@@ -263,6 +263,31 @@ pub(crate) fn a_push_eases_on_the_destination_hero_curve() {
         flight.begin_rect(),
         "below the destination hero's threshold curve, the shuttle has not moved",
     );
+}
+
+/// A hero that shrinks to nothing along an overshooting curve: the curve passes 1
+/// near the end, which extrapolates the rect past its zero-size end. The shuttle's
+/// width and height stay non-negative on every sampled frame.
+pub(crate) fn a_shrinking_flight_with_overshoot_keeps_a_non_negative_size() {
+    let navigator = seeded_navigator();
+    let controller = install(&navigator);
+    let mut harness = mount_navigator(&navigator);
+    let transition = fly(
+        &navigator,
+        &mut harness,
+        hero_page("shared", 100.0, 80.0),
+        hero_page_with("shared", 0.0, 0.0, |hero| hero.curve(Curves::EaseOutBack)),
+    );
+    let flight = controller.flights().get(&tag("shared")).expect("airborne");
+    for step in 0..=20 {
+        let t = f64::from(step) / 20.0;
+        harness.enter_owner_scope(|| transition.controller().expect("installed").set_value(t));
+        let rect = flight.shuttle_rect();
+        assert!(
+            rect.width() >= 0.0 && rect.height() >= 0.0,
+            "t = {t}: shuttle rect {rect:?}"
+        );
+    }
 }
 
 // ============================================================================

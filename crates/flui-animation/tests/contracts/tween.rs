@@ -1,4 +1,5 @@
-//! Consumer contracts for integer and weighted animation progress.
+//! Consumer contracts for integer and weighted animation
+//! progress.
 
 use flui_animation::{
     Animatable, FloatTween, IntTween, StepTween, TweenSequence, TweenSequenceItem,
@@ -35,6 +36,11 @@ fn ordinary_integer_rounding_and_clamping() {
     assert_eq!(stepped.transform(2.0), 3);
 }
 
+fn nan_progress_keeps_begin() {
+    assert_eq!(IntTween::new(-2, 3).transform(f64::NAN), -2);
+    assert_eq!(StepTween::new(7, 3).transform(f64::NAN), 7);
+}
+
 #[test]
 fn integer_tweens_interpolate_across_the_full_range() {
     crate::run_table(&[
@@ -50,6 +56,7 @@ fn integer_tweens_interpolate_across_the_full_range() {
             "ordinary integer rounding and clamping",
             ordinary_integer_rounding_and_clamping,
         ),
+        ("nan progress keeps begin", nan_progress_keeps_begin),
     ]);
 }
 

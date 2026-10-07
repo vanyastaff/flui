@@ -36,7 +36,6 @@ use flui_foundation::Listenable;
 use flui_interaction::recognizers::drag_variants::horizontal_drag;
 use flui_interaction::{
     DragEndDetails, DragGestureRecognizer, DragStartDetails, DragUpdateDetails, GestureRecognizer,
-    PointerEventExt,
 };
 use flui_painting::typography::TextDirection;
 use flui_rendering::hit_testing::HitTestBehavior;
@@ -288,7 +287,6 @@ impl BackGestureRuntime {
         recognizer: &Arc<DragGestureRecognizer>,
         dispatch: flui_interaction::PointerDispatch<'_>,
     ) {
-        let event = dispatch.local;
         if !(self.enabled)() {
             return;
         }
@@ -303,11 +301,9 @@ impl BackGestureRuntime {
         // local position under the name `global_position` (issue #908), and
         // the transform between them is exactly what an edge-anchored back
         // gesture sits behind.
-        recognizer.add_pointer(
-            event.pointer_id(),
-            event.position(),
-            dispatch.global.position(),
-        );
+        // The Down itself, so the recognizer reads the device kind and admits
+        // the primary button only.
+        recognizer.add_pointer_down(dispatch);
     }
 
     /// The recognizer's drag start: begins a gesture unless one is in flight.

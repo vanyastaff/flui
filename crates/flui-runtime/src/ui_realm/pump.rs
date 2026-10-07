@@ -74,7 +74,7 @@ impl UiRealm {
     ///
     /// The clock is read once. That instant is the scheduler's frame
     /// timestamp and the time the realm's `Vsync` controllers tick at
-    /// (`now_secs` reads it for the frame's duration); a scheduler `Ticker`
+    /// (`raw_frame_time` reads it for the frame's duration); a scheduler `Ticker`
     /// still measures elapsed time on the wall clock (`flui-scheduler`'s
     /// `ARCHITECTURE.md`).
     /// Whether a wake becomes a frame at all is the host's decision (its wake
