@@ -369,6 +369,26 @@ pub mod prelude {
     };
 }
 
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+mod readme_examples {}
+
+#[cfg(doctest)]
+#[doc = include_str!("../docs/GESTURES.md")]
+mod gesture_examples {}
+
+#[cfg(doctest)]
+#[doc = include_str!("../docs/ARCHITECTURE.md")]
+mod architecture_examples {}
+
+#[cfg(doctest)]
+#[doc = include_str!("../docs/PERFORMANCE.md")]
+mod performance_examples {}
+
+#[cfg(doctest)]
+#[doc = include_str!("../docs/HIT_TESTING.md")]
+mod hit_test_examples {}
+
 // ============================================================================
 // Static Assertions: Send + Sync (data-plane only)
 // ============================================================================
