@@ -97,9 +97,8 @@ impl TouchInputState {
         };
         let mut sample = PointerSample::new(time, position);
         // Pencil hover angles were added after UIHoverGestureRecognizer itself.
-        // SAFETY: selectors are getter queries, with no lifetime-bearing argument.
-        if unsafe { recognizer.respondsToSelector(sel!(altitudeAngle)) }
-            && unsafe { recognizer.respondsToSelector(sel!(azimuthAngleInView:)) }
+        if recognizer.respondsToSelector(sel!(altitudeAngle))
+            && recognizer.respondsToSelector(sel!(azimuthAngleInView:))
             && let Ok(orientation) = PenOrientation::try_new(
                 recognizer.altitudeAngle(),
                 recognizer.azimuthAngleInView(Some(view)),
