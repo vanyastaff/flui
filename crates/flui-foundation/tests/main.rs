@@ -15,6 +15,12 @@ mod matrix;
 #[path = "geometry/scalar.rs"]
 mod scalar;
 
+#[path = "geometry/matrix4_lerp.rs"]
+mod matrix4_lerp;
+
+#[path = "geometry/angle.rs"]
+mod angle;
+
 /// Execute every named scenario before reporting failures. Keep opaque panic
 /// payloads alive until all rows complete, without invoking arbitrary Drop.
 pub(crate) fn run_table(cases: &[(&str, fn())]) {

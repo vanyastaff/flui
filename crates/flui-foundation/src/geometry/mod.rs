@@ -14,6 +14,7 @@
 //! | [`Edges`] / [`EdgeInsets`] | per-side insets |
 //! | [`RRect`] / [`Radius`] | rounded rectangle with elliptical corners |
 //! | [`Matrix4`] | 4×4 transform (glam inside) |
+//! | [`Angle`] | plane angle in radians; whole turns are kept |
 
 // Math-crate idiom: single-letter coordinate names are the domain's vocabulary.
 #![expect(clippy::many_single_char_names)]
@@ -32,6 +33,7 @@
 )]
 #![deny(missing_docs)]
 
+pub mod angle;
 pub mod axis;
 pub mod bounds;
 pub mod circle;
@@ -44,6 +46,7 @@ pub mod keys;
 pub mod lerp;
 pub mod line;
 pub mod matrix4;
+mod matrix4_decompose;
 pub mod offset;
 pub mod point;
 pub mod rect;
@@ -76,6 +79,7 @@ pub mod prelude {
     };
 }
 
+pub use angle::Angle;
 pub use axis::Axis;
 pub use bounds::{Bounds, bounds};
 pub use circle::Circle;
