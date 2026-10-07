@@ -34,8 +34,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use flui_foundation::ManualClock;
 use flui_foundation::geometry::{Bounds, Size};
+use flui_foundation::{ManualClock, PresentationId};
 use flui_platform_api::TextStoreHost;
 use flui_platform_api::{
     CursorError, CursorIcon, InMemoryClipboard, PlatformInput, PlatformTextInput, PlatformWindow,
@@ -58,16 +58,21 @@ use flui_semantics::platform::{
 use flui_view::dev_agent::DevAgentHook;
 use parking_lot::Mutex;
 
+use crate::a11y::A11yTree;
 use crate::text_store_host::RecordingTextStoreHost;
 
-/// The window a [`HeadlessHost`] presents into: window 1 at scale factor 1,
-/// focused and visible, with the logical size the realm was built at.
+/// The window a [`HeadlessHost`] presents into: window 1 at scale factor 1 (a
+/// window [opened](HeadlessHost::open_window) beside it takes the next
+/// identity, and [`HeadlessHost::set_scale_factor`] moves it), focused and
+/// visible, with the logical size the realm was built at.
 ///
 /// It records what the realm asks of a window that a test asserts on: the
 /// cursor a hovered region sets, and, when built with a text input, every
 /// IME enable and cursor-area call.
 pub struct HeadlessWindow {
+    id: WindowId,
     size: Size<f64>,
+    scale_factor: Mutex<f64>,
     cursor: Mutex<CursorIcon>,
     text_input: Option<Arc<RecordingTextInput>>,
     text_store_host: bool,
@@ -87,7 +92,9 @@ impl HeadlessWindow {
     #[must_use]
     pub fn new(width: u32, height: u32) -> Self {
         Self {
+            id: WindowId(1),
             size: Size::new(f64::from(width), f64::from(height)),
+            scale_factor: Mutex::new(1.0),
             cursor: Mutex::new(CursorIcon::Default),
             text_input: None,
             text_store_host: false,
@@ -137,18 +144,25 @@ impl HeadlessWindow {
             .map(|input| input.ime_allowed.lock().clone())
     }
 
+    /// The logical size in device pixels at the current scale factor: a
+    /// window moved to another monitor keeps its logical size.
     fn physical_size_i32(&self) -> Size<i32> {
+        let scale = *self.scale_factor.lock();
         #[expect(
             clippy::cast_possible_truncation,
-            reason = "built from u32 pixel counts, which a test keeps far below i32::MAX"
+            reason = "built from u32 pixel counts at a test's small scale factor, far below \
+                      i32::MAX"
         )]
-        Size::new(self.size.width as i32, self.size.height as i32)
+        Size::new(
+            (self.size.width * scale).round() as i32,
+            (self.size.height * scale).round() as i32,
+        )
     }
 }
 
 impl PlatformWindow for HeadlessWindow {
     fn id(&self) -> WindowId {
-        WindowId(1)
+        self.id
     }
 
     fn physical_size(&self) -> Size<i32> {
@@ -160,7 +174,7 @@ impl PlatformWindow for HeadlessWindow {
     }
 
     fn scale_factor(&self) -> f64 {
-        1.0
+        *self.scale_factor.lock()
     }
 
     fn request_redraw(&self) {}
@@ -207,15 +221,15 @@ impl PlatformTextInput for RecordingTextInput {
 }
 
 /// The accessibility bridge of a [`HeadlessHost`]'s window: assistive
-/// technology attaches when a test asks, published trees are dropped (the
-/// harness reads the assembled tree from the pipeline instead), and the
-/// action listener the realm registers is handed to a test that plays the
-/// adapter.
+/// technology attaches when a test asks, published updates are folded into
+/// the tree an adapter would hold, and the action listener the realm
+/// registers is handed to a test that plays the adapter.
 #[derive(Default)]
 struct HeadlessAccessibility {
     active: AtomicBool,
     activation: Mutex<Option<AccessibilityActivationListener>>,
     action: Mutex<Option<AccessibilityActionListener>>,
+    published: Mutex<Option<accesskit::TreeUpdate>>,
 }
 
 impl HeadlessAccessibility {
@@ -232,7 +246,41 @@ impl HeadlessAccessibility {
 }
 
 impl PlatformAccessibility for HeadlessAccessibility {
-    fn publish(&self, _update: accesskit::TreeUpdate) {}
+    /// Fold `update` into the published tree as an adapter does: an update
+    /// carrying tree data replaces it, any other replaces the nodes it names,
+    /// adds the rest, and drops those no longer reachable from the root.
+    fn publish(&self, update: accesskit::TreeUpdate) {
+        let mut published = self.published.lock();
+        match published.as_mut() {
+            Some(tree) if update.tree.is_none() => {
+                for (id, node) in update.nodes {
+                    match tree.nodes.iter_mut().find(|(known, _)| *known == id) {
+                        Some(slot) => slot.1 = node,
+                        None => tree.nodes.push((id, node)),
+                    }
+                }
+                tree.focus = update.focus;
+                // An adapter drops the nodes no longer reachable from the
+                // root, so the kept tree tracks the live one instead of
+                // accumulating every node ever published.
+                if let Some(root) = tree.tree.as_ref().map(|data| data.root) {
+                    let mut reachable = std::collections::HashSet::from([root]);
+                    let mut pending = vec![root];
+                    while let Some(id) = pending.pop() {
+                        if let Some((_, node)) = tree.nodes.iter().find(|(known, _)| *known == id) {
+                            for &child in node.children() {
+                                if reachable.insert(child) {
+                                    pending.push(child);
+                                }
+                            }
+                        }
+                    }
+                    tree.nodes.retain(|(id, _)| reachable.contains(id));
+                }
+            }
+            _ => *published = Some(update),
+        }
+    }
 
     fn is_active(&self) -> bool {
         self.active.load(Ordering::Relaxed)
@@ -341,6 +389,8 @@ pub struct HeadlessHost {
     window: Arc<HeadlessWindow>,
     accessibility: Arc<HeadlessAccessibility>,
     clipboard: Arc<InMemoryClipboard>,
+    /// The windows opened beside the primary one, in opening order.
+    secondary: Vec<SecondaryWindow>,
     text_store_host: Option<Rc<RecordingTextStoreHost>>,
     /// Dropped-frame reports not yet raised, as the text a raised failure
     /// carries: those of the pump in progress, and any the realm made
@@ -433,6 +483,7 @@ impl HeadlessHost {
             accessibility,
             clipboard,
             text_store_host,
+            secondary: Vec::new(),
             failures,
         }
     }
@@ -658,6 +709,155 @@ impl HeadlessHost {
     pub fn clipboard(&self) -> Arc<InMemoryClipboard> {
         Arc::clone(&self.clipboard)
     }
+
+    /// The window the realm was built on.
+    #[must_use]
+    pub fn primary_window(&self) -> HeadlessWindowId {
+        HeadlessWindowId(self.realm.presentation_id())
+    }
+
+    /// Open `window` beside the existing ones, as a runner installs a
+    /// presentation for a window the app opened: the realm builds it a
+    /// pipeline of its own at the window's scale factor. It shows nothing
+    /// until a view is [attached](Self::attach_to) to it.
+    ///
+    /// The window gets the next free window identity, so no two windows of
+    /// this host share one.
+    pub fn open_window(&mut self, mut window: HeadlessWindow) -> HeadlessWindowId {
+        let next = u64::try_from(self.secondary.len())
+            .expect("BUG: a test opens far fewer than u64::MAX windows")
+            + 2;
+        window.id = WindowId(next);
+        let window = Arc::new(window);
+        let accessibility = Arc::new(HeadlessAccessibility::default());
+        let presentation = self.realm.assemble_presentation(PresentationWindow::new(
+            Arc::clone(&window) as Arc<dyn PlatformWindow>,
+            Some(Arc::clone(&accessibility) as Arc<dyn PlatformAccessibility>),
+        ));
+        let id = self.realm.install_presentation(presentation);
+        self.secondary.push(SecondaryWindow {
+            id,
+            window,
+            accessibility,
+        });
+        HeadlessWindowId(id)
+    }
+
+    /// Attach `view` as the root widget of `window`. The primary window's
+    /// root is attached with [`attach`](Self::attach).
+    ///
+    /// # Errors
+    ///
+    /// [`flui_view::AttachError`] if a root is already attached.
+    ///
+    /// # Panics
+    ///
+    /// If `window` was not opened by this host.
+    pub fn attach_to<V>(
+        &self,
+        window: HeadlessWindowId,
+        view: &V,
+    ) -> Result<(), flui_view::AttachError>
+    where
+        V: flui_view::View + Clone + 'static,
+    {
+        if window == self.primary_window() {
+            return self.attach(view);
+        }
+        // The same environment the primary root gets: this window's own
+        // `MediaQuery` and its size.
+        let size = self.secondary_of(window).window.size;
+        self.realm
+            .attach_root_widget_with_size_to(window.0, view, size.width, size.height)
+    }
+
+    /// Attach assistive technology to `window`; see
+    /// [`enable_semantics`](Self::enable_semantics).
+    ///
+    /// # Panics
+    ///
+    /// If `window` was not opened by this host.
+    pub fn enable_semantics_on(&self, window: HeadlessWindowId) {
+        self.accessibility_of(window).attach();
+    }
+
+    /// Move `window` to a monitor of scale `scale_factor`, as a runner
+    /// delivers the platform's scale change: the window keeps its logical
+    /// size and reports the new scale, the primary window's surface takes
+    /// the new device size, and the window's own presentation (never a
+    /// sibling's) lays out, paints and publishes semantics at it from the
+    /// next [`pump`](Self::pump).
+    ///
+    /// # Panics
+    ///
+    /// If `window` was not opened by this host.
+    pub fn set_scale_factor(&mut self, window: HeadlessWindowId, scale_factor: f64) {
+        let target = self.window_of(window);
+        *target.scale_factor.lock() = scale_factor;
+        if window == self.primary_window() {
+            let physical = target.physical_size_i32();
+            self.sink.size = (
+                u32::try_from(physical.width).expect("BUG: a window's device size is positive"),
+                u32::try_from(physical.height).expect("BUG: a window's device size is positive"),
+            );
+        }
+        self.realm.enter(|realm| {
+            realm.set_device_pixel_ratio_for(window.0, scale_factor);
+            if let Some(source) = realm.media_query_for(window.0) {
+                source.update(|data| data.device_pixel_ratio = scale_factor);
+            }
+            realm.request_redraw();
+        });
+    }
+
+    /// The accessibility tree `window` last published to its platform
+    /// adapter, every incremental update folded in; `None` before
+    /// assistive technology attached and a [`pump`](Self::pump) ran.
+    ///
+    /// # Panics
+    ///
+    /// If `window` was not opened by this host.
+    #[must_use]
+    pub fn published_a11y_tree(&self, window: HeadlessWindowId) -> Option<A11yTree> {
+        self.accessibility_of(window)
+            .published
+            .lock()
+            .clone()
+            .map(A11yTree::new)
+    }
+
+    fn window_of(&self, window: HeadlessWindowId) -> &HeadlessWindow {
+        if window == self.primary_window() {
+            return &self.window;
+        }
+        &self.secondary_of(window).window
+    }
+
+    fn accessibility_of(&self, window: HeadlessWindowId) -> &HeadlessAccessibility {
+        if window == self.primary_window() {
+            return &self.accessibility;
+        }
+        &self.secondary_of(window).accessibility
+    }
+
+    fn secondary_of(&self, window: HeadlessWindowId) -> &SecondaryWindow {
+        self.secondary
+            .iter()
+            .find(|secondary| secondary.id == window.0)
+            .expect("a HeadlessWindowId names a window this host opened")
+    }
+}
+
+/// A window of a [`HeadlessHost`]: its primary one or one it
+/// [opened](HeadlessHost::open_window).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct HeadlessWindowId(PresentationId);
+
+/// A window [`HeadlessHost::open_window`] installed beside the primary one.
+struct SecondaryWindow {
+    id: PresentationId,
+    window: Arc<HeadlessWindow>,
+    accessibility: Arc<HeadlessAccessibility>,
 }
 
 /// The text a dropped-frame report raises with; `None` for a contained
@@ -710,5 +910,52 @@ mod tests {
             "the raising pump did not move the clock"
         );
         let _outcome = realm.pump(Duration::ZERO);
+    }
+
+    /// The kept tree holds what an adapter holds: a node an incremental
+    /// update detaches from the root is dropped, not kept forever.
+    ///
+    /// Fails against a fold that only upserts: the detached node stays.
+    #[test]
+    fn a_detached_node_leaves_the_published_tree() {
+        use accesskit::{Node, NodeId, Role, TreeId, TreeInfo, TreeUpdate};
+
+        use super::PlatformAccessibility as _;
+
+        let parent = |children: Vec<NodeId>| {
+            let mut node = Node::new(Role::Window);
+            node.set_children(children);
+            node
+        };
+        let bridge = super::HeadlessAccessibility::default();
+        bridge.publish(TreeUpdate {
+            nodes: vec![
+                (NodeId(1), parent(vec![NodeId(2)])),
+                (NodeId(2), Node::new(Role::Label)),
+            ],
+            tree: Some(TreeInfo::new(NodeId(1))),
+            tree_id: TreeId::ROOT,
+            focus: NodeId(1),
+        });
+        bridge.publish(TreeUpdate {
+            nodes: vec![
+                (NodeId(1), parent(vec![NodeId(3)])),
+                (NodeId(3), Node::new(Role::Label)),
+            ],
+            tree: None,
+            tree_id: TreeId::ROOT,
+            focus: NodeId(1),
+        });
+
+        let published = bridge.published.lock();
+        let mut ids: Vec<_> = published
+            .as_ref()
+            .expect("a tree was published")
+            .nodes
+            .iter()
+            .map(|(id, _)| *id)
+            .collect();
+        ids.sort_unstable();
+        assert_eq!(ids, [NodeId(1), NodeId(3)]);
     }
 }

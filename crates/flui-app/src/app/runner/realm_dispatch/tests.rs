@@ -617,6 +617,145 @@ fn one_realm_two_windows_policy_routes_by_presentation() {
     teardown_platform_realm();
 }
 
+/// A `Resized` stamped for a secondary window of a shared realm, delivered
+/// through `dispatch_platform_realm`, rescales that window's pipeline (and so
+/// its semantics bounds) and leaves the primary's at its old ratio.
+fn resized_rescales_only_the_addressed_presentation() {
+    let (primary, _clear_guard) = install_realm_a_through_a_real_owner_platform();
+    let (secondary, _window) = super::super::secondary_window::open_secondary_window_impl(
+        AppConfig::default(),
+        WindowPolicy::Shared,
+    )
+    .expect("WindowPolicy::Shared installs a second presentation into realm A")
+    .expect("the headless platform opens windows Ready");
+    assert_eq!(secondary.address.realm_id, primary.address.realm_id);
+    assert_ne!(
+        secondary.address.presentation_id,
+        primary.address.presentation_id
+    );
+
+    let ratios = || {
+        APP_RUNTIME.with(|slot| {
+            let state = slot.borrow();
+            let realm = state
+                .realms
+                .get(&primary.address.realm_id)
+                .and_then(|slot| slot.realm.as_ref())
+                .expect("realm A is resident");
+            let ratio = |id| {
+                realm
+                    .presentation_device_pixel_ratio_for_test(id)
+                    .expect("both presentations are resident")
+            };
+            (
+                ratio(primary.address.presentation_id),
+                ratio(secondary.address.presentation_id),
+            )
+        })
+    };
+    let (primary_before, secondary_before) = ratios();
+    let rescaled = primary_before.max(secondary_before) + 1.5;
+
+    dispatch_platform_realm(
+        secondary,
+        RealmTask::Event(PlatformToUi::Resized {
+            size: flui_foundation::geometry::Size::new(640.0, 480.0),
+            scale_factor: rescaled,
+        }),
+    )
+    .expect("the secondary presentation is live");
+
+    let (primary_after, secondary_after) = ratios();
+    assert!(
+        (secondary_after - rescaled).abs() < f64::EPSILON,
+        "the addressed secondary window must take the reported ratio, got {secondary_after}"
+    );
+    assert!(
+        (primary_after - primary_before).abs() < f64::EPSILON,
+        "the primary window must keep its own ratio, got {primary_after} (was {primary_before})"
+    );
+
+    teardown_platform_realm();
+}
+
+/// A `Resized` stamped for a secondary window of a shared realm never reaches
+/// the realm's surface applier, which belongs to the primary window's
+/// renderer: the primary's surface keeps its size, so the constraints its
+/// next frame is laid out under (surface / primary ratio) stay put. A
+/// `Resized` for the primary still applies.
+fn resizing_a_secondary_leaves_the_primary_surface_alone() {
+    use std::{cell::Cell, rc::Rc};
+
+    let (primary, _clear_guard) = install_realm_a_through_a_real_owner_platform();
+    let surface = Rc::new(Cell::new((800_u32, 600_u32)));
+    let applied = Rc::clone(&surface);
+    super::install_surface_applier(primary.address.realm_id, move |size, scale_factor| {
+        applied.set((
+            (size.width * scale_factor) as u32,
+            (size.height * scale_factor) as u32,
+        ));
+    });
+    let (secondary, _window) = super::super::secondary_window::open_secondary_window_impl(
+        AppConfig::default(),
+        WindowPolicy::Shared,
+    )
+    .expect("WindowPolicy::Shared installs a second presentation into realm A")
+    .expect("the headless platform opens windows Ready");
+    let primary_ratio = || {
+        APP_RUNTIME.with(|slot| {
+            slot.borrow()
+                .realms
+                .get(&primary.address.realm_id)
+                .and_then(|slot| slot.realm.as_ref())
+                .and_then(|realm| {
+                    realm.presentation_device_pixel_ratio_for_test(primary.address.presentation_id)
+                })
+                .expect("the primary presentation is resident")
+        })
+    };
+    let primary_constraints = || {
+        let (width, height) = surface.get();
+        let ratio = primary_ratio();
+        (f64::from(width) / ratio, f64::from(height) / ratio)
+    };
+    let before = primary_constraints();
+
+    dispatch_platform_realm(
+        secondary,
+        RealmTask::Event(PlatformToUi::Resized {
+            size: flui_foundation::geometry::Size::new(320.0, 200.0),
+            scale_factor: 2.5,
+        }),
+    )
+    .expect("the secondary presentation is live");
+    assert_eq!(
+        surface.get(),
+        (800, 600),
+        "a secondary window's resize must not reach the primary's surface"
+    );
+    assert_eq!(
+        primary_constraints(),
+        before,
+        "the primary's layout constraints must not move with a secondary's resize"
+    );
+
+    dispatch_platform_realm(
+        primary,
+        RealmTask::Event(PlatformToUi::Resized {
+            size: flui_foundation::geometry::Size::new(500.0, 400.0),
+            scale_factor: 2.0,
+        }),
+    )
+    .expect("the primary presentation is live");
+    assert_eq!(
+        surface.get(),
+        (1000, 800),
+        "the primary window's own resize still reaches its surface"
+    );
+
+    teardown_platform_realm();
+}
+
 /// Installs realm A under `ExitPolicy::OnLastWindowClosed` with a quit
 /// counter, and returns the parked re-evaluation handle with them.
 ///
@@ -1100,6 +1239,14 @@ fn realm_dispatch_matrix() {
             (
                 "one_realm_two_windows_policy_routes_by_presentation",
                 one_realm_two_windows_policy_routes_by_presentation as fn(),
+            ),
+            (
+                "resized_rescales_only_the_addressed_presentation",
+                resized_rescales_only_the_addressed_presentation as fn(),
+            ),
+            (
+                "resizing_a_secondary_leaves_the_primary_surface_alone",
+                resizing_a_secondary_leaves_the_primary_surface_alone as fn(),
             ),
             (
                 "closing_the_last_window_reentrantly_from_inside_a_dispatch_still_exits",

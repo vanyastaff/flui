@@ -112,6 +112,59 @@ impl UiRealm {
         })
     }
 
+    /// [`Self::attach_root_widget_with_size`], but for the resident
+    /// presentation `id`: the root is wrapped in THAT presentation's own
+    /// `MediaQuery` (its window's size and ratio, rewritten by its addressed
+    /// resize), vsync and gesture arena, and its root view is born at
+    /// `width` × `height`. What a headless host gives a secondary window, so
+    /// the secondary's subtree sees the same environment as the primary's.
+    ///
+    /// # Errors
+    ///
+    /// Forwards every [`flui_view::AttachError`] from
+    /// [`flui_view::WidgetsBinding::attach_root_widget_with_size`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if `id` does not name a presentation this realm currently
+    /// hosts.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn attach_root_widget_with_size_to<V>(
+        &self,
+        id: PresentationId,
+        view: &V,
+        width: f64,
+        height: f64,
+    ) -> Result<(), flui_view::AttachError>
+    where
+        V: flui_view::View + Clone + 'static,
+    {
+        self.enter(|realm| {
+            let presentation = realm.presentations.get(id).expect(
+                "BUG: attach_root_widget_with_size_to given a presentation id this realm does \
+                 not host",
+            );
+            let with_media_query = crate::media_query_root::MediaQueryRoot::new(
+                std::rc::Rc::clone(&presentation.media_query),
+                flui_view::view::ViewExt::boxed(view.clone()),
+            );
+            let focused = FocusRoot::new(with_media_query);
+            let animated = VsyncScope::new(presentation.vsync(), focused);
+            let wrapped = GestureArenaScope::new(presentation.gestures().arena().clone(), animated);
+            presentation
+                .widgets()
+                .attach_root_widget_with_size(&wrapped, width, height)?;
+            realm.request_redraw_for(presentation);
+            tracing::debug!(
+                ?id,
+                width,
+                height,
+                "Root widget attached (sized, addressed)"
+            );
+            Ok(())
+        })
+    }
+
     /// Attach a root widget sizing the root view to an explicit logical
     /// `width` × `height` — the platform window's surface size.
     ///

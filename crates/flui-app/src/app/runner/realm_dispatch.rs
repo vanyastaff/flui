@@ -345,14 +345,37 @@ impl PlatformToUi {
                 // yet, or already cleared by teardown) this skips with a
                 // trace instead of unwrapping/panicking; surface application
                 // then coalesces onto the next real applier install.
+                //
+                // The realm has one surface applier and one frame sink, both
+                // the window's that installed them (`surface_owner`). A
+                // resize of any other presentation — a `WindowPolicy::Shared`
+                // secondary — must not reach them: the primary's surface
+                // would take the secondary's size and its next frame would be
+                // laid out at it. That resize stays addressed to its own
+                // ratio and media query below; its surface waits for
+                // per-presentation sinks (#559).
                 let realm_id = realm.realm_id();
-                let applier = APP_RUNTIME.with(|slot| {
-                    slot.borrow_mut()
-                        .realms
-                        .get_mut(&realm_id)
-                        .and_then(|realm_slot| realm_slot.surface_applier.take())
+                let (owns_surface, applier) = APP_RUNTIME.with(|slot| {
+                    let mut state = slot.borrow_mut();
+                    let Some(realm_slot) = state.realms.get_mut(&realm_id) else {
+                        return (true, None);
+                    };
+                    if realm_slot
+                        .surface_owner
+                        .is_some_and(|owner| owner != presentation_id)
+                    {
+                        return (false, None);
+                    }
+                    (true, realm_slot.surface_applier.take())
                 });
                 match applier {
+                    None if !owns_surface => {
+                        tracing::trace!(
+                            ?presentation_id,
+                            "realm resize: presentation does not own the realm's surface; \
+                             surface left alone"
+                        );
+                    }
                     Some(applier) => {
                         // The guard restores the applier on drop
                         // unconditionally — including if `call` below
@@ -372,12 +395,14 @@ impl PlatformToUi {
                         );
                     }
                 }
-                realm.set_device_pixel_ratio(scale_factor);
-                // Addressed write: dropped when the presentation this resize
-                // was stamped for is gone by delivery time — see
-                // `UiRealm::media_query_for`. Everything else in this arm
-                // (surface applier, device pixel ratio, redraw) is realm-wide
-                // and runs either way.
+                // Addressed writes: the ratio and the media query belong to
+                // the window that reported them (windows on monitors with
+                // different scales keep their own), and both are dropped when
+                // the presentation this resize was stamped for is gone by
+                // delivery time — see `UiRealm::media_query_for`. The redraw
+                // below is realm-wide and runs
+                // either way.
+                realm.set_device_pixel_ratio_for(presentation_id, scale_factor);
                 if let Some(source) = realm.media_query_for(presentation_id) {
                     source.update(|data| {
                         data.size = size;
@@ -480,6 +505,7 @@ pub(super) fn install_surface_applier(
     APP_RUNTIME.with(|slot| {
         if let Some(realm_slot) = slot.borrow_mut().realms.get_mut(&realm_id) {
             realm_slot.surface_applier = Some(Box::new(applier));
+            realm_slot.surface_owner = Some(realm_slot.address.presentation_id);
         } else {
             debug_assert!(
                 false,
@@ -569,6 +595,7 @@ pub(super) fn install_platform_realm(
                 draining: false,
                 address,
                 surface_applier: None,
+                surface_owner: None,
             },
         );
         state.owner_thread = Some(owner_thread);
@@ -670,6 +697,7 @@ pub(super) fn install_realm_alongside(
                 draining: false,
                 address,
                 surface_applier: None,
+                surface_owner: None,
             },
             window,
         )
