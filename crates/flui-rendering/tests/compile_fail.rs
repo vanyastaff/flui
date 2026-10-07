@@ -1,4 +1,5 @@
-//! Compile-fail tests pinning the `#[diagnostic::on_unimplemented]` text on
+//! Compile-fail tests pinning pipeline admission, phases and
+//! `#[diagnostic::on_unimplemented]` text on
 //! the render-object traits: a type that is not a `RenderBox` is told to
 //! implement the protocol trait (not `RenderObject` directly), and a type
 //! that is not `ParentData` is told the one-line impl that suffices.
@@ -12,5 +13,6 @@
 #[test]
 fn trybuild_ui() {
     let t = trybuild::TestCases::new();
+    t.pass("tests/compile_pass/pipeline_phases.rs");
     t.compile_fail("tests/compile_fail/*.rs");
 }

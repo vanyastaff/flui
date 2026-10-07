@@ -154,9 +154,11 @@ that a later rasterization has the same dimensions or texels.
 The public `glyph_images_admit_only_complete_mask_and_color_buffers` row in
 `parley_oracle_contract` covers mask/RGBA admission, short and excess buffers,
 format/length disagreement, empty-axis extremes, overflow and a healthy next
-image. `GlyphImage`'s compile-fail doctests prohibit literal construction,
-dimension mutation and pixel mutation through its getter. The existing Swash
-bitmap oracle continues to pin actual producer output.
+image. `compile_fail::trybuild_ui` pins E0451 for literal construction, E0616
+for dimension mutation and E0594 for pixel mutation through the getter, with a
+passing constructor-and-getter caller. `GlyphImage`'s compile-fail doctests
+illustrate these restrictions. The existing Swash bitmap oracle continues to
+pin actual producer output.
 
 ---
 

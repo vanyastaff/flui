@@ -44,7 +44,6 @@ pub mod edges;
 pub mod error;
 pub mod keys;
 pub mod lerp;
-pub mod line;
 pub mod matrix4;
 mod matrix4_decompose;
 pub mod offset;
@@ -69,7 +68,6 @@ pub mod prelude {
         bounds::Bounds,
         circle::Circle,
         error::GeometryError,
-        line::Line,
         offset::Offset,
         point::{Point, point},
         rect::{Rect, rect},
@@ -89,7 +87,6 @@ pub use edges::{Edges, edges};
 pub use error::GeometryError;
 pub use keys::{canonical_bits, canonical_bits_f64};
 pub use lerp::{Lerp, MaybeLerp};
-pub use line::Line;
 pub use matrix4::Matrix4;
 pub use offset::Offset;
 pub use point::{Point, point};

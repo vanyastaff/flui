@@ -1,0 +1,39 @@
+error[E0277]: `Rc<Cell<u32>>` cannot be shared between threads safely
+ --> tests/ui/state_cell_is_not_sync.rs:6:18
+  |
+6 |     require_sync(StateCell::new(0_u32));
+  |     ------------ ^^^^^^^^^^^^^^^^^^^^^ `Rc<Cell<u32>>` cannot be shared between threads safely
+  |     |
+  |     required by a bound introduced by this call
+  |
+  = help: within `StateCell<u32>`, the trait `Sync` is not implemented for `Rc<Cell<u32>>`
+note: required because it appears within the type `StateCell<u32>`
+ --> src/state_cell.rs
+  |
+  | pub struct StateCell<T: Copy> {
+  |            ^^^^^^^^^
+note: required by a bound in `require_sync`
+ --> tests/ui/state_cell_is_not_sync.rs:3:20
+  |
+3 | fn require_sync<T: Sync>(_: T) {}
+  |                    ^^^^ required by this bound in `require_sync`
+
+error[E0277]: `Rc<RefCell<Option<RebuildHandle>>>` cannot be shared between threads safely
+ --> tests/ui/state_cell_is_not_sync.rs:6:18
+  |
+6 |     require_sync(StateCell::new(0_u32));
+  |     ------------ ^^^^^^^^^^^^^^^^^^^^^ `Rc<RefCell<Option<RebuildHandle>>>` cannot be shared between threads safely
+  |     |
+  |     required by a bound introduced by this call
+  |
+  = help: within `StateCell<u32>`, the trait `Sync` is not implemented for `Rc<RefCell<Option<RebuildHandle>>>`
+note: required because it appears within the type `StateCell<u32>`
+ --> src/state_cell.rs
+  |
+  | pub struct StateCell<T: Copy> {
+  |            ^^^^^^^^^
+note: required by a bound in `require_sync`
+ --> tests/ui/state_cell_is_not_sync.rs:3:20
+  |
+3 | fn require_sync<T: Sync>(_: T) {}
+  |                    ^^^^ required by this bound in `require_sync`

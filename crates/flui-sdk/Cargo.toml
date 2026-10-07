@@ -41,6 +41,7 @@ flui-objects = { path = "../flui-objects", version = "=0.2.0-dev" }
 flui-scheduler = { path = "../flui-scheduler", version = "=0.2.0-dev" }
 
 [dev-dependencies]
+trybuild = { workspace = true }
 # `tests/surface.rs` checks that each re-export is the facade's own type.
 # Path-only, so `cargo package` drops it: the published SDK never names the
 # facade.

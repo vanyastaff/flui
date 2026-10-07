@@ -1,0 +1,10 @@
+error[E0624]: associated function `new` is private
+ --> tests/ui/writer_source_minting_is_private.rs:4:27
+  |
+4 |     let _ = WriterSource::new(ctx.reactive());
+  |                           ^^^ private associated function
+  |
+ ::: src/reactive/writer.rs
+  |
+  |     pub(crate) fn new(graph: Reactive) -> Self {
+  |     ------------------------------------------ private associated function defined here

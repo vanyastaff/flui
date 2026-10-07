@@ -685,7 +685,27 @@ impl RenderTester {
     /// #     fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {}
     /// # }
     /// let run = RenderTester::mount(box_node(FixedBox)).run_layout();
-    /// let _ = run.snapshot(); // error: no method `snapshot` found for `LayoutRun`
+    /// let _ = run.snapshot();
+    /// ```
+    ///
+    /// Advancing the same object to paint makes its snapshot available:
+    ///
+    /// ```
+    /// # use flui_rendering::testing::{box_node, RenderTester};
+    /// # use flui_rendering::prelude::*;
+    /// # use flui_foundation::Leaf;
+    /// # use flui_foundation::geometry::Size;
+    /// # #[derive(Debug, Default)]
+    /// # struct FixedBox;
+    /// # impl flui_foundation::Diagnosticable for FixedBox {}
+    /// # impl RenderBox for FixedBox {
+    /// #     type Arity = Leaf;
+    /// #     type ParentData = BoxParentData;
+    /// #     fn perform_layout(&mut self, _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size { Size::ZERO }
+    /// #     fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {}
+    /// # }
+    /// let run = RenderTester::mount(box_node(FixedBox)).run_to_paint();
+    /// let _ = run.snapshot();
     /// ```
     #[must_use]
     pub fn run_to_paint(self) -> PaintRun {

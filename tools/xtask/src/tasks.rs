@@ -262,16 +262,32 @@ fn platform_suite_linux() -> Cmd {
         .env("FLUI_HEADLESS", "1")
 }
 
+/// Portable external compiler checks; no native window or event loop runs.
+fn platform_compiler_tests() -> Cmd {
+    Cmd::cargo([
+        "nextest",
+        "run",
+        "-p",
+        "flui-platform",
+        "--test",
+        "compiler_guards",
+    ])
+    .args(["--locked", "--no-fail-fast"])
+}
+
 /// flui-platform's suite on `host`: under Xvfb on Linux, directly on Windows
-/// (native Windows needs neither), skipped elsewhere.
+/// (native Windows needs neither), skipped elsewhere. Compiler checks run
+/// separately in the nested stage.
 fn platform_suite(host: Host) -> Step {
     match host {
-        Host::Linux => platform_suite_linux().into(),
+        Host::Linux => platform_suite_linux()
+            .args(["-E", "not (group(trybuild))"])
+            .into(),
         Host::Windows => Cmd::cargo(["nextest", "run", "-p", "flui-platform"])
-            .args(["--locked", "--all-features", "--no-fail-fast"])
+            .args(["--locked", "--all-features", "--no-fail-fast", "-E", "not (group(trybuild))"])
             .into(),
         Host::MacOs | Host::Other => Step::Note(
-            "Skipping flui-platform tests on this host: the CI-mirroring invocation needs xvfb-run (Linux-only) for the winit backend X11-dependent tests; see docs/testing.md."
+            "Skipping native flui-platform tests on this host: the CI-mirroring invocation needs xvfb-run (Linux-only) for the winit backend X11-dependent tests; see docs/testing.md."
                 .to_owned(),
         ),
     }
@@ -299,10 +315,14 @@ fn native_platform_plan(host: Host) -> Vec<Step> {
                     // tests retain their existing macOS ignore annotations.
                     command = command.env("FLUI_HEADLESS", "1");
                 }
-                command.into()
+                command.args(["-E", "not (group(trybuild))"]).into()
             })
             .collect(),
-        Host::Linux => vec![platform_suite_linux().into()],
+        Host::Linux => vec![
+            platform_suite_linux()
+                .args(["-E", "not (group(trybuild))"])
+                .into(),
+        ],
         Host::Other => vec![Step::Note("platform-test: unsupported host".to_owned())],
     }
 }
@@ -382,24 +402,34 @@ fn test_plan(host: Host, stages: Stages) -> Vec<Step> {
     let base = || scoped_nextest(host, &format!("not ({NESTED})"));
     let nested = scoped_nextest(host, NESTED);
     let mut steps = match stages {
-        Stages::All => vec![base().into(), platform_suite(host), nested.into()],
+        Stages::All => vec![
+            base().into(),
+            platform_suite(host),
+            nested.into(),
+            platform_compiler_tests().into(),
+        ],
         Stages::Fast => vec![
             base().into(),
             platform_suite(host),
-            Step::Note(format!(
-                "test --fast: SKIPPED the nested tests (trybuild compile_fail suites, flui-cli cli_create::generated_*, flui::facade_consumer; groups in .config/nextest.toml). Run them with: {nested}"
-            )),
+            Step::Note(
+                "test --fast: SKIPPED the nested tests (trybuild compile_fail suites, flui-cli cli_create::generated_*, flui::facade_consumer; groups in .config/nextest.toml). Run them with: cargo xtask test --nested".to_owned(),
+            ),
         ],
-        Stages::Nested => vec![nested.into()],
-        Stages::NestedGroup(group) => vec![scoped_nextest(host, group.filterset()).into()],
+        Stages::Nested => vec![nested.into(), platform_compiler_tests().into()],
+        Stages::NestedGroup(group) => {
+            let mut steps = vec![scoped_nextest(host, group.filterset()).into()];
+            if group == NestedGroup::Trybuild {
+                steps.push(platform_compiler_tests().into());
+            }
+            steps
+        }
         Stages::NoTrybuild => vec![
             base().into(),
             platform_suite(host),
             scoped_nextest(host, "group(nested-cargo)").into(),
-            Step::Note(format!(
-                "test --no-trybuild: SKIPPED the trybuild suites. Run them with: {}",
-                scoped_nextest(host, "group(trybuild)")
-            )),
+            Step::Note(
+                "test --no-trybuild: SKIPPED the trybuild suites. Run them with: cargo xtask test --nested --nested-group trybuild".to_owned(),
+            ),
         ],
     };
     if host == Host::Windows {
@@ -1201,15 +1231,21 @@ mod tests {
         assert_eq!(
             lines(&native_platform_plan(Host::Windows)),
             [
-                "$ cargo nextest run -p flui-platform --locked --no-fail-fast",
-                "$ cargo nextest run -p flui-platform --locked --no-fail-fast --all-features",
+                "$ cargo nextest run -p flui-platform --locked --no-fail-fast -E 'not (group(trybuild))'",
+                "$ cargo nextest run -p flui-platform --locked --no-fail-fast --all-features -E 'not (group(trybuild))'",
             ]
         );
         assert_eq!(
             lines(&native_platform_plan(Host::MacOs)),
             [
-                "$ FLUI_HEADLESS=1 cargo nextest run -p flui-platform --locked --no-fail-fast",
-                "$ FLUI_HEADLESS=1 cargo nextest run -p flui-platform --locked --no-fail-fast --all-features",
+                "$ FLUI_HEADLESS=1 cargo nextest run -p flui-platform --locked --no-fail-fast -E 'not (group(trybuild))'",
+                "$ FLUI_HEADLESS=1 cargo nextest run -p flui-platform --locked --no-fail-fast --all-features -E 'not (group(trybuild))'",
+            ]
+        );
+        assert_eq!(
+            lines(&native_platform_plan(Host::Linux)),
+            [
+                "$ FLUI_HEADLESS=1 xvfb-run -a cargo nextest run -p flui-platform --locked --all-features --no-fail-fast -E 'not (group(trybuild))'"
             ]
         );
         assert_eq!(
@@ -1226,6 +1262,29 @@ mod tests {
                 "$ FLUI_REQUIRE_GPU=1 cargo nextest run -p flui --no-default-features --features gpu-readback-tests --test composited_layer_update_readback --locked --no-fail-fast --test-threads 1",
             ]
         );
+    }
+
+    fn platform_compiler_checks_follow_each_host_and_stage() {
+        for host in [Host::Linux, Host::Windows, Host::MacOs, Host::Other] {
+            for (stage, expected) in [
+                (Stages::All, 1),
+                (Stages::Fast, 0),
+                (Stages::Nested, 1),
+                (Stages::NestedGroup(NestedGroup::Trybuild), 1),
+                (Stages::NestedGroup(NestedGroup::Native), 0),
+                (Stages::NoTrybuild, 0),
+            ] {
+                let commands = lines(&test_plan(host, stage));
+                assert_eq!(
+                    commands
+                        .iter()
+                        .filter(|line| line.contains("-p flui-platform --test compiler_guards"))
+                        .count(),
+                    expected,
+                    "{host:?} {stage:?}: {commands:?}"
+                );
+            }
+        }
     }
 
     fn workflow_lint_runs_each_installed_linter_and_skips_the_rest() {
@@ -1246,41 +1305,46 @@ mod tests {
             lines(&test_plan(Host::Linux, Stages::All)),
             [
                 format!("$ cargo nextest run {SCOPE} -E 'not (group(nested-cargo) | group(trybuild))'"),
-                "$ FLUI_HEADLESS=1 xvfb-run -a cargo nextest run -p flui-platform --locked --all-features --no-fail-fast".to_owned(),
+                "$ FLUI_HEADLESS=1 xvfb-run -a cargo nextest run -p flui-platform --locked --all-features --no-fail-fast -E 'not (group(trybuild))'".to_owned(),
                 format!("$ cargo nextest run {SCOPE} -E 'group(nested-cargo) | group(trybuild)'"),
+                "$ cargo nextest run -p flui-platform --test compiler_guards --locked --no-fail-fast".to_owned(),
             ]
         );
         assert_eq!(
             lines(&test_plan(Host::Windows, Stages::All))[2],
-            "$ cargo nextest run -p flui-platform --locked --all-features --no-fail-fast"
+            "$ cargo nextest run -p flui-platform --locked --all-features --no-fail-fast -E 'not (group(trybuild))'"
         );
         assert!(
-            lines(&test_plan(Host::MacOs, Stages::All))[1].starts_with("Skipping flui-platform")
+            lines(&test_plan(Host::MacOs, Stages::All))[1]
+                .starts_with("Skipping native flui-platform")
         );
         let fast = lines(&test_plan(Host::Linux, Stages::Fast));
         assert_eq!(fast.len(), 3);
         assert!(fast[2].starts_with("test --fast: SKIPPED the nested tests"));
         assert!(
-            fast[2].ends_with(&format!(
-                "cargo nextest run {SCOPE} -E 'group(nested-cargo) | group(trybuild)'"
-            )),
+            fast[2].ends_with("cargo xtask test --nested"),
             "{}",
             fast[2]
         );
-        // The complete local nested stage: both groups, with no platform leg
+        // Nested stages include the portable platform compiler leg.
         assert_eq!(
             lines(&test_plan(Host::Linux, Stages::Nested)),
-            [format!(
-                "$ cargo nextest run {SCOPE} -E 'group(nested-cargo) | group(trybuild)'"
-            )]
+            [
+                format!("$ cargo nextest run {SCOPE} -E 'group(nested-cargo) | group(trybuild)'"),
+                "$ cargo nextest run -p flui-platform --test compiler_guards --locked --no-fail-fast".to_owned(),
+            ]
         );
         for (group, filter) in [
             (NestedGroup::Native, "group(nested-cargo)"),
             (NestedGroup::Trybuild, "group(trybuild)"),
         ] {
+            let mut expected = vec![format!("$ cargo nextest run {SCOPE} -E '{filter}'")];
+            if group == NestedGroup::Trybuild {
+                expected.push("$ cargo nextest run -p flui-platform --test compiler_guards --locked --no-fail-fast".to_owned());
+            }
             assert_eq!(
                 lines(&test_plan(Host::Linux, Stages::NestedGroup(group))),
-                [format!("$ cargo nextest run {SCOPE} -E '{filter}'")]
+                expected
             );
         }
         // CI's Windows job: the host-specific nested group, not trybuild
@@ -1292,7 +1356,7 @@ mod tests {
         );
         assert!(
             windows[4].starts_with("test --no-trybuild: SKIPPED the trybuild suites")
-                && windows[4].ends_with("-E 'group(trybuild)' --exclude xtask"),
+                && windows[4].ends_with("cargo xtask test --nested --nested-group trybuild"),
             "{}",
             windows[4]
         );
@@ -1372,6 +1436,10 @@ mod tests {
                 (
                     "test_runs_both_group_stages_and_the_platform_suite_per_host",
                     test_runs_both_group_stages_and_the_platform_suite_per_host as fn(),
+                ),
+                (
+                    "platform_compiler_checks_follow_each_host_and_stage",
+                    platform_compiler_checks_follow_each_host_and_stage as fn(),
                 ),
                 (
                     "nested_group_requires_nested_and_preserves_existing_modes",

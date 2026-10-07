@@ -3344,6 +3344,20 @@ fn harness_visibility_keeps_child_geometry_while_hidden() {
     }
 }
 
+fn harness_visibility_reports_effective_semantics_changes() {
+    use flui_rendering::RenderUpdateImpact as Impact;
+
+    let mut gate = RenderVisibility::new(true);
+    assert_eq!(gate.set_visible(true), Impact::NONE);
+    assert_eq!(gate.set_visible(false), Impact::PAINT | Impact::SEMANTICS);
+    assert_eq!(gate.set_maintain_semantics(true), Impact::SEMANTICS);
+    assert_eq!(gate.set_maintain_semantics(true), Impact::NONE);
+    assert_eq!(gate.set_visible(true), Impact::PAINT);
+    assert_eq!(gate.set_maintain_semantics(false), Impact::NONE);
+    assert_eq!(gate.set_visible(false), Impact::PAINT | Impact::SEMANTICS);
+    assert_eq!(gate.set_visible(true), Impact::PAINT | Impact::SEMANTICS);
+}
+
 fn harness_absorb_pointer_blocks_child_hits() {
     let run = RenderTester::mount(
         box_node(RenderStack::new())
@@ -6383,6 +6397,10 @@ fn family_visibility() {
             (
                 "visibility_keeps_child_geometry_while_hidden",
                 harness_visibility_keeps_child_geometry_while_hidden,
+            ),
+            (
+                "visibility_reports_effective_semantics_changes",
+                harness_visibility_reports_effective_semantics_changes,
             ),
         ],
     );
