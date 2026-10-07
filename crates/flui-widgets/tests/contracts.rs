@@ -202,6 +202,10 @@ fn focus_actions_and_shortcuts() {
     run_cases(
         "focus_actions_and_shortcuts",
         &[
+            ("focus::traversal_groups_order_blocks_without_creating_focus_scopes", crate::focus::traversal_groups_order_blocks_without_creating_focus_scopes as fn()),
+            ("focus::typed_focus_overrides_fall_back_after_target_invalidation", crate::focus::typed_focus_overrides_fall_back_after_target_invalidation as fn()),
+            ("focus::arrow_traversal_prefers_the_beam_and_respects_group_edges", crate::focus::arrow_traversal_prefers_the_beam_and_respects_group_edges as fn()),
+            ("focus::widget_scope_edge_configuration_reaches_the_tab_path", crate::focus::widget_scope_edge_configuration_reaches_the_tab_path as fn()),
             ("focus::tab_groups_vertically_overlapping_widgets_into_one_reading_row", crate::focus::tab_groups_vertically_overlapping_widgets_into_one_reading_row as fn()),
             ("focus::tab_reads_an_rtl_scope_from_its_inherited_directionality", crate::focus::tab_reads_an_rtl_scope_from_its_inherited_directionality as fn()),
             ("focus::a_tall_widget_cannot_bridge_disjoint_reading_rows", crate::focus::a_tall_widget_cannot_bridge_disjoint_reading_rows as fn()),
