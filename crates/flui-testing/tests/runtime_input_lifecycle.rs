@@ -15,6 +15,7 @@ use flui_interaction::events::{
 use flui_interaction::{GestureArenaMember, PointerId};
 use flui_platform_api::{PlatformInput, PlatformWindow, WindowExecutionState};
 use flui_rendering::hit_testing::HitTestBehavior;
+use flui_runtime::sink::SubmitVerdict;
 use flui_runtime::testing::{ScriptedSink, TestWindow};
 use flui_runtime::ui_realm::UiRealm;
 use flui_scheduler::AppLifecycleState;
@@ -25,6 +26,17 @@ fn pump(realm: &mut UiRealm) {
     let _ = realm.pump(
         &mut ManualClock::default(),
         &mut ScriptedSink::always_presents(),
+    );
+}
+
+fn pump_uncommitted(realm: &mut UiRealm) {
+    let outcome = realm.pump(
+        &mut ManualClock::default(),
+        &mut ScriptedSink::single_shot(SubmitVerdict::Retry),
+    );
+    assert!(
+        !outcome.presented(),
+        "the initial surface did not acknowledge the tree"
     );
 }
 
@@ -133,9 +145,10 @@ fn queued_hover_after_transition(paused: bool, held: bool) {
         .expect("root attaches");
     realm.synchronize_window_snapshot(primary, WindowExecutionState::Running, true, true);
     if held {
-        realm.defer_first_frame();
+        pump_uncommitted(&mut realm);
+    } else {
+        pump(&mut realm);
     }
-    pump(&mut realm);
     dispatch(&realm, primary, hover());
     assert_eq!(hovers.get(), 0, "hover waits for frame cadence");
     if paused {
@@ -143,9 +156,6 @@ fn queued_hover_after_transition(paused: bool, held: bool) {
         realm.update_host_lifecycle(AppLifecycleState::Resumed);
     } else {
         realm.update_window_focus(primary, false);
-    }
-    if held {
-        realm.allow_first_frame();
     }
     pump(&mut realm);
     assert_eq!(
@@ -191,8 +201,7 @@ pub(crate) fn host_pause_keeps_a_completed_held_tap_for_the_first_commit() {
         )
         .expect("root attaches");
     realm.synchronize_window_snapshot(primary, WindowExecutionState::Running, true, true);
-    realm.defer_first_frame();
-    pump(&mut realm);
+    pump_uncommitted(&mut realm);
     dispatch(
         &realm,
         primary,
@@ -210,7 +219,6 @@ pub(crate) fn host_pause_keeps_a_completed_held_tap_for_the_first_commit() {
     );
     realm.update_host_lifecycle(AppLifecycleState::Paused);
     realm.update_host_lifecycle(AppLifecycleState::Resumed);
-    realm.allow_first_frame();
     pump(&mut realm);
     assert_eq!(
         (downs.get(), ups.get()),
@@ -382,8 +390,11 @@ fn pause_diagnostic_failure_still_drains_motion(cancel_panics: bool) {
         primary,
         make_down_event(Offset::new(4.0, 6.0), PointerType::Touch),
     );
-    let mut motion =
-        make_move_event_for_id(PointerId::new(2), Offset::new(8.0, 9.0), PointerType::Mouse);
+    let mut motion = make_move_event_for_id(
+        PointerId::new(2).expect("nonzero mouse pointer"),
+        Offset::new(8.0, 9.0),
+        PointerType::Mouse,
+    );
     if let PointerEvent::Move(update) = &mut motion {
         update.current.buttons = Default::default();
     }
