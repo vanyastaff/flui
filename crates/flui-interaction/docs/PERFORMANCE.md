@@ -1,8 +1,7 @@
 # Performance Guide
 
-Cost bounds and the benchmarks for `flui_interaction`. No benchmark results are
-recorded in the repository, so this document states bounds and how to measure,
-not timings.
+Cost bounds, benchmark fixtures and measurements for `flui_interaction`.
+Microbenchmark timings describe the measured fixtures, not a frame-time guarantee.
 
 ## Pointer path
 
@@ -78,6 +77,54 @@ was not dyn-compatible. Compare static dispatch before/after, then dynamic
 against static dispatch on the new implementation. Weak-member resolution
 must keep a strong fixture owner alive; measuring dead weak references would
 exercise withdrawal instead of arbitration.
+
+## Recognizer ownership measurements
+
+Measured on 2026-10-07, on the same Windows x86_64 MSVC host with Rust 1.99.0,
+Criterion's optimized bench profile, six build jobs, 20 samples, one second of
+warmup and two seconds of measurement. The live-contact baseline was saved at
+`6f60614b8`; measurements after the recognizer migration use `6dd428949`.
+The existing benchmark names and timed loops are preserved. Tap fixture setup,
+cancellation and destruction are outside the measured interval; callback
+witnesses assert that the sequence actually completes.
+
+The table reports Criterion's slope point estimates, in nanoseconds:
+
+| Existing fixture | Before | After |
+|---|---:|---:|
+| Tap, no callbacks | 982.14 | 377.55 |
+| Tap, primary callbacks | 628.25 | 347.41 |
+| Tap, secondary callbacks | 650.77 | 361.67 |
+| Tap admission | 266.78 | 235.46 |
+| Arena add into empty arena, including prior sweep | 231.74 | 79.34 |
+| Arena add into four-member arena, including rejection | 179.32 | 46.33 |
+| Arena add and single-member sweep | 236.65 | 73.01 |
+| Arena construction, two admissions and eager conflict | 4163.90 | 347.69 |
+| Arena construction, admission, close and sweep | 985.37 | 320.79 |
+
+Dynamic tap delivery through `RecognizerSet` measured 363.71 ns without
+callbacks, 352.80 ns with primary callbacks and 395.69 ns with secondary
+callbacks. These new rows have no historical baseline: the old recognizer
+trait was not dyn-compatible. Both static and dynamic fixtures deliver the
+same three events and assert the same callback and settlement witnesses.
+
+Isolated `resolve/weak` measured 93.91 ns (95% slope interval 88.80–100.90 ns).
+Its two strong fixture owners and closed arena are prepared outside timing;
+the witness asserts one acceptance, one rejection and an empty arena. The
+older eager-conflict row includes construction and admission, so its timing
+cannot serve as an isolated strong-resolution baseline. No isolated
+strong-resolution measurement was saved.
+
+Reproduce the existing-row comparison with the saved `before` data:
+
+```bash
+cargo bench -p flui-interaction --bench tap_detector_bench -- 'handle_event/static|add_pointer' --baseline before --sample-size 20 --warm-up-time 1 --measurement-time 2
+cargo bench -p flui-interaction --bench gesture_arena_bench -- GestureArena --baseline before --sample-size 20 --warm-up-time 1 --measurement-time 2
+```
+
+Run `handle_event/dyn` and `resolve/weak` separately with `--save-baseline after`.
+The host was shared, confidence intervals vary by row, and these observations
+do not establish a portable percentage speedup or a CI performance threshold.
 
 ## See also
 
