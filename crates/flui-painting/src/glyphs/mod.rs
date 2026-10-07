@@ -72,6 +72,9 @@ impl GlyphContent {
 /// draws nothing and carries no data. [`try_new`](Self::try_new) validates the
 /// complete row-major buffer before admitting an image; immutable accessors
 /// preserve that byte-layout invariant for every rasterizer and atlas consumer.
+/// The `compile_fail::trybuild_ui` integration test pins the diagnostics for
+/// literal construction, dimension mutation and mutation through [`Self::data`],
+/// alongside a passing constructor-and-getter caller.
 ///
 /// A consumer cannot bypass buffer admission with a struct literal:
 ///
