@@ -1,9 +1,8 @@
 //! Static tap dispatch and admission, with a fresh live contact per iteration.
 //!
-//! Fixture creation and disposal are outside Criterion's measured interval.
+//! Fixture creation and cancellation are outside Criterion's measured interval.
 //! Each sequence is also run once before measurement to check arena settlement
-//! and callback delivery. A permanently disposed recognizer cannot stand in
-//! for the dispatch hot path.
+//! and callback delivery. Each measured sequence uses a fresh recognizer.
 
 use std::{cell::Cell, hint::black_box, rc::Rc};
 
@@ -25,23 +24,23 @@ struct TapFixture {
 impl TapFixture {
     fn new(callbacks: bool, button: PointerButton) -> Self {
         let arena = GestureArena::new();
-        let mut recognizer = TapGestureRecognizer::new(arena.clone());
+        let mut recognizer = TapGestureRecognizer::builder(arena.clone());
         let calls = Rc::new(Cell::new(0));
         if callbacks {
             let (down, up, tap) = (Rc::clone(&calls), Rc::clone(&calls), Rc::clone(&calls));
             recognizer = match button {
                 PointerButton::Secondary => recognizer
-                    .with_on_secondary_tap_down(move |_| down.set(down.get() + 1))
-                    .with_on_secondary_tap_up(move |_| up.set(up.get() + 1))
-                    .with_on_secondary_tap(move |_| tap.set(tap.get() + 1)),
+                    .on_secondary_tap_down(move |_| down.set(down.get() + 1))
+                    .on_secondary_tap_up(move |_| up.set(up.get() + 1))
+                    .on_secondary_tap(move |_| tap.set(tap.get() + 1)),
                 _ => recognizer
-                    .with_on_tap_down(move |_| down.set(down.get() + 1))
-                    .with_on_tap_up(move |_| up.set(up.get() + 1))
-                    .with_on_tap(move |_| tap.set(tap.get() + 1)),
+                    .on_tap_down(move |_| down.set(down.get() + 1))
+                    .on_tap_up(move |_| up.set(up.get() + 1))
+                    .on_tap(move |_| tap.set(tap.get() + 1)),
             };
         }
         Self {
-            recognizer,
+            recognizer: recognizer.build(),
             arena,
             callbacks: calls,
         }
@@ -49,7 +48,7 @@ impl TapFixture {
 
     fn sequence(&self, events: &[PointerEvent; 3]) {
         self.recognizer
-            .add_pointer_down(PointerDispatch::at_root(black_box(&events[0])));
+            .add_pointer(PointerDispatch::at_root(black_box(&events[0])));
         for event in &events[1..] {
             self.recognizer
                 .handle_event(PointerDispatch::at_root(black_box(event)));
@@ -60,7 +59,7 @@ impl TapFixture {
 
 impl Drop for TapFixture {
     fn drop(&mut self) {
-        self.recognizer.dispose();
+        self.recognizer.cancel();
     }
 }
 
@@ -118,7 +117,7 @@ fn bench_admission(c: &mut Criterion) {
             |fixture| {
                 fixture
                     .recognizer
-                    .add_pointer_down(PointerDispatch::at_root(black_box(&down)))
+                    .add_pointer(PointerDispatch::at_root(black_box(&down)))
             },
             BatchSize::SmallInput,
         );
