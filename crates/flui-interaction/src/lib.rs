@@ -336,7 +336,7 @@ pub mod prelude {
     #[cfg(any(test, feature = "testing"))]
     pub use crate::testing::ModifiersBuilder;
     // Traits
-    pub use crate::traits::{DragAxis, PointerEventExtTrait as PointerEventExt};
+    pub use crate::traits::DragAxis;
     pub use crate::{
         arena::{GestureArenaTeam, PointerSignalResolver, SignalPriority, TeamEntry},
         ids::{DeviceId, FocusNodeId, HandlerId, PointerId, RegionId},
