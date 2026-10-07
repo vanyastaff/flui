@@ -42,13 +42,19 @@ pub enum CompositionError {
 #[derive(Clone)]
 pub(super) struct CompositionBranch {
     pub(super) competition: Rc<GestureCompetition>,
-    pub(super) first: bool,
+    pub(super) position: BranchPosition,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum BranchPosition {
+    First,
+    Second,
 }
 
 impl CompositionBranch {
     pub(super) fn blocks(&self, other: &Self) -> bool {
-        !self.first
-            && other.first
+        self.position == BranchPosition::Second
+            && other.position == BranchPosition::First
             && *self.competition == GestureCompetition::RequireFirstFailure
             && Rc::ptr_eq(&self.competition, &other.competition)
     }
@@ -74,12 +80,12 @@ impl GestureArena {
         let mut first = self.clone();
         first.branch = Some(CompositionBranch {
             competition: Rc::clone(&competition),
-            first: true,
+            position: BranchPosition::First,
         });
         let mut second = self.clone();
         second.branch = Some(CompositionBranch {
             competition,
-            first: false,
+            position: BranchPosition::Second,
         });
         Ok(GestureBranches { first, second })
     }

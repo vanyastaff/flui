@@ -1192,6 +1192,22 @@ fn gesture_lifecycle_matrix() {
             sweep_cannot_grant_a_dependency_blocked_fallback,
         ),
         (
+            "preferred_death_releases_accepted_fallback_debt",
+            preferred_death_releases_accepted_fallback_debt,
+        ),
+        (
+            "preferred_deadline_releases_fallback_without_input",
+            preferred_deadline_releases_fallback_without_input,
+        ),
+        (
+            "composition_checks_preferred_members_after_close",
+            composition_checks_preferred_members_after_close,
+        ),
+        (
+            "preferred_acceptance_rejects_a_pending_fallback",
+            preferred_acceptance_rejects_a_pending_fallback,
+        ),
+        (
             "arena_polls_pointer_deadlines_in_identity_order",
             arena_polls_pointer_deadlines_in_identity_order,
         ),
@@ -1453,6 +1469,189 @@ fn sweep_cannot_grant_a_dependency_blocked_fallback() {
             ("preferred", GestureDisposition::Rejected),
             ("fallback", GestureDisposition::Accepted),
             ("fresh", GestureDisposition::Accepted)
+        ]
+    );
+}
+
+fn preferred_death_releases_accepted_fallback_debt() {
+    for sweep in [false, true] {
+        let arena = GestureArena::new();
+        let (first, second) = arena
+            .compose(GestureCompetition::RequireFirstFailure)
+            .expect("root composition")
+            .into_branches();
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let pointer = id(2);
+        let preferred = Rc::new(CompositionMember {
+            name: "preferred",
+            log: Rc::clone(&log),
+        });
+        let fallback = Rc::new(CompositionMember {
+            name: "fallback",
+            log: Rc::clone(&log),
+        });
+        first.add(pointer, &preferred);
+        let fallback_entry = second.add(pointer, &fallback);
+        arena.close(pointer);
+        fallback_entry.resolve(GestureDisposition::Accepted);
+        if sweep {
+            arena.sweep(pointer);
+        }
+        assert!(log.borrow().is_empty());
+        drop(preferred);
+        arena.drain_deferred_resolutions();
+        assert_eq!(
+            log.borrow().as_slice(),
+            [("fallback", GestureDisposition::Accepted)]
+        );
+        assert!(arena.is_empty());
+    }
+}
+
+struct DeadlineFailure {
+    due: Cell<Option<web_time::Instant>>,
+    entry: RefCell<Option<GestureArenaEntry>>,
+    member: CompositionMember,
+}
+
+impl GestureArenaMember for DeadlineFailure {
+    fn accept_gesture(&self, pointer: PointerId) {
+        self.member.accept_gesture(pointer);
+    }
+    fn reject_gesture(&self, pointer: PointerId) {
+        self.due.set(None);
+        self.member.reject_gesture(pointer);
+    }
+    fn deadline(&self) -> Option<web_time::Instant> {
+        self.due.get()
+    }
+    fn poll_deadline(&self, now: web_time::Instant) {
+        if self.due.get().is_some_and(|due| due <= now) {
+            self.due.set(None);
+            let entry = self.entry.borrow_mut().take();
+            if let Some(entry) = entry {
+                entry.resolve(GestureDisposition::Rejected);
+            }
+        }
+    }
+}
+
+fn preferred_deadline_releases_fallback_without_input() {
+    let clock = ManualClock::new();
+    let arena = GestureArena::binding_driven(Arc::new(clock.clone()));
+    let (first, second) = arena
+        .compose(GestureCompetition::RequireFirstFailure)
+        .expect("root composition")
+        .into_branches();
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let pointer = id(2);
+    let preferred = Rc::new(DeadlineFailure {
+        due: Cell::new(Some(arena.now() + Duration::from_millis(30))),
+        entry: RefCell::new(None),
+        member: CompositionMember {
+            name: "preferred",
+            log: Rc::clone(&log),
+        },
+    });
+    let fallback = Rc::new(CompositionMember {
+        name: "fallback",
+        log: Rc::clone(&log),
+    });
+    *preferred.entry.borrow_mut() = Some(first.add(pointer, &preferred));
+    let fallback_entry = second.add(pointer, &fallback);
+    arena.close(pointer);
+    fallback_entry.resolve(GestureDisposition::Accepted);
+    arena.sweep(pointer);
+    clock.advance(Duration::from_millis(29));
+    arena.poll_deadlines();
+    arena.drain_deferred_resolutions();
+    assert!(log.borrow().is_empty());
+    clock.advance(Duration::from_millis(1));
+    arena.poll_deadlines();
+    arena.drain_deferred_resolutions();
+    assert_eq!(
+        log.borrow().as_slice(),
+        [
+            ("preferred", GestureDisposition::Rejected),
+            ("fallback", GestureDisposition::Accepted)
+        ]
+    );
+    assert!(!arena.has_pending_deadlines());
+}
+
+fn composition_checks_preferred_members_after_close() {
+    for admit_preferred in [false, true] {
+        let arena = GestureArena::new();
+        let (first, second) = arena
+            .compose(GestureCompetition::RequireFirstFailure)
+            .expect("root composition")
+            .into_branches();
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let pointer = id(2);
+        let preferred = Rc::new(CompositionMember {
+            name: "preferred",
+            log: Rc::clone(&log),
+        });
+        let fallback = Rc::new(CompositionMember {
+            name: "fallback",
+            log: Rc::clone(&log),
+        });
+        let fallback_entry = second.add(pointer, &fallback);
+        fallback_entry.resolve(GestureDisposition::Accepted);
+        let preferred_entry = admit_preferred.then(|| first.add(pointer, &preferred));
+        arena.close(pointer);
+        arena.drain_deferred_resolutions();
+        if let Some(preferred_entry) = preferred_entry {
+            assert!(
+                log.borrow().is_empty(),
+                "a later preferred admission blocks an earlier fallback vote"
+            );
+            preferred_entry.resolve(GestureDisposition::Rejected);
+            arena.drain_deferred_resolutions();
+            assert_eq!(
+                log.borrow().as_slice(),
+                [
+                    ("preferred", GestureDisposition::Rejected),
+                    ("fallback", GestureDisposition::Accepted)
+                ]
+            );
+        } else {
+            assert_eq!(
+                log.borrow().as_slice(),
+                [("fallback", GestureDisposition::Accepted)]
+            );
+        }
+    }
+}
+
+fn preferred_acceptance_rejects_a_pending_fallback() {
+    let arena = GestureArena::new();
+    let (first, second) = arena
+        .compose(GestureCompetition::RequireFirstFailure)
+        .expect("root composition")
+        .into_branches();
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let pointer = id(2);
+    let preferred = Rc::new(CompositionMember {
+        name: "preferred",
+        log: Rc::clone(&log),
+    });
+    let fallback = Rc::new(CompositionMember {
+        name: "fallback",
+        log: Rc::clone(&log),
+    });
+    let fallback_entry = second.add(pointer, &fallback);
+    let preferred_entry = first.add(pointer, &preferred);
+    arena.close(pointer);
+    fallback_entry.resolve(GestureDisposition::Accepted);
+    preferred_entry.resolve(GestureDisposition::Accepted);
+    fallback_entry.resolve(GestureDisposition::Accepted);
+    arena.drain_deferred_resolutions();
+    assert_eq!(
+        log.borrow().as_slice(),
+        [
+            ("fallback", GestureDisposition::Rejected),
+            ("preferred", GestureDisposition::Accepted)
         ]
     );
 }

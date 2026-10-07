@@ -66,7 +66,7 @@ use crate::retain::Retain;
 use flui_foundation::{MonotonicClock, SystemClock};
 
 mod composition;
-use composition::CompositionBranch;
+use composition::{BranchPosition, CompositionBranch};
 pub use composition::{CompositionError, GestureBranches, GestureCompetition};
 
 // ============================================================================
@@ -874,7 +874,7 @@ impl ArenaEntryData {
                 !self.is_blocked(request)
                     && self.branches.iter().any(|(member, branch)| {
                         Weak::ptr_eq(member, request)
-                            && !branch.first
+                            && branch.position == BranchPosition::Second
                             && *branch.competition == GestureCompetition::RequireFirstFailure
                     })
             })
