@@ -2,6 +2,7 @@
 
 use std::cell::Cell;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use flui_foundation::geometry::Offset;
 use flui_foundation::{ManualClock, PresentationId};
@@ -9,9 +10,9 @@ use flui_interaction::events::{
     PointerEvent, PointerType, make_down_event, make_move_event,
 };
 use flui_interaction::{GestureArenaMember, PointerId};
-use flui_platform_api::{PlatformInput, WindowExecutionState};
+use flui_platform_api::{PlatformInput, PlatformWindow, WindowExecutionState};
 use flui_rendering::hit_testing::HitTestBehavior;
-use flui_runtime::testing::ScriptedSink;
+use flui_runtime::testing::{ScriptedSink, TestWindow};
 use flui_runtime::ui_realm::UiRealm;
 use flui_scheduler::AppLifecycleState;
 use flui_view::prelude::*;
@@ -27,6 +28,12 @@ fn dispatch(realm: &UiRealm, id: PresentationId, event: PointerEvent) {
     });
 }
 
+fn install_secondary(realm: &mut UiRealm) -> PresentationId {
+    let window: Arc<dyn PlatformWindow> = Arc::new(TestWindow::new().focused(false));
+    let presentation = realm.assemble_presentation(window);
+    realm.install_presentation(presentation)
+}
+
 fn hover() -> PointerEvent {
     let mut event = make_move_event(Offset::new(8.0, 9.0), PointerType::Mouse);
     if let PointerEvent::Move(update) = &mut event {
@@ -37,7 +44,7 @@ fn hover() -> PointerEvent {
 
 pub(crate) fn a_secondary_contact_move_is_delivered_by_the_next_frame() {
     let mut realm = UiRealm::for_test();
-    let secondary = realm.install_second_presentation_for_test();
+    let secondary = install_secondary(&mut realm);
     let moves = Rc::new(Cell::new(0));
     let seen = moves.clone();
     realm.attach_root_widget_to_for_test(
@@ -70,7 +77,7 @@ impl GestureArenaMember for AcceptLog {
 
 pub(crate) fn a_secondary_deferred_arena_verdict_is_delivered_by_the_next_frame() {
     let mut realm = UiRealm::for_test();
-    let secondary = realm.install_second_presentation_for_test();
+    let secondary = install_secondary(&mut realm);
     let accepted = Rc::new(Cell::new(0));
     let member = Rc::new(AcceptLog(accepted.clone()));
     let arena = realm.presentation_gestures_for_test(secondary).arena();
@@ -146,7 +153,7 @@ impl StatelessView for ShrinkingHoverRegion {
 
 pub(crate) fn a_secondary_layout_refreshes_its_stationary_hover() {
     let mut realm = UiRealm::for_test();
-    let secondary = realm.install_second_presentation_for_test();
+    let secondary = install_secondary(&mut realm);
     let graph = realm.presentation_widgets_for_test(secondary)
         .with_build_owner(|owner| owner.reactive().clone());
     let enters = Rc::new(Cell::new(0));
