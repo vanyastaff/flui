@@ -12,6 +12,306 @@ fn hit_entry(target: PointerTarget) -> HitTestEntry {
     HitTestEntry::new(RenderId::new(1)).pointer_target(target)
 }
 
+#[test]
+fn binding_input_contract_matrix() {
+    let cases: &[(&str, fn())] = &[
+        (
+            "non_finite_down_refuses_its_continuation",
+            non_finite_down_refuses_its_continuation,
+        ),
+        (
+            "capped_contact_never_becomes_hover",
+            capped_contact_never_becomes_hover,
+        ),
+        (
+            "wheel_listener_failure_keeps_claim_delivery",
+            wheel_listener_failure_keeps_claim_delivery,
+        ),
+        (
+            "wheel_first_failure_survives_claim_failure",
+            wheel_first_failure_survives_claim_failure,
+        ),
+        (
+            "pinch_listener_failure_keeps_claim_delivery",
+            pinch_listener_failure_keeps_claim_delivery,
+        ),
+        (
+            "pinch_first_failure_survives_claim_failure",
+            pinch_first_failure_survives_claim_failure,
+        ),
+        (
+            "captured_pinch_listener_failure_keeps_claim_delivery",
+            captured_pinch_listener_failure_keeps_claim_delivery,
+        ),
+        (
+            "captured_pinch_first_failure_survives_claim_failure",
+            captured_pinch_first_failure_survives_claim_failure,
+        ),
+    ];
+    let mut failures = Vec::new();
+    for &(name, case) in cases {
+        if let Err(payload) = std::panic::catch_unwind(case) {
+            failures.push(format!(
+                "{name}: {}",
+                flui_foundation::panic::payload_text(&*payload).unwrap_or("unknown failure")
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "failed rows:\n{}", failures.join("\n"));
+}
+
+fn non_finite_down_refuses_its_continuation() {
+    use flui_foundation::geometry::Offset;
+    use flui_interaction::events::{
+        PointerType, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
+    };
+    use flui_interaction::{GestureBinding, HitTestResult, PointerId};
+    use std::{cell::Cell, rc::Rc};
+
+    for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        for position in [Offset::new(bad, 0.0), Offset::new(0.0, bad)] {
+            let binding = GestureBinding::new();
+            let hits = Cell::new(0);
+            let deliveries = Rc::new(Cell::new(0));
+            let log = Rc::clone(&deliveries);
+            binding
+                .pointer_router()
+                .add_global_handler(Rc::new(move |_| log.set(log.get() + 1)));
+            let pointer = PointerId::new(2).expect("nonzero pointer");
+            let result = |_| {
+                hits.set(hits.get() + 1);
+                HitTestResult::new()
+            };
+            binding.handle_pointer_event(
+                &make_down_event_for_id(pointer, position, PointerType::Touch),
+                result,
+            );
+            assert_eq!(hits.get(), 0, "an invalid Down must not reach hit testing");
+            assert_eq!(
+                deliveries.get(),
+                0,
+                "an invalid Down must not reach a recognizer route"
+            );
+            binding.handle_pointer_event(
+                &make_move_event_for_id(pointer, Offset::ZERO, PointerType::Touch),
+                result,
+            );
+            binding.flush_pending_moves();
+            binding.handle_pointer_event(
+                &make_up_event_for_id(pointer, Offset::ZERO, PointerType::Touch),
+                result,
+            );
+            assert_eq!(
+                hits.get(),
+                0,
+                "a refused contact's Move must not become hover"
+            );
+            assert_eq!(
+                deliveries.get(),
+                0,
+                "a refused contact's tail is not delivered"
+            );
+            binding.handle_pointer_event(
+                &make_down_event_for_id(pointer, Offset::ZERO, PointerType::Touch),
+                result,
+            );
+            binding.handle_pointer_event(
+                &make_up_event_for_id(pointer, Offset::ZERO, PointerType::Touch),
+                result,
+            );
+            assert_eq!(
+                hits.get(),
+                1,
+                "the pointer ID is reusable after the refused Up"
+            );
+            assert_eq!(
+                deliveries.get(),
+                2,
+                "healthy replacement contact is delivered"
+            );
+        }
+    }
+}
+
+fn capped_contact_never_becomes_hover() {
+    use flui_foundation::geometry::Offset;
+    use flui_interaction::events::{
+        PointerType, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
+    };
+    use flui_interaction::{GestureBinding, HitTestResult, PointerId};
+    use std::cell::Cell;
+
+    let binding = GestureBinding::new();
+    let hits = Cell::new(0);
+    let result = |_| {
+        hits.set(hits.get() + 1);
+        HitTestResult::new()
+    };
+    for raw in 1..=33 {
+        let pointer = PointerId::new(raw).expect("nonzero pointer");
+        binding.handle_pointer_event(
+            &make_down_event_for_id(pointer, Offset::ZERO, PointerType::Touch),
+            result,
+        );
+    }
+    assert_eq!(hits.get(), 32, "the thirty-third contact is refused");
+    let refused = PointerId::new(33).expect("nonzero pointer");
+    binding.handle_pointer_event(
+        &make_move_event_for_id(refused, Offset::ZERO, PointerType::Touch),
+        result,
+    );
+    binding.flush_pending_moves();
+    assert_eq!(hits.get(), 32, "the refused contact does not become hover");
+    binding.handle_pointer_event(
+        &make_up_event_for_id(refused, Offset::ZERO, PointerType::Touch),
+        result,
+    );
+    binding.handle_pointer_event(
+        &make_up_event_for_id(PointerId::PRIMARY, Offset::ZERO, PointerType::Touch),
+        result,
+    );
+    binding.handle_pointer_event(
+        &make_down_event_for_id(refused, Offset::ZERO, PointerType::Touch),
+        result,
+    );
+    assert_eq!(hits.get(), 33, "a released slot accepts the next sequence");
+    binding.handle_lifecycle_pause();
+}
+
+#[derive(Clone, Copy)]
+enum SignalRoute {
+    Wheel,
+    Pinch,
+    CapturedPinch,
+}
+
+fn assert_signal_claim_delivery(route: SignalRoute, competing: bool) {
+    use flui_foundation::geometry::Offset;
+    use flui_interaction::events::{
+        PointerEvent, PointerType, make_down_event_for_id, make_pinch_gesture_event,
+        make_scroll_event, make_up_event_for_id,
+    };
+    use flui_interaction::{EventPropagation, GestureBinding, HitTestResult, PointerId};
+    use std::{
+        cell::Cell,
+        panic::{AssertUnwindSafe, catch_unwind},
+        rc::Rc,
+    };
+
+    let lane = InteractionLane::try_new().expect("lane");
+    let handle = lane.dispatch_handle();
+    let binding = GestureBinding::new();
+    let failing = Rc::new(Cell::new(true));
+    let claims = Rc::new(Cell::new(0));
+    let observed = Rc::new(Cell::new(0));
+    lane.enter(|| {
+        let fail = Rc::clone(&failing);
+        let pointer = handle
+            .register_pointer(move |dispatch| {
+                if matches!(
+                    dispatch.local,
+                    PointerEvent::Scroll(_) | PointerEvent::Gesture(_)
+                ) && fail.get()
+                {
+                    panic!("pointer listener first failure");
+                }
+            })
+            .expect("pointer target");
+        let later = Rc::clone(&observed);
+        let observer = handle
+            .register_pointer(move |dispatch| {
+                if matches!(
+                    dispatch.local,
+                    PointerEvent::Scroll(_) | PointerEvent::Gesture(_)
+                ) {
+                    later.set(later.get() + 1);
+                }
+            })
+            .expect("later pointer target");
+        let calls = Rc::clone(&claims);
+        let fail = Rc::clone(&failing);
+        let claim = move || {
+            calls.set(calls.get() + 1);
+            if competing && fail.get() {
+                panic!("claim handler second failure");
+            }
+            EventPropagation::Stop
+        };
+        let entry = match route {
+            SignalRoute::Wheel => hit_entry(pointer).scroll_target(
+                handle
+                    .register_scroll(move |_| claim())
+                    .expect("scroll target"),
+            ),
+            SignalRoute::Pinch | SignalRoute::CapturedPinch => hit_entry(pointer).pan_zoom_target(
+                handle
+                    .register_pan_zoom(move |_| claim())
+                    .expect("pan-zoom target"),
+            ),
+        };
+        let mut path = HitTestResult::new();
+        path.add(entry);
+        path.add(hit_entry(observer));
+        let signal = match route {
+            SignalRoute::Wheel => make_scroll_event(Offset::ZERO, Offset::new(0.0, 10.0)),
+            SignalRoute::Pinch | SignalRoute::CapturedPinch => {
+                make_pinch_gesture_event(Offset::ZERO, 0.1)
+            }
+        };
+        let pointer = PointerId::new(u64::MAX).expect("synthetic pinch identity");
+        if matches!(route, SignalRoute::CapturedPinch) {
+            binding.handle_pointer_event(
+                &make_down_event_for_id(pointer, Offset::ZERO, PointerType::Touch),
+                |_| path.clone(),
+            );
+        }
+        let failure = catch_unwind(AssertUnwindSafe(|| {
+            binding.handle_pointer_event(&signal, |_| path.clone())
+        }))
+        .expect_err("pointer listener failure propagates");
+        assert_eq!(
+            flui_foundation::panic::payload_text(&*failure),
+            Some("pointer listener first failure"),
+            "the first failure remains authoritative"
+        );
+        assert_eq!(observed.get(), 1, "the pointer observation round finishes");
+        assert_eq!(
+            claims.get(),
+            1,
+            "accepted signal reaches the claim walk after pointer failure"
+        );
+        failing.set(false);
+        binding.handle_pointer_event(&signal, |_| path.clone());
+        assert_eq!(observed.get(), 2, "healthy observation follows containment");
+        assert_eq!(claims.get(), 2, "healthy claim follows containment");
+        if matches!(route, SignalRoute::CapturedPinch) {
+            binding.handle_pointer_event(
+                &make_up_event_for_id(pointer, Offset::ZERO, PointerType::Touch),
+                |_| path.clone(),
+            );
+        }
+    });
+}
+
+fn wheel_listener_failure_keeps_claim_delivery() {
+    assert_signal_claim_delivery(SignalRoute::Wheel, false);
+}
+fn wheel_first_failure_survives_claim_failure() {
+    assert_signal_claim_delivery(SignalRoute::Wheel, true);
+}
+fn pinch_listener_failure_keeps_claim_delivery() {
+    assert_signal_claim_delivery(SignalRoute::Pinch, false);
+}
+fn pinch_first_failure_survives_claim_failure() {
+    assert_signal_claim_delivery(SignalRoute::Pinch, true);
+}
+fn captured_pinch_listener_failure_keeps_claim_delivery() {
+    assert_signal_claim_delivery(SignalRoute::CapturedPinch, false);
+}
+fn captured_pinch_first_failure_survives_claim_failure() {
+    assert_signal_claim_delivery(SignalRoute::CapturedPinch, true);
+}
+
 assert_not_impl_any!(InteractionLane: Send, Sync);
 assert_impl_all!(InteractionDispatchHandle: Clone, Send, Sync);
 assert_impl_all!(PointerTarget: Copy, Send, Sync);
