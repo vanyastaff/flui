@@ -827,11 +827,20 @@ fn harness_mouse_region_uses_one_tracker_target_for_hover_enter_and_exit() {
     let inside_position = Offset::new(10.0, 10.0);
     run.pipeline().hit_test(inside_position, &mut inside);
     let tracker = MouseTracker::new();
-    tracker.add_device(
-        0,
-        flui_interaction::events::PointerType::Mouse,
-        Offset::ZERO,
-    );
+    let device = flui_interaction::events::DeviceId::try_from(1).expect("nonzero mouse device");
+    let mouse_move = |position, buttons| {
+        let event = flui_interaction::events::make_move_event(
+            position,
+            flui_interaction::events::PointerKind::Mouse,
+        )
+        .expect("finite mouse position");
+        let flui_interaction::events::PointerEvent::Move(mut update) = event else {
+            unreachable!("make_move_event always returns PointerEvent::Move")
+        };
+        update.pointer = update.pointer.with_device(device);
+        update.buttons = buttons;
+        flui_interaction::events::PointerEvent::Move(update)
+    };
 
     // `update_with_motion` (enter/exit/cursor tracking) and `dispatch_hover`
     // (on_hover) are two independent dispatch paths that both resolve the
@@ -839,14 +848,10 @@ fn harness_mouse_region_uses_one_tracker_target_for_hover_enter_and_exit() {
     // three callbacks, just not through one call. `make_move_event` defaults
     // `buttons` to a button held (it targets contact-motion tests), so a
     // genuine hover-shaped move needs buttons cleared explicitly.
-    let mut hover_event = flui_interaction::events::make_move_event(
+    let hover_event = mouse_move(
         inside_position,
-        flui_interaction::events::PointerType::Mouse,
+        flui_interaction::events::PointerButtons::EMPTY,
     );
-    let flui_interaction::events::PointerEvent::Move(hover_update) = &mut hover_event else {
-        unreachable!("make_move_event always returns PointerEvent::Move")
-    };
-    hover_update.current.buttons = flui_interaction::events::PointerButtons::new();
 
     lane.enter(|| {
         tracker.update_with_motion(&hover_event, PointerMotionKind::Hover, &inside);
@@ -867,9 +872,11 @@ fn harness_mouse_region_uses_one_tracker_target_for_hover_enter_and_exit() {
         "dispatch_hover resolves the same tracker target enter/exit used",
     );
 
-    let contact_event = flui_interaction::events::make_move_event(
+    let contact_event = mouse_move(
         inside_position,
-        flui_interaction::events::PointerType::Mouse,
+        flui_interaction::events::PointerButtons::only(
+            flui_interaction::events::PointerButton::PRIMARY,
+        ),
     );
     lane.enter(|| {
         tracker.update_with_motion(&contact_event, PointerMotionKind::Contact, &inside);
@@ -884,9 +891,9 @@ fn harness_mouse_region_uses_one_tracker_target_for_hover_enter_and_exit() {
     let mut outside = HitTestResult::new();
     let outside_position = Offset::new(80.0, 10.0);
     run.pipeline().hit_test(outside_position, &mut outside);
-    let outside_event = flui_interaction::events::make_move_event(
+    let outside_event = mouse_move(
         outside_position,
-        flui_interaction::events::PointerType::Mouse,
+        flui_interaction::events::PointerButtons::EMPTY,
     );
     lane.enter(|| {
         lane.dispatch_handle()
