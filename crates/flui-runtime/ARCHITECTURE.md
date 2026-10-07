@@ -223,6 +223,12 @@ tree acknowledgement remains accepted input across a reversible pause.
 contracts through addressed platform input and the real realm pump in
 `flui-testing`'s `containment_and_isolation_matrix`.
 
+The binding commits this drain before emitting its optional diagnostic.
+`a_panicking_pause_diagnostic_cannot_skip_motion_drain` and
+`a_cancel_failure_precedes_a_pause_diagnostic_failure_and_recovers` verify
+the actual diagnostic is delivered, stale motion is gone despite its panic,
+the first terminal failure remains authoritative and new input recovers.
+
 ### The frame runtime is a crate below the hosts
 
 The frame runtime is per realm and per presentation (ADR-0027, no process-wide
