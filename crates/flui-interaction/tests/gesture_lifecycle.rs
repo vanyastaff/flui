@@ -1212,6 +1212,10 @@ fn gesture_lifecycle_matrix() {
             composition_preserves_first_callback_failure_and_recovers,
         ),
         (
+            "an_aliased_branch_join_cannot_change_the_contact_relationship",
+            an_aliased_branch_join_cannot_change_the_contact_relationship,
+        ),
+        (
             "arena_polls_pointer_deadlines_in_identity_order",
             arena_polls_pointer_deadlines_in_identity_order,
         ),
@@ -1740,6 +1744,47 @@ fn composition_preserves_first_callback_failure_and_recovers() {
 }
 
 const POINTERS: u64 = 3;
+
+fn an_aliased_branch_join_cannot_change_the_contact_relationship() {
+    let arena = GestureArena::new();
+    let (first, second) = arena
+        .compose(GestureCompetition::RequireFirstFailure)
+        .expect("root composition")
+        .into_branches();
+    assert!(matches!(
+        first.compose(GestureCompetition::Exclusive),
+        Err(flui_interaction::arena::CompositionError::AlreadyComposed)
+    ));
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let pointer = id(2);
+    let preferred = Rc::new(CompositionMember {
+        name: "preferred",
+        log: Rc::clone(&log),
+    });
+    let fallback = Rc::new(CompositionMember {
+        name: "fallback",
+        log: Rc::clone(&log),
+    });
+    let preferred_entry = first.add(pointer, &preferred);
+    let refused_alias = second.add(pointer, &preferred);
+    let fallback_entry = second.add(pointer, &fallback);
+    refused_alias.resolve(GestureDisposition::Accepted);
+    arena.close(pointer);
+    fallback_entry.resolve(GestureDisposition::Accepted);
+    assert!(
+        log.borrow().is_empty(),
+        "a refused aliased join cannot become a preferred vote"
+    );
+    preferred_entry.resolve(GestureDisposition::Rejected);
+    arena.drain_deferred_resolutions();
+    assert_eq!(
+        log.borrow().as_slice(),
+        [
+            ("preferred", GestureDisposition::Rejected),
+            ("fallback", GestureDisposition::Accepted)
+        ]
+    );
+}
 
 #[derive(Debug, Clone, Copy)]
 enum MemberKind {
