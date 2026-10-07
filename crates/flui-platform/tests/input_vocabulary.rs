@@ -66,8 +66,8 @@ fn a_mouse_press_has_no_pressure_sensor() {
     assert_eq!(down.pointer.kind, PointerKind::Mouse);
     assert!(down.pointer.is_primary());
     assert_eq!(down.pointer.id.get().get(), 1);
-    assert_eq!(down.button, PointerButton::PRIMARY);
-    assert_eq!(down.buttons, PointerButtons::only(PointerButton::PRIMARY));
+    assert_eq!(down.button(), PointerButton::PRIMARY);
+    assert_eq!(down.buttons(), PointerButtons::only(PointerButton::PRIMARY));
     assert_eq!(down.click_count.map(core::num::NonZeroU8::get), Some(1));
     assert_eq!(down.modifiers, Modifiers::SHIFT);
     assert_eq!(down.sample.position.get(), Point::new(10.5, 20.25));
@@ -88,8 +88,8 @@ fn a_release_leaves_the_released_button_out_of_the_set() {
     })) else {
         panic!("a release is an Up");
     };
-    assert_eq!(up.button, PointerButton::SECONDARY);
-    assert_eq!(up.buttons, PointerButtons::only(PointerButton::PRIMARY));
+    assert_eq!(up.button(), PointerButton::SECONDARY);
+    assert_eq!(up.buttons(), PointerButtons::only(PointerButton::PRIMARY));
 }
 
 fn side_and_extra_buttons_keep_their_numbers() {
@@ -163,8 +163,41 @@ fn the_eraser_button_is_the_pens_tool() {
             tool: PenTool::Eraser
         }
     );
-    assert_eq!(down.button, PointerButton::PRIMARY);
-    assert_eq!(down.buttons, PointerButtons::only(PointerButton::PRIMARY));
+    assert_eq!(down.button(), PointerButton::PRIMARY);
+    assert_eq!(down.buttons(), PointerButtons::only(PointerButton::PRIMARY));
+
+    // The release reports the held set without the eraser; the tool is still the eraser.
+    let Some(PointerEvent::Up(up)) = convert(&up::PointerEvent::Up(up::PointerButtonEvent {
+        button: Some(up::PointerButton::PenEraser),
+        pointer: info(3, up::PointerType::Pen),
+        state: state(1.0, 1.0, &[]),
+    })) else {
+        panic!("a release is an Up");
+    };
+    assert_eq!(
+        up.pointer.kind,
+        PointerKind::Pen {
+            tool: PenTool::Eraser
+        }
+    );
+}
+
+/// A pen altitude outside `[0, π/2]` is an invalid reading: the sample has no
+/// orientation rather than a clamped, plausible one.
+fn an_out_of_range_pen_altitude_is_dropped_not_clamped() {
+    let mut pen_state = state(1.0, 1.0, &[up::PointerButton::Primary]);
+    pen_state.orientation = up::PointerOrientation {
+        altitude: f32::INFINITY,
+        azimuth: 1.0,
+    };
+    let Some(PointerEvent::Down(down)) = convert(&up::PointerEvent::Down(up::PointerButtonEvent {
+        button: Some(up::PointerButton::Primary),
+        pointer: info(3, up::PointerType::Pen),
+        state: pen_state,
+    })) else {
+        panic!("a press is a Down");
+    };
+    assert_eq!(down.sample.orientation, None);
 }
 
 fn a_press_at_a_non_finite_position_is_dropped() {
@@ -334,7 +367,7 @@ fn a_key_event_keeps_every_field() {
     };
     let event = key_event(&upstream, OBSERVED);
     assert_eq!(event.state, KeyState::Down);
-    assert_eq!(event.key, Key::Character("q".to_owned()));
+    assert_eq!(event.key, Key::character("q"));
     assert_eq!(event.code, Code::KeyQ);
     assert_eq!(event.location, Location::Left);
     assert_eq!(event.modifiers, Modifiers::ALT);
@@ -367,6 +400,10 @@ fn input_vocabulary_conversion() {
             (
                 "the_eraser_button_is_the_pens_tool",
                 the_eraser_button_is_the_pens_tool,
+            ),
+            (
+                "an_out_of_range_pen_altitude_is_dropped_not_clamped",
+                an_out_of_range_pen_altitude_is_dropped_not_clamped,
             ),
             (
                 "a_press_at_a_non_finite_position_is_dropped",

@@ -136,9 +136,9 @@ fn a_button_event_holds_the_button_after_a_press_and_not_after_a_release() {
     let held = PointerButtons::only(PointerButton::PRIMARY);
     let sample = PointerSample::new(T0, position(0.0, 0.0));
     let press = PointerPress::new(mouse(), PointerButton::SECONDARY, held, sample);
-    assert_eq!(press.buttons, held.with(PointerButton::SECONDARY));
+    assert_eq!(press.buttons(), held.with(PointerButton::SECONDARY));
     let release = PointerRelease::new(mouse(), PointerButton::PRIMARY, held, sample);
-    assert!(release.buttons.is_empty());
+    assert!(release.buttons().is_empty());
 }
 
 fn button_numbers_skip_the_eraser_slot() {
@@ -164,6 +164,14 @@ fn coalesced_and_predicted_readings_are_ordered_around_the_current_one() {
     };
     assert_eq!(times(&moved.coalesced), [10, 40]);
     assert_eq!(times(&moved.predicted), [55, 70]);
+
+    // An exact copy of `current` in the history is dropped; a distinct reading at the same
+    // time is kept.
+    let current = sampled_at(50);
+    let elsewhere = PointerSample::new(EventTime::from_nanos(50), position(9.0, 9.0));
+    let moved = PointerMove::new(mouse(), PointerButtons::NONE, current)
+        .with_coalesced(vec![current, elsewhere]);
+    assert_eq!(moved.coalesced, [elsewhere]);
 }
 
 fn a_scroll_keeps_its_unit() {
@@ -221,6 +229,9 @@ fn a_pan_zoom_transform_is_finite_with_a_positive_scale() {
         (Offset::new(3.0, 4.0), 1.5, 0.25)
     );
     assert_eq!(PanZoomTransform::default(), PanZoomTransform::IDENTITY);
+    // Every finite positive scale is valid, a subnormal one included.
+    let tiny = f64::MIN_POSITIVE / 4.0;
+    assert!(PanZoomTransform::try_new(zero, tiny, 0.0).is_ok());
 }
 
 fn a_key_event_is_a_repeat_only_while_down() {

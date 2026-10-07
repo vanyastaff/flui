@@ -52,7 +52,10 @@ impl PanZoomTransform {
     pub fn try_new(pan: Offset<f64>, scale: f64, rotation: f64) -> Result<Self, InputValueError> {
         finite(Quantity::Pan, pan.dx)?;
         finite(Quantity::Pan, pan.dy)?;
-        let scale = within(Quantity::Scale, scale, f64::MIN_POSITIVE, f64::MAX)?;
+        // Every positive finite scale, subnormals included: a cumulative zoom built
+        // from many positive steps can get that small and is still valid.
+        let smallest_positive = f64::from_bits(1);
+        let scale = within(Quantity::Scale, scale, smallest_positive, f64::MAX)?;
         let rotation = finite(Quantity::Rotation, rotation)?;
         Ok(Self {
             pan,

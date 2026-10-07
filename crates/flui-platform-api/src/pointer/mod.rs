@@ -47,7 +47,7 @@
 //!         .with_modifiers(Modifiers::SHIFT),
 //! );
 //! let PointerEvent::Down(down) = &press else { unreachable!() };
-//! assert!(down.buttons.contains(PointerButton::PRIMARY));
+//! assert!(down.buttons().contains(PointerButton::PRIMARY));
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
@@ -357,10 +357,8 @@ pub type PointerRelease = PointerButtonEvent<Release>;
 pub struct PointerButtonEvent<D: ButtonDirection> {
     /// Who pressed or released.
     pub pointer: PointerInfo,
-    /// The button that changed.
-    pub button: PointerButton,
-    /// The buttons held after the change.
-    pub buttons: PointerButtons,
+    button: PointerButton,
+    buttons: PointerButtons,
     /// The modifiers held.
     pub modifiers: Modifiers,
     /// The platform's click count for a press (2 for a double-click), or `None` when the
@@ -372,6 +370,19 @@ pub struct PointerButtonEvent<D: ButtonDirection> {
 }
 
 impl<D: ButtonDirection> PointerButtonEvent<D> {
+    /// The button that changed.
+    #[must_use]
+    pub fn button(&self) -> PointerButton {
+        self.button
+    }
+
+    /// The buttons held after the change; [`new`](Self::new) keeps it consistent with
+    /// [`button`](Self::button), and the fields cannot be changed apart.
+    #[must_use]
+    pub fn buttons(&self) -> PointerButtons {
+        self.buttons
+    }
+
     /// `button` changing in direction `D` on top of the platform's `buttons`. The stored set
     /// holds `button` after a press and not after a release.
     #[must_use]
@@ -471,11 +482,12 @@ impl PointerMove {
     }
 
     /// This move with the coalesced readings `samples`: sorted oldest first, keeping only
-    /// those not later than `current`.
+    /// those not later than `current` and dropping an exact copy of `current` (a reading
+    /// that merely shares its time is kept).
     #[must_use]
     pub fn with_coalesced(self, mut samples: Vec<PointerSample>) -> Self {
-        let current = self.current.time;
-        samples.retain(|sample| sample.time <= current);
+        let current = self.current;
+        samples.retain(|sample| sample.time <= current.time && *sample != current);
         samples.sort_by_key(|sample| sample.time);
         Self {
             coalesced: samples,

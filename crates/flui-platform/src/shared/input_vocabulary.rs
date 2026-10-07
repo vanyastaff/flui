@@ -33,7 +33,6 @@
 //!   not list is `Unidentified`, and the legacy `Hyper` and `Super` keys and modifiers are
 //!   `Meta`.
 
-use core::f64::consts::FRAC_PI_2;
 use core::num::NonZeroU8;
 
 use flui_foundation::geometry::{Offset, Point, Size};
@@ -160,7 +159,7 @@ fn sample(state: &upstream::PointerState, kind: PointerKind) -> Option<PointerSa
     }
     if state.orientation != upstream::PointerOrientation::default()
         && let Ok(orientation) = PenOrientation::try_new(
-            f64::from(state.orientation.altitude).clamp(0.0, FRAC_PI_2),
+            f64::from(state.orientation.altitude),
             f64::from(state.orientation.azimuth),
         )
     {
@@ -179,7 +178,13 @@ fn sample(state: &upstream::PointerState, kind: PointerKind) -> Option<PointerSa
 fn button_event<D: ButtonDirection>(
     event: &upstream::PointerButtonEvent,
 ) -> Option<PointerButtonEvent<D>> {
-    let kind = kind(&event.pointer, Some(event.state.buttons));
+    // The tool is the one that changed as well as the ones still held: an
+    // eraser release reports a held set without the eraser.
+    let mut tool_buttons = event.state.buttons;
+    if let Some(changed) = event.button {
+        tool_buttons.insert(changed);
+    }
+    let kind = kind(&event.pointer, Some(tool_buttons));
     let pointer = info(&event.pointer, kind)?;
     let sample = sample(&event.state, kind)?;
     // A touch or pen contact without a button, and the eraser, press the primary button.

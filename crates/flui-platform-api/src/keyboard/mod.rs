@@ -24,9 +24,10 @@ use crate::EventTime;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Key {
-    /// The key produces this text: one grapheme cluster, never empty. A backend reports a key
-    /// that produces no text as [`NamedKey::Unidentified`] instead of an empty string.
-    Character(String),
+    /// The key produces this text, never empty (usually one grapheme cluster; some layouts
+    /// produce several characters for one key). Built through [`Key::character`], which reports
+    /// a key that produces no text as [`NamedKey::Unidentified`].
+    Character(KeyText),
     /// A key the W3C names, such as Enter, an arrow or a dead key.
     Named(NamedKey),
 }
@@ -39,7 +40,7 @@ impl Key {
     /// ```
     /// use flui_platform_api::keyboard::{Key, NamedKey};
     ///
-    /// assert_eq!(Key::character("é"), Key::Character("é".to_owned()));
+    /// assert!(matches!(Key::character("é"), Key::Character(text) if text.as_str() == "é"));
     /// assert_eq!(Key::character(""), Key::Named(NamedKey::Unidentified));
     /// ```
     #[must_use]
@@ -48,8 +49,27 @@ impl Key {
         if text.is_empty() {
             Self::Named(NamedKey::Unidentified)
         } else {
-            Self::Character(text)
+            Self::Character(KeyText(text))
         }
+    }
+}
+
+/// The text a [`Key::Character`] produces: never empty, so the variant cannot be built with
+/// an invalid payload.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct KeyText(String);
+
+impl KeyText {
+    /// The text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl core::fmt::Display for KeyText {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(&self.0)
     }
 }
 
