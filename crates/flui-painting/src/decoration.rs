@@ -181,9 +181,29 @@ pub fn paint_box_decoration(
     if paints_no_area {
         // fall through to the border/shadow/image passes
     } else if let Some(gradient) = &decoration.gradient {
+        // Circle dispatch narrows the radius before constructing shader bounds.
+        // Resolve alignments in the decoration rect, but validate in that same
+        // bounds-local domain the engine uses for the silhouette.
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "match engine circle dispatch"
+        )]
+        let shader_bounds = match &silhouette {
+            Silhouette::Circle(circle) => {
+                let radius = circle.radius as f32;
+                Rect::from_xywh(
+                    circle.center.x - f64::from(radius),
+                    circle.center.y - f64::from(radius),
+                    f64::from(radius * 2.0),
+                    f64::from(radius * 2.0),
+                )
+            }
+            Silhouette::RRect(rrect) => rrect.bounding_rect(),
+            Silhouette::Rect => rect,
+        };
         let gradient = if let Some((raw, bounded)) = decoration.gradient_fallback.as_deref()
             && raw == gradient
-            && !crate::styling::gradient::valid_bounds(gradient, rect)
+            && !crate::styling::gradient::valid_bounds(gradient, rect, shader_bounds)
         {
             bounded
         } else {

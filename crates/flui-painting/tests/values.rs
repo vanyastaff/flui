@@ -205,10 +205,26 @@ pub(crate) fn gradient_geometry_checks_intermediate_and_output_overflow() {
     );
     let mut large_b = large_a.clone();
     large_b.end.x = 2.0;
-    assert!(LinearGradient::lerp(&large_a, &large_b, 1e100).is_none());
+    assert!(LinearGradient::lerp(&large_a, &large_b, 1e100).is_some());
     let start = BoxDecoration::<f64>::with_gradient(Gradient::Linear(large_a));
     let end = BoxDecoration::with_gradient(Gradient::Linear(large_b));
-    assert_eq!(BoxDecoration::lerp(&start, &end, 1e100), end);
+    let mut canvas = flui_painting::Canvas::new();
+    flui_painting::paint_box_decoration(
+        &mut canvas,
+        Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
+        &BoxDecoration::lerp(&start, &end, 1e100),
+        flui_painting::DecorationPaintOptions::default(),
+    );
+    let list = canvas.finish();
+    let flui_painting::DrawOp::Rect { paint, .. } =
+        &list.iter().next().expect("bounded linear fill").op
+    else {
+        panic!("rect fill");
+    };
+    let Some(flui_painting::paint::Shader::LinearGradient { to, .. }) = &paint.shader else {
+        panic!("linear fill");
+    };
+    assert_eq!(to.dx, 150.0);
     let linear_a = LinearGradient::new(
         Alignment::CENTER,
         Alignment::CENTER_RIGHT,
@@ -543,6 +559,65 @@ pub(crate) fn gradient_packing_preserves_extrapolated_geometry() {
         SweepGradient::lerp(&sweep, &moved, 1e100).is_none(),
         "sweep center packing"
     );
+    let mut distant = sweep.clone();
+    distant.center.x = 1e40;
+    assert_eq!(
+        SweepGradient::lerp(&distant, &distant, 0.5),
+        Some(distant.clone()),
+        "large center can resolve in a small representable box"
+    );
+    let mut canvas = flui_painting::Canvas::new();
+    flui_painting::paint_box_decoration(
+        &mut canvas,
+        Rect::from_xywh(0.0, 0.0, 1e-20, 1e-20),
+        &BoxDecoration::<f64>::lerp(
+            &BoxDecoration::with_gradient(Gradient::Sweep(distant.clone())),
+            &BoxDecoration::with_gradient(Gradient::Sweep(distant)),
+            0.5,
+        ),
+        flui_painting::DecorationPaintOptions::default(),
+    );
+    let list = canvas.finish();
+    let flui_painting::DrawOp::Rect { paint, .. } =
+        &list.iter().next().expect("small-box sweep fill").op
+    else {
+        panic!("expected rect fill");
+    };
+    let Some(flui_painting::paint::Shader::SweepGradient { center, .. }) = &paint.shader else {
+        panic!("expected sweep gradient");
+    };
+    assert_eq!(center.dx, 5e19);
+    let linear = LinearGradient::new(
+        Alignment::CENTER_LEFT,
+        Alignment::new(1e50, 0.0),
+        vec![Color::RED, Color::BLUE],
+        None,
+        TileMode::Clamp,
+    );
+    assert_eq!(
+        LinearGradient::lerp(&linear, &linear, 0.5),
+        Some(linear.clone()),
+        "large direction can resolve in a small representable box"
+    );
+    let mut canvas = flui_painting::Canvas::new();
+    let endpoint = BoxDecoration::<f64>::with_gradient(Gradient::Linear(linear));
+    flui_painting::paint_box_decoration(
+        &mut canvas,
+        Rect::from_xywh(0.0, 0.0, 1e-30, 1e-30),
+        &BoxDecoration::lerp(&endpoint, &endpoint, 0.5),
+        flui_painting::DecorationPaintOptions::default(),
+    );
+    let list = canvas.finish();
+    let flui_painting::DrawOp::Rect { paint, .. } =
+        &list.iter().next().expect("small-box linear fill").op
+    else {
+        panic!("expected rect fill");
+    };
+    let Some(flui_painting::paint::Shader::LinearGradient { from, to, .. }) = &paint.shader else {
+        panic!("expected linear gradient");
+    };
+    assert_eq!(from.dx, 0.0);
+    assert_eq!(to.dx, 5.000_000_000_000_001e19);
 
     sweep.start_angle = 6.0;
     sweep.end_angle = 6.1;
@@ -716,6 +791,120 @@ pub(crate) fn decoration_gradient_centers_fall_back_after_bounds_scaling() {
         };
         assert_eq!(center.dy, height, "bounded center in actual paint box");
     }
+}
+
+pub(crate) fn decoration_silhouette_and_terminal_fallback() {
+    let a = BoxDecoration::<f64>::with_gradient(Gradient::Sweep(SweepGradient::centered(vec![
+        Color::RED,
+        Color::BLUE,
+    ])));
+    let mut b = a.clone();
+    let Some(Gradient::Sweep(sweep)) = &mut b.gradient else {
+        panic!("sweep endpoint");
+    };
+    sweep.center.y = -1.0;
+    for (circle, chained) in [(true, false), (false, true)] {
+        let mut mixed = if chained {
+            BoxDecoration::lerp(&a, &BoxDecoration::lerp(&a, &b, 5.0), 2.0)
+        } else {
+            BoxDecoration::lerp(&a, &b, 3.0)
+        };
+        if circle {
+            mixed.shape = flui_painting::BoxShape::Circle;
+        }
+        let mut canvas = flui_painting::Canvas::new();
+        flui_painting::paint_box_decoration(
+            &mut canvas,
+            Rect::from_xywh(0.0, 0.0, 2e38, if circle { 3e38 } else { 2e38 }),
+            &mixed,
+            flui_painting::DecorationPaintOptions::default(),
+        );
+        let list = canvas.finish();
+        let (flui_painting::DrawOp::Circle { paint, .. }
+        | flui_painting::DrawOp::Rect { paint, .. }) =
+            &list.iter().next().expect("gradient fill").op
+        else {
+            panic!("expected background fill");
+        };
+        let Some(flui_painting::paint::Shader::SweepGradient { center, .. }) = &paint.shader else {
+            panic!("sweep fill");
+        };
+        assert_eq!(center.dy, 0.0, "circle={circle}, chained={chained}");
+    }
+}
+
+pub(crate) fn decoration_endpoint_ramp_preserves_stop_limit() {
+    let a = LinearGradient::new(
+        Alignment::CENTER_LEFT,
+        Alignment::CENTER_RIGHT,
+        vec![Color::RED; 256],
+        Some((0..256).map(|i| (f64::from(i) + 0.25) / 256.0).collect()),
+        TileMode::Clamp,
+    );
+    let mut b = a.clone();
+    b.end.x = 2.0;
+    b.colors = vec![Color::BLUE; 256];
+    b.stops = Some((0..256).map(|i| (f64::from(i) + 0.75) / 256.0).collect());
+    let mixed = BoxDecoration::<f64>::lerp(
+        &BoxDecoration::with_gradient(Gradient::Linear(a)),
+        &BoxDecoration::with_gradient(Gradient::Linear(b.clone())),
+        2.0,
+    );
+    let mut canvas = flui_painting::Canvas::new();
+    flui_painting::paint_box_decoration(
+        &mut canvas,
+        Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
+        &mixed,
+        flui_painting::DecorationPaintOptions::default(),
+    );
+    let list = canvas.finish();
+    let flui_painting::DrawOp::Rect { paint, .. } = &list.iter().next().expect("linear fill").op
+    else {
+        panic!("rect fill");
+    };
+    let Some(flui_painting::paint::Shader::LinearGradient {
+        to, colors, stops, ..
+    }) = &paint.shader
+    else {
+        panic!("linear fill");
+    };
+    assert_eq!(colors, &b.colors);
+    assert_eq!(stops, &b.stops);
+    assert_eq!(to.dx, 200.0, "geometry still extrapolates");
+}
+
+pub(crate) fn decoration_linear_overshoot_resolves_in_small_box() {
+    let a = LinearGradient::new(
+        Alignment::CENTER_LEFT,
+        Alignment::CENTER,
+        vec![Color::RED, Color::BLUE],
+        None,
+        TileMode::Clamp,
+    );
+    let mut b = a.clone();
+    b.end.x = 1.0;
+    let mixed = BoxDecoration::<f64>::lerp(
+        &BoxDecoration::with_gradient(Gradient::Linear(a)),
+        &BoxDecoration::with_gradient(Gradient::Linear(b)),
+        1e50,
+    );
+    let mut canvas = flui_painting::Canvas::new();
+    flui_painting::paint_box_decoration(
+        &mut canvas,
+        Rect::from_xywh(0.0, 0.0, 1e-20, 1e-20),
+        &mixed,
+        flui_painting::DecorationPaintOptions::default(),
+    );
+    let list = canvas.finish();
+    let flui_painting::DrawOp::Rect { paint, .. } = &list.iter().next().expect("linear fill").op
+    else {
+        panic!("rect fill");
+    };
+    let Some(flui_painting::paint::Shader::LinearGradient { from, to, .. }) = &paint.shader else {
+        panic!("linear fill");
+    };
+    assert_eq!(from.dx, 0.0);
+    assert_eq!(to.dx, 1e50 * (1e-20 / 2.0) + 1e-20 / 2.0);
 }
 
 pub(crate) fn linear_nan_stops_are_rejected() {

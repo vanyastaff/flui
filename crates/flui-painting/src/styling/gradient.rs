@@ -207,7 +207,6 @@ impl LinearGradient {
             || !(end.y - begin.y).is_finite()
             || distorted_span(a.begin.x, a.end.x, b.begin.x, b.end.x, end.x - begin.x, t)
             || distorted_span(a.begin.y, a.end.y, b.begin.y, b.end.y, end.y - begin.y, t)
-            || !valid_linear_projection(begin, end)
         {
             return None;
         }
@@ -504,6 +503,10 @@ impl SweepGradient {
         let phase = start_angle.rem_euclid(std::f64::consts::TAU);
         let packed_end = (phase + span) as f32;
         let packed_span = packed_end - phase as f32;
+        // A box dimension can round up from just above half the smallest f32
+        // subnormal. Refuse centers impossible even at that scale; smaller
+        // boxes can otherwise represent centers beyond the unit-box f32 range.
+        let minimum_dimension = f64::from(f32::from_bits(1)) * 0.5;
         // Extrapolation must not amplify packing error into a changed angular
         // scale. Bounded interpolation and unchanged gradients retain the
         // renderer's existing small-span representation.
@@ -518,10 +521,9 @@ impl SweepGradient {
             )
             || !packed_end.is_finite()
             || !packed_span.is_finite()
-            || ![center.x, center.y].into_iter().all(|value| {
-                let local = value.mul_add(0.5, 0.5);
-                (local as f32).is_finite() && (local == 0.0 || local as f32 != 0.0)
-            })
+            || ![center.x, center.y]
+                .into_iter()
+                .all(|value| ((value * 0.5 * minimum_dimension) as f32).is_finite())
             || (span != 0.0 && packed_span == 0.0)
             || (!(0.0..=1.0).contains(&t)
                 && (a.start_angle != b.start_angle || a.end_angle != b.end_angle)
@@ -673,35 +675,28 @@ fn valid_circles(positions: [f64; 4], radius: f64, focal_radius: f64, bounds: [f
     })
 }
 
-fn valid_linear_projection(begin: Alignment, end: Alignment) -> bool {
-    valid_resolved_linear_projection(
-        [begin.x.mul_add(0.5, 0.5), begin.y.mul_add(0.5, 0.5)],
-        [(end.x - begin.x) * 0.5, (end.y - begin.y) * 0.5],
-        [1.0, 1.0],
-    )
-}
-
 #[expect(
     clippy::cast_possible_truncation,
     reason = "validate bounds-local renderer packing"
 )]
 pub(crate) fn valid_bounds(
     gradient: &Gradient,
+    rect: flui_foundation::geometry::Rect<f64>,
     bounds: flui_foundation::geometry::Rect<f64>,
 ) -> bool {
-    let center = bounds.center();
+    let center = rect.center();
     let local = |alignment: Alignment| {
         [
-            (center.x + alignment.x * (bounds.width() / 2.0)) - bounds.left(),
-            (center.y + alignment.y * (bounds.height() / 2.0)) - bounds.top(),
+            (center.x + alignment.x * (rect.width() / 2.0)) - bounds.left(),
+            (center.y + alignment.y * (rect.height() / 2.0)) - bounds.top(),
         ]
     };
     match gradient {
-        Gradient::Linear(linear) => valid_linear_bounds(linear, bounds),
+        Gradient::Linear(linear) => valid_linear_bounds(linear, rect, bounds),
         Gradient::Radial(radial) => {
             let center = local(radial.center);
             let focal = local(radial.focal.unwrap_or(radial.center));
-            let half_side = (bounds.width() / 2.0).min(bounds.height() / 2.0);
+            let half_side = (rect.width() / 2.0).min(rect.height() / 2.0);
             valid_circles(
                 [center[0], center[1], focal[0], focal[1]],
                 radial.radius * half_side * 2.0,
@@ -718,13 +713,14 @@ pub(crate) fn valid_bounds(
 // The decoration producer knows the real paint box, unlike interpolation.
 fn valid_linear_bounds(
     gradient: &LinearGradient,
+    rect: flui_foundation::geometry::Rect<f64>,
     bounds: flui_foundation::geometry::Rect<f64>,
 ) -> bool {
-    let center = bounds.center();
+    let center = rect.center();
     let at = |alignment: Alignment| {
         [
-            center.x + alignment.x * (bounds.width() / 2.0),
-            center.y + alignment.y * (bounds.height() / 2.0),
+            center.x + alignment.x * (rect.width() / 2.0),
+            center.y + alignment.y * (rect.height() / 2.0),
         ]
     };
     let from = at(gradient.begin);

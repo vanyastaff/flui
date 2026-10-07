@@ -180,6 +180,18 @@ fn value_contract() {
                 values::decoration_gradient_centers_fall_back_after_bounds_scaling,
             ),
             (
+                "decoration_silhouette_and_terminal_fallback",
+                values::decoration_silhouette_and_terminal_fallback,
+            ),
+            (
+                "decoration_endpoint_ramp_preserves_stop_limit",
+                values::decoration_endpoint_ramp_preserves_stop_limit,
+            ),
+            (
+                "decoration_linear_overshoot_resolves_in_small_box",
+                values::decoration_linear_overshoot_resolves_in_small_box,
+            ),
+            (
                 "gradient_domains_keep_zero_radii_and_signed_angles",
                 values::gradient_domains_keep_zero_radii_and_signed_angles,
             ),

@@ -1012,8 +1012,9 @@ Radii extrapolate with a zero lower bound. Circle positions, radii, reciprocal
 scale and circle differences must survive `f32` packing after shared unit-box
 normalization, rather than restricting the raw radii. Fragment-coordinate
 subtraction and the radial quadratic must retain their nonzero values and
-equation sign. Sweep centers must pack in the unit box, and extrapolated sweep
-spans must retain their scale after phase-reduced packing.
+equation sign. Sweep centers are refused only when impossible even at the
+smallest nonzero packed box dimension; larger raw centers can remain valid in
+small boxes. Extrapolated sweep spans must retain their scale after phase-reduced packing.
 The engine still validates the resolved bounds, normalization and equation. Colors
 saturate through `Color::lerp`;
 stop positions retain the sampled union rather than inventing correspondence
@@ -1022,16 +1023,21 @@ when endpoint subtraction overflows, and refuses non-finite output.
 Independent interpolation of direction, angle and focal-center spans
 detects translation-induced distortion beyond the renderer's relative precision.
 Compensated endpoint differences retain finite residuals when large spans cancel,
-so zero intended spans are validated too. Linear projections are checked in a
-unit paint box. A successfully extrapolated decoration retains its bounded
+so zero intended spans are validated too. Linear projection packing is deferred
+until the actual paint bounds are known. A successfully extrapolated decoration retains its bounded
 endpoint until paint can check the actual bounds-local linear coefficients and
 shader arithmetic, normalized radial circles and equation, or sweep center.
-If those checks fail, paint resolves the bounded endpoint.
-The fallback travels with cloned and serialized decorations; replacing the
+If those checks fail, paint resolves the bounded endpoint. Geometry resolves in
+the decoration rectangle, while packing is checked against the dispatched
+silhouette bounds, including the engine's narrowed circle radius.
+Chained extrapolations retain the terminal bounded fallback. The fallback
+travels with cloned and serialized decorations; replacing the
 gradient through its setter clears it, and direct field replacement is checked
 against the original extrapolated gradient before the fallback is used.
 `BoxDecoration::lerp` forwards the raw fraction for paired gradient geometry;
 its other fields keep their bounded interpolation and exact endpoint behavior.
+Outside the interval, it preserves the selected endpoint's color/stop ramp so
+merging disjoint ramps cannot exceed the renderer's stop limit.
 If extrapolation is unrepresentable, the infallible decoration producer falls
 back to bounded gradient interpolation. Radial interpolation refuses coincident
 nonzero circles, which the renderer cannot represent; negative radius overflow
@@ -1043,6 +1049,11 @@ producer's raw overshoot in a small box and bounded endpoint in a tall box,
 including replacement and serialization behavior.
 `decoration_gradient_centers_fall_back_after_bounds_scaling` covers sweep-center
 packing and radial quadratic underflow after resolving tall paint boxes.
+`decoration_silhouette_and_terminal_fallback` covers circle bounds and chained
+extrapolation; `decoration_endpoint_ramp_preserves_stop_limit` keeps a
+renderable endpoint ramp while geometry extrapolates, and
+`decoration_linear_overshoot_resolves_in_small_box` retains directions that
+only become packable after resolving a small box.
 The public `value_contract` rows `gradient_geometry_preserves_overshoot`,
 `decoration_gradient_geometry_preserves_overshoot`,
 `gradient_geometry_rejects_invalid_inputs_before_equal_shortcuts`,

@@ -330,13 +330,35 @@ where
         if t == 0.0 || t == 1.0 {
             let mut endpoint = if t == 0.0 { a.clone() } else { b.clone() };
             if let (Some(a_gradient), Some(b_gradient)) = (&a.gradient, &b.gradient)
-                && let Some(gradient) = Gradient::lerp(a_gradient, b_gradient, gradient_t)
+                && let Some(mut gradient) = Gradient::lerp(a_gradient, b_gradient, gradient_t)
             {
-                if let Some(bounded) = &endpoint.gradient
-                    && &gradient != bounded
-                {
-                    endpoint.gradient_fallback =
-                        Some(Box::new((gradient.clone(), bounded.clone())));
+                if let Some(bounded) = &endpoint.gradient {
+                    // Only geometry extrapolates. Keep the saturated endpoint's
+                    // ramp instead of merging disjoint stop positions again.
+                    match (&mut gradient, bounded) {
+                        (Gradient::Linear(raw), Gradient::Linear(end)) => {
+                            raw.colors.clone_from(&end.colors);
+                            raw.stops.clone_from(&end.stops);
+                        }
+                        (Gradient::Radial(raw), Gradient::Radial(end)) => {
+                            raw.colors.clone_from(&end.colors);
+                            raw.stops.clone_from(&end.stops);
+                        }
+                        (Gradient::Sweep(raw), Gradient::Sweep(end)) => {
+                            raw.colors.clone_from(&end.colors);
+                            raw.stops.clone_from(&end.stops);
+                        }
+                        _ => {}
+                    }
+                    if &gradient != bounded {
+                        let terminal = endpoint
+                            .gradient_fallback
+                            .as_deref()
+                            .filter(|(raw, _)| raw == bounded)
+                            .map_or(bounded, |(_, fallback)| fallback);
+                        endpoint.gradient_fallback =
+                            Some(Box::new((gradient.clone(), terminal.clone())));
+                    }
                 }
                 endpoint.gradient = Some(gradient);
             }
