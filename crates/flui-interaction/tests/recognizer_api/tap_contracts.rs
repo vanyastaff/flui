@@ -64,9 +64,9 @@ fn replacing_builder_callback_preserves_retirement_failure() {
         std::hint::black_box(&old);
     });
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-        builder.on_tap(move |_| {
+        drop(builder.on_tap(move |_| {
             std::hint::black_box(&incoming);
-        });
+        }));
     }))
     .expect_err("old capture failure must resume");
     assert_eq!(failure.downcast_ref::<&str>(), Some(&"old callback drop"));
