@@ -8,12 +8,12 @@ use super::{
 };
 use crate::{
     arena::{GestureArena, GestureArenaMember},
-    events::{PointerEvent, PointerType},
+    events::{PointerEvent, PointerEventExt, PointerType},
     ids::PointerId,
     processing::VelocityTracker,
     routing::PointerDispatch,
     settings::GestureSettings,
-    traits::{DragAxis, PointerEventExtTrait},
+    traits::DragAxis,
 };
 use flui_foundation::geometry::Offset;
 use std::{cell::RefCell, rc::Rc};

@@ -221,7 +221,7 @@ pub use flui_foundation::{ManualClock, MonotonicClock, SystemClock};
 // ============================================================================
 
 // Re-export commonly used event types at crate root
-pub use events::{CursorIcon, KeyboardEvent, PointerEvent};
+pub use events::{CursorIcon, KeyboardEvent, PointerEvent, PointerEventExt};
 // Re-export observability surface — typed event names + span constants.
 pub use observability::{GestureEvent, SPAN_ARENA, SPAN_RECOGNIZER, pointer_event_kind};
 // Trackpad pan/zoom module — canonical public entry point for the
@@ -301,7 +301,7 @@ pub use testing::ModifiersBuilder;
 // ============================================================================
 // Re-exports: Traits
 // ============================================================================
-pub use traits::{DragAxis, PointerEventExtTrait as PointerEventExt};
+pub use traits::DragAxis;
 
 // ============================================================================
 // Prelude
@@ -322,7 +322,7 @@ pub mod prelude {
     // Gesture recognition
     pub use crate::arena::*;
     // Events (W3C-compliant)
-    pub use crate::events::{CursorIcon, KeyboardEvent, PointerEvent};
+    pub use crate::events::{CursorIcon, KeyboardEvent, PointerEvent, PointerEventExt};
     // Advanced interaction
     pub use crate::routing::{MouseTracker, MouseTrackerAnnotation, PointerMotionKind};
     // Input processing

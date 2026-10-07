@@ -7,9 +7,8 @@ use flui_foundation::geometry::Offset;
 use flui_interaction::{
     CancelOutcome, DoubleTapGestureRecognizer, GestureArena, GestureRecognizer,
     TapGestureRecognizer,
-    events::{PointerType, make_down_event, make_up_event},
+    events::{PointerEventExt, PointerType, make_down_event, make_up_event},
     routing::PointerDispatch,
-    traits::PointerEventExtTrait,
 };
 
 #[test]
