@@ -448,3 +448,58 @@ fn keycode_to_character(keycode: i32) -> Option<char> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flui_platform_api::pointer::{PenTool, PointerKind};
+
+    #[test]
+    fn android_native_pointer_readings() {
+        let rows: &[(&str, fn())] = &[
+            ("eraser remains a tool", eraser_remains_a_tool),
+            ("buttons preserve contact and barrel", buttons_preserve_contact_and_barrel),
+            ("fractional physical contact is logical", fractional_contact_is_logical),
+            ("invalid scale refuses geometry", invalid_scale_refuses_geometry),
+            ("native orientation changes coordinate basis", native_orientation_changes_basis),
+        ];
+        for (name, row) in rows {
+            row();
+            eprintln!("passed: {name}");
+        }
+    }
+
+    fn eraser_remains_a_tool() {
+        assert_eq!(pointer_kind(ToolType::Eraser), PointerKind::Pen { tool: PenTool::Eraser });
+        assert_eq!(pointer_kind(ToolType::Stylus), PointerKind::Pen { tool: PenTool::Tip });
+        assert_eq!(pointer_kind(ToolType::Unknown), PointerKind::Unknown);
+    }
+
+    fn buttons_preserve_contact_and_barrel() {
+        use flui_platform_api::pointer::PointerButton as Button;
+        let held = native_buttons(android_activity::input::ButtonState(0x20 | 0x40), true);
+        assert!(held.contains(Button::PRIMARY));
+        assert!(held.contains(Button::SECONDARY));
+        assert!(held.contains(Button::AUXILIARY));
+        assert_eq!(native_buttons(android_activity::input::ButtonState(0), false), flui_platform_api::pointer::PointerButtons::NONE);
+    }
+
+    fn fractional_contact_is_logical() {
+        let size = logical_contact(18.5, 7.25, 2.0).expect("reported finite axes").get();
+        assert_eq!((size.width, size.height), (9.25, 3.625));
+        assert_eq!(logical_contact(0.0, 0.0, 2.0), None);
+    }
+
+    fn invalid_scale_refuses_geometry() {
+        for scale in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert_eq!(logical_contact(18.5, 7.25, scale), None);
+        }
+    }
+
+    fn native_orientation_changes_basis() {
+        let angles = pen_orientation(core::f64::consts::FRAC_PI_4, 0.0).expect("finite pen angles");
+        assert_eq!(angles.altitude(), Some(core::f64::consts::FRAC_PI_4));
+        assert_eq!(angles.azimuth(), Some(3.0 * core::f64::consts::FRAC_PI_2));
+        assert_eq!(pen_orientation(f64::NAN, 0.0), None);
+    }
+}
