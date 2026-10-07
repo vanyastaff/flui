@@ -117,7 +117,7 @@ default = []
 testing = []
 
 # Serialize the gesture values (details, velocity, pointer device kind).
-serde = ["dep:serde", "flui-painting/serde"]
+serde = ["dep:serde", "flui-painting/serde", "flui-platform-api/serde"]
 
 [lints]
 workspace = true

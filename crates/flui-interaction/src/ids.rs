@@ -1,32 +1,9 @@
 //! Type-safe identifiers used by the gesture/interaction subsystem.
 //!
-//! # `PointerId` re-export
-//!
-//! The canonical [`PointerId`] is **re-exported** from the `ui-events` crate
-//! (W3C-compliant pointer event types). This crate previously carried a local
-//! `PointerId(i32)` newtype which:
-//!
-//! - Used `0` as the "mouse / primary pointer" sentinel.
-//! - Duplicated a per-event `DefaultHasher` allocation on every event in
-//!   `extract_pointer_id` to fit `ui_events::pointer::PointerId(NonZeroU64)`
-//!   back into a 32-bit `i32`.
-//! - Caused HashMap key collisions between two pointers that hashed to the
-//!   same 31-bit truncated value.
-//!
-//! Widening the local type to [`ui_events::pointer::PointerId`] (i.e.
-//! `NonZeroU64`) removes the lossy hash and aligns the gesture layer with
-//! the platform layer ([`flui-platform`](crate)) which already speaks
-//! `ui_events` directly.
-//!
-//! ## Constructor migration
-//!
-//! `ui_events::pointer::PointerId::new` is **fallible** — it returns
-//! `Option<PointerId>` because `0` is not a valid id (the inner type is
-//! `NonZeroU64`). Callers that previously wrote `PointerId::new(0)` must use
-//! [`PointerId::PRIMARY`] instead (the canonical primary pointer id, value
-//! `1`). Callers that previously wrote `PointerId::new(N)` for `N >= 1`
-//! should use `PointerId::new((N as u64) + 1).expect("nonzero pointer id")`
-//! — adding `1` keeps test pointers distinct from `PRIMARY`.
+//! [`PointerId`] and [`DeviceId`] are the exact owned contract identities from
+//! `flui-platform-api` (ADR-0143). Pointer identity names a contact; device
+//! identity names connected hardware. Neither is a truncated hash or a signed
+//! compatibility label. Primary contact status lives in `PointerInfo`, not an ID.
 //!
 //! # Local IDs
 //!
@@ -35,13 +12,11 @@
 //!
 //! # Example
 //!
-//! ```rust,ignore
+//! ```rust
 //! use flui_interaction::ids::{PointerId, FocusNodeId};
 //!
-//! // Primary pointer (was: `PointerId::new(0)`).
-//! let mouse = PointerId::PRIMARY;
-//! // Second pointer in a multi-touch gesture.
-//! let touch1 = PointerId::new(2).expect("nonzero pointer id");
+//! let mouse = PointerId::try_from(1_u64).expect("nonzero pointer id");
+//! let touch1 = PointerId::try_from(2_u64).expect("nonzero pointer id");
 //!
 //! assert_ne!(mouse, touch1);
 //!
@@ -52,15 +27,13 @@
 use std::{fmt, num::NonZeroU64};
 
 // ============================================================================
-// PointerId — re-exported from ui-events (canonical W3C-compliant type)
+// PointerId — the owned platform contract identity
 // ============================================================================
 
 /// Unique identifier for a pointer device (mouse, touch, stylus).
 ///
-/// Re-exported from [`ui_events::pointer::PointerId`]. See [the module
-/// documentation](self) for migration notes (the local `i32` newtype
-/// was widened to this `NonZeroU64`-backed type).
-pub use ui_events::pointer::PointerId;
+/// Re-exported from [`flui_platform_api::pointer::PointerId`].
+pub use flui_platform_api::pointer::PointerId;
 
 // ============================================================================
 // FocusNodeId - Identifier for focusable UI elements
@@ -219,8 +192,8 @@ impl From<HandlerId> for NonZeroU64 {
 
 /// Unique identifier for an input device.
 ///
-/// Alias for mouse tracker compatibility.
-pub type DeviceId = i32;
+/// Re-exported from [`flui_platform_api::pointer::DeviceId`].
+pub use flui_platform_api::pointer::DeviceId;
 
 // ============================================================================
 // RegionId - Identifier for mouse regions

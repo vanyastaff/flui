@@ -30,10 +30,9 @@
 //! which re-exports everything defined here at its old paths. Only
 //! composition roots depend on `flui-platform` (ADR-0082 §2).
 //!
-//! The pointer and keyboard types re-exported from `ui-events` (and, through
-//! it, `keyboard-types`) are ADR-0089 debt. FLUI's own vocabulary, which
-//! replaces them in [`PlatformInput`] (ADR-0143), is in [`pointer`](mod@pointer),
-//! [`keyboard`] and [`EventTime`].
+//! [`PlatformInput`] carries FLUI's owned vocabulary (ADR-0143), defined in
+//! [`pointer`](mod@pointer), [`keyboard`] and [`EventTime`]. Upstream translator
+//! types stay behind the backend boundary.
 //!
 //! # Implementing a capability without a backend
 //!
@@ -120,10 +119,15 @@ pub use haptic_feedback::HapticFeedback;
 pub use haptics::PlatformHaptics;
 pub use ime::ImeEvent;
 pub use input::{
-    DispatchEventResult, DragDropEvent, Key, KeyboardEvent, Modifiers, PlatformInput,
-    PointerButton, PointerButtons, PointerEvent, PointerId, PointerType, PointerUpdate,
-    ScrollDelta, delta_offset_from_coords, device_to_logical, logical_to_device,
-    offset_from_coords,
+    DispatchEventResult, DragDropEvent, PlatformInput, delta_offset_from_coords,
+    device_to_logical, logical_to_device, offset_from_coords,
+};
+pub use keyboard::{Code, Key, KeyEvent, KeyState, Location, Modifiers, NamedKey};
+pub use pointer::{
+    ButtonChange, CancelReason, DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform,
+    PenTool, PointerButton, PointerButtons, PointerCancel, PointerEvent, PointerId, PointerInfo,
+    PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease, PointerRole, PointerSample,
+    ScrollDelta, ScrollEvent, ScrollPhase, ScrollPrecision, ScrollUnit,
 };
 pub use locale::Locale;
 pub use platform_window::PlatformWindow;

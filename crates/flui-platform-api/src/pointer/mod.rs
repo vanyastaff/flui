@@ -190,6 +190,7 @@ impl TryFrom<u64> for DeviceId {
 
 /// Which end of a pen is in use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum PenTool {
     /// The writing tip.
@@ -202,6 +203,7 @@ pub enum PenTool {
 
 /// The kind of device behind a pointer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum PointerKind {
     /// A mouse or other indirect cursor device.
