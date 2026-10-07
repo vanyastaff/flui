@@ -107,9 +107,45 @@ fn normalisation_overflow_switches_at_the_midpoint() {
     assert_eq!(half.m, Matrix4::IDENTITY.m, "from the midpoint: {half:?}");
 }
 
+fn opposite_extreme_translations_meet_at_zero() {
+    let begin = Matrix4::translation(-f64::MAX, f64::MAX, 0.0);
+    let end = Matrix4::translation(f64::MAX, -f64::MAX, 0.0);
+    assert_close(
+        begin.lerp(end, 0.5),
+        Matrix4::IDENTITY,
+        0.0,
+        "-MAX -> MAX midpoint",
+    );
+}
+
+fn identical_collapsed_rotation_is_constant() {
+    let collapsed = Matrix4::rotation_z(1.0) * Matrix4::scaling(0.0, 1.0, 1.0);
+    for t in [0.25, 0.5, 0.75] {
+        assert_eq!(collapsed.lerp(collapsed, t).m, collapsed.m, "t = {t}");
+    }
+}
+
+fn tiny_rotation_extrapolates_along_the_arc() {
+    let tiny = Matrix4::rotation_z(1e-7);
+    let far = Matrix4::IDENTITY.lerp(tiny, 1e7);
+    assert_close(far, Matrix4::rotation_z(1.0), 1e-6, "1e-7 rad x 1e7");
+}
+
 #[test]
 fn matrix4_lerp_decomposes_like_css_transforms() {
     crate::run_table(&[
+        (
+            "opposite extreme translations meet at zero",
+            opposite_extreme_translations_meet_at_zero,
+        ),
+        (
+            "identical collapsed rotation is constant",
+            identical_collapsed_rotation_is_constant,
+        ),
+        (
+            "tiny rotation extrapolates along the arc",
+            tiny_rotation_extrapolates_along_the_arc,
+        ),
         (
             "zero scale axis interpolates finitely",
             zero_scale_axis_interpolates_finitely,
