@@ -27,11 +27,11 @@ use crate::layout::SizedBox;
 ///    Paint and hit-testing are suppressed by `Offstage` when hidden.
 ///    Hidden focus behavior is configured by [`ExcludeFocus`].
 ///
-/// 3. **Interactive-while-hidden (`maintain_interactivity = true`, requires
-///    `maintain_state = true`):** deferred — full support requires
-///    `maintainSize`. Setting `maintain_interactivity = true` is accepted but
-///    has no additional effect beyond `maintain_state` behaviour; see the
-///    divergence note below.
+/// 3. **Size-preserving (`maintain_size = true`, requires
+///    `maintain_animation = true`):** the child keeps its full layout size
+///    while hidden. Paint, semantics, pointer events and focus are suppressed
+///    independently; `maintain_semantics`, `maintain_interactivity` and
+///    `maintain_focusability` opt into their respective retained behavior.
 ///
 /// **Current limits:**
 /// - `maintainAnimation` controls descendants registered through an ambient
@@ -40,10 +40,6 @@ use crate::layout::SizedBox;
 ///   an ambient scope, FLUI's `TickerMode` intentionally passes its child
 ///   through so an undriven nested registry cannot swallow wall-clock
 ///   fallback animations.
-/// - `maintainSemantics` — absent by design rather than deferred-and-inert:
-///   it would need a hook to skip a render object's children during the
-///   semantics walk, and FLUI's render traits expose none, so no knob is
-///   offered that would silently do nothing.
 /// - There is no visibility scope widget for descendants to query (no
 ///   equivalent query API yet).
 #[derive(Clone, StatelessView)]
@@ -52,6 +48,7 @@ pub struct Visibility {
     maintain_state: bool,
     maintain_animation: bool,
     maintain_size: bool,
+    maintain_semantics: bool,
     maintain_focusability: bool,
     maintain_interactivity: bool,
     replacement: BoxedView,
@@ -68,6 +65,7 @@ impl Visibility {
             maintain_state: false,
             maintain_animation: false,
             maintain_size: false,
+            maintain_semantics: false,
             maintain_focusability: false,
             maintain_interactivity: false,
             replacement: SizedBox::shrink().boxed(),
@@ -137,6 +135,18 @@ impl Visibility {
         self
     }
 
+    /// Keep hidden children in the accessibility tree (default `false`).
+    ///
+    /// Requires `maintain_size = true`, so retained semantics keeps the child's
+    /// normal layout geometry. Debug builds check the completed configuration,
+    /// allowing either builder method to be called first. This does not enable
+    /// pointer events or focus while hidden.
+    #[must_use]
+    pub fn maintain_semantics(mut self, maintain_semantics: bool) -> Self {
+        self.maintain_semantics = maintain_semantics;
+        self
+    }
+
     /// Allow pointer events to reach the child even when it is not visible.
     ///
     /// Requires `maintain_size = true` — without it the hidden child occupies
@@ -164,6 +174,7 @@ impl fmt::Debug for Visibility {
             .field("maintain_state", &self.maintain_state)
             .field("maintain_animation", &self.maintain_animation)
             .field("maintain_size", &self.maintain_size)
+            .field("maintain_semantics", &self.maintain_semantics)
             .field("maintain_focusability", &self.maintain_focusability)
             .field("maintain_interactivity", &self.maintain_interactivity)
             .finish_non_exhaustive()
@@ -183,6 +194,10 @@ impl StatelessView for Visibility {
         debug_assert!(
             self.maintain_size || !self.maintain_interactivity,
             "maintain_interactivity requires maintain_size"
+        );
+        debug_assert!(
+            self.maintain_size || !self.maintain_semantics,
+            "maintain_semantics requires maintain_size"
         );
         debug_assert!(
             self.maintain_state || !self.maintain_focusability,
@@ -212,6 +227,7 @@ impl StatelessView for Visibility {
             // still reach it.
             VisibilityGate::new()
                 .visible(self.visible)
+                .maintain_semantics(self.maintain_semantics)
                 .child(
                     IgnorePointer::new()
                         .ignoring(!self.visible && !self.maintain_interactivity)

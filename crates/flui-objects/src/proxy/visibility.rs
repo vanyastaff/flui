@@ -6,20 +6,9 @@
 //! point: a hidden child keeps occupying exactly the space it would occupy
 //! visible.
 //!
-//! # Why not `RenderOpacity`
-//!
-//! An opacity of zero would hide the child too, but a fully opaque opacity
-//! object must leave its opacity layer in the layer tree, which forces every
-//! ancestor to composite as well and can shatter one simple scene into many
-//! layers. A paint gate has no layer and no compositing cost.
-//!
-//! # Not covered here
-//!
-//! Gating the subtree's semantics on `maintain_semantics || visible` is not
-//! covered. FLUI's render traits expose no
-//! semantics-visiting hook, so that half is **not** implemented and
-//! `Visibility` deliberately carries no `maintain_semantics` knob to imply
-//! otherwise.
+//! A visibility gate emits no opacity layer. Hidden children also stay out
+//! of the semantics walk unless `maintain_semantics` explicitly retains them.
+//! Layout, paint, accessibility and pointer participation are independent.
 
 use flui_foundation::Single;
 
@@ -34,6 +23,7 @@ use flui_rendering::{RenderUpdateImpact, parent_data::BoxParentData, traits::Ren
 #[derive(Debug, Clone)]
 pub struct RenderVisibility {
     visible: bool,
+    maintain_semantics: bool,
     has_child: bool,
 }
 
@@ -43,6 +33,7 @@ impl RenderVisibility {
     pub const fn new(visible: bool) -> Self {
         Self {
             visible,
+            maintain_semantics: false,
             has_child: false,
         }
     }
@@ -54,16 +45,32 @@ impl RenderVisibility {
         self.visible
     }
 
-    /// Updates the visible flag, reporting whether a repaint is needed.
-    ///
-    /// Paint only — the child's geometry does not depend on this flag, which
-    /// is why `maintain_size` maintains the size at all.
+    /// Updates paint visibility and invalidates semantics when the child
+    /// enters or leaves the accessibility tree. Layout is unaffected.
     pub fn set_visible(&mut self, visible: bool) -> RenderUpdateImpact {
         if self.visible == visible {
             return RenderUpdateImpact::NONE;
         }
         self.visible = visible;
-        RenderUpdateImpact::PAINT
+        if self.maintain_semantics {
+            RenderUpdateImpact::PAINT
+        } else {
+            RenderUpdateImpact::PAINT | RenderUpdateImpact::SEMANTICS
+        }
+    }
+
+    /// Keeps hidden children in the accessibility tree when enabled.
+    /// Only a change to effective child visitation invalidates semantics.
+    pub fn set_maintain_semantics(&mut self, maintain_semantics: bool) -> RenderUpdateImpact {
+        if self.maintain_semantics == maintain_semantics {
+            return RenderUpdateImpact::NONE;
+        }
+        self.maintain_semantics = maintain_semantics;
+        if self.visible {
+            RenderUpdateImpact::NONE
+        } else {
+            RenderUpdateImpact::SEMANTICS
+        }
     }
 }
 
@@ -79,6 +86,7 @@ impl flui_foundation::Diagnosticable for RenderVisibility {
         // `add_flag` prints nothing when the flag is false, which would hide
         // the one state worth seeing here, so this reports unconditionally.
         builder.add("visible", if self.visible { "visible" } else { "hidden" });
+        builder.add_flag("maintain_semantics", self.maintain_semantics, "retained");
     }
 }
 
@@ -92,6 +100,10 @@ impl RenderBox for RenderVisibility {
 
     fn skip_paint(&self) -> bool {
         !self.visible
+    }
+
+    fn visits_child_for_semantics(&self, _child_slot: usize) -> bool {
+        self.visible || self.maintain_semantics
     }
 
     flui_rendering::forward_single_child_box_hit_test!();
