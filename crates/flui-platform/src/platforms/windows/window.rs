@@ -167,6 +167,7 @@ impl WindowsWindow {
         frames: Rc<super::platform::FrameCount>,
         exit_policy: super::owner_control::ExitPolicyRequest,
         config: crate::config::WindowConfiguration,
+        apartment: Option<Rc<super::com_apartment::ComApartment>>,
     ) -> Result<Arc<Self>, OpenWindowError> {
         // Admission refuses identity exhaustion before creating an HWND
         // whose ownership has not yet transferred to a context and wrapper.
@@ -186,6 +187,7 @@ impl WindowsWindow {
             hwnd,
             requested,
             scale_factor,
+            apartment,
         ))
     }
 
@@ -268,6 +270,7 @@ impl WindowsWindow {
         hwnd: HWND,
         requested: Size<i32>,
         scale_factor: f64,
+        apartment: Option<Rc<super::com_apartment::ComApartment>>,
     ) -> Arc<Self> {
         let (width, height) = (requested.width, requested.height);
         // SAFETY: `hwnd` is the valid handle `create_native` just returned
@@ -369,7 +372,7 @@ impl WindowsWindow {
             });
             let context_ptr = Box::into_raw(context);
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, context_ptr as isize);
-            Self::activate_text_services(hwnd);
+            Self::activate_text_services(hwnd, apartment);
 
             let window = Arc::new(Self {
                 hwnd,
@@ -407,9 +410,21 @@ impl WindowsWindow {
     /// hold the connection in its context (ADR-0135 §3): from here on the
     /// window offers its text-store host. TSF's calls read the window's
     /// context (its scale), so it is installed first. A failure leaves the
-    /// window without a host, and text input takes the `WM_CHAR` path.
-    fn activate_text_services(hwnd: HWND) {
-        match super::text_services::TextServices::activate(hwnd) {
+    /// window without a host, and text input takes the `WM_CHAR` path, as
+    /// it does with no `apartment` (the platform's is reachable on its owner
+    /// thread only, where windows are opened).
+    fn activate_text_services(
+        hwnd: HWND,
+        apartment: Option<Rc<super::com_apartment::ComApartment>>,
+    ) {
+        let Some(apartment) = apartment else {
+            tracing::warn!(
+                ?hwnd,
+                "no COM apartment for TSF; text input falls back to WM_CHAR"
+            );
+            return;
+        };
+        match super::text_services::TextServices::activate(hwnd, apartment) {
             Ok(services) => {
                 let installed = super::platform::with_window_context(hwnd, "text_services", |c| {
                     c.text_services.replace(Some(Rc::clone(&services)))

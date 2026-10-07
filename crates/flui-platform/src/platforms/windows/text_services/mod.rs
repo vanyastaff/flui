@@ -69,6 +69,15 @@ use windows::Win32::{
 use windows_core::{IUnknown, Interface};
 
 use self::document::{DocumentState, TsfStore};
+use super::com_apartment::ComApartment;
+
+#[cfg(test)]
+thread_local! {
+    /// Whether this thread was inside its COM apartment when text services
+    /// last shut down; `None` before any shutdown. Read by the teardown-order
+    /// tests.
+    pub(super) static SHUTDOWN_IN_APARTMENT: Cell<Option<bool>> = const { Cell::new(None) };
+}
 
 /// A host operation waiting for the COM entry it arrived under to return.
 enum HostOp {
@@ -148,6 +157,10 @@ pub(super) struct TextServices {
     /// committed in place when it is raised or logged ([`Recovery`]).
     recovery: RefCell<Vec<Rc<dyn TextStore>>>,
     me: Weak<TextServices>,
+    /// Keeps the thread's COM apartment entered until the interfaces above
+    /// are released: declared last, so it drops after them, and it may be
+    /// the apartment's last holder when the platform went first.
+    _apartment: Rc<ComApartment>,
 }
 
 /// Resets `entry_depth` by one when a host operation's frame ends, unwinding
@@ -213,13 +226,17 @@ fn same_object(a: &impl Interface, b: &impl Interface) -> bool {
 impl TextServices {
     /// Activate TSF for `hwnd`'s thread and associate the empty document
     /// with the window. The thread must be the window's owner thread, inside
-    /// a single-threaded COM apartment (the platform establishes both).
+    /// the single-threaded COM apartment `apartment` holds, which these
+    /// services keep entered until they are dropped.
     ///
     /// # Errors
     ///
     /// The COM error of the step that failed; the caller falls back to the
     /// `WM_CHAR` path.
-    pub(super) fn activate(hwnd: HWND) -> windows_core::Result<Rc<Self>> {
+    pub(super) fn activate(
+        hwnd: HWND,
+        apartment: Rc<ComApartment>,
+    ) -> windows_core::Result<Rc<Self>> {
         // SAFETY: plain COM calls on this STA thread with no pointer
         // arguments of ours; each result is checked before the next step.
         let (thread_manager, client_id, empty) = unsafe {
@@ -252,6 +269,7 @@ impl TextServices {
             failure: RefCell::new(None),
             recovery: RefCell::new(Vec::new()),
             me: me.clone(),
+            _apartment: apartment,
         }))
     }
 
@@ -727,6 +745,8 @@ impl TextServices {
             Serving::Field(document) => self.release_document(document),
             Serving::Nothing => {}
         }
+        #[cfg(test)]
+        SHUTDOWN_IN_APARTMENT.set(Some(super::com_apartment::thread_in_apartment()));
         // SAFETY: plain COM calls on this STA thread.
         let deactivated = unsafe {
             let _ = associate(&self.thread_manager, self.hwnd, None);

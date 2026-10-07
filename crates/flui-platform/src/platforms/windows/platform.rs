@@ -675,6 +675,11 @@ pub struct WindowsPlatform {
     /// and re-asserted by `run`. Pre-run window creation on that same
     /// thread (the Win32 examples) stays legal.
     affinity: flui_foundation::OwnerAffinity,
+
+    /// The owner thread's COM apartment. Declared last, so it is released
+    /// after everything above; each window's text services hold their own
+    /// clone, so COM outlives the platform while any of them is alive.
+    apartment: super::com_apartment::ApartmentHold,
 }
 
 // SAFETY, per field: `windows` is an `Arc<Mutex<..>>`, `owner_control` holds
@@ -696,7 +701,8 @@ pub struct WindowsPlatform {
 // (see `WindowsWindow`'s `Send`/`Sync` docs); the remaining affine calls here
 // (`quit`'s `PostQuitMessage`, `open_window`'s queue binding) are logic-level
 // rather than memory-safety and stay guarded by `affinity.debug_assert_owner`
-// — see ADR-0039 (event-loop affinity).
+// — see ADR-0039 (event-loop affinity). `apartment` is `Send + Sync` by its
+// own owner-thread gate.
 unsafe impl Send for WindowsPlatform {}
 // SAFETY: as for `Send` — `&WindowsPlatform` grants no more than shared access
 // to already-synchronized members plus a never-dereferenced address.
@@ -765,22 +771,15 @@ impl WindowsPlatform {
     ) -> Result<Self, PlatformError> {
         let owner_identity = WindowIdentity::mint_from(source);
 
-        // SAFETY: `CoInitializeEx` takes no pointer arguments (`None` for
-        // the reserved parameter) and its `HRESULT` is checked before
-        // anything downstream assumes COM is initialized on this thread —
-        // this call establishes the calling thread as an STA, which is also
-        // the thread this platform's `affinity` binds to a few lines below.
-        //
-        // Initialize COM for drag-and-drop, clipboard, etc.
-        unsafe {
-            use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
-            let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-            if hr.is_err() {
-                return Err(PlatformError::Init {
-                    message: format!("Failed to initialize COM: {hr:?}"),
-                });
-            }
-        }
+        // Enter this thread's STA for drag-and-drop, clipboard and TSF. The
+        // apartment is a value: an early return below releases it, and once
+        // built it lives until the platform and every window's text services
+        // are gone (see `com_apartment`). This thread is also the one the
+        // platform's `affinity` binds to below.
+        let apartment =
+            super::com_apartment::ComApartment::enter().map_err(|hr| PlatformError::Init {
+                message: format!("Failed to initialize COM: {hr:?}"),
+            })?;
 
         // SAFETY: `SetProcessDpiAwarenessContext` takes a constant by value,
         // no pointer arguments; failure (already set, or an OS predating
@@ -850,6 +849,7 @@ impl WindowsPlatform {
             background_executor,
             config,
             affinity: flui_foundation::OwnerAffinity::new(),
+            apartment: super::com_apartment::ApartmentHold::new(apartment),
         };
         // The message-only window above was just created on THIS thread, so
         // its message queue already belongs here — the owner is decided at
@@ -2194,6 +2194,7 @@ impl Platform for WindowsPlatform {
             shares.frames,
             shares.exit_policy,
             self.config.clone(),
+            self.apartment.share(),
         )?;
         let hwnd_value = window.hwnd().0 as isize;
 
@@ -2644,27 +2645,8 @@ impl Drop for WindowsPlatform {
             }
         }
 
-        // SAFETY: `CoUninitialize` takes no arguments, so this call itself
-        // cannot be memory-unsafe regardless of which thread runs it.
-        //
-        // NOT established: that this runs on the same thread that called
-        // `CoInitializeEx` in `with_config`. COM's apartment state is
-        // per-thread, and `CoUninitialize` is only the matching call for
-        // the thread that initialized it — but `WindowsPlatform` is `Send`
-        // (see its impl above), so nothing stops this value being moved to
-        // and dropped on a different thread than the one that constructed
-        // it. If that happens, this does not uninitialize the constructing
-        // thread's COM apartment at all; at worst it leaves that thread's
-        // COM reference count unbalanced (permanently initialized) and/or
-        // calls `CoUninitialize` on a thread whose own apartment state this
-        // struct never tracked — an accounting/leak concern, not memory
-        // unsafety, and not fixed by this comment.
-        //
-        // Uninitialize COM
-        unsafe {
-            use windows::Win32::System::Com::CoUninitialize;
-            CoUninitialize();
-        }
+        // COM is left by the `apartment` field, after this body, or later by
+        // the last window's text services if any still live.
     }
 }
 
