@@ -625,6 +625,14 @@ fn retargeting_a_curve_to_its_target_keeps_its_schedule() {
 #[test]
 fn retarget_seams() {
     crate::run_table(&[
+        (
+            "a_large_retarget_keeps_modest_velocity",
+            a_large_retarget_keeps_modest_velocity,
+        ),
+        (
+            "a_large_arrival_correction_is_weighted_before_scaling",
+            a_large_arrival_correction_is_weighted_before_scaling,
+        ),
         ("seam_at_zero", seam_at_zero),
         (
             "a_retarget_within_the_spring_tolerance_starts_at_the_seam",
@@ -680,4 +688,44 @@ fn retarget_seams() {
             retargeting_a_curve_to_its_target_keeps_its_schedule,
         ),
     ]);
+}
+
+fn a_large_retarget_keeps_modest_velocity() {
+    let mut value = AnimatedValue::with_motion(0.0_f64, linear_spec(1000));
+    value.animate_to(1.0);
+    value.advance(0.5);
+    assert_eq!(value.velocity()[0], 1.5);
+    let before = value.value();
+    value.animate_to(1e308);
+    assert_eq!(value.value(), before);
+    assert_eq!(
+        value.velocity()[0],
+        1.5,
+        "the inherited velocity survives a much larger curve rate"
+    );
+}
+
+fn a_large_arrival_correction_is_weighted_before_scaling() {
+    let mut value = AnimatedValue::with_motion(
+        0.0_f64,
+        MotionSpec::Curve {
+            duration: Duration::from_secs(1),
+            curve: ArcCurve::new(Cubic::new(0.25, 0.0, 0.75, 0.5)),
+        },
+    );
+    value.animate_to(1e308);
+    assert_eq!(
+        value.value(),
+        0.0,
+        "an overflowing unweighted coefficient must not snap the segment"
+    );
+    assert!(!value.is_settled());
+    value.advance(0.5);
+    // At Bézier parameter 1/2, x = 1/2 and y = 5/16. The endpoint slope is 2,
+    // so its zero-velocity arrival correction adds 2 * (1/2)^2 * (1/2) = 1/4.
+    assert!(close(value.value() / 1e308, 0.5625, 1e-8));
+    value.advance(0.5);
+    assert_eq!(value.value(), 1e308);
+    assert_eq!(value.velocity()[0], 0.0);
+    assert!(value.is_settled());
 }

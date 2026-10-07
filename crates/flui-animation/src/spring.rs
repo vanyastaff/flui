@@ -255,6 +255,14 @@ impl<T: TwoWayConverter> AnimatedValue<T> {
     /// The current animated value.
     #[must_use]
     pub fn value(&self) -> T {
+        // Completed curve and constant segments retain the exact target, including
+        // components a converter cannot recover (transparent color channels).
+        // A settled spring still publishes its analytic convergence.
+        if self.components.iter().all(|segment| {
+            !matches!(segment, Segment::Spring { .. }) && segment.is_done(self.elapsed)
+        }) {
+            return self.target.clone();
+        }
         T::from_vector(self.current_vector())
     }
 
@@ -262,11 +270,6 @@ impl<T: TwoWayConverter> AnimatedValue<T> {
     /// second. Zero at rest.
     #[must_use]
     pub fn velocity(&self) -> T::Vector {
-        // At rest the value is the target itself: the vector form can be lossy (a
-        // transparent colour's components premultiply away).
-        if self.is_settled() {
-            return self.target.clone();
-        }
         let mut buffer = self.target.to_vector();
         for (slot, segment) in buffer.as_mut().iter_mut().zip(&self.components) {
             *slot = segment.dx(self.elapsed);

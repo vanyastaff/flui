@@ -108,11 +108,10 @@ pub(crate) struct CurveSegment {
     span: f64,
     /// Seconds; at least [`MIN_CURVE_SECONDS`].
     duration: f64,
-    /// The inherited velocity the curve does not account for, per second.
-    excess: f64,
-    /// `span·c'(1)`: the arrival velocity the curve itself would have, times
-    /// the duration, which the second Hermite term cancels.
-    arrival: f64,
+    /// Kept independently so a much larger natural rate cannot round it away.
+    v0: f64,
+    start_slope: f64,
+    end_slope: f64,
     curve: ArcCurve,
 }
 
@@ -161,9 +160,9 @@ impl Segment {
                 // A reversal shortens, but never below the floor: the seam's
                 // value and velocity are kept however early it reverses.
                 let duration = (full * scale).max(MIN_CURVE_SECONDS);
-                let excess = v0 - rate(span, curve.slope(0.0), duration);
-                let arrival = span * curve.slope(1.0);
-                if !(excess.is_finite() && arrival.is_finite()) {
+                let start_slope = curve.slope(0.0);
+                let end_slope = curve.slope(1.0);
+                if !(start_slope.is_finite() && end_slope.is_finite()) {
                     return Self::Rest(target);
                 }
                 Self::Curve(CurveSegment {
@@ -171,8 +170,9 @@ impl Segment {
                     to: target,
                     span,
                     duration,
-                    excess,
-                    arrival,
+                    v0,
+                    start_slope,
+                    end_slope,
                     curve: curve.clone(),
                 })
             }
@@ -230,30 +230,44 @@ fn seam_time(t: f64) -> f64 {
 
 impl CurveSegment {
     fn x(&self, t: f64) -> f64 {
+        if t == 0.0 {
+            return self.from;
+        }
         if t >= self.duration {
             return self.to;
         }
         let tau = t / self.duration;
         let u = 1.0 - tau;
-        // `excess · τ(1 − τ)²` first: it is at most `excess`, so the product
-        // with the duration overflows only when the correction itself does.
-        let departure = self.excess * (tau * u * u) * self.duration;
-        let arrival = self.arrival * (tau * tau * u);
-        finite_or(
-            self.from + self.span * self.curve.transform(tau) + departure + arrival,
-            self.to,
-        )
+        // Weight and combine the curve's corrections before scaling by its span.
+        // An unweighted endpoint rate can overflow even though this sample fits.
+        let departure_weight = tau * u * u;
+        let arrival_weight = tau * tau * u;
+        let progress = self.end_slope.mul_add(
+            arrival_weight,
+            self.curve.transform(tau) - self.start_slope * departure_weight,
+        );
+        let inherited = self.v0 * departure_weight * self.duration;
+        finite_or(self.from + self.span * progress + inherited, self.to)
     }
 
     fn dx(&self, t: f64) -> f64 {
+        if t == 0.0 {
+            return self.v0;
+        }
         if t >= self.duration {
             return 0.0;
         }
         let tau = t / self.duration;
-        let curve = rate(self.span, self.curve.slope(tau), self.duration);
-        let departure = self.excess * (1.0 - tau) * (1.0 - 3.0 * tau);
-        let arrival = rate(self.arrival, tau * (2.0 - 3.0 * tau), self.duration);
-        finite_or(curve + departure + arrival, 0.0)
+        let departure_weight = (1.0 - tau) * (1.0 - 3.0 * tau);
+        let arrival_weight = tau * (2.0 - 3.0 * tau);
+        let slope = self.end_slope.mul_add(
+            arrival_weight,
+            self.curve.slope(tau) - self.start_slope * departure_weight,
+        );
+        finite_or(
+            rate(self.span, slope, self.duration) + self.v0 * departure_weight,
+            0.0,
+        )
     }
 }
 
