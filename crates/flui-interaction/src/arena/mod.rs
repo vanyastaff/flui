@@ -453,7 +453,7 @@ impl GestureArenaEntry {
             return;
         }
         let mut pending = slot.data.borrow_mut().resolve(None);
-        pending.retain(|(member, _)| !Weak::ptr_eq(&Rc::downgrade(member), &self.member));
+        pending.retain(|(member, _)| !Weak::ptr_eq(member, &self.member));
         GestureArena::dispatch_pending(pending, slot.pointer);
     }
 
@@ -535,7 +535,9 @@ impl std::fmt::Debug for ArenaEntryData {
 /// `arena.resolve`), which needs to borrow the same entry. Internal `ArenaEntryData` mutators
 /// therefore return the pending notifications; the public `GestureArena`
 /// methods dispatch them after releasing the borrow.
-type PendingNotifications = SmallVec<[(Rc<dyn GestureArenaMember>, GestureDisposition); 4]>;
+/// Pending verdicts keep only weak ownership: an earlier callback may release
+/// a later member, so each member is upgraded immediately before its callback.
+type PendingNotifications = SmallVec<[(Weak<dyn GestureArenaMember>, GestureDisposition); 4]>;
 
 enum ArenaFollowUp {
     None,
@@ -630,9 +632,7 @@ impl ArenaEntryData {
 
         // Defer the member's rejection callback (dispatched after the entry
         // borrow is released to permit arena reentry).
-        if let Some(rejected) = rejected.upgrade() {
-            pending.push((rejected, GestureDisposition::Rejected));
-        }
+        pending.push((rejected, GestureDisposition::Rejected));
         self.prune_departed();
 
         let follow_up = if self.is_open {
@@ -706,12 +706,9 @@ impl ArenaEntryData {
         // accepting the winner. This ordering is observable when callbacks
         // re-enter or panic.
         for member in members {
-            let Some(member) = member.upgrade() else {
-                continue;
-            };
             let is_winner = winner
                 .as_ref()
-                .is_some_and(|winner| Rc::ptr_eq(&member, winner));
+                .is_some_and(|winner| Weak::ptr_eq(&member, &Rc::downgrade(winner)));
             if is_winner {
                 accepted.push((member, GestureDisposition::Accepted));
             } else {
@@ -738,10 +735,9 @@ impl ArenaEntryData {
 
         // Reject all losers before accepting any team member.
         for member in members {
-            let Some(member) = member.upgrade() else {
-                continue;
-            };
-            let is_winner = winners.iter().any(|winner| Rc::ptr_eq(&member, winner));
+            let is_winner = winners
+                .iter()
+                .any(|winner| Weak::ptr_eq(&member, &Rc::downgrade(winner)));
             if is_winner {
                 accepted.push((member, GestureDisposition::Accepted));
             } else {
@@ -765,7 +761,9 @@ impl ArenaEntryData {
         self.is_resolved = true;
         let members = std::mem::take(&mut self.members);
         self.eager_winner = None;
-        let mut live = members.into_iter().filter_map(|member| member.upgrade());
+        let mut live = members
+            .into_iter()
+            .filter(|member| member.strong_count() != 0);
         if let Some(winner) = live.next() {
             pending.push((winner, GestureDisposition::Accepted));
             pending.extend(live.map(|member| (member, GestureDisposition::Rejected)));
@@ -1239,6 +1237,9 @@ impl GestureArena {
         first_panic: &mut Option<Box<dyn Any + Send>>,
     ) {
         for (member, disposition) in pending {
+            let Some(member) = member.upgrade() else {
+                continue;
+            };
             let candidate = catch_unwind(AssertUnwindSafe(|| match disposition {
                 GestureDisposition::Accepted => member.accept_gesture(pointer),
                 GestureDisposition::Rejected => member.reject_gesture(pointer),
@@ -1293,7 +1294,7 @@ impl GestureArena {
         };
         pending.extend(self.collect_follow_up(pointer, slot, follow_up));
         if let Some(excluded) = excluded {
-            pending.retain(|(member, _)| !Weak::ptr_eq(&Rc::downgrade(member), excluded));
+            pending.retain(|(member, _)| !Weak::ptr_eq(member, excluded));
         }
         Self::dispatch_with_candidate(pending, pointer, Some(member));
     }
@@ -1593,6 +1594,9 @@ impl GestureArena {
                 }
                 let pending = slot.data.borrow_mut().resolve(None);
                 for (member, disposition) in pending {
+                    let Some(member) = member.upgrade() else {
+                        continue;
+                    };
                     failure.run(|| match disposition {
                         GestureDisposition::Accepted => member.accept_gesture(batch.pointer),
                         GestureDisposition::Rejected => member.reject_gesture(batch.pointer),
@@ -2132,7 +2136,7 @@ mod tests {
         arena.close(pointer);
 
         let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            arena.resolve(pointer, Some(winner));
+            arena.resolve(pointer, Some(winner.clone()));
         }));
 
         assert!(unwind.is_err(), "the earliest callback panic must resume");

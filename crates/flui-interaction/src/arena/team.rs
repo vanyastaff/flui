@@ -240,10 +240,9 @@ impl CombiningMember {
 
         // Queue all member notifications - they all lose except the winner
         for member in &self.members {
-            let Some(member) = member.upgrade() else {
-                continue;
-            };
-            let is_winner = winner.as_ref().is_some_and(|w| Rc::ptr_eq(w, &member));
+            let is_winner = winner
+                .as_ref()
+                .is_some_and(|winner| Weak::ptr_eq(&Rc::downgrade(winner), member));
             if is_winner {
                 pending.accepts.push(member.clone());
             } else {
@@ -253,7 +252,7 @@ impl CombiningMember {
 
         // If winner is the captain (not in members), notify captain separately
         if winner_is_captain && let Some(captain) = captain {
-            pending.accepts.push(captain);
+            pending.accepts.push(Rc::downgrade(&captain));
         }
 
         // Remove from team's combiners
@@ -275,9 +274,7 @@ impl CombiningMember {
         self.resolved = true;
 
         // Queue rejection for all members
-        pending
-            .rejects
-            .extend(self.members.iter().filter_map(Weak::upgrade));
+        pending.rejects.extend(self.members.iter().cloned());
 
         // Remove from team's combiners
         if let Some(team) = self.team.upgrade() {
@@ -297,8 +294,8 @@ impl CombiningMember {
 struct PendingTeamNotifications {
     pointer: PointerId,
     /// At most the winner and (separately) the captain.
-    accepts: SmallVec<[Rc<dyn GestureArenaMember>; 2]>,
-    rejects: SmallVec<[Rc<dyn GestureArenaMember>; 4]>,
+    accepts: SmallVec<[Weak<dyn GestureArenaMember>; 2]>,
+    rejects: SmallVec<[Weak<dyn GestureArenaMember>; 4]>,
 }
 
 impl PendingTeamNotifications {
@@ -312,8 +309,8 @@ impl PendingTeamNotifications {
 
     /// Fire all queued notifications. Call WITHOUT the combiner lock held.
     ///
-    /// Every member is notified even when an earlier callback panics; the
-    /// first panic resumes once all of them ran, as in the arena itself.
+    /// Every surviving member is notified even when an earlier callback
+    /// panics; the first panic resumes after delivery, as in the arena itself.
     fn dispatch(self) {
         let pending: PendingNotifications = self
             .accepts
