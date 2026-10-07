@@ -50,9 +50,22 @@ impl AssetKey {
     ///
     /// ```compile_fail
     /// use flui_assets::AssetKey;
-    /// fn leaked_name() -> &'static str {
-    ///     AssetKey::new("temporary.png").as_str()
+    /// fn borrowed_name<'a>(key: &'a AssetKey) -> &'static str {
+    ///     key.as_str()
     /// }
+    /// let key = AssetKey::new("temporary.png");
+    /// assert_eq!(borrowed_name(&key), "temporary.png");
+    /// ```
+    ///
+    /// Returning the name for the owner's borrowed lifetime compiles:
+    ///
+    /// ```
+    /// use flui_assets::AssetKey;
+    /// fn borrowed_name<'a>(key: &'a AssetKey) -> &'a str {
+    ///     key.as_str()
+    /// }
+    /// let key = AssetKey::new("temporary.png");
+    /// assert_eq!(borrowed_name(&key), "temporary.png");
     /// ```
     #[inline]
     pub fn as_str(&self) -> &str {
