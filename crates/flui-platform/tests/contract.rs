@@ -2402,7 +2402,7 @@ mod native_windows {
         let hwnd = hwnd_of(&window);
         let events = record_pointer(&window);
         // Remove creation traffic before the two queued samples.
-        pump_window(hwnd);
+        pump_translated(hwnd);
         events.lock().expect("pointer log").clear();
         // SAFETY: an owned live HWND, with only integer mouse coordinates.
         unsafe { PostMessageW(Some(hwnd), WM_MOUSEMOVE, WPARAM(0), mouse_lparam(5, 5)) }
