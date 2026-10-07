@@ -225,8 +225,13 @@ let estimate = tracker.get_velocity_estimate(); // Option<VelocityEstimate>
 
 A quadratic least-squares fit over at most 20 samples within a 100 ms horizon;
 fewer than 3 samples gives no fit, and a pointer still for 40 ms reports zero.
-`IosFlingVelocityTracker`, `MacosFlingVelocityTracker` and
-`ImpulseVelocityTracker` are alternative strategies with the same shape.
+Use `processing::VelocityTracker::with_estimator(kind, estimator)` for a
+different `processing::VelocityEstimator`, or configure a recognizer through
+`GestureSettings::with_velocity_estimator`. Drag, multi-drag, tap-and-drag and
+scale capture this policy when their contact sequence begins. Defaults remain
+least squares on every platform; selecting weighted recent intervals or impulse
+integration is an authored policy rather than an OS preference. All algorithms
+share the explicit sample-clock stop gate exposed by `estimate_at(now)`.
 
 Owned `PointerMove` exposes current, coalesced and predicted samples separately.
 Recognizers consume measured history in source order and never feed predictions

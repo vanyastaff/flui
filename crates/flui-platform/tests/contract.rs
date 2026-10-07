@@ -403,6 +403,10 @@ mod native_windows {
             "synthetic_touch_and_pen_reach_native_pointer_dispatch",
             synthetic_touch_and_pen_reach_native_pointer_dispatch,
         ),
+        (
+            "native_mouse_wheels_keep_hover_identity_and_signed_units",
+            native_mouse_wheels_keep_hover_identity_and_signed_units,
+        ),
     ];
 
     pub(super) fn run_requested_child() -> bool {
@@ -487,6 +491,34 @@ mod native_windows {
                 ..Default::default()
             })
             .expect("create actual shown Win32 window")
+    }
+
+    struct ClosePointerTarget(Arc<dyn HostWindow>);
+
+    impl Drop for ClosePointerTarget {
+        fn drop(&mut self) { self.0.close(); }
+    }
+
+    #[expect(unsafe_code, reason = "keeps only the ephemeral injected-input target above unrelated host windows")]
+    fn open_pointer_target(platform: &WindowsPlatform) -> Option<(Arc<dyn HostWindow>, ClosePointerTarget)> {
+        use windows::Win32::UI::WindowsAndMessaging::{HWND_TOPMOST, SetForegroundWindow, GetForegroundWindow};
+        let window = open_shown(platform);
+        let close = ClosePointerTarget(Arc::clone(&window));
+        // SAFETY: the fixture's exact live owner-thread HWND. It is destroyed
+        // by the RAII owner on success, early refusal, or assertion unwind;
+        // no pre-existing host window's z-order or style is changed.
+        unsafe { SetWindowPos(hwnd_of(&window), Some(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE) }.expect("keep ephemeral pointer target above host windows");
+        // SAFETY: only this fixture's live HWND is activated; its RAII owner
+        // destroys it on failure as well. Pump activation before real input
+        // so a first contact cannot be consumed merely to activate the target.
+        let _ = unsafe { SetForegroundWindow(hwnd_of(&window)) };
+        for _ in 0..25 { pump_pointer_thread(); std::thread::sleep(Duration::from_millis(2)); }
+        // SAFETY: observes desktop activation without retaining a native handle.
+        if unsafe { GetForegroundWindow() } != hwnd_of(&window) {
+            eprintln!("CANNOT_VERIFY native input: host foreground policy refused activation of the owned ephemeral target");
+            return None;
+        }
+        Some((window, close))
     }
 
     fn deadline_rearms_independent_windows_without_input() {
@@ -1458,7 +1490,6 @@ mod native_windows {
             if !unsafe { PeekMessageW(&raw mut message, Some(hwnd), 0, 0, PM_REMOVE) }.as_bool() {
                 return;
             }
-            trace_native_pointer(&message);
             // SAFETY: translate and dispatch the message this thread's queue
             // returned.
             unsafe {
@@ -2580,7 +2611,7 @@ mod native_windows {
             matches!(error.code().0 as u32, 0x8007_0005 | 0x8007_0032 | 0x8007_0078 | 0x8000_4001)
         }
         let platform = WindowsPlatform::new().expect("native Windows platform");
-        let window = open_shown(&platform);
+        let Some((window, _close)) = open_pointer_target(&platform) else { return; };
         let hwnd = hwnd_of(&window);
         pump_pointer_thread();
         let mut target = POINT { x: 40, y: 40 };
@@ -2612,6 +2643,15 @@ mod native_windows {
                 (POINTER_FLAG_DOWN | POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT, 512),
                 (POINTER_FLAG_UP, 0),
             ] {
+                let mut current_origin = POINT { x: 40, y: 40 };
+                // SAFETY: queries for this live ephemeral window do not redirect
+                // or fabricate the native injected target.
+                unsafe {
+                    assert!(ClientToScreen(hwnd, &mut current_origin).as_bool());
+                    assert_eq!((current_origin.x, current_origin.y), (target.x, target.y), "owned target must not move during injection");
+                    assert_eq!(WindowFromPoint(target), hwnd, "native injection must still hit the owned target");
+                    assert_eq!(windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow(), hwnd, "owned target must remain foreground during injection");
+                }
                 let info = POINTER_INFO { pointerType: native_kind, pointerId: 1, pointerFlags: flags, ptPixelLocation: target, ptPixelLocationRaw: target, ..Default::default() };
                 let packet = if native_kind == PT_TOUCH {
                     let contact = RECT { left: target.x - 10, top: target.y - 15, right: target.x + 10, bottom: target.y + 15 };
@@ -2636,6 +2676,8 @@ mod native_windows {
                     pump_pointer_thread();
                     std::thread::sleep(Duration::from_millis(2));
                 }
+                // SAFETY: read the actual hit target after native queue pumping.
+                assert_eq!(unsafe { WindowFromPoint(target) }, hwnd, "owned target must remain hit-testable after native dispatch");
             }
             if !supported { continue; }
             let log = events.lock().expect("pointer log");
@@ -2674,34 +2716,6 @@ mod native_windows {
         window.close();
     }
 
-    #[expect(unsafe_code, reason = "read-only native pointer queries after actual queue retrieval before owner-thread dispatch")]
-    fn trace_native_pointer(message: &MSG) {
-        use windows::Win32::UI::{Input::Pointer::*, WindowsAndMessaging::*};
-            if matches!(message.message, WM_POINTERDOWN | WM_POINTERUP | WM_POINTERUPDATE | WM_POINTERENTER | WM_POINTERLEAVE | WM_POINTERCAPTURECHANGED | WM_POINTERWHEEL | WM_POINTERHWHEEL) {
-                let raw = (message.wParam.0 & 0xffff) as u32;
-                let mut info = POINTER_INFO::default();
-                // SAFETY: initialized native output, current message's raw ID.
-                let current = unsafe { GetPointerInfo(raw, &mut info) };
-                eprintln!("NATIVE_POINTER message={} raw={} queue_tick={} retrieved_tick={} current={:?} info={info:?}", message.message, raw, unsafe { GetMessageTime() }, message.time, current);
-                if current.is_ok() {
-                    let mut count = info.historyCount.max(1);
-                    if info.pointerType == PT_TOUCH {
-                        let mut reading = POINTER_TOUCH_INFO::default();
-                        let mut history = vec![POINTER_TOUCH_INFO::default(); count as usize];
-                        // SAFETY: initialized current/history buffers sized by
-                        // this packet's count; no owner state is touched.
-                        let (current, historical) = unsafe { (GetPointerTouchInfo(raw, &mut reading), GetPointerTouchInfoHistory(raw, &mut count, Some(history.as_mut_ptr()))) };
-                        eprintln!("NATIVE_TOUCH current={current:?} reading={reading:?} history={historical:?} count={count} history_head={:?}", history.first());
-                    } else if info.pointerType == PT_PEN {
-                        let mut reading = POINTER_PEN_INFO::default();
-                        let mut history = vec![POINTER_PEN_INFO::default(); count as usize];
-                        // SAFETY: same owned initialized output-buffer contract.
-                        let (current, historical) = unsafe { (GetPointerPenInfo(raw, &mut reading), GetPointerPenInfoHistory(raw, &mut count, Some(history.as_mut_ptr()))) };
-                        eprintln!("NATIVE_PEN current={current:?} reading={reading:?} history={historical:?} count={count} history_head={:?}", history.first());
-                    }
-                }
-            }
-    }
 
     #[expect(unsafe_code, reason = "drains actual native pointer broker messages on the child window's owner thread")]
     fn pump_pointer_thread() {
@@ -2710,12 +2724,68 @@ mod native_windows {
             // SAFETY: this child owns every window on this thread, including
             // the platform's message-only broker. No HWND filter excludes it.
             if !unsafe { PeekMessageW(&mut message, None, 0, 0, PM_REMOVE) }.as_bool() { return; }
-            eprintln!("NATIVE_QUEUE hwnd={:?} message={} tick={}", message.hwnd, message.message, message.time);
-            trace_native_pointer(&message);
             // SAFETY: dispatch the actual message retrieved by this thread.
             unsafe { let _ = TranslateMessage(&message); DispatchMessageW(&message); }
         }
         panic!("native pointer child queue did not drain");
+    }
+
+    #[expect(unsafe_code, reason = "real native mouse input directed to an ephemeral hit-tested window with cursor restoration")]
+    fn native_mouse_wheels_keep_hover_identity_and_signed_units() {
+        use flui_platform_api::pointer::{PointerEvent, PointerKind, ScrollUnit};
+        use windows::Win32::UI::{Input::KeyboardAndMouse::{INPUT, INPUT_0, INPUT_MOUSE, MOUSEINPUT, MOUSEEVENTF_WHEEL, MOUSEEVENTF_HWHEEL, SendInput}, WindowsAndMessaging::{GetCursorPos, SetCursorPos, WindowFromPoint}};
+        struct Cursor(POINT);
+        impl Drop for Cursor {
+            fn drop(&mut self) {
+                // SAFETY: restore the position captured before this child row.
+                let _ = unsafe { SetCursorPos(self.0.x, self.0.y) };
+            }
+        }
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let Some((window, _close)) = open_pointer_target(&platform) else { return; };
+        let hwnd = hwnd_of(&window);
+        let mut target = POINT { x: 40, y: 40 };
+        let mut original = POINT::default();
+        // SAFETY: initialized points and a live owner-thread window.
+        unsafe {
+            assert!(ClientToScreen(hwnd, &mut target).as_bool());
+            GetCursorPos(&mut original).expect("capture cursor for restoration");
+        }
+        let _restore = Cursor(original);
+        if unsafe { WindowFromPoint(target) } != hwnd {
+            eprintln!("CANNOT_VERIFY native wheel: shown target is occluded or desktop unavailable");
+            window.close();
+            return;
+        }
+        let events = record_pointer(&window);
+        // SAFETY: this point was checked against our shown ephemeral target.
+        unsafe { SetCursorPos(target.x, target.y) }.expect("move cursor to owned target");
+        for _ in 0..25 { pump_translated(hwnd); std::thread::sleep(Duration::from_millis(2)); }
+        let hover = events.lock().expect("pointer log").iter().find_map(|event| match event {
+            PointerEvent::Move(movement) if movement.pointer.kind == PointerKind::Mouse => Some(movement.pointer),
+            PointerEvent::Enter(signal) if signal.pointer.kind == PointerKind::Mouse => Some(signal.pointer),
+            _ => None,
+        }).expect("actual native mouse hover identity");
+        events.lock().expect("pointer log").clear();
+        for flags in [MOUSEEVENTF_WHEEL, MOUSEEVENTF_HWHEEL] {
+            let input = INPUT { r#type: INPUT_MOUSE, Anonymous: INPUT_0 { mi: MOUSEINPUT { mouseData: 120, dwFlags: flags, ..Default::default() } } };
+            // SAFETY: initialized mouse union arm; cursor is over owned target.
+            assert_eq!(unsafe { SendInput(&[input], std::mem::size_of::<INPUT>() as i32) }, 1, "native wheel injection accepted");
+            for _ in 0..25 { pump_translated(hwnd); std::thread::sleep(Duration::from_millis(2)); }
+        }
+        let log = events.lock().expect("pointer log");
+        let scrolls: Vec<_> = log.iter().filter_map(|event| if let PointerEvent::Scroll(scroll) = event { Some(scroll) } else { None }).collect();
+        assert_eq!(scrolls.len(), 2, "exactly one dispatch per native wheel: {log:?}");
+        for (scroll, expected) in scrolls.iter().zip([(0.0, -1.0), (1.0, 0.0)]) {
+            assert_eq!(scroll.pointer, hover, "native wheel retains actual hover metadata");
+            assert_eq!(scroll.delta.unit(), ScrollUnit::Lines);
+            assert_eq!((scroll.delta.x(), scroll.delta.y()), expected);
+            assert_eq!(scroll.phase, None, "a wheel tick supplies no gesture phase");
+            let point = scroll.position.get();
+            assert_eq!((point.x, point.y), (40.0 / window.scale_factor(), 40.0 / window.scale_factor()));
+        }
+        drop(log);
+        window.close();
     }
 
     /// Delaying dispatch cannot compress the time between generated samples.

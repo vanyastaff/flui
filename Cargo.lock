@@ -1871,7 +1871,6 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio-util",
  "tracing",
- "ui-events",
  "wasm-bindgen-futures",
  "web-time",
 ]
@@ -2209,7 +2208,6 @@ dependencies = [
  "dirs",
  "dispatch",
  "dispatch2",
- "dpi",
  "flui-foundation",
  "flui-platform-api",
  "flui-semantics",

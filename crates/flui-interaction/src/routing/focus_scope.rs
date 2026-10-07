@@ -58,7 +58,11 @@ pub type NodeContext = Rc<dyn std::any::Any>;
 pub type FocusNodeChangeCallback = Rc<dyn Fn()>;
 
 /// Result of one focus-node key handler.
+///
+/// These three outcomes form the closed propagation algebra: continue, consume,
+/// or stop without consuming.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[must_use]
 pub enum KeyEventResult {
     /// Stop propagation and consume the event.
     Handled,
@@ -69,6 +73,12 @@ pub enum KeyEventResult {
 }
 
 impl KeyEventResult {
+    /// Whether native default handling should be prevented.
+    #[must_use]
+    pub const fn is_handled(self) -> bool {
+        matches!(self, Self::Handled)
+    }
+
     /// Combine several handler channels on one node.
     #[must_use]
     pub fn combine(self, other: Self) -> Self {
@@ -83,6 +93,7 @@ impl KeyEventResult {
 
 /// A structural focus-tree mutation failed.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum FocusTreeError {
     /// The mutation would create a parent cycle.
     #[error(
@@ -146,6 +157,8 @@ pub enum FocusTreeError {
 
 /// Result of a node-level focus request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+#[must_use]
 pub enum FocusRequestOutcome {
     /// Accepted — applied immediately, or, when requested from inside a
     /// focus-change listener, queued and applied after the in-flight
@@ -164,6 +177,8 @@ pub enum FocusRequestOutcome {
 
 /// Result of detaching through a [`FocusAttachment`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+#[must_use]
 pub enum FocusDetachOutcome {
     /// The live attachment was detached.
     Detached,
@@ -283,6 +298,27 @@ impl FocusAttachment {
             return Err(FocusTreeError::StaleAttachment { node: node.id() });
         }
         Ok(())
+    }
+}
+
+/// Ownership of one focus-node listener registration.
+///
+/// Dropping the subscription withdraws its listener. The subscription holds a
+/// weak node reference, so retaining it cannot keep the focus tree alive.
+/// Withdrawal commits before callback captures are retired and follows the
+/// owner's existing panic-preservation policy.
+#[must_use = "retain the subscription for as long as the listener should remain installed"]
+#[derive(Debug)]
+pub struct FocusSubscription {
+    node: Weak<FocusNode>,
+    listener_id: ListenerId,
+}
+
+impl Drop for FocusSubscription {
+    fn drop(&mut self) {
+        if let Some(node) = self.node.upgrade() {
+            node.remove_listener(self.listener_id);
+        }
     }
 }
 
@@ -747,7 +783,7 @@ impl FocusNode {
     }
 
     /// Register a listener for focus or focusability changes on this node.
-    pub fn add_listener(&self, callback: FocusNodeChangeCallback) -> ListenerId {
+    pub(super) fn add_listener(&self, callback: FocusNodeChangeCallback) -> ListenerId {
         let id = ListenerId::new(self.next_listener_id.get());
         let next = self
             .next_listener_id
@@ -765,8 +801,16 @@ impl FocusNode {
         id
     }
 
+    /// Subscribe to focus or focusability changes until the returned guard is dropped.
+    pub fn subscribe(self: &Rc<Self>, callback: FocusNodeChangeCallback) -> FocusSubscription {
+        FocusSubscription {
+            node: Rc::downgrade(self),
+            listener_id: self.add_listener(callback),
+        }
+    }
+
     /// Remove one node listener.
-    pub fn remove_listener(&self, id: ListenerId) {
+    pub(super) fn remove_listener(&self, id: ListenerId) {
         let removed = {
             let mut listeners = self.listeners.borrow_mut();
             listeners
@@ -774,14 +818,11 @@ impl FocusNode {
                 .position(|(held, _)| *held == id)
                 .map(|index| listeners.remove(index))
         };
-        drop(removed);
-    }
-
-    /// Number of node listeners, for deterministic lifecycle tests.
-    #[cfg(any(test, feature = "testing"))]
-    #[must_use]
-    pub fn listener_count(&self) -> usize {
-        self.listeners.borrow().len()
+        let mut failure = FocusClosePanic::for_rejection(self.close_mode());
+        if let Some((_, callback)) = removed {
+            failure.retire(callback);
+        }
+        failure.finish();
     }
 
     pub(crate) fn notify_listeners(&self) {
@@ -1270,7 +1311,7 @@ impl FocusNode {
 
     fn fulfill_pending_subtree(node: &Rc<FocusNode>) {
         if node.pending_focus_request.replace(false) {
-            node.request_focus();
+            let _ = node.request_focus();
         }
         for child in node.children() {
             Self::fulfill_pending_subtree(&child);
@@ -1435,8 +1476,8 @@ pub(crate) fn focus_node_identity_exhaustion_preserves_notifications() {
                 .push((name, node.has_primary_focus()));
         }));
     }
-    first.request_focus();
-    last.request_focus();
+    let _ = first.request_focus();
+    let _ = last.request_focus();
     for _ in 0..8 {
         let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             FocusNode::create_with_counter(None, None, &counter)
@@ -1444,7 +1485,7 @@ pub(crate) fn focus_node_identity_exhaustion_preserves_notifications() {
         .expect_err("exhausted allocator must permanently refuse");
         flui_foundation::panic::retain_opaque_payload(failure);
     }
-    first.request_focus();
+    let _ = first.request_focus();
     assert_eq!(
         *notifications.borrow(),
         vec![
@@ -1466,7 +1507,7 @@ pub(crate) fn focus_node_identity_exhaustion_preserves_notifications() {
         .root_scope()
         .attach_node(&fresh)
         .expect("fresh node attaches");
-    fresh.request_focus();
+    let _ = fresh.request_focus();
     assert!(Rc::ptr_eq(
         &manager.primary_focus().expect("fresh focus"),
         &fresh
@@ -1789,8 +1830,9 @@ impl FocusScopeNode {
     pub fn resolve_traversal(
         &self,
         current: Option<&Rc<FocusNode>>,
-        forward: bool,
+        direction: TraversalDirection,
     ) -> ResolvedStep {
+        let forward = matches!(direction, TraversalDirection::Forward);
         let order = self.sorted_traversal_order(current);
 
         let Some(current) = current else {
@@ -1843,21 +1885,25 @@ impl FocusScopeNode {
 
     /// Focus the next node in this scope.
     pub fn focus_next_in_scope(&self, current: &Rc<FocusNode>) -> bool {
-        self.perform(self.step(Some(current), true))
+        self.perform(self.step(Some(current), TraversalDirection::Forward))
     }
 
     /// Focus the previous node in this scope.
     pub fn focus_previous_in_scope(&self, current: &Rc<FocusNode>) -> bool {
-        self.perform(self.step(Some(current), false))
+        self.perform(self.step(Some(current), TraversalDirection::Backward))
     }
 
     /// Resolve a step, following parent-scope edge behavior.
-    pub fn step(&self, current: Option<&Rc<FocusNode>>, forward: bool) -> ResolvedStep {
+    pub fn step(
+        &self,
+        current: Option<&Rc<FocusNode>>,
+        direction: TraversalDirection,
+    ) -> ResolvedStep {
         let mut scope: Option<Rc<FocusScopeNode>> = None;
         loop {
             let step = scope.as_ref().map_or_else(
-                || self.resolve_traversal(current, forward),
-                |scope| scope.resolve_traversal(current, forward),
+                || self.resolve_traversal(current, direction),
+                |scope| scope.resolve_traversal(current, direction),
             );
             if !matches!(step, ResolvedStep::RetryInParent) {
                 return step;
@@ -1934,6 +1980,15 @@ impl std::fmt::Debug for FocusScopeNode {
             .field("focused_child", &self.focused_child().map(|node| node.id()))
             .finish_non_exhaustive()
     }
+}
+
+/// The direction through the scope's ordered traversal candidates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TraversalDirection {
+    /// Move toward the following candidate.
+    Forward,
+    /// Move toward the preceding candidate.
+    Backward,
 }
 
 /// What traversal does when it runs off a scope edge.

@@ -13,13 +13,12 @@ use std::{
 use flui_foundation::ListenerId;
 use flui_platform_api::keyboard::KeyEvent;
 
-use crate::routing::focus_scope::{FocusNode, FocusScopeNode, KeyEventResult};
+use crate::routing::focus_scope::{
+    FocusNode, FocusScopeNode, KeyEventHandler, KeyEventResult, TraversalDirection,
+};
 
 /// Callback invoked after primary focus or its focus-tree ancestry changes.
 pub type FocusChangeCallback = Rc<dyn Fn(Option<Rc<FocusNode>>, Option<Rc<FocusNode>>)>;
-
-/// Owner-local global key handler.
-pub type KeyEventCallback = Rc<dyn Fn(&KeyEvent) -> bool>;
 
 pub(super) use crate::__runtime::ClosePanic as FocusClosePanic;
 use crate::__runtime::{CloseMode, CloseTombstone};
@@ -65,7 +64,7 @@ pub struct FocusManager {
     next_listener_id: Cell<usize>,
     /// Each handler under the registration number it was added with, so a
     /// dispatch snapshot names registrations rather than allocations.
-    global_key_handlers: RefCell<Vec<(u64, KeyEventCallback)>>,
+    global_key_handlers: RefCell<Vec<(u64, KeyEventHandler)>>,
     next_global_key_handler: Cell<u64>,
     /// Nodes that asked to start a key's walk while nothing is focused,
     /// oldest first ([`Self::claim_unfocused_keys`]).
@@ -629,15 +628,15 @@ impl FocusManager {
 
     /// Move focus forward in the primary node's enclosing traversal scope.
     pub fn focus_next(&self) -> bool {
-        self.traverse(true)
+        self.traverse(TraversalDirection::Forward)
     }
 
     /// Move focus backward in the primary node's enclosing traversal scope.
     pub fn focus_previous(&self) -> bool {
-        self.traverse(false)
+        self.traverse(TraversalDirection::Backward)
     }
 
-    fn traverse(&self, forward: bool) -> bool {
+    fn traverse(&self, direction: TraversalDirection) -> bool {
         if self.closed.get() {
             return false;
         }
@@ -652,7 +651,7 @@ impl FocusManager {
         let cursor = current
             .as_ref()
             .filter(|node| !Rc::ptr_eq(node, scope.as_focus_node()));
-        let step = scope.step(cursor, forward);
+        let step = scope.step(cursor, direction);
         FocusScopeNode::perform_with_manager(self, step)
     }
 
@@ -661,7 +660,7 @@ impl FocusManager {
     /// A closed owner rejects incoming callback ownership. Healthy rejection
     /// runs its destructor outside internal borrows; rejection during an active
     /// unwind retains it to preserve the original failure.
-    pub fn add_global_key_handler(&self, handler: KeyEventCallback) {
+    pub fn add_global_key_handler(&self, handler: KeyEventHandler) {
         if self.closed.get() {
             let mut failure = FocusClosePanic::for_rejection(self.close_mode.mode());
             failure.retire(handler);
@@ -696,9 +695,11 @@ impl FocusManager {
     /// so is one registered during this dispatch, even when it is the same
     /// `Rc` re-added; a snapshot registration that remains registered can
     /// still handle the key.
-    pub fn dispatch_key_event(&self, event: &KeyEvent) -> bool {
+    /// `SkipRemainingHandlers` stops propagation while leaving the event's
+    /// default action available; only `Handled` consumes it.
+    pub fn dispatch_key_event(&self, event: &KeyEvent) -> KeyEventResult {
         if self.closed.get() {
-            return false;
+            return KeyEventResult::Ignored;
         }
 
         let registrations: Vec<u64> = self
@@ -709,7 +710,7 @@ impl FocusManager {
             .collect();
         for registration in registrations {
             if self.closed.get() {
-                return false;
+                return KeyEventResult::Ignored;
             }
             let handler = self
                 .global_key_handlers
@@ -721,18 +722,20 @@ impl FocusManager {
                 continue;
             };
             let mut failure = FocusClosePanic::for_rejection(self.close_mode.mode());
-            let handled = failure.invoke(|| handler(event)).unwrap_or(false);
+            let result = failure
+                .invoke(|| handler(event))
+                .unwrap_or(KeyEventResult::Ignored);
             failure.retire(handler);
             failure.finish();
-            if handled {
+            if result != KeyEventResult::Ignored {
                 tracing::trace!("key event handled by global focus handler");
-                return true;
+                return result;
             }
         }
 
         let Some(focused) = self.primary_focus().or_else(|| self.unfocused_key_target()) else {
             tracing::trace!("key event ignored because nothing is focused");
-            return false;
+            return KeyEventResult::Ignored;
         };
 
         for node in std::iter::once(Rc::clone(&focused)).chain(focused.ancestors()) {
@@ -740,20 +743,20 @@ impl FocusManager {
                 KeyEventResult::Ignored => {}
                 KeyEventResult::Handled => {
                     tracing::trace!(node = node.id().get(), "key event handled");
-                    return true;
+                    return KeyEventResult::Handled;
                 }
                 KeyEventResult::SkipRemainingHandlers => {
                     tracing::trace!(
                         node = node.id().get(),
                         "key propagation stopped without consuming the event"
                     );
-                    return false;
+                    return KeyEventResult::SkipRemainingHandlers;
                 }
             }
         }
 
         tracing::trace!("key event not handled");
-        false
+        KeyEventResult::Ignored
     }
 
     /// Ask for keys to start their walk at `node` while nothing is focused.
@@ -1013,15 +1016,27 @@ mod tests {
             parent_calls.borrow_mut().push("parent");
             KeyEventResult::Handled
         }));
-        child.request_focus();
+        let _ = child.request_focus();
 
-        assert!(manager.dispatch_key_event(&key_event()));
+        assert!(manager.dispatch_key_event(&key_event()).is_handled());
         assert_eq!(calls.borrow().as_slice(), &["leaf", "parent"]);
 
         child.set_on_key_event(Rc::new(|_| KeyEventResult::SkipRemainingHandlers));
         calls.borrow_mut().clear();
-        assert!(!manager.dispatch_key_event(&key_event()));
+        assert_eq!(
+            manager.dispatch_key_event(&key_event()),
+            KeyEventResult::SkipRemainingHandlers
+        );
         assert!(calls.borrow().is_empty());
+
+        manager.add_global_key_handler(Rc::new(|_| KeyEventResult::SkipRemainingHandlers));
+        child.set_on_key_event(Rc::new(|_| {
+            panic!("global stop must precede the focused walk")
+        }));
+        assert_eq!(
+            manager.dispatch_key_event(&key_event()),
+            KeyEventResult::SkipRemainingHandlers
+        );
     }
 
     fn traversal_uses_policy_order_and_edge_behavior() {
@@ -1059,7 +1074,7 @@ mod tests {
         scope.attach_node(&first).unwrap();
         scope.attach_node(&second).unwrap();
 
-        second.request_focus();
+        let _ = second.request_focus();
         manager.unfocus();
 
         assert!(scope.set_first_focus());
@@ -1293,7 +1308,7 @@ mod tests {
         ];
         for &(panicking_drops, callback_failure, expected) in cases {
             let (manager, nodes) = manager_with_nodes(2);
-            nodes[0].request_focus();
+            let _ = nodes[0].request_focus();
             let drops = Rc::new(RefCell::new(Vec::new()));
             let terminal = Rc::new(Cell::new(true));
             let capture = |label| CloseCapture {
@@ -1319,7 +1334,7 @@ mod tests {
             let owner = capture("global handler");
             manager.add_global_key_handler(Rc::new(move |_| {
                 let _ = &owner;
-                false
+                KeyEventResult::Ignored
             }));
             let owner = capture("key handler");
             let key_registration = nodes[1].register_on_key_event(Rc::new(move |_| {
@@ -1406,7 +1421,7 @@ mod tests {
                 FocusRequestOutcome::OwnerClosed
             ));
             assert!(manager.root_scope().attach_node(&FocusNode::new()).is_err());
-            assert!(!manager.dispatch_key_event(&key_event()));
+            assert!(!manager.dispatch_key_event(&key_event()).is_handled());
             manager.close();
         }
     }
@@ -1437,7 +1452,7 @@ mod tests {
         }
         for notification_fails in [true, false] {
             let (manager, nodes) = manager_with_nodes(1);
-            nodes[0].request_focus();
+            let _ = nodes[0].request_focus();
             nodes[0].add_listener(Rc::new(move || {
                 assert!(!notification_fails, "first final notification");
             }));
@@ -1446,7 +1461,7 @@ mod tests {
             let captured = ThrowsOpaque(std::sync::Arc::clone(&payload_drops));
             manager.add_global_key_handler(Rc::new(move |_| {
                 let _ = &captured;
-                false
+                KeyEventResult::Ignored
             }));
             nodes[0]
                 .register_context(Rc::new((
@@ -1482,7 +1497,7 @@ mod tests {
         use crate::routing::FocusRequestOutcome;
 
         let (manager, nodes) = manager_with_nodes(2);
-        nodes[0].request_focus();
+        let _ = nodes[0].request_focus();
         let other = Rc::clone(&nodes[1]);
         let owner = Rc::downgrade(&manager);
         let notified = Rc::new(Cell::new(false));
@@ -1510,14 +1525,14 @@ mod tests {
             nodes[1].handle_key_event(&key_event()),
             KeyEventResult::Ignored
         );
-        assert!(!manager.dispatch_key_event(&key_event()));
+        assert!(!manager.dispatch_key_event(&key_event()).is_handled());
         assert_eq!(manager.listener_count(), 0);
     }
 
     fn close_does_not_notify_a_root_parked_on_itself() {
         let manager = FocusManager::new();
         let root = Rc::clone(manager.root_scope().as_focus_node());
-        root.request_focus();
+        let _ = root.request_focus();
         assert!(
             manager
                 .primary_focus()
@@ -1535,14 +1550,14 @@ mod tests {
         let manager = FocusManager::new();
         let calls = Rc::new(RefCell::new(Vec::new()));
         let recorded = Rc::clone(&calls);
-        let later: KeyEventCallback = Rc::new(move |_| {
+        let later: KeyEventHandler = Rc::new(move |_| {
             recorded.borrow_mut().push("later healthy handler");
-            true
+            KeyEventResult::Handled
         });
         let recorded = Rc::clone(&calls);
-        let kept_removed: KeyEventCallback = Rc::new(move |_| {
+        let kept_removed: KeyEventHandler = Rc::new(move |_| {
             recorded.borrow_mut().push("removed handler");
-            false
+            KeyEventResult::Ignored
         });
         let owner = Rc::downgrade(&manager);
         let surviving = Rc::clone(&later);
@@ -1555,15 +1570,15 @@ mod tests {
             // dispatch's snapshot does not name. The removed callback still
             // has an independent consumer-owned Rc below.
             owner.add_global_key_handler(Rc::clone(&surviving));
-            false
+            KeyEventResult::Ignored
         }));
         manager.add_global_key_handler(Rc::clone(&kept_removed));
         manager.add_global_key_handler(later);
 
-        assert!(!manager.dispatch_key_event(&key_event()));
+        assert!(!manager.dispatch_key_event(&key_event()).is_handled());
         assert_eq!(*calls.borrow(), ["removing handler"]);
         calls.borrow_mut().clear();
-        assert!(manager.dispatch_key_event(&key_event()));
+        assert!(manager.dispatch_key_event(&key_event()).is_handled());
         assert_eq!(*calls.borrow(), ["later healthy handler"]);
         drop(kept_removed);
         manager.close();
@@ -1574,7 +1589,7 @@ mod tests {
 
         for global in [true, false] {
             let (manager, nodes) = manager_with_nodes(1);
-            nodes[0].request_focus();
+            let _ = nodes[0].request_focus();
             let capture_drops = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
             let hostile = (
                 CloseBomb(std::sync::Arc::clone(&capture_drops)),
@@ -1595,7 +1610,7 @@ mod tests {
                 nodes[0].set_on_key_event(Rc::new(move |_| callback()));
             }
             let outcome = catch_unwind(AssertUnwindSafe(|| {
-                manager.dispatch_key_event(&key_event())
+                manager.dispatch_key_event(&key_event()).is_handled()
             }));
             let payload = outcome.expect_err("the original key callback failure propagates");
             assert_eq!(
@@ -1605,7 +1620,7 @@ mod tests {
             flui_foundation::panic::retain_opaque_payload(payload);
             assert!(!nodes[0].is_attached());
             assert_eq!(capture_drops.load(std::sync::atomic::Ordering::Relaxed), 0);
-            assert!(!manager.dispatch_key_event(&key_event()));
+            assert!(!manager.dispatch_key_event(&key_event()).is_handled());
         }
     }
 
@@ -1623,7 +1638,7 @@ mod tests {
         let outcome = catch_unwind(AssertUnwindSafe(|| {
             let (manager, nodes) = manager_with_nodes(1);
             *survivor.borrow_mut() = Some(Rc::clone(&nodes[0]));
-            nodes[0].request_focus();
+            let _ = nodes[0].request_focus();
             nodes[0].add_listener(Rc::new(|| panic!("secondary final listener")));
             nodes[0]
                 .register_context(Rc::new((
@@ -1818,7 +1833,7 @@ mod tests {
                 0,
                 "unwinding rejection retains aggregate: {kind}"
             );
-            assert!(!manager.dispatch_key_event(&key_event()));
+            assert!(!manager.dispatch_key_event(&key_event()).is_handled());
             assert!(nodes[0].context().is_none());
             reject_focus_capture(
                 &manager,
@@ -1845,8 +1860,8 @@ mod tests {
                 count.set(count.get() + 1);
                 KeyEventResult::Handled
             }));
-            healthy_nodes[0].request_focus();
-            assert!(healthy.dispatch_key_event(&key_event()));
+            let _ = healthy_nodes[0].request_focus();
+            assert!(healthy.dispatch_key_event(&key_event()).is_handled());
             assert_eq!(calls.get(), 1);
         }
     }
@@ -1859,7 +1874,7 @@ mod tests {
     /// produced.
     fn reentrant_request_during_notification_is_applied_after_and_published_in_order() {
         let (manager, nodes) = manager_with_nodes(3);
-        nodes[0].request_focus();
+        let _ = nodes[0].request_focus();
 
         let edges = Rc::new(RefCell::new(Vec::new()));
         let edges_for_listener = Rc::clone(&edges);
@@ -1874,11 +1889,11 @@ mod tests {
         let intermediate = Rc::downgrade(&nodes[1]);
         nodes[1].add_listener(Rc::new(move || {
             if intermediate.upgrade().unwrap().has_primary_focus() {
-                next.request_focus();
+                let _ = next.request_focus();
             }
         }));
 
-        nodes[1].request_focus();
+        let _ = nodes[1].request_focus();
 
         assert!(nodes[2].has_primary_focus());
         assert_eq!(
@@ -1903,7 +1918,7 @@ mod tests {
         manager.root_scope().attach_node(&b).unwrap();
         let c = FocusNode::with_debug_label("c");
         let c_attachment = manager.root_scope().attach_node(&c).unwrap();
-        a.request_focus();
+        let _ = a.request_focus();
 
         let edges = Rc::new(RefCell::new(Vec::new()));
         let edges_for_listener = Rc::clone(&edges);
@@ -1918,12 +1933,12 @@ mod tests {
         let b_weak = Rc::downgrade(&b);
         b.add_listener(Rc::new(move || {
             if b_weak.upgrade().unwrap().has_primary_focus() {
-                c_for_listener.request_focus();
-                c_attachment.detach();
+                let _ = c_for_listener.request_focus();
+                let _ = c_attachment.detach();
             }
         }));
 
-        b.request_focus();
+        let _ = b.request_focus();
 
         assert!(
             b.has_primary_focus(),
@@ -1945,13 +1960,13 @@ mod tests {
     /// to drain it.
     fn listener_panic_does_not_leave_notification_depth_stuck() {
         let (manager, nodes) = manager_with_nodes(2);
-        nodes[0].request_focus();
+        let _ = nodes[0].request_focus();
 
         let panicking_listener =
             nodes[0].add_listener(Rc::new(|| panic!("boom: listener under test panics")));
 
         let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            nodes[1].request_focus();
+            let _ = nodes[1].request_focus();
         }));
         assert!(panicked.is_err(), "the listener panic must propagate");
         // Uninstall it: it would otherwise re-panic on every later
@@ -1970,7 +1985,7 @@ mod tests {
             ));
         }));
 
-        nodes[0].request_focus();
+        let _ = nodes[0].request_focus();
 
         assert!(
             nodes[0].has_primary_focus(),
@@ -2008,19 +2023,19 @@ mod tests {
         let self_of_0 = Rc::downgrade(&nodes[0]);
         let listener_0 = nodes[0].add_listener(Rc::new(move || {
             if self_of_0.upgrade().unwrap().has_primary_focus() {
-                target_of_0.request_focus();
+                let _ = target_of_0.request_focus();
             }
         }));
         let target_of_1 = Rc::clone(&nodes[0]);
         let self_of_1 = Rc::downgrade(&nodes[1]);
         let listener_1 = nodes[1].add_listener(Rc::new(move || {
             if self_of_1.upgrade().unwrap().has_primary_focus() {
-                target_of_1.request_focus();
+                let _ = target_of_1.request_focus();
             }
         }));
 
         let ((), log) = flui_testing::log_capture::capture(|| {
-            nodes[0].request_focus();
+            let _ = nodes[0].request_focus();
         });
 
         assert_eq!(
@@ -2073,7 +2088,7 @@ mod tests {
             Rc::clone(&nodes[0])
         };
 
-        other.request_focus();
+        let _ = other.request_focus();
 
         assert!(other.has_primary_focus());
         assert_eq!(
@@ -2090,7 +2105,7 @@ mod tests {
     /// listener is dropped rather than applied.
     fn queued_requests_are_dropped_when_the_manager_closes_mid_drain() {
         let (manager, nodes) = manager_with_nodes(3);
-        nodes[0].request_focus();
+        let _ = nodes[0].request_focus();
 
         let edges = Rc::new(RefCell::new(Vec::new()));
         let edges_for_listener = Rc::clone(&edges);
@@ -2105,10 +2120,10 @@ mod tests {
         let sibling = Rc::clone(&nodes[2]);
         nodes[1].add_listener(Rc::new(move || {
             manager_for_listener.close();
-            sibling.request_focus();
+            let _ = sibling.request_focus();
         }));
 
-        nodes[1].request_focus();
+        let _ = nodes[1].request_focus();
 
         assert!(
             edges.borrow().is_empty(),

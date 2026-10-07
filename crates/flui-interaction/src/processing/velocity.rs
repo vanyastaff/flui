@@ -1,21 +1,21 @@
 //! Velocity estimation for gesture recognition
 //!
-//! This module provides pointer velocity estimation. Three tracker flavours
-//! are provided:
+//! One sample buffer supports four explicitly selected release estimators:
 //!
 //! - [`VelocityTracker`] — least-squares polynomial regression on a 20-sample
 //!   circular buffer. This is the default and the one the core gesture
 //!   pipeline uses.
-//! - [`IosFlingVelocityTracker`] — iOS `UIScrollView` fling approximation:
-//!   weighted average of three adjacent 2-point velocities. Use this when you
-//!   want the initial fling velocity that matches native iOS scroll physics.
-//! - [`MacosFlingVelocityTracker`] — same algorithm as iOS, with different
-//!   weights (matches `NSScrollView`).
+//! - [`VelocityEstimator::Impulse`] — velocity-change integration.
+//! - [`VelocityEstimator::Ios`] and [`VelocityEstimator::Macos`] — weighted
+//!   averages of three adjacent interval velocities, with different weights.
+//!
+//! All defaults use least squares. Applications select another algorithm in
+//! [`GestureSettings`](crate::settings::GestureSettings); no OS policy is read.
 //!
 //! # Algorithm
 //!
-//! All trackers keep a 20-slot circular buffer of `(time, position)` samples
-//! and walk backwards from the newest sample, stopping when either the
+//! The tracker keeps a 20-slot circular buffer of `(time, position)` samples.
+//! Least squares and impulse walk backwards from the newest sample, stopping when either the
 //! horizon (100 ms) is exceeded or the gap between consecutive samples
 //! exceeds 40 ms (the pointer is considered stationary). For the least-
 //! squares flavour, the surviving samples are fed to `LeastSquaresSolver`
@@ -27,7 +27,8 @@
 //!
 //! Confidence is the product of the R² fit quality of the x and y
 //! polynomials; a perfect linear swipe gives 1.0, a noisy curve gives
-//! something close to 0.0.
+//! something close to 0.0. Weighted estimators use the three newest interval
+//! velocities and report confidence 1.0 without making a fit-quality claim.
 //!
 //! # Numerical contract
 //!
@@ -84,6 +85,24 @@ use flui_foundation::geometry::Offset;
 
 use super::lsq_solver::{MAX_SAMPLES, PolynomialFit, solve_two};
 
+/// The algorithm used to estimate release velocity from admitted pointer history.
+///
+/// This is an authored interaction policy. Choosing an algorithm does not read
+/// OS preferences or promise an exact match to a native scroll view.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum VelocityEstimator {
+    /// Quadratic least-squares regression, falling back to a line when needed.
+    #[default]
+    LeastSquares,
+    /// Integrate changes in velocity as impulse work over the sample window.
+    Impulse,
+    /// Weight the three newest interval velocities by 0.6, 0.35 and 0.05.
+    Ios,
+    /// Weight the three newest interval velocities by 0.15, 0.65 and 0.2.
+    Macos,
+}
+
 // ============================================================================
 // Constants
 // ============================================================================
@@ -136,24 +155,6 @@ fn signed_ms(time: Instant, reference: Instant) -> f64 {
     match time.checked_duration_since(reference) {
         Some(later) => later.as_secs_f64() * 1000.0,
         None => -(reference.duration_since(time).as_secs_f64() * 1000.0),
-    }
-}
-
-/// The memoized, buffer-pure result of a least-squares fit.
-#[derive(Debug, Clone, Copy)]
-struct Fit {
-    estimate: VelocityEstimate,
-    /// Second derivative of the fit at the newest sample, px/s²; zero for a
-    /// linear or degenerate fit.
-    acceleration: Offset<f64>,
-}
-
-impl Fit {
-    const fn without_acceleration(estimate: VelocityEstimate) -> Self {
-        Self {
-            estimate,
-            acceleration: Offset::ZERO,
-        }
     }
 }
 
@@ -228,6 +229,8 @@ pub struct VelocityTracker {
     /// device-independent.
     kind: PointerKind,
 
+    estimator: VelocityEstimator,
+
     /// Circular buffer of samples. Empty slots are `None` so we can
     /// distinguish "slot not yet written" from a sample at `Instant::EPOCH`.
     samples: [Option<PointAtTime>; HISTORY_SIZE],
@@ -242,7 +245,7 @@ pub struct VelocityTracker {
     since_last_sample: Option<Instant>,
 
     /// Memoized result of the buffer-pure part of [`Self::get_velocity_estimate`]
-    /// (the backward walk plus the least-squares fit). Invalidated whenever
+    /// (the selected estimator). Invalidated whenever
     /// the sample buffer changes ([`Self::add_position`] / [`Self::reset`]).
     ///
     /// Only the buffer-pure computation is cached; the time-dependent
@@ -250,7 +253,7 @@ pub struct VelocityTracker {
     /// fit is returned only while the pointer is still moving. This collapses
     /// repeated velocity and estimate queries over unchanged samples from
     /// two O(N) QR solves to one.
-    cached_fit: Option<Fit>,
+    cached_fit: Option<VelocityEstimate>,
 }
 
 impl Default for VelocityTracker {
@@ -262,13 +265,22 @@ impl Default for VelocityTracker {
 impl VelocityTracker {
     /// Construct a new velocity tracker for the given pointer device kind.
     ///
-    /// The parameter is kept even though the algorithm doesn't yet branch on
-    /// it, so the field is in place for future device-specific tuning (mouse
-    /// vs touch vs stylus).
+    /// Uses least squares; `kind` records the admitted source independently
+    /// of the authored algorithm choice.
     #[must_use]
     pub fn with_kind(kind: PointerKind) -> Self {
+        Self::with_estimator(kind, VelocityEstimator::LeastSquares)
+    }
+
+    /// Construct a tracker with an explicit release-velocity policy.
+    ///
+    /// The policy stays fixed until this tracker is replaced; resetting samples
+    /// does not change it. Queries share the same sample-clock stop gate.
+    #[must_use]
+    pub fn with_estimator(kind: PointerKind, estimator: VelocityEstimator) -> Self {
         Self {
             kind,
+            estimator,
             samples: [None; HISTORY_SIZE],
             index: 0,
             since_last_sample: None,
@@ -391,12 +403,17 @@ impl VelocityTracker {
         // Reuse the memoized fit if the sample buffer hasn't changed since it
         // was computed. `VelocityEstimate` is `Copy`, so this is a cheap read.
         if let Some(cached) = self.cached_fit {
-            return Some(cached.estimate);
+            return Some(cached);
         }
 
-        let fit = self.compute_estimate()?;
+        let fit = match self.estimator {
+            VelocityEstimator::LeastSquares => self.compute_estimate(),
+            VelocityEstimator::Impulse => self.compute_impulse(),
+            VelocityEstimator::Ios => self.compute_weighted([0.6, 0.35, 0.05]),
+            VelocityEstimator::Macos => self.compute_weighted([0.15, 0.65, 0.2]),
+        }?;
         self.cached_fit = Some(fit);
-        Some(fit.estimate)
+        Some(fit)
     }
 
     /// Walk the circular buffer back from the newest sample while the samples
@@ -447,7 +464,7 @@ impl VelocityTracker {
     /// time-dependent stationary gate, nor the memo cache — which is exactly
     /// what makes the cache in [`Self::get_velocity_estimate`] sound. O(N)
     /// where N ≤ `HISTORY_SIZE` (the buffer is bounded at 20 samples).
-    fn compute_estimate(&self) -> Option<Fit> {
+    fn compute_estimate(&self) -> Option<VelocityEstimate> {
         let mut xs = [0.0f64; HISTORY_SIZE];
         let mut ys = [0.0f64; HISTORY_SIZE];
         let mut ts = [0.0f64; HISTORY_SIZE];
@@ -482,12 +499,12 @@ impl VelocityTracker {
                 reason = "too_few_contiguous_samples",
                 "velocity estimate: no fling"
             );
-            return Some(Fit::without_acceleration(VelocityEstimate::new(
+            return Some(VelocityEstimate::new(
                 Offset::ZERO,
                 Offset::ZERO,
                 duration,
                 1.0,
-            )));
+            ));
         }
 
         // Guard: if the total time window is effectively zero (all samples at
@@ -513,12 +530,7 @@ impl VelocityTracker {
                 reason = "degenerate_time_span",
                 "velocity estimate: no fling"
             );
-            return Some(Fit::without_acceleration(VelocityEstimate::new(
-                offset,
-                Offset::ZERO,
-                duration,
-                0.0,
-            )));
+            return Some(VelocityEstimate::new(offset, Offset::ZERO, duration, 0.0));
         }
 
         // Fit a quadratic in milliseconds; velocity in px/ms is the linear
@@ -540,41 +552,15 @@ impl VelocityTracker {
                 reason = "unsolvable_time_span",
                 "velocity estimate: no fling"
             );
-            return Some(Fit::without_acceleration(VelocityEstimate::new(
-                offset,
-                Offset::ZERO,
-                duration,
-                0.0,
-            )));
+            return Some(VelocityEstimate::new(offset, Offset::ZERO, duration, 0.0));
         };
         let slope = |fit: &PolynomialFit| fit.coefficients[1] * 1000.0;
-        // x(t) = c0 + c1·t + c2·t² in ms, so x''(t) = 2·c2 px/ms² = 2e6·c2 px/s².
-        let curvature = |fit: &PolynomialFit| fit.coefficients[2] * 2.0e6;
-        let acceleration = Offset::new(curvature(&x_fit), curvature(&y_fit));
-        Some(Fit {
-            estimate: VelocityEstimate::new(
-                offset,
-                bounded(Offset::new(slope(&x_fit), slope(&y_fit))),
-                duration,
-                x_fit.confidence * y_fit.confidence,
-            ),
-            acceleration: if acceleration.dx.is_finite() && acceleration.dy.is_finite() {
-                acceleration
-            } else {
-                Offset::ZERO
-            },
-        })
-    }
-
-    /// The acceleration of the current fit, in px/s², zero when the fit is
-    /// linear, degenerate or the pointer has stopped (wall-clock gate, like
-    /// [`Self::get_velocity_estimate`]). Finite, but not bounded: callers
-    /// bound what they derive from it.
-    pub(crate) fn acceleration(&mut self) -> Offset<f64> {
-        if self.get_velocity_estimate() == Some(STOPPED) {
-            return Offset::ZERO;
-        }
-        self.cached_fit.map_or(Offset::ZERO, |fit| fit.acceleration)
+        Some(VelocityEstimate::new(
+            offset,
+            bounded(Offset::new(slope(&x_fit), slope(&y_fit))),
+            duration,
+            x_fit.confidence * y_fit.confidence,
+        ))
     }
 
     /// The most recent velocity as a [`Velocity`].
@@ -627,111 +613,42 @@ impl VelocityTracker {
     }
 }
 
-// ============================================================================
-// IosFlingVelocityTracker
-// ============================================================================
-
-/// Velocity tracker that matches iOS `UIScrollView` fling estimation.
-///
-/// Uses a weighted average of three adjacent 2-point velocities (offsets
-/// `-2`, `-1`, `0` in the circular buffer) with weights `0.6 / 0.35 / 0.05`.
-/// The fit is intentionally crude — it's what `UIScrollView` reports to its
-/// delegate in `scrollViewWillEndDragging(_:withVelocity:targetContentOffset:)`,
-/// and the gesture pipeline uses it to seed the `Scrollable`'s fling
-/// simulation.
-///
-/// The 20-slot history is larger than the 4 used by the maths — the extra
-/// slots keep the `VelocityEstimate.offset` (computed as `newest - oldest`)
-/// large enough to be recognised as a fling by the drag recognizers.
-#[derive(Debug, Clone)]
-pub struct IosFlingVelocityTracker {
-    inner: VelocityTracker,
-    /// Weights applied to the 2-point velocities at offsets (-2, -1, 0).
-    weights: [f64; 3],
-}
-
-impl Default for IosFlingVelocityTracker {
-    fn default() -> Self {
-        Self::with_kind(PointerKind::Touch)
-    }
-}
-
-impl IosFlingVelocityTracker {
-    /// Construct an iOS-flavour tracker for the given pointer kind.
-    #[must_use]
-    pub fn with_kind(kind: PointerKind) -> Self {
-        Self {
-            inner: VelocityTracker::with_kind(kind),
-            weights: [0.6, 0.35, 0.05],
-        }
-    }
-
-    /// Record a position. O(1). Mirrors `IOSScrollViewFlingVelocityTracker.addPosition`.
-    pub fn add_position(&mut self, time: Instant, position: Offset<f64>) {
-        self.inner.add_position(time, position);
-    }
-
-    /// Reset all samples.
-    pub fn reset(&mut self) {
-        self.inner.reset();
-    }
-
-    /// The pointer kind this tracker is configured for.
-    #[inline]
-    pub fn kind(&self) -> PointerKind {
-        self.inner.kind()
-    }
-
+impl VelocityTracker {
     /// Velocity estimate. The `pixels_per_second` is the weighted sum of
     /// 2-point velocities; the `confidence` is always 1.0 (the algorithm
     /// makes no claim about fit quality); `duration` and `offset` are
-    /// computed from the newest and oldest non-null samples.
-    pub fn get_velocity_estimate(&self) -> Option<VelocityEstimate> {
-        // Stationary? Report zero with confidence 1.0.
-        if let Some(last) = self.inner.since_last_sample
-            && last.elapsed() >= ASSUME_POINTER_STOPPED
-        {
-            return Some(STOPPED);
-        }
-
-        let estimated_velocity = bounded(self.estimated_velocity());
-        let newest = self.inner.samples[self.inner.index]?;
-        // Walk forward through the buffer to find the oldest non-null sample.
-        let mut oldest: Option<PointAtTime> = None;
-        for i in 1..=HISTORY_SIZE {
-            let slot = self.inner.samples[(self.inner.index + i) % HISTORY_SIZE];
-            if let Some(s) = slot {
-                oldest = Some(s);
-                break;
-            }
-        }
-        let oldest = oldest.expect("newest was Some, so at least one slot is non-null");
+    /// computed from the newest and oldest eligible samples.
+    fn compute_weighted(&self, weights: [f64; 3]) -> Option<VelocityEstimate> {
+        let (newest, oldest, eligible_samples) = self.walk_window(|_, _| {})?;
+        let estimated_velocity =
+            bounded(self.estimated_weighted_velocity(weights, eligible_samples));
 
         Some(VelocityEstimate::new(
             finite_offset(newest.position, oldest.position),
             estimated_velocity,
-            newest.time.saturating_duration_since(oldest.time),
+            time_between(newest.time, oldest.time),
             1.0,
         ))
-    }
-
-    /// Velocity for fling detection. Same semantics as
-    /// [`VelocityTracker::get_fling_velocity`].
-    pub fn get_fling_velocity(&self, allow_slow: bool) -> Velocity {
-        fling_velocity_or_zero(self.get_velocity(), allow_slow)
     }
 
     /// The raw weighted-average velocity, regardless of the
     /// "stationary for 40 ms" gate. Each two-point velocity is bounded
     /// before weighting, so the sum cannot overflow.
-    fn estimated_velocity(&self) -> Offset<f64> {
-        let v = |offset: isize| {
+    fn estimated_weighted_velocity(
+        &self,
+        weights: [f64; 3],
+        eligible_samples: usize,
+    ) -> Offset<f64> {
+        let v = |offset: isize, required_samples| {
+            if eligible_samples < required_samples {
+                return Offset::ZERO;
+            }
             let (dx, dy) = self.two_sample_velocity_at_f64(offset);
             bounded(Offset::new(dx, dy))
         };
-        let (a, b, c) = (v(-2), v(-1), v(0));
-        let dx = a.dx * self.weights[0] + b.dx * self.weights[1] + c.dx * self.weights[2];
-        let dy = a.dy * self.weights[0] + b.dy * self.weights[1] + c.dy * self.weights[2];
+        let (a, b, c) = (v(-2, 4), v(-1, 3), v(0, 2));
+        let dx = a.dx * weights[0] + b.dx * weights[1] + c.dx * weights[2];
+        let dy = a.dy * weights[0] + b.dy * weights[1] + c.dy * weights[2];
         Offset::new(dx, dy)
     }
 
@@ -739,11 +656,9 @@ impl IosFlingVelocityTracker {
     /// returned in `(dx, dy)` f64 form for precision arithmetic.
     /// `offset = 0` is the most recent pair, `-1` is the one before, etc.
     fn two_sample_velocity_at_f64(&self, offset: isize) -> (f64, f64) {
-        let end_idx =
-            (self.inner.index as isize + offset).rem_euclid(HISTORY_SIZE as isize) as usize;
+        let end_idx = (self.index as isize + offset).rem_euclid(HISTORY_SIZE as isize) as usize;
         let start_idx = (end_idx as isize - 1).rem_euclid(HISTORY_SIZE as isize) as usize;
-        let (Some(end), Some(start)) = (self.inner.samples[end_idx], self.inner.samples[start_idx])
-        else {
+        let (Some(end), Some(start)) = (self.samples[end_idx], self.samples[start_idx]) else {
             return (0.0, 0.0);
         };
         // dt is in microseconds; convert to milliseconds for the divisor so
@@ -758,143 +673,9 @@ impl IosFlingVelocityTracker {
         let dy_px_s = (end.position.dy - start.position.dy) * 1000.0 / dt_ms;
         (dx_px_s, dy_px_s)
     }
-
-    /// Alias for [`Self::get_velocity_estimate`].
-    #[inline]
-    pub fn estimate(&self) -> Option<VelocityEstimate> {
-        self.get_velocity_estimate()
-    }
-
-    /// Velocity as a [`Velocity`]. [`Velocity::ZERO`] when the estimate is
-    /// missing or its velocity is zero.
-    pub fn get_velocity(&self) -> Velocity {
-        velocity_from_estimate(self.get_velocity_estimate())
-    }
 }
 
-// ============================================================================
-// MacosFlingVelocityTracker
-// ============================================================================
-
-/// Velocity tracker matching macOS `NSScrollView` fling estimation.
-///
-/// Same algorithm as [`IosFlingVelocityTracker`] with weights
-/// `0.15 / 0.65 / 0.2` (the macOS delegate weights from
-/// `scrollViewWillEndDragging(_:withVelocity:targetContentOffset:)`).
-#[derive(Debug, Clone)]
-pub struct MacosFlingVelocityTracker {
-    inner: IosFlingVelocityTracker,
-}
-
-impl Default for MacosFlingVelocityTracker {
-    fn default() -> Self {
-        Self::with_kind(PointerKind::Touch)
-    }
-}
-
-impl MacosFlingVelocityTracker {
-    /// Construct a macOS-flavour tracker for the given pointer kind.
-    #[must_use]
-    pub fn with_kind(kind: PointerKind) -> Self {
-        let mut inner = IosFlingVelocityTracker::with_kind(kind);
-        inner.weights = [0.15, 0.65, 0.2];
-        Self { inner }
-    }
-
-    /// Record a position.
-    pub fn add_position(&mut self, time: Instant, position: Offset<f64>) {
-        self.inner.add_position(time, position);
-    }
-
-    /// Reset all samples.
-    pub fn reset(&mut self) {
-        self.inner.reset();
-    }
-
-    /// The pointer kind this tracker is configured for.
-    #[inline]
-    pub fn kind(&self) -> PointerKind {
-        self.inner.kind()
-    }
-
-    /// Velocity estimate using the macOS weights.
-    pub fn get_velocity_estimate(&self) -> Option<VelocityEstimate> {
-        self.inner.get_velocity_estimate()
-    }
-
-    /// Velocity as a [`Velocity`].
-    pub fn get_velocity(&self) -> Velocity {
-        self.inner.get_velocity()
-    }
-
-    /// Velocity for fling detection.
-    pub fn get_fling_velocity(&self, allow_slow: bool) -> Velocity {
-        self.inner.get_fling_velocity(allow_slow)
-    }
-}
-
-// ============================================================================
-// ImpulseVelocityTracker
-// ============================================================================
-
-/// Velocity tracker using Android's impulse strategy — the platform default
-/// since Android 8.1 (`ImpulseVelocityTrackerStrategy` in AOSP
-/// `frameworks/native/libs/input/VelocityTracker.cpp`).
-///
-/// The impulse model treats the touch surface as a physical object the
-/// finger does work on, and recovers the release velocity from the
-/// accumulated kinetic energy:
-///
-/// ```text
-/// w   += (v_i − v(w)) · |v_i|        per sample interval, first interval ×0.5
-/// v(w) = sign(w) · √(2·|w|)
-/// ```
-///
-/// Compared to the quadratic least-squares fit, each interval's contribution
-/// is weighted by the velocity *change* it represents, so a sharp
-/// deceleration right before lift-off discounts older samples instead of
-/// being averaged away — flings track the finger's final intent, which is
-/// why AOSP made it the default. Use this tracker for Android-feel scroll
-/// and fling; use [`VelocityTracker`] (least-squares) for the default fit.
-///
-/// Sample window and stationary gates are shared with the other trackers
-/// (100 ms horizon, 40 ms assume-stopped).
-#[derive(Debug, Clone)]
-pub struct ImpulseVelocityTracker {
-    inner: VelocityTracker,
-}
-
-impl Default for ImpulseVelocityTracker {
-    fn default() -> Self {
-        Self::with_kind(PointerKind::Touch)
-    }
-}
-
-impl ImpulseVelocityTracker {
-    /// Construct an impulse tracker for the given pointer kind.
-    #[must_use]
-    pub fn with_kind(kind: PointerKind) -> Self {
-        Self {
-            inner: VelocityTracker::with_kind(kind),
-        }
-    }
-
-    /// Record a position.
-    pub fn add_position(&mut self, time: Instant, position: Offset<f64>) {
-        self.inner.add_position(time, position);
-    }
-
-    /// Reset all samples.
-    pub fn reset(&mut self) {
-        self.inner.reset();
-    }
-
-    /// The pointer kind this tracker is configured for.
-    #[inline]
-    pub fn kind(&self) -> PointerKind {
-        self.inner.kind()
-    }
-
+impl VelocityTracker {
     /// AOSP: kinetic energy back to velocity, preserving direction.
     /// `v = sign(w) · √2 · √|w|` (mass cancels).
     #[inline]
@@ -924,29 +705,18 @@ impl ImpulseVelocityTracker {
         Self::kinetic_energy_to_velocity(work)
     }
 
-    /// Velocity estimate via the impulse strategy.
-    ///
-    /// Returns `None` when no samples have been recorded; a zero estimate
-    /// when the pointer is stationary (40 ms without a sample) or fewer than
-    /// two samples fall inside the window.
-    pub fn get_velocity_estimate(&self) -> Option<VelocityEstimate> {
-        // Stationary gate, same contract as the other trackers.
-        if let Some(last) = self.inner.since_last_sample
-            && last.elapsed() >= ASSUME_POINTER_STOPPED
-        {
-            return Some(STOPPED);
-        }
-
-        let newest = self.inner.samples[self.inner.index]?;
+    /// Buffer-pure impulse estimate; the caller applies the query-clock gate.
+    fn compute_impulse(&self) -> Option<VelocityEstimate> {
+        let newest = self.samples[self.index]?;
 
         // Walk backwards through the window (100 ms horizon / 40 ms gap),
         // collecting chronological samples for the impulse integration.
         let mut chron: [Option<PointAtTime>; HISTORY_SIZE] = [None; HISTORY_SIZE];
         let mut n = 0usize;
-        let mut cursor = self.inner.index;
+        let mut cursor = self.index;
         let mut previous = newest;
         for _ in 0..HISTORY_SIZE {
-            let Some(sample) = self.inner.samples[cursor] else {
+            let Some(sample) = self.samples[cursor] else {
                 break;
             };
             let age = newest.time.saturating_duration_since(sample.time);
@@ -984,7 +754,7 @@ impl ImpulseVelocityTracker {
         let mut last_time: Option<Instant> = None;
         for i in (0..n).rev() {
             // Invariant: slots 0..n were written by the walk above.
-            let s = chron[i].expect("walk wrote chron[0..n]; i < n");
+            let s = chron[i].expect("BUG: walk wrote chron[0..n] and i < n");
             if let Some(prev_time) = last_time {
                 let dt = s.time.saturating_duration_since(prev_time).as_secs_f64();
                 if dt <= 0.0 {
@@ -1021,59 +791,4 @@ impl ImpulseVelocityTracker {
             1.0,
         ))
     }
-
-    /// Velocity as a [`Velocity`].
-    pub fn get_velocity(&self) -> Velocity {
-        velocity_from_estimate(self.get_velocity_estimate())
-    }
-
-    /// Velocity for fling detection. Same semantics as
-    /// [`VelocityTracker::get_fling_velocity`].
-    pub fn get_fling_velocity(&self, allow_slow: bool) -> Velocity {
-        fling_velocity_or_zero(self.get_velocity(), allow_slow)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn linear_swipe_x(
-        duration_ms: u64,
-        samples: usize,
-        slope_px_per_s: f64,
-    ) -> Vec<(Instant, Offset<f64>)> {
-        let start = Instant::now();
-        let dt = Duration::from_millis(duration_ms / samples as u64);
-        (0..samples)
-            .map(|i| {
-                let t = start + dt * i as u32;
-                let pos = Offset::new(slope_px_per_s * (i as f64 * dt.as_secs_f64()), 0.0);
-                (t, pos)
-            })
-            .collect()
-    }
-
-    #[test]
-    fn impulse_recovers_constant_velocity_exactly() {
-        // For uniform motion the impulse model is exact: the first interval
-        // contributes w = ½v², every later interval contributes zero, and
-        // v = √(2w) returns the original speed.
-        let mut tracker = ImpulseVelocityTracker::with_kind(PointerKind::Touch);
-        for (t, p) in linear_swipe_x(90, 10, 1000.0) {
-            tracker.add_position(t, p);
-        }
-        let v = tracker.get_velocity().pixels_per_second.dx;
-        assert!(
-            (v - 1000.0).abs() < 10.0,
-            "constant 1000 px/s must be recovered exactly, got {v}"
-        );
-    }
-
-    // ── Dead-fling witnesses ─────────────────────────────────────────────
-    //
-    // Both zero-velocity exits below are reachable on a loaded machine and
-    // are indistinguishable from the outside — a gesture that moved the
-    // content but produced no fling. These assert that each one SAYS which
-    // it was, because that distinction is the whole diagnostic value.
 }

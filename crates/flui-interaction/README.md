@@ -88,7 +88,7 @@ let manager = FocusManager::new();
 let node = FocusNode::new();
 let _attachment = manager.root_scope().attach_node(&node)
     .expect("a fresh node attaches to its presentation root");
-node.request_focus();
+let _ = node.request_focus();
 assert!(node.has_primary_focus());
 ```
 

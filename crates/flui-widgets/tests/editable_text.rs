@@ -701,7 +701,7 @@ pub(crate) fn focus_gain_attaches_an_ime_client_and_routes_preedit_to_the_contro
         Rc::clone(&focus_node),
     ));
 
-    focus_node.request_focus();
+    let _ = focus_node.request_focus();
     assert_eq!(
         harness.active_ime_clients(),
         1,
@@ -865,7 +865,7 @@ pub(crate) fn a_pointer_down_and_a_paste_commit_the_composition_first() {
             controller.clone(),
             Rc::clone(&node),
         ));
-        node.request_focus();
+        let _ = node.request_focus();
         harness.tick();
         harness.dispatch_ime(&flui_platform_api::ImeEvent::Preedit {
             text: "東京".to_owned(),
@@ -897,19 +897,24 @@ pub(crate) fn a_pointer_down_and_a_paste_commit_the_composition_first() {
     let (harness, controller) = composing("ab");
     harness.clipboard().write_text("!".to_owned());
     assert!(
-        harness.focus_manager().dispatch_key_event(
-            &KeyEvent::new(
-                KeyState::Down,
-                Key::character("v"),
-                Code::KeyV,
-                EventTime::from_nanos(0)
+        harness
+            .focus_manager()
+            .dispatch_key_event(
+                &KeyEvent::new(
+                    KeyState::Down,
+                    Key::character("v"),
+                    Code::KeyV,
+                    EventTime::from_nanos(0)
+                )
+                .with_modifiers(
+                    if cfg!(any(target_os = "macos", target_os = "ios")) {
+                        Modifiers::META
+                    } else {
+                        Modifiers::CONTROL
+                    }
+                )
             )
-            .with_modifiers(if cfg!(any(target_os = "macos", target_os = "ios")) {
-                Modifiers::META
-            } else {
-                Modifiers::CONTROL
-            })
-        ),
+            .is_handled(),
         "paste: the chord is consumed while composing"
     );
     assert!(committed(&harness), "paste: the host is asked first");
@@ -957,7 +962,7 @@ pub(crate) fn moving_focus_off_a_composing_field_commits_it_in_either_mount_orde
             mount_with_push_ime(fields)
         };
         let (source, destination) = if compose_in_later { (1, 0) } else { (0, 1) };
-        nodes[source].request_focus();
+        let _ = nodes[source].request_focus();
         harness.tick();
         harness.dispatch_ime(&flui_platform_api::ImeEvent::Preedit {
             text: "東京".to_owned(),
@@ -966,7 +971,7 @@ pub(crate) fn moving_focus_off_a_composing_field_commits_it_in_either_mount_orde
         let composing = &controllers[source];
         assert!(composing.is_composing(), "precondition: composing");
 
-        nodes[destination].request_focus();
+        let _ = nodes[destination].request_focus();
         harness.tick();
         assert!(
             !composing.is_composing(),
@@ -975,12 +980,13 @@ pub(crate) fn moving_focus_off_a_composing_field_commits_it_in_either_mount_orde
         let committed = format!("{}東京", if source == 0 { "ab" } else { "cd" });
         assert_eq!(composing.text(), committed, "keeping its text");
 
-        nodes[source].request_focus();
+        let _ = nodes[source].request_focus();
         harness.tick();
         assert!(
             harness
                 .focus_manager()
                 .dispatch_key_event(&character_key_event('x'))
+                .is_handled()
         );
         harness.tick();
         assert_eq!(
@@ -1025,7 +1031,7 @@ pub(crate) fn a_press_reentered_by_its_commit_is_not_a_second_contact() {
             }
         }),
     );
-    node.request_focus();
+    let _ = node.request_focus();
     harness.tick();
     harness.dispatch_ime(&flui_platform_api::ImeEvent::Preedit {
         text: "東京".to_owned(),
@@ -1221,7 +1227,7 @@ pub(crate) mod text_store {
             controller.clone(),
             Rc::clone(&focus_node),
         ));
-        focus_node.request_focus();
+        let _ = focus_node.request_focus();
         harness.tick();
         (harness, focus_node)
     }
@@ -1368,7 +1374,8 @@ pub(crate) mod text_store {
 
         let handled = harness
             .focus_manager()
-            .dispatch_key_event(&character_key_event('b'));
+            .dispatch_key_event(&character_key_event('b'))
+            .is_handled();
         assert!(handled);
         assert_eq!(controller.text(), "Ab");
     }
@@ -1415,7 +1422,7 @@ pub(crate) mod text_store {
                 },
             ),
         );
-        focus_node.request_focus();
+        let _ = focus_node.request_focus();
         harness.tick();
         let field = store(&harness);
         *slot.borrow_mut() = Some(Rc::clone(&field));
@@ -1503,7 +1510,7 @@ pub(crate) mod text_store {
             EditableText::new(controller.clone(), Rc::clone(&focus_node))
                 .on_changed(move |_cx, text| sink.borrow_mut().push(text.to_owned())),
         );
-        focus_node.request_focus();
+        let _ = focus_node.request_focus();
         harness.tick();
         let field = store(&harness);
         LISTENED_FIELD.with(|slot| *slot.borrow_mut() = Some(Rc::clone(&field)));
@@ -1598,7 +1605,7 @@ pub(crate) mod text_store {
             old.clone(),
             Rc::clone(&focus_node),
         ))));
-        focus_node.request_focus();
+        let _ = focus_node.request_focus();
         harness.borrow_mut().tick();
         let field = store(&harness.borrow());
         let (nested, replacement, node) =
@@ -1627,7 +1634,7 @@ pub(crate) mod text_store {
             EditableText::new(controller.clone(), Rc::clone(&focus_node))
                 .on_changed(move |_cx, text| on_changed(text)),
         );
-        focus_node.request_focus();
+        let _ = focus_node.request_focus();
         harness.tick();
         (harness, focus_node)
     }
@@ -1855,7 +1862,7 @@ pub(crate) mod text_store {
         let mut harness = crate::common::harness::mount_with_push_ime(
             SizedBox::new(60.0, 30.0).child(EditableText::new(controller, Rc::clone(&focus))),
         );
-        focus.request_focus();
+        let _ = focus.request_focus();
         let assert_visible = |harness: &Harness| {
             let candidate = harness
                 .cursor_area_calls()
@@ -1872,6 +1879,7 @@ pub(crate) mod text_store {
                 harness
                     .focus_manager()
                     .dispatch_key_event(&super::character_key_event(ch))
+                    .is_handled()
             );
             harness.tick();
         }
@@ -1883,7 +1891,12 @@ pub(crate) mod text_store {
                 Code::Home,
                 EventTime::from_nanos(0),
             );
-            assert!(harness.focus_manager().dispatch_key_event(&event));
+            assert!(
+                harness
+                    .focus_manager()
+                    .dispatch_key_event(&event)
+                    .is_handled()
+            );
             harness.tick();
             assert_visible(&harness);
         }
@@ -1915,12 +1928,13 @@ pub(crate) mod text_store {
         let mut harness = crate::common::harness::mount_with_ime(SizedBox::new(60.0, 30.0).child(
             EditableText::new(controller.clone(), Rc::clone(&focus)).obscure_text(obscured),
         ));
-        focus.request_focus();
+        let _ = focus.request_focus();
         for ch in text.chars() {
             assert!(
                 harness
                     .focus_manager()
                     .dispatch_key_event(&super::character_key_event(ch))
+                    .is_handled()
             );
             harness.tick();
         }
@@ -1982,7 +1996,12 @@ pub(crate) mod text_store {
                 Code::Home,
                 EventTime::from_nanos(0),
             );
-            assert!(harness.focus_manager().dispatch_key_event(&event));
+            assert!(
+                harness
+                    .focus_manager()
+                    .dispatch_key_event(&event)
+                    .is_handled()
+            );
             harness.tick();
             assert_visible(&harness);
         }
@@ -1994,7 +2013,12 @@ pub(crate) mod text_store {
             EventTime::from_nanos(0),
         )
         .with_modifiers(Modifiers::SHIFT);
-        assert!(harness.focus_manager().dispatch_key_event(&select));
+        assert!(
+            harness
+                .focus_manager()
+                .dispatch_key_event(&select)
+                .is_handled()
+        );
         harness.tick();
         let selected = read(&field, |session| {
             session
@@ -2011,7 +2035,12 @@ pub(crate) mod text_store {
             Code::End,
             EventTime::from_nanos(0),
         );
-        assert!(harness.focus_manager().dispatch_key_event(&end));
+        assert!(
+            harness
+                .focus_manager()
+                .dispatch_key_event(&end)
+                .is_handled()
+        );
         harness.tick();
 
         // A visible suffix boundary is not the same x as its full-content
@@ -2029,6 +2058,7 @@ pub(crate) mod text_store {
             harness
                 .focus_manager()
                 .dispatch_key_event(&super::character_key_event('!'))
+                .is_handled()
         );
         assert_eq!(
             controller.text(),
@@ -2089,10 +2119,11 @@ pub(crate) mod text_store {
             SizedBox::new(60.0, 30.0).child(EditableText::new(controller, Rc::clone(&focus))),
             crate::common::tight(60.0, 30.0),
         );
-        focus.request_focus();
+        let _ = focus.request_focus();
         for ch in "abcdefghijklmnopqrstuvwxyz".chars() {
-            laid.focus_manager()
-                .dispatch_key_event(&super::character_key_event(ch));
+            let _ = laid.focus_manager()
+                .dispatch_key_event(&super::character_key_event(ch))
+                .is_handled();
         }
         laid.tick();
         let tree = laid.layer_tree().expect("typing painted a frame");
@@ -2153,7 +2184,7 @@ pub(crate) mod event_cx {
             field(signals, probe_controller.clone(), Rc::clone(&probe_node))
         });
         let mut harness = mount_with_ime(probe.view());
-        harness.enter_owner_scope(|| focus_node.request_focus());
+        let _ = harness.enter_owner_scope(|| focus_node.request_focus());
         harness.tick();
         (probe, harness, controller)
     }
@@ -2166,8 +2197,12 @@ pub(crate) mod event_cx {
         });
 
         let keys = harness.focus_manager();
-        keys.dispatch_key_event(&character_key_event('a'));
-        keys.dispatch_key_event(&character_key_event('b'));
+        let _ = keys
+            .dispatch_key_event(&character_key_event('a'))
+            .is_handled();
+        let _ = keys
+            .dispatch_key_event(&character_key_event('b'))
+            .is_handled();
 
         assert_eq!(probe.value(), Ok(2));
         harness.tick();
@@ -2184,6 +2219,7 @@ pub(crate) mod event_cx {
             harness
                 .focus_manager()
                 .dispatch_key_event(&character_key_event('a'))
+                .is_handled()
         });
 
         assert!(

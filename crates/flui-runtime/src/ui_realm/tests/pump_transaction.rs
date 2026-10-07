@@ -118,17 +118,20 @@ fn a_realm_on_a_manual_clock_fires_gesture_deadlines_on_that_clock() {
     let mut realm = manual_clock_realm(&clock);
     let fired = Arc::new(AtomicBool::new(false));
     let fired_in_callback = Arc::clone(&fired);
-    let recognizer = LongPressGestureRecognizer::with_settings(
-        realm.gestures().arena().clone(),
-        GestureSettings::touch_defaults().with_long_press_timeout(Duration::from_millis(500)),
-    )
-    .with_on_long_press_start(move |_details| fired_in_callback.store(true, Ordering::SeqCst));
+    let recognizer = LongPressGestureRecognizer::builder(realm.gestures().arena().clone())
+        .settings(
+            GestureSettings::touch_defaults().with_long_press_timeout(Duration::from_millis(500)),
+        )
+        .on_long_press_start(move |_details| fired_in_callback.store(true, Ordering::SeqCst))
+        .build();
     let position = flui_foundation::geometry::Offset::new(10.0, 10.0);
-    recognizer.add_pointer(
+    let down = flui_interaction::testing::make_down_event_for_id(
         PointerId::new(std::num::NonZeroU64::MIN),
         position,
-        position,
-    );
+        flui_interaction::PointerKind::Touch,
+    )
+    .expect("valid Down sample");
+    recognizer.add_pointer(flui_interaction::PointerDispatch::at_root(&down));
 
     let mut sink = ScriptedSink::always_presents();
     clock.advance(Duration::from_millis(300));

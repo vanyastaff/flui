@@ -1,26 +1,27 @@
 //! DOM event → PlatformInput mapping
 //!
 //! Registers DOM event listeners on the canvas and converts browser events
-//! into FLUI's owned PlatformInput types. Keyboard and wheel translations
-//! still use private W3C transport helpers.
+//! into FLUI's owned PlatformInput types.
 
 use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc};
 
 use flui_foundation::geometry::{Point, Size};
 use flui_platform_api::{
     EventTime,
+    keyboard::{
+        Code, ImeComposition, Key, KeyEvent, KeyRepeat, KeyState, Location, Modifiers, NamedKey,
+    },
     pointer::{
         ButtonChange, CancelReason, ContactSize, PenOrientation, PenTool, PointerButton,
         PointerButtons, PointerCancel, PointerEvent, PointerId, PointerInfo, PointerKind,
         PointerMove, PointerPosition, PointerPress, PointerRelease, PointerRole, PointerSample,
-        Pressure, TangentialPressure, Twist,
+        Pressure, ScrollEvent, TangentialPressure, Twist,
     },
 };
 
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 
-use crate::shared::input_vocabulary::{keyboard_input, pointer_input};
 use crate::{shared::WindowCallbacks, traits::PlatformInput};
 
 use super::window::WebWindow;
@@ -224,9 +225,9 @@ fn register_keyboard_events(callbacks: &Arc<WindowCallbacks>) {
     // keydown
     {
         let callbacks = Arc::clone(callbacks);
-        let closure = Closure::<dyn FnMut(web_sys::Event)>::new(move |e: web_sys::Event| {
+        let closure = Closure::<dyn Fn(web_sys::Event)>::new(move |e: web_sys::Event| {
             let ke: web_sys::KeyboardEvent = e.unchecked_into();
-            let input = convert_keyboard_event(&ke, keyboard_types::KeyState::Down);
+            let input = convert_keyboard_event(&ke, KeyState::Down);
             callbacks.dispatch_input(input);
         });
         let _ = browser_window
@@ -237,9 +238,9 @@ fn register_keyboard_events(callbacks: &Arc<WindowCallbacks>) {
     // keyup
     {
         let callbacks = Arc::clone(callbacks);
-        let closure = Closure::<dyn FnMut(web_sys::Event)>::new(move |e: web_sys::Event| {
+        let closure = Closure::<dyn Fn(web_sys::Event)>::new(move |e: web_sys::Event| {
             let ke: web_sys::KeyboardEvent = e.unchecked_into();
-            let input = convert_keyboard_event(&ke, keyboard_types::KeyState::Up);
+            let input = convert_keyboard_event(&ke, KeyState::Up);
             callbacks.dispatch_input(input);
         });
         let _ = browser_window
@@ -299,7 +300,7 @@ fn register_focus_events(canvas: &web_sys::HtmlCanvasElement, callbacks: &Arc<Wi
 fn register_wheel_events(canvas: &web_sys::HtmlCanvasElement, callbacks: &Arc<WindowCallbacks>) {
     let callbacks = Arc::clone(callbacks);
     let target = canvas.clone();
-    let closure = Closure::<dyn FnMut(web_sys::Event)>::new(move |e: web_sys::Event| {
+    let closure = Closure::<dyn Fn(web_sys::Event)>::new(move |e: web_sys::Event| {
         e.prevent_default();
         let we: web_sys::WheelEvent = e.unchecked_into();
         let input = convert_wheel_event(&we, &target);
@@ -363,9 +364,9 @@ extern "C" {
     fn predicted_events(this: &ExtendedPointerEvent) -> Result<js_sys::Array, JsValue>;
 }
 
-fn pointer_position(event: &web_sys::MouseEvent) -> dpi::PhysicalPosition<f64> {
+fn pointer_position(event: &web_sys::MouseEvent) -> Point {
     let event: &PreciseMouseEvent = event.unchecked_ref();
-    dpi::PhysicalPosition::new(event.offset_x_f64(), event.offset_y_f64())
+    Point::new(event.offset_x_f64(), event.offset_y_f64())
 }
 
 /// MouseEvent implementations can round wheel offsets even when the canvas
@@ -373,17 +374,14 @@ fn pointer_position(event: &web_sys::MouseEvent) -> dpi::PhysicalPosition<f64> {
 /// coordinates only when the whole ancestry has no coordinate transform.
 /// A bounding rectangle cannot invert a rotation, skew or perspective;
 /// those shapes keep the browser's own local offset instead of guessing.
-fn wheel_position(
-    event: &web_sys::WheelEvent,
-    canvas: &web_sys::HtmlCanvasElement,
-) -> dpi::PhysicalPosition<f64> {
+fn wheel_position(event: &web_sys::WheelEvent, canvas: &web_sys::HtmlCanvasElement) -> Point {
     untransformed_wheel_position(event, canvas).unwrap_or_else(|| pointer_position(event))
 }
 
 fn untransformed_wheel_position(
     event: &web_sys::WheelEvent,
     canvas: &web_sys::HtmlCanvasElement,
-) -> Option<dpi::PhysicalPosition<f64>> {
+) -> Option<Point> {
     let window = web_sys::window()?;
     let canvas_style = window.get_computed_style(canvas).ok()??;
     let mut ancestor = Some(canvas.unchecked_ref::<web_sys::Element>().clone());
@@ -408,7 +406,7 @@ fn untransformed_wheel_position(
     let border_top: f64 = border_top.strip_suffix("px")?.parse().ok()?;
     let rect = canvas.get_bounding_client_rect();
     let source: &PreciseMouseEvent = event.unchecked_ref();
-    Some(dpi::PhysicalPosition::new(
+    Some(Point::new(
         source.client_x_f64() - rect.left() - border_left,
         source.client_y_f64() - rect.top() - border_top,
     ))
@@ -445,28 +443,6 @@ fn make_pointer_info(pe: &web_sys::PointerEvent) -> Option<PointerInfo> {
 ///
 /// Bit values are fixed by the UI Events spec: 1 primary, 2 secondary,
 /// 4 auxiliary, 8 back and 16 forward.
-fn upstream_buttons_from_mask(mask: u16) -> ui_events::pointer::PointerButtons {
-    use ui_events::pointer::{PointerButton, PointerButtons};
-
-    let mut buttons = PointerButtons::default();
-    if mask & 0x01 != 0 {
-        buttons.insert(PointerButton::Primary);
-    }
-    if mask & 0x02 != 0 {
-        buttons.insert(PointerButton::Secondary);
-    }
-    if mask & 0x04 != 0 {
-        buttons.insert(PointerButton::Auxiliary);
-    }
-    if mask & 0x08 != 0 {
-        buttons.insert(PointerButton::X1);
-    }
-    if mask & 0x10 != 0 {
-        buttons.insert(PointerButton::X2);
-    }
-    buttons
-}
-
 fn buttons_from_mask(mask: u16) -> PointerButtons {
     [
         (1, PointerButton::PRIMARY),
@@ -499,7 +475,7 @@ fn pointer_time(pe: &web_sys::PointerEvent) -> EventTime {
 
 fn pointer_sample(pe: &web_sys::PointerEvent) -> Option<PointerSample> {
     let point = pointer_position(pe);
-    let position = PointerPosition::try_new(Point::new(point.x, point.y)).ok()?;
+    let position = PointerPosition::try_new(point).ok()?;
     let mut sample = PointerSample::new(pointer_time(pe), position);
     // DOM has no per-device sensor capability query. Keep its reported touch
     // and pen pressure, including zero, without treating a mouse fallback as force.
@@ -538,7 +514,7 @@ fn pointer_sample(pe: &web_sys::PointerEvent) -> Option<PointerSample> {
 }
 
 fn pointer_modifiers(pe: &web_sys::PointerEvent) -> flui_platform_api::keyboard::Modifiers {
-    crate::shared::input_vocabulary::modifiers(extract_modifiers_from_mouse(pe))
+    extract_modifiers_from_mouse(pe)
 }
 
 fn convert_pointer_down(pe: &web_sys::PointerEvent) -> Option<PlatformInput> {
@@ -638,147 +614,99 @@ fn convert_wheel_event(
     we: &web_sys::WheelEvent,
     canvas: &web_sys::HtmlCanvasElement,
 ) -> Option<PlatformInput> {
-    use ui_events::pointer::{
-        PointerEvent, PointerInfo, PointerOrientation, PointerScrollEvent, PointerState,
-        PointerType,
-    };
-
-    let delta = crate::shared::scroll::from_web(we.delta_mode(), we.delta_x(), we.delta_y());
-
+    let delta =
+        crate::shared::scroll::from_web(we.delta_mode(), we.delta_x(), we.delta_y()).ok()?;
+    let position = PointerPosition::try_new(wheel_position(we, canvas)).ok()?;
+    let time = EventTime::from_nanos((we.time_stamp() * 1_000_000.0) as u64);
     let modifiers = extract_modifiers_from_mouse(we);
-
-    pointer_input(
-        PointerEvent::Scroll(PointerScrollEvent {
-            pointer: PointerInfo {
-                pointer_id: None,
-                persistent_device_id: None,
-                pointer_type: PointerType::Mouse,
-            },
-            delta,
-            state: PointerState {
-                time: (we.time_stamp() * 1_000_000.0) as u64,
-                position: wheel_position(we, canvas),
-                buttons: upstream_buttons_from_mask(we.buttons()),
-                modifiers,
-                count: 0,
-                contact_geometry: dpi::PhysicalSize::new(1.0, 1.0),
-                orientation: PointerOrientation::default(),
-                pressure: 0.0,
-                tangential_pressure: 0.0,
-                scale_factor: web_sys::window().map_or(1.0, |w| w.device_pixel_ratio()),
-            },
-        }),
-        (we.time_stamp() * 1_000_000.0) as u64,
+    // DOM wheel events have no pointer identity. Keep the documented primary
+    // mouse fallback rather than guessing a hardware source or scroll phase.
+    let pointer = PointerInfo::new(
+        PointerId::try_from(1_u64).expect("BUG: the primary mouse identity is nonzero"),
+        PointerKind::Mouse,
     )
+    .with_role(PointerRole::Primary);
+    Some(PlatformInput::Pointer(PointerEvent::Scroll(
+        ScrollEvent::new(pointer, time, position, delta).with_modifiers(modifiers),
+    )))
 }
 
-fn convert_keyboard_event(
-    ke: &web_sys::KeyboardEvent,
-    state: keyboard_types::KeyState,
-) -> PlatformInput {
-    let mut modifiers = keyboard_types::Modifiers::empty();
+fn convert_keyboard_event(ke: &web_sys::KeyboardEvent, state: KeyState) -> PlatformInput {
+    let mut modifiers = Modifiers::NONE;
     if ke.shift_key() {
-        modifiers |= keyboard_types::Modifiers::SHIFT;
+        modifiers |= Modifiers::SHIFT;
     }
     if ke.ctrl_key() {
-        modifiers |= keyboard_types::Modifiers::CONTROL;
+        modifiers |= Modifiers::CONTROL;
     }
     if ke.alt_key() {
-        modifiers |= keyboard_types::Modifiers::ALT;
+        modifiers |= Modifiers::ALT;
     }
     if ke.meta_key() {
-        modifiers |= keyboard_types::Modifiers::META;
+        modifiers |= Modifiers::META;
     }
 
     let key = map_key_value(&ke.key());
 
     let location = match ke.location() {
-        1 => keyboard_types::Location::Left,
-        2 => keyboard_types::Location::Right,
-        3 => keyboard_types::Location::Numpad,
+        1 => Location::Left,
+        2 => Location::Right,
+        3 => Location::Numpad,
         // 0 is DOM_KEY_LOCATION_STANDARD; an unrecognised value is treated
         // the same way rather than dropped.
-        _ => keyboard_types::Location::Standard,
+        _ => Location::Standard,
     };
 
-    keyboard_input(
-        ui_events::keyboard::KeyboardEvent {
+    PlatformInput::Keyboard(
+        KeyEvent::new(
             state,
             key,
-            code: ke
-                .code()
-                .parse()
-                .unwrap_or(keyboard_types::Code::Unidentified),
-            location,
-            modifiers,
-            repeat: ke.repeat(),
-            is_composing: ke.is_composing(),
-        },
-        (ke.time_stamp() * 1_000_000.0) as u64,
+            Code::from_w3c(&ke.code()).unwrap_or(Code::Unidentified),
+            EventTime::from_nanos((ke.time_stamp() * 1_000_000.0) as u64),
+        )
+        .with_location(location)
+        .with_modifiers(modifiers)
+        .with_repeat(if ke.repeat() {
+            KeyRepeat::AutoRepeat
+        } else {
+            KeyRepeat::First
+        })
+        .with_composition(if ke.is_composing() {
+            ImeComposition::Active
+        } else {
+            ImeComposition::Inactive
+        }),
     )
 }
 
 // ==================== Helpers ====================
 
-fn extract_modifiers_from_mouse(e: &web_sys::MouseEvent) -> keyboard_types::Modifiers {
-    let mut modifiers = keyboard_types::Modifiers::empty();
+fn extract_modifiers_from_mouse(e: &web_sys::MouseEvent) -> Modifiers {
+    let mut modifiers = Modifiers::NONE;
     if e.shift_key() {
-        modifiers |= keyboard_types::Modifiers::SHIFT;
+        modifiers |= Modifiers::SHIFT;
     }
     if e.ctrl_key() {
-        modifiers |= keyboard_types::Modifiers::CONTROL;
+        modifiers |= Modifiers::CONTROL;
     }
     if e.alt_key() {
-        modifiers |= keyboard_types::Modifiers::ALT;
+        modifiers |= Modifiers::ALT;
     }
     if e.meta_key() {
-        modifiers |= keyboard_types::Modifiers::META;
+        modifiers |= Modifiers::META;
     }
     modifiers
 }
 
-/// Map DOM `KeyboardEvent.key` to `keyboard_types::Key`
-fn map_key_value(key: &str) -> keyboard_types::Key {
-    use keyboard_types::{Key, NamedKey};
-
-    match key {
-        "Enter" => Key::Named(NamedKey::Enter),
-        "Tab" => Key::Named(NamedKey::Tab),
-        "Backspace" => Key::Named(NamedKey::Backspace),
-        "Escape" => Key::Named(NamedKey::Escape),
-        "ArrowUp" => Key::Named(NamedKey::ArrowUp),
-        "ArrowDown" => Key::Named(NamedKey::ArrowDown),
-        "ArrowLeft" => Key::Named(NamedKey::ArrowLeft),
-        "ArrowRight" => Key::Named(NamedKey::ArrowRight),
-        "Shift" => Key::Named(NamedKey::Shift),
-        "Control" => Key::Named(NamedKey::Control),
-        "Alt" => Key::Named(NamedKey::Alt),
-        "Meta" => Key::Named(NamedKey::Meta),
-        "Delete" => Key::Named(NamedKey::Delete),
-        "Insert" => Key::Named(NamedKey::Insert),
-        "Home" => Key::Named(NamedKey::Home),
-        "End" => Key::Named(NamedKey::End),
-        "PageUp" => Key::Named(NamedKey::PageUp),
-        "PageDown" => Key::Named(NamedKey::PageDown),
-        " " => Key::Character(" ".into()),
-        "F1" => Key::Named(NamedKey::F1),
-        "F2" => Key::Named(NamedKey::F2),
-        "F3" => Key::Named(NamedKey::F3),
-        "F4" => Key::Named(NamedKey::F4),
-        "F5" => Key::Named(NamedKey::F5),
-        "F6" => Key::Named(NamedKey::F6),
-        "F7" => Key::Named(NamedKey::F7),
-        "F8" => Key::Named(NamedKey::F8),
-        "F9" => Key::Named(NamedKey::F9),
-        "F10" => Key::Named(NamedKey::F10),
-        "F11" => Key::Named(NamedKey::F11),
-        "F12" => Key::Named(NamedKey::F12),
-        "CapsLock" => Key::Named(NamedKey::CapsLock),
-        "NumLock" => Key::Named(NamedKey::NumLock),
-        "ScrollLock" => Key::Named(NamedKey::ScrollLock),
-        // Any string that is a single character (including multi-byte Unicode like Cyrillic)
-        s if s.chars().count() == 1 => Key::Character(s.into()),
-        // Multi-char strings that aren't named keys (e.g. "Dead", "Unidentified")
-        _ => Key::Named(NamedKey::Unidentified),
+/// DOM named keys use the same W3C spellings as the generated owned table.
+fn map_key_value(key: &str) -> Key {
+    if matches!(key, "Hyper" | "Super") {
+        Key::Named(NamedKey::Meta)
+    } else if let Some(named) = NamedKey::from_w3c(key) {
+        Key::Named(named)
+    } else if key.chars().count() == 1 {
+        Key::character(key)
+    } else {
+        Key::Named(NamedKey::Unidentified)
     }
 }

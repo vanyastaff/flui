@@ -9,7 +9,7 @@
 //! Declared with `#[path]` from `events.rs` as a sibling of its inline
 //! test modules, so these tests read as
 //! `platforms::winit::events::keyboard_tests::*`. Both modules below use
-//! only `pub` items from `ui_events`, `ui_events_winit`, `winit`, and
+//! only `pub` items from `keyboard_types`, `ui_events_winit`, `winit`, and
 //! `crate::shared`, so nothing here needs `use super::*`.
 
 #[cfg(test)]
@@ -27,7 +27,7 @@ mod keyboard_conversion_tests {
     //! for exactly what that leaves unpinned.
     use std::collections::BTreeSet;
 
-    use ui_events::keyboard::Code;
+    use keyboard_types::Code;
     use ui_events_winit::keyboard::from_winit_code;
     use winit::keyboard::{KeyCode, PhysicalKey};
 
@@ -750,7 +750,7 @@ mod cross_backend_physical_key_agreement {
             let winit_result = from_winit_code(PhysicalKey::Code(winit_code));
             if let Some((scancode, extended)) = win32 {
                 let win32_result = scancode_to_code(scancode, extended);
-                if win32_result != winit_result {
+                if win32_result.as_str() != winit_result.to_string() {
                     disagreements.push(format!(
                         "{label}: winit={winit_result:?} win32={win32_result:?}"
                     ));
@@ -758,7 +758,7 @@ mod cross_backend_physical_key_agreement {
             }
             if let Some(keycode) = appkit {
                 let appkit_result = keycode_to_code(keycode);
-                if appkit_result != winit_result {
+                if appkit_result.as_str() != winit_result.to_string() {
                     disagreements.push(format!(
                         "{label}: winit={winit_result:?} appkit={appkit_result:?}"
                     ));

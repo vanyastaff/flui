@@ -352,7 +352,7 @@ embedder code that closed the window. The native rows in `tests/contract.rs`
 ### The winit backend delegates the whole keyboard event to `ui-events-winit`; Win32/AppKit keep hand-written tables
 
 **Rule:** every native keyboard event this crate receives must be normalized
-into the canonical `ui_events`/`keyboard-types` vocabulary (`Code`, `Key`,
+into FLUI's owned keyboard vocabulary (`Code`, `Key`,
 `Location`) at the platform boundary — see the module doc of `crates/flui-platform-api/src/input.rs`.
 `Code::Unidentified` must mean the backend genuinely could not identify the
 physical key, never that a conversion table was incomplete (issue #1092).
@@ -387,6 +387,16 @@ This asymmetry between backends is deliberate, not inconsistent: the rule is
 `cross_backend_physical_key_agreement` test cross-checks a curated set of
 physical keys against both hand-written tables so the two authored
 translations and the delegated one cannot silently drift apart.
+
+The Winit and Android ecosystem mappings remain boundary dependencies:
+`shared::keyboard_adapter` converts their results to owned `KeyEvent` values.
+Win32 and AppKit tables return owned enums directly, and Web parses the DOM's
+W3C spellings against the generated owned tables. No pointer event uses the
+keyboard adapter. `keyboard_adapter_contract` preserves all named/physical
+key spellings, legacy Meta aliases and every event field. This conversion
+test lives beside the private adapter because Winit's complete `KeyEvent`
+contains private platform state and cannot be constructed by an integration
+test; native backend probes cover actual input delivery separately.
 
 **Alternatives considered:**
 

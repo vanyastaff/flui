@@ -13,8 +13,7 @@ use flui_interaction::events::{
     pointer::ScrollUnit,
 };
 use flui_interaction::processing::{
-    ImpulseVelocityTracker, IosFlingVelocityTracker, MacosFlingVelocityTracker,
-    PointerEventResampler, SamplingClock, VelocityTracker,
+    PointerEventResampler, SamplingClock, VelocityEstimator, VelocityTracker,
 };
 use flui_interaction::{
     DEFAULT_MAX_FLING_VELOCITY, GestureBinding, GestureSettings, GestureSettingsError,
@@ -199,9 +198,10 @@ fn sub_millisecond_spacing_is_bounded() {
 fn huge_coordinates_stay_finite() {
     let t0 = origin();
     let mut lsq = VelocityTracker::new();
-    let mut impulse = ImpulseVelocityTracker::default();
-    let mut ios = IosFlingVelocityTracker::default();
-    let mut macos = MacosFlingVelocityTracker::default();
+    let mut impulse =
+        VelocityTracker::with_estimator(PointerKind::Touch, VelocityEstimator::Impulse);
+    let mut ios = VelocityTracker::with_estimator(PointerKind::Touch, VelocityEstimator::Ios);
+    let mut macos = VelocityTracker::with_estimator(PointerKind::Touch, VelocityEstimator::Macos);
     for i in 0..8 {
         let x = if i % 2 == 0 { 1e300 } else { -1e300 };
         let at = t0 + ms(f64::from(i));
@@ -212,9 +212,138 @@ fn huge_coordinates_stay_finite() {
         macos.add_position(at, position);
     }
     assert_bounded(lsq.estimate_at(t0 + ms(7.0)), "lsq");
-    assert_bounded(impulse.get_velocity_estimate(), "impulse");
-    assert_bounded(ios.get_velocity_estimate(), "ios");
-    assert_bounded(macos.get_velocity_estimate(), "macos");
+    assert_bounded(impulse.estimate_at(t0 + ms(7.0)), "impulse");
+    assert_bounded(ios.estimate_at(t0 + ms(7.0)), "ios");
+    assert_bounded(macos.estimate_at(t0 + ms(7.0)), "macos");
+}
+
+fn selected_estimators_use_the_sample_clock_and_recover() {
+    for (estimator, expected) in [
+        (VelocityEstimator::LeastSquares, 500.0),
+        (VelocityEstimator::Impulse, 1589.9257985831982),
+        (VelocityEstimator::Ios, 2550.0),
+        (VelocityEstimator::Macos, 1950.0),
+    ] {
+        let t0 = origin();
+        let mut tracker = VelocityTracker::with_estimator(PointerKind::Touch, estimator);
+        assert!(tracker.estimate_at(t0).is_none());
+        for sign in [1.0, -1.0] {
+            for (millis, x) in [(0, 10.0), (10, 40.0), (20, 60.0), (30, 70.0)] {
+                tracker.add_position(
+                    t0 + Duration::from_millis(millis),
+                    Offset::new(sign * x, 0.0),
+                );
+            }
+            // The sample origin is in the future of the process clock. Both
+            // an earlier query and repeated queries use sample time, not wall
+            // elapsed time; the repeated query also exercises the fit cache.
+            for query in [t0, t0 + ms(30.0), t0 + ms(30.0)] {
+                let velocity = tracker.velocity_at(query);
+                assert!(
+                    (velocity.dx() - sign * expected).abs() < 1e-6,
+                    "{estimator:?}: {velocity:?}"
+                );
+            }
+            assert_eq!(
+                tracker.velocity_at(t0 + ms(70.0)),
+                Velocity::ZERO,
+                "{estimator:?} stop gate"
+            );
+            tracker.reset();
+            assert!(tracker.estimate_at(t0).is_none());
+        }
+    }
+}
+
+fn impulse_recovers_constant_velocity_exactly() {
+    let t0 = origin();
+    let mut tracker =
+        VelocityTracker::with_estimator(PointerKind::Touch, VelocityEstimator::Impulse);
+    for i in 0..10 {
+        tracker.add_position(
+            t0 + Duration::from_millis(i * 9),
+            Offset::new(i as f64 * 9.0, 0.0),
+        );
+    }
+    let velocity = tracker.velocity_at(t0 + ms(81.0));
+    assert!(
+        (velocity.dx() - 1000.0).abs() < 10.0,
+        "constant 1000 px/s must be recovered exactly: {velocity:?}"
+    );
+}
+
+fn long_pause_matches_an_independent_fresh_tail(estimator: VelocityEstimator) {
+    let t0 = origin();
+    let mut prefixed = VelocityTracker::with_estimator(PointerKind::Touch, estimator);
+    let mut fresh = VelocityTracker::with_estimator(PointerKind::Touch, estimator);
+    for (millis, x) in [(0, 0.0), (10, 80.0), (20, 160.0)] {
+        prefixed.add_position(t0 + Duration::from_millis(millis), Offset::new(x, 0.0));
+    }
+    assert!(prefixed.velocity_at(t0 + ms(20.0)).dx() > 0.0);
+    assert_eq!(prefixed.velocity_at(t0 + ms(1000.0)), Velocity::ZERO);
+
+    // The pointer resumes after a long stationary interval. Three fresh
+    // positions travel at 100 px/s and also determine an LSQ fit. The gap's
+    // displacement is not an interval of the resumed movement. An independent
+    // tracker receives exactly this same tail, without the old fast stroke.
+    let tail = [(1000, 500.0), (1010, 501.0), (1020, 502.0)];
+    for (millis, x) in tail {
+        let time = t0 + Duration::from_millis(millis);
+        prefixed.add_position(time, Offset::new(x, 0.0));
+        fresh.add_position(time, Offset::new(x, 0.0));
+    }
+    let terminal = t0 + ms(1020.0);
+    let expected = fresh.estimate_at(terminal).expect("fresh moving tail");
+    assert!(expected.is_valid() && expected.pixels_per_second.dx > 0.0);
+    for _ in 0..2 {
+        assert_eq!(
+            prefixed.estimate_at(terminal),
+            Some(expected),
+            "{estimator:?}: stale prefix must not affect resumed velocity or span"
+        );
+    }
+    assert_eq!(prefixed.velocity_at(t0 + ms(1060.0)), Velocity::ZERO);
+    assert_eq!(fresh.velocity_at(t0 + ms(1060.0)), Velocity::ZERO);
+
+    // Reuse both handles after reset; the stopped query must neither poison
+    // the fit cache nor change the selected policy for the next stroke.
+    prefixed.reset();
+    fresh.reset();
+    for (millis, x) in tail {
+        let time = t0 + Duration::from_millis(millis);
+        prefixed.add_position(time, Offset::new(-x, 0.0));
+        fresh.add_position(time, Offset::new(-x, 0.0));
+    }
+    assert!(fresh.velocity_at(terminal).dx() < 0.0);
+    assert_eq!(prefixed.estimate_at(terminal), fresh.estimate_at(terminal));
+}
+
+fn lsq_recovers_from_a_long_pause() {
+    long_pause_matches_an_independent_fresh_tail(VelocityEstimator::LeastSquares);
+}
+
+fn impulse_recovers_from_a_long_pause() {
+    long_pause_matches_an_independent_fresh_tail(VelocityEstimator::Impulse);
+}
+
+fn ios_weights_recover_from_a_long_pause() {
+    long_pause_matches_an_independent_fresh_tail(VelocityEstimator::Ios);
+}
+
+fn macos_weights_recover_from_a_long_pause() {
+    long_pause_matches_an_independent_fresh_tail(VelocityEstimator::Macos);
+}
+
+fn selected_estimators_recover_from_a_long_pause() {
+    run_rows(
+        "long-pause recovery",
+        &[
+            ("least squares", lsq_recovers_from_a_long_pause),
+            ("impulse", impulse_recovers_from_a_long_pause),
+            ("iOS weights", ios_weights_recover_from_a_long_pause),
+            ("macOS weights", macos_weights_recover_from_a_long_pause),
+        ],
+    );
 }
 
 #[test]
@@ -235,6 +364,18 @@ fn velocity_estimates_are_finite_bounded_and_on_the_sample_clock() {
                 sub_millisecond_spacing_is_bounded,
             ),
             ("huge coordinates", huge_coordinates_stay_finite),
+            (
+                "selected estimators on sample clock",
+                selected_estimators_use_the_sample_clock_and_recover,
+            ),
+            (
+                "constant impulse motion",
+                impulse_recovers_constant_velocity_exactly,
+            ),
+            (
+                "long-pause recovery",
+                selected_estimators_recover_from_a_long_pause,
+            ),
         ],
     );
 }
@@ -275,9 +416,9 @@ proptest! {
             }
         };
         let mut lsq = VelocityTracker::new();
-        let mut impulse = ImpulseVelocityTracker::default();
-        let mut ios = IosFlingVelocityTracker::default();
-        let mut macos = MacosFlingVelocityTracker::default();
+        let mut impulse = VelocityTracker::with_estimator(PointerKind::Touch, VelocityEstimator::Impulse);
+        let mut ios = VelocityTracker::with_estimator(PointerKind::Touch, VelocityEstimator::Ios);
+        let mut macos = VelocityTracker::with_estimator(PointerKind::Touch, VelocityEstimator::Macos);
         let mut last = t0;
         for (offset, x, y) in &samples {
             last = at(*offset);
@@ -292,9 +433,9 @@ proptest! {
         let fling = lsq.velocity_at(query);
         prop_assert!(fling.is_finite());
         prop_assert!(fling.magnitude() <= DEFAULT_MAX_FLING_VELOCITY * (1.0 + 1e-9));
-        assert_bounded(impulse.get_velocity_estimate(), "impulse");
-        assert_bounded(ios.get_velocity_estimate(), "ios");
-        assert_bounded(macos.get_velocity_estimate(), "macos");
+        assert_bounded(impulse.estimate_at(query), "impulse");
+        assert_bounded(ios.estimate_at(query), "ios");
+        assert_bounded(macos.estimate_at(query), "macos");
     }
 }
 

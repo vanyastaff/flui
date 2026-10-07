@@ -952,6 +952,14 @@ impl GestureRecognizer for ScaleGestureRecognizer {
         let mut state = self.gesture_state.borrow_mut();
         // A contact added while this recognizer owns the gesture is claimed
         // with it.
+        if state.contacts.is_empty()
+            && let PointerEvent::Down(data) = down.local
+        {
+            state.scale_velocity_tracker = VelocityTracker::with_estimator(
+                data.pointer.kind,
+                self.settings.velocity_estimator(),
+            );
+        }
         let claim = state.won.then(|| entry.clone());
         state.contacts.push(Contact {
             id,

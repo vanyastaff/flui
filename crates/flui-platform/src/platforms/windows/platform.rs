@@ -345,7 +345,7 @@ pub(super) struct WindowContext {
     /// Is mouse hovering over this window? (T034)
     pub is_hovered: std::cell::Cell<bool>,
     /// Current keyboard modifiers (T035)
-    pub modifiers: std::cell::Cell<keyboard_types::Modifiers>,
+    pub modifiers: std::cell::Cell<flui_platform_api::Modifiers>,
     /// Cursor selected by this exact window's presentation.
     pub cursor: std::cell::Cell<CursorIcon>,
     /// Window style bits before fullscreen (Windows-specific: WS_OVERLAPPEDWINDOW, etc.)
@@ -1630,7 +1630,6 @@ impl WindowsPlatform {
                 | windows::Win32::UI::WindowsAndMessaging::WM_POINTERENTER
                 | windows::Win32::UI::WindowsAndMessaging::WM_POINTERLEAVE
                 | windows::Win32::UI::WindowsAndMessaging::WM_POINTERCAPTURECHANGED => {
-                    eprintln!("WIN32_POINTER_ENTRY hwnd={hwnd:?} message={msg} raw={} context={}", wparam.0 & 0xffff, ctx.is_some());
                     if let Some(ctx) = ctx {
                         let events = super::events::native_pointer_input(hwnd, msg, (wparam.0 & 0xffff) as u32, ctx.scale_factor.get(), &ctx.message_clock, &ctx.pointer_registry);
                         for event in events {

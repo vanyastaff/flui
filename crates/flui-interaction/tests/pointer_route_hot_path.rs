@@ -7,8 +7,11 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use flui_foundation::geometry::Point;
 use flui_interaction::events::{PointerKind, make_move_event};
 use flui_interaction::{HitTestEntry, InteractionLane, Offset, PointerTarget, RenderId};
+use flui_platform_api::EventTime;
+use flui_platform_api::pointer::{PointerEvent, PointerMove, PointerPosition, PointerSample};
 
 static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
 
@@ -103,6 +106,100 @@ fn resolved_route_move_invocation_allocates_no_heap_after_setup() {
         );
         assert_eq!(deliveries.get(), 8);
 
+        handle.release_route(route).expect("release route");
+    });
+
+    // Keep every counting case in this one test: a global allocator counter
+    // must not race a sibling test in the same Rust test process.
+    for target_count in [1_usize, 4, 16] {
+        for translated in [false, true] {
+            for history in [false, true] {
+                measure_route_shape(target_count, translated, history);
+            }
+        }
+    }
+}
+
+fn route_sample(time: u64, x: f64, y: f64) -> PointerSample {
+    PointerSample::new(
+        EventTime::from_nanos(time),
+        PointerPosition::try_new(Point::new(x, y)).expect("finite fixture sample"),
+    )
+}
+
+fn measure_route_shape(target_count: usize, translated: bool, history: bool) {
+    let lane = InteractionLane::try_new().expect("lane");
+    let handle = lane.dispatch_handle();
+    let deliveries = Rc::new(Cell::new(0));
+    let PointerEvent::Move(base) =
+        make_move_event(Offset::new(30.0, 50.0), PointerKind::Mouse).expect("valid fixture sample")
+    else {
+        panic!("move fixture")
+    };
+    let mut movement = PointerMove::new(
+        base.pointer,
+        base.buttons,
+        route_sample(3_000_000, 30.0, 50.0),
+    );
+    if history {
+        movement = movement
+            .with_coalesced(vec![
+                route_sample(1_000_000, 10.0, 20.0),
+                route_sample(2_000_000, 20.0, 30.0),
+            ])
+            .with_predicted(vec![route_sample(4_000_000, 40.0, 60.0)]);
+    }
+    let event = PointerEvent::Move(movement);
+    lane.enter(|| {
+        let targets: Vec<_> = (0..target_count).map(|_| {
+            let deliveries = Rc::clone(&deliveries);
+            handle.register_pointer(move |dispatch| {
+                let PointerEvent::Move(local) = dispatch.local else { panic!("local Move") };
+                let PointerEvent::Move(global) = dispatch.global else { panic!("global Move") };
+                let (dx, dy) = if translated { (10.0, 20.0) } else { (0.0, 0.0) };
+                assert_eq!(global.current().position.get(), Point::new(30.0, 50.0));
+                assert_eq!(local.current().position.get(), Point::new(30.0 - dx, 50.0 - dy));
+                assert_eq!(local.current().time.as_nanos(), 3_000_000);
+                assert_eq!(local.coalesced().len(), if history { 2 } else { 0 });
+                assert_eq!(local.predicted().len(), usize::from(history));
+                if history {
+                    for (sample, (time, point)) in local.coalesced().iter().zip([
+                        (1_000_000, Point::new(10.0 - dx, 20.0 - dy)),
+                        (2_000_000, Point::new(20.0 - dx, 30.0 - dy)),
+                    ]) {
+                        assert_eq!(sample.time.as_nanos(), time);
+                        assert_eq!(sample.position.get(), point);
+                    }
+                    assert_eq!(local.predicted()[0].time.as_nanos(), 4_000_000);
+                    assert_eq!(local.predicted()[0].position.get(), Point::new(40.0 - dx, 60.0 - dy));
+                    assert_eq!(global.coalesced()[0].position.get(), Point::new(10.0, 20.0));
+                    assert_eq!(global.predicted()[0].position.get(), Point::new(40.0, 60.0));
+                }
+                deliveries.set(deliveries.get() + 1);
+            }).expect("register target")
+        }).collect();
+        let mut path: Vec<_> = targets.iter().enumerate()
+            .map(|(index, target)| hit_entry(index, *target)).collect();
+        if translated {
+            let mut result = flui_interaction::HitTestResult::new();
+            result.with_paint_offset(Offset::new(10.0, 20.0), |result| {
+                for entry in path.drain(..) { result.add(entry); }
+            }).expect("finite offset");
+            path = result.path().to_vec();
+        }
+        let route = handle.resolve_pointer_route(&path).expect("resolve route").token();
+        assert!(handle.invoke_pointer_route(route, &event).expect("warm invocation").is_none());
+        ALLOCATIONS.store(0, Ordering::Relaxed);
+        let result = handle.invoke_pointer_route(route, &event).expect("measured invocation");
+        let allocations = ALLOCATIONS.load(Ordering::Relaxed);
+        assert!(result.is_none());
+        assert_eq!(deliveries.get(), target_count * 2);
+        if !history {
+            assert_eq!(allocations, 0, "scalar cached delivery allocates no heap after setup");
+        }
+        // History may require owned localized vectors. Record its measured
+        // cost without pinning a private clone/collection implementation.
+        println!("cached Move: targets={target_count}, translated={translated}, history={history}, allocations={allocations}");
         handle.release_route(route).expect("release route");
     });
 }

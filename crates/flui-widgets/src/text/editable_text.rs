@@ -898,7 +898,7 @@ impl EditableTextState {
                         ..admitted
                     };
                     drag_anchor.set(Some(drag));
-                    focus_node.request_focus();
+                    let _ = focus_node.request_focus();
                     if drag_anchor.get() == Some(drag) {
                         controller.borrow().set_caret_byte_offset(offset);
                     }
@@ -1194,7 +1194,7 @@ impl FieldSemanticsActions {
             return;
         }
         if let Some(node) = self.live_node().filter(|node| node.can_request_focus()) {
-            node.request_focus();
+            let _ = node.request_focus();
         }
     }
 
@@ -1973,7 +1973,7 @@ impl ViewState<EditableText> for EditableTextState {
         // A platform that still holds the store (or a grant queued in it)
         // must not reach the controller of a field that is gone.
         if let Some(store) = self.text_store.take() {
-            calls.run(|| store.detach());
+            let _ = calls.run(|| store.detach());
             calls.retire(store);
         }
 
@@ -1990,7 +1990,7 @@ impl ViewState<EditableText> for EditableTextState {
 
         // Detach through the generation-checked lifecycle authority.
         if let Some(attachment) = attachment {
-            calls.run(|| attachment.detach());
+            let _ = calls.run(|| attachment.detach());
         }
         self.parent = None;
 

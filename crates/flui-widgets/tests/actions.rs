@@ -45,8 +45,11 @@ fn invoker(amount: usize, field: &Rc<FocusNode>) -> Shortcuts {
 /// Focus `field` and press Ctrl+A. Returns whether the key was consumed —
 /// `true` only when an enabled action ran.
 fn press(harness: &Harness, field: &Rc<FocusNode>) -> bool {
-    field.request_focus();
-    harness.focus_manager().dispatch_key_event(&ctrl_a())
+    let _ = field.request_focus();
+    harness
+        .focus_manager()
+        .dispatch_key_event(&ctrl_a())
+        .is_handled()
 }
 
 /// Nearest-scope-first with the typed payload delivered: the inner

@@ -746,6 +746,8 @@ impl GestureRecognizer for TapAndDragGestureRecognizer {
         if let PointerEvent::Down(data) = down.local {
             state.kind = data.pointer.kind;
         }
+        state.velocity_tracker =
+            VelocityTracker::with_estimator(state.kind, self.settings.velocity_estimator());
         state.last = position;
         state.last_global = global_position;
         state.last_reported = position;

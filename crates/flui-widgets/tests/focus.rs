@@ -161,7 +161,7 @@ pub(crate) fn tab_traversal_follows_geometry_not_attach_order() {
     );
     assert_eq!(a.rect().min_y(), 50.0);
 
-    a.request_focus();
+    let _ = a.request_focus();
 
     manager.focus_next();
     assert!(
@@ -243,10 +243,11 @@ fn assert_widget_reading_order(
             .collect::<Vec<_>>(),
         "the mounted geometry determines the complete order, including its first stop"
     );
-    harness.enter_owner_scope(|| nodes[expected[0]].request_focus());
+    let _ = harness.enter_owner_scope(|| nodes[expected[0]].request_focus());
     for &next in expected.iter().skip(1).chain(expected.iter().take(1)) {
         assert!(
-            harness.enter_owner_scope(|| manager.dispatch_key_event(&tab_event(false))),
+            harness
+                .enter_owner_scope(|| manager.dispatch_key_event(&tab_event(false)).is_handled()),
             "Tab is consumed by the mounted action chain"
         );
         assert!(
@@ -256,7 +257,7 @@ fn assert_widget_reading_order(
     }
     for &previous in expected.iter().rev() {
         assert!(
-            harness.enter_owner_scope(|| manager.dispatch_key_event(&tab_event(true))),
+            harness.enter_owner_scope(|| manager.dispatch_key_event(&tab_event(true)).is_handled()),
             "Shift+Tab is consumed by the mounted action chain"
         );
         assert!(
@@ -389,20 +390,26 @@ pub(crate) fn a_directionality_update_changes_tab_order_without_replacing_focus_
     ];
     let mut harness = mount(reading_order_tree(Ltr, &scope, &nodes, &geometry));
     let manager = harness.focus_manager();
-    harness.enter_owner_scope(|| nodes[0].request_focus());
-    assert!(harness.enter_owner_scope(|| manager.dispatch_key_event(&tab_event(false))));
+    let _ = harness.enter_owner_scope(|| nodes[0].request_focus());
+    assert!(
+        harness.enter_owner_scope(|| manager.dispatch_key_event(&tab_event(false)).is_handled())
+    );
     assert!(nodes[1].has_primary_focus());
     harness.swap_root(reading_order_tree(Rtl, &scope, &nodes, &geometry));
     assert!(
         nodes[1].has_primary_focus(),
         "the focused external node survives the inherited update"
     );
-    assert!(harness.enter_owner_scope(|| manager.dispatch_key_event(&tab_event(false))));
+    assert!(
+        harness.enter_owner_scope(|| manager.dispatch_key_event(&tab_event(false)).is_handled())
+    );
     assert!(
         nodes[0].has_primary_focus(),
         "the existing scope consumes the new RTL direction"
     );
-    assert!(harness.enter_owner_scope(|| manager.dispatch_key_event(&tab_event(true))));
+    assert!(
+        harness.enter_owner_scope(|| manager.dispatch_key_event(&tab_event(true)).is_handled())
+    );
     assert!(nodes[1].has_primary_focus());
 }
 
@@ -438,17 +445,17 @@ pub(crate) mod event_cx {
                 })
         });
         let mut harness = mount(probe.view());
-        old_node.request_focus();
+        let _ = old_node.request_focus();
         assert_eq!(probe.value(), Ok(1));
 
         *selected.borrow_mut() = Rc::clone(&new_node);
         harness.swap_root(probe.view());
         assert!(!old_node.has_focus());
         assert_eq!(probe.value(), Ok(0), "replacement delivered its loss");
-        new_node.request_focus();
+        let _ = new_node.request_focus();
         assert_eq!(probe.value(), Ok(1));
         assert_eq!(*edges.borrow(), [true, false, true]);
-        old_node.request_focus();
+        let _ = old_node.request_focus();
         assert_eq!(
             *edges.borrow(),
             [true, false, true],

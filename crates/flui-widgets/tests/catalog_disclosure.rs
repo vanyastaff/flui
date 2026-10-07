@@ -70,12 +70,14 @@ fn action(app: &LaidOut, id: NodeId, action: Action) {
 
 fn key(app: &LaidOut, key: Key) -> bool {
     app.enter_owner_scope(|| {
-        app.focus_manager().dispatch_key_event(
-            &KeyEventBuilder::new(Code::Unidentified)
-                .with_key(key)
-                .with_state(KeyState::Down)
-                .build(),
-        )
+        app.focus_manager()
+            .dispatch_key_event(
+                &KeyEventBuilder::new(Code::Unidentified)
+                    .with_key(key)
+                    .with_state(KeyState::Down)
+                    .build(),
+            )
+            .is_handled()
     })
 }
 

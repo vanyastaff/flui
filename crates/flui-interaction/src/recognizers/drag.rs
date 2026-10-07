@@ -478,7 +478,8 @@ impl GestureRecognizer for DragGestureRecognizer {
         if !self.contact.is_current(id) {
             return;
         }
-        let mut velocity_tracker = VelocityTracker::new();
+        let mut velocity_tracker =
+            VelocityTracker::with_estimator(contact.kind, contact.settings.velocity_estimator());
         velocity_tracker.add_position(now, contact.local);
         *self.drag_state.borrow_mut() = Some(DragState {
             id,

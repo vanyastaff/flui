@@ -33,7 +33,7 @@
 //! is queued by `TranslateMessage` of the Alt *keyup* — and is assembled by
 //! [`assemble_stray_wm_char`] into its own event instead of being dropped.
 
-use keyboard_types::{Code, Key, Location, NamedKey};
+use flui_platform_api::keyboard::{Code, Key, Location, NamedKey};
 
 // Virtual-key codes, from `winuser.h`. Raw `u16` rather than the `windows`
 // crate's `VIRTUAL_KEY` newtype so this module compiles on every host.
@@ -128,7 +128,7 @@ pub fn vk_to_key(vk_code: u16, shift: bool) -> Key {
     match vk_code {
         vk::RETURN => K::Named(NamedKey::Enter),
         vk::TAB => K::Named(NamedKey::Tab),
-        vk::SPACE => K::Character(" ".into()),
+        vk::SPACE => K::character(" "),
         vk::BACK => K::Named(NamedKey::Backspace),
         vk::DELETE => K::Named(NamedKey::Delete),
         vk::ESCAPE => K::Named(NamedKey::Escape),
@@ -167,22 +167,22 @@ pub fn vk_to_key(vk_code: u16, shift: bool) -> Key {
             } else {
                 (c as u8 as char).to_ascii_lowercase()
             };
-            K::Character(ch.to_string())
+            K::character(ch.to_string())
         }
         // VK_0..=VK_9 are the ASCII digits. Their shifted values are
         // layout-dependent, so no `shift` handling: the WM_CHAR merge is
         // what delivers `!`/`@`/… on a real press.
-        c @ vk::KEY_0..=vk::KEY_9 => K::Character((c as u8 as char).to_string()),
+        c @ vk::KEY_0..=vk::KEY_9 => K::character((c as u8 as char).to_string()),
 
         // Numpad digits and operators (delivered with NumLock on).
         c @ vk::NUMPAD0..=vk::NUMPAD9 => {
-            K::Character(((b'0' + (c - vk::NUMPAD0) as u8) as char).to_string())
+            K::character(((b'0' + (c - vk::NUMPAD0) as u8) as char).to_string())
         }
-        vk::MULTIPLY => K::Character("*".into()),
-        vk::ADD => K::Character("+".into()),
-        vk::SUBTRACT => K::Character("-".into()),
-        vk::DECIMAL => K::Character(".".into()),
-        vk::DIVIDE => K::Character("/".into()),
+        vk::MULTIPLY => K::character("*"),
+        vk::ADD => K::character("+"),
+        vk::SUBTRACT => K::character("-"),
+        vk::DECIMAL => K::character("."),
+        vk::DIVIDE => K::character("/"),
 
         c @ vk::F1..=vk::F12 => {
             let named = [
@@ -203,17 +203,17 @@ pub fn vk_to_key(vk_code: u16, shift: bool) -> Key {
         }
 
         // OEM punctuation, US-layout positions (unshifted).
-        vk::OEM_1 => K::Character(";".into()),
-        vk::OEM_PLUS => K::Character("=".into()),
-        vk::OEM_COMMA => K::Character(",".into()),
-        vk::OEM_MINUS => K::Character("-".into()),
-        vk::OEM_PERIOD => K::Character(".".into()),
-        vk::OEM_2 => K::Character("/".into()),
-        vk::OEM_3 => K::Character("`".into()),
-        vk::OEM_4 => K::Character("[".into()),
-        vk::OEM_5 | vk::OEM_102 => K::Character("\\".into()),
-        vk::OEM_6 => K::Character("]".into()),
-        vk::OEM_7 => K::Character("'".into()),
+        vk::OEM_1 => K::character(";"),
+        vk::OEM_PLUS => K::character("="),
+        vk::OEM_COMMA => K::character(","),
+        vk::OEM_MINUS => K::character("-"),
+        vk::OEM_PERIOD => K::character("."),
+        vk::OEM_2 => K::character("/"),
+        vk::OEM_3 => K::character("`"),
+        vk::OEM_4 => K::character("["),
+        vk::OEM_5 | vk::OEM_102 => K::character("\\"),
+        vk::OEM_6 => K::character("]"),
+        vk::OEM_7 => K::character("'"),
 
         _ => K::Named(NamedKey::Unidentified),
     }
@@ -450,7 +450,7 @@ pub fn wm_char_text(units: &[u16]) -> Option<String> {
 /// matches a `"s"` shortcut.
 pub fn merge_wm_char(fallback: Key, text: Option<String>) -> Key {
     match text {
-        Some(text) => Key::Character(text),
+        Some(text) => Key::character(text),
         None => fallback,
     }
 }

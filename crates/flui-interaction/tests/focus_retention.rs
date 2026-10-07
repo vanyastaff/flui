@@ -15,6 +15,150 @@ use flui_platform_api::{
     keyboard::{Code, Key, KeyEvent, KeyState},
 };
 
+fn subscription_withdrawal_preserves_independent_listeners() {
+    let manager = FocusManager::new();
+    let node = FocusNode::new();
+    let _attachment = manager.root_scope().attach_node(&node).expect("attach");
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let first_calls = Rc::clone(&calls);
+    let first = node.subscribe(Rc::new(move || first_calls.borrow_mut().push("first")));
+    let second_calls = Rc::clone(&calls);
+    let second = node.subscribe(Rc::new(move || second_calls.borrow_mut().push("second")));
+    let _ = node.request_focus();
+    assert_eq!(*calls.borrow(), ["first", "second"]);
+    calls.borrow_mut().clear();
+    drop(first);
+    manager.unfocus();
+    assert_eq!(*calls.borrow(), ["second"]);
+    calls.borrow_mut().clear();
+    drop(second);
+    let _ = node.request_focus();
+    assert!(calls.borrow().is_empty());
+
+    let detached = FocusNode::new();
+    let owner = Rc::downgrade(&detached);
+    let (captured, capture_owner) = capture();
+    let subscription = detached.subscribe(Rc::new(move || {
+        let _ = &captured;
+    }));
+    drop(detached);
+    assert!(owner.upgrade().is_none());
+    assert!(capture_owner.upgrade().is_none());
+    drop(subscription);
+}
+
+fn subscription_retirement_can_reenter_the_same_node() {
+    struct SubscribeOnDrop {
+        node: Weak<FocusNode>,
+        calls: Rc<Cell<usize>>,
+        replacement: Rc<RefCell<Option<flui_interaction::FocusSubscription>>>,
+    }
+    impl Drop for SubscribeOnDrop {
+        fn drop(&mut self) {
+            let node = self.node.upgrade().expect("caller retains node");
+            let calls = Rc::clone(&self.calls);
+            *self.replacement.borrow_mut() =
+                Some(node.subscribe(Rc::new(move || calls.set(calls.get() + 1))));
+        }
+    }
+    let manager = FocusManager::new();
+    let node = FocusNode::new();
+    let _attachment = manager.root_scope().attach_node(&node).expect("attach");
+    let calls = Rc::new(Cell::new(0));
+    let replacement = Rc::new(RefCell::new(None));
+    let captured = SubscribeOnDrop {
+        node: Rc::downgrade(&node),
+        calls: Rc::clone(&calls),
+        replacement: Rc::clone(&replacement),
+    };
+    let subscription = node.subscribe(Rc::new(move || {
+        let _ = &captured;
+    }));
+    drop(subscription);
+    let _ = node.request_focus();
+    assert_eq!(calls.get(), 1);
+    let previous = replacement.borrow_mut().take();
+    drop(previous);
+    manager.unfocus();
+    assert_eq!(calls.get(), 1);
+}
+
+fn subscription_failure_preserves_unwind_and_allows_recovery() {
+    struct FailingCapture(Rc<Cell<usize>>);
+    impl Drop for FailingCapture {
+        fn drop(&mut self) {
+            self.0.set(self.0.get() + 1);
+            panic!("subscription capture");
+        }
+    }
+    for already_unwinding in [false, true] {
+        let manager = FocusManager::new();
+        let node = FocusNode::new();
+        let _attachment = manager.root_scope().attach_node(&node).expect("attach");
+        let drops = Rc::new(Cell::new(0));
+        let captured = FailingCapture(Rc::clone(&drops));
+        let subscription = node.subscribe(Rc::new(move || {
+            let _ = &captured;
+        }));
+        let failure = catch_unwind(AssertUnwindSafe(|| {
+            let subscription = subscription;
+            assert!(!already_unwinding, "earlier failure");
+            drop(subscription);
+        }))
+        .expect_err("failure propagates");
+        assert_eq!(
+            flui_foundation::panic::payload_text(failure.as_ref()),
+            Some(if already_unwinding {
+                "earlier failure"
+            } else {
+                "subscription capture"
+            })
+        );
+        flui_foundation::panic::retain_opaque_payload(failure);
+        assert_eq!(drops.get(), usize::from(!already_unwinding));
+        let calls = Rc::new(Cell::new(0));
+        let observed = Rc::clone(&calls);
+        let healthy = node.subscribe(Rc::new(move || observed.set(observed.get() + 1)));
+        let _ = node.request_focus();
+        assert_eq!(calls.get(), 1);
+        drop(healthy);
+        manager.unfocus();
+        assert_eq!(calls.get(), 1);
+    }
+}
+
+fn key_dispatch_preserves_propagation_outcomes() {
+    for outcome in [
+        KeyEventResult::Ignored,
+        KeyEventResult::Handled,
+        KeyEventResult::SkipRemainingHandlers,
+    ] {
+        let manager = FocusManager::new();
+        let node = FocusNode::new();
+        let _attachment = manager.root_scope().attach_node(&node).expect("attach");
+        let _ = node.request_focus();
+        let calls = Rc::new(Cell::new(0));
+        let observed = Rc::clone(&calls);
+        node.set_on_key_event(Rc::new(move |_| {
+            observed.set(observed.get() + 1);
+            KeyEventResult::Handled
+        }));
+        manager.add_global_key_handler(Rc::new(move |_| outcome));
+        assert_eq!(
+            manager.dispatch_key_event(&key_event()),
+            if outcome == KeyEventResult::Ignored {
+                KeyEventResult::Handled
+            } else {
+                outcome
+            }
+        );
+        assert_eq!(calls.get(), usize::from(outcome == KeyEventResult::Ignored));
+        manager.clear_global_key_handlers();
+        node.set_on_key_event(Rc::new(move |_| outcome));
+        assert_eq!(manager.dispatch_key_event(&key_event()), outcome);
+    }
+}
+
 fn key_event() -> KeyEvent {
     KeyEvent::new(
         KeyState::Down,
@@ -47,7 +191,7 @@ fn focus_listener_capture_dies_with_its_manager() {
         assert!(new.is_none(), "focus listener");
     }));
     expect_failure(|| {
-        node.request_focus();
+        let _ = node.request_focus();
     });
     drop((attachment, node, manager));
     assert!(
@@ -64,7 +208,7 @@ fn global_key_handler_capture_dies_with_its_manager() {
         panic!("global key handler");
     }));
     expect_failure(|| {
-        manager.dispatch_key_event(&key_event());
+        let _ = manager.dispatch_key_event(&key_event()).is_handled();
     });
     drop(manager);
     assert!(probe.upgrade().is_none(), "the handler capture is released");
@@ -78,7 +222,7 @@ fn node_key_handler_capture_dies_with_its_node() {
         panic!("node key handler");
     }));
     expect_failure(|| {
-        node.handle_key_event(&key_event());
+        let _ = node.handle_key_event(&key_event());
     });
     drop(node);
     assert!(probe.upgrade().is_none(), "the handler capture is released");
@@ -89,9 +233,9 @@ fn node_key_handler_capture_dies_with_its_node() {
 /// closed manager, is released with the caller.
 fn closing_manager_leaves_shared_callbacks_with_their_caller() {
     let (capture, probe) = capture();
-    let handler: Rc<dyn Fn(&KeyEvent) -> bool> = Rc::new(move |_| {
+    let handler: Rc<dyn Fn(&KeyEvent) -> KeyEventResult> = Rc::new(move |_| {
         let _ = &capture;
-        false
+        KeyEventResult::Ignored
     });
     let manager = FocusManager::new();
     manager.add_global_key_handler(Rc::clone(&handler));
@@ -235,17 +379,18 @@ fn assert_focus_notification_recovery(node_panics: bool, manager_panics: usize) 
     let log = Rc::new(RefCell::new(Vec::new()));
     let fail = Rc::new(Cell::new(true));
 
+    let mut subscriptions = Vec::new();
     for (label, panics) in [("node first", node_panics), ("node later", false)] {
         let log = Rc::clone(&log);
         let fail = Rc::clone(&fail);
         let node_probe = Rc::downgrade(&node);
-        node.add_listener(Rc::new(move || {
+        subscriptions.push(node.subscribe(Rc::new(move || {
             let focused = node_probe.upgrade().expect("live node").has_primary_focus();
             log.borrow_mut().push((label, focused));
             if panics && fail.get() {
                 std::panic::panic_any("first node failure");
             }
-        }));
+        })));
     }
     for (index, label) in ["manager first", "manager second", "manager later"]
         .into_iter()
@@ -313,21 +458,27 @@ fn reentrant_listener_replacement_survives_a_failed_notification() {
     let node = FocusNode::with_debug_label("reentrant listener");
     let attachment = manager.root_scope().attach_node(&node).expect("attach");
     let log = Rc::new(RefCell::new(Vec::new()));
-    let listener_id = Rc::new(Cell::new(None));
+    let subscription = Rc::new(RefCell::new(None));
     let node_probe = Rc::downgrade(&node);
     let callback_log = Rc::clone(&log);
-    let callback_id = Rc::clone(&listener_id);
-    let id = node.add_listener(Rc::new(move || {
+    let callback_subscription = Rc::clone(&subscription);
+    let guard = node.subscribe(Rc::new(move || {
         callback_log.borrow_mut().push("reentrant");
         let node = node_probe.upgrade().expect("live node");
-        node.remove_listener(callback_id.get().expect("registered listener"));
+        let previous = callback_subscription
+            .borrow_mut()
+            .take()
+            .expect("registered listener");
+        drop(previous);
         let late_log = Rc::clone(&callback_log);
-        node.add_listener(Rc::new(move || late_log.borrow_mut().push("late")));
+        *callback_subscription.borrow_mut() =
+            Some(node.subscribe(Rc::new(move || late_log.borrow_mut().push("late"))));
         std::panic::panic_any("reentrant listener failure");
     }));
-    listener_id.set(Some(id));
+    *subscription.borrow_mut() = Some(guard);
     let stable_log = Rc::clone(&log);
-    node.add_listener(Rc::new(move || stable_log.borrow_mut().push("stable")));
+    let _stable_subscription =
+        node.subscribe(Rc::new(move || stable_log.borrow_mut().push("stable")));
     let edge_log = Rc::clone(&log);
     manager.add_listener(Rc::new(move |_, _| edge_log.borrow_mut().push("manager")));
 
@@ -487,9 +638,9 @@ fn assert_queued_diagnostic_recovery(earlier_failure: bool) {
         let Some((queued, attachment)) = queued_owner.borrow_mut().take() else {
             return;
         };
-        queued.request_focus();
-        last_probe.upgrade().expect("live last").request_focus();
-        attachment.detach();
+        let _ = queued.request_focus();
+        let _ = last_probe.upgrade().expect("live last").request_focus();
+        let _ = attachment.detach();
         if earlier_failure {
             std::panic::panic_any("earlier observer failure");
         }
@@ -586,7 +737,7 @@ fn assert_queued_retirement_recovery(earlier_failure: bool) {
             last_probe.upgrade().expect("live last").request_focus(),
             FocusRequestOutcome::Focused
         );
-        attachment.detach();
+        let _ = attachment.detach();
         drop((queued, attachment));
         if earlier_failure {
             std::panic::panic_any("earlier observer failure");
@@ -678,9 +829,9 @@ fn assert_queued_focus_recovery(from_node: bool, competing: bool) {
         std::panic::panic_any("first queued focus failure");
     });
     let first_id = nodes[0].id();
-    if from_node {
+    let _node_subscription = if from_node {
         let first_probe = Rc::downgrade(&nodes[0]);
-        nodes[0].add_listener(Rc::new(move || {
+        Some(nodes[0].subscribe(Rc::new(move || {
             if first_probe
                 .upgrade()
                 .expect("live first")
@@ -688,14 +839,15 @@ fn assert_queued_focus_recovery(from_node: bool, competing: bool) {
             {
                 queue_then_fail();
             }
-        }));
+        })))
     } else {
         manager.add_listener(Rc::new(move |_, new| {
             if new.as_ref().is_some_and(|node| node.id() == first_id) {
                 queue_then_fail();
             }
         }));
-    }
+        None
+    };
     let second_id = nodes[1].id();
     let later_failure = Rc::clone(&fail);
     manager.add_listener(Rc::new(move |_, new| {
@@ -742,6 +894,22 @@ fn assert_queued_focus_recovery(from_node: bool, competing: bool) {
 #[test]
 fn caught_callback_failures_leave_captures_with_their_owner() {
     let cases: &[(&str, fn())] = &[
+        (
+            "subscription ownership and independent listeners",
+            subscription_withdrawal_preserves_independent_listeners,
+        ),
+        (
+            "subscription retirement reentry",
+            subscription_retirement_can_reenter_the_same_node,
+        ),
+        (
+            "subscription failure preservation and recovery",
+            subscription_failure_preserves_unwind_and_allows_recovery,
+        ),
+        (
+            "key dispatch propagation outcomes",
+            key_dispatch_preserves_propagation_outcomes,
+        ),
         (
             "nested close preserves healthy captures after observer failure",
             nested_close_after_observer_failure_retains_healthy_captures,
@@ -870,7 +1038,7 @@ fn healthy_close_retires_children_before_their_parent() {
     }
     // Within one node: key handler, then listeners, then context.
     let recorder = DropRecorder("nested listener", Rc::clone(&log));
-    nested.add_listener(Rc::new(move || {
+    let _subscription = nested.subscribe(Rc::new(move || {
         let _ = &recorder;
     }));
     let recorder = DropRecorder("nested key handler", Rc::clone(&log));

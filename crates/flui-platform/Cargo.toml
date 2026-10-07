@@ -42,11 +42,9 @@ flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
 # Wasm-safe Instant for input timestamps (std re-export on native).
 web-time = { workspace = true }
 
-# UI Events - W3C compliant event types
-ui-events = { workspace = true }
 cursor-icon = { workspace = true }
-keyboard-types = "0.8"
-dpi = "0.1"
+# Native keyboard adapters are confined to Winit and Android.
+keyboard-types = { workspace = true, optional = true }
 
 # Windowing (for platform implementations)
 winit = { workspace = true, optional = true }
@@ -180,6 +178,8 @@ dispatch = "0.2"
 
 # Android platform
 [target.'cfg(target_os = "android")'.dependencies]
+ui-events = { workspace = true }
+keyboard-types = { workspace = true }
 android-activity = { version = "0.6", features = ["native-activity"] }
 jni.workspace = true
 
@@ -340,7 +340,7 @@ a11y = ["dep:accesskit_unix", "dep:accesskit_windows", "dep:accesskit_macos"]
 
 # winit fallback backend — primary on Linux until native Wayland/X11 lands
 # (roadmap Cross.P); optional on Windows/macOS.
-winit-backend = ["dep:winit", "dep:arboard", "dep:crossbeam-channel", "dep:ui-events-winit"]
+winit-backend = ["dep:winit", "dep:arboard", "dep:crossbeam-channel", "dep:ui-events-winit", "dep:keyboard-types"]
 
 # Web platform
 # Honest note (verified 2026-08-04): no-op selector — zero

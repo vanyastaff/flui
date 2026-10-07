@@ -50,7 +50,7 @@ Each needs the `testing` feature, which the dev-dependency enables.
 
 | Bench | Cases |
 |---|---|
-| `velocity_tracker_bench` | `VelocityTracker::estimate` with 20 and 3 samples and 4 repeated queries; `add_position`; `IosFlingVelocityTracker` and `ImpulseVelocityTracker` estimates; `OneEuroFilter2D::filter` |
+| `velocity_tracker_bench` | `VelocityTracker::estimate` with 20 and 3 samples and 4 repeated queries; `add_position`; selected Ios and Impulse estimates; `OneEuroFilter2D::filter` |
 | `gesture_arena_bench` | `add` into an empty and a busy (4-member) arena; `sweep` of one member; add + accept with a competitor; add + close + sweep |
 | `tap_detector_bench` | live tap sequences without callbacks and with primary/secondary callbacks; fresh fixtures keep setup and retirement outside measured invocation; `add_pointer` |
 | `pointer_resampler_bench` | `add_event` at 60 Hz and 240 Hz; `sample` draining 60 events; `add_event` at the 100-event cap |

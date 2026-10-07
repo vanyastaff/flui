@@ -79,7 +79,7 @@
 //! let attachment = manager.root_scope().attach_node(&node)?;
 //!
 //! // Request focus
-//! node.request_focus();
+//! let _ = node.request_focus();
 //!
 //! // Check focus
 //! if node.has_primary_focus() {
@@ -267,14 +267,14 @@ pub use recognizers::drag_variants::{
 pub use routing::{
     EventPropagation, FocusAttachment, FocusChangeCallback, FocusDetachOutcome, FocusManager,
     FocusNode, FocusNodeChangeCallback, FocusNodeRegistration, FocusRequestOutcome, FocusScopeNode,
-    FocusTraversalPolicy, FocusTreeError, GlobalPointerHandler, HitTestBehavior, HitTestEntry,
-    HitTestHandle, HitTestProbe, HitTestResult, HitTestSnapshot, InteractionDispatchError,
-    InteractionDispatchHandle, InteractionLane, KeyEventCallback, KeyEventHandler, KeyEventResult,
-    LocalPayloadTarget, NodeContext, PathClipTarget, PointerDispatch, PointerRouteHandler,
-    PointerRouter, PointerTarget, ReadingOrderPolicy, RectProvider, RenderId, ResolvedRouteToken,
-    ResolvedStep, RoutePanic, RouteResolution, RouteResolutionMiss, ScrollTarget, ShaderMaskTarget,
-    TransformGuard, TraversalEdgeBehavior, resolve_local_payload, resolve_path_clip_target,
-    resolve_shader_mask_target,
+    FocusSubscription, FocusTraversalPolicy, FocusTreeError, GlobalPointerHandler, HitTestBehavior,
+    HitTestEntry, HitTestHandle, HitTestProbe, HitTestResult, HitTestSnapshot,
+    InteractionDispatchError, InteractionDispatchHandle, InteractionLane, KeyEventHandler,
+    KeyEventResult, LocalPayloadTarget, NodeContext, PathClipTarget, PointerDispatch,
+    PointerRouteHandler, PointerRouter, PointerTarget, ReadingOrderPolicy, RectProvider, RenderId,
+    ResolvedRouteToken, ResolvedStep, RoutePanic, RouteResolution, RouteResolutionMiss,
+    ScrollTarget, ShaderMaskTarget, TransformGuard, TraversalDirection, TraversalEdgeBehavior,
+    resolve_local_payload, resolve_path_clip_target, resolve_shader_mask_target,
 };
 pub use settings::{
     DEFAULT_DOUBLE_TAP_SLOP, DEFAULT_DOUBLE_TAP_TIMEOUT, DEFAULT_LONG_PRESS_TIMEOUT,

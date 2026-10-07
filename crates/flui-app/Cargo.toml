@@ -143,9 +143,6 @@ flui-platform = { path = "../flui-platform", version = "=0.2.0-dev", features = 
 flui-engine = { path = "../flui-engine", version = "=0.2.0-dev", features = ["vulkan"] }
 
 [dev-dependencies]
-# The production backend bridge still accepts ui-events until native producers
-# migrate. This fixture drives that existing bridge into the real widget pipeline.
-ui-events = { workspace = true }
 # `log_capture::disarm_interest_cache`, which this crate's tracing-capturing
 # tests call so a sibling test cannot poison their callsites' cached interest.
 # A dev-only edge, and a dev-only CYCLE: flui-testing depends on this crate
