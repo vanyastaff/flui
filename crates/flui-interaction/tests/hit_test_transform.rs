@@ -71,6 +71,34 @@ fn determinant_overflow_skips_the_callback() {
     ]));
 }
 
+fn refused_offset(offset: Offset) {
+    let called = Cell::new(false);
+    let mut result = HitTestResult::new();
+    result.with_paint_offset(Offset::new(10.0, 20.0), |result| {
+        // Refusal is observed through the subtree, not the scope's return
+        // value, so the contract holds whatever shape that value takes.
+        result.with_paint_offset(offset, |result| {
+            called.set(true);
+            result.add(HitTestEntry::new(RenderId::new(1)));
+        });
+        assert!(!called.get(), "refused subtree must not execute");
+        assert!(
+            result.is_empty(),
+            "refused subtree must not publish entries"
+        );
+        result.add(HitTestEntry::new(RenderId::new(2)));
+        assert_point(local_point(result, 0, (15.0, 27.0)), (5.0, 7.0));
+    });
+}
+
+fn nan_paint_offset_skips_the_callback() {
+    refused_offset(Offset::new(f64::NAN, 0.0));
+}
+
+fn infinite_paint_offset_skips_the_callback() {
+    refused_offset(Offset::new(0.0, f64::NEG_INFINITY));
+}
+
 fn tiny_invertible_paint_transform_maps_local_coordinates() {
     let mut result = HitTestResult::new();
     let hit = result.with_paint_transform(Matrix4::scaling(1e-9, 1e-9, 1.0), |result| {
@@ -188,4 +216,24 @@ fn hit_test_transform_admission() {
         failures.is_empty(),
         "hit transform cases failed: {failures:?}"
     );
+}
+
+#[test]
+#[ignore = "contract: a non-finite paint offset refuses its subtree like a non-invertible \
+            paint transform"]
+fn hit_test_offset_admission() {
+    let mut failures = Vec::new();
+    for (name, case) in [
+        ("NaN offset", nan_paint_offset_skips_the_callback as fn()),
+        (
+            "infinite offset",
+            infinite_paint_offset_skips_the_callback as fn(),
+        ),
+    ] {
+        if let Err(payload) = catch_unwind(case) {
+            flui_foundation::panic::retain_opaque_payload(payload);
+            failures.push(name);
+        }
+    }
+    assert!(failures.is_empty(), "hit offset cases failed: {failures:?}");
 }
