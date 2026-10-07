@@ -206,6 +206,7 @@ fn focus_actions_and_shortcuts() {
         "focus_actions_and_shortcuts",
         &[
             ("focus::traversal_groups_order_blocks_without_creating_focus_scopes", crate::focus::traversal_groups_order_blocks_without_creating_focus_scopes as fn()),
+            ("focus::nested_scope_edges_visit_the_containing_group_and_reuse_policy_order", crate::focus::nested_scope_edges_visit_the_containing_group_and_reuse_policy_order as fn()),
             ("focus::typed_focus_overrides_fall_back_after_target_invalidation", crate::focus::typed_focus_overrides_fall_back_after_target_invalidation as fn()),
             ("focus::arrow_traversal_prefers_the_beam_and_respects_group_edges", crate::focus::arrow_traversal_prefers_the_beam_and_respects_group_edges as fn()),
             ("focus::widget_scope_edge_configuration_reaches_the_tab_path", crate::focus::widget_scope_edge_configuration_reaches_the_tab_path as fn()),

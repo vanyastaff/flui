@@ -73,6 +73,61 @@ pub(crate) fn traversal_groups_order_blocks_without_creating_focus_scopes() {
     }
 }
 
+pub(crate) fn nested_scope_edges_visit_the_containing_group_and_reuse_policy_order() {
+    use flui_interaction::{
+        FocusTraversalPolicy, KeyEventResult, ReadingOrderPolicy, TraversalEdgeBehavior,
+    };
+    use flui_painting::typography::TextDirection;
+    use flui_widgets::interaction::FocusTraversalGroup;
+    use std::cell::Cell;
+    #[derive(Debug)]
+    struct CountingPolicy(Rc<Cell<usize>>);
+    impl FocusTraversalPolicy for CountingPolicy {
+        fn order(&self, nodes: &mut [Rc<FocusNode>], direction: TextDirection) {
+            self.0.set(self.0.get() + 1);
+            ReadingOrderPolicy.order(nodes, direction);
+        }
+    }
+    for edge in [
+        TraversalEdgeBehavior::Stop,
+        TraversalEdgeBehavior::ParentScope,
+    ] {
+        let source = FocusNode::new();
+        let outside = FocusNode::new();
+        let calls = Rc::new(Cell::new(0));
+        let inner = FocusTraversalGroup::new(traversal_field(&source, 0.0, 0.0))
+            .policy(Rc::new(CountingPolicy(Rc::clone(&calls))))
+            .edge_behavior(TraversalEdgeBehavior::ParentScope);
+        let outer = FocusTraversalGroup::new(
+            FocusScope::new(inner).edge_behavior(TraversalEdgeBehavior::ParentScope),
+        )
+        .edge_behavior(edge);
+        let harness = mount(Stack::new(vec![
+            outer.into_view().boxed(),
+            traversal_field(&outside, 100.0, 0.0),
+        ]));
+        let manager = harness.focus_manager();
+        let _ = source.request_focus();
+        let result = manager.dispatch_key_event(&tab_event(false));
+        assert_eq!(
+            calls.get(),
+            1,
+            "parent retries reuse the inner group's in-flight policy order"
+        );
+        match edge {
+            TraversalEdgeBehavior::Stop => {
+                assert_eq!(result, KeyEventResult::SkipRemainingHandlers);
+                assert!(source.has_primary_focus());
+            }
+            TraversalEdgeBehavior::ParentScope => {
+                assert_eq!(result, KeyEventResult::Handled);
+                assert!(outside.has_primary_focus());
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
 pub(crate) fn typed_focus_overrides_fall_back_after_target_invalidation() {
     use flui_interaction::FocusTraversalOverrides;
     let nodes = [FocusNode::new(), FocusNode::new(), FocusNode::new()];
