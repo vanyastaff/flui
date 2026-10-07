@@ -13,6 +13,11 @@ use flui_interaction::{
     DragGestureRecognizer, DragPointerStrategy, DragStartDetails, DragUpdateDetails, GestureRecognizer,
     LongPressGestureRecognizer, TapGestureRecognizer, cancel_all,
 };
+use flui_interaction::recognizers::scale::{
+    ScaleEndDetails, ScaleGestureRecognizer, ScaleStartDetails, ScaleStartMode, ScaleUpdateDetails,
+};
+use flui_interaction::routing::{EventPropagation, PanZoomDispatch};
+use flui_interaction::{PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerInfo};
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_view::prelude::*;
 
@@ -30,6 +35,10 @@ type DoubleTapDownHandler = Rc<dyn Fn(&mut EventCx<'_>, DoubleTapDetails)>;
 type PanStartHandler = Rc<dyn Fn(&mut EventCx<'_>, DragStartDetails)>;
 type PanUpdateHandler = Rc<dyn Fn(&mut EventCx<'_>, DragUpdateDetails)>;
 type PanEndHandler = Rc<dyn Fn(&mut EventCx<'_>, DragEndDetails)>;
+type ScaleStartHandler = Rc<dyn Fn(&mut EventCx<'_>, ScaleStartDetails)>;
+type ScaleUpdateHandler = Rc<dyn Fn(&mut EventCx<'_>, ScaleUpdateDetails)>;
+type ScaleEndHandler = Rc<dyn Fn(&mut EventCx<'_>, ScaleEndDetails)>;
+type NativeScaleAdmission = Rc<dyn Fn(&PanZoomEvent) -> bool>;
 /// Horizontal-drag callbacks carry the same detail types as pan, but the
 /// underlying recognizer is axis-constrained ([`DragAxis::Horizontal`])
 /// rather than free — see [`GestureDetector`]'s docs on why this and
@@ -159,6 +168,12 @@ pub struct GestureDetector {
     on_pan_start: Option<PanStartHandler>,
     on_pan_update: Option<PanUpdateHandler>,
     on_pan_end: Option<PanEndHandler>,
+    on_scale_start: Option<ScaleStartHandler>,
+    on_scale_update: Option<ScaleUpdateHandler>,
+    on_scale_end: Option<ScaleEndHandler>,
+    on_scale_cancel: Option<GestureCallback>,
+    scale_start_mode: ScaleStartMode,
+    native_scale_admission: Option<NativeScaleAdmission>,
     on_horizontal_drag_down: Option<HorizontalDragDownHandler>,
     on_horizontal_drag_start: Option<HorizontalDragStartHandler>,
     on_horizontal_drag_update: Option<HorizontalDragUpdateHandler>,
@@ -181,6 +196,12 @@ impl Default for GestureDetector {
             on_pan_start: None,
             on_pan_update: None,
             on_pan_end: None,
+            on_scale_start: None,
+            on_scale_update: None,
+            on_scale_end: None,
+            on_scale_cancel: None,
+            scale_start_mode: ScaleStartMode::Scale,
+            native_scale_admission: None,
             on_horizontal_drag_down: None,
             on_horizontal_drag_start: None,
             on_horizontal_drag_update: None,
@@ -358,6 +379,63 @@ impl GestureDetector {
         self
     }
 
+    /// Called when a multi-contact or native trackpad scale begins.
+    #[must_use]
+    pub fn on_scale_start<F, R>(mut self, callback: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, ScaleStartDetails) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_scale_start = Some(value_callback(callback));
+        self
+    }
+
+    /// Called with the gesture's cumulative scale and incremental focal motion.
+    #[must_use]
+    pub fn on_scale_update<F, R>(mut self, callback: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, ScaleUpdateDetails) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_scale_update = Some(value_callback(callback));
+        self
+    }
+
+    /// Called when the scale ends, carrying its scalar and focal velocities.
+    #[must_use]
+    pub fn on_scale_end<F, R>(mut self, callback: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, ScaleEndDetails) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_scale_end = Some(value_callback(callback));
+        self
+    }
+
+    /// Called when an admitted scale is cancelled.
+    #[must_use]
+    pub fn on_scale_cancel<F, R>(mut self, callback: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_scale_cancel = Some(event_callback(callback));
+        self
+    }
+
+    pub(crate) fn scale_start_mode(mut self, mode: ScaleStartMode) -> Self {
+        self.scale_start_mode = mode;
+        self
+    }
+
+    pub(crate) fn native_scale_admission(
+        mut self,
+        admit: impl Fn(&PanZoomEvent) -> bool + 'static,
+    ) -> Self {
+        self.native_scale_admission = Some(Rc::new(admit));
+        self
+    }
+
     /// Called when a pointer that might begin a horizontal drag contacts the
     /// screen — before any movement threshold is met. Mutually exclusive with
     /// `on_pan_*` on one detector; see the type docs.
@@ -464,6 +542,121 @@ struct HorizontalDragCallbacks {
     cancel: Option<HorizontalDragCancelHandler>,
 }
 
+#[derive(Clone, Default)]
+struct ScaleCallbacks {
+    start: Option<ScaleStartHandler>,
+    update: Option<ScaleUpdateHandler>,
+    end: Option<ScaleEndHandler>,
+    cancel: Option<GestureCallback>,
+    native_admission: Option<NativeScaleAdmission>,
+}
+
+impl ScaleCallbacks {
+    fn is_active(&self) -> bool {
+        self.start.is_some() || self.update.is_some() || self.end.is_some() || self.cancel.is_some()
+    }
+}
+
+#[derive(Default)]
+struct NativeScaleRoute {
+    pending: Option<(PanZoomEvent, PanZoomEvent)>,
+    active: Option<PointerInfo>,
+}
+
+fn same_native_source(left: &PointerInfo, right: &PointerInfo) -> bool {
+    left.id == right.id && left.device == right.device
+}
+
+fn claim_native_scale(
+    recognizer: &ScaleGestureRecognizer,
+    gates: &RecognizerGates,
+    route: &RefCell<NativeScaleRoute>,
+    dispatch: PanZoomDispatch<'_>,
+) -> EventPropagation {
+    let event = dispatch.local;
+    match event.phase {
+        PanZoomPhase::Start => {
+            let mut route = route.borrow_mut();
+            if route.active.is_none() {
+                route.pending = Some((*dispatch.local, *dispatch.global));
+            }
+            EventPropagation::Continue
+        }
+        PanZoomPhase::Update(transform) => {
+            let active = route.borrow().active;
+            if let Some(active) = active {
+                if !same_native_source(&active, event.pointer()) {
+                    return EventPropagation::Continue;
+                }
+            } else {
+                if !gates.scale_active() || transform == PanZoomTransform::IDENTITY {
+                    return EventPropagation::Continue;
+                }
+                // Typed input is finite; adding cumulative motion can still overflow.
+                for event in [dispatch.local, dispatch.global] {
+                    let PanZoomPhase::Update(transform) = event.phase else {
+                        return EventPropagation::Continue;
+                    };
+                    let focal = event.position.get() + transform.pan();
+                    if !focal.x.is_finite() || !focal.y.is_finite() {
+                        return EventPropagation::Continue;
+                    }
+                }
+                let admission = gates.scale_slot.borrow().native_admission.clone();
+                if admission.is_some_and(|admit| !admit(event)) {
+                    return EventPropagation::Continue;
+                }
+                let pending = {
+                    let mut route = route.borrow_mut();
+                    let pending = route.pending.filter(|(local, _)| {
+                        same_native_source(local.pointer(), event.pointer())
+                            && local.time <= event.time
+                    });
+                    if pending.is_some() {
+                        route.pending = None;
+                        route.active = Some(*event.pointer());
+                    }
+                    pending
+                };
+                if let Some((local, global)) = pending {
+                    recognizer.handle_pan_zoom(PanZoomDispatch {
+                        local: &local,
+                        global: &global,
+                    });
+                }
+            }
+            if recognizer.handle_pan_zoom(dispatch) {
+                EventPropagation::Stop
+            } else {
+                EventPropagation::Continue
+            }
+        }
+        PanZoomPhase::End | PanZoomPhase::Cancelled => {
+            let active = {
+                let mut route = route.borrow_mut();
+                if route.pending.is_some_and(|(local, _)| {
+                    same_native_source(local.pointer(), event.pointer())
+                }) {
+                    route.pending = None;
+                }
+                let active = route
+                    .active
+                    .is_some_and(|active| same_native_source(&active, event.pointer()));
+                if active {
+                    route.active = None;
+                }
+                active
+            };
+            if active && recognizer.handle_pan_zoom(dispatch) {
+                EventPropagation::Stop
+            } else {
+                EventPropagation::Continue
+            }
+        }
+        _ => EventPropagation::Continue,
+    }
+}
+
 /// The recognizers, built once in [`GestureDetectorState::init_state`] against
 /// the presentation arena.
 ///
@@ -486,6 +679,7 @@ struct Recognizers {
     /// Horizontal-drag recognizer (axis-constrained) — mutually exclusive with
     /// `drag` on one detector, see [`GestureDetector`]'s conflict doc.
     horizontal_drag: Rc<DragGestureRecognizer>,
+    scale: Rc<ScaleGestureRecognizer>,
 }
 
 /// Persistent gesture state: the recognizers + their shared arena survive
@@ -550,6 +744,9 @@ pub struct GestureDetectorState {
     pan_slot: Rc<RefCell<PanCallbacks>>,
     /// The live horizontal-drag callbacks, refreshed each `build`.
     horizontal_drag_slot: Rc<RefCell<HorizontalDragCallbacks>>,
+    scale_slot: Rc<RefCell<ScaleCallbacks>>,
+    scale_start_mode: ScaleStartMode,
+    native_scale_route: Rc<RefCell<NativeScaleRoute>>,
     /// The recognizers + arena, built once in `init_state`. `None` only in the
     /// window between `create_state` and the first `init_state` — never observed
     /// by `build`, which always runs after `init_state`.
@@ -667,6 +864,15 @@ impl StatefulView for GestureDetector {
                 end: self.on_horizontal_drag_end.clone(),
                 cancel: self.on_horizontal_drag_cancel.clone(),
             })),
+            scale_slot: Rc::new(RefCell::new(ScaleCallbacks {
+                start: self.on_scale_start.clone(),
+                update: self.on_scale_update.clone(),
+                end: self.on_scale_end.clone(),
+                cancel: self.on_scale_cancel.clone(),
+                native_admission: self.native_scale_admission.clone(),
+            })),
+            scale_start_mode: self.scale_start_mode,
+            native_scale_route: Rc::new(RefCell::new(NativeScaleRoute::default())),
             recognizers: None,
             semantics_requests: Arc::new(SemanticsRequests::default()),
             rebuild: None,
@@ -851,6 +1057,45 @@ impl ViewState<GestureDetector> for GestureDetectorState {
                 .build()
         };
 
+        let scale = {
+            let start_slot = Rc::clone(&self.scale_slot);
+            let update_slot = Rc::clone(&self.scale_slot);
+            let end_slot = Rc::clone(&self.scale_slot);
+            let cancel_slot = Rc::clone(&self.scale_slot);
+            let start_writer = writer.clone();
+            let update_writer = writer.clone();
+            let end_writer = writer.clone();
+            let cancel_writer = writer.clone();
+            ScaleGestureRecognizer::builder(arena.clone())
+                .settings(settings.clone())
+                .start_mode(self.scale_start_mode)
+                .on_start(move |details| {
+                    let callback = start_slot.borrow().start.clone();
+                    if let Some(callback) = callback {
+                        start_writer.write(|cx| callback(cx, details));
+                    }
+                })
+                .on_update(move |details| {
+                    let callback = update_slot.borrow().update.clone();
+                    if let Some(callback) = callback {
+                        update_writer.write(|cx| callback(cx, details));
+                    }
+                })
+                .on_end(move |details| {
+                    let callback = end_slot.borrow().end.clone();
+                    if let Some(callback) = callback {
+                        end_writer.write(|cx| callback(cx, details));
+                    }
+                })
+                .on_cancel(move || {
+                    let callback = cancel_slot.borrow().cancel.clone();
+                    if let Some(callback) = callback {
+                        cancel_writer.write(|cx| callback(cx));
+                    }
+                })
+                .build()
+        };
+
         let (drag, horizontal_drag) = self.make_drag_recognizers(self.drag_pointer_strategy);
         *self.drag_attachment.target.borrow_mut() = Rc::downgrade(&drag);
         *self.horizontal_drag_attachment.target.borrow_mut() = Rc::downgrade(&horizontal_drag);
@@ -861,6 +1106,7 @@ impl ViewState<GestureDetector> for GestureDetectorState {
             double_tap,
             drag,
             horizontal_drag,
+            scale,
         });
     }
 
@@ -896,6 +1142,14 @@ impl ViewState<GestureDetector> for GestureDetectorState {
             slot.end.clone_from(&view.on_horizontal_drag_end);
             slot.cancel.clone_from(&view.on_horizontal_drag_cancel);
         }
+        let outgoing_scale_callbacks = self.scale_slot.replace(ScaleCallbacks {
+            start: view.on_scale_start.clone(),
+            update: view.on_scale_update.clone(),
+            end: view.on_scale_end.clone(),
+            cancel: view.on_scale_cancel.clone(),
+            native_admission: view.native_scale_admission.clone(),
+        });
+        drop(outgoing_scale_callbacks);
 
         self.drain_semantics_requests();
 
@@ -930,6 +1184,7 @@ impl ViewState<GestureDetector> for GestureDetectorState {
                 &*recognizers.double_tap,
                 &*recognizers.drag,
                 &*recognizers.horizontal_drag,
+                &*recognizers.scale,
             ]);
         }
     }
@@ -1060,6 +1315,7 @@ impl GestureDetectorState {
             double_tap_down_slot: Rc::clone(&self.double_tap_down_slot),
             pan_slot: Rc::clone(&self.pan_slot),
             horizontal_drag_slot: Rc::clone(&self.horizontal_drag_slot),
+            scale_slot: Rc::clone(&self.scale_slot),
         });
 
         // The whole `PointerDispatch` goes through, both spaces. Dispatch
@@ -1068,7 +1324,9 @@ impl GestureDetectorState {
         // this point except in the pair's global half — a recogniser handed
         // only the local event has no way to report a global position and can
         // only restate the local one under that name (issue #908).
+        
         Listener::new()
+            .contact_recognizers()
             .recognizer_when(&recognizers.tap, {
                 let gates = Rc::clone(&gates);
                 move |_| gates.tap_active()
@@ -1085,8 +1343,26 @@ impl GestureDetectorState {
                 let gates = Rc::clone(&gates);
                 move |_| gates.drag_active()
             })
-            .recognizer_when(&self.horizontal_drag_attachment, move |_| {
-                gates.horizontal_drag_active()
+            .recognizer_when(&self.horizontal_drag_attachment, {
+                let gates = Rc::clone(&gates);
+                move |_| gates.horizontal_drag_active()
+            })
+            .recognizer_when(&recognizers.scale, {
+                let gates = Rc::clone(&gates);
+                move |_| gates.scale_active()
+            })
+            .on_pointer_pan_zoom_claim({
+                let recognizer = Rc::downgrade(&recognizers.scale);
+                let route = Rc::clone(&self.native_scale_route);
+                move |dispatch| {
+                    if !gates.mounted.get() {
+                        return EventPropagation::Continue;
+                    }
+                    let Some(recognizer) = recognizer.upgrade() else {
+                        return EventPropagation::Continue;
+                    };
+                    claim_native_scale(&recognizer, &gates, &route, dispatch)
+                }
             })
     }
 }
@@ -1102,9 +1378,13 @@ struct RecognizerGates {
     double_tap_down_slot: Rc<RefCell<Option<DoubleTapDownHandler>>>,
     pan_slot: Rc<RefCell<PanCallbacks>>,
     horizontal_drag_slot: Rc<RefCell<HorizontalDragCallbacks>>,
+    scale_slot: Rc<RefCell<ScaleCallbacks>>,
 }
 
 impl RecognizerGates {
+    fn scale_active(&self) -> bool {
+        self.mounted.get() && self.scale_slot.borrow().is_active()
+    }
     /// The tap recognizer participates iff a primary- OR secondary-tap callback
     /// is currently set.
     fn tap_active(&self) -> bool {
