@@ -1,0 +1,12 @@
+error[E0593]: closure is expected to take 1 argument, but it takes 0 arguments
+ --> tests/compile_fail/builder_stays_on_its_thread.rs:8:60
+  |
+8 |         TapGestureRecognizer::builder(GestureArena::new()).on_tap(move || taps.set(taps.get() + 1));
+  |                                                            ^^^^^^ ------- takes 0 arguments
+  |                                                            |
+  |                                                            expected closure that takes 1 argument
+  |
+help: consider changing the closure to take and ignore the expected argument
+  |
+8 |         TapGestureRecognizer::builder(GestureArena::new()).on_tap(move |_| taps.set(taps.get() + 1));
+  |                                                                         +
