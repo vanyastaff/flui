@@ -154,6 +154,18 @@ impl CallbackSequence {
     }
 }
 
+/// Resume the first captured panic, or retain it when the thread was already
+/// unwinding before the containment began.
+pub(crate) fn finish_containment(first: Option<RoutePanic>, incoming_failure: bool) {
+    if let Some(panic) = first {
+        if incoming_failure {
+            panic.retain();
+        } else {
+            panic.resume();
+        }
+    }
+}
+
 /// Run `before` (the recognizer's own state commit), then the user callback.
 ///
 /// The callback runs only when `before` completed. Its capture is retired
