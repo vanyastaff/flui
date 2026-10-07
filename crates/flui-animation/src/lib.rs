@@ -12,9 +12,8 @@
 //! - [`CurvedAnimation`] - Applies easing curves to animations
 //! - [`Curve`] - Easing curve trait with predefined curves in [`Curves`]
 //!   (full Penner catalog, M3 [`ThreePointCubic`] emphasized set, [`Split`])
-//! - [`Tween`] - Maps animation values to any type T;
-//!   [`OklabColorTween`] interpolates colors perceptually (Oklab) instead of
-//!   componentwise sRGB
+//! - [`Tween`] - Maps animation values to any type T; [`ColorTween`]
+//!   interpolates colors in Oklab with premultiplied alpha
 //! - [`smoothing`] - Frame-rate-independent followers:
 //!   [`exp_decay`]/[`Smoothed`] (half-life exponential decay) and
 //!   [`SmoothDamp`] (critically damped, max-speed-clamped)
@@ -154,8 +153,7 @@ pub use status::{AnimationBehavior, AnimationStatus};
 pub use tween_types::{
     AlignmentTween, Animatable, BorderRadiusTween, ChainedTween, ColorTween, ConstantTween,
     CurveExt, CurveTween, EdgeInsetsTween, FloatTween, IntTween, Matrix4Tween, OffsetTween,
-    OklabColorTween, RectTween, ReverseTween, SizeTween, StepTween, Tween, TweenSequence,
-    TweenSequenceItem,
+    RectTween, ReverseTween, SizeTween, StepTween, Tween, TweenSequence, TweenSequenceItem,
 };
 
 // Re-export scheduler types for convenience.

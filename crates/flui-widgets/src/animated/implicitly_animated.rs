@@ -283,26 +283,31 @@ impl<T: Lerp + Clone + PartialEq> OptTween<T> {
         self.tween.as_ref().map(|tween| tween.transform(t))
     }
 
-    /// Re-anchor toward `new_target`, evaluating the current value at `t` for a
-    /// Some→Some change. Returns `true` when a continuous (animatable) change
-    /// occurred — the owner restarts the shared controller if any property does.
-    pub(crate) fn retarget(&mut self, new_target: Option<T>, t: f64) -> bool {
+    /// Whether moving to `new_target` is a continuous (animatable) Some→Some change;
+    /// the owner restarts the shared controller if any property's is.
+    pub(crate) fn animates_toward(&self, new_target: Option<&T>) -> bool {
+        matches!((new_target, &self.tween), (Some(target), Some(existing)) if existing.end != *target)
+    }
+
+    /// Move toward `new_target`. When the owner is `restarting` the shared
+    /// controller, every Some→Some tween — changed or not — re-anchors at its value
+    /// for the current progress `t`, so an unchanged property continues from where
+    /// it is instead of replaying its old run from the start.
+    pub(crate) fn retarget(&mut self, new_target: Option<T>, t: f64, restarting: bool) {
         match (new_target, self.tween.as_ref()) {
-            (Some(target), Some(existing)) if existing.end != target => {
-                let from = existing.transform(t);
-                self.tween = Some(Tween::new(from, target));
-                true
+            (Some(target), Some(existing)) => {
+                if restarting {
+                    let from = existing.transform(t);
+                    self.tween = Some(Tween::new(from, target));
+                }
             }
-            (Some(_), Some(_)) => false, // unchanged target
             (Some(target), None) => {
                 // Appearing: snap in (no "from" to animate from).
                 self.tween = Some(Tween::new(target.clone(), target));
-                false
             }
             (None, _) => {
                 // Disappearing: drop the tween, snap out.
                 self.tween = None;
-                false
             }
         }
     }
