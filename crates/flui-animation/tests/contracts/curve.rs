@@ -6,10 +6,6 @@ use flui_animation::{
     ArcCurve, BounceInCurve, Cubic, Curve, CurveError, Curves, ElasticInCurve, ElasticInOutCurve,
     ElasticOutCurve, Interval, JumpAt, Linear, Split, Steps, ThreePointCubic,
 };
-use flui_animation::{
-    ArcCurve, BounceInCurve, Cubic, Curve, CurveError, Curves, ElasticInCurve, ElasticInOutCurve,
-    ElasticOutCurve, Interval, Linear, Split, ThreePointCubic,
-};
 use proptest::prelude::*;
 
 /// Whether a catalog curve promises to never decrease.
@@ -1186,42 +1182,5 @@ fn steps_follow_css_easing() {
         ("CSS values", css_steps_values),
         ("curve contract", steps_keep_the_curve_contract),
         ("invalid counts", steps_reject_invalid_counts),
-    ]);
-}
-
-// ---- slope ------------------------------------------------------------------
-
-/// `t²`, whose derivative `2t` is the analytic reference.
-struct Square;
-
-impl Curve for Square {
-    fn transform(&self, t: f64) -> f64 {
-        t * t
-    }
-}
-
-fn slope_matches_the_derivative() {
-    for (t, expected) in [(0.0, 0.0), (0.25, 0.5), (0.5, 1.0), (1.0, 2.0)] {
-        assert!((Square.slope(t) - expected).abs() < 1e-9, "t² at {t}");
-    }
-    for t in [0.0, 0.3, 1.0] {
-        assert!(
-            (Curves::Linear.slope(t) - 1.0).abs() < 1e-9,
-            "linear at {t}"
-        );
-    }
-}
-
-fn slope_outside_and_nan() {
-    assert!((Square.slope(2.0) - 2.0).abs() < 1e-9, "clamped to the end");
-    assert_eq!(Square.slope(f64::NAN), 0.0);
-    assert_eq!(Steps::new(1, JumpAt::End).slope(f64::NAN), 0.0);
-}
-
-#[test]
-fn curve_slope_is_the_derivative() {
-    crate::run_table(&[
-        ("derivative", slope_matches_the_derivative),
-        ("outside and NaN", slope_outside_and_nan),
     ]);
 }

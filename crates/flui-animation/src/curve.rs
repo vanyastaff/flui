@@ -50,39 +50,6 @@ pub trait Curve {
     /// policy in the trait documentation.
     fn transform(&self, t: f64) -> f64;
 
-    /// Returns `d transform / dt` at `t`, clamped into `[0, 1]`.
-    ///
-    /// The provided implementation is a second-order finite difference with
-    /// step `1e-4` (central inside the interval, one-sided at the ends), so
-    /// it is exact for curves up to quadratic and within `O(1e-8 · |c'''|)`
-    /// otherwise. A non-finite estimate (NaN `t`, a step, a vertical
-    /// tangent) is reported as `0.0`, never as NaN or infinity.
-    ///
-    /// Keyframe tracks read it to match a cubic segment's velocity to a
-    /// neighbouring curved segment.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_animation::{Curve, Curves};
-    ///
-    /// assert!((Curves::Linear.slope(0.3) - 1.0).abs() < 1e-9);
-    /// assert_eq!(Curves::Linear.slope(f64::NAN), 0.0);
-    /// ```
-    fn slope(&self, t: f64) -> f64 {
-        const H: f64 = 1e-4;
-        let t = t.clamp(0.0, 1.0);
-        let f = |x: f64| self.transform(x);
-        let estimate = if t < H {
-            (-3.0 * f(t) + 4.0 * f(t + H) - f(t + 2.0 * H)) / (2.0 * H)
-        } else if t > 1.0 - H {
-            (3.0 * f(t) - 4.0 * f(t - H) + f(t - 2.0 * H)) / (2.0 * H)
-        } else {
-            (f(t + H) - f(t - H)) / (2.0 * H)
-        };
-        if estimate.is_finite() { estimate } else { 0.0 }
-    }
-
     /// Returns a new curve that is the flipped version of this one.
     ///
     /// Flipping rotates the curve 180°: `transform(t)` becomes
@@ -111,6 +78,9 @@ pub trait Curve {
     /// Its error is about `h²·|f'''|`; a non-finite difference reports 0.
     /// [`Linear`], [`Cubic`], [`Interval`], [`FlippedCurve`] and
     /// [`ArcCurve`] override it exactly.
+    ///
+    /// Keyframe tracks read it to match a cubic segment's velocity to a
+    /// neighbouring curved segment.
     ///
     /// # Examples
     ///

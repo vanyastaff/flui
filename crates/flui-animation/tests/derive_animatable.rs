@@ -9,9 +9,6 @@
 
 use flui_animation::{Keyframes, Lerp, Linear, TwoWayConverter};
 
-#[path = "contracts/keyframes.rs"]
-mod keyframes;
-
 #[derive(Clone, TwoWayConverter)]
 struct Translation {
     x: f64,
@@ -63,7 +60,7 @@ fn derived_type_is_a_keyframe_value() {
 
 #[test]
 fn two_way_converter_derive_contract() {
-    run_table(&[
+    crate::run_table(&[
         ("vector round trip", named_struct_round_trips_through_vector),
         ("componentwise lerp", derived_lerp_is_componentwise),
         ("keyframe value", derived_type_is_a_keyframe_value),
