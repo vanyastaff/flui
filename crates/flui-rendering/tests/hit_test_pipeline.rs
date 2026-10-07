@@ -125,6 +125,10 @@ pub(crate) fn perspective_transform_refuses_hidden_and_degenerate_planes() {
             1.0, 0.0, 0.0, -0.5, 0.0, 1.0, 0.0, 0.0,
             0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
         ]), Point::new(-2.0, 3.0)),
+        ("near horizon", Matrix4::from([
+            1.0, 0.0, 0.0, -0.5, 0.0, 1.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+        ]), Point::new(-2.0 + f64::EPSILON, 3.0)),
         ("edge-on plane", Matrix4::from([
             0.0, 0.0, -1.0, 0.0, 0.0, 1.0, 0.0, 0.0,
             1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0,
