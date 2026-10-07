@@ -349,13 +349,10 @@ fn task_retirement_disarms_sibling_wakers() {
         std::future::pending::<()>().await;
     }));
     let second = driver
-        .spawn_local_eager(probe(
-            Outcome::Pending,
-            0,
-            &Arc::new(AtomicUsize::new(0)),
-            &observed,
-            None,
-        ))
+        .spawn_local_eager(Box::pin(std::future::poll_fn(move |cx| {
+            *observed.lock().expect("observed waker") = Some(cx.waker().clone());
+            Poll::Pending
+        })))
         .expect("pending sibling");
     frame.poll_ready();
     let wakes = Arc::new(AtomicUsize::new(0));
