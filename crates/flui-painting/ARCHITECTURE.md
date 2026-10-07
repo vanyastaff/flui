@@ -1012,11 +1012,16 @@ between lists of different lengths. Arithmetic preserves representable results
 when endpoint subtraction overflows, and refuses non-finite output.
 `BoxDecoration::lerp` forwards the raw fraction for paired gradient geometry;
 its other fields keep their bounded interpolation and exact endpoint behavior.
+If extrapolation is unrepresentable, the infallible decoration producer falls
+back to bounded gradient interpolation. Radial interpolation refuses coincident
+nonzero circles, which the renderer cannot represent; negative radius overflow
+still reaches the finite zero lower bound.
 The public `value_contract` rows `gradient_geometry_preserves_overshoot`,
 `decoration_gradient_geometry_preserves_overshoot`,
 `gradient_geometry_rejects_invalid_inputs_before_equal_shortcuts`,
 `gradient_geometry_checks_intermediate_and_output_overflow` and
-`gradient_domains_keep_zero_radii_and_signed_angles` pin these boundaries.
+`gradient_domains_keep_zero_radii_and_signed_angles` and
+`radial_overshoot_refuses_coincident_nonzero_circles` pin these boundaries.
 
 ### 23. Text styles reach Parley's spacing and OpenType setting properties
 

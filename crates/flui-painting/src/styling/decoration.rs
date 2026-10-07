@@ -343,7 +343,8 @@ where
             (None, None) => None,
         };
         let gradient = match (&a.gradient, &b.gradient) {
-            (Some(a_grad), Some(b_grad)) => Gradient::lerp(a_grad, b_grad, gradient_t),
+            (Some(a_grad), Some(b_grad)) => Gradient::lerp(a_grad, b_grad, gradient_t)
+                .or_else(|| Gradient::lerp(a_grad, b_grad, t)),
             (Some(gradient), None) => Some(scale_gradient(gradient, fade_a)),
             (None, Some(gradient)) => Some(scale_gradient(gradient, fade_b)),
             (None, None) => None,

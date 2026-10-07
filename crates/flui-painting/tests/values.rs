@@ -168,7 +168,23 @@ pub(crate) fn gradient_geometry_checks_intermediate_and_output_overflow() {
         panic!("linear interpolation must remain linear");
     };
     assert_eq!(midpoint.begin.x, 0.0);
-    assert!(Gradient::lerp(&Gradient::Linear(a), &Gradient::Linear(b), 2.0).is_none());
+    assert!(
+        Gradient::lerp(
+            &Gradient::Linear(a.clone()),
+            &Gradient::Linear(b.clone()),
+            2.0
+        )
+        .is_none()
+    );
+    let mixed = BoxDecoration::<f64>::lerp(
+        &BoxDecoration::with_gradient(Gradient::Linear(a.clone())),
+        &BoxDecoration::with_gradient(Gradient::Linear(b.clone())),
+        2.0,
+    );
+    assert_eq!(
+        mixed.gradient,
+        Gradient::lerp(&Gradient::Linear(a), &Gradient::Linear(b), 1.0)
+    );
     let healthy = Gradient::Linear(LinearGradient::horizontal(vec![Color::RED, Color::BLUE]));
     assert!(Gradient::lerp(&healthy, &healthy, 0.5).is_some());
 }
@@ -183,6 +199,12 @@ pub(crate) fn gradient_domains_keep_zero_radii_and_signed_angles() {
     let mixed = RadialGradient::lerp(&a, &b, 2.0).expect("finite extrapolated radius");
     assert_eq!(mixed.radius, 0.0);
     assert_eq!(mixed.focal_radius, Some(0.0));
+    a.radius = 2.0;
+    a.focal_radius = Some(2.0);
+    let mixed = RadialGradient::lerp(&a, &b, f64::MAX)
+        .expect("negative radius overflow has the finite zero lower bound");
+    assert_eq!(mixed.radius, 0.0);
+    assert_eq!(mixed.focal_radius, Some(0.0));
 
     let mut a = SweepGradient::centered(vec![Color::RED, Color::BLUE]);
     a.start_angle = 0.25;
@@ -192,6 +214,25 @@ pub(crate) fn gradient_domains_keep_zero_radii_and_signed_angles() {
     b.end_angle = 2.25;
     let mixed = SweepGradient::lerp(&a, &b, -0.5).expect("finite signed angles");
     assert_eq!((mixed.start_angle, mixed.end_angle), (-0.25, 0.75));
+}
+
+pub(crate) fn radial_overshoot_refuses_coincident_nonzero_circles() {
+    let mut a = RadialGradient::circular(vec![Color::RED, Color::BLUE]);
+    a.radius = 1.0;
+    a.focal_radius = Some(0.0);
+    let mut b = a.clone();
+    b.radius = 2.0;
+    b.focal_radius = Some(1.5);
+    assert!(RadialGradient::lerp(&a, &b, 2.0).is_none());
+    let mixed = BoxDecoration::<f64>::lerp(
+        &BoxDecoration::with_gradient(Gradient::Radial(a.clone())),
+        &BoxDecoration::with_gradient(Gradient::Radial(b.clone())),
+        2.0,
+    );
+    assert_eq!(
+        mixed.gradient,
+        Gradient::lerp(&Gradient::Radial(a), &Gradient::Radial(b), 1.0)
+    );
 }
 
 fn healthy_gradient_like(gradient: &Gradient) -> Gradient {

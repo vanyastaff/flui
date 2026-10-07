@@ -156,6 +156,10 @@ fn value_contract() {
         "value",
         &[
             (
+                "radial_overshoot_refuses_coincident_nonzero_circles",
+                values::radial_overshoot_refuses_coincident_nonzero_circles,
+            ),
+            (
                 "gradient_geometry_rejects_invalid_inputs_before_equal_shortcuts",
                 values::gradient_geometry_rejects_invalid_inputs_before_equal_shortcuts,
             ),

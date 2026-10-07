@@ -349,7 +349,7 @@ impl RadialGradient {
             return Some(a.clone());
         }
         let center = lerp_alignment(a.center, b.center, t)?;
-        let radius = lerp_finite(a.radius, b.radius, t)?.max(0.0);
+        let radius = lerp_radius(a.radius, b.radius, t)?;
         let (colors, stops) = interpolate_colors_and_stops(
             (&a.colors, a.stops.as_deref()),
             (&b.colors, b.stops.as_deref()),
@@ -364,8 +364,14 @@ impl RadialGradient {
         };
         let focal_radius = match (a.focal_radius, b.focal_radius) {
             (None, None) => None,
-            (a_r, b_r) => Some(lerp_finite(a_r.unwrap_or(0.0), b_r.unwrap_or(0.0), t)?.max(0.0)),
+            (a_r, b_r) => Some(lerp_radius(a_r.unwrap_or(0.0), b_r.unwrap_or(0.0), t)?),
         };
+        if focal.unwrap_or(center) == center
+            && focal_radius.unwrap_or(0.0) == radius
+            && radius != 0.0
+        {
+            return None;
+        }
         Some(Self {
             center,
             radius,
@@ -482,6 +488,13 @@ fn valid_alignment(value: Alignment) -> bool {
 
 fn valid_radius(value: f64) -> bool {
     value.is_finite() && value >= 0.0
+}
+
+fn lerp_radius(a: f64, b: f64, t: f64) -> Option<f64> {
+    // Admitted radii are nonnegative, so subtraction cannot overflow.
+    // Clamp negative infinity before checking the published radius.
+    let value = (b - a).mul_add(t, a).max(0.0);
+    value.is_finite().then_some(value)
 }
 
 fn lerp_alignment(a: Alignment, b: Alignment, t: f64) -> Option<Alignment> {
