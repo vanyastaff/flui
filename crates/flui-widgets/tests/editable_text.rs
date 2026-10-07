@@ -843,6 +843,209 @@ pub(crate) fn a_tap_places_the_caret_where_it_landed() {
     assert!(!controller.has_selection(), "a tap collapses");
 }
 
+/// A pointer-down on a composing field and a paste into one commit the
+/// composition before they act, keeping its text, through the window's
+/// input-method host (ADR-0142 item 4): the caret lands where the tap did,
+/// and the clipboard's text lands after the committed text.
+///
+/// Red-checks: drop the commit from the pointer-down handler (the tap moves
+/// the caret inside a composition that is still open), or from the paste
+/// action (a paste is refused while composing).
+pub(crate) fn a_pointer_down_and_a_paste_commit_the_composition_first() {
+    use flui_platform_api::Clipboard as _;
+    use flui_testing::StoreHostCall;
+
+    fn composing(text: &str) -> (crate::common::harness::Harness, TextEditingController) {
+        let controller = TextEditingController::with_text(text);
+        let node = FocusNode::with_debug_label("composing field");
+        let mut harness = crate::common::harness::mount_with_ime(EditableText::new(
+            controller.clone(),
+            Rc::clone(&node),
+        ));
+        node.request_focus();
+        harness.tick();
+        harness.dispatch_ime(&flui_platform_api::ImeEvent::Preedit {
+            text: "東京".to_owned(),
+            cursor: Some(("東京".len(), "東京".len())),
+        });
+        assert!(controller.is_composing(), "precondition: composing");
+        (harness, controller)
+    }
+    let committed = |harness: &crate::common::harness::Harness| {
+        harness
+            .store_host_calls()
+            .contains(&StoreHostCall::CompleteComposition)
+    };
+
+    let (harness, controller) = composing("ab");
+    harness.dispatch_pointer_down(1.0, 5.0);
+    assert!(committed(&harness), "pointer: the host is asked first");
+    assert!(
+        !controller.is_composing(),
+        "pointer: the composition is committed"
+    );
+    assert_eq!(controller.text(), "ab東京", "pointer: keeping its text");
+    assert_eq!(
+        controller.caret_byte_offset(),
+        0,
+        "pointer: then the caret moves"
+    );
+
+    let (harness, controller) = composing("ab");
+    harness.clipboard().write_text("!".to_owned());
+    assert!(
+        harness.focus_manager().dispatch_key_event(
+            &flui_interaction::testing::input::KeyEventBuilder::new(
+                flui_interaction::events::Code::KeyV
+            )
+            .with_key(Key::Character("v".to_owned()))
+            .with_state(KeyState::Down)
+            .with_modifiers(if cfg!(any(target_os = "macos", target_os = "ios")) {
+                flui_interaction::events::Modifiers::META
+            } else {
+                flui_interaction::events::Modifiers::CONTROL
+            })
+            .build()
+        ),
+        "paste: the chord is consumed while composing"
+    );
+    assert!(committed(&harness), "paste: the host is asked first");
+    assert!(
+        !controller.is_composing(),
+        "paste: the composition is committed"
+    );
+    assert_eq!(
+        controller.text(),
+        "ab東京!",
+        "paste: lands after the committed text"
+    );
+}
+
+/// Focus moving from a composing field to another commits the composition,
+/// whichever field mounted first, on a pull and on a push window: the
+/// composing controller keeps its text and no composing range, and typing
+/// into it works once it is focused again (ADR-0142 item 4). The focus
+/// manager tells the fields in mount order, so when the destination mounted
+/// first it attaches before the source hears of its blur, and the source's
+/// own completion then carries a stale token.
+///
+/// Red-check: drop the outgoing commit from `TextInputOwner::attach` — the
+/// earlier-destination rows keep the composing range and the typed
+/// character is refused.
+pub(crate) fn moving_focus_off_a_composing_field_commits_it_in_either_mount_order() {
+    use crate::common::harness::{Harness, mount_with_ime, mount_with_push_ime};
+
+    fn run(pull: bool, compose_in_later: bool) {
+        let controllers = [
+            TextEditingController::with_text("ab"),
+            TextEditingController::with_text("cd"),
+        ];
+        let nodes = [
+            FocusNode::with_debug_label("earlier field"),
+            FocusNode::with_debug_label("later field"),
+        ];
+        let fields = flui_widgets::Column::new(flui_widgets::column![
+            EditableText::new(controllers[0].clone(), Rc::clone(&nodes[0])),
+            EditableText::new(controllers[1].clone(), Rc::clone(&nodes[1])),
+        ]);
+        let mut harness: Harness = if pull {
+            mount_with_ime(fields)
+        } else {
+            mount_with_push_ime(fields)
+        };
+        let (source, destination) = if compose_in_later { (1, 0) } else { (0, 1) };
+        nodes[source].request_focus();
+        harness.tick();
+        harness.dispatch_ime(&flui_platform_api::ImeEvent::Preedit {
+            text: "東京".to_owned(),
+            cursor: Some(("東京".len(), "東京".len())),
+        });
+        let composing = &controllers[source];
+        assert!(composing.is_composing(), "precondition: composing");
+
+        nodes[destination].request_focus();
+        harness.tick();
+        assert!(
+            !composing.is_composing(),
+            "the blurred field's composition is committed"
+        );
+        let committed = format!("{}東京", if source == 0 { "ab" } else { "cd" });
+        assert_eq!(composing.text(), committed, "keeping its text");
+
+        nodes[source].request_focus();
+        harness.tick();
+        assert!(
+            harness
+                .focus_manager()
+                .dispatch_key_event(&character_key_event('x'))
+        );
+        harness.tick();
+        assert_eq!(
+            composing.text(),
+            format!("{committed}x"),
+            "typing into the refocused field works"
+        );
+    }
+
+    crate::common::cases::run_cases(
+        "focus off a composing field",
+        &[
+            ("pull, later to earlier", (|| run(true, true)) as fn()),
+            ("pull, earlier to later", || run(true, false)),
+            ("push, later to earlier", || run(false, true)),
+            ("push, earlier to later", || run(false, false)),
+        ],
+    );
+}
+
+/// A press reentered from the commit it runs (the commit's `on_changed`
+/// dispatching another press) finds the outer press's contact already
+/// recorded: the nested one is refused and moves nothing, and the outer one
+/// places the caret.
+///
+/// Red-check: record the contact after the commit (the nested press is
+/// admitted as a second contact and moves the caret to where it landed).
+pub(crate) fn a_press_reentered_by_its_commit_is_not_a_second_contact() {
+    use std::cell::{Cell, RefCell};
+    type Slot = Rc<RefCell<Option<&'static crate::common::harness::Harness>>>;
+    let controller = TextEditingController::with_text("ab");
+    let node = FocusNode::with_debug_label("reentered press");
+    let slot: Slot = Rc::default();
+    let seen = Rc::new(Cell::new(None));
+    let (nested, observed, read) = (Rc::clone(&slot), Rc::clone(&seen), controller.clone());
+    let mut harness = crate::common::harness::mount_with_ime(
+        EditableText::new(controller.clone(), Rc::clone(&node)).on_changed(move |_cx, _text| {
+            let harness = nested.borrow_mut().take();
+            if let Some(harness) = harness {
+                harness.dispatch_pointer_down(400.0, 5.0);
+                observed.set(Some(read.caret_byte_offset()));
+            }
+        }),
+    );
+    node.request_focus();
+    harness.tick();
+    harness.dispatch_ime(&flui_platform_api::ImeEvent::Preedit {
+        text: "東京".to_owned(),
+        cursor: Some(("東京".len(), "東京".len())),
+    });
+    assert!(controller.is_composing(), "precondition: composing");
+    let harness: &'static _ = Box::leak(Box::new(harness));
+    slot.replace(Some(harness));
+
+    harness.dispatch_pointer_down(1.0, 5.0);
+    let committed = "ab東京".len();
+    assert_eq!(
+        seen.get(),
+        Some(committed),
+        "the nested press moved nothing (the commit left the caret after the text)"
+    );
+    assert_eq!(
+        controller.caret_byte_offset(),
+        0,
+        "the outer press placed the caret where it landed"
+    );
+}
+
 /// A drag selects from where it started to where the pointer is, and the
 /// caret follows the pointer rather than the lower end.
 ///
@@ -1238,8 +1441,9 @@ pub(crate) mod text_store {
     }
 
     /// A field that gains focus is the store the window's input-method host
-    /// serves; losing focus takes it away (ADR-0135). The pull window is the
-    /// one Windows offers.
+    /// serves; losing focus ends its composition, then takes it away
+    /// (ADR-0135, ADR-0142 item 4). The pull window is the one Windows
+    /// offers.
     ///
     /// Red-check: have the presentation's text-input owner skip its host —
     /// the host hears nothing and serves no store.
@@ -1258,7 +1462,11 @@ pub(crate) mod text_store {
         harness.tick();
         assert_eq!(
             harness.store_host_calls(),
-            [StoreHostCall::Focus, StoreHostCall::Unfocus]
+            [
+                StoreHostCall::Focus,
+                StoreHostCall::CompleteComposition,
+                StoreHostCall::Unfocus
+            ]
         );
         assert!(harness.active_text_store().is_none());
     }

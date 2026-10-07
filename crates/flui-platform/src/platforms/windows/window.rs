@@ -167,6 +167,7 @@ impl WindowsWindow {
         frames: Rc<super::platform::FrameCount>,
         exit_policy: super::owner_control::ExitPolicyRequest,
         config: crate::config::WindowConfiguration,
+        apartment: Option<Rc<super::com_apartment::ComApartment>>,
     ) -> Result<Arc<Self>, OpenWindowError> {
         // Admission refuses identity exhaustion before creating an HWND
         // whose ownership has not yet transferred to a context and wrapper.
@@ -175,7 +176,7 @@ impl WindowsWindow {
             || Self::create_native(&options),
         );
         let (hwnd, requested, scale_factor) = created?;
-        Ok(Self::install_native(
+        Self::install_native(
             options,
             windows_map,
             handlers,
@@ -186,7 +187,8 @@ impl WindowsWindow {
             hwnd,
             requested,
             scale_factor,
-        ))
+            apartment,
+        )
     }
 
     /// Create the native window: the resource an admitted identity owns.
@@ -268,7 +270,8 @@ impl WindowsWindow {
         hwnd: HWND,
         requested: Size<i32>,
         scale_factor: f64,
-    ) -> Arc<Self> {
+        apartment: Option<Rc<super::com_apartment::ComApartment>>,
+    ) -> Result<Arc<Self>, OpenWindowError> {
         let (width, height) = (requested.width, requested.height);
         // SAFETY: `hwnd` is the valid handle `create_native` just returned
         // on this thread. `SetClassLongPtrW` and `apply_windows_features`
@@ -364,6 +367,7 @@ impl WindowsWindow {
                     crate::shared::visibility::win32_initial_visibility(created_style),
                 ),
                 pending_high_surrogate: std::cell::Cell::new(None),
+                text_services: std::cell::RefCell::new(None),
                 held_dead_keys: std::cell::RefCell::default(),
                 ledger: std::cell::RefCell::new(crate::shared::hwnd_affinity::ContextLedger::new()),
             });
@@ -381,6 +385,14 @@ impl WindowsWindow {
                 #[cfg(feature = "a11y")]
                 accessibility: Arc::new(super::accessibility::WindowsAccessibility::new(hwnd)),
             });
+            // The wrapper owns the window from here: a panic out of the
+            // activation (or anything after it) drops it, which destroys the
+            // window and retires its context.
+            if !Self::activate_text_services(hwnd, apartment) {
+                return Err(OpenWindowError::Backend {
+                    message: "the window was destroyed while its text services activated".into(),
+                });
+            }
 
             // Show window if requested
             if options.visible {
@@ -398,8 +410,55 @@ impl WindowsWindow {
                 window.state.lock().visible = true;
             }
 
-            window
+            Ok(window)
         }
+    }
+
+    /// Activate TSF for the window just installed, on its owner thread, and
+    /// hold the connection in its context (ADR-0135 §3): from here on the
+    /// window offers its text-store host. TSF's calls read the window's
+    /// context (its scale), so it is installed first. A failure leaves the
+    /// window without a host, and text input takes the `WM_CHAR` path, as
+    /// it does with no `apartment` (the platform's is reachable on its owner
+    /// thread only, where windows are opened).
+    ///
+    /// Returns whether the window is still alive: a message the activation
+    /// dispatched may have destroyed it, and the open then fails.
+    fn activate_text_services(
+        hwnd: HWND,
+        apartment: Option<Rc<super::com_apartment::ComApartment>>,
+    ) -> bool {
+        let Some(apartment) = apartment else {
+            tracing::warn!(
+                ?hwnd,
+                "no COM apartment for TSF; text input falls back to WM_CHAR"
+            );
+            return true;
+        };
+        #[cfg(test)]
+        if let Some(hook) = BEFORE_TSF_ACTIVATION.get() {
+            hook(hwnd);
+        }
+        match super::text_services::TextServices::activate(hwnd, apartment) {
+            Ok(services) => {
+                let installed = super::platform::with_window_context(hwnd, "text_services", |c| {
+                    c.text_services.replace(Some(Rc::clone(&services)))
+                });
+                if installed.is_none() {
+                    // The window is already gone (destroyed by a message
+                    // the activation dispatched): deactivate at once.
+                    super::text_services::TextServices::retire_with_window(services);
+                }
+            }
+            Err(error) => {
+                tracing::warn!(
+                    ?hwnd,
+                    ?error,
+                    "TSF did not activate for this window; text input falls back to WM_CHAR"
+                );
+            }
+        }
+        super::platform::with_window_context(hwnd, "text_services", |_| ()).is_some()
     }
 
     /// Apply Windows 11 features automatically
@@ -813,15 +872,23 @@ impl crate::traits::HostWindow for WindowsWindow {
     /// HWND belongs to the thread that created it, and its text services
     /// live in its `WindowContext` on that thread. So the host is read
     /// through `with_window_context`, which refuses any other thread
-    /// (`shared::hwnd_affinity`), and a caller on one gets `None`. The
-    /// context does not hold the text services yet (ADR-0135 §3), so the
-    /// creating thread gets `None` too until it does.
+    /// (`shared::hwnd_affinity`), and a caller on one gets `None`. On the
+    /// creating thread it is the window's TSF connection (ADR-0135 §3):
+    /// `None` when TSF did not activate for it, or once the window is
+    /// destroyed; a host read before that answers
+    /// [`TextStoreHostError::Unavailable`] from then on.
+    ///
+    /// [`TextStoreHostError::Unavailable`]: flui_platform_api::text_store::TextStoreHostError::Unavailable
     fn text_store_host(
         &self,
         _owner: crate::traits::OwnerThreadToken,
     ) -> Option<Rc<dyn flui_platform_api::text_store::TextStoreHost>> {
-        super::platform::with_window_context(self.hwnd, "text_store_host", |_context| None)
-            .flatten()
+        super::platform::with_window_context(self.hwnd, "text_store_host", |context| {
+            let services = context.text_services.borrow().clone();
+            services
+                .map(|services| services as Rc<dyn flui_platform_api::text_store::TextStoreHost>)
+        })
+        .flatten()
     }
 }
 
@@ -2254,4 +2321,12 @@ impl Drop for WindowsWindow {
             };
         }
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Runs as a window's text services are about to activate: lets a test
+    /// stand in for a message the activation dispatches.
+    pub(super) static BEFORE_TSF_ACTIVATION: std::cell::Cell<Option<fn(HWND)>> =
+        const { std::cell::Cell::new(None) };
 }

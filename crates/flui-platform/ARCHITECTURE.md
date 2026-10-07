@@ -167,6 +167,20 @@ by `refusal_precedence_is_gone_then_foreign_thread_then_class_then_slot`
 (run by `the_owner_thread_machinery_honours_its_contracts` in `shared/handlers.rs`), and the callback panic and re-entrancy rules by
 `tests/window_callback_unwind.rs`.
 
+### Each Win32 window owns its text services, activated at creation and deactivated by `WM_DESTROY`
+
+A window's TSF connection (`text_services::TextServices`, ADR-0135 §3) lives in its
+`WindowContext`, activated on the owner thread right after the context is installed (TSF's
+calls read the context's scale), so the host exists before any field can focus; a lazy
+activation would put the first `ITfThreadMgr::Activate` inside a focus change, under owner
+code. A failed activation leaves `None` and the `WM_CHAR` path. `WM_DESTROY` deactivates it
+after the close callbacks (the presentation's close unfocuses its field through the still
+active host) and before the context retires; the shutdown is a host operation, so one that
+arrives inside a TSF call into a store waits for that call. Its application-code failures are
+logged, contained: the window procedure aborts on a panic. Test:
+`a_window_offers_its_text_services_as_its_host`, and the `window destroyed inside a TSF call`
+row of `the_text_services_answer_a_completion_for_its_store`.
+
 ### AppKit reopen signals use a loop-owned serialized callback pump
 
 The owned application delegate implements

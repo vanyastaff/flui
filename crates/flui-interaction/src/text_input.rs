@@ -558,6 +558,41 @@ impl TextInputOwner {
             failure.finish();
             return Err(error);
         }
+        let mut calls = OwnerCalls::new();
+        // A replaced client's composition is committed before the incoming
+        // client is installed, whatever order the fields hear of the focus
+        // change in: the outgoing field's own completion arrives with a stale
+        // token and does nothing. On a push or storeless backend the commit
+        // runs here, through the path `complete_composition` takes; a failure
+        // it raises is kept and the attach goes on. A pull host hears of it
+        // as a completion queued ahead of the incoming focus, below.
+        let outgoing = if self.is_pull() {
+            None
+        } else {
+            self.state
+                .borrow()
+                .active
+                .as_ref()
+                .map(|active| Rc::clone(&active.client.store))
+        };
+        if let Some(store) = outgoing {
+            let queued = calls.run_parking(&self.gate, || commit_queued(&*store));
+            if queued == Some(true) {
+                self.owe_commit(&store, &mut calls);
+            }
+            calls.retire_parking(&self.gate, store);
+            // The outgoing store's commit may have closed the owner.
+            if let Err(error) = self.ensure_open() {
+                if let Some(payload) = calls.into_failure() {
+                    RetainOnFailure::retain(client);
+                    std::panic::resume_unwind(payload);
+                }
+                let mut failure = ClosePanic::for_rejection(self.close_mode.mode());
+                retire_rejected(&mut failure, client);
+                failure.finish();
+                return Err(error);
+            }
+        }
         // Open, so close has not taken the capability.
         let platform = self.push_platform();
         let focus = self.is_pull().then(|| Rc::clone(&client.store));
@@ -568,6 +603,11 @@ impl TextInputOwner {
             let enable_platform = platform.is_some() && !state.platform_enabled;
             if let Some(replaced) = &replaced {
                 state.retire(replaced, transaction_open);
+                if focus.is_some() {
+                    state
+                        .host_ops
+                        .push_back(HostOp::Complete(Rc::clone(&replaced.client.store)));
+                }
             }
             if let Some(store) = focus {
                 state.host_ops.push_back(HostOp::Focus(Some(store)));
@@ -575,7 +615,6 @@ impl TextInputOwner {
             (enable_platform, replaced)
         };
 
-        let mut calls = OwnerCalls::new();
         if enable_platform
             && let Some(platform) = &platform
             && calls.run(|| platform.set_ime_allowed(true)).is_some()

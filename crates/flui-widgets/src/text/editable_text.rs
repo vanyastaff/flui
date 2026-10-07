@@ -262,6 +262,15 @@ pub(super) fn source_offset_for_masked_offset(
 /// contract — a field unmounted while still focused must not leave a stale
 /// IME client attached), and a disposed field refuses every lock.
 ///
+/// A field that loses its input commits its composition first, keeping the
+/// text (ADR-0142 item 4): on blur before it detaches, on a pointer-down on
+/// it before the caret moves, and on a paste before the clipboard's text
+/// lands. The platform ends its composition; one that cannot (a pull host
+/// answering `Abandoned`, or a push platform) has the composing range
+/// cleared in place. Each step of the transition still runs when the
+/// commit's owner code (`on_changed`) panics, and that first failure is
+/// resumed after them.
+///
 /// A platform session is one change to the field: its edits are written to
 /// the controller once, and after the lock is released the listeners hear
 /// of it once and [`EditableText::on_changed`] runs at most once, only when
@@ -326,7 +335,7 @@ pub(super) fn source_offset_for_masked_offset(
 /// |---|---|---|
 /// | Copy | a clipboard is installed, the field is not obscured, and the selection is not empty | writes the selection; the selection stays |
 /// | Cut | as Copy, and the field is enabled | writes the selection, then deletes it |
-/// | Paste | a clipboard is installed, the field is enabled, and no IME composition is active | replaces the selection with the clipboard's text, line breaks removed |
+/// | Paste | a clipboard is installed and the field is enabled | commits an active IME composition, keeping its text, then replaces the selection with the clipboard's text, line breaks removed |
 ///
 /// A disabled action leaves the key unconsumed, so an obscured field's
 /// Ctrl+C keeps bubbling. Paste consumes the key even when the clipboard is
@@ -844,25 +853,50 @@ impl EditableTextState {
             let controller = Rc::clone(&controller);
             let focus_node = Rc::clone(&focus_node);
             let drag_anchor = Rc::clone(&drag_anchor);
+            let commit = self.composition_commit();
             move |_cx: &mut EventCx<'_>, dispatch: PointerDispatch<'_>| {
                 if !enabled || drag_anchor.get().is_some() {
                     return;
                 }
-                // Admit the contact before focus observers run. Reentrant
-                // disablement or controller replacement can retire it before
-                // the caret is written to the current document.
-                let Some(offset) = resolve(dispatch.global.position()) else {
+                // Admit the contact before any owner code runs (the commit's
+                // `on_changed`, focus observers): a press they dispatch finds
+                // this one recorded and is refused, and a reentrant
+                // disablement, controller replacement or cancel retires it,
+                // which the identity check below sees. The anchor is resolved
+                // again once the commit has laid the text out as committed.
+                let Some(provisional) = resolve(dispatch.global.position()) else {
                     return;
                 };
-                let drag = SelectionDrag {
+                let admitted = SelectionDrag {
                     contact: flui_interaction::events::extract_pointer_id(dispatch.global),
-                    source_anchor: offset,
+                    source_anchor: provisional,
                 };
-                drag_anchor.set(Some(drag));
-                focus_node.request_focus();
-                if drag_anchor.get() == Some(drag) {
-                    controller.borrow().set_caret_byte_offset(offset);
-                }
+                drag_anchor.set(Some(admitted));
+                // A composition in this field is committed before the caret
+                // moves (ADR-0142 item 4); the press is still handled when
+                // the commit's owner code fails, and that failure is resumed
+                // after it.
+                let mut calls = OwnerCalls::new();
+                commit.run(&mut calls);
+                calls.run(|| {
+                    if drag_anchor.get() != Some(admitted) {
+                        return;
+                    }
+                    let Some(offset) = resolve(dispatch.global.position()) else {
+                        drag_anchor.set(None);
+                        return;
+                    };
+                    let drag = SelectionDrag {
+                        source_anchor: offset,
+                        ..admitted
+                    };
+                    drag_anchor.set(Some(drag));
+                    focus_node.request_focus();
+                    if drag_anchor.get() == Some(drag) {
+                        controller.borrow().set_caret_byte_offset(offset);
+                    }
+                });
+                calls.resume();
             }
         };
 
@@ -1021,6 +1055,14 @@ impl EditableTextState {
         }
     }
 
+    /// What commits this field's composition before it loses its input.
+    fn composition_commit(&self) -> CompositionCommit {
+        CompositionCommit {
+            handle: self.ime_handle.clone(),
+            token: Rc::clone(&self.ime_token),
+        }
+    }
+
     /// The key handler for `node`: [`build_key_handler`], reporting each
     /// edit it makes through `on_changed`.
     fn key_handler(&self, node: &Rc<FocusNode>) -> KeyEventHandler {
@@ -1085,6 +1127,7 @@ impl EditableTextState {
             obscure: Rc::clone(&self.obscure),
             clipboard: self.clipboard.clone(),
             edits: self.edit_observer(),
+            commit: self.composition_commit(),
         };
         let chain = layered_chain(
             enclosing.clone(),
@@ -1248,6 +1291,44 @@ impl EditObserver {
     }
 }
 
+/// Commits a field's composition, keeping its text, before the field loses
+/// its input: a blur, a pointer-down on it and a paste (ADR-0142 item 4).
+/// The presentation asks the platform to end its composition (a pull host)
+/// and commits in place when it cannot, or does that directly (a push
+/// platform); inside a frame the request is queued with the field's store
+/// and reaches it at the anchor, even after a detach that follows.
+#[derive(Clone)]
+struct CompositionCommit {
+    handle: Option<TextInputHandle>,
+    /// The client this field attached, while it holds the input.
+    token: Rc<RefCell<Option<ClientToken>>>,
+}
+
+impl CompositionCommit {
+    /// Commit the attached client's composition inside `calls`, which keeps
+    /// a failure of the owner code the commit reaches (its `on_changed`, a
+    /// host) for the caller to resume once its own operation is complete.
+    /// A field with no client attached has no composition to commit.
+    fn run(&self, calls: &mut OwnerCalls) {
+        let Some(handle) = &self.handle else {
+            return;
+        };
+        // Read in a statement of its own: the commit runs owner code, which
+        // may detach this field and so take the token.
+        let token = *self.token.borrow();
+        if let Some(token) = token
+            && let Some(Err(error)) = calls.run(|| handle.complete_composition(token))
+        {
+            calls.run(|| {
+                tracing::trace!(
+                    ?error,
+                    "a composition commit reached a presentation that was already closing"
+                );
+            });
+        }
+    }
+}
+
 /// Copy, cut and paste for one mounted field — see [`EditableText`]'s
 /// `# Clipboard` section for when each is enabled.
 ///
@@ -1262,6 +1343,8 @@ struct ClipboardTextAction {
     clipboard: Option<ClipboardHandle>,
     /// Cut and paste are user edits.
     edits: EditObserver,
+    /// A paste commits the composition first.
+    commit: CompositionCommit,
 }
 
 impl ClipboardTextAction {
@@ -1305,30 +1388,38 @@ impl Action<CopySelectionTextIntent> for ClipboardTextAction {
 
 impl Action<PasteTextIntent> for ClipboardTextAction {
     fn is_enabled(&self, _intent: &PasteTextIntent) -> bool {
-        self.clipboard.is_some() && self.enabled() && !self.controller.borrow().is_composing()
+        self.clipboard.is_some() && self.enabled()
     }
 
+    /// Commits an active composition first, keeping its text, so the paste
+    /// lands after it (ADR-0142 item 4); the paste runs though the commit's
+    /// owner code failed, and that failure is resumed after it.
     fn invoke(&self, _cx: &mut EventCx<'_>, _intent: &PasteTextIntent) -> ActionOutcome {
         let Some(clipboard) = &self.clipboard else {
             return ActionOutcome::NotPerformed;
         };
+        let mut calls = OwnerCalls::new();
+        self.commit.run(&mut calls);
         let controller = self.controller();
         let edits = self.edits.clone();
         // May complete before `read_text` returns: nothing is borrowed here.
-        clipboard.read_text(move |text| {
-            let Some(text) = text else {
-                return;
-            };
-            // A single-line field: line breaks are dropped, `\r` included,
-            // so a Windows `\r\n` leaves nothing behind.
-            let line: String = text
-                .chars()
-                .filter(|&character| character != '\n' && character != '\r')
-                .collect();
-            if !line.is_empty() {
-                edits.around(|| controller.insert_str(&line));
-            }
+        calls.run(|| {
+            clipboard.read_text(move |text| {
+                let Some(text) = text else {
+                    return;
+                };
+                // A single-line field: line breaks are dropped, `\r` included,
+                // so a Windows `\r\n` leaves nothing behind.
+                let line: String = text
+                    .chars()
+                    .filter(|&character| character != '\n' && character != '\r')
+                    .collect();
+                if !line.is_empty() {
+                    edits.around(|| controller.insert_str(&line));
+                }
+            });
         });
+        calls.resume();
         ActionOutcome::Performed
     }
 }
@@ -1428,6 +1519,7 @@ impl ViewState<EditableText> for EditableTextState {
             .clone()
             .expect("BUG: init_state builds the text store before the IME listener");
         let ime_token_for_focus = Rc::clone(&self.ime_token);
+        let commit_for_focus = self.composition_commit();
         let cursor_area_alive_for_focus = Rc::clone(&self.cursor_area_alive);
         let ime_focus_transition: ImeFocusTransition = Rc::new(move |now_focused| {
             let Some(handle) = &ime_handle_for_focus else {
@@ -1484,11 +1576,16 @@ impl ViewState<EditableText> for EditableTextState {
                     );
                 }
             } else {
+                // The composition is committed while the token still names
+                // this field's client, then the client detaches; the detach
+                // runs though the commit's owner code failed (ADR-0142
+                // items 4 and 8).
+                let mut calls = OwnerCalls::new();
+                commit_for_focus.run(&mut calls);
                 // The token is taken in a statement of its own: a borrow
                 // held across the detach (which runs other code) would be
                 // refused by a reentrant focus change.
                 let token = ime_token_for_focus.borrow_mut().take();
-                let mut calls = OwnerCalls::new();
                 if let Some(token) = token
                     && let Some(Err(error)) = calls.run(|| handle.detach(token))
                 {
