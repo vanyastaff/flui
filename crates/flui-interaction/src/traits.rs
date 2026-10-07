@@ -1,11 +1,4 @@
-//! Core traits with advanced type system features
-//!
-//! This module provides the foundational traits for the interaction system,
-//! using Rust's advanced type features:
-//!
-//! - **GATs**: Generic Associated Types for flexible callbacks
-//! - **Extension traits**: Add methods to foreign types
-//! - **Marker traits**: Compile-time constraints
+//! Hit-test targets, pointer event conveniences and drag constraints.
 
 use flui_foundation::geometry::Offset;
 
@@ -35,43 +28,6 @@ pub trait HitTestTarget: Send + Sync {
     /// * `entry` - The hit test entry containing position and transform info
     fn handle_event(&self, event: &PointerEvent, entry: &HitTestEntry);
 }
-
-// ============================================================================
-// GestureCallback trait with GAT
-// ============================================================================
-
-/// A callback that can be invoked with gesture details.
-///
-/// Uses GAT to allow different detail types per callback kind.
-///
-/// # Example
-///
-/// ```rust,ignore
-/// struct TapCallback<F>(F);
-///
-/// impl<F: Fn(TapDetails)> GestureCallback for TapCallback<F> {
-///     type Details<'a> = TapDetails;
-///
-///     fn invoke(&self, details: Self::Details<'_>) {
-///         (self.0)(details);
-///     }
-/// }
-/// ```
-pub trait GestureCallback {
-    /// The type of details passed to this callback.
-    ///
-    /// Using GAT allows callbacks to borrow data from the gesture recognizer
-    /// without requiring clones.
-    type Details<'a>
-    where
-        Self: 'a;
-
-    /// Invokes the callback with the given details.
-    fn invoke(&self, details: Self::Details<'_>);
-}
-
-/// A boxed gesture callback for dynamic dispatch.
-pub type BoxedCallback<D> = Box<dyn Fn(D)>;
 
 // ============================================================================
 // PointerEventExtTrait extension trait (additional methods)
@@ -138,34 +94,6 @@ impl PointerEventExtTrait for PointerEvent {
     }
 }
 
-// ============================================================================
-// GestureRecognizerExt extension trait
-// ============================================================================
-
-/// Extension trait for gesture recognizers with utility methods.
-pub trait GestureRecognizerExt {
-    /// Checks if the gesture has exceeded the slop threshold.
-    ///
-    /// # Arguments
-    ///
-    /// * `initial` - Initial pointer position
-    /// * `current` - Current pointer position
-    /// * `slop` - Maximum allowed movement (typically 18px)
-    fn exceeds_slop(initial: Offset<f64>, current: Offset<f64>, slop: f64) -> bool {
-        let delta = current - initial;
-        delta.distance() > slop
-    }
-
-    /// Calculates the primary delta for a given drag axis.
-    fn primary_delta(delta: Offset<f64>, axis: DragAxis) -> f64 {
-        match axis {
-            DragAxis::Vertical => delta.dy,
-            DragAxis::Horizontal => delta.dx,
-            DragAxis::Free => delta.distance(),
-        }
-    }
-}
-
 /// Drag axis constraint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum DragAxis {
@@ -176,24 +104,6 @@ pub enum DragAxis {
     /// Free drag (any direction).
     #[default]
     Free,
-}
-
-// ============================================================================
-// Disposable trait
-// ============================================================================
-
-/// Trait for resources that can be disposed/cleaned up.
-///
-/// Similar to `Drop` but for explicit cleanup before destruction.
-pub trait Disposable {
-    /// Disposes of this resource, releasing any held callbacks or state.
-    ///
-    /// After calling this method, the object should be considered unusable.
-    /// Subsequent method calls may panic or return default values.
-    fn dispose(&mut self);
-
-    /// Returns `true` if this resource has been disposed.
-    fn is_disposed(&self) -> bool;
 }
 
 // ============================================================================
