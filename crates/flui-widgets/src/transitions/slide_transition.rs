@@ -3,29 +3,24 @@
 
 use std::sync::Arc;
 
-use flui_animation::Animation;
-use flui_foundation::Listenable;
-use flui_objects::TranslationFraction;
+use flui_animation::{Animation, ProxyAnimation};
+use flui_objects::{TransformMotion, TranslationFraction};
 use flui_painting::typography::TextDirection;
-use flui_view::prelude::BuildContext;
-use flui_view::{
-    AnimatedView, BoxedView, IntoView, StatefulView, ViewExt, ViewState, impl_animated_view,
-};
+use flui_view::prelude::{BuildContext, StatefulView};
+use flui_view::{BoxedView, IntoView, ViewExt, ViewState};
 
-use crate::FractionalTranslation;
+use super::transform_view::AnimatedTransformView;
 
 /// Animates its child's position by a fraction of the child's own size, as a
 /// [`TranslationFraction`] read off an [`Animation`].
 ///
-/// Wraps `FractionalTranslation`. Each tick of `position`
-/// rebuilds the transition and re-reads [`Animation::value`] into a
-/// [`FractionalTranslation`].
+/// Backed by `RenderAnimatedTransform`, which listens to `position` itself: a
+/// tick patches the node's transform layer without rebuilding the element
+/// tree or repainting the child.
 ///
 /// The animated value is a dedicated [`TranslationFraction`], not an `Offset`:
 /// an `Offset` is in pixels, so carrying a size-relative fraction in one would
-/// be the unit mismatch `FractionalTranslation` already documents (see
-/// `flui_objects::TranslationFraction`'s module doc). This transition drives
-/// that fraction newtype end to end.
+/// be a unit mismatch (see `flui_objects::TranslationFraction`'s module doc).
 ///
 /// `position.value() == TranslationFraction { dx: 0.0, dy: 0.0 }` paints the
 /// child at its normal location; `{ dx: 1.0, dy: 0.0 }` shifts it fully off
@@ -34,19 +29,19 @@ use crate::FractionalTranslation;
 /// # `text_direction`
 ///
 /// `SlideTransition` does **not** read the ambient `Directionality`;
-/// `text_direction` is a plain, caller-supplied, optional setting. It
-/// defaults to `None` (canvas coordinates — positive `dx` moves the child
-/// right), and `Some(TextDirection::Rtl)` flips `dx`'s sign so positive
-/// values move the child toward the reading-direction start instead.
+/// `text_direction` is a plain, caller-supplied setting. Unset, `dx` is in
+/// canvas coordinates (positive moves the child right), and
+/// `TextDirection::Rtl` flips `dx`'s sign so positive values move the child
+/// toward the reading-direction start instead.
 ///
 /// ```rust,ignore
 /// let controller = AnimationController::without_ticker(Duration::from_millis(300));
 /// let tween = Tween::new(TranslationFraction::new(-1.0, 0.0), TranslationFraction::ZERO);
 /// let position = Arc::new(tween.animate(Arc::new(controller.clone()) as Arc<dyn Animation<f64>>));
 /// let slide = SlideTransition::new(position, Text::new("hi"));
-/// controller.forward(); // each frame re-reads the fractional offset into the child
+/// controller.forward(); // each frame moves the child's transform layer
 /// ```
-#[derive(Clone)]
+#[derive(Clone, StatefulView)]
 pub struct SlideTransition {
     position: Arc<dyn Animation<TranslationFraction>>,
     transform_hit_tests: bool,
@@ -81,14 +76,8 @@ impl SlideTransition {
         self
     }
 
-    /// The [`TranslationFraction`] this transition currently paints at,
-    /// after applying [`Self::text_direction`]'s sign flip.
-    fn resolved_offset(&self) -> TranslationFraction {
-        let offset = self.position.value();
-        match self.text_direction {
-            Some(TextDirection::Rtl) => TranslationFraction::new(-offset.dx, offset.dy),
-            Some(TextDirection::Ltr) | None => offset,
-        }
+    fn resolved_direction(&self) -> TextDirection {
+        self.text_direction.unwrap_or(TextDirection::Ltr)
     }
 }
 
@@ -102,18 +91,32 @@ impl std::fmt::Debug for SlideTransition {
     }
 }
 
-/// State for [`SlideTransition`]. Stateless beyond the listenable
-/// subscription that [`AnimatedView`] manages — the offset lives on the
-/// animation, not here.
+/// State for [`SlideTransition`]: the proxy the render object listens to,
+/// kept across rebuilds so a new `position` retargets it in place.
 #[derive(Debug)]
-pub struct SlideTransitionState;
+pub struct SlideTransitionState {
+    proxy: ProxyAnimation<TranslationFraction>,
+    position: Arc<dyn Animation<TranslationFraction>>,
+}
 
 impl ViewState<SlideTransition> for SlideTransitionState {
     fn build(&self, view: &SlideTransition, _ctx: &dyn BuildContext) -> impl IntoView {
-        let offset = view.resolved_offset();
-        FractionalTranslation::new(offset.dx, offset.dy)
-            .transform_hit_tests(view.transform_hit_tests)
-            .child(view.child.clone())
+        AnimatedTransformView {
+            motion: TransformMotion::Slide {
+                offset: self.proxy.clone(),
+                text_direction: view.resolved_direction(),
+            },
+            transform_hit_tests: view.transform_hit_tests,
+            text_direction: view.resolved_direction(),
+            child: view.child.clone(),
+        }
+    }
+
+    fn did_update_view(&mut self, _old_view: &SlideTransition, new_view: &SlideTransition) {
+        if !Arc::ptr_eq(&self.position, &new_view.position) {
+            self.position = Arc::clone(&new_view.position);
+            self.proxy.set_parent(Arc::clone(&new_view.position));
+        }
     }
 }
 
@@ -121,17 +124,9 @@ impl StatefulView for SlideTransition {
     type State = SlideTransitionState;
 
     fn create_state(&self) -> Self::State {
-        SlideTransitionState
+        SlideTransitionState {
+            proxy: ProxyAnimation::new(Arc::clone(&self.position)),
+            position: Arc::clone(&self.position),
+        }
     }
 }
-
-impl AnimatedView for SlideTransition {
-    fn listenable(&self) -> Arc<dyn Listenable> {
-        // `Animation<TranslationFraction>: Listenable`; upcast the trait
-        // object so the element subscribes to the same notifier the
-        // animation ticks.
-        self.position.clone() as Arc<dyn Listenable>
-    }
-}
-
-impl_animated_view!(SlideTransition);

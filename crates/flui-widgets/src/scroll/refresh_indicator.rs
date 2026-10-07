@@ -44,13 +44,13 @@ use flui_rendering::hit_testing::HitTestBehavior;
 use flui_view::prelude::StatefulView;
 use flui_view::{
     BuildContext, BuildContextExt, Child, EventCx, EventOutcome, IntoView, LifecycleContext,
-    ViewExt, ViewState,
+    RebuildHandle, RebuildReason, ViewExt, ViewState,
 };
 
 use crate::animated::VsyncScope;
 use crate::scroll::single_child_scroll_view::SingleChildScrollView;
 use crate::scroll::{ClampingScrollPhysics, ScrollController, ScrollMetrics, SharedScrollPhysics};
-use crate::{AnimatedBuilder, ColoredBox, GestureDetector, Positioned, Stack};
+use crate::{ColoredBox, GestureDetector, Positioned, Stack};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -76,15 +76,57 @@ const INDICATOR_COLOR: Color = Color {
 // RefreshControllerInner — Arc-shared state
 // ---------------------------------------------------------------------------
 
+/// Whether a refresh is running, and how many times that has changed.
+///
+/// The epoch is bumped under the same lock as the flag, so a listener that
+/// reads both learns the order of the mutation it observed: notifications
+/// on two threads may finish in either order, but the epoch only grows.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct Phase {
+    refreshing: bool,
+    epoch: u64,
+}
+
+impl Phase {
+    fn set(&mut self, refreshing: bool) {
+        if self.refreshing != refreshing {
+            self.refreshing = refreshing;
+            self.epoch = self.epoch.saturating_add(1);
+        }
+    }
+}
+
+/// The last [`Phase`] a listener acted on, advanced only forward.
+#[derive(Debug)]
+struct PhaseTracker(Mutex<Phase>);
+
+impl PhaseTracker {
+    /// Records `observed` if it is newer than the tracked phase; returns
+    /// whether that flipped the refresh flag. An older observation finishing
+    /// late is ignored, so it cannot restore a superseded phase.
+    fn advance(&self, observed: Phase) -> bool {
+        let mut last = self
+            .0
+            .lock()
+            .expect("BUG: PhaseTracker is never held across a panic");
+        if observed.epoch <= last.epoch {
+            return false;
+        }
+        let flipped = last.refreshing != observed.refreshing;
+        *last = observed;
+        flipped
+    }
+}
+
 struct RefreshControllerInner {
     pull_distance_px: Mutex<f64>,
-    is_refreshing: Mutex<bool>,
+    phase: Mutex<Phase>,
     notifier: ChangeNotifier,
 }
 
 impl std::fmt::Debug for RefreshControllerInner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let is_refreshing = self.is_refreshing.lock().is_ok_and(|g| *g);
+        let is_refreshing = self.phase.lock().is_ok_and(|g| g.refreshing);
         let pull = self.pull_distance_px.lock().map_or(0.0, |g| *g);
         f.debug_struct("RefreshControllerInner")
             .field("is_refreshing", &is_refreshing)
@@ -129,7 +171,7 @@ impl Default for RefreshController {
         Self {
             inner: Arc::new(RefreshControllerInner {
                 pull_distance_px: Mutex::new(0.0),
-                is_refreshing: Mutex::new(false),
+                phase: Mutex::new(Phase::default()),
                 notifier: ChangeNotifier::new(),
             }),
         }
@@ -147,11 +189,16 @@ impl RefreshController {
     /// been called but [`finish`](Self::finish) has not yet been called.
     #[must_use]
     pub fn is_refreshing(&self) -> bool {
+        self.phase().refreshing
+    }
+
+    /// The refresh phase and its mutation epoch, read together.
+    fn phase(&self) -> Phase {
         *self
             .inner
-            .is_refreshing
+            .phase
             .lock()
-            .expect("BUG: RefreshController is_refreshing mutex is never held across a panic; poisoning means a bug elsewhere already corrupted controller state")
+            .expect("BUG: RefreshController phase mutex is never held across a panic; poisoning means a bug elsewhere already corrupted controller state")
     }
 
     /// The current pull distance in logical pixels.
@@ -174,17 +221,17 @@ impl RefreshController {
     pub fn finish(&self) {
         let mut guard = self
             .inner
-            .is_refreshing
+            .phase
             .lock()
-            .expect("BUG: RefreshController is_refreshing mutex is never held across a panic; poisoning means a bug elsewhere already corrupted controller state");
-        *guard = false;
+            .expect("BUG: RefreshController phase mutex is never held across a panic; poisoning means a bug elsewhere already corrupted controller state");
+        guard.set(false);
         drop(guard);
         self.inner.notifier.notify_listeners();
     }
 
     /// An `Arc<dyn Listenable>` pointing at the same inner state.
     ///
-    /// Subscribe via [`AnimatedBuilder`] to rebuild when the refresh phase or
+    /// Subscribe via [`AnimatedBuilder`](crate::transitions::AnimatedBuilder) to rebuild when the refresh phase or
     /// pull distance changes.
     #[must_use]
     pub fn as_listenable(&self) -> Arc<dyn Listenable> {
@@ -203,19 +250,24 @@ impl RefreshController {
         self.inner.notifier.notify_listeners();
     }
 
+    /// Whether `other` is a clone of this controller (the same shared state).
+    fn shares_state_with(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
+
     pub(super) fn begin_refresh(&self) {
         {
             let mut refreshing = self
                 .inner
-                .is_refreshing
+                .phase
                 .lock()
-                .expect("BUG: RefreshController is_refreshing mutex is never held across a panic; poisoning means a bug elsewhere already corrupted controller state");
+                .expect("BUG: RefreshController phase mutex is never held across a panic; poisoning means a bug elsewhere already corrupted controller state");
             let mut pull = self
                 .inner
                 .pull_distance_px
                 .lock()
                 .expect("BUG: RefreshController pull_distance_px mutex is never held across a panic; poisoning means a bug elsewhere already corrupted controller state");
-            *refreshing = true;
+            refreshing.set(true);
             *pull = 0.0;
         }
         self.inner.notifier.notify_listeners();
@@ -376,6 +428,14 @@ pub struct RefreshIndicatorState {
     vsync: Option<Vsync>,
     /// Registration returned by `vsync.register(fling_controller)`.
     vsync_registration: Option<VsyncRegistration>,
+    /// Schedules this element's rebuild; acquired in `init_state`.
+    rebuild: Option<RebuildHandle>,
+    /// The refresh controller this state listens to for phase changes, and
+    /// the subscription; replaced when the view hands over another one.
+    phase_subscription: Option<(RefreshController, ListenerId)>,
+    /// The controller from the first configuration, subscribed in
+    /// `init_state` once a rebuild handle exists.
+    initial_controller: Option<RefreshController>,
 }
 
 impl std::fmt::Debug for RefreshIndicatorState {
@@ -405,8 +465,55 @@ impl StatefulView for RefreshIndicator {
             fling_listener_id: None,
             vsync: None,
             vsync_registration: None,
+            rebuild: None,
+            phase_subscription: None,
+            initial_controller: Some(self.controller.clone()),
         }
     }
+}
+
+/// Calls `on_flip` whenever `controller`'s refresh flag flips relative to
+/// `snapshot`, the phase the caller last built against. After registering it
+/// catches up with a change made between the snapshot and the registration,
+/// which no notification would report.
+fn listen_for_phase_flips(
+    controller: &RefreshController,
+    snapshot: Phase,
+    on_flip: impl Fn() + Send + Sync + 'static,
+) -> ListenerId {
+    let tracker = Arc::new(PhaseTracker(Mutex::new(snapshot)));
+    let on_flip = Arc::new(on_flip);
+    let id = controller.inner.add_listener(Arc::new({
+        let watched = controller.clone();
+        let tracker = Arc::clone(&tracker);
+        let on_flip = Arc::clone(&on_flip);
+        move || {
+            // Ordered by the mutation's epoch, not by which notification
+            // finishes first.
+            if tracker.advance(watched.phase()) {
+                on_flip();
+            }
+        }
+    }));
+    let catch_up = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if tracker.advance(controller.phase()) {
+            on_flip();
+        }
+    }));
+    if let Err(payload) = catch_up {
+        // The caller has not received the subscription ID yet. Withdraw it
+        // while our local callback ownership prevents opaque destruction.
+        if let Err(secondary) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            controller.inner.remove_listener(id);
+        })) {
+            flui_foundation::panic::retain_opaque_payload(secondary);
+        }
+        // A callback's capture destructor must not replace its failure as
+        // the original panic resumes (ADR-0127).
+        std::mem::forget(on_flip);
+        std::panic::resume_unwind(payload);
+    }
+    id
 }
 
 impl RefreshIndicatorState {
@@ -420,11 +527,35 @@ impl RefreshIndicatorState {
             scroll.set_pixels(fling.value());
         })));
     }
+
+    /// Listens to `controller` and rebuilds only when its refresh phase
+    /// flips: a pull-distance change alone reaches external listeners of
+    /// [`RefreshController::as_listenable`] but rebuilds nothing here.
+    fn subscribe_phase(&mut self, controller: &RefreshController) {
+        self.unsubscribe_phase();
+        let Some(rebuild) = self.rebuild.clone() else {
+            return;
+        };
+        let id = listen_for_phase_flips(controller, controller.phase(), move || {
+            rebuild.schedule(RebuildReason::StateChange);
+        });
+        self.phase_subscription = Some((controller.clone(), id));
+    }
+
+    fn unsubscribe_phase(&mut self) {
+        if let Some((controller, id)) = self.phase_subscription.take() {
+            controller.inner.remove_listener(id);
+        }
+    }
 }
 
 impl ViewState<RefreshIndicator> for RefreshIndicatorState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.install_fling_listener();
+        self.rebuild = Some(ctx.rebuild_handle());
+        if let Some(controller) = self.initial_controller.take() {
+            self.subscribe_phase(&controller);
+        }
 
         // Register with the ambient VsyncScope so the binding ticks the fling
         // controller on each virtual frame deterministically.
@@ -438,143 +569,116 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
     }
 
     fn build(&self, view: &RefreshIndicator, _ctx: &dyn BuildContext) -> impl IntoView {
-        let scroll_controller = self.scroll_controller.clone();
-        let fling_controller = self.fling_controller.clone();
-        let refresh_controller = view.controller.clone();
-        let on_refresh_fn = view.on_refresh.clone();
+        // Built once per refresh phase, not per scroll pixel: the viewport
+        // follows the shared position itself, and every gesture callback reads
+        // the controllers at event time rather than capturing a snapshot.
+        let scroll_view = {
+            let mut scroll_view =
+                SingleChildScrollView::new().position(self.scroll_controller.position());
+            if let Some(content) = view.child.clone().into_inner() {
+                scroll_view = scroll_view.child(content);
+            }
+            scroll_view
+        };
+        let mut stack_children: Vec<_> = vec![scroll_view.boxed()];
+        if view.controller.is_refreshing() {
+            // Overlay the indicator at the very top of the content area.
+            // DEFERRED (v1): replace with a RotationTransition-based spinner.
+            let indicator = Positioned::new(ColoredBox::new(INDICATOR_COLOR))
+                .top(0.0)
+                .left(0.0)
+                .right(0.0)
+                .height(INDICATOR_HEIGHT_PX);
+            stack_children.push(indicator.boxed());
+        }
+
         let threshold_px = view.threshold_px;
-        let physics = view.physics.clone();
-        let child = view.child.clone();
+        let fling_stop = self.fling_controller.clone();
+        let rc_start = view.controller.clone();
+        let sc_update = self.scroll_controller.clone();
+        let rc_update = view.controller.clone();
+        let ph_update = view.physics.clone();
+        let sc_end = self.scroll_controller.clone();
+        let rc_end = view.controller.clone();
+        let ph_end = view.physics.clone();
+        let fc_fling = self.fling_controller.clone();
+        let on_refresh_cb = view.on_refresh.clone();
 
-        // Outer AnimatedBuilder: rebuilds on every scroll-position change.
-        AnimatedBuilder::new(scroll_controller.as_listenable(), move || {
-            let rc_outer = refresh_controller.clone();
-            let sc_inner = scroll_controller.clone();
-            let fc_inner = fling_controller.clone();
-            let ph_inner = physics.clone();
-            let ch_inner = child.clone();
-            let on_refresh_inner = on_refresh_fn.clone();
-
-            // Inner AnimatedBuilder: rebuilds on refresh-phase / pull-distance
-            // changes (fired by RefreshController's own notifier).
-            AnimatedBuilder::new(rc_outer.as_listenable(), move || {
-                let pixels = sc_inner.pixels();
-                let is_refreshing = rc_outer.is_refreshing();
-
-                // Visual indicator: static coloured overlay while refreshing.
-                // DEFERRED (v1): animated rotation spinner via RotationTransition.
-                let show_indicator = is_refreshing;
-
-                // Gesture clones — each closure needs its own Arc-counted handle.
-                let fling_stop = fc_inner.clone();
-                let rc_start = rc_outer.clone();
-                let sc_update = sc_inner.clone();
-                let rc_update = rc_outer.clone();
-                let ph_update = ph_inner.clone();
-                let sc_end = sc_inner.clone();
-                let rc_end = rc_outer.clone();
-                let ph_end = ph_inner.clone();
-                let fc_fling = fc_inner.clone();
-                let on_refresh_cb = on_refresh_inner.clone();
-
-                let scroll_view = {
-                    let mut sv = SingleChildScrollView::new().offset(pixels);
-                    if let Some(content) = ch_inner.clone().into_inner() {
-                        sv = sv.child(content);
-                    }
-                    sv
-                };
-
-                let mut stack_children: Vec<_> = vec![scroll_view.boxed()];
-                if show_indicator {
-                    // Overlay the spinner at the very top of the content area.
-                    // DEFERRED (v1): replace with RotationTransition-based spinner.
-                    let indicator = Positioned::new(ColoredBox::new(INDICATOR_COLOR))
-                        .top(0.0)
-                        .left(0.0)
-                        .right(0.0)
-                        .height(INDICATOR_HEIGHT_PX);
-                    stack_children.push(indicator.boxed());
+        GestureDetector::new()
+            .behavior(HitTestBehavior::Opaque)
+            .on_pan_start(move |_cx, _details| {
+                // Halt any in-flight fling when the user grabs the content.
+                let _ = fling_stop.stop();
+                if !rc_start.is_refreshing() {
+                    rc_start.set_pull_distance_px(0.0);
                 }
-
-                GestureDetector::new()
-                    .behavior(HitTestBehavior::Opaque)
-                    .on_pan_start(move |_cx, _details| {
-                        // Halt any in-flight fling when the user grabs the content.
-                        let _ = fling_stop.stop();
-                        if !rc_start.is_refreshing() {
-                            rc_start.set_pull_distance_px(0.0);
-                        }
-                    })
-                    .on_pan_update(move |_cx, details| {
-                        // Ignore scroll/pull updates while a refresh is in progress
-                        // so the indicator stays stable.
-                        if rc_update.is_refreshing() {
-                            return;
-                        }
-                        // Positive dy (finger moving DOWN) maps to a decrease in
-                        // scroll offset (reveals content above).
-                        let raw_delta_y = details.delta.dy;
-                        // Pull remains outside the clamped scroll position. Consume
-                        // it first when the finger reverses toward ordinary scrolling.
-                        let proposed =
-                            sc_update.pixels() - rc_update.pull_distance_px() - raw_delta_y;
-
-                        if proposed < sc_update.min_scroll_extent() {
-                            // Overscroll at top: track how far past the boundary
-                            // the user has pulled; freeze the scroll at min_extent.
-                            let overscroll_px = sc_update.min_scroll_extent() - proposed;
-                            rc_update.set_pull_distance_px(overscroll_px);
-                            sc_update.set_pixels(sc_update.min_scroll_extent());
-                        } else {
-                            rc_update.set_pull_distance_px(0.0);
-                            let metrics = ScrollMetrics::from(&sc_update.position());
-                            let clamped = ph_update.apply_boundary_conditions(&metrics, proposed);
-                            sc_update.set_pixels(clamped);
-                        }
-                    })
-                    .on_pan_end(move |cx, details| {
-                        if rc_end.is_refreshing() {
-                            return;
-                        }
-                        if details.reason == flui_interaction::GestureEndReason::Cancelled {
-                            rc_end.set_pull_distance_px(0.0);
-                            let metrics = ScrollMetrics::from(&sc_end.position());
-                            if let Some(sim) = ph_end.create_ballistic_simulation(&metrics, 0.0) {
-                                let _ = fc_fling.animate_with(sim);
-                            }
-                            return;
-                        }
-                        let pull = rc_end.pull_distance_px();
-                        if pull >= threshold_px {
-                            // Sufficient overscroll: enter refreshing state and
-                            // fire the caller's callback.
-                            rc_end.begin_refresh();
-                            on_refresh_cb(cx);
-                        } else {
-                            // Under-threshold pull: reset and start a normal fling.
-                            rc_end.set_pull_distance_px(0.0);
-
-                            // Convert pointer velocity to scroll velocity (negate:
-                            // finger DOWN = positive dy → offset increases with negative delta).
-                            let fling_vel_px_per_sec = {
-                                let raw = -details.velocity.pixels_per_second.dy;
-                                let bounded = raw.clamp(-8_000.0, 8_000.0);
-                                // `clamp` propagates NaN (IEEE 754); treat NaN as 0
-                                // so spring-back still works without measurable velocity.
-                                if bounded.is_nan() { 0.0 } else { bounded }
-                            };
-                            let metrics = ScrollMetrics::from(&sc_end.position());
-                            if let Some(sim) =
-                                ph_end.create_ballistic_simulation(&metrics, fling_vel_px_per_sec)
-                            {
-                                let _ = fc_fling.animate_with(sim);
-                            }
-                        }
-                    })
-                    .child(Stack::new(stack_children))
             })
-        })
+            .on_pan_update(move |_cx, details| {
+                // Ignore scroll/pull updates while a refresh is in progress
+                // so the indicator stays stable.
+                if rc_update.is_refreshing() {
+                    return;
+                }
+                // Positive dy (finger moving DOWN) maps to a decrease in
+                // scroll offset (reveals content above).
+                let raw_delta_y = details.delta.dy;
+                // Pull remains outside the clamped scroll position. Consume
+                // it first when the finger reverses toward ordinary scrolling.
+                let proposed = sc_update.pixels() - rc_update.pull_distance_px() - raw_delta_y;
+
+                if proposed < sc_update.min_scroll_extent() {
+                    // Overscroll at top: track how far past the boundary
+                    // the user has pulled; freeze the scroll at min_extent.
+                    let overscroll_px = sc_update.min_scroll_extent() - proposed;
+                    rc_update.set_pull_distance_px(overscroll_px);
+                    sc_update.set_pixels(sc_update.min_scroll_extent());
+                } else {
+                    rc_update.set_pull_distance_px(0.0);
+                    let metrics = ScrollMetrics::from(&sc_update.position());
+                    let clamped = ph_update.apply_boundary_conditions(&metrics, proposed);
+                    sc_update.set_pixels(clamped);
+                }
+            })
+            .on_pan_end(move |cx, details| {
+                if rc_end.is_refreshing() {
+                    return;
+                }
+                if details.reason == flui_interaction::GestureEndReason::Cancelled {
+                    rc_end.set_pull_distance_px(0.0);
+                    let metrics = ScrollMetrics::from(&sc_end.position());
+                    if let Some(sim) = ph_end.create_ballistic_simulation(&metrics, 0.0) {
+                        let _ = fc_fling.animate_with(sim);
+                    }
+                    return;
+                }
+                let pull = rc_end.pull_distance_px();
+                if pull >= threshold_px {
+                    // Sufficient overscroll: enter refreshing state and
+                    // fire the caller's callback.
+                    rc_end.begin_refresh();
+                    on_refresh_cb(cx);
+                } else {
+                    // Under-threshold pull: reset and start a normal fling.
+                    rc_end.set_pull_distance_px(0.0);
+
+                    // Convert pointer velocity to scroll velocity (negate:
+                    // finger DOWN = positive dy → offset increases with negative delta).
+                    let fling_vel_px_per_sec = {
+                        let raw = -details.velocity.pixels_per_second.dy;
+                        let bounded = raw.clamp(-8_000.0, 8_000.0);
+                        // `clamp` propagates NaN (IEEE 754); treat NaN as 0
+                        // so spring-back still works without measurable velocity.
+                        if bounded.is_nan() { 0.0 } else { bounded }
+                    };
+                    let metrics = ScrollMetrics::from(&sc_end.position());
+                    if let Some(sim) =
+                        ph_end.create_ballistic_simulation(&metrics, fling_vel_px_per_sec)
+                    {
+                        let _ = fc_fling.animate_with(sim);
+                    }
+                }
+            })
+            .child(Stack::new(stack_children))
     }
 
     fn did_update_view(&mut self, _old_view: &RefreshIndicator, new_view: &RefreshIndicator) {
@@ -589,9 +693,17 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
             self.scroll_controller = new_view.scroll_controller.clone();
             self.install_fling_listener();
         }
+        if !self
+            .phase_subscription
+            .as_ref()
+            .is_some_and(|(controller, _)| controller.shares_state_with(&new_view.controller))
+        {
+            self.subscribe_phase(&new_view.controller);
+        }
     }
 
     fn dispose(&mut self) {
+        self.unsubscribe_phase();
         if let Some(id) = self.fling_listener_id.take() {
             self.fling_controller.remove_listener(id);
         }
@@ -601,5 +713,99 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
             vsync.unregister(&registration);
         }
         self.fling_controller.dispose();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The start notification read the refreshing phase, then stalled while
+    // `finish` ran and its notification completed. When the start resumes it
+    // must be ignored, or the tracker records `refreshing` while the
+    // controller is idle and the next start schedules no rebuild. A private
+    // seam: the public surface cannot pause one notification inside another.
+    #[test]
+    fn phase_tracker_follows_mutation_order() {
+        let idle = Phase::default();
+        let mut refreshing = idle;
+        refreshing.set(true);
+        let mut finished = refreshing;
+        finished.set(false);
+        let mut restarted = finished;
+        restarted.set(true);
+
+        let tracker = PhaseTracker(Mutex::new(idle));
+        assert!(
+            !tracker.advance(finished),
+            "idle to idle (through a refresh) changes nothing visible"
+        );
+        assert!(
+            !tracker.advance(refreshing),
+            "the older notification finishing late must be ignored"
+        );
+        assert!(
+            tracker.advance(restarted),
+            "the next refresh must still schedule a rebuild"
+        );
+    }
+
+    // `finish` ran between the subscriber's phase snapshot (refreshing) and
+    // its registration, so no notification reports it. The catch-up read
+    // after registration must, or the next refresh flips nothing and its
+    // indicator never shows. A private seam: the public surface cannot run a
+    // mutation inside the subscription.
+    #[test]
+    fn phase_change_before_registration_is_caught_up() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let controller = RefreshController::new();
+        controller.begin_refresh();
+        let stale = controller.phase();
+        controller.finish();
+        let flips = Arc::new(AtomicUsize::new(0));
+        let id = listen_for_phase_flips(&controller, stale, {
+            let flips = Arc::clone(&flips);
+            move || {
+                flips.fetch_add(1, Ordering::SeqCst);
+            }
+        });
+        assert_eq!(
+            flips.load(Ordering::SeqCst),
+            1,
+            "the missed finish must flip"
+        );
+        controller.begin_refresh();
+        assert_eq!(
+            flips.load(Ordering::SeqCst),
+            2,
+            "the next refresh must flip"
+        );
+        controller.inner.remove_listener(id);
+
+        let stale = controller.phase();
+        controller.finish();
+        let failures = Arc::new(AtomicUsize::new(0));
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            listen_for_phase_flips(&controller, stale, {
+                let failures = Arc::clone(&failures);
+                move || {
+                    failures.fetch_add(1, Ordering::SeqCst);
+                    panic!("catch-up scheduling failure");
+                }
+            })
+        }));
+        let payload = result.expect_err("catch-up failure propagates");
+        assert_eq!(
+            flui_foundation::panic::payload_text(&*payload),
+            Some("catch-up scheduling failure")
+        );
+        assert_eq!(failures.load(Ordering::SeqCst), 1);
+        controller.begin_refresh();
+        controller.finish();
+        assert_eq!(
+            failures.load(Ordering::SeqCst),
+            1,
+            "the failed registration must no longer observe phase changes"
+        );
     }
 }

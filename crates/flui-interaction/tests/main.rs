@@ -27,3 +27,7 @@ mod text_store_host;
 mod gesture_lifecycle;
 #[path = "mouse_tracking.rs"]
 mod mouse_tracking;
+#[path = "multi_pointer_recognizers.rs"]
+mod multi_pointer_recognizers;
+#[path = "velocity_and_resampling.rs"]
+mod velocity_and_resampling;

@@ -25,6 +25,7 @@ fn navigator_failure_containment_and_reentrancy() {
             ("hero_seam::an_observer_may_push_from_did_push_without_deadlocking", crate::hero_seam::an_observer_may_push_from_did_push_without_deadlocking),
             ("transition_route::status_listener_does_not_hold_a_lock_across_the_binding_call", crate::transition_route::status_listener_does_not_hold_a_lock_across_the_binding_call),
             ("transition_route::pop_mid_push_cancels_the_push_future_inside_the_flush_and_ends_popping", crate::transition_route::pop_mid_push_cancels_the_push_future_inside_the_flush_and_ends_popping),
+            ("transition_route::dispose_releases_the_controller_slot_before_disposing_it", crate::transition_route::dispose_releases_the_controller_slot_before_disposing_it),
         ],
     );
 }
@@ -214,6 +215,7 @@ fn semantics_translation_and_routing() {
             ("semantics::numeric_range_admission_and_owner_payload_validation", crate::semantics::numeric_range_admission_and_owner_payload_validation as fn()),
             ("semantics::a_set_text_request_without_a_payload_is_dropped_rather_than_emptied", crate::semantics::a_set_text_request_without_a_payload_is_dropped_rather_than_emptied as fn()),
             ("semantics::a_tap_handler_round_trips_from_a_platform_click_to_the_callback", crate::semantics::a_tap_handler_round_trips_from_a_platform_click_to_the_callback),
+            ("semantics::assistive_scroll_actions_move_a_scrollable", crate::semantics::assistive_scroll_actions_move_a_scrollable),
             ("semantics::merge_semantics_collapses_its_descendants_in_the_a11y_tree", crate::semantics::merge_semantics_collapses_its_descendants_in_the_a11y_tree),
             ("semantics::published_bounds_are_physical_and_follow_the_scale_factor", crate::semantics::published_bounds_are_physical_and_follow_the_scale_factor),
             ("semantics::a_covered_retained_form_stays_absent_after_a_late_controller_update", crate::semantics::a_covered_retained_form_stays_absent_after_a_late_controller_update),
@@ -236,6 +238,8 @@ fn scroll_physics_and_activity() {
             ("scroll::scrollbar_thumb_stays_inside_short_tracks_and_drag_remains_bounded", crate::scroll::scrollbar_thumb_stays_inside_short_tracks_and_drag_remains_bounded as fn()),
             ("scroll::dragging_a_scrollbar_thumb_interrupts_animation_before_the_next_tick", crate::scroll::dragging_a_scrollbar_thumb_interrupts_animation_before_the_next_tick),
             ("scroll::cancelling_an_in_range_scroll_ends_activity_without_coasting", crate::scroll::cancelling_an_in_range_scroll_ends_activity_without_coasting as fn()),
+            ("scroll::refresh_indicator_drag_scrolls_without_rebuilding", crate::scroll::refresh_indicator_drag_scrolls_without_rebuilding),
+            ("scroll::refresh_indicator_rebuilds_only_on_a_phase_change", crate::scroll::refresh_indicator_rebuilds_only_on_a_phase_change),
             ("scroll::cancelling_bouncing_overscroll_settles_without_release_velocity", crate::scroll::cancelling_bouncing_overscroll_settles_without_release_velocity as fn()),
             ("scroll::cancelling_a_threshold_refresh_pull_does_not_refresh", crate::scroll::cancelling_a_threshold_refresh_pull_does_not_refresh as fn()),
             ("scroll::bouncing_lower_edge_preserves_outward_direction", crate::scroll::bouncing_lower_edge_preserves_outward_direction as fn()),
@@ -327,6 +331,7 @@ fn route_transitions() {
             ("page_route::page_route_occludes_the_route_below_once_its_transition_completes", crate::page_route::page_route_occludes_the_route_below_once_its_transition_completes),
             ("page_route::secondary_animation_runs_on_the_previous_page_route_when_pushing_and_popping", crate::page_route::secondary_animation_runs_on_the_previous_page_route_when_pushing_and_popping),
             ("transition_route::push_transition_parks_the_entry_in_pushing_until_the_controller_completes", crate::transition_route::push_transition_parks_the_entry_in_pushing_until_the_controller_completes),
+            ("transition_route::hopping_route_dropped_without_dispose_frees_proxy", crate::transition_route::hopping_route_dropped_without_dispose_frees_proxy),
         ],
     );
 }
@@ -383,6 +388,7 @@ fn hero_flights() {
             ("hero::a_hero_child_keeps_its_state_across_a_flight_without_a_global_key", crate::hero::a_hero_child_keeps_its_state_across_a_flight_without_a_global_key as fn()),
             ("hero_flight::a_push_eases_on_the_destination_hero_curve", crate::hero_flight::a_push_eases_on_the_destination_hero_curve),
             ("hero_flight::a_push_flight_interrupted_by_a_pop_diverts_in_place", crate::hero_flight::a_push_flight_interrupted_by_a_pop_diverts_in_place),
+            ("hero_flight::a_shrinking_flight_with_overshoot_keeps_a_non_negative_size", crate::hero_flight::a_shrinking_flight_with_overshoot_keeps_a_non_negative_size),
             ("hero_gesture::complete_release_pops_to_the_destination_route_and_the_flight_lands", crate::hero_gesture::complete_release_pops_to_the_destination_route_and_the_flight_lands),
             ("hero_public::a_hero_push_flight_runs_and_settles", crate::hero_public::a_hero_push_flight_runs_and_settles),
         ],
@@ -401,10 +407,78 @@ fn animation_and_visibility() {
             ("animated_size::animated_size_interpolates_to_a_new_child_size_over_frames", crate::animated_size::animated_size_interpolates_to_a_new_child_size_over_frames as fn()),
             ("implicit_animations::animated_container_interpolates_size_over_frames", crate::implicit_animations::animated_container_interpolates_size_over_frames),
             ("implicit_animations::animated_opacity_retargets_from_the_current_value_midflight", crate::implicit_animations::animated_opacity_retargets_from_the_current_value_midflight),
+            ("implicit_animations::overshooting_padding_stays_non_negative", crate::implicit_animations::overshooting_padding_stays_non_negative),
+            ("implicit_animations::overshooting_margin_stays_non_negative", crate::implicit_animations::overshooting_margin_stays_non_negative),
+            ("implicit_animations::overshooting_size_stays_non_negative", crate::implicit_animations::overshooting_size_stays_non_negative),
+            ("implicit_animations::animated_container_animates_its_transform", crate::implicit_animations::animated_container_animates_its_transform),
+            ("implicit_animations::nan_size_passes_through_like_container", crate::implicit_animations::nan_size_passes_through_like_container),
+            ("implicit_animations::animated_container_reanchors_unchanged_properties_on_restart", crate::implicit_animations::animated_container_reanchors_unchanged_properties_on_restart),
+            ("implicit_animations::animated_container_keeps_an_unchanged_collapsed_transform_on_restart", crate::implicit_animations::animated_container_keeps_an_unchanged_collapsed_transform_on_restart),
+            ("implicit_animations::animated_rotation_takes_the_shorter_arc", crate::implicit_animations::animated_rotation_takes_the_shorter_arc),
+            ("implicit_animations::animated_rotation_takes_the_numeric_arc", crate::implicit_animations::animated_rotation_takes_the_numeric_arc),
+            ("implicit_animations::animated_rotation_retargets_on_a_path_change", crate::implicit_animations::animated_rotation_retargets_on_a_path_change),
             ("binding_animation::registered_controller_advances_fade_opacity_frame_to_frame", crate::binding_animation::registered_controller_advances_fade_opacity_frame_to_frame),
-            ("slide_transition::build_wires_transform_hit_tests_false_into_fractional_translation", crate::slide_transition::build_wires_transform_hit_tests_false_into_fractional_translation),
             ("visibility::hidden_without_maintain_state_shows_the_default_replacement", crate::visibility::hidden_without_maintain_state_shows_the_default_replacement),
             ("visibility::maintained_child_mutes_and_resumes_without_remounting_as_visibility_changes", crate::visibility::maintained_child_mutes_and_resumes_without_remounting_as_visibility_changes),
+        ],
+    );
+}
+
+/// Slide, scale and rotation transitions: a tick moves the transform on the
+/// same frame without rebuilding any element.
+#[test]
+fn transitions_tick_without_rebuilding() {
+    run_cases(
+        "transitions_tick_without_rebuilding",
+        &[
+            (
+                "slide",
+                crate::transitions::slide_ticks_without_rebuilding as fn(),
+            ),
+            (
+                "slide_rtl",
+                crate::transitions::slide_rtl_mirrors_dx_without_rebuilding,
+            ),
+            ("scale", crate::transitions::scale_ticks_without_rebuilding),
+            (
+                "rotation",
+                crate::transitions::rotation_ticks_without_rebuilding,
+            ),
+            (
+                "shared_controller",
+                crate::transitions::shared_controller_moves_both_transitions_on_one_tick,
+            ),
+            (
+                "zero_dt_huge_dt_reverse_mid_run",
+                crate::transitions::virtual_time_ticks_follow_the_controller_value,
+            ),
+        ],
+    );
+}
+
+/// Where a transformed child is hit, and how the transition
+/// owns, swaps and releases its animation.
+#[test]
+fn transitions_follow_the_painted_transform() {
+    run_cases(
+        "transitions_follow_the_painted_transform",
+        &[
+            (
+                "transitions_hit_test_follows_the_painted_transform",
+                crate::transitions::hit_test_follows_the_painted_transform as fn(),
+            ),
+            (
+                "transitions_swap_their_animation_in_place",
+                crate::transitions::swapping_the_animation_keeps_the_render_object,
+            ),
+            (
+                "transition_unmounted_during_a_tick_marks_nothing",
+                crate::transitions::unmounted_transition_leaves_its_sibling_ticking,
+            ),
+            (
+                "transitions_release_the_animation_after_unmount",
+                crate::transitions::the_animation_is_released_after_unmount,
+            ),
         ],
     );
 }
@@ -439,6 +513,7 @@ fn forms_and_async_builders() {
             ("form::reset_restores_initial_values_and_clears_errors_and_interaction", crate::form::reset_restores_initial_values_and_clears_errors_and_interaction as fn()),
             ("form::validate_shows_the_validator_error_and_revalidating_a_valid_value_clears_it", crate::form::validate_shows_the_validator_error_and_revalidating_a_valid_value_clears_it),
             ("future_builder::future_builder_pending_then_error", crate::future_builder::future_builder_pending_then_error),
+            ("future_builder::future_builder_accepts_an_owner_local_future", crate::future_builder::future_builder_accepts_an_owner_local_future),
             ("stream_builder::stream_builder_data_error_data_then_done", crate::stream_builder::stream_builder_data_error_data_then_done),
         ],
     );

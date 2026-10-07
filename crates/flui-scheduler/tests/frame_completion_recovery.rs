@@ -47,7 +47,9 @@ fn assert_failure(result: Result<(), Box<dyn std::any::Any + Send>>, expected: &
 }
 fn assert_next_frame(scheduler: &UpdateScheduler) {
     let mut next = scheduler.end_of_frame();
-    scheduler.execute_frame();
+    scheduler.execute_frame(
+        &flui_scheduler::OwnerFrame::new(scheduler).expect("the scheduler has no live owner frame"),
+    );
     assert!(matches!(
         Pin::new(&mut next).poll(&mut Context::from_waker(Waker::noop())),
         Poll::Ready(Ok(FrameOutcome::Completed { .. }))
@@ -151,15 +153,24 @@ fn delivery(case: &str) {
             drop(owned);
         } else if pipeline {
             scheduler.drive_frame(
+                &flui_scheduler::OwnerFrame::new(scheduler)
+                    .expect("the scheduler has no live owner frame"),
                 Instant::now(),
                 IdleDeadline::far_future(Instant::now()),
                 || panic!("pipeline primary"),
             );
         } else if case == "direct abort" {
-            scheduler.handle_begin_frame(Instant::now());
+            scheduler.handle_begin_frame(
+                Instant::now(),
+                &flui_scheduler::OwnerFrame::new(scheduler)
+                    .expect("the scheduler has no live owner frame"),
+            );
             scheduler.abort_frame();
         } else {
-            scheduler.execute_frame();
+            scheduler.execute_frame(
+                &flui_scheduler::OwnerFrame::new(scheduler)
+                    .expect("the scheduler has no live owner frame"),
+            );
         }
     };
     let result = if case.starts_with("telemetry") {

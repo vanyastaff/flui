@@ -156,8 +156,8 @@ impl UiRealm {
             window,
             RealmCapabilities {
                 global_key_scope: self.global_key_scope.clone(),
-                async_driver: self.scheduler.async_driver().clone(),
-                local_post_frame_handle: self.local_post_frame.local_handle(),
+                async_driver: self.owner_frame.async_driver(),
+                local_post_frame_handle: self.owner_frame.local_post_frame_handle(),
                 interaction_dispatch_handle: self.interaction_lane.dispatch_handle(),
                 scheduler: &self.scheduler,
                 wake: Arc::clone(&self.wake),
@@ -268,16 +268,17 @@ impl UiRealm {
         &self.scheduler
     }
 
-    /// This realm's owner-local post-frame lane. Test-only: production ends
-    /// every frame through [`Self::pump`], whose frame drive passes the lane
-    /// to `UpdateScheduler::drive_frame_with_lane` itself so no host can
-    /// drive a frame that forgets it. A test that hand-assembles a frame
-    /// drive passes it the same way — drain-by-parameter, the same reason
-    /// [`Self::scheduler`] exists rather than a process-global lookup.
+    /// This realm's owner-local frame state (its post-frame queue and async
+    /// tasks). Test-only: production drives every frame through
+    /// [`Self::pump`], whose frame drive passes it to
+    /// `UpdateScheduler::drive_frame` itself so no host can drive a frame
+    /// that forgets it. A test that hand-assembles a frame drive passes it the
+    /// same way — by parameter, the same reason [`Self::scheduler`] exists
+    /// rather than a process-global lookup.
     #[cfg(any(test, feature = "test-support"))]
     #[must_use]
-    pub fn local_post_frame_lane(&self) -> &flui_scheduler::LocalPostFrameLane {
-        &self.local_post_frame
+    pub fn owner_frame(&self) -> &flui_scheduler::OwnerFrame {
+        &self.owner_frame
     }
 
     /// Enter this realm's owner scope.
@@ -291,12 +292,12 @@ impl UiRealm {
     /// segment is running. Nested entry is stack-shaped and panic unwinding
     /// restores the previously active realm.
     ///
-    /// Does NOT activate the local post-frame lane: `LocalPostFrameHandle`
+    /// Does NOT activate the owner frame: `LocalPostFrameHandle`
     /// addresses its lane directly (a `Weak` pointer minted once per
     /// presentation), so `schedule_local` needs no ambient "active lane"
     /// scope to succeed. The frame drive drains that lane by passing it
-    /// explicitly to `UpdateScheduler::drive_frame_with_lane`/
-    /// `end_frame_with_lane`, not by anything entered here.
+    /// explicitly to `UpdateScheduler::drive_frame`/
+    /// `end_frame`, not by anything entered here.
     pub fn enter<R>(&self, f: impl FnOnce(&Self) -> R) -> R {
         self.interaction_lane.enter(|| {
             let composite = GlobalKeyRegistryComposite::assemble(

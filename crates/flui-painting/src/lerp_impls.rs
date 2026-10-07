@@ -20,9 +20,8 @@ impl Lerp for Color {
         // The `Lerp` contract is no-clamp: `t` may fall outside [0, 1] so
         // overshoot curves (elastic/back) propagate through `Tween<Color>`.
         // `Color::lerp` clamps `t`, which would flatten that overshoot, so this
-        // takes the same premultiplied interpolation without the clamp. Colour
-        // channels interpolate in f32; the animation parameter arrives as f64.
-        Color::lerp_unclamped(*self, *other, t as f32)
+        // takes the same premultiplied Oklab interpolation without the clamp.
+        Color::lerp_unclamped(*self, *other, t)
     }
 }
 

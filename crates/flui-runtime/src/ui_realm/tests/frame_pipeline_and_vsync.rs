@@ -70,9 +70,12 @@ pub(crate) fn the_production_frame_polls_the_realms_async_driver_once_before_the
 
     let polls = Arc::new(AtomicUsize::new(0));
     let polls_for_task = Arc::clone(&polls);
-    let _token = scheduler.spawn_local(Box::pin(async move {
-        polls_for_task.fetch_add(1, Ordering::Release);
-    }));
+    let _token = realm
+        .owner_frame()
+        .async_driver()
+        .spawn_local(Box::pin(async move {
+            polls_for_task.fetch_add(1, Ordering::Release);
+        }));
     assert_eq!(
         polls.load(Ordering::Acquire),
         0,
@@ -83,14 +86,14 @@ pub(crate) fn the_production_frame_polls_the_realms_async_driver_once_before_the
     let flag = Arc::clone(&polled_before_pipeline);
     let polls_probe = Arc::clone(&polls);
 
-    scheduler.drive_frame_with_lane(
+    scheduler.drive_frame(
+        realm.owner_frame(),
         flui_scheduler::Instant::now(),
         flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
         || {
             flag.store(polls_probe.load(Ordering::Acquire) == 1, Ordering::Release);
             let _ = realm.draw_frame(test_constraints());
         },
-        realm.local_post_frame_lane(),
     );
 
     assert!(
@@ -109,6 +112,60 @@ pub(crate) fn the_production_frame_polls_the_realms_async_driver_once_before_the
 // ---- Gesture-arena / pointer dispatch --------------------------------
 
 // ---- Vsync wiring (production frame continuation) -------------------
+
+/// A raw frame time that is not a duration (NaN, ±∞, negative) or that runs
+/// backwards holds the presentation's animation time: the running
+/// controller keeps its value and keeps running, and the next valid frame
+/// continues from where the timeline stood.
+pub(crate) fn an_invalid_or_backwards_frame_time_holds_the_animation() {
+    use flui_animation::{Animation as _, AnimationController};
+    use std::time::Duration;
+
+    let realm = mount_root();
+    let controller = AnimationController::new(
+        Duration::from_secs(1),
+        &flui_scheduler::UpdateScheduler::new(),
+    );
+    realm.vsync().register(controller.clone());
+    controller.forward().expect("fresh controller forwards");
+    let frame_at = |secs: f64| {
+        realm.set_now_secs_for_test(secs);
+        let _ = realm.enter(|realm| realm.draw_frame_entered(test_constraints()));
+    };
+
+    // The first tick anchors the run; 250 ms later it is a quarter through.
+    frame_at(0.5);
+    frame_at(0.75);
+    let held = controller.value();
+    assert!((held - 0.25).abs() < 1e-9, "a quarter through, got {held}");
+
+    for (case, secs) in [
+        ("nan", f64::NAN),
+        ("positive_infinity", f64::INFINITY),
+        ("negative_infinity", f64::NEG_INFINITY),
+        ("negative", -1.0),
+        ("backwards", 0.6),
+    ] {
+        frame_at(secs);
+        assert_eq!(
+            controller.value().to_bits(),
+            held.to_bits(),
+            "{case}: the value holds"
+        );
+        assert!(controller.is_animating(), "{case}: the run keeps running");
+        assert!(
+            realm.vsync().has_running(),
+            "{case}: the run still demands frames"
+        );
+    }
+
+    frame_at(1.0);
+    let resumed = controller.value();
+    assert!(
+        (resumed - 0.5).abs() < 1e-9,
+        "continues from the timeline, got {resumed}"
+    );
+}
 
 // ---- render_frame retry / first-frame-deferral semantics ----
 

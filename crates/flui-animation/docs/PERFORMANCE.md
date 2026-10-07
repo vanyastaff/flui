@@ -2,45 +2,74 @@
 
 Performance characteristics of `flui_animation`.
 
-Standalone `rust` blocks are compiled as doctests. Blocks marked
-`rust,ignore` are implementation sketches or benchmark fragments whose
-surrounding harness is intentionally omitted.
+Every `rust` block is compiled as a doctest against the current API. Lines
+starting with `#` are hidden setup.
 
 ## Measured benchmarks
 
-These are **measured** by the committed Criterion bench
-(`benches/animation_bench.rs`); run `cargo bench -p flui-animation` to reproduce.
-Absolute numbers are machine-relative (the figures below are from one
-development machine); treat them as orders of magnitude and as a regression
-baseline, not as a hardware promise.
+The benchmark tables below record measurements from the committed Criterion
+targets `benches/animation_bench.rs` and `benches/vsync_registry.rs`. The later
+per-controller analysis also records historical scratch measurements and a
+standalone prototype; those experiments are not committed, and the command
+below does not reproduce their attribution percentages or the 15,000–30,000
+controller samples. Absolute numbers are machine-relative and both hosts below
+were shared with other builds, so read them as orders of magnitude and as a
+regression baseline, not as a hardware promise. Run the committed targets with:
 
-| Hot path (per call) | Median |
-|---------------------|--------|
-| `Tween<f32>::transform` (Lerp) | ~0.64 ns |
-| `Tween<Offset>::transform` | ~0.66 ns |
-| `Tween<Color>::transform` | ~5.9 ns |
-| `Curves::Linear` | ~0.42 ns |
-| `Curves::ElasticOut` | ~9–13 ns |
-| `Curves::EaseInOut` (Cubic, table + Newton, output-bounded) | ~15 ns |
-| `Curves::EaseInOutCubicEmphasized` (two precomputed `Cubic` segments) | ~25 ns |
-| `SpringSimulation` x + dx | ~19 ns |
-| `AnimatedValue<Color>` advance + value (4 component springs) | ~97 ns |
-| `AnimationController::tick_at` (frame advance) | ~8.8 ns |
-| `CurvedAnimation::value` (1 `Arc<dyn>` hop + cubic) | ~59 ns |
+```bash
+cargo bench -p flui-animation --bench animation_bench --bench vsync_registry
+```
 
-The cubic-curve solve (`EaseInOut` and friends) inverts the bezier x-coordinate
-to find the parameter (the WebKit `UnitBezier` / Chromium `gfx::CubicBezier`
-method): an 11-sample x table built in `Cubic::new` brackets the root and seeds
-up to four Newton steps, two probes then prove the root lies within
-`1e-7 / max|dy/ds|` of the estimate, and bisection takes over when they do
-not. It stops on the output, so the result is within `1e-7` of the exact
-y(x) even next to a vertical tangent. All curves are comfortably within a
-60fps frame budget.
+### Controller frame path
 
-> The tables below this point are illustrative structure/complexity notes, not
-> measured timings. Earlier hand-estimated nanosecond figures have been removed
-> in favour of the measured table above; the remaining size/complexity notes are
-> derived from the types and may drift — verify against the code.
+Windows development host, shared. Every `tick_at` row measures a run that
+cannot finish during the bench, so it times a real frame advance rather than
+the early return of a settled controller.
+
+| Bench | Median |
+|-------|-------:|
+| `controller/tick_at/linear` | 41.6 ns |
+| `controller/tick_at/ease_in_out` | 52.0 ns |
+| `controller/tick_at/1_value_1_status_listeners` | 62.0 ns |
+| `controller/tick_at/4_value_1_status_listeners` | 130.3 ns |
+| `controller/tick_at/simulation_friction` | 64.3 ns |
+| `controller/tick_at/simulation_spring` | 93.6 ns |
+| `controller/curved_value` (mid-run parent) | 24.0 ns |
+| `controller/status_fan_out/1` | 315 ns |
+| `controller/status_fan_out/4` | 355 ns |
+| `controller/status_fan_out/8` | 531 ns |
+| `controller/forward` | 206 ns |
+| `smoothing/smooth_damp_step` | 7.6 ns |
+
+A steady-state frame (`Vsync::tick_all` on a running controller with four
+value listeners and one status listener) performs no heap allocation; the
+`tick_allocation` test target pins that with a counting allocator. The
+notifier's listener snapshot holds four callbacks inline, so a fifth value
+listener spills it to the heap on every notification.
+
+### Curves, tweens and simulations
+
+Same kind of host, loaded by concurrent builds, so these are slower than an
+idle machine would show.
+
+| Bench | Median |
+|-------|-------:|
+| `tween_transform/f64` | 1.42 ns |
+| `tween_transform/offset` | 3.95 ns |
+| `curve_eval/linear` | 1.09 ns |
+| `curve_eval/elastic_out` | 24.6 ns |
+| `curve_eval/ease_in_out` | 31.0 ns |
+| `curve_eval/three_point_cubic_emphasized` | 84.8 ns |
+| `smoothing/exp_decay_half_life` | 10.9 ns |
+| `spring/simulation_x_dx` | 54.7 ns |
+
+The cubic-curve solve (`EaseInOut` and every other `Cubic`) inverts the
+bezier x-coordinate to find the parameter, using Newton-Raphson with a
+bisection fallback (the WebKit `UnitBezier` solver), which converges in 2–4
+iterations on the common path. Colour interpolation now uses premultiplied
+Oklab throughout (ADR-0149). Earlier sRGB and separate Oklab-tween timings
+are omitted because those APIs and the colour-spring representation changed;
+run the current colour cases in `animation_bench` to measure the new paths.
 
 ## Vsync registry indexing (#1060)
 
@@ -159,64 +188,33 @@ few percent better," not as a confirmed 20 % win; `has_running` folds the
 same probe in and is otherwise unaffected (still O(N), not part of either
 table).
 
-## Memory Layout
+## Ownership and size
 
-### Type Sizes
+Sizes are not listed here: they follow from the field types and change with
+them. What matters for cost is what each type holds:
 
-| Type | Size | Notes |
-|------|------|-------|
-| `AnimationController` | ~64 bytes | Arc + Arc (inner + notifier) |
-| `Arc<AnimationController>` | 8 bytes | Pointer |
-| `CurvedAnimation<C>` | 16 + sizeof(C) | Arc + curve + option |
-| `TweenAnimation<T, A>` | 8 + sizeof(A) | Arc + tween |
-| `ReverseAnimation` | 8 bytes | Single Arc |
-| `CompoundAnimation` | 24 bytes | Two Arcs + operator |
-| `ConstantAnimation<T>` | 24 + sizeof(T) | Value + status + notifier |
-| `AnimationStatus` | 1 byte | 4-variant enum |
-| `AnimationOperator` | 1 byte | 6-variant enum |
-| `AnimationError` | 1 byte | Simple enum |
-| `ListenerId` | 8 bytes | NonZeroU64 |
-
-### Curve Sizes
-
-| Curve | Size | Notes |
-|-------|------|-------|
-| `Linear` | 0 bytes | Unit struct |
-| `Cubic` | 176 bytes | 4 control values, 6 polynomial coefficients, slope bound, 11-sample x table (all `f64`) |
-| `ThreePointCubic` | 432 bytes | 5 points + two precomputed `Cubic` segments |
-| `ElasticInCurve` | 8 bytes | period: f64 |
-| `Interval<C>` | 8 + sizeof(C) | begin, end + curve |
-| `CatmullRomCurve` | 32 bytes | SmallVec (8 points inline) |
-
-### Tween Sizes
-
-| Tween | Size | Notes |
-|-------|------|-------|
-| `FloatTween` | 8 bytes | 2 × f32 |
-| `IntTween` | 8 bytes | 2 × i32 |
-| `ColorTween` | 32 bytes | 2 × Color |
-| `SizeTween` | 16 bytes | 2 × Size |
-| `TweenSequence<T, A>` | 24 bytes | Vec + total_weight |
+| Type | Holds |
+|------|-------|
+| `AnimationController` | two `Arc`s (state behind one `parking_lot::Mutex`, and the value notifier); `clone()` shares the controller |
+| `CurvedAnimation<C>` | the curve(s) and one `Arc` of links: the parent `Arc<dyn Animation<f64>>`, a notifier, a curve-direction `Mutex` and two parent subscriptions (value and status) |
+| `TweenAnimation<T, A>` | the parent `Arc<dyn Animation<f64>>`, the animatable, a notifier and a parent subscription |
+| `ReverseAnimation` | the parent `Arc<dyn Animation<f64>>`, a notifier and a parent subscription |
+| `CompoundAnimation` | two parent `Arc<dyn Animation<f64>>`s, a notifier and two parent subscriptions |
+| `ConstantAnimation<T>` | the value and a status; no notifier, since it never changes |
+| `Cubic`, `ElasticOutCurve`, `Interval<C>` | plain `f64` parameters (plus the inner curve) |
+| `CatmullRomCurve` | a `SmallVec` of points, eight inline |
 
 ---
 
 ## Synchronization
 
-### parking_lot vs std
+### Controller lock strategy
 
-The controller uses `parking_lot::Mutex`, which is smaller and faster than
-`std::sync::Mutex` under both contention and no contention. These are *reference*
-figures from parking_lot's own published benchmarks (order-of-magnitude
-single-digit-to-tens-of-nanoseconds for an uncontended lock), not measured in
-this crate — the per-frame `tick_at` figure in the [Measured benchmarks](#measured-benchmarks)
-table (~8.8 ns, lock included) is the number that actually matters here.
+All controller state sits behind a single `parking_lot::Mutex`, next to a
+separately shared value notifier:
 
-### Controller Lock Strategy
-
-Single `Mutex<Inner>` for all state:
-
-```rust,ignore
-struct AnimationController {
+```text
+AnimationController {
     inner: Arc<Mutex<AnimationControllerInner>>,
     notifier: Arc<ChangeNotifier>,
 }
@@ -225,174 +223,72 @@ struct AnimationController {
 Benefits:
 - Simple reasoning about state consistency
 - Batched updates in single lock acquisition
-- Lock released before listener callbacks
+- Lock released before user code (listeners, curves, simulations) runs
 
-### Tick Cycle
+### Tick cycle
 
-```rust,ignore
-fn tick(&self) {
-    let should_notify = {
-        let mut inner = self.inner.lock();
-        // Update value, status
-        // ...
-        status_changed
-    };
-    // Lock released
-    
-    self.notifier.notify_listeners();  // Value listeners
-    
-    if should_notify {
-        // Status listeners called outside lock
-    }
-}
+A frame is driven by `tick_at(raw_elapsed_secs)`, an absolute time since the
+run started. The controller samples the active run's source (curve or
+simulation) outside its lock, commits the new value and status under the
+lock, releases it, and only then notifies value listeners and, on a status
+change, status listeners. The `tick_at` rows of the benchmark table include
+that lock traffic.
+
+---
+
+## Arc and dispatch
+
+`AnimationController::clone()` is two reference-count increments. Composition
+types hold their parent as `Arc<dyn Animation<f64>>`, so each `value()` call
+crosses one dynamic dispatch per layer; `controller/curved_value` above is
+that hop plus a cubic solve.
+
+```rust
+# use std::sync::Arc;
+# use std::time::Duration;
+# use flui_animation::{Animation, AnimationController, CurvedAnimation, Curves};
+# use flui_scheduler::UpdateScheduler;
+# let scheduler = UpdateScheduler::new();
+# let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
+let shared = controller.clone(); // shares the controller, no copy
+let animation: Arc<dyn Animation<f64>> = Arc::new(CurvedAnimation::new(
+    Arc::new(shared),
+    Curves::EaseInOut,
+));
+let value = animation.value(); // dynamic dispatch into the curved layer
+# controller.dispose();
 ```
 
 ---
 
-## Arc Overhead
+## Listener overhead
 
-### Cloning
+Value and status listeners are `Arc<dyn Fn ...>` callbacks. Reusing one
+callback across several animations shares its `Arc` and captures, but
+`add_listener` still wraps each registration in a fresh `Arc` (plus any map
+growth), so every registration costs at least one allocation:
 
-`Arc::clone` is atomic increment (~5ns):
+```rust
+# use std::sync::Arc;
+# use std::time::Duration;
+# use flui_animation::AnimationController;
+# use flui_scheduler::UpdateScheduler;
+use flui_foundation::{Listenable, ListenerCallback};
+# let scheduler = UpdateScheduler::new();
+# let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
+# let other = AnimationController::new(Duration::from_millis(300), &scheduler);
 
-```rust,ignore
-let controller2 = controller.clone();  // Very cheap
-```
-
-### Dereferencing
-
-One pointer indirection per access:
-
-```rust,ignore
-let value = controller.value();
-// Equivalent to: (*controller).value()
-```
-
-For hot paths, cache the reference:
-
-```rust,ignore
-let ctrl = &*controller;
-ctrl.value();
-ctrl.status();
-ctrl.is_animating();
-```
-
----
-
-## Trait Object Overhead
-
-### Virtual Dispatch
-
-`Arc<dyn Animation<f32>>` adds vtable lookup (~2ns per call):
-
-```rust,ignore
-// Virtual dispatch
-let value = animation.value();
-
-// Direct (if concrete type known)
-let value = controller.value();
-```
-
-### When to Use Generics
-
-For performance-critical paths:
-
-```rust,ignore
-// Trait object (virtual dispatch each call)
-pub struct SlowAnimation {
-    parent: Arc<dyn Animation<f32>>,
-}
-
-// Generic (monomorphized, no dispatch)
-pub struct FastAnimation<A: Animation<f32>> {
-    parent: Arc<A>,
-}
-```
-
-Trade-off: Generics increase binary size and compile time.
-
----
-
-## Curve Evaluation Cost
-
-Relative cost by the work each curve does (measured figures for `Linear`,
-`EaseInOut`, and `ElasticOut` are in the [Measured benchmarks](#measured-benchmarks)
-table above):
-
-| Curve | Operations | Relative cost |
-|-------|------------|---------------|
-| `Linear` | 1 clamp | trivial |
-| `EaseIn/Out` (`Cubic`) | table lookup + Newton bézier x-inversion, two proof probes (+ bisection fallback) | moderate |
-| `EaseInOutSine` | 1 trig | low |
-| `ElasticIn/Out` | pow + sin | low-moderate |
-| `BounceOut` | 3-4 branches + muls | low |
-| `CatmullRomCurve` | spline interpolation | moderate |
-
-All curves are comfortably within a 60fps (~16ms) frame budget. The `Cubic`
-solve is the heaviest single curve (~15 ns): a table lookup, a few Newton
-steps and two probes on the common path.
-
----
-
-## Tween Evaluation Cost
-
-| Tween | Operations | Cost |
-|-------|------------|------|
-| `FloatTween` | 1 lerp | ~1ns |
-| `IntTween` | 1 lerp + round | ~2ns |
-| `ColorTween` | 4 lerps | ~4ns |
-| `SizeTween` | 2 lerps | ~2ns |
-| `TweenSequence` | Segment lookup + lerp | ~10ns |
-
----
-
-## Listener Overhead
-
-### Storage
-
-Listeners stored in `Vec<(ListenerId, Callback)>`:
-
-| Operation | Complexity |
-|-----------|------------|
-| Add listener | O(1) amortized |
-| Remove listener | O(n) |
-| Notify all | O(n) |
-
-For many listeners, consider `HashMap<ListenerId, Callback>`.
-
-### Callback Allocation
-
-`Arc<dyn Fn() + Send + Sync>` requires:
-- One heap allocation for closure
-- One allocation for Arc control block
-
-Reuse callbacks:
-
-```rust,ignore
-// Good: single allocation
-let callback = Arc::new(|| println!("changed"));
-controller.add_listener(callback.clone());
+// The captures are shared; each registration still allocates its own wrapper
+let callback: ListenerCallback = Arc::new(|| println!("changed"));
+controller.add_listener(Arc::clone(&callback));
 other.add_listener(callback);
-
-// Bad: allocation per add
-controller.add_listener(Arc::new(|| println!("changed")));
-other.add_listener(Arc::new(|| println!("changed")));
+# controller.dispose();
+# other.dispose();
 ```
 
----
-
-## Frame Budget
-
-At 60fps, ~16.6ms per frame:
-
-| Phase | Budget | Notes |
-|-------|--------|-------|
-| Animation tick | <0.5ms | All controllers |
-| Layout | <5ms | Tree traversal |
-| Paint | <10ms | GPU commands |
-| Headroom | ~1ms | Jitter buffer |
-
-Typical animation overhead: <0.1ms for 10 active animations.
+The per-frame cost of listeners is in the benchmark table:
+`tick_at/1_value_1_status_listeners` against `tick_at/4_value_1_status_listeners`,
+and `status_fan_out/{1,4,8}` for status transitions.
 
 ---
 
@@ -400,49 +296,38 @@ Typical animation overhead: <0.1ms for 10 active animations.
 
 ### 1. Reuse Controllers
 
-```rust,ignore
-// Bad: new allocation per animation
-fn animate() {
-    let controller = AnimationController::new(...);
-    controller.forward()?;
-    controller.dispose();
-}
-
-// Good: reuse
-controller.reset();
+```rust
+# use std::time::Duration;
+# use flui_animation::{AnimationController, AnimationError};
+# use flui_scheduler::UpdateScheduler;
+# fn main() -> Result<(), AnimationError> {
+# let scheduler = UpdateScheduler::new();
+# let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
+// Instead of creating a controller per animation, rewind and replay
+controller.reset()?;
 controller.forward()?;
+# controller.dispose();
+# Ok(())
+# }
 ```
 
-### 2. Avoid Unnecessary Clones
+### 2. Use Status Listeners Instead of Polling
 
-```rust,ignore
-// Bad: clone on every access
-fn render(&self) {
-    let ctrl = self.controller.clone();
-    let value = ctrl.value();
-}
-
-// Good: borrow
-fn render(&self) {
-    let value = self.controller.value();
-}
+```rust
+# use std::sync::Arc;
+# use std::time::Duration;
+# use flui_animation::{Animation, AnimationController, AnimationStatus};
+# use flui_scheduler::UpdateScheduler;
+# let scheduler = UpdateScheduler::new();
+# let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
+// React to the transition once instead of reading status every frame
+controller.add_status_listener(Arc::new(|status| {
+    if status == AnimationStatus::Completed { /* ... */ }
+}));
+# controller.dispose();
 ```
 
-### 3. Use Status Listeners
-
-```rust,ignore
-// Bad: poll every frame
-fn on_frame(&self) {
-    if self.controller.status() == Completed { ... }
-}
-
-// Good: react to changes
-controller.add_status_listener(|status| {
-    if status == Completed { ... }
-});
-```
-
-### 4. Batch Animations
+### 3. Batch Animations
 
 ```rust
 # use std::sync::Arc;
@@ -459,41 +344,19 @@ let ctrl2 = AnimationController::new(d, &scheduler);
 # ctrl2.dispose();
 ```
 
-### 5. Build Custom Curves Once
+### 4. Keep Listener Counts Small on Hot Controllers
 
-`Cubic::new` precomputes the solver's coefficients and x table, so a custom
-cubic evaluates exactly as fast as a `Curves` constant. Make it a `const`
-(validated at compile time) rather than rebuilding it every frame:
+Up to four value listeners notify without allocating; a fifth spills the
+notifier's snapshot to the heap on every frame. Fan out from one listener
+when a controller needs many observers.
+
+### 5. Built-in Curves Are Plain Values
+
+`Curves::EaseInOut` is `Cubic::new(0.42, 0.0, 0.58, 1.0)`: a named constant
+costs exactly what the equivalent hand-written `Cubic` costs.
 
 ```rust
-use flui_animation::{Cubic, Curve, Curves};
+use flui_animation::{Cubic, Curves};
 
-const MY_EASE: Cubic = Cubic::new(0.42, 0.0, 0.58, 1.0);
-assert_eq!(MY_EASE, Curves::EaseInOut);
-assert_eq!(MY_EASE.transform(0.5), Curves::EaseInOut.transform(0.5));
+assert_eq!(Curves::EaseInOut, Cubic::new(0.42, 0.0, 0.58, 1.0));
 ```
-
----
-
-## Benchmarks
-
-Run with:
-
-```bash
-cargo bench -p flui-animation
-```
-
-Typical results (Apple M1):
-
-| Operation | Time |
-|-----------|------|
-| `controller.value()` | ~50ns |
-| `controller.forward()` | ~150ns |
-| `controller.tick()` | ~200ns |
-| `curved.value()` | ~60ns |
-| `tween.transform()` | ~5ns |
-| `Arc::clone` | ~5ns |
-| `add_listener` | ~200ns |
-| `notify (10 listeners)` | ~800ns |
-
-Note: Times include lock acquisition. Uncontended locks dominate.

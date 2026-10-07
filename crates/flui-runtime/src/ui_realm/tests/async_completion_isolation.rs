@@ -103,10 +103,7 @@ pub(crate) fn async_completion_after_presentation_teardown_fails_closed_no_sibli
     // Spawn on the REALM's shared driver — exactly what a real
     // async widget on presentation A would have done. Nothing
     // drives it to completion until explicitly polled below, well
-    // after A has already closed. `Arc<AtomicBool>`, not
-    // `Rc<Cell<bool>>`: `BoxedTask` requires `Send` (the driver is
-    // shared across threads even though polling only ever happens
-    // on the frame thread — see `AsyncDriver`'s own doc).
+    // after A has already closed.
     let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let ran_marker = Arc::clone(&ran);
     let _token = driver.spawn_local(Box::pin(async move {
@@ -136,11 +133,11 @@ pub(crate) fn async_completion_after_presentation_teardown_fails_closed_no_sibli
     // Poll the driver to completion — A's task runs, its captured
     // `RebuildHandle` schedules against A's own (now-orphaned)
     // inbox.
-    realm.scheduler().drive_frame_with_lane(
+    realm.scheduler().drive_frame(
+        realm.owner_frame(),
         flui_scheduler::Instant::now(),
         flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
         || {},
-        realm.local_post_frame_lane(),
     );
     assert!(
         ran.load(Ordering::Relaxed),

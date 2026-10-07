@@ -2,7 +2,7 @@
 
 use super::{CancellablePostFrameCallback, UpdateScheduler};
 use crate::post_frame::LocalPostFrameEntry;
-use crate::{CallbackId, FrameTiming, LocalPostFrameLane};
+use crate::{CallbackId, FrameTiming, OwnerFrame};
 
 /// Preserve queue provenance so an uninvoked panic tail can return to its owner.
 enum PendingPostFrame {
@@ -29,7 +29,7 @@ impl PendingPostFrame {
 impl UpdateScheduler {
     pub(super) fn dispatch_post_frame_callbacks(
         &self,
-        lane: Option<&LocalPostFrameLane>,
+        owner: &OwnerFrame,
         timing: &FrameTiming,
     ) -> std::thread::Result<()> {
         let (mut callbacks, shared_callbacks, local_callbacks) = {
@@ -38,9 +38,7 @@ impl UpdateScheduler {
             let mut snapshot: Vec<_> = cbs.drain(..).map(PendingPostFrame::Shared).collect();
             let shared_callbacks = snapshot.len();
             let mut local_callbacks = 0;
-            if let Some(lane) = lane
-                && let Ok(local_entries) = lane.take_queue_for(self)
-            {
+            if let Ok(local_entries) = owner.take_post_frame_queue_for(self) {
                 local_callbacks = local_entries.len();
                 snapshot.extend(local_entries.into_iter().map(PendingPostFrame::Local));
             }
@@ -84,8 +82,8 @@ impl UpdateScheduler {
             let _registration = self.inner.callbacks.post_frame_registration.lock();
             self.inner.callbacks.post_frame.lock().extend(shared);
             if !local.is_empty() {
-                lane.expect("BUG: local post-frame tail has a validated source lane")
-                    .restore_queue(local);
+                // Only a validated owner frame contributed local entries.
+                owner.restore_post_frame_queue(local);
             }
             // Keep cancellations for the restored tail and other queues.
         } else {

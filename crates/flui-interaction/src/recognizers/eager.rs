@@ -63,12 +63,14 @@ use std::sync::Arc;
 use flui_foundation::geometry::Offset;
 use parking_lot::Mutex;
 
-use super::recognizer::{GestureRecognizer, RecognizerBase};
+use super::recognizer::{GestureRecognizer, RecognizerBase, withdraw_cancelled};
 use crate::{
     arena::{GestureArena, GestureArenaMember, GestureDisposition},
+    events::PointerEvent,
     ids::PointerId,
     routing::PointerDispatch,
     settings::GestureSettings,
+    traits::PointerEventExtTrait,
 };
 
 /// Eager gesture recognizer — wins the arena on `add_pointer`.
@@ -80,9 +82,8 @@ pub struct EagerGestureRecognizer {
     state: RecognizerBase,
 
     /// Per-device gesture settings. Stored for parity with the rest of the
-    /// recogniser set; Eager does not currently consult these values (it
-    /// has no timing or slop logic) but exposes them so future v2 hooks
-    /// (e.g. eager-with-deadline) can read them without a breaking change.
+    /// recogniser set; Eager has no timing or slop logic and does not read
+    /// them.
     settings: Arc<Mutex<GestureSettings>>,
 }
 
@@ -143,10 +144,10 @@ impl GestureRecognizer for EagerGestureRecognizer {
         // `accept` call below touches the arena again.
         self.state
             .start_tracking(pointer, position, global_position, self);
-        // Eager accept: resolve the arena in our favor immediately. If
-        // the arena is still open we register as the eager winner
-        // (auto-resolves on close); if it is already closed we resolve
-        // outright. Either way we win before any pointer event arrives.
+        // Eager accept: while the arena is open this registers the eager
+        // winner, which resolves on close when there are competitors; a lone
+        // member is resolved by the arena's deferred default at the end of
+        // the input. On a closed arena it resolves outright.
         self.state.accept_tracked();
     }
 
@@ -162,13 +163,26 @@ impl GestureRecognizer for EagerGestureRecognizer {
         if !self.state.assert_not_disposed("handle_event") {
             return;
         }
-        // Eager has no event-driven logic — the arena win happens entirely
-        // in `add_pointer`. `handle_event` is a no-op aside from the
-        // disposed-state check so a stale event stream does not panic.
-        //
-        // v2 may read `event.pointer_id()` + `self.state.primary_pointer()`
-        // to emit per-event diagnostics; v1 is arena-side only.
-        let _ = event;
+        // The arena win happens entirely in `add_pointer`. The only event
+        // work is ending the tracked sequence when its pointer lifts or is
+        // cancelled, so `primary_pointer` never reports a finished contact.
+        if Some(event.pointer_id()) != self.state.primary_pointer() {
+            return;
+        }
+        match event {
+            PointerEvent::Up(_) => self.state.stop_tracking(),
+            PointerEvent::Cancel(_) => {
+                // A cancelled contact's arena has no winner: a self-driven
+                // arena is abandoned here, not swept, so a rival never accepts
+                // the cancelled contact.
+                let entry = self.state.tracked_entry();
+                if let Some(entry) = &entry {
+                    withdraw_cancelled(entry, self.state.arena());
+                }
+                self.state.reject();
+            }
+            _ => {}
+        }
     }
 
     fn dispose(&self) {
@@ -223,19 +237,16 @@ impl crate::recognizers::PrimaryPointerGestureRecognizer for EagerGestureRecogni
 
 impl GestureArenaMember for EagerGestureRecognizer {
     fn accept_gesture(&self, _pointer: PointerId) {
-        // v2 may mark an `accepted` flag here; for v1 the arena win is
-        // declared in `add_pointer` via `state.accept`, so this hook is
-        // a no-op.
+        // The win was claimed in `add_pointer`; Eager has no callback to run.
     }
 
-    fn reject_gesture(&self, _pointer: PointerId) {
-        // Clear the tracked primary pointer and
-        // initial position so the recogniser is ready for a fresh
-        // sequence. We do NOT re-enter the arena here (no `state.reject`
-        // call) — the dispatch path that called us is already holding
-        // the arena's per-entry lock; another `arena.resolve` call would
-        // re-deadlock under `parking_lot::Mutex`.
-        self.state.set_primary_pointer(None);
-        self.state.clear_initial_contact();
+    fn reject_gesture(&self, pointer: PointerId) {
+        // Another eager member claimed first. Forget the contact so the
+        // recogniser is ready for a fresh sequence; a rejection for an older
+        // contact leaves the current one alone.
+        if self.state.primary_pointer() == Some(pointer) {
+            self.state.set_primary_pointer(None);
+            self.state.clear_initial_contact();
+        }
     }
 }

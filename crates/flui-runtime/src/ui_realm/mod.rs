@@ -54,7 +54,7 @@ use flui_rendering::binding::RendererBinding as _;
 use flui_rendering::constraints::BoxConstraints;
 #[cfg(test)]
 use flui_scheduler::SchedulerPhase;
-use flui_scheduler::{LocalPostFrameLane, UpdateScheduler};
+use flui_scheduler::{OwnerFrame, UpdateScheduler};
 use flui_view::GlobalKeyScope;
 #[cfg(test)]
 use parking_lot::RwLock;
@@ -140,8 +140,11 @@ pub enum UiRealmError {
 /// access goes through [`UiCommandSender`] only.
 pub struct UiRealm {
     realm_id: RealmId,
-    /// Owner-local callback queue, activated with the realm's other TLS scope.
-    local_post_frame: LocalPostFrameLane,
+    /// The realm's owner-local frame state — its post-frame queue and its
+    /// async tasks — of which the realm is the only strong owner (ADR-0136
+    /// §2). Every frame drive passes it; teardown retires it in `Drop`, on
+    /// the owner thread, before resuming any earlier failure.
+    owner_frame: OwnerFrame,
     /// Owner-local interaction callback storage, activated with the realm scope.
     interaction_lane: InteractionLane,
     /// This realm's cross-tree `GlobalKey` uniqueness domain (ADR-0043 §1),
@@ -167,9 +170,9 @@ pub struct UiRealm {
     /// [`FocusCoordinator`]'s own doc.
     focus_coordinator: FocusCoordinator,
     host_lifecycle: Cell<HostLifecycle>,
-    /// Wall-clock origin for the production `now_secs` computation, moved
+    /// Wall-clock origin for the production `raw_frame_time` computation, moved
     /// here from the retired `AppBinding`: frame times are realm-relative.
-    /// `now_secs()` = `start.elapsed().as_secs_f64()`, stored once here so
+    /// `raw_frame_time()` = `start.elapsed()`, stored once here so
     /// every frame this realm produces shares one monotonically-increasing
     /// origin instead of drifting between the Vsync tick and elsewhere.
     start: web_time::Instant,
@@ -180,7 +183,7 @@ pub struct UiRealm {
     /// [`FrameClock`]: flui_scheduler::FrameClock
     clock: flui_scheduler::ClockSource,
     /// The timestamp of the frame [`Self::pump`] is running, published for
-    /// the frame's duration so `now_secs` (the `Vsync` tick) reads the frame
+    /// the frame's duration so `raw_frame_time` (the `Vsync` tick) reads the frame
     /// clock instead of the wall clock. `None` outside a pump; a drop guard
     /// clears it, so a panic unwinding out of the frame does too.
     frame_time: Cell<Option<web_time::Instant>>,
@@ -219,7 +222,7 @@ pub struct UiRealm {
     /// realm and its presentations.
     text: flui_rendering::TextContextHandle,
     /// Test-only injectable clock, stored as the f64 bits in a u64 atomic
-    /// (rather than an `Option<f64>`/`Cell<f64>`) so [`Self::now_secs`] can
+    /// (rather than an `Option<f64>`/`Cell<f64>`) so [`Self::raw_frame_time`] can
     /// read it with a single relaxed load; `0u64` is the "not set" sentinel
     /// (see [`Self::set_now_secs_for_test`] for why a genuine `t=0.0` is
     /// nudged to the smallest positive subnormal instead).
@@ -417,6 +420,18 @@ impl Drop for UiRealm {
                 );
             }
         }
+        // The realm is the only strong owner of its owner-local post-frame
+        // callbacks and async tasks: retire them here, on the owner thread,
+        // after the presentations (whose widgets may still cancel tasks) and
+        // before any earlier failure resumes, so every capture is dropped
+        // once, here, and never by a later unwind (ADR-0136 §2). Each value
+        // is dropped under its own catch; the realm's first failure stays
+        // authoritative.
+        crate::lifecycle_state::preserve_first_lifecycle_panic(
+            &mut first,
+            self.owner_frame.retire(),
+            "realm owner-local frame retirement",
+        );
         if let Some(payload) = first {
             if std::thread::panicking() {
                 flui_foundation::panic::retain_opaque_payload(payload);

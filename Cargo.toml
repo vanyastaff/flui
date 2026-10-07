@@ -653,9 +653,14 @@ edge-exceptions = [
 ]
 
 # cargo-shear reports these as unlinked; tools/device-checks' iOS safe-area and
-# resident-reopen checks copy them into a scratch project as its `src/main.rs`.
+# resident-reopen checks copy them into a scratch project as its `src/main.rs`;
+# `tests/thread_boundary_ui.rs` hands the trybuild inputs to rustc by glob.
 [package.metadata.cargo-shear]
-ignored-paths = ["tests/fixtures/ios_safe_area.rs", "tests/fixtures/resident_app.rs"]
+ignored-paths = [
+    "tests/fixtures/ios_safe_area.rs",
+    "tests/fixtures/resident_app.rs",
+    "tests/ui/thread_boundary/*.rs",
+]
 
 [lints]
 workspace = true
@@ -720,6 +725,8 @@ insta = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 parking_lot.workspace = true
+# tests/thread_boundary_ui.rs: the compile-fail suite for realm-bound handles.
+trybuild = { workspace = true }
 
 # NOTE: flui-material / flui-cupertino moved to [dependencies] above — the
 # facade's own src/lib.rs re-exports them as `flui::material`/`flui::cupertino`.
@@ -960,6 +967,13 @@ required-features = ["material", "cupertino"]
 name = "agent_workflow"
 path = "tests/agent_workflow.rs"
 required-features = ["testing", "material"]
+
+# Realm-bound handles refuse `std::thread::spawn` (compile-fail fixtures under
+# `tests/ui/thread_boundary/`). Its own binary, a member of nextest's
+# `trybuild` group, so the slow rustc runs never hold the ordinary suite.
+[[test]]
+name = "thread_boundary_ui"
+path = "tests/thread_boundary_ui.rs"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Build Profiles

@@ -1015,3 +1015,158 @@ pub(crate) fn cancelling_a_threshold_refresh_pull_does_not_refresh() {
     laid.dispatch_pointer_up(150.0, 140.0);
     assert_eq!(calls.get(), 1, "normal release still starts refresh");
 }
+
+// ============================================================================
+// RefreshIndicator — scrolling and pulling without rebuilding
+// ============================================================================
+
+/// A `RefreshIndicator` on the headless binding, whose per-frame report runs
+/// the build phase every frame, driven by pointer events between frames.
+struct RefreshHarness {
+    binding: flui_testing::HeadlessBinding,
+    scroll: ScrollController,
+    refresh: RefreshController,
+}
+
+const REFRESH_FRAME: Duration = Duration::from_nanos(16_666_667);
+
+impl RefreshHarness {
+    fn mount() -> Self {
+        let scroll = ScrollController::new();
+        scroll.update_dimensions(300.0, 0.0, 4700.0);
+        let refresh = RefreshController::new();
+        let mut binding = flui_testing::HeadlessBinding::new();
+        let root = flui_widgets::GestureArenaScope::new(
+            binding.arena().clone(),
+            flui_widgets::FocusRoot::new(VsyncScope::new(
+                binding.vsync().clone(),
+                refresh_content(&scroll, &refresh),
+            )),
+        );
+        let _ = binding.mount_root(
+            &root,
+            flui_testing::MountOwners::fresh(),
+            flui_testing::MountOptions::tight(300.0, 300.0),
+        );
+        binding.pump_frame(REFRESH_FRAME);
+        Self {
+            binding,
+            scroll,
+            refresh,
+        }
+    }
+
+    fn pointer(&self, phase: flui_testing::PointerPhase, y: f64) {
+        let event = flui_testing::ScriptedPointer::new(
+            Duration::ZERO,
+            flui_interaction::PointerId::PRIMARY,
+            phase,
+            flui_foundation::geometry::Offset::new(150.0, y),
+        )
+        .to_event();
+        let binding = &self.binding;
+        binding.dispatch_pointer(&event, |position| binding.hit_test(position));
+    }
+
+    /// Pumps one frame and returns how many elements it rebuilt.
+    fn frame(&mut self) -> usize {
+        self.binding.pump_frame(REFRESH_FRAME);
+        self.binding.last_frame_report().build.elements_built
+    }
+
+    /// Where the content's top edge is painted, in root coordinates.
+    fn content_top(&self) -> f64 {
+        self.binding
+            .pipeline_owner()
+            .expect("tree-bound")
+            .with(|owner| {
+                let root = owner.root_id().expect("rooted");
+                let content = owner
+                    .render_tree()
+                    .iter()
+                    .map(|(id, _)| id)
+                    .find(|&id| {
+                        owner.box_size(id)
+                            == Some(flui_foundation::geometry::Size::new(300.0, 5000.0))
+                    })
+                    .expect("the 300x5000 content is mounted");
+                owner
+                    .transform_to(content, root)
+                    .expect("content laid out")
+                    .transform_point(0.0, 0.0)
+                    .1
+            })
+    }
+}
+
+/// Dragging the content scrolls the viewport on every frame without
+/// rebuilding any element.
+pub(crate) fn refresh_indicator_drag_scrolls_without_rebuilding() {
+    use flui_testing::PointerPhase::{Down, Move, Up};
+    let mut harness = RefreshHarness::mount();
+    harness.pointer(Down, 250.0);
+    assert_eq!(harness.frame(), 0, "touch down rebuilds nothing");
+    for y in [230.0, 200.0, 170.0, 140.0] {
+        harness.pointer(Move, y);
+        assert_eq!(harness.frame(), 0, "a drag frame to y={y} must not rebuild");
+        assert!(
+            (harness.content_top() + harness.scroll.pixels()).abs() < 1e-9,
+            "the viewport follows the position on the same frame: top {} at pixels {}",
+            harness.content_top(),
+            harness.scroll.pixels()
+        );
+    }
+    assert!(harness.scroll.pixels() > 0.0, "the drag scrolled");
+    harness.pointer(Up, 140.0);
+    for _ in 0..4 {
+        let before = harness.scroll.pixels();
+        assert_eq!(harness.frame(), 0, "a fling frame must not rebuild");
+        assert!(
+            harness.scroll.pixels() >= before,
+            "the fling coasts forward"
+        );
+        assert!((harness.content_top() + harness.scroll.pixels()).abs() < 1e-9);
+    }
+}
+
+/// A pull changes only the pull distance: no rebuild, while an external
+/// listener still hears every change. Entering and leaving the refreshing
+/// phase rebuilds, once each.
+pub(crate) fn refresh_indicator_rebuilds_only_on_a_phase_change() {
+    use flui_testing::PointerPhase::{Down, Move, Up};
+    let mut harness = RefreshHarness::mount();
+    let heard = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counter = Arc::clone(&heard);
+    let _subscription = harness
+        .refresh
+        .as_listenable()
+        .add_listener(Arc::new(move || {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }));
+
+    harness.pointer(Down, 40.0);
+    harness.frame();
+    let mut moves = 0;
+    for y in [60.0, 80.0, 100.0, 120.0, 140.0] {
+        harness.pointer(Move, y);
+        moves += 1;
+        assert_eq!(harness.frame(), 0, "a pull frame to y={y} must not rebuild");
+    }
+    assert!(harness.refresh.pull_distance_px() > 80.0);
+    assert!(
+        heard.load(std::sync::atomic::Ordering::SeqCst) >= moves,
+        "external listeners hear every pull change"
+    );
+
+    harness.pointer(Up, 140.0);
+    assert!(harness.refresh.is_refreshing());
+    assert!(
+        harness.frame() > 0,
+        "entering the refreshing phase rebuilds"
+    );
+    assert_eq!(harness.frame(), 0, "and then settles");
+
+    harness.refresh.finish();
+    assert!(harness.frame() > 0, "leaving the refreshing phase rebuilds");
+    assert_eq!(harness.frame(), 0, "and then settles");
+}

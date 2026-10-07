@@ -37,6 +37,18 @@ nodes_laid_out = 132
 nodes_painted = 133
 semantics_nodes_updated = 80
 
+[slide_transition_tick]
+builds_run = 0
+elements_rebuilt = 0
+frames_produced = 1
+layers_produced = 2
+layers_reused = 1
+layout_passes = 0
+layout_roots = 0
+nodes_laid_out = 0
+nodes_painted = 3
+semantics_nodes_updated = 0
+
 [text_change]
 builds_run = 3
 elements_rebuilt = 3
