@@ -29,6 +29,7 @@ mod text_input_mapping;
 mod window_callback_unwind;
 
 /// Runs every case even after one fails, then panics listing the failing case names.
+#[cfg(feature = "storage")]
 fn run_table(table: &str, cases: &[(&str, fn())]) {
     let failed: Vec<&str> = cases
         .iter()
