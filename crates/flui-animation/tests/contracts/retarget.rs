@@ -516,6 +516,26 @@ fn time_steps_that_overflow_publish_the_limit() {
     }
 }
 
+/// A span near the f64 limit over a short curve: the endpoint rate
+/// `span · slope / duration` is finite although `span / duration` alone is
+/// not, so the run keeps its seam instead of snapping to the target.
+fn a_large_span_over_a_short_curve_keeps_its_seam() {
+    let mut value = AnimatedValue::with_motion(
+        0.0_f64,
+        MotionSpec::Curve {
+            duration: Duration::from_millis(500),
+            curve: ArcCurve::new(Cubic::new(0.25, 0.125, 0.75, 1.0)),
+        },
+    );
+    value.animate_to(1e308);
+    assert!(!value.is_settled(), "snapped to the target at the seam");
+    assert_eq!(value.value(), 0.0, "the seam keeps the start value");
+    value.advance(0.25);
+    let (x, v) = (value.value(), value.velocity()[0]);
+    assert!(x.is_finite() && v.is_finite(), "x {x}, v {v}");
+    assert!(x > 0.0 && x < 1e308, "x {x} is not between the ends");
+}
+
 /// A near-overflow velocity handed to a long curve segment: the Hermite
 /// correction is in range although `excess · duration` alone is not.
 fn a_large_finite_curve_correction_stays_finite() {
@@ -614,6 +634,10 @@ fn retarget_seams() {
         (
             "time_steps_that_overflow_publish_the_limit",
             time_steps_that_overflow_publish_the_limit,
+        ),
+        (
+            "a_large_span_over_a_short_curve_keeps_its_seam",
+            a_large_span_over_a_short_curve_keeps_its_seam,
         ),
         (
             "a_large_finite_curve_correction_stays_finite",

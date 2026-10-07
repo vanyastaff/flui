@@ -161,7 +161,7 @@ impl Segment {
                 // A reversal shortens, but never below the floor: the seam's
                 // value and velocity are kept however early it reverses.
                 let duration = (full * scale).max(MIN_CURVE_SECONDS);
-                let excess = v0 - span / duration * curve.slope(0.0);
+                let excess = v0 - span * curve.slope(0.0) / duration;
                 let arrival = span * curve.slope(1.0);
                 if !(excess.is_finite() && arrival.is_finite()) {
                     return Self::Rest(target);
@@ -250,7 +250,7 @@ impl CurveSegment {
             return 0.0;
         }
         let tau = t / self.duration;
-        let curve = self.span / self.duration * self.curve.slope(tau);
+        let curve = self.span * self.curve.slope(tau) / self.duration;
         let departure = self.excess * (1.0 - tau) * (1.0 - 3.0 * tau);
         let arrival = self.arrival / self.duration * (tau * (2.0 - 3.0 * tau));
         finite_or(curve + departure + arrival, 0.0)
