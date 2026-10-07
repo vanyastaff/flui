@@ -301,6 +301,27 @@ impl FocusAttachment {
     }
 }
 
+/// Ownership of one focus-node listener registration.
+///
+/// Dropping the subscription withdraws its listener. The subscription holds a
+/// weak node reference, so retaining it cannot keep the focus tree alive.
+/// Withdrawal commits before callback captures are retired and follows the
+/// owner's existing panic-preservation policy.
+#[must_use = "retain the subscription for as long as the listener should remain installed"]
+#[derive(Debug)]
+pub struct FocusSubscription {
+    node: Weak<FocusNode>,
+    listener_id: ListenerId,
+}
+
+impl Drop for FocusSubscription {
+    fn drop(&mut self) {
+        if let Some(node) = self.node.upgrade() {
+            node.remove_listener(self.listener_id);
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FocusNodeRegistrationKind {
     KeyHandler,
@@ -780,6 +801,14 @@ impl FocusNode {
         id
     }
 
+    /// Subscribe to focus or focusability changes until the returned guard is dropped.
+    pub fn subscribe(self: &Rc<Self>, callback: FocusNodeChangeCallback) -> FocusSubscription {
+        FocusSubscription {
+            node: Rc::downgrade(self),
+            listener_id: self.add_listener(callback),
+        }
+    }
+
     /// Remove one node listener.
     pub fn remove_listener(&self, id: ListenerId) {
         let removed = {
@@ -789,7 +818,11 @@ impl FocusNode {
                 .position(|(held, _)| *held == id)
                 .map(|index| listeners.remove(index))
         };
-        drop(removed);
+        let mut failure = FocusClosePanic::for_rejection(self.close_mode());
+        if let Some((_, callback)) = removed {
+            failure.retire(callback);
+        }
+        failure.finish();
     }
 
     /// Number of node listeners, for deterministic lifecycle tests.

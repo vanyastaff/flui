@@ -15,6 +15,118 @@ use flui_platform_api::{
     keyboard::{Code, Key, KeyEvent, KeyState},
 };
 
+fn subscription_withdrawal_preserves_independent_listeners() {
+    let manager = FocusManager::new();
+    let node = FocusNode::new();
+    let _attachment = manager.root_scope().attach_node(&node).expect("attach");
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let first_calls = Rc::clone(&calls);
+    let first = node.subscribe(Rc::new(move || first_calls.borrow_mut().push("first")));
+    let second_calls = Rc::clone(&calls);
+    let second = node.subscribe(Rc::new(move || second_calls.borrow_mut().push("second")));
+    let _ = node.request_focus();
+    assert_eq!(*calls.borrow(), ["first", "second"]);
+    calls.borrow_mut().clear();
+    drop(first);
+    manager.unfocus();
+    assert_eq!(*calls.borrow(), ["second"]);
+    calls.borrow_mut().clear();
+    drop(second);
+    let _ = node.request_focus();
+    assert!(calls.borrow().is_empty());
+
+    let detached = FocusNode::new();
+    let owner = Rc::downgrade(&detached);
+    let (captured, capture_owner) = capture();
+    let subscription = detached.subscribe(Rc::new(move || {
+        let _ = &captured;
+    }));
+    drop(detached);
+    assert!(owner.upgrade().is_none());
+    assert!(capture_owner.upgrade().is_none());
+    drop(subscription);
+}
+
+fn subscription_retirement_can_reenter_the_same_node() {
+    struct SubscribeOnDrop {
+        node: Weak<FocusNode>,
+        calls: Rc<Cell<usize>>,
+        replacement: Rc<RefCell<Option<flui_interaction::FocusSubscription>>>,
+    }
+    impl Drop for SubscribeOnDrop {
+        fn drop(&mut self) {
+            let node = self.node.upgrade().expect("caller retains node");
+            let calls = Rc::clone(&self.calls);
+            *self.replacement.borrow_mut() =
+                Some(node.subscribe(Rc::new(move || calls.set(calls.get() + 1))));
+        }
+    }
+    let manager = FocusManager::new();
+    let node = FocusNode::new();
+    let _attachment = manager.root_scope().attach_node(&node).expect("attach");
+    let calls = Rc::new(Cell::new(0));
+    let replacement = Rc::new(RefCell::new(None));
+    let captured = SubscribeOnDrop {
+        node: Rc::downgrade(&node),
+        calls: Rc::clone(&calls),
+        replacement: Rc::clone(&replacement),
+    };
+    let subscription = node.subscribe(Rc::new(move || {
+        let _ = &captured;
+    }));
+    drop(subscription);
+    let _ = node.request_focus();
+    assert_eq!(calls.get(), 1);
+    let previous = replacement.borrow_mut().take();
+    drop(previous);
+    manager.unfocus();
+    assert_eq!(calls.get(), 1);
+}
+
+fn subscription_failure_preserves_unwind_and_allows_recovery() {
+    struct FailingCapture(Rc<Cell<usize>>);
+    impl Drop for FailingCapture {
+        fn drop(&mut self) {
+            self.0.set(self.0.get() + 1);
+            panic!("subscription capture");
+        }
+    }
+    for already_unwinding in [false, true] {
+        let manager = FocusManager::new();
+        let node = FocusNode::new();
+        let _attachment = manager.root_scope().attach_node(&node).expect("attach");
+        let drops = Rc::new(Cell::new(0));
+        let captured = FailingCapture(Rc::clone(&drops));
+        let subscription = node.subscribe(Rc::new(move || {
+            let _ = &captured;
+        }));
+        let failure = catch_unwind(AssertUnwindSafe(|| {
+            let subscription = subscription;
+            assert!(!already_unwinding, "earlier failure");
+            drop(subscription);
+        }))
+        .expect_err("failure propagates");
+        assert_eq!(
+            flui_foundation::panic::payload_text(failure.as_ref()),
+            Some(if already_unwinding {
+                "earlier failure"
+            } else {
+                "subscription capture"
+            })
+        );
+        flui_foundation::panic::retain_opaque_payload(failure);
+        assert_eq!(drops.get(), usize::from(!already_unwinding));
+        let calls = Rc::new(Cell::new(0));
+        let observed = Rc::clone(&calls);
+        let healthy = node.subscribe(Rc::new(move || observed.set(observed.get() + 1)));
+        let _ = node.request_focus();
+        assert_eq!(calls.get(), 1);
+        drop(healthy);
+        manager.unfocus();
+        assert_eq!(calls.get(), 1);
+    }
+}
+
 fn key_dispatch_preserves_propagation_outcomes() {
     for outcome in [
         KeyEventResult::Ignored,
@@ -774,6 +886,18 @@ fn assert_queued_focus_recovery(from_node: bool, competing: bool) {
 #[test]
 fn caught_callback_failures_leave_captures_with_their_owner() {
     let cases: &[(&str, fn())] = &[
+        (
+            "subscription ownership and independent listeners",
+            subscription_withdrawal_preserves_independent_listeners,
+        ),
+        (
+            "subscription retirement reentry",
+            subscription_retirement_can_reenter_the_same_node,
+        ),
+        (
+            "subscription failure preservation and recovery",
+            subscription_failure_preserves_unwind_and_allows_recovery,
+        ),
         (
             "key dispatch propagation outcomes",
             key_dispatch_preserves_propagation_outcomes,

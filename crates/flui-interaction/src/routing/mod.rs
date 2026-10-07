@@ -22,9 +22,9 @@ mod pointer_router;
 pub use focus::{FocusChangeCallback, FocusManager};
 pub use focus_scope::{
     FocusAttachment, FocusDetachOutcome, FocusNode, FocusNodeChangeCallback, FocusNodeId,
-    FocusNodeRegistration, FocusRequestOutcome, FocusScopeNode, FocusTraversalPolicy,
-    FocusTreeError, KeyEventHandler, KeyEventResult, NodeContext, ReadingOrderPolicy, RectProvider,
-    ResolvedStep, TraversalDirection, TraversalEdgeBehavior,
+    FocusNodeRegistration, FocusRequestOutcome, FocusScopeNode, FocusSubscription,
+    FocusTraversalPolicy, FocusTreeError, KeyEventHandler, KeyEventResult, NodeContext,
+    ReadingOrderPolicy, RectProvider, ResolvedStep, TraversalDirection, TraversalEdgeBehavior,
 };
 pub use hit_test::{
     CursorRequest, EventPropagation, HitTestBehavior, HitTestEntry, HitTestResult, RenderId,
