@@ -1,161 +1,379 @@
-//! PointerEventResampler benchmarks
+//! Owned pointer resampling with deterministic source times and frame windows.
 //!
-//! Hot path: `PointerEventResampler::add_event` is called once per raw
-//! pointer event from the platform layer (winit, Win32, etc.). The
-//! resampler is invoked by `GestureBinding` between the platform event
-//! source and the recogniser set. Trackpads emit events at much higher
-//! rates than touchscreens (240 Hz on modern Precision touchpads, vs
-//! 60-120 Hz on touchscreens), so the resampler must not regress under
-//! burst input.
-//!
-//! Performance targets:
-//! - `add_event` per raw input event: < 200 ns. The work is a
-//!   `RefCell` borrow of the resampler state + a `VecDeque::push_back`
-//!   (moves coalesce beyond 100 queued events) + a state-machine
-//!   transition for Down/Up/Cancel/Leave.
-//! - `sample` flush at 60 Hz (16.67 ms): < 1 µs per drained event.
-//!
-//! The two scenarios below (60 Hz and 240 Hz) verify the resampler
-//! does not blow up under trackpad-style input.
-//!
-//! Follows the workspace benchmark template at
-//! `rust-studio/.../templates/benchmark-report.md`.
-//!
-//! Run with `cargo bench -p flui-interaction --bench pointer_resampler_bench`.
-
-// Bench harness, not public API; `criterion_group!` generates the
-// undocumentable entry fn.
+//! Each fixture proves delivery before measurement. Construction and retirement
+//! are outside sample/stop/overflow timings; frame traces include admission,
+//! sampling, callback consumption and the terminal flush. These are workload
+//! timings, not per-event bounds or native-device throughput measurements.
 
 use std::hint::black_box;
+use std::num::NonZeroU64;
 use std::time::{Duration, Instant};
 
-use criterion::{Criterion, criterion_group, criterion_main};
-use flui_foundation::geometry::Offset;
-use flui_interaction::events::{PointerKind, make_move_event};
-use flui_interaction::ids::PointerId;
+use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
+use flui_foundation::geometry::Point;
+use flui_interaction::events::{PointerEvent, PointerEventExt};
 use flui_interaction::processing::PointerEventResampler;
+use flui_platform_api::EventTime;
+use flui_platform_api::pointer::{
+    CancelReason, PointerButton, PointerButtons, PointerCancel, PointerId, PointerInfo,
+    PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease, PointerRole,
+    PointerSample,
+};
 
-/// Build `count` move events, 1 px apart. The `duration_ms` argument is
-/// documentary: the synthetic events carry timestamp 0, so `add_event`
-/// places them at their arrival; `bench_sample_flush` places them
-/// explicitly with `add_event_at`.
-fn make_move_events(
-    count: usize,
-    _duration_ms: u64,
-) -> Vec<flui_interaction::events::PointerEvent> {
-    (0..count)
-        .map(|i| {
-            make_move_event(Offset::new(100.0 + i as f64, 100.0), PointerKind::Touch)
-                .expect("valid fixture sample")
-        })
-        .collect()
+const SECOND: u64 = 1_000_000_000;
+const FRAME_RATE: u64 = 60;
+const LOOKBACK: u64 = 5_000_000;
+
+#[derive(Clone, Copy)]
+enum Terminal {
+    Up,
+    Cancel,
 }
 
-/// 60 Hz benchmark — touchscreen rate. Pre-loads the queue once at
-/// setup, then per-iteration clears and re-feeds. Measures per-event
-/// push cost in the steady state.
-fn bench_add_event_60hz(c: &mut Criterion) {
-    let events = black_box(make_move_events(100, 100)); // 100 events / 100 ms ≈ 1 kHz; rate is the test, not the gate
-    c.bench_function("PointerEventResampler::add_event (60 Hz workload)", |b| {
-        b.iter(|| {
-            let resampler = PointerEventResampler::new(PointerId::new(std::num::NonZeroU64::MIN));
-            for event in &events {
-                resampler.add_event(black_box(event.clone()));
-            }
-            black_box(resampler.has_pending_events());
-        });
-    });
-}
-
-/// 240 Hz benchmark — trackpad rate. 240 events over 1 second. The
-/// resampler must keep up without dropping events (the
-/// `MAX_BUFFERED_EVENTS = 100` cap is the back-pressure boundary;
-/// drops are logged via `tracing::warn!`).
-fn bench_add_event_240hz(c: &mut Criterion) {
-    let events = black_box(make_move_events(240, 1000));
-    c.bench_function("PointerEventResampler::add_event (240 Hz workload)", |b| {
-        b.iter(|| {
-            let resampler = PointerEventResampler::new(PointerId::new(std::num::NonZeroU64::MIN));
-            for event in &events {
-                resampler.add_event(black_box(event.clone()));
-            }
-            black_box(resampler.has_pending_events());
-        });
-    });
-}
-
-/// `sample` flush cost — the per-frame work done by the binding
-/// (drains the queue, fires callbacks). One iteration drains a
-/// 60-event queue, one event per 0.25 ms, followed by a 61st event after
-/// the sample time so the interpolated move is part of the work, and
-/// counts callbacks. The queue is built in (untimed) setup on a tracked
-/// resampler, so the timed region is only `sample`, and it is asserted to
-/// emit all 61 events (60 real + 1 interpolated).
-fn bench_sample_flush(c: &mut Criterion) {
-    let events = make_move_events(61, 16);
-    let start = Instant::now();
-    let sample_time = start + Duration::from_millis(15);
-    let next = sample_time + Duration::from_millis(16);
-    let setup = || {
-        let resampler = PointerEventResampler::new(PointerId::new(std::num::NonZeroU64::MIN));
-        resampler.start_tracking();
-        for (i, event) in events.iter().enumerate() {
-            let at = start + Duration::from_micros(250 * i as u64);
-            let at = if i == 60 { next } else { at };
-            resampler.add_event_at(event.clone(), at);
+impl Terminal {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Up => "up",
+            Self::Cancel => "cancel",
         }
-        resampler
-    };
-    let mut probe = 0u32;
-    setup().sample(sample_time, next, |_event| probe += 1);
-    assert_eq!(probe, 61, "the bench must drain the whole frame");
-    c.bench_function(
-        "PointerEventResampler::sample (drain 60-event queue)",
-        |b| {
-            b.iter_batched(
-                setup,
-                |resampler| {
-                    let mut count = 0u32;
-                    resampler.sample(black_box(sample_time), black_box(next), |_event| {
-                        count += 1;
-                    });
-                    black_box(count)
+    }
+}
+
+fn pointer() -> PointerInfo {
+    PointerInfo::new(PointerId::new(NonZeroU64::MIN), PointerKind::Touch)
+        .with_role(PointerRole::Primary)
+}
+
+fn sample(nanos: u64, x: f64) -> PointerSample {
+    PointerSample::new(
+        EventTime::from_nanos(nanos),
+        PointerPosition::try_new(Point::new(x, 25.5)).expect("finite fixture position"),
+    )
+}
+
+fn movement(nanos: u64) -> PointerEvent {
+    PointerEvent::Move(PointerMove::new(
+        pointer(),
+        PointerButtons::only(PointerButton::PRIMARY),
+        sample(nanos, nanos as f64 / 1_000_000.0),
+    ))
+}
+
+fn down() -> PointerEvent {
+    PointerEvent::Down(PointerPress::new(
+        pointer(),
+        PointerButton::PRIMARY,
+        PointerButtons::NONE,
+        sample(0, 0.0),
+    ))
+}
+
+fn terminal(kind: Terminal, nanos: u64, x: f64) -> PointerEvent {
+    match kind {
+        Terminal::Up => PointerEvent::Up(PointerRelease::new(
+            pointer(),
+            PointerButton::PRIMARY,
+            PointerButtons::only(PointerButton::PRIMARY),
+            sample(nanos, x),
+        )),
+        Terminal::Cancel => PointerEvent::Cancel(PointerCancel::new(
+            pointer(),
+            EventTime::from_nanos(nanos),
+            CancelReason::Platform,
+        )),
+    }
+}
+
+fn event_nanos(event: &PointerEvent) -> u64 {
+    flui_interaction::events::get_event_time(event)
+        .expect("fixture event time")
+        .as_nanos()
+}
+
+/// Consume both the source clock and the delivered value, not merely callback count.
+fn consume(event: PointerEvent) {
+    black_box((event_nanos(&event), event.position()));
+    if let PointerEvent::Move(event) = event {
+        black_box(event.coalesced());
+    }
+}
+
+struct Fixture {
+    resampler: PointerEventResampler,
+    base: Instant,
+}
+
+impl Fixture {
+    fn new() -> Self {
+        Self {
+            resampler: PointerEventResampler::new(pointer().id),
+            base: Instant::now(),
+        }
+    }
+
+    fn add(&self, event: PointerEvent) {
+        let at = self.base + Duration::from_nanos(event_nanos(&event));
+        self.resampler.add_event_at(event, at);
+    }
+}
+
+/// A preflight witness of the known 1000 px/s horizontal trajectory.
+#[derive(Default)]
+struct Witness {
+    down: usize,
+    up: usize,
+    cancel: usize,
+    moves: usize,
+    readings: usize,
+    last_time: u64,
+    last_move: Option<(u64, f64)>,
+    terminal: Option<&'static str>,
+}
+
+impl Witness {
+    fn observe(&mut self, event: PointerEvent) {
+        let nanos = event_nanos(&event);
+        assert!(
+            nanos >= self.last_time,
+            "delivered timestamps are monotonic"
+        );
+        self.last_time = nanos;
+        assert!(self.terminal.is_none(), "nothing follows the terminal");
+        match event {
+            PointerEvent::Down(event) => {
+                self.down += 1;
+                assert_eq!(event.sample.position.get(), Point::new(0.0, 25.5));
+                assert_eq!(event.sample.time.as_nanos(), 0);
+            }
+            PointerEvent::Move(event) => {
+                assert_eq!(self.down, 1, "movement follows admitted Down");
+                self.moves += 1;
+                for sample in event
+                    .coalesced()
+                    .iter()
+                    .chain(std::iter::once(event.current()))
+                {
+                    self.readings += 1;
+                    assert!(
+                        (sample.position.get().x - sample.time.as_nanos() as f64 / 1_000_000.0)
+                            .abs()
+                            < 1e-9,
+                        "delivered values follow the independent linear trajectory"
+                    );
+                    assert_eq!(sample.position.get().y, 25.5);
+                }
+                self.last_move = Some((
+                    event.current().time.as_nanos(),
+                    event.current().position.get().x,
+                ));
+            }
+            PointerEvent::Up(event) => {
+                self.up += 1;
+                assert!(!event.buttons().contains(PointerButton::PRIMARY));
+                self.terminal = Some("up");
+            }
+            PointerEvent::Cancel(event) => {
+                self.cancel += 1;
+                assert_eq!(event.reason, CancelReason::Platform);
+                self.terminal = Some("cancel");
+            }
+            _ => panic!("unexpected fixture event"),
+        }
+    }
+
+    fn finished(&self, terminal: Terminal, time: u64, last_move: (u64, f64)) {
+        assert_eq!(self.down, 1);
+        assert_eq!(self.terminal, Some(terminal.name()));
+        assert_eq!(
+            (self.up, self.cancel),
+            match terminal {
+                Terminal::Up => (1, 0),
+                Terminal::Cancel => (0, 1),
+            }
+        );
+        assert_eq!(self.last_time, time);
+        assert_eq!(self.last_move, Some(last_move));
+    }
+}
+
+fn frame_trace(fixture: &Fixture, events: &[PointerEvent], mut emit: impl FnMut(PointerEvent)) {
+    let mut next = 0;
+    for frame in 1..=FRAME_RATE {
+        let frame_time = frame * SECOND / FRAME_RATE;
+        while next < events.len() && event_nanos(&events[next]) <= frame_time {
+            fixture.add(events[next].clone());
+            next += 1;
+        }
+        let target = frame_time - LOOKBACK;
+        fixture.resampler.sample(
+            fixture.base + Duration::from_nanos(target),
+            fixture.base + Duration::from_nanos(target + SECOND / FRAME_RATE),
+            &mut emit,
+        );
+    }
+    for event in &events[next..] {
+        fixture.add(event.clone());
+    }
+    fixture.resampler.stop(emit);
+}
+
+fn bench_frame_traces(c: &mut Criterion) {
+    let mut group = c.benchmark_group("resampler/frame_trace");
+    for rate in [60_u64, 240] {
+        for kind in [Terminal::Up, Terminal::Cancel] {
+            let mut events = vec![down()];
+            events.extend((1..=rate).map(|i| movement(i * SECOND / rate)));
+            events.push(terminal(kind, SECOND + 1, 1000.0));
+            let mut witness = Witness::default();
+            frame_trace(&Fixture::new(), &events, |event| witness.observe(event));
+            // One measured packet per source tick, one interpolated value per
+            // display frame, followed by the genuine terminal.
+            assert_eq!(witness.moves, rate as usize + FRAME_RATE as usize);
+            witness.finished(kind, SECOND + 1, (SECOND, 1000.0));
+            group.bench_function(
+                BenchmarkId::new(format!("{rate}_to_60"), kind.name()),
+                |b| {
+                    b.iter_batched_ref(
+                        Fixture::new,
+                        |fixture| frame_trace(fixture, black_box(&events), consume),
+                        BatchSize::SmallInput,
+                    );
                 },
-                criterion::BatchSize::SmallInput,
             );
-        },
+        }
+    }
+    group.finish();
+}
+
+fn sample_fixture(kind: Terminal) -> Fixture {
+    let fixture = Fixture::new();
+    fixture.add(down());
+    for i in 1..=60 {
+        fixture.add(movement(i * 250_000));
+    }
+    fixture.add(movement(16_000_000));
+    fixture.add(terminal(kind, 17_000_000, 16.0));
+    fixture
+}
+
+fn sample_frame(fixture: &Fixture, emit: impl FnMut(PointerEvent)) {
+    fixture.resampler.sample(
+        fixture.base + Duration::from_nanos(15_500_000),
+        fixture.base + Duration::from_nanos(32_166_667),
+        emit,
     );
 }
 
-/// Steady-state push: the queue is at its 100-event cap, so each
-/// `add_event` coalesces the oldest pair of adjacent moves (the older
-/// one's samples join the newer one's `coalesced` history) before
-/// queueing — the overflow path that replaced dropping the newest event.
-fn bench_push_at_capacity(c: &mut Criterion) {
-    let resampler = PointerEventResampler::new(PointerId::new(std::num::NonZeroU64::MIN));
-    // Pre-fill to capacity.
-    for event in make_move_events(100, 100) {
-        resampler.add_event(event);
+fn verify_sample_and_tail(kind: Terminal) {
+    let fixture = sample_fixture(kind);
+    let mut witness = Witness::default();
+    sample_frame(&fixture, |event| witness.observe(event));
+    assert_eq!(
+        (witness.down, witness.moves, witness.up, witness.cancel),
+        (1, 61, 0, 0)
+    );
+    assert_eq!(
+        witness.last_move,
+        Some((15_500_000, 15.5)),
+        "the 61st movement is the interpolated frame reading"
+    );
+    fixture.resampler.stop(|event| witness.observe(event));
+    assert_eq!(
+        witness.moves, 62,
+        "the future measured packet follows interpolation"
+    );
+    witness.finished(kind, 17_000_000, (16_000_000, 16.0));
+    assert!(
+        !fixture.resampler.has_pending_events(),
+        "terminal flush drains accepted debt"
+    );
+}
+
+fn bench_sample_and_stop(c: &mut Criterion) {
+    for kind in [Terminal::Up, Terminal::Cancel] {
+        verify_sample_and_tail(kind);
     }
-    let event = black_box(
-        make_move_event(Offset::new(200.0, 100.0), PointerKind::Touch)
-            .expect("valid fixture sample"),
+    c.bench_function("resampler/sample/measured_and_interpolated", |b| {
+        b.iter_batched_ref(
+            || sample_fixture(Terminal::Up),
+            |fixture| sample_frame(fixture, consume),
+            BatchSize::SmallInput,
+        );
+    });
+    let mut group = c.benchmark_group("resampler/stop");
+    for kind in [Terminal::Up, Terminal::Cancel] {
+        group.bench_function(kind.name(), |b| {
+            b.iter_batched_ref(
+                || {
+                    let fixture = sample_fixture(kind);
+                    sample_frame(&fixture, consume);
+                    fixture
+                },
+                |fixture| fixture.resampler.stop(consume),
+                BatchSize::SmallInput,
+            );
+        });
+    }
+    group.finish();
+}
+
+fn capacity_fixture(moves: u64) -> Fixture {
+    let fixture = Fixture::new();
+    fixture.add(down());
+    for i in 1..=moves {
+        fixture.add(movement(i * 1_000_000));
+    }
+    assert_eq!(
+        fixture.resampler.pending_event_count(),
+        100,
+        "documented capacity fixture"
     );
-    c.bench_function(
-        "PointerEventResampler::add_event (queue at cap, overflow path)",
-        |b| {
-            b.iter(|| {
-                resampler.add_event(black_box(event.clone()));
-            });
-        },
-    );
+    fixture
+}
+
+fn bench_capacity(c: &mut Criterion) {
+    let mut group = c.benchmark_group("resampler/overflow");
+    for (name, moves, expected_readings) in [
+        ("scalar_history", 99_u64, 100_usize),
+        ("saturated_history", 300, 199),
+    ] {
+        let event = movement((moves + 1) * 1_000_000);
+        let witness_fixture = capacity_fixture(moves);
+        witness_fixture.add(event.clone());
+        witness_fixture.add(terminal(
+            Terminal::Up,
+            (moves + 2) * 1_000_000,
+            (moves + 1) as f64,
+        ));
+        let mut witness = Witness::default();
+        witness_fixture
+            .resampler
+            .stop(|event| witness.observe(event));
+        assert_eq!(witness.moves, 99, "overflow folds one adjacent pair");
+        assert_eq!(
+            witness.readings, expected_readings,
+            "bounded history is explicit, not lossless beyond its cap"
+        );
+        witness.finished(
+            Terminal::Up,
+            (moves + 2) * 1_000_000,
+            ((moves + 1) * 1_000_000, (moves + 1) as f64),
+        );
+        group.bench_function(name, |b| {
+            b.iter_batched_ref(
+                || capacity_fixture(moves),
+                |fixture| fixture.add(black_box(event.clone())),
+                BatchSize::SmallInput,
+            );
+        });
+    }
+    group.finish();
 }
 
 criterion_group!(
     resampler_benches,
-    bench_add_event_60hz,
-    bench_add_event_240hz,
-    bench_sample_flush,
-    bench_push_at_capacity,
+    bench_frame_traces,
+    bench_sample_and_stop,
+    bench_capacity
 );
 criterion_main!(resampler_benches);
