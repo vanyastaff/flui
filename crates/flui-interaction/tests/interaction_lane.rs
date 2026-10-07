@@ -64,6 +64,10 @@ fn explicit_pointer_capture_contract() {
             "accepted_motion",
             capture_release_delivers_accepted_motion_before_loss,
         ),
+        (
+            "released_tail",
+            capture_released_tail_waits_for_a_fresh_down,
+        ),
     ];
     for &(name, row) in rows {
         if let Err(payload) = std::panic::catch_unwind(row) {
@@ -88,6 +92,7 @@ enum CaptureCase {
     OwnerClose,
     DeviceRemoval,
     QueuedRelease,
+    ReleasedTail,
 }
 
 fn capture_keeps_the_full_implicit_down_route() {
@@ -128,6 +133,9 @@ fn capture_device_removal_invalidates_retained_token() {
 }
 fn capture_release_delivers_accepted_motion_before_loss() {
     assert_capture_route(CaptureCase::QueuedRelease);
+}
+fn capture_released_tail_waits_for_a_fresh_down() {
+    assert_capture_route(CaptureCase::ReleasedTail);
 }
 
 fn assert_capture_route(case: CaptureCase) {
@@ -292,7 +300,10 @@ fn assert_capture_route(case: CaptureCase) {
         }
         if matches!(
             case,
-            CaptureCase::Drop | CaptureCase::Release | CaptureCase::QueuedRelease
+            CaptureCase::Drop
+                | CaptureCase::Release
+                | CaptureCase::QueuedRelease
+                | CaptureCase::ReleasedTail
         ) || fails
         {
             if case == CaptureCase::QueuedRelease {
@@ -341,7 +352,20 @@ fn assert_capture_route(case: CaptureCase) {
                 1
             );
             assert!(binding.arena().is_empty());
-            if fails {
+            if case == CaptureCase::ReleasedTail {
+                let tail = make_move_event(Offset::new(30.0, 30.0), PointerKind::Touch)
+                    .expect("released tail");
+                binding.handle_pointer_event(&tail, |_| {
+                    panic!("released contact tail cannot become hover")
+                });
+                binding.flush_pending_moves();
+                assert_eq!(
+                    log.borrow().last(),
+                    Some(&(1, "lost")),
+                    "unadmitted post-release motion is refused"
+                );
+            }
+            if fails || case == CaptureCase::ReleasedTail {
                 binding.handle_pointer_event(&down, |_| path());
                 let up =
                     make_up_event(Offset::new(5.0, 5.0), PointerKind::Touch).expect("healthy up");
