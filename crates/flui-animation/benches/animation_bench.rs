@@ -1,13 +1,20 @@
 //! Criterion benchmarks for flui-animation hot paths.
 //!
 //! These measure the paths that run every frame: tween interpolation, curve
-//! evaluation, spring stepping, and the controller tick. Run with
-//! `cargo bench -p flui-animation`; the numbers in `docs/PERFORMANCE.md` should
-//! be sourced from here, not estimated.
+//! evaluation, spring stepping, the controller tick and its listener fan-out,
+//! and the cost of starting a run. Run with `cargo bench -p flui-animation`;
+//! the numbers in `docs/PERFORMANCE.md` should be sourced from here, not
+//! estimated.
+//!
+//! Every controller benchmark measures a controller that is genuinely mid-run:
+//! a time-based run whose duration is far longer than any benchmark can
+//! advance, or a simulation that cannot settle in that span. A completed run
+//! makes `tick_at` an early return, which prices a lock and a branch rather
+//! than a frame.
 
 // Target-level lint relaxations — crate-level allows don't reach this
-// target. `unwrap` in test/example code: a panic IS the failure report
-// (docs/PANIC-POLICY.md); style items here are ship-wave debt.
+// target. `unwrap` in bench code: a panic IS the failure report
+// (docs/PANIC-POLICY.md).
 #![expect(clippy::unwrap_used)]
 // Benchmark harness functions are internal measurement scaffolding, not a
 // public API surface, so they are exempt from the crate's missing-docs lint.
@@ -16,16 +23,24 @@ use std::hint::black_box;
 use std::sync::Arc;
 use std::time::Duration;
 
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 
 use flui_animation::{
     Animatable, AnimatedValue, Animation, AnimationController, ColorTween, Curve, CurvedAnimation,
-    Curves, FloatTween, OklabColorTween, Simulation, SpringDescription, SpringSimulation,
-    Tolerance, Tween,
+    Curves, FloatTween, FrictionSimulation, OklabColorTween, Simulation, SpringDescription,
+    SpringSimulation, Tolerance, Tween,
 };
+use flui_foundation::Listenable;
 use flui_foundation::geometry::Offset;
 use flui_painting::styling::Color;
-use flui_scheduler::UpdateScheduler;
+
+/// One frame at 60 Hz, in seconds.
+const FRAME: f64 = 1.0 / 60.0;
+
+/// A run no benchmark can finish: criterion advances at most a few hundred
+/// million frames (a few million seconds at 60 Hz), while this lasts ~136
+/// years.
+const NEVER_ENDING: Duration = Duration::from_secs(u32::MAX as u64);
 
 fn tween_transform(c: &mut Criterion) {
     let mut group = c.benchmark_group("tween_transform");
@@ -104,43 +119,175 @@ fn spring_step(c: &mut Criterion) {
         });
     });
 
-    // Per-component color spring: retarget, then one frame advance and read.
+    // Per-component color spring: the first frame after a retarget. Each
+    // iteration starts from a freshly retargeted value, so the spring is
+    // always in motion; advancing one shared value forever would price a
+    // settled spring at an ever-growing elapsed time.
     let smooth =
         SpringDescription::with_duration_and_bounce(Duration::from_millis(500), 0.0).unwrap();
-    let mut value = AnimatedValue::new(Color::rgba(0, 0, 0, 255), smooth).unwrap();
     group.bench_function("animated_value_color_frame", |b| {
-        b.iter(|| {
-            value.animate_to(Color::rgba(255, 128, 0, 255)).unwrap();
-            value.advance(black_box(Duration::from_nanos(16_666_667)));
-            black_box(value.value())
-        });
+        b.iter_batched(
+            || {
+                let mut value = AnimatedValue::new(Color::rgba(0, 0, 0, 255), smooth).unwrap();
+                value.animate_to(Color::rgba(255, 128, 0, 255)).unwrap();
+                value
+            },
+            |mut value| {
+                value.advance(black_box(Duration::from_secs_f64(FRAME)));
+                black_box(value.value());
+                value
+            },
+            BatchSize::SmallInput,
+        );
     });
 
     group.finish();
 }
 
-fn controller_tick(c: &mut Criterion) {
-    let mut group = c.benchmark_group("controller");
+/// Register `value_listeners` no-op value listeners and `status_listeners`
+/// no-op status listeners on `controller`.
+fn add_listeners(
+    controller: &AnimationController,
+    value_listeners: usize,
+    status_listeners: usize,
+) {
+    for _ in 0..value_listeners {
+        controller.add_listener(Arc::new(|| {
+            black_box(());
+        }));
+    }
+    for _ in 0..status_listeners {
+        controller.add_status_listener(Arc::new(|status| {
+            black_box(status);
+        }));
+    }
+}
 
-    let scheduler = UpdateScheduler::new();
-    let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
-    controller.forward().unwrap();
+/// Advance `controller` one 60 Hz frame per iteration, starting from `t = 0`.
+fn bench_live_tick(
+    group: &mut criterion::BenchmarkGroup<'_, criterion::measurement::WallTime>,
+    variant: &str,
+    controller: &AnimationController,
+) {
     let mut t = 0.0_f64;
-    group.bench_function("tick_at", |b| {
+    group.bench_function(BenchmarkId::new("tick_at", variant), |b| {
         b.iter(|| {
-            t += 1.0 / 60.0;
+            t += FRAME;
             controller.tick_at(black_box(t));
         });
     });
+    assert!(
+        controller.status().is_running(),
+        "the {variant} run must still be live after the benchmark, or it priced a finished run"
+    );
+}
 
-    // Reading a curved combinator's value goes through one Arc<dyn> hop.
-    let parent: Arc<dyn Animation<f64>> = Arc::new(controller.clone());
+fn controller_tick(c: &mut Criterion) {
+    let mut group = c.benchmark_group("controller");
+
+    // Linear time-based run, no listeners.
+    let linear = AnimationController::without_ticker(NEVER_ENDING);
+    linear.forward().unwrap();
+    bench_live_tick(&mut group, "linear", &linear);
+    linear.dispose();
+
+    // The same run eased through a cubic Bézier.
+    let eased = AnimationController::without_ticker(NEVER_ENDING);
+    eased
+        .animate_to_curved(1.0, None, Arc::new(Curves::EaseInOut))
+        .unwrap();
+    bench_live_tick(&mut group, "ease_in_out", &eased);
+    eased.dispose();
+
+    // Value fan-out: every tick notifies the value listeners; the status
+    // listener is registered but no tick changes the status.
+    for value_listeners in [1, 4] {
+        let controller = AnimationController::without_ticker(NEVER_ENDING);
+        add_listeners(&controller, value_listeners, 1);
+        controller.forward().unwrap();
+        bench_live_tick(
+            &mut group,
+            &format!("{value_listeners}_value_1_status_listeners"),
+            &controller,
+        );
+        controller.dispose();
+    }
+
+    // Simulation runs: a near-unit drag that takes ~2e10 s to slow below the
+    // default velocity tolerance, and a barely damped spring that rests only
+    // after millions of seconds.
+    let friction = AnimationController::unbounded_without_ticker(NEVER_ENDING);
+    friction
+        .animate_with(FrictionSimulation::new(1.0 - 1e-9, 0.0, 1000.0, Tolerance::DEFAULT).unwrap())
+        .unwrap();
+    bench_live_tick(&mut group, "simulation_friction", &friction);
+    friction.dispose();
+
+    let spring = AnimationController::unbounded_without_ticker(NEVER_ENDING);
+    spring
+        .animate_with(
+            SpringSimulation::try_new(
+                SpringDescription::new(1.0, 100.0, 1e-6).unwrap(),
+                0.0,
+                1000.0,
+                0.0,
+                Tolerance::DEFAULT,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    bench_live_tick(&mut group, "simulation_spring", &spring);
+    spring.dispose();
+
+    // Reading a curved combinator's value goes through one Arc<dyn> hop and
+    // the curve; the parent sits mid-run so the curve is actually evaluated.
+    let parent_controller = AnimationController::without_ticker(Duration::from_secs(1));
+    parent_controller.forward().unwrap();
+    parent_controller.tick_at(0.37);
+    let parent: Arc<dyn Animation<f64>> = Arc::new(parent_controller.clone());
     let curved = CurvedAnimation::new(parent, Curves::EaseInOut);
     group.bench_function("curved_value", |b| {
         b.iter(|| black_box(curved.value()));
     });
+    assert!(parent_controller.status().is_running());
+    drop(curved);
+    parent_controller.dispose();
 
-    controller.dispose();
+    group.finish();
+}
+
+fn controller_status(c: &mut Criterion) {
+    let mut group = c.benchmark_group("controller");
+
+    // One iteration is two status transitions, each fanned out to every
+    // listener: `forward_from(0)` (Completed -> Forward) and a tick past the
+    // end (Forward -> Completed).
+    for status_listeners in [1, 4, 8] {
+        let controller = AnimationController::without_ticker(Duration::from_secs(1));
+        add_listeners(&controller, 0, status_listeners);
+        group.bench_function(BenchmarkId::new("status_fan_out", status_listeners), |b| {
+            b.iter(|| {
+                black_box(controller.forward_from(Some(0.0)).unwrap());
+                controller.tick_at(black_box(2.0));
+            });
+        });
+        controller.dispose();
+    }
+
+    // Starting a run from rest on a fresh controller with a detached ticker
+    // (the `is_animating`-reporting widget shape). Construction and the
+    // returned future's drop sit outside the timed region.
+    group.bench_function("forward", |b| {
+        b.iter_batched(
+            || AnimationController::with_detached_ticker(NEVER_ENDING),
+            |controller| {
+                let run = controller.forward().unwrap();
+                (controller, run)
+            },
+            BatchSize::SmallInput,
+        );
+    });
+
     group.finish();
 }
 
@@ -149,6 +296,7 @@ criterion_group!(
     tween_transform,
     curve_eval,
     spring_step,
-    controller_tick
+    controller_tick,
+    controller_status
 );
 criterion_main!(benches);

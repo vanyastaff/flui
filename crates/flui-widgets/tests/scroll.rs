@@ -720,6 +720,51 @@ pub(crate) fn a_wheel_tick_over_nested_scrollables_moves_only_the_inner() {
     );
 }
 
+/// Shift turns a plain vertical wheel tick into horizontal scrolling: a
+/// horizontal list takes it, a vertical list does not, and a device that
+/// already reports horizontal motion is passed through unchanged.
+pub(crate) fn shift_wheel_scrolls_the_horizontal_axis() {
+    use flui_foundation::geometry::Axis;
+    use flui_interaction::events::Modifiers;
+
+    let laid_out = |axis: Axis, scroll: &ScrollController| {
+        scroll.update_dimensions(300.0, 0.0, 700.0);
+        lay_out(
+            Scrollable::new()
+                .scroll_direction(axis)
+                .controller(scroll.clone())
+                .child(SizedBox::new(1000.0, 1000.0)),
+            tight(300.0, 300.0),
+        )
+    };
+
+    let horizontal = ScrollController::new();
+    let h = laid_out(Axis::Horizontal, &horizontal);
+    h.dispatch_scroll(150.0, 150.0, 0.0, 53.0);
+    assert_eq!(horizontal.pixels(), 0.0, "a plain wheel tick is vertical");
+    h.dispatch_scroll_with_modifiers(150.0, 150.0, 0.0, 53.0, Modifiers::SHIFT);
+    assert_eq!(
+        horizontal.pixels(),
+        53.0,
+        "shift+wheel scrolls a horizontal list"
+    );
+    h.dispatch_scroll_with_modifiers(150.0, 150.0, 20.0, 53.0, Modifiers::SHIFT);
+    assert_eq!(
+        horizontal.pixels(),
+        73.0,
+        "reported horizontal motion is kept"
+    );
+
+    let vertical = ScrollController::new();
+    let v = laid_out(Axis::Vertical, &vertical);
+    v.dispatch_scroll_with_modifiers(150.0, 150.0, 0.0, 53.0, Modifiers::SHIFT);
+    assert_eq!(
+        vertical.pixels(),
+        0.0,
+        "shift+wheel does not scroll a vertical list"
+    );
+}
+
 fn assert_bounce(current: f64, proposed: f64, expected: f64) {
     use flui_widgets::{ScrollMetrics, ScrollPhysics};
     let actual = BouncingScrollPhysics::new()
