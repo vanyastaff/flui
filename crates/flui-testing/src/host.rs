@@ -247,8 +247,8 @@ impl HeadlessAccessibility {
 
 impl PlatformAccessibility for HeadlessAccessibility {
     /// Fold `update` into the published tree as an adapter does: an update
-    /// carrying tree data replaces it, any other replaces the nodes it names
-    /// and adds the rest.
+    /// carrying tree data replaces it, any other replaces the nodes it names,
+    /// adds the rest, and drops those no longer reachable from the root.
     fn publish(&self, update: accesskit::TreeUpdate) {
         let mut published = self.published.lock();
         match published.as_mut() {
@@ -260,6 +260,23 @@ impl PlatformAccessibility for HeadlessAccessibility {
                     }
                 }
                 tree.focus = update.focus;
+                // An adapter drops the nodes no longer reachable from the
+                // root, so the kept tree tracks the live one instead of
+                // accumulating every node ever published.
+                if let Some(root) = tree.tree.as_ref().map(|data| data.root) {
+                    let mut reachable = std::collections::HashSet::from([root]);
+                    let mut pending = vec![root];
+                    while let Some(id) = pending.pop() {
+                        if let Some((_, node)) = tree.nodes.iter().find(|(known, _)| *known == id) {
+                            for &child in node.children() {
+                                if reachable.insert(child) {
+                                    pending.push(child);
+                                }
+                            }
+                        }
+                    }
+                    tree.nodes.retain(|(id, _)| reachable.contains(id));
+                }
             }
             _ => *published = Some(update),
         }
@@ -889,5 +906,52 @@ mod tests {
             "the raising pump did not move the clock"
         );
         let _outcome = realm.pump(Duration::ZERO);
+    }
+
+    /// The kept tree holds what an adapter holds: a node an incremental
+    /// update detaches from the root is dropped, not kept forever.
+    ///
+    /// Fails against a fold that only upserts: the detached node stays.
+    #[test]
+    fn a_detached_node_leaves_the_published_tree() {
+        use accesskit::{Node, NodeId, Role, TreeId, TreeInfo, TreeUpdate};
+
+        use super::PlatformAccessibility as _;
+
+        let parent = |children: Vec<NodeId>| {
+            let mut node = Node::new(Role::Window);
+            node.set_children(children);
+            node
+        };
+        let bridge = super::HeadlessAccessibility::default();
+        bridge.publish(TreeUpdate {
+            nodes: vec![
+                (NodeId(1), parent(vec![NodeId(2)])),
+                (NodeId(2), Node::new(Role::Label)),
+            ],
+            tree: Some(TreeInfo::new(NodeId(1))),
+            tree_id: TreeId::ROOT,
+            focus: NodeId(1),
+        });
+        bridge.publish(TreeUpdate {
+            nodes: vec![
+                (NodeId(1), parent(vec![NodeId(3)])),
+                (NodeId(3), Node::new(Role::Label)),
+            ],
+            tree: None,
+            tree_id: TreeId::ROOT,
+            focus: NodeId(1),
+        });
+
+        let published = bridge.published.lock();
+        let mut ids: Vec<_> = published
+            .as_ref()
+            .expect("a tree was published")
+            .nodes
+            .iter()
+            .map(|(id, _)| *id)
+            .collect();
+        ids.sort_unstable();
+        assert_eq!(ids, [NodeId(1), NodeId(3)]);
     }
 }
