@@ -72,6 +72,7 @@ fn geometric_focus_navigation_pins_ranking_and_admission() {
                 Rect::new(20.0, 0.0, f64::INFINITY, 10.0),
                 Rect::new(f64::NAN, 0.0, 30.0, 10.0),
                 Rect::new(20.0, 0.0, 20.0, 10.0),
+                Rect::new(-1.0e308, 0.0, f64::MAX, 10.0),
             ],
             None,
         ),
