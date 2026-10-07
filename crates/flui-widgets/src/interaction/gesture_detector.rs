@@ -187,6 +187,7 @@ pub struct GestureDetector {
     /// How the underlying [`Listener`] participates in hit-testing.
     behavior: HitTestBehavior,
     drag_pointer_strategy: DragPointerStrategy,
+    exclusive_drags: bool,
     child: Child,
 }
 
@@ -214,6 +215,7 @@ impl Default for GestureDetector {
             on_horizontal_drag_cancel: None,
             behavior: HitTestBehavior::DeferToChild,
             drag_pointer_strategy: DragPointerStrategy::PrimaryOnly,
+            exclusive_drags: false,
             child: Child::empty(),
         }
     }
@@ -256,6 +258,16 @@ impl std::fmt::Debug for GestureDetector {
 }
 
 impl GestureDetector {
+    /// Allow pan and horizontal-drag callbacks to compete for one arena winner.
+    ///
+    /// The first recognizer to claim the contact wins; the other receives
+    /// cancellation. Without this explicit policy, configuring both families
+    /// remains a configuration error in debug builds.
+    #[must_use]
+    pub fn exclusive_drags(mut self) -> Self {
+        self.exclusive_drags = true;
+        self
+    }
     /// Configure contact handoff for pan and horizontal drags. A mounted
     /// policy change cancels the outgoing drag and applies to the next Down.
     #[must_use]
@@ -766,6 +778,7 @@ impl<R: GestureRecognizer> GestureRecognizer for RecognizerAttachment<R> {
 /// Policy replacement commits new targets before cancelling outgoing drags.
 pub struct GestureDetectorState {
     drag_pointer_strategy: DragPointerStrategy,
+    exclusive_drags: bool,
     recognizer_configuration: Option<RecognizerConfiguration>,
     drag_attachment: Rc<RecognizerAttachment<DragGestureRecognizer>>,
     horizontal_drag_attachment: Rc<RecognizerAttachment<DragGestureRecognizer>>,
@@ -886,6 +899,7 @@ impl StatefulView for GestureDetector {
         // `init_state`, which has the context needed to read the ambient arena.
         GestureDetectorState {
             drag_pointer_strategy: self.drag_pointer_strategy,
+            exclusive_drags: self.exclusive_drags,
             recognizer_configuration: None,
             drag_attachment: Rc::new(RecognizerAttachment::default()),
             horizontal_drag_attachment: Rc::new(RecognizerAttachment::default()),
@@ -1009,13 +1023,15 @@ impl ViewState<GestureDetector> for GestureDetectorState {
     }
 
     fn did_update_view(&mut self, old_view: &GestureDetector, new_view: &GestureDetector) {
-        let replace_drag = old_view.drag_pointer_strategy != new_view.drag_pointer_strategy;
+        let replace_drag = old_view.drag_pointer_strategy != new_view.drag_pointer_strategy
+            || old_view.exclusive_drags != new_view.exclusive_drags;
         let replace_scale = old_view.scale_start_mode != new_view.scale_start_mode;
         if !replace_drag && !replace_scale {
             return;
         }
-        let incoming_drag =
-            replace_drag.then(|| self.make_drag_recognizers(new_view.drag_pointer_strategy));
+        let incoming_drag = replace_drag.then(|| {
+            self.make_drag_recognizers(new_view.drag_pointer_strategy, new_view.exclusive_drags)
+        });
         let incoming_scale =
             replace_scale.then(|| self.make_scale_recognizer(new_view.scale_start_mode));
         let Some(recognizers) = self.recognizers.as_mut() else {
@@ -1025,6 +1041,7 @@ impl ViewState<GestureDetector> for GestureDetectorState {
         // become visible before retiring user-controlled outgoing callbacks.
         let outgoing_drag = incoming_drag.map(|(drag, horizontal)| {
             self.drag_pointer_strategy = new_view.drag_pointer_strategy;
+            self.exclusive_drags = new_view.exclusive_drags;
             let old_drag = std::mem::replace(&mut recognizers.drag, drag);
             let old_horizontal = std::mem::replace(&mut recognizers.horizontal_drag, horizontal);
             *self.drag_attachment.target.borrow_mut() = Rc::downgrade(&recognizers.drag);
@@ -1061,10 +1078,14 @@ impl ViewState<GestureDetector> for GestureDetectorState {
         }));
         let arena = GestureArenaScope::of(ctx);
         let settings = GestureArenaScope::settings_of(ctx);
-        let (double_tap_arena, tap_arena) = arena
-            .compose(GestureCompetition::RequireFirstFailure)
-            .expect("BUG: the presentation scope provides an uncomposed arena")
-            .into_branches();
+        // A detector in a caller-provided branch inherits that enclosing
+        // relationship. Its existing double-tap hold still defers the tap;
+        // constructing another nested relation is explicitly unsupported.
+        let (double_tap_arena, tap_arena) =
+            match arena.compose(GestureCompetition::RequireFirstFailure) {
+                Ok(branches) => branches.into_branches(),
+                Err(_) => (arena.clone(), arena.clone()),
+            };
         self.recognizer_configuration = Some(RecognizerConfiguration {
             arena: arena.clone(),
             settings: settings.clone(),
@@ -1138,7 +1159,8 @@ impl ViewState<GestureDetector> for GestureDetectorState {
         let scale = self.make_scale_recognizer(self.scale_start_mode);
         *self.scale_attachment.target.borrow_mut() = Rc::downgrade(&scale);
 
-        let (drag, horizontal_drag) = self.make_drag_recognizers(self.drag_pointer_strategy);
+        let (drag, horizontal_drag) =
+            self.make_drag_recognizers(self.drag_pointer_strategy, self.exclusive_drags);
         *self.drag_attachment.target.borrow_mut() = Rc::downgrade(&drag);
         *self.horizontal_drag_attachment.target.borrow_mut() = Rc::downgrade(&horizontal_drag);
 
@@ -1244,7 +1266,7 @@ fn assert_no_pan_horizontal_drag_conflict(view: &GestureDetector) {
         || view.on_horizontal_drag_update.is_some()
         || view.on_horizontal_drag_end.is_some();
     debug_assert!(
-        !(have_pan && have_horizontal_drag),
+        !(have_pan && have_horizontal_drag) || view.exclusive_drags,
         "GestureDetector: on_pan_* and on_horizontal_drag_* are both configured on one \
          detector. FLUI's pan recognizer is DragAxis::Free — it already spans the horizontal \
          axis — so it competes directly with the horizontal recognizer for the same \
@@ -1301,12 +1323,21 @@ impl GestureDetectorState {
     fn make_drag_recognizers(
         &self,
         strategy: DragPointerStrategy,
+        exclusive: bool,
     ) -> (Rc<DragGestureRecognizer>, Rc<DragGestureRecognizer>) {
         let configuration = self
             .recognizer_configuration
             .as_ref()
             .expect("BUG: drag configuration acquired during init_state");
         let arena = configuration.arena.clone();
+        let (pan_arena, horizontal_arena) = if exclusive {
+            match arena.compose(GestureCompetition::Exclusive) {
+                Ok(branches) => branches.into_branches(),
+                Err(_) => (arena.clone(), arena),
+            }
+        } else {
+            (arena.clone(), arena)
+        };
         let settings = configuration.settings.clone();
         let writer = configuration.writer.clone();
         let drag = {
@@ -1316,7 +1347,7 @@ impl GestureDetectorState {
             let start_writer = writer.clone();
             let update_writer = writer.clone();
             let end_writer = writer.clone();
-            DragGestureRecognizer::builder(arena.clone(), DragAxis::Free)
+            DragGestureRecognizer::builder(pan_arena, DragAxis::Free)
                 .pointer_strategy(strategy)
                 .settings(settings.clone())
                 .on_start(move |details| {
@@ -1351,7 +1382,7 @@ impl GestureDetectorState {
             let update_writer = writer.clone();
             let end_writer = writer.clone();
             let cancel_writer = writer;
-            DragGestureRecognizer::builder(arena, DragAxis::Horizontal)
+            DragGestureRecognizer::builder(horizontal_arena, DragAxis::Horizontal)
                 .pointer_strategy(strategy)
                 .settings(settings)
                 .on_down(move |details| {

@@ -10,6 +10,110 @@ use crate::common::{lay_out, tight};
 use flui_painting::styling::Color;
 use flui_widgets::{ColoredBox, GestureDetector};
 
+pub(crate) fn exclusive_drag_callbacks_have_one_arena_winner() {
+    use std::{cell::RefCell, rc::Rc};
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let (pan_start, pan_end, horizontal_start, horizontal_end, horizontal_cancel) = (
+        Rc::clone(&calls),
+        Rc::clone(&calls),
+        Rc::clone(&calls),
+        Rc::clone(&calls),
+        Rc::clone(&calls),
+    );
+    let mut scoped = lay_out(
+        GestureDetector::new()
+            .exclusive_drags()
+            .on_pan_start(move |_, _| pan_start.borrow_mut().push("pan start"))
+            .on_pan_end(move |_, _| pan_end.borrow_mut().push("pan end"))
+            .on_horizontal_drag_start(move |_, _| {
+                horizontal_start.borrow_mut().push("horizontal start")
+            })
+            .on_horizontal_drag_end(move |_, _| horizontal_end.borrow_mut().push("horizontal end"))
+            .on_horizontal_drag_cancel(move |_| {
+                horizontal_cancel.borrow_mut().push("horizontal cancel")
+            })
+            .child(ColoredBox::new(Color::rgb(10, 20, 30))),
+        tight(100.0, 100.0),
+    );
+    scoped.dispatch_pointer_down(10.0, 50.0);
+    scoped.dispatch_pointer_move(50.0, 50.0);
+    scoped.dispatch_pointer_up(60.0, 50.0);
+    assert_eq!(
+        calls.borrow().as_slice(),
+        ["horizontal cancel", "pan start", "pan end"]
+    );
+}
+
+#[derive(Clone, flui_view::prelude::StatefulView)]
+struct ComposedDetector {
+    detector: GestureDetector,
+}
+
+struct ComposedDetectorState {
+    branch: Option<flui_interaction::GestureArena>,
+}
+
+impl flui_view::StatefulView for ComposedDetector {
+    type State = ComposedDetectorState;
+    fn create_state(&self) -> Self::State {
+        ComposedDetectorState { branch: None }
+    }
+}
+
+impl flui_view::ViewState<ComposedDetector> for ComposedDetectorState {
+    fn init_state(&mut self, ctx: &dyn flui_view::LifecycleContext) {
+        let arena = flui_widgets::GestureArenaScope::of(ctx);
+        let (first, _) = arena
+            .compose(flui_interaction::arena::GestureCompetition::Exclusive)
+            .expect("presentation root")
+            .into_branches();
+        self.branch = Some(first);
+    }
+    fn build(
+        &self,
+        view: &ComposedDetector,
+        _: &dyn flui_view::BuildContext,
+    ) -> impl flui_view::IntoView {
+        flui_widgets::GestureArenaScope::new(
+            self.branch.as_ref().expect("mounted branch").clone(),
+            view.detector.clone(),
+        )
+    }
+}
+
+pub(crate) fn a_detector_in_a_composed_scope_preserves_double_tap_timing() {
+    use std::time::Duration;
+    for double in [false, true] {
+        let taps = Arc::new(AtomicUsize::new(0));
+        let doubles = Arc::new(AtomicUsize::new(0));
+        let (tap, double_tap) = (Arc::clone(&taps), Arc::clone(&doubles));
+        let mut scoped = lay_out(
+            ComposedDetector {
+                detector: GestureDetector::new()
+                    .on_tap(move |_| {
+                        tap.fetch_add(1, Ordering::SeqCst);
+                    })
+                    .on_double_tap(move |_| {
+                        double_tap.fetch_add(1, Ordering::SeqCst);
+                    })
+                    .child(ColoredBox::new(Color::rgb(10, 20, 30))),
+            },
+            tight(100.0, 100.0),
+        );
+        scoped.dispatch_pointer_down(50.0, 50.0);
+        scoped.dispatch_pointer_up(50.0, 50.0);
+        scoped.pump_for(Duration::from_millis(50));
+        assert_eq!(taps.load(Ordering::SeqCst), 0);
+        if double {
+            scoped.dispatch_pointer_down(50.0, 50.0);
+            scoped.dispatch_pointer_up(50.0, 50.0);
+        }
+        scoped.pump_for(Duration::from_millis(400));
+        assert_eq!(taps.load(Ordering::SeqCst), usize::from(!double));
+        assert_eq!(doubles.load(Ordering::SeqCst), usize::from(double));
+    }
+}
+
 #[derive(Clone, flui_view::prelude::StatefulView)]
 struct ConfiguredGesture {
     settings: flui_interaction::GestureSettings,
