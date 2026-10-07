@@ -172,6 +172,15 @@ impl Witness {
             PointerEvent::Up(event) => {
                 self.up += 1;
                 assert!(!event.buttons().contains(PointerButton::PRIMARY));
+                assert_eq!(
+                    event.sample.position.get(),
+                    Point::new(
+                        self.last_move
+                            .expect("terminal follows delivered movement")
+                            .1,
+                        25.5,
+                    )
+                );
                 self.terminal = Some("up");
             }
             PointerEvent::Cancel(event) => {
