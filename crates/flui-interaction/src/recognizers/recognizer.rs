@@ -5,7 +5,6 @@ use crate::{
     routing::{PointerDispatch, RoutePanic},
 };
 use flui_foundation::geometry::Offset;
-use ui_events::pointer::PointerState;
 use web_time::{Duration, Instant};
 
 /// A recognizer admits Down and receives the remaining pointer stream.
@@ -56,70 +55,25 @@ pub(crate) fn is_primary_down(event: &PointerEvent) -> bool {
 }
 
 pub(crate) fn event_time(event: &PointerEvent) -> Option<u64> {
-    let time = match event {
-        PointerEvent::Down(data) => data.sample.time,
-        PointerEvent::Up(data) => data.sample.time,
-        PointerEvent::ButtonChange(crate::events::ButtonChange::Pressed(data)) => data.sample.time,
-        PointerEvent::ButtonChange(crate::events::ButtonChange::Released(data)) => data.sample.time,
-        PointerEvent::Move(data) => data.current().time,
-        PointerEvent::Scroll(data) => data.time,
-        PointerEvent::PanZoom(data) => data.time,
-        PointerEvent::Cancel(data) => data.time,
-        PointerEvent::Enter(data)
-        | PointerEvent::Leave(data)
-        | PointerEvent::ScrollInertiaCancel(data) => data.time,
-        PointerEvent::DeviceAdded(data) | PointerEvent::DeviceRemoved(data) => data.time,
-        _ => return None,
-    };
-    Some(time.as_nanos())
-}
-
-/// Keep complete hardware samples; a fit window belongs to the velocity
-/// tracker, not to delivery. Unknown timestamps retain their arrival order.
-fn normalise_samples(samples: &mut Vec<PointerState>, current: &PointerState) {
-    samples.retain(|sample| sample.position.x.is_finite() && sample.position.y.is_finite());
-    if current.time != 0
-        && samples.iter().all(|sample| sample.time != 0)
-        && samples.windows(2).any(|pair| pair[0].time > pair[1].time)
-    {
-        samples.sort_by_key(|sample| sample.time);
-    }
-    samples.dedup();
-}
-
-pub(crate) fn normalise_motion_history(event: &mut PointerEvent) {
-    if let PointerEvent::Move(movement) = event {
-        normalise_samples(&mut movement.coalesced, &movement.current);
-    }
-}
-
-pub(crate) fn merge_motion_history(previous: &mut PointerEvent, latest: &mut PointerEvent) {
-    if let (PointerEvent::Move(previous), PointerEvent::Move(latest)) = (previous, latest) {
-        let mut samples = std::mem::take(&mut previous.coalesced);
-        samples.push(previous.current.clone());
-        samples.append(&mut latest.coalesced);
-        normalise_samples(&mut samples, &latest.current);
-        latest.coalesced = samples;
-    }
+    crate::events::get_event_time(event).map(flui_platform_api::EventTime::as_nanos)
 }
 
 /// Historical local positions only. Geometry and callbacks still publish the
 /// frame's current sample, while the tracker consumes every hardware timestamp.
-pub(crate) fn motion_history(event: &PointerEvent) -> Vec<(Option<u64>, Offset<f64>)> {
-    let PointerEvent::Move(movement) = event else {
-        return Vec::new();
+pub(crate) fn motion_history(
+    event: &PointerEvent,
+) -> impl Iterator<Item = (Option<u64>, Offset<f64>)> + '_ {
+    let samples = match event {
+        PointerEvent::Move(movement) => movement.coalesced(),
+        _ => &[],
     };
-    let mut samples = movement.coalesced.clone();
-    normalise_samples(&mut samples, &movement.current);
-    samples
-        .into_iter()
-        .map(|sample| {
-            (
-                (sample.time != 0).then_some(sample.time),
-                Offset::new(sample.position.x, sample.position.y),
-            )
-        })
-        .collect()
+    samples.iter().map(|sample| {
+        let position = sample.position.get();
+        (
+            Some(sample.time.as_nanos()),
+            Offset::new(position.x, position.y),
+        )
+    })
 }
 
 /// Places device production timestamps on the arena clock.

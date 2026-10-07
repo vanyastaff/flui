@@ -56,6 +56,26 @@ pub fn get_pointer_sample(event: &PointerEvent) -> Option<&PointerSample> {
     }
 }
 
+/// Extract the platform's timestamp, including the valid epoch value zero.
+#[must_use]
+pub fn get_event_time(event: &PointerEvent) -> Option<flui_platform_api::EventTime> {
+    Some(match event {
+        PointerEvent::Down(data) => data.sample.time,
+        PointerEvent::Up(data) => data.sample.time,
+        PointerEvent::ButtonChange(ButtonChange::Pressed(data)) => data.sample.time,
+        PointerEvent::ButtonChange(ButtonChange::Released(data)) => data.sample.time,
+        PointerEvent::Move(data) => data.current().time,
+        PointerEvent::Scroll(data) => data.time,
+        PointerEvent::PanZoom(data) => data.time,
+        PointerEvent::Cancel(data) => data.time,
+        PointerEvent::Enter(data)
+        | PointerEvent::Leave(data)
+        | PointerEvent::ScrollInertiaCancel(data) => data.time,
+        PointerEvent::DeviceAdded(data) | PointerEvent::DeviceRemoved(data) => data.time,
+        _ => return None,
+    })
+}
+
 /// Extract a contact identity without inventing one for device lifecycle events.
 #[must_use]
 pub fn extract_pointer_id(event: &PointerEvent) -> Option<PointerId> {

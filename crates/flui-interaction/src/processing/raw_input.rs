@@ -1,253 +1,102 @@
-//! Raw input mode for direct pointer access
+//! Direct access to owned pointer events with a computed movement delta.
 //!
-//! This module provides a way to receive pointer events directly without
-//! going through the gesture recognition system. Useful for:
-//!
-//! - Games that need direct control over input
-//! - Custom gesture implementations
-//! - Low-latency input handling
-//! - Drawing applications
-//!
-//! # Example
-//!
-//! ```rust,ignore
-//! use flui_interaction::raw_input::{RawInputHandler, RawPointerEvent};
-//!
-//! let mut handler = RawInputHandler::new();
-//!
-//! // Set callback for raw events
-//! handler.set_callback(|event| {
-//!     match event {
-//!         RawPointerEvent::Down { position, .. } => {
-//!             start_drawing(position);
-//!         }
-//!         RawPointerEvent::Move { position, delta, .. } => {
-//!             continue_drawing(position, delta);
-//!         }
-//!         RawPointerEvent::Up { position, .. } => {
-//!             finish_drawing(position);
-//!         }
-//!         _ => {}
-//!     }
-//! });
-//!
-//! // Process events
-//! handler.handle_event(&pointer_event);
-//! ```
+//! Raw delivery borrows the original event, preserving its identity, timestamp,
+//! sensors, coalesced samples and predictions without a second event vocabulary.
 
+use crate::events::{
+    PointerEvent, PointerEventExt, PointerId, PointerInfo, PointerKind, get_event_time,
+    get_pointer_info,
+};
+use flui_foundation::geometry::Offset;
+use flui_platform_api::EventTime;
 use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
     rc::Rc,
 };
 
-use web_time::Instant;
-
-use flui_foundation::geometry::Offset;
-
-use crate::{
-    events::{PointerEvent, PointerType},
-    ids::PointerId,
-};
-
-// ============================================================================
-// RawPointerEvent
-// ============================================================================
-
-/// Raw pointer event with additional computed information.
-///
-/// Unlike the standard `PointerEvent`, this includes:
-/// - Delta from previous position
-/// - Pointer tracking state
-/// - High-resolution timestamp
-#[derive(Debug, Clone)]
-pub enum RawPointerEvent {
-    /// Pointer pressed down.
-    Down {
-        /// Pointer identifier.
-        pointer: PointerId,
-        /// Position in logical pixels.
-        position: Offset<f64>,
-        /// Device type.
-        device_kind: PointerType,
-        /// Event timestamp.
-        timestamp: Instant,
-    },
-
-    /// Pointer moved.
-    Move {
-        /// Pointer identifier.
-        pointer: PointerId,
-        /// Current position.
-        position: Offset<f64>,
-        /// Delta from previous position.
-        delta: Offset<f64>,
-        /// Device type.
-        device_kind: PointerType,
-        /// Event timestamp.
-        timestamp: Instant,
-    },
-
-    /// Pointer released.
-    Up {
-        /// Pointer identifier.
-        pointer: PointerId,
-        /// Final position.
-        position: Offset<f64>,
-        /// Delta from previous position.
-        delta: Offset<f64>,
-        /// Device type.
-        device_kind: PointerType,
-        /// Event timestamp.
-        timestamp: Instant,
-    },
-
-    /// Pointer cancelled (e.g., palm rejection).
-    Cancel {
-        /// Pointer identifier.
-        pointer: PointerId,
-        /// Last known position.
-        position: Offset<f64>,
-        /// Device type.
-        device_kind: PointerType,
-        /// Event timestamp.
-        timestamp: Instant,
-    },
-
-    /// Pointer hovering (no contact).
-    Hover {
-        /// Pointer identifier.
-        pointer: PointerId,
-        /// Current position.
-        position: Offset<f64>,
-        /// Delta from previous position.
-        delta: Offset<f64>,
-        /// Device type.
-        device_kind: PointerType,
-        /// Event timestamp.
-        timestamp: Instant,
-    },
+/// A borrowed raw dispatch and its computed movement delta.
+#[derive(Debug, Clone, Copy)]
+pub struct RawPointerEvent<'event> {
+    event: &'event PointerEvent,
+    delta: Option<Offset<f64>>,
 }
 
-impl RawPointerEvent {
-    /// Get the pointer ID.
-    pub fn pointer(&self) -> PointerId {
-        match self {
-            Self::Down { pointer, .. }
-            | Self::Move { pointer, .. }
-            | Self::Up { pointer, .. }
-            | Self::Cancel { pointer, .. }
-            | Self::Hover { pointer, .. } => *pointer,
-        }
+impl<'event> RawPointerEvent<'event> {
+    /// The complete source event, including all measured and predicted samples.
+    #[must_use]
+    pub fn event(&self) -> &'event PointerEvent {
+        self.event
     }
 
-    /// Get the position.
-    pub fn position(&self) -> Offset<f64> {
-        match self {
-            Self::Down { position, .. }
-            | Self::Move { position, .. }
-            | Self::Up { position, .. }
-            | Self::Cancel { position, .. }
-            | Self::Hover { position, .. } => *position,
-        }
+    /// The contact identity, absent for device lifecycle events.
+    #[must_use]
+    pub fn pointer(&self) -> Option<PointerId> {
+        self.event.pointer_id()
     }
 
-    /// Get the delta (zero for Down events).
-    pub fn delta(&self) -> Offset<f64> {
-        match self {
-            Self::Down { .. } | Self::Cancel { .. } => Offset::new(0.0, 0.0),
-            Self::Move { delta, .. } | Self::Up { delta, .. } | Self::Hover { delta, .. } => *delta,
-        }
+    /// The reported position, when this event carries one.
+    #[must_use]
+    pub fn position(&self) -> Option<Offset<f64>> {
+        self.event.position()
     }
 
-    /// Get the timestamp.
-    pub fn timestamp(&self) -> Instant {
-        match self {
-            Self::Down { timestamp, .. }
-            | Self::Move { timestamp, .. }
-            | Self::Up { timestamp, .. }
-            | Self::Cancel { timestamp, .. }
-            | Self::Hover { timestamp, .. } => *timestamp,
-        }
+    /// Movement since the previous known position, or `None` when unknown or overflowing.
+    /// A Down has the defined initial delta zero.
+    #[must_use]
+    pub fn delta(&self) -> Option<Offset<f64>> {
+        self.delta
     }
 
-    /// Returns true if this is a Down event.
+    /// The device kind reported by the source.
+    #[must_use]
+    pub fn device_kind(&self) -> Option<PointerKind> {
+        self.event.pointer_kind()
+    }
+
+    /// The source's production timestamp, including epoch zero.
+    #[must_use]
+    pub fn timestamp(&self) -> Option<EventTime> {
+        get_event_time(self.event)
+    }
+
+    /// Whether a contact began.
+    #[must_use]
     pub fn is_down(&self) -> bool {
-        matches!(self, Self::Down { .. })
+        matches!(self.event, PointerEvent::Down(_))
     }
-
-    /// Returns true if this is a Move event.
+    /// Whether a pointer moved.
+    #[must_use]
     pub fn is_move(&self) -> bool {
-        matches!(self, Self::Move { .. })
+        matches!(self.event, PointerEvent::Move(_))
     }
-
-    /// Returns true if this is an Up event.
+    /// Whether a contact ended with a release.
+    #[must_use]
     pub fn is_up(&self) -> bool {
-        matches!(self, Self::Up { .. })
+        matches!(self.event, PointerEvent::Up(_))
     }
-
-    /// Returns true if this is a Cancel event.
+    /// Whether a contact was cancelled.
+    #[must_use]
     pub fn is_cancel(&self) -> bool {
-        matches!(self, Self::Cancel { .. })
+        matches!(self.event, PointerEvent::Cancel(_))
     }
 }
 
-// ============================================================================
-// RawInputCallback
-// ============================================================================
+/// A raw callback borrows the source only for its synchronous dispatch.
+pub type RawInputCallback = Rc<dyn for<'event> Fn(RawPointerEvent<'event>)>;
 
-/// Callback type for raw input events.
-pub type RawInputCallback = Rc<dyn Fn(RawPointerEvent)>;
-
-// ============================================================================
-// PointerTrackingState
-// ============================================================================
-
-/// Tracking state for a single pointer.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct PointerTrackingState {
-    /// Last known position.
     last_position: Offset<f64>,
-    /// Is pointer currently down?
     is_down: bool,
-    /// Device kind (stored for potential future use).
-    #[expect(dead_code)]
-    device_kind: PointerType,
+    pointer: PointerInfo,
 }
 
-// ============================================================================
-// RawInputHandler
-// ============================================================================
-
-/// Handler for raw input events.
-///
-/// Converts standard `PointerEvent` to `RawPointerEvent` with additional
-/// computed information (deltas, timestamps) and invokes callbacks.
-///
-/// # Thread affinity
-///
-/// `RawInputHandler` is owner-local under ADR-0027. It stores executable raw
-/// input callbacks as `Rc` and should be driven by the owning UI runtime.
-///
-/// # Example
-///
-/// ```rust,ignore
-/// let handler = RawInputHandler::new();
-///
-/// handler.set_callback(|event| {
-///     println!("Raw event: {:?}", event);
-/// });
-///
-/// // In your event loop:
-/// handler.handle_event(&pointer_event);
-/// ```
+/// Owner-local raw input tracking and synchronous borrowed delivery.
 #[derive(Clone)]
 pub struct RawInputHandler {
-    /// Tracking state for each pointer.
     tracking: Rc<RefCell<HashMap<PointerId, PointerTrackingState>>>,
-    /// Callback for raw events.
     callback: Rc<RefCell<Option<RawInputCallback>>>,
-    /// Whether raw mode is enabled.
     enabled: Rc<Cell<bool>>,
 }
 
@@ -258,7 +107,8 @@ impl Default for RawInputHandler {
 }
 
 impl RawInputHandler {
-    /// Create a new raw input handler.
+    /// Create an enabled handler without a callback.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             tracking: Rc::new(RefCell::new(HashMap::new())),
@@ -267,205 +117,144 @@ impl RawInputHandler {
         }
     }
 
-    /// Set the callback for raw input events.
-    pub fn set_callback(&self, callback: impl Fn(RawPointerEvent) + 'static) {
-        let _prev = self.callback.borrow_mut().replace(Rc::new(callback));
+    /// Replace the callback; outgoing captures retire after the borrow is released.
+    pub fn set_callback(&self, callback: impl for<'event> Fn(RawPointerEvent<'event>) + 'static) {
+        let _previous = self.callback.borrow_mut().replace(Rc::new(callback));
     }
 
-    /// Clear the callback.
+    /// Clear the callback; outgoing captures retire after the borrow is released.
     pub fn clear_callback(&self) {
-        let _prev = self.callback.borrow_mut().take();
+        let _previous = self.callback.borrow_mut().take();
     }
 
-    /// Enable or disable raw input handling.
+    /// Enable or disable raw delivery.
     pub fn set_enabled(&self, enabled: bool) {
         self.enabled.set(enabled);
     }
-
-    /// Check if raw input is enabled.
-    #[inline]
+    /// Whether raw delivery is enabled.
+    #[must_use]
     pub fn is_enabled(&self) -> bool {
         self.enabled.get()
     }
 
-    /// Handle a pointer event, converting to raw event and invoking callback.
-    ///
-    /// Returns the generated `RawPointerEvent` if one was created. The
-    /// callback runs with no borrow held, so it may call
-    /// [`Self::set_callback`] or [`Self::clear_callback`]; the change applies
-    /// from the next event.
-    pub fn handle_event(&self, event: &PointerEvent) -> Option<RawPointerEvent> {
+    /// Commit tracking before invoking the callback without an internal borrow.
+    /// Replacement or clearing through this same handle applies to the next event.
+    pub fn handle_event<'event>(
+        &self,
+        event: &'event PointerEvent,
+    ) -> Option<RawPointerEvent<'event>> {
         if !self.enabled.get() {
             return None;
         }
-
-        let raw_event = self.convert_event(event);
-
-        // Clone the callback out and release the borrow before calling it:
-        // the callback may replace or clear itself through this handler.
+        let raw = RawPointerEvent {
+            event,
+            delta: self.update_tracking(event),
+        };
         let callback = self.callback.borrow().clone();
-        if let (Some(raw), Some(callback)) = (&raw_event, callback) {
-            callback(raw.clone());
+        if let Some(callback) = callback {
+            callback(raw);
         }
-
-        raw_event
+        Some(raw)
     }
 
-    /// Extract pointer ID from event (use 0 for primary pointer).
-    #[inline]
-    fn get_pointer_id(event: &PointerEvent) -> PointerId {
-        crate::events::extract_pointer_id(event)
-    }
-
-    /// Convert a PointerEvent to RawPointerEvent.
-    fn convert_event(&self, event: &PointerEvent) -> Option<RawPointerEvent> {
-        let timestamp = Instant::now();
-        let pointer = Self::get_pointer_id(event);
-
+    fn update_tracking(&self, event: &PointerEvent) -> Option<Offset<f64>> {
+        if let PointerEvent::DeviceRemoved(device) = event {
+            self.tracking
+                .borrow_mut()
+                .retain(|_, state| state.pointer.device != Some(device.device));
+            return None;
+        }
+        let pointer = *get_pointer_info(event)?;
+        let mut tracking = self.tracking.borrow_mut();
+        if matches!(event, PointerEvent::Cancel(_)) {
+            tracking.remove(&pointer.id);
+            return None;
+        }
+        let position = event.position()?;
         match event {
-            PointerEvent::Down(data) => {
-                let pos = data.state.position;
-                let position = Offset::new(pos.x, pos.y);
-                let device_kind = data.pointer.pointer_type;
-
-                // Start tracking
-                self.tracking.borrow_mut().insert(
-                    pointer,
+            PointerEvent::Down(_) => {
+                tracking.insert(
+                    pointer.id,
                     PointerTrackingState {
                         last_position: position,
                         is_down: true,
-                        device_kind,
+                        pointer,
                     },
                 );
-
-                Some(RawPointerEvent::Down {
-                    pointer,
-                    position,
-                    device_kind,
-                    timestamp,
-                })
+                Some(Offset::ZERO)
             }
-
-            PointerEvent::Move(data) => {
-                let pos = data.current.position;
-                let position = Offset::new(pos.x, pos.y);
-                let device_kind = data.pointer.pointer_type;
-
-                let delta = {
-                    let mut tracking = self.tracking.borrow_mut();
-                    if let Some(state) = tracking.get_mut(&pointer) {
-                        let delta = position - state.last_position;
-                        state.last_position = position;
-                        delta
-                    } else {
-                        // Not tracking this pointer, start now
-                        tracking.insert(
+            PointerEvent::Up(_) => tracking
+                .remove(&pointer.id)
+                .and_then(|state| finite_delta(position, state.last_position)),
+            PointerEvent::Move(_) | PointerEvent::ButtonChange(_) => {
+                if let Some(state) = tracking.get_mut(&pointer.id) {
+                    let delta = finite_delta(position, state.last_position);
+                    state.last_position = position;
+                    state.pointer = pointer;
+                    delta
+                } else if matches!(event, PointerEvent::Move(_)) {
+                    tracking.insert(
+                        pointer.id,
+                        PointerTrackingState {
+                            last_position: position,
+                            is_down: false,
                             pointer,
-                            PointerTrackingState {
-                                last_position: position,
-                                is_down: false,
-                                device_kind,
-                            },
-                        );
-                        Offset::ZERO
-                    }
-                };
-
-                Some(RawPointerEvent::Move {
-                    pointer,
-                    position,
-                    delta: delta.to_delta(),
-                    device_kind,
-                    timestamp,
-                })
+                        },
+                    );
+                    None
+                } else {
+                    None
+                }
             }
-
-            PointerEvent::Up(data) => {
-                let pos = data.state.position;
-                let position = Offset::new(pos.x, pos.y);
-                let device_kind = data.pointer.pointer_type;
-
-                let delta = {
-                    let mut tracking = self.tracking.borrow_mut();
-                    if let Some(state) = tracking.remove(&pointer) {
-                        position - state.last_position
-                    } else {
-                        Offset::ZERO
-                    }
-                };
-
-                Some(RawPointerEvent::Up {
-                    pointer,
-                    position,
-                    delta: delta.to_delta(),
-                    device_kind,
-                    timestamp,
-                })
-            }
-
-            PointerEvent::Cancel(info) => {
-                let device_kind = info.pointer_type;
-
-                // Single lock: get last position and remove in one acquisition
-                let position = {
-                    let mut tracking = self.tracking.borrow_mut();
-                    tracking
-                        .remove(&pointer)
-                        .map_or(Offset::ZERO, |s| s.last_position)
-                };
-
-                Some(RawPointerEvent::Cancel {
-                    pointer,
-                    position,
-                    device_kind,
-                    timestamp,
-                })
-            }
-
-            // Events we don't convert to raw (Enter, Leave, Scroll, Gesture)
             _ => None,
         }
     }
 
-    /// Get the number of pointers currently being tracked.
+    /// Number of tracked contacts and hover pointers.
+    #[must_use]
     pub fn tracked_pointer_count(&self) -> usize {
         self.tracking.borrow().len()
     }
-
-    /// Get the number of pointers currently down.
+    /// Number of contacts still down.
+    #[must_use]
     pub fn active_pointer_count(&self) -> usize {
         self.tracking
             .borrow()
             .values()
-            .filter(|s| s.is_down)
+            .filter(|state| state.is_down)
             .count()
     }
-
-    /// Check if a specific pointer is currently down.
+    /// Whether this contact is down.
+    #[must_use]
     pub fn is_pointer_down(&self, pointer: PointerId) -> bool {
         self.tracking
             .borrow()
             .get(&pointer)
-            .is_some_and(|s| s.is_down)
+            .is_some_and(|state| state.is_down)
     }
-
-    /// Get the last known position of a pointer.
+    /// Last known measured position for a tracked pointer.
+    #[must_use]
     pub fn pointer_position(&self, pointer: PointerId) -> Option<Offset<f64>> {
         self.tracking
             .borrow()
             .get(&pointer)
-            .map(|s| s.last_position)
+            .map(|state| state.last_position)
     }
-
-    /// Clear all tracking state.
+    /// Forget tracking without retiring the callback.
     pub fn reset(&self) {
         self.tracking.borrow_mut().clear();
     }
 }
 
+fn finite_delta(position: Offset<f64>, previous: Offset<f64>) -> Option<Offset<f64>> {
+    let delta = Offset::new(position.dx - previous.dx, position.dy - previous.dy);
+    (delta.dx.is_finite() && delta.dy.is_finite()).then_some(delta)
+}
+
 impl std::fmt::Debug for RawInputHandler {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RawInputHandler")
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RawInputHandler")
             .field("tracked_pointers", &self.tracked_pointer_count())
             .field("active_pointers", &self.active_pointer_count())
             .field("enabled", &self.is_enabled())
@@ -473,40 +262,26 @@ impl std::fmt::Debug for RawInputHandler {
     }
 }
 
-// ============================================================================
-// InputMode enum
-// ============================================================================
-
-/// Input processing mode.
-///
-/// Determines how pointer events are processed.
+/// Which synchronous input paths receive an event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum InputMode {
-    /// Standard gesture recognition (default).
-    ///
-    /// Events go through hit testing and gesture arena.
+    /// Gesture routing only.
     #[default]
     Gesture,
-
-    /// Raw input mode.
-    ///
-    /// Events are delivered directly without gesture processing.
-    /// Use this for games or custom gesture implementations.
+    /// Raw delivery only.
     Raw,
-
-    /// Both modes simultaneously.
-    ///
-    /// Events are delivered to both gesture system and raw handlers.
+    /// Both gesture routing and raw delivery.
     Both,
 }
 
 impl InputMode {
-    /// Returns true if gesture recognition is active.
+    /// Whether gesture routing is enabled.
+    #[must_use]
     pub fn has_gestures(self) -> bool {
         matches!(self, Self::Gesture | Self::Both)
     }
-
-    /// Returns true if raw input is active.
+    /// Whether raw delivery is enabled.
+    #[must_use]
     pub fn has_raw(self) -> bool {
         matches!(self, Self::Raw | Self::Both)
     }
