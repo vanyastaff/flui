@@ -75,6 +75,59 @@ pub(crate) fn scrollable_drag_up_increases_scroll_offset() {
     );
 }
 
+pub(crate) fn a_remaining_touch_continues_scroll_without_an_intermediate_fling() {
+    use flui_foundation::geometry::Offset;
+    use flui_platform_api::{EventTime, pointer::{PointerButton, PointerButtons, PointerEvent, PointerInfo, PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease, PointerSample}};
+    use flui_testing::PointerPhase;
+
+    let controller = ScrollController::new();
+    controller.update_dimensions(300.0, 0.0, 4700.0);
+    let widget = Scrollable::new()
+        .controller(controller.clone())
+        .child(SizedBox::new(300.0, 5000.0));
+    let mut scoped = fling_scoped(widget, Vsync::new(), tight(300.0, 300.0));
+    let event = |id, millis, y, phase| {
+        let info = PointerInfo::new(flui_interaction::PointerId::try_from(id).expect("nonzero touch identity"), PointerKind::Touch);
+        let sample = PointerSample::new(EventTime::from_nanos(millis * 1_000_000), PointerPosition::try_new(Offset::new(150.0, y)).expect("finite touch position"));
+        match phase {
+            PointerPhase::Down => PointerEvent::Down(PointerPress::new(info, PointerButton::PRIMARY, PointerButtons::NONE.with(PointerButton::PRIMARY), sample)),
+            PointerPhase::Move => PointerEvent::Move(PointerMove::new(info, PointerButtons::NONE.with(PointerButton::PRIMARY), sample)),
+            PointerPhase::Up => PointerEvent::Up(PointerRelease::new(info, PointerButton::PRIMARY, PointerButtons::NONE, sample)),
+            PointerPhase::Cancel => unreachable!("this row scripts touch release"),
+        }
+    };
+    for (id, millis, y, phase) in [
+        (2, 0, 250.0, PointerPhase::Down),
+        (2, 10, 200.0, PointerPhase::Move),
+        (2, 20, 150.0, PointerPhase::Move),
+        (3, 25, 60.0, PointerPhase::Down),
+        (3, 30, 70.0, PointerPhase::Move),
+        (3, 40, 80.0, PointerPhase::Move),
+    ] {
+        scoped.dispatch_pointer_event(&event(id, millis, y, phase));
+    }
+    assert_eq!(controller.pixels(), 100.0, "passive touch motion does not move the active drag");
+    scoped.dispatch_pointer_event(&event(2, 45, 150.0, PointerPhase::Up));
+    scoped.pump_for(Duration::from_millis(16));
+    scoped.pump_for(Duration::from_millis(16));
+    assert_eq!(controller.pixels(), 100.0, "first touch release must not start a ballistic run while another touch remains");
+
+    scoped.dispatch_pointer_event(&event(3, 55, 90.0, PointerPhase::Move));
+    assert_eq!(controller.pixels(), 90.0, "handoff rebases to the successor: only its next 10px delta scrolls");
+    scoped.dispatch_pointer_event(&event(3, 65, 100.0, PointerPhase::Move));
+    assert_eq!(controller.pixels(), 80.0);
+    scoped.dispatch_pointer_event(&event(3, 70, 100.0, PointerPhase::Up));
+    scoped.pump_for(Duration::from_millis(16));
+    scoped.pump_for(Duration::from_millis(16));
+    assert!(controller.pixels() < 80.0, "final fling uses the successor's downward measured history, not the first touch's upward velocity: {}", controller.pixels());
+
+    controller.jump_to(200.0);
+    scoped.dispatch_pointer_event(&event(2, 200, 200.0, PointerPhase::Down));
+    scoped.dispatch_pointer_event(&event(2, 210, 190.0, PointerPhase::Move));
+    assert_eq!(controller.pixels(), 210.0, "reused touch identity starts a fresh drag after completion");
+    scoped.dispatch_pointer_event(&event(2, 220, 190.0, PointerPhase::Up));
+}
+
 // ============================================================================
 // Scrollable — fling ballistic simulation integration
 // ============================================================================
