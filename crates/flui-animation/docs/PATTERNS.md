@@ -54,12 +54,12 @@ Composed animations store `Arc<dyn Animation<T>>`:
 
 ```rust
 pub struct CurvedAnimation<C: Curve> {
-    parent: Arc<dyn Animation<f32>>,
+    parent: Arc<dyn Animation<f64>>,
     curve: C,
 }
 
 pub struct TweenAnimation<T, A: Animatable<T>> {
-    parent: Arc<dyn Animation<f32>>,
+    parent: Arc<dyn Animation<f64>>,
     tween: A,
 }
 ```
@@ -95,9 +95,9 @@ let controller = AnimationController::builder(duration, &scheduler)
 Unlike builders that defer validation to `build()`, we validate immediately:
 
 ```rust
-pub fn bounds(mut self, lower: f32, upper: f32) -> Result<Self, AnimationError> {
-    if lower >= upper {
-        return Err(AnimationError::InvalidBounds);
+pub fn bounds(mut self, lower: f64, upper: f64) -> Result<Self, AnimationError> {
+    if !(lower < upper) || !(upper - lower).is_finite() {
+        return Err(AnimationError::InvalidBounds(format!("{lower}..{upper}")));
     }
     self.lower_bound = lower;
     self.upper_bound = upper;
@@ -123,17 +123,20 @@ Adding convenience methods to core types bloats their API.
 Extension traits for fluent composition:
 
 ```rust
-pub trait AnimationExt: Animation<f32> + Sized + 'static {
-    fn curved<C: Curve>(self: Arc<Self>, curve: C) -> Arc<CurvedAnimation<C>> {
-        Arc::new(CurvedAnimation::new(self, curve))
+pub trait AnimationExt: Animation<f64> + Sized + 'static {
+    fn curved<C>(self: Arc<Self>, curve: C) -> CurvedAnimation<C>
+    where
+        C: Curve + Clone + Send + Sync + fmt::Debug + 'static,
+    {
+        CurvedAnimation::new(self as Arc<dyn Animation<f64>>, curve)
     }
-    
-    fn reversed(self: Arc<Self>) -> Arc<ReverseAnimation> {
-        Arc::new(ReverseAnimation::new(self))
+
+    fn reversed(self: Arc<Self>) -> ReverseAnimation {
+        ReverseAnimation::new(self as Arc<dyn Animation<f64>>)
     }
 }
 
-impl<A: Animation<f32> + 'static> AnimationExt for A {}
+impl<A: Animation<f64> + 'static> AnimationExt for A {}
 ```
 
 ### Usage
@@ -141,9 +144,9 @@ impl<A: Animation<f32> + 'static> AnimationExt for A {}
 ```rust
 use flui_animation::AnimationExt;
 
-let animation = Arc::new(controller)
-    .curved(Curves::EaseInOut)
-    .reversed();
+// Each method takes `Arc<Self>` and returns the composed animation by value.
+let curved = Arc::new(controller.clone()).curved(Curves::EaseInOut);
+let animation = Arc::new(curved).reversed();
 ```
 
 ### Benefits
@@ -166,29 +169,21 @@ Use `Arc<dyn Animation<T>>`:
 
 ```rust
 pub struct Container {
-    animations: Vec<Arc<dyn Animation<f32>>>,
+    animations: Vec<Arc<dyn Animation<f64>>>,
 }
 
 impl Container {
-    fn add<A: Animation<f32> + 'static>(&mut self, anim: A) {
+    fn add<A: Animation<f64> + 'static>(&mut self, anim: A) {
         self.animations.push(Arc::new(anim));
     }
 }
 ```
 
-### DynAnimation Trait
+### Listening Through the Erased Type
 
-For collections requiring both Animation and Listenable:
-
-```rust
-pub trait DynAnimation<T>: Animation<T> + Listenable {}
-
-impl<T, A> DynAnimation<T> for A
-where
-    T: Clone + Send + Sync + 'static,
-    A: Animation<T> + Listenable + ?Sized,
-{}
-```
+`Animation<T>` has `Listenable` as a supertrait, so an `Arc<dyn Animation<T>>`
+already exposes both value and status listeners; no extra combined trait is
+needed.
 
 ---
 
@@ -248,7 +243,7 @@ pub fn dispose(&self) {
         return;
     }
     inner.disposed = true;
-    
+
     if let Some(ticker) = inner.ticker.take() {
         ticker.stop();
     }
@@ -259,10 +254,10 @@ pub fn dispose(&self) {
 ### Guard Against Use After Dispose
 
 ```rust
-pub fn forward(&self) -> Result<(), AnimationError> {
+pub fn forward(&self) -> Result<TickerFuture, AnimationError> {
     let inner = self.inner.lock();
     if inner.disposed {
-        return Err(AnimationError::AlreadyDisposed);
+        return Err(AnimationError::Disposed);
     }
     // ...
 }
@@ -270,8 +265,9 @@ pub fn forward(&self) -> Result<(), AnimationError> {
 
 ### Why Not Drop?
 
-- `Drop` can't return errors
-- `Drop` takes `&mut self`, incompatible with `Arc<Self>`
+- Clones of an `AnimationController` share one controller, so dropping one
+  handle cannot mean the animation is finished; `dispose()` ends it for every
+  handle at once
 - Explicit disposal is idempotent (safe to call multiple times)
 
 ---
@@ -288,16 +284,16 @@ Validate in constructors, panic on violation:
 
 ```rust
 impl SpringDescription {
-    pub fn new(mass: f32, stiffness: f32, damping: f32) -> Self {
-        assert!(mass > 0.0, "Mass must be positive");
-        assert!(stiffness > 0.0, "Stiffness must be positive");
-        assert!(damping >= 0.0, "Damping must be non-negative");
+    pub fn new(mass: f64, stiffness: f64, damping: f64) -> Self {
+        assert!(mass.is_finite() && mass > 0.0, "Mass must be finite and positive");
+        assert!(stiffness.is_finite() && stiffness > 0.0, "Stiffness must be finite and positive");
+        assert!(damping.is_finite() && damping >= 0.0, "Damping must be finite and non-negative");
         Self { mass, stiffness, damping }
     }
 }
 
 impl FrictionSimulation {
-    pub fn new(drag: f32, position: f32, velocity: f32) -> Self {
+    pub fn new(drag: f64, position: f64, velocity: f64) -> Self {
         assert!(drag > 0.0, "Drag must be positive");
         assert!((drag - 1.0).abs() > 1e-6, "Drag cannot be 1.0");
         // ...
@@ -311,7 +307,7 @@ Curves guarantee exact boundary values:
 
 ```rust
 impl Curve for ElasticInCurve {
-    fn transform(&self, t: f32) -> f32 {
+    fn transform(&self, t: f64) -> f64 {
         let t = t.clamp(0.0, 1.0);
         if t == 0.0 { return 0.0; }
         if t == 1.0 { return 1.0; }

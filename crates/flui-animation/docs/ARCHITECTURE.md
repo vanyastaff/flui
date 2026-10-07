@@ -28,7 +28,9 @@ src/
 │
 ├── animation.rs      # Animation<T> trait, AnimationDirection
 ├── controller.rs     # AnimationController (main driver)
+├── controller_tests.rs # controller failure-path matrix (cfg(test))
 ├── builder.rs        # AnimationControllerBuilder
+├── vsync.rs          # Vsync registry: drives many controllers per frame
 │
 ├── curved.rs         # CurvedAnimation (applies curve)
 ├── tween.rs          # TweenAnimation<T> (maps to type T)
@@ -42,9 +44,12 @@ src/
 ├── tween_types.rs    # Animatable, Tween, all tween types
 ├── status.rs         # AnimationStatus, AnimationBehavior
 ├── simulation.rs     # Simulation trait, Spring, Friction, Gravity
+├── spring.rs         # AnimatedValue, TwoWayConverter (interruptible springs)
+├── smoothing.rs      # exp_decay, Smoothed, SmoothDamp followers
 │
-├── ext.rs            # AnimatableExt, AnimationExt, CurveExt
-└── error.rs          # AnimationError
+├── ext.rs            # AnimatableExt, AnimationExt (CurveExt lives in tween_types.rs)
+├── error.rs          # AnimationError
+└── test_cases.rs     # table-test runner (cfg(test))
 ```
 
 ## Core Abstractions
@@ -235,33 +240,19 @@ struct RepeatRun {
 
 ### Tick Cycle
 
-Each frame (via the scheduler-driven `Ticker`):
+Each frame calls `tick_at(raw_elapsed_secs: f64)` with the absolute time
+since the active run started (`tick()` reads it from the controller's own
+ticker; production widgets are advanced through `Vsync::tick_all`):
 
-1. Lock `inner`
-2. Calculate elapsed time
-3. Update `value` based on duration/simulation
-4. Check for completion, update `status`
-5. Unlock `inner`
-6. Notify value listeners (via ChangeNotifier)
-7. Notify status listeners (if status changed)
+1. Lock `inner`, read the active run and its generation, unlock
+2. Sample the run's source (curve or simulation) outside the lock
+3. Lock `inner` again; if the run is still the same generation, commit the
+   new `value`, detect completion and update `status`; unlock
+4. Notify value listeners (via `ChangeNotifier`)
+5. Notify status listeners (if status changed)
 
-```rust
-fn tick(&self, delta: Duration) {
-    let (new_status, should_notify_status) = {
-        let mut inner = self.inner.lock();
-        // Update value and status
-        // ...
-        (inner.status, status_changed)
-    };
-    // Lock released
-    
-    self.notifier.notify_listeners();
-    
-    if should_notify_status {
-        self.notify_status_listeners(new_status);
-    }
-}
-```
+User code (curves, simulations, listeners) never runs under the state lock,
+so a frame takes the lock up to three times rather than once.
 
 ## Mapping decisions
 
@@ -792,15 +783,14 @@ primitive is not a measured throughput claim.
 ## Error Handling
 
 ```rust
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum AnimationError {
-    InvalidBounds,      // lower >= upper
-    InvalidValue,       // value outside bounds
-    InvalidDuration,    // duration <= 0
-    AlreadyDisposed,    // operation on disposed controller
-    AlreadyAnimating,   // conflicting animation command
-    TickerError,        // scheduler/ticker failure
+    Disposed,                // operation on a disposed controller
+    InvalidBounds(String),   // lower >= upper, non-finite bound/span, bad repeat range
+    TickerNotAvailable,      // declared; no current operation returns it
+    InvalidSpring(String),   // oscillating spring passed to fling
+    NonFiniteTarget(String), // non-finite target, `from`, velocity or simulation start
 }
 ```
 
@@ -814,9 +804,12 @@ Design:
 ### Arc Sharing
 
 ```rust
-let controller = Arc::new(AnimationController::new(...));
-let curved = Arc::new(CurvedAnimation::new(controller.clone(), curve));
-let tweened = TweenAnimation::new(tween, curved.clone());
+// `AnimationController` is itself a handle over `Arc`-shared state:
+// `clone()` shares the controller.
+let controller = AnimationController::new(duration, &scheduler);
+let curved: Arc<dyn Animation<f64>> =
+    Arc::new(CurvedAnimation::new(Arc::new(controller.clone()), curve));
+let tweened = TweenAnimation::new(tween, Arc::clone(&curved));
 ```
 
 Benefits:
@@ -832,15 +825,34 @@ Controllers require explicit disposal:
 controller.dispose();
 ```
 
-After disposal:
-- All operations return `Err(AnimationError::AlreadyDisposed)`
-- Ticker stopped and dropped
-- Listeners cleared
+After disposal, driving operations (`forward`, `reverse`, `animate_*`,
+`fling*`, `repeat*`, `stop`, `reset`) return `Err(AnimationError::Disposed)`
+and the ticker is stopped.
 
 Why not just Drop?
-- `Drop` can't return errors
-- `Drop` takes `&mut self`, not compatible with `Arc<Self>`
+- Clones of an `AnimationController` share one controller, so dropping one
+  handle cannot mean the animation is finished; `dispose` is the explicit end
+  of life for every handle at once
 - Explicit disposal can be called safely multiple times
+
+### Known gaps in the current controller
+
+These are defects, recorded here so the document matches the code until the
+controller rework lands; each has an ignored `contract:` test row that pins
+the intended behaviour (`cargo nextest run -p flui-animation --run-ignored only`):
+`tests/contracts/controller_robustness.rs` (disposed controller, curved-run
+finiteness and bounds), `tests/contracts/status_delivery.rs` (listener and
+`Vsync` walk panics, switch reentry) and `tests/contracts/ownership.rs`.
+
+- After `dispose`, `set_value` still changes the value, listener registration
+  is still accepted, and value listeners stay attached.
+- A status listener that panics stops the listeners after it from seeing that
+  transition, and a panicking curve or simulation ends the whole
+  `Vsync::tick_all` walk for that frame.
+- A curved run publishes the curve's output without a finiteness check or a
+  clamp to the bounds: a curve returning NaN or overshooting is published as is.
+- `AnimationSwitch` reads its parents' `value()` and `status()` while holding its
+  own lock, so a parent that reads the switch back deadlocks.
 
 ## Extension Traits
 
@@ -850,9 +862,11 @@ Add fluent APIs without cluttering core types:
 
 ```rust
 pub trait AnimationExt: Animation<f64> + Sized + 'static {
-    fn curved<C: Curve>(self: Arc<Self>, curve: C) -> Arc<CurvedAnimation<C>>;
-    fn reversed(self: Arc<Self>) -> Arc<ReverseAnimation>;
-    fn add(self: Arc<Self>, other: Arc<dyn Animation<f64>>) -> Arc<CompoundAnimation>;
+    fn curved<C>(self: Arc<Self>, curve: C) -> CurvedAnimation<C>
+    where
+        C: Curve + Clone + Send + Sync + fmt::Debug + 'static;
+    fn reversed(self: Arc<Self>) -> ReverseAnimation;
+    fn add(self: Arc<Self>, other: Arc<dyn Animation<f64>>) -> CompoundAnimation;
     // ...
 }
 
@@ -862,9 +876,9 @@ impl<A: Animation<f64> + 'static> AnimationExt for A {}
 ### AnimatableExt
 
 ```rust
-pub trait AnimatableExt<T>: Animatable<T> {
-    fn animate<A: Animation<f64>>(self, parent: Arc<A>) -> TweenAnimation<T, Self>;
-    fn chain<B: Animatable<T>>(self, next: B) -> ChainedTween<Self, B>;
+pub trait AnimatableExt<T>: Animatable<T> + Sized {
+    fn animate(self, parent: Arc<dyn Animation<f64>>) -> TweenAnimation<T, Self>;
+    fn chain<B>(self, other: B) -> ChainedTween<Self, B>;
     fn with_curve<C: Curve>(self, curve: C) -> ChainedTween<CurveTween<C>, Self>;
     fn reversed(self) -> ReverseTween<T, Self>;
 }
@@ -875,7 +889,7 @@ pub trait AnimatableExt<T>: Animatable<T> {
 ```rust
 pub trait CurveExt: Curve + Sized {
     fn into_tween(self) -> CurveTween<Self>;
-    fn then<C: Curve>(self, next: C) -> ChainedCurve<Self, C>;
+    fn then<T, A: Animatable<T>>(self, animatable: A) -> ChainedTween<CurveTween<Self>, A>;
 }
 ```
 
