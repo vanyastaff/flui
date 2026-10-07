@@ -439,6 +439,35 @@ impl GestureArenaEntry {
         }
     }
 
+    /// Release this exact generation's retained hold without notifying members.
+    /// Owners call this for their held tokens before silent withdrawal in Drop.
+    pub(crate) fn release_deferred(&self) {
+        if self.arena.owner_closed.get() {
+            return;
+        }
+        let Some(slot) = self.slot.upgrade() else {
+            return;
+        };
+        if slot.generation != self.generation || !self.arena.is_live_slot(self.pointer, &slot) {
+            return;
+        }
+        let should_queue = {
+            let mut entry = slot.data.borrow_mut();
+            if entry.is_resolved {
+                return;
+            }
+            entry.release();
+            entry.has_pending_sweep
+                || matches!(
+                    entry.follow_up(),
+                    ArenaFollowUp::DeferDefault | ArenaFollowUp::ResolveInFavorOf(_)
+                )
+        };
+        if should_queue {
+            self.arena.queue_default_resolution(self.pointer, &slot);
+        }
+    }
+
     /// Sweep this exact arena generation.
     pub fn sweep(&self) {
         if self.arena.owner_closed.get() {
@@ -1930,7 +1959,7 @@ impl GestureArena {
             .map_or(0, |slot| slot.data.borrow().members.len())
     }
 
-    /// Drain single-member default resolutions queued by `close`/`reject`.
+    /// Drain default, eager and released pointer-up decisions without losing debt.
     ///
     /// This is a typed owner-boundary queue, not an arbitrary closure
     /// executor. Each token carries the exact arena generation; rejection,
@@ -1947,7 +1976,11 @@ impl GestureArena {
             let follow_up = {
                 let mut entry = slot.data.borrow_mut();
                 entry.prune_departed();
-                entry.follow_up()
+                if entry.has_pending_sweep && !entry.is_held && !entry.is_resolved {
+                    ArenaFollowUp::DeferDefault
+                } else {
+                    entry.follow_up()
+                }
             };
             match follow_up {
                 ArenaFollowUp::DeferDefault => self.queue_default_resolution(slot.pointer, &slot),
@@ -1972,12 +2005,17 @@ impl GestureArena {
             let pending = {
                 let mut entry = slot.data.borrow_mut();
                 entry.prune_departed();
-                let winner = match entry.follow_up() {
-                    ArenaFollowUp::DeferDefault => entry.members[0].upgrade(),
-                    ArenaFollowUp::ResolveInFavorOf(winner) => winner.upgrade(),
-                    ArenaFollowUp::None | ArenaFollowUp::RemoveEmpty => continue,
-                };
-                entry.resolve(winner.as_ref())
+                if entry.has_pending_sweep && !entry.is_held {
+                    entry.has_pending_sweep = false;
+                    entry.sweep()
+                } else {
+                    let winner = match entry.follow_up() {
+                        ArenaFollowUp::DeferDefault => entry.members[0].upgrade(),
+                        ArenaFollowUp::ResolveInFavorOf(winner) => winner.upgrade(),
+                        ArenaFollowUp::None | ArenaFollowUp::RemoveEmpty => continue,
+                    };
+                    entry.resolve(winner.as_ref())
+                }
             };
             self.remove_exact_slot(token.pointer, &slot);
             resolved += 1;
