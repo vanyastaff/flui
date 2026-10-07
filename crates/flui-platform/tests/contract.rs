@@ -196,7 +196,7 @@ mod native_windows {
             SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetWindowPos, SetWindowsHookExW, ShowWindow,
             TranslateMessage, UnhookWindowsHookEx, WH_CALLWNDPROC, WM_CHAR, WM_CLOSE, WM_DEADCHAR,
             WM_ENTERMENULOOP, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
-            WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP,
+            WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSCHAR, WM_SYSDEADCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP,
         },
     };
 
@@ -277,6 +277,10 @@ mod native_windows {
         ("alt_tap_keeps_next_character", alt_tap_keeps_next_character),
         ("f10_keeps_next_character", f10_keeps_next_character),
         ("dead_key_is_reported_as_dead", dead_key_is_reported_as_dead),
+        (
+            "system_dead_key_is_reported_as_dead",
+            system_dead_key_is_reported_as_dead,
+        ),
         (
             "consumed_alt_space_withdraws_its_system_char",
             consumed_alt_space_withdraws_its_system_char,
@@ -1201,11 +1205,27 @@ mod native_windows {
     // `NamedKey::Dead`, not as its unshifted character, so a shortcut bound
     // to that character does not fire mid-composition. `TranslateMessage`
     // queues `WM_DEADCHAR` for it; the row posts one before the keydown.
+    fn dead_key_is_reported_as_dead() {
+        dead_keydown_reports_dead(DeadKeyPath::Plain);
+    }
+
+    // With Alt held the same key is a system keydown, and `TranslateMessage`
+    // queues `WM_SYSDEADCHAR` for it instead.
+    fn system_dead_key_is_reported_as_dead() {
+        dead_keydown_reports_dead(DeadKeyPath::System);
+    }
+
+    #[derive(Clone, Copy)]
+    enum DeadKeyPath {
+        Plain,
+        System,
+    }
+
     #[expect(
         unsafe_code,
         reason = "owned Win32 keyboard dispatch and message pumping"
     )]
-    fn dead_key_is_reported_as_dead() {
+    fn dead_keydown_reports_dead(path: DeadKeyPath) {
         let platform = WindowsPlatform::new().expect("native Windows platform");
         let window = open_shown(&platform);
         let hwnd = window
@@ -1225,21 +1245,25 @@ mod native_windows {
         }));
         // VK_OEM_7 (apostrophe), the acute-accent dead key on US-International.
         let (vk, scan) = (0xDE_usize, 0x28_isize);
+        let (dead, down, context) = match path {
+            DeadKeyPath::Plain => (WM_DEADCHAR, WM_KEYDOWN, 0),
+            DeadKeyPath::System => (WM_SYSDEADCHAR, WM_SYSKEYDOWN, 1 << 29),
+        };
         // SAFETY: integer key data for the fixture's own HWND on this thread;
         // dispatch is synchronous.
         unsafe {
             PostMessageW(
                 Some(hwnd),
-                WM_DEADCHAR,
+                dead,
                 WPARAM(0x27),
-                LPARAM(1 | (scan << 16)),
+                LPARAM(1 | (scan << 16) | context),
             )
             .expect("queue dead char");
             SendMessageW(
                 hwnd,
-                WM_KEYDOWN,
+                down,
                 Some(WPARAM(vk)),
-                Some(LPARAM(1 | (scan << 16))),
+                Some(LPARAM(1 | (scan << 16) | context)),
             );
         }
         for _ in 0..64 {
