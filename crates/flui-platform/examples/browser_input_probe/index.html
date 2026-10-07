@@ -12,6 +12,7 @@ pre { position: relative; z-index: 9999; background: white; width: max-content; 
   <button id="cancel">Check browser cancellation</button>
   <button id="capture-loss">Check capture loss</button>
   <button id="fractional">Check fractional positions</button>
+  <button id="pen-samples">Check pen samples</button>
   <button id="capture">Arm trusted capture check</button>
   <button id="display">Check display</button>
   <button id="created">Check created callback</button>
@@ -95,6 +96,7 @@ document.getElementById('cancel').onclick = () => check('cancel-check', () => {
   const common = { pointerId: 7, pointerType: 'touch', bubbles: true, clientX: 80, clientY: 40 };
   canvas.dispatchEvent(new PointerEvent('pointerdown', { ...common, button: 0, buttons: 1 }));
   canvas.dispatchEvent(new PointerEvent('pointercancel', { ...common, button: -1, buttons: 0 }));
+  equal({ reason: document.getElementById('cancel-reason')?.textContent }, { reason: 'Platform' });
   // Capture loss after cancellation cannot deliver a second terminal event.
   canvas.dispatchEvent(new PointerEvent('lostpointercapture', common));
   canvas.dispatchEvent(new PointerEvent('pointerdown', { ...common, button: 0, buttons: 1 }));
@@ -142,6 +144,7 @@ document.getElementById('capture-loss').onclick = () => check('capture-loss-chec
   const common = { pointerId: 9, pointerType: 'mouse', bubbles: true, clientX: 80, clientY: 40 };
   canvas.dispatchEvent(new PointerEvent('pointerdown', { ...common, button: 0, buttons: 1 }));
   canvas.dispatchEvent(new PointerEvent('lostpointercapture', common));
+  equal({ reason: document.getElementById('cancel-reason')?.textContent }, { reason: 'CaptureLost' });
   canvas.dispatchEvent(new PointerEvent('lostpointercapture', common));
   canvas.dispatchEvent(new PointerEvent('pointerdown', { ...common, button: 0, buttons: 1 }));
   canvas.dispatchEvent(new PointerEvent('pointerup', { ...common, button: 0, buttons: 0 }));
@@ -168,4 +171,48 @@ document.getElementById('capture').onclick = () => {
     });
   }, { once: true });
 };
+
+document.getElementById('pen-samples').onclick = () => check('samples-check', () => {
+  const canvas = document.querySelector('canvas');
+  if (!canvas) throw new Error('Install input first');
+  const rect = canvas.getBoundingClientRect();
+  const make = (time, x, pressure) => {
+    const event = new PointerEvent('pointermove', {
+      pointerId: 11, pointerType: 'pen', isPrimary: true, bubbles: true,
+      clientX: rect.left + x, clientY: rect.top + 30.5, buttons: 1,
+      pressure, tangentialPressure: 0, altitudeAngle: Math.PI / 4,
+      azimuthAngle: Math.PI / 2, twist: 270, width: 7, height: 9,
+    });
+    Object.defineProperty(event, 'timeStamp', { value: time });
+    // Dispatch each real sample object once so its browser-owned target and
+    // local coordinates match the parent event's canvas. This fixture supplies
+    // source lists; it does not claim physical hardware generated the lists.
+    canvas.dispatchEvent(event);
+    equal(event, { timeStamp: time, pressure, tangentialPressure: 0, twist: 270, width: 7, height: 9 });
+    equal({ x: event.offsetX, y: event.offsetY }, { x, y: 30.5 });
+    return event;
+  };
+  const first = make(10, 20.25, .125);
+  const second = make(20, 40.5, .25);
+  const current = make(30, 50.75, .375);
+  const next = make(40, 60.25, .5);
+  const last = make(50, 80.5, .75);
+  // The PointerEvent constructor has no source-list arguments. Exercise the
+  // platform's actual DOM method calls using explicit lists of DOM objects.
+  Object.defineProperty(current, 'getCoalescedEvents', { value: () => [second, first, current, last] });
+  Object.defineProperty(current, 'getPredictedEvents', { value: () => [last, first, current, next] });
+  report('sample-source', JSON.stringify({ current: current.timeStamp, coalesced: current.getCoalescedEvents().map(e => e.timeStamp), predicted: current.getPredictedEvents().map(e => e.timeStamp), altitude: current.altitudeAngle, azimuth: current.azimuthAngle }));
+  canvas.dispatchEvent(current);
+  const actual = JSON.parse(document.getElementById('samples')?.textContent ?? 'null');
+  if (!actual) throw new Error('no public samples');
+  equal(actual, { kind: 'Pen { tool: Tip }', role: 'Primary' });
+  equal(actual.current, { time: 30000000, x: 50.75, y: 30.5, pressure: .375, tangential: 0, width: 7, height: 9 });
+  const near = (actual, expected) => { if (Math.abs(actual - expected) > 1e-12) throw new Error(`angle: expected ${expected}, got ${actual}`); };
+  if (actual.current.altitude === null || actual.current.azimuth === null || actual.current.twist === null) throw new Error('pen angles missing');
+  near(actual.current.altitude, Math.PI / 4); near(actual.current.azimuth, Math.PI / 2); near(actual.current.twist, 3 * Math.PI / 2);
+  equal({ times: actual.coalesced.map(s => s.time).join(',') }, { times: '10000000,20000000' });
+  equal({ times: actual.predicted.map(s => s.time).join(',') }, { times: '40000000,50000000' });
+  equal(actual.coalesced[0], { x: 20.25, pressure: .125 });
+  equal(actual.predicted[1], { x: 80.5, pressure: .75 });
+});
 </script>
