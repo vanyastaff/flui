@@ -52,15 +52,12 @@ use crate::__runtime::{CloseMode, CloseTombstone};
 /// reentrant chain that never settles (two listeners that keep
 /// re-requesting each other) is bounded: past a fixed per-call budget of
 /// applications, the remaining queue is dropped with a single
-/// `tracing::warn!`. A listener that panics cannot leave this guard stuck
-/// open: `notification_depth` is held by a private RAII guard that
-/// decrements on unwind exactly as it does on a normal return, and —
-/// because the notification it was guarding never got to finish, so
-/// whatever it queued is only half a transaction — also discards the
-/// pending queue in that case (warning once, naming the count, if it was
-/// non-empty — an unwind must not silently erase requests a healthy
-/// caller had already had accepted), so a later, healthy call is never
-/// asked to replay a chain a panic interrupted partway through.
+/// `tracing::warn!`. A listener failure is contained until every
+/// still-registered observer receives the committed edge and all accepted
+/// queued requests have been revalidated and drained. The first failure
+/// then propagates; a competing failure cannot erase later accepted work
+/// or replace that first failure. The notification-depth guard decrements
+/// on both normal return and an unexpected unwind.
 /// See `## Mapping decisions` in `crates/flui-interaction/docs/ARCHITECTURE.md`
 /// for why transitions apply synchronously rather than being deferred.
 pub struct FocusManager {
@@ -249,8 +246,10 @@ impl FocusManager {
             self.pending_focus_transitions.borrow_mut().push_back(node);
             return;
         }
-        self.apply_focus_transition(node);
-        self.drain_pending_focus_transitions();
+        let mut failure = FocusClosePanic::for_rejection(self.close_mode.mode());
+        self.apply_focus_transition(node, &mut failure);
+        self.drain_pending_focus_transitions(&mut failure);
+        failure.finish();
     }
 
     /// Commit one focus transition and publish it.
@@ -262,7 +261,7 @@ impl FocusManager {
     /// `request_focus`/`unfocus` queues instead of applying inline. The
     /// caller is responsible for draining `pending_focus_transitions` once
     /// this returns at depth zero.
-    fn apply_focus_transition(&self, node: Option<Rc<FocusNode>>) {
+    fn apply_focus_transition(&self, node: Option<Rc<FocusNode>>, failure: &mut FocusClosePanic) {
         let previous = {
             let mut primary = self.primary_focus.borrow_mut();
             if Self::focus_identity_eq(primary.as_ref(), node.as_ref()) {
@@ -285,10 +284,8 @@ impl FocusManager {
             &self.notification_depth,
             &self.pending_focus_transitions,
         );
-        let mut failure = FocusClosePanic::for_rejection(self.close_mode.mode());
-        Self::notify_focus_nodes(previous.as_ref(), node.as_ref(), &mut failure);
-        self.notify_listeners(previous, node, &mut failure);
-        failure.finish();
+        Self::notify_focus_nodes(previous.as_ref(), node.as_ref(), failure);
+        self.notify_listeners(previous, node, failure);
     }
 
     /// Whether `a` and `b` name the identical focus node (or both `None`).
@@ -311,7 +308,7 @@ impl FocusManager {
     /// dequeued `None` ([`Self::unfocus`]) is always eligible. Neither an
     /// eligibility skip nor a same-identity no-op counts against the drain
     /// budget: it bounds applications, not queue pops.
-    fn drain_pending_focus_transitions(&self) {
+    fn drain_pending_focus_transitions(&self, failure: &mut FocusClosePanic) {
         let mut applied = 0usize;
         loop {
             if self.closed.get() {
@@ -353,7 +350,7 @@ impl FocusManager {
                 let _prev = std::mem::take(&mut *self.pending_focus_transitions.borrow_mut());
                 return;
             }
-            self.apply_focus_transition(node);
+            self.apply_focus_transition(node, failure);
         }
     }
 
@@ -416,21 +413,21 @@ impl FocusManager {
                 .collect()
         });
 
+        let mut failure = FocusClosePanic::for_rejection(self.close_mode.mode());
         {
             let _guard = NotificationDepthGuard::enter(
                 &self.notification_depth,
                 &self.pending_focus_transitions,
             );
-            let mut failure = FocusClosePanic::for_rejection(self.close_mode.mode());
             Self::notify_focus_path_change(previous_focus_path, current_focus_path, &mut failure);
             if !Self::focus_identity_eq(current.as_ref(), Some(&previous_primary)) {
                 self.notify_listeners(Some(previous_primary), current, &mut failure);
             }
-            failure.finish();
         }
         if self.notification_depth.get() == 0 {
-            self.drain_pending_focus_transitions();
+            self.drain_pending_focus_transitions(&mut failure);
         }
+        failure.finish();
     }
 
     /// Release primary focus.
