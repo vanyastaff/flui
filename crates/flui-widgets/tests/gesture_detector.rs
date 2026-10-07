@@ -10,7 +10,7 @@ use crate::common::{lay_out, tight};
 use flui_painting::styling::Color;
 use flui_widgets::{ColoredBox, GestureDetector};
 
-#[derive(Clone, flui_view::StatefulView)]
+#[derive(Clone, flui_view::prelude::StatefulView)]
 struct ConfiguredGesture {
     settings: flui_interaction::GestureSettings,
     detector: GestureDetector,
@@ -87,7 +87,7 @@ pub(crate) fn scoped_settings_control_touch_recognition_thresholds() {
             );
             let pointer = PointerId::try_from(1_u64).expect("authored touch contact");
             let start = Offset::new(40.0, 40.0);
-            let end = Offset::new(if family == "tap" { 70.0 } else { 60.0 }, 40.0);
+            let end = Offset::new(if family == "tap" { 70.0 } else { 52.0 }, 40.0);
             for event in [
                 make_down_event_for_id(pointer, start, PointerKind::Touch).expect("finite Down"),
                 make_move_event_for_id(pointer, end, PointerKind::Touch).expect("finite Move"),
