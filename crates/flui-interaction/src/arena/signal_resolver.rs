@@ -255,3 +255,35 @@ impl Default for PointerSignalResolver {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    use super::*;
+
+    // The terminal counter needs a private seam; exhausting it through public
+    // registration would require more operations than a test can perform.
+    #[test]
+    fn signal_handler_exhaustion_refuses_permanently_without_losing_registration() {
+        let resolver = PointerSignalResolver::new();
+        let pointer = PointerId::PRIMARY;
+        resolver.inner.borrow_mut().next_handler_id = u64::MAX - 1;
+        let last = resolver.register(pointer, SignalPriority::Normal, |_| {});
+        assert_eq!(last.get(), u64::MAX - 1);
+
+        for _ in 0..2 {
+            let failure = catch_unwind(AssertUnwindSafe(|| {
+                resolver.register(pointer, SignalPriority::Normal, |_| {});
+            }))
+            .expect_err("terminal registration must refuse instead of wrapping");
+            assert_eq!(
+                flui_foundation::panic::payload_text(failure.as_ref()),
+                Some("BUG: pointer signal handler ID exhausted"),
+            );
+            assert_eq!(resolver.handler_count(pointer), 1);
+        }
+        resolver.unregister(pointer, last);
+        assert_eq!(resolver.handler_count(pointer), 0);
+    }
+}
