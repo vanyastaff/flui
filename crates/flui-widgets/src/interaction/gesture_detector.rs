@@ -893,7 +893,7 @@ impl ViewState<GestureDetector> for GestureDetectorState {
         let recognizers = self
             .recognizers
             .as_ref()
-            .expect("init_state builds the recognizers before the first build");
+            .expect("BUG: init_state builds the recognizers before the first build");
 
         let listener = self.make_listener(recognizers).behavior(view.behavior);
 
