@@ -735,6 +735,22 @@ mod tests {
                 "native orientation changes coordinate basis",
                 native_orientation_changes_basis,
             ),
+            (
+                "known zero sensors remain readings",
+                known_zero_sensors_remain_readings,
+            ),
+            (
+                "unknown sensor capability remains absent",
+                unknown_sensor_capability_remains_absent,
+            ),
+            (
+                "partial pen capabilities remain partial",
+                partial_pen_capabilities_remain_partial,
+            ),
+            (
+                "native device identities stay independent",
+                native_device_identities_stay_independent,
+            ),
         ];
         for (name, row) in rows {
             row();
@@ -790,5 +806,112 @@ mod tests {
         assert_eq!(angles.altitude(), Some(core::f64::consts::FRAC_PI_4));
         assert_eq!(angles.azimuth(), Some(3.0 * core::f64::consts::FRAC_PI_2));
         assert_eq!(pen_orientation(f64::NAN, 0.0), None);
+    }
+
+    fn capabilities(axes: &[Axis]) -> DeviceCapabilities {
+        DeviceCapabilities {
+            source: 0,
+            axes: axes
+                .iter()
+                .fold(0, |bits, axis| bits | (1_u64 << u32::from(*axis))),
+        }
+    }
+
+    fn known_zero_sensors_remain_readings() {
+        let sample = native_sample(
+            EventTime::from_nanos(17),
+            PointerKind::Pen { tool: PenTool::Tip },
+            2.0,
+            Some(capabilities(&[
+                Axis::Pressure,
+                Axis::Tilt,
+                Axis::Orientation,
+                Axis::TouchMajor,
+                Axis::TouchMinor,
+            ])),
+            |_| 0.0,
+        )
+        .expect("reported zero samples");
+        assert_eq!(sample.time, EventTime::from_nanos(17));
+        assert_eq!(sample.pressure.map(Pressure::get), Some(0.0));
+        let orientation = sample.orientation.expect("two reported angles");
+        assert_eq!(orientation.altitude(), Some(core::f64::consts::FRAC_PI_2));
+        assert_eq!(
+            orientation.azimuth(),
+            Some(3.0 * core::f64::consts::FRAC_PI_2)
+        );
+        assert_eq!(
+            sample.contact_size.expect("reported contact axes").get(),
+            Size::ZERO
+        );
+        assert_eq!(sample.tangential_pressure, None);
+        assert_eq!(sample.twist, None);
+    }
+
+    fn unknown_sensor_capability_remains_absent() {
+        for capabilities in [None, Some(capabilities(&[]))] {
+            let sample = native_sample(
+                EventTime::from_nanos(17),
+                PointerKind::Pen {
+                    tool: PenTool::Eraser,
+                },
+                2.0,
+                capabilities,
+                |_| 0.0,
+            )
+            .expect("position without sensor capabilities");
+            assert_eq!(sample.pressure, None);
+            assert_eq!(sample.orientation, None);
+            assert_eq!(sample.contact_size, None);
+        }
+        let mouse = native_sample(
+            EventTime::from_nanos(17),
+            PointerKind::Mouse,
+            2.0,
+            Some(capabilities(&[Axis::Pressure])),
+            |_| 0.5,
+        )
+        .expect("mouse position");
+        assert_eq!(mouse.pressure, None);
+    }
+
+    fn partial_pen_capabilities_remain_partial() {
+        for (axes, expected) in [
+            (
+                &[Axis::Tilt][..],
+                (Some(core::f64::consts::FRAC_PI_2), None),
+            ),
+            (
+                &[Axis::Orientation][..],
+                (None, Some(3.0 * core::f64::consts::FRAC_PI_2)),
+            ),
+        ] {
+            let sample = native_sample(
+                EventTime::from_nanos(17),
+                PointerKind::Pen { tool: PenTool::Tip },
+                2.0,
+                Some(capabilities(axes)),
+                |_| 0.0,
+            )
+            .expect("position and partial angles");
+            let orientation = sample.orientation.expect("one reported angle");
+            assert_eq!((orientation.altitude(), orientation.azimuth()), expected);
+        }
+        assert_eq!(
+            pen_orientation(f64::from(core::f32::consts::FRAC_PI_2), 0.0)
+                .expect("native flat pen endpoint")
+                .altitude(),
+            Some(0.0)
+        );
+    }
+
+    fn native_device_identities_stay_independent() {
+        let first = native_pointer_id(1, 0).expect("first device pointer");
+        let second = native_pointer_id(2, 0).expect("second device pointer");
+        let virtual_device = native_pointer_id(-1, 0).expect("signed native device");
+        assert_ne!(first, second);
+        assert_ne!(first, virtual_device);
+        assert_eq!(first.get().get(), 4_294_967_297);
+        assert_eq!(native_pointer_id(1, -1), None);
     }
 }
