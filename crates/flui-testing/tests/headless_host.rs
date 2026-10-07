@@ -301,3 +301,28 @@ fn close_delivery_is_idempotent() {
         "the presentation is told it is detached exactly once"
     );
 }
+
+#[test]
+fn secondary_window_preserves_its_text_store_backend() {
+    let mut host = HeadlessHost::new(HeadlessWindow::new(100, 100));
+    let enabled = host.open_window(HeadlessWindow::new(100, 100).with_text_store_host());
+    let absent = host.open_window(HeadlessWindow::new(100, 100));
+    assert!(host.text_store_host_on(host.primary_window()).is_none());
+    let node = flui_interaction::routing::FocusNode::new();
+    host.attach_to(
+        enabled,
+        &flui_widgets::EditableText::new(flui_widgets::TextEditingController::new(), node.clone()),
+    )
+    .expect("secondary root");
+    let _ = host.pump(Duration::ZERO);
+    node.request_focus();
+    let _ = host.pump(Duration::ZERO);
+    assert!(
+        host.text_store_host_on(enabled)
+            .expect("backend")
+            .focused_store()
+            .is_some(),
+        "the secondary field reaches the pull host"
+    );
+    assert!(host.text_store_host_on(absent).is_none());
+}

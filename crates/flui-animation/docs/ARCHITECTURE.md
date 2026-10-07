@@ -903,23 +903,6 @@ Existing rounding, flooring and progress clamping remain deliberate.
 The public consumer family `integer_tweens_interpolate_across_the_full_range`
 checks both directions across the full range and ordinary rounding.
 
-### Weighted progress uses relative weights and exact endpoints
-
-`TweenSequence` revalidates each item's finite positive weight after caller edits
-to the public item fields. Evaluation scales weights by the largest weight, so
-finite inputs whose raw sum overflows still describe usable relative durations.
-The `total_weight` accessor retains the original sum and may return infinity;
-it does not drive interpolation. Exact progress endpoints return the first and
-last tween's endpoints. Interior progress divides by the actual relative weight,
-without an arbitrary epsilon that discards short segments. A relative interval
-that underflows to zero cannot be selected by representable interior progress,
-but its endpoint remains reachable.
-
-Public consumer families `weighted_sequences_preserve_endpoints_and_relative_progress`
-and `weighted_sequences_reject_invalid_edited_configuration` cover overflowing
-finite weights, small first and final intervals, ordinary weighted progress,
-edited invalid configuration and a subsequent valid sequence.
-
 ### Controller sources execute outside the state lock
 
 Custom `Simulation::x`, `dx`, `is_done` and `Curve::transform` implementations may

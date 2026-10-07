@@ -725,9 +725,92 @@ fn callback_client_with_store(
     })
 }
 
+struct ReentrantCommitStore {
+    inner: Rc<InMemoryTextStore>,
+    callback: RefCell<Option<Box<dyn FnOnce()>>>,
+}
+impl TextStore for ReentrantCommitStore {
+    fn status(&self) -> TextStoreStatus {
+        self.inner.status()
+    }
+    fn request_lock(
+        &self,
+        grant: LockGrant,
+        timing: LockTiming,
+    ) -> Result<LockOutcome, TextStoreError> {
+        let result = self.inner.request_lock(grant, timing);
+        let callback = self.callback.borrow_mut().take();
+        if let Some(callback) = callback {
+            callback();
+        }
+        result
+    }
+    fn run_deferred_grants(&self) -> usize {
+        self.inner.run_deferred_grants()
+    }
+    fn set_commit_gate(&self, gate: CommitGate) {
+        self.inner.set_commit_gate(gate);
+    }
+    fn set_observer(&self, observer: Option<Rc<dyn TextStoreObserver>>) {
+        self.inner.set_observer(observer);
+    }
+}
+fn commit_reentry_preserves_the_newer_attachment() {
+    let (owner, _) = owner();
+    let handle = owner.handle();
+    let nested = Rc::new(Cell::new(None));
+    let nested_store = InMemoryTextStore::new("newer");
+    let incoming = nested_store.clone();
+    let observed = nested.clone();
+    let reentrant = handle.clone();
+    let store = Rc::new(ReentrantCommitStore {
+        inner: InMemoryTextStore::new("outgoing"),
+        callback: RefCell::new(None),
+    });
+    handle
+        .attach(TextInputClient::new(store.clone()))
+        .expect("outgoing");
+    *store.callback.borrow_mut() = Some(Box::new(move || {
+        observed.set(Some(
+            reentrant
+                .attach(TextInputClient::new(incoming))
+                .expect("nested attach"),
+        ));
+    }));
+    assert_eq!(handle.attach(client()), Err(TextInputError::Superseded));
+    assert!(owner.is_attached(nested.get().expect("nested token")));
+    owner.dispatch(&flui_platform_api::ImeEvent::Commit("!".into()));
+    let text = Rc::new(RefCell::new(String::new()));
+    let read = text.clone();
+    let _ = nested_store
+        .request_lock(
+            LockGrant::read(move |session| {
+                *read.borrow_mut() = session
+                    .text(
+                        flui_platform_api::text_store::Utf16Range::new(
+                            flui_platform_api::text_store::Utf16Offset::ZERO,
+                            session.document_len(),
+                        )
+                        .expect("ordered range"),
+                    )
+                    .expect("document text");
+            }),
+            LockTiming::Sync,
+        )
+        .expect("read");
+    assert!(
+        text.borrow().contains('!'),
+        "subsequent IME events reach the newer client"
+    );
+}
+
 #[test]
 fn text_input_retirement_allows_reentry_and_preserves_recovery() {
     let cases: &[(&str, fn())] = &[
+        (
+            "commit reentry",
+            commit_reentry_preserves_the_newer_attachment,
+        ),
         (
             "replacement",
             replacement_destructor_may_replace_the_new_client,

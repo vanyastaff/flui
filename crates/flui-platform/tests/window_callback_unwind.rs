@@ -156,3 +156,58 @@ fn ready_tasks_return_results_without_executor_bounds() {
     }
     assert!(failures.is_empty(), "failed cases: {failures:?}");
 }
+
+#[test]
+fn a_discarded_retirement_notice_contains_its_capture_failure() {
+    const CHILD: &str = "FLUI_DISCARDED_NOTICE_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        struct Hostile;
+        impl Drop for Hostile {
+            fn drop(&mut self) {
+                panic!("notice capture failure");
+            }
+        }
+        let callbacks = Arc::new(WindowCallbacks::new());
+        let nested = Arc::downgrade(&callbacks);
+        *callbacks.on_request_frame.lock() = Some(Box::new(move || {
+            let hostile = Hostile;
+            nested
+                .upgrade()
+                .expect("owner")
+                .clear_then(move || drop(hostile));
+            panic!("first failure");
+        }));
+        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            callbacks.dispatch_request_frame();
+        }))
+        .expect_err("original failure");
+        assert_eq!(
+            flui_foundation::panic::payload_text(failure.as_ref()),
+            Some("first failure")
+        );
+        callbacks.clear();
+        std::process::exit(86);
+    }
+    let mut child = std::process::Command::new(std::env::current_exe().expect("binary"))
+        .args([
+            "--exact",
+            "window_callback_unwind::a_discarded_retirement_notice_contains_its_capture_failure",
+            "--nocapture",
+        ])
+        .env(CHILD, "1")
+        .env("RUST_BACKTRACE", "0")
+        .spawn()
+        .expect("child");
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        if let Some(status) = child.try_wait().expect("wait") {
+            assert_eq!(status.code(), Some(86));
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            child.kill().expect("kill timed-out child");
+            panic!("notice retirement timed out");
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+}

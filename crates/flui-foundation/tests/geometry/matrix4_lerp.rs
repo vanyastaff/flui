@@ -4,6 +4,16 @@
 
 use flui_foundation::geometry::Matrix4;
 
+fn identical_endpoints_carry_nan_progress() {
+    assert!(
+        Matrix4::IDENTITY
+            .lerp(Matrix4::IDENTITY, f64::NAN)
+            .m
+            .iter()
+            .all(|v| v.is_nan())
+    );
+}
+
 fn assert_close(actual: Matrix4, expected: Matrix4, tolerance: f64, what: &str) {
     for (index, (got, want)) in actual.m.iter().zip(expected.m.iter()).enumerate() {
         assert!(
@@ -137,6 +147,10 @@ fn matrix4_lerp_decomposes_like_css_transforms() {
         (
             "opposite extreme translations meet at zero",
             opposite_extreme_translations_meet_at_zero,
+        ),
+        (
+            "identical endpoints carry NaN progress",
+            identical_endpoints_carry_nan_progress,
         ),
         (
             "identical collapsed rotation is constant",

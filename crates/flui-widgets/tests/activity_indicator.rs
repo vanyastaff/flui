@@ -237,6 +237,19 @@ fn indicator_unmount_mid_frame_releases_controller() {
     laid.pump_for(ms(300));
     laid.pump_widget(VsyncScope::new(vsync.clone(), two_indicators(1)));
     assert_eq!(vsync.len(), 1, "the unmounted indicator unregistered");
+    let replacement = Vsync::new();
+    laid.pump_widget(VsyncScope::new(replacement.clone(), two_indicators(1)));
+    assert!(
+        vsync.is_empty(),
+        "the old inherited registry no longer owns the survivor"
+    );
+    assert_eq!(
+        replacement.len(),
+        1,
+        "a retained state joins its new inherited registry"
+    );
+    laid.pump_widget(VsyncScope::new(vsync, two_indicators(1)));
+    assert!(replacement.is_empty());
     laid.pump_for(ms(1500));
     let (start, _) = only_arc(&laid);
     assert_angle(

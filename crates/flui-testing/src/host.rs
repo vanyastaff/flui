@@ -710,6 +710,19 @@ impl HeadlessHost {
         Arc::clone(&self.clipboard)
     }
 
+    /// The recording text store backend of a particular presentation.
+    #[must_use]
+    pub fn text_store_host_on(
+        &self,
+        window: HeadlessWindowId,
+    ) -> Option<&Rc<RecordingTextStoreHost>> {
+        if window == self.primary_window() {
+            self.text_store_host.as_ref()
+        } else {
+            self.secondary_of(window).text_store_host.as_ref()
+        }
+    }
+
     /// The window the realm was built on.
     #[must_use]
     pub fn primary_window(&self) -> HeadlessWindowId {
@@ -728,14 +741,23 @@ impl HeadlessHost {
             .expect("BUG: a test opens far fewer than u64::MAX windows")
             + 2;
         window.id = WindowId(next);
+        let text_store_host = window.text_store_host.then(RecordingTextStoreHost::new);
         let window = Arc::new(window);
         let accessibility = Arc::new(HeadlessAccessibility::default());
-        let presentation = self.realm.assemble_presentation(PresentationWindow::new(
-            Arc::clone(&window) as Arc<dyn PlatformWindow>,
-            Some(Arc::clone(&accessibility) as Arc<dyn PlatformAccessibility>),
-        ));
+        let presentation = self.realm.assemble_presentation(
+            PresentationWindow::new(
+                Arc::clone(&window) as Arc<dyn PlatformWindow>,
+                Some(Arc::clone(&accessibility) as Arc<dyn PlatformAccessibility>),
+            )
+            .with_text_store_host(
+                text_store_host
+                    .clone()
+                    .map(|host| host as Rc<dyn TextStoreHost>),
+            ),
+        );
         let id = self.realm.install_presentation(presentation);
         self.secondary.push(SecondaryWindow {
+            text_store_host,
             id,
             window,
             accessibility,
@@ -855,6 +877,7 @@ pub struct HeadlessWindowId(PresentationId);
 
 /// A window [`HeadlessHost::open_window`] installed beside the primary one.
 struct SecondaryWindow {
+    text_store_host: Option<Rc<RecordingTextStoreHost>>,
     id: PresentationId,
     window: Arc<HeadlessWindow>,
     accessibility: Arc<HeadlessAccessibility>,

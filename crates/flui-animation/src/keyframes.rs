@@ -259,10 +259,14 @@ impl<T: Lerp + TwoWayConverter> Segment<T> {
                 let p1 = self.to.to_vector();
                 for (i, component) in out.as_mut().iter_mut().enumerate() {
                     let p0 = *component;
-                    *component = h00 * p0
-                        + h10 * d * start_velocity.as_ref()[i]
-                        + h01 * p1.as_ref()[i]
-                        + h11 * d * end_velocity.as_ref()[i];
+                    let v0 = start_velocity.as_ref()[i];
+                    let v1 = end_velocity.as_ref()[i];
+                    let mut tangent = h10 * d * v0 + h11 * d * v1;
+                    if !tangent.is_finite() {
+                        let scale = v0.abs().max(v1.abs());
+                        tangent = (h10 * (v0 / scale) + h11 * (v1 / scale)) * d * scale;
+                    }
+                    *component = h00 * p0 + h01 * p1.as_ref()[i] + tangent;
                 }
                 if !is_finite_vector(&out) {
                     return self.from.clone();

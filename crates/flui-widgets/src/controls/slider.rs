@@ -333,11 +333,18 @@ impl ViewState<Slider> for SliderState {
                 }
             })
             .on_key_event(move |cx, event| {
-                if event.state != KeyState::Down
-                    || !event.modifiers.is_empty()
-                    || !key.usable()
-                    || !key.admits_context(cx)
-                {
+                if event.state != KeyState::Down || !key.usable() || !key.admits_context(cx) {
+                    return KeyEventResult::Ignored;
+                }
+                if crate::SingleActivator::character_ignoring_shift("+").matches(event) {
+                    key.stepped(cx, true);
+                    return KeyEventResult::Handled;
+                }
+                if crate::SingleActivator::character_ignoring_shift("-").matches(event) {
+                    key.stepped(cx, false);
+                    return KeyEventResult::Handled;
+                }
+                if !event.modifiers.is_empty() {
                     return KeyEventResult::Ignored;
                 }
                 match event.key {

@@ -665,7 +665,7 @@ Fallible operations return `Result<_, AnimationError>`:
 
 | Variant | When |
 |---------|------|
-| `Disposed` | Any operation on a disposed controller |
+| `Disposed` | Fallible driving operations (`forward`, `reverse`, `animate_*`, `fling*`, `repeat*`, `stop`, `reset`); value setters, listeners and queries remain callable |
 | `InvalidBounds(String)` | `lower >= upper`, a non-finite bound or span, or a bad `repeat_with` range |
 | `TickerNotAvailable` | Declared for a missing ticker; no current operation returns it |
 | `InvalidSpring(String)` | An underdamped (oscillating) spring passed to `fling_with`; use `animate_with` for those |
@@ -686,7 +686,8 @@ assert!(matches!(err, Err(AnimationError::InvalidBounds(_))));
 
 - `AnimationController` is `Send + Sync`
 - All animations are `Send + Sync`
-- Listeners are invoked synchronously by whoever drives the tick, after the
+- Listeners are invoked synchronously by the call that causes the change, including
+  `forward`, `reverse`, `stop`, `reset` and ticks, after the
   controller's lock is released
 - Internal state is protected by `parking_lot::Mutex`
 

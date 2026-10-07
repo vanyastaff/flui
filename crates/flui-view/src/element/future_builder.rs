@@ -532,7 +532,7 @@ mod tests {
             },
             "the first build shows Waiting"
         );
-        assert_eq!(harness.owner_frame.pending_task_count(), 1);
+        assert_eq!(harness.owner_frame.async_driver().pending_task_count(), 1);
 
         completer.complete(Ok(Payload(42)));
         harness.frame();
@@ -546,7 +546,7 @@ mod tests {
             },
             "the completion is observed in the frame that polls it"
         );
-        assert_eq!(harness.owner_frame.pending_task_count(), 0);
+        assert_eq!(harness.owner_frame.async_driver().pending_task_count(), 0);
     }
 
     // ── update semantics ────────────────────────────────────────────────────

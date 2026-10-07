@@ -1,27 +1,19 @@
 //! Completed-frame callback snapshots and panic-tail recovery.
 
 use super::{CancellablePostFrameCallback, UpdateScheduler};
-use crate::post_frame::LocalPostFrameEntry;
 use crate::{CallbackId, FrameTiming, OwnerFrame};
 
 /// Preserve queue provenance so an uninvoked panic tail can return to its owner.
 enum PendingPostFrame {
     Shared(CancellablePostFrameCallback),
-    Local(LocalPostFrameEntry),
+    Local(CallbackId),
 }
 
 impl PendingPostFrame {
     fn id(&self) -> CallbackId {
         match self {
             Self::Shared(entry) => entry.id,
-            Self::Local(entry) => entry.id,
-        }
-    }
-
-    fn invoke(self, timing: &FrameTiming) {
-        match self {
-            Self::Shared(entry) => (entry.callback)(timing),
-            Self::Local(entry) => (entry.callback)(timing),
+            Self::Local(id) => *id,
         }
     }
 }
@@ -60,31 +52,39 @@ impl UpdateScheduler {
                 "draining post-frame callback batch"
             );
             for entry in callbacks.by_ref() {
-                if self.inner.callbacks.cancelled.contains_key(&entry.id()) {
-                    continue;
+                let cancelled = self.inner.callbacks.cancelled.contains_key(&entry.id());
+                match entry {
+                    PendingPostFrame::Shared(entry) => {
+                        if !cancelled {
+                            (entry.callback)(timing);
+                        }
+                    }
+                    PendingPostFrame::Local(id) => {
+                        if let Some(entry) = owner.take_active_post_frame(id)
+                            && !cancelled
+                        {
+                            (entry.callback)(timing);
+                        }
+                    }
                 }
-                entry.invoke(timing);
             }
         }));
 
         if result.is_err() {
             let mut shared = Vec::new();
-            let mut local = Vec::new();
             for entry in callbacks {
                 match entry {
                     PendingPostFrame::Shared(entry) => shared.push(entry),
-                    PendingPostFrame::Local(entry) => local.push(entry),
+                    PendingPostFrame::Local(_) => {}
                 }
             }
             // Move only: no user callback or capture is dropped under a
             // queue guard. Original IDs put this tail ahead of reentrant
             // registrations when the next completed frame sorts its batch.
-            let _registration = self.inner.callbacks.post_frame_registration.lock();
+            let registration = self.inner.callbacks.post_frame_registration.lock();
             self.inner.callbacks.post_frame.lock().extend(shared);
-            if !local.is_empty() {
-                // Only a validated owner frame contributed local entries.
-                owner.restore_post_frame_queue(local);
-            }
+            drop(registration);
+            owner.restore_post_frame_queue();
             // Keep cancellations for the restored tail and other queues.
         } else {
             self.inner.callbacks.cancelled.clear();

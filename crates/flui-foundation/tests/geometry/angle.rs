@@ -22,6 +22,9 @@ fn crossing_zero_continues_past_a_full_turn() {
 }
 
 fn an_exact_half_turn_resolves_toward_increasing_angle() {
+    let reference = Angle::from_radians(-0.001);
+    let target = Angle::from_radians(reference.radians() + std::f64::consts::PI);
+    assert_eq!(target.nearest_equivalent(reference), target);
     let half = Angle::from_turns(0.5);
     assert_eq!(half.nearest_equivalent(Angle::ZERO), half);
     let back = Angle::from_turns(-0.5).nearest_equivalent(Angle::ZERO);

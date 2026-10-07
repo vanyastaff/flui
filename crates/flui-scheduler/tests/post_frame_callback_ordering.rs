@@ -182,11 +182,51 @@ fn persistent_callbacks_run_before_the_pipeline() {
     );
 }
 
+fn retiring_owner_cancels_the_active_local_tail() {
+    for fail_after_retire in [false, true] {
+        let scheduler = UpdateScheduler::new();
+        let owner = std::rc::Rc::new(flui_scheduler::OwnerFrame::new(&scheduler).expect("owner"));
+        let lane = owner.local_post_frame_handle();
+        let head = owner.clone();
+        lane.schedule_local(move |_| {
+            assert!(head.retire().is_none());
+            assert!(!fail_after_retire, "head failure");
+        })
+        .expect("head");
+        let ran = std::rc::Rc::new(std::cell::Cell::new(false));
+        let tail = ran.clone();
+        lane.schedule_local(move |_| tail.set(true)).expect("tail");
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            scheduler.drive_frame(&owner, Instant::now(), far_deadline(), || {});
+        }));
+        assert_eq!(result.is_err(), fail_after_retire);
+        if let Err(failure) = result {
+            assert_eq!(
+                flui_foundation::panic::payload_text(failure.as_ref()),
+                Some("head failure")
+            );
+        }
+        assert!(
+            !ran.get(),
+            "retirement cancels callbacks already snapshotted for this frame"
+        );
+        scheduler.drive_frame(&owner, Instant::now(), far_deadline(), || {});
+        assert!(
+            !ran.get(),
+            "an abandoned frame cannot restore a retired local tail"
+        );
+    }
+}
+
 #[test]
 fn post_frame_ordering_matrix() {
     crate::run_table(
         "post_frame_ordering_matrix",
         &[
+            (
+                "retiring_owner_cancels_the_active_local_tail",
+                retiring_owner_cancels_the_active_local_tail as fn(),
+            ),
             (
                 "drive_frame_runs_post_frame_callbacks_after_the_pipeline",
                 drive_frame_runs_post_frame_callbacks_after_the_pipeline as fn(),

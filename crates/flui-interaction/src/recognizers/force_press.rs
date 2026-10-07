@@ -598,6 +598,7 @@ impl GestureRecognizer for ForcePressGestureRecognizer {
         let mut state = self.gesture_state.lock();
         *state = ForcePressState {
             phase: ForcePressPhase::Possible,
+            generation: state.generation,
             pointer: Some(pointer),
             entry: self.state.tracked_entry(),
             position,

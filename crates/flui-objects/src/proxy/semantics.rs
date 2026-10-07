@@ -5,6 +5,30 @@
 //! semantics hooks differ.
 
 use flui_foundation::Single;
+use flui_foundation::geometry::Axis;
+use flui_rendering::semantics::{NumericRange, SemanticsAction};
+use flui_rendering::{
+    pipeline::RenderInvalidationHandle,
+    view::{ScrollPosition, ViewportOffset},
+};
+use std::sync::Arc;
+
+struct ScrollSubscription {
+    position: ScrollPosition,
+    listener: Arc<dyn Fn() + Send + Sync>,
+}
+impl std::fmt::Debug for ScrollSubscription {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScrollSubscription")
+            .field("position", &self.position)
+            .finish_non_exhaustive()
+    }
+}
+impl Drop for ScrollSubscription {
+    fn drop(&mut self) {
+        self.position.remove_listener(&self.listener);
+    }
+}
 
 use flui_rendering::{
     hit_testing::LocalPayloadTarget,
@@ -65,6 +89,9 @@ pub struct RenderSemanticsAnnotations {
     block_user_actions: bool,
     has_child: bool,
     action_route: Option<SemanticsActionRoute>,
+    scroll: Option<(ScrollPosition, Axis, bool)>,
+    scroll_subscription: Option<Arc<ScrollSubscription>>,
+    invalidation: Option<RenderInvalidationHandle>,
 }
 
 impl RenderSemanticsAnnotations {
@@ -84,6 +111,44 @@ impl RenderSemanticsAnnotations {
             block_user_actions: false,
             has_child: false,
             action_route: None,
+            scroll: None,
+            scroll_subscription: None,
+            invalidation: None,
+        }
+    }
+
+    /// Publishes the live viewport range and only the directions that can move.
+    /// Position notifications invalidate semantics without rebuilding the viewport.
+    pub fn set_scroll_source(
+        &mut self,
+        source: Option<(ScrollPosition, Axis, bool)>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        if self
+            .scroll
+            .as_ref()
+            .zip(source.as_ref())
+            .is_some_and(|(old, new)| old.0.ptr_eq(&new.0) && old.1 == new.1 && old.2 == new.2)
+            || self.scroll.is_none() && source.is_none()
+        {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        self.scroll_subscription = None;
+        self.scroll = source;
+        self.subscribe_scroll();
+        flui_rendering::RenderUpdateImpact::SEMANTICS
+    }
+
+    fn subscribe_scroll(&mut self) {
+        if let (Some((position, _, _)), Some(handle)) = (&self.scroll, &self.invalidation) {
+            let handle = handle.clone();
+            let listener: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+                let _ = handle.mark_needs_semantics();
+            });
+            position.add_listener(Arc::clone(&listener));
+            self.scroll_subscription = Some(Arc::new(ScrollSubscription {
+                position: position.clone(),
+                listener,
+            }));
         }
     }
 
@@ -291,6 +356,46 @@ impl RenderBox for RenderSemanticsAnnotations {
         config.set_semantics_boundary(self.container);
         config.set_explicit_child_nodes(self.explicit_child_nodes);
         config.set_blocks_user_actions(self.block_user_actions);
+        if let Some((position, axis, reversed)) = &self.scroll {
+            let min = position.min_scroll_extent();
+            let max = position.max_scroll_extent();
+            let pixels = position.pixels();
+            config.set_scroll_position(pixels);
+            config.set_scroll_extent_min(min);
+            config.set_scroll_extent_max(max);
+            if config.has_action(SemanticsAction::SetNumericValue)
+                && let Ok(range) = NumericRange::new(
+                    pixels.clamp(min, max),
+                    min,
+                    max,
+                    (position.viewport_dimension() * 0.8).max(f64::MIN_POSITIVE),
+                )
+            {
+                config.set_numeric_range(range);
+            }
+            let (decrease, increase) = match axis {
+                Axis::Vertical => (SemanticsAction::ScrollUp, SemanticsAction::ScrollDown),
+                Axis::Horizontal => (SemanticsAction::ScrollLeft, SemanticsAction::ScrollRight),
+            };
+            if pixels <= min {
+                config.remove_action(SemanticsAction::Decrease);
+                config.remove_action(if *reversed { increase } else { decrease });
+            }
+            if pixels >= max {
+                config.remove_action(SemanticsAction::Increase);
+                config.remove_action(if *reversed { decrease } else { increase });
+            }
+        }
+    }
+
+    fn attach(&mut self, handle: RenderInvalidationHandle) {
+        self.scroll_subscription = None;
+        self.invalidation = Some(handle);
+        self.subscribe_scroll();
+    }
+    fn detach(&mut self) {
+        self.invalidation = None;
+        self.scroll_subscription = None;
     }
 
     fn excludes_semantics_subtree(&self) -> bool {

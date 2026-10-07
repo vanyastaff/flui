@@ -1867,7 +1867,13 @@ feature never changes what an existing name resolves to.
 **Choice:** `Key::Character` carries what the key produced, so Caps
 Lock turns Ctrl+C into a `"C"` event. A single ASCII letter trigger therefore
 matches either case; the exact Shift comparison still tells Ctrl+Shift+C
-apart. **Unasserted:** no test pins this.
+apart. `character_ignoring_shift` is a separate character-only constructor:
+Shift may be held or released, while Control, Alt and Meta remain exact. A
+named key cannot acquire that policy. `Slider` consumes logical `+` and `-`
+through this constructor, including characters produced by native Shift key
+translation. ADR-0156 supersedes the old exact-Shift contract for this constructor.
+**Asserted:** `a_shift_produced_character_matches_when_shift_is_ignored` and
+`slider_focus_keys_and_semantic_actions_share_controlled_proposals`.
 
 ### 32. `EditableText::on_changed` reports only the user's edits, and a text form field reads its controller
 

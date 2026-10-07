@@ -39,6 +39,21 @@ fn mount() -> (LaidOut, Vsync) {
         loose(100.0),
         vsync.clone(),
     );
+    let next = Vsync::new();
+    laid.pump_widget(VsyncScope::new(
+        next.clone(),
+        CupertinoActivityIndicator::new(),
+    ));
+    assert!(
+        vsync.is_empty(),
+        "the retained indicator leaves its old registry"
+    );
+    assert_eq!(next.len(), 1);
+    laid.pump_widget(VsyncScope::new(
+        vsync.clone(),
+        CupertinoActivityIndicator::new(),
+    ));
+    assert!(next.is_empty());
     // The first tick anchors the repeating run at virtual time zero.
     laid.pump_for(Duration::ZERO);
     (laid, vsync)

@@ -205,6 +205,10 @@ mod native_windows {
     const CHILD: &str = "FLUI_NATIVE_WINDOW_CONTRACT_CHILD";
     const CASES: &[(&str, fn())] = &[
         (
+            "shift_character_reaches_native_key_dispatch",
+            shift_character_reaches_native_key_dispatch,
+        ),
+        (
             "deadline_rearms_independent_windows_without_input",
             deadline_rearms_independent_windows_without_input,
         ),
@@ -1854,6 +1858,50 @@ mod native_windows {
         window.close();
     }
 
+    #[expect(
+        unsafe_code,
+        reason = "owner-thread keyboard state and native character dispatch"
+    )]
+    fn shift_character_reaches_native_key_dispatch() {
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let window = open(&platform, true);
+        let hwnd = window
+            .as_any()
+            .downcast_ref::<WindowsWindow>()
+            .expect("Win32 backend")
+            .hwnd();
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let keys = observed.clone();
+        window.on_input(Box::new(move |event| {
+            if let Some(event) = event.as_keyboard() {
+                keys.lock().expect("keys").push(event.clone());
+            }
+            DispatchEventResult::resolved(true, false)
+        }));
+        let _shift = ThreadKeyboardState::with_keys(&[
+            (VK_SHIFT, true),
+            (VK_LSHIFT, true),
+            (VK_CONTROL, false),
+            (VK_MENU, false),
+        ]);
+        // SAFETY: this platform owns the live HWND on this thread; WM_CHAR carries a scalar '+' and no caller pointers.
+        unsafe {
+            SendMessageW(
+                hwnd,
+                WM_CHAR,
+                Some(WPARAM(0x2b)),
+                Some(LPARAM(1 | (0x0d << 16))),
+            );
+        }
+        assert!(
+            observed.lock().expect("keys").iter().any(|event| event.key
+                == keyboard_types::Key::Character("+".into())
+                && event.modifiers.shift()),
+            "native character translation retains the Shift that produced the character"
+        );
+        window.close();
+    }
+
     fn closed_window_retires_tracking() {
         let platform = WindowsPlatform::new().expect("native Windows platform");
         for _ in 0..2 {
@@ -1964,9 +2012,29 @@ mod native_windows {
             destroyed: Arc::clone(&destroyed),
             traced_before_release: Arc::clone(&traced_before_release),
         };
+        struct InstallDuringRetirement {
+            window: Arc<dyn HostWindow>,
+            probe: Option<SurfaceRelease>,
+        }
+        impl Drop for InstallDuringRetirement {
+            fn drop(&mut self) {
+                let probe = self.probe.take().expect("replacement capture");
+                self.window.on_resize(Box::new(move |_, _| {
+                    let _owned = &probe;
+                }));
+            }
+        }
+        let replacement_release = Arc::new(Mutex::new(None));
+        let install = InstallDuringRetirement {
+            window: window.clone(),
+            probe: Some(SurfaceRelease {
+                destroyed: destroyed.clone(),
+                traced_before_release: replacement_release.clone(),
+            }),
+        };
         let weak = Arc::downgrade(&window);
         window.on_resize(Box::new(move |_, _| {
-            let _owned = &surface;
+            let _owned = (&surface, &install);
             if let Some(window) = weak.upgrade() {
                 window.close();
             }
@@ -1995,6 +2063,11 @@ mod native_windows {
             *traced_before_release.lock().expect("release slot"),
             Some(0),
             "the surface-owning callback is released before destruction is traced"
+        );
+        assert_eq!(
+            *replacement_release.lock().expect("replacement release"),
+            Some(0),
+            "a callback registered by capture Drop is refused and retired before the notice"
         );
         assert_eq!(
             *destroyed.lock().expect("recorder lock"),

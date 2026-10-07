@@ -938,7 +938,11 @@ pub(crate) fn assistive_scroll_actions_move_a_scrollable() {
                 tree.describe()
             )
         });
-    assert!(scroller.supports_action(Action::ScrollUp));
+    assert!(
+        !scroller.supports_action(Action::ScrollUp),
+        "blocked direction is omitted"
+    );
+    assert_eq!(scroller.raw().role(), flui_testing::a11y::Role::ScrollView);
     let scroller = scroller.id();
 
     laid.invoke_semantics_action(request(Action::ScrollDown, scroller, None))
@@ -954,6 +958,37 @@ pub(crate) fn assistive_scroll_actions_move_a_scrollable() {
         .expect("scroll-up resolves");
     laid.tick();
     assert_eq!(scroll.pixels(), 0.0, "scroll-up returns to the start");
+    let adjustment = laid
+        .a11y_tree()
+        .expect("tree")
+        .nodes()
+        .find(|node| node.supports_action(Action::SetValue) && node.raw().numeric_value().is_some())
+        .expect("native scroll adjustment")
+        .id();
+    laid.invoke_semantics_action(request(
+        Action::SetValue,
+        adjustment,
+        Some(flui_testing::a11y::ActionData::NumericValue(160.0)),
+    ))
+    .expect("native range action resolves on the concrete scrollable");
+    laid.tick();
+    assert_eq!(scroll.pixels(), 160.0);
+    let republished = laid.a11y_tree().expect("live tree");
+    let republished = republished
+        .nodes()
+        .find(|node| node.id() == scroller)
+        .expect("same scroll node");
+    assert!(republished.supports_action(Action::ScrollUp));
+    let published = laid.a11y_tree().expect("tree");
+    assert_eq!(
+        published
+            .nodes()
+            .find(|node| node.id() == adjustment)
+            .expect("adjuster")
+            .raw()
+            .numeric_value(),
+        Some(160.0)
+    );
 }
 
 // ===========================================================================

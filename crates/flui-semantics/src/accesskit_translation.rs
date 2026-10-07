@@ -138,6 +138,7 @@ pub(crate) fn resolve_role(data: &SemanticsNodeData) -> Role {
 /// declares no role and the flags must decide.
 fn explicit_role(role: SemanticsRole) -> Option<Role> {
     Some(match role {
+        SemanticsRole::ScrollView => Role::ScrollView,
         SemanticsRole::AlertDialog => Role::AlertDialog,
         SemanticsRole::Dialog => Role::Dialog,
         SemanticsRole::Tab => Role::Tab,

@@ -66,11 +66,27 @@ fn mount_in(direction: TextDirection, indicator: LinearProgressIndicator) -> Mou
     let mut laid = lay_out_animated(
         VsyncScope::new(
             vsync.clone(),
-            Directionality::new(direction, Theme::new(theme, indicator)),
+            Directionality::new(direction, Theme::new(theme.clone(), indicator.clone())),
         ),
         tight(WIDTH, HEIGHT),
         vsync.clone(),
     );
+    let registrations = vsync.len();
+    let next = Vsync::new();
+    laid.pump_widget(VsyncScope::new(
+        next.clone(),
+        Directionality::new(direction, Theme::new(theme.clone(), indicator.clone())),
+    ));
+    assert!(
+        vsync.is_empty(),
+        "retained progress state leaves its old registry"
+    );
+    assert_eq!(next.len(), registrations);
+    laid.pump_widget(VsyncScope::new(
+        vsync.clone(),
+        Directionality::new(direction, Theme::new(theme, indicator)),
+    ));
+    assert!(next.is_empty());
     // The first tick anchors the repeating run at virtual time zero.
     laid.pump_for(Duration::ZERO);
     Mounted {

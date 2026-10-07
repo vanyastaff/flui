@@ -162,16 +162,32 @@ impl StatefulView for ActivityIndicator {
 
 impl ViewState<ActivityIndicator> for ActivityIndicatorState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        // Without a VsyncScope nothing would tick the controller: paint the
-        // first frame instead of starting a run that never advances.
-        let Some(vsync) = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone()) else {
+        self.did_change_dependencies(ctx);
+    }
+
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
+        let next = ctx.depend_on::<VsyncScope, _>(|scope| scope.vsync().clone());
+        if self
+            .registration
+            .as_ref()
+            .map(|(vsync, _)| vsync)
+            .zip(next.as_ref())
+            .is_some_and(|(old, new)| old.is_same(new))
+        {
             return;
-        };
-        let registration = vsync.register(self.controller.clone());
-        self.registration = Some((vsync, registration));
-        // A fresh, undisposed controller over [0, 1] always accepts a repeat;
-        // its future only reports the (never-reached) end of an endless run.
-        let _ = self.controller.repeat(false);
+        }
+        if let Some((vsync, token)) = self.registration.take() {
+            vsync.unregister(&token);
+        }
+        if let Some(vsync) = next {
+            let token = vsync.register(self.controller.clone());
+            self.registration = Some((vsync, token));
+            if !self.controller.is_animating() {
+                let _ = self.controller.repeat(false);
+            }
+        } else {
+            let _ = self.controller.stop();
+        }
     }
 
     fn build(&self, view: &ActivityIndicator, _ctx: &dyn BuildContext) -> impl IntoView {

@@ -56,7 +56,7 @@ const CHECK_DEADLINE: Duration = Duration::from_secs(
         + (ADVANCE_WITHIN.as_secs() + UNCHANGED_FOR.as_secs()) * 3
         + ADVANCE_WITHIN.as_secs() * 2
         + UNCHANGED_FOR.as_secs()
-        + ADVANCE_WITHIN.as_secs() * 2,
+        + ADVANCE_WITHIN.as_secs() * 4,
 );
 /// How long the probe is told to stay up: twice [`CHECK_DEADLINE`], leaving
 /// the tree walks between waits room, so the probe quitting on its own can
@@ -262,6 +262,56 @@ fn drive_patterns(session: &Session, window: &IUIAutomationElement) -> anyhow::R
         uia::dump(&session.walk(window));
         return Ok(false);
     }
+    // The concrete Scrollable is kept in the native tree and exposes the same
+    // exact-value adjustment path used by native range controls.
+    let nodes = session.walk(window);
+    let mut scroll = None;
+    for node in &nodes {
+        if node.name != "Scroll position" {
+            continue;
+        }
+        // SAFETY: each element is from this COM session's current native tree.
+        if let Ok(pattern) = unsafe {
+            node.element
+                .GetCurrentPatternAs::<IUIAutomationRangeValuePattern>(UIA_RangeValuePatternId)
+        } && unsafe { pattern.CurrentMaximum()? } > 100.0
+        {
+            anyhow::ensure!(scroll.is_none(), "multiple native scroll ranges");
+            scroll = Some(pattern);
+        }
+    }
+    let Some(scroll) = scroll else {
+        println!("FAIL: native Scrollable range missing");
+        return Ok(false);
+    };
+    for value in [160.0, 0.0] {
+        // SAFETY: live UIA pattern; both offsets are inside the finite viewport range.
+        unsafe {
+            scroll.SetValue(value)?;
+        }
+        if !wait_for_state(session, window, "native scroll offset", |nodes| {
+            for node in nodes {
+                if node.name != "Scroll position" {
+                    continue;
+                }
+                // SAFETY: live UIA element on the COM owner thread.
+                if let Ok(pattern) = unsafe {
+                    node.element
+                        .GetCurrentPatternAs::<IUIAutomationRangeValuePattern>(
+                            UIA_RangeValuePatternId,
+                        )
+                } && unsafe { pattern.CurrentMaximum()? } > 100.0
+                    && unsafe { pattern.CurrentValue()? } == value
+                {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        })? {
+            return Ok(false);
+        }
+    }
+    println!("UIA scroll: offset 160 then 0");
     Ok(true)
 }
 

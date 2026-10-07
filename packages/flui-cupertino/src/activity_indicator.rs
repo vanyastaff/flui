@@ -127,14 +127,32 @@ impl StatefulView for CupertinoActivityIndicator {
 
 impl ViewState<CupertinoActivityIndicator> for CupertinoActivityIndicatorState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        let Some(vsync) = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone()) else {
+        self.did_change_dependencies(ctx);
+    }
+
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
+        let next = ctx.depend_on::<VsyncScope, _>(|scope| scope.vsync().clone());
+        if self
+            .registration
+            .as_ref()
+            .map(|(vsync, _)| vsync)
+            .zip(next.as_ref())
+            .is_some_and(|(old, new)| old.is_same(new))
+        {
             return;
-        };
-        let registration = vsync.register(self.controller.clone());
-        self.registration = Some((vsync, registration));
-        // An undisposed controller over [0, 1] accepts a repeat; the future
-        // only reports the end of an endless run.
-        let _ = self.controller.repeat(false);
+        }
+        if let Some((vsync, token)) = self.registration.take() {
+            vsync.unregister(&token);
+        }
+        if let Some(vsync) = next {
+            let token = vsync.register(self.controller.clone());
+            self.registration = Some((vsync, token));
+            if !self.controller.is_animating() {
+                let _ = self.controller.repeat(false);
+            }
+        } else {
+            let _ = self.controller.stop();
+        }
     }
 
     fn build(&self, _view: &CupertinoActivityIndicator, ctx: &dyn BuildContext) -> impl IntoView {

@@ -602,15 +602,16 @@ match controller.forward() {
 }
 
 // Propagation
-fn animate(d: Duration, s: &UpdateScheduler) -> Result<(), AnimationError> {
+fn animate(d: Duration, s: &UpdateScheduler) -> Result<AnimationController, AnimationError> {
     let controller = AnimationController::builder(d, s)
         .bounds(0.0, 100.0)?
         .build()?;
     controller.forward()?;
-    controller.dispose();
-    Ok(())
+    // Retain the controller while the scheduler advances its run.
+    Ok(controller)
 }
-# animate(Duration::from_millis(300), &scheduler).unwrap();
+# let running = animate(Duration::from_millis(300), &scheduler).unwrap();
+# running.dispose();
 # controller.dispose();
 ```
 

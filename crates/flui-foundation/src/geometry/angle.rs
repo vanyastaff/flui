@@ -92,6 +92,10 @@ impl Angle {
     /// ```
     #[must_use]
     pub fn nearest_equivalent(self, reference: Angle) -> Angle {
+        let difference = self.radians - reference.radians;
+        if difference.abs() == PI {
+            return Self::from_radians(reference.radians + PI);
+        }
         // Each angle is reduced into [0, TAU) first, so opposite extreme magnitudes
         // cannot overflow the difference; folding (PI, TAU) down gives (-PI, PI].
         let delta =

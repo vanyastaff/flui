@@ -877,6 +877,10 @@ fn vertical_tangent_slope_is_finite_and_steep() {
 fn curve_slope_is_the_derivative_of_transform() {
     crate::run_table(&[
         (
+            "nonpositive cubic endpoint slope",
+            nonpositive_cubic_endpoint_slope,
+        ),
+        (
             "cubic slope matches polynomial derivatives",
             cubic_slope_matches_polynomial_derivatives,
         ),
@@ -914,6 +918,29 @@ fn curve_slope_is_the_derivative_of_transform() {
             narrow_interval_of_a_steep_curve_has_a_finite_slope,
         ),
     ]);
+}
+
+fn nonpositive_cubic_endpoint_slope() {
+    let curve = Cubic::new(0.0, 1.0 / 3.0, 1.0, 2.0 / 3.0);
+    // x(s) = 3s² - 2s³, y(s) = s; solve x independently by bisection.
+    for x in [1e-16_f64, 1e-12, 1e-8] {
+        let (mut lo, mut hi) = (0.0, 1.0);
+        for _ in 0..200 {
+            let s = f64::midpoint(lo, hi);
+            if s * s * (3.0 - 2.0 * s) < x {
+                lo = s;
+            } else {
+                hi = s;
+            }
+        }
+        let s = f64::midpoint(lo, hi);
+        assert_close(
+            "near endpoint",
+            curve.slope(x),
+            1.0 / (6.0 * s * (1.0 - s)),
+            1e-6,
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

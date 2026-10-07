@@ -395,7 +395,9 @@ impl<E> Drop for DispatchDrain<'_, E> {
                 // after releasing the mutex in case their destructors re-enter.
                 std::mem::take(&mut state.pending)
             };
-            drop(pending);
+            for event in pending {
+                super::panic_boundary::contain_owner_callback(|| drop(event));
+            }
         }
     }
 }
@@ -478,6 +480,11 @@ impl<T> Drop for CallbackLease<'_, T> {
 }
 
 impl WindowCallbacks {
+    /// Refuse registrations once native retirement has started.
+    #[cfg(target_os = "windows")]
+    pub(crate) fn accepts_registration(&self) -> bool {
+        !self.lifecycle_closed.load(Ordering::SeqCst)
+    }
     /// Create a new empty callback set
     pub fn new() -> Self {
         Self::counting_frames(Arc::default())

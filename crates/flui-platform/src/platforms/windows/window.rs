@@ -547,7 +547,8 @@ impl WindowsWindow {
     /// which is routine teardown ordering.
     fn register(&self, op: &'static str, install: impl FnOnce(&WindowCallbacks)) {
         let outcome = super::platform::with_window_context_checked(self.hwnd, op, |context| {
-            (context.identity == self.identity).then(|| install(&context.callbacks))
+            (context.identity == self.identity && context.callbacks.accepts_registration())
+                .then(|| install(&context.callbacks))
         });
         match outcome {
             Ok(Some(())) => {}
