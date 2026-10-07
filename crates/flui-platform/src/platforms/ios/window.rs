@@ -162,7 +162,7 @@ define_class!(
 );
 
 /// Which touch callback produced a batch, mapped to the pointer phase the
-/// `ui-events` vocabulary uses.
+/// owned pointer vocabulary uses.
 #[derive(Clone, Copy)]
 enum TouchPhase {
     Began,

@@ -27,6 +27,7 @@ struct Gesture {
     pointer: PointerInfo,
     transform: PanZoomTransform,
     components: u8,
+    position: PointerPosition,
 }
 
 /// Owner-local AppKit input state, committed before callbacks run.
@@ -170,6 +171,16 @@ impl MacInputState {
             };
             return vec![PlatformInput::Pointer(event)];
         }
+        let position = position.or_else(|| {
+            if matches!(event_type, NSEventType::Magnify | NSEventType::Rotate)
+                && (event.phase().contains(NSEventPhase::Ended)
+                    || event.phase().contains(NSEventPhase::Cancelled))
+            {
+                self.gesture.as_ref().map(|gesture| gesture.position)
+            } else {
+                None
+            }
+        });
         let Some(position) = position else {
             return Vec::new();
         };
@@ -260,6 +271,7 @@ impl MacInputState {
                     pointer,
                     transform: PanZoomTransform::IDENTITY,
                     components: 0,
+                    position,
                 });
                 events.push(
                     PanZoomEvent::new(pointer, time, position, PanZoomPhase::Start)
@@ -273,6 +285,7 @@ impl MacInputState {
         let Some(gesture) = self.gesture.as_mut() else {
             return events;
         };
+        gesture.position = position;
         if phase.contains(NSEventPhase::Cancelled) {
             let pointer = gesture.pointer;
             self.gesture = None;

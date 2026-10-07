@@ -16,7 +16,7 @@
 //!     ↓
 //! keyDown:/mouseDown:/etc.
 //!     ↓
-//! convert_ns_event()
+//! MacInputState::convert()
 //!     ↓
 //! WindowCallbacks::dispatch_input
 //! ```
