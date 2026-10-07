@@ -21,10 +21,11 @@ use std::{
 
 use flui_foundation::geometry::Offset;
 use parking_lot::Mutex;
+use web_time::Instant;
 
 use super::recognizer::{
-    GestureRecognizer, RecognizerBase, finish_containment, invoke_callback, retire_callback,
-    withdraw_cancelled,
+    EventTimeline, GestureRecognizer, RecognizerBase, event_time, finish_containment,
+    invoke_callback, retire_callback, withdraw_cancelled,
 };
 use crate::{
     arena::{GestureArenaEntry, GestureArenaMember, GestureDisposition, SweepModel},
@@ -318,6 +319,7 @@ struct ScaleState {
     published_focal: Offset<f64>,
     /// Velocity tracker for scale changes.
     scale_velocity_tracker: VelocityTracker,
+    timeline: EventTimeline,
 }
 
 impl Default for ScaleState {
@@ -336,6 +338,7 @@ impl Default for ScaleState {
             focal_point: Offset::ZERO,
             published_focal: Offset::ZERO,
             scale_velocity_tracker: VelocityTracker::new(),
+            timeline: EventTimeline::default(),
         }
     }
 }
@@ -499,10 +502,10 @@ impl ScaleState {
         })
     }
 
-    fn end_details(&mut self) -> ScaleEndDetails {
+    fn end_details(&mut self, now: Instant) -> ScaleEndDetails {
         let velocity = self
             .scale_velocity_tracker
-            .get_velocity()
+            .velocity_at(now)
             .pixels_per_second
             .dx;
         ScaleEndDetails {
@@ -516,9 +519,9 @@ impl ScaleState {
     /// After a contact left: end a started scale that fell below two
     /// contacts, re-measure otherwise, and go idle once no contact remains.
     /// Returns the final details when a started scale ended.
-    fn after_contact_removed(&mut self) -> Option<ScaleEndDetails> {
+    fn after_contact_removed(&mut self, now: Instant) -> Option<ScaleEndDetails> {
         let ended = (self.phase == ScalePhase::Started && self.contacts.len() < 2)
-            .then(|| self.end_details());
+            .then(|| self.end_details(now));
         if self.contacts.is_empty() {
             self.reset();
         } else if ended.is_some() {
@@ -763,14 +766,22 @@ impl ScaleGestureRecognizer {
     }
 
     /// Handle a tracked contact's move.
-    fn handle_pointer_move(&self, pointer: PointerId, position: Offset<f64>, kind: PointerType) {
+    fn handle_pointer_move(
+        &self,
+        pointer: PointerId,
+        position: Offset<f64>,
+        kind: PointerType,
+        stamp: Option<u64>,
+    ) {
         if !position.is_finite() {
             return;
         }
+        let now = self.state.now();
         let mut state = self.gesture_state.lock();
         let Some(index) = state.index_of(pointer) else {
             return;
         };
+        let now = state.timeline.instant(stamp, now);
         let baseline = state.baseline;
         state.contacts[index].position = position;
         let Some(measure) = state.sample() else {
@@ -791,10 +802,6 @@ impl ScaleGestureRecognizer {
                 }
             }
             ScalePhase::Started => {
-                // Read the arena's clock: a headless frame driver binds a
-                // `ManualClock`, so a replayed gesture's own sample spacing
-                // decides the velocity.
-                let now = self.state.now();
                 let scale = state.current.scale;
                 state
                     .scale_velocity_tracker
@@ -808,11 +815,13 @@ impl ScaleGestureRecognizer {
     }
 
     /// Handle a tracked contact lifting.
-    fn handle_pointer_up(&self, pointer: PointerId) {
+    fn handle_pointer_up(&self, pointer: PointerId, stamp: Option<u64>) {
+        let now = self.state.now();
         let mut state = self.gesture_state.lock();
         let Some(index) = state.index_of(pointer) else {
             return;
         };
+        let now = state.timeline.instant(stamp, now);
         let contact = state.contacts.remove(index);
         // A contact that lifts before the scale started gives its arena up,
         // so a competitor (a tap) wins it on the sweep instead of this
@@ -824,7 +833,7 @@ impl ScaleGestureRecognizer {
             (Some(contact.entry), None)
         };
         let outcome = state
-            .after_contact_removed()
+            .after_contact_removed(now)
             .map_or(Outcome::Nothing, Outcome::End);
         let primary = state.contacts.first().map(|c| c.pointer);
         drop(state);
@@ -964,9 +973,10 @@ impl GestureRecognizer for ScaleGestureRecognizer {
                     pointer,
                     Offset::new(pos.x, pos.y),
                     data.pointer.pointer_type,
+                    event_time(event),
                 );
             }
-            PointerEvent::Up(_) => self.handle_pointer_up(pointer),
+            PointerEvent::Up(_) => self.handle_pointer_up(pointer, event_time(event)),
             PointerEvent::Cancel(_) => self.handle_cancel(pointer),
             _ => {}
         }
@@ -1027,7 +1037,7 @@ impl crate::recognizers::OneSequenceGestureRecognizer for ScaleGestureRecognizer
     }
 
     fn stop_tracking_pointer(&self, pointer: PointerId) {
-        self.handle_pointer_up(pointer);
+        self.handle_pointer_up(pointer, None);
     }
 }
 
@@ -1068,6 +1078,7 @@ impl GestureArenaMember for ScaleGestureRecognizer {
     fn reject_gesture(&self, pointer: PointerId) {
         // The contact's arena went to a competitor: it no longer belongs to
         // this scale.
+        let now = self.state.now();
         let mut state = self.gesture_state.lock();
         let Some(index) = state.index_of(pointer) else {
             return;
@@ -1081,7 +1092,8 @@ impl GestureArenaMember for ScaleGestureRecognizer {
             return;
         }
         state.contacts.remove(index);
-        let outcome = if state.after_contact_removed().is_some() {
+        let now = state.timeline.instant(None, now);
+        let outcome = if state.after_contact_removed(now).is_some() {
             Outcome::Cancel
         } else {
             Outcome::Nothing

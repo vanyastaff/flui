@@ -512,8 +512,9 @@ impl DragGestureRecognizer {
         kind: PointerType,
         stamp: Option<u64>,
     ) {
+        let now = self.state.now();
         let mut state = self.drag_state.lock();
-        let now = state.timeline.instant(stamp, self.state.now());
+        let now = state.timeline.instant(stamp, now);
 
         match state.state {
             DragPhase::Possible => {
@@ -655,12 +656,19 @@ impl DragGestureRecognizer {
     }
 
     /// Handle pointer up - end drag
-    fn handle_up(&self, position: Offset<f64>, global_position: Offset<f64>, _kind: PointerType) {
+    fn handle_up(
+        &self,
+        position: Offset<f64>,
+        global_position: Offset<f64>,
+        _kind: PointerType,
+        stamp: Option<u64>,
+    ) {
+        let now = self.state.now();
         let mut state = self.drag_state.lock();
 
         if state.state == DragPhase::Started {
-            // Calculate final velocity
-            let velocity = state.velocity_tracker.get_velocity();
+            let now = state.timeline.instant(stamp, now);
+            let velocity = state.velocity_tracker.velocity_at(now);
             let primary_velocity = self.calculate_primary_velocity(velocity.pixels_per_second);
 
             let callback = self.callbacks.borrow().on_end.clone();
@@ -873,7 +881,7 @@ impl GestureRecognizer for DragGestureRecognizer {
                 self.handle_move(position, global_position, pointer_type, event_time(event));
             }
             PointerEvent::Up(_) => {
-                self.handle_up(position, global_position, pointer_type);
+                self.handle_up(position, global_position, pointer_type, event_time(event));
             }
             PointerEvent::Cancel(_) => {
                 self.handle_cancel();

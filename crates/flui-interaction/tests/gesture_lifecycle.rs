@@ -35,6 +35,12 @@ use flui_interaction::{
     MultiDragGestureRecognizer, MultiDragHandle, MultiDragUpdateDetails, MultiTapGestureRecognizer,
     PointerId, ScaleGestureRecognizer, TapAndDragGestureRecognizer, TapGestureRecognizer,
 };
+use flui_interaction::{
+    DoubleTapGestureRecognizer, DragAxis, DragGestureRecognizer, GestureRecognizer,
+    LongPressGestureRecognizer, ManualClock, MultiDragAxis, MultiDragEndDetails,
+    MultiDragGestureRecognizer, MultiDragHandle, MultiDragUpdateDetails, MultiTapGestureRecognizer,
+    PointerId, ScaleGestureRecognizer, TapAndDragGestureRecognizer, TapGestureRecognizer,
+};
 use proptest::prelude::*;
 
 // ---------------------------------------------------------------------------
@@ -855,7 +861,12 @@ fn fling_velocity_follows_event_timestamps_not_dispatch_time() {
 /// Dispatch the terminal event in the same frame as the last move, even
 /// though the device observed a stationary gap before release.
 fn terminal_velocity_cases(lane: &Lane, velocities: &RefCell<Vec<f64>>, scale: bool) {
-    for (sequence, gap_ms) in [(0_u64, 0_u64), (1, 100), (2, 0)] {
+    for (sequence, gap_ms, queued) in [
+        (0_u64, 0_u64, false),
+        (1, 100, false),
+        (2, 0, false),
+        (3, 0, true),
+    ] {
         let base = 1_000_000_000 + sequence * 1_000_000_000;
         let touch = PointerType::Touch;
         lane.send(&stamped(down(id(2), at(0.0, 0.0), touch), base));
@@ -863,7 +874,9 @@ fn terminal_velocity_cases(lane: &Lane, velocities: &RefCell<Vec<f64>>, scale: b
             lane.send(&stamped(down(id(3), at(100.0, 0.0), touch), base));
         }
         for k in 1..=6_u32 {
-            lane.clock.advance(Duration::from_millis(10));
+            if !queued {
+                lane.clock.advance(Duration::from_millis(10));
+            }
             lane.send(&stamped(
                 motion(id(2), at(-f64::from(k) * 20.0, 0.0), touch),
                 base + u64::from(k) * 10_000_000,
@@ -881,9 +894,10 @@ fn terminal_velocity_cases(lane: &Lane, velocities: &RefCell<Vec<f64>>, scale: b
         );
         let velocity = *values.last().expect("accepted gesture ended");
         if gap_ms == 0 {
+            let expected = if scale { 20.0_f64 } else { -2000.0_f64 };
             assert!(
-                velocity.is_finite() && velocity.abs() > 1.0,
-                "healthy/recovery velocity: {velocity}"
+                (velocity - expected).abs() < expected.abs() * 0.1,
+                "healthy/recovery velocity (queued={queued}): {velocity}, expected {expected}"
             );
         } else {
             assert_eq!(

@@ -380,12 +380,13 @@ impl MultiDragGestureRecognizer {
         kind: PointerType,
         stamp: Option<u64>,
     ) {
+        let now = self.state.now();
         let (client, update, arena_entry) = {
             let mut map = self.pointers.lock();
             let Some(state) = map.get_mut(&pointer) else {
                 return;
             };
-            let timestamp = state.timeline.instant(stamp, self.state.now());
+            let timestamp = state.timeline.instant(stamp, now);
             let delta = (position - state.last_position).to_delta();
             state.last_position = position;
             state.last_global_position = global_position;
@@ -526,6 +527,7 @@ impl MultiDragGestureRecognizer {
         _position: Offset<f64>,
         global_position: Offset<f64>,
         _kind: PointerType,
+        stamp: Option<u64>,
     ) {
         let Some(mut state) = self.remove_pointer(pointer) else {
             return;
@@ -540,7 +542,8 @@ impl MultiDragGestureRecognizer {
         if let Some(client) = state.client.take() {
             // Read the velocity first (it borrows the tracker mutably to
             // memoize) before invoking the client.
-            let velocity = state.velocity_tracker.get_velocity();
+            let now = state.timeline.instant(stamp, self.state.now());
+            let velocity = state.velocity_tracker.velocity_at(now);
             let details = MultiDragEndDetails {
                 pointer_id: pointer,
                 global_position: state.last_global_position,
@@ -634,7 +637,9 @@ impl GestureRecognizer for MultiDragGestureRecognizer {
             PointerEvent::Move(_) => {
                 self.handle_move(pointer, position, global_position, kind, event_time(event));
             }
-            PointerEvent::Up(_) => self.handle_up(pointer, position, global_position, kind),
+            PointerEvent::Up(_) => {
+                self.handle_up(pointer, position, global_position, kind, event_time(event));
+            }
             _ => {}
         }
     }
