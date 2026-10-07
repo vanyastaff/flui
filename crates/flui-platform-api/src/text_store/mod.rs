@@ -18,6 +18,9 @@
 //!   presentation's frame transaction as that machine reads it.
 //! - [`TextStore`] and [`TextStoreObserver`]: the field side and the
 //!   platform side of the connection.
+//! - [`TextStoreHost`]: what a pull-model window offers the presentation:
+//!   which field it serves, and ending that field's composition (ADR-0135);
+//!   [`commit_composition_in_place`] when the platform cannot end it.
 //! - [`project_ime_event`]: a push-model [`ImeEvent`](crate::ImeEvent)
 //!   (winit) applied as store edits, so there is one editing path.
 //! - [`CompositionLedger`] and [`committed_text`]: the committed text
@@ -32,6 +35,7 @@
 
 mod composition_ledger;
 mod generation;
+mod host;
 mod in_memory;
 mod lock;
 mod owner_calls;
@@ -42,6 +46,7 @@ pub mod utf16;
 
 pub use composition_ledger::{CompositionLedger, committed_text};
 pub use generation::EditGeneration;
+pub use host::{CompositionEnd, TextStoreHost, TextStoreHostError, commit_composition_in_place};
 pub use in_memory::InMemoryTextStore;
 pub use lock::{
     CommitGate, DEFERRED_LOCK_CAPACITY, LockArbiter, LockGrant, LockKind, LockOutcome, LockTiming,

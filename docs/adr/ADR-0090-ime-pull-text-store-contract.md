@@ -199,12 +199,12 @@ handler runs queued grants first), but a programmatic `set_text` made while a gr
 ahead of it. App edits reach the observer at the next frame, key press or lock request, since
 controller listeners are `Send + Sync` and the store is not.
 
-No platform backend holds a store yet: `PlatformTextInput` is `Send + Sync` and the store is an
-owner-thread `Rc`, so the pull connection waits for ADR-0082's owner-thread capability split. Until
-then the production caller is the push projection. `TextInputOwner::active_store` is
-`#[doc(hidden)]` until the Win32 TSF backend (§3) reads it, and the observer,
-`rect_for_range`, `index_at_point` and `document_bounds` have no production caller before then
-either.
+A pull platform receives the focused store through an owner-thread `TextStoreHost`
+([ADR-0135](ADR-0135-win32-text-services-hold-the-text-store-on-the-owner-thread.md));
+`TextInputOwner::active_store` is removed (ADR-0142 item 7). No window offers a host yet, so the
+production caller is still the push projection, and the observer, `rect_for_range`,
+`index_at_point` and `document_bounds` have no production caller until the Win32 window offers
+its host.
 
 ## Divergences
 

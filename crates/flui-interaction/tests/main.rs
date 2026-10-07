@@ -19,3 +19,11 @@ mod hit_test_transform;
 
 #[path = "focus_retention.rs"]
 mod focus_retention;
+
+#[path = "text_store_host.rs"]
+mod text_store_host;
+
+#[path = "gesture_lifecycle.rs"]
+mod gesture_lifecycle;
+#[path = "mouse_tracking.rs"]
+mod mouse_tracking;

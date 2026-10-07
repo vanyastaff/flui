@@ -36,15 +36,18 @@
 //! | `on_session_start`, the projection, and the dispatched client snapshot | `TextInputOwner::dispatch` (`flui-interaction` `text_input.rs`) |
 //! | clients replaced or detached, and what their destruction parks; once the client is active, attach parks its failures and returns the token | `TextInputOwner::attach`, `detach` (`flui-interaction` `text_input.rs`) |
 //! | stores retired at an anchor | `TextInputOwner::run_deferred_grants` (`flui-interaction` `text_input.rs`) |
+//! | a pull host's `focus_store` and `complete_composition` from the owner's queue, the completed store, and the host clone; a failure parked before them is taken first on the owner's turn (`complete_composition`, the anchor) and left for that turn by `attach` and `detach` | `TextInputOwner::apply_host_ops` (`flui-interaction` `text_input.rs`), drained by `attach`, `detach`, `complete_composition` and `run_deferred_grants` |
+//! | a push completion committed in place, and its store; at close, the queued grants of a store whose commit waits behind the frame | `TextInputOwner::complete_composition`, `close_with_mode` (`flui-interaction` `text_input.rs`) |
 //! | diagnostics (`tracing` runs a user-installed subscriber) | `TextInputOwner::attach`, `detach`, `dispatch`; `EditableTextState::dispose`, the blur detach and the cursor-area loop |
 //!
 //! Presentation close (`TextInputOwner::close_with_mode` and its `Drop`)
 //! keeps its close-mode containment (ADR-0123), which retires the same
 //! values under the same retention rule; it takes a failure parked for its
 //! next turn too, ahead of its own, raised by an ordinary close and retained
-//! by a preserving one or by `Drop`. Its platform call and each client owner
-//! it retires run through [`OwnerCalls::run_parking`] first, so a failure
-//! one of them parked while its own panic unwound stays behind that panic. The remaining diagnostics (the focus
+//! by a preserving one or by `Drop`. Its platform and host calls and each
+//! client owner it retires run through [`OwnerCalls::run_parking`] first
+//! (`close_host_call`), so a failure one of them parked while its own panic
+//! unwound stays behind that panic. The remaining diagnostics (the focus
 //! listener's attach warnings, a deferred projection's warning inside a
 //! grant body) run inside the containment of the code that calls them: the
 //! focus notifier, the grant.

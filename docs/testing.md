@@ -294,6 +294,40 @@ So:
   from scratch;
 - a worktree's `target/` is deleted with the worktree once its branch merges.
 
+### Bounding disk use of agent worktrees
+
+A worktree's `target/` reaches 30-60 GB after a workspace build and the full
+suite. A Claude Code subagent started with worktree isolation gets a checkout
+of its own under `.claude/worktrees/`, so a session that fans out agents
+multiplies that. To keep it bounded:
+
+- **An agent that only reads needs no worktree.** Searching, answering a
+  question or reviewing a PR (`gh pr diff`) runs in an existing checkout;
+  isolation is for agents that edit.
+- **A writing agent builds only what it touched:** `cargo check -p <crate>`
+  and `cargo nextest run -p <crate>` while iterating, then
+  `cargo xtask check-changed` once before the PR. A `--workspace` build or
+  `cargo xtask test` is most of a short-lived worktree's disk.
+- **`CARGO_INCREMENTAL=0` in a short-lived worktree.** Incremental caches are
+  over half of a used debug directory (9.30 GB against 4.06 GB without them,
+  [build-footprint.md](../design/build-footprint.md) R2); they pay off only
+  across many edits to one crate, which a one-PR agent rarely makes.
+- **Delete a worktree's `target/` once its branch is pushed.** From then on CI
+  is the proof; a review fix rebuilds in minutes, while keeping the directory
+  costs tens of GB until the merge.
+- **After the merge, `cargo xtask worktree prune`.** It surveys every worktree
+  git knows, `.claude/worktrees/` included, not only `.worktrees/`, and removes
+  a merged one with its `target/` and branch. It keeps a worktree that is
+  locked (Claude Code locks an agent's worktree while the agent runs, and a
+  lock left by a process that died stays until `git worktree unlock`),
+  detached, unmerged, or holding modified, untracked or ignored files other
+  than `TASKS.md` and `target/`. `cargo xtask worktree prune --dry-run` names
+  each kept one and why; deleting a kept one's `target/` by hand still frees
+  the space.
+- **The main checkout:** `cargo xtask clean-nested` drops the nested-test
+  caches, then `cargo sweep --installed .` and `cargo sweep --maxsize 12GB .`
+  bound the rest ([Nested-cargo tests](#nested-cargo-tests)).
+
 ## Build
 
 ```bash
@@ -307,19 +341,15 @@ A bare `cargo build` at the root builds only the `flui` facade; pass `--workspac
 
 ### Local machine mode (shared, memory-limited)
 
-On a shared, memory-constrained dev machine — several agent worktrees against the same checkout,
-one compiling worker at a time (see AGENTS.md's Commands table) — every worktree points at the
-same `CARGO_TARGET_DIR`, and `CARGO_BUILD_JOBS` is sized to available RAM rather than core count.
-A docs-only change never needs a workspace build: `cargo xtask checks`, which builds only
-xtask, is the full local gate for it, which is what lets a docs worktree stay green without
-contending for the shared build. One concrete consequence of the shared
-`CARGO_TARGET_DIR`: the trybuild suites (`flui-engine::compile_fail`, `flui-rendering::compile_fail`,
-`flui-painting::compile_fail`, `trybuild_ui::ui_tests`) each drive a
-real `rustc` invocation per fixture into scratch output under `target/`, so two of them compiling
-concurrently from different worktrees against the same target dir can spuriously fail on artifact
-contention rather than on the fixture's actual `compile_fail` assertion — keep trybuild runs
-serialized with the rest of the machine's one-worker-at-a-time rule, not fanned out across parallel
-agent sessions.
+On a shared, memory-constrained dev machine — several agent worktrees off the same checkout —
+run one compiling worker at a time (the heavy xtask commands queue behind one host-wide lock for
+this, see AGENTS.md's Commands section) and size `CARGO_BUILD_JOBS` to available RAM rather than
+core count. Each worktree still builds into its own `target/`
+("One target directory per checkout", under [Nested-cargo tests](#nested-cargo-tests)); memory is bounded by serializing
+builds, never by sharing a target directory, and disk by the
+[agent-worktree rules](#bounding-disk-use-of-agent-worktrees). A docs-only change never needs a
+workspace build: `cargo xtask checks`, which builds only xtask, is the full local gate for it,
+so a docs worktree stays green without a multi-GB `target/` or a wait for the workspace builds.
 
 ## Test Commands
 
