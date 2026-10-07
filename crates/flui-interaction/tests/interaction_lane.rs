@@ -34,18 +34,24 @@ fn explicit_pointer_capture_contract() {
     }
 }
 
-fn capture_keeps_the_full_implicit_down_route() { assert_capture_route(0); }
-fn capture_selects_one_target_after_the_down_round() { assert_capture_route(1); }
-fn capture_cannot_be_stolen_by_a_later_down_target() { assert_capture_route(2); }
-fn capture_drop_defers_exactly_one_loss_to_owner_entry() { assert_capture_route(3); }
-fn capture_release_defers_exactly_one_loss_to_owner_entry() { assert_capture_route(4); }
-fn capture_native_terminal_invalidates_the_token() { assert_capture_route(5); }
-fn capture_old_token_cannot_cancel_a_replacement_down() { assert_capture_route(6); }
-fn capture_release_inside_motion_defers_loss_until_next_entry() { assert_capture_route(7); }
-fn capture_loss_callback_failure_still_retires_contact() { assert_capture_route(8); }
-fn capture_loss_preserves_first_failure_and_next_contact() { assert_capture_route(9); }
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CaptureCase {
+    Implicit, Exclusive, FirstClaim, Drop, Release, NativeLoss, ReusedId,
+    CallbackRelease, LossFailure, CompetingLossFailure,
+}
 
-fn assert_capture_route(mode: u8) {
+fn capture_keeps_the_full_implicit_down_route() { assert_capture_route(CaptureCase::Implicit); }
+fn capture_selects_one_target_after_the_down_round() { assert_capture_route(CaptureCase::Exclusive); }
+fn capture_cannot_be_stolen_by_a_later_down_target() { assert_capture_route(CaptureCase::FirstClaim); }
+fn capture_drop_defers_exactly_one_loss_to_owner_entry() { assert_capture_route(CaptureCase::Drop); }
+fn capture_release_defers_exactly_one_loss_to_owner_entry() { assert_capture_route(CaptureCase::Release); }
+fn capture_native_terminal_invalidates_the_token() { assert_capture_route(CaptureCase::NativeLoss); }
+fn capture_old_token_cannot_cancel_a_replacement_down() { assert_capture_route(CaptureCase::ReusedId); }
+fn capture_release_inside_motion_defers_loss_until_next_entry() { assert_capture_route(CaptureCase::CallbackRelease); }
+fn capture_loss_callback_failure_still_retires_contact() { assert_capture_route(CaptureCase::LossFailure); }
+fn capture_loss_preserves_first_failure_and_next_contact() { assert_capture_route(CaptureCase::CompetingLossFailure); }
+
+fn assert_capture_route(case: CaptureCase) {
     use flui_foundation::geometry::Offset;
     use flui_interaction::{GestureBinding, HitTestResult, PointerCapture, PointerDispatch};
     use flui_interaction::events::{PointerEvent, PointerKind, make_down_event, make_move_event, make_up_event};
@@ -59,8 +65,9 @@ fn assert_capture_route(mode: u8) {
     let log = Rc::new(RefCell::new(Vec::new()));
     let down = make_down_event(Offset::new(5.0, 5.0), PointerKind::Touch).expect("down");
     assert!(PointerDispatch::at_root(&down).capture().is_err(), "synthetic dispatch has no capture authority");
+    let fails = matches!(case, CaptureCase::LossFailure | CaptureCase::CompetingLossFailure);
     lane.enter(|| {
-        if mode == 9 {
+        if case == CaptureCase::CompetingLossFailure {
             binding.pointer_router().add_global_handler(Rc::new(|event| {
                 assert!(!matches!(event, PointerEvent::Cancel(_)), "second capture loss failure");
             }));
@@ -78,15 +85,15 @@ fn assert_capture_route(mode: u8) {
                 }
                 _ => "other",
             }));
-            if mode >= 8 && matches!(dispatch.global, PointerEvent::Cancel(_)) {
+            if fails && matches!(dispatch.global, PointerEvent::Cancel(_)) {
                 panic!("first capture loss failure");
             }
-            if mode != 0 && matches!(dispatch.global, PointerEvent::Down(_)) {
+            if case != CaptureCase::Implicit && matches!(dispatch.global, PointerEvent::Down(_)) {
                 let token = dispatch.capture().expect("real Down target can capture");
                 held.borrow_mut().push(token);
             } else if matches!(dispatch.global, PointerEvent::Move(_)) {
                 assert!(dispatch.capture().is_err(), "Move cannot mint capture authority");
-                if mode == 7 {
+                if case == CaptureCase::CallbackRelease {
                     let token = held.borrow_mut().pop().expect("callback owns capture");
                     drop(token);
                     assert_eq!(first_log.borrow().last(), Some(&(1, "move")), "release within delivery invokes no nested cancellation");
@@ -102,7 +109,7 @@ fn assert_capture_route(mode: u8) {
                 PointerEvent::Cancel(_) => "lost",
                 _ => "other",
             }));
-            if mode == 2 && matches!(dispatch.global, PointerEvent::Down(_)) {
+            if case == CaptureCase::FirstClaim && matches!(dispatch.global, PointerEvent::Down(_)) {
                 assert!(dispatch.capture().is_err(), "first claimant keeps exclusive authority");
             }
         }).expect("second target");
@@ -114,17 +121,17 @@ fn assert_capture_route(mode: u8) {
         };
         binding.handle_pointer_event(&down, |_| path());
         assert_eq!(&*log.borrow(), &[(1, "down"), (2, "down")], "capture does not truncate the committed Down round");
-        if mode == 6 {
+        if case == CaptureCase::ReusedId {
             binding.handle_pointer_event(&down, |_| path());
             let stale = tokens.borrow_mut().remove(0);
             drop(stale);
         }
-        if mode == 3 || mode == 4 || mode >= 8 {
+        if matches!(case, CaptureCase::Drop | CaptureCase::Release) || fails {
             let token = tokens.borrow_mut().pop().expect("retained token");
-            if mode == 4 { token.release(); } else { drop(token); }
+            if case == CaptureCase::Release { token.release(); } else { drop(token); }
             assert_eq!(log.borrow().last(), Some(&(2, "down")), "release runs no event callback inline");
             let drained = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| binding.flush_pending_moves()));
-            if mode >= 8 {
+            if fails {
                 let payload = drained.expect_err("loss failure propagates after mandatory cleanup");
                 assert_eq!(flui_foundation::panic::payload_text(&*payload), Some("first capture loss failure"));
             } else {
@@ -135,7 +142,7 @@ fn assert_capture_route(mode: u8) {
             binding.flush_pending_moves();
             assert_eq!(log.borrow().iter().filter(|(_, event)| *event == "lost").count(), 1);
             assert!(binding.arena().is_empty());
-            if mode >= 8 {
+            if fails {
                 binding.handle_pointer_event(&down, |_| path());
                 let up = make_up_event(Offset::new(5.0, 5.0), PointerKind::Touch).expect("healthy up");
                 binding.handle_pointer_event(&up, |_| panic!("healthy terminal retains route"));
@@ -149,7 +156,7 @@ fn assert_capture_route(mode: u8) {
         let movement = make_move_event(Offset::new(200.0, 200.0), PointerKind::Touch).expect("outside move");
         binding.handle_pointer_event(&movement, |_| panic!("touch contact retains its Down route"));
         binding.flush_pending_moves();
-        let terminal = if mode == 5 {
+        let terminal = if case == CaptureCase::NativeLoss {
             let PointerEvent::Down(press) = &down else { unreachable!() };
             PointerEvent::Cancel(flui_platform_api::pointer::PointerCancel::new(
                 press.pointer,
@@ -160,11 +167,12 @@ fn assert_capture_route(mode: u8) {
             make_up_event(Offset::new(200.0, 200.0), PointerKind::Touch).expect("up")
         };
         binding.handle_pointer_event(&terminal, |_| panic!("terminal retains its Down route"));
-        let tail = if mode == 0 { vec![(1, "move"), (2, "move"), (1, "up"), (2, "up")] } else if mode == 5 || mode == 7 { vec![(1, "move"), (1, "lost")] } else { vec![(1, "move"), (1, "up")] };
+        let loses = matches!(case, CaptureCase::NativeLoss | CaptureCase::CallbackRelease);
+        let tail = if case == CaptureCase::Implicit { vec![(1, "move"), (2, "move"), (1, "up"), (2, "up")] } else if loses { vec![(1, "move"), (1, "lost")] } else { vec![(1, "move"), (1, "up")] };
         assert!(log.borrow().ends_with(&tail), "later delivery uses the claimed target, or the entire implicit route");
         tokens.borrow_mut().clear();
         binding.flush_pending_moves();
-        assert_eq!(log.borrow().iter().filter(|(_, event)| *event == "lost").count(), usize::from(mode == 5 || mode == 7), "native terminal and stale tokens cannot add cancellation");
+        assert_eq!(log.borrow().iter().filter(|(_, event)| *event == "lost").count(), usize::from(loses), "native terminal and stale tokens cannot add cancellation");
         assert_eq!(binding.active_pointer_count(), 0);
     });
 }
