@@ -154,7 +154,7 @@ for crate in flui_interaction flui_foundation flui_platform_api web_time; do
     ' "$artifacts")
     externs+=(--extern "$crate=$library")
     if [[ "$crate" == flui_interaction ]]; then
-        dependency_dir=$(dirname "$library")
+        dependency_dir="$(dirname "$library")/deps"
     fi
 done
 
