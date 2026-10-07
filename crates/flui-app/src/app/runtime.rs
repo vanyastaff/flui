@@ -160,38 +160,13 @@ fn font_digest(font_bytes: &[u8]) -> FontDigest {
 // ============================================================================
 
 /// One UI runtime's dispatch-adjacent state, keyed by [`UiRuntimeId`] in
-/// [`AppRuntime`]'s [`RuntimeRegistry`]. Bundles exactly what the single-slot
-/// design this replaces used to keep as flat `AppRuntime` fields (`ui_runtime`,
-/// `queue`, `draining`, `address`, `surface_applier`): each hosted UI runtime now
-/// owns its own copy of all five, so a second UI runtime's dispatch, resize
-/// routing, and reentrancy guard are independent of the first's — the
-/// concrete mechanism behind the end-state invariant that two windows share
-/// no mutable UI tree through `AppRuntime` (sharing happens only through
-/// explicit `SharedEngineServices`/app-model injection, never through this
-/// registry).
+/// [`AppRuntime`]'s [`RuntimeRegistry`]. Work admission and ordering belong to
+/// the host-wide FIFO; a slot retains only its runtime and native attachments.
 pub(super) struct RuntimeSlot {
     /// `None` while this UI runtime is checked OUT of the registry for
-    /// [`dispatch_platform_ui_runtime`](super::runner) — the other four fields
-    /// stay in place throughout that checkout (never removed alongside
-    /// `ui_runtime`), so a nested same-UI runtime dispatch still finds its target and
-    /// enqueues into `queue`, instead of reading back `StaleRuntime`.
+    /// [`dispatch_platform_ui_runtime`](super::runner). Membership stays in place
+    /// so reentrant work can target it through the host-wide FIFO.
     pub(super) ui_runtime: Option<UiRuntime>,
-    /// This UI runtime's own owner-thread work queue — never shared with a
-    /// sibling UI runtime's queue, so draining one UI runtime's events can never pop a
-    /// task meant for another. Each entry is stamped with the
-    /// [`PresentationId`] of the `PresentationDispatcher` (`runner.rs`, private to
-    /// that module) that enqueued it (issue #555's addressed-routing slice): a
-    /// UI runtime's queue is shared across every presentation it hosts, so which
-    /// window produced a given `RuntimeTask::Event` cannot be recovered from
-    /// the queue's OWN dispatch call alone once more than one presentation's
-    /// window can enqueue into it — the stamp travels with the task itself
-    /// instead. Pump tasks are UI runtime-wide; `ClosePresentation` already
-    /// carries its target id. Only `RuntimeTask::Event` reads the stamp in
-    /// `RuntimeEvent::run`.
-    pub(super) queue: VecDeque<(PresentationId, RuntimeTask)>,
-    /// Set while a queued task for THIS UI runtime is running, so a reentrant
-    /// same-UI runtime dispatch enqueues instead of recursing into `ui_runtime.take()`.
-    pub(super) draining: bool,
     /// This UI runtime's routable address — the per-slot replacement for the
     /// single `AppRuntime.address: Option<PresentationAddress>` this type
     /// used to be.
@@ -503,10 +478,6 @@ pub(crate) struct AppRuntime {
     pub(super) frame_drivers: super::runner::FrameDrivers,
     pub(super) native_retirement: super::runner::NativeRetirement,
     /// Every hosted UI runtime, keyed by `UiRuntimeId`, in mount (insertion) order.
-    /// Replaces the single `Option<UiRuntime>` slot (plus its four sibling
-    /// flat fields `queue`/`draining`/`address`/`surface_applier`) this
-    /// struct used to carry — see [`RuntimeSlot`]'s doc for why those four
-    /// moved inside the per-UI runtime entry instead of staying flat.
     pub(super) ui_runtimes: RuntimeRegistry,
     /// Owner-local work accepted while another UI runtime callback is running.
     ///
@@ -596,10 +567,8 @@ pub(crate) struct AppRuntime {
     /// `Some`; `dispatch_platform_ui_runtime` debug-asserts that invariant at its
     /// one checkout site.
     pub(super) dispatched_scheduler: Option<UpdateScheduler>,
-    /// The identity companion to `dispatched_scheduler` above: which UI runtime
-    /// is currently checked out, so a nested dispatch attempt targeting a
-    /// DIFFERENT UI runtime can be told apart from a legitimate same-UI runtime
-    /// reentrant call (already handled by each slot's own `draining` flag).
+    /// The identity companion to `dispatched_scheduler`: which UI runtime
+    /// is currently checked out. Reentrant work for any runtime stays queued.
     /// Also set (alongside `dispatched_scheduler`) for the UI runtime
     /// `for_each_installed_ui_runtime` currently has checked out of the registry
     /// mid-visit — from fence (c)'s perspective a visited UI runtime IS

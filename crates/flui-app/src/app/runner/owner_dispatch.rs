@@ -247,8 +247,7 @@ impl RuntimeTask {
     ///
     /// `presentation_id` is the [`flui_foundation::PresentationId`] the
     /// enqueueing [`PresentationDispatcher`] was addressed to — stamped onto this
-    /// task's queue entry at enqueue time (`dispatch_platform_ui_runtime`), since
-    /// a UI runtime's queue is shared across every presentation it hosts. Font
+    /// task's host-wide FIFO entry at enqueue time (`dispatch_platform_ui_runtime`). Font
     /// notifications invalidate the whole UI runtime; surface recovery still
     /// repaints its primary. Only `Self::Event` threads the address through
     /// to [`RuntimeEvent::run`].
@@ -566,8 +565,6 @@ pub(super) fn install_platform_ui_runtime(
                 address.ui_runtime_id,
                 RuntimeSlot {
                     ui_runtime: Some(ui_runtime),
-                    queue: VecDeque::new(),
-                    draining: false,
                     address,
                     surface_applier: None,
                     surface_owner: None,
@@ -700,8 +697,6 @@ pub(super) fn install_ui_runtime_alongside(
             address.ui_runtime_id,
             RuntimeSlot {
                 ui_runtime: Some(ui_runtime),
-                queue: VecDeque::new(),
-                draining: false,
                 address,
                 surface_applier: None,
                 surface_owner: None,
@@ -1434,30 +1429,12 @@ fn dispatch_platform_ui_runtime_now(
             .ui_runtimes
             .get_mut(&ui_runtime_id)
             .expect("BUG: presence just checked above via contains_key");
-        // Same-ui_runtime reentrancy: this ui_runtime is already draining (mid its
-        // own drain loop below) or checked out (by its own dispatch, or by
-        // a `for_each_installed_ui_runtime` visit) -- always safe to enqueue and
-        // return early; the ongoing drain loop, or the next legitimate
-        // dispatch once the ui_runtime is restored, picks the event up.
-        if ui_runtime_slot.draining || ui_runtime_slot.ui_runtime.is_none() {
-            ui_runtime_slot
-                .queue
-                .push_back((dispatcher.address.presentation_id, event));
-            return Ok(None);
-        }
-        let ui_runtime_slot = state
-            .ui_runtimes
-            .get_mut(&ui_runtime_id)
-            .expect("BUG: presence checked above");
-        ui_runtime_slot
-            .queue
-            .push_back((dispatcher.address.presentation_id, event));
-        let first = ui_runtime_slot
-            .queue
-            .pop_front()
-            .expect("BUG: event was enqueued before starting ui_runtime dispatch");
-        ui_runtime_slot.draining = true;
-        let ui_runtime = ui_runtime_slot.ui_runtime.take();
+        // Reentrant work remains in the host FIFO until the active operation
+        // or registry visit completes. One checkout executes exactly one entry.
+        let ui_runtime = ui_runtime_slot
+            .ui_runtime
+            .take()
+            .ok_or(DispatchError::RuntimeUnavailable)?;
         // Stash a clone of the checked-out ui_runtime's scheduler (and its
         // identity) BEFORE it leaves this slot: `installed_ui_runtime_phase`
         // (with_owner_platform's fence (c)) reads `dispatched_scheduler` as
@@ -1468,201 +1445,188 @@ fn dispatch_platform_ui_runtime_now(
         // installed at all. `UpdateScheduler::clone` is one `Arc::clone` (see
         // `flui-scheduler`'s single-`Arc` handle shape), not a second
         // scheduler.
-        state.dispatched_scheduler = ui_runtime
-            .as_ref()
-            .map(|ui_runtime| ui_runtime.scheduler().clone());
+        state.dispatched_scheduler = Some(ui_runtime.scheduler().clone());
         state.dispatched_ui_runtime_id = Some(ui_runtime_id);
-        Ok(ui_runtime.map(|ui_runtime| (ui_runtime, first)))
+        Ok(ui_runtime)
     })?;
-    let Some((mut ui_runtime, first)) = checked_out else {
-        return Ok(());
-    };
+    let mut ui_runtime = checked_out;
 
     // Never hold the TLS RefCell borrow across user/platform callbacks. Catch
     // only to restore the host invariants; the original panic is resumed.
     let native_retirement = APP_RUNTIME.with(|slot| slot.borrow().native_retirement.clone());
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let mut next = Some(first);
-        while let Some((task_presentation_id, event)) = next {
-            // `ClosePresentation` is matched out here, before it would
-            // otherwise reach `RuntimeTask::run`'s `&UiRuntime` receiver: closing
-            // a presentation removes it from the forest (`&mut UiRuntime`),
-            // which is only available in this exact window -- `ui_runtime` sits
-            // here as an owned local, checked out of `APP_RUNTIME` for the
-            // whole dispatched task, so `&mut` falls out naturally instead of
-            // needing interior mutability on the forest itself.
-            match event {
-                RuntimeTask::ClosePresentation(id) => {
-                    APP_RUNTIME.with(|slot| {
-                        slot.borrow_mut().frame_drivers.retire_presentation(
-                            flui_foundation::PresentationAddress {
-                                ui_runtime_id,
-                                presentation_id: id,
-                            },
-                        );
-                    });
-                    if ui_runtime.is_sole_presentation(id) {
-                        // Reentrant events must fail admission before terminal observers run.
-                        APP_RUNTIME.with(|slot| {
-                            let mut state = slot.borrow_mut();
-                            state.registry.remove_ui_runtime(ui_runtime_id);
-                            state
-                                .closing_presentations
-                                .retain(|address| address.ui_runtime_id != ui_runtime_id);
-                        });
-                        let handlers = APP_RUNTIME
-                            .with(|slot| slot.borrow().close_requests())
-                            .take_ui_runtime(ui_runtime_id);
-                        native_retirement.close_handlers(handlers);
-                        // Closing the ui_runtime's ONLY presentation IS closing
-                        // the ui_runtime. Dispatch Detached FIRST, through this
-                        // exact ui_runtime, before requesting the uninstall --
-                        // shutdown must cancel any in-flight pointer
-                        // sequence whose platform Up/Cancel will never
-                        // arrive, and must notify lifecycle observers,
-                        // before the ui_runtime and its `UpdateScheduler` are gone.
-                        // This is the same reason `on_quit`'s own Detached
-                        // dispatch exists (`run_desktop`'s bootstrap),
-                        // generalized to per-ui_runtime teardown instead of only
-                        // process-wide quit: a ui_runtime closing because its one
-                        // window closed is exactly as "detached" as one
-                        // closing because the whole process quit, and
-                        // `on_quit`'s own dispatch now frequently finds this
-                        // ui_runtime already gone (a harmless, traced no-op --
-                        // see that callback's doc). Uses `RuntimeEvent::
-                        // Lifecycle(..).run` directly (the same private
-                        // helper an ordinary `RuntimeTask::Event(RuntimeEvent::
-                        // Lifecycle(..))` dispatches through below) rather
-                        // than re-queuing another task, since `ui_runtime` is
-                        // already the exact owned local that method needs.
-                        let notification =
-                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                ui_runtime.stop_presentations();
-                            }));
-
-                        // Closing the ui_runtime's ONLY presentation IS closing
-                        // the ui_runtime -- routing it through
-                        // close_presentation_entered would leave an empty
-                        // forest behind (every other method on this ui_runtime,
-                        // starting with `primary()`, assumes one always
-                        // exists). Request a full ui_runtime uninstall through
-                        // the SAME deferral machinery every other
-                        // ui_runtime-map mutation already uses:
-                        // `dispatched_ui_runtime_id` is `Some` for this whole
-                        // checkout, so this defers to `dispatch_platform_
-                        // ui_runtime`'s own tail (below), which runs
-                        // `apply_uninstall` only after `ui_runtime` is restored
-                        // to its slot -- `apply_uninstall` already removes
-                        // every one of this ui_runtime's `WindowRegistry`
-                        // entries before dropping the `RuntimeSlot` (see its
-                        // own doc), so step 1 is covered by the SAME path
-                        // a whole-ui_runtime close always used.
-                        let displaced = APP_RUNTIME.with(|slot| {
-                            slot.borrow_mut()
-                                .request_ui_runtime_uninstall(ui_runtime_id)
-                        });
-                        drop(displaced);
-                        if let Err(payload) = notification {
-                            std::panic::resume_unwind(payload);
-                        }
-                    } else {
-                        // Step 1: unregister exactly THIS presentation's own
-                        // window mapping -- never a sibling's, and never
-                        // every window this ui_runtime owns (`WindowRegistry::
-                        // remove_ui_runtime` would be wrong here). `UiRuntime`
-                        // itself has no access to the registry (AppRuntime
-                        // is its single authority, ADR-0037 §2), so this
-                        // runs here, in the one caller that does, before
-                        // handing off to close_presentation_entered's
-                        // steps 2-6. Without this, a stale platform event
-                        // for the closed presentation's original window
-                        // would still resolve to its now-dead
-                        // PresentationId instead of being refused.
-                        let address = flui_foundation::PresentationAddress {
+        let task_presentation_id = dispatcher.address.presentation_id;
+        // `ClosePresentation` is matched out here, before it would
+        // otherwise reach `RuntimeTask::run`'s `&UiRuntime` receiver: closing
+        // a presentation removes it from the forest (`&mut UiRuntime`),
+        // which is only available in this exact window -- `ui_runtime` sits
+        // here as an owned local, checked out of `APP_RUNTIME` for the
+        // whole dispatched task, so `&mut` falls out naturally instead of
+        // needing interior mutability on the forest itself.
+        match event {
+            RuntimeTask::ClosePresentation(id) => {
+                APP_RUNTIME.with(|slot| {
+                    slot.borrow_mut().frame_drivers.retire_presentation(
+                        flui_foundation::PresentationAddress {
                             ui_runtime_id,
                             presentation_id: id,
-                        };
-                        let unregistered = APP_RUNTIME.with(|slot| {
-                            let mut state = slot.borrow_mut();
-                            state.closing_presentations.remove(&address);
-                            state.registry.remove_presentation(address)
+                        },
+                    );
+                });
+                if ui_runtime.is_sole_presentation(id) {
+                    // Reentrant events must fail admission before terminal observers run.
+                    APP_RUNTIME.with(|slot| {
+                        let mut state = slot.borrow_mut();
+                        state.registry.remove_ui_runtime(ui_runtime_id);
+                        state
+                            .closing_presentations
+                            .retain(|address| address.ui_runtime_id != ui_runtime_id);
+                    });
+                    let handlers = APP_RUNTIME
+                        .with(|slot| slot.borrow().close_requests())
+                        .take_ui_runtime(ui_runtime_id);
+                    native_retirement.close_handlers(handlers);
+                    // Closing the ui_runtime's ONLY presentation IS closing
+                    // the ui_runtime. Dispatch Detached FIRST, through this
+                    // exact ui_runtime, before requesting the uninstall --
+                    // shutdown must cancel any in-flight pointer
+                    // sequence whose platform Up/Cancel will never
+                    // arrive, and must notify lifecycle observers,
+                    // before the ui_runtime and its `UpdateScheduler` are gone.
+                    // This is the same reason `on_quit`'s own Detached
+                    // dispatch exists (`run_desktop`'s bootstrap),
+                    // generalized to per-ui_runtime teardown instead of only
+                    // process-wide quit: a ui_runtime closing because its one
+                    // window closed is exactly as "detached" as one
+                    // closing because the whole process quit, and
+                    // `on_quit`'s own dispatch now frequently finds this
+                    // ui_runtime already gone (a harmless, traced no-op --
+                    // see that callback's doc). Uses `RuntimeEvent::
+                    // Lifecycle(..).run` directly (the same private
+                    // helper an ordinary `RuntimeTask::Event(RuntimeEvent::
+                    // Lifecycle(..))` dispatches through below) rather
+                    // than re-queuing another task, since `ui_runtime` is
+                    // already the exact owned local that method needs.
+                    let notification =
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            ui_runtime.stop_presentations();
+                        }));
+
+                    // Closing the ui_runtime's ONLY presentation IS closing
+                    // the ui_runtime -- routing it through
+                    // close_presentation_entered would leave an empty
+                    // forest behind (every other method on this ui_runtime,
+                    // starting with `primary()`, assumes one always
+                    // exists). Request a full ui_runtime uninstall through
+                    // the SAME deferral machinery every other
+                    // ui_runtime-map mutation already uses:
+                    // `dispatched_ui_runtime_id` is `Some` for this whole
+                    // checkout, so this defers to `dispatch_platform_
+                    // ui_runtime`'s own tail (below), which runs
+                    // `apply_uninstall` only after `ui_runtime` is restored
+                    // to its slot -- `apply_uninstall` already removes
+                    // every one of this ui_runtime's `WindowRegistry`
+                    // entries before dropping the `RuntimeSlot` (see its
+                    // own doc), so step 1 is covered by the SAME path
+                    // a whole-ui_runtime close always used.
+                    let displaced = APP_RUNTIME.with(|slot| {
+                        slot.borrow_mut()
+                            .request_ui_runtime_uninstall(ui_runtime_id)
+                    });
+                    drop(displaced);
+                    if let Err(payload) = notification {
+                        std::panic::resume_unwind(payload);
+                    }
+                } else {
+                    // Step 1: unregister exactly THIS presentation's own
+                    // window mapping -- never a sibling's, and never
+                    // every window this ui_runtime owns (`WindowRegistry::
+                    // remove_ui_runtime` would be wrong here). `UiRuntime`
+                    // itself has no access to the registry (AppRuntime
+                    // is its single authority, ADR-0037 §2), so this
+                    // runs here, in the one caller that does, before
+                    // handing off to close_presentation_entered's
+                    // steps 2-6. Without this, a stale platform event
+                    // for the closed presentation's original window
+                    // would still resolve to its now-dead
+                    // PresentationId instead of being refused.
+                    let address = flui_foundation::PresentationAddress {
+                        ui_runtime_id,
+                        presentation_id: id,
+                    };
+                    let unregistered = APP_RUNTIME.with(|slot| {
+                        let mut state = slot.borrow_mut();
+                        state.closing_presentations.remove(&address);
+                        state.registry.remove_presentation(address)
+                    });
+                    drop(unregistered);
+                    // Same step for the close-request router (issue
+                    // #558): this presentation can no longer be asked
+                    // about, nor closed programmatically, once its
+                    // routable address is gone.
+                    let handler = APP_RUNTIME
+                        .with(|slot| slot.borrow().close_requests())
+                        .take(address);
+                    native_retirement.close_handlers(handler);
+
+                    // Re-stamp this ui_runtime's tracked routable address
+                    // (`RuntimeSlot::address`) to the surviving primary
+                    // BEFORE running `id`'s own teardown/dispose hooks
+                    // -- not after. `close_presentation_entered`'s step
+                    // 2-3 (below) can run a dispose hook that re-enters
+                    // this exact function with a dispatcher still
+                    // bearing `id`; ordering the re-stamp first means
+                    // that reentrant dispatch's `StalePresentation`
+                    // check (at the top of this function) already
+                    // compares against the NEW primary and correctly
+                    // refuses it right there. Re-stamping AFTER
+                    // disposal instead would leave a window where that
+                    // same reentrant dispatch still compares equal
+                    // (both sides still `id`), gets ACCEPTED by the
+                    // stale check, and is merely enqueued behind the
+                    // same-ui_runtime reentrancy guard -- only to run a
+                    // moment later, in this very drain loop, against
+                    // whatever survives the close: silently
+                    // misaddressed rather than refused. See
+                    // `UiRuntime::primary_id_excluding`'s own doc for why
+                    // this is computable before the removal happens.
+                    // Kept as an `if let` rather than an unwrap: this
+                    // branch runs only when `is_sole_presentation(id)` was
+                    // `false` above, which rules out a forest holding just
+                    // `id` but not an EMPTY one — `is_sole_presentation`
+                    // is `false` for a forest of none as well. A `None`
+                    // here is therefore not reachable for a ui_runtime that
+                    // still hosts something, and the arm simply skips the
+                    // re-stamp for one that does not.
+                    if let Some(surviving_primary_id) = ui_runtime.primary_id_excluding(id) {
+                        APP_RUNTIME.with(|slot| {
+                            if let Some(ui_runtime_slot) =
+                                slot.borrow_mut().ui_runtimes.get_mut(&ui_runtime_id)
+                            {
+                                ui_runtime_slot.address.presentation_id = surviving_primary_id;
+                            }
                         });
-                        drop(unregistered);
-                        // Same step for the close-request router (issue
-                        // #558): this presentation can no longer be asked
-                        // about, nor closed programmatically, once its
-                        // routable address is gone.
-                        let handler = APP_RUNTIME
-                            .with(|slot| slot.borrow().close_requests())
-                            .take(address);
-                        native_retirement.close_handlers(handler);
-
-                        // Re-stamp this ui_runtime's tracked routable address
-                        // (`RuntimeSlot::address`) to the surviving primary
-                        // BEFORE running `id`'s own teardown/dispose hooks
-                        // -- not after. `close_presentation_entered`'s step
-                        // 2-3 (below) can run a dispose hook that re-enters
-                        // this exact function with a dispatcher still
-                        // bearing `id`; ordering the re-stamp first means
-                        // that reentrant dispatch's `StalePresentation`
-                        // check (at the top of this function) already
-                        // compares against the NEW primary and correctly
-                        // refuses it right there. Re-stamping AFTER
-                        // disposal instead would leave a window where that
-                        // same reentrant dispatch still compares equal
-                        // (both sides still `id`), gets ACCEPTED by the
-                        // stale check, and is merely enqueued behind the
-                        // same-ui_runtime reentrancy guard -- only to run a
-                        // moment later, in this very drain loop, against
-                        // whatever survives the close: silently
-                        // misaddressed rather than refused. See
-                        // `UiRuntime::primary_id_excluding`'s own doc for why
-                        // this is computable before the removal happens.
-                        // Kept as an `if let` rather than an unwrap: this
-                        // branch runs only when `is_sole_presentation(id)` was
-                        // `false` above, which rules out a forest holding just
-                        // `id` but not an EMPTY one — `is_sole_presentation`
-                        // is `false` for a forest of none as well. A `None`
-                        // here is therefore not reachable for a ui_runtime that
-                        // still hosts something, and the arm simply skips the
-                        // re-stamp for one that does not.
-                        if let Some(surviving_primary_id) = ui_runtime.primary_id_excluding(id) {
-                            APP_RUNTIME.with(|slot| {
-                                if let Some(ui_runtime_slot) =
-                                    slot.borrow_mut().ui_runtimes.get_mut(&ui_runtime_id)
-                                {
-                                    ui_runtime_slot.address.presentation_id = surviving_primary_id;
-                                }
-                            });
-                        }
-
-                        ui_runtime.close_presentation_entered(id);
                     }
+
+                    ui_runtime.close_presentation_entered(id);
                 }
-                // Not entered here: the pump enters the ui_runtime itself, and a
-                // installed driver enters it explicitly for its gate.
-                RuntimeTask::Frame(binding) => {
-                    let driver =
-                        APP_RUNTIME.with(|slot| slot.borrow().frame_drivers.checkout(binding));
-                    if let Some(mut driver) = driver {
-                        driver.wake(&mut ui_runtime);
-                    }
-                }
-                #[cfg(any(test, target_os = "ios"))]
-                RuntimeTask::BackgroundPump => {
-                    // There is no frame gate to consume the redraw report. Async
-                    // work may enqueue new commands for the next owner opportunity.
-                    let _ = ui_runtime.enter(crate::app::ui_runtime::UiRuntime::drain_owner_inbox);
-                    ui_runtime.pump_background();
-                }
-                other => ui_runtime.enter(|ui_runtime| other.run(ui_runtime, task_presentation_id)),
             }
-            next = APP_RUNTIME.with(|slot| {
-                slot.borrow_mut()
-                    .ui_runtimes
-                    .get_mut(&ui_runtime_id)
-                    .and_then(|ui_runtime_slot| ui_runtime_slot.queue.pop_front())
-            });
+            // Not entered here: the pump enters the ui_runtime itself, and a
+            // installed driver enters it explicitly for its gate.
+            RuntimeTask::Frame(binding) => {
+                let driver = APP_RUNTIME.with(|slot| slot.borrow().frame_drivers.checkout(binding));
+                if let Some(mut driver) = driver {
+                    driver.wake(&mut ui_runtime);
+                }
+            }
+            #[cfg(any(test, target_os = "ios"))]
+            RuntimeTask::BackgroundPump => {
+                // There is no frame gate to consume the redraw report. Async
+                // work may enqueue new commands for the next owner opportunity.
+                let _ = ui_runtime.enter(crate::app::ui_runtime::UiRuntime::drain_owner_inbox);
+                ui_runtime.pump_background();
+            }
+            other => ui_runtime.enter(|ui_runtime| other.run(ui_runtime, task_presentation_id)),
         }
     }));
     let removed = APP_RUNTIME.with(|slot| {
@@ -1670,11 +1634,10 @@ fn dispatch_platform_ui_runtime_now(
         // The slot may be gone entirely if a NESTED, non-dispatch teardown
         // (e.g. `teardown_platform_ui_runtime`'s full-registry clear, called
         // reentrantly from inside the just-run task) already removed it —
-        // that dropped this ui_runtime's queue/applier already, so there is
+        // that retired this ui_runtime's native attachments already, so there is
         // nothing left to restore; just let `ui_runtime` fall out of scope below.
         if let Some(ui_runtime_slot) = state.ui_runtimes.get_mut(&ui_runtime_id) {
             ui_runtime_slot.ui_runtime = Some(ui_runtime);
-            ui_runtime_slot.draining = false;
         }
         // Cleared unconditionally in this same restore block, which runs
         // whether or not the dispatched task above panicked (the panic, if
@@ -1790,18 +1753,12 @@ fn drop_removed_ui_runtimes(
     for slot in removed {
         let RuntimeSlot {
             ui_runtime,
-            queue,
             surface_applier,
             ..
         } = slot;
         let failure =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(ui_runtime))).err();
         preserve_first_lifecycle_panic(first_panic, failure, "removed UI runtime");
-        for (_, task) in queue {
-            let failure =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(task))).err();
-            preserve_first_lifecycle_panic(first_panic, failure, "removed runtime operation");
-        }
         let failure =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(surface_applier))).err();
         preserve_first_lifecycle_panic(first_panic, failure, "removed surface applier");

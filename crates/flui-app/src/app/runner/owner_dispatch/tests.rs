@@ -566,6 +566,72 @@ fn install_two_test_ui_runtimes() -> (PresentationDispatcher, PresentationDispat
     (dispatcher_a, dispatcher_b)
 }
 
+fn carried_work_shares_one_callback_budget_across_runtimes() {
+    let _clear = OwnerHostClearGuard::arm();
+    let (a, b) = install_two_test_ui_runtimes();
+    let posted = Rc::new(Cell::new(0));
+    let wake_posts = Rc::clone(&posted);
+    APP_RUNTIME.with(|slot| {
+        slot.borrow_mut().owner_turn_wake = Some(Rc::new(move || {
+            wake_posts.set(wake_posts.get() + 1);
+            true
+        }));
+    });
+    let order = Rc::new(RefCell::new(Vec::new()));
+    let admitted = Rc::clone(&order);
+    dispatch_platform_ui_runtime(
+        a,
+        RuntimeTask::TestCallback(Box::new(move |_| {
+            for index in 0..80 {
+                let delivered = Rc::clone(&admitted);
+                dispatch_platform_ui_runtime(
+                    if index % 2 == 0 { a } else { b },
+                    RuntimeTask::TestCallback(Box::new(move |_| {
+                        delivered.borrow_mut().push(index);
+                    })),
+                )
+                .expect("reentrant work accepted");
+            }
+        })),
+    )
+    .expect("initial turn");
+    assert_eq!(*order.borrow(), (0..31).collect::<Vec<_>>());
+    assert_eq!(posted.get(), 1, "one continuation for the accepted tail");
+
+    {
+        let _callback = begin_owner_callback();
+        let delivered = Rc::clone(&order);
+        dispatch_platform_ui_runtime(
+            a,
+            RuntimeTask::TestCallback(Box::new(move |_| {
+                delivered.borrow_mut().push(100);
+            })),
+        )
+        .expect("fresh native root runs synchronously in the carried callback");
+        // A nested native callback must not replenish the enclosing budget.
+        drop(begin_owner_callback());
+    }
+    let mut expected: Vec<_> = (0..31).collect();
+    expected.push(100);
+    expected.extend(31..62);
+    assert_eq!(*order.borrow(), expected);
+    assert_eq!(
+        posted.get(),
+        2,
+        "remaining work gets one further opportunity"
+    );
+
+    drop(begin_owner_callback());
+    expected.extend(62..80);
+    assert_eq!(
+        *order.borrow(),
+        expected,
+        "every accepted operation runs once"
+    );
+    assert_eq!(posted.get(), 2, "settled FIFO posts no extra continuation");
+    teardown_platform_ui_runtime();
+}
+
 fn reentrant_owner_turns_preserve_global_fifo_across_ui_runtimes() {
     let (dispatcher_a, dispatcher_b) = install_two_test_ui_runtimes();
 
@@ -1502,6 +1568,10 @@ fn owner_dispatch_matrix() {
             (
                 "reentrant_owner_turns_preserve_global_fifo_across_ui_runtimes",
                 reentrant_owner_turns_preserve_global_fifo_across_ui_runtimes as fn(),
+            ),
+            (
+                "carried_work_shares_one_callback_budget_across_runtimes",
+                carried_work_shares_one_callback_budget_across_runtimes as fn(),
             ),
             (
                 "two_ui_runtimes_via_isolated_policy_share_nothing",

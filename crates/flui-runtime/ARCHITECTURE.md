@@ -50,6 +50,11 @@ host.
   operations per continuation callback, sharing the budget between fresh
   native roots and carried FIFO entries, counts stale entries against it, and
   requests one sequence-stamped continuation opportunity when work remains.
+  There is no additional per-runtime queue: each checkout executes exactly one
+  entry selected by the host-wide FIFO. The app test
+  `carried_work_shares_one_callback_budget_across_runtimes` verifies delivery
+  across callbacks, shared fresh/carried budget, nested callback scope and no
+  continuation after the queue settles.
   A fresh native root stays synchronous while budget remains, while a close fences its exact
   `PresentationAddress` from later work at admission time so root priority
   cannot let input jump a deferred terminal operation. The remaining
