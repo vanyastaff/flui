@@ -10,6 +10,172 @@ use crate::common::{lay_out, tight};
 use flui_painting::styling::Color;
 use flui_widgets::{ColoredBox, GestureDetector};
 
+pub(crate) fn clearing_pan_callbacks_mid_drag_still_finishes_the_drag() {
+    use crate::common::{ProbeSignals, SignalProbe};
+    use flui_foundation::geometry::Offset;
+    use flui_interaction::PointerType;
+    use flui_interaction::events::{
+        make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
+    };
+    use flui_view::SignalWriteExt;
+    use std::{cell::Cell, rc::Rc};
+
+    let enabled = Rc::new(Cell::new(true));
+    let starts = Rc::new(Cell::new(0));
+    let updates = Rc::new(Cell::new(0));
+    let ends = Rc::new(Cell::new(0));
+    let (gate, started, updated, ended) = (
+        Rc::clone(&enabled),
+        Rc::clone(&starts),
+        Rc::clone(&updates),
+        Rc::clone(&ends),
+    );
+    let signal = Rc::new(Cell::new(None));
+    let remembered = Rc::clone(&signal);
+    let probe = SignalProbe::new(move |ProbeSignals { count, .. }| {
+        remembered.set(Some(count));
+        let detector = GestureDetector::new();
+        let detector = if gate.get() {
+            let (started, updated, ended) =
+                (Rc::clone(&started), Rc::clone(&updated), Rc::clone(&ended));
+            detector
+                .on_pan_start(move |_, _| started.set(started.get() + 1))
+                .on_pan_update(move |_, _| updated.set(updated.get() + 1))
+                .on_pan_end(move |_, _| ended.set(ended.get() + 1))
+        } else {
+            detector
+        };
+        detector.child(ColoredBox::new(Color::rgb(10, 20, 30)))
+    });
+    let mut laid = lay_out(probe.view(), tight(100.0, 100.0));
+    let contacts = flui_testing::widgets::PointerContacts::new();
+    let pointer = contacts.begin();
+    laid.dispatch_pointer_event(&make_down_event_for_id(
+        pointer,
+        Offset::new(50.0, 10.0),
+        PointerType::Mouse,
+    ));
+    laid.dispatch_pointer_event(&make_move_event_for_id(
+        pointer,
+        Offset::new(50.0, 50.0),
+        PointerType::Mouse,
+    ));
+    assert_eq!(starts.get(), 1);
+    enabled.set(false);
+    probe
+        .write(|cx| signal.get().expect("mounted probe").set(cx, 1))
+        .expect("write");
+    laid.pump();
+    laid.dispatch_pointer_event(&make_up_event_for_id(
+        pointer,
+        Offset::new(50.0, 50.0),
+        PointerType::Mouse,
+    ));
+    assert_eq!(ends.get(), 0, "removed callbacks are not invoked");
+    enabled.set(true);
+    probe
+        .write(|cx| signal.get().expect("mounted probe").set(cx, 2))
+        .expect("write");
+    laid.pump();
+    let before = updates.get();
+    // Deliberately replay a stale sample for the released identity through the
+    // public host boundary; the convenience Move helper requires a live Down.
+    laid.dispatch_pointer_event(&make_move_event_for_id(
+        pointer,
+        Offset::new(50.0, 60.0),
+        PointerType::Mouse,
+    ));
+    assert_eq!(
+        updates.get(),
+        before,
+        "the released contact cannot resume when callbacks return"
+    );
+    let fresh = contacts.begin();
+    laid.dispatch_pointer_event(&make_down_event_for_id(
+        fresh,
+        Offset::new(50.0, 10.0),
+        PointerType::Mouse,
+    ));
+    laid.dispatch_pointer_event(&make_move_event_for_id(
+        fresh,
+        Offset::new(50.0, 50.0),
+        PointerType::Mouse,
+    ));
+    laid.dispatch_pointer_event(&make_up_event_for_id(
+        fresh,
+        Offset::new(50.0, 50.0),
+        PointerType::Mouse,
+    ));
+    assert_eq!(starts.get(), 2);
+    assert_eq!(ends.get(), 1);
+}
+
+pub(crate) fn unmount_mid_drag_cancels_once_and_hands_the_arena_to_the_rival() {
+    use crate::common::{ProbeSignals, SignalProbe};
+    use flui_view::{IntoView, SignalWriteExt, ViewExt};
+    use std::{cell::Cell, rc::Rc};
+
+    let mounted = Rc::new(Cell::new(true));
+    let cancelled = Rc::new(Cell::new(0));
+    let rival_starts = Rc::new(Cell::new(0));
+    let rival_ends = Rc::new(Cell::new(0));
+    let signal = Rc::new(Cell::new(None));
+    let (gate, cancels, remembered) = (
+        Rc::clone(&mounted),
+        Rc::clone(&cancelled),
+        Rc::clone(&signal),
+    );
+    let probe = SignalProbe::new(move |ProbeSignals { count, .. }| {
+        remembered.set(Some(count));
+        let child = ColoredBox::new(Color::rgb(10, 20, 30));
+        if gate.get() {
+            let cancels = Rc::clone(&cancels);
+            GestureDetector::new()
+                .on_horizontal_drag_start(|_, _| -> () {
+                    panic!("the retired contender must not start")
+                })
+                .on_horizontal_drag_cancel(move |_| cancels.set(cancels.get() + 1))
+                .child(child)
+                .into_view()
+                .boxed()
+        } else {
+            child.into_view().boxed()
+        }
+    });
+    let (started, ended) = (Rc::clone(&rival_starts), Rc::clone(&rival_ends));
+    let mut laid = lay_out(
+        GestureDetector::new()
+            .on_pan_start(move |_, _| started.set(started.get() + 1))
+            .on_pan_end(move |_, _| ended.set(ended.get() + 1))
+            .child(probe.view()),
+        tight(100.0, 100.0),
+    );
+    laid.dispatch_pointer_down(10.0, 50.0);
+    mounted.set(false);
+    probe
+        .write(|cx| signal.get().expect("mounted probe").set(cx, 1))
+        .expect("write");
+    laid.pump();
+    assert_eq!(
+        cancelled.get(),
+        1,
+        "unmount explicitly cancels the admitted contender"
+    );
+    laid.dispatch_pointer_move(60.0, 50.0);
+    laid.dispatch_pointer_up(60.0, 50.0);
+    assert_eq!(
+        rival_starts.get(),
+        1,
+        "the remaining live recognizer wins the contact"
+    );
+    assert_eq!(rival_ends.get(), 1);
+    assert_eq!(
+        cancelled.get(),
+        1,
+        "the cached terminal route cannot cancel the retired owner twice"
+    );
+}
+
 pub(crate) fn gesture_detector_fires_on_tap_for_a_down_up_on_the_child() {
     let taps = Arc::new(AtomicUsize::new(0));
     let in_cb = Arc::clone(&taps);

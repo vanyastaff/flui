@@ -29,3 +29,10 @@ its rectangle and release. Set a bounded canvas CSS size first when the page
 uses the default full-viewport canvas. `capture-admission` must report PASS and
 the outside release must reach `capture-check`; synthetic DOM pointer events
 cannot prove capture admission because they do not create an active pointer.
+
+WheelEvent constructors can coerce fractional viewport coordinates to integers.
+The fractional wheel case therefore uses integer source coordinates and a
+fractional canvas origin with explicit borders and padding. Its transformed
+case checks that native local coordinates remain authoritative; browser rounding
+on transformed wheel coordinates is not repaired by guessing an inverse from
+an axis-aligned bounding rectangle.

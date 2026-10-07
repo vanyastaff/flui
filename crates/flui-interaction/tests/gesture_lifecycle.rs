@@ -28,7 +28,6 @@ use flui_interaction::events::{
     make_move_event_for_id, make_up_event_for_id, make_up_event_for_id_with_button,
 };
 use flui_interaction::routing::PointerDispatch;
-use flui_interaction::sealed::CustomGestureRecognizer;
 use flui_interaction::{
     DoubleTapGestureRecognizer, DragAxis, DragGestureRecognizer, GestureEndReason,
     GestureRecognizer, LongPressGestureRecognizer, ManualClock, MultiDragAxis, MultiDragEndDetails,
@@ -66,7 +65,7 @@ impl Lane {
     fn join<R: GestureRecognizer + 'static>(&mut self, recognizer: &Rc<R>) {
         let admit = Rc::clone(recognizer);
         self.admit
-            .push(Box::new(move |dispatch| admit.add_pointer_down(dispatch)));
+            .push(Box::new(move |dispatch| admit.add_pointer(dispatch)));
         let forward = Rc::clone(recognizer);
         self.forward
             .push(Box::new(move |dispatch| forward.handle_event(dispatch)));
@@ -154,11 +153,13 @@ fn tap_and_double_tap(lane: &mut Lane) -> (TapLog, Rc<Cell<u32>>) {
     let taps = Rc::new(RefCell::new(Vec::new()));
     let doubles = counter();
     let tap_log = Rc::clone(&taps);
-    let tap = TapGestureRecognizer::new(lane.arena.clone())
-        .with_on_tap(move |details| tap_log.borrow_mut().push(details.local_position));
+    let tap = TapGestureRecognizer::builder(lane.arena.clone())
+        .on_tap(move |details| tap_log.borrow_mut().push(details.local_position))
+        .build();
     let double_log = Rc::clone(&doubles);
-    let double_tap = DoubleTapGestureRecognizer::new(lane.arena.clone())
-        .with_on_double_tap(move |_| double_log.set(double_log.get() + 1));
+    let double_tap = DoubleTapGestureRecognizer::builder(lane.arena.clone())
+        .on_double_tap(move |_| double_log.set(double_log.get() + 1))
+        .build();
     lane.join(&tap);
     lane.join(&double_tap);
     (taps, doubles)
@@ -250,10 +251,11 @@ fn second_finger_leaves_a_running_drag_alone() {
     let mut lane = Lane::new();
     let (updates, ends, cancels) = (counter(), counter(), counter());
     let (u, e, c) = (Rc::clone(&updates), Rc::clone(&ends), Rc::clone(&cancels));
-    let drag = DragGestureRecognizer::new(lane.arena.clone(), DragAxis::Free)
-        .with_on_update(move |_| u.set(u.get() + 1))
-        .with_on_end(move |_| e.set(e.get() + 1))
-        .with_on_cancel(move || c.set(c.get() + 1));
+    let drag = DragGestureRecognizer::builder(lane.arena.clone(), DragAxis::Free)
+        .on_update(move |_| u.set(u.get() + 1))
+        .on_end(move |_| e.set(e.get() + 1))
+        .on_cancel(move || c.set(c.get() + 1))
+        .build();
     lane.join(&drag);
     let touch = PointerType::Touch;
     lane.send(&down(id(2), at(0.0, 0.0), touch));
@@ -277,10 +279,11 @@ fn second_finger_leaves_a_long_press_alone() {
     let mut lane = Lane::new();
     let (starts, ends, cancels) = (counter(), counter(), counter());
     let (s, e, c) = (Rc::clone(&starts), Rc::clone(&ends), Rc::clone(&cancels));
-    let long_press = LongPressGestureRecognizer::new(lane.arena.clone())
-        .with_on_long_press_start(move |_| s.set(s.get() + 1))
-        .with_on_long_press_end(move |_| e.set(e.get() + 1))
-        .with_on_long_press_cancel(move |_| c.set(c.get() + 1));
+    let long_press = LongPressGestureRecognizer::builder(lane.arena.clone())
+        .on_long_press_start(move |_| s.set(s.get() + 1))
+        .on_long_press_end(move |_| e.set(e.get() + 1))
+        .on_long_press_cancel(move |_| c.set(c.get() + 1))
+        .build();
     lane.join(&long_press);
     let touch = PointerType::Touch;
     lane.send(&down(id(2), at(10.0, 10.0), touch));
@@ -320,7 +323,7 @@ fn assert_drag_terminal_callback_admits_the_next_contact_once(started: bool) {
             .upgrade()
             .expect("recognizer is routed");
         let next_down = down(pointer, at(100.0, 10.0), touch);
-        recognizer.add_pointer_down(PointerDispatch::at_root(&next_down));
+        recognizer.add_pointer(PointerDispatch::at_root(&next_down));
     });
     let (d, s, e, c) = (
         Rc::clone(&downs),
@@ -329,26 +332,27 @@ fn assert_drag_terminal_callback_admits_the_next_contact_once(started: bool) {
         Rc::clone(&cancels),
     );
     let readmit_cancel = Rc::clone(&readmit);
-    let drag = DragGestureRecognizer::new(lane.arena.clone(), DragAxis::Free)
-        .with_on_down(move |details| {
+    let drag = DragGestureRecognizer::builder(lane.arena.clone(), DragAxis::Free)
+        .on_down(move |details| {
             d.borrow_mut()
                 .push((details.local_position, details.global_position));
         })
-        .with_on_start(move |details| {
+        .on_start(move |details| {
             s.borrow_mut()
                 .push((details.local_position, details.global_position));
         })
-        .with_on_end(move |details| {
+        .on_end(move |details| {
             e.borrow_mut()
                 .push((details.reason, details.local_position));
             if details.reason == GestureEndReason::Cancelled {
                 readmit();
             }
         })
-        .with_on_cancel(move || {
+        .on_cancel(move || {
             c.set(c.get() + 1);
             readmit_cancel();
-        });
+        })
+        .build();
     *slot.borrow_mut() = Rc::downgrade(&drag);
     lane.join(&drag);
     let first_down = down(pointer, at(0.0, 0.0), touch);
@@ -358,7 +362,7 @@ fn assert_drag_terminal_callback_admits_the_next_contact_once(started: bool) {
     } else {
         // A closed arena defers its lone winner until the input-end drain.
         // Restart while the first contact still awaits that verdict.
-        drag.add_pointer_down(PointerDispatch::at_root(&first_down));
+        drag.add_pointer(PointerDispatch::at_root(&first_down));
         lane.arena.close(pointer);
     }
 
@@ -426,8 +430,9 @@ fn other_finger_does_not_complete_a_double_tap_contact() {
     let mut lane = Lane::new();
     let doubles = counter();
     let d = Rc::clone(&doubles);
-    let double_tap = DoubleTapGestureRecognizer::new(lane.arena.clone())
-        .with_on_double_tap(move |_| d.set(d.get() + 1));
+    let double_tap = DoubleTapGestureRecognizer::builder(lane.arena.clone())
+        .on_double_tap(move |_| d.set(d.get() + 1))
+        .build();
     lane.join(&double_tap);
     let touch = PointerType::Touch;
     lane.send(&down(id(2), at(10.0, 10.0), touch));
@@ -448,13 +453,14 @@ fn long_press_callback_can_dispose_its_recognizer() {
     let mut lane = Lane::new();
     let slot: Rc<RefCell<Option<Rc<LongPressGestureRecognizer>>>> = Rc::default();
     let inner = Rc::clone(&slot);
-    let long_press =
-        LongPressGestureRecognizer::new(lane.arena.clone()).with_on_long_press(move || {
+    let long_press = LongPressGestureRecognizer::builder(lane.arena.clone())
+        .on_long_press(move || {
             let recognizer = inner.borrow().clone();
             if let Some(recognizer) = recognizer {
-                recognizer.dispose();
+                recognizer.cancel();
             }
-        });
+        })
+        .build();
     *slot.borrow_mut() = Some(Rc::clone(&long_press));
     lane.join(&long_press);
     lane.send(&down(id(2), at(10.0, 10.0), PointerType::Touch));
@@ -471,13 +477,14 @@ fn double_tap_callback_can_dispose_its_recognizer() {
     let mut lane = Lane::new();
     let slot: Rc<RefCell<Option<Rc<DoubleTapGestureRecognizer>>>> = Rc::default();
     let inner = Rc::clone(&slot);
-    let double_tap =
-        DoubleTapGestureRecognizer::new(lane.arena.clone()).with_on_double_tap(move |_| {
+    let double_tap = DoubleTapGestureRecognizer::builder(lane.arena.clone())
+        .on_double_tap(move |_| {
             let recognizer = inner.borrow().clone();
             if let Some(recognizer) = recognizer {
-                recognizer.dispose();
+                recognizer.cancel();
             }
-        });
+        })
+        .build();
     *slot.borrow_mut() = Some(Rc::clone(&double_tap));
     lane.join(&double_tap);
     let touch = PointerType::Touch;
@@ -498,12 +505,14 @@ fn tap_move_callback_can_dispose_its_recognizer() {
     let mut lane = Lane::new();
     let slot: Rc<RefCell<Option<Rc<TapGestureRecognizer>>>> = Rc::default();
     let inner = Rc::clone(&slot);
-    let tap = TapGestureRecognizer::new(lane.arena.clone()).with_on_tap_move(move |_| {
-        let recognizer = inner.borrow().clone();
-        if let Some(recognizer) = recognizer {
-            recognizer.dispose();
-        }
-    });
+    let tap = TapGestureRecognizer::builder(lane.arena.clone())
+        .on_tap_move(move |_| {
+            let recognizer = inner.borrow().clone();
+            if let Some(recognizer) = recognizer {
+                recognizer.cancel();
+            }
+        })
+        .build();
     *slot.borrow_mut() = Some(Rc::clone(&tap));
     lane.join(&tap);
     let touch = PointerType::Touch;
@@ -520,11 +529,12 @@ fn panicking_double_tap_callback_leaves_the_next_double_tap_working() {
     let mut lane = Lane::new();
     let doubles = counter();
     let d = Rc::clone(&doubles);
-    let double_tap =
-        DoubleTapGestureRecognizer::new(lane.arena.clone()).with_on_double_tap(move |_| {
+    let double_tap = DoubleTapGestureRecognizer::builder(lane.arena.clone())
+        .on_double_tap(move |_| {
             d.set(d.get() + 1);
             assert!(d.get() > 1, "first double tap panics");
-        });
+        })
+        .build();
     lane.join(&double_tap);
     let touch = PointerType::Touch;
     for (first, second, expect_panic) in [(2, 3, true), (4, 5, false)] {
@@ -551,11 +561,13 @@ fn verdict_by_pointer_cannot_pick_a_tap_sequence() {
     let taps = counter();
     let doubles = counter();
     let t = Rc::clone(&taps);
-    let tap =
-        TapGestureRecognizer::new(lane.arena.clone()).with_on_tap(move |_| t.set(t.get() + 1));
+    let tap = TapGestureRecognizer::builder(lane.arena.clone())
+        .on_tap(move |_| t.set(t.get() + 1))
+        .build();
     let d = Rc::clone(&doubles);
-    let double_tap = DoubleTapGestureRecognizer::new(lane.arena.clone())
-        .with_on_double_tap(move |_| d.set(d.get() + 1));
+    let double_tap = DoubleTapGestureRecognizer::builder(lane.arena.clone())
+        .on_double_tap(move |_| d.set(d.get() + 1))
+        .build();
     lane.join(&tap);
     lane.join(&double_tap);
     let mouse = PointerType::Mouse;
@@ -575,9 +587,10 @@ fn panicking_first_callback_still_runs_the_rest() {
     let mut lane = Lane::new();
     let starts = counter();
     let s = Rc::clone(&starts);
-    let long_press = LongPressGestureRecognizer::new(lane.arena.clone())
-        .with_on_long_press(|| panic!("on_long_press panics"))
-        .with_on_long_press_start(move |_| s.set(s.get() + 1));
+    let long_press = LongPressGestureRecognizer::builder(lane.arena.clone())
+        .on_long_press(|| panic!("on_long_press panics"))
+        .on_long_press_start(move |_| s.set(s.get() + 1))
+        .build();
     lane.join(&long_press);
     lane.send(&down(id(2), at(10.0, 10.0), PointerType::Touch));
     let pumped = catch_unwind(AssertUnwindSafe(|| lane.frames(600)));
@@ -588,9 +601,10 @@ fn panicking_first_callback_still_runs_the_rest() {
     let mut lane = Lane::new();
     let taps = counter();
     let t = Rc::clone(&taps);
-    let tap = TapGestureRecognizer::new(lane.arena.clone())
-        .with_on_tap_up(|_| panic!("on_tap_up panics"))
-        .with_on_tap(move |_| t.set(t.get() + 1));
+    let tap = TapGestureRecognizer::builder(lane.arena.clone())
+        .on_tap_up(|_| panic!("on_tap_up panics"))
+        .on_tap(move |_| t.set(t.get() + 1))
+        .build();
     lane.join(&tap);
     let released = catch_unwind(AssertUnwindSafe(|| {
         click(&lane, id(2), at(10.0, 10.0), PointerType::Touch);
@@ -603,14 +617,17 @@ fn panicking_first_callback_still_runs_the_rest() {
 fn panicking_multi_tap_callback_leaves_the_next_pair_working() {
     let taps = counter();
     let t = Rc::clone(&taps);
-    let recognizer =
-        MultiTapGestureRecognizer::new(GestureArena::new(), 2).with_on_multi_tap(move |_| {
+    let recognizer = MultiTapGestureRecognizer::builder(GestureArena::new(), 2)
+        .on_multi_tap(move |_| {
             t.set(t.get() + 1);
             assert!(t.get() > 1, "first multi tap panics");
-        });
+        })
+        .build();
     for (a, b, expect_panic) in [(2, 3, true), (4, 5, false)] {
-        recognizer.add_pointer(id(a), at(10.0, 10.0), at(10.0, 10.0));
-        recognizer.add_pointer(id(b), at(90.0, 10.0), at(90.0, 10.0));
+        let first = down(id(a), at(10.0, 10.0), PointerType::Touch);
+        let second = down(id(b), at(90.0, 10.0), PointerType::Touch);
+        recognizer.add_pointer(PointerDispatch::at_root(&first));
+        recognizer.add_pointer(PointerDispatch::at_root(&second));
         recognizer.handle_event(PointerDispatch::at_root(&make_up_event_for_id(
             id(a),
             at(10.0, 10.0),
@@ -635,13 +652,13 @@ struct Verdicts {
     panic_on_accept: bool,
 }
 
-impl CustomGestureRecognizer for Verdicts {
-    fn on_arena_accept(&self, _pointer: PointerId) {
+impl GestureArenaMember for Verdicts {
+    fn accept_gesture(&self, _pointer: PointerId) {
         self.accepted.fetch_add(1, Ordering::SeqCst);
         assert!(!self.panic_on_accept, "member accept panics");
     }
 
-    fn on_arena_reject(&self, _pointer: PointerId) {
+    fn reject_gesture(&self, _pointer: PointerId) {
         self.rejected.fetch_add(1, Ordering::SeqCst);
     }
 }
@@ -739,9 +756,10 @@ fn mouse_drift_beyond_the_precise_slop_cancels_taps_and_presses() {
     let mut lane = Lane::new();
     let (taps, cancels) = (counter(), counter());
     let (t, c) = (Rc::clone(&taps), Rc::clone(&cancels));
-    let tap = TapGestureRecognizer::new(lane.arena.clone())
-        .with_on_tap(move |_| t.set(t.get() + 1))
-        .with_on_tap_cancel(move |_| c.set(c.get() + 1));
+    let tap = TapGestureRecognizer::builder(lane.arena.clone())
+        .on_tap(move |_| t.set(t.get() + 1))
+        .on_tap_cancel(move |_| c.set(c.get() + 1))
+        .build();
     lane.join(&tap);
     lane.send(&down(PointerId::PRIMARY, start, mouse));
     lane.send(&motion(PointerId::PRIMARY, drifted, mouse));
@@ -751,9 +769,10 @@ fn mouse_drift_beyond_the_precise_slop_cancels_taps_and_presses() {
     let mut lane = Lane::new();
     let (starts, cancels) = (counter(), counter());
     let (s, c) = (Rc::clone(&starts), Rc::clone(&cancels));
-    let long_press = LongPressGestureRecognizer::new(lane.arena.clone())
-        .with_on_long_press_start(move |_| s.set(s.get() + 1))
-        .with_on_long_press_cancel(move |_| c.set(c.get() + 1));
+    let long_press = LongPressGestureRecognizer::builder(lane.arena.clone())
+        .on_long_press_start(move |_| s.set(s.get() + 1))
+        .on_long_press_cancel(move |_| c.set(c.get() + 1))
+        .build();
     lane.join(&long_press);
     lane.send(&down(PointerId::PRIMARY, start, mouse));
     lane.send(&motion(PointerId::PRIMARY, drifted, mouse));
@@ -763,8 +782,9 @@ fn mouse_drift_beyond_the_precise_slop_cancels_taps_and_presses() {
     let mut lane = Lane::new();
     let cancels = counter();
     let c = Rc::clone(&cancels);
-    let double_tap = DoubleTapGestureRecognizer::new(lane.arena.clone())
-        .with_on_double_tap_cancel(move |_| c.set(c.get() + 1));
+    let double_tap = DoubleTapGestureRecognizer::builder(lane.arena.clone())
+        .on_double_tap_cancel(move |_| c.set(c.get() + 1))
+        .build();
     lane.join(&double_tap);
     lane.send(&down(PointerId::PRIMARY, start, mouse));
     lane.send(&motion(PointerId::PRIMARY, drifted, mouse));
@@ -785,8 +805,9 @@ fn secondary_button_starts_no_drag_and_no_long_press() {
     let mut lane = Lane::new();
     let starts = counter();
     let s = Rc::clone(&starts);
-    let drag = DragGestureRecognizer::new(lane.arena.clone(), DragAxis::Free)
-        .with_on_start(move |_| s.set(s.get() + 1));
+    let drag = DragGestureRecognizer::builder(lane.arena.clone(), DragAxis::Free)
+        .on_start(move |_| s.set(s.get() + 1))
+        .build();
     lane.join(&drag);
     lane.send(&right(at(0.0, 0.0)));
     lane.send(&motion(PointerId::PRIMARY, at(60.0, 0.0), mouse));
@@ -801,8 +822,9 @@ fn secondary_button_starts_no_drag_and_no_long_press() {
     let mut lane = Lane::new();
     let presses = counter();
     let p = Rc::clone(&presses);
-    let long_press = LongPressGestureRecognizer::new(lane.arena.clone())
-        .with_on_long_press(move || p.set(p.get() + 1));
+    let long_press = LongPressGestureRecognizer::builder(lane.arena.clone())
+        .on_long_press(move || p.set(p.get() + 1))
+        .build();
     lane.join(&long_press);
     lane.send(&right(at(0.0, 0.0)));
     lane.frames(600);
@@ -813,8 +835,9 @@ fn drag_reports_the_device_kind_from_its_down() {
     let mut lane = Lane::new();
     let kinds = Rc::new(RefCell::new(Vec::new()));
     let k = Rc::clone(&kinds);
-    let drag = DragGestureRecognizer::new(lane.arena.clone(), DragAxis::Horizontal)
-        .with_on_down(move |details| k.borrow_mut().push(details.kind));
+    let drag = DragGestureRecognizer::builder(lane.arena.clone(), DragAxis::Horizontal)
+        .on_down(move |details| k.borrow_mut().push(details.kind))
+        .build();
     lane.join(&drag);
     lane.send(&down(PointerId::PRIMARY, at(0.0, 0.0), PointerType::Mouse));
     assert_eq!(*kinds.borrow(), [PointerType::Mouse]);
@@ -828,8 +851,9 @@ fn fling_velocity_follows_event_timestamps_not_dispatch_time() {
     let mut lane = Lane::new();
     let velocity = Rc::new(Cell::new(None));
     let v = Rc::clone(&velocity);
-    let drag = DragGestureRecognizer::new(lane.arena.clone(), DragAxis::Horizontal)
-        .with_on_end(move |details| v.set(Some(details.velocity.pixels_per_second.dx)));
+    let drag = DragGestureRecognizer::builder(lane.arena.clone(), DragAxis::Horizontal)
+        .on_end(move |details| v.set(Some(details.velocity.pixels_per_second.dx)))
+        .build();
     lane.join(&drag);
     let touch = PointerType::Touch;
     // Every event of the stroke is dispatched in one frame (the arena clock
@@ -907,8 +931,9 @@ fn drag_release_uses_terminal_event_time() {
     let mut lane = Lane::new();
     let velocities = Rc::new(RefCell::new(Vec::new()));
     let log = Rc::clone(&velocities);
-    let drag = DragGestureRecognizer::new(lane.arena.clone(), DragAxis::Horizontal)
-        .with_on_end(move |details| log.borrow_mut().push(details.velocity.pixels_per_second.dx));
+    let drag = DragGestureRecognizer::builder(lane.arena.clone(), DragAxis::Horizontal)
+        .on_end(move |details| log.borrow_mut().push(details.velocity.pixels_per_second.dx))
+        .build();
     lane.join(&drag);
     terminal_velocity_cases(&lane, &velocities, false);
 }
@@ -929,10 +954,11 @@ fn multidrag_release_uses_terminal_event_time() {
     let mut lane = Lane::new();
     let velocities = Rc::new(RefCell::new(Vec::new()));
     let log = Rc::clone(&velocities);
-    let drag = MultiDragGestureRecognizer::new(lane.arena.clone(), MultiDragAxis::Horizontal)
-        .with_on_start(Rc::new(move |_, _| {
-            Some(Box::new(VelocityHandle(Rc::clone(&log))))
-        }));
+    let drag = MultiDragGestureRecognizer::builder(lane.arena.clone(), MultiDragAxis::Horizontal)
+        .on_start(move |_, _| {
+            Some(Rc::new(VelocityHandle(Rc::clone(&log))) as Rc<dyn MultiDragHandle>)
+        })
+        .build();
     lane.join(&drag);
     terminal_velocity_cases(&lane, &velocities, false);
 }
@@ -941,8 +967,9 @@ fn scale_release_uses_terminal_event_time() {
     let mut lane = Lane::new();
     let velocities = Rc::new(RefCell::new(Vec::new()));
     let log = Rc::clone(&velocities);
-    let scale = ScaleGestureRecognizer::new(lane.arena.clone())
-        .with_on_scale_end(move |details| log.borrow_mut().push(details.velocity));
+    let scale = ScaleGestureRecognizer::builder(lane.arena.clone())
+        .on_end(move |details| log.borrow_mut().push(details.velocity))
+        .build();
     lane.join(&scale);
     terminal_velocity_cases(&lane, &velocities, true);
 }
@@ -951,10 +978,9 @@ fn tap_and_drag_release_uses_terminal_event_time() {
     let mut lane = Lane::new();
     let velocities = Rc::new(RefCell::new(Vec::new()));
     let log = Rc::clone(&velocities);
-    let drag =
-        TapAndDragGestureRecognizer::new(lane.arena.clone()).with_on_drag_end(move |details| {
-            log.borrow_mut().push(details.velocity.pixels_per_second.dx)
-        });
+    let drag = TapAndDragGestureRecognizer::builder(lane.arena.clone())
+        .on_drag_end(move |details| log.borrow_mut().push(details.velocity.pixels_per_second.dx))
+        .build();
     lane.join(&drag);
     terminal_velocity_cases(&lane, &velocities, false);
 }
@@ -1181,8 +1207,8 @@ impl ModelMember {
     }
 }
 
-impl CustomGestureRecognizer for ModelMember {
-    fn on_arena_accept(&self, _pointer: PointerId) {
+impl GestureArenaMember for ModelMember {
+    fn accept_gesture(&self, _pointer: PointerId) {
         self.record(GestureDisposition::Accepted);
         assert!(
             !matches!(self.kind, MemberKind::PanicOnAccept),
@@ -1190,7 +1216,7 @@ impl CustomGestureRecognizer for ModelMember {
         );
     }
 
-    fn on_arena_reject(&self, _pointer: PointerId) {
+    fn reject_gesture(&self, _pointer: PointerId) {
         self.record(GestureDisposition::Rejected);
         assert!(
             !matches!(self.kind, MemberKind::PanicOnReject),
@@ -1454,15 +1480,16 @@ fn dispose_retires_two_panicking_captures_one_at_a_time() {
     let lane = Lane::new();
     let first = PanicsOnDrop("on_tap");
     let second = PanicsOnDrop("on_tap_up");
-    let tap = TapGestureRecognizer::new(lane.arena)
-        .with_on_tap(move |_| {
+    let tap = TapGestureRecognizer::builder(lane.arena)
+        .on_tap(move |_| {
             let _ = &first;
         })
-        .with_on_tap_up(move |_| {
+        .on_tap_up(move |_| {
             let _ = &second;
-        });
-    let failure = catch_unwind(AssertUnwindSafe(|| tap.dispose()))
-        .expect_err("the first capture's panic surfaces from dispose");
+        })
+        .build();
+    let failure = catch_unwind(AssertUnwindSafe(|| drop(tap)))
+        .expect_err("the first capture's panic surfaces from final owner drop");
     let message = failure
         .downcast_ref::<String>()
         .map(String::as_str)
@@ -1482,11 +1509,12 @@ fn panicking_window_end_still_admits_the_far_contact() {
     let double_log = Rc::clone(&doubles);
     let armed = Rc::new(Cell::new(true));
     let trip = Rc::clone(&armed);
-    let double_tap = DoubleTapGestureRecognizer::new(lane.arena.clone())
-        .with_on_double_tap(move |_| double_log.set(double_log.get() + 1))
-        .with_on_double_tap_cancel(move |_| {
+    let double_tap = DoubleTapGestureRecognizer::builder(lane.arena.clone())
+        .on_double_tap(move |_| double_log.set(double_log.get() + 1))
+        .on_double_tap_cancel(move |_| {
             assert!(!trip.replace(false), "cancel callback failed");
-        });
+        })
+        .build();
     lane.join(&double_tap);
     let kind = PointerType::Touch;
     click(&lane, id(2), at(10.0, 10.0), kind);
@@ -1513,9 +1541,9 @@ struct ClosesOnDrop {
     closed: Rc<Cell<bool>>,
 }
 
-impl CustomGestureRecognizer for ClosesOnDrop {
-    fn on_arena_accept(&self, _pointer: PointerId) {}
-    fn on_arena_reject(&self, _pointer: PointerId) {}
+impl GestureArenaMember for ClosesOnDrop {
+    fn accept_gesture(&self, _pointer: PointerId) {}
+    fn reject_gesture(&self, _pointer: PointerId) {}
 }
 
 impl Drop for ClosesOnDrop {
@@ -1592,10 +1620,10 @@ struct RetirementMember {
     owner: std::rc::Weak<RetirementOwner>,
 }
 
-impl CustomGestureRecognizer for RetirementMember {
-    fn on_arena_accept(&self, _: PointerId) {}
+impl GestureArenaMember for RetirementMember {
+    fn accept_gesture(&self, _: PointerId) {}
 
-    fn on_arena_reject(&self, _: PointerId) {
+    fn reject_gesture(&self, _: PointerId) {
         self.rejected.set(self.rejected.get() + 1);
         if let Some(owner) = self.owner.upgrade() {
             let retired = owner.borrow_mut().take();
@@ -1691,10 +1719,11 @@ fn arena_polls_pointer_deadlines_in_identity_order() {
     for raw in (1..=8).rev() {
         let pointer = id(raw);
         let log = Rc::clone(&fired);
-        let recognizer = LongPressGestureRecognizer::new(arena.clone())
-            .with_on_long_press(move || log.borrow_mut().push(raw));
+        let recognizer = LongPressGestureRecognizer::builder(arena.clone())
+            .on_long_press(move || log.borrow_mut().push(raw))
+            .build();
         let event = down(pointer, at(0.0, 0.0), PointerType::Touch);
-        recognizer.add_pointer_down(PointerDispatch::at_root(&event));
+        recognizer.add_pointer(PointerDispatch::at_root(&event));
         let rival = Rc::new(Verdicts::default());
         arena.add(pointer, &rival);
         arena.close(pointer);

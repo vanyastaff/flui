@@ -1258,9 +1258,8 @@ mod tests {
     }
 
     impl crate::routing::FocusTraversalPolicy for ClosingPolicy {
-        fn sort_descendants(&self, nodes: &[Rc<FocusNode>]) -> Vec<Rc<FocusNode>> {
+        fn order(&self, _: &mut [Rc<FocusNode>], _: flui_painting::typography::TextDirection) {
             let _ = &self.0;
-            nodes.to_vec()
         }
     }
 
@@ -1667,7 +1666,7 @@ mod tests {
     }
 
     impl<T> crate::routing::FocusTraversalPolicy for RejectedPolicy<T> {
-        fn sort_descendants(&self, _: &[Rc<FocusNode>]) -> Vec<Rc<FocusNode>> {
+        fn order(&self, _: &mut [Rc<FocusNode>], _: flui_painting::typography::TextDirection) {
             panic!("closed scope accepted policy")
         }
     }

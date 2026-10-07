@@ -192,7 +192,7 @@ fn closing_dispatch_leaves_shared_payloads_with_their_caller() {
 struct PanickingPolicy(#[expect(dead_code, reason = "held for its lifetime")] Rc<()>);
 
 impl FocusTraversalPolicy for PanickingPolicy {
-    fn sort_descendants(&self, _: &[Rc<FocusNode>]) -> Vec<Rc<FocusNode>> {
+    fn order(&self, _: &mut [Rc<FocusNode>], _: flui_painting::typography::TextDirection) {
         panic!("traversal policy");
     }
 }

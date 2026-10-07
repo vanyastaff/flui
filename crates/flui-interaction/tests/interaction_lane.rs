@@ -1157,10 +1157,12 @@ fn fresh_drag_completes_after_retirement() {
     let ended = Rc::new(Cell::new(0));
     let observed_start = started.clone();
     let observed_end = ended.clone();
-    let recognizer = DragGestureRecognizer::new(arena.clone(), DragAxis::Horizontal)
-        .with_on_start(move |_| observed_start.set(observed_start.get() + 1))
-        .with_on_end(move |_| observed_end.set(observed_end.get() + 1));
-    recognizer.add_pointer(PointerId::PRIMARY, Offset::ZERO, Offset::ZERO);
+    let recognizer = DragGestureRecognizer::builder(arena.clone(), DragAxis::Horizontal)
+        .on_start(move |_| observed_start.set(observed_start.get() + 1))
+        .on_end(move |_| observed_end.set(observed_end.get() + 1))
+        .build();
+    let down = flui_interaction::events::make_down_event(Offset::ZERO, PointerType::Touch);
+    recognizer.add_pointer(PointerDispatch::at_root(&down));
     arena.close(PointerId::PRIMARY);
     arena.drain_deferred_resolutions();
     let movement = make_move_event(Offset::new(30.0, 0.0), PointerType::Touch);
@@ -1168,30 +1170,44 @@ fn fresh_drag_completes_after_retirement() {
     let release = make_up_event(Offset::new(30.0, 0.0), PointerType::Touch);
     recognizer.handle_event(PointerDispatch::at_root(&release));
     assert_eq!((started.get(), ended.get()), (1, 1));
-    recognizer.dispose();
+    assert_eq!(recognizer.cancel(), flui_interaction::CancelOutcome::Idle);
 }
 
 fn drag_dispose_capture_reentry() {
     use flui_interaction::arena::GestureArena;
     use flui_interaction::{DragAxis, DragGestureRecognizer, GestureRecognizer};
-    use std::{cell::Cell, rc::Rc};
+    use std::{cell::{Cell, RefCell}, rc::{Rc, Weak}};
 
-    let recognizer = DragGestureRecognizer::new(GestureArena::new(), DragAxis::Horizontal);
-    let weak = Rc::downgrade(&recognizer);
+    let owner = Rc::new(RefCell::new(Weak::<DragGestureRecognizer>::new()));
+    let weak = owner.clone();
+    struct Rival(Rc<Cell<usize>>);
+    impl flui_interaction::arena::GestureArenaMember for Rival {
+        fn accept_gesture(&self, _: flui_interaction::PointerId) { self.0.set(self.0.get() + 1); }
+        fn reject_gesture(&self, _: flui_interaction::PointerId) { panic!("retiring owner must not reject its rival"); }
+    }
+    let arena = GestureArena::new();
+    let reentrant_arena = arena.clone();
+    let accepts = Rc::new(Cell::new(0));
+    let rival = Rc::new(Rival(accepts.clone()));
     let retired = Rc::new(Cell::new(false));
     let observed = retired.clone();
     let probe = DragRetirementProbe(Box::new(move || {
-        let recognizer = weak.upgrade().expect("live public recognizer");
-        recognizer.dispose();
-        assert!(recognizer.primary_pointer().is_none());
+        assert!(weak.borrow().upgrade().is_none(), "final owner is already unavailable to reentry");
+        assert_eq!(reentrant_arena.drain_deferred_resolutions(), 1, "capture retirement may reenter the exact owner arena");
+        assert!(reentrant_arena.is_empty());
         observed.set(true);
     }));
-    let recognizer = recognizer.with_on_down(move |_| {
+    let recognizer = DragGestureRecognizer::builder(arena.clone(), DragAxis::Horizontal).on_down(move |_| {
         let _capture = &probe;
-    });
-    recognizer.dispose();
+    }).build();
+    *owner.borrow_mut() = Rc::downgrade(&recognizer);
+    let down = flui_interaction::events::make_down_event(flui_interaction::Offset::ZERO, flui_interaction::events::PointerType::Touch);
+    recognizer.add_pointer(flui_interaction::routing::PointerDispatch::at_root(&down));
+    arena.add(flui_interaction::PointerId::PRIMARY, &rival);
+    arena.close(flui_interaction::PointerId::PRIMARY);
+    drop(recognizer);
     assert!(retired.get());
-    recognizer.dispose();
+    assert_eq!(accepts.get(), 1, "reentrant retirement delivers the accepted rival once");
     fresh_drag_completes_after_retirement();
 }
 
@@ -1201,78 +1217,79 @@ fn drag_callback_replacements_commit_before_retirement() {
     use std::{cell::Cell, rc::Rc};
 
     for slot in 0..5 {
-        let recognizer = DragGestureRecognizer::new(GestureArena::new(), DragAxis::Horizontal);
+        let recognizer = DragGestureRecognizer::builder(GestureArena::new(), DragAxis::Horizontal).build();
         let weak = Rc::downgrade(&recognizer);
         let retired = Rc::new(Cell::new(false));
         let observed = retired.clone();
         let probe = DragRetirementProbe(Box::new(move || {
             let recognizer = weak.upgrade().expect("replacement pins public owner");
-            recognizer.dispose();
+            assert_eq!(recognizer.cancel(), flui_interaction::CancelOutcome::Idle);
             observed.set(true);
         }));
-        let recognizer = match slot {
-            0 => recognizer.with_on_down(move |_| {
+        let builder = DragGestureRecognizer::builder(GestureArena::new(), DragAxis::Horizontal);
+        let builder = match slot {
+            0 => builder.on_down(move |_| {
                 let _capture = &probe;
             }),
-            1 => recognizer.with_on_start(move |_| {
+            1 => builder.on_start(move |_| {
                 let _capture = &probe;
             }),
-            2 => recognizer.with_on_update(move |_| {
+            2 => builder.on_update(move |_| {
                 let _capture = &probe;
             }),
-            3 => recognizer.with_on_end(move |_| {
+            3 => builder.on_end(move |_| {
                 let _capture = &probe;
             }),
-            _ => recognizer.with_on_cancel(move || {
+            _ => builder.on_cancel(move || {
                 let _capture = &probe;
             }),
         };
-        let recognizer = match slot {
-            0 => recognizer.with_on_down(|_| {}),
-            1 => recognizer.with_on_start(|_| {}),
-            2 => recognizer.with_on_update(|_| {}),
-            3 => recognizer.with_on_end(|_| {}),
-            _ => recognizer.with_on_cancel(|| {}),
+        let builder = match slot {
+            0 => builder.on_down(|_| {}),
+            1 => builder.on_start(|_| {}),
+            2 => builder.on_update(|_| {}),
+            3 => builder.on_end(|_| {}),
+            _ => builder.on_cancel(|| {}),
         };
         assert!(retired.get(), "slot {slot} retires the replaced capture");
-        recognizer.dispose();
+        drop(builder.build());
+        drop(recognizer);
     }
     fresh_drag_completes_after_retirement();
 }
 
 fn drag_dispose_closes_callback_admission() {
     use flui_interaction::arena::GestureArena;
-    use flui_interaction::{DragAxis, DragGestureRecognizer, GestureRecognizer};
+    use flui_interaction::{DragAxis, DragGestureRecognizer};
     use std::{cell::Cell, rc::Rc};
 
-    let recognizer = DragGestureRecognizer::new(GestureArena::new(), DragAxis::Horizontal);
-    recognizer.dispose();
     let retired = Rc::new(Cell::new(0));
     for slot in 0..5 {
         let observed = retired.clone();
         let probe = DragRetirementProbe(Box::new(move || observed.set(observed.get() + 1)));
-        let recognizer = recognizer.clone();
-        let _recognizer = match slot {
-            0 => recognizer.with_on_down(move |_| {
+        let builder = DragGestureRecognizer::builder(GestureArena::new(), DragAxis::Horizontal);
+        let builder = match slot {
+            0 => builder.on_down(move |_| {
                 let _capture = &probe;
             }),
-            1 => recognizer.with_on_start(move |_| {
+            1 => builder.on_start(move |_| {
                 let _capture = &probe;
             }),
-            2 => recognizer.with_on_update(move |_| {
+            2 => builder.on_update(move |_| {
                 let _capture = &probe;
             }),
-            3 => recognizer.with_on_end(move |_| {
+            3 => builder.on_end(move |_| {
                 let _capture = &probe;
             }),
-            _ => recognizer.with_on_cancel(move || {
+            _ => builder.on_cancel(move || {
                 let _capture = &probe;
             }),
         };
+        drop(builder);
         assert_eq!(
             retired.get(),
             slot + 1,
-            "closed admission retires immediately"
+            "an abandoned builder retires its capture without admitting a contact"
         );
     }
     fresh_drag_completes_after_retirement();
@@ -1293,7 +1310,7 @@ fn drag_final_callback_owner_during_active_unwind() {
 
 fn drag_independent_capture_failures(final_owner: bool, active_unwind: bool) {
     use flui_interaction::arena::GestureArena;
-    use flui_interaction::{DragAxis, DragGestureRecognizer, GestureRecognizer};
+    use flui_interaction::{DragAxis, DragGestureRecognizer};
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::{cell::Cell, rc::Rc};
 
@@ -1309,36 +1326,30 @@ fn drag_independent_capture_failures(final_owner: bool, active_unwind: bool) {
         second.set(second.get() + 1);
         panic!("second drag capture failure");
     }));
-    let recognizer = DragGestureRecognizer::new(GestureArena::new(), DragAxis::Horizontal)
-        .with_on_down(move |_| {
+    let builder = DragGestureRecognizer::builder(GestureArena::new(), DragAxis::Horizontal)
+        .on_down(move |_| {
             let _capture = &down;
         })
-        .with_on_start(move |_| {
+        .on_start(move |_| {
             let _capture = &start;
         });
-    // A separate recognizer value shares the physical Rc callback owner.
-    let alias = Rc::new((*recognizer).clone());
-    drop(recognizer);
-    assert_eq!((first_drops.get(), second_drops.get()), (0, 0));
-    struct DisposeOnDrop(Rc<DragGestureRecognizer>);
-    impl Drop for DisposeOnDrop {
-        fn drop(&mut self) {
-            self.0.dispose();
-        }
-    }
     let outcome = catch_unwind(AssertUnwindSafe(|| {
-        if active_unwind {
-            if final_owner {
+        if final_owner {
+            let recognizer = builder.build();
+            let alias = Rc::clone(&recognizer);
+            drop(recognizer);
+            assert_eq!((first_drops.get(), second_drops.get()), (0, 0));
+            if active_unwind {
                 let _owner = alias;
                 panic!("incoming drag failure");
             }
-            let _cleanup = DisposeOnDrop(alias);
-            panic!("incoming drag failure");
-        }
-        if final_owner {
             drop(alias);
         } else {
-            alias.dispose();
+            if active_unwind {
+                let _builder = builder;
+                panic!("incoming drag failure");
+            }
+            drop(builder);
         }
     }));
     let payload = outcome.expect_err("first drag failure propagates");
@@ -1361,16 +1372,16 @@ fn drag_independent_capture_failures(final_owner: bool, active_unwind: bool) {
 
 fn drag_caller_keeps_previously_caught_failure() {
     use flui_interaction::arena::GestureArena;
-    use flui_interaction::{DragAxis, DragGestureRecognizer, GestureRecognizer};
+    use flui_interaction::{DragAxis, DragGestureRecognizer};
     use std::panic::{AssertUnwindSafe, catch_unwind};
     let caller_failure = catch_unwind(|| panic!("caller already caught failure"))
         .expect_err("caller owns prior payload");
     let probe = DragRetirementProbe(Box::new(|| panic!("new retirement failure")));
-    let recognizer = DragGestureRecognizer::new(GestureArena::new(), DragAxis::Horizontal)
-        .with_on_down(move |_| {
+    let recognizer = DragGestureRecognizer::builder(GestureArena::new(), DragAxis::Horizontal)
+        .on_down(move |_| {
             let _capture = &probe;
-        });
-    let outcome = catch_unwind(AssertUnwindSafe(|| recognizer.dispose()));
+        }).build();
+    let outcome = catch_unwind(AssertUnwindSafe(|| drop(recognizer)));
     assert_eq!(
         outcome
             .expect_err("healthy call reports its own failure")
@@ -1389,29 +1400,30 @@ fn drag_callbacks_live_until_the_final_shared_owner() {
     use flui_interaction::{DragAxis, DragGestureRecognizer};
     use std::{cell::Cell, rc::Rc};
     let dropped = Rc::new(Cell::new(0));
-    let mut recognizer = DragGestureRecognizer::new(GestureArena::new(), DragAxis::Horizontal);
+    let mut builder = DragGestureRecognizer::builder(GestureArena::new(), DragAxis::Horizontal);
     for slot in 0..5 {
         let observed = dropped.clone();
         let probe = DragRetirementProbe(Box::new(move || observed.set(observed.get() + 1)));
-        recognizer = match slot {
-            0 => recognizer.with_on_down(move |_| {
+        builder = match slot {
+            0 => builder.on_down(move |_| {
                 let _capture = &probe;
             }),
-            1 => recognizer.with_on_start(move |_| {
+            1 => builder.on_start(move |_| {
                 let _capture = &probe;
             }),
-            2 => recognizer.with_on_update(move |_| {
+            2 => builder.on_update(move |_| {
                 let _capture = &probe;
             }),
-            3 => recognizer.with_on_end(move |_| {
+            3 => builder.on_end(move |_| {
                 let _capture = &probe;
             }),
-            _ => recognizer.with_on_cancel(move || {
+            _ => builder.on_cancel(move || {
                 let _capture = &probe;
             }),
         };
     }
-    let alias = Rc::new((*recognizer).clone());
+    let recognizer = builder.build();
+    let alias = Rc::clone(&recognizer);
     drop(recognizer);
     assert_eq!(dropped.get(), 0, "a recognizer alias still owns callbacks");
     drop(alias);
@@ -1434,23 +1446,26 @@ fn drag_self_dispose_from_callback(body_failure: bool) {
     use flui_interaction::arena::GestureArena;
     use flui_interaction::{DragAxis, DragGestureRecognizer, GestureRecognizer, Offset, PointerId};
     use std::panic::{AssertUnwindSafe, catch_unwind};
-    use std::{cell::Cell, rc::Rc};
+    use std::{cell::{Cell, RefCell}, rc::{Rc, Weak}};
 
-    let recognizer = DragGestureRecognizer::new(GestureArena::new(), DragAxis::Horizontal);
-    let weak = Rc::downgrade(&recognizer);
+    let owner = Rc::new(RefCell::new(Weak::<DragGestureRecognizer>::new()));
+    let weak = owner.clone();
     let drops = Rc::new(Cell::new(0));
     let observed = drops.clone();
     let probe = DragRetirementProbe(Box::new(move || {
         observed.set(observed.get() + 1);
         assert!(!body_failure, "drag body capture failure");
     }));
-    let recognizer = recognizer.with_on_down(move |_| {
+    let recognizer = DragGestureRecognizer::builder(GestureArena::new(), DragAxis::Horizontal).on_down(move |_| {
         let _capture = &probe;
-        weak.upgrade().expect("live recognizer callback").dispose();
+        let recognizer = weak.borrow().upgrade().expect("live recognizer callback");
+        assert_eq!(recognizer.cancel(), flui_interaction::CancelOutcome::Cancelled);
         assert!(!body_failure, "drag callback body failure");
-    });
+    }).build();
+    *owner.borrow_mut() = Rc::downgrade(&recognizer);
     let outcome = catch_unwind(AssertUnwindSafe(|| {
-        recognizer.add_pointer(PointerId::PRIMARY, Offset::ZERO, Offset::ZERO);
+        let down = flui_interaction::events::make_down_event(Offset::ZERO, flui_interaction::events::PointerType::Touch);
+        recognizer.add_pointer(flui_interaction::routing::PointerDispatch::at_root(&down));
     }));
     if body_failure {
         assert_eq!(
@@ -1462,10 +1477,11 @@ fn drag_self_dispose_from_callback(body_failure: bool) {
         assert_eq!(drops.get(), 0, "failed body retains its opaque capture");
     } else {
         outcome.expect("callback self disposal is reentrant");
-        assert_eq!(drops.get(), 1, "healthy callback snapshot retires normally");
+        assert_eq!(drops.get(), 0, "cancel preserves immutable callbacks for the next contact");
     }
-    assert!(recognizer.primary_pointer().is_none());
-    recognizer.dispose();
+    assert_eq!(recognizer.cancel(), flui_interaction::CancelOutcome::Idle);
+    drop(recognizer);
+    assert_eq!(drops.get(), usize::from(!body_failure), "only healthy final ownership retires the opaque capture");
     fresh_drag_completes_after_retirement();
 }
 
@@ -1479,7 +1495,7 @@ fn drag_disposal_commits_tracking_before_rejection_diagnostics() {
     };
 
     use flui_interaction::arena::GestureArena;
-    use flui_interaction::sealed::CustomGestureRecognizer;
+    use flui_interaction::arena::GestureArenaMember;
     use flui_interaction::{DragAxis, DragGestureRecognizer, GestureRecognizer, Offset, PointerId};
 
     struct RejectEventPanic(Arc<AtomicBool>);
@@ -1501,18 +1517,19 @@ fn drag_disposal_commits_tracking_before_rejection_diagnostics() {
         fn exit(&self, _: &tracing::span::Id) {}
     }
     struct Sibling(Rc<Cell<usize>>);
-    impl CustomGestureRecognizer for Sibling {
-        fn on_arena_accept(&self, _: PointerId) {
+    impl GestureArenaMember for Sibling {
+        fn accept_gesture(&self, _: PointerId) {
             self.0.set(self.0.get() + 1);
         }
-        fn on_arena_reject(&self, _: PointerId) {
+        fn reject_gesture(&self, _: PointerId) {
             panic!("disposing the drag must preserve its sibling");
         }
     }
 
     let arena = GestureArena::new();
-    let recognizer = DragGestureRecognizer::new(arena.clone(), DragAxis::Horizontal);
-    recognizer.add_pointer(PointerId::PRIMARY, Offset::ZERO, Offset::ZERO);
+    let recognizer = DragGestureRecognizer::builder(arena.clone(), DragAxis::Horizontal).build();
+    let down = flui_interaction::events::make_down_event(Offset::ZERO, flui_interaction::events::PointerType::Touch);
+    recognizer.add_pointer(flui_interaction::routing::PointerDispatch::at_root(&down));
     let sibling_accepts = Rc::new(Cell::new(0));
     let sibling = Rc::new(Sibling(sibling_accepts.clone()));
     arena.add(PointerId::PRIMARY, &sibling);
@@ -1522,7 +1539,7 @@ fn drag_disposal_commits_tracking_before_rejection_diagnostics() {
     let diagnostic_ran = Arc::new(AtomicBool::new(false));
     let result =
         tracing::subscriber::with_default(RejectEventPanic(diagnostic_ran.clone()), || {
-            catch_unwind(AssertUnwindSafe(|| recognizer.dispose()))
+            catch_unwind(AssertUnwindSafe(|| recognizer.cancel()))
         });
     let payload = result.expect_err("the actual debug event subscriber must fail");
     assert_eq!(
@@ -1534,7 +1551,7 @@ fn drag_disposal_commits_tracking_before_rejection_diagnostics() {
         "the event actually ran"
     );
     assert!(
-        recognizer.primary_pointer().is_none(),
+        recognizer.cancel() == flui_interaction::CancelOutcome::Idle,
         "tracking commits before diagnostic code"
     );
     assert_eq!(
@@ -1549,7 +1566,7 @@ fn drag_disposal_commits_tracking_before_rejection_diagnostics() {
         "the sibling still makes progress after diagnostic failure"
     );
     assert!(arena.is_empty());
-    recognizer.dispose();
+    assert_eq!(recognizer.cancel(), flui_interaction::CancelOutcome::Idle);
     fresh_drag_completes_after_retirement();
 }
 
@@ -1590,10 +1607,11 @@ fn drag_completion_commits_tracking_before_stop_diagnostics() {
     let ends = Rc::new(Cell::new(0));
     let observed_start = starts.clone();
     let observed_end = ends.clone();
-    let recognizer = DragGestureRecognizer::new(arena.clone(), DragAxis::Horizontal)
-        .with_on_start(move |_| observed_start.set(observed_start.get() + 1))
-        .with_on_end(move |_| observed_end.set(observed_end.get() + 1));
-    recognizer.add_pointer(PointerId::PRIMARY, Offset::ZERO, Offset::ZERO);
+    let recognizer = DragGestureRecognizer::builder(arena.clone(), DragAxis::Horizontal)
+        .on_start(move |_| observed_start.set(observed_start.get() + 1))
+        .on_end(move |_| observed_end.set(observed_end.get() + 1)).build();
+    let down = flui_interaction::events::make_down_event(Offset::ZERO, PointerType::Touch);
+    recognizer.add_pointer(PointerDispatch::at_root(&down));
     arena.close(PointerId::PRIMARY);
     arena.drain_deferred_resolutions();
     let movement = make_move_event(Offset::new(30.0, 0.0), PointerType::Touch);
@@ -1617,7 +1635,7 @@ fn drag_completion_commits_tracking_before_stop_diagnostics() {
         "the event actually ran"
     );
     assert!(
-        recognizer.primary_pointer().is_none(),
+        recognizer.cancel() == flui_interaction::CancelOutcome::Idle,
         "terminal contact committed before diagnostics"
     );
     assert!(arena.is_empty());
@@ -1629,31 +1647,29 @@ fn drag_completion_commits_tracking_before_stop_diagnostics() {
 
     // A second actual drag on the same recognizer proves the failed terminal
     // contact did not wedge its tracking or delete subsequent work.
-    recognizer.add_pointer(PointerId::PRIMARY, Offset::ZERO, Offset::ZERO);
+    recognizer.add_pointer(PointerDispatch::at_root(&down));
     arena.close(PointerId::PRIMARY);
     arena.drain_deferred_resolutions();
     recognizer.handle_event(PointerDispatch::at_root(&movement));
     recognizer.handle_event(PointerDispatch::at_root(&release));
     assert_eq!((starts.get(), ends.get()), (2, 1));
-    assert!(recognizer.primary_pointer().is_none());
-    recognizer.dispose();
+    assert_eq!(recognizer.cancel(), flui_interaction::CancelOutcome::Idle);
     fresh_drag_completes_after_retirement();
 }
 
 fn stop_tracking_pointer_sweep_starts_the_unresolved_drag() {
     use flui_interaction::arena::GestureArena;
-    use flui_interaction::recognizers::OneSequenceGestureRecognizer;
-    use flui_interaction::sealed::CustomGestureRecognizer;
+    use flui_interaction::arena::GestureArenaMember;
     use flui_interaction::{DragAxis, DragGestureRecognizer, GestureRecognizer, Offset, PointerId};
     use std::cell::Cell;
     use std::rc::Rc;
 
     struct Rival(Rc<Cell<usize>>);
-    impl CustomGestureRecognizer for Rival {
-        fn on_arena_accept(&self, _: PointerId) {
+    impl GestureArenaMember for Rival {
+        fn accept_gesture(&self, _: PointerId) {
             panic!("the sweep accepts the front member");
         }
-        fn on_arena_reject(&self, _: PointerId) {
+        fn reject_gesture(&self, _: PointerId) {
             self.0.set(self.0.get() + 1);
         }
     }
@@ -1661,24 +1677,25 @@ fn stop_tracking_pointer_sweep_starts_the_unresolved_drag() {
     let arena = GestureArena::new();
     let starts = Rc::new(Cell::new(0));
     let observed = starts.clone();
-    let recognizer = DragGestureRecognizer::new(arena.clone(), DragAxis::Horizontal)
-        .with_on_start(move |_| observed.set(observed.get() + 1));
-    recognizer.add_pointer(PointerId::PRIMARY, Offset::ZERO, Offset::ZERO);
+    let recognizer = DragGestureRecognizer::builder(arena.clone(), DragAxis::Horizontal)
+        .on_start(move |_| observed.set(observed.get() + 1)).build();
+    let down = flui_interaction::events::make_down_event(Offset::ZERO, flui_interaction::events::PointerType::Touch);
+    recognizer.add_pointer(flui_interaction::routing::PointerDispatch::at_root(&down));
     let rejections = Rc::new(Cell::new(0));
     let rival = Rc::new(Rival(rejections.clone()));
     arena.add(PointerId::PRIMARY, &rival);
     arena.close(PointerId::PRIMARY);
     assert_eq!(starts.get(), 0, "the competition is still open");
 
-    recognizer.stop_tracking_pointer(PointerId::PRIMARY);
+    arena.sweep(PointerId::PRIMARY);
     assert_eq!(
         (starts.get(), rejections.get()),
         (1, 1),
         "the sweep accepts the retiring drag and starts it"
     );
-    assert!(recognizer.primary_pointer().is_none());
+    assert_eq!(recognizer.cancel(), flui_interaction::CancelOutcome::Cancelled);
     assert!(arena.is_empty());
-    recognizer.dispose();
+    assert_eq!(recognizer.cancel(), flui_interaction::CancelOutcome::Idle);
     fresh_drag_completes_after_retirement();
 }
 
@@ -1692,63 +1709,56 @@ fn stop_tracking_preserves_reentrant_contact_after_sweep_failure() {
 
 fn assert_stop_tracking_preserves_reentrant_contact(fail_after_admission: bool) {
     use flui_interaction::arena::GestureArena;
-    use flui_interaction::recognizers::RecognizerBase;
-    use flui_interaction::sealed::CustomGestureRecognizer;
-    use flui_interaction::{Offset, PointerId};
-    use std::cell::{Cell, RefCell};
+    use flui_interaction::arena::GestureArenaMember;
+    use flui_interaction::{ArenaMembership, PrimaryContact, GestureSettings, Offset, PointerId};
+    use flui_interaction::events::{make_down_event, PointerType};
+    use flui_interaction::routing::PointerDispatch;
+    use std::cell::Cell;
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::rc::Rc;
 
-    #[derive(Clone)]
-    struct NextContact(Rc<Cell<usize>>);
-    impl CustomGestureRecognizer for NextContact {
-        fn on_arena_accept(&self, _: PointerId) {
-            self.0.set(self.0.get() + 1);
-        }
-        fn on_arena_reject(&self, _: PointerId) {
-            panic!("accepted next contact must not be rejected");
-        }
-    }
-    #[derive(Clone)]
     struct ReentrantSweep {
-        base: RecognizerBase,
+        contact: PrimaryContact,
+        admitted_next: Cell<bool>,
         next_accepts: Rc<Cell<usize>>,
-        next_owner: Rc<RefCell<Option<Rc<NextContact>>>>,
         fail_after_admission: bool,
     }
-    impl CustomGestureRecognizer for ReentrantSweep {
-        fn on_arena_accept(&self, pointer: PointerId) {
+    impl GestureArenaMember for ReentrantSweep {
+        fn accept_gesture(&self, pointer: PointerId) {
+            if self.admitted_next.replace(true) {
+                self.next_accepts.set(self.next_accepts.get() + 1);
+                return;
+            }
             assert_eq!(
-                self.base.primary_pointer(),
+                self.contact.current().map(|contact| contact.pointer),
                 Some(pointer),
                 "the retiring contact stays visible to its sweep resolution"
             );
-            let next = Rc::new(NextContact(self.next_accepts.clone()));
-            self.next_owner.replace(Some(Rc::clone(&next)));
             // Reuse the platform pointer ID while the old exact-generation
             // sweep is delivering. The new arena slot belongs to this contact.
-            self.base
-                .start_tracking(pointer, Offset::new(7.0, 3.0), Offset::new(7.0, 3.0), &next);
+            self.contact.withdraw().expect("retiring contact");
+            let down = make_down_event(Offset::new(7.0, 3.0), PointerType::Touch);
+            self.contact.begin(PointerDispatch::at_root(&down), &GestureSettings::default()).expect("next generation admitted");
             assert!(
                 !self.fail_after_admission,
                 "sweep failure after next contact admission"
             );
         }
-        fn on_arena_reject(&self, _: PointerId) {
+        fn reject_gesture(&self, _: PointerId) {
             panic!("swept front member must be accepted");
         }
     }
     let arena = GestureArena::new();
-    let base = RecognizerBase::new(arena.clone());
     let next_accepts = Rc::new(Cell::new(0));
-    let member = Rc::new(ReentrantSweep {
-        base: base.clone(),
+    let member = Rc::new_cyclic(|this: &std::rc::Weak<ReentrantSweep>| ReentrantSweep {
+        contact: PrimaryContact::new(ArenaMembership::new(arena.clone(), this.clone())),
+        admitted_next: Cell::new(false),
         next_accepts: next_accepts.clone(),
-        next_owner: Rc::new(RefCell::new(None)),
         fail_after_admission,
     });
-    base.start_tracking(PointerId::PRIMARY, Offset::ZERO, Offset::ZERO, &member);
-    let result = catch_unwind(AssertUnwindSafe(|| base.stop_tracking()));
+    let down = make_down_event(Offset::ZERO, PointerType::Touch);
+    let retiring = member.contact.begin(PointerDispatch::at_root(&down), &GestureSettings::default()).expect("initial generation admitted");
+    let result = catch_unwind(AssertUnwindSafe(|| member.contact.finish()));
     if fail_after_admission {
         assert_eq!(
             result
@@ -1759,14 +1769,17 @@ fn assert_stop_tracking_preserves_reentrant_contact(fail_after_admission: bool) 
     } else {
         result.expect("reentrant sweep finishes");
     }
-    assert_eq!(base.primary_pointer(), Some(PointerId::PRIMARY));
-    assert_eq!(base.initial_position(), Some(Offset::new(7.0, 3.0)));
-    assert!(base.tracked_entry().is_some());
+    let next = member.contact.current().expect("reentrant contact survives old cleanup");
+    assert_ne!(next.id, retiring, "reused pointer gets a distinct contact generation");
+    assert_eq!(next.pointer, PointerId::PRIMARY);
+    assert_eq!(next.local, Offset::new(7.0, 3.0));
+    assert_eq!(next.global, Offset::new(7.0, 3.0));
+    assert!(member.contact.tracks(PointerId::PRIMARY));
     assert_eq!(arena.member_count(PointerId::PRIMARY), 1);
     assert!(arena.is_open(PointerId::PRIMARY));
-    base.stop_tracking();
-    assert!(base.primary_pointer().is_none());
-    assert!(base.tracked_entry().is_none());
+    member.contact.finish();
+    assert!(member.contact.current().is_none());
+    assert!(!member.contact.tracks(PointerId::PRIMARY));
     assert_eq!(next_accepts.get(), 1, "accepted tail remains deliverable");
     assert!(arena.is_empty());
     fresh_drag_completes_after_retirement();

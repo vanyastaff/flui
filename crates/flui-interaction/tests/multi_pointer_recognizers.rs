@@ -17,7 +17,6 @@ use flui_interaction::events::{
     PointerEvent, PointerType, make_cancel_event_for_id, make_down_event_for_id,
     make_move_event_for_id, make_up_event_for_id,
 };
-use flui_interaction::recognizers::OneSequenceGestureRecognizer;
 use flui_interaction::recognizers::scale::{ScaleEndDetails, ScaleUpdateDetails};
 use flui_interaction::routing::PointerDispatch;
 use flui_interaction::{
@@ -33,8 +32,8 @@ use flui_interaction::{
 type Route = (Option<u64>, Rc<Cell<bool>>, Rc<dyn Fn(&PointerEvent)>);
 
 /// A binding whose global pointer handler forwards to attached recognizers
-/// the way a detector does: `add_pointer` then the Down itself, and every
-/// later event through `handle_event`.
+/// the way a detector does: Down admission, then every later event through
+/// `handle_event`. Routes borrow ownership through `Weak` for each call.
 struct Rig {
     binding: Rc<GestureBinding>,
     clock: ManualClock,
@@ -43,13 +42,6 @@ struct Rig {
 
 fn id(raw: u64) -> PointerId {
     PointerId::new(raw).expect("nonzero pointer id")
-}
-
-fn down_position(event: &PointerEvent) -> Offset<f64> {
-    match event {
-        PointerEvent::Down(data) => Offset::new(data.state.position.x, data.state.position.y),
-        _ => Offset::ZERO,
-    }
 }
 
 fn pointer_of(event: &PointerEvent) -> Option<u64> {
@@ -105,22 +97,22 @@ impl Rig {
         global: impl Fn(&PointerEvent) -> PointerEvent + 'static,
     ) -> Rc<Cell<bool>> {
         let live = Rc::new(Cell::new(true));
-        let recognizer = Rc::clone(recognizer);
+        let recognizer = Rc::downgrade(recognizer);
         let alive = Rc::clone(&live);
         let route: Rc<dyn Fn(&PointerEvent)> = Rc::new(move |event| {
-            if let PointerEvent::Down(_) = event {
-                let position = down_position(event);
-                let pointer = id(pointer_of(event).expect("down carries an id"));
-                recognizer.add_pointer(pointer, position, position);
-                if !alive.get() {
-                    return;
-                }
-            }
+            let Some(recognizer) = recognizer.upgrade() else {
+                return;
+            };
             let global = global(event);
-            recognizer.handle_event(PointerDispatch {
+            let dispatch = PointerDispatch {
                 local: event,
                 global: &global,
-            });
+            };
+            if matches!(event, PointerEvent::Down(_)) {
+                recognizer.add_pointer(dispatch);
+            } else if alive.get() {
+                recognizer.handle_event(dispatch);
+            }
         });
         self.routes
             .borrow_mut()
@@ -236,20 +228,21 @@ impl ScaleLog {
 fn scale_on(rig: &Rig) -> (Rc<ScaleGestureRecognizer>, Rc<ScaleLog>) {
     let log = Rc::new(ScaleLog::default());
     let (s, u, e, c) = (log.clone(), log.clone(), log.clone(), log.clone());
-    let recognizer = ScaleGestureRecognizer::new(rig.binding.arena().clone())
-        .with_on_scale_start(move |_| {
+    let recognizer = ScaleGestureRecognizer::builder(rig.binding.arena().clone())
+        .on_start(move |_| {
             s.starts.set(s.starts.get() + 1);
             trip(&s.panic_start, "scale start callback panic");
         })
-        .with_on_scale_update(move |d| {
+        .on_update(move |d| {
             u.updates.borrow_mut().push(d);
             trip(&u.panic_update, "scale update callback panic");
         })
-        .with_on_scale_end(move |d| {
+        .on_end(move |d| {
             e.ends.borrow_mut().push(d);
             trip(&e.panic_end, "scale end callback panic");
         })
-        .with_on_scale_cancel(move || c.cancels.set(c.cancels.get() + 1));
+        .on_cancel(move || c.cancels.set(c.cancels.get() + 1))
+        .build();
     rig.attach(&recognizer, None);
     (recognizer, log)
 }
@@ -300,8 +293,9 @@ fn scale_claims_the_second_contacts_arena() {
     // A pan that only sees the second contact competes for its arena.
     let pans = Rc::new(Cell::new(0));
     let counted = pans.clone();
-    let pan = DragGestureRecognizer::new(rig.binding.arena().clone(), DragAxis::Free)
-        .with_on_start(move |_| counted.set(counted.get() + 1));
+    let pan = DragGestureRecognizer::builder(rig.binding.arena().clone(), DragAxis::Free)
+        .on_start(move |_| counted.set(counted.get() + 1))
+        .build();
     rig.attach(&pan, Some(2));
     rig.down(1, 100.0, 200.0);
     rig.down(2, 300.0, 200.0);
@@ -444,21 +438,24 @@ fn scale_ended_from_its_start_publishes_no_update() {
     let slot: Rc<RefCell<Option<Rc<ScaleGestureRecognizer>>>> = Rc::default();
     let log = Rc::new(ScaleLog::default());
     let (s, st, u, e) = (slot.clone(), log.clone(), log.clone(), log.clone());
-    let scale = ScaleGestureRecognizer::new(rig.binding.arena().clone())
-        .with_on_scale_start(move |_| {
+    let scale = ScaleGestureRecognizer::builder(rig.binding.arena().clone())
+        .on_start(move |_| {
             st.starts.set(st.starts.get() + 1);
             // Lifting one of two contacts from inside the start ends the scale.
-            if let Some(scale) = s.borrow_mut().take() {
-                scale.stop_tracking_pointer(id(1));
+            let ending = s.borrow_mut().take();
+            if let Some(scale) = ending {
+                let up = make_up_event_for_id(id(1), Offset::new(50.0, 200.0), PointerType::Touch);
+                scale.handle_event(PointerDispatch::at_root(&up));
             }
         })
-        .with_on_scale_update(move |d| u.updates.borrow_mut().push(d))
-        .with_on_scale_end(move |d| e.ends.borrow_mut().push(d));
+        .on_update(move |d| u.updates.borrow_mut().push(d))
+        .on_end(move |d| e.ends.borrow_mut().push(d))
+        .build();
     rig.attach(&scale, None);
     *slot.borrow_mut() = Some(Rc::clone(&scale));
     // A pan on the second contact keeps the arena contested, so the scale
     // starts by claiming it on the move that crosses the slop.
-    let pan = DragGestureRecognizer::new(rig.binding.arena().clone(), DragAxis::Free);
+    let pan = DragGestureRecognizer::builder(rig.binding.arena().clone(), DragAxis::Free).build();
     rig.attach(&pan, Some(2));
     pinch_out(&rig, 1, 2);
     assert_eq!(log.starts.get(), 1);
@@ -472,7 +469,7 @@ fn scale_ended_from_its_start_publishes_no_update() {
 fn scale_contact_lost_to_a_competitor_cancels_the_scale() {
     let rig = Rig::new();
     // An eager member that sees only the third contact claims its arena first.
-    let eager = EagerGestureRecognizer::new(rig.binding.arena().clone());
+    let eager = EagerGestureRecognizer::builder(rig.binding.arena().clone()).build();
     rig.attach(&eager, Some(3));
     let (_scale, log) = scale_on(&rig);
     pinch_out(&rig, 1, 2);
@@ -501,16 +498,16 @@ fn scale_disposed_from_its_update() {
     let live_slot: Rc<RefCell<Option<Rc<Cell<bool>>>>> = Rc::default();
     let updates = Rc::new(Cell::new(0));
     let (s, l, n) = (slot.clone(), live_slot.clone(), updates.clone());
-    let recognizer =
-        ScaleGestureRecognizer::new(rig.binding.arena().clone()).with_on_scale_update(move |_| {
+    let recognizer = ScaleGestureRecognizer::builder(rig.binding.arena().clone())
+        .on_update(move |_| {
             n.set(n.get() + 1);
             if let Some(live) = l.borrow().as_ref() {
                 live.set(false);
             }
-            if let Some(recognizer) = s.borrow_mut().take() {
-                recognizer.dispose();
-            }
-        });
+            let retiring = s.borrow_mut().take();
+            drop(retiring);
+        })
+        .build();
     *live_slot.borrow_mut() = Some(rig.attach(&recognizer, None));
     *slot.borrow_mut() = Some(recognizer);
     pinch_out(&rig, 1, 2);
@@ -595,14 +592,15 @@ struct PressLog {
 fn press_on(rig: &Rig) -> (Rc<ForcePressGestureRecognizer>, Rc<PressLog>) {
     let log = Rc::new(PressLog::default());
     let (s, p, u, e) = (log.clone(), log.clone(), log.clone(), log.clone());
-    let recognizer = ForcePressGestureRecognizer::new(rig.binding.arena().clone())
-        .with_on_start(move |_| {
+    let recognizer = ForcePressGestureRecognizer::builder(rig.binding.arena().clone())
+        .on_start(move |_| {
             s.starts.set(s.starts.get() + 1);
             trip(&s.panic_start, "force press start callback panic");
         })
-        .with_on_peak(move |_| p.peaks.set(p.peaks.get() + 1))
-        .with_on_update(move |_| u.updates.set(u.updates.get() + 1))
-        .with_on_end(move |_| e.ends.set(e.ends.get() + 1));
+        .on_peak(move |_| p.peaks.set(p.peaks.get() + 1))
+        .on_update(move |_| u.updates.set(u.updates.get() + 1))
+        .on_end(move |_| e.ends.set(e.ends.get() + 1))
+        .build();
     (recognizer, log)
 }
 
@@ -637,8 +635,9 @@ fn force_press_claims_the_arena_before_starting() {
     let rig = Rig::new();
     let taps = Rc::new(Cell::new(0));
     let counted = taps.clone();
-    let tap = TapGestureRecognizer::new(rig.binding.arena().clone())
-        .with_on_tap(move |_| counted.set(counted.get() + 1));
+    let tap = TapGestureRecognizer::builder(rig.binding.arena().clone())
+        .on_tap(move |_| counted.set(counted.get() + 1))
+        .build();
     rig.attach(&tap, None);
     let (press_rec, log) = press_on(&rig);
     rig.attach(&press_rec, None);
@@ -702,18 +701,21 @@ fn force_press_released_from_its_start_publishes_no_peak() {
     let slot: Rc<RefCell<Option<Rc<ForcePressGestureRecognizer>>>> = Rc::default();
     let log = Rc::new(PressLog::default());
     let (s, st, p, e) = (slot.clone(), log.clone(), log.clone(), log.clone());
-    let recognizer = ForcePressGestureRecognizer::new(rig.binding.arena().clone())
-        .with_on_start(move |_| {
+    let recognizer = ForcePressGestureRecognizer::builder(rig.binding.arena().clone())
+        .on_start(move |_| {
             st.starts.set(st.starts.get() + 1);
-            if let Some(recognizer) = s.borrow_mut().take() {
-                recognizer.stop_tracking_pointer(id(1));
+            let ending = s.borrow_mut().take();
+            if let Some(recognizer) = ending {
+                let up = make_up_event_for_id(id(1), Offset::new(100.0, 100.0), PointerType::Touch);
+                recognizer.handle_event(PointerDispatch::at_root(&up));
                 let at = Offset::new(100.0, 100.0);
                 let down = make_down_event_for_id(id(1), at, PointerType::Pen);
-                recognizer.add_pointer_down(PointerDispatch::at_root(&down));
+                recognizer.add_pointer(PointerDispatch::at_root(&down));
             }
         })
-        .with_on_peak(move |_| p.peaks.set(p.peaks.get() + 1))
-        .with_on_end(move |_| e.ends.set(e.ends.get() + 1));
+        .on_peak(move |_| p.peaks.set(p.peaks.get() + 1))
+        .on_end(move |_| e.ends.set(e.ends.get() + 1))
+        .build();
     rig.attach(&recognizer, None);
     *slot.borrow_mut() = Some(Rc::clone(&recognizer));
     rig.down_with(1, 100.0, 100.0, PointerType::Pen, 0.2);
@@ -733,16 +735,16 @@ fn force_press_disposed_from_its_start() {
     let live_slot: Rc<RefCell<Option<Rc<Cell<bool>>>>> = Rc::default();
     let ends = Rc::new(Cell::new(0));
     let (s, l, e) = (slot.clone(), live_slot.clone(), ends.clone());
-    let recognizer = ForcePressGestureRecognizer::new(rig.binding.arena().clone())
-        .with_on_start(move |_| {
+    let recognizer = ForcePressGestureRecognizer::builder(rig.binding.arena().clone())
+        .on_start(move |_| {
             if let Some(live) = l.borrow().as_ref() {
                 live.set(false);
             }
-            if let Some(recognizer) = s.borrow_mut().take() {
-                recognizer.dispose();
-            }
+            let retiring = s.borrow_mut().take();
+            drop(retiring);
         })
-        .with_on_end(move |_| e.set(e.get() + 1));
+        .on_end(move |_| e.set(e.get() + 1))
+        .build();
     *live_slot.borrow_mut() = Some(rig.attach(&recognizer, None));
     *slot.borrow_mut() = Some(recognizer);
     press(&rig, 1, &[0.7, 0.9]);
@@ -813,26 +815,27 @@ fn tap_drag_on(rig: &Rig) -> (Rc<TapAndDragGestureRecognizer>, Rc<TapDragLog>) {
     };
     let (start, end, cancel) = (push(&log, "start"), push(&log, "end"), push(&log, "cancel"));
     let (down_log, up_log, update_log) = (log.clone(), log.clone(), log.clone());
-    let recognizer = TapAndDragGestureRecognizer::new(rig.binding.arena().clone())
-        .with_on_tap_down(move |_| {
+    let recognizer = TapAndDragGestureRecognizer::builder(rig.binding.arena().clone())
+        .on_tap_down(move |_| {
             down_log.events.borrow_mut().push("down".to_owned());
             trip(&down_log.panic_down, "tap-and-drag down callback panic");
         })
-        .with_on_tap_up(move |d| {
+        .on_tap_up(move |d| {
             up_log.events.borrow_mut().push("up".to_owned());
             up_log.counts.borrow_mut().push(d.consecutive_tap_count);
             trip(&up_log.panic_up, "tap-and-drag up callback panic");
         })
-        .with_on_drag_start(move |_| start())
-        .with_on_drag_update(move |_| {
+        .on_drag_start(move |_| start())
+        .on_drag_update(move |_| {
             update_log.events.borrow_mut().push("update".to_owned());
             trip(
                 &update_log.panic_update,
                 "tap-and-drag update callback panic",
             );
         })
-        .with_on_drag_end(move |_| end())
-        .with_on_cancel(cancel);
+        .on_drag_end(move |_| end())
+        .on_cancel(cancel)
+        .build();
     (recognizer, log)
 }
 
@@ -849,8 +852,9 @@ fn tap_wins_against_a_later_tap_recognizer() {
     rig.attach(&tad, None);
     let taps = Rc::new(Cell::new(0));
     let counted = taps.clone();
-    let tap = TapGestureRecognizer::new(rig.binding.arena().clone())
-        .with_on_tap(move |_| counted.set(counted.get() + 1));
+    let tap = TapGestureRecognizer::builder(rig.binding.arena().clone())
+        .on_tap(move |_| counted.set(counted.get() + 1))
+        .build();
     rig.attach(&tap, None);
     rig.down(1, 100.0, 100.0);
     rig.frame();
@@ -866,8 +870,9 @@ fn drag_claims_the_arena_before_starting() {
     rig.attach(&tad, None);
     let pans = Rc::new(Cell::new(0));
     let counted = pans.clone();
-    let pan = DragGestureRecognizer::new(rig.binding.arena().clone(), DragAxis::Free)
-        .with_on_start(move |_| counted.set(counted.get() + 1));
+    let pan = DragGestureRecognizer::builder(rig.binding.arena().clone(), DragAxis::Free)
+        .on_start(move |_| counted.set(counted.get() + 1))
+        .build();
     rig.attach(&pan, None);
     rig.down(1, 100.0, 100.0);
     rig.frame();
@@ -932,7 +937,7 @@ fn tap_down_panic_still_starts_and_ends_the_drag() {
     rig.attach(&tad, None);
     // A competing pan keeps the arena open, so the claim delivers tap-down,
     // drag-start and the first update as one transition.
-    let pan = DragGestureRecognizer::new(rig.binding.arena().clone(), DragAxis::Free);
+    let pan = DragGestureRecognizer::builder(rig.binding.arena().clone(), DragAxis::Free).build();
     rig.attach(&pan, None);
     rig.down(1, 100.0, 100.0);
     rig.frame();
@@ -952,7 +957,7 @@ fn tap_down_panic_still_delivers_the_tap_up() {
     rig.attach(&tad, None);
     // A competing tap keeps the arena open until the sweep on up, which
     // delivers tap-down and tap-up together.
-    let tap = TapGestureRecognizer::new(rig.binding.arena().clone());
+    let tap = TapGestureRecognizer::builder(rig.binding.arena().clone()).build();
     rig.attach(&tap, None);
     rig.down(1, 100.0, 100.0);
     rig.frame();
@@ -966,24 +971,27 @@ fn tap_down_admitting_the_next_contact_keeps_the_tap_up() {
     let slot: Rc<RefCell<Option<Rc<TapAndDragGestureRecognizer>>>> = Rc::default();
     let log = Rc::new(TapDragLog::default());
     let (s, d, u) = (slot.clone(), log.clone(), log.clone());
-    let tad = TapAndDragGestureRecognizer::new(rig.binding.arena().clone())
-        .with_on_tap_down(move |_| {
+    let tad = TapAndDragGestureRecognizer::builder(rig.binding.arena().clone())
+        .on_tap_down(move |_| {
             d.events.borrow_mut().push("down".to_owned());
             // The next contact arrives while the completed tap is delivered.
-            if let Some(tad) = s.borrow_mut().take() {
+            let ending = s.borrow_mut().take();
+            if let Some(tad) = ending {
                 let at = Offset::new(300.0, 100.0);
-                tad.add_pointer(id(2), at, at);
+                let down = make_down_event_for_id(id(2), at, PointerType::Touch);
+                tad.add_pointer(PointerDispatch::at_root(&down));
             }
         })
-        .with_on_tap_up(move |details| {
+        .on_tap_up(move |details| {
             u.events.borrow_mut().push("up".to_owned());
             u.counts.borrow_mut().push(details.consecutive_tap_count);
-        });
+        })
+        .build();
     rig.attach(&tad, None);
     *slot.borrow_mut() = Some(Rc::clone(&tad));
     // A competing tap keeps the arena open until the sweep on up, which
     // delivers tap-down and tap-up together.
-    let tap = TapGestureRecognizer::new(rig.binding.arena().clone());
+    let tap = TapGestureRecognizer::builder(rig.binding.arena().clone()).build();
     rig.attach(&tap, None);
     rig.down(1, 100.0, 100.0);
     rig.frame();
@@ -1013,11 +1021,12 @@ fn tap_drag_publishes_no_non_finite_global_position() {
         globals.clone(),
         globals.clone(),
     );
-    let tad = TapAndDragGestureRecognizer::new(rig.binding.arena().clone())
-        .with_on_drag_start(move |d| s.borrow_mut().push(d.global_position))
-        .with_on_drag_update(move |d| u.borrow_mut().push(d.global_position))
-        .with_on_drag_end(move |d| e.borrow_mut().push(d.global_position))
-        .with_on_tap_up(move |d| t.borrow_mut().push(d.global_position));
+    let tad = TapAndDragGestureRecognizer::builder(rig.binding.arena().clone())
+        .on_drag_start(move |d| s.borrow_mut().push(d.global_position))
+        .on_drag_update(move |d| u.borrow_mut().push(d.global_position))
+        .on_drag_end(move |d| e.borrow_mut().push(d.global_position))
+        .on_tap_up(move |d| t.borrow_mut().push(d.global_position))
+        .build();
     rig.attach_with_global(&tad, None, nan_after_down);
     rig.down(1, 100.0, 100.0);
     rig.frame();
@@ -1056,17 +1065,17 @@ fn tap_drag_disposed_from_its_drag_start() {
         later.clone(),
         later.clone(),
     );
-    let recognizer = TapAndDragGestureRecognizer::new(rig.binding.arena().clone())
-        .with_on_drag_start(move |_| {
+    let recognizer = TapAndDragGestureRecognizer::builder(rig.binding.arena().clone())
+        .on_drag_start(move |_| {
             if let Some(live) = l.borrow().as_ref() {
                 live.set(false);
             }
-            if let Some(recognizer) = s.borrow_mut().take() {
-                recognizer.dispose();
-            }
+            let retiring = s.borrow_mut().take();
+            drop(retiring);
         })
-        .with_on_drag_update(move |_| n.set(n.get() + 1))
-        .with_on_drag_end(move |_| m.set(m.get() + 1));
+        .on_drag_update(move |_| n.set(n.get() + 1))
+        .on_drag_end(move |_| m.set(m.get() + 1))
+        .build();
     *live_slot.borrow_mut() = Some(rig.attach(&recognizer, None));
     *slot.borrow_mut() = Some(recognizer);
     rig.down(1, 100.0, 100.0);
@@ -1118,27 +1127,39 @@ fn tap_and_drag_resolves_through_the_shared_arena() {
 #[test]
 fn eager_wins_at_close_and_forgets_a_finished_contact() {
     let rig = Rig::new();
-    let eager = EagerGestureRecognizer::new(rig.binding.arena().clone());
+    let eager = EagerGestureRecognizer::builder(rig.binding.arena().clone()).build();
     rig.attach(&eager, None);
     let taps = Rc::new(Cell::new(0));
     let counted = taps.clone();
-    let tap = TapGestureRecognizer::new(rig.binding.arena().clone())
-        .with_on_tap(move |_| counted.set(counted.get() + 1));
+    let tap = TapGestureRecognizer::builder(rig.binding.arena().clone())
+        .on_tap(move |_| counted.set(counted.get() + 1))
+        .build();
     rig.attach(&tap, None);
     for pointer in [1, 2] {
         rig.down(pointer, 100.0, 100.0);
-        assert_eq!(eager.primary_pointer(), Some(id(pointer)));
         rig.frame();
         rig.up(pointer, 100.0, 100.0);
         rig.frame();
-        assert_eq!(eager.primary_pointer(), None, "the lifted contact is over");
+        assert!(
+            !rig.binding.arena().contains(id(pointer)),
+            "the lifted contact is over"
+        );
+        assert_eq!(
+            eager.cancel(),
+            flui_interaction::CancelOutcome::Idle,
+            "the lifted contact was already retired"
+        );
     }
     rig.down(3, 100.0, 100.0);
     rig.cancel(3);
-    assert_eq!(
-        eager.primary_pointer(),
-        None,
+    assert!(
+        !rig.binding.arena().contains(id(3)),
         "the cancelled contact is over"
+    );
+    assert_eq!(
+        eager.cancel(),
+        flui_interaction::CancelOutcome::Idle,
+        "the cancelled contact was already retired"
     );
     assert_eq!(taps.get(), 0, "the eager member won every contact");
 }
@@ -1156,19 +1177,18 @@ fn route<R: GestureRecognizer>(recognizer: &R, event: &PointerEvent) {
 #[test]
 fn eager_cancel_in_a_self_driven_arena_awards_no_rival() {
     let arena = GestureArena::new();
-    let eager = EagerGestureRecognizer::new(arena.clone());
+    let eager = EagerGestureRecognizer::builder(arena.clone()).build();
     let starts = Rc::new(Cell::new(0));
     let counted = starts.clone();
     // A drag starts the moment the arena accepts it, so an award is visible.
-    let rival = DragGestureRecognizer::new(arena.clone(), DragAxis::Free)
-        .with_on_start(move |_| counted.set(counted.get() + 1));
+    let rival = DragGestureRecognizer::builder(arena.clone(), DragAxis::Free)
+        .on_start(move |_| counted.set(counted.get() + 1))
+        .build();
     let at = Offset::new(100.0, 100.0);
     let down = make_down_event_for_id(id(1), at, PointerType::Touch);
     let cancel = make_cancel_event_for_id(id(1), PointerType::Touch);
-    eager.add_pointer(id(1), at, at);
-    route(&*eager, &down);
-    rival.add_pointer(id(1), at, at);
-    route(&*rival, &down);
+    eager.add_pointer(PointerDispatch::at_root(&down));
+    rival.add_pointer(PointerDispatch::at_root(&down));
     // The eager member hears the cancel first, then the rival.
     route(&*eager, &cancel);
     route(&*rival, &cancel);
@@ -1295,40 +1315,42 @@ struct CancelRival {
     reject: Box<dyn Fn()>,
     accepted: Rc<Cell<usize>>,
 }
-impl flui_interaction::sealed::CustomGestureRecognizer for CancelRival {
-    fn on_arena_accept(&self, _: PointerId) {
+impl flui_interaction::GestureArenaMember for CancelRival {
+    fn accept_gesture(&self, _: PointerId) {
         self.accepted.set(self.accepted.get() + 1);
     }
-    fn on_arena_reject(&self, _: PointerId) {
+    fn reject_gesture(&self, _: PointerId) {
         (self.reject)();
     }
 }
-fn cancellation_reentry<R: GestureRecognizer + OneSequenceGestureRecognizer + 'static>(
-    make: fn(GestureArena) -> Rc<R>,
-) {
+fn cancellation_reentry<R: GestureRecognizer + 'static>(make: fn(GestureArena) -> Rc<R>) {
     let arena = GestureArena::new();
     let recognizer = make(arena.clone());
     let next = recognizer.clone();
     let at = Offset::new(100.0, 100.0);
     let rival = Rc::new(CancelRival {
         accepted: Rc::new(Cell::new(0)),
-        reject: Box::new(move || next.add_pointer(id(1), at, at)),
+        reject: Box::new(move || {
+            let down = make_down_event_for_id(id(1), at, PointerType::Touch);
+            next.add_pointer(PointerDispatch::at_root(&down));
+        }),
     });
     let _rival_entry = arena.add(id(1), &rival);
-    recognizer.add_pointer(id(1), at, at);
+    let down = make_down_event_for_id(id(1), at, PointerType::Touch);
+    recognizer.add_pointer(PointerDispatch::at_root(&down));
     route(
         &*recognizer,
         &make_cancel_event_for_id(id(1), PointerType::Touch),
     );
     assert!(
-        recognizer.tracked_pointers().contains(&id(1)),
+        arena.contains(id(1)),
         "old cancellation must not reject the newly admitted contact"
     );
-    recognizer.dispose();
+    recognizer.cancel();
 }
 fn cancelled_scale_keeps_other_contacts_competing() {
     let arena = GestureArena::new();
-    let scale = ScaleGestureRecognizer::new(arena.clone());
+    let scale = ScaleGestureRecognizer::builder(arena.clone()).build();
     let accepted = Rc::new(Cell::new(0));
     let rejected = Rc::new(Cell::new(0));
     let count = rejected.clone();
@@ -1338,8 +1360,10 @@ fn cancelled_scale_keeps_other_contacts_competing() {
     });
     let _rival_entry = arena.add(id(2), &rival);
     let at = Offset::new(100.0, 100.0);
-    scale.add_pointer(id(1), at, at);
-    scale.add_pointer(id(2), at, at);
+    let first = make_down_event_for_id(id(1), at, PointerType::Touch);
+    let second = make_down_event_for_id(id(2), at, PointerType::Touch);
+    scale.add_pointer(PointerDispatch::at_root(&first));
+    scale.add_pointer(PointerDispatch::at_root(&second));
     arena.close(id(1));
     arena.close(id(2));
     route(
@@ -1360,16 +1384,16 @@ fn cancellation_preserves_reentrant_and_independent_contacts() {
         "cancellation",
         &[
             ("force reentry", || {
-                cancellation_reentry(ForcePressGestureRecognizer::new);
+                cancellation_reentry(|arena| ForcePressGestureRecognizer::builder(arena).build());
             }),
             ("scale reentry", || {
-                cancellation_reentry(ScaleGestureRecognizer::new);
+                cancellation_reentry(|arena| ScaleGestureRecognizer::builder(arena).build());
             }),
             ("tap and drag reentry", || {
-                cancellation_reentry(TapAndDragGestureRecognizer::new);
+                cancellation_reentry(|arena| TapAndDragGestureRecognizer::builder(arena).build());
             }),
             ("eager reentry", || {
-                cancellation_reentry(EagerGestureRecognizer::new);
+                cancellation_reentry(|arena| EagerGestureRecognizer::builder(arena).build());
             }),
             (
                 "other scale contacts",

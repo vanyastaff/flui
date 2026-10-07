@@ -264,10 +264,11 @@ fn register_focus_events(canvas: &web_sys::HtmlCanvasElement, callbacks: &Arc<Wi
 
 fn register_wheel_events(canvas: &web_sys::HtmlCanvasElement, callbacks: &Arc<WindowCallbacks>) {
     let callbacks = Arc::clone(callbacks);
+    let target = canvas.clone();
     let closure = Closure::<dyn FnMut(web_sys::Event)>::new(move |e: web_sys::Event| {
         e.prevent_default();
         let we: web_sys::WheelEvent = e.unchecked_into();
-        let input = convert_wheel_event(&we);
+        let input = convert_wheel_event(&we, &target);
         callbacks.dispatch_input(input);
     });
 
@@ -304,11 +305,61 @@ extern "C" {
     fn offset_x_f64(this: &PreciseMouseEvent) -> f64;
     #[wasm_bindgen(method, getter, js_name = offsetY)]
     fn offset_y_f64(this: &PreciseMouseEvent) -> f64;
+    #[wasm_bindgen(method, getter, js_name = clientX)]
+    fn client_x_f64(this: &PreciseMouseEvent) -> f64;
+    #[wasm_bindgen(method, getter, js_name = clientY)]
+    fn client_y_f64(this: &PreciseMouseEvent) -> f64;
 }
 
 fn pointer_position(event: &web_sys::MouseEvent) -> dpi::PhysicalPosition<f64> {
     let event: &PreciseMouseEvent = event.unchecked_ref();
     dpi::PhysicalPosition::new(event.offset_x_f64(), event.offset_y_f64())
+}
+
+/// MouseEvent implementations can round wheel offsets even when the canvas
+/// origin is fractional. Recover its padding-edge position from viewport
+/// coordinates only when the whole ancestry has no coordinate transform.
+/// A bounding rectangle cannot invert a rotation, skew or perspective;
+/// those shapes keep the browser's own local offset instead of guessing.
+fn wheel_position(
+    event: &web_sys::WheelEvent,
+    canvas: &web_sys::HtmlCanvasElement,
+) -> dpi::PhysicalPosition<f64> {
+    untransformed_wheel_position(event, canvas).unwrap_or_else(|| pointer_position(event))
+}
+
+fn untransformed_wheel_position(
+    event: &web_sys::WheelEvent,
+    canvas: &web_sys::HtmlCanvasElement,
+) -> Option<dpi::PhysicalPosition<f64>> {
+    let window = web_sys::window()?;
+    let canvas_style = window.get_computed_style(canvas).ok()??;
+    let mut ancestor = Some(canvas.unchecked_ref::<web_sys::Element>().clone());
+    while let Some(element) = ancestor {
+        let style = window.get_computed_style(&element).ok()??;
+        for property in ["transform", "rotate", "scale", "translate", "perspective"] {
+            if style.get_property_value(property).ok()? != "none" {
+                return None;
+            }
+        }
+        if !matches!(
+            style.get_property_value("zoom").ok()?.as_str(),
+            "1" | "normal"
+        ) {
+            return None;
+        }
+        ancestor = element.parent_element();
+    }
+    let border_left = canvas_style.get_property_value("border-left-width").ok()?;
+    let border_top = canvas_style.get_property_value("border-top-width").ok()?;
+    let border_left: f64 = border_left.strip_suffix("px")?.parse().ok()?;
+    let border_top: f64 = border_top.strip_suffix("px")?.parse().ok()?;
+    let rect = canvas.get_bounding_client_rect();
+    let source: &PreciseMouseEvent = event.unchecked_ref();
+    Some(dpi::PhysicalPosition::new(
+        source.client_x_f64() - rect.left() - border_left,
+        source.client_y_f64() - rect.top() - border_top,
+    ))
 }
 
 fn make_pointer_info(pe: &web_sys::PointerEvent) -> ui_events::pointer::PointerInfo {
@@ -435,7 +486,10 @@ fn convert_pointer_move(pe: &web_sys::PointerEvent) -> PlatformInput {
 /// the `ScrollDelta` variants — kept in `crate::shared::scroll` so this
 /// boundary appears in the same sign/unit table (and executing contract
 /// tests) as the backends that DO have to flip or rescale.
-fn convert_wheel_event(we: &web_sys::WheelEvent) -> PlatformInput {
+fn convert_wheel_event(
+    we: &web_sys::WheelEvent,
+    canvas: &web_sys::HtmlCanvasElement,
+) -> PlatformInput {
     use ui_events::pointer::{
         PointerEvent, PointerInfo, PointerOrientation, PointerScrollEvent, PointerState,
         PointerType,
@@ -454,7 +508,7 @@ fn convert_wheel_event(we: &web_sys::WheelEvent) -> PlatformInput {
         delta,
         state: PointerState {
             time: (we.time_stamp() * 1_000_000.0) as u64,
-            position: pointer_position(we),
+            position: wheel_position(we, canvas),
             buttons: buttons_from_mask(we.buttons()),
             modifiers,
             count: 0,

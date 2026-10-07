@@ -4,13 +4,21 @@ use std::{
     cell::{Cell, RefCell},
     panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
     rc::{Rc, Weak},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
     time::Duration,
 };
 
+use flui_foundation::MonotonicClock;
 use flui_foundation::geometry::Offset;
 use flui_interaction::{
-    ArenaMembership, BeginContactError, CancelOutcome, GestureArena, GestureArenaMember,
-    GestureRecognizer, GestureSettings, PointerId, PrimaryContact, RecognizerSet, cancel_all,
+    ArenaMembership, BeginContactError, CancelOutcome, DoubleTapGestureRecognizer, GestureArena,
+    GestureArenaMember, GestureRecognizer, GestureSettings, MultiTapGestureRecognizer, PointerId,
+    PrimaryContact, RecognizerSet,
+    arena::run_pointer_lifecycle,
+    cancel_all,
     events::{
         PointerButton, PointerEvent, PointerType, make_down_event_for_id_with_button,
         make_up_event_for_id,
@@ -19,6 +27,38 @@ use flui_interaction::{
 };
 
 type Log = Rc<RefCell<Vec<&'static str>>>;
+
+thread_local! {
+    // A Send clock can reenter owner-local state on its calling thread.
+    static CLOCK_CONTACT: RefCell<Option<Weak<Extension>>> = const { RefCell::new(None) };
+}
+
+#[derive(Debug)]
+struct ReentrantClock {
+    now: web_time::Instant,
+    replace_contact: AtomicBool,
+}
+
+impl MonotonicClock for ReentrantClock {
+    fn now(&self) -> web_time::Instant {
+        if self.replace_contact.swap(false, Ordering::Relaxed) {
+            let owner = CLOCK_CONTACT.with(|slot| slot.borrow().as_ref().and_then(Weak::upgrade));
+            if let Some(owner) = owner {
+                let old = owner
+                    .contact
+                    .current()
+                    .expect("clock sees committed contact");
+                owner.contact.withdraw();
+                let event = down(old.pointer);
+                owner
+                    .contact
+                    .begin(PointerDispatch::at_root(&event), &old.settings)
+                    .expect("clock reentrant admission");
+            }
+        }
+        self.now
+    }
+}
 
 struct Extension {
     contact: PrimaryContact,
@@ -289,6 +329,244 @@ fn deadlines_refuse_overflow_and_survive_arena_resolution() {
     assert!(arena.next_deadline().is_none());
 }
 
+fn stale_contact_drop_cannot_withdraw_a_reused_pointer() {
+    let log = Log::default();
+    let arena = GestureArena::new();
+    let owner = Extension::new(arena.clone(), "owner", log.clone());
+    let rival = Extension::new(arena.clone(), "rival", log.clone());
+    let member: Rc<dyn GestureArenaMember> = owner.clone();
+    let contact = PrimaryContact::new(ArenaMembership::new(arena.clone(), Rc::downgrade(&member)));
+    let event = down(pointer(79));
+    contact
+        .begin(
+            PointerDispatch::at_root(&event),
+            &GestureSettings::default(),
+        )
+        .expect("old generation admitted");
+    arena.abandon(pointer(79));
+    let _new_generation = arena.add(pointer(79), &rival);
+    arena.close(pointer(79));
+    log.borrow_mut().clear();
+    drop(contact);
+    assert!(log.borrow().is_empty());
+    arena.drain_deferred_resolutions();
+    assert_eq!(*log.borrow(), ["accepted"]);
+}
+
+fn invalid_admission_remains_idle_and_settings_are_frozen() {
+    let owner = Extension::new(GestureArena::new(), "owner", Log::default());
+    let up = make_up_event_for_id(pointer(80), Offset::ZERO, PointerType::Mouse);
+    assert!(matches!(
+        owner
+            .contact
+            .begin(PointerDispatch::at_root(&up), &GestureSettings::default()),
+        Err(BeginContactError::NotDown)
+    ));
+    for position in [Offset::new(f64::NAN, 0.0), Offset::new(0.0, f64::INFINITY)] {
+        let event = make_down_event_for_id_with_button(
+            pointer(80),
+            position,
+            PointerType::Mouse,
+            PointerButton::Primary,
+        );
+        assert!(matches!(
+            owner.contact.begin(
+                PointerDispatch::at_root(&event),
+                &GestureSettings::default()
+            ),
+            Err(BeginContactError::NonFinite)
+        ));
+        assert!(owner.contact.current().is_none());
+    }
+    let event = down(pointer(80));
+    let settings = GestureSettings::default()
+        .try_with_touch_slop(11.0)
+        .expect("finite settings");
+    owner
+        .contact
+        .begin(PointerDispatch::at_root(&event), &settings)
+        .expect("valid admission after refusal");
+    let settings = settings
+        .try_with_touch_slop(25.0)
+        .expect("replacement settings");
+    assert_eq!(
+        owner
+            .contact
+            .current()
+            .expect("active contact")
+            .settings
+            .touch_slop(),
+        11.0
+    );
+    assert!(!owner.contact.moved_beyond(Offset::new(14.0, 4.0), 11.0));
+    assert!(owner.contact.moved_beyond(Offset::new(14.5, 4.0), 11.0));
+    assert!(owner.contact.moved_beyond(Offset::new(f64::NAN, 4.0), 11.0));
+    owner.contact.withdraw();
+    owner
+        .contact
+        .begin(PointerDispatch::at_root(&event), &settings)
+        .expect("new settings on next sequence");
+    assert_eq!(
+        owner
+            .contact
+            .current()
+            .expect("new contact")
+            .settings
+            .touch_slop(),
+        25.0
+    );
+}
+
+fn clock_reentry_cannot_arm_a_replacement_contact() {
+    let clock = Arc::new(ReentrantClock {
+        now: web_time::Instant::now(),
+        replace_contact: AtomicBool::new(false),
+    });
+    let owner = Extension::new(
+        GestureArena::with_clock(clock.clone()),
+        "owner",
+        Log::default(),
+    );
+    let event = down(pointer(81));
+    let old_id = owner
+        .contact
+        .begin(
+            PointerDispatch::at_root(&event),
+            &GestureSettings::default(),
+        )
+        .expect("old admission");
+    CLOCK_CONTACT.with(|slot| *slot.borrow_mut() = Some(Rc::downgrade(&owner)));
+    clock.replace_contact.store(true, Ordering::Relaxed);
+    assert!(owner.contact.arm_deadline(Duration::from_secs(1)).is_none());
+    CLOCK_CONTACT.with(|slot| slot.borrow_mut().take());
+    let current = owner.contact.current().expect("clock replacement survives");
+    assert_ne!(current.id, old_id);
+    assert_eq!(current.pointer, pointer(81));
+    assert!(owner.contact.deadline().is_none());
+    assert!(owner.contact.arm_deadline(Duration::from_secs(1)).is_some());
+}
+
+fn diagnostic_panic_cannot_replace_first_delivery_failure_or_skip_a_peer() {
+    struct DiagnosticPanic(Arc<AtomicUsize>);
+    impl tracing::Subscriber for DiagnosticPanic {
+        fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+            *metadata.level() == tracing::Level::ERROR
+        }
+        fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+        fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+        fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+        fn event(&self, _: &tracing::Event<'_>) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            panic!("secondary failure diagnostic panicked");
+        }
+        fn enter(&self, _: &tracing::span::Id) {}
+        fn exit(&self, _: &tracing::span::Id) {}
+    }
+
+    let log = Log::default();
+    let arena = GestureArena::new();
+    let first = Extension::new(arena.clone(), "first", log.clone());
+    let second = Extension::new(arena.clone(), "second", log.clone());
+    let third = Extension::new(arena, "third", log.clone());
+    first.fail_delivery.set(true);
+    second.fail_delivery.set(true);
+    let mut set = RecognizerSet::default();
+    set.attach(&first);
+    set.attach(&second);
+    set.attach(&third);
+    let diagnostic_calls = Arc::new(AtomicUsize::new(0));
+    let event = down(pointer(82));
+    let failure =
+        tracing::subscriber::with_default(DiagnosticPanic(diagnostic_calls.clone()), || {
+            catch_unwind(AssertUnwindSafe(|| {
+                set.dispatch(PointerDispatch::at_root(&event))
+            }))
+        })
+        .expect_err("first delivery failure resumes");
+    assert_eq!(
+        failure.downcast_ref::<String>().map(String::as_str),
+        Some("first")
+    );
+    assert_eq!(
+        diagnostic_calls.load(Ordering::Relaxed),
+        1,
+        "real diagnostic ran"
+    );
+    assert_eq!(*log.borrow(), ["first", "second", "third"]);
+    first.fail_delivery.set(false);
+    second.fail_delivery.set(false);
+    let up = make_up_event_for_id(pointer(82), Offset::ZERO, PointerType::Touch);
+    set.dispatch(PointerDispatch::at_root(&up));
+    assert!(first.contact.current().is_none());
+    assert!(second.contact.current().is_none());
+    assert!(third.contact.current().is_none());
+}
+
+fn double_tap_drop_releases_a_pending_sweep_without_inline_notifications() {
+    held_recognizer_drop_releases_pending_sweep(
+        |arena| DoubleTapGestureRecognizer::builder(arena).build(),
+        false,
+    );
+}
+
+fn multi_tap_drop_releases_a_pending_sweep_without_inline_notifications() {
+    held_recognizer_drop_releases_pending_sweep(
+        |arena| MultiTapGestureRecognizer::builder(arena).build(),
+        true,
+    );
+}
+
+fn held_recognizer_drop_releases_pending_sweep(
+    make_owner: fn(GestureArena) -> Rc<dyn GestureRecognizer>,
+    second_contact: bool,
+) {
+    let arena = GestureArena::binding_driven(Arc::new(flui_interaction::ManualClock::new()));
+    let owner = make_owner(arena.clone());
+    let first_log = Log::default();
+    let second_log = Log::default();
+    let first = Extension::new(arena.clone(), "first rival", first_log.clone());
+    let second = Extension::new(arena.clone(), "second rival", second_log.clone());
+    let event = down(pointer(83));
+    owner.add_pointer(PointerDispatch::at_root(&event));
+    let _first_entry = arena.add(pointer(83), &first);
+    let _second_entry = arena.add(pointer(83), &second);
+    run_pointer_lifecycle(&arena, &event);
+    if second_contact {
+        let another = down(pointer(84));
+        owner.add_pointer(PointerDispatch::at_root(&another));
+        run_pointer_lifecycle(&arena, &another);
+    }
+    let up = make_up_event_for_id(pointer(83), Offset::new(3.0, 4.0), PointerType::Touch);
+    owner.handle_event(PointerDispatch::at_root(&up));
+    run_pointer_lifecycle(&arena, &up);
+    assert!(arena.is_held(pointer(83)), "actual recognizer owns a hold");
+    assert!(
+        arena.has_pending_sweep(pointer(83)),
+        "Up accepted deferred sweep debt"
+    );
+    assert!(first_log.borrow().is_empty());
+    assert!(second_log.borrow().is_empty());
+    drop(owner);
+    assert!(
+        first_log.borrow().is_empty(),
+        "Drop must not notify a rival"
+    );
+    assert!(
+        second_log.borrow().is_empty(),
+        "Drop must not notify a rival"
+    );
+    arena.drain_deferred_resolutions();
+    assert_eq!(
+        *first_log.borrow(),
+        ["accepted"],
+        "pending sweep chooses the surviving front member"
+    );
+    assert_eq!(*second_log.borrow(), ["rejected"]);
+    assert!(arena.is_empty());
+}
+
 #[test]
 fn public_recognizer_extension_contracts() {
     let cases: &[(&str, fn())] = &[
@@ -316,11 +594,43 @@ fn public_recognizer_extension_contracts() {
             "deadlines_refuse_overflow_and_survive_arena_resolution",
             deadlines_refuse_overflow_and_survive_arena_resolution,
         ),
+        (
+            "stale_contact_drop_cannot_withdraw_a_reused_pointer",
+            stale_contact_drop_cannot_withdraw_a_reused_pointer,
+        ),
+        (
+            "invalid_admission_remains_idle_and_settings_are_frozen",
+            invalid_admission_remains_idle_and_settings_are_frozen,
+        ),
+        (
+            "clock_reentry_cannot_arm_a_replacement_contact",
+            clock_reentry_cannot_arm_a_replacement_contact,
+        ),
+        (
+            "diagnostic_panic_cannot_replace_first_delivery_failure_or_skip_a_peer",
+            diagnostic_panic_cannot_replace_first_delivery_failure_or_skip_a_peer,
+        ),
+        (
+            "double_tap_drop_releases_a_pending_sweep_without_inline_notifications",
+            double_tap_drop_releases_a_pending_sweep_without_inline_notifications,
+        ),
+        (
+            "multi_tap_drop_releases_a_pending_sweep_without_inline_notifications",
+            multi_tap_drop_releases_a_pending_sweep_without_inline_notifications,
+        ),
     ];
+    let mut first = None;
     for &(name, case) in cases {
         if let Err(payload) = catch_unwind(AssertUnwindSafe(case)) {
             eprintln!("public recognizer contract failed: {name}");
-            resume_unwind(payload);
+            if first.is_none() {
+                first = Some(payload);
+            } else {
+                flui_foundation::panic::retain_opaque_payload(payload);
+            }
         }
+    }
+    if let Some(payload) = first {
+        resume_unwind(payload);
     }
 }

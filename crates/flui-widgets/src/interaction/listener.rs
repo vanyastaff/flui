@@ -2,11 +2,17 @@
 //! pointer events landing on its child to callbacks, each one carrying both
 //! the listener's own space and the root's (`PointerDispatch`).
 
-use std::rc::Rc;
+use std::{
+    panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
+    rc::Rc,
+};
 
 use flui_interaction::events::ScrollEventData;
 use flui_interaction::routing::{EventPropagation, PanZoomTarget, ScrollTarget};
-use flui_interaction::{PointerDispatch, PointerPanZoomEvent, PointerTarget, from_w3c_event};
+use flui_interaction::{
+    GestureRecognizer, PointerDispatch, PointerPanZoomEvent, PointerTarget, RecognizerSet,
+    from_w3c_event,
+};
 use flui_objects::RenderListener;
 use flui_rendering::hit_testing::{HitTestBehavior, PointerEvent};
 use flui_rendering::protocol::BoxProtocol;
@@ -73,6 +79,7 @@ type PanZoomClaimCallback = Rc<dyn Fn(&PointerPanZoomEvent) -> EventPropagation>
 /// [`ui_events`]: https://docs.rs/ui-events
 #[derive(Clone)]
 pub struct Listener {
+    recognizers: RecognizerSet,
     on_pointer_down: Option<PointerCallback>,
     on_pointer_up: Option<PointerCallback>,
     on_pointer_move: Option<PointerCallback>,
@@ -89,6 +96,7 @@ pub struct Listener {
 impl Default for Listener {
     fn default() -> Self {
         Self {
+            recognizers: RecognizerSet::default(),
             on_pointer_down: None,
             on_pointer_up: None,
             on_pointer_move: None,
@@ -107,6 +115,7 @@ impl Default for Listener {
 impl std::fmt::Debug for Listener {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Listener")
+            .field("has_recognizers", &!self.recognizers.is_empty())
             .field("on_pointer_down", &self.on_pointer_down.is_some())
             .field("on_pointer_up", &self.on_pointer_up.is_some())
             .field("on_pointer_move", &self.on_pointer_move.is_some())
@@ -132,6 +141,31 @@ impl Listener {
     /// set), defaulting to [`HitTestBehavior::DeferToChild`].
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Attach a recognizer without extending its owner's lifetime.
+    ///
+    /// The owner retains its `Rc`; delivery follows attachment order, after
+    /// this listener's raw observer and outside its event-context write.
+    #[must_use]
+    pub fn recognizer<R: GestureRecognizer + 'static>(mut self, recognizer: &Rc<R>) -> Self {
+        self.recognizers.attach(recognizer);
+        self
+    }
+
+    /// Admit new contacts only when `admit` accepts their Down event.
+    ///
+    /// Later events, including Up and Cancel, reach every live attachment
+    /// regardless of the current predicate, so reconfiguration cannot strand
+    /// an already admitted contact.
+    #[must_use]
+    pub fn recognizer_when<R: GestureRecognizer + 'static>(
+        mut self,
+        recognizer: &Rc<R>,
+        admit: impl Fn(PointerDispatch<'_>) -> bool + 'static,
+    ) -> Self {
+        self.recognizers.attach_when(recognizer, admit);
+        self
     }
 
     /// Set how the listener participates in hit-testing (default
@@ -302,29 +336,41 @@ impl Listener {
         let on_cancel = self.on_pointer_cancel.clone();
         let on_signal = self.on_pointer_signal.clone();
         let on_pan_zoom_update = self.on_pointer_pan_zoom_update.clone();
+        let recognizers = self.recognizers.clone();
         // The event KIND is the same in both spaces, so the routing match
         // reads the local one and each callback receives the whole pair.
         move |dispatch: PointerDispatch<'_>| {
-            let callback = match dispatch.local {
-                PointerEvent::Down(_) => &on_down,
-                PointerEvent::Up(_) => &on_up,
-                PointerEvent::Move(update) if update.current.buttons.is_empty() => &on_hover,
-                PointerEvent::Move(_) => &on_move,
-                PointerEvent::Cancel(_) => &on_cancel,
-                PointerEvent::Scroll(_) => &on_signal,
-                PointerEvent::Gesture(_) => {
-                    if let Some(callback) = &on_pan_zoom_update
-                        && let Some(pan_zoom) = from_w3c_event(dispatch.local)
-                        && pan_zoom.is_update()
-                    {
-                        writer.write(|cx| callback(cx, &pan_zoom));
+            let raw = catch_unwind(AssertUnwindSafe(|| {
+                let callback = match dispatch.local {
+                    PointerEvent::Down(_) => &on_down,
+                    PointerEvent::Up(_) => &on_up,
+                    PointerEvent::Move(update) if update.current.buttons.is_empty() => &on_hover,
+                    PointerEvent::Move(_) => &on_move,
+                    PointerEvent::Cancel(_) => &on_cancel,
+                    PointerEvent::Scroll(_) => &on_signal,
+                    PointerEvent::Gesture(_) => {
+                        if let Some(callback) = &on_pan_zoom_update
+                            && let Some(pan_zoom) = from_w3c_event(dispatch.local)
+                            && pan_zoom.is_update()
+                        {
+                            writer.write(|cx| callback(cx, &pan_zoom));
+                        }
+                        return;
                     }
-                    return;
+                    _ => return,
+                };
+                if let Some(callback) = callback {
+                    writer.write(|cx| callback(cx, dispatch));
                 }
-                _ => return,
-            };
-            if let Some(callback) = callback {
-                writer.write(|cx| callback(cx, dispatch));
+            }));
+            let recognized = catch_unwind(AssertUnwindSafe(|| recognizers.dispatch(dispatch)));
+            match (raw, recognized) {
+                (Err(first), Err(later)) => {
+                    flui_foundation::panic::retain_opaque_payload(later);
+                    resume_unwind(first);
+                }
+                (Err(payload), Ok(())) | (Ok(()), Err(payload)) => resume_unwind(payload),
+                (Ok(()), Ok(())) => {}
             }
         }
     }

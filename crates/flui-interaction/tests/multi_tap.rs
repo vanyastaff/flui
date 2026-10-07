@@ -4,7 +4,8 @@ use std::{cell::RefCell, rc::Rc};
 use flui_foundation::geometry::Offset;
 use flui_interaction::arena::GestureArena;
 use flui_interaction::events::{
-    PointerType, make_cancel_event_for_id, make_move_event_for_id, make_up_event_for_id,
+    PointerType, make_cancel_event_for_id, make_down_event_for_id, make_move_event_for_id,
+    make_up_event_for_id,
 };
 use flui_interaction::routing::PointerDispatch;
 use flui_interaction::{GestureRecognizer, MultiTapGestureRecognizer, PointerId};
@@ -15,7 +16,8 @@ fn contact(id: u64) -> PointerId {
 
 fn pair(recognizer: &Rc<MultiTapGestureRecognizer>, a: u64, b: u64) {
     for (id, position) in [(a, Offset::new(10.0, 10.0)), (b, Offset::new(100.0, 10.0))] {
-        recognizer.add_pointer(contact(id), position, position);
+        let event = make_down_event_for_id(contact(id), position, PointerType::Touch);
+        recognizer.add_pointer(PointerDispatch::at_root(&event));
     }
 }
 
@@ -28,8 +30,9 @@ fn released_contacts_complete_once_in_either_order() {
     for reverse in [false, true] {
         let taps = Rc::new(RefCell::new(Vec::new()));
         let captured = Rc::clone(&taps);
-        let recognizer = MultiTapGestureRecognizer::new(GestureArena::new(), 2)
-            .with_on_multi_tap(move |details| captured.borrow_mut().push(details));
+        let recognizer = MultiTapGestureRecognizer::builder(GestureArena::new(), 2)
+            .on_multi_tap(move |details| captured.borrow_mut().push(details))
+            .build();
         for (a, b) in [(2, 3), (4, 5)] {
             pair(&recognizer, a, b);
             let (first, last) = if reverse { (b, a) } else { (a, b) };
@@ -59,8 +62,9 @@ fn released_contacts_complete_once_in_either_order() {
 fn secondary_motion_uses_its_own_slop_origin() {
     let taps = Rc::new(RefCell::new(0));
     let captured = Rc::clone(&taps);
-    let recognizer = MultiTapGestureRecognizer::new(GestureArena::new(), 2)
-        .with_on_multi_tap(move |_| *captured.borrow_mut() += 1);
+    let recognizer = MultiTapGestureRecognizer::builder(GestureArena::new(), 2)
+        .on_multi_tap(move |_| *captured.borrow_mut() += 1)
+        .build();
     pair(&recognizer, 2, 3);
     let motion = make_move_event_for_id(contact(3), Offset::new(101.0, 10.0), PointerType::Touch);
     recognizer.handle_event(PointerDispatch::at_root(&motion));
@@ -76,8 +80,9 @@ fn secondary_motion_uses_its_own_slop_origin() {
 fn unrelated_cancel_does_not_erase_the_pair() {
     let taps = Rc::new(RefCell::new(0));
     let captured = Rc::clone(&taps);
-    let recognizer = MultiTapGestureRecognizer::new(GestureArena::new(), 2)
-        .with_on_multi_tap(move |_| *captured.borrow_mut() += 1);
+    let recognizer = MultiTapGestureRecognizer::builder(GestureArena::new(), 2)
+        .on_multi_tap(move |_| *captured.borrow_mut() += 1)
+        .build();
     pair(&recognizer, 2, 3);
     let cancel = make_cancel_event_for_id(contact(9), PointerType::Touch);
     recognizer.handle_event(PointerDispatch::at_root(&cancel));
@@ -93,8 +98,9 @@ fn unrelated_cancel_does_not_erase_the_pair() {
 fn tracked_cancel_allows_a_new_pair() {
     let taps = Rc::new(RefCell::new(0));
     let captured = Rc::clone(&taps);
-    let recognizer = MultiTapGestureRecognizer::new(GestureArena::new(), 2)
-        .with_on_multi_tap(move |_| *captured.borrow_mut() += 1);
+    let recognizer = MultiTapGestureRecognizer::builder(GestureArena::new(), 2)
+        .on_multi_tap(move |_| *captured.borrow_mut() += 1)
+        .build();
     pair(&recognizer, 2, 3);
     let cancel = make_cancel_event_for_id(contact(3), PointerType::Touch);
     recognizer.handle_event(PointerDispatch::at_root(&cancel));

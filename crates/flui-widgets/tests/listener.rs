@@ -49,6 +49,216 @@ pub(crate) fn listener_routes_down_and_up_to_their_own_callbacks() {
     assert_eq!(downs.get(), 1, "up does not re-invoke on_pointer_down");
 }
 
+pub(crate) fn listener_admission_keeps_terminal_delivery_and_weak_ownership() {
+    use flui_interaction::{CancelOutcome, GestureArenaMember, GestureRecognizer, PointerId};
+    use std::cell::RefCell;
+
+    struct ContactObserver(Rc<RefCell<Vec<&'static str>>>);
+    impl GestureArenaMember for ContactObserver {
+        fn accept_gesture(&self, _: PointerId) {}
+        fn reject_gesture(&self, _: PointerId) {}
+    }
+    impl GestureRecognizer for ContactObserver {
+        fn add_pointer(&self, _: PointerDispatch<'_>) {
+            self.0.borrow_mut().push("down");
+        }
+        fn handle_event(&self, dispatch: PointerDispatch<'_>) {
+            use flui_rendering::hit_testing::PointerEvent;
+            self.0.borrow_mut().push(match dispatch.local {
+                PointerEvent::Up(_) => "up",
+                PointerEvent::Move(_) => "move",
+                _ => "other",
+            });
+        }
+        fn cancel(&self) -> CancelOutcome {
+            CancelOutcome::Idle
+        }
+    }
+
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let recognizer = Rc::new(ContactObserver(Rc::clone(&events)));
+    let admitted = Rc::new(Cell::new(true));
+    let predicate = Rc::clone(&admitted);
+    let raw = Rc::clone(&events);
+    let laid = lay_out(
+        Listener::new()
+            .behavior(HitTestBehavior::Opaque)
+            .on_pointer_down(move |_, _| raw.borrow_mut().push("raw"))
+            .recognizer_when(&recognizer, move |_| predicate.get())
+            .child(SizedBox::new(80.0, 80.0)),
+        tight(80.0, 80.0),
+    );
+    laid.dispatch_pointer_down(40.0, 40.0);
+    admitted.set(false);
+    laid.dispatch_pointer_move(41.0, 40.0);
+    laid.dispatch_pointer_up(41.0, 40.0);
+    assert_eq!(&*events.borrow(), &["raw", "down", "move", "up"]);
+    events.borrow_mut().clear();
+    drop(recognizer);
+    laid.dispatch_pointer_down(40.0, 40.0);
+    laid.dispatch_pointer_up(40.0, 40.0);
+    assert_eq!(
+        &*events.borrow(),
+        &["raw"],
+        "the cached handler owns no recognizer"
+    );
+}
+
+pub(crate) fn listener_raw_observer_panic_still_delivers_the_recognizer_event() {
+    use flui_interaction::{CancelOutcome, GestureArenaMember, GestureRecognizer, PointerId};
+    struct Observer(Rc<Cell<usize>>);
+    impl GestureArenaMember for Observer {
+        fn accept_gesture(&self, _: PointerId) {}
+        fn reject_gesture(&self, _: PointerId) {}
+    }
+    impl GestureRecognizer for Observer {
+        fn add_pointer(&self, _: PointerDispatch<'_>) {
+            self.0.set(self.0.get() + 1);
+        }
+        fn handle_event(&self, _: PointerDispatch<'_>) {}
+        fn cancel(&self) -> CancelOutcome {
+            CancelOutcome::Idle
+        }
+    }
+    let delivered = Rc::new(Cell::new(0));
+    let recognizer = Rc::new(Observer(Rc::clone(&delivered)));
+    let first = Rc::new(Cell::new(true));
+    let raw = Rc::clone(&first);
+    let laid = lay_out(
+        Listener::new()
+            .behavior(HitTestBehavior::Opaque)
+            .on_pointer_down(move |_, _| {
+                if raw.replace(false) {
+                    panic!("raw observer first failure");
+                }
+            })
+            .recognizer(&recognizer)
+            .child(SizedBox::new(80.0, 80.0)),
+        tight(80.0, 80.0),
+    );
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        laid.dispatch_pointer_down(40.0, 40.0);
+    }))
+    .expect_err("the raw callback's first panic leaves dispatch");
+    assert_eq!(
+        failure.downcast_ref::<&str>(),
+        Some(&"raw observer first failure")
+    );
+    assert_eq!(
+        delivered.get(),
+        1,
+        "accepted dispatch reaches attachments despite the observer failure"
+    );
+    laid.dispatch_pointer_up(40.0, 40.0);
+    laid.dispatch_pointer_down(40.0, 40.0);
+    laid.dispatch_pointer_up(40.0, 40.0);
+    assert_eq!(delivered.get(), 2, "the next contact remains deliverable");
+}
+
+pub(crate) fn custom_recognizer_competes_through_a_listener() {
+    use flui_interaction::{
+        ArenaMembership, CancelOutcome, GestureArenaMember, GestureRecognizer, GestureSettings,
+        PointerId, PrimaryContact, TapGestureRecognizer,
+    };
+    use flui_rendering::hit_testing::PointerEvent;
+    use flui_view::prelude::*;
+    use flui_widgets::GestureArenaScope;
+    use std::cell::RefCell;
+
+    struct ExternalRecognizer {
+        contact: PrimaryContact,
+        events: Rc<RefCell<Vec<&'static str>>>,
+    }
+    impl GestureArenaMember for ExternalRecognizer {
+        fn accept_gesture(&self, _: PointerId) {
+            self.events.borrow_mut().push("custom won");
+        }
+        fn reject_gesture(&self, _: PointerId) {
+            self.contact.finish();
+        }
+    }
+    impl GestureRecognizer for ExternalRecognizer {
+        fn add_pointer(&self, down: PointerDispatch<'_>) {
+            self.contact
+                .begin(down, &GestureSettings::default())
+                .expect("new contact");
+        }
+        fn handle_event(&self, dispatch: PointerDispatch<'_>) {
+            match dispatch.local {
+                PointerEvent::Move(_) => self.contact.accept(),
+                PointerEvent::Up(_) | PointerEvent::Cancel(_) => {
+                    self.contact.finish();
+                }
+                _ => {}
+            }
+        }
+        fn cancel(&self) -> CancelOutcome {
+            if self.contact.withdraw().is_some() {
+                CancelOutcome::Cancelled
+            } else {
+                CancelOutcome::Idle
+            }
+        }
+    }
+    #[derive(Clone)]
+    struct Attached(Rc<RefCell<Vec<&'static str>>>);
+    impl View for Attached {
+        fn create_element(&self) -> flui_view::element::ElementKind {
+            flui_view::element::ElementKind::stateful(self)
+        }
+    }
+    struct State {
+        events: Rc<RefCell<Vec<&'static str>>>,
+        custom: Option<Rc<ExternalRecognizer>>,
+        tap: Option<Rc<TapGestureRecognizer>>,
+    }
+    impl StatefulView for Attached {
+        type State = State;
+        fn create_state(&self) -> State {
+            State {
+                events: Rc::clone(&self.0),
+                custom: None,
+                tap: None,
+            }
+        }
+    }
+    impl ViewState<Attached> for State {
+        fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+            let arena = GestureArenaScope::of(ctx);
+            let custom_events = Rc::clone(&self.events);
+            self.custom = Some(Rc::new_cyclic(
+                |this: &std::rc::Weak<ExternalRecognizer>| ExternalRecognizer {
+                    contact: PrimaryContact::new(ArenaMembership::new(arena.clone(), this.clone())),
+                    events: custom_events,
+                },
+            ));
+            let tap_events = Rc::clone(&self.events);
+            self.tap = Some(
+                TapGestureRecognizer::builder(arena)
+                    .on_tap(move |_| tap_events.borrow_mut().push("tap won"))
+                    .build(),
+            );
+        }
+        fn build(&self, _: &Attached, _: &dyn BuildContext) -> impl IntoView {
+            Listener::new()
+                .behavior(HitTestBehavior::Opaque)
+                .recognizer(self.tap.as_ref().expect("mounted tap"))
+                .recognizer(self.custom.as_ref().expect("mounted custom recognizer"))
+                .child(SizedBox::new(80.0, 80.0))
+        }
+    }
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let laid = lay_out(Attached(Rc::clone(&events)), tight(80.0, 80.0));
+    laid.dispatch_pointer_down(40.0, 40.0);
+    laid.dispatch_pointer_move(45.0, 40.0);
+    laid.dispatch_pointer_up(45.0, 40.0);
+    assert_eq!(
+        &*events.borrow(),
+        &["custom won"],
+        "the external recognizer defeats the built-in tap through the presentation arena"
+    );
+}
+
 // ============================================================================
 // Event context (ADR-0086): the listener takes the owner's writer source
 // from its render-object context and opens one write per event.

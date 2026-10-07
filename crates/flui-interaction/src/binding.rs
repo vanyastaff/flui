@@ -1777,12 +1777,12 @@ mod tests {
         rejects: AtomicUsize,
     }
 
-    impl crate::sealed::CustomGestureRecognizer for CountingArenaMember {
-        fn on_arena_accept(&self, _pointer: PointerId) {
+    impl crate::arena::GestureArenaMember for CountingArenaMember {
+        fn accept_gesture(&self, _pointer: PointerId) {
             self.accepts.fetch_add(1, Ordering::Relaxed);
         }
 
-        fn on_arena_reject(&self, _pointer: PointerId) {
+        fn reject_gesture(&self, _pointer: PointerId) {
             self.rejects.fetch_add(1, Ordering::Relaxed);
         }
     }
@@ -1790,12 +1790,12 @@ mod tests {
     #[derive(Debug, Default)]
     struct PanickingAcceptArenaMember;
 
-    impl crate::sealed::CustomGestureRecognizer for PanickingAcceptArenaMember {
-        fn on_arena_accept(&self, _pointer: PointerId) {
+    impl crate::arena::GestureArenaMember for PanickingAcceptArenaMember {
+        fn accept_gesture(&self, _pointer: PointerId) {
             panic!("arena accept panic");
         }
 
-        fn on_arena_reject(&self, _pointer: PointerId) {}
+        fn reject_gesture(&self, _pointer: PointerId) {}
     }
 
     fn set_resampling(binding: &GestureBinding, enabled: bool) {

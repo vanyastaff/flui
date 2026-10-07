@@ -1,204 +1,109 @@
-//! Drag gesture recognizer
-//!
-//! Recognizes drag gestures (pointer down + move).
-//!
-//! Supports three types of drag:
-//! - **Vertical**: Movement constrained to vertical axis
-//! - **Horizontal**: Movement constrained to horizontal axis
-//! - **Pan**: Free movement in any direction
-
-use std::{cell::RefCell, rc::Rc, sync::Arc};
-
-use web_time::Instant;
-
-use flui_foundation::geometry::Offset;
-use parking_lot::Mutex;
-
-use super::recognizer::{
-    EventTimeline, GestureRecognizer, RecognizerBase, event_time, invoke_callback, is_primary_down,
-    retire_callback,
+//! Owner-local drag recognition with one admitted contact.
+use super::{
+    callback_containment::{
+        finish_containment, invoke_callback, retire_callback, retire_callbacks,
+    },
+    contact::{ArenaMembership, ContactId, PrimaryContact},
+    recognizer::{CancelOutcome, EventTimeline, GestureRecognizer, event_time, is_primary_down},
 };
-use crate::retain::Retain;
 use crate::{
-    arena::GestureArenaMember,
+    arena::{GestureArena, GestureArenaMember},
     events::{PointerEvent, PointerType},
     ids::PointerId,
     processing::VelocityTracker,
-    routing::{PointerDispatch, RoutePanic},
+    routing::PointerDispatch,
     settings::GestureSettings,
     traits::{DragAxis, PointerEventExtTrait},
 };
+use flui_foundation::geometry::Offset;
+use std::{cell::RefCell, rc::Rc};
+use web_time::Instant;
 
-/// Configures when the drag's initial position is reported.
-///
-/// - [`Down`](Self::Down): the initial position reported in
-///   [`DragStartDetails`] is the pointer's position at the down event.
-/// - [`Start`](Self::Start): the initial position is the pointer's position
-///   when the recognizer wins the arena. With competitors this is usually the
-///   slop-crossing position; a lone recognizer can win the deferred default
-///   while still at the Down position.
+/// Position used for the initial drag notification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub enum DragStartBehavior {
-    /// Use the pointer's down position as the drag's initial position.
+    /// Report the contact's Down position and accumulated initial movement.
     Down,
-    /// Use the position at arena acceptance as the drag's initial position.
-    /// The default.
+    /// Report the position at acceptance.
     #[default]
     Start,
 }
-
-/// Details about drag down (pointer contact before drag starts)
+/// Details about a newly admitted drag contact.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DragDownDetails {
-    /// Global position where pointer contacted the screen
+    /// Root-space contact position.
     pub global_position: Offset<f64>,
-    /// Local position (relative to widget)
+    /// Receiving node's contact position.
     pub local_position: Offset<f64>,
-    /// Pointer device kind
+    /// Device kind captured at admission.
     pub kind: PointerType,
 }
-
-/// Details about drag start
+/// Details about an accepted drag.
 #[derive(Debug, Clone)]
 pub struct DragStartDetails {
-    /// Global position where drag started
+    /// Root-space initial position.
     pub global_position: Offset<f64>,
-    /// Local position (relative to widget)
+    /// Receiving node's initial position.
     pub local_position: Offset<f64>,
-    /// Pointer device kind
+    /// Admitted device kind.
     pub kind: PointerType,
-    /// When the drag started
+    /// Event-clock instant at acceptance.
     pub timestamp: Instant,
 }
-
-/// Details about drag update
+/// Details about movement during an accepted drag.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DragUpdateDetails {
-    /// Current global position
+    /// Root-space observed position.
     pub global_position: Offset<f64>,
-    /// Current local position
+    /// Receiving node's position.
     pub local_position: Offset<f64>,
-    /// Delta since last update
+    /// Movement since the previous update, projected onto the axis.
     pub delta: Offset<f64>,
-    /// `delta` projected onto the recognizer's primary axis: the amount the
-    /// pointer has moved along the primary axis **since the previous
-    /// update**, i.e. per-event, not cumulative since the drag started.
+    /// Axis component of this update's movement.
     pub primary_delta: f64,
-    /// Pointer device kind
+    /// Admitted device kind.
     pub kind: PointerType,
 }
-
-/// Why an accepted gesture reached its terminal callback.
+/// Why an accepted drag ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GestureEndReason {
-    /// A normal pointer release or a synthesized discrete interaction completed.
+    /// Pointer release completed the drag.
     Completed,
-    /// The input sequence was interrupted by a pointer cancellation.
+    /// Cancellation interrupted the drag.
     Cancelled,
 }
-
-/// Details about drag end
+/// Details about an accepted drag's terminal notification.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DragEndDetails {
-    /// Accepted cancellation still reports an end, but must not commit a release action.
+    /// Completion or cancellation.
     pub reason: GestureEndReason,
-    /// Velocity at end of drag (pixels per second)
+    /// Velocity measured on the event clock.
     pub velocity: Velocity,
-    /// Final global position
+    /// Final observed root-space position.
     pub global_position: Offset<f64>,
-    /// Final local position
+    /// Final receiving-node position.
     pub local_position: Offset<f64>,
-    /// Primary velocity (axis-aligned)
+    /// Axis component of the velocity.
     pub primary_velocity: f64,
 }
-
-// Re-export Velocity from the velocity module
 pub use crate::processing::Velocity;
-
-/// Callback fired when a pointer contacts the screen and might begin a drag.
+/// Callback for an admitted contact.
 pub type DragDownCallback = Rc<dyn Fn(DragDownDetails)>;
-/// Callback fired when the drag is recognized by the gesture arena.
+/// Callback for arena acceptance.
 pub type DragStartCallback = Rc<dyn Fn(DragStartDetails)>;
-/// Callback fired for each pointer move while the drag is in progress.
+/// Callback for accepted movement.
 pub type DragUpdateCallback = Rc<dyn Fn(DragUpdateDetails)>;
-/// Callback fired when an accepted drag completes or is cancelled.
+/// Callback for an accepted terminal contact.
 pub type DragEndCallback = Rc<dyn Fn(DragEndDetails)>;
-/// Callback fired when the gesture is cancelled (e.g. the arena rejects it).
+/// Callback for a contact cancelled before acceptance.
 pub type DragCancelCallback = Rc<dyn Fn()>;
 
-/// Recognizes drag gestures
-///
-/// A drag begins when this recognizer wins its pointer's arena. Movement past
-/// the device slop explicitly claims victory when other recognizers are still
-/// competing; a lone recognizer can win by the arena's deferred default.
-///
-/// # Example
-///
-/// ```rust,ignore
-/// use flui_interaction::prelude::*;
-///
-/// let arena = GestureArena::new();
-/// let recognizer = DragGestureRecognizer::new(arena, DragAxis::Vertical)
-///     .with_on_start(|details| {
-///         println!("Drag started at {:?}", details.global_position);
-///     })
-///     .with_on_update(|details| {
-///         println!("Dragged by {:?}", details.delta);
-///     })
-///     .with_on_end(|details| {
-///         println!("Drag ended with velocity: {}", details.velocity.magnitude());
-///     });
-/// ```
-///
-/// Callback replacement commits before outgoing captures retire. Disposal
-/// closes callback admission and withdraws all callbacks before arena cleanup
-/// or capture retirement. Captures retire independently on healthy paths; the
-/// first failure retains the remaining opaque captures and propagates after
-/// cleanup. Active unwinding retains all outgoing captures. A callback's own
-/// aggregate of panicking destructors remains subject to Rust's double-panic
-/// limit. A failure previously caught by the caller is owned by that caller;
-/// this API cannot infer prior thread history from a healthy call.
-#[derive(Clone)]
-pub struct DragGestureRecognizer {
-    /// Base state (arena, tracking, etc.)
-    state: RecognizerBase,
-
-    /// Drag axis constraint
-    axis: DragAxis,
-
-    /// When to fix the drag's initial position.
-    ///
-    /// - [`DragStartBehavior::Down`]: position is the down-event position.
-    /// - [`DragStartBehavior::Start`]: position is where arena acceptance
-    ///   happens (the default).
-    start_behavior: DragStartBehavior,
-
-    /// Callbacks
-    callbacks: Rc<RefCell<DragCallbacks>>,
-
-    /// Current drag state
-    drag_state: Arc<Mutex<DragState>>,
-
-    /// Gesture settings (device-specific tolerances)
-    settings: Arc<Mutex<GestureSettings>>,
-}
-
-impl std::fmt::Debug for DragGestureRecognizer {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DragGestureRecognizer")
-            .field("state", &self.state)
-            .field("axis", &self.axis)
-            .field("start_behavior", &self.start_behavior)
-            .field("drag_state", &*self.drag_state.lock())
-            .field("settings", &self.settings.lock())
-            .finish_non_exhaustive()
-    }
-}
-
-// Field names keep the `on_drag_start`-style callback names.
-#[expect(clippy::struct_field_names)]
 #[derive(Default)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "callback fields name their public notifications"
+)]
 struct DragCallbacks {
     on_down: Option<DragDownCallback>,
     on_start: Option<DragStartCallback>,
@@ -206,544 +111,143 @@ struct DragCallbacks {
     on_end: Option<DragEndCallback>,
     on_cancel: Option<DragCancelCallback>,
 }
-
-impl DragCallbacks {
-    fn retire(&mut self, first: &mut Option<RoutePanic>) {
-        // Take every independent field before any user capture can run.
-        let down = self.on_down.take();
-        let start = self.on_start.take();
-        let update = self.on_update.take();
-        let end = self.on_end.take();
-        let cancel = self.on_cancel.take();
-        retire_callback(down, first);
-        retire_callback(start, first);
-        retire_callback(update, first);
-        retire_callback(end, first);
-        retire_callback(cancel, first);
-    }
-}
-
 impl Drop for DragCallbacks {
     fn drop(&mut self) {
-        let mut first = None;
-        self.retire(&mut first);
-        if let Some(panic) = first {
-            panic.resume();
-        }
+        retire_callbacks!(self; on_down, on_start, on_update, on_end, on_cancel);
+    }
+}
+fn replace_callback<T: ?Sized>(slot: &mut Option<Rc<T>>, incoming: Rc<T>) {
+    let outgoing = slot.replace(incoming);
+    let mut failure = None;
+    retire_callback(outgoing, &mut failure);
+    finish_containment(failure, std::thread::panicking());
+}
+
+/// Collects drag policy and callbacks before shared ownership begins.
+/// Callbacks cannot be replaced after [`build`](Self::build).
+pub struct DragGestureRecognizerBuilder {
+    arena: GestureArena,
+    axis: DragAxis,
+    start_behavior: DragStartBehavior,
+    settings: GestureSettings,
+    callbacks: DragCallbacks,
+}
+impl std::fmt::Debug for DragGestureRecognizerBuilder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DragGestureRecognizerBuilder")
+            .field("axis", &self.axis)
+            .field("start_behavior", &self.start_behavior)
+            .finish_non_exhaustive()
+    }
+}
+impl DragGestureRecognizerBuilder {
+    /// Configure admission settings, captured independently for each contact.
+    #[must_use]
+    pub fn settings(mut self, settings: GestureSettings) -> Self {
+        self.settings = settings;
+        self
+    }
+    /// Configure the initial-position policy.
+    #[must_use]
+    pub fn drag_start_behavior(mut self, behavior: DragStartBehavior) -> Self {
+        self.start_behavior = behavior;
+        self
+    }
+    /// Set the contact callback.
+    #[must_use]
+    pub fn on_down(mut self, callback: impl Fn(DragDownDetails) + 'static) -> Self {
+        replace_callback(&mut self.callbacks.on_down, Rc::new(callback));
+        self
+    }
+    /// Set the acceptance callback.
+    #[must_use]
+    pub fn on_start(mut self, callback: impl Fn(DragStartDetails) + 'static) -> Self {
+        replace_callback(&mut self.callbacks.on_start, Rc::new(callback));
+        self
+    }
+    /// Set the movement callback.
+    #[must_use]
+    pub fn on_update(mut self, callback: impl Fn(DragUpdateDetails) + 'static) -> Self {
+        replace_callback(&mut self.callbacks.on_update, Rc::new(callback));
+        self
+    }
+    /// Set the accepted terminal callback.
+    #[must_use]
+    pub fn on_end(mut self, callback: impl Fn(DragEndDetails) + 'static) -> Self {
+        replace_callback(&mut self.callbacks.on_end, Rc::new(callback));
+        self
+    }
+    /// Set the unaccepted cancellation callback.
+    #[must_use]
+    pub fn on_cancel(mut self, callback: impl Fn() + 'static) -> Self {
+        replace_callback(&mut self.callbacks.on_cancel, Rc::new(callback));
+        self
+    }
+    /// Build a recognizer belonging to the current UI owner.
+    #[must_use]
+    pub fn build(self) -> Rc<DragGestureRecognizer> {
+        Rc::<DragGestureRecognizer>::new_cyclic(|this| DragGestureRecognizer {
+            contact: PrimaryContact::new(ArenaMembership::new(self.arena, this.clone())),
+            axis: self.axis,
+            start_behavior: self.start_behavior,
+            settings: self.settings,
+            callbacks: self.callbacks,
+            drag_state: RefCell::new(None),
+        })
     }
 }
 
-#[derive(Debug, Clone)]
 struct DragState {
-    /// Current state
-    state: DragPhase,
-    /// When drag started
-    start_time: Option<Instant>,
-    /// Position reported in [`DragStartDetails`] — depends on
-    /// `start_behavior` (down position or slop-crossing position).
-    start_position: Option<Offset<f64>>,
-    /// The same contact as `start_position`, in the root's space.
-    ///
-    /// Stored rather than derived: dispatch localises the event before a
-    /// recognizer sees it, so the global position exists only at the moment
-    /// the event arrives (issue #908).
-    start_global_position: Option<Offset<f64>>,
-    /// The contact position at Down, in the root's space — the global
-    /// counterpart of the shared state's `initial_position`.
-    down_global_position: Option<Offset<f64>>,
-    /// Last update position
-    last_position: Option<Offset<f64>>,
-    /// The same contact as `last_position`, in the root's space.
-    last_global_position: Option<Offset<f64>>,
-    /// Last update time (for velocity calculation)
-    last_time: Option<Instant>,
-    /// Device kind captured at Down, needed when arena acceptance arrives
-    /// without another pointer event.
-    device_kind: Option<PointerType>,
-    /// Places this sequence's event timestamps on the arena clock, so
-    /// velocity samples are spaced by when the device produced them.
+    id: ContactId,
+    accepted: bool,
+    last_position: Offset<f64>,
+    last_global_position: Offset<f64>,
+    last_time: Instant,
     timeline: EventTimeline,
-    /// Velocity tracker
     velocity_tracker: VelocityTracker,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DragPhase {
-    Ready,
-    Possible, // Pointer down but haven't moved beyond slop yet
-    Started,  // Drag in progress
+/// Recognizes one drag, using immutable callbacks and policy.
+/// An accepted cancellation delivers `on_end(Cancelled)`; an unaccepted
+/// cancellation delivers `on_cancel`. Both leave the recognizer reusable.
+pub struct DragGestureRecognizer {
+    contact: PrimaryContact,
+    axis: DragAxis,
+    start_behavior: DragStartBehavior,
+    settings: GestureSettings,
+    callbacks: DragCallbacks,
+    drag_state: RefCell<Option<DragState>>,
 }
-
-impl Default for DragState {
-    fn default() -> Self {
-        Self {
-            state: DragPhase::Ready,
-            start_time: None,
-            start_position: None,
-            start_global_position: None,
-            down_global_position: None,
-            last_position: None,
-            last_global_position: None,
-            last_time: None,
-            device_kind: None,
-            timeline: EventTimeline::default(),
-            velocity_tracker: VelocityTracker::new(),
-        }
+impl std::fmt::Debug for DragGestureRecognizer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DragGestureRecognizer")
+            .field("axis", &self.axis)
+            .field("start_behavior", &self.start_behavior)
+            .finish_non_exhaustive()
     }
 }
-
 impl DragGestureRecognizer {
-    fn replace_callback<T: ?Sized>(
-        &self,
-        incoming: Rc<T>,
-        slot: impl FnOnce(&mut DragCallbacks) -> &mut Option<Rc<T>>,
-    ) {
-        let outgoing = if self.state.is_disposed() {
-            Some(incoming)
-        } else {
-            slot(&mut self.callbacks.borrow_mut()).replace(incoming)
-        };
-        let mut first = None;
-        retire_callback(outgoing, &mut first);
-        if let Some(panic) = first {
-            panic.resume();
+    /// Configure a drag before allocating its shared owner.
+    #[must_use]
+    pub fn builder(arena: GestureArena, axis: DragAxis) -> DragGestureRecognizerBuilder {
+        DragGestureRecognizerBuilder {
+            arena,
+            axis,
+            start_behavior: DragStartBehavior::default(),
+            settings: GestureSettings::default(),
+            callbacks: DragCallbacks::default(),
         }
     }
-    /// Create a new drag recognizer with gesture arena and axis constraint
-    pub fn new(arena: crate::arena::GestureArena, axis: DragAxis) -> Rc<Self> {
-        Rc::new(Self {
-            state: RecognizerBase::new(arena),
-            axis,
-            start_behavior: DragStartBehavior::default(),
-            callbacks: Rc::new(RefCell::new(DragCallbacks::default())),
-            drag_state: Arc::new(Mutex::new(DragState::default())),
-            settings: Arc::new(Mutex::new(GestureSettings::default())),
-        })
-    }
-
-    /// Create a new drag recognizer with custom settings
-    pub fn with_settings(
-        arena: crate::arena::GestureArena,
-        axis: DragAxis,
-        settings: GestureSettings,
-    ) -> Rc<Self> {
-        Rc::new(Self {
-            state: RecognizerBase::new(arena),
-            axis,
-            start_behavior: DragStartBehavior::default(),
-            callbacks: Rc::new(RefCell::new(DragCallbacks::default())),
-            drag_state: Arc::new(Mutex::new(DragState::default())),
-            settings: Arc::new(Mutex::new(settings)),
-        })
-    }
-
-    /// Configure when the drag's initial position is reported.
-    ///
-    /// See [`DragStartBehavior`] for the semantics. Default is
-    /// [`DragStartBehavior::Start`].
-    pub fn with_drag_start_behavior(self: Rc<Self>, behavior: DragStartBehavior) -> Rc<Self> {
-        // Re-construct with the new behavior — fields are all `Copy`/Arc so
-        // this is a cheap move, and it keeps the constructor pattern uniform.
-        Rc::new(Self {
-            start_behavior: behavior,
-            ..(*self).clone()
-        })
-    }
-
-    /// Get the current gesture settings
-    pub fn settings(&self) -> GestureSettings {
-        self.settings.lock().clone()
-    }
-
-    /// Update gesture settings
-    pub fn set_settings(&self, settings: GestureSettings) {
-        *self.settings.lock() = settings;
-    }
-
-    /// Drag axis this recogniser is bound to.
+    /// Configured axis.
+    #[must_use]
     pub fn axis(&self) -> DragAxis {
         self.axis
     }
-
-    /// Currently-configured [`DragStartBehavior`].
+    /// Configured initial-position policy.
+    #[must_use]
     pub fn drag_start_behavior(&self) -> DragStartBehavior {
         self.start_behavior
     }
-
-    /// Minimum drag distance for the current axis and pointer `kind`.
-    ///
-    /// Exactly `PointerDeviceKind::Mouse` counts as "precise" — stylus,
-    /// trackpad, and unknown all still resolve through the configured
-    /// settings profile alongside touch. A precise (mouse) pointer always
-    /// gets the fixed, much smaller constant, unconditionally —
-    /// [`with_settings`](Self::with_settings) customization has no effect on
-    /// it. For every other kind, per-axis slop:
-    /// - [`DragAxis::Vertical`][]: [`GestureSettings::pan_slop_vertical`]
-    /// - [`DragAxis::Horizontal`][]: [`GestureSettings::pan_slop_horizontal`]
-    /// - [`DragAxis::Free`][]: [`GestureSettings::pan_slop`]
-    ///
-    /// The kind split itself lives in [`GestureSettings::hit_slop`] and
-    /// [`GestureSettings::pan_slop_for`] — this method picks the tier and
-    /// then applies FLUI's per-axis narrowing on top.
-    fn min_drag_distance(&self, kind: PointerType) -> f64 {
-        let s = self.settings.lock();
-        match self.axis {
-            // PanGestureRecognizer resolves through `computePanSlop`, which is
-            // what the shared accessor is — both arms of it.
-            DragAxis::Free => s.pan_slop_for(kind),
-            // Vertical/HorizontalDragGestureRecognizer resolve through
-            // `computeHitSlop`. Its mouse arm is the shared accessor exactly;
-            // for every other kind FLUI narrows further, to a per-axis value
-            // the reference has no equivalent of.
-            DragAxis::Vertical | DragAxis::Horizontal if kind == PointerType::Mouse => {
-                s.hit_slop(kind)
-            }
-            DragAxis::Vertical => s.pan_slop_vertical(),
-            DragAxis::Horizontal => s.pan_slop_horizontal(),
-        }
-    }
-
-    /// Get the minimum fling velocity from settings
-    fn min_fling_velocity(&self) -> f64 {
-        self.settings.lock().min_fling_velocity()
-    }
-
-    /// Set the drag down callback (called on pointer contact before drag
-    /// starts)
-    ///
-    /// This is called when a pointer contacts the screen with a primary button
-    /// and might begin to move. Unlike `on_start`, this is called before any
-    /// movement threshold is met.
-    pub fn with_on_down(self: Rc<Self>, callback: impl Fn(DragDownDetails) + 'static) -> Rc<Self> {
-        let callback: DragDownCallback = Rc::new(callback);
-        self.replace_callback(callback, |callbacks| &mut callbacks.on_down);
-        self
-    }
-
-    /// Set the drag start callback
-    pub fn with_on_start(
-        self: Rc<Self>,
-        callback: impl Fn(DragStartDetails) + 'static,
-    ) -> Rc<Self> {
-        let callback: DragStartCallback = Rc::new(callback);
-        self.replace_callback(callback, |callbacks| &mut callbacks.on_start);
-        self
-    }
-
-    /// Set the drag update callback
-    pub fn with_on_update(
-        self: Rc<Self>,
-        callback: impl Fn(DragUpdateDetails) + 'static,
-    ) -> Rc<Self> {
-        let callback: DragUpdateCallback = Rc::new(callback);
-        self.replace_callback(callback, |callbacks| &mut callbacks.on_update);
-        self
-    }
-
-    /// Set the drag end callback
-    pub fn with_on_end(self: Rc<Self>, callback: impl Fn(DragEndDetails) + 'static) -> Rc<Self> {
-        let callback: DragEndCallback = Rc::new(callback);
-        self.replace_callback(callback, |callbacks| &mut callbacks.on_end);
-        self
-    }
-
-    /// Set the drag cancel callback
-    pub fn with_on_cancel(self: Rc<Self>, callback: impl Fn() + 'static) -> Rc<Self> {
-        let callback: DragCancelCallback = Rc::new(callback);
-        self.replace_callback(callback, |callbacks| &mut callbacks.on_cancel);
-        self
-    }
-
-    /// Handle pointer down - start tracking
-    ///
-    /// `stamp` is the Down's own timestamp, if the contact was admitted
-    /// with its event and the event carried one.
-    fn handle_down(
-        &self,
-        position: Offset<f64>,
-        global_position: Offset<f64>,
-        kind: PointerType,
-        stamp: Option<u64>,
-    ) {
-        // Anchor the sequence's event timestamps on the arena's clock, not the
-        // OS clock directly: a headless frame driver binds it to a
-        // `ManualClock`, the same mechanism the deadline recognizers use.
-        let mut timeline = EventTimeline::default();
-        let now = timeline.instant(stamp, self.state.now());
-        let mut state = self.drag_state.lock();
-        state.timeline = timeline;
-        state.state = DragPhase::Possible;
-        state.start_time = Some(now);
-        state.start_position = None;
-        state.start_global_position = None;
-        state.down_global_position = Some(global_position);
-        state.last_position = Some(position);
-        state.last_global_position = Some(global_position);
-        state.last_time = Some(now);
-        state.device_kind = Some(kind);
-        state.velocity_tracker.reset();
-        state.velocity_tracker.add_position(now, position);
-        drop(state); // Release lock before callback
-
-        // Call on_down callback (pointer contact before drag starts)
-        let callback = self.callbacks.borrow().on_down.clone();
-        invoke_callback(
-            callback,
-            || {},
-            |callback| {
-                let details = DragDownDetails {
-                    global_position,
-                    local_position: position,
-                    kind,
-                };
-                callback(details);
-            },
-        );
-    }
-
-    /// Handle pointer move - check slop and start/update drag
-    fn handle_move(
-        &self,
-        position: Offset<f64>,
-        global_position: Offset<f64>,
-        kind: PointerType,
-        stamp: Option<u64>,
-    ) {
-        let now = self.state.now();
-        let mut state = self.drag_state.lock();
-        let now = state.timeline.instant(stamp, now);
-
-        match state.state {
-            DragPhase::Possible => {
-                let Some(initial_pos) = self.state.initial_position() else {
-                    return;
-                };
-                let distance = self.calculate_primary_delta(position - initial_pos);
-                state.last_position = Some(position);
-                state.last_global_position = Some(global_position);
-                state.last_time = Some(now);
-                state.device_kind = Some(kind);
-                state.velocity_tracker.add_position(now, position);
-                let should_accept = distance.abs() > self.min_drag_distance(kind);
-                drop(state);
-
-                // Crossing slop is a request to win, not permission to invoke
-                // callbacks. Arena acceptance can be delayed by competitors;
-                // `accept_gesture` is the sole start transition.
-                if should_accept {
-                    self.state.accept_tracked();
-                }
-            }
-            DragPhase::Started => {
-                // Update drag
-                if let Some(last_pos) = state.last_position {
-                    let delta = self.project_delta(position - last_pos);
-                    state.last_position = Some(position);
-                    state.last_global_position = Some(global_position);
-                    state.last_time = Some(now);
-                    state.velocity_tracker.add_position(now, position);
-
-                    // Per-event, matching `delta` above — not accumulated
-                    // across the whole drag. Passing a running total here
-                    // would make every update after the first report the
-                    // wrong magnitude (and, once the drag reverses direction,
-                    // the wrong sign) for any drag with 3+ move events.
-                    let primary_delta = self.calculate_primary_delta(delta);
-
-                    drop(state); // Release lock before calling callback
-
-                    let callback = self.callbacks.borrow().on_update.clone();
-                    invoke_callback(
-                        callback,
-                        || {},
-                        |callback| {
-                            let details = DragUpdateDetails {
-                                global_position,
-                                local_position: position,
-                                delta,
-                                primary_delta,
-                                kind,
-                            };
-                            callback(details);
-                        },
-                    );
-                }
-            }
-            DragPhase::Ready => {}
-        }
-    }
-
-    /// Transition a possible drag after the arena has accepted it.
-    ///
-    /// State is committed before application code so a reentrant callback
-    /// observes `Started`, and the callback never runs under a recognizer lock.
-    fn begin_accepted_drag(&self) {
-        let (start_details, initial_update) = {
-            let mut state = self.drag_state.lock();
-            if state.state != DragPhase::Possible {
-                return;
-            }
-            let Some(initial) = self.state.initial_position() else {
-                return;
-            };
-            let accepted_position = state.last_position.unwrap_or(initial);
-            // The global counterparts of the same two anchors. Both are
-            // OBSERVED values, never re-derived: a recognizer holds no
-            // transform, so a local delta cannot be mapped into the root's
-            // space here.
-            let initial_global = state.down_global_position.unwrap_or(initial);
-            let accepted_global = state.last_global_position.unwrap_or(initial_global);
-            let start_position = match self.start_behavior {
-                DragStartBehavior::Down => initial,
-                DragStartBehavior::Start => accepted_position,
-            };
-            let start_global = match self.start_behavior {
-                DragStartBehavior::Down => initial_global,
-                DragStartBehavior::Start => accepted_global,
-            };
-            let timestamp = state.last_time.unwrap_or_else(|| self.state.now());
-            let kind = state.device_kind.unwrap_or(PointerType::Touch);
-            state.state = DragPhase::Started;
-            state.start_position = Some(start_position);
-            state.start_global_position = Some(start_global);
-            state.last_position = Some(accepted_position);
-            state.last_global_position = Some(accepted_global);
-            let start_details = DragStartDetails {
-                global_position: start_global,
-                local_position: start_position,
-                kind,
-                timestamp,
-            };
-
-            // `Down` preserves the contact position
-            // for onStart and immediately flushes movement accumulated while
-            // the arena was unresolved. `Start` re-anchors at acceptance and
-            // deliberately emits no synthetic first update.
-            let initial_update = (self.start_behavior == DragStartBehavior::Down)
-                .then(|| self.project_delta(accepted_position - initial))
-                .filter(|delta| delta.dx != 0.0 || delta.dy != 0.0)
-                .map(|delta| {
-                    let corrected_position = initial + delta;
-                    // `corrected_position` is SYNTHESIZED — the down anchor
-                    // plus an axis-projected delta — so it has no global
-                    // counterpart a recognizer can compute: mapping a local
-                    // delta into the root's space needs the transform, which
-                    // dispatch applied and did not hand over. The observed
-                    // global at acceptance is reported instead: it is where
-                    // the pointer actually is, which is what a consumer of
-                    // this field wants, while the local half stays projected
-                    // for the widget's own axis maths.
-                    DragUpdateDetails {
-                        global_position: accepted_global,
-                        local_position: corrected_position,
-                        primary_delta: self.calculate_primary_delta(delta),
-                        delta,
-                        kind,
-                    }
-                });
-            (start_details, initial_update)
-        };
-
-        let callback = self.callbacks.borrow().on_start.clone();
-        invoke_callback(callback, || {}, |callback| callback(start_details));
-        if let Some(details) = initial_update {
-            let callback = self.callbacks.borrow().on_update.clone();
-            invoke_callback(callback, || {}, |callback| callback(details));
-        }
-    }
-
-    /// Handle pointer up - end drag
-    fn handle_up(
-        &self,
-        position: Offset<f64>,
-        global_position: Offset<f64>,
-        _kind: PointerType,
-        stamp: Option<u64>,
-    ) {
-        let now = self.state.now();
-        let mut state = self.drag_state.lock();
-
-        if state.state == DragPhase::Started {
-            let now = state.timeline.instant(stamp, now);
-            let velocity = state.velocity_tracker.velocity_at(now);
-            let primary_velocity = self.calculate_primary_velocity(velocity.pixels_per_second);
-
-            let callback = self.callbacks.borrow().on_end.clone();
-            *state = DragState::default();
-            drop(state);
-
-            // Retire tracking before application code can unwind or start
-            // another pointer sequence on this recognizer.
-            invoke_callback(
-                callback,
-                || self.state.stop_tracking(),
-                |callback| {
-                    callback(DragEndDetails {
-                        reason: GestureEndReason::Completed,
-                        velocity,
-                        global_position,
-                        local_position: position,
-                        primary_velocity,
-                    });
-                },
-            );
-        } else {
-            // A pointer that lifts before this recognizer wins is no longer a
-            // candidate: resolve rejected and emit the cancel callback;
-            // leaving the entry live lets sweep incorrectly choose this drag
-            // over a competing tap.
-            let callback = self.callbacks.borrow().on_cancel.clone();
-            *state = DragState::default();
-            drop(state);
-            invoke_callback(callback, || self.state.reject(), |callback| callback());
-        }
-    }
-
-    /// Handle cancel
-    fn handle_cancel(&self) {
-        let mut state = self.drag_state.lock();
-
-        match state.state {
-            DragPhase::Ready => {}
-            DragPhase::Possible => {
-                let callback = self.callbacks.borrow().on_cancel.clone();
-                *state = DragState::default();
-                drop(state);
-
-                invoke_callback(callback, || self.state.reject(), |callback| callback());
-            }
-            DragPhase::Started => {
-                // An accepted drag ends even when the terminal event is
-                // PointerCancel.
-                let position = state.last_position.unwrap_or(Offset::ZERO);
-                let global_position = state.last_global_position.unwrap_or(position);
-                let velocity = state.velocity_tracker.get_velocity();
-                let primary_velocity = self.calculate_primary_velocity(velocity.pixels_per_second);
-                let callback = self.callbacks.borrow().on_end.clone();
-                *state = DragState::default();
-                drop(state);
-
-                invoke_callback(
-                    callback,
-                    || self.state.stop_tracking(),
-                    |callback| {
-                        callback(DragEndDetails {
-                            reason: GestureEndReason::Cancelled,
-                            velocity,
-                            global_position,
-                            local_position: position,
-                            primary_velocity,
-                        });
-                    },
-                );
-            }
-        }
-    }
-
-    /// Project movement onto the recognizer's configured axis.
-    ///
-    /// Horizontal and vertical recognizers report an axis-pure delta; only a
-    /// pan recognizer retains both axes.
     fn project_delta(&self, delta: Offset<f64>) -> Offset<f64> {
         match self.axis {
             DragAxis::Vertical => Offset::new(0.0, delta.dy),
@@ -751,365 +255,278 @@ impl DragGestureRecognizer {
             DragAxis::Free => delta.to_delta(),
         }
     }
-
-    /// Calculate primary delta based on axis
-    fn calculate_primary_delta(&self, delta: Offset<f64>) -> f64 {
+    fn primary_delta(&self, delta: Offset<f64>) -> f64 {
         match self.axis {
             DragAxis::Vertical => delta.dy,
             DragAxis::Horizontal => delta.dx,
-            DragAxis::Free => delta.distance(),
+            DragAxis::Free => delta.dx.hypot(delta.dy),
         }
     }
-
-    /// Calculate primary velocity based on axis
-    fn calculate_primary_velocity(&self, velocity: Offset<f64>) -> f64 {
+    fn slop(&self, kind: PointerType, settings: &GestureSettings) -> f64 {
         match self.axis {
-            DragAxis::Vertical => velocity.dy,
-            DragAxis::Horizontal => velocity.dx,
-            DragAxis::Free => velocity.distance(),
-        }
-    }
-
-    /// Check if velocity is sufficient for a fling gesture
-    pub fn is_fling(&self, velocity: &Velocity) -> bool {
-        let speed = velocity.pixels_per_second.distance();
-        speed >= self.min_fling_velocity()
-    }
-
-    /// Extract position and pointer type from a PointerEvent
-    fn extract_event_data(event: &PointerEvent) -> (Offset<f64>, PointerType) {
-        let position = event.position();
-        let pointer_type = match event {
-            PointerEvent::Down(e) | PointerEvent::Up(e) => e.pointer.pointer_type,
-            PointerEvent::Move(e) => e.pointer.pointer_type,
-            PointerEvent::Cancel(info) | PointerEvent::Enter(info) | PointerEvent::Leave(info) => {
-                info.pointer_type
+            DragAxis::Free => settings.pan_slop_for(kind),
+            DragAxis::Vertical | DragAxis::Horizontal if kind == PointerType::Mouse => {
+                settings.hit_slop(kind)
             }
-            PointerEvent::Scroll(e) => e.pointer.pointer_type,
-            PointerEvent::Gesture(e) => e.pointer.pointer_type,
-        };
-        (position, pointer_type)
+            DragAxis::Vertical => settings.pan_slop_vertical(),
+            DragAxis::Horizontal => settings.pan_slop_horizontal(),
+        }
     }
-
-    /// Start a sequence for `pointer`.
-    ///
-    /// A drag follows one contact. While it tracks one, another contact
-    /// landing on the same recognizer (a second finger) is not admitted and
-    /// leaves the running drag alone. A new contact under the pointer the
-    /// drag still tracks means that pointer's terminal event never arrived:
-    /// the old sequence is terminated first — an accepted drag reports its
-    /// end as cancelled, a possible one its cancel — so the consumer always
-    /// sees one terminal callback per started drag.
-    fn admit(
-        self: &Rc<Self>,
-        pointer: PointerId,
-        position: Offset<f64>,
-        global_position: Offset<f64>,
-        kind: PointerType,
-        stamp: Option<u64>,
-    ) {
-        if !self.state.assert_not_disposed("add_pointer") {
+    fn handle_move(&self, dispatch: PointerDispatch<'_>) {
+        let Some(contact) = self.contact.current() else {
+            return;
+        };
+        let position = dispatch.local.position();
+        let global = dispatch.global.position();
+        if !position.dx.is_finite()
+            || !position.dy.is_finite()
+            || !global.dx.is_finite()
+            || !global.dy.is_finite()
+        {
+            self.cancel();
             return;
         }
-        let generation = self.state.contact_generation();
-        match self.state.primary_pointer() {
-            Some(tracked) if tracked != pointer => return,
-            Some(_) => self.handle_cancel(),
-            None => {}
+        let clock = self.contact.now();
+        let (update, claim) = {
+            let mut slot = self.drag_state.borrow_mut();
+            let Some(state) = slot.as_mut() else {
+                return;
+            };
+            if state.id != contact.id {
+                return;
+            }
+            let now = state.timeline.instant(event_time(dispatch.local), clock);
+            let delta = self.project_delta(position - state.last_position);
+            if !delta.dx.is_finite()
+                || !delta.dy.is_finite()
+                || !self.primary_delta(delta).is_finite()
+            {
+                drop(slot);
+                self.cancel();
+                return;
+            }
+            state.last_position = position;
+            state.last_global_position = global;
+            state.last_time = now;
+            state.velocity_tracker.add_position(now, position);
+            let update = state.accepted.then_some(DragUpdateDetails {
+                global_position: global,
+                local_position: position,
+                delta,
+                primary_delta: self.primary_delta(delta),
+                kind: contact.kind,
+            });
+            let claim = !state.accepted
+                && self.primary_delta(position - contact.local).abs()
+                    > self.slop(contact.kind, &contact.settings);
+            (update, claim)
+        };
+        if let Some(details) = update {
+            invoke_callback(
+                self.callbacks.on_update.clone(),
+                || {},
+                |callback| callback(details),
+            );
+        } else if claim {
+            self.contact.accept();
         }
-        // `handle_cancel` runs user code, which may dispose this recognizer or
-        // admit a contact of its own; either way this admission is void.
-        if self.state.is_disposed() || self.state.contact_generation() != generation {
+    }
+    fn begin_accepted_drag(&self) {
+        let Some(contact) = self.contact.current() else {
             return;
+        };
+        let (start, update) = {
+            let mut state = self.drag_state.borrow_mut();
+            let Some(state) = state.as_mut() else {
+                return;
+            };
+            if state.accepted || state.id != contact.id {
+                return;
+            }
+            state.accepted = true;
+            let (local, global) = match self.start_behavior {
+                DragStartBehavior::Down => (contact.local, contact.global),
+                DragStartBehavior::Start => (state.last_position, state.last_global_position),
+            };
+            let start = DragStartDetails {
+                global_position: global,
+                local_position: local,
+                kind: contact.kind,
+                timestamp: state.last_time,
+            };
+            let delta = self.project_delta(state.last_position - contact.local);
+            let update = (self.start_behavior == DragStartBehavior::Down && delta != Offset::ZERO)
+                .then_some(DragUpdateDetails {
+                    global_position: state.last_global_position,
+                    local_position: contact.local + delta,
+                    delta,
+                    primary_delta: self.primary_delta(delta),
+                    kind: contact.kind,
+                });
+            (start, update)
+        };
+        invoke_callback(
+            self.callbacks.on_start.clone(),
+            || {},
+            |callback| callback(start),
+        );
+        if self.contact.is_current(contact.id)
+            && let Some(details) = update
+        {
+            invoke_callback(
+                self.callbacks.on_update.clone(),
+                || {},
+                |callback| callback(details),
+            );
         }
-        self.state
-            .start_tracking(pointer, position, global_position, self);
-        self.handle_down(position, global_position, kind, stamp);
+    }
+    fn terminate(
+        &self,
+        reason: GestureEndReason,
+        dispatch: Option<PointerDispatch<'_>>,
+    ) -> CancelOutcome {
+        let Some(contact) = self.contact.current() else {
+            return CancelOutcome::Idle;
+        };
+        let clock = self.contact.now();
+        if !self.contact.is_current(contact.id) {
+            return CancelOutcome::Idle;
+        }
+        let state = self.drag_state.borrow_mut().take();
+        let Some(mut state) = state else {
+            self.contact.cancel();
+            return CancelOutcome::Cancelled;
+        };
+        let now = state
+            .timeline
+            .instant(dispatch.and_then(|d| event_time(d.local)), clock);
+        let velocity = state.velocity_tracker.velocity_at(now);
+        let (position, global) = dispatch
+            .filter(|d| matches!(d.local, PointerEvent::Up(_)))
+            .map_or((state.last_position, state.last_global_position), |d| {
+                (d.local.position(), d.global.position())
+            });
+        if state.accepted {
+            let before = || {
+                if reason == GestureEndReason::Completed {
+                    self.contact.finish();
+                } else {
+                    self.contact.cancel();
+                }
+            };
+            invoke_callback(self.callbacks.on_end.clone(), before, |callback| {
+                callback(DragEndDetails {
+                    reason,
+                    velocity,
+                    local_position: position,
+                    global_position: global,
+                    primary_velocity: self.primary_delta(velocity.pixels_per_second),
+                })
+            });
+        } else {
+            invoke_callback(
+                self.callbacks.on_cancel.clone(),
+                || {
+                    if reason == GestureEndReason::Completed {
+                        self.contact.withdraw();
+                    } else {
+                        self.contact.cancel();
+                    }
+                },
+                |callback| callback(),
+            );
+        }
+        CancelOutcome::Cancelled
     }
 }
-
 impl GestureRecognizer for DragGestureRecognizer {
-    fn add_pointer(
-        self: &Rc<Self>,
-        pointer: PointerId,
-        position: Offset<f64>,
-        global_position: Offset<f64>,
-    ) {
-        // No event, so neither kind nor time: the touch tier, dispatch time.
-        self.admit(pointer, position, global_position, PointerType::Touch, None);
-    }
-
-    fn add_pointer_down(self: &Rc<Self>, dispatch: PointerDispatch<'_>) {
-        let event = dispatch.local;
-        if !is_primary_down(event) {
+    fn add_pointer(&self, dispatch: PointerDispatch<'_>) {
+        if !is_primary_down(dispatch.local) {
             return;
         }
-        let (position, kind) = Self::extract_event_data(event);
-        self.admit(
-            event.pointer_id(),
-            position,
-            dispatch.global.position(),
-            kind,
-            event_time(event),
-        );
-    }
-
-    fn handle_event(&self, dispatch: PointerDispatch<'_>) {
-        if !self.state.assert_not_disposed("handle_event") {
-            return;
+        if let Some(current) = self.contact.current() {
+            if current.pointer != dispatch.local.pointer_id() {
+                return;
+            }
+            self.cancel();
+            if self.contact.current().is_some() {
+                return;
+            }
         }
-        // Only process if we're tracking a pointer
-        let Some(primary) = self.state.primary_pointer() else {
+        let Ok(id) = self.contact.begin(dispatch, &self.settings) else {
             return;
         };
-        let event = dispatch.local;
-        // Filter to the primary pointer we are tracking.
-        if event.pointer_id() != primary {
+        let Some(contact) = self.contact.current() else {
+            return;
+        };
+        let mut timeline = EventTimeline::default();
+        let now = timeline.instant(event_time(dispatch.local), self.contact.now());
+        if !self.contact.is_current(id) {
             return;
         }
-
-        let (position, pointer_type) = Self::extract_event_data(event);
-        // Read here and threaded on, never re-derived: this is the only point
-        // at which the untransformed position is available at all.
-        let global_position = dispatch.global.position();
-
-        match event {
-            PointerEvent::Move(_) => {
-                self.handle_move(position, global_position, pointer_type, event_time(event));
-            }
+        let mut velocity_tracker = VelocityTracker::new();
+        velocity_tracker.add_position(now, contact.local);
+        *self.drag_state.borrow_mut() = Some(DragState {
+            id,
+            accepted: false,
+            last_position: contact.local,
+            last_global_position: contact.global,
+            last_time: now,
+            timeline,
+            velocity_tracker,
+        });
+        invoke_callback(
+            self.callbacks.on_down.clone(),
+            || {},
+            |callback| {
+                callback(DragDownDetails {
+                    global_position: contact.global,
+                    local_position: contact.local,
+                    kind: contact.kind,
+                })
+            },
+        );
+    }
+    fn handle_event(&self, dispatch: PointerDispatch<'_>) {
+        if !self.contact.tracks(dispatch.local.pointer_id()) {
+            return;
+        }
+        match dispatch.local {
+            PointerEvent::Move(_) => self.handle_move(dispatch),
             PointerEvent::Up(_) => {
-                self.handle_up(position, global_position, pointer_type, event_time(event));
+                self.terminate(GestureEndReason::Completed, Some(dispatch));
             }
             PointerEvent::Cancel(_) => {
-                self.handle_cancel();
+                self.terminate(GestureEndReason::Cancelled, Some(dispatch));
             }
             _ => {}
         }
     }
-
-    fn dispose(&self) {
-        let incoming_failure = std::thread::panicking();
-        self.state.mark_disposed();
-        let mut callbacks = std::mem::take(&mut *self.callbacks.borrow_mut());
-        *self.drag_state.lock() = DragState::default();
-        // Reject arena entries + clear tracked pointer (disposing a
-        // recognizer clears arena state for tracked pointers).
-        let mut first = RoutePanic::capture(|| self.state.reject());
-        callbacks.retire(&mut first);
-        if let Some(panic) = first {
-            if incoming_failure {
-                panic.retain();
-            } else {
-                panic.resume();
-            }
-        }
-    }
-
-    fn primary_pointer(&self) -> Option<PointerId> {
-        self.state.primary_pointer()
+    fn cancel(&self) -> CancelOutcome {
+        self.terminate(GestureEndReason::Cancelled, None)
     }
 }
-
-// =============================================================================
-// Canonical trait hierarchy adoption
-// =============================================================================
-//
-// Drag is OneSequence (NOT PrimaryPointer) — it tracks a single sequence but
-// doesn't have the pre-acceptance deadline semantics of PrimaryPointer
-// recognizers.
-
-impl crate::recognizers::OneSequenceGestureRecognizer for DragGestureRecognizer {
-    fn tracked_pointers(&self) -> Vec<PointerId> {
-        self.state
-            .primary_pointer()
-            .map(|p| vec![p])
-            .unwrap_or_default()
-    }
-
-    fn resolve_pointer(&self, pointer: PointerId, disposition: crate::arena::GestureDisposition) {
-        match disposition {
-            crate::arena::GestureDisposition::Accepted => {
-                self.begin_accepted_drag();
-            }
-            crate::arena::GestureDisposition::Rejected => {
-                self.reject_gesture(pointer);
-            }
-        }
-    }
-
-    fn stop_tracking_pointer(&self, _pointer: PointerId) {
-        self.state.stop_tracking();
-    }
-}
-
 impl GestureArenaMember for DragGestureRecognizer {
     fn accept_gesture(&self, pointer: PointerId) {
-        if self.state.primary_pointer() == Some(pointer) {
+        if self.contact.tracks(pointer) {
             self.begin_accepted_drag();
         }
     }
-
     fn reject_gesture(&self, pointer: PointerId) {
-        if self.state.primary_pointer() != Some(pointer) {
+        if !self.contact.tracks(pointer) {
             return;
         }
-        let callback = {
-            let mut state = self.drag_state.lock();
-            let callback = (state.state != DragPhase::Ready)
-                .then(|| self.callbacks.borrow().on_cancel.clone())
-                .flatten();
-            *state = DragState::default();
-            callback
-        };
-        // The arena already resolved this entry. Clear only local tracking;
-        // resolving it again is unnecessary re-entrancy.
-        invoke_callback(
-            callback,
-            || self.state.stop_tracking(),
-            |callback| callback(),
-        );
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{arena::GestureArena, events::make_move_event};
-
-    struct PassiveCompetitor;
-
-    impl crate::sealed::arena_member::Sealed for PassiveCompetitor {}
-
-    impl GestureArenaMember for PassiveCompetitor {
-        fn accept_gesture(&self, _pointer: PointerId) {}
-
-        fn reject_gesture(&self, _pointer: PointerId) {}
-    }
-
-    fn close_with_competitor(arena: &GestureArena, pointer: PointerId) -> Rc<PassiveCompetitor> {
-        let competitor = Rc::new(PassiveCompetitor);
-        arena.add(pointer, &competitor);
-        arena.close(pointer);
-        competitor
-    }
-
-    // Drag recognizer matrix: vertical recognition and rejection on early up.
-    #[test]
-    fn drag_recognizer_matrix() {
-        let cases: &[(&str, fn())] = &[
-            (
-                "test_drag_recognizer_vertical",
-                test_drag_recognizer_vertical,
-            ),
-            (
-                "up_before_acceptance_rejects_drag_and_preserves_the_competitor",
-                up_before_acceptance_rejects_drag_and_preserves_the_competitor,
-            ),
-        ];
-        for &(name, case) in cases {
-            if let Err(payload) = std::panic::catch_unwind(case) {
-                eprintln!("matrix case `{name}` failed");
-                std::panic::resume_unwind(payload);
-            }
+        let active = self.drag_state.borrow_mut().take().is_some();
+        if active {
+            invoke_callback(
+                self.callbacks.on_cancel.clone(),
+                || {
+                    self.contact.withdraw();
+                },
+                |callback| callback(),
+            );
+        } else {
+            self.contact.withdraw();
         }
     }
-
-    fn up_before_acceptance_rejects_drag_and_preserves_the_competitor() {
-        struct Winner(Arc<Mutex<u32>>);
-
-        impl crate::sealed::arena_member::Sealed for Winner {}
-
-        impl GestureArenaMember for Winner {
-            fn accept_gesture(&self, _pointer: PointerId) {
-                *self.0.lock() += 1;
-            }
-
-            fn reject_gesture(&self, _pointer: PointerId) {}
-        }
-
-        let arena = GestureArena::new();
-        let cancels = Arc::new(Mutex::new(0_u32));
-        let callback_cancels = Arc::clone(&cancels);
-        let recognizer = DragGestureRecognizer::new(arena.clone(), DragAxis::Horizontal)
-            .with_on_cancel(move || *callback_cancels.lock() += 1);
-        let accepted = Arc::new(Mutex::new(0_u32));
-        let pointer = PointerId::PRIMARY;
-        let position = Offset::new(10.0, 20.0);
-
-        recognizer.add_pointer(pointer, position, position);
-        let winner = Rc::new(Winner(Arc::clone(&accepted)));
-        arena.add(pointer, &winner);
-        arena.close(pointer);
-        recognizer.handle_event(PointerDispatch::at_root(&crate::events::make_up_event(
-            position,
-            PointerType::Touch,
-        )));
-        arena.drain_deferred_resolutions();
-
-        assert_eq!(*cancels.lock(), 1);
-        assert_eq!(
-            *accepted.lock(),
-            1,
-            "the possible drag must withdraw instead of stealing the Up sweep"
-        );
-        assert_eq!(recognizer.primary_pointer(), None);
-        assert!(arena.is_empty());
-    }
-
-    fn test_drag_recognizer_vertical() {
-        let arena = GestureArena::new();
-        let started = Arc::new(Mutex::new(false));
-        let updated = Arc::new(Mutex::new(false));
-
-        let started_clone = started.clone();
-        let updated_clone = updated.clone();
-
-        let recognizer = DragGestureRecognizer::new(arena.clone(), DragAxis::Vertical)
-            .with_on_start(move |_details| {
-                *started_clone.lock() = true;
-            })
-            .with_on_update(move |_details| {
-                *updated_clone.lock() = true;
-            });
-
-        let pointer = PointerId::PRIMARY;
-        let start_pos = Offset::new(100.0, 100.0);
-
-        // Start tracking
-        recognizer.add_pointer(pointer, start_pos, start_pos);
-        let _competitor = close_with_competitor(&arena, pointer);
-
-        // Move vertically beyond slop
-        let moved_pos = Offset::new(100.0, 130.0); // 30px down
-        let move_event = make_move_event(moved_pos, PointerType::Touch);
-        recognizer.handle_event(PointerDispatch::at_root(&move_event));
-
-        // Should have started
-        assert!(*started.lock());
-
-        // Move more
-        let moved_pos2 = Offset::new(100.0, 150.0);
-        let move_event2 = make_move_event(moved_pos2, PointerType::Touch);
-        recognizer.handle_event(PointerDispatch::at_root(&move_event2));
-
-        // Should have updated
-        assert!(*updated.lock());
-    }
-
-    // ========================================================================
-    // Precise-pointer slop (mouse vs. touch)
-    //
-    // A mouse gets the precise-pointer hit slop (1.0 logical px), not the
-    // touch slop (18.0) — every other kind (stylus, trackpad, unknown,
-    // touch) still resolves through the touch-tier settings.
-    // ========================================================================
-
-    // ========================================================================
-    // H/V/Pan split tests
-    //
-    // Verifies:
-    // - per-axis slop (Vertical/Horizontal pick their own slop, Free uses
-    //   the generic `pan_slop`),
-    // - `DragStartBehavior::Down` vs `Start` (start_position differs).
-    // ========================================================================
 }

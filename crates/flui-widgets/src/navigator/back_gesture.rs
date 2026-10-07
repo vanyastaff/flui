@@ -297,28 +297,14 @@ impl BackGestureRuntime {
         self.awaiting_settle.get()
     }
 
-    fn on_pointer_down(
-        &self,
-        recognizer: &Rc<DragGestureRecognizer>,
-        dispatch: flui_interaction::PointerDispatch<'_>,
-    ) {
+    fn admits_new_gesture(&self) -> bool {
         if !(self.enabled)() {
-            return;
+            return false;
         }
         // Multi-touch: while a drag is active, a second pointer-down in the
         // edge region must not start a second gesture — a hard guard rather
         // than a debug-only assertion.
-        if self.gesture.borrow().is_some() {
-            return;
-        }
-        // Both spaces, from the pair the Listener hands over: passing the
-        // localised position twice is how a recogniser ends up reporting a
-        // local position under the name `global_position` (issue #908), and
-        // the transform between them is exactly what an edge-anchored back
-        // gesture sits behind.
-        // The Down itself, so the recognizer reads the device kind and admits
-        // the primary button only.
-        recognizer.add_pointer_down(dispatch);
+        self.gesture.borrow().is_none()
     }
 
     /// The recognizer's drag start: begins a gesture unless one is in flight.
@@ -561,11 +547,7 @@ impl StatefulView for BackGestureDetector {
 pub(crate) struct BackGestureDetectorState {
     runtime: super::lifecycle::Terminal<Rc<BackGestureRuntime>>,
     /// Built exactly once in `init_state` against the presentation arena.
-    recognizer: Option<Recognizer>,
-}
-
-struct Recognizer {
-    drag: Rc<DragGestureRecognizer>,
+    recognizer: Option<Rc<DragGestureRecognizer>>,
 }
 
 impl Drop for BackGestureDetectorState {
@@ -605,21 +587,10 @@ impl ViewState<BackGestureDetector> for BackGestureDetectorState {
             .expect("BUG: init_state must build the recognizer before the first build");
 
         let down_runtime = super::lifecycle::Terminal::new(Rc::clone(&self.runtime));
-        let down_drag = super::lifecycle::Terminal::new(Rc::clone(&recognizer.drag));
-        let move_drag = Rc::clone(&recognizer.drag);
-        let up_drag = Rc::clone(&recognizer.drag);
-        let cancel_drag = Rc::clone(&recognizer.drag);
 
         let listener = Listener::new()
             .behavior(HitTestBehavior::Translucent)
-            // The drag recognizer tracks one space; hand it the local one,
-            // which is what it has always received.
-            .on_pointer_down(move |_cx, dispatch| {
-                down_runtime.on_pointer_down(&down_drag, dispatch);
-            })
-            .on_pointer_move(move |_cx, dispatch| move_drag.handle_event(dispatch))
-            .on_pointer_up(move |_cx, dispatch| up_drag.handle_event(dispatch))
-            .on_pointer_cancel(move |_cx, dispatch| cancel_drag.handle_event(dispatch));
+            .recognizer_when(recognizer, move |_| down_runtime.admits_new_gesture());
 
         let child = view
             .child
@@ -641,27 +612,26 @@ impl ViewState<BackGestureDetector> for BackGestureDetectorState {
 
     fn dispose(&mut self) {
         self.runtime.dispose_safety_net();
-        if let Some(recognizer) = self.recognizer.as_ref() {
-            recognizer.drag.dispose();
+        if let Some(recognizer) = self.recognizer.take() {
+            recognizer.cancel();
         }
     }
 }
 
 impl BackGestureDetectorState {
-    fn build_recognizer(&self, ctx: &dyn BuildContext) -> Recognizer {
+    fn build_recognizer(&self, ctx: &dyn BuildContext) -> Rc<DragGestureRecognizer> {
         let arena = GestureArenaScope::of(ctx);
 
         let start_runtime = Rc::clone(&self.runtime);
         let update_runtime = Rc::clone(&self.runtime);
         let end_runtime = Rc::clone(&self.runtime);
         let cancel_runtime = Rc::clone(&self.runtime);
-        let drag = horizontal_drag(arena)
-            .with_on_start(move |details| start_runtime.on_drag_start(details))
-            .with_on_update(move |details| update_runtime.on_drag_update(details))
-            .with_on_end(move |details| end_runtime.on_drag_end(details))
-            .with_on_cancel(move || cancel_runtime.on_drag_cancel());
-
-        Recognizer { drag }
+        horizontal_drag(arena)
+            .on_start(move |details| start_runtime.on_drag_start(details))
+            .on_update(move |details| update_runtime.on_drag_update(details))
+            .on_end(move |details| end_runtime.on_drag_end(details))
+            .on_cancel(move || cancel_runtime.on_drag_cancel())
+            .build()
     }
 }
 

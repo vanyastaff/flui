@@ -7,7 +7,6 @@
 
 use std::{
     cell::{Cell, RefCell},
-    cmp::Ordering,
     collections::VecDeque,
     rc::{Rc, Weak},
     sync::atomic::{AtomicU64, Ordering as AtomicOrdering},
@@ -15,6 +14,7 @@ use std::{
 
 use flui_foundation::ListenerId;
 use flui_foundation::geometry::Rect;
+use flui_painting::typography::TextDirection;
 use thiserror::Error;
 
 use super::focus::FocusClosePanic;
@@ -1526,6 +1526,7 @@ pub struct FocusScopeNode {
     autofocus: Cell<bool>,
     traps_focus: Cell<bool>,
     traversal_policy: RefCell<Rc<dyn FocusTraversalPolicy>>,
+    text_direction: Cell<TextDirection>,
     traversal_edge_behavior: Cell<TraversalEdgeBehavior>,
 }
 
@@ -1553,6 +1554,7 @@ impl FocusScopeNode {
             autofocus: Cell::new(false),
             traps_focus: Cell::new(false),
             traversal_policy: RefCell::new(Rc::new(ReadingOrderPolicy)),
+            text_direction: Cell::new(TextDirection::Ltr),
             traversal_edge_behavior: Cell::new(TraversalEdgeBehavior::default()),
         })
     }
@@ -1607,6 +1609,19 @@ impl FocusScopeNode {
             return;
         }
         let _prev = std::mem::replace(&mut *self.traversal_policy.borrow_mut(), policy);
+    }
+
+    /// Reading direction used by this scope's traversal policy.
+    #[must_use]
+    pub fn text_direction(&self) -> TextDirection {
+        self.text_direction.get()
+    }
+
+    /// Record the inherited direction without replacing the custom policy.
+    pub fn set_text_direction(&self, direction: TextDirection) {
+        if !self.inner.is_closed() {
+            self.text_direction.set(direction);
+        }
     }
 
     /// Most recently focused structurally live descendant.
@@ -1761,14 +1776,11 @@ impl FocusScopeNode {
             nodes.push(Rc::clone(cursor));
         }
         let policy = Rc::clone(&self.traversal_policy.borrow());
+        let direction = self.text_direction.get();
         let mut failure = FocusClosePanic::for_rejection(self.close_mode());
-        let mut order = None;
-        failure.run(|| order = Some(policy.sort_descendants(&nodes)));
+        failure.run(|| policy.order(&mut nodes, direction));
         failure.retire(policy);
-        for node in nodes {
-            failure.retire(node);
-        }
-        failure.finish_with(order).unwrap_or_default()
+        failure.finish_with(nodes)
     }
 
     /// Resolve one traversal step without applying it.
@@ -1967,35 +1979,80 @@ fn is_traversable(node: &Rc<FocusNode>) -> bool {
 
 /// Orders traversal candidates.
 pub trait FocusTraversalPolicy: std::fmt::Debug {
-    /// Return `nodes` in policy order.
-    fn sort_descendants(&self, nodes: &[Rc<FocusNode>]) -> Vec<Rc<FocusNode>>;
+    /// Permute the supplied candidates in place using the scope's direction.
+    ///
+    /// Implementations must retain every supplied node exactly once. Direction
+    /// is frozen for the current traversal; changes apply to the next call.
+    fn order(&self, nodes: &mut [Rc<FocusNode>], direction: TextDirection);
 }
 
-/// Top-to-bottom, then left-to-right traversal.
+/// Top-to-bottom rows, then leading-edge traversal within each row.
+///
+/// A row has a shared, strictly nonempty vertical intersection; a tall node
+/// cannot bridge disjoint rows. Exact ties retain structural order. Invalid
+/// or empty rectangles follow valid rows in structural order.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ReadingOrderPolicy;
 
 impl FocusTraversalPolicy for ReadingOrderPolicy {
-    fn sort_descendants(&self, nodes: &[Rc<FocusNode>]) -> Vec<Rc<FocusNode>> {
-        Self::sorted_indices(nodes)
-            .into_iter()
-            .map(|index| Rc::clone(&nodes[index]))
-            .collect()
-    }
-}
-
-impl ReadingOrderPolicy {
-    fn sorted_indices(nodes: &[Rc<FocusNode>]) -> Vec<usize> {
-        let mut indices: Vec<_> = (0..nodes.len()).collect();
-        indices.sort_by(|&left, &right| {
-            let left_rect = nodes[left].rect();
-            let right_rect = nodes[right].rect();
-            let y = left_rect.top().total_cmp(&right_rect.top());
-            if y != Ordering::Equal {
-                return y;
-            }
-            left_rect.left().total_cmp(&right_rect.left())
+    fn order(&self, nodes: &mut [Rc<FocusNode>], direction: TextDirection) {
+        // Rect providers are user code: snapshot once before comparisons.
+        let rectangles: Vec<_> = nodes.iter().map(|node| node.rect()).collect();
+        let (mut spatial, fallback): (Vec<_>, Vec<_>) = (0..nodes.len()).partition(|&index| {
+            let rect = rectangles[index];
+            [rect.left(), rect.top(), rect.right(), rect.bottom()]
+                .into_iter()
+                .all(f64::is_finite)
+                && rect.left() < rect.right()
+                && rect.top() < rect.bottom()
         });
-        indices
+        spatial.sort_by(|&left, &right| {
+            rectangles[left]
+                .top()
+                .total_cmp(&rectangles[right].top())
+                .then_with(|| left.cmp(&right))
+        });
+        let mut row_start = 0;
+        while row_start < spatial.len() {
+            let first = rectangles[spatial[row_start]];
+            let mut top = first.top();
+            let mut bottom = first.bottom();
+            let mut row_end = row_start + 1;
+            while row_end < spatial.len() {
+                let next = rectangles[spatial[row_end]];
+                let shared_top = top.max(next.top());
+                let shared_bottom = bottom.min(next.bottom());
+                if shared_top >= shared_bottom {
+                    break;
+                }
+                top = shared_top;
+                bottom = shared_bottom;
+                row_end += 1;
+            }
+            spatial[row_start..row_end].sort_by(|&left, &right| {
+                let left_rect = rectangles[left];
+                let right_rect = rectangles[right];
+                match direction {
+                    TextDirection::Ltr => left_rect.left().total_cmp(&right_rect.left()),
+                    TextDirection::Rtl => right_rect.right().total_cmp(&left_rect.right()),
+                }
+                .then_with(|| left.cmp(&right))
+            });
+            row_start = row_end;
+        }
+        spatial.extend(fallback);
+        // Convert source indices into destinations, then follow permutation
+        // cycles without cloning or retiring any candidate handle.
+        let mut destinations = vec![0; nodes.len()];
+        for (destination, source) in spatial.into_iter().enumerate() {
+            destinations[source] = destination;
+        }
+        for index in 0..nodes.len() {
+            while destinations[index] != index {
+                let destination = destinations[index];
+                nodes.swap(index, destination);
+                destinations.swap(index, destination);
+            }
+        }
     }
 }
