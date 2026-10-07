@@ -60,6 +60,8 @@ pub(super) struct GroupConfig {
     pub edge: TraversalEdgeBehavior,
 }
 
+pub(super) type GroupOrderCache = Vec<(FocusNodeId, Vec<FocusNodeId>)>;
+
 struct GroupSnapshot {
     id: FocusNodeId,
     node: Rc<FocusNode>,
@@ -100,14 +102,20 @@ impl GroupOrderSnapshot {
         Self { groups, paths }
     }
 
-    pub(super) fn order(&self, nodes: &mut Vec<Rc<FocusNode>>, failure: &mut FocusClosePanic) {
-        self.order_at(nodes, 0, failure);
+    pub(super) fn order(
+        &self,
+        nodes: &mut Vec<Rc<FocusNode>>,
+        cache: &mut GroupOrderCache,
+        failure: &mut FocusClosePanic,
+    ) {
+        self.order_at(nodes, 0, cache, failure);
     }
 
     fn order_at(
         &self,
         nodes: &mut Vec<Rc<FocusNode>>,
         depth: usize,
+        cache: &mut GroupOrderCache,
         failure: &mut FocusClosePanic,
     ) {
         let mut output = Vec::with_capacity(nodes.len());
@@ -136,15 +144,25 @@ impl GroupOrderSnapshot {
                 })
                 .cloned()
                 .collect();
-            if let Some(group) = self.groups.iter().find(|group| group.id == id) {
-                failure.run(|| {
-                    group
-                        .config
-                        .policy
-                        .order(&mut members, group.config.direction)
+            if let Some((_, order)) = cache.iter().find(|(cached, _)| *cached == id) {
+                members.sort_by_key(|node| {
+                    order
+                        .iter()
+                        .position(|id| *id == node.id())
+                        .unwrap_or(usize::MAX)
                 });
+            } else {
+                if let Some(group) = self.groups.iter().find(|group| group.id == id) {
+                    failure.run(|| {
+                        group
+                            .config
+                            .policy
+                            .order(&mut members, group.config.direction)
+                    });
+                }
+                self.order_at(&mut members, depth + 1, cache, failure);
+                cache.push((id, members.iter().map(|node| node.id()).collect()));
             }
-            self.order_at(&mut members, depth + 1, failure);
             output.append(&mut members);
         }
         *nodes = output;
@@ -160,6 +178,7 @@ impl GroupOrderSnapshot {
 
 fn group_of(node: &Rc<FocusNode>) -> Option<Rc<FocusNode>> {
     node.ancestors()
+        .take_while(|parent| !parent.is_scope())
         .find(|parent| parent.traversal_group_snapshot().is_some())
 }
 
@@ -190,19 +209,39 @@ fn belongs_to(node: &Rc<FocusNode>, boundary: &Rc<FocusNode>) -> bool {
 
 fn group_order(
     group: &Rc<FocusNode>,
+    current: &Rc<FocusNode>,
     config: GroupConfig,
+    cache: &mut GroupOrderCache,
     failure: &mut FocusClosePanic,
 ) -> Vec<Rc<FocusNode>> {
     let mut nodes: Vec<_> = group
         .descendants()
         .filter(|node| !node.is_scope() && node.can_request_focus() && !node.skip_traversal())
         .collect();
+    if !nodes.iter().any(|node| Rc::ptr_eq(node, current)) && belongs_to(current, group) {
+        nodes.push(Rc::clone(current));
+    }
     let snapshot = GroupOrderSnapshot::new(&nodes, group);
-    failure.run(|| config.policy.order(&mut nodes, config.direction));
-    snapshot.order(&mut nodes, failure);
+    if let Some((_, order)) = cache.iter().find(|(id, _)| *id == group.id()) {
+        nodes.sort_by_key(|node| {
+            order
+                .iter()
+                .position(|id| *id == node.id())
+                .unwrap_or(usize::MAX)
+        });
+    } else {
+        failure.run(|| config.policy.order(&mut nodes, config.direction));
+        snapshot.order(&mut nodes, cache, failure);
+        cache.push((group.id(), nodes.iter().map(|node| node.id()).collect()));
+    }
     snapshot.retire(failure);
     failure.retire(config.policy);
     nodes
+}
+
+enum Boundary {
+    Group(Rc<FocusNode>, GroupConfig),
+    Scope(Rc<FocusScopeNode>),
 }
 
 pub(super) fn linear_step(
@@ -211,67 +250,105 @@ pub(super) fn linear_step(
     scope: &Rc<FocusScopeNode>,
     direction: TraversalDirection,
 ) -> ResolvedStep {
-    if let Some(current) = current {
-        if let Some(target) = current.traversal_override_target(direction)
-            && !Rc::ptr_eq(current, &target)
-            && eligible(manager, &target)
-            && same_boundary(current, &target)
-        {
-            return ResolvedStep::Focus(target);
-        }
-        let mut boundary = group_of(current);
-        while let Some(group) = boundary {
-            let Some(config) = group.traversal_group_snapshot() else {
-                break;
-            };
-            let edge = config.edge;
-            let mut failure = FocusClosePanic::for_rejection(group.traversal_close_mode());
-            let nodes = group_order(&group, config, &mut failure);
-            let index = nodes.iter().position(|node| Rc::ptr_eq(node, current));
-            let next = match direction {
-                TraversalDirection::Forward => index.and_then(|index| nodes.get(index + 1)),
-                TraversalDirection::Backward => {
-                    index.and_then(|index| index.checked_sub(1).and_then(|index| nodes.get(index)))
-                }
-            };
-            let step = if let Some(next) = next {
-                ResolvedStep::Focus(Rc::clone(next))
+    let Some(current) = current else {
+        return scope.step(None, direction);
+    };
+    if let Some(target) = current.traversal_override_target(direction)
+        && !Rc::ptr_eq(current, &target)
+        && eligible(manager, &target)
+        && same_boundary(current, &target)
+    {
+        return ResolvedStep::Focus(target);
+    }
+    let boundaries: Vec<_> = current
+        .ancestors()
+        .filter_map(|node| {
+            if let Some(scope) = node.as_scope() {
+                Some(Boundary::Scope(scope))
             } else {
-                match edge {
-                    TraversalEdgeBehavior::ClosedLoop => match direction {
-                        TraversalDirection::Forward => nodes.first(),
-                        TraversalDirection::Backward => nodes.last(),
+                node.traversal_group_snapshot()
+                    .map(|config| Boundary::Group(node, config))
+            }
+        })
+        .collect();
+    let mut failure = FocusClosePanic::for_rejection(current.traversal_close_mode());
+    let mut cache = Vec::new();
+    let mut step = ResolvedStep::None;
+    let mut selected_boundary = None;
+    for boundary in &boundaries {
+        if failure.preserving() {
+            break;
+        }
+        step = match boundary {
+            Boundary::Scope(scope) => failure
+                .invoke(|| scope.resolve_traversal_with_cache(Some(current), direction, &mut cache))
+                .unwrap_or_default(),
+            Boundary::Group(group, config) => {
+                let nodes = group_order(group, current, config.clone(), &mut cache, &mut failure);
+                let index = nodes.iter().position(|node| Rc::ptr_eq(node, current));
+                let target = match direction {
+                    TraversalDirection::Forward => index.and_then(|index| nodes.get(index + 1)),
+                    TraversalDirection::Backward => index
+                        .and_then(|index| index.checked_sub(1).and_then(|index| nodes.get(index))),
+                };
+                let result = if let Some(target) = target {
+                    ResolvedStep::Focus(Rc::clone(target))
+                } else {
+                    match config.edge {
+                        TraversalEdgeBehavior::ClosedLoop => match direction {
+                            TraversalDirection::Forward => {
+                                nodes.iter().find(|node| eligible(manager, node))
+                            }
+                            TraversalDirection::Backward => {
+                                nodes.iter().rev().find(|node| eligible(manager, node))
+                            }
+                        }
+                        .map_or(ResolvedStep::None, |node| {
+                            ResolvedStep::Focus(Rc::clone(node))
+                        }),
+                        TraversalEdgeBehavior::Stop => ResolvedStep::None,
+                        TraversalEdgeBehavior::LeaveView => ResolvedStep::Unfocus,
+                        TraversalEdgeBehavior::ParentScope => ResolvedStep::RetryInParent,
                     }
-                    .map_or(ResolvedStep::None, |node| {
-                        ResolvedStep::Focus(Rc::clone(node))
-                    }),
-                    TraversalEdgeBehavior::Stop => ResolvedStep::None,
-                    TraversalEdgeBehavior::LeaveView => ResolvedStep::Unfocus,
-                    TraversalEdgeBehavior::ParentScope => ResolvedStep::RetryInParent,
+                };
+                for node in nodes {
+                    failure.retire(node);
                 }
-            };
-            for node in nodes {
-                failure.retire(node);
+                result
             }
-            let valid = match &step {
-                ResolvedStep::Focus(target) => {
-                    eligible(manager, target) && belongs_to(target, &group)
-                }
-                _ => true,
-            };
-            let mut parent = group_of(&group);
-            failure.retire(group);
-            if !matches!(step, ResolvedStep::RetryInParent) || failure.preserving() {
-                failure.retire(parent.take());
-            }
-            let step = failure.finish_with(step);
-            if !matches!(step, ResolvedStep::RetryInParent) {
-                return if valid { step } else { ResolvedStep::None };
-            }
-            boundary = parent;
+        };
+        if !matches!(step, ResolvedStep::RetryInParent) {
+            selected_boundary = Some(match boundary {
+                Boundary::Group(node, _) => node.id(),
+                Boundary::Scope(scope) => scope.as_focus_node().id(),
+            });
+            break;
         }
     }
-    scope.step(current, direction)
+    for boundary in boundaries {
+        match boundary {
+            Boundary::Group(node, config) => {
+                failure.retire(config.policy);
+                failure.retire(node);
+            }
+            Boundary::Scope(scope) => failure.retire(scope),
+        }
+    }
+    let step = failure.finish_with(step);
+    if !manager
+        .primary_focus()
+        .is_some_and(|focused| Rc::ptr_eq(&focused, current))
+    {
+        return ResolvedStep::None;
+    }
+    if let ResolvedStep::Focus(target) = &step
+        && (!eligible(manager, target)
+            || !selected_boundary
+                .is_some_and(|id| target.ancestors().any(|parent| parent.id() == id)))
+    {
+        return ResolvedStep::None;
+    }
+    step
 }
 
 #[derive(Clone, Copy)]
@@ -290,6 +367,8 @@ impl Geometry {
             .all(|value| value.is_finite())
             || left >= right
             || top >= bottom
+            || !(right - left).is_finite()
+            || !(bottom - top).is_finite()
         {
             return None;
         }
@@ -307,12 +386,7 @@ impl Geometry {
         })
     }
     fn center(min: f64, max: f64) -> f64 {
-        let span = max - min;
-        if span.is_finite() {
-            min + span * 0.5
-        } else {
-            min * 0.5 + max * 0.5
-        }
+        min + (max - min) * 0.5
     }
     fn primary_center(self) -> f64 {
         Self::center(self.primary_min, self.primary_max)
@@ -360,7 +434,12 @@ fn geometry(
 ) -> Option<Geometry> {
     let (provider, fallback) = node.traversal_geometry_snapshot();
     let rect = if let Some(provider) = provider {
-        let rect = failure.invoke(|| provider()).flatten().unwrap_or(fallback);
+        let rect = if failure.preserving() {
+            None
+        } else {
+            failure.invoke(|| provider()).flatten()
+        }
+        .unwrap_or(fallback);
         failure.retire(provider);
         rect
     } else {
@@ -369,63 +448,77 @@ fn geometry(
     Geometry::from_rect(rect, direction)
 }
 
-fn spatial_target(
-    manager: &FocusManager,
-    current: &Rc<FocusNode>,
-    boundary: &Rc<FocusNode>,
+struct SpatialCandidate {
+    node: Rc<FocusNode>,
+    geometry: Option<Option<Geometry>>,
+}
+
+struct SpatialBoundary {
+    node: Rc<FocusNode>,
+    edge: TraversalEdgeBehavior,
+}
+
+struct SpatialSearch<'a> {
+    manager: &'a FocusManager,
+    current: &'a Rc<FocusNode>,
+    source: Geometry,
     direction: FocusDirection,
+}
+
+fn spatial_target(
+    search: &SpatialSearch<'_>,
+    boundary: &Rc<FocusNode>,
+    candidates: &mut [SpatialCandidate],
     wrap: bool,
+    failure: &mut FocusClosePanic,
 ) -> Option<Rc<FocusNode>> {
-    let retained: Vec<_> = boundary.descendants().collect();
-    let candidates: Vec<_> = retained
-        .iter()
-        .filter(|node| eligible(manager, node) && !Rc::ptr_eq(node, current))
-        .cloned()
-        .collect();
-    let mut failure = FocusClosePanic::for_rejection(boundary.traversal_close_mode());
-    let source = geometry(current, direction, &mut failure);
     let mut best: Option<(Rc<FocusNode>, Geometry)> = None;
-    if let Some(source) = source {
-        for node in &candidates {
-            let Some(rect) = geometry(node, direction, &mut failure) else {
-                continue;
+    for candidate in candidates {
+        if Rc::ptr_eq(&candidate.node, search.current)
+            || !eligible(search.manager, &candidate.node)
+            || !belongs_to(&candidate.node, boundary)
+        {
+            continue;
+        }
+        let rect = *candidate
+            .geometry
+            .get_or_insert_with(|| geometry(&candidate.node, search.direction, failure));
+        let Some(rect) = rect else {
+            continue;
+        };
+        if !wrap && rect.primary_center() <= search.source.primary_center() {
+            continue;
+        }
+        let better = best.as_ref().is_none_or(|(_, previous)| {
+            let beam = previous
+                .in_beam(search.source)
+                .cmp(&rect.in_beam(search.source));
+            let primary = if wrap {
+                rect.primary_center().total_cmp(&previous.primary_center())
+            } else {
+                Distance::between(
+                    rect.primary_min.max(search.source.primary_max),
+                    search.source.primary_max,
+                )
+                .cmp(Distance::between(
+                    previous.primary_min.max(search.source.primary_max),
+                    search.source.primary_max,
+                ))
             };
-            if !wrap && rect.primary_center() <= source.primary_center() {
-                continue;
-            }
-            let better = best.as_ref().is_none_or(|(_, previous)| {
-                let beam = previous.in_beam(source).cmp(&rect.in_beam(source));
-                let primary = if wrap {
-                    rect.primary_center().total_cmp(&previous.primary_center())
-                } else {
-                    Distance::between(rect.primary_min.max(source.primary_max), source.primary_max)
-                        .cmp(Distance::between(
-                            previous.primary_min.max(source.primary_max),
-                            source.primary_max,
-                        ))
-                };
-                let secondary =
-                    Distance::between(rect.secondary_center(), source.secondary_center()).cmp(
-                        Distance::between(previous.secondary_center(), source.secondary_center()),
-                    );
-                beam.then(primary).then(secondary) == Ordering::Less
-            });
-            if better {
-                best = Some((Rc::clone(node), rect));
-            }
+            let secondary =
+                Distance::between(rect.secondary_center(), search.source.secondary_center()).cmp(
+                    Distance::between(
+                        previous.secondary_center(),
+                        search.source.secondary_center(),
+                    ),
+                );
+            beam.then(primary).then(secondary) == Ordering::Less
+        });
+        if better {
+            best = Some((Rc::clone(&candidate.node), rect));
         }
     }
-    for node in candidates {
-        failure.retire(node);
-    }
-    for node in retained {
-        failure.retire(node);
-    }
-    failure
-        .finish_with(best.map(|(node, _)| node))
-        .filter(|node| {
-            eligible(manager, node) && belongs_to(node, boundary) && belongs_to(current, boundary)
-        })
+    best.map(|(node, _)| node)
 }
 
 pub(super) fn directional_step(
@@ -433,67 +526,102 @@ pub(super) fn directional_step(
     current: &Rc<FocusNode>,
     direction: FocusDirection,
 ) -> ResolvedStep {
-    let mut group = group_of(current);
-    let mut scope = current.enclosing_scope();
-    let mut failure = FocusClosePanic::for_rejection(current.traversal_close_mode());
-    let step = if failure.preserving() {
-        ResolvedStep::None
-    } else {
-        failure
-            .invoke(|| directional_step_inner(manager, current, direction, &mut group, &mut scope))
-            .unwrap_or_default()
-    };
-    failure.retire(group);
-    failure.retire(scope);
-    failure.finish_with(step)
-}
-
-fn directional_step_inner(
-    manager: &FocusManager,
-    current: &Rc<FocusNode>,
-    direction: FocusDirection,
-    group: &mut Option<Rc<FocusNode>>,
-    scope: &mut Option<Rc<FocusScopeNode>>,
-) -> ResolvedStep {
-    loop {
-        let (boundary, edge) = if let Some(group) = group.as_ref() {
-            let Some(config) = group.traversal_group_snapshot() else {
-                return ResolvedStep::None;
-            };
-            let edge = config.edge;
-            let mut failure = FocusClosePanic::for_rejection(group.traversal_close_mode());
-            failure.retire(config.policy);
-            failure.finish();
-            (Rc::clone(group), edge)
-        } else if let Some(scope) = scope.as_ref() {
-            (
-                Rc::clone(scope.as_focus_node()),
-                scope.traversal_edge_behavior(),
-            )
-        } else {
-            return ResolvedStep::None;
-        };
-        if let Some(target) = spatial_target(manager, current, &boundary, direction, false) {
-            return ResolvedStep::Focus(target);
+    // Retain every backing node and freeze edges before a provider can replace
+    // registrations, release the last external owner, or reparent a subtree.
+    let mut scopes = Vec::new();
+    let mut boundaries = Vec::new();
+    for node in current.ancestors() {
+        if let Some(scope) = node.as_scope() {
+            boundaries.push(SpatialBoundary {
+                node,
+                edge: scope.traversal_edge_behavior(),
+            });
+            scopes.push(scope);
+        } else if let Some(edge) = node.traversal_group_edge() {
+            boundaries.push(SpatialBoundary { node, edge });
         }
-        match edge {
-            TraversalEdgeBehavior::Stop => return ResolvedStep::None,
-            TraversalEdgeBehavior::LeaveView => return ResolvedStep::Unfocus,
-            TraversalEdgeBehavior::ClosedLoop => {
-                return spatial_target(manager, current, &boundary, direction, true)
-                    .map_or(ResolvedStep::None, ResolvedStep::Focus);
+    }
+    let mut candidates: Vec<_> = manager
+        .root_scope()
+        .as_focus_node()
+        .descendants()
+        .map(|node| SpatialCandidate {
+            node,
+            geometry: None,
+        })
+        .collect();
+    let mut failure = FocusClosePanic::for_rejection(current.traversal_close_mode());
+    let source = geometry(current, direction, &mut failure);
+    let mut step = ResolvedStep::None;
+    let mut selected_boundary = None;
+    if let Some(source) = source {
+        let search = SpatialSearch {
+            manager,
+            current,
+            source,
+            direction,
+        };
+        for (index, boundary) in boundaries.iter().enumerate() {
+            if let Some(target) = spatial_target(
+                &search,
+                &boundary.node,
+                &mut candidates,
+                false,
+                &mut failure,
+            ) {
+                step = ResolvedStep::Focus(target);
+                selected_boundary = Some(boundary.node.id());
+                break;
             }
-            TraversalEdgeBehavior::ParentScope => {
-                if let Some(previous) = group.take() {
-                    *group = group_of(&previous);
-                } else if let Some(previous) = scope.take() {
-                    *scope = previous.as_focus_node().enclosing_scope();
-                    if scope.is_none() {
-                        return spatial_target(manager, current, &boundary, direction, true)
-                            .map_or(ResolvedStep::None, ResolvedStep::Focus);
+            match boundary.edge {
+                TraversalEdgeBehavior::Stop => break,
+                TraversalEdgeBehavior::LeaveView => {
+                    step = ResolvedStep::Unfocus;
+                    break;
+                }
+                TraversalEdgeBehavior::ClosedLoop => {
+                    if let Some(target) =
+                        spatial_target(&search, &boundary.node, &mut candidates, true, &mut failure)
+                    {
+                        step = ResolvedStep::Focus(target);
+                        selected_boundary = Some(boundary.node.id());
+                    }
+                    break;
+                }
+                TraversalEdgeBehavior::ParentScope if index + 1 == boundaries.len() => {
+                    if let Some(target) =
+                        spatial_target(&search, &boundary.node, &mut candidates, true, &mut failure)
+                    {
+                        step = ResolvedStep::Focus(target);
+                        selected_boundary = Some(boundary.node.id());
                     }
                 }
+                TraversalEdgeBehavior::ParentScope => {}
             }
         }
     }
+    for candidate in candidates {
+        failure.retire(candidate.node);
+    }
+    for boundary in boundaries {
+        failure.retire(boundary.node);
+    }
+    for scope in scopes {
+        failure.retire(scope);
+    }
+    let step = failure.finish_with(step);
+    if !manager
+        .primary_focus()
+        .is_some_and(|focused| Rc::ptr_eq(&focused, current))
+    {
+        return ResolvedStep::None;
+    }
+    if let ResolvedStep::Focus(target) = &step
+        && (!eligible(manager, target)
+            || !selected_boundary
+                .is_some_and(|id| target.ancestors().any(|parent| parent.id() == id)))
+    {
+        return ResolvedStep::None;
+    }
+    step
 }

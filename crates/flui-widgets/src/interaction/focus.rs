@@ -1230,12 +1230,6 @@ impl ViewState<FocusScope> for FocusScopeState {
     }
 
     fn did_update_view(&mut self, old_view: &FocusScope, new_view: &FocusScope) {
-        if let Some(edge) = new_view.edge_behavior {
-            self.scope.set_traversal_edge_behavior(edge);
-        } else if new_view.external_scope.is_none() && old_view.edge_behavior.is_some() {
-            self.scope
-                .set_traversal_edge_behavior(TraversalEdgeBehavior::default());
-        }
         let scope_changed = match (
             old_view.external_scope.as_ref(),
             new_view.external_scope.as_ref(),
@@ -1245,6 +1239,12 @@ impl ViewState<FocusScope> for FocusScopeState {
             _ => true,
         };
         if !scope_changed {
+            if let Some(edge) = new_view.edge_behavior {
+                self.scope.set_traversal_edge_behavior(edge);
+            } else if new_view.external_scope.is_none() && old_view.edge_behavior.is_some() {
+                self.scope
+                    .set_traversal_edge_behavior(TraversalEdgeBehavior::default());
+            }
             return;
         }
 

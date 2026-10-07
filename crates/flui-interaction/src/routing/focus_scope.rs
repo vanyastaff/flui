@@ -13,7 +13,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering as AtomicOrdering},
 };
 
-use super::traversal::{FocusTraversalOverrides, GroupConfig, GroupOrderSnapshot};
+use super::traversal::{FocusTraversalOverrides, GroupConfig, GroupOrderCache, GroupOrderSnapshot};
 use flui_foundation::ListenerId;
 use flui_foundation::geometry::Rect;
 use flui_painting::typography::TextDirection;
@@ -865,6 +865,12 @@ impl FocusNode {
 
     pub(super) fn traversal_group_snapshot(&self) -> Option<GroupConfig> {
         self.traversal_group.borrow().clone()
+    }
+    pub(super) fn traversal_group_edge(&self) -> Option<TraversalEdgeBehavior> {
+        self.traversal_group
+            .borrow()
+            .as_ref()
+            .map(|group| group.edge)
     }
     pub(super) fn traversal_override_target(
         &self,
@@ -1915,6 +1921,14 @@ impl FocusScopeNode {
     /// outgoing values are retained rather than running arbitrary destruction.
     /// During an existing unwind, sorting is skipped and the order is empty.
     pub fn sorted_traversal_order(&self, cursor: Option<&Rc<FocusNode>>) -> Vec<Rc<FocusNode>> {
+        self.sorted_traversal_order_with_cache(cursor, &mut Vec::new())
+    }
+
+    fn sorted_traversal_order_with_cache(
+        &self,
+        cursor: Option<&Rc<FocusNode>>,
+        cache: &mut GroupOrderCache,
+    ) -> Vec<Rc<FocusNode>> {
         let mut nodes = self.collect_focusable_nodes();
         if let Some(cursor) = cursor
             && !nodes.iter().any(|node| Rc::ptr_eq(node, cursor))
@@ -1927,7 +1941,7 @@ impl FocusScopeNode {
         let direction = self.text_direction.get();
         let mut failure = FocusClosePanic::for_rejection(self.close_mode());
         failure.run(|| policy.order(&mut nodes, direction));
-        groups.order(&mut nodes, &mut failure);
+        groups.order(&mut nodes, cache, &mut failure);
         groups.retire(&mut failure);
         failure.retire(policy);
         failure.finish_with(nodes)
@@ -1939,8 +1953,17 @@ impl FocusScopeNode {
         current: Option<&Rc<FocusNode>>,
         direction: TraversalDirection,
     ) -> ResolvedStep {
+        self.resolve_traversal_with_cache(current, direction, &mut Vec::new())
+    }
+
+    pub(super) fn resolve_traversal_with_cache(
+        &self,
+        current: Option<&Rc<FocusNode>>,
+        direction: TraversalDirection,
+        cache: &mut GroupOrderCache,
+    ) -> ResolvedStep {
         let forward = matches!(direction, TraversalDirection::Forward);
-        let order = self.sorted_traversal_order(current);
+        let order = self.sorted_traversal_order_with_cache(current, cache);
 
         let Some(current) = current else {
             let target = if forward {
