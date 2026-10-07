@@ -2691,13 +2691,13 @@ mod native_windows {
                         // SAFETY: initialized current/history buffers sized by
                         // this packet's count; no owner state is touched.
                         let (current, historical) = unsafe { (GetPointerTouchInfo(raw, &mut reading), GetPointerTouchInfoHistory(raw, &mut count, Some(history.as_mut_ptr()))) };
-                        eprintln!("NATIVE_TOUCH current={current:?} reading={reading:?} history={historical:?} count={count}");
+                        eprintln!("NATIVE_TOUCH current={current:?} reading={reading:?} history={historical:?} count={count} history_head={:?}", history.first());
                     } else if info.pointerType == PT_PEN {
                         let mut reading = POINTER_PEN_INFO::default();
                         let mut history = vec![POINTER_PEN_INFO::default(); count as usize];
                         // SAFETY: same owned initialized output-buffer contract.
                         let (current, historical) = unsafe { (GetPointerPenInfo(raw, &mut reading), GetPointerPenInfoHistory(raw, &mut count, Some(history.as_mut_ptr()))) };
-                        eprintln!("NATIVE_PEN current={current:?} reading={reading:?} history={historical:?} count={count}");
+                        eprintln!("NATIVE_PEN current={current:?} reading={reading:?} history={historical:?} count={count} history_head={:?}", history.first());
                     }
                 }
             }
