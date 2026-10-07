@@ -11,7 +11,8 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::time::Duration;
 
 use flui_animation::{
-    Animatable, Curve, Curves, Keyframes, KeyframesError, Linear, Stagger, StaggerOrigin,
+    Animatable, Curve, Curves, JumpAt, Keyframes, KeyframesError, Linear, Stagger, StaggerOrigin,
+    Steps,
 };
 use proptest::prelude::*;
 
@@ -405,6 +406,10 @@ fn overflowing_ramp_stays_finite() {
     for step in 0..=100 {
         assert!(track.value_at(ms(step)).is_finite(), "at {step} ms");
     }
+    // The ramp moves through its finite interior instead of freezing at 1e308.
+    assert_eq!(track.value_at(ms(50)), 0.0);
+    let quarter = track.value_at(ms(25));
+    assert!((quarter - 5e307).abs() <= 1e293, "quarter: {quarter}");
     assert_eq!(track.value_at(ms(100)), -1e308);
 }
 
@@ -446,11 +451,58 @@ fn cubic_hermite_midpoint() {
     assert_eq!(track.value_at(ms(1000)), 1.0);
 }
 
+/// The midpoint of a one-second cubic from 1 to 2 after a one-second eased
+/// segment from 0 to 1 that ends with `curve`: 1.5 when the eased segment
+/// hands over no velocity.
+fn cubic_midpoint_after(curve: impl Curve + Send + Sync + 'static) -> f64 {
+    let track = Keyframes::builder(0.0, Duration::from_secs(2))
+        .to(1.0, Duration::from_secs(1), curve)
+        .cubic(2.0, Duration::from_secs(1))
+        .build()
+        .expect("fits");
+    track.value_at(ms(1500))
+}
+
+fn steps_segment_hands_over_no_velocity() {
+    // A jump has no finite derivative; a difference across it read ~3750.
+    assert_close(
+        cubic_midpoint_after(Steps::new(4, JumpAt::End)),
+        1.5,
+        "after steps",
+    );
+}
+
+/// Linear in value, but declares a flat end: the declared slope, not a
+/// difference of `transform`, seeds the next cubic.
+struct DeclaredFlat;
+
+impl Curve for DeclaredFlat {
+    fn transform(&self, t: f64) -> f64 {
+        t.clamp(0.0, 1.0)
+    }
+
+    fn slope(&self, _t: f64) -> f64 {
+        0.0
+    }
+}
+
+fn custom_slope_seeds_the_next_cubic() {
+    assert_close(cubic_midpoint_after(DeclaredFlat), 1.5, "declared flat end");
+}
+
 #[test]
 fn cubic_keyframes_pass_through_keys() {
     crate::run_table(&[
         ("late keyframe", cubic_hits_a_late_keyframe_at_its_time),
         ("Hermite midpoint", cubic_hermite_midpoint),
+        (
+            "steps hand over no velocity",
+            steps_segment_hands_over_no_velocity,
+        ),
+        (
+            "custom slope seeds the next cubic",
+            custom_slope_seeds_the_next_cubic,
+        ),
     ]);
 }
 

@@ -144,7 +144,7 @@ fn settled_slope(t: f64) -> Option<f64> {
 /// The closed set of curves [`ArcCurve`] compares by value.
 mod builtin {
     use super::{
-        Cubic, Curve, ElasticInCurve, ElasticInOutCurve, ElasticOutCurve, ThreePointCubic,
+        Cubic, Curve, ElasticInCurve, ElasticInOutCurve, ElasticOutCurve, Steps, ThreePointCubic,
         interval_slope, interval_transform,
     };
     use std::sync::Arc;
@@ -173,6 +173,7 @@ mod builtin {
                 Builtin::ElasticIn(curve) => curve.transform(t),
                 Builtin::ElasticOut(curve) => curve.transform(t),
                 Builtin::ElasticInOut(curve) => curve.transform(t),
+                Builtin::Steps(curve) => curve.transform(t),
                 Builtin::Interval { begin, end, curve } => {
                     interval_transform(*begin, *end, t, |local| curve.transform(local))
                 }
@@ -192,6 +193,7 @@ mod builtin {
                 Builtin::ElasticIn(curve) => curve.slope(t),
                 Builtin::ElasticOut(curve) => curve.slope(t),
                 Builtin::ElasticInOut(curve) => curve.slope(t),
+                Builtin::Steps(curve) => curve.slope(t),
                 Builtin::Interval { begin, end, curve } => interval_slope(
                     *begin,
                     *end,
@@ -222,6 +224,7 @@ mod builtin {
         ElasticIn(ElasticInCurve),
         ElasticOut(ElasticOutCurve),
         ElasticInOut(ElasticInOutCurve),
+        Steps(Steps),
         Interval {
             begin: f64,
             end: f64,
@@ -1711,6 +1714,15 @@ impl Steps {
 }
 
 impl Curve for Steps {
+    builtin_value!(Steps(self));
+
+    /// 0 wherever it is defined: the curve is flat between jumps, and a jump
+    /// has no finite derivative, so a neighbouring keyframe segment inherits
+    /// no velocity from it. NaN gives NaN, as for every curve.
+    fn slope(&self, t: f64) -> f64 {
+        settled_slope(t).unwrap_or(0.0)
+    }
+
     fn transform(&self, t: f64) -> f64 {
         if let Some(end) = settled(t) {
             return end;

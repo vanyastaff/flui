@@ -6,8 +6,8 @@
   no published non-finite sample, typed `KeyframesError`s from `build`, clamped (`value_at`),
   looped (`value_at_looped`) and progress (`Animatable`) reads. `Stagger` gives per-index delays
   with a `First`/`Last`/`Center`/`Index` origin.
-- **`flui-animation`**: `Steps` and `JumpAt`, CSS `steps()`; `Curve::slope`, the curve's
-  derivative.
+- **`flui-animation`**: `Steps` and `JumpAt`, CSS `steps()`, with slope 0 (a jump hands no
+  velocity to a neighbouring cubic keyframe) and value equality inside `ArcCurve`.
 - **`flui-widgets`**: `ActivityIndicator`, an indeterminate circular indicator.
   `RefreshIndicator` now shows it while refreshing instead of a static coloured bar.
 - **`flui-material`**: `LinearProgressIndicator`, determinate or indeterminate.

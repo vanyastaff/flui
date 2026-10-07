@@ -230,7 +230,20 @@ impl<T: Lerp + TwoWayConverter> Segment<T> {
                 if !eased.is_finite() {
                     return self.from.clone();
                 }
-                self.from.lerp_to(&self.to, eased)
+                let lerped = self.from.lerp_to(&self.to, eased);
+                if is_finite_vector(&lerped.to_vector()) {
+                    lerped
+                } else {
+                    // `a + (b − a)·e` overflows on `b − a` for far-apart
+                    // finite ends (1e308 → -1e308); `a·(1 − e) + b·e` does
+                    // not, and is still exact at both ends.
+                    let mut out = self.from.to_vector();
+                    let to = self.to.to_vector();
+                    for (component, &b) in out.as_mut().iter_mut().zip(to.as_ref()) {
+                        *component = *component * (1.0 - eased) + b * eased;
+                    }
+                    T::from_vector(out)
+                }
             }
             Motion::Cubic {
                 start_velocity,

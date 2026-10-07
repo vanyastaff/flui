@@ -578,6 +578,40 @@ impl Curve for Quadratic {
     }
 }
 
+fn equal_steps_compare_by_value() {
+    let steps = || ArcCurve::new(Steps::new(4, JumpAt::End));
+    assert_eq!(steps(), steps());
+    assert_ne!(steps(), ArcCurve::new(Steps::new(4, JumpAt::Start)));
+}
+
+/// A step has no finite derivative at a jump: its slope is 0, also once
+/// erased, never a difference across the jump.
+fn steps_slope_is_zero_through_erasure() {
+    let steps = Steps::new(4, JumpAt::End);
+    for t in [0.0, 0.25, 0.3, 1.0] {
+        assert_eq!(steps.slope(t), 0.0, "Steps at {t}");
+        assert_eq!(ArcCurve::new(steps).slope(t), 0.0, "erased Steps at {t}");
+    }
+    assert!(steps.slope(f64::NAN).is_nan());
+}
+
+/// Linear in value but declaring slope 2: erasure keeps the declaration.
+struct DeclaredSlope;
+
+impl Curve for DeclaredSlope {
+    fn transform(&self, t: f64) -> f64 {
+        t.clamp(0.0, 1.0)
+    }
+
+    fn slope(&self, _t: f64) -> f64 {
+        2.0
+    }
+}
+
+fn erased_custom_curve_keeps_its_slope() {
+    assert_eq!(ArcCurve::new(DeclaredSlope).slope(0.5), 2.0);
+}
+
 fn custom_curves_compare_by_identity() {
     let custom = ArcCurve::new(Quadratic);
     assert_eq!(custom, custom.clone());
@@ -632,6 +666,15 @@ fn arc_curve_compares_builtins_by_value_and_custom_curves_by_identity() {
         (
             "erased curves evaluate like the curve",
             erased_curves_evaluate_like_the_curve,
+        ),
+        ("equal steps compare by value", equal_steps_compare_by_value),
+        (
+            "steps slope is zero through erasure",
+            steps_slope_is_zero_through_erasure,
+        ),
+        (
+            "erased custom curve keeps its slope",
+            erased_custom_curve_keeps_its_slope,
         ),
     ]);
 }
