@@ -1081,7 +1081,21 @@ impl WindowsPlatform {
                         // here, before the swapchain-owning callback's
                         // native window is gone, releases the surface while
                         // it is still valid to destroy.
-                        ctx.callbacks.clear();
+                        //
+                        // The destruction trace rides on the clear: a close
+                        // from inside one of this window's own callbacks
+                        // only queues it behind that callback, and the
+                        // surface is released when the queued clear runs,
+                        // so the trace is ordered after the release however
+                        // the close arrived.
+                        let window_id = ctx.window_id.0;
+                        ctx.callbacks.clear_then(move || {
+                            tracing::debug!(
+                                target: "flui.platform",
+                                event = "native_window_destroyed",
+                                window_id,
+                            );
+                        });
 
                         // Retire the context: clear the slot FIRST, so no
                         // new borrow can be minted (`with_window_context`
@@ -1120,13 +1134,6 @@ impl WindowsPlatform {
                         });
                         let last_window_closed = removed.as_ref().is_some_and(|(_, empty)| *empty);
                         drop(removed);
-                        // After the callbacks released the surface above, so
-                        // a log orders the surface's release before this.
-                        tracing::debug!(
-                            target: "flui.platform",
-                            event = "native_window_destroyed",
-                            window_id = ctx.window_id.0,
-                        );
                         // The last tracked window is gone: the owner decides,
                         // on its own turn, whether the loop ends. Not here —
                         // this `WM_DESTROY` may be nested inside embedder
