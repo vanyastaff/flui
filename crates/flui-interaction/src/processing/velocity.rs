@@ -84,6 +84,24 @@ use flui_foundation::geometry::Offset;
 
 use super::lsq_solver::{MAX_SAMPLES, PolynomialFit, solve_two};
 
+/// The algorithm used to estimate release velocity from admitted pointer history.
+///
+/// This is an authored interaction policy. Choosing an algorithm does not read
+/// OS preferences or promise an exact match to a native scroll view.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum VelocityEstimator {
+    /// Quadratic least-squares regression, falling back to a line when needed.
+    #[default]
+    LeastSquares,
+    /// Integrate changes in velocity as impulse work over the sample window.
+    Impulse,
+    /// Weight the three newest interval velocities by 0.6, 0.35 and 0.05.
+    Ios,
+    /// Weight the three newest interval velocities by 0.15, 0.65 and 0.2.
+    Macos,
+}
+
 // ============================================================================
 // Constants
 // ============================================================================

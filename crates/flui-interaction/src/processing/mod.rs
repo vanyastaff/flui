@@ -32,5 +32,5 @@ pub use resampler::{DEFAULT_RESAMPLE_LOOKBACK, PointerEventResampler};
 pub use sampling_clock::{DEFAULT_SAMPLE_PERIOD, SamplingClock};
 pub use velocity::{
     ImpulseVelocityTracker, IosFlingVelocityTracker, MacosFlingVelocityTracker, Velocity,
-    VelocityEstimate, VelocityTracker,
+    VelocityEstimate, VelocityEstimator, VelocityTracker,
 };

@@ -24,6 +24,8 @@ use std::time::Duration;
 use flui_platform_api::TargetPlatform;
 use flui_platform_api::pointer::PointerKind;
 
+use crate::processing::VelocityEstimator;
+
 /// Default touch slop for touch devices (18 logical pixels).
 ///
 /// Touch slop is the maximum distance a pointer can move before it's
@@ -173,6 +175,9 @@ pub struct GestureSettings {
 
     /// Maximum velocity for a fling (clamped).
     max_fling_velocity: f64,
+
+    /// Release-velocity policy captured when a gesture sequence begins.
+    velocity_estimator: VelocityEstimator,
 }
 
 impl Default for GestureSettings {
@@ -258,6 +263,7 @@ impl GestureSettings {
             long_press_timeout,
             min_fling_velocity,
             max_fling_velocity,
+            velocity_estimator: VelocityEstimator::LeastSquares,
         })
     }
 
@@ -276,6 +282,7 @@ impl GestureSettings {
             long_press_timeout: DEFAULT_LONG_PRESS_TIMEOUT,
             min_fling_velocity: DEFAULT_MIN_FLING_VELOCITY,
             max_fling_velocity: DEFAULT_MAX_FLING_VELOCITY,
+            velocity_estimator: VelocityEstimator::LeastSquares,
         }
     }
 
@@ -298,6 +305,7 @@ impl GestureSettings {
             long_press_timeout: DEFAULT_LONG_PRESS_TIMEOUT,
             min_fling_velocity: DEFAULT_MIN_FLING_VELOCITY,
             max_fling_velocity: DEFAULT_MAX_FLING_VELOCITY,
+            velocity_estimator: VelocityEstimator::LeastSquares,
         }
     }
 
@@ -366,6 +374,7 @@ impl GestureSettings {
             long_press_timeout: Duration::from_millis(400),
             min_fling_velocity: 50.0,
             max_fling_velocity: 8000.0,
+            velocity_estimator: VelocityEstimator::LeastSquares,
         }
     }
 
@@ -388,6 +397,7 @@ impl GestureSettings {
             long_press_timeout: Duration::from_millis(500),
             min_fling_velocity: 50.0,
             max_fling_velocity: 8000.0,
+            velocity_estimator: VelocityEstimator::LeastSquares,
         }
     }
 
@@ -406,6 +416,7 @@ impl GestureSettings {
             long_press_timeout: DEFAULT_LONG_PRESS_TIMEOUT,
             min_fling_velocity: DEFAULT_MIN_FLING_VELOCITY,
             max_fling_velocity: DEFAULT_MAX_FLING_VELOCITY,
+            velocity_estimator: VelocityEstimator::LeastSquares,
         }
     }
 
@@ -431,6 +442,23 @@ impl GestureSettings {
     // ========================================================================
     // Getters
     // ========================================================================
+
+    /// Release-velocity algorithm captured by a new gesture sequence.
+    #[must_use]
+    pub const fn velocity_estimator(&self) -> VelocityEstimator {
+        self.velocity_estimator
+    }
+
+    /// Choose how a new gesture estimates its release velocity.
+    ///
+    /// Existing contacts keep their captured settings. All built-in settings
+    /// profiles use least squares unless the caller explicitly selects another
+    /// algorithm; platform thresholds and algorithm selection are independent.
+    #[must_use]
+    pub const fn with_velocity_estimator(mut self, estimator: VelocityEstimator) -> Self {
+        self.velocity_estimator = estimator;
+        self
+    }
 
     /// Get the touch slop (maximum movement for a tap).
     #[inline]
