@@ -9,6 +9,9 @@ pre { position: relative; z-index: 9999; background: white; width: max-content; 
 <nav>
   <button id="input">Install input</button>
   <button id="events">Check pointer and wheel events</button>
+  <button id="cancel">Check browser cancellation</button>
+  <button id="fractional">Check fractional positions</button>
+  <button id="capture">Arm trusted capture check</button>
   <button id="display">Check display</button>
   <button id="created">Check created callback</button>
   <button id="quit">Check quit callback</button>
@@ -84,4 +87,53 @@ document.getElementById('events').onclick = () => check('events-check', () => {
     equal(actual, { x: 80, y: 40, scale: devicePixelRatio, x1: true, x2: kind !== 'up' });
   }
 });
+document.getElementById('cancel').onclick = () => check('cancel-check', () => {
+  const canvas = document.querySelector('canvas');
+  if (!canvas) throw new Error('Install input first');
+  report('sequence', '');
+  const common = { pointerId: 7, pointerType: 'touch', bubbles: true, clientX: 80, clientY: 40 };
+  canvas.dispatchEvent(new PointerEvent('pointerdown', { ...common, button: 0, buttons: 1 }));
+  canvas.dispatchEvent(new PointerEvent('pointercancel', { ...common, button: -1, buttons: 0 }));
+  // Capture loss after cancellation cannot deliver a second terminal event.
+  canvas.dispatchEvent(new PointerEvent('lostpointercapture', common));
+  canvas.dispatchEvent(new PointerEvent('pointerdown', { ...common, button: 0, buttons: 1 }));
+  canvas.dispatchEvent(new PointerEvent('pointerup', { ...common, button: 0, buttons: 0 }));
+  equal({ sequence: document.getElementById('sequence')?.textContent }, { sequence: 'down,cancel,down,up,' });
+});
+document.getElementById('fractional').onclick = () => check('fractional-check', () => {
+  const canvas = document.querySelector('canvas');
+  if (!canvas) throw new Error('Install input first');
+  const rect = canvas.getBoundingClientRect();
+  const common = { clientX: rect.left + 80.25, clientY: rect.top + 40.75, bubbles: true };
+  const pointer = new PointerEvent('pointermove', { ...common, pointerId: 1, pointerType: 'mouse' });
+  equal({ x: pointer.clientX - rect.left, y: pointer.clientY - rect.top }, { x: 80.25, y: 40.75 });
+  canvas.dispatchEvent(pointer);
+  canvas.dispatchEvent(new WheelEvent('wheel', { ...common, deltaY: 1 }));
+  for (const kind of ['move', 'scroll']) {
+    const actual = JSON.parse(document.getElementById(kind)?.textContent ?? 'null');
+    if (!actual) throw new Error(`${kind} was not delivered`);
+    equal(actual, { x: 80.25, y: 40.75 });
+  }
+});
+document.getElementById('capture').onclick = () => {
+  const canvas = document.querySelector('canvas');
+  if (!canvas) return report('capture-check', 'FAIL: Install input first');
+  report('sequence', '');
+  report('capture-check', 'Press the canvas, drag outside its bounds, then release');
+  canvas.addEventListener('pointerdown', event => {
+    if (!event.isTrusted) return report('capture-check', 'FAIL: trusted pointer required');
+    report('capture-admission', canvas.hasPointerCapture(event.pointerId) ? 'PASS' : 'FAIL: no native capture');
+  }, { once: true });
+  canvas.addEventListener('pointerup', event => {
+    if (!event.isTrusted) return;
+    check('capture-check', () => {
+      equal({ admitted: document.getElementById('capture-admission')?.textContent }, { admitted: 'PASS' });
+      if (event.clientX >= canvas.getBoundingClientRect().left && event.clientX <= canvas.getBoundingClientRect().right &&
+          event.clientY >= canvas.getBoundingClientRect().top && event.clientY <= canvas.getBoundingClientRect().bottom) {
+        throw new Error('release must occur outside canvas bounds');
+      }
+      if (!document.getElementById('sequence')?.textContent.endsWith('up,')) throw new Error('outside release was not delivered');
+    });
+  }, { once: true });
+};
 </script>
