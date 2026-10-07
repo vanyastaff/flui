@@ -18,6 +18,7 @@
 use std::cell::RefCell;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::RecvTimeoutError;
 use std::time::Duration;
 
 use flui_animation::{Animation, AnimationStatus, Vsync};
@@ -283,36 +284,48 @@ impl Drop for ReadsControllerOnDrop {
 /// Disposing a route retires its controller's status listeners; a listener
 /// capture whose `Drop` reads the controller through the route's handle must
 /// not find the route still holding its controller slot. A held slot is a
-/// self-deadlock, not a failure — nextest's timeout catches it.
+/// self-deadlock, so the scenario runs on its own thread and the row fails
+/// after ten seconds without a completion signal (the stuck thread is leaked).
 ///
 /// Red-check: dispose the controller inside
 /// `if let Some(controller) = self.inner.controller.lock().take() && …` in
 /// `TransitionRoute::dispose`.
 pub(crate) fn dispose_releases_the_controller_slot_before_disposing_it() {
-    let (navigator_handle, mut harness) = navigator();
-    let (route, animation) = transition("second");
-    navigator_handle.push(route);
-    complete(&animation);
-    harness.tick();
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let (navigator_handle, mut harness) = navigator();
+        let (route, animation) = transition("second");
+        navigator_handle.push(route);
+        complete(&animation);
+        harness.tick();
 
-    let reentered = Arc::new(AtomicBool::new(false));
-    let probe = ReadsControllerOnDrop(Arc::clone(&reentered));
-    animation
-        .controller()
-        .expect("install created the controller")
-        .add_status_listener(Arc::new(move |_| {
-            let _ = &probe;
-        }));
-    REENTRANT_HANDLE.with(|slot| *slot.borrow_mut() = Some(animation.clone()));
+        let reentered = Arc::new(AtomicBool::new(false));
+        let probe = ReadsControllerOnDrop(Arc::clone(&reentered));
+        animation
+            .controller()
+            .expect("install created the controller")
+            .add_status_listener(Arc::new(move |_| {
+                let _ = &probe;
+            }));
+        REENTRANT_HANDLE.with(|slot| *slot.borrow_mut() = Some(animation.clone()));
 
-    navigator_handle.pop();
-    dismiss(&animation);
-    harness.tick();
-    REENTRANT_HANDLE.with(|slot| slot.borrow_mut().take());
+        navigator_handle.pop();
+        dismiss(&animation);
+        harness.tick();
+        REENTRANT_HANDLE.with(|slot| slot.borrow_mut().take());
 
-    assert_eq!(navigator_handle.route_ids().len(), 1);
-    assert!(
-        reentered.load(Ordering::SeqCst),
-        "disposing the route retired the listener capture"
-    );
+        assert_eq!(navigator_handle.route_ids().len(), 1);
+        assert!(
+            reentered.load(Ordering::SeqCst),
+            "disposing the route retired the listener capture"
+        );
+        let _ = done.send(());
+    });
+    match finished.recv_timeout(Duration::from_secs(10)) {
+        Ok(()) => {}
+        Err(RecvTimeoutError::Timeout) => {
+            panic!("deadlock: dispose held the controller slot while dropping a capture")
+        }
+        Err(RecvTimeoutError::Disconnected) => panic!("the dispose scenario panicked"),
+    }
 }
