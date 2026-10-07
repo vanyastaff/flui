@@ -361,11 +361,11 @@ fn run_custom_key_child(fail: bool) {
     assert_eq!(realm.global_key_scope.claim_count(), 2);
 }
 
-impl flui_interaction::CustomGestureRecognizer for CloseArenaMember {
-    fn on_arena_accept(&self, _: flui_interaction::PointerId) {
+impl flui_interaction::GestureArenaMember for CloseArenaMember {
+    fn accept_gesture(&self, _: flui_interaction::PointerId) {
         self.calls.set(self.calls.get() + 1);
     }
-    fn on_arena_reject(&self, _: flui_interaction::PointerId) {
+    fn reject_gesture(&self, _: flui_interaction::PointerId) {
         let _ = (&self.captures.first, &self.captures.second);
         self.calls.set(self.calls.get() + 1);
         CLOSE_REENTRY.with(|hook| {
