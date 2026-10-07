@@ -3556,6 +3556,13 @@ fn editable_update_whose_observer_and_focus_listener_panic() {
         assert!(listener.replace(true), "focus listener failure");
     }));
     harness.swap_root(EditableText::new(controller.clone(), Rc::clone(&new)).obscure_text(true));
+    eprintln!(
+        "editable update recovery: editable_elements={}, active_store={}, old_attached={}, replacement_attached={}",
+        harness.elements_of_type(std::any::TypeId::of::<EditableText>()).len(),
+        harness.active_text_store().is_some(),
+        old.is_attached(),
+        new.is_attached(),
+    );
     field.set_observer(None);
     assert!(heard.get(), "the old node heard its focus loss");
     assert!(!old.is_attached(), "the old node was replaced");
