@@ -425,6 +425,22 @@ impl GestureArenaEntry {
         }
     }
 
+    /// End this exact arena generation without a winner: every member still
+    /// in it is rejected.
+    ///
+    /// A cancelled contact uses this rather than [`Self::sweep`]: a sweep has
+    /// pointer-up semantics and awards the arena to its first member, which
+    /// would accept a gesture for a contact that no longer exists. A
+    /// generation already resolved or gone is left alone.
+    pub fn abandon(&self) {
+        if self.arena.owner_closed.load(Ordering::Acquire) {
+            return;
+        }
+        if let Some(slot) = self.slot.upgrade() {
+            self.arena.abandon_slot(&slot);
+        }
+    }
+
     /// Get the pointer ID for this entry.
     #[inline]
     pub fn pointer(&self) -> PointerId {
@@ -763,6 +779,9 @@ pub enum SweepModel {
 /// first-up `hold` run before the sweep, so the sweep observes the hold
 /// and defers). A held arena leaves the pointer's active slot on that sweep,
 /// so the pointer's next Down opens a fresh arena.
+///
+/// No workspace code calls it: `GestureBinding` runs the same sequence inline
+/// (`binding.rs`). Kept public for standalone arena users and tests.
 pub fn run_pointer_lifecycle(arena: &GestureArena, event: &crate::events::PointerEvent) {
     use crate::events::PointerEvent;
     let pointer = crate::events::extract_pointer_id(event);
@@ -1393,6 +1412,16 @@ impl GestureArena {
             entry.sweep()
         };
         self.remove_exact_slot(slot.pointer, slot);
+        Self::dispatch_pending(pending, slot.pointer);
+    }
+
+    fn abandon_slot(&self, slot: &Arc<ArenaSlot>) {
+        // Leave the maps first, so a reentrant rejection callback cannot reach
+        // this generation again.
+        if !self.remove_exact_slot(slot.pointer, slot) {
+            return;
+        }
+        let pending = slot.data.lock().resolve(None);
         Self::dispatch_pending(pending, slot.pointer);
     }
 

@@ -48,9 +48,15 @@ fn drive_frame_runs_post_frame_callbacks_after_the_pipeline() {
     }));
 
     let log_pipe = log.clone();
-    scheduler.drive_frame(Instant::now(), far_deadline(), || {
-        log_pipe.push("pipeline");
-    });
+    scheduler.drive_frame(
+        &flui_scheduler::OwnerFrame::new(&scheduler)
+            .expect("the scheduler has no live owner frame"),
+        Instant::now(),
+        far_deadline(),
+        || {
+            log_pipe.push("pipeline");
+        },
+    );
 
     assert_eq!(log.get(), vec!["pipeline", "post_frame"]);
 }
@@ -74,9 +80,13 @@ fn a_panicking_pipeline_aborts_the_frame_and_runs_no_post_frame_callbacks() {
     }));
 
     let panicked = catch_unwind(AssertUnwindSafe(|| {
-        scheduler.drive_frame(Instant::now(), far_deadline(), || {
-            panic!("pipeline exploded")
-        });
+        scheduler.drive_frame(
+            &flui_scheduler::OwnerFrame::new(&scheduler)
+                .expect("the scheduler has no live owner frame"),
+            Instant::now(),
+            far_deadline(),
+            || panic!("pipeline exploded"),
+        );
     }))
     .is_err();
     assert!(panicked, "the panic must propagate, not be swallowed");
@@ -93,7 +103,13 @@ fn a_panicking_pipeline_aborts_the_frame_and_runs_no_post_frame_callbacks() {
     );
 
     // The recovered scheduler drives a clean frame, and the queued callback runs.
-    scheduler.drive_frame(Instant::now(), far_deadline(), || {});
+    scheduler.drive_frame(
+        &flui_scheduler::OwnerFrame::new(&scheduler)
+            .expect("the scheduler has no live owner frame"),
+        Instant::now(),
+        far_deadline(),
+        || {},
+    );
     assert_eq!(fired.load(Ordering::SeqCst), 1);
 }
 
@@ -103,7 +119,13 @@ fn a_panicking_pipeline_aborts_the_frame_and_runs_no_post_frame_callbacks() {
 fn a_frame_after_a_panicking_frame_starts_cleanly() {
     let scheduler = UpdateScheduler::new();
     let _ = catch_unwind(AssertUnwindSafe(|| {
-        scheduler.drive_frame(Instant::now(), far_deadline(), || panic!("boom"));
+        scheduler.drive_frame(
+            &flui_scheduler::OwnerFrame::new(&scheduler)
+                .expect("the scheduler has no live owner frame"),
+            Instant::now(),
+            far_deadline(),
+            || panic!("boom"),
+        );
     }));
 
     let ran = Arc::new(AtomicUsize::new(0));
@@ -113,7 +135,13 @@ fn a_frame_after_a_panicking_frame_starts_cleanly() {
     }));
 
     // Would `debug_assert!` on the illegal transition if the frame were still open.
-    scheduler.drive_frame(Instant::now(), far_deadline(), || {});
+    scheduler.drive_frame(
+        &flui_scheduler::OwnerFrame::new(&scheduler)
+            .expect("the scheduler has no live owner frame"),
+        Instant::now(),
+        far_deadline(),
+        || {},
+    );
     assert_eq!(ran.load(Ordering::SeqCst), 1);
     assert_eq!(scheduler.phase(), SchedulerPhase::Idle);
 }
@@ -137,9 +165,15 @@ fn persistent_callbacks_run_before_the_pipeline() {
     scheduler.add_post_frame_callback(Box::new(move |_| {
         log_post.push("post_frame");
     }));
-    scheduler.drive_frame(Instant::now(), far_deadline(), || {
-        log_pipe.push("pipeline");
-    });
+    scheduler.drive_frame(
+        &flui_scheduler::OwnerFrame::new(&scheduler)
+            .expect("the scheduler has no live owner frame"),
+        Instant::now(),
+        far_deadline(),
+        || {
+            log_pipe.push("pipeline");
+        },
+    );
 
     assert_eq!(
         log.get(),

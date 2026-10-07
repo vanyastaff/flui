@@ -163,6 +163,11 @@ impl<T: TwoWayConverter> AnimatedValue<T> {
     /// The current animated value.
     #[must_use]
     pub fn value(&self) -> T {
+        // At rest the value is the target itself: the vector form can be lossy (a
+        // transparent colour's components premultiply away).
+        if self.is_settled() {
+            return self.target.clone();
+        }
         let mut buffer = self.target.to_vector();
         for (slot, sim) in buffer.as_mut().iter_mut().zip(&self.components) {
             *slot = sim.x(self.elapsed);

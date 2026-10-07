@@ -4,9 +4,10 @@
   `ThreePointCubic`, `Interval` and the elastic curves have private fields, a `const fn new` that
   panics on invalid input (a compile error in a `const`), a `try_new` returning the new
   `CurveError`, and serde decoding that rejects what `try_new` rejects; the serialized field
-  names are unchanged. `Cubic::new` requires `x1` and `x2` in `[0, 1]` (CSS Easing 2) and finite
-  `y1`, `y2`; `ElasticInCurve::new(0.0)` and other non-positive periods are refused instead of
-  producing NaN. `Split` reports an invalid split as a `CurveError` message.
+  names are unchanged. `Cubic::new` requires `x1` and `x2` in `[0, 1]` (CSS Easing 2) and
+  `y1`, `y2` in `[-1e6, 1e6]` (as do `ThreePointCubic`'s control y values); the elastic curves require a period in
+  `[1e-6, 1e6]`, so `ElasticInCurve::new(0.0)` is refused instead of producing NaN. `Split`
+  reports an invalid split as a `CurveError` message.
 - **`flui-animation`**: one input policy for every curve, stated on the `Curve` trait:
   `transform(NaN)` returns NaN (`Cubic`, `ThreePointCubic`, `Interval` and `Split` returned 0 or
   1), `t` outside `[0, 1]` clamps to the nearest end, and the ends are exact.
@@ -30,5 +31,8 @@
 
 - **`flui-animation`**: `ReverseCurve` and `Curve::reversed` (they mapped 0 to 1, breaking the
   curve contract): reverse the driving animation (`ReverseAnimation`, `AnimationExt::reversed`)
-  or use `.flipped()` to turn an ease-in into an ease-out. `SawTooth` and `Threshold`: use
-  `Interval::linear(t, t)` for a step at `t`.
+  or use `.flipped()` to turn an ease-in into an ease-out. `Threshold`: use
+  `Interval::linear(t, t)` for a step at `t`. `SawTooth` has no direct replacement (its repeated
+  ramps jumped from 1 back to 0, breaking the same contract): for `count` ramps over `duration`, use
+  `repeat_with(None, None, false, Some(duration / count), Some(count))`, which stops after `count`
+  ramps (`repeat(false)` would repeat forever). The recipe needs `count >= 1`; `SawTooth::new(0)` was the constant 0, which is a controller left at its lower bound (no run started).

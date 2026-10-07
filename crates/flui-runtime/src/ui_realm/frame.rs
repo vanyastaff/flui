@@ -139,7 +139,7 @@ impl UiRealm {
 
         // The async-driver step lives in `UpdateScheduler::handle_begin_frame`'s
         // mid-frame slot, not here: this pipeline runs in
-        // `PersistentCallbacks`, where `drive_async_tasks` debug-asserts it
+        // `PersistentCallbacks`, where `OwnerFrame::poll_ready` debug-asserts it
         // must never poll (polling here could re-enter a frame-phase-only
         // capability from inside a woken future). One mid-frame poll per
         // frame, on the right `UpdateScheduler` instance, is enforced by the
@@ -328,7 +328,7 @@ impl UiRealm {
     /// post-frame callback, a nested platform pump) is refused (sync) or
     /// queued (async), and no platform edit lands in a tree mid-frame. The
     /// gates reopen on every exit, a panic's unwind included. The queued
-    /// grants run only after `drive_frame_with_lane` returned, with the
+    /// grants run only after `UpdateScheduler::drive_frame` returned, with the
     /// scheduler back in `Idle`: an edit a grant makes there marks the tree
     /// dirty and schedules the next frame like any other owner-thread edit,
     /// where the same edit inside the frame would have its visual-update
@@ -343,9 +343,9 @@ impl UiRealm {
         pipeline: impl FnOnce() -> R,
     ) -> R {
         let commits_closed = TextCommitsClosed::close(self);
-        let result =
-            self.scheduler
-                .drive_frame_with_lane(now, deadline, pipeline, &self.local_post_frame);
+        let result = self
+            .scheduler
+            .drive_frame(&self.owner_frame, now, deadline, pipeline);
         drop(commits_closed);
         // The commit anchor: each presentation's queued grants, against the
         // stores that queued them.

@@ -1144,7 +1144,8 @@ mod tests {
         .writer_source();
         for change in ["replace", "remove", "dispose"] {
             let scheduler = flui_scheduler::UpdateScheduler::new();
-            let lane = scheduler.new_local_post_frame_lane();
+            let owner_frame = flui_scheduler::OwnerFrame::new(&scheduler)
+                .expect("the scheduler has no live owner frame");
             let calls = Rc::new(Cell::new(0));
             let old_calls = Rc::clone(&calls);
             let mut state = GestureDetector::new()
@@ -1156,7 +1157,7 @@ mod tests {
                 writer: writer.clone(),
                 mounted: Rc::clone(&state.mounted),
             }));
-            state.local_post_frame = Some(lane.local_handle());
+            state.local_post_frame = Some(owner_frame.local_post_frame_handle());
             state.semantics_requests.push(PendingSemanticsAction::Tap);
             // Queue through the production semantics-to-post-frame bridge,
             // then alter its target before the real scheduler delivers it.
@@ -1171,7 +1172,7 @@ mod tests {
                 "dispose" => state.dispose(),
                 _ => unreachable!(),
             }
-            scheduler.execute_frame_with_lane(&lane);
+            scheduler.execute_frame(&owner_frame);
             assert_eq!(
                 calls.get(),
                 if change == "replace" { 2 } else { 0 },

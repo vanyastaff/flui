@@ -12,10 +12,12 @@ use std::{
 };
 
 use flui_foundation::geometry::Offset;
+use flui_interaction::arena::GestureArena;
 use flui_interaction::events::{
     PointerEvent, PointerType, make_cancel_event_for_id, make_down_event_for_id,
     make_move_event_for_id, make_up_event_for_id,
 };
+use flui_interaction::recognizers::OneSequenceGestureRecognizer;
 use flui_interaction::recognizers::scale::{ScaleEndDetails, ScaleUpdateDetails};
 use flui_interaction::routing::PointerDispatch;
 use flui_interaction::{
@@ -437,6 +439,36 @@ fn scale_cancel_mid_gesture_then_next_gesture() {
     assert!(log.updates.borrow().len() > updates);
 }
 
+fn scale_ended_from_its_start_publishes_no_update() {
+    let rig = Rig::new();
+    let slot: Rc<RefCell<Option<Arc<ScaleGestureRecognizer>>>> = Rc::default();
+    let log = Rc::new(ScaleLog::default());
+    let (s, st, u, e) = (slot.clone(), log.clone(), log.clone(), log.clone());
+    let scale = ScaleGestureRecognizer::new(rig.binding.arena().clone())
+        .with_on_scale_start(move |_| {
+            st.starts.set(st.starts.get() + 1);
+            // Lifting one of two contacts from inside the start ends the scale.
+            if let Some(scale) = s.borrow_mut().take() {
+                scale.stop_tracking_pointer(id(1));
+            }
+        })
+        .with_on_scale_update(move |d| u.updates.borrow_mut().push(d))
+        .with_on_scale_end(move |d| e.ends.borrow_mut().push(d));
+    rig.attach(&scale, None);
+    *slot.borrow_mut() = Some(Arc::clone(&scale));
+    // A pan on the second contact keeps the arena contested, so the scale
+    // starts by claiming it on the move that crosses the slop.
+    let pan = DragGestureRecognizer::new(rig.binding.arena().clone(), DragAxis::Free);
+    rig.attach(&pan, Some(2));
+    pinch_out(&rig, 1, 2);
+    assert_eq!(log.starts.get(), 1);
+    assert_eq!(log.ends.borrow().len(), 1, "the start ended the scale");
+    assert!(
+        log.updates.borrow().is_empty(),
+        "no update after the gesture ended"
+    );
+}
+
 fn scale_contact_lost_to_a_competitor_cancels_the_scale() {
     let rig = Rig::new();
     // An eager member that sees only the third contact claims its arena first.
@@ -539,6 +571,10 @@ fn scale_publishes_finite_continuous_values_and_owns_its_contacts() {
                 scale_contact_lost_to_a_competitor_cancels_the_scale,
             ),
             ("dispose from update", scale_disposed_from_its_update),
+            (
+                "ended from its start",
+                scale_ended_from_its_start_publishes_no_update,
+            ),
         ],
     );
 }
@@ -661,6 +697,33 @@ fn force_press_cancel_ends_once() {
     assert_eq!((log.starts.get(), log.ends.get()), (2, 2));
 }
 
+fn force_press_released_from_its_start_publishes_no_peak() {
+    let rig = Rig::new();
+    let slot: Rc<RefCell<Option<Arc<ForcePressGestureRecognizer>>>> = Rc::default();
+    let log = Rc::new(PressLog::default());
+    let (s, st, p, e) = (slot.clone(), log.clone(), log.clone(), log.clone());
+    let recognizer = ForcePressGestureRecognizer::new(rig.binding.arena().clone())
+        .with_on_start(move |_| {
+            st.starts.set(st.starts.get() + 1);
+            if let Some(recognizer) = s.borrow_mut().take() {
+                recognizer.stop_tracking_pointer(id(1));
+            }
+        })
+        .with_on_peak(move |_| p.peaks.set(p.peaks.get() + 1))
+        .with_on_end(move |_| e.ends.set(e.ends.get() + 1));
+    rig.attach(&recognizer, None);
+    *slot.borrow_mut() = Some(Arc::clone(&recognizer));
+    rig.down_with(1, 100.0, 100.0, PointerType::Pen, 0.2);
+    rig.frame(); // the lone member wins by default
+    // Start and peak in one sample; the start retires the press.
+    rig.move_with(1, 100.0, 100.0, PointerType::Pen, 0.9);
+    assert_eq!(
+        (log.starts.get(), log.peaks.get(), log.ends.get()),
+        (1, 0, 1),
+        "no peak after the press ended"
+    );
+}
+
 fn force_press_disposed_from_its_start() {
     let rig = Rig::new();
     let slot: Rc<RefCell<Option<Arc<ForcePressGestureRecognizer>>>> = Rc::default();
@@ -700,6 +763,10 @@ fn force_press_needs_a_sensor_and_the_arena() {
             ),
             ("cancel", force_press_cancel_ends_once),
             ("dispose from start", force_press_disposed_from_its_start),
+            (
+                "released from its start",
+                force_press_released_from_its_start_publishes_no_peak,
+            ),
             (
                 "mouse at full pressure",
                 a_mouse_at_full_pressure_never_force_presses,
@@ -891,6 +958,37 @@ fn tap_down_panic_still_delivers_the_tap_up() {
     assert_eq!(*log.events.borrow(), ["down", "up"]);
 }
 
+fn tap_down_admitting_the_next_contact_keeps_the_tap_up() {
+    let rig = Rig::new();
+    let slot: Rc<RefCell<Option<Arc<TapAndDragGestureRecognizer>>>> = Rc::default();
+    let log = Rc::new(TapDragLog::default());
+    let (s, d, u) = (slot.clone(), log.clone(), log.clone());
+    let tad = TapAndDragGestureRecognizer::new(rig.binding.arena().clone())
+        .with_on_tap_down(move |_| {
+            d.events.borrow_mut().push("down".to_owned());
+            // The next contact arrives while the completed tap is delivered.
+            if let Some(tad) = s.borrow_mut().take() {
+                let at = Offset::new(300.0, 100.0);
+                tad.add_pointer(id(2), at, at);
+            }
+        })
+        .with_on_tap_up(move |details| {
+            u.events.borrow_mut().push("up".to_owned());
+            u.counts.borrow_mut().push(details.consecutive_tap_count);
+        });
+    rig.attach(&tad, None);
+    *slot.borrow_mut() = Some(Arc::clone(&tad));
+    // A competing tap keeps the arena open until the sweep on up, which
+    // delivers tap-down and tap-up together.
+    let tap = TapGestureRecognizer::new(rig.binding.arena().clone());
+    rig.attach(&tap, None);
+    rig.down(1, 100.0, 100.0);
+    rig.frame();
+    rig.up(1, 100.0, 100.0);
+    assert_eq!(*log.events.borrow(), ["down", "up"]);
+    assert_eq!(*log.counts.borrow(), [1]);
+}
+
 /// The same event with its position replaced by NaN, for every event after
 /// the down.
 fn nan_after_down(event: &PointerEvent) -> PointerEvent {
@@ -999,6 +1097,10 @@ fn tap_and_drag_resolves_through_the_shared_arena() {
             ),
             ("cancel mid drag", cancel_mid_drag_cancels_once),
             (
+                "tap down admits the next contact",
+                tap_down_admitting_the_next_contact_keeps_the_tap_up,
+            ),
+            (
                 "dispose from drag start",
                 tap_drag_disposed_from_its_drag_start,
             ),
@@ -1036,6 +1138,39 @@ fn eager_wins_at_close_and_forgets_a_finished_contact() {
         "the cancelled contact is over"
     );
     assert_eq!(taps.get(), 0, "the eager member won every contact");
+}
+
+fn route<R: GestureRecognizer>(recognizer: &R, event: &PointerEvent) {
+    recognizer.handle_event(PointerDispatch {
+        local: event,
+        global: event,
+    });
+}
+
+/// In a self-driven arena the recognizers close it themselves. A cancelled
+/// contact's arena has no winner: the eager member's cancel must not award the
+/// arena to a rival, which would accept a gesture for the cancelled contact.
+#[test]
+fn eager_cancel_in_a_self_driven_arena_awards_no_rival() {
+    let arena = GestureArena::new();
+    let eager = EagerGestureRecognizer::new(arena.clone());
+    let starts = Rc::new(Cell::new(0));
+    let counted = starts.clone();
+    // A drag starts the moment the arena accepts it, so an award is visible.
+    let rival = DragGestureRecognizer::new(arena.clone(), DragAxis::Free)
+        .with_on_start(move |_| counted.set(counted.get() + 1));
+    let at = Offset::new(100.0, 100.0);
+    let down = make_down_event_for_id(id(1), at, PointerType::Touch);
+    let cancel = make_cancel_event_for_id(id(1), PointerType::Touch);
+    eager.add_pointer(id(1), at, at);
+    route(&*eager, &down);
+    rival.add_pointer(id(1), at, at);
+    route(&*rival, &down);
+    // The eager member hears the cancel first, then the rival.
+    route(&*eager, &cancel);
+    route(&*rival, &cancel);
+    assert_eq!(starts.get(), 0, "the cancelled contact has no winner");
+    assert!(!arena.contains(id(1)), "the cancelled arena is gone");
 }
 
 /// A non-finite pressure sample during an active press makes no transition: no

@@ -44,6 +44,7 @@ fn background_owner_pump_drains_before_polling_without_a_frame() {
     let _clear = OwnerHostClearGuard::arm();
     let realm = crate::app::ui_realm::UiRealm::for_test();
     let scheduler = realm.scheduler().clone();
+    let driver = realm.owner_frame().async_driver();
     let sender = realm.command_sender();
     let dispatcher = install_platform_realm(realm, &test_window());
     sender.request_redraw();
@@ -58,7 +59,7 @@ fn background_owner_pump_drains_before_polling_without_a_frame() {
 
     let polled = Arc::new(AtomicBool::new(false));
     let polled_in_task = Arc::clone(&polled);
-    let _token = scheduler.spawn_local(Box::pin(async move {
+    let _token = driver.spawn_local(Box::pin(async move {
         polled_in_task.store(true, Ordering::SeqCst);
         sender.request_redraw();
     }));

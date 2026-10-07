@@ -913,6 +913,49 @@ pub(crate) fn numeric_range_admission_and_owner_payload_validation() {
     assert_eq!(count.get(), 1);
 }
 
+/// A screen reader scrolls a list through the same position a drag drives:
+/// the scrollable advertises scroll-down/up, and each request moves the
+/// offset by most of a viewport, clamped to the extents.
+pub(crate) fn assistive_scroll_actions_move_a_scrollable() {
+    use flui_widgets::{ScrollController, Scrollable};
+
+    let scroll = ScrollController::new();
+    scroll.update_dimensions(100.0, 0.0, 900.0);
+    let (mut laid, tree, _host) = pump_labelled(
+        host().child(
+            Scrollable::new()
+                .controller(scroll.clone())
+                .child(SizedBox::new(100.0, 1000.0)),
+        ),
+    );
+    let scroller = tree
+        .nodes()
+        .find(|node| node.supports_action(Action::ScrollDown))
+        .unwrap_or_else(|| {
+            panic!(
+                "a scrollable must advertise scroll-down to assistive technology. \
+                 Tree was:\n{}",
+                tree.describe()
+            )
+        });
+    assert!(scroller.supports_action(Action::ScrollUp));
+    let scroller = scroller.id();
+
+    laid.invoke_semantics_action(request(Action::ScrollDown, scroller, None))
+        .expect("scroll-down resolves");
+    laid.tick();
+    let after_down = scroll.pixels();
+    assert!(
+        after_down > 0.0,
+        "scroll-down moved the list, got {after_down}"
+    );
+
+    laid.invoke_semantics_action(request(Action::ScrollUp, scroller, None))
+        .expect("scroll-up resolves");
+    laid.tick();
+    assert_eq!(scroll.pixels(), 0.0, "scroll-up returns to the start");
+}
+
 // ===========================================================================
 // Published bounds are physical pixels
 // ===========================================================================

@@ -224,9 +224,37 @@ fn solve_rhs(
 ) -> Option<PolynomialFit> {
     let mut result = PolynomialFit::new(n - 1)?;
 
+    // Fit the samples mapped onto [-1, 1] (y' = (y - centre) / half_range),
+    // then map the coefficients back. Positions near the top of the f64
+    // range would otherwise overflow the weighted sums and the squared
+    // residuals; on this scale every intermediate stays bounded and only the
+    // final rescale can saturate, which the caller bounds. Halving before
+    // subtracting keeps `centre` and `half_range` finite for any finite input.
+    let (y_min, y_max) = y[..m]
+        .iter()
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), &v| {
+            (lo.min(v), hi.max(v))
+        });
+    let centre = y_min / 2.0 + y_max / 2.0;
+    let half_range = y_max / 2.0 - y_min / 2.0;
+    if !half_range.is_finite() || !centre.is_finite() {
+        return None;
+    }
+    if half_range == 0.0 {
+        // A constant series: the exact fit is the constant itself.
+        result.coefficients[0] = centre;
+        result.confidence = 1.0;
+        return Some(result);
+    }
+    let mut ys = [0.0_f64; SCRATCH_M];
+    for (scaled, &yh) in ys.iter_mut().zip(&y[..m]) {
+        *scaled = yh / half_range - centre / half_range;
+    }
+    let y = &ys[..m];
+
     // Step 3: back-substitute R B = Qᵀ W Y from bottom-right to top-left.
     let mut wy = [0.0_f64; SCRATCH_M];
-    for (h, (&yh, &wh)) in y[..m].iter().zip(w[..m].iter()).enumerate() {
+    for (h, (&yh, &wh)) in y.iter().zip(w[..m].iter()).enumerate() {
         wy[h] = yh * wh;
     }
     for i in (0..n).rev() {
@@ -246,7 +274,7 @@ fn solve_rhs(
 
     // Step 4: R² confidence (only the active coefficient slice contributes; the
     // trailing padding slots are zero).
-    let y_mean: f64 = y[..m].iter().sum::<f64>() / m as f64;
+    let y_mean: f64 = y.iter().sum::<f64>() / m as f64;
     let mut sum_squared_error = 0.0_f64;
     let mut sum_squared_total = 0.0_f64;
     for h in 0..m {
@@ -263,14 +291,27 @@ fn solve_rhs(
         let v = y[h] - y_mean;
         sum_squared_total += wh_sq * v * v;
     }
-    result.confidence = if sum_squared_total <= PRECISION_ERROR_TOLERANCE {
+    // R² is scale-invariant, so it is computed on the normalized series; the
+    // "no variance to explain" cut-off stays in the caller's units (px²).
+    let total_variance_in_units = sum_squared_total * half_range * half_range;
+    let r_squared = 1.0 - (sum_squared_error / sum_squared_total);
+    result.confidence = if total_variance_in_units <= PRECISION_ERROR_TOLERANCE {
         1.0
+    } else if r_squared.is_finite() {
+        // Clamp to [0, 1]: floating-point rounding can produce a tiny
+        // negative when SSE ≈ SST, and a fit worse than the mean would give
+        // R² < 0 — neither is a meaningful "confidence".
+        r_squared.clamp(0.0, 1.0)
     } else {
-        // R² = 1 - SSE/SST. Clamp to [0, 1]: floating-point rounding can produce
-        // a tiny negative when SSE ≈ SST, and a fit worse than the mean would
-        // give R² < 0 — neither is a meaningful "confidence".
-        (1.0 - (sum_squared_error / sum_squared_total)).clamp(0.0, 1.0)
+        0.0
     };
+
+    // Map the coefficients back to the caller's units. Only the constant
+    // term carries the centre.
+    for c in &mut result.coefficients[..n] {
+        *c *= half_range;
+    }
+    result.coefficients[0] += centre;
 
     Some(result)
 }

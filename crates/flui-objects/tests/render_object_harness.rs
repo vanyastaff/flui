@@ -2321,8 +2321,10 @@ fn harness_animated_transform_tick_dirty_marking() {
          {patched} painted, {crossing} on the crossing"
     );
 
-    let (painted, _) = tick_to(&mut run, &controller, 0.75);
-    assert_eq!(painted, 0, "an unchanged value marks nothing");
+    for _ in 0..4 {
+        let (painted, _) = tick_to(&mut run, &controller, 0.75);
+        assert_eq!(painted, 0, "repeated unchanged values mark nothing");
+    }
 
     let (painted, structure) = tick_to(&mut run, &controller, 0.0);
     assert!(

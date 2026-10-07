@@ -290,6 +290,7 @@ pub use settings::{
     DEFAULT_MAX_FLING_VELOCITY, DEFAULT_MIN_FLING_VELOCITY, DEFAULT_MOUSE_PAN_SLOP,
     DEFAULT_MOUSE_SLOP, DEFAULT_PAN_SLOP, DEFAULT_PAN_SLOP_HORIZONTAL, DEFAULT_PAN_SLOP_VERTICAL,
     DEFAULT_PEN_SLOP, DEFAULT_SCALE_SLOP, DEFAULT_TOUCH_SLOP, GestureSettings,
+    GestureSettingsError,
 };
 pub use text_input::{
     ClientToken, DetachOutcome, TextInputBackend, TextInputClient, TextInputError, TextInputHandle,

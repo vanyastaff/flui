@@ -212,6 +212,7 @@ fn semantics_translation_and_routing() {
             ("semantics::numeric_range_admission_and_owner_payload_validation", crate::semantics::numeric_range_admission_and_owner_payload_validation as fn()),
             ("semantics::a_set_text_request_without_a_payload_is_dropped_rather_than_emptied", crate::semantics::a_set_text_request_without_a_payload_is_dropped_rather_than_emptied as fn()),
             ("semantics::a_tap_handler_round_trips_from_a_platform_click_to_the_callback", crate::semantics::a_tap_handler_round_trips_from_a_platform_click_to_the_callback),
+            ("semantics::assistive_scroll_actions_move_a_scrollable", crate::semantics::assistive_scroll_actions_move_a_scrollable),
             ("semantics::merge_semantics_collapses_its_descendants_in_the_a11y_tree", crate::semantics::merge_semantics_collapses_its_descendants_in_the_a11y_tree),
             ("semantics::published_bounds_are_physical_and_follow_the_scale_factor", crate::semantics::published_bounds_are_physical_and_follow_the_scale_factor),
             ("semantics::a_covered_retained_form_stays_absent_after_a_late_controller_update", crate::semantics::a_covered_retained_form_stays_absent_after_a_late_controller_update),
@@ -409,6 +410,7 @@ fn animation_and_visibility() {
             ("implicit_animations::animated_container_animates_its_transform", crate::implicit_animations::animated_container_animates_its_transform),
             ("implicit_animations::nan_size_passes_through_like_container", crate::implicit_animations::nan_size_passes_through_like_container),
             ("implicit_animations::animated_container_reanchors_unchanged_properties_on_restart", crate::implicit_animations::animated_container_reanchors_unchanged_properties_on_restart),
+            ("implicit_animations::animated_container_keeps_an_unchanged_collapsed_transform_on_restart", crate::implicit_animations::animated_container_keeps_an_unchanged_collapsed_transform_on_restart),
             ("implicit_animations::animated_rotation_takes_the_shorter_arc", crate::implicit_animations::animated_rotation_takes_the_shorter_arc),
             ("implicit_animations::animated_rotation_takes_the_numeric_arc", crate::implicit_animations::animated_rotation_takes_the_numeric_arc),
             ("implicit_animations::animated_rotation_retargets_on_a_path_change", crate::implicit_animations::animated_rotation_retargets_on_a_path_change),
@@ -508,6 +510,7 @@ fn forms_and_async_builders() {
             ("form::reset_restores_initial_values_and_clears_errors_and_interaction", crate::form::reset_restores_initial_values_and_clears_errors_and_interaction as fn()),
             ("form::validate_shows_the_validator_error_and_revalidating_a_valid_value_clears_it", crate::form::validate_shows_the_validator_error_and_revalidating_a_valid_value_clears_it),
             ("future_builder::future_builder_pending_then_error", crate::future_builder::future_builder_pending_then_error),
+            ("future_builder::future_builder_accepts_an_owner_local_future", crate::future_builder::future_builder_accepts_an_owner_local_future),
             ("stream_builder::stream_builder_data_error_data_then_done", crate::stream_builder::stream_builder_data_error_data_then_done),
         ],
     );

@@ -45,7 +45,7 @@ use web_time::Instant;
 
 use super::{
     recognizer::{GestureRecognizer, RecognizerBase},
-    recognizer::{finish_containment, invoke_callback, retire_callback},
+    recognizer::{finish_containment, invoke_callback, retire_callback, withdraw_cancelled},
 };
 use crate::{
     arena::{GestureArenaEntry, GestureArenaMember, GestureDisposition, SweepModel},
@@ -274,6 +274,8 @@ enum ArenaStep {
     Withdraw(GestureArenaEntry),
     /// A self-driven arena is swept by its recogniser on pointer up.
     Sweep(GestureArenaEntry),
+    /// The contact was cancelled: its arena ends without a winner.
+    Abandon(GestureArenaEntry),
 }
 
 impl TapDragState {
@@ -490,6 +492,13 @@ impl TapAndDragGestureRecognizer {
     /// ran and every notice of the transition was delivered.
     fn finish(&self, step: ArenaStep, notices: Vec<Notice>) {
         let generation = self.gesture_state.lock().generation;
+        // A batch that ends its sequence (a completed tap, a drag end, a
+        // cancel) is delivered whole, even when a callback admits the next
+        // contact meanwhile; a batch for a live sequence stops once a callback
+        // ends that sequence reentrantly.
+        let ends_sequence = notices
+            .iter()
+            .any(|n| matches!(n, Notice::TapUp(_) | Notice::DragEnd(_) | Notice::Cancel));
         let self_driven = self.state.arena().sweep_model() == SweepModel::SelfDriven;
         let mut first = match step {
             ArenaStep::None => None,
@@ -507,6 +516,9 @@ impl TapAndDragGestureRecognizer {
                     entry.sweep();
                 }
             }),
+            ArenaStep::Abandon(entry) => {
+                RoutePanic::capture(|| withdraw_cancelled(&entry, self.state.arena()))
+            }
         };
         // Every notice of a committed transition is delivered, so a panic in
         // `on_tap_down` cannot strand a started drag without its end or a tap
@@ -515,7 +527,7 @@ impl TapAndDragGestureRecognizer {
             // A callback that ended this sequence reentrantly (a cancel, a
             // dispose) already delivered its own end; what is left belongs to
             // a sequence that no longer exists.
-            if self.gesture_state.lock().generation != generation {
+            if !ends_sequence && self.gesture_state.lock().generation != generation {
                 break;
             }
             RoutePanic::preserve_first(
@@ -691,7 +703,7 @@ impl TapAndDragGestureRecognizer {
         }
         let step = state
             .abandon(&mut notices)
-            .map_or(ArenaStep::None, ArenaStep::Withdraw);
+            .map_or(ArenaStep::None, ArenaStep::Abandon);
         drop(state);
         self.clear_base_tracking();
         self.finish(step, notices);

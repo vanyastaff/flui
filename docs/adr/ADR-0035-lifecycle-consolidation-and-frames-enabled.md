@@ -38,9 +38,12 @@ paints fresh content instead of running idle.
 
 ### 3. Frames disabled still pump async work
 
+**Superseded-by:** [ADR-0136 §2](ADR-0136-owner-local-ui-surfaces.md) for the async pump
+API; the ordering and lifecycle decision remain unchanged.
+
 The per-wake gate is `wake_action(frames_enabled, dirty, frame_scheduled) -> Render | PumpAsync
 | Skip`. `PumpAsync` (frames disabled) clears the frame-scheduled latch with
-`Scheduler::finish_async_pump()` and then runs `drive_async_tasks()` — no begin/draw frame, no
+`UpdateScheduler::finish_async_pump()` and then runs `OwnerFrame::poll_ready()` — no begin/draw frame, no
 tickers, no pipeline, no present. The clear comes **first**, mirroring `handle_begin_frame`:
 without it a later independent `Waker::wake()` finds the latch already set and never wakes the
 loop; clearing *after* instead would erase a task's synchronous self-wake during the pump. How

@@ -108,7 +108,7 @@ impl UiRealm {
     }
 
     /// A wake that runs no frame: clear the scheduler's frame latch, then
-    /// poll the async driver once. No begin frame, no tickers, no pipeline,
+    /// poll the realm's ready async tasks once. No begin frame, no tickers, no pipeline,
     /// no present. Hosts call it for a wake whose gate found frames disabled
     /// (the app is hidden, paused or detached), and iOS for every owner turn,
     /// which only commits commands and polls, frames enabled or not.
@@ -120,7 +120,7 @@ impl UiRealm {
     pub fn pump_background(&mut self) {
         self.enter(|realm| {
             realm.scheduler.finish_async_pump();
-            realm.scheduler.drive_async_tasks();
+            realm.owner_frame.poll_ready();
         });
     }
 
