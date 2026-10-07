@@ -1,37 +1,32 @@
 //! Custom gesture recognizer participating in the gesture arena.
 //!
-//! Demonstrates the [`CustomGestureRecognizer`] extension point: any type that
-//! implements it automatically becomes a [`GestureArenaMember`] (via a blanket
-//! impl) and can compete in the [`GestureArena`] alongside the built-in
-//! recognizers. Winning the arena calls `on_arena_accept`; losing calls
-//! `on_arena_reject`.
+//! Implements [`GestureArenaMember`] directly to compete in the [`GestureArena`]
+//! alongside the built-in recognizers. Winning calls `accept_gesture`; losing
+//! calls `reject_gesture`. The owner keeps each participant alive with [`Rc`].
 //!
 //! Run with:
 //! ```text
 //! cargo run -p flui-interaction --example custom_recognizer
 //! ```
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
+use std::{cell::Cell, rc::Rc};
 
-use flui_interaction::{PointerId, arena::GestureArena, sealed::CustomGestureRecognizer};
+use flui_interaction::{GestureArenaMember, PointerId, arena::GestureArena};
 
 /// A minimal custom recognizer that records whether it won the arena and logs
 /// the outcome. A real one would inspect pointer events and resolve itself.
 struct LoggingRecognizer {
     name: &'static str,
-    won: AtomicBool,
+    won: Cell<bool>,
 }
 
-impl CustomGestureRecognizer for LoggingRecognizer {
-    fn on_arena_accept(&self, pointer: PointerId) {
-        self.won.store(true, Ordering::Relaxed);
+impl GestureArenaMember for LoggingRecognizer {
+    fn accept_gesture(&self, pointer: PointerId) {
+        self.won.set(true);
         println!("[{}] accepted for pointer {pointer:?}", self.name);
     }
 
-    fn on_arena_reject(&self, pointer: PointerId) {
+    fn reject_gesture(&self, pointer: PointerId) {
         println!("[{}] rejected for pointer {pointer:?}", self.name);
     }
 }
@@ -41,30 +36,24 @@ fn main() {
     let pointer = PointerId::PRIMARY;
 
     // Two custom recognizers contend for the same pointer.
-    let winner = Arc::new(LoggingRecognizer {
+    let winner = Rc::new(LoggingRecognizer {
         name: "winner",
-        won: AtomicBool::new(false),
+        won: Cell::new(false),
     });
-    let loser = Arc::new(LoggingRecognizer {
+    let loser = Rc::new(LoggingRecognizer {
         name: "loser",
-        won: AtomicBool::new(false),
+        won: Cell::new(false),
     });
 
-    arena.add(pointer, winner.clone());
-    arena.add(pointer, loser.clone());
+    arena.add(pointer, &winner);
+    arena.add(pointer, &loser);
     arena.close(pointer);
 
-    // Resolve in favour of `winner`: it receives `on_arena_accept`, every other
-    // member receives `on_arena_reject`.
+    // Resolve in favour of `winner`: it receives `accept_gesture`, every other
+    // member receives `reject_gesture`.
     arena.resolve(pointer, Some(winner.clone()));
 
-    assert!(
-        winner.won.load(Ordering::Relaxed),
-        "winner should be accepted"
-    );
-    assert!(
-        !loser.won.load(Ordering::Relaxed),
-        "loser should be rejected"
-    );
+    assert!(winner.won.get(), "winner should be accepted");
+    assert!(!loser.won.get(), "loser should be rejected");
     println!("custom recognizer arena demo OK");
 }
