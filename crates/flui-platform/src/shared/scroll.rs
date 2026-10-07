@@ -24,7 +24,11 @@ pub fn from_win32_hwheel(raw_distance: i16) -> ScrollDelta {
 /// DOM wheel values already use down/right-positive logical CSS units.
 /// Unknown modes follow DOM_DELTA_PIXEL; nonfinite deltas are refused.
 /// <https://w3c.github.io/uievents/#events-wheelevents>
-pub fn from_web(delta_mode: u32, delta_x: f64, delta_y: f64) -> Result<ScrollDelta, InputValueError> {
+pub fn from_web(
+    delta_mode: u32,
+    delta_x: f64,
+    delta_y: f64,
+) -> Result<ScrollDelta, InputValueError> {
     let unit = match delta_mode {
         1 => ScrollUnit::Lines,
         2 => ScrollUnit::Pages,
