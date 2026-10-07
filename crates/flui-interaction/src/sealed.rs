@@ -1,97 +1,8 @@
-//! Sealed trait pattern implementation with extension points
+//! Sealed hit-test extension points.
 //!
-//! This module provides sealed traits with **extension points** for custom
-//! implementations.
-//!
-//! # Architecture
-//!
-//! We use a two-tier trait system:
-//!
-//! 1. **Sealed traits** (internal) - cannot be implemented directly
-//! 2. **Extension traits** (public) - can be implemented by external crates
-//!
-//! When you implement an extension trait, you automatically get the sealed
-//! trait via blanket implementation.
-//!
-//! # Example: Custom Gesture Recognizer
-//!
-//! ```rust,ignore
-//! use flui_interaction::prelude::*;
-//!
-//! struct CircularGestureRecognizer {
-//!     // Your custom state
-//! }
-//!
-//! impl CustomGestureRecognizer for CircularGestureRecognizer {
-//!     fn on_arena_accept(&self, pointer: PointerId) {
-//!         println!("Circle gesture accepted!");
-//!     }
-//!
-//!     fn on_arena_reject(&self, pointer: PointerId) {
-//!         println!("Circle gesture rejected");
-//!     }
-//! }
-//!
-//! // Now you can use it with GestureArena!
-//! let arena = GestureArena::new();
-//! arena.add(pointer_id, Arc::new(recognizer));
-//! ```
+//! Gesture recognizers and arena members implement their open traits directly.
 
 use flui_foundation::geometry::Offset;
-
-use crate::ids::PointerId;
-
-// ============================================================================
-// Extension Traits (PUBLIC - implement these for custom types)
-// ============================================================================
-
-/// Extension trait for custom gesture recognizers.
-///
-/// Implement this trait to create your own gesture recognizers that can
-/// participate in the gesture arena conflict resolution system.
-///
-/// # Example
-///
-/// ```rust,ignore
-/// use flui_interaction::sealed::CustomGestureRecognizer;
-/// use flui_interaction::ids::PointerId;
-///
-/// struct SwipePatternRecognizer {
-///     pattern: Vec<Direction>,
-///     current_index: usize,
-/// }
-///
-/// impl CustomGestureRecognizer for SwipePatternRecognizer {
-///     fn on_arena_accept(&self, pointer: PointerId) {
-///         // Called when this recognizer wins the arena
-///         tracing::debug!(?pointer, "pattern matched");
-///     }
-///
-///     fn on_arena_reject(&self, pointer: PointerId) {
-///         // Called when another recognizer wins
-///         self.reset();
-///     }
-/// }
-/// ```
-///
-/// # Ownership
-///
-/// Custom recognizers run synchronously on their UI owner's gesture lane.
-/// They may hold owner-local state; implementing this trait does not promise
-/// `Send` or `Sync`.
-pub trait CustomGestureRecognizer {
-    /// Called when this recognizer wins the gesture arena.
-    ///
-    /// This means your gesture was recognized and other competing
-    /// recognizers have been rejected.
-    fn on_arena_accept(&self, pointer: PointerId);
-
-    /// Called when this recognizer loses the gesture arena.
-    ///
-    /// Another recognizer won, or this recognizer explicitly rejected.
-    /// Clean up any state and prepare for the next gesture.
-    fn on_arena_reject(&self, pointer: PointerId);
-}
 
 /// Extension trait for custom hit-testable types.
 ///
@@ -156,10 +67,6 @@ pub trait CustomHitTestable: Send + Sync {
     }
 }
 
-// ============================================================================
-// Sealed Traits (INTERNAL - do not implement directly)
-// ============================================================================
-
 /// Sealed trait for hit testable types.
 ///
 /// **Do not implement directly.** Instead, implement [`CustomHitTestable`].
@@ -170,60 +77,6 @@ pub mod hit_testable {
 
     // Blanket impl: any CustomHitTestable automatically gets Sealed
     impl<T: super::CustomHitTestable> Sealed for T {}
-}
-
-/// Sealed trait for gesture recognizers.
-///
-/// **Do not implement directly.** Instead, implement
-/// [`CustomGestureRecognizer`].
-pub mod gesture_recognizer {
-    /// Marker supertrait sealing `GestureRecognizer`; implemented for the
-    /// built-in recognisers and automatically for every
-    /// [`CustomGestureRecognizer`](super::CustomGestureRecognizer).
-    pub trait Sealed {}
-
-    // Blanket impl: any CustomGestureRecognizer automatically gets Sealed
-    impl<T: super::CustomGestureRecognizer> Sealed for T {}
-
-    // Built-in gesture recognizers — same impl list as arena_member::Sealed
-    // below. Required so `impl OneSequenceGestureRecognizer for X`
-    // (which has `: Sealed` supertrait bound) compiles for these types.
-    impl Sealed for crate::recognizers::TapGestureRecognizer {}
-    impl Sealed for crate::recognizers::DoubleTapGestureRecognizer {}
-    impl Sealed for crate::recognizers::LongPressGestureRecognizer {}
-    impl Sealed for crate::recognizers::DragGestureRecognizer {}
-    impl Sealed for crate::recognizers::ScaleGestureRecognizer {}
-    impl Sealed for crate::recognizers::MultiTapGestureRecognizer {}
-    impl Sealed for crate::recognizers::ForcePressGestureRecognizer {}
-    impl Sealed for crate::recognizers::MultiDragGestureRecognizer {}
-    impl Sealed for crate::recognizers::TapAndDragGestureRecognizer {}
-    impl Sealed for crate::recognizers::EagerGestureRecognizer {}
-}
-
-/// Sealed trait for arena members.
-///
-/// **Do not implement directly.** Instead, implement
-/// [`CustomGestureRecognizer`].
-pub mod arena_member {
-    /// Marker supertrait sealing `GestureArenaMember`; implemented for the
-    /// built-in recognisers and automatically for every
-    /// [`CustomGestureRecognizer`](super::CustomGestureRecognizer).
-    pub trait Sealed {}
-
-    // Blanket impl: any CustomGestureRecognizer automatically gets Sealed
-    impl<T: super::CustomGestureRecognizer> Sealed for T {}
-
-    // Built-in gesture recognizers
-    impl Sealed for crate::recognizers::TapGestureRecognizer {}
-    impl Sealed for crate::recognizers::DoubleTapGestureRecognizer {}
-    impl Sealed for crate::recognizers::LongPressGestureRecognizer {}
-    impl Sealed for crate::recognizers::DragGestureRecognizer {}
-    impl Sealed for crate::recognizers::ScaleGestureRecognizer {}
-    impl Sealed for crate::recognizers::MultiTapGestureRecognizer {}
-    impl Sealed for crate::recognizers::ForcePressGestureRecognizer {}
-    impl Sealed for crate::recognizers::MultiDragGestureRecognizer {}
-    impl Sealed for crate::recognizers::TapAndDragGestureRecognizer {}
-    impl Sealed for crate::recognizers::EagerGestureRecognizer {}
 }
 
 /// Sealed trait for focus nodes.

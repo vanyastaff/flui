@@ -335,9 +335,6 @@ struct CombiningMemberWrapper {
     combiner: Weak<Mutex<CombiningMember>>,
 }
 
-// Implement sealed trait for arena membership
-impl crate::sealed::arena_member::Sealed for CombiningMemberWrapper {}
-
 impl GestureArenaMember for CombiningMemberWrapper {
     fn accept_gesture(&self, _pointer: PointerId) {
         let Some(combiner) = self.combiner.upgrade() else {
@@ -520,8 +517,6 @@ mod tests {
         accepted: AtomicBool,
         rejected: AtomicBool,
     }
-
-    impl crate::sealed::arena_member::Sealed for MockMember {}
 
     impl MockMember {
         fn new(id: usize) -> Rc<Self> {

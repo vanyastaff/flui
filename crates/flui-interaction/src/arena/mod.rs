@@ -106,31 +106,29 @@ impl GestureDisposition {
 ///
 /// External members implement this trait directly, including their own deadline
 /// query and polling hook. The arena holds members weakly; their owner keeps them alive.
-/// The existing [`CustomGestureRecognizer`] bridge remains usable for members
-/// that need only acceptance and rejection callbacks.
 ///
 /// ```rust,ignore
-/// use flui_interaction::sealed::CustomGestureRecognizer;
+/// use flui_interaction::arena::{GestureArena, GestureArenaMember};
+/// use flui_interaction::PointerId;
 ///
 /// struct MyRecognizer { /* ... */ }
 ///
-/// impl CustomGestureRecognizer for MyRecognizer {
-///     fn on_arena_accept(&self, pointer: PointerId) {
+/// impl GestureArenaMember for MyRecognizer {
+///     fn accept_gesture(&self, pointer: PointerId) {
 ///         // Handle winning the arena
 ///     }
-///     fn on_arena_reject(&self, pointer: PointerId) {
+///     fn reject_gesture(&self, pointer: PointerId) {
 ///         // Handle losing the arena
 ///     }
 /// }
 ///
-/// // MyRecognizer now implements GestureArenaMember automatically!
 /// let arena = GestureArena::new();
+/// let pointer = PointerId::PRIMARY;
 /// let recognizer = std::rc::Rc::new(MyRecognizer { /* ... */ });
 /// let entry = arena.add(pointer, &recognizer);
 /// // Later: entry.resolve(GestureDisposition::Accepted);
 /// ```
 ///
-/// [`CustomGestureRecognizer`]: crate::sealed::CustomGestureRecognizer
 pub trait GestureArenaMember {
     /// Accept the gesture for this pointer.
     ///
@@ -163,24 +161,6 @@ pub trait GestureArenaMember {
 }
 
 // ============================================================================
-// Blanket implementation for CustomGestureRecognizer
-// ============================================================================
-
-/// Blanket implementation: any `CustomGestureRecognizer` automatically
-/// implements `GestureArenaMember`.
-impl<T: crate::sealed::CustomGestureRecognizer> GestureArenaMember for T {
-    #[inline]
-    fn accept_gesture(&self, pointer: PointerId) {
-        self.on_arena_accept(pointer);
-    }
-
-    #[inline]
-    fn reject_gesture(&self, pointer: PointerId) {
-        self.on_arena_reject(pointer);
-    }
-}
-
-// ============================================================================
 // GestureArenaEntry - Handle pattern for resolving gestures
 // ============================================================================
 
@@ -197,12 +177,12 @@ impl<T: crate::sealed::CustomGestureRecognizer> GestureArenaMember for T {
 ///
 /// use flui_interaction::arena::{GestureArena, GestureDisposition};
 /// use flui_interaction::ids::PointerId;
-/// use flui_interaction::sealed::CustomGestureRecognizer;
+/// use flui_interaction::arena::GestureArenaMember;
 ///
 /// struct R;
-/// impl CustomGestureRecognizer for R {
-///     fn on_arena_accept(&self, _: PointerId) {}
-///     fn on_arena_reject(&self, _: PointerId) {}
+/// impl GestureArenaMember for R {
+///     fn accept_gesture(&self, _: PointerId) {}
+///     fn reject_gesture(&self, _: PointerId) {}
 /// }
 ///
 /// let arena = GestureArena::new();
@@ -927,16 +907,16 @@ pub fn run_pointer_lifecycle(arena: &GestureArena, event: &crate::events::Pointe
 ///
 /// use flui_interaction::arena::{GestureArena, GestureDisposition};
 /// use flui_interaction::ids::PointerId;
-/// use flui_interaction::sealed::CustomGestureRecognizer;
+/// use flui_interaction::arena::GestureArenaMember;
 ///
 /// // A minimal recogniser that counts accepts/rejects. Use a real
 /// // `TapGestureRecognizer` / `DragGestureRecognizer` in production —
 /// // this is the minimum surface to participate in the arena.
 /// #[derive(Debug)]
 /// struct Counter(AtomicUsize, AtomicUsize);
-/// impl CustomGestureRecognizer for Counter {
-///     fn on_arena_accept(&self, _: PointerId) { self.0.fetch_add(1, Ordering::Relaxed); }
-///     fn on_arena_reject(&self, _: PointerId) { self.1.fetch_add(1, Ordering::Relaxed); }
+/// impl GestureArenaMember for Counter {
+///     fn accept_gesture(&self, _: PointerId) { self.0.fetch_add(1, Ordering::Relaxed); }
+///     fn reject_gesture(&self, _: PointerId) { self.1.fetch_add(1, Ordering::Relaxed); }
 /// }
 ///
 /// let arena = GestureArena::new();
@@ -1204,12 +1184,12 @@ impl GestureArena {
     ///
     /// use flui_interaction::arena::{GestureArena, GestureDisposition};
     /// use flui_interaction::ids::PointerId;
-    /// use flui_interaction::sealed::CustomGestureRecognizer;
+    /// use flui_interaction::arena::GestureArenaMember;
     ///
     /// struct R;
-    /// impl CustomGestureRecognizer for R {
-    ///     fn on_arena_accept(&self, _: PointerId) {}
-    ///     fn on_arena_reject(&self, _: PointerId) {}
+    /// impl GestureArenaMember for R {
+    ///     fn accept_gesture(&self, _: PointerId) {}
+    ///     fn reject_gesture(&self, _: PointerId) {}
     /// }
     ///
     /// let arena = GestureArena::new();
@@ -2057,9 +2037,6 @@ mod tests {
         rejected: Rc<Mutex<bool>>,
     }
 
-    // Implement the sealed trait
-    impl crate::sealed::arena_member::Sealed for MockMember {}
-
     impl MockMember {
         fn new() -> Self {
             Self {
@@ -2097,8 +2074,6 @@ mod tests {
         rejected: Rc<Mutex<bool>>,
     }
 
-    impl crate::sealed::arena_member::Sealed for ReentrantMember {}
-
     impl GestureArenaMember for ReentrantMember {
         fn accept_gesture(&self, _pointer: PointerId) {}
 
@@ -2114,8 +2089,6 @@ mod tests {
         calls: Rc<Mutex<Vec<&'static str>>>,
         panic_on_accept: bool,
     }
-
-    impl crate::sealed::arena_member::Sealed for OrderedMember {}
 
     impl GestureArenaMember for OrderedMember {
         fn accept_gesture(&self, _pointer: PointerId) {
