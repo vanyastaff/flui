@@ -176,14 +176,14 @@ impl MultiTapGestureRecognizer {
     fn retire_entries(
         &self,
         sequence: &MultiTapSequence,
-        accepted: bool,
+        disposition: GestureDisposition,
         first: &mut Option<RoutePanic>,
     ) {
         for contact in sequence.contacts.values() {
             RoutePanic::preserve_first(
                 first,
                 RoutePanic::capture(|| {
-                    if accepted {
+                    if disposition.is_accepted() {
                         contact.entry.resolve(GestureDisposition::Accepted);
                     } else {
                         withdraw_cancelled(&contact.entry, self.membership.arena());
@@ -201,7 +201,7 @@ impl MultiTapGestureRecognizer {
     fn complete(&self, sequence: MultiTapSequence) {
         let details = Self::details(&sequence);
         let mut first = None;
-        self.retire_entries(&sequence, true, &mut first);
+        self.retire_entries(&sequence, GestureDisposition::Accepted, &mut first);
         let mut notices = CallbackSequence::new();
         notices.call(self.callbacks.on_multi_tap.clone(), |callback| {
             callback(details)
@@ -383,7 +383,7 @@ impl GestureRecognizer for MultiTapGestureRecognizer {
         };
         let details = Self::details(&sequence);
         let mut first = None;
-        self.retire_entries(&sequence, false, &mut first);
+        self.retire_entries(&sequence, GestureDisposition::Rejected, &mut first);
         let mut notices = CallbackSequence::new();
         notices.call(self.callbacks.on_multi_tap_cancel.clone(), |callback| {
             callback(details)

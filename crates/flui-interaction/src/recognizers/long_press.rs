@@ -319,7 +319,10 @@ impl GestureRecognizer for LongPressGestureRecognizer {
                     state.global = global;
                 }
                 if phase == LongPressPhase::Possible {
-                    self.fire_deadline(self.contact.now());
+                    let now = self.contact.now();
+                    if self.contact.is_current(contact.id) {
+                        self.fire_deadline(now);
+                    }
                 } else if phase == LongPressPhase::Started {
                     let details = self.details(contact.kind);
                     let mut notices = CallbackSequence::new();
