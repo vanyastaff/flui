@@ -399,6 +399,10 @@ mod native_windows {
             "unknown_native_pointer_messages_do_not_invent_contacts",
             unknown_native_pointer_messages_do_not_invent_contacts,
         ),
+        (
+            "synthetic_touch_and_pen_reach_native_pointer_dispatch",
+            synthetic_touch_and_pen_reach_native_pointer_dispatch,
+        ),
     ];
 
     pub(super) fn run_requested_child() -> bool {
@@ -2551,6 +2555,108 @@ mod native_windows {
         send_mouse(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, mouse_lparam(10, 10));
         send_mouse(hwnd, WM_LBUTTONUP, 0, mouse_lparam(10, 10));
         assert_eq!(kinds(&events), ["down", "up"], "ordinary input recovers");
+        window.close();
+    }
+
+    #[expect(unsafe_code, reason = "real native pointer injection into an ephemeral shown test window")]
+    fn synthetic_touch_and_pen_reach_native_pointer_dispatch() {
+        use flui_platform_api::pointer::{PenTool, PointerEvent, PointerKind};
+        use windows::Win32::UI::{
+            Controls::{CreateSyntheticPointerDevice, DestroySyntheticPointerDevice, HSYNTHETICPOINTERDEVICE, POINTER_FEEDBACK_NONE, POINTER_TYPE_INFO, POINTER_TYPE_INFO_0},
+            Input::Pointer::{InjectSyntheticPointerInput, POINTER_INFO, POINTER_PEN_INFO, POINTER_TOUCH_INFO, POINTER_FLAG_DOWN, POINTER_FLAG_INCONTACT, POINTER_FLAG_INRANGE, POINTER_FLAG_UPDATE, POINTER_FLAG_UP},
+            WindowsAndMessaging::{PT_PEN, PT_TOUCH, PEN_MASK_PRESSURE, PEN_MASK_ROTATION, PEN_MASK_TILT_X, PEN_MASK_TILT_Y, TOUCH_MASK_CONTACTAREA, TOUCH_MASK_PRESSURE, WindowFromPoint},
+        };
+        struct Device(HSYNTHETICPOINTERDEVICE);
+        impl Drop for Device {
+            fn drop(&mut self) {
+                // SAFETY: this fixture uniquely owns the device returned by Create.
+                unsafe { DestroySyntheticPointerDevice(self.0) };
+            }
+        }
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let window = open_shown(&platform);
+        let hwnd = hwnd_of(&window);
+        pump_translated(hwnd);
+        let mut target = POINT { x: 40, y: 40 };
+        // SAFETY: the live shown owner window and initialized point.
+        assert!(unsafe { ClientToScreen(hwnd, &mut target) }.as_bool());
+        // Injection uses actual hit testing, never hwndTarget as an override.
+        if unsafe { WindowFromPoint(target) } != hwnd {
+            eprintln!("CANNOT_VERIFY synthetic pointer delivery: shown target is occluded or the desktop is unavailable");
+            window.close();
+            return;
+        }
+        let events = record_pointer(&window);
+        for (native_kind, expected_kind) in [(PT_TOUCH, PointerKind::Touch), (PT_PEN, PointerKind::Pen { tool: PenTool::Tip })] {
+            // SAFETY: one ephemeral synthetic device, no borrowed native resources.
+            let device = match unsafe { CreateSyntheticPointerDevice(native_kind, 1, POINTER_FEEDBACK_NONE) } {
+                Ok(device) => Device(device),
+                Err(error) => {
+                    eprintln!("CANNOT_VERIFY synthetic {expected_kind:?}: CreateSyntheticPointerDevice refused: {error}");
+                    continue;
+                }
+            };
+            events.lock().expect("pointer log").clear();
+            let mut supported = true;
+            for (flags, pressure) in [
+                (POINTER_FLAG_DOWN | POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT, 512),
+                (POINTER_FLAG_UPDATE | POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT, 768),
+                (POINTER_FLAG_UP, 0),
+                (POINTER_FLAG_DOWN | POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT, 512),
+                (POINTER_FLAG_UP, 0),
+            ] {
+                let info = POINTER_INFO { pointerType: native_kind, pointerId: 1, pointerFlags: flags, ptPixelLocation: target, ptPixelLocationRaw: target, ..Default::default() };
+                let packet = if native_kind == PT_TOUCH {
+                    let contact = RECT { left: target.x - 10, top: target.y - 15, right: target.x + 10, bottom: target.y + 15 };
+                    POINTER_TYPE_INFO { r#type: native_kind, Anonymous: POINTER_TYPE_INFO_0 { touchInfo: POINTER_TOUCH_INFO {
+                        pointerInfo: info, touchMask: TOUCH_MASK_CONTACTAREA | TOUCH_MASK_PRESSURE, pressure, rcContact: contact, rcContactRaw: contact, ..Default::default()
+                    } } }
+                } else {
+                    POINTER_TYPE_INFO { r#type: native_kind, Anonymous: POINTER_TYPE_INFO_0 { penInfo: POINTER_PEN_INFO {
+                        pointerInfo: info, penMask: PEN_MASK_PRESSURE | PEN_MASK_ROTATION | PEN_MASK_TILT_X | PEN_MASK_TILT_Y, pressure, rotation: 180, tiltX: 45, tiltY: 0, ..Default::default()
+                    } } }
+                };
+                // SAFETY: initialized union arm matches type and device; the
+                // packet slice remains alive for the synchronous native copy.
+                if let Err(error) = unsafe { InjectSyntheticPointerInput(device.0, &[packet]) } {
+                    eprintln!("CANNOT_VERIFY synthetic {expected_kind:?}: InjectSyntheticPointerInput refused: {error}");
+                    supported = false;
+                    break;
+                }
+                let limit = Instant::now() + Duration::from_millis(500);
+                while Instant::now() < limit {
+                    pump_translated(hwnd);
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+            }
+            if !supported { continue; }
+            let log = events.lock().expect("pointer log");
+            let downs: Vec<_> = log.iter().filter_map(|event| if let PointerEvent::Down(press) = event { Some(press) } else { None }).collect();
+            // Successful injection with no producer delivery is a regression,
+            // not an unsupported-platform skip.
+            assert_eq!(downs.len(), 2, "{expected_kind:?}: {log:?}");
+            let ups: Vec<_> = log.iter().filter_map(|event| if let PointerEvent::Up(release) = event { Some(release) } else { None }).collect();
+            assert_eq!(ups.len(), 2, "{expected_kind:?}: {log:?}");
+            for (down, up) in downs.iter().zip(&ups) {
+                assert_eq!(down.pointer.kind, expected_kind);
+                assert!(down.pointer.device.is_some(), "native source handle retained");
+                assert_eq!(down.pointer, up.pointer);
+                assert_eq!(down.sample.pressure.map(|value| value.get()), Some(0.5));
+                let point = down.sample.position.get();
+                assert_eq!((point.x, point.y), (40.0 / window.scale_factor(), 40.0 / window.scale_factor()));
+            }
+            assert_ne!(downs[0].pointer.id, downs[1].pointer.id, "fresh admission after Up");
+            assert!(log.iter().any(|event| matches!(event, PointerEvent::Move(movement) if movement.current().pressure.map(|value| value.get()) == Some(0.75))), "actual update sensor reading: {log:?}");
+            if native_kind == PT_TOUCH {
+                let contact = downs[0].sample.contact_size.expect("injected contact area").get();
+                assert_eq!((contact.width, contact.height), (20.0 / window.scale_factor(), 30.0 / window.scale_factor()));
+            } else {
+                let orientation = downs[0].sample.orientation.expect("reported both tilt axes");
+                assert!((orientation.altitude().expect("altitude") - std::f64::consts::FRAC_PI_4).abs() < 1e-12);
+                assert_eq!(orientation.azimuth(), Some(0.0));
+                assert!((downs[0].sample.twist.expect("rotation").radians() - std::f64::consts::PI).abs() < 1e-12);
+            }
+        }
         window.close();
     }
 
