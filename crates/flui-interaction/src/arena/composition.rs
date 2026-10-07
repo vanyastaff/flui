@@ -45,6 +45,15 @@ pub(super) struct CompositionBranch {
     pub(super) first: bool,
 }
 
+impl CompositionBranch {
+    pub(super) fn blocks(&self, other: &Self) -> bool {
+        !self.first
+            && other.first
+            && *self.competition == GestureCompetition::RequireFirstFailure
+            && Rc::ptr_eq(&self.competition, &other.competition)
+    }
+}
+
 impl GestureArena {
     /// Construct a binary recognizer competition in this presentation arena.
     ///
