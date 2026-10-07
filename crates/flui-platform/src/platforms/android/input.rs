@@ -4,7 +4,7 @@
 //! divided by the window scale once. Sensor presence comes from the device's
 //! motion ranges, not from whether an axis happens to read zero.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use android_activity::input::{Axis, Button, ButtonState, KeyAction, MotionAction, ToolType};
 use flui_foundation::geometry::{Point, Size};
@@ -39,7 +39,9 @@ impl DeviceCapabilities {
 #[derive(Clone)]
 pub(crate) struct CachedDevice {
     capabilities: DeviceCapabilities,
-    object: jni::refs::Global<jni::objects::JObject<'static>>,
+    // The cache and a query snapshot share this global reference. Platform is
+    // Send + Sync, so Rc cannot represent that ownership here.
+    object: Arc<jni::refs::Global<jni::objects::JObject<'static>>>,
 }
 
 pub(crate) enum DeviceReading {
@@ -63,6 +65,10 @@ pub(crate) fn motion_device(
 
     // SAFETY: AndroidApp owns the running Android VM for its entire lifetime.
     // JavaVM is a borrowed VM handle; constructing it does not destroy the VM.
+    #[expect(
+        unsafe_code,
+        reason = "AndroidApp supplies the live VM handle required by JNI"
+    )]
     let vm = unsafe { JavaVM::from_raw(app.vm_as_ptr().cast()) };
     let result = vm.attach_current_thread(|env| -> jni::errors::Result<_> {
         let result = (|| {
@@ -120,7 +126,7 @@ pub(crate) fn motion_device(
             Ok(DeviceReading::Present {
                 cached: CachedDevice {
                     capabilities: DeviceCapabilities { source, axes },
-                    object: env.new_global_ref(&device)?,
+                    object: Arc::new(env.new_global_ref(&device)?),
                 },
                 replaced,
             })
