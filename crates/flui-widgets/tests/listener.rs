@@ -98,6 +98,43 @@ pub(crate) fn listener_admission_keeps_terminal_delivery_and_weak_ownership() {
     assert_eq!(&*events.borrow(), &["raw"], "the cached handler owns no recognizer");
 }
 
+pub(crate) fn listener_raw_observer_panic_still_delivers_the_recognizer_event() {
+    use flui_interaction::{CancelOutcome, GestureArenaMember, GestureRecognizer, PointerId};
+    struct Observer(Rc<Cell<usize>>);
+    impl GestureArenaMember for Observer {
+        fn accept_gesture(&self, _: PointerId) {}
+        fn reject_gesture(&self, _: PointerId) {}
+    }
+    impl GestureRecognizer for Observer {
+        fn add_pointer(&self, _: PointerDispatch<'_>) { self.0.set(self.0.get() + 1); }
+        fn handle_event(&self, _: PointerDispatch<'_>) {}
+        fn cancel(&self) -> CancelOutcome { CancelOutcome::Idle }
+    }
+    let delivered = Rc::new(Cell::new(0));
+    let recognizer = Rc::new(Observer(Rc::clone(&delivered)));
+    let first = Rc::new(Cell::new(true));
+    let raw = Rc::clone(&first);
+    let laid = lay_out(
+        Listener::new()
+            .behavior(HitTestBehavior::Opaque)
+            .on_pointer_down(move |_, _| {
+                if raw.replace(false) { panic!("raw observer first failure"); }
+            })
+            .recognizer(&recognizer)
+            .child(SizedBox::new(80.0, 80.0)),
+        tight(80.0, 80.0),
+    );
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        laid.dispatch_pointer_down(40.0, 40.0);
+    })).expect_err("the raw callback's first panic leaves dispatch");
+    assert_eq!(failure.downcast_ref::<&str>(), Some(&"raw observer first failure"));
+    assert_eq!(delivered.get(), 1, "accepted dispatch reaches attachments despite the observer failure");
+    laid.dispatch_pointer_up(40.0, 40.0);
+    laid.dispatch_pointer_down(40.0, 40.0);
+    laid.dispatch_pointer_up(40.0, 40.0);
+    assert_eq!(delivered.get(), 2, "the next contact remains deliverable");
+}
+
 // ============================================================================
 // Event context (ADR-0086): the listener takes the owner's writer source
 // from its render-object context and opens one write per event.
