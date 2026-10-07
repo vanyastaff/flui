@@ -17,10 +17,11 @@ costs no clone.
 `HitTestEntry` is data-only:
 
 - `target: RenderId`
-- `transform: Option<Matrix4>`
+- `transform: Option<Matrix4>` (global-to-local)
 - `pointer_target: Option<PointerTarget>`
-- `scroll_handler: Option<ScrollEventHandler>`
-- cursor and mouse-tracker annotation metadata
+- `scroll_target: Option<ScrollTarget>` and `pan_zoom_target: Option<PanZoomTarget>`
+- `metadata: Option<Arc<dyn Any + Send + Sync>>`
+- `cursor: CursorIcon` and `mouse_annotation: Option<MouseTrackerAnnotation>`
 
 Executable pointer callbacks do not live in render storage or hit-test entries.
 Widgets register owner-local handlers through `RenderObjectContext`, render
@@ -47,11 +48,24 @@ the active route keeps the owner-local handler cell alive until Up/Cancel.
 Per-target panics are isolated: later targets still receive the event, cleanup
 runs, then the first panic is resumed by the dispatch owner.
 
-## Scroll / pointer-signal dispatch
+Localization rewrites the event's own position only. For a `Move`, the
+`coalesced` and `predicted` samples are copied unchanged and stay in global
+coordinates (`transform_pointer_event` in `routing/hit_test.rs`).
 
-`EventPropagation` is scroll-only. Pointer-signal/scroll handling remains a
-separate claiming resolver where a scroll handler may return `Stop` to claim the
-signal. Do not use `EventPropagation` for ordinary pointer delivery.
+## Scroll and pan-zoom dispatch
+
+`EventPropagation` belongs to the two claiming walks: the pointer-signal /
+scroll resolver and the trackpad pan-zoom walk. A handler there may return
+`Stop` to claim the event. Ordinary pointer delivery does not use it.
+
+## Mouse enter, exit and cursor
+
+`MouseTracker` diffs the regions under a device against the previous hit
+path. It delivers all exits first, in hit-test (leaf-first) order, then all
+enters in reverse hit-test order (outermost region first), then the cursor
+change callback (`DeviceWork::invoke`, `routing/mouse_tracker.rs`). The cursor
+is `HitTestResult::resolve_cursor`: the first entry along the leaf-first path
+whose cursor is not `CursorIcon::Default`, or `Default` when there is none.
 
 ## Transform support
 
@@ -177,10 +191,8 @@ reaching the driver:
 
 ## Tests
 
-Useful focused checks:
-
 ```bash
-cargo test -p flui-interaction hit_test
-cargo test -p flui-interaction interaction_lane
-cargo test -p flui-interaction down_caches_route_and_up_delivers_after_target_unregisters
+cargo nextest run -p flui-interaction hit_test_transform_admission
+cargo nextest run -p flui-interaction interaction_lane
+cargo nextest run -p flui-interaction resolved_route_move_invocation_allocates_no_heap_after_setup
 ```
