@@ -704,5 +704,12 @@ mod event_timeline_tests {
             stamped >= unstamped,
             "{stamped:?} ran back before {unstamped:?}"
         );
+        // The stamped events after it keep their own 10 ms spacing.
+        let next = timeline.instant(Some(20_000_000), start + Duration::from_millis(102));
+        assert_eq!(
+            next - stamped,
+            Duration::from_millis(10),
+            "the timeline did not collapse"
+        );
     }
 }
