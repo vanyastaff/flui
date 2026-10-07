@@ -312,7 +312,10 @@ impl FocusManager {
         let mut applied = 0usize;
         loop {
             if self.closed.get() {
-                let _prev = std::mem::take(&mut *self.pending_focus_transitions.borrow_mut());
+                let pending = std::mem::take(&mut *self.pending_focus_transitions.borrow_mut());
+                for node in pending {
+                    failure.retire(node);
+                }
                 return;
             }
             let Some(node) = self.pending_focus_transitions.borrow_mut().pop_front() else {
@@ -325,12 +328,14 @@ impl FocusManager {
                     node = target.id().get(),
                     "skipping a queued focus transition whose target is no longer eligible"
                 );
+                failure.retire(node);
                 continue;
             }
             if Self::focus_identity_eq(self.primary_focus.borrow().as_ref(), node.as_ref()) {
                 // Already the committed primary: applying it would be the
                 // same no-op `apply_focus_transition` itself would detect,
                 // so it never counted as an application either.
+                failure.retire(node);
                 continue;
             }
             applied += 1;
@@ -347,7 +352,11 @@ impl FocusManager {
                     "reentrant focus requests exceeded the drain budget; \
                      dropping the rest of the queue"
                 );
-                let _prev = std::mem::take(&mut *self.pending_focus_transitions.borrow_mut());
+                let pending = std::mem::take(&mut *self.pending_focus_transitions.borrow_mut());
+                failure.retire(node);
+                for node in pending {
+                    failure.retire(node);
+                }
                 return;
             }
             self.apply_focus_transition(node, failure);
