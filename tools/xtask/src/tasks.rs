@@ -82,7 +82,8 @@ const TEST_FEATURES: &str = "flui/material,flui/cupertino,flui/persist,flui-devt
 /// The driver itself is already built by the cargo alias. Exclude it here:
 /// Windows cannot replace its running executable when workspace feature
 /// unification changes the driver's dependency artifacts. Its test binary
-/// remains part of the workspace test run, and lint checks all its targets.
+/// remains covered by the test task (separately on Windows), and lint checks
+/// all its targets.
 fn build_all_targets() -> Cmd {
     Cmd::cargo([
         "build",
@@ -327,10 +328,31 @@ const NESTED: &str = "group(nested-cargo) | group(trybuild)";
 
 /// `cargo nextest run` over [`TEST_SCOPE`] with `filterset`, the only `-E`: a
 /// second one would be ORed with it, not intersected.
-fn scoped_nextest(filterset: &str) -> Cmd {
-    Cmd::cargo(["nextest", "run"])
+fn scoped_nextest(host: Host, filterset: &str) -> Cmd {
+    let command = Cmd::cargo(["nextest", "run"])
         .args(TEST_SCOPE)
-        .args(["-E", filterset])
+        .args(["-E", filterset]);
+    if host == Host::Windows {
+        command.args(["--exclude", "xtask"])
+    } else {
+        command
+    }
+}
+
+/// Test the driver before workspace feature unification can replace its
+/// running Windows executable. Keep both unit and integration targets.
+fn driver_tests() -> Cmd {
+    Cmd::cargo([
+        "nextest",
+        "run",
+        "-p",
+        "xtask",
+        "--bins",
+        "--tests",
+        "--locked",
+        "--no-fail-fast",
+        "--no-tests=pass",
+    ])
 }
 
 /// Which part of the suite `cargo xtask test` runs.
@@ -354,11 +376,12 @@ enum Stages {
 /// own, then the nested tests (they run a `cargo` or `rustc` of their own and
 /// dominate the wall-clock, so they run last). Same scope in every stage, so
 /// nothing is rebuilt, and the filtersets are complements, so together they
-/// are the whole suite.
+/// are the whole suite. Windows tests the driver separately before the
+/// workspace's features can force replacement of its running executable.
 fn test_plan(host: Host, stages: Stages) -> Vec<Step> {
-    let base = || scoped_nextest(&format!("not ({NESTED})"));
-    let nested = scoped_nextest(NESTED);
-    match stages {
+    let base = || scoped_nextest(host, &format!("not ({NESTED})"));
+    let nested = scoped_nextest(host, NESTED);
+    let mut steps = match stages {
         Stages::All => vec![base().into(), platform_suite(host), nested.into()],
         Stages::Fast => vec![
             base().into(),
@@ -368,17 +391,32 @@ fn test_plan(host: Host, stages: Stages) -> Vec<Step> {
             )),
         ],
         Stages::Nested => vec![nested.into()],
-        Stages::NestedGroup(group) => vec![scoped_nextest(group.filterset()).into()],
+        Stages::NestedGroup(group) => vec![scoped_nextest(host, group.filterset()).into()],
         Stages::NoTrybuild => vec![
             base().into(),
             platform_suite(host),
-            scoped_nextest("group(nested-cargo)").into(),
+            scoped_nextest(host, "group(nested-cargo)").into(),
             Step::Note(format!(
                 "test --no-trybuild: SKIPPED the trybuild suites. Run them with: {}",
-                scoped_nextest("group(trybuild)")
+                scoped_nextest(host, "group(trybuild)")
             )),
         ],
+    };
+    if host == Host::Windows {
+        let filter = match stages {
+            Stages::All => None,
+            Stages::Fast => Some(format!("not ({NESTED})")),
+            Stages::Nested => Some(NESTED.to_owned()),
+            Stages::NestedGroup(group) => Some(group.filterset().to_owned()),
+            Stages::NoTrybuild => Some("not (group(trybuild))".to_owned()),
+        };
+        let mut driver = driver_tests();
+        if let Some(filter) = filter {
+            driver = driver.args(["-E", &filter]);
+        }
+        steps.insert(0, driver.into());
     }
+    steps
 }
 
 /// Clippy exactly as CI's `clippy` job runs it: the workspace, then
@@ -1213,7 +1251,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            lines(&test_plan(Host::Windows, Stages::All))[1],
+            lines(&test_plan(Host::Windows, Stages::All))[2],
             "$ cargo nextest run -p flui-platform --locked --all-features --no-fail-fast"
         );
         assert!(
@@ -1247,16 +1285,16 @@ mod tests {
         }
         // CI's Windows job: the host-specific nested group, not trybuild
         let windows = lines(&test_plan(Host::Windows, Stages::NoTrybuild));
-        assert_eq!(windows.len(), 4);
+        assert_eq!(windows.len(), 5);
         assert_eq!(
-            windows[2],
-            format!("$ cargo nextest run {SCOPE} -E 'group(nested-cargo)'")
+            windows[3],
+            format!("$ cargo nextest run {SCOPE} -E 'group(nested-cargo)' --exclude xtask")
         );
         assert!(
-            windows[3].starts_with("test --no-trybuild: SKIPPED the trybuild suites")
-                && windows[3].ends_with("-E 'group(trybuild)'"),
+            windows[4].starts_with("test --no-trybuild: SKIPPED the trybuild suites")
+                && windows[4].ends_with("-E 'group(trybuild)' --exclude xtask"),
             "{}",
-            windows[3]
+            windows[4]
         );
         // the example link reuses the test build: the same features
         assert_eq!(
