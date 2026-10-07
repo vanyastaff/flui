@@ -616,6 +616,67 @@ fn one_realm_two_windows_policy_routes_by_presentation() {
     teardown_platform_realm();
 }
 
+/// A `Resized` stamped for a secondary window of a shared realm, delivered
+/// through `dispatch_platform_realm`, rescales that window's pipeline (and so
+/// its semantics bounds) and leaves the primary's at its old ratio.
+fn resized_rescales_only_the_addressed_presentation() {
+    let (primary, _clear_guard) = install_realm_a_through_a_real_owner_platform();
+    let (secondary, _window) = super::super::secondary_window::open_secondary_window_impl(
+        AppConfig::default(),
+        WindowPolicy::Shared,
+    )
+    .expect("WindowPolicy::Shared installs a second presentation into realm A")
+    .expect("the headless platform opens windows Ready");
+    assert_eq!(secondary.address.realm_id, primary.address.realm_id);
+    assert_ne!(
+        secondary.address.presentation_id,
+        primary.address.presentation_id
+    );
+
+    let ratios = || {
+        APP_RUNTIME.with(|slot| {
+            let state = slot.borrow();
+            let realm = state
+                .realms
+                .get(&primary.address.realm_id)
+                .and_then(|slot| slot.realm.as_ref())
+                .expect("realm A is resident");
+            let ratio = |id| {
+                realm
+                    .presentation_device_pixel_ratio_for_test(id)
+                    .expect("both presentations are resident")
+            };
+            (
+                ratio(primary.address.presentation_id),
+                ratio(secondary.address.presentation_id),
+            )
+        })
+    };
+    let (primary_before, secondary_before) = ratios();
+    let rescaled = primary_before.max(secondary_before) + 1.5;
+
+    dispatch_platform_realm(
+        secondary,
+        RealmTask::Event(PlatformToUi::Resized {
+            size: flui_foundation::geometry::Size::new(640.0, 480.0),
+            scale_factor: rescaled,
+        }),
+    )
+    .expect("the secondary presentation is live");
+
+    let (primary_after, secondary_after) = ratios();
+    assert!(
+        (secondary_after - rescaled).abs() < f64::EPSILON,
+        "the addressed secondary window must take the reported ratio, got {secondary_after}"
+    );
+    assert!(
+        (primary_after - primary_before).abs() < f64::EPSILON,
+        "the primary window must keep its own ratio, got {primary_after} (was {primary_before})"
+    );
+
+    teardown_platform_realm();
+}
+
 /// Installs realm A under `ExitPolicy::OnLastWindowClosed` with a quit
 /// counter, and returns the parked re-evaluation handle with them.
 ///
@@ -1099,6 +1160,10 @@ fn realm_dispatch_matrix() {
             (
                 "one_realm_two_windows_policy_routes_by_presentation",
                 one_realm_two_windows_policy_routes_by_presentation as fn(),
+            ),
+            (
+                "resized_rescales_only_the_addressed_presentation",
+                resized_rescales_only_the_addressed_presentation as fn(),
             ),
             (
                 "closing_the_last_window_reentrantly_from_inside_a_dispatch_still_exits",
