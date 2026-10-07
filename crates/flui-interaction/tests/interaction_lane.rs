@@ -25,6 +25,8 @@ fn explicit_pointer_capture_contract() {
         ("callback_release", capture_release_inside_motion_defers_loss_until_next_entry),
         ("loss_failure", capture_loss_callback_failure_still_retires_contact),
         ("competing_loss_failure", capture_loss_preserves_first_failure_and_next_contact),
+        ("owner_close", capture_owner_close_invalidates_retained_token),
+        ("device_removal", capture_device_removal_invalidates_retained_token),
     ];
     for &(name, row) in rows {
         if let Err(payload) = std::panic::catch_unwind(row) {
@@ -37,7 +39,7 @@ fn explicit_pointer_capture_contract() {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum CaptureCase {
     Implicit, Exclusive, FirstClaim, Drop, Release, NativeLoss, ReusedId,
-    CallbackRelease, LossFailure, CompetingLossFailure,
+    CallbackRelease, LossFailure, CompetingLossFailure, OwnerClose, DeviceRemoval,
 }
 
 fn capture_keeps_the_full_implicit_down_route() { assert_capture_route(CaptureCase::Implicit); }
@@ -50,6 +52,8 @@ fn capture_old_token_cannot_cancel_a_replacement_down() { assert_capture_route(C
 fn capture_release_inside_motion_defers_loss_until_next_entry() { assert_capture_route(CaptureCase::CallbackRelease); }
 fn capture_loss_callback_failure_still_retires_contact() { assert_capture_route(CaptureCase::LossFailure); }
 fn capture_loss_preserves_first_failure_and_next_contact() { assert_capture_route(CaptureCase::CompetingLossFailure); }
+fn capture_owner_close_invalidates_retained_token() { assert_capture_route(CaptureCase::OwnerClose); }
+fn capture_device_removal_invalidates_retained_token() { assert_capture_route(CaptureCase::DeviceRemoval); }
 
 fn assert_capture_route(case: CaptureCase) {
     use flui_foundation::geometry::Offset;
@@ -63,7 +67,12 @@ fn assert_capture_route(case: CaptureCase) {
     let binding = GestureBinding::new();
     let tokens = Rc::new(RefCell::new(Vec::<PointerCapture>::new()));
     let log = Rc::new(RefCell::new(Vec::new()));
-    let down = make_down_event(Offset::new(5.0, 5.0), PointerKind::Touch).expect("down");
+    let mut down = make_down_event(Offset::new(5.0, 5.0), PointerKind::Touch).expect("down");
+    let device = flui_platform_api::pointer::DeviceId::try_from(17_u64).expect("nonzero device");
+    if case == CaptureCase::DeviceRemoval {
+        let PointerEvent::Down(press) = &mut down else { unreachable!() };
+        press.pointer = press.pointer.with_device(device);
+    }
     assert!(PointerDispatch::at_root(&down).capture().is_err(), "synthetic dispatch has no capture authority");
     let fails = matches!(case, CaptureCase::LossFailure | CaptureCase::CompetingLossFailure);
     lane.enter(|| {
@@ -80,8 +89,13 @@ fn assert_capture_route(case: CaptureCase) {
                 PointerEvent::Move(_) => "move",
                 PointerEvent::Up(_) => "up",
                 PointerEvent::Cancel(cancel) => {
-                    assert_eq!(cancel.reason, CancelReason::CaptureLost);
-                    "lost"
+                    if case == CaptureCase::DeviceRemoval {
+                        assert_eq!(cancel.reason, CancelReason::DeviceRemoved);
+                        "removed"
+                    } else {
+                        assert_eq!(cancel.reason, CancelReason::CaptureLost);
+                        "lost"
+                    }
                 }
                 _ => "other",
             }));
@@ -121,6 +135,24 @@ fn assert_capture_route(case: CaptureCase) {
         };
         binding.handle_pointer_event(&down, |_| path());
         assert_eq!(&*log.borrow(), &[(1, "down"), (2, "down")], "capture does not truncate the committed Down round");
+        if matches!(case, CaptureCase::OwnerClose | CaptureCase::DeviceRemoval) {
+            if case == CaptureCase::OwnerClose {
+                flui_interaction::__runtime::close_gestures(&binding, flui_interaction::__runtime::CloseMode::Ordinary);
+            } else {
+                let removed = PointerEvent::DeviceRemoved(flui_platform_api::pointer::PointerDeviceChange::new(
+                    device, PointerKind::Touch, flui_platform_api::EventTime::from_nanos(1),
+                ));
+                binding.handle_pointer_event(&removed, |_| panic!("device removal does not hit-test"));
+            }
+            let before_drop = log.borrow().clone();
+            let token = tokens.borrow_mut().pop().expect("retained closed-owner token");
+            drop(token);
+            binding.flush_pending_moves();
+            assert_eq!(&*log.borrow(), &before_drop, "closed owner/device invalidates token before callbacks");
+            assert_eq!(binding.active_pointer_count(), 0);
+            assert!(binding.arena().is_empty());
+            return;
+        }
         if case == CaptureCase::ReusedId {
             binding.handle_pointer_event(&down, |_| path());
             let stale = tokens.borrow_mut().remove(0);
