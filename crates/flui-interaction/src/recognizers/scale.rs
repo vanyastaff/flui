@@ -232,24 +232,15 @@ impl Measure {
         if contacts.len() < 2 {
             return None;
         }
-        let count = contacts.len() as f64;
-        // Each position is divided before summing, so large finite positions
-        // whose centroid is finite do not overflow on the way there.
-        let mut focal = Offset::ZERO;
-        for contact in contacts {
-            focal += Offset::new(contact.position.dx / count, contact.position.dy / count);
-        }
-        let (mut span, mut horizontal, mut vertical) = (0.0, 0.0, 0.0);
-        for contact in contacts {
-            let delta = contact.position - focal;
-            span += delta.distance();
-            horizontal += delta.dx.abs();
-            vertical += delta.dy.abs();
-        }
+        let focal = Offset::new(
+            scaled_mean(contacts.iter().map(|c| c.position.dx)),
+            scaled_mean(contacts.iter().map(|c| c.position.dy)),
+        );
+        let deltas = || contacts.iter().map(|c| c.position - focal);
         let measure = Self {
-            span: span / count,
-            horizontal: horizontal / count,
-            vertical: vertical / count,
+            span: scaled_mean(deltas().map(Offset::distance)),
+            horizontal: scaled_mean(deltas().map(|d| d.dx.abs())),
+            vertical: scaled_mean(deltas().map(|d| d.dy.abs())),
             focal,
         };
         (measure.span.is_finite()
@@ -970,4 +961,26 @@ impl GestureArenaMember for ScaleGestureRecognizer {
         self.sync_primary(primary);
         self.deliver(outcome);
     }
+}
+
+/// The mean of `values` without overflowing on the way: each value is divided
+/// by the largest magnitude before summing, so the running sum stays within
+/// the count, and the result is finite whenever every value is. A non-finite
+/// value makes the mean non-finite, which the caller refuses.
+fn scaled_mean(values: impl Iterator<Item = f64> + Clone) -> f64 {
+    let scale = values
+        .clone()
+        .fold(0.0_f64, |largest, value| largest.max(value.abs()));
+    let mut count = 0.0;
+    let mut sum = 0.0;
+    for value in values {
+        count += 1.0;
+        if scale > 0.0 {
+            sum += value / scale;
+        }
+    }
+    if count == 0.0 || scale == 0.0 {
+        return 0.0;
+    }
+    scale * (sum / count)
 }

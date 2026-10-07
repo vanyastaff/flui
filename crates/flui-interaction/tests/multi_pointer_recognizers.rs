@@ -497,6 +497,10 @@ fn scale_publishes_finite_continuous_values_and_owns_its_contacts() {
                 scale_measures_extreme_finite_contacts,
             ),
             (
+                "three contacts at the largest coordinate",
+                scale_measures_three_contacts_at_the_largest_coordinate,
+            ),
+            (
                 "zero horizontal baseline",
                 scale_axis_with_zero_baseline_holds_finite,
             ),
@@ -1062,5 +1066,31 @@ fn scale_measures_extreme_finite_contacts() {
             .iter()
             .all(|update| update.focal_point.dx > 1.0e307 && update.focal_point.dy.is_finite()),
         "every focal point is the contacts' real, finite centroid"
+    );
+}
+
+/// Three contacts at the largest finite coordinate: summing their divided
+/// positions would still overflow, but their centroid is finite, so the scale
+/// starts and its focal point is that centroid.
+fn scale_measures_three_contacts_at_the_largest_coordinate() {
+    let rig = Rig::new();
+    let (_scale, log) = scale_on(&rig);
+    let top = f64::MAX;
+    rig.down(1, top, 0.0);
+    rig.down(2, top, 100.0);
+    rig.down(3, top, 300.0);
+    rig.frame();
+    rig.move_to(1, top, -50.0);
+    rig.move_to(3, top, 350.0);
+    assert_eq!(
+        log.starts.get(),
+        1,
+        "the scale started from a real measurement"
+    );
+    let updates = log.updates.borrow();
+    assert!(!updates.is_empty(), "the gesture published updates");
+    assert!(
+        updates.iter().all(|update| update.focal_point.dx == top),
+        "the focal point is the contacts' finite centroid"
     );
 }
