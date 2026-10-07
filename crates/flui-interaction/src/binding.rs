@@ -1941,6 +1941,16 @@ mod tests {
     }
 
     fn contact_move_uses_down_route_and_fresh_mouse_tracking_route() {
+        let device = crate::events::DeviceId::try_from(1_u64).expect("known mouse device");
+        let from_device = |mut event: PointerEvent| {
+            match &mut event {
+                PointerEvent::Down(data) => data.pointer = data.pointer.with_device(device),
+                PointerEvent::Move(data) => data.pointer = data.pointer.with_device(device),
+                PointerEvent::Up(data) => data.pointer = data.pointer.with_device(device),
+                _ => unreachable!("fixture contains only measured contact events"),
+            }
+            event
+        };
         let lane = InteractionLane::try_new().expect("lane");
         let handle = lane.dispatch_handle();
         let binding = GestureBinding::new();
@@ -1978,7 +1988,7 @@ mod tests {
             down_result.add(HitTestEntry::new(down_target_id).pointer_target(pointer_target));
             let position = Offset::new(10.0, 10.0);
             binding.handle_pointer_event(
-                &make_down_event(position, PointerKind::Mouse).expect("finite input"),
+                &from_device(make_down_event(position, PointerKind::Mouse).expect("finite input")),
                 |_| down_result,
             );
 
@@ -1990,7 +2000,7 @@ mod tests {
             );
             let callback_fresh_hit_tests = Rc::clone(&fresh_hit_tests);
             binding.handle_pointer_event(
-                &make_move_event(position, PointerKind::Mouse).expect("finite input"),
+                &from_device(make_move_event(position, PointerKind::Mouse).expect("finite input")),
                 move |_| {
                     callback_fresh_hit_tests.set(callback_fresh_hit_tests.get() + 1);
                     fresh_result
@@ -2014,12 +2024,12 @@ mod tests {
             assert!(
                 binding
                     .mouse_tracker()
-                    .device_active_regions(0)
+                    .device_active_regions(device)
                     .contains(&mouse_target_id)
             );
 
             binding.handle_pointer_event(
-                &make_up_event(position, PointerKind::Mouse).expect("finite input"),
+                &from_device(make_up_event(position, PointerKind::Mouse).expect("finite input")),
                 |_| HitTestResult::new(),
             );
             handle
