@@ -148,8 +148,12 @@ impl PointerSignalResolver {
     {
         let mut inner = self.inner.borrow_mut();
 
+        let next_handler_id = inner
+            .next_handler_id
+            .checked_add(1)
+            .expect("BUG: pointer signal handler ID exhausted");
         let handler_id = HandlerId::new(inner.next_handler_id);
-        inner.next_handler_id += 1;
+        inner.next_handler_id = next_handler_id;
 
         let handler = SignalHandler {
             id: handler_id,

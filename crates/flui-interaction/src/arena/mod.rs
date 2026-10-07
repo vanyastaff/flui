@@ -1684,6 +1684,9 @@ impl GestureArena {
     /// since the timers' lifetime is independent from the arena.
     /// Exact recognizer identities are de-duplicated, so a registered member
     /// that is also still competing is polled only once.
+    /// Active slots are visited in ascending pointer identity order, followed
+    /// by retained slots in generation order and explicit timer registrations
+    /// in registration order.
     ///
     /// Complexity: O(P + M) where P is the number of open arenas and M the
     /// total active members — both bounded by the simultaneous-pointer cap.
