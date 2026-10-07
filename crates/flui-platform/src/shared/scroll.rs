@@ -2,8 +2,8 @@
 //!
 //! Every backend hands its raw platform wheel data to one of these helpers at
 //! its translation boundary, so the shared consumers downstream
-//! (`flui_interaction::events::ScrollEventData::delta_to_offset` states the
-//! full contract) always receive the same convention:
+//! (`flui_platform_api::pointer::ScrollDelta` states the unit and sign
+//! contract) always receive the same convention:
 //!
 //! - **Sign**: positive = content scrolls down / right (the scroll offset
 //!   increases), exactly the W3C `WheelEvent.deltaX/deltaY` convention
