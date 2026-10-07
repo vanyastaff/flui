@@ -189,9 +189,11 @@ pub use flui_widgets as widgets;
 /// A glob module rather than a whole-crate alias, so that it can shadow
 /// `flui_view::__runtime`, the composition roots' seam (ADR-0081 §4), which
 /// is not application surface:
+/// `thread_boundary_ui` pins the module-privacy diagnostic alongside valid
+/// facade view and internal composition-root callers.
 ///
 /// ```compile_fail,E0603
-/// use flui::view::__runtime::BindingRuntime;
+/// use flui::view::__runtime;
 /// ```
 pub mod view {
     pub use flui_view::*;

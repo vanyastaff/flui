@@ -1,0 +1,13 @@
+error[E0308]: mismatched types
+ --> tests/ui/element_depth_rejects_raw_stamping.rs:4:23
+  |
+4 |     element.set_depth(9);
+  |             --------- ^ expected `ElementDepth`, found integer
+  |             |
+  |             arguments to this method are incorrect
+  |
+note: method defined here
+ --> src/view/view.rs
+  |
+  |     fn set_depth(&mut self, depth: ElementDepth);
+  |        ^^^^^^^^^

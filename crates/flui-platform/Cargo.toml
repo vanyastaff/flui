@@ -366,6 +366,13 @@ workspace = true
 # dependency again: no `anyhow` token may appear in this crate's public API.
 anyhow = { workspace = true }
 tracing-subscriber = { workspace = true }
+# Exact diagnostics for owner capabilities and retired public names.
+trybuild = { workspace = true }
+
+# Nested Cargo stays separate from the native platform contract binary.
+[[test]]
+name = "compiler_guards"
+path = "tests/compiler_guards.rs"
 
 [[test]]
 name = "platform_it"

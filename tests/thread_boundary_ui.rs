@@ -1,9 +1,8 @@
-//! Realm-bound handles stay on their owner thread: each fixture under
-//! `tests/ui/thread_boundary/` hands one to `std::thread::spawn` through the
-//! facade, and the compiler must refuse it, naming the public type.
+//! Compiler diagnostics for facade authority and owner-thread boundaries.
 
 #[test]
 fn thread_boundary_ui() {
     let cases = trybuild::TestCases::new();
+    cases.pass("tests/ui_pass/facade_runtime_seam.rs");
     cases.compile_fail("tests/ui/thread_boundary/*.rs");
 }

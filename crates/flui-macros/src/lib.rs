@@ -225,23 +225,36 @@ pub fn derive_stateful_view(input: TokenStream) -> TokenStream {
 /// # Supported shapes
 ///
 /// Only structs with named fields are supported. The derive rejects enums,
-/// unions, tuple structs and unit structs with a compile-time diagnostic:
+/// unions, tuple structs and unit structs with a compile-time diagnostic.
+/// Each failing example below has a passing companion that differs only
+/// at its shape or attribute line.
 ///
 /// ```rust,compile_fail
 /// use flui_macros::Diagnosticable;
 ///
 /// #[derive(Debug, Diagnosticable)]
-/// enum NotSupported {
-///     A,
-///     B,
-/// }
+/// enum Sample { First, Second }
+/// ```
+///
+/// ```rust
+/// use flui_macros::Diagnosticable;
+///
+/// #[derive(Debug, Diagnosticable)]
+/// struct Sample { first: (), second: () }
 /// ```
 ///
 /// ```rust,compile_fail
 /// use flui_macros::Diagnosticable;
 ///
 /// #[derive(Debug, Diagnosticable)]
-/// struct AlsoNotSupported(u32, u32);
+/// struct Sample(u32, u32);
+/// ```
+///
+/// ```rust
+/// use flui_macros::Diagnosticable;
+///
+/// #[derive(Debug, Diagnosticable)]
+/// struct Sample { first: u32, second: u32 }
 /// ```
 ///
 /// An unknown `diagnostic(...)` sub-attribute is likewise a hard error:
@@ -250,8 +263,18 @@ pub fn derive_stateful_view(input: TokenStream) -> TokenStream {
 /// use flui_macros::Diagnosticable;
 ///
 /// #[derive(Debug, Diagnosticable)]
-/// struct Bad {
+/// struct Sample {
 ///     #[diagnostic(nonsense)]
+///     field: u32,
+/// }
+/// ```
+///
+/// ```rust
+/// use flui_macros::Diagnosticable;
+///
+/// #[derive(Debug, Diagnosticable)]
+/// struct Sample {
+///     #[diagnostic(skip)]
 ///     field: u32,
 /// }
 /// ```

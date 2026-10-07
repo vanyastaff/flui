@@ -1,5 +1,21 @@
 # flui-widgets architecture
 
+## Accessibility of hidden retained children
+
+`Visibility::maintain_size` preserves layout while hidden, with child semantics
+excluded by default. `maintain_semantics` explicitly retains accessibility and
+requires `maintain_size`, so the retained child keeps its normal geometry.
+Pointer interactivity and focus remain independently configured. The composed
+`VisibilityGate` forwards retention to `RenderVisibility`'s existing child
+visitation hook; it also provides the same default and opt-in when used directly.
+No global rule ties paint suppression to semantics suppression.
+
+`retained_visibility_hides_child_semantics_by_default` pins the visible premise
+and hidden default in the assembled a11y tree.
+`retained_visibility_updates_semantics_without_changing_layout` updates a
+mounted widget through visible, hidden and explicitly retained configurations,
+asserting the child's accessibility label and unchanged allocated size.
+
 ## Overlay entry identity admission
 
 Overlay entry allocation admits the final nonzero identity once and then refuses

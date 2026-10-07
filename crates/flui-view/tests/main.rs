@@ -296,6 +296,7 @@ fn element_lifecycle_and_dependency_matrix() {
             ("inherited_dependency::unmounted_dependent_is_removed_from_provider_before_next_notification", inherited_dependency::unmounted_dependent_is_removed_from_provider_before_next_notification as fn()),
             ("build_owner_tests::build_owners_have_isolated_focus_managers", build_owner_tests::build_owners_have_isolated_focus_managers as fn()),
             ("build_owner_tests::test_build_scope_processes_in_depth_order", build_owner_tests::test_build_scope_processes_in_depth_order as fn()),
+            ("build_owner_tests::clean_binding_frames_report_no_builds", build_owner_tests::clean_binding_frames_report_no_builds as fn()),
         ],
     );
 }
@@ -359,6 +360,10 @@ fn signal_read_and_write_matrix() {
             (
                 "signal_reads::a_read_in_build_subscribes_through_the_production_context",
                 signal_reads::a_read_in_build_subscribes_through_the_production_context as fn(),
+            ),
+            (
+                "signal_reads::changing_read_sets_preserves_peer_rebuild_order",
+                signal_reads::changing_read_sets_preserves_peer_rebuild_order as fn(),
             ),
             (
                 "signal_reads::a_partially_committed_panicking_update_rebuilds_its_mounted_reader",

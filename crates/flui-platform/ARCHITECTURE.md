@@ -51,6 +51,15 @@ trait depends on `flui-platform-api` instead.
 
 ## Mapping decisions
 
+### Owner capability boundaries have external compiler witnesses
+
+`OwnerPlatform` stays owner-local, and callers obtain its thread-safe residual
+through `shared`. A text-store host is reached through that owner capability;
+the hidden token cannot be imported or forged with `Default` outside this crate.
+`trybuild_ui::ui_tests` pins the external caller diagnostics alongside valid
+owner-local access and `SharedPlatform` thread bounds. It also checks each
+retired tracker, embedder and timestamp name independently (ADR-0082 §5).
+
 ### Native Win32 delivers admitted idle deadlines through live window paints
 
 The owner loop keeps admitted deadline delivery separate from the next hook

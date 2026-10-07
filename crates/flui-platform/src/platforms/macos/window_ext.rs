@@ -117,10 +117,10 @@ pub trait MacOSWindowExt {
     /// Numeric IDs cannot establish that ownership:
     ///
     /// ```compile_fail,E0308
-    /// use flui_platform::platforms::macos::MacOSWindowExt;
+    /// use flui_platform::{HostWindow, platforms::macos::MacOSWindowExt};
     ///
-    /// fn join(window: &mut dyn MacOSWindowExt) {
-    ///     window.add_tab_to_window(1);
+    /// fn join(window: &mut dyn MacOSWindowExt, other: &dyn HostWindow) -> bool {
+    ///     window.add_tab_to_window(1)
     /// }
     /// ```
     ///

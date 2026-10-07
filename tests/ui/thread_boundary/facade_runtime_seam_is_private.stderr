@@ -1,0 +1,11 @@
+error[E0603]: module `__runtime` is private
+ --> tests/ui/thread_boundary/facade_runtime_seam_is_private.rs:1:17
+  |
+1 | use flui::view::__runtime;
+  |                 ^^^^^^^^^ private module
+  |
+note: the module `__runtime` is defined here
+ --> src/lib.rs
+  |
+  |     mod __runtime {}
+  |     ^^^^^^^^^^^^^

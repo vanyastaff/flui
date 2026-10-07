@@ -114,7 +114,7 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 /// ```compile_fail,E0407
 /// use std::any::Any;
 ///
-/// use flui_platform_api::{CursorError, CursorIcon, PlatformWindow, WindowId};
+/// use flui_platform_api::{CursorError, CursorIcon, PlatformWindow, WindowId, WindowShowError};
 /// use flui_foundation::geometry::{DeviceSize, Size};
 ///
 /// struct Offscreen;
@@ -142,13 +142,15 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 ///     fn set_cursor(&self, _cursor: CursorIcon) -> Result<(), CursorError> {
 ///         Err(CursorError::Unsupported)
 ///     }
-///     fn accessibility(&self) -> Option<()> {
-///         None
-///     }
+///     fn accessibility(&self) -> Option<()> { None }
 ///     fn as_any(&self) -> &dyn Any {
 ///         self
 ///     }
 /// }
+///
+/// let window: &dyn PlatformWindow = &Offscreen;
+/// assert_eq!(window.id(), WindowId(7));
+/// assert_eq!(window.show(), Err(WindowShowError::Unsupported));
 /// ```
 pub trait PlatformWindow: Send + Sync {
     /// This window's platform-internal identity.

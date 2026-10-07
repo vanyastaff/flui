@@ -236,6 +236,15 @@ before diagnosing an intermittent leak. This command returns advisory exit code
   and `test-trybuild`); `cargo xtask test --no-trybuild` everything but the `trybuild` group
   (useful for local native Windows runs).
 
+Platform compiler diagnostics need no display or event loop. Exact diagnostics
+require the pinned toolchain's `rust-src` component
+(`rustup component add rust-src`), because exact snapshots include standard-library
+declarations. CI installs it in the diagnostic test job.
+The nested and trybuild stages run `flui-platform`'s `compiler_guards` target separately on
+every host; the native platform leg excludes that group. `check-changed` also
+runs the portable target whenever platform code is in scope, including hosts
+where it skips the native display suite.
+
 To narrow either stage, combine with `&` inside the single `-E`:
 `-E 'not group(trybuild) & package(flui-view)'`. A second `-E` is ORed
 with the first, not intersected: `-E 'not group(trybuild)' -E

@@ -560,6 +560,12 @@ impl Semantics {
     /// ```compile_fail
     /// let _ = flui_widgets::Semantics::new().on_expand(|_cx| {});
     /// ```
+    ///
+    /// Register the expanded state and both transition handlers together:
+    ///
+    /// ```
+    /// let _ = flui_widgets::Semantics::new().expandable(false, |_cx| {}, |_cx| {});
+    /// ```
     #[must_use]
     pub fn expandable<E, RE, C, RC>(self, expanded: bool, on_expand: E, on_collapse: C) -> Self
     where

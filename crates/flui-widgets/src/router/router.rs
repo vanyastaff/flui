@@ -209,14 +209,14 @@ impl<R: Routable> Router<R> {
     ///
     /// ```compile_fail,E0308
     /// # use flui_widgets::prelude::*; use flui_widgets::{Router, Routable};
-    /// fn build_body<R: Routable>(cx: &dyn BuildContext) { let _ = Router::<R>::handle(cx); }
+    /// fn acquire_handle<R: Routable>(cx: &dyn BuildContext) { let _ = Router::<R>::handle(cx); }
     /// ```
     ///
     /// while the same call from a lifecycle context does:
     ///
     /// ```
     /// # use flui_widgets::prelude::*; use flui_widgets::{Router, Routable};
-    /// fn init<R: Routable>(cx: &dyn LifecycleContext) { let _ = Router::<R>::handle(cx); }
+    /// fn acquire_handle<R: Routable>(cx: &dyn LifecycleContext) { let _ = Router::<R>::handle(cx); }
     /// ```
     ///
     /// # Errors

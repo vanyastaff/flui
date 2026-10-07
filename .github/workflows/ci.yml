@@ -474,8 +474,11 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install pinned Rust
+      # Exact diagnostic snapshots include standard-library declarations.
+      - name: Install pinned Rust + diagnostic sources
         uses: ./.github/actions/rust-toolchain
+        with:
+          components: rust-src
 
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
