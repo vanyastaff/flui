@@ -3,8 +3,9 @@
 //! UIA reads current roles, names, values and bounds and invokes normal buttons.
 //! Pointer events and physical shortcuts enter the OS input queue. Character
 //! entry uses UTF-16 Unicode packets (VK_PACKET -> TranslateMessage -> WM_CHAR),
-//! not a controller setter. This is plain native keyboard input, not a TSF/IME
-//! composition or Narrator test. UIA observations are not GPU pixel readbacks.
+//! not a controller setter. One step composes with Microsoft IME ja-JP through
+//! the window's text services (TSF). It is not a Narrator test, and UIA
+//! observations are not GPU pixel readbacks.
 //! The deterministic Error/Retry flow does not prove held-loader cancellation;
 //! that remains the separate, already executed public headless scenario.
 
@@ -12,7 +13,7 @@ use std::fmt;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use windows::Win32::Foundation::{HWND, POINT, RECT};
+use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT, WPARAM};
 use windows::Win32::UI::Accessibility::{
     IUIAutomationElement, IUIAutomationInvokePattern, IUIAutomationValuePattern,
     UIA_CONTROLTYPE_ID, UIA_EditControlTypeId, UIA_GroupControlTypeId, UIA_InvokePatternId,
@@ -22,13 +23,14 @@ use windows::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, GetDpiForWindow, SetProcessDpiAwarenessContext,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP,
-    KEYEVENTF_UNICODE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_WHEEL, MOUSEINPUT,
-    VIRTUAL_KEY, VK_BACK, VK_CONTROL, VK_F4, VK_MENU, VK_RETURN, VK_SHIFT, VK_TAB,
+    GetKeyboardLayout, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBD_EVENT_FLAGS, KEYBDINPUT,
+    KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
+    MOUSEEVENTF_WHEEL, MOUSEINPUT, VIRTUAL_KEY, VK_BACK, VK_CONTROL, VK_END, VK_F4, VK_MENU,
+    VK_RETURN, VK_SHIFT, VK_SPACE, VK_TAB,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetWindowInfo, GetWindowThreadProcessId, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER,
-    SetCursorPos, SetWindowPos, WINDOWINFO,
+    GetWindowInfo, GetWindowThreadProcessId, PostMessageW, SWP_NOACTIVATE, SWP_NOMOVE,
+    SWP_NOZORDER, SetCursorPos, SetWindowPos, WINDOWINFO, WM_INPUTLANGCHANGEREQUEST,
 };
 
 use super::uia::{self, BUTTON, Session, Start, TEXT};
@@ -217,6 +219,9 @@ impl Driver<'_> {
         self.stable_band()?;
         self.open(&format!("Note {id}"), id, RESIZED_DRAFT)?;
         println!("notes: resize ok");
+
+        self.compose_japanese(RESIZED_DRAFT)?;
+        println!("notes: Japanese IME composition through the window's text services ok");
 
         self.chord(&[VK_MENU, VK_F4])?;
         let status = self
@@ -533,6 +538,70 @@ impl Driver<'_> {
             self.character(unit)?;
         }
         self.value(text)?;
+        Ok(())
+    }
+
+    /// Types `toukyou`, Space and Enter with Microsoft IME ja-JP into the
+    /// editor, after `before`. The preedit must be in the field's value
+    /// while it composes: the window's text services (TSF) hand the input
+    /// method the field's own store (ADR-0135 §3), whereas a window without
+    /// them gets the input method's IMM32 fallback, which composes in a
+    /// window of its own and only sends the committed text.
+    ///
+    /// The input language is switched for the Notes window only, with
+    /// `WM_INPUTLANGCHANGEREQUEST`, and switched back afterwards. A host
+    /// without Japanese among its input languages cannot verify.
+    fn compose_japanese(&self, before: &str) -> anyhow::Result<()> {
+        const JAPANESE: u16 = 0x0411;
+        self.focus_edit()?;
+        self.chord(&[VK_END])?;
+        // SAFETY: a read-only identity lookup on the Notes window.
+        let thread = unsafe { GetWindowThreadProcessId(self.hwnd, None) };
+        let language = || {
+            // SAFETY: reads the layout of a live thread of another process.
+            let layout = unsafe { GetKeyboardLayout(thread) };
+            (layout.0 as usize & 0xffff) as u16
+        };
+        // SAFETY: as above.
+        let previous = unsafe { GetKeyboardLayout(thread) };
+        let request = |layout: isize| {
+            // SAFETY: a posted request to the Notes window's own default
+            // handling, which switches its thread's input language.
+            unsafe {
+                PostMessageW(
+                    Some(self.hwnd),
+                    WM_INPUTLANGCHANGEREQUEST,
+                    WPARAM(0),
+                    LPARAM(layout),
+                )
+            }
+        };
+        request(0x0411_0411)
+            .map_err(|error| host_error(format!("language request refused: {error}")))?;
+        if self
+            .wait("Japanese input language", |_| {
+                Ok((language() == JAPANESE).then_some(()))
+            })
+            .is_err()
+        {
+            return Err(host_error("Japanese is not an input language on this host"));
+        }
+        let composed = (|| -> anyhow::Result<()> {
+            // The IME-on key, as a user would press it.
+            self.chord(&[VIRTUAL_KEY(0x16)])?;
+            for key in "TOUKYOU".bytes() {
+                self.chord(&[VIRTUAL_KEY(u16::from(key))])?;
+            }
+            self.value(&format!("{before}とうきょう"))?;
+            self.chord(&[VK_SPACE])?;
+            self.value(&format!("{before}東京"))?;
+            self.chord(&[VK_RETURN])?;
+            self.value(&format!("{before}東京"))?;
+            Ok(())
+        })();
+        let restored = request(previous.0 as isize);
+        composed?;
+        restored.map_err(|error| host_error(format!("language restore refused: {error}")))?;
         Ok(())
     }
 
