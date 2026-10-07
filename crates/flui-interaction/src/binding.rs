@@ -997,17 +997,24 @@ impl GestureBinding {
         let resamplers = self.active_resampler_count();
         let pending_moves = self.pending_moves.len();
         let arenas = self.arena.len();
-        if hit_tests > 0 || resamplers > 0 || pending_moves > 0 || arenas > 0 {
-            tracing::debug!(
-                hit_tests,
-                resamplers,
-                pending_moves,
-                arenas,
-                "GestureBinding draining interrupted pointer state on lifecycle pause"
-            );
+        // Mandatory state retirement precedes diagnostics, whose subscriber
+        // is user code and can panic or reenter the binding.
+        let mut first_panic = RoutePanic::capture(|| self.cancel_all_pointer_sequences());
+        let diagnostic = RoutePanic::capture(|| {
+            if hit_tests > 0 || resamplers > 0 || pending_moves > 0 || arenas > 0 {
+                tracing::debug!(
+                    hit_tests,
+                    resamplers,
+                    pending_moves,
+                    arenas,
+                    "GestureBinding draining interrupted pointer state on lifecycle pause"
+                );
+            }
+        });
+        RoutePanic::preserve_first(&mut first_panic, diagnostic, "lifecycle pause diagnostic");
+        if let Some(panic) = first_panic {
+            panic.resume();
         }
-
-        self.cancel_all_pointer_sequences();
     }
 
     /// Get the number of active pointers (with cached hit tests).
