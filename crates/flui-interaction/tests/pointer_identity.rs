@@ -364,7 +364,7 @@ fn lifecycle_cancel_preserves_the_latest_tool_role_and_time() {
         ));
         assert_eq!(*seen.borrow(), [started, latest, cancelled]);
         assert_eq!(binding.active_pointer_count(), 0);
-        assert!(!binding.has_pending_moves());
+        assert!(!binding.has_pending_motion());
     });
 }
 
