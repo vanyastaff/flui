@@ -9,7 +9,7 @@
 //!     ↓
 //! convert_ns_event() (this module)
 //!     ↓
-//! PlatformInput (ui-events wrapper)
+//! PlatformInput (owned FLUI vocabulary)
 //!     ↓
 //! WindowCallbacks::dispatch_input
 //! ```
@@ -91,15 +91,18 @@ fn convert_typed_event(
                 let modifiers = extract_modifiers(event);
                 let is_repeat = event.isARepeat();
 
-                Some(PlatformInput::Keyboard(KeyboardEvent {
-                    state: KeyState::Down,
-                    key,
-                    code,
-                    location: crate::shared::keys::location_for_code(code),
-                    modifiers,
-                    repeat: is_repeat,
-                    is_composing: false,
-                }))
+                Some(crate::shared::input_vocabulary::keyboard_input(
+                    KeyboardEvent {
+                        state: KeyState::Down,
+                        key,
+                        code,
+                        location: crate::shared::keys::location_for_code(code),
+                        modifiers,
+                        repeat: is_repeat,
+                        is_composing: false,
+                    },
+                    event_timestamp_ns(),
+                ))
             }
 
             NSEventType::KeyUp => {
@@ -108,78 +111,79 @@ fn convert_typed_event(
                 let code = crate::shared::keys_macos::keycode_to_code(key_code);
                 let modifiers = extract_modifiers(event);
 
-                Some(PlatformInput::Keyboard(KeyboardEvent {
-                    state: KeyState::Up,
-                    key,
-                    code,
-                    location: crate::shared::keys::location_for_code(code),
-                    modifiers,
-                    repeat: false,
-                    is_composing: false,
-                }))
+                Some(crate::shared::input_vocabulary::keyboard_input(
+                    KeyboardEvent {
+                        state: KeyState::Up,
+                        key,
+                        code,
+                        location: crate::shared::keys::location_for_code(code),
+                        modifiers,
+                        repeat: false,
+                        is_composing: false,
+                    },
+                    event_timestamp_ns(),
+                ))
             }
 
             // Mouse button events
-            NSEventType::LeftMouseDown => Some(convert_mouse_button(
+            NSEventType::LeftMouseDown => convert_mouse_button(
                 event,
                 scale_factor,
                 view_height,
                 PointerButton::Primary,
                 true,
-            )),
+            ),
 
-            NSEventType::LeftMouseUp => Some(convert_mouse_button(
+            NSEventType::LeftMouseUp => convert_mouse_button(
                 event,
                 scale_factor,
                 view_height,
                 PointerButton::Primary,
                 false,
-            )),
+            ),
 
-            NSEventType::RightMouseDown => Some(convert_mouse_button(
+            NSEventType::RightMouseDown => convert_mouse_button(
                 event,
                 scale_factor,
                 view_height,
                 PointerButton::Secondary,
                 true,
-            )),
+            ),
 
-            NSEventType::RightMouseUp => Some(convert_mouse_button(
+            NSEventType::RightMouseUp => convert_mouse_button(
                 event,
                 scale_factor,
                 view_height,
                 PointerButton::Secondary,
                 false,
-            )),
+            ),
 
-            NSEventType::OtherMouseDown => Some(convert_mouse_button(
+            NSEventType::OtherMouseDown => convert_mouse_button(
                 event,
                 scale_factor,
                 view_height,
                 PointerButton::Auxiliary,
                 true,
-            )),
+            ),
 
-            NSEventType::OtherMouseUp => Some(convert_mouse_button(
+            NSEventType::OtherMouseUp => convert_mouse_button(
                 event,
                 scale_factor,
                 view_height,
                 PointerButton::Auxiliary,
                 false,
-            )),
+            ),
 
             // Mouse movement events
             NSEventType::MouseMoved
             | NSEventType::LeftMouseDragged
             | NSEventType::RightMouseDragged
             | NSEventType::OtherMouseDragged => {
-                Some(convert_mouse_move(event, scale_factor, view_height))
+                convert_mouse_move(event, scale_factor, view_height)
             }
 
             // Scroll events
-            NSEventType::ScrollWheel => {
-                Some(convert_scroll_event(event, scale_factor, view_height))
-            }
+            NSEventType::ScrollWheel => convert_scroll_event(event, scale_factor, view_height),
 
             // Trackpad pinch/rotation — the native producer for the pan-zoom
             // lane (ordinary macOS apps select THIS backend, not winit).
@@ -189,28 +193,31 @@ fn convert_typed_event(
             // boundary uses, so the two backends cannot drift.
             NSEventType::Magnify => {
                 let magnification = event.magnification();
-                crate::shared::gestures::pinch(magnification)
-                    .map(|gesture| convert_gesture_event(event, scale_factor, view_height, gesture))
+                crate::shared::gestures::pinch(magnification).and_then(|gesture| {
+                    convert_gesture_event(event, scale_factor, view_height, gesture)
+                })
             }
             NSEventType::Rotate => {
                 let degrees = event.rotation();
-                Some(convert_gesture_event(
+                convert_gesture_event(
                     event,
                     scale_factor,
                     view_height,
                     crate::shared::gestures::rotation_ccw_degrees(degrees),
-                ))
+                )
             }
 
             // Mouse enter/exit carry no useful position payload in the W3C
             // model — Enter/Leave only identify the pointer.
-            NSEventType::MouseEntered => Some(PlatformInput::Pointer(PointerEvent::Enter(
-                primary_mouse_info(),
-            ))),
+            NSEventType::MouseEntered => crate::shared::input_vocabulary::pointer_input(
+                PointerEvent::Enter(primary_mouse_info()),
+                event_timestamp_ns(),
+            ),
 
-            NSEventType::MouseExited => Some(PlatformInput::Pointer(PointerEvent::Leave(
-                primary_mouse_info(),
-            ))),
+            NSEventType::MouseExited => crate::shared::input_vocabulary::pointer_input(
+                PointerEvent::Leave(primary_mouse_info()),
+                event_timestamp_ns(),
+            ),
 
             // Unsupported events
             _ => None,
@@ -326,7 +333,7 @@ fn convert_mouse_button(
     view_height: f64,
     button: PointerButton,
     is_down: bool,
-) -> PlatformInput {
+) -> Option<PlatformInput> {
     // The held-set-derived pressure is already right for both edges:
     // `pressedMouseButtons` includes the pressed button at Down and excludes
     // it at Up.
@@ -344,7 +351,7 @@ fn convert_mouse_button(
         PointerEvent::Up(button_event)
     };
 
-    PlatformInput::Pointer(pointer_event)
+    crate::shared::input_vocabulary::pointer_input(pointer_event, event_timestamp_ns())
 }
 
 /// Convert mouse movement event
@@ -352,15 +359,22 @@ fn convert_mouse_button(
 /// # Safety
 ///
 /// `ns_event` must be a valid, live `NSEvent*` of a mouse-move event.
-fn convert_mouse_move(event: &NSEvent, scale_factor: f64, view_height: f64) -> PlatformInput {
+fn convert_mouse_move(
+    event: &NSEvent,
+    scale_factor: f64,
+    view_height: f64,
+) -> Option<PlatformInput> {
     let state = pointer_state(event, scale_factor, view_height, 0);
 
-    PlatformInput::Pointer(PointerEvent::Move(PointerUpdate {
-        pointer: primary_mouse_info(),
-        current: state,
-        coalesced: Vec::new(),
-        predicted: Vec::new(),
-    }))
+    crate::shared::input_vocabulary::pointer_input(
+        PointerEvent::Move(PointerUpdate {
+            pointer: primary_mouse_info(),
+            current: state,
+            coalesced: Vec::new(),
+            predicted: Vec::new(),
+        }),
+        event_timestamp_ns(),
+    )
 }
 
 /// Convert scroll wheel event
@@ -377,7 +391,11 @@ fn convert_mouse_move(event: &NSEvent, scale_factor: f64, view_height: f64) -> P
 /// # Safety
 ///
 /// `ns_event` must be a valid, live `NSEvent*` of a scroll-wheel event.
-fn convert_scroll_event(event: &NSEvent, scale_factor: f64, view_height: f64) -> PlatformInput {
+fn convert_scroll_event(
+    event: &NSEvent,
+    scale_factor: f64,
+    view_height: f64,
+) -> Option<PlatformInput> {
     let state = pointer_state(event, scale_factor, view_height, 0);
 
     let delta_x = event.scrollingDeltaX();
@@ -389,11 +407,14 @@ fn convert_scroll_event(event: &NSEvent, scale_factor: f64, view_height: f64) ->
 
     let delta = crate::shared::scroll::from_appkit(delta_x, delta_y, has_precise_delta);
 
-    PlatformInput::Pointer(PointerEvent::Scroll(PointerScrollEvent {
-        pointer: primary_mouse_info(),
-        state,
-        delta,
-    }))
+    crate::shared::input_vocabulary::pointer_input(
+        PointerEvent::Scroll(PointerScrollEvent {
+            pointer: primary_mouse_info(),
+            state,
+            delta,
+        }),
+        event_timestamp_ns(),
+    )
 }
 
 /// Assemble a `PointerEvent::Gesture` around an already-converted
@@ -409,10 +430,10 @@ fn convert_gesture_event(
     scale_factor: f64,
     view_height: f64,
     gesture: ui_events::pointer::PointerGesture,
-) -> PlatformInput {
+) -> Option<PlatformInput> {
     let state = pointer_state(event, scale_factor, view_height, 0);
-    PlatformInput::Pointer(PointerEvent::Gesture(
-        ui_events::pointer::PointerGestureEvent {
+    crate::shared::input_vocabulary::pointer_input(
+        PointerEvent::Gesture(ui_events::pointer::PointerGestureEvent {
             pointer: PointerInfo {
                 pointer_id: ui_events::pointer::PointerId::new(
                     crate::shared::gestures::GESTURE_POINTER_ID,
@@ -422,8 +443,9 @@ fn convert_gesture_event(
             },
             gesture,
             state,
-        },
-    ))
+        }),
+        event_timestamp_ns(),
+    )
 }
 
 // ============================================================================

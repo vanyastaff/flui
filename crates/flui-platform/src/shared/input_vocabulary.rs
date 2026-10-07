@@ -50,6 +50,26 @@ use flui_platform_api::pointer::{
 use ui_events::keyboard as upstream_keyboard;
 use ui_events::pointer as upstream;
 
+/// Complete the backend translation at the owned input boundary.
+pub(crate) fn pointer_input(
+    event: upstream::PointerEvent,
+    observed_ns: u64,
+) -> Option<flui_platform_api::PlatformInput> {
+    pointer_event(&event, EventTime::from_nanos(observed_ns))
+        .map(flui_platform_api::PlatformInput::Pointer)
+}
+
+/// Keyboard translation is total, including unidentified keys and codes.
+pub(crate) fn keyboard_input(
+    event: upstream_keyboard::KeyboardEvent,
+    observed_ns: u64,
+) -> flui_platform_api::PlatformInput {
+    flui_platform_api::PlatformInput::Keyboard(key_event(
+        &event,
+        EventTime::from_nanos(observed_ns),
+    ))
+}
+
 /// Every `ui-events` button, in bit order: index `i` is button number `i + 1`.
 const UPSTREAM_BUTTONS: [upstream::PointerButton; 32] = {
     use upstream::PointerButton::{

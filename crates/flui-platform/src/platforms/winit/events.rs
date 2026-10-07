@@ -1,6 +1,6 @@
 //! Winit event conversion to W3C ui-events
 //!
-//! Converts winit 0.30 events to W3C-compliant PlatformInput types.
+//! Converts winit 0.30 events through private W3C translations to owned PlatformInput types.
 
 use dpi::{PhysicalPosition, PhysicalSize};
 use keyboard_types::Modifiers as KeyboardModifiers;
@@ -12,6 +12,7 @@ use winit::event::{ElementState, MouseButton, MouseScrollDelta};
 
 use crate::{
     shared::events::{event_timestamp_ns, primary_mouse_info},
+    shared::input_vocabulary::{keyboard_input, pointer_input},
     traits::PlatformInput,
 };
 
@@ -120,7 +121,7 @@ pub fn cursor_moved_event(
     scale_factor: f64,
     modifiers: KeyboardModifiers,
     held_buttons: PointerButtons,
-) -> PlatformInput {
+) -> Option<PlatformInput> {
     let pressure = if held_buttons == PointerButtons::default() {
         0.0
     } else {
@@ -135,7 +136,7 @@ pub fn cursor_moved_event(
         predicted: Vec::new(),
     });
 
-    PlatformInput::Pointer(event)
+    pointer_input(event, event_timestamp_ns())
 }
 
 /// Convert winit MouseInput to W3C PointerEvent::Down/Up
@@ -148,7 +149,7 @@ pub fn mouse_button_event(
     scale_factor: f64,
     modifiers: KeyboardModifiers,
     held_buttons: PointerButtons,
-) -> PlatformInput {
+) -> Option<PlatformInput> {
     let is_down = state == ElementState::Pressed;
     let pointer_button = convert_mouse_button(button);
     let pressure = if is_down { 0.5 } else { 0.0 };
@@ -168,7 +169,7 @@ pub fn mouse_button_event(
         })
     };
 
-    PlatformInput::Pointer(event)
+    pointer_input(event, event_timestamp_ns())
 }
 
 /// Convert winit `Touch` to a per-contact W3C pointer event.
@@ -188,7 +189,7 @@ pub fn touch_event(
     pointer_id: u64,
     scale_factor: f64,
     modifiers: KeyboardModifiers,
-) -> PlatformInput {
+) -> Option<PlatformInput> {
     use winit::event::TouchPhase;
 
     let info = PointerInfo {
@@ -242,7 +243,7 @@ pub fn touch_event(
         TouchPhase::Cancelled => PointerEvent::Cancel(info),
     };
 
-    PlatformInput::Pointer(event)
+    pointer_input(event, event_timestamp_ns())
 }
 
 /// Convert a winit trackpad pinch or rotation tick into a
@@ -273,7 +274,7 @@ pub fn trackpad_gesture_event(
     position: winit::dpi::PhysicalPosition<f64>,
     scale_factor: f64,
     modifiers: KeyboardModifiers,
-) -> PlatformInput {
+) -> Option<PlatformInput> {
     let event = PointerEvent::Gesture(ui_events::pointer::PointerGestureEvent {
         pointer: PointerInfo {
             pointer_id: PointerId::new(crate::shared::gestures::GESTURE_POINTER_ID),
@@ -291,7 +292,7 @@ pub fn trackpad_gesture_event(
         ),
     });
 
-    PlatformInput::Pointer(event)
+    pointer_input(event, event_timestamp_ns())
 }
 
 /// Convert winit MouseWheel to W3C PointerEvent::Scroll
@@ -300,7 +301,7 @@ pub fn mouse_wheel_event(
     position: winit::dpi::PhysicalPosition<f64>,
     scale_factor: f64,
     modifiers: KeyboardModifiers,
-) -> PlatformInput {
+) -> Option<PlatformInput> {
     // Normalized at THIS boundary so every backend hands consumers the
     // same convention — the oracle's `scrollDelta`: positive = content
     // scrolls down (the web backend's DOM `deltaY` already arrives that
@@ -332,7 +333,7 @@ pub fn mouse_wheel_event(
         delta: scroll_delta,
     });
 
-    PlatformInput::Pointer(event)
+    pointer_input(event, event_timestamp_ns())
 }
 
 /// Convert winit's `Ime` event to [`flui_platform_api::ImeEvent`].
@@ -379,9 +380,10 @@ pub fn keyboard_event(
     event: winit::event::KeyEvent,
     modifiers: winit::keyboard::ModifiersState,
 ) -> PlatformInput {
-    PlatformInput::Keyboard(ui_events_winit::keyboard::from_winit_keyboard_event(
-        event, modifiers,
-    ))
+    keyboard_input(
+        ui_events_winit::keyboard::from_winit_keyboard_event(event, modifiers),
+        event_timestamp_ns(),
+    )
 }
 
 #[cfg(test)]
@@ -389,11 +391,11 @@ mod pointer_translation_tests {
     use std::time::Instant;
 
     use super::*;
-    use ui_events::pointer::PointerEvent;
+    use flui_platform_api::pointer::PointerEvent;
 
     /// The cross-wire field contract (flui-interaction's module doc): time
-    /// in NANOSECONDS, pressure 0.5 while a button is held on sensor-less
-    /// hardware, click count 1 on transitions and 0 on motion/scroll.
+    /// in NANOSECONDS, no pressure sensor on a mouse, and click count 1 on
+    /// transitions. Upstream pressure stand-ins do not cross the owned wire.
     pub(super) fn translated_events_meet_the_pointer_field_contract() {
         let position = winit::dpi::PhysicalPosition::new(10.0, 10.0);
         let held = PointerButtons::from(PointerButton::Primary);
@@ -402,7 +404,7 @@ mod pointer_translation_tests {
         // stamps; a millisecond stamp would show a delta of ~2, a
         // nanosecond stamp ~2_000_000. (A bounded spin on Instant, not a
         // pacing sleep: elapsed time IS the measured phenomenon here.)
-        let PlatformInput::Pointer(PointerEvent::Move(first)) = cursor_moved_event(
+        let Some(PlatformInput::Pointer(PointerEvent::Move(first))) = cursor_moved_event(
             position,
             1.0,
             KeyboardModifiers::empty(),
@@ -414,7 +416,7 @@ mod pointer_translation_tests {
         while spin_start.elapsed() < std::time::Duration::from_millis(2) {
             std::hint::spin_loop();
         }
-        let PlatformInput::Pointer(PointerEvent::Move(second)) = cursor_moved_event(
+        let Some(PlatformInput::Pointer(PointerEvent::Move(second))) = cursor_moved_event(
             position,
             1.0,
             KeyboardModifiers::empty(),
@@ -422,7 +424,7 @@ mod pointer_translation_tests {
         ) else {
             panic!("expected Move");
         };
-        let delta = second.current.time - first.current.time;
+        let delta = second.current().time.as_nanos() - first.current().time.as_nanos();
         assert!(
             delta >= 1_000_000,
             "~2ms between stamps must read as ~2,000,000 time units — the \
@@ -430,7 +432,7 @@ mod pointer_translation_tests {
         );
 
         // pressure + count on a Down with a held button.
-        let PlatformInput::Pointer(PointerEvent::Down(down)) = mouse_button_event(
+        let Some(PlatformInput::Pointer(PointerEvent::Down(down))) = mouse_button_event(
             MouseButton::Left,
             ElementState::Pressed,
             position,
@@ -440,12 +442,15 @@ mod pointer_translation_tests {
         ) else {
             panic!("expected Down");
         };
-        assert_eq!(down.state.pressure, 0.5, "W3C sensor-less held default");
-        assert_eq!(down.state.count, 1, "a Down is a click transition");
+        assert_eq!(down.sample.pressure, None, "a mouse has no pressure sensor");
+        assert_eq!(
+            down.click_count.map(core::num::NonZeroU8::get),
+            Some(1),
+            "a Down is a click transition"
+        );
 
         // A hover move carries neither.
-        assert_eq!(first.current.pressure, 0.0);
-        assert_eq!(first.current.count, 0, "motion is not a click");
+        assert_eq!(first.current().pressure, None);
     }
 }
 

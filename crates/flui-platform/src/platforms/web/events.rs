@@ -1,13 +1,14 @@
 //! DOM event → PlatformInput mapping
 //!
 //! Registers DOM event listeners on the canvas and converts browser events
-//! to FLUI's W3C-based PlatformInput types.
+//! through private W3C translations into FLUI's owned PlatformInput types.
 
 use std::{cell::RefCell, collections::HashSet, rc::Rc, sync::Arc};
 
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 
+use crate::shared::input_vocabulary::{keyboard_input, pointer_input};
 use crate::{shared::WindowCallbacks, traits::PlatformInput};
 
 use super::window::WebWindow;
@@ -91,7 +92,9 @@ fn register_pointer_events(canvas: &web_sys::HtmlCanvasElement, callbacks: &Arc<
                 tracing::debug!(?error, "browser pointer capture was not admitted");
             }
             let input = convert_pointer_down(&pe);
-            callbacks.dispatch_input(input);
+            if let Some(input) = input {
+                callbacks.dispatch_input(input);
+            }
         });
         let _ = canvas
             .add_event_listener_with_callback("pointerdown", closure.as_ref().unchecked_ref());
@@ -104,7 +107,9 @@ fn register_pointer_events(canvas: &web_sys::HtmlCanvasElement, callbacks: &Arc<
         let closure = Closure::<dyn FnMut(web_sys::Event)>::new(move |e: web_sys::Event| {
             let pe: web_sys::PointerEvent = e.unchecked_into();
             let input = convert_pointer_move(&pe);
-            callbacks.dispatch_input(input);
+            if let Some(input) = input {
+                callbacks.dispatch_input(input);
+            }
         });
         let _ = canvas
             .add_event_listener_with_callback("pointermove", closure.as_ref().unchecked_ref());
@@ -124,7 +129,9 @@ fn register_pointer_events(canvas: &web_sys::HtmlCanvasElement, callbacks: &Arc<
             }
             release_pointer_capture(&capture, pe.pointer_id());
             let input = convert_pointer_up(&pe);
-            callbacks.dispatch_input(input);
+            if let Some(input) = input {
+                callbacks.dispatch_input(input);
+            }
         });
         let _ =
             canvas.add_event_listener_with_callback("pointerup", closure.as_ref().unchecked_ref());
@@ -144,9 +151,12 @@ fn register_pointer_events(canvas: &web_sys::HtmlCanvasElement, callbacks: &Arc<
                 return;
             }
             release_pointer_capture(&capture, pe.pointer_id());
-            callbacks.dispatch_input(PlatformInput::Pointer(
+            if let Some(input) = pointer_input(
                 ui_events::pointer::PointerEvent::Cancel(make_pointer_info(&pe)),
-            ));
+                (pe.time_stamp() * 1_000_000.0) as u64,
+            ) {
+                callbacks.dispatch_input(input);
+            }
         });
         let _ = canvas
             .add_event_listener_with_callback("pointercancel", closure.as_ref().unchecked_ref());
@@ -161,9 +171,12 @@ fn register_pointer_events(canvas: &web_sys::HtmlCanvasElement, callbacks: &Arc<
             // notification following that terminal edge must stay inert.
             let was_active = active.borrow_mut().remove(&pe.pointer_id());
             if was_active {
-                callbacks.dispatch_input(PlatformInput::Pointer(
+                if let Some(input) = pointer_input(
                     ui_events::pointer::PointerEvent::Cancel(make_pointer_info(&pe)),
-                ));
+                    (pe.time_stamp() * 1_000_000.0) as u64,
+                ) {
+                    callbacks.dispatch_input(input);
+                }
             }
         });
         let _ = canvas.add_event_listener_with_callback(
@@ -269,7 +282,9 @@ fn register_wheel_events(canvas: &web_sys::HtmlCanvasElement, callbacks: &Arc<Wi
         e.prevent_default();
         let we: web_sys::WheelEvent = e.unchecked_into();
         let input = convert_wheel_event(&we, &target);
-        callbacks.dispatch_input(input);
+        if let Some(input) = input {
+            callbacks.dispatch_input(input);
+        }
     });
 
     let options = web_sys::AddEventListenerOptions::new();
@@ -447,35 +462,44 @@ fn map_button(button: i16) -> Option<ui_events::pointer::PointerButton> {
     }
 }
 
-fn convert_pointer_down(pe: &web_sys::PointerEvent) -> PlatformInput {
+fn convert_pointer_down(pe: &web_sys::PointerEvent) -> Option<PlatformInput> {
     use ui_events::pointer::{PointerButtonEvent, PointerEvent};
 
-    PlatformInput::Pointer(PointerEvent::Down(PointerButtonEvent {
-        button: map_button(pe.button()),
-        pointer: make_pointer_info(pe),
-        state: make_pointer_state(pe, 1),
-    }))
+    pointer_input(
+        PointerEvent::Down(PointerButtonEvent {
+            button: map_button(pe.button()),
+            pointer: make_pointer_info(pe),
+            state: make_pointer_state(pe, 1),
+        }),
+        (pe.time_stamp() * 1_000_000.0) as u64,
+    )
 }
 
-fn convert_pointer_up(pe: &web_sys::PointerEvent) -> PlatformInput {
+fn convert_pointer_up(pe: &web_sys::PointerEvent) -> Option<PlatformInput> {
     use ui_events::pointer::{PointerButtonEvent, PointerEvent};
 
-    PlatformInput::Pointer(PointerEvent::Up(PointerButtonEvent {
-        button: map_button(pe.button()),
-        pointer: make_pointer_info(pe),
-        state: make_pointer_state(pe, 1),
-    }))
+    pointer_input(
+        PointerEvent::Up(PointerButtonEvent {
+            button: map_button(pe.button()),
+            pointer: make_pointer_info(pe),
+            state: make_pointer_state(pe, 1),
+        }),
+        (pe.time_stamp() * 1_000_000.0) as u64,
+    )
 }
 
-fn convert_pointer_move(pe: &web_sys::PointerEvent) -> PlatformInput {
+fn convert_pointer_move(pe: &web_sys::PointerEvent) -> Option<PlatformInput> {
     use ui_events::pointer::{PointerEvent, PointerUpdate};
 
-    PlatformInput::Pointer(PointerEvent::Move(PointerUpdate {
-        pointer: make_pointer_info(pe),
-        current: make_pointer_state(pe, 0),
-        coalesced: Vec::new(),
-        predicted: Vec::new(),
-    }))
+    pointer_input(
+        PointerEvent::Move(PointerUpdate {
+            pointer: make_pointer_info(pe),
+            current: make_pointer_state(pe, 0),
+            coalesced: Vec::new(),
+            predicted: Vec::new(),
+        }),
+        (pe.time_stamp() * 1_000_000.0) as u64,
+    )
 }
 
 /// Convert a DOM `WheelEvent` to a W3C `PointerEvent::Scroll`.
@@ -489,7 +513,7 @@ fn convert_pointer_move(pe: &web_sys::PointerEvent) -> PlatformInput {
 fn convert_wheel_event(
     we: &web_sys::WheelEvent,
     canvas: &web_sys::HtmlCanvasElement,
-) -> PlatformInput {
+) -> Option<PlatformInput> {
     use ui_events::pointer::{
         PointerEvent, PointerInfo, PointerOrientation, PointerScrollEvent, PointerState,
         PointerType,
@@ -499,26 +523,29 @@ fn convert_wheel_event(
 
     let modifiers = extract_modifiers_from_mouse(we);
 
-    PlatformInput::Pointer(PointerEvent::Scroll(PointerScrollEvent {
-        pointer: PointerInfo {
-            pointer_id: None,
-            persistent_device_id: None,
-            pointer_type: PointerType::Mouse,
-        },
-        delta,
-        state: PointerState {
-            time: (we.time_stamp() * 1_000_000.0) as u64,
-            position: wheel_position(we, canvas),
-            buttons: buttons_from_mask(we.buttons()),
-            modifiers,
-            count: 0,
-            contact_geometry: dpi::PhysicalSize::new(1.0, 1.0),
-            orientation: PointerOrientation::default(),
-            pressure: 0.0,
-            tangential_pressure: 0.0,
-            scale_factor: web_sys::window().map_or(1.0, |w| w.device_pixel_ratio()),
-        },
-    }))
+    pointer_input(
+        PointerEvent::Scroll(PointerScrollEvent {
+            pointer: PointerInfo {
+                pointer_id: None,
+                persistent_device_id: None,
+                pointer_type: PointerType::Mouse,
+            },
+            delta,
+            state: PointerState {
+                time: (we.time_stamp() * 1_000_000.0) as u64,
+                position: wheel_position(we, canvas),
+                buttons: buttons_from_mask(we.buttons()),
+                modifiers,
+                count: 0,
+                contact_geometry: dpi::PhysicalSize::new(1.0, 1.0),
+                orientation: PointerOrientation::default(),
+                pressure: 0.0,
+                tangential_pressure: 0.0,
+                scale_factor: web_sys::window().map_or(1.0, |w| w.device_pixel_ratio()),
+            },
+        }),
+        (we.time_stamp() * 1_000_000.0) as u64,
+    )
 }
 
 fn convert_keyboard_event(
@@ -550,18 +577,21 @@ fn convert_keyboard_event(
         _ => keyboard_types::Location::Standard,
     };
 
-    PlatformInput::Keyboard(ui_events::keyboard::KeyboardEvent {
-        state,
-        key,
-        code: ke
-            .code()
-            .parse()
-            .unwrap_or(keyboard_types::Code::Unidentified),
-        location,
-        modifiers,
-        repeat: ke.repeat(),
-        is_composing: ke.is_composing(),
-    })
+    keyboard_input(
+        ui_events::keyboard::KeyboardEvent {
+            state,
+            key,
+            code: ke
+                .code()
+                .parse()
+                .unwrap_or(keyboard_types::Code::Unidentified),
+            location,
+            modifiers,
+            repeat: ke.repeat(),
+            is_composing: ke.is_composing(),
+        },
+        (ke.time_stamp() * 1_000_000.0) as u64,
+    )
 }
 
 // ==================== Helpers ====================
