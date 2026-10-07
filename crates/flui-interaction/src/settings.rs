@@ -8,21 +8,21 @@
 //!
 //! ```rust,ignore
 //! use flui_interaction::settings::GestureSettings;
-//! use ui_events::pointer::PointerType;
+//! use flui_platform_api::pointer::PointerKind;
 //!
 //! // Get settings for touch input
-//! let touch_settings = GestureSettings::for_device(PointerType::Touch);
+//! let touch_settings = GestureSettings::for_device(PointerKind::Touch);
 //! assert_eq!(touch_settings.touch_slop(), 18.0);
 //!
 //! // Get settings for mouse input (more precise)
-//! let mouse_settings = GestureSettings::for_device(PointerType::Mouse);
+//! let mouse_settings = GestureSettings::for_device(PointerKind::Mouse);
 //! assert_eq!(mouse_settings.touch_slop(), 1.0);
 //! ```
 
 use std::time::Duration;
 
 use flui_platform_api::TargetPlatform;
-use ui_events::pointer::PointerType;
+use flui_platform_api::pointer::PointerKind;
 
 /// Default touch slop for touch devices (18 logical pixels).
 ///
@@ -414,15 +414,15 @@ impl GestureSettings {
     ///
     /// ```rust,ignore
     /// use flui_interaction::settings::GestureSettings;
-    /// use ui_events::pointer::PointerType;
+    /// use flui_platform_api::pointer::PointerKind;
     ///
-    /// let settings = GestureSettings::for_device(PointerType::Touch);
+    /// let settings = GestureSettings::for_device(PointerKind::Touch);
     /// ```
-    pub fn for_device(device_kind: PointerType) -> Self {
+    pub fn for_device(device_kind: PointerKind) -> Self {
         match device_kind {
-            PointerType::Mouse => Self::mouse_defaults(),
-            PointerType::Pen => Self::pen_defaults(),
-            // Touch, and any unknown device type, use touch defaults.
+            PointerKind::Mouse => Self::mouse_defaults(),
+            PointerKind::Pen { .. } => Self::pen_defaults(),
+            // Touch, trackpad gestures and unknown kinds use touch defaults.
             _ => Self::touch_defaults(),
         }
     }
@@ -446,9 +446,9 @@ impl GestureSettings {
     /// The hit slop for `kind` — how far a pointer of that kind may drift
     /// before a gesture is rejected.
     ///
-    /// [`PointerType::Mouse`] is precise, so it gets a fixed small constant
-    /// that no profile customises. Every other kind — here `Pen`, `Touch`,
-    /// and `Unknown` — resolves through this settings object's touch tier.
+    /// [`PointerKind::Mouse`] is precise, so it gets a fixed small constant
+    /// that no profile customises. Every other kind — `Pen` (tip or eraser),
+    /// `Touch`, `Trackpad` and `Unknown` — resolves through this settings object's touch tier.
     /// **A pen is not precise under this rule**: that is deliberate (a
     /// stylus gets the touch tier), not an omission.
     ///
@@ -462,9 +462,9 @@ impl GestureSettings {
     /// shipped platform.
     #[inline]
     #[must_use]
-    pub fn hit_slop(&self, kind: PointerType) -> f64 {
+    pub fn hit_slop(&self, kind: PointerKind) -> f64 {
         match kind {
-            PointerType::Mouse => DEFAULT_MOUSE_SLOP,
+            PointerKind::Mouse => DEFAULT_MOUSE_SLOP,
             _ => self.touch_slop(),
         }
     }
@@ -481,9 +481,9 @@ impl GestureSettings {
     /// wrong in production.
     #[inline]
     #[must_use]
-    pub fn pan_slop_for(&self, kind: PointerType) -> f64 {
+    pub fn pan_slop_for(&self, kind: PointerKind) -> f64 {
         match kind {
-            PointerType::Mouse => DEFAULT_MOUSE_PAN_SLOP,
+            PointerKind::Mouse => DEFAULT_MOUSE_PAN_SLOP,
             _ => self.pan_slop(),
         }
     }
@@ -528,9 +528,9 @@ impl GestureSettings {
     /// before it reaches 5%, and a small pinch crosses the ratio tier while
     /// barely moving.
     #[inline]
-    pub fn span_slop_for(&self, kind: PointerType) -> f64 {
+    pub fn span_slop_for(&self, kind: PointerKind) -> f64 {
         match kind {
-            PointerType::Mouse => DEFAULT_MOUSE_SPAN_SLOP,
+            PointerKind::Mouse => DEFAULT_MOUSE_SPAN_SLOP,
             _ => DEFAULT_SPAN_SLOP,
         }
     }
