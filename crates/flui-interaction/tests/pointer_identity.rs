@@ -241,7 +241,7 @@ fn metadata_boundary_failure_preserves_the_newer_delivery_debt() {
             binding.handle_pointer_event_with_result(&newer, &HitTestResult::new());
         })).expect_err("crossing metadata delivers the earlier packet");
         assert_eq!(failure.downcast_ref::<&str>(), Some(&"older metadata packet first failure"));
-        assert!(binding.has_pending_moves(), "newer accepted packet survives first callback failure");
+        assert!(binding.has_pending_motion(), "newer accepted packet survives first callback failure");
         binding.flush_pending_moves();
         let finished = up(changed, 40);
         binding.handle_pointer_event_with_result(&finished, &HitTestResult::new());
