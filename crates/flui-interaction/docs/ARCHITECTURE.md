@@ -71,7 +71,15 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   `ArenaMembership` independently for each pointer.
   `public_recognizer_extension_contracts` pins overlapping admission, settings
   freezing, cancellation of every owner, silent Drop and later recovery.
-- **Pointer event types are W3C `ui-events`, not a local re-implementation.** Pointer events are `ui_events::pointer::*` (W3C-compliant), with a `DeviceId = i32` shim at the `InputEvent` enum layer. This keeps the crate aligned with the platform layer's event types and follows the workspace preference for a mature crate over a hand-rolled one.
+- **One owned input vocabulary (ADR-0143).** Platform dispatch, interaction,
+  runtime replay and widget callbacks share `flui-platform-api`'s pointer and
+  keyboard types. Pointer and hardware IDs remain distinct; absent device or
+  sensor metadata is not fabricated. Localized measured and predicted sample
+  families preserve their source metadata. Raw input borrows this same source
+  instead of flattening it into another enum. `pointer_source_contracts` pins
+  raw source preservation, reentry, device-only delivery and identity fallback;
+  the mounted `pointer_delivery_preserves_source_and_sample_families` and
+  `scroll_claim_preserves_owned_source_units_and_phase` rows pin the widget edge.
 - **`TapButton` is a typed enum, not integer button constants.** `TapButton` (`src/recognizers/tap.rs`) maps pointer buttons explicitly through `from_pointer_button`, so the type system enforces the choice. It is `#[non_exhaustive]` so a future fourth button slot can be added without breaking downstream.
 - **Weak arena membership.** The inline-four member list stores weak identities,
   not lifetime ownership. Dead members withdraw; queued verdicts recheck

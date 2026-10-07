@@ -7,8 +7,8 @@ event.
 
 A handler is invoked with a `PointerDispatch`, not a bare event: `local` is the
 event rewritten into that entry's own space, `global` is the platform's own
-value passed through untouched. FLUI's pointer events are `ui_events`
-types with room for exactly one position, so the pair travels beside the event.
+value passed through untouched. Both use the owned `flui-platform-api` pointer
+vocabulary, so the pair travels beside the event.
 Both halves borrow values the dispatch already owns, so carrying the second one
 costs no clone.
 
@@ -53,15 +53,29 @@ Down admission filters do not gate a previously admitted contact's terminal tail
 Per-target panics are isolated: later targets still receive the event, cleanup
 runs, then the first panic is resumed by the dispatch owner.
 
-Localization rewrites the event's own position only. For a `Move`, the
-`coalesced` and `predicted` samples are copied unchanged and stay in global
-coordinates (`transform_pointer_event` in `routing/hit_test.rs`).
+Localization rewrites the current position and every coalesced and predicted
+sample into the same local coordinate space. Times, pointer/device identity,
+kind, primary role, buttons, modifiers and sensor readings are preserved.
+The global event stays unchanged. A computed non-finite local position refuses
+that transformed event (`transform_pointer_event` in `routing/hit_test.rs`).
+The mounted `pointer_delivery_preserves_source_and_sample_families` row checks
+both coordinate spaces and distinct sample families.
 
 ## Scroll and pan-zoom dispatch
 
 `EventPropagation` belongs to the two claiming walks: the pointer-signal /
 scroll resolver and the trackpad pan-zoom walk. A handler there may return
 `Stop` to claim the event. Ordinary pointer delivery does not use it.
+
+Scroll delivery carries `ScrollEvent` with its checked delta unit, precision,
+phase and source metadata. Localization changes the focal position, not the
+delta's unit. Page deltas resolve against the consuming viewport's actual
+dimension. Line deltas currently use the widget's 53-logical-pixel fallback;
+system-derived line settings await the platform preferences producer.
+`scroll_claim_preserves_owned_source_units_and_phase` and
+`page_scroll_resolves_against_the_actual_viewport` pin the consumer contract.
+Trackpad delivery uses cumulative `PanZoomEvent` transforms rather than a
+second interaction-only pan-zoom vocabulary.
 
 ## Mouse enter, exit and cursor
 

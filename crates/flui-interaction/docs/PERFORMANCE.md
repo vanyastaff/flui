@@ -18,9 +18,13 @@ Microbenchmark timings describe the measured fixtures, not a frame-time guarante
 `InputPredictor` is not part of this path: the binding never calls it. It is a
 standalone helper for callers that want extrapolated positions.
 
-Cached-route Move delivery performs no heap allocation after setup; the
+The measured cached-route Move fixture without sample history performs no heap
+allocation after setup; the
 counting-allocator test `resolved_route_move_invocation_allocates_no_heap_after_setup`
 (`tests/pointer_route_hot_path.rs`) asserts it.
+Localizing coalesced or predicted histories may allocate their transformed
+sample collections; that fixture does not establish an allocation bound for
+history-bearing events.
 
 ## Bounds
 
@@ -84,7 +88,9 @@ Measured on 2026-10-07, on the same Windows x86_64 MSVC host with Rust 1.99.0,
 Criterion's optimized bench profile, six build jobs, 20 samples, one second of
 warmup and two seconds of measurement. The live-contact baseline was saved at
 `6f60614b8`; measurements after the recognizer migration use `6dd428949`.
-The existing benchmark names and timed loops are preserved. Tap fixture setup,
+These measurements precede the owned pointer-wire migration and measure the
+recognizer ownership change only. The existing benchmark names and timed loops
+are preserved. Tap fixture setup,
 cancellation and destruction are outside the measured interval; callback
 witnesses assert that the sequence actually completes.
 
