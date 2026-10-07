@@ -419,6 +419,7 @@ fn reentrant_owner_turns_preserve_global_fifo_across_realms() {
 /// one) — both windows this helper and its caller open come from the
 /// SAME headless platform instance, so their native window identities
 /// cannot collide once both are registered in the one `WindowRegistry`.
+#[cfg(not(target_os = "ios"))]
 fn install_realm_a_through_a_real_owner_platform() -> (RealmDispatcher, OwnerHostClearGuard) {
     use std::{cell::Cell, rc::Rc};
 
