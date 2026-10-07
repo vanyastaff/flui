@@ -139,3 +139,31 @@ pub(crate) fn page_scroll_resolves_against_the_actual_viewport() {
         );
     }
 }
+
+pub(crate) fn viewer_page_zoom_resolves_against_the_actual_viewport() {
+    use flui_foundation::Color;
+    use flui_widgets::{ColoredBox, InteractiveViewer, TransformationController};
+
+    for height in [100.0, 275.0] {
+        let controller = TransformationController::new();
+        let laid = lay_out(
+            InteractiveViewer::new()
+                .controller(controller.clone())
+                .child(ColoredBox::new(Color::rgb(10, 20, 30))),
+            tight(100.0, height),
+        );
+        let scroll = ScrollEvent::new(
+            mouse(),
+            EventTime::from_nanos(60),
+            position(50.0, height / 2.0),
+            ScrollDelta::try_new(ScrollUnit::Pages, 0.0, -0.5).expect("finite pages"),
+        );
+        laid.dispatch_pointer_event(&PointerEvent::Scroll(scroll));
+        let scale = controller.value().to_col_major_array()[0];
+        let expected = (height * 0.5 / 200.0_f64).exp();
+        assert!(
+            (scale - expected).abs() < 1e-12,
+            "half page in {height}px viewer"
+        );
+    }
+}
