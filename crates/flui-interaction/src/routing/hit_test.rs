@@ -10,11 +10,14 @@
 //! serve.
 
 pub use flui_foundation::RenderId;
-use flui_foundation::geometry::{Matrix4, Offset};
+use flui_foundation::geometry::{Matrix4, Offset, Point};
+use flui_platform_api::pointer::{
+    ButtonChange, PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerMove, PointerPosition,
+    PointerSample, ScrollDelta, ScrollEvent,
+};
 
-use crate::pan_zoom::PointerPanZoomEvent;
 use crate::{
-    events::{CursorIcon, PointerEvent, ScrollEventData},
+    events::{CursorIcon, PointerEvent},
     routing::MouseTrackerAnnotation,
     routing::interaction_lane::{
         PanZoomTarget, PointerTarget, RoutePanic, ScrollTarget, active_dispatch_handle,
@@ -642,7 +645,7 @@ impl HitTestResult {
     }
 
     /// Dispatches a scroll event to all entries.
-    pub fn dispatch_scroll(&self, event: &ScrollEventData) -> bool {
+    pub fn dispatch_scroll(&self, event: &ScrollEvent) -> bool {
         let handle = match active_dispatch_handle() {
             Ok(handle) => handle,
             Err(error) => {
@@ -665,7 +668,10 @@ impl HitTestResult {
                     // still skip delivery rather than report a bogus point
                     // (unchanged pre-existing behavior).
                     if transform.is_invertible() {
-                        transform_scroll_event(event, transform)
+                        let Some(local) = transform_scroll_event(event, transform) else {
+                            continue;
+                        };
+                        local
                     } else {
                         continue;
                     }
@@ -708,7 +714,7 @@ impl HitTestResult {
     /// codebase already has.
     ///
     /// Returns `true` when a target claimed the event.
-    pub fn dispatch_pan_zoom(&self, event: &PointerPanZoomEvent) -> bool {
+    pub fn dispatch_pan_zoom(&self, event: &PanZoomEvent) -> bool {
         let handle = match active_dispatch_handle() {
             Ok(handle) => handle,
             Err(error) => {
@@ -729,7 +735,10 @@ impl HitTestResult {
                     // point that is not on screen, exactly as the scroll walk
                     // does.
                     if transform.is_invertible() {
-                        transform_pan_zoom_event(event, transform)
+                        let Some(local) = transform_pan_zoom_event(event, transform) else {
+                            continue;
+                        };
+                        local
                     } else {
                         continue;
                     }
@@ -806,190 +815,84 @@ impl Drop for TransformGuard<'_> {
 // HELPER FUNCTIONS
 // ============================================================================
 
-#[expect(
-    clippy::cast_possible_truncation,
-    reason = "line and page deltas use the upstream f32 representation"
-)]
-pub(crate) fn transform_pointer_event(event: &PointerEvent, transform: &Matrix4) -> PointerEvent {
-    use ui_events::pointer::{PointerButtonEvent, PointerScrollEvent, PointerUpdate};
-
-    let transform_position = |pos: dpi::PhysicalPosition<f64>| -> dpi::PhysicalPosition<f64> {
-        let (x, y) = transform.transform_point(pos.x, pos.y);
-        dpi::PhysicalPosition::new(x, y)
-    };
-
-    match event {
-        PointerEvent::Down(e) => {
-            let mut new_state = e.state.clone();
-            new_state.position = transform_position(e.state.position);
-            PointerEvent::Down(PointerButtonEvent {
-                button: e.button,
-                pointer: e.pointer,
-                state: new_state,
-            })
-        }
-        PointerEvent::Up(e) => {
-            let mut new_state = e.state.clone();
-            new_state.position = transform_position(e.state.position);
-            PointerEvent::Up(PointerButtonEvent {
-                button: e.button,
-                pointer: e.pointer,
-                state: new_state,
-            })
-        }
-        PointerEvent::Move(e) => {
-            let mut new_current = e.current.clone();
-            new_current.position = transform_position(e.current.position);
-            PointerEvent::Move(PointerUpdate {
-                pointer: e.pointer,
-                current: new_current,
-                coalesced: e
-                    .coalesced
-                    .iter()
-                    .map(|sample| {
-                        let mut sample = sample.clone();
-                        sample.position = transform_position(sample.position);
-                        sample
-                    })
-                    .collect(),
-                predicted: e
-                    .predicted
-                    .iter()
-                    .map(|sample| {
-                        let mut sample = sample.clone();
-                        sample.position = transform_position(sample.position);
-                        sample
-                    })
-                    .collect(),
-            })
-        }
-        PointerEvent::Scroll(e) => {
-            let mut new_state = e.state.clone();
-            new_state.position = transform_position(e.state.position);
-            PointerEvent::Scroll(PointerScrollEvent {
-                pointer: e.pointer,
-                state: new_state,
-                delta: match e.delta {
-                    ui_events::ScrollDelta::PixelDelta(delta) => {
-                        let local = transform_delta(transform, Offset::new(delta.x, delta.y));
-                        ui_events::ScrollDelta::PixelDelta(dpi::PhysicalPosition::new(
-                            local.dx, local.dy,
-                        ))
-                    }
-                    ui_events::ScrollDelta::LineDelta(x, y) => {
-                        let local =
-                            transform_delta(transform, Offset::new(f64::from(x), f64::from(y)));
-                        ui_events::ScrollDelta::LineDelta(local.dx as f32, local.dy as f32)
-                    }
-                    ui_events::ScrollDelta::PageDelta(x, y) => {
-                        let local =
-                            transform_delta(transform, Offset::new(f64::from(x), f64::from(y)));
-                        ui_events::ScrollDelta::PageDelta(local.dx as f32, local.dy as f32)
-                    }
-                },
-            })
-        }
-        PointerEvent::Gesture(e) => {
-            // A gesture's focal point localizes exactly like a scroll's
-            // position — without this, a pinch consumer under any offset or
-            // transform scales around a window-global point and the content
-            // jumps instead of staying under the fingers.
-            let mut new_state = e.state.clone();
-            new_state.position = transform_position(e.state.position);
-            PointerEvent::Gesture(ui_events::pointer::PointerGestureEvent {
-                pointer: e.pointer,
-                gesture: e.gesture.clone(),
-                state: new_state,
-            })
-        }
-        // Cancel, Enter, Leave don't have position - just clone
-        other => other.clone(),
-    }
-}
-
-/// Re-express a pan-zoom event in an entry's local space.
-///
-/// Each field is localized differently:
-///
-/// - `position` and `pan` are **positions**: transformed as points.
-/// - `pan_delta` is a **delta anchored at `pan`**: the delta's start and end
-///   points are transformed separately and subtracted, rather than mapping
-///   the offset directly — mathematically equivalent for an affine matrix,
-///   but it also stays correct under perspective and carries less precision
-///   error.
-/// - `scale` and `rotation` are dimensionless and pass through untouched.
-///
-/// Localizing `pan`/`pan_delta` matters even though today's W3C adapter
-/// synthesizes both as zero (`convert_gesture` has no upstream pan field to
-/// read): `PointerPanZoomEvent` is public and `dispatch_pan_zoom` accepts a
-/// fully populated one, so a richer producer must not silently observe
-/// global-space offsets inside a scaled or rotated subtree.
-fn transform_pan_zoom_event(
-    event: &PointerPanZoomEvent,
+pub(crate) fn transform_pointer_event(
+    event: &PointerEvent,
     transform: &Matrix4,
-) -> PointerPanZoomEvent {
-    let localize = |point: Offset<f64>| {
-        let (x, y) = transform.transform_point(point.dx, point.dy);
-        Offset::new(x, y)
-    };
-    match *event {
-        PointerPanZoomEvent::Start {
-            pointer_id,
-            position,
-            timestamp_nanos,
-            device_kind,
-        } => PointerPanZoomEvent::Start {
-            pointer_id,
-            position: localize(position),
-            timestamp_nanos,
-            device_kind,
-        },
-        PointerPanZoomEvent::Update {
-            pointer_id,
-            position,
-            pan,
-            pan_delta,
-            scale,
-            rotation,
-            timestamp_nanos,
-            device_kind,
-        } => {
-            let local_pan = localize(pan);
-            PointerPanZoomEvent::Update {
-                pointer_id,
-                position: localize(position),
-                pan: local_pan,
-                // `transformDeltaViaPositions`: end minus start, both mapped
-                // as positions, with `pan` as the delta's end point.
-                pan_delta: local_pan - localize(pan - pan_delta),
-                scale,
-                rotation,
-                timestamp_nanos,
-                device_kind,
+) -> Option<PointerEvent> {
+    let mut local = event.clone();
+    match &mut local {
+        PointerEvent::Down(event) => event.sample = transform_sample(event.sample, transform)?,
+        PointerEvent::Up(event) => event.sample = transform_sample(event.sample, transform)?,
+        PointerEvent::ButtonChange(ButtonChange::Pressed(event)) => {
+            event.sample = transform_sample(event.sample, transform)?;
+        }
+        PointerEvent::ButtonChange(ButtonChange::Released(event)) => {
+            event.sample = transform_sample(event.sample, transform)?;
+        }
+        PointerEvent::Move(event) => {
+            let current = transform_sample(*event.current(), transform)?;
+            let coalesced = event
+                .coalesced()
+                .iter()
+                .copied()
+                .map(|sample| transform_sample(sample, transform))
+                .collect::<Option<Vec<_>>>()?;
+            let predicted = event
+                .predicted()
+                .iter()
+                .copied()
+                .map(|sample| transform_sample(sample, transform))
+                .collect::<Option<Vec<_>>>()?;
+            *event = PointerMove::new(event.pointer, event.buttons, current)
+                .with_modifiers(event.modifiers)
+                .with_coalesced(coalesced)
+                .with_predicted(predicted);
+        }
+        PointerEvent::Scroll(event) => *event = transform_scroll_event(event, transform)?,
+        PointerEvent::PanZoom(event) => *event = transform_pan_zoom_event(event, transform)?,
+        PointerEvent::Enter(event)
+        | PointerEvent::Leave(event)
+        | PointerEvent::ScrollInertiaCancel(event) => {
+            if let Some(position) = event.position {
+                event.position = Some(transform_position(position, transform)?);
             }
         }
-        PointerPanZoomEvent::End {
-            pointer_id,
-            position,
-            timestamp_nanos,
-            device_kind,
-        } => PointerPanZoomEvent::End {
-            pointer_id,
-            position: localize(position),
-            timestamp_nanos,
-            device_kind,
-        },
+        _ => {}
     }
+    Some(local)
 }
 
-fn transform_scroll_event(event: &ScrollEventData, transform: &Matrix4) -> ScrollEventData {
-    let (x, y) = transform.transform_point(event.position.dx, event.position.dy);
+/// Refuse a local coordinate that cannot be represented by the checked vocabulary.
+fn transform_position(position: PointerPosition, transform: &Matrix4) -> Option<PointerPosition> {
+    let point = position.get();
+    let (x, y) = transform.transform_point(point.x, point.y);
+    PointerPosition::try_new(Point::new(x, y)).ok()
+}
 
-    ScrollEventData {
-        position: Offset::new(x, y),
-        delta: transform_delta(transform, event.delta),
-        modifiers: event.modifiers,
+fn transform_sample(mut sample: PointerSample, transform: &Matrix4) -> Option<PointerSample> {
+    sample.position = transform_position(sample.position, transform)?;
+    Some(sample)
+}
+
+/// Localize the focal point and cumulative pan without changing dimensionless scale or rotation.
+fn transform_pan_zoom_event(event: &PanZoomEvent, transform: &Matrix4) -> Option<PanZoomEvent> {
+    let mut local = *event;
+    local.position = transform_position(event.position, transform)?;
+    if let PanZoomPhase::Update(value) = event.phase {
+        let pan = transform_delta(transform, value.pan());
+        local.phase = PanZoomPhase::Update(
+            PanZoomTransform::try_new(pan, value.scale(), value.rotation()).ok()?,
+        );
     }
+    Some(local)
+}
+
+fn transform_scroll_event(event: &ScrollEvent, transform: &Matrix4) -> Option<ScrollEvent> {
+    let mut local = *event;
+    local.position = transform_position(event.position, transform)?;
+    let delta = transform_delta(transform, Offset::new(event.delta.x(), event.delta.y()));
+    local.delta = ScrollDelta::try_new(event.delta.unit(), delta.dx, delta.dy).ok()?;
+    Some(local)
 }
 
 fn transform_delta(transform: &Matrix4, delta: Offset<f64>) -> Offset<f64> {

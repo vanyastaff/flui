@@ -113,69 +113,6 @@ impl PointerEventExt for PointerEvent {
     }
 }
 
-// ============================================================================
-// Scroll event data (compatibility with existing code)
-// ============================================================================
-
-/// Scroll event data with position and delta.
-///
-/// This provides a simpler interface than [`PointerScrollEvent`] for
-/// common scroll handling scenarios.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ScrollEventData {
-    /// Position where the scroll occurred.
-    pub position: Offset<f64>,
-    /// Scroll delta in pixels (converted from any scroll unit).
-    pub delta: Offset<f64>,
-    /// Keyboard modifiers active during scroll.
-    pub modifiers: Modifiers,
-}
-
-impl ScrollEventData {
-    /// Creates new scroll event data.
-    pub fn new(position: Offset<f64>, delta: Offset<f64>, modifiers: Modifiers) -> Self {
-        Self {
-            position,
-            delta,
-            modifiers,
-        }
-    }
-
-    /// Converts a ScrollDelta to a logical-pixel offset.
-    ///
-    /// This is the single owner of the line-height and page-height factors
-    /// in the scroll delta contract (see the module docs): backends deliver
-    /// normalized signs and units, and only this function turns lines and
-    /// pages into pixels.
-    pub fn delta_to_offset(delta: &ScrollDelta) -> Offset<f64> {
-        match delta {
-            ScrollDelta::PixelDelta(pos) => Offset::new(pos.x, pos.y),
-            ScrollDelta::LineDelta(x, y) => {
-                // One wheel line = 53 logical pixels — the factor commonly
-                // applied to GTK scroll units, so wheel speed and
-                // `InteractiveViewer`'s scroll-to-scale math feel the same
-                // as other Linux UI toolkits tick for tick.
-                Offset::new(f64::from(*x) * 53.0, f64::from(*y) * 53.0)
-            }
-            ScrollDelta::PageDelta(x, y) => {
-                // Approximate: 1 page ≈ 400 pixels
-                Offset::new(f64::from(*x) * 400.0, f64::from(*y) * 400.0)
-            }
-        }
-    }
-}
-
-impl From<&PointerScrollEvent> for ScrollEventData {
-    fn from(event: &PointerScrollEvent) -> Self {
-        let pos = event.state.position;
-        Self {
-            position: Offset::new(pos.x, pos.y),
-            delta: Self::delta_to_offset(&event.delta),
-            modifiers: event.state.modifiers,
-        }
-    }
-}
-
 #[cfg(any(test, feature = "testing"))]
 fn test_pointer_id() -> PointerId {
     PointerId::new(core::num::NonZeroU64::MIN)
@@ -330,5 +267,55 @@ pub fn make_cancel_event_for_id(id: PointerId, kind: PointerKind) -> PointerEven
         PointerInfo::new(id, kind).with_role(PointerRole::Primary),
         flui_platform_api::EventTime::from_nanos(0),
         CancelReason::Platform,
+    ))
+}
+
+/// Construct a synthetic one-update pinch with checked position and cumulative scale.
+#[cfg(any(test, feature = "testing"))]
+pub fn make_pinch_gesture_event(
+    position: Offset<f64>,
+    fraction: f64,
+) -> Result<PointerEvent, InputValueError> {
+    use flui_platform_api::{
+        EventTime,
+        pointer::{PanZoomPhase, PanZoomTransform},
+    };
+    let pointer = PointerInfo::new(
+        PointerId::try_from(u64::MAX).expect("BUG: nonzero synthetic gesture identity"),
+        PointerKind::Trackpad,
+    );
+    let position = test_sample(position)?.position;
+    let value = PanZoomTransform::try_new(Offset::ZERO, 1.0 + fraction, 0.0)?;
+    Ok(PointerEvent::PanZoom(PanZoomEvent::new(
+        pointer,
+        EventTime::from_nanos(0),
+        position,
+        PanZoomPhase::Update(value),
+    )))
+}
+
+/// Construct a checked synthetic pixel scroll.
+#[cfg(any(test, feature = "testing"))]
+pub fn make_scroll_event(
+    position: Offset<f64>,
+    delta: Offset<f64>,
+) -> Result<PointerEvent, InputValueError> {
+    make_scroll_event_with_modifiers(position, delta, Modifiers::NONE)
+}
+
+/// Construct a checked synthetic pixel scroll with explicit modifiers.
+#[cfg(any(test, feature = "testing"))]
+pub fn make_scroll_event_with_modifiers(
+    position: Offset<f64>,
+    delta: Offset<f64>,
+    modifiers: Modifiers,
+) -> Result<PointerEvent, InputValueError> {
+    use flui_platform_api::{EventTime, pointer::ScrollUnit};
+    let pointer = PointerInfo::new(test_pointer_id(), PointerKind::Mouse);
+    let position = test_sample(position)?.position;
+    let delta = ScrollDelta::try_new(ScrollUnit::Pixels, delta.dx, delta.dy)?;
+    Ok(PointerEvent::Scroll(
+        ScrollEvent::new(pointer, EventTime::from_nanos(0), position, delta)
+            .with_modifiers(modifiers),
     ))
 }
