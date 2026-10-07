@@ -152,6 +152,14 @@ mod message_clock_contract {
                 [101, 102],
                 [u64::MAX, u64::MAX],
             ),
+            (
+                "native reading ahead of coarse uptime",
+                100,
+                1_000_000,
+                200,
+                [200, 201],
+                [101_000_000, 102_000_000],
+            ),
         ] {
             let clock = MessageClock::anchored(anchor_tick, anchor_ns);
             assert_eq!(
@@ -333,6 +341,7 @@ pub(super) fn native_pointer_input(
     let mut samples = Vec::new();
     for reading in readings.into_iter().rev() {
         let time = EventTime::from_nanos(clock.rebase_at(reading.info().dwTime, now));
+        eprintln!("WIN32_POINTER_CLOCK raw={raw} tick={} now={now} age={} anchor={} epoch={} stamp={}", reading.info().dwTime, (now as u32).wrapping_sub(reading.info().dwTime), clock.uptime_ms, clock.epoch_ns, time.as_nanos());
         let Some(decoded) = decode_native_reading(reading, offset, scale, time) else {
             return registry.borrow_mut().cancel(raw, cancel_time, CancelReason::InvalidInput);
         };
