@@ -1,8 +1,9 @@
 # ADR-0135: Win32 text services hold the text store on the owner thread
 
-- **Status:** Accepted (2026-10-06). §1, §2 and the owner's queue in §4 are implemented; the
-  Win32 window does not offer its host yet (§3), so `HostWindow::text_store_host` answers `None`
-  on every production backend (a headless window offers one only when a test asks).
+- **Status:** Accepted (2026-10-06). §1–§3 and the owner's queue in §4 are implemented: every
+  Win32 window activates its text services as it is created and offers them as its host
+  (`WindowsWindow::text_store_host`); the other production backends answer `None` (a headless
+  window offers one only when a test asks).
 - **Date:** 2026-10-06
 - **Implements part of:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) §4 (owner-thread
   storage, step 1; the owner-proof shape of step 2, for one capability)
@@ -56,9 +57,14 @@ composition must still end somewhere.
 3. **Win32 keeps the text services in the window.** The `ITfThreadMgr`, the empty document and
    the focused field's document (one state: nothing, a field's document, or shut down) live in
    the window's `WindowContext`, on the owner thread, with
-   no `static` or `thread_local!`; no `windows::*` type leaves `flui-platform`. The window offers
-   the host once `WindowContext` holds them; until then it answers `None` and the presentation
-   uses the push path it had.
+   no `static` or `thread_local!`; no `windows::*` type leaves `flui-platform`. They are
+   activated as the window is created, once its `WindowContext` is installed, and the window
+   offers them as its host from then on; a window whose activation failed answers `None`, and
+   its text input takes the `WM_CHAR` path. `WM_DESTROY` deactivates them after the window's
+   close callbacks (the presentation's close, which unfocused its field) and before the context
+   retires; inside a TSF call into a store the deactivation waits for that call to return. The
+   teardown's application-code failures are logged, contained, since the window procedure must
+   not unwind. A host the presentation still holds then answers `Unavailable`.
 4. **The presentation's owner orders host calls and never nests them.**
    `TextInputOwner::new(TextInputBackend)` takes `Push(Arc<dyn PlatformTextInput>)`,
    `Pull(Rc<dyn TextStoreHost>)` or `Unsupported`, held in one `RefCell`; the presentation picks
@@ -121,9 +127,9 @@ composition must still end somewhere.
 - A platform-level test makes a headless window pull-model with
   `HeadlessPlatform::with_text_store_host`, which is how the runner's
   `runner::presentation_window` is tested.
-- `TextInputOwner::complete_composition` and `TextInputHandle::complete_composition` have no
-  production caller yet: the runtime's pointer-down and close hooks and the field's blur, paste,
-  undo and unmount handling (ADR-0142 item 4) call them.
+- `TextInputHandle::complete_composition` is called by `EditableText` on blur, on a pointer-down
+  on the field and on a paste (ADR-0142 item 4). `TextInputOwner::complete_composition` has no
+  production caller yet: the runtime's pointer-down and close hooks call it.
 - When ADR-0082 §4 step 2 lands, `text_store_host` moves to the owner window and the token goes.
 
 ## Verification
@@ -157,10 +163,15 @@ composition must still end somewhere.
   reports its teardown's failure ahead of its in-place recovery's, a teardown whose `Pop`
   diagnostic panics after its observer retirement did raises the retirement's failure, and a
   protection change reaches TSF as a new context, ending a composition TSF holds in the old one
-  first (committing it in place when TSF refuses) (§4, §5).
+  first (committing it in place when TSF refuses) (§4, §5); a window destroyed inside a TSF
+  call shuts its text services down when that call returns (§3).
+- `flui-platform` `text_services::tests::a_window_offers_its_text_services_as_its_host`,
+  Windows only: a real `WindowsWindow` offers its own text services as its host, a focused store
+  gets a TSF document of the window, and after `WM_DESTROY` the host answers `Unavailable` (§3).
 - The Win32 text services' opt-in probe,
   `cargo test -p flui-platform --lib text_services -- --ignored --nocapture`, run 2026-10-06 with
   Microsoft IME ja-JP at 100 %: activation, `toukyou` → 東京, `TS_S_ASYNC` behind a shut gate,
   candidate placement with both negative controls, `TS_E_NOLAYOUT` retries, and `Committed` /
-  `Abandoned` with the gate open and shut (§3, §5, §6). The window wiring of §3 is verified when
-  it lands, with the Win32 unit tests ADR-0090 §3 lists.
+  `Abandoned` with the gate open and shut (§3, §5, §6). Run again 2026-10-06 at 100 % through
+  the host the window itself offers: the same results, and the host answers `Unavailable` after
+  the window's `WM_DESTROY` (§3).

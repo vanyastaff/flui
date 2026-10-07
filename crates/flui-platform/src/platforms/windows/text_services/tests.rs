@@ -81,6 +81,34 @@ fn a_queued_completion_commits_in_place_without_a_document(hwnd: HWND) {
     services.shutdown();
 }
 
+/// A window destroyed from inside a TSF call into a store (application code
+/// closing it from a grant) does not release the document under that call:
+/// the shutdown waits for the call to return, and a completion asked for
+/// meanwhile still commits its store in place.
+fn a_window_destroyed_inside_a_tsf_call_shuts_down_when_it_returns(hwnd: HWND) {
+    let services = TextServices::activate(hwnd).expect("TSF activates");
+    let store = composing_store();
+    services.focus_store(Some(erased(&store)));
+    services.enter();
+    TextServices::retire_with_window(Rc::clone(&services));
+    assert!(
+        matches!(*services.serving.borrow(), Serving::Field(_)),
+        "the document outlives the call it is under"
+    );
+    assert_eq!(
+        services.complete_composition(&erased(&store)),
+        Ok(CompositionEnd::Deferred)
+    );
+    services.leave();
+    assert!(services.is_shut_down(), "shut down once the call returned");
+    assert_eq!(
+        store.composition(),
+        None,
+        "the completion committed in place"
+    );
+    assert_eq!(store.text(), "abかな");
+}
+
 /// A store the host does not serve, queued focus changes included, is
 /// refused; so is any store once TSF has shut down.
 fn a_completion_reaches_only_the_focused_store(hwnd: HWND) {
@@ -655,6 +683,70 @@ fn the_document_status_follows_the_store_status() {
     }
 }
 
+/// A real window offers its own text services as its host, on its owner
+/// thread (ADR-0135 §3): the host serves a focused store through a TSF
+/// document of the window, and once the window is destroyed its
+/// `WM_DESTROY` has deactivated TSF, so the host the presentation still
+/// holds refuses every request.
+///
+/// Red-checks: have `text_store_host` answer `None` (no host is offered),
+/// or skip the deactivation in `WM_DESTROY` (the host still serves).
+#[test]
+fn a_window_offers_its_text_services_as_its_host() {
+    use crate::traits::{HostWindow as _, OwnerThreadToken};
+
+    let platform = super::super::WindowsPlatform::new().expect("platform");
+    let window = platform
+        .open_window(WindowOptions {
+            title: "flui window host".into(),
+            size: Size::new(200.0, 80.0),
+            visible: false,
+            ..Default::default()
+        })
+        .expect("window");
+    let win32 = window
+        .as_any()
+        .downcast_ref::<super::super::WindowsWindow>()
+        .expect("Win32 window");
+    let hwnd = win32.hwnd();
+    let host = win32
+        .text_store_host(OwnerThreadToken::new())
+        .expect("a real window offers its host");
+    let services = super::super::platform::with_window_context(hwnd, "test", |context| {
+        context.text_services.borrow().clone()
+    })
+    .flatten()
+    .expect("the window holds its text services");
+    assert!(
+        std::ptr::addr_eq(Rc::as_ptr(&host), Rc::as_ptr(&services)),
+        "the host is the window's own TSF connection"
+    );
+
+    let store = composing_store();
+    host.focus_store(Some(erased(&store)));
+    let document = associated_manager(&services);
+    assert!(
+        !same_object(&document, &services.empty),
+        "a focused store gets a TSF document of its own, associated with the window"
+    );
+    assert_eq!(
+        host.complete_composition(&erased(&store)),
+        Ok(CompositionEnd::Committed),
+        "TSF ends the composition it holds in the focused store (none here)"
+    );
+
+    window.close();
+    assert_eq!(
+        host.complete_composition(&erased(&store)),
+        Err(TextStoreHostError::Unavailable),
+        "the destroyed window's text services are shut down"
+    );
+    assert!(
+        matches!(*services.serving.borrow(), Serving::Shutdown),
+        "and its document released"
+    );
+}
+
 /// One row: its name, and the case run against the shared window.
 type Row = (&'static str, fn(HWND));
 
@@ -682,6 +774,10 @@ fn the_text_services_answer_a_completion_for_its_store() {
         (
             "no document",
             a_queued_completion_commits_in_place_without_a_document,
+        ),
+        (
+            "window destroyed inside a TSF call",
+            a_window_destroyed_inside_a_tsf_call_shuts_down_when_it_returns,
         ),
         (
             "focused store only",

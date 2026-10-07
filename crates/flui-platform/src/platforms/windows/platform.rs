@@ -47,6 +47,7 @@ use windows::{
 
 use super::{
     display::enumerate_displays,
+    text_services::TextServices,
     util::{WINDOW_CLASS_NAME, get_x_lparam, get_y_lparam, hiword, load_cursor_style},
     window::WindowsWindow,
 };
@@ -370,6 +371,12 @@ pub(super) struct WindowContext {
     /// path in `window_proc` uses this; the `WM_KEYDOWN` drain sees a whole
     /// burst at once and never needs cross-message state.
     pub pending_high_surrogate: std::cell::Cell<Option<u16>>,
+    /// The window's TSF connection and text-store host (ADR-0135 §3),
+    /// activated as the window is created, on its owner thread; `None` when
+    /// activation failed, and text input takes the `WM_CHAR` path.
+    /// Deactivated by `WM_DESTROY` after the close callbacks and before the
+    /// context retires ([`TextServices::retire_with_window`]).
+    pub text_services: RefCell<Option<Rc<TextServices>>>,
     /// Borrow ledger deferring this context's free past every live borrow
     /// on the owner thread — see [`ContextLedger`] for the reentrancy
     /// hazard (a framework callback closing the window from inside a
@@ -1078,6 +1085,18 @@ impl WindowsPlatform {
                         // native window is gone, releases the surface while
                         // it is still valid to destroy.
                         ctx.callbacks.clear();
+
+                        // Deactivate TSF for the window while the HWND is
+                        // still valid: after the close callbacks, which
+                        // closed the presentation and so unfocused its
+                        // field, and before the context retires (ADR-0135
+                        // §3). Taken out in a statement of its own: the
+                        // shutdown reaches application code, which must
+                        // find no borrow held.
+                        let services = ctx.text_services.borrow_mut().take();
+                        if let Some(services) = services {
+                            TextServices::retire_with_window(services);
+                        }
 
                         // Retire the context: clear the slot FIRST, so no
                         // new borrow can be minted (`with_window_context`

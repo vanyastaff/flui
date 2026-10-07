@@ -17,17 +17,6 @@ mod clipboard;
 mod display;
 mod events;
 mod platform;
-// Not yet attached to `WindowContext`: the window does not offer a
-// `TextStoreHost` yet (ADR-0135 §3 describes the wiring), so
-// `HostWindow::text_store_host` answers `None` and only the opt-in probe
-// drives this module.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "WindowContext does not hold the text services until the window offers its host"
-    )
-)]
 mod text_services;
 mod util;
 mod window;

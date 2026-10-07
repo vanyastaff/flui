@@ -364,10 +364,12 @@ impl WindowsWindow {
                     crate::shared::visibility::win32_initial_visibility(created_style),
                 ),
                 pending_high_surrogate: std::cell::Cell::new(None),
+                text_services: std::cell::RefCell::new(None),
                 ledger: std::cell::RefCell::new(crate::shared::hwnd_affinity::ContextLedger::new()),
             });
             let context_ptr = Box::into_raw(context);
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, context_ptr as isize);
+            Self::activate_text_services(hwnd);
 
             let window = Arc::new(Self {
                 hwnd,
@@ -398,6 +400,33 @@ impl WindowsWindow {
             }
 
             window
+        }
+    }
+
+    /// Activate TSF for the window just installed, on its owner thread, and
+    /// hold the connection in its context (ADR-0135 §3): from here on the
+    /// window offers its text-store host. TSF's calls read the window's
+    /// context (its scale), so it is installed first. A failure leaves the
+    /// window without a host, and text input takes the `WM_CHAR` path.
+    fn activate_text_services(hwnd: HWND) {
+        match super::text_services::TextServices::activate(hwnd) {
+            Ok(services) => {
+                let installed = super::platform::with_window_context(hwnd, "text_services", |c| {
+                    c.text_services.replace(Some(Rc::clone(&services)))
+                });
+                if installed.is_none() {
+                    // The window is already gone (destroyed by a message
+                    // the activation dispatched): deactivate at once.
+                    super::text_services::TextServices::retire_with_window(services);
+                }
+            }
+            Err(error) => {
+                tracing::warn!(
+                    ?hwnd,
+                    ?error,
+                    "TSF did not activate for this window; text input falls back to WM_CHAR"
+                );
+            }
         }
     }
 
@@ -812,15 +841,23 @@ impl crate::traits::HostWindow for WindowsWindow {
     /// HWND belongs to the thread that created it, and its text services
     /// live in its `WindowContext` on that thread. So the host is read
     /// through `with_window_context`, which refuses any other thread
-    /// (`shared::hwnd_affinity`), and a caller on one gets `None`. The
-    /// context does not hold the text services yet (ADR-0135 §3), so the
-    /// creating thread gets `None` too until it does.
+    /// (`shared::hwnd_affinity`), and a caller on one gets `None`. On the
+    /// creating thread it is the window's TSF connection (ADR-0135 §3):
+    /// `None` when TSF did not activate for it, or once the window is
+    /// destroyed; a host read before that answers
+    /// [`TextStoreHostError::Unavailable`] from then on.
+    ///
+    /// [`TextStoreHostError::Unavailable`]: flui_platform_api::text_store::TextStoreHostError::Unavailable
     fn text_store_host(
         &self,
         _owner: crate::traits::OwnerThreadToken,
     ) -> Option<Rc<dyn flui_platform_api::text_store::TextStoreHost>> {
-        super::platform::with_window_context(self.hwnd, "text_store_host", |_context| None)
-            .flatten()
+        super::platform::with_window_context(self.hwnd, "text_store_host", |context| {
+            let services = context.text_services.borrow().clone();
+            services
+                .map(|services| services as Rc<dyn flui_platform_api::text_store::TextStoreHost>)
+        })
+        .flatten()
     }
 }
 

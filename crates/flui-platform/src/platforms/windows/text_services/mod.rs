@@ -81,6 +81,8 @@ enum HostOp {
     /// Replace this document with a new one over the same store, so TSF
     /// reads its static status again (a field's protection changed).
     Reopen(Rc<DocumentState>),
+    /// The window is being destroyed: deactivate TSF for it.
+    Shutdown,
 }
 
 /// Commits in place, when dropped, the compositions TSF did not end while a
@@ -182,6 +184,24 @@ unsafe fn associate(
     }
 }
 
+/// Log a failure of application code a host operation reached, where it
+/// cannot be raised (a COM entry, the window procedure). The log runs a
+/// user-installed subscriber, so it is contained too: nothing unwinds, and
+/// the payload is retained whatever the subscriber does.
+fn log_failure(payload: Box<dyn Any + Send>) {
+    let mut calls = OwnerCalls::new();
+    calls.run(|| {
+        tracing::error!(
+            target: "flui_platform::tsf",
+            panic = crate::shared::panic_boundary::panic_payload_message(&*payload),
+            "application code a TSF document's teardown reached panicked"
+        );
+    });
+    retain_opaque_payload(payload);
+    // A failure the diagnostic raised is retained with the scope.
+    drop(calls);
+}
+
 /// Whether two COM pointers name the same object.
 fn same_object(a: &impl Interface, b: &impl Interface) -> bool {
     match (a.cast::<IUnknown>(), b.cast::<IUnknown>()) {
@@ -235,17 +255,20 @@ impl TextServices {
         }))
     }
 
-    /// The client id `ITfThreadMgr::Activate` returned.
+    /// The client id `ITfThreadMgr::Activate` returned, for the probe.
+    #[cfg(test)]
     pub(super) fn client_id(&self) -> u32 {
         self.client_id
     }
 
-    /// The thread manager, for the window's own TSF queries.
+    /// The thread manager, for the probe's own TSF queries.
+    #[cfg(test)]
     pub(super) fn thread_manager(&self) -> &ITfThreadMgr {
         &self.thread_manager
     }
 
     /// Whether TSF's focus is on the focused field's document.
+    #[cfg(test)]
     pub(super) fn document_has_focus(&self) -> bool {
         let manager = match &*self.serving.borrow() {
             Serving::Field(document) => document.manager.clone(),
@@ -273,7 +296,10 @@ impl TextServices {
     fn focused_store(&self) -> Option<Rc<dyn TextStore>> {
         let queued = self.pending.borrow().iter().rev().find_map(|op| match op {
             HostOp::Focus(store) => Some(store.clone()),
-            HostOp::CompleteComposition(_) | HostOp::DropPoisoned(_) | HostOp::Reopen(_) => None,
+            HostOp::CompleteComposition(_)
+            | HostOp::DropPoisoned(_)
+            | HostOp::Reopen(_)
+            | HostOp::Shutdown => None,
         });
         queued.unwrap_or_else(|| self.focused_state().map(|state| Rc::clone(&state.store)))
     }
@@ -295,18 +321,32 @@ impl TextServices {
         if self.entry_depth.get() == 0
             && let Some((payload, recovery)) = self.take_failure()
         {
-            let mut calls = OwnerCalls::new();
-            calls.run(|| {
-                tracing::error!(
-                    target: "flui_platform::tsf",
-                    panic = crate::shared::panic_boundary::panic_payload_message(&*payload),
-                    "application code a TSF document's teardown reached panicked"
-                );
-            });
-            retain_opaque_payload(payload);
+            log_failure(payload);
             drop(recovery);
-            // A failure the diagnostic raised is retained with the scope.
-            drop(calls);
+        }
+    }
+
+    /// Deactivate the window's text services as its `WM_DESTROY` runs, after
+    /// the window's close callbacks (the presentation's own close, which
+    /// unfocused its field) and before its context is retired, and release
+    /// the window's hold on them.
+    ///
+    /// Inside a TSF call into a store (application code destroying the window
+    /// from a grant), the shutdown is queued like any host operation: the
+    /// call's own entry keeps the services alive and shuts them down when it
+    /// returns. The window procedure must not unwind, so a failure of the
+    /// application code the teardown reaches is logged, not raised, the log
+    /// contained as [`Self::leave`]'s is; after a failure the services are
+    /// retained, not destroyed (ADR-0127).
+    pub(super) fn retire_with_window(services: Rc<Self>) {
+        let mut calls = OwnerCalls::new();
+        calls.run(|| {
+            services.run_host_op(HostOp::Shutdown);
+            services.raise_failure();
+        });
+        calls.retire(services);
+        if let Some(payload) = calls.into_failure() {
+            log_failure(payload);
         }
     }
 
@@ -464,6 +504,7 @@ impl TextServices {
                     self.shutdown();
                 }
             }
+            HostOp::Shutdown => self.shutdown(),
         }
     }
 
