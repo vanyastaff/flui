@@ -284,6 +284,88 @@ pub(crate) fn viewer_native_rotation_preserves_the_scene_pivot() {
     laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::End));
 }
 
+pub(crate) fn viewer_rotation_refuses_an_unfittable_quad_then_recovers() {
+    use flui_widgets::{InteractiveViewer, TransformationController};
+    let controller = TransformationController::new();
+    let updates = Rc::new(RefCell::new(Vec::new()));
+    let log = updates.clone();
+    let laid = lay_out(
+        InteractiveViewer::new()
+            .controller(controller.clone())
+            .rotation_enabled(true)
+            .on_interaction_update(move |_, details| log.borrow_mut().push(details.scale))
+            .child(SizedBox::new(100.0, 100.0)),
+        tight(100.0, 100.0),
+    );
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::Start));
+    let rotated = |scale| {
+        pan_zoom(PanZoomPhase::Update(
+            PanZoomTransform::try_new(Offset::ZERO, scale, std::f64::consts::FRAC_PI_4)
+                .expect("finite requested rotation"),
+        ))
+    };
+    laid.dispatch_pointer_event(&rotated(1.0));
+    assert_eq!(
+        controller.value(),
+        flui_foundation::geometry::Matrix4::identity(),
+        "a rotated viewport cannot fit without extra zoom"
+    );
+    assert!(
+        updates.borrow().is_empty(),
+        "unadmitted native input has no recognized update"
+    );
+    laid.dispatch_pointer_event(&rotated(1.5));
+    let matrix = controller.value();
+    let m = matrix.to_col_major_array();
+    assert_scale(m[0].hypot(m[1]), 1.5);
+    assert!(m[1] > 1.0, "the recoverable input actually rotates");
+    for point in [
+        Offset::new(0.0, 0.0),
+        Offset::new(100.0, 0.0),
+        Offset::new(0.0, 100.0),
+        Offset::new(100.0, 100.0),
+    ] {
+        let scene = controller.to_scene(point);
+        assert!(scene.dx >= -1e-9 && scene.dx <= 100.0 + 1e-9);
+        assert!(scene.dy >= -1e-9 && scene.dy <= 100.0 + 1e-9);
+    }
+    assert_eq!(*updates.borrow(), [1.5]);
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::End));
+}
+
+/// Large finite motion must clamp to the edge, not cancel away to the origin.
+pub(crate) fn viewer_extreme_finite_pan_preserves_the_boundary_result() {
+    use flui_widgets::TransformationController;
+    let controller = TransformationController::new();
+    let laid = lay_out(
+        viewer(controller.clone(), Rc::new(RefCell::new(Vec::new()))),
+        tight(100.0, 100.0),
+    );
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::Start));
+    let movement = |pan| {
+        pan_zoom(PanZoomPhase::Update(
+            PanZoomTransform::try_new(Offset::new(pan, 0.0), 1.0, 0.0)
+                .expect("finite requested pan"),
+        ))
+    };
+    laid.dispatch_pointer_event(&movement(f64::MAX));
+    let shifted_origin = controller.value().transform_point(0.0, 0.0);
+    assert_scale(shifted_origin.0, 1000.0);
+    assert_scale(shifted_origin.1, 0.0);
+    assert!(
+        controller
+            .value()
+            .to_col_major_array()
+            .iter()
+            .all(|value| value.is_finite())
+    );
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::End));
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::Start));
+    laid.dispatch_pointer_event(&movement(-20.0));
+    assert_scale(controller.value().transform_point(0.0, 0.0).0, 980.0);
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::End));
+}
+
 /// The real presentation ticks the release velocity and new input retires it.
 pub(crate) fn viewer_focal_fling_advances_then_stops_on_new_input() {
     use flui_animation::Vsync;
