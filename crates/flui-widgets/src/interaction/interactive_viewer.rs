@@ -1035,6 +1035,9 @@ fn gesture_transform(
     {
         return None;
     }
+    if delta == Offset::ZERO && scale == 1.0 && rotation == 0.0 {
+        return contain_transform(matrix, viewport, boundary);
+    }
     let previous_focal = focal - delta;
     if !previous_focal.is_finite() {
         return None;
