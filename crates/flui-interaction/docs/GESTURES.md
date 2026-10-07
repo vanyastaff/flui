@@ -65,7 +65,7 @@ Phases: `Ready`, `FirstDown`, `WaitingForSecond`, `SecondDown`, `Completed`,
   the first goes to `SecondDown`.
 - A second down farther than `double_tap_slop()` is ignored: the first entry
   stays held and the phase stays `WaitingForSecond`.
-- After the window expires, `check_timeout()` releases the held entry (so a
+- After the window expires, deadline polling releases the held entry (so a
   competing single tap can win), fires `on_double_tap_cancel`, and returns to
   `Ready`; a new contact then counts as a first tap.
 - Movement beyond slop during `FirstDown` or `SecondDown` cancels.
@@ -108,7 +108,8 @@ pub struct DragEndDetails    { reason: GestureEndReason, velocity: Velocity,
 `DragEndDetails::reason` is `Completed` for pointer Up and `Cancelled` for an
 accepted pointer Cancel; the measured velocity is kept in both cases
 (ADR-0112). `DragGestureRecognizer::is_fling(&velocity)` compares speed with
-`min_fling_velocity()`.
+`min_fling_velocity()`. Completed Up evaluates velocity at the terminal event's
+time, so a stationary pause before release cannot publish an old fast fling.
 
 ### Scale (`scale.rs`, `ScalePhase`)
 
@@ -199,7 +200,7 @@ route, closes the arena, sweeps on Up, and does not sweep on Cancel.
 ## Velocity tracking (`processing/velocity.rs`)
 
 ```rust
-use std::time::Instant;
+use web_time::Instant;
 use flui_foundation::geometry::Offset;
 use flui_interaction::{PointerDeviceKind, Velocity, VelocityTracker};
 
