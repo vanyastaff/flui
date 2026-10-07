@@ -201,12 +201,15 @@ impl LinearGradient {
         {
             return None;
         }
-        // Equal gradients short-circuit to `a`.
+        let begin = lerp_alignment(a.begin, b.begin, t)?;
+        let end = lerp_alignment(a.end, b.end, t)?;
+        if !(end.x - begin.x).is_finite() || !(end.y - begin.y).is_finite() {
+            return None;
+        }
+        // Preserve the representation of valid equal gradients.
         if a == b {
             return Some(a.clone());
         }
-        let begin = lerp_alignment(a.begin, b.begin, t)?;
-        let end = lerp_alignment(a.end, b.end, t)?;
         let (colors, stops) = interpolate_colors_and_stops(
             (&a.colors, a.stops.as_deref()),
             (&b.colors, b.stops.as_deref()),
@@ -459,13 +462,16 @@ impl SweepGradient {
         {
             return None;
         }
-        // Equal gradients short-circuit to `a`.
-        if a == b {
-            return Some(a.clone());
-        }
         let center = lerp_alignment(a.center, b.center, t)?;
         let start_angle = lerp_finite(a.start_angle, b.start_angle, t)?;
         let end_angle = lerp_finite(a.end_angle, b.end_angle, t)?;
+        if !(end_angle - start_angle).is_finite() {
+            return None;
+        }
+        // Preserve the representation of valid equal gradients.
+        if a == b {
+            return Some(a.clone());
+        }
         let (colors, stops) = interpolate_colors_and_stops(
             (&a.colors, a.stops.as_deref()),
             (&b.colors, b.stops.as_deref()),

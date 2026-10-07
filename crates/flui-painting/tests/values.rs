@@ -154,6 +154,46 @@ pub(crate) fn gradient_geometry_rejects_invalid_inputs_before_equal_shortcuts() 
 }
 
 pub(crate) fn gradient_geometry_checks_intermediate_and_output_overflow() {
+    let mut linear_a = LinearGradient::horizontal(vec![Color::RED, Color::BLUE]);
+    linear_a.begin = Alignment::CENTER;
+    linear_a.end = Alignment::CENTER;
+    let mut linear_b = linear_a.clone();
+    linear_b.begin.x = 1.0;
+    linear_b.end.x = -1.0;
+    let mut sweep_a = SweepGradient::centered(vec![Color::RED, Color::BLUE]);
+    sweep_a.start_angle = 0.0;
+    sweep_a.end_angle = 0.0;
+    let mut sweep_b = sweep_a.clone();
+    sweep_b.start_angle = 1.0;
+    sweep_b.end_angle = -1.0;
+    for (a, b) in [
+        (Gradient::Linear(linear_a), Gradient::Linear(linear_b)),
+        (Gradient::Sweep(sweep_a), Gradient::Sweep(sweep_b)),
+    ] {
+        assert!(
+            Gradient::lerp(&a, &b, f64::MAX).is_none(),
+            "finite components must not publish an infinite direction or span: {b:?}"
+        );
+        let mixed = BoxDecoration::<f64>::lerp(
+            &BoxDecoration::with_gradient(a.clone()),
+            &BoxDecoration::with_gradient(b.clone()),
+            f64::MAX,
+        );
+        assert_eq!(mixed.gradient, Gradient::lerp(&a, &b, 1.0));
+        let mut invalid = b;
+        match &mut invalid {
+            Gradient::Linear(g) => {
+                g.begin.x = f64::MAX;
+                g.end.x = -f64::MAX;
+            }
+            Gradient::Sweep(g) => {
+                g.start_angle = f64::MAX;
+                g.end_angle = -f64::MAX;
+            }
+            Gradient::Radial(_) => unreachable!(),
+        }
+        assert!(Gradient::lerp(&invalid, &invalid, 0.5).is_none());
+    }
     let colors = vec![Color::RED, Color::BLUE];
     let mut a = LinearGradient::horizontal(colors);
     let mut b = a.clone();
