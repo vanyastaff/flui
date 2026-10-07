@@ -454,7 +454,34 @@ pub struct PointerMove {
     predicted: Vec<PointerSample>,
 }
 
+/// Two movements describe different contact metadata and cannot be coalesced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("pointer metadata differs between movements")]
+pub struct MismatchedPointerInfo;
+
 impl PointerMove {
+    /// Fold an earlier movement's measured readings into this dispatch.
+    ///
+    /// The complete [`PointerInfo`] must match; refusal leaves both movements
+    /// unchanged. This dispatch keeps its current sample, predicted readings,
+    /// buttons and modifiers, while its history includes `older`'s history and
+    /// current sample before its own history. As in [`with_coalesced`](Self::with_coalesced),
+    /// readings are sorted oldest first, future readings and exact copies of
+    /// this dispatch's current sample are excluded. Repeated historical readings
+    /// remain distinct: a coarse timestamp does not identify a reading.
+    pub fn try_coalesce(&mut self, older: &Self) -> Result<(), MismatchedPointerInfo> {
+        if self.pointer != older.pointer {
+            return Err(MismatchedPointerInfo);
+        }
+        let mut samples = older.coalesced.clone();
+        samples.push(older.current);
+        samples.extend_from_slice(&self.coalesced);
+        samples.retain(|sample| sample.time <= self.current.time && *sample != self.current);
+        samples.sort_by_key(|sample| sample.time);
+        self.coalesced = samples;
+        Ok(())
+    }
+
     /// The latest reading.
     #[must_use]
     pub const fn current(&self) -> &PointerSample {
