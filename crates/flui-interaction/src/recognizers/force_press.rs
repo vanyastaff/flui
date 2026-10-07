@@ -21,7 +21,7 @@ use parking_lot::Mutex;
 
 use super::{
     recognizer::{GestureRecognizer, RecognizerBase},
-    recognizer::{finish_containment, invoke_callback, retire_callback},
+    recognizer::{finish_containment, invoke_callback, retire_callback, withdraw_cancelled},
 };
 use crate::{
     arena::{GestureArenaEntry, GestureArenaMember, GestureDisposition, SweepModel},
@@ -146,6 +146,9 @@ enum ForcePressPhase {
 
 #[derive(Debug, Clone)]
 struct ForcePressState {
+    /// Bumped when a sequence retires, so notices queued for a sequence a
+    /// reentrant callback already retired are not delivered after its end.
+    generation: u64,
     phase: ForcePressPhase,
     /// The tracked contact and its arena membership.
     pointer: Option<PointerId>,
@@ -164,6 +167,7 @@ struct ForcePressState {
 impl Default for ForcePressState {
     fn default() -> Self {
         Self {
+            generation: 0,
             phase: ForcePressPhase::Ready,
             pointer: None,
             entry: None,
@@ -235,6 +239,8 @@ enum ArenaStep {
     None,
     Claim(GestureArenaEntry),
     Withdraw(GestureArenaEntry),
+    /// The contact was cancelled: its arena ends without a winner.
+    Abandon(GestureArenaEntry),
 }
 
 impl ForcePressGestureRecognizer {
@@ -372,6 +378,10 @@ impl ForcePressGestureRecognizer {
     /// Run the arena step, then deliver each notice. The first panic is
     /// resumed after everything ran; the state was committed beforehand.
     fn finish(&self, step: ArenaStep, notices: Vec<Notice>) {
+        let generation = self.gesture_state.lock().generation;
+        // A batch that ends its sequence is delivered whole; a batch for a live
+        // sequence stops once a callback retires that sequence reentrantly.
+        let ends_sequence = notices.iter().any(|n| matches!(n, Notice::End(_)));
         let self_driven = self.state.arena().sweep_model() == SweepModel::SelfDriven;
         let mut first = None;
         match step {
@@ -391,11 +401,19 @@ impl ForcePressGestureRecognizer {
                 }),
                 "force press arena withdrawal",
             ),
+            ArenaStep::Abandon(entry) => RoutePanic::preserve_first(
+                &mut first,
+                RoutePanic::capture(|| withdraw_cancelled(&entry, self.state.arena())),
+                "force press arena withdrawal",
+            ),
         }
         // Every notice of a committed transition is delivered: a panic in
         // `on_start` must not leave the caller with a start and no end. The
         // first failure stays authoritative and resumes after the rest.
         for notice in notices {
+            if !ends_sequence && self.gesture_state.lock().generation != generation {
+                break;
+            }
             RoutePanic::preserve_first(
                 &mut first,
                 RoutePanic::capture(|| self.deliver(notice)),
@@ -426,7 +444,11 @@ impl ForcePressGestureRecognizer {
             out.push(Notice::End(state.details()));
         }
         let entry = state.entry.take();
-        *state = ForcePressState::default();
+        // Only compared for change; wrapping after 2^64 retirements is harmless.
+        *state = ForcePressState {
+            generation: state.generation.wrapping_add(1),
+            ..ForcePressState::default()
+        };
         self.state.set_primary_pointer(None);
         self.state.clear_initial_contact();
         entry.map_or(ArenaStep::None, ArenaStep::Withdraw)
@@ -504,7 +526,23 @@ impl ForcePressGestureRecognizer {
         self.finish(step, notices);
     }
 
-    /// The tracked contact lifted or was cancelled.
+    /// The tracked contact was cancelled, or went down again without its end.
+    fn handle_cancel(&self) {
+        let mut notices = Vec::new();
+        let mut state = self.gesture_state.lock();
+        if state.phase == ForcePressPhase::Ready {
+            return;
+        }
+        state.pressure = 0.0;
+        let step = match self.retire_sequence(&mut state, &mut notices) {
+            ArenaStep::Withdraw(entry) => ArenaStep::Abandon(entry),
+            step => step,
+        };
+        drop(state);
+        self.finish(step, notices);
+    }
+
+    /// The tracked contact lifted, or this recognizer stopped tracking it.
     fn handle_release(&self, position: Option<Offset<f64>>, global_position: Option<Offset<f64>>) {
         let mut notices = Vec::new();
         let mut state = self.gesture_state.lock();
@@ -547,7 +585,7 @@ impl GestureRecognizer for ForcePressGestureRecognizer {
         let tracked = self.gesture_state.lock().pointer;
         match tracked {
             Some(current) if current != pointer => return,
-            Some(_) => self.handle_release(None, None),
+            Some(_) => self.handle_cancel(),
             None => {}
         }
         // The retired sequence's `on_end` may have disposed this recognizer or
@@ -601,7 +639,7 @@ impl GestureRecognizer for ForcePressGestureRecognizer {
                 let pos = data.state.position;
                 self.handle_release(Some(Offset::new(pos.x, pos.y)), Some(global_position));
             }
-            PointerEvent::Cancel(_) => self.handle_release(None, None),
+            PointerEvent::Cancel(_) => self.handle_cancel(),
             _ => {}
         }
     }

@@ -63,9 +63,9 @@ use std::sync::Arc;
 use flui_foundation::geometry::Offset;
 use parking_lot::Mutex;
 
-use super::recognizer::{GestureRecognizer, RecognizerBase};
+use super::recognizer::{GestureRecognizer, RecognizerBase, withdraw_cancelled};
 use crate::{
-    arena::{GestureArena, GestureArenaMember, GestureDisposition, SweepModel},
+    arena::{GestureArena, GestureArenaMember, GestureDisposition},
     events::PointerEvent,
     ids::PointerId,
     routing::PointerDispatch,
@@ -172,16 +172,14 @@ impl GestureRecognizer for EagerGestureRecognizer {
         match event {
             PointerEvent::Up(_) => self.state.stop_tracking(),
             PointerEvent::Cancel(_) => {
-                // A cancelled contact may leave its arena open and now empty; a
-                // self-driven arena has no binding to sweep it, so the entry
-                // sweeps it here, as the Up path does through `stop_tracking`.
+                // A cancelled contact's arena has no winner: a self-driven
+                // arena is abandoned here, not swept, so a rival never accepts
+                // the cancelled contact.
                 let entry = self.state.tracked_entry();
-                self.state.reject();
-                if self.state.arena().sweep_model() == SweepModel::SelfDriven
-                    && let Some(entry) = entry
-                {
-                    entry.sweep();
+                if let Some(entry) = &entry {
+                    withdraw_cancelled(entry, self.state.arena());
                 }
+                self.state.reject();
             }
             _ => {}
         }
