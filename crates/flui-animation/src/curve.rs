@@ -190,9 +190,13 @@ mod builtin {
                 Builtin::ElasticIn(curve) => curve.slope(t),
                 Builtin::ElasticOut(curve) => curve.slope(t),
                 Builtin::ElasticInOut(curve) => curve.slope(t),
-                Builtin::Interval { begin, end, curve } => {
-                    interval_slope(*begin, *end, t, |local| curve.slope(local))
-                }
+                Builtin::Interval { begin, end, curve } => interval_slope(
+                    *begin,
+                    *end,
+                    t,
+                    |local| curve.slope(local),
+                    |local| curve.transform(local),
+                ),
                 Builtin::Flipped(curve) => curve.slope(1.0 - t),
             }
         }
@@ -245,8 +249,10 @@ macro_rules! builtin_value {
 /// Why a curve parameter was rejected.
 ///
 /// Returned by the `try_new` constructors and, as the error message, by
-/// serde decoding (feature `serde`); the panicking `new` constructors panic
-/// with the same text.
+/// serde decoding (feature `serde`). The panicking `const fn new` constructors
+/// cannot format a value in a `const` context, so their message states the
+/// rule the arguments broke; the matching `try_new` names the parameter and
+/// value.
 #[derive(Debug, Clone, Copy, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum CurveError {
@@ -503,7 +509,13 @@ impl<C: Curve + Copy> Curve for Interval<C> {
     }
 
     fn slope(&self, t: f64) -> f64 {
-        interval_slope(self.begin, self.end, t, |local| self.curve.slope(local))
+        interval_slope(
+            self.begin,
+            self.end,
+            t,
+            |local| self.curve.slope(local),
+            |local| self.curve.transform(local),
+        )
     }
 
     fn builtin(&self) -> Option<BuiltinCurve> {
@@ -517,15 +529,27 @@ impl<C: Curve + Copy> Curve for Interval<C> {
 }
 
 /// [`Interval`]'s derivative by the chain rule: 0 outside `[begin, end]`
-/// and for a step, `inner(local) / (end − begin)` inside.
-fn interval_slope(begin: f64, end: f64, t: f64, inner: impl FnOnce(f64) -> f64) -> f64 {
+/// and for a step, `slope(local) / (end − begin)` inside. Where that quotient
+/// overflows (a steep inner curve in a narrow interval) the finite
+/// difference of the interval's own shape stands in.
+fn interval_slope(
+    begin: f64,
+    end: f64,
+    t: f64,
+    slope: impl FnOnce(f64) -> f64,
+    transform: impl Fn(f64) -> f64,
+) -> f64 {
     if let Some(settled) = settled_slope(t) {
         return settled;
     }
     if t < begin || t > end || end - begin < 1e-6 {
-        0.0
+        return 0.0;
+    }
+    let chained = slope((t - begin) / (end - begin)) / (end - begin);
+    if chained.is_finite() {
+        chained
     } else {
-        inner((t - begin) / (end - begin)) / (end - begin)
+        difference_slope(|t| interval_transform(begin, end, t, &transform), t)
     }
 }
 
@@ -616,8 +640,15 @@ impl UnitBezier {
     }
 }
 
-/// Below this `|x'(s)|` the cubic slope `y'/x'` is not computed directly.
-const MIN_SLOPE_DENOMINATOR: f64 = 1e-9;
+/// The largest `|y1|`, `|y2|` [`Cubic`] admits. Far past any easing's
+/// overshoot, and small enough that the solver's coefficients and slope bound
+/// stay finite.
+const MAX_CUBIC_Y: f64 = 1e6;
+
+/// The largest `|y|` a [`ThreePointCubic`] segment may reach once rescaled to
+/// the unit square: the bezier coefficients `3·y` and `3·(y2 − y1)` stay
+/// finite below it.
+const MAX_SEGMENT_Y: f64 = 1e300;
 
 /// Bezier parameters of the x lookup table.
 const SAMPLE_PARAMETERS: [f64; 11] = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0];
@@ -640,7 +671,7 @@ const MIN_NEWTON_SLOPE: f64 = 1e-7;
 /// The bezier runs from `(0, 0)` through control points `(x1, y1)` and
 /// `(x2, y2)` to `(1, 1)`. `x1` and `x2` lie in `[0, 1]` (CSS Easing 2
 /// §2.2), so x is monotone in the bezier parameter and every progress value
-/// has exactly one output; `y1` and `y2` are any finite numbers, and outside
+/// has exactly one output; `y1` and `y2` lie in `[-1e6, 1e6]`, and outside
 /// `[0, 1]` the curve overshoots. The curve is monotone when `y1` and `y2`
 /// both lie in `[0, 1]`.
 ///
@@ -685,12 +716,13 @@ pub struct Cubic {
 }
 
 impl Cubic {
-    /// Admits finite control points with `x1, x2 ∈ [0, 1]`.
+    /// Admits finite control points with `x1, x2 ∈ [0, 1]` and
+    /// `y1, y2 ∈ [-MAX_CUBIC_Y, MAX_CUBIC_Y]`.
     const fn validate(x1: f64, y1: f64, x2: f64, y2: f64) -> Result<Self, CurveError> {
         check!(within(x1, 0.0, 1.0, "x1", "[0, 1]"));
-        check!(finite(y1, "y1"));
+        check!(within(y1, -MAX_CUBIC_Y, MAX_CUBIC_Y, "y1", "[-1e6, 1e6]"));
         check!(within(x2, 0.0, 1.0, "x2", "[0, 1]"));
-        check!(finite(y2, "y2"));
+        check!(within(y2, -MAX_CUBIC_Y, MAX_CUBIC_Y, "y2", "[-1e6, 1e6]"));
         Ok(Self::solved(x1, y1, x2, y2))
     }
 
@@ -730,8 +762,8 @@ impl Cubic {
         match Self::validate(x1, y1, x2, y2) {
             Ok(cubic) => cubic,
             Err(_) => panic!(
-                "Cubic::new: x1 and x2 must be finite and in [0, 1], y1 and y2 finite \
-                 (Cubic::try_new reports which)"
+                "Cubic::new: x1 and x2 must be finite and in [0, 1], y1 and y2 in \
+                 [-1e6, 1e6] (Cubic::try_new reports which)"
             ),
         }
     }
@@ -742,7 +774,8 @@ impl Cubic {
     /// # Errors
     ///
     /// - [`CurveError::NonFinite`] when any argument is NaN or infinite;
-    /// - [`CurveError::OutOfRange`] when `x1` or `x2` lies outside `[0, 1]`.
+    /// - [`CurveError::OutOfRange`] when `x1` or `x2` lies outside `[0, 1]`, or
+    ///   `y1` or `y2` outside `[-1e6, 1e6]`.
     ///
     /// # Examples
     ///
@@ -827,20 +860,98 @@ impl Cubic {
             }
         }
     }
+
+    /// `dy/dx` at `x` where `x'` nearly vanishes inside the curve. About the
+    /// stationary point `c` of `x'` the x polynomial is exactly
+    /// `x(c) + p·u + a·u³` with `u = s − c` and `p = x'(c) ≥ 0`, so `u` is
+    /// solved from the small offset `x − x(c)` to full relative precision and
+    /// `x'(s) = p + 3a·u²` follows from it, rather than from an `s` rounding
+    /// has moved onto the tangent. `None` when x has no such point (`a ≤ 0`).
+    /// The parameter of `x` found by bisection to the last representable bit;
+    /// slower than [`Self::solve`] (which bounds the output, not the
+    /// parameter) and used only where a derivative needs the exact point.
+    fn parameter_exact(&self, x: f64) -> f64 {
+        let (mut lo, mut hi) = (0.0_f64, 1.0_f64);
+        loop {
+            let mid = f64::midpoint(lo, hi);
+            if mid <= lo || mid >= hi {
+                return mid;
+            }
+            if self.x.at(mid) < x {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+    }
+
+    fn tangent_slope(&self, x: f64) -> Option<f64> {
+        let cubed = self.x.a;
+        if cubed <= 0.0 {
+            return None;
+        }
+        // The expansion `a·u³ + x'(c)·u` holds only about a genuine stationary
+        // point of `x'`: outside [0, 1] the `u²` term does not vanish.
+        let centre = -self.x.b / (3.0 * cubed);
+        if !(0.0..=1.0).contains(&centre) {
+            // No stationary point inside: `x` is strictly monotone with a
+            // nonzero quadratic part, so re-solve the parameter to full
+            // precision and take the exact quotient there.
+            let (mut lo, mut hi) = (0.0_f64, 1.0_f64);
+            loop {
+                let mid = f64::midpoint(lo, hi);
+                if mid <= lo || mid >= hi {
+                    break;
+                }
+                if self.x.at(mid) < x {
+                    lo = mid;
+                } else {
+                    hi = mid;
+                }
+            }
+            let s = f64::midpoint(lo, hi);
+            let quotient = self.y.slope(s) / self.x.slope(s);
+            return quotient.is_finite().then_some(quotient);
+        }
+        let rate = self.x.slope(centre).max(0.0);
+        let offset = x - self.x.at(centre);
+        // `a·u³ + p·u` increases in `u`: bisect it over the parameter range.
+        let (mut lo, mut hi) = (-1.0_f64, 1.0_f64);
+        loop {
+            let mid = f64::midpoint(lo, hi);
+            if mid <= lo || mid >= hi {
+                break;
+            }
+            if (cubed * mid).mul_add(mid, rate) * mid < offset {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        let shift = f64::midpoint(lo, hi);
+        Some(self.y.slope(centre + shift) / (3.0 * cubed * shift).mul_add(shift, rate))
+    }
 }
 
 impl Curve for Cubic {
     builtin_value!(Cubic(self));
 
-    /// `dy/dx = y'(s) / x'(s)` at the solved parameter `s`. Where
-    /// `x'(s) = 0`: if `y'(s) = 0` too (a flat start such as
-    /// `cubic-bezier(0, 0, …)`), the limit `y''(s) / x''(s)`; otherwise the
-    /// tangent is vertical and the slope is the finite secant of the default
-    /// difference.
+    /// `dy/dx = y'(s) / x'(s)` at the solved parameter `s` whenever `x'(s)` is
+    /// nonzero and the quotient finite. At the ends `s` is exact, so however
+    /// small `x'(s)` is it is the true derivative. Inside, `s` is known only to
+    /// within the solver's reach `r`, which moves `x'` by up to
+    /// `|x''|·r + 3|a|·r²`; an `x'(s)` below that is rounding, not slope, and
+    /// the slope comes from the parameter re-solved about the stationary
+    /// point of `x'` instead (`Cubic::tangent_slope`). Where `x'(s) = 0`
+    /// exactly and `y'(s) = 0` too (a flat start such as
+    /// `cubic-bezier(0, 0, …)`), the limit `y''(s) / x''(s)`; at a vertical
+    /// tangent, or where the quotient overflows, the finite secant of the
+    /// default difference.
     fn slope(&self, t: f64) -> f64 {
         if let Some(settled) = settled_slope(t) {
             return settled;
         }
+        let interior = t > 0.0 && t < 1.0;
         let s = if t <= 0.0 {
             0.0
         } else if t >= 1.0 {
@@ -848,14 +959,30 @@ impl Curve for Cubic {
         } else {
             self.solve(t)
         };
+        let reach = OUTPUT_TOLERANCE / self.y_slope_bound;
+        let x_error = self.x.curvature(s).abs() * reach + 3.0 * self.x.a.abs() * reach * reach;
+        let near_tangent = interior && self.x.slope(s).abs() <= x_error;
+        // Away from a stationary point of `x'` the quotient needs the exact
+        // parameter: the solver bounds the output, not `s`, and near an end a
+        // small genuine `x'` is sensitive to it.
+        let s = if interior && !near_tangent {
+            self.parameter_exact(t)
+        } else {
+            s
+        };
         let dx = self.x.slope(s);
         let dy = self.y.slope(s);
-        if dx.abs() >= MIN_SLOPE_DENOMINATOR {
-            return dy / dx;
-        }
-        let ddx = self.x.curvature(s);
-        if dy.abs() < MIN_SLOPE_DENOMINATOR && ddx.abs() >= MIN_SLOPE_DENOMINATOR {
-            return self.y.curvature(s) / ddx;
+        let ratio = if near_tangent {
+            self.tangent_slope(t).unwrap_or(f64::NAN)
+        } else if dx != 0.0 {
+            dy / dx
+        } else if dy == 0.0 {
+            self.y.curvature(s) / self.x.curvature(s)
+        } else {
+            f64::NAN
+        };
+        if ratio.is_finite() {
+            return ratio;
         }
         difference_slope(|t| self.transform(t), t)
     }
@@ -918,6 +1045,12 @@ impl TryFrom<CubicWire> for Cubic {
     }
 }
 
+/// A rescaled [`ThreePointCubic`] segment y the cubic solver evaluates
+/// without overflow.
+const fn segment_y(y: f64) -> bool {
+    y.is_finite() && y.abs() <= MAX_SEGMENT_Y
+}
+
 /// Two cubic bezier segments joined at a shared `midpoint`.
 ///
 /// The curve passes through `(0, 0)`, `midpoint` and `(1, 1)`; each half is
@@ -949,7 +1082,8 @@ pub struct ThreePointCubic {
 
 impl ThreePointCubic {
     /// Admits finite points with `midpoint` strictly inside the unit square,
-    /// `a1.x, b1.x ∈ [0, midpoint.x]` and `a2.x, b2.x ∈ [midpoint.x, 1]`.
+    /// `a1.x, b1.x ∈ [0, midpoint.x]`, `a2.x, b2.x ∈ [midpoint.x, 1]` and
+    /// every control y in `[-1e6, 1e6]`.
     const fn validate(
         a1: (f64, f64),
         b1: (f64, f64),
@@ -961,39 +1095,62 @@ impl ThreePointCubic {
         check!(strictly_inside_unit(mx, "midpoint.x"));
         check!(strictly_inside_unit(my, "midpoint.y"));
         check!(within(a1.0, 0.0, mx, "a1.x", "[0, midpoint.x]"));
-        check!(finite(a1.1, "a1.y"));
+        check!(within(
+            a1.1,
+            -MAX_CUBIC_Y,
+            MAX_CUBIC_Y,
+            "a1.y",
+            "[-1e6, 1e6]"
+        ));
         check!(within(b1.0, 0.0, mx, "b1.x", "[0, midpoint.x]"));
-        check!(finite(b1.1, "b1.y"));
+        check!(within(
+            b1.1,
+            -MAX_CUBIC_Y,
+            MAX_CUBIC_Y,
+            "b1.y",
+            "[-1e6, 1e6]"
+        ));
         check!(within(a2.0, mx, 1.0, "a2.x", "[midpoint.x, 1]"));
-        check!(finite(a2.1, "a2.y"));
+        check!(within(
+            a2.1,
+            -MAX_CUBIC_Y,
+            MAX_CUBIC_Y,
+            "a2.y",
+            "[-1e6, 1e6]"
+        ));
         check!(within(b2.0, mx, 1.0, "b2.x", "[midpoint.x, 1]"));
-        check!(finite(b2.1, "b2.y"));
+        check!(within(
+            b2.1,
+            -MAX_CUBIC_Y,
+            MAX_CUBIC_Y,
+            "b2.y",
+            "[-1e6, 1e6]"
+        ));
         // Rescaling keeps x inside [0, 1] (IEEE division and subtraction are
-        // monotone); it can only overflow y, next to a midpoint.y of 0 or 1.
+        // monotone). With every y within MAX_CUBIC_Y, a rescaled y reaches
+        // MAX_SEGMENT_Y only for a midpoint.y within about 1e-294 of 0 or 1.
         let (wide, high) = (1.0 - mx, 1.0 - my);
-        let first = Cubic::validate(a1.0 / mx, a1.1 / my, b1.0 / mx, b1.1 / my);
-        let second = Cubic::validate(
-            (a2.0 - mx) / wide,
-            (a2.1 - my) / high,
-            (b2.0 - mx) / wide,
-            (b2.1 - my) / high,
-        );
-        match (first, second) {
-            (Ok(first), Ok(second)) => Ok(Self {
-                a1,
-                b1,
-                midpoint,
-                a2,
-                b2,
-                first,
-                second,
-            }),
-            _ => Err(CurveError::OutOfRange {
+        let first = (a1.1 / my, b1.1 / my);
+        let second = ((a2.1 - my) / high, (b2.1 - my) / high);
+        if !(segment_y(first.0) && segment_y(first.1) && segment_y(second.0) && segment_y(second.1))
+        {
+            return Err(CurveError::OutOfRange {
                 parameter: "midpoint.y",
                 value: my,
                 allowed: "(0, 1), far enough from both to rescale the control points",
-            }),
+            });
         }
+        let first = Cubic::solved(a1.0 / mx, first.0, b1.0 / mx, first.1);
+        let second = Cubic::solved((a2.0 - mx) / wide, second.0, (b2.0 - mx) / wide, second.1);
+        Ok(Self {
+            a1,
+            b1,
+            midpoint,
+            a2,
+            b2,
+            first,
+            second,
+        })
     }
 
     /// Creates a three-point cubic from the control points of both segments.
@@ -1018,7 +1175,7 @@ impl ThreePointCubic {
             Err(_) => panic!(
                 "ThreePointCubic::new: midpoint must lie strictly inside the unit square, \
                  a1.x and b1.x in [0, midpoint.x], a2.x and b2.x in [midpoint.x, 1], \
-                 every coordinate finite (ThreePointCubic::try_new reports which)"
+                 every control y in [-1e6, 1e6] (ThreePointCubic::try_new reports which)"
             ),
         }
     }
@@ -1031,8 +1188,9 @@ impl ThreePointCubic {
     /// - [`CurveError::OutOfRange`] when `midpoint` is not strictly inside
     ///   the unit square, when a first-segment control point's x lies outside
     ///   `[0, midpoint.x]` or a second-segment one's outside
-    ///   `[midpoint.x, 1]`, or when `midpoint.y` is so close to 0 or 1 that
-    ///   a rescaled control point overflows.
+    ///   `[midpoint.x, 1]`, when a control y lies outside `[-1e6, 1e6]`, or
+    ///   when `midpoint.y` is within about `1e-294` of 0 or 1, so that a
+    ///   rescaled control point overflows.
     ///
     /// # Examples
     ///
@@ -1313,17 +1471,12 @@ fn elastic_wave(u: f64, period: f64) -> f64 {
     ((u - period / 4.0) * std::f64::consts::TAU / period).sin()
 }
 
-/// Admits a finite, positive elastic period.
+/// Admits an elastic period in `[1e-6, 1e6]`: covers every visible
+/// oscillation and is narrow enough that the phase `(u − period / 4)·τ / period`
+/// stays finite (an unbounded period overflows the product, a subnormal one
+/// the quotient).
 const fn validate_period(period: f64) -> Result<(), CurveError> {
-    check!(finite(period, "period"));
-    if period <= 0.0 {
-        return Err(CurveError::OutOfRange {
-            parameter: "period",
-            value: period,
-            allowed: "(0, inf)",
-        });
-    }
-    Ok(())
+    within(period, 1e-6, 1e6, "period", "[1e-6, 1e6]")
 }
 
 /// Declares an elastic curve type: the period field, its validated
@@ -1351,7 +1504,7 @@ macro_rules! elastic_curve {
             ///
             /// # Panics
             ///
-            /// Panics when the period is not finite and positive. In a `const`
+            /// Panics when the period lies outside `[1e-6, 1e6]`. In a `const`
             /// item the panic is a compile error.
             #[must_use]
             pub const fn new(period: f64) -> Self {
@@ -1359,7 +1512,7 @@ macro_rules! elastic_curve {
                     Ok(()) => Self { period },
                     Err(_) => panic!(concat!(
                         stringify!($name),
-                        "::new: period must be finite and positive"
+                        "::new: period must lie in [1e-6, 1e6]"
                     )),
                 }
             }
@@ -1369,7 +1522,7 @@ macro_rules! elastic_curve {
             /// # Errors
             ///
             /// - [`CurveError::NonFinite`] when `period` is NaN or infinite;
-            /// - [`CurveError::OutOfRange`] when `period <= 0`.
+            /// - [`CurveError::OutOfRange`] when `period` lies outside `[1e-6, 1e6]`.
             ///
             /// # Examples
             ///
@@ -1575,8 +1728,9 @@ impl Curve for DecelerateCurve {
 /// Uses stack allocation for up to 8 points to avoid heap allocations in common cases.
 ///
 /// The points' x coordinates are ignored: the points are spaced evenly in
-/// progress, and the ends take the first and last points' y. It meets the
-/// [`Curve`] endpoint contract only when those are 0 and 1.
+/// progress. Like every [`Curve`], it returns exactly 0 at `t = 0` and 1 at
+/// `t = 1`; strictly between, it interpolates the points' y values, so
+/// points whose first and last y are not 0 and 1 make it jump at the ends.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CatmullRomCurve {
@@ -1607,8 +1761,9 @@ impl CatmullRomCurve {
 
 impl Curve for CatmullRomCurve {
     fn transform(&self, t: f64) -> f64 {
-        let t = t.clamp(0.0, 1.0);
-
+        if let Some(settled) = settled(t) {
+            return settled;
+        }
         if self.points.len() == 1 {
             return self.points[0].1;
         }

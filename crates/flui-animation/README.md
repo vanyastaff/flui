@@ -564,9 +564,9 @@ Constructors validate parameters and panic on invalid input:
 | `FrictionSimulation::new` | drag ≤ 0, drag = 1.0 |
 | `TweenSequenceItem::new` | weight ≤ 0, weight is infinite |
 | `Interval::new` | begin/end not finite or outside [0,1], end < begin |
-| `Cubic::new` | any argument not finite, x1 or x2 outside [0,1] |
-| `ThreePointCubic::new` | midpoint not strictly inside the unit square, a control x outside its segment, a coordinate not finite |
-| `Elastic{In,Out,InOut}Curve::new` | period not finite or ≤ 0 |
+| `Cubic::new` | any argument not finite, x1 or x2 outside [0,1], y1 or y2 outside [-1e6, 1e6] |
+| `ThreePointCubic::new` | midpoint not strictly inside the unit square, a control x outside its segment, a control y outside [-1e6, 1e6], a coordinate not finite |
+| `Elastic{In,Out,InOut}Curve::new` | period not finite or outside [1e-6, 1e6] |
 | `Split::with_curves` | split not finite or outside [0,1] |
 
 ---

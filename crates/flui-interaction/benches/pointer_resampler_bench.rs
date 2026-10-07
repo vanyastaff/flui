@@ -10,10 +10,9 @@
 //!
 //! Performance targets:
 //! - `add_event` per raw input event: < 200 ns. The work is a
-//!   `Mutex` lock on `ResamplerInner` + a `VecDeque::push_back` (with
-//!   bounded cap = 100) + a state-machine transition for
-//!   Down/Up/Cancel/Leave. No allocations in the steady state once
-//!   the queue is at capacity.
+//!   `RefCell` borrow of the resampler state + a `VecDeque::push_back`
+//!   (moves coalesce beyond 100 queued events) + a state-machine
+//!   transition for Down/Up/Cancel/Leave.
 //! - `sample` flush at 60 Hz (16.67 ms): < 1 µs per drained event.
 //!
 //! The two scenarios below (60 Hz and 240 Hz) verify the resampler
@@ -36,12 +35,10 @@ use flui_interaction::events::{PointerType, make_move_event};
 use flui_interaction::ids::PointerId;
 use flui_interaction::processing::PointerEventResampler;
 
-/// Build `count` move events. Position is varied by 1 px per event so
-/// the resampler's dedup logic does not collapse the queue to a
-/// single entry — we need the queue to actually hold `count` distinct
-/// events. The `duration_ms` argument is documentary (the synthetic
-/// events all carry timestamp 0; the resampler reads `Instant::now()`
-/// at push time, so this bench is not a timing-fidelity measurement).
+/// Build `count` move events, 1 px apart. The `duration_ms` argument is
+/// documentary: the synthetic events carry timestamp 0, so `add_event`
+/// places them at their arrival; `bench_sample_flush` places them
+/// explicitly with `add_event_at`.
 fn make_move_events(
     count: usize,
     _duration_ms: u64,
@@ -86,41 +83,51 @@ fn bench_add_event_240hz(c: &mut Criterion) {
 
 /// `sample` flush cost — the per-frame work done by the binding
 /// (drains the queue, fires callbacks). One iteration drains a
-/// 60-event queue and counts callbacks.
+/// 60-event queue, one event per 0.25 ms, followed by a 61st event after
+/// the sample time so the interpolated move is part of the work, and
+/// counts callbacks. The queue is built in (untimed) setup on a tracked
+/// resampler, so the timed region is only `sample`, and it is asserted to
+/// emit all 61 events (60 real + 1 interpolated).
 fn bench_sample_flush(c: &mut Criterion) {
-    let resampler = PointerEventResampler::new(PointerId::PRIMARY);
-    // Pre-load 60 events so the queue is at the typical 60 Hz
-    // frame's worth of work.
-    for event in make_move_events(60, 16) {
-        resampler.add_event(event);
-    }
-    // Push 100 ns past MIN_SAMPLE_INTERVAL so the per-sample
-    // throttling gate does not early-return.
-    let now = Instant::now() + Duration::from_millis(2);
-    let next = now + Duration::from_millis(16);
+    let events = make_move_events(61, 16);
+    let start = Instant::now();
+    let sample_time = start + Duration::from_millis(15);
+    let next = sample_time + Duration::from_millis(16);
+    let setup = || {
+        let resampler = PointerEventResampler::new(PointerId::PRIMARY);
+        resampler.start_tracking();
+        for (i, event) in events.iter().enumerate() {
+            let at = start + Duration::from_micros(250 * i as u64);
+            let at = if i == 60 { next } else { at };
+            resampler.add_event_at(event.clone(), at);
+        }
+        resampler
+    };
+    let mut probe = 0u32;
+    setup().sample(sample_time, next, |_event| probe += 1);
+    assert_eq!(probe, 61, "the bench must drain the whole frame");
     c.bench_function(
         "PointerEventResampler::sample (drain 60-event queue)",
         |b| {
-            b.iter(|| {
-                // Re-add events so the queue is non-empty for the next
-                // sample call (each `sample` pops the queue).
-                for event in make_move_events(60, 16) {
-                    resampler.add_event(event);
-                }
-                let mut count = 0u32;
-                resampler.sample(black_box(now), black_box(next), |_event| {
-                    count += 1;
-                });
-                black_box(count);
-            });
+            b.iter_batched(
+                setup,
+                |resampler| {
+                    let mut count = 0u32;
+                    resampler.sample(black_box(sample_time), black_box(next), |_event| {
+                        count += 1;
+                    });
+                    black_box(count)
+                },
+                criterion::BatchSize::SmallInput,
+            );
         },
     );
 }
 
 /// Steady-state push: the queue is at its 100-event cap, so each
-/// `add_event` should be a single atomic Mutex lock + a state
-/// transition. The 101st-and-onward events are silently dropped (per
-/// `MAX_BUFFERED_EVENTS`), so this also covers the drop path.
+/// `add_event` coalesces the oldest pair of adjacent moves (the older
+/// one's samples join the newer one's `coalesced` history) before
+/// queueing — the overflow path that replaced dropping the newest event.
 fn bench_push_at_capacity(c: &mut Criterion) {
     let resampler = PointerEventResampler::new(PointerId::PRIMARY);
     // Pre-fill to capacity.
@@ -132,7 +139,7 @@ fn bench_push_at_capacity(c: &mut Criterion) {
         PointerType::Touch,
     ));
     c.bench_function(
-        "PointerEventResampler::add_event (queue at cap, drop path)",
+        "PointerEventResampler::add_event (queue at cap, overflow path)",
         |b| {
             b.iter(|| {
                 resampler.add_event(black_box(event.clone()));
