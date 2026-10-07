@@ -519,6 +519,33 @@ impl Matrix4 {
         if !x.is_finite() || !y.is_finite() || self.m.iter().any(|value| !value.is_finite()) {
             return None;
         }
+        let point_scale = x.abs().max(y.abs()).max(1.0);
+        let sx = x / point_scale;
+        let sy = y / point_scale;
+        let sw = 1.0 / point_scale;
+        if self.m[2] == 0.0 && self.m[6] == 0.0 && self.m[14] == 0.0 {
+            // The local plane is screen-depth zero already. Exclude irrelevant
+            // depth coefficients: a finite z scale must not erase a meaningful
+            // 2D quotient during normalization.
+            if self.m[10] == 0.0 {
+                return None;
+            }
+            let plane = [self.m[0], self.m[1], self.m[3], self.m[4], self.m[5],
+                self.m[7], self.m[12], self.m[13], self.m[15]];
+            let scale = plane.iter().fold(0.0_f64, |scale, value| scale.max(value.abs()));
+            if scale == 0.0 {
+                return None;
+            }
+            let [xx, yx, wx, xy, yy, wy, tx, ty, tw] = plane.map(|value| value / scale);
+            let weight = wx * sx + wy * sy + tw * sw;
+            let uncertainty = f64::EPSILON * ((wx * sx).abs() + (wy * sy).abs() + (tw * sw).abs());
+            if weight <= uncertainty {
+                return None;
+            }
+            let local_x = (xx * sx + xy * sy + tx * sw) / weight;
+            let local_y = (yx * sx + yy * sy + ty * sw) / weight;
+            return (local_x.is_finite() && local_y.is_finite()).then_some((local_x, local_y));
+        }
         let matrix_scale = self.m.iter().fold(0.0_f64, |scale, value| scale.max(value.abs()));
         if matrix_scale == 0.0 {
             return None;
@@ -526,10 +553,6 @@ impl Matrix4 {
         // Both normalizations are positive, so they preserve visibility and the
         // final projective quotient while keeping every product bounded.
         let m = self.m.map(|value| value / matrix_scale);
-        let point_scale = x.abs().max(y.abs()).max(1.0);
-        let sx = x / point_scale;
-        let sy = y / point_scale;
-        let sw = 1.0 / point_scale;
         let ray = [
             m[0] * sx + m[4] * sy + m[12] * sw,
             m[1] * sx + m[5] * sy + m[13] * sw,
