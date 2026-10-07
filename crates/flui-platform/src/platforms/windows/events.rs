@@ -203,6 +203,40 @@ fn decode_native_reading(
     None
 }
 
+#[derive(Default)]
+pub(super) struct NativePointerRegistry {
+    next_contact: u64,
+    contacts: std::collections::BTreeMap<u32, flui_platform_api::pointer::PointerInfo>,
+}
+
+impl NativePointerRegistry {
+    fn commit(
+        &mut self,
+        _native: &windows::Win32::UI::Input::Pointer::POINTER_INFO,
+        _decoded: DecodedPointer,
+        _message: u32,
+    ) -> Vec<PlatformInput> {
+        Vec::new()
+    }
+
+    fn cancel(
+        &mut self,
+        _raw: u32,
+        _time: flui_platform_api::EventTime,
+        _reason: flui_platform_api::pointer::CancelReason,
+    ) -> Vec<PlatformInput> {
+        Vec::new()
+    }
+
+    fn remove_device(
+        &mut self,
+        _device: flui_platform_api::pointer::DeviceId,
+        _time: flui_platform_api::EventTime,
+    ) -> Vec<PlatformInput> {
+        Vec::new()
+    }
+}
+
 #[cfg(test)]
 mod native_pointer_contracts {
     use super::*;
@@ -377,6 +411,140 @@ mod native_pointer_contracts {
             "reported zero is a sensor reading"
         );
     }
+
+    fn packet(device: u64, time: u64) -> DecodedPointer {
+        use flui_platform_api::pointer::{DeviceId, PointerPosition, PointerSample};
+        DecodedPointer {
+            kind: PointerKind::Touch,
+            role: PointerRole::Additional,
+            device: Some(DeviceId::try_from(device).expect("nonzero device")),
+            sample: PointerSample::new(
+                EventTime::from_nanos(time),
+                PointerPosition::try_new(flui_foundation::geometry::Point::new(10.0, 20.0))
+                    .expect("finite native geometry"),
+            ),
+        }
+    }
+    fn down(
+        registry: &mut NativePointerRegistry,
+        raw: u32,
+        device: u64,
+        time: u64,
+    ) -> flui_platform_api::pointer::PointerInfo {
+        use flui_platform_api::pointer::PointerEvent;
+        use windows::Win32::UI::{
+            Input::Pointer::{POINTER_FLAG_DOWN, POINTER_FLAG_FIRSTBUTTON, POINTER_FLAG_INCONTACT},
+            WindowsAndMessaging::WM_POINTERDOWN,
+        };
+        let native = POINTER_INFO {
+            pointerId: raw,
+            pointerFlags: POINTER_FLAG_DOWN | POINTER_FLAG_FIRSTBUTTON | POINTER_FLAG_INCONTACT,
+            ..info()
+        };
+        registry
+            .commit(&native, packet(device, time), WM_POINTERDOWN)
+            .into_iter()
+            .find_map(|input| match input {
+                PlatformInput::Pointer(PointerEvent::Down(press)) => Some(press.pointer),
+                _ => None,
+            })
+            .expect("native contact must be admitted")
+    }
+    fn native_contacts_survive_independent_device_removal() {
+        use flui_platform_api::pointer::{CancelReason, DeviceId, PointerEvent};
+        let mut registry = NativePointerRegistry::default();
+        let first = down(&mut registry, 7, 0x3450, 1);
+        let second = down(&mut registry, 8, 0x4560, 2);
+        assert_ne!(first.id, second.id);
+        let removed = registry.remove_device(
+            DeviceId::try_from(0x3450_u64).expect("device"),
+            EventTime::from_nanos(3),
+        );
+        let cancelled: Vec<_> = removed
+            .iter()
+            .filter_map(|input| match input {
+                PlatformInput::Pointer(PointerEvent::Cancel(cancel)) => Some(cancel),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(cancelled.len(), 1);
+        assert_eq!(cancelled[0].pointer, first);
+        assert_eq!(cancelled[0].reason, CancelReason::DeviceRemoved);
+        let surviving = registry.cancel(8, EventTime::from_nanos(4), CancelReason::CaptureLost);
+        assert!(surviving.iter().any(|input| matches!(input, PlatformInput::Pointer(PointerEvent::Cancel(cancel)) if cancel.pointer == second && cancel.reason == CancelReason::CaptureLost)));
+        assert!(
+            registry
+                .cancel(7, EventTime::from_nanos(5), CancelReason::CaptureLost)
+                .is_empty()
+        );
+    }
+    fn native_terminal_identity_survives_callback_readmission() {
+        use flui_platform_api::pointer::PointerEvent;
+        use windows::Win32::UI::{
+            Input::Pointer::POINTER_FLAG_UP, WindowsAndMessaging::WM_POINTERUP,
+        };
+        let mut registry = NativePointerRegistry::default();
+        let old = down(&mut registry, 7, 0x3450, 1);
+        let terminal = registry.commit(
+            &POINTER_INFO {
+                pointerId: 7,
+                pointerFlags: POINTER_FLAG_UP,
+                ..info()
+            },
+            packet(0x3450, 2),
+            WM_POINTERUP,
+        );
+        // Presentation delivery can re-admit the native ID after retirement.
+        let fresh = down(&mut registry, 7, 0x3450, 3);
+        assert_ne!(old.id, fresh.id);
+        assert!(terminal.iter().any(|input| matches!(input, PlatformInput::Pointer(PointerEvent::Up(release)) if release.pointer == old)));
+        let cancelled = registry.cancel(
+            7,
+            EventTime::from_nanos(4),
+            flui_platform_api::pointer::CancelReason::Platform,
+        );
+        assert!(cancelled.iter().any(|input| matches!(input, PlatformInput::Pointer(PointerEvent::Cancel(cancel)) if cancel.pointer == fresh)));
+    }
+    fn exhausted_native_identity_never_wraps() {
+        use flui_platform_api::pointer::PointerEvent;
+        use windows::Win32::UI::WindowsAndMessaging::WM_POINTERDOWN;
+        let mut registry = NativePointerRegistry {
+            next_contact: u64::MAX - 1,
+            ..Default::default()
+        };
+        let final_contact = down(&mut registry, 7, 0x3450, 1);
+        assert_eq!(final_contact.id.get().get(), u64::MAX);
+        for raw in [8, 9] {
+            let native = POINTER_INFO {
+                pointerId: raw,
+                ..info()
+            };
+            assert!(
+                !registry
+                    .commit(&native, packet(0x3450, 2), WM_POINTERDOWN)
+                    .iter()
+                    .any(|input| matches!(input, PlatformInput::Pointer(PointerEvent::Down(_))))
+            );
+        }
+        registry.cancel(
+            7,
+            EventTime::from_nanos(3),
+            flui_platform_api::pointer::CancelReason::Platform,
+        );
+        assert!(
+            !registry
+                .commit(
+                    &POINTER_INFO {
+                        pointerId: 10,
+                        ..info()
+                    },
+                    packet(0x3450, 4),
+                    WM_POINTERDOWN
+                )
+                .iter()
+                .any(|input| matches!(input, PlatformInput::Pointer(PointerEvent::Down(_))))
+        );
+    }
     #[test]
     fn native_pointer_decoding_contracts() {
         for case in [
@@ -384,6 +552,9 @@ mod native_pointer_contracts {
             native_pen_masks_preserve_sensor_presence,
             native_touch_contact_and_pressure_are_measured,
             invalid_native_sensor_and_scale_are_refused,
+            native_contacts_survive_independent_device_removal,
+            native_terminal_identity_survives_callback_readmission,
+            exhausted_native_identity_never_wraps,
         ] {
             case();
         }
