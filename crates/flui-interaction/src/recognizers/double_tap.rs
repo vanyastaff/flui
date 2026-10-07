@@ -7,7 +7,7 @@ use super::{
 };
 use crate::{
     arena::{GestureArena, GestureArenaEntry, GestureArenaMember, GestureDisposition},
-    events::{PointerEvent, PointerEventExt, PointerType},
+    events::{PointerEvent, PointerEventExt, PointerKind},
     ids::PointerId,
     routing::{PointerDispatch, RoutePanic},
     settings::GestureSettings,
@@ -29,7 +29,7 @@ pub struct DoubleTapDetails {
     /// Position in the recognizer coordinate space.
     pub local_position: Offset<f64>,
     /// Device kind frozen at admission.
-    pub kind: PointerType,
+    pub kind: PointerKind,
 }
 
 #[derive(Default)]
@@ -137,7 +137,7 @@ impl DoubleTapGestureRecognizer {
             DoubleTapDetails {
                 local_position: Offset::ZERO,
                 global_position: Offset::ZERO,
-                kind: PointerType::Touch,
+                kind: PointerKind::Touch,
             },
             |contact| DoubleTapDetails {
                 local_position: contact.local,
@@ -235,6 +235,9 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
         let PointerEvent::Down(_) = dispatch.local else {
             return;
         };
+        let Some(position) = dispatch.local.position() else {
+            return;
+        };
         let state = self.gesture.borrow().clone();
         let mut failure = None;
         let mut second = false;
@@ -252,7 +255,7 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
                 if !self.contact.is_current(waiting_contact.id) {
                     return;
                 }
-                let distance = (dispatch.local.position() - details.local_position).distance();
+                let distance = (position - details.local_position).distance();
                 if deadline.is_some_and(|deadline| now >= deadline)
                     || !distance.is_finite()
                     || distance > settings.double_tap_slop()
@@ -293,12 +296,16 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
         let Some(contact) = self.contact.current() else {
             return;
         };
-        if !self.contact.tracks(dispatch.local.pointer_id()) {
+        if !dispatch
+            .local
+            .pointer_id()
+            .is_some_and(|pointer| self.contact.tracks(pointer))
+        {
             return;
         }
         let details = DoubleTapDetails {
-            local_position: dispatch.local.position(),
-            global_position: dispatch.global.position(),
+            local_position: dispatch.local.position().unwrap_or(contact.local),
+            global_position: dispatch.global.position().unwrap_or(contact.global),
             kind: contact.kind,
         };
         let state = self.gesture.borrow().clone();

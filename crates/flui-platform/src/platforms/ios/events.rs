@@ -1,7 +1,7 @@
 //! iOS touch event conversion.
 //!
 //! Converts a UIKit `UITouch` (and its `NSSet` batch) into the
-//! platform-agnostic `PlatformInput` types — the W3C-compliant `ui-events`
+//! platform-agnostic `PlatformInput` types through the private `ui-events`
 //! vocabulary every backend speaks.
 //!
 //! # Mapping
@@ -78,7 +78,12 @@ pub(super) fn touch_to_pointer_events(
         TouchPhase::Cancel => PointerEvent::Cancel(info),
     };
 
-    vec![PlatformInput::Pointer(event)]
+    crate::shared::input_vocabulary::pointer_input(
+        event,
+        (touch.timestamp() * 1_000_000_000.0) as u64,
+    )
+    .into_iter()
+    .collect()
 }
 
 /// Stable pointer identity for a `UITouch`.

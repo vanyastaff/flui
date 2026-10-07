@@ -4,11 +4,14 @@ use super::{
         finish_containment, invoke_callback, retire_callback, retire_callbacks, withdraw_cancelled,
     },
     contact::{ArenaMembership, ContactId},
-    recognizer::{CancelOutcome, EventTimeline, GestureRecognizer, event_time, is_primary_down},
+    recognizer::{
+        CancelOutcome, EventTimeline, GestureRecognizer, event_time, is_primary_down,
+        motion_history,
+    },
 };
 use crate::{
     arena::{GestureArena, GestureArenaEntry, GestureArenaMember},
-    events::{PointerEvent, PointerEventExt, PointerType},
+    events::{PointerEvent, PointerEventExt, PointerKind},
     ids::PointerId,
     processing::VelocityTracker,
     routing::{PointerDispatch, RoutePanic},
@@ -59,7 +62,7 @@ pub struct MultiDragUpdateDetails {
     /// Movement since the prior delivered sample.
     pub delta: Offset<f64>,
     /// Device kind captured on Down.
-    pub kind: PointerType,
+    pub kind: PointerKind,
     /// Event-clock timestamp.
     pub timestamp: Instant,
 }
@@ -73,7 +76,7 @@ pub struct MultiDragEndDetails {
     /// Velocity on the contact's event clock.
     pub velocity: crate::processing::Velocity,
     /// Device kind captured on Down.
-    pub kind: PointerType,
+    pub kind: PointerKind,
 }
 
 #[derive(Default)]
@@ -138,7 +141,7 @@ struct MultiDragPointerState {
     initial_global_position: Offset<f64>,
     last_position: Offset<f64>,
     last_global_position: Offset<f64>,
-    kind: PointerType,
+    kind: PointerKind,
     slop: f64,
     pending_delta: Offset<f64>,
     accepted: bool,
@@ -220,7 +223,10 @@ impl MultiDragGestureRecognizer {
                 let now = state.timeline.instant(event_time(dispatch.local), clock);
                 let details = MultiDragEndDetails {
                     pointer_id: pointer,
-                    global_position: dispatch.global.position(),
+                    global_position: dispatch
+                        .global
+                        .position()
+                        .unwrap_or(state.last_global_position),
                     velocity: state.velocity_tracker.velocity_at(now),
                     kind: state.kind,
                 };
@@ -237,9 +243,14 @@ impl MultiDragGestureRecognizer {
         retire_callback(client, first);
     }
     fn handle_move(&self, dispatch: PointerDispatch<'_>) {
-        let pointer = dispatch.local.pointer_id();
-        let position = dispatch.local.position();
-        let global = dispatch.global.position();
+        let Some(pointer) = dispatch.local.pointer_id() else {
+            return;
+        };
+        let (Some(position), Some(global)) =
+            (dispatch.local.position(), dispatch.global.position())
+        else {
+            return;
+        };
         let Some(id) = self.pointers.borrow().get(&pointer).map(|state| state.id) else {
             return;
         };
@@ -256,12 +267,17 @@ impl MultiDragGestureRecognizer {
             }
             return;
         }
+        let history = motion_history(dispatch.local);
         let clock = self.membership.now();
         let (client, update, claim) = {
             let mut pointers = self.pointers.borrow_mut();
             let Some(state) = pointers.get_mut(&pointer).filter(|state| state.id == id) else {
                 return;
             };
+            for (stamp, position) in history {
+                let timestamp = state.timeline.instant(stamp, clock);
+                state.velocity_tracker.add_position(timestamp, position);
+            }
             let timestamp = state.timeline.instant(event_time(dispatch.local), clock);
             let delta = (position - state.last_position).to_delta();
             let pending = state.pending_delta + delta;
@@ -389,7 +405,9 @@ impl MultiDragGestureRecognizer {
 }
 impl GestureRecognizer for MultiDragGestureRecognizer {
     fn add_pointer(&self, dispatch: PointerDispatch<'_>) {
-        let pointer = dispatch.local.pointer_id();
+        let Some(pointer) = dispatch.local.pointer_id() else {
+            return;
+        };
         let _span = tracing::info_span!(
             "multidrag.add_pointer",
             pointer = ?pointer,
@@ -398,9 +416,11 @@ impl GestureRecognizer for MultiDragGestureRecognizer {
         if !is_primary_down(dispatch.local) {
             return;
         }
-        let pointer = dispatch.local.pointer_id();
-        let position = dispatch.local.position();
-        let global = dispatch.global.position();
+        let (Some(position), Some(global)) =
+            (dispatch.local.position(), dispatch.global.position())
+        else {
+            return;
+        };
         if !position.dx.is_finite()
             || !position.dy.is_finite()
             || !global.dx.is_finite()
@@ -430,7 +450,7 @@ impl GestureRecognizer for MultiDragGestureRecognizer {
         let PointerEvent::Down(data) = dispatch.local else {
             return;
         };
-        let kind = data.pointer.pointer_type;
+        let kind = data.pointer.kind;
         let mut timeline = EventTimeline::default();
         let now = timeline.instant(event_time(dispatch.local), clock);
         let mut velocity_tracker = VelocityTracker::new();
@@ -461,7 +481,9 @@ impl GestureRecognizer for MultiDragGestureRecognizer {
             kind = %crate::observability::pointer_event_kind(dispatch.local),
             event = %crate::observability::GestureEvent::EventReceived,
         );
-        let pointer = dispatch.local.pointer_id();
+        let Some(pointer) = dispatch.local.pointer_id() else {
+            return;
+        };
         match dispatch.local {
             PointerEvent::Move(_) => self.handle_move(dispatch),
             PointerEvent::Up(_) | PointerEvent::Cancel(_) => {

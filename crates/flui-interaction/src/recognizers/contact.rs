@@ -14,7 +14,7 @@ use crate::{
         GestureArena, GestureArenaEntry, GestureArenaMember, GestureDeadlineRegistration,
         GestureDisposition, SweepModel,
     },
-    events::{PointerEvent, PointerEventExt, PointerType},
+    events::{PointerEvent, PointerEventExt, PointerKind},
     ids::PointerId,
     routing::{PointerDispatch, RoutePanic},
     settings::GestureSettings,
@@ -91,7 +91,7 @@ pub struct ContactSnapshot {
     /// Device pointer identifier, which may be reused by a later sequence.
     pub pointer: PointerId,
     /// Device kind captured on Down.
-    pub kind: PointerType,
+    pub kind: PointerKind,
     /// Down position in recognizer coordinates.
     pub local: Offset<f64>,
     /// Down position in root coordinates.
@@ -175,13 +175,13 @@ impl PrimaryContact {
                 current: current.pointer,
             });
         }
-        let local = down.local.position();
-        let global = down.global.position();
+        let local = down.local.position().ok_or(BeginContactError::NonFinite)?;
+        let global = down.global.position().ok_or(BeginContactError::NonFinite)?;
         if !finite(local) || !finite(global) {
             return Err(BeginContactError::NonFinite);
         }
         let id = ContactId::next(&self.last_id).ok_or(BeginContactError::Exhausted)?;
-        let pointer = down.local.pointer_id();
+        let pointer = data.pointer.id;
         // Complete fallible private allocation before arena admission. The
         // registration token retires silently when admission is refused.
         let registration = self
@@ -196,7 +196,7 @@ impl PrimaryContact {
             snapshot: ContactSnapshot {
                 id,
                 pointer,
-                kind: data.pointer.pointer_type,
+                kind: data.pointer.kind,
                 local,
                 global,
                 settings: settings.clone(),

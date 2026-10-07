@@ -34,7 +34,7 @@
 //!    independent of that route, which is the whole point.
 //!
 //!    **Where the position comes from.** FLUI's pointer events are
-//!    `ui_events` types with room for one position, so dispatch delivers the
+//!    owned input values with room for one position, so dispatch delivers the
 //!    global/local pair beside the event, as a `PointerDispatch`.
 //!    `GestureRecognizer::handle_event` takes the dispatch, and every
 //!    `Drag*Details` reports its `global_position` from the untransformed

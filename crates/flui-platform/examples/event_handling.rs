@@ -76,7 +76,7 @@ fn main() -> anyhow::Result<()> {
     // Show event types
     tracing::info!("\n📋 Event Types:");
     tracing::info!("  - PointerEvent: Mouse clicks, touch, pen input");
-    tracing::info!("  - KeyboardEvent: Key presses with modifiers");
+    tracing::info!("  - KeyEvent: Key presses with modifiers");
     tracing::info!("  - WindowEvent: Resize, focus, close, redraw");
 
     // Show coordinate system
@@ -99,7 +99,7 @@ fn main() -> anyhow::Result<()> {
     tracing::info!("\n💡 Try these interactions:");
     tracing::info!("  1. Click anywhere - fires PointerEvent::Down");
     tracing::info!("  2. Move mouse - fires PointerEvent::Move");
-    tracing::info!("  3. Type on keyboard - fires KeyboardEvent");
+    tracing::info!("  3. Type on keyboard - fires KeyEvent");
     tracing::info!("  4. Hold Ctrl/Shift/Alt while clicking - modifier tracking");
     tracing::info!("  5. Resize window - fires WindowEvent::Resized");
     tracing::info!("  6. Focus/unfocus window - fires WindowEvent::FocusChanged");
@@ -110,7 +110,7 @@ fn main() -> anyhow::Result<()> {
         tracing::info!("\n👆 Multi-Touch:");
         tracing::info!("  - Each touch point has unique PointerId");
         tracing::info!("  - Supports simultaneous touches");
-        tracing::info!("  - Touch events are PointerType::Touch");
+        tracing::info!("  - Touch events are PointerKind::Touch");
     }
 
     // Keep window alive

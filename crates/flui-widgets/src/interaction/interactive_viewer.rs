@@ -62,12 +62,15 @@ use flui_foundation::geometry::Axis;
 use flui_foundation::geometry::Matrix4;
 use flui_foundation::geometry::{EdgeInsets, Offset, Point, Rect};
 use flui_interaction::Velocity;
-use flui_interaction::events::{Modifiers, ScrollEventData};
 use flui_interaction::routing::EventPropagation;
 use flui_interaction::{DragEndDetails, DragStartDetails, DragUpdateDetails, GestureEndReason};
 use flui_objects::SubtreeAnchor;
 use flui_painting::Alignment;
 use flui_painting::paint::Clip;
+use flui_platform_api::{
+    keyboard::Modifiers,
+    pointer::{PanZoomEvent, PanZoomPhase, PointerId, ScrollEvent, ScrollUnit},
+};
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::pipeline::PipelineCell;
 use flui_view::element::ElementKind;
@@ -418,6 +421,7 @@ impl StatefulView for InteractiveViewer {
             gesture: Rc::new(GestureTracking {
                 pan_start_local: Cell::new(None),
                 current_axis: Cell::new(None),
+                pan_zoom_scale: Cell::new(None),
             }),
             pipeline_cell: None,
             writer: None,
@@ -443,6 +447,8 @@ struct GestureTracking {
     /// the first non-zero movement of the gesture. `None` before that, and
     /// reset to `None` at the end of every gesture.
     current_axis: Cell<Option<Axis>>,
+    /// Cumulative trackpad scale, preserved across widget rebuilds.
+    pan_zoom_scale: Cell<Option<(PointerId, f64)>>,
 }
 
 /// Persistent state for [`InteractiveViewer`].
@@ -599,7 +605,7 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
             let on_update_wheel = on_update.clone();
             let on_end_wheel = on_end.clone();
             let wheel_writer = writer.clone();
-            let scroll_claim = move |data: &ScrollEventData| {
+            let scroll_claim = move |data: &ScrollEvent| {
                 wheel_writer.write(|cx| {
                     if wheel_scale_gate == WheelScaleGate::CtrlWheel
                         && !data.modifiers.contains(Modifiers::CONTROL)
@@ -608,32 +614,53 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
                         // the ctrl-gated contract.
                         return EventPropagation::Continue;
                     }
-                    if data.delta.dy == 0.0 {
+                    let geometry = InteractiveViewerState::geometry(
+                        pipeline_cell_wheel.as_ref(),
+                        &anchor_wheel,
+                        boundary_margin,
+                    );
+                    let pixels_per_unit = match data.delta.unit() {
+                        ScrollUnit::Pixels => 1.0,
+                        // Preserve the existing consumer policy while system
+                        // wheel preferences remain owned by the platform layer.
+                        ScrollUnit::Lines => 53.0,
+                        ScrollUnit::Pages => {
+                            let Some((viewport, _)) = geometry else {
+                                return EventPropagation::Continue;
+                            };
+                            let height = viewport.height();
+                            if !height.is_finite() || height <= 0.0 {
+                                return EventPropagation::Continue;
+                            }
+                            height
+                        }
+                        _ => return EventPropagation::Continue,
+                    };
+                    let delta = data.delta.y() * pixels_per_unit;
+                    if delta == 0.0 || !delta.is_finite() {
                         // Ignore horizontal-only wheel scroll.
                         return EventPropagation::Continue;
                     }
 
+                    let position = data.position.get();
+                    let position = Offset::new(position.x, position.y);
+                    let scale_change = (-delta / scale_factor).exp();
+                    if !scale_change.is_finite() || scale_change <= 0.0 {
+                        return EventPropagation::Continue;
+                    }
                     if let Some(callback) = &on_start_wheel {
                         callback(
                             cx,
                             InteractionStartDetails {
-                                focal_point: data.position,
-                                local_focal_point: data.position,
+                                focal_point: position,
+                                local_focal_point: position,
                             },
                         );
                     }
 
-                    let scale_change = (-data.delta.dy / scale_factor).exp();
-
                     let value_before_zoom = controller_wheel.value();
-                    if scale_enabled
-                        && let Some((viewport, boundary)) = InteractiveViewerState::geometry(
-                            pipeline_cell_wheel.as_ref(),
-                            &anchor_wheel,
-                            boundary_margin,
-                        )
-                    {
-                        let scene_before = controller_wheel.to_scene(data.position);
+                    if scale_enabled && let Some((viewport, boundary)) = geometry {
+                        let scene_before = controller_wheel.to_scene(position);
                         let scaled = clamp_scale(
                             controller_wheel.value(),
                             scale_change,
@@ -646,7 +673,7 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
 
                         // Keep the same scene point under the cursor before and
                         // after the scale.
-                        let scene_after = controller_wheel.to_scene(data.position);
+                        let scene_after = controller_wheel.to_scene(position);
                         let correction = Offset::new(
                             scene_after.dx - scene_before.dx,
                             scene_after.dy - scene_before.dy,
@@ -664,8 +691,8 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
                         callback(
                             cx,
                             InteractionUpdateDetails {
-                                focal_point: data.position,
-                                local_focal_point: data.position,
+                                focal_point: position,
+                                local_focal_point: position,
                                 scale: scale_change,
                                 focal_point_delta: Offset::ZERO,
                             },
@@ -727,10 +754,8 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
             // would do this instead, which V1 scopes out; see this module's
             // own docs.)
             //
-            // The pan-zoom lane delivers per-tick updates whose `scale` is
-            // the tick's own factor (each converted gesture is a one-tick
-            // "cumulative" — see `convert_gesture`'s doc), so composing is
-            // a straight multiply per update, with the identical
+            // The owned pan-zoom stream is cumulative. Convert each update
+            // to its factor since the previous update, with the identical
             // clamp-and-keep-the-focal-point-fixed steps the wheel branch
             // uses. Ticks that change nothing (pure rotation, scale 1.0)
             // fire the interaction callbacks and leave the transform alone.
@@ -741,14 +766,39 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
             let on_update_pinch = on_update.clone();
             let on_end_pinch = on_end.clone();
             let pinch_writer = writer.clone();
-            let pan_zoom = move |event: &flui_interaction::PointerPanZoomEvent| {
-                pinch_writer.write(|cx| {
-                    let flui_interaction::PointerPanZoomEvent::Update {
-                        position, scale, ..
-                    } = *event
-                    else {
+            let pinch_gesture = gesture.clone();
+            let pan_zoom = move |event: &PanZoomEvent| {
+                let pointer = event.pointer().id;
+                let scale_change = match event.phase {
+                    PanZoomPhase::Start => {
+                        pinch_gesture.pan_zoom_scale.set(Some((pointer, 1.0)));
                         return EventPropagation::Continue;
-                    };
+                    }
+                    PanZoomPhase::Update(transform) => {
+                        let previous = pinch_gesture
+                            .pan_zoom_scale
+                            .replace(Some((pointer, transform.scale())))
+                            .filter(|(previous_pointer, _)| *previous_pointer == pointer)
+                            .map_or(1.0, |(_, scale)| scale);
+                        // Two checked finite scales can have an unrepresentable
+                        // ratio. Saturate the step before publishing callbacks.
+                        (transform.scale() / previous).clamp(f64::from_bits(1), f64::MAX)
+                    }
+                    PanZoomPhase::End | PanZoomPhase::Cancelled => {
+                        if pinch_gesture
+                            .pan_zoom_scale
+                            .get()
+                            .is_some_and(|(active, _)| active == pointer)
+                        {
+                            pinch_gesture.pan_zoom_scale.set(None);
+                        }
+                        return EventPropagation::Continue;
+                    }
+                    _ => return EventPropagation::Continue,
+                };
+                let point = event.position.get();
+                let position = Offset::new(point.x, point.y);
+                pinch_writer.write(|cx| {
                     if let Some(callback) = &on_start_pinch {
                         callback(
                             cx,
@@ -758,7 +808,6 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
                             },
                         );
                     }
-                    let scale_change = scale;
                     let value_before_zoom = controller_pinch.value();
                     if scale_enabled
                         && scale_change != 1.0

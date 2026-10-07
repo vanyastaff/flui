@@ -8,8 +8,8 @@ use std::rc::Rc;
 use flui_foundation::RenderId;
 use flui_foundation::geometry::{Matrix4, Offset};
 use flui_interaction::events::{
-    Modifiers, PointerButtons, PointerEvent, PointerType, ScrollDelta, ScrollEventData,
-    make_move_event_for_id, make_scroll_event,
+    Modifiers, PointerButtons, PointerEvent, PointerInfo, PointerKind, PointerPosition,
+    ScrollDelta, ScrollEvent, ScrollEventData, make_move_event_for_id, pointer::ScrollUnit,
 };
 use flui_interaction::routing::{
     DeviceId, InteractionDispatchHandle, InteractionLane, MouseRegionCallbacks, MouseRegionTarget,
@@ -21,12 +21,22 @@ const MOUSE: u64 = 2;
 const PEN: u64 = 3;
 
 /// A buttonless move, as a platform reports hover, `time_ms` after start.
-fn hover(pointer: u64, pointer_type: PointerType, position: Offset, time_ms: u64) -> PointerEvent {
-    let id = PointerId::new(pointer).expect("nonzero pointer id");
-    let mut event = make_move_event_for_id(id, position, pointer_type);
+fn hover(pointer: u64, pointer_type: PointerKind, position: Offset, time_ms: u64) -> PointerEvent {
+    let id = PointerId::new(std::num::NonZeroU64::new(pointer).expect("nonzero pointer id"));
+    let mut event =
+        make_move_event_for_id(id, position, pointer_type).expect("valid fixture sample");
     if let PointerEvent::Move(update) = &mut event {
-        update.current.buttons = PointerButtons::new();
-        update.current.time = time_ms * 1_000_000;
+        update.buttons = PointerButtons::NONE;
+        update.pointer = update.pointer.with_device(device(pointer));
+        {
+            let mut sample = *update.current();
+            sample.time = flui_platform_api::EventTime::from_nanos(time_ms * 1_000_000);
+            *update =
+                flui_interaction::events::PointerMove::new(update.pointer, update.buttons, sample)
+                    .with_modifiers(update.modifiers)
+                    .with_coalesced(update.coalesced().to_vec())
+                    .with_predicted(update.predicted().to_vec());
+        };
     }
     event
 }
@@ -58,10 +68,14 @@ fn logging_region(
     handle
         .register_mouse_region(MouseRegionCallbacks {
             on_enter: Some(Rc::new(move |device, _| {
-                entered.borrow_mut().push(format!("enter {name} {device}"));
+                entered
+                    .borrow_mut()
+                    .push(format!("enter {name} {}", device.get().get()));
             })),
             on_exit: Some(Rc::new(move |device, _| {
-                exited.borrow_mut().push(format!("exit {name} {device}"));
+                exited
+                    .borrow_mut()
+                    .push(format!("exit {name} {}", device.get().get()));
             })),
             ..MouseRegionCallbacks::default()
         })
@@ -84,27 +98,27 @@ fn shared_region_exits_once_per_device() {
 
     lane.enter(|| {
         tracker.update_with_motion(
-            &hover(MOUSE, PointerType::Mouse, at, 1),
+            &hover(MOUSE, PointerKind::Mouse, at, 1),
             PointerMotionKind::Hover,
             &over,
         );
         tracker.update_with_motion(
-            &hover(PEN, PointerType::Pen, at, 2),
+            &hover(PEN, PointerKind::Pen, at, 2),
             PointerMotionKind::Hover,
             &over,
         );
         tracker.update_with_motion(
-            &hover(PEN, PointerType::Pen, at, 3),
+            &hover(PEN, PointerKind::Pen, at, 3),
             PointerMotionKind::Hover,
             &away,
         );
         tracker.update_with_motion(
-            &hover(MOUSE, PointerType::Mouse, at, 4),
+            &hover(MOUSE, PointerKind::Mouse, at, 4),
             PointerMotionKind::Hover,
             &away,
         );
         tracker.update_with_motion(
-            &hover(MOUSE, PointerType::Mouse, at, 5),
+            &hover(MOUSE, PointerKind::Mouse, at, 5),
             PointerMotionKind::Hover,
             &away,
         );
@@ -134,7 +148,7 @@ fn stationary_device_follows_layout_without_duplicates() {
 
     lane.enter(|| {
         tracker.update_with_motion(
-            &hover(MOUSE, PointerType::Mouse, at, 1),
+            &hover(MOUSE, PointerKind::Mouse, at, 1),
             PointerMotionKind::Hover,
             &HitTestResult::new(),
         );
@@ -150,7 +164,7 @@ fn stationary_device_follows_layout_without_duplicates() {
         // Layout replaces them with a sibling: every exit precedes the enter.
         tracker.update_all_devices(|_| moved.clone());
         tracker.update_with_motion(
-            &hover(MOUSE, PointerType::Mouse, at, 2),
+            &hover(MOUSE, PointerKind::Mouse, at, 2),
             PointerMotionKind::Hover,
             &moved,
         );
@@ -206,12 +220,12 @@ fn refresh_callback_panic_reaches_every_device() {
     };
     lane.enter(|| {
         tracker.update_with_motion(
-            &hover(MOUSE, PointerType::Mouse, mouse_at, 1),
+            &hover(MOUSE, PointerKind::Mouse, mouse_at, 1),
             PointerMotionKind::Hover,
             &regions_at(mouse_at),
         );
         tracker.update_with_motion(
-            &hover(PEN, PointerType::Pen, pen_at, 2),
+            &hover(PEN, PointerKind::Pen, pen_at, 2),
             PointerMotionKind::Hover,
             &regions_at(pen_at),
         );
@@ -249,12 +263,12 @@ fn refresh_hit_test_panic_keeps_the_device_for_the_next_refresh() {
     let pen_at = Offset::new(20.0, 20.0);
     lane.enter(|| {
         tracker.update_with_motion(
-            &hover(MOUSE, PointerType::Mouse, mouse_at, 1),
+            &hover(MOUSE, PointerKind::Mouse, mouse_at, 1),
             PointerMotionKind::Hover,
             &path(&[(1, mouse_region)]),
         );
         tracker.update_with_motion(
-            &hover(PEN, PointerType::Pen, pen_at, 2),
+            &hover(PEN, PointerKind::Pen, pen_at, 2),
             PointerMotionKind::Hover,
             &path(&[(2, pen_region)]),
         );
@@ -296,12 +310,12 @@ fn refresh_hit_test_failure_precedes_a_competing_callback_failure() {
     let pen_at = Offset::new(20.0, 20.0);
     lane.enter(|| {
         tracker.update_with_motion(
-            &hover(MOUSE, PointerType::Mouse, mouse_at, 1),
+            &hover(MOUSE, PointerKind::Mouse, mouse_at, 1),
             PointerMotionKind::Hover,
             &path(&[(1, mouse_region)]),
         );
         tracker.update_with_motion(
-            &hover(PEN, PointerType::Pen, pen_at, 2),
+            &hover(PEN, PointerKind::Pen, pen_at, 2),
             PointerMotionKind::Hover,
             &HitTestResult::new(),
         );
@@ -370,7 +384,7 @@ fn region_destructor_may_reenter_the_tracker() {
     let at = Offset::new(10.0, 10.0);
     lane.enter(|| {
         tracker.update_with_motion(
-            &hover(MOUSE, PointerType::Mouse, at, 1),
+            &hover(MOUSE, PointerKind::Mouse, at, 1),
             PointerMotionKind::Hover,
             &path(&[(1, region)]),
         );
@@ -380,7 +394,7 @@ fn region_destructor_may_reenter_the_tracker() {
             .unregister_mouse_region(region)
             .expect("unregister region");
         tracker.update_with_motion(
-            &hover(MOUSE, PointerType::Mouse, at, 2),
+            &hover(MOUSE, PointerKind::Mouse, at, 2),
             PointerMotionKind::Hover,
             &HitTestResult::new(),
         );
@@ -476,7 +490,7 @@ fn assert_region_retirement_recovery(competing: bool) {
     let at = Offset::new(10.0, 10.0);
     lane.enter(|| {
         tracker.update_with_motion(
-            &hover(MOUSE, PointerType::Mouse, at, 1),
+            &hover(MOUSE, PointerKind::Mouse, at, 1),
             PointerMotionKind::Hover,
             &path(&regions),
         );
@@ -489,7 +503,7 @@ fn assert_region_retirement_recovery(competing: bool) {
     let payload = catch_unwind(AssertUnwindSafe(|| {
         lane.enter(|| {
             tracker.update_with_motion(
-                &hover(MOUSE, PointerType::Mouse, at, 2),
+                &hover(MOUSE, PointerKind::Mouse, at, 2),
                 PointerMotionKind::Hover,
                 &HitTestResult::new(),
             );
@@ -516,12 +530,12 @@ fn assert_region_retirement_recovery(competing: bool) {
     lane.enter(|| {
         let target = logging_region(&handle, "healthy", &log);
         tracker.update_with_motion(
-            &hover(MOUSE, PointerType::Mouse, at, 3),
+            &hover(MOUSE, PointerKind::Mouse, at, 3),
             PointerMotionKind::Hover,
             &path(&[(4, target)]),
         );
         tracker.update_with_motion(
-            &hover(MOUSE, PointerType::Mouse, at, 4),
+            &hover(MOUSE, PointerKind::Mouse, at, 4),
             PointerMotionKind::Hover,
             &HitTestResult::new(),
         );
@@ -568,12 +582,12 @@ fn tracker_reports_the_explicit_arrow() {
     let text_area = cursor_path(&[None, Some(CursorIcon::Text)]);
     let button = cursor_path(&[Some(CursorIcon::Default), Some(CursorIcon::Text)]);
     tracker.update_with_motion(
-        &hover(MOUSE, PointerType::Mouse, at, 1),
+        &hover(MOUSE, PointerKind::Mouse, at, 1),
         PointerMotionKind::Hover,
         &text_area,
     );
     tracker.update_with_motion(
-        &hover(MOUSE, PointerType::Mouse, at, 2),
+        &hover(MOUSE, PointerKind::Mouse, at, 2),
         PointerMotionKind::Hover,
         &button,
     );
@@ -636,75 +650,93 @@ fn pointer_events_seen_locally(events: &[PointerEvent]) -> Vec<PointerEvent> {
 }
 
 fn move_samples_are_localized() {
-    let mut event = hover(MOUSE, PointerType::Mouse, Offset::new(80.0, 70.0), 3);
+    let mut event = hover(MOUSE, PointerKind::Mouse, Offset::new(80.0, 70.0), 3);
     if let PointerEvent::Move(update) = &mut event {
-        for (x, y) in [(90.0, 60.0), (84.0, 66.0)] {
-            let mut sample = update.current.clone();
-            sample.position = dpi::PhysicalPosition::new(x, y);
-            update.coalesced.push(sample);
-        }
-        let mut predicted = update.current.clone();
-        predicted.position = dpi::PhysicalPosition::new(76.0, 74.0);
-        update.predicted.push(predicted);
+        let coalesced = [(90.0, 60.0), (84.0, 66.0)].map(|(x, y)| {
+            let mut sample = *update.current();
+            sample.position = PointerPosition::try_new(flui_foundation::geometry::Point::new(x, y))
+                .expect("finite historical position");
+            sample
+        });
+        let mut predicted = *update.current();
+        predicted.position =
+            PointerPosition::try_new(flui_foundation::geometry::Point::new(76.0, 74.0))
+                .expect("finite predicted position");
+        *update = update
+            .clone()
+            .with_coalesced(coalesced.to_vec())
+            .with_predicted(vec![predicted]);
     }
     let seen = pointer_events_seen_locally(&[event]);
     let [PointerEvent::Move(local)] = seen.as_slice() else {
         panic!("one localized move: {seen:?}");
     };
-    let point =
-        |state: &flui_interaction::events::PointerState| (state.position.x, state.position.y);
+    let point = |state: &flui_interaction::events::PointerSample| {
+        (state.position.get().x, state.position.get().y)
+    };
     assert_close(
-        point(&local.current),
+        point(local.current()),
         expected_local((80.0, 70.0)),
         "current",
     );
-    assert_eq!(local.coalesced.len(), 2);
+    assert_eq!(local.coalesced().len(), 2);
     assert_close(
-        point(&local.coalesced[0]),
+        point(&local.coalesced()[0]),
         expected_local((90.0, 60.0)),
         "coalesced[0]",
     );
     assert_close(
-        point(&local.coalesced[1]),
+        point(&local.coalesced()[1]),
         expected_local((84.0, 66.0)),
         "coalesced[1]",
     );
-    assert_eq!(local.predicted.len(), 1);
+    assert_eq!(local.predicted().len(), 1);
     assert_close(
-        point(&local.predicted[0]),
+        point(&local.predicted()[0]),
         expected_local((76.0, 74.0)),
         "predicted",
     );
 }
 
 fn scroll_delta_is_localized_as_a_vector() {
-    let pixels = make_scroll_event(Offset::new(80.0, 70.0), Offset::new(0.0, 30.0));
+    let pixels = PointerEvent::Scroll(ScrollEvent::new(
+        PointerInfo::new(
+            PointerId::new(std::num::NonZeroU64::MIN),
+            PointerKind::Mouse,
+        ),
+        flui_platform_api::EventTime::from_nanos(0),
+        PointerPosition::try_new(flui_foundation::geometry::Point::new(80.0, 70.0))
+            .expect("finite scroll position"),
+        ScrollDelta::try_new(ScrollUnit::Pixels, 0.0, 30.0).expect("finite pixel delta"),
+    ));
     let mut lines = pixels.clone();
     if let PointerEvent::Scroll(scroll) = &mut lines {
-        scroll.delta = ScrollDelta::LineDelta(4.0, 0.0);
+        scroll.delta =
+            ScrollDelta::try_new(ScrollUnit::Lines, 4.0, 0.0).expect("finite line delta");
     }
     let seen = pointer_events_seen_locally(&[pixels, lines]);
     let [PointerEvent::Scroll(pixels), PointerEvent::Scroll(lines)] = seen.as_slice() else {
         panic!("two localized scrolls: {seen:?}");
     };
     assert_close(
-        (pixels.state.position.x, pixels.state.position.y),
+        (pixels.position.get().x, pixels.position.get().y),
         expected_local((80.0, 70.0)),
         "scroll position",
     );
-    let ScrollDelta::PixelDelta(delta) = pixels.delta else {
-        panic!("pixel delta stays pixels: {:?}", pixels.delta);
-    };
+    let delta = pixels.delta;
+    assert_eq!(delta.unit(), ScrollUnit::Pixels, "pixel delta stays pixels");
     assert_close(
-        (delta.x, delta.y),
+        (delta.x(), delta.y()),
         expected_local_delta((0.0, 30.0)),
         "pixel delta",
     );
-    let ScrollDelta::LineDelta(x, y) = lines.delta else {
-        panic!("line delta stays lines: {:?}", lines.delta);
-    };
+    assert_eq!(
+        lines.delta.unit(),
+        ScrollUnit::Lines,
+        "line delta stays lines"
+    );
     assert_close(
-        (f64::from(x), f64::from(y)),
+        (lines.delta.x(), lines.delta.y()),
         expected_local_delta((4.0, 0.0)),
         "line delta",
     );

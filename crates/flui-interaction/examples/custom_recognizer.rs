@@ -9,9 +9,9 @@ use std::{cell::Cell, rc::Rc};
 
 use flui_interaction::{
     ArenaMembership, CancelOutcome, GestureArenaMember, GestureRecognizer, GestureSettings, Offset,
-    PointerDispatch, PointerId, PointerEventExt, PrimaryContact, RecognizerSet,
+    PointerDispatch, PointerEventExt, PointerId, PrimaryContact, RecognizerSet,
     arena::GestureArena,
-    events::{PointerEvent, PointerType, make_down_event_for_id, make_up_event_for_id},
+    events::{PointerEvent, PointerKind, make_down_event_for_id, make_up_event_for_id},
 };
 
 struct LoggingRecognizer {
@@ -50,7 +50,11 @@ impl GestureRecognizer for LoggingRecognizer {
     }
 
     fn handle_event(&self, dispatch: PointerDispatch<'_>) {
-        if !self.contact.tracks(dispatch.local.pointer_id()) {
+        if !dispatch
+            .local
+            .pointer_id()
+            .is_some_and(|pointer| self.contact.tracks(pointer))
+        {
             return;
         }
         match dispatch.local {
@@ -82,9 +86,11 @@ fn main() {
     recognizers.attach(&winner);
     recognizers.attach(&loser);
 
-    let pointer = PointerId::PRIMARY;
-    let down = make_down_event_for_id(pointer, Offset::ZERO, PointerType::Touch);
-    let up = make_up_event_for_id(pointer, Offset::ZERO, PointerType::Touch);
+    let pointer = PointerId::new(std::num::NonZeroU64::MIN);
+    let down = make_down_event_for_id(pointer, Offset::ZERO, PointerKind::Touch)
+        .expect("valid fixture sample");
+    let up = make_up_event_for_id(pointer, Offset::ZERO, PointerKind::Touch)
+        .expect("valid fixture sample");
     recognizers.dispatch(PointerDispatch::at_root(&down));
     arena.close(pointer);
     recognizers.dispatch(PointerDispatch::at_root(&up));

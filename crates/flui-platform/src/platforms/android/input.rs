@@ -1,7 +1,7 @@
 //! Android input event conversion
 //!
 //! Converts `android-activity` input events (`MotionEvent`, `KeyEvent`) to
-//! the platform-agnostic `PlatformInput` types (W3C-compliant `ui-events`).
+//! private `ui-events` values, then bridges them to FLUI's owned `PlatformInput`.
 //!
 //! # Touch Event Mapping
 //!
@@ -20,12 +20,15 @@ use keyboard_types::{Key, KeyState, Modifiers, NamedKey};
 use ui_events::{
     keyboard::KeyboardEvent,
     pointer::{
-        ContactGeometry, PointerButtonEvent, PointerId, PointerInfo, PointerOrientation,
-        PointerState, PointerUpdate,
+        ContactGeometry, PointerButton, PointerButtonEvent, PointerButtons, PointerEvent,
+        PointerId, PointerInfo, PointerOrientation, PointerState, PointerType, PointerUpdate,
     },
 };
 
-use crate::traits::{PlatformInput, PointerButton, PointerButtons, PointerEvent, PointerType};
+use crate::{
+    shared::input_vocabulary::{keyboard_input, pointer_input},
+    traits::PlatformInput,
+};
 
 /// Convert an Android `MotionEvent` to one or more `PlatformInput` events.
 ///
@@ -55,13 +58,16 @@ pub fn convert_motion_event(
                 1,
             );
 
-            vec![PlatformInput::Pointer(PointerEvent::Down(
-                PointerButtonEvent {
+            pointer_input(
+                PointerEvent::Down(PointerButtonEvent {
                     button: Some(PointerButton::Primary),
                     pointer: info,
                     state,
-                },
-            ))]
+                }),
+                time_ns,
+            )
+            .into_iter()
+            .collect()
         }
 
         MotionAction::Up | MotionAction::PointerUp => {
@@ -77,20 +83,23 @@ pub fn convert_motion_event(
                 1,
             );
 
-            vec![PlatformInput::Pointer(PointerEvent::Up(
-                PointerButtonEvent {
+            pointer_input(
+                PointerEvent::Up(PointerButtonEvent {
                     button: Some(PointerButton::Primary),
                     pointer: info,
                     state,
-                },
-            ))]
+                }),
+                time_ns,
+            )
+            .into_iter()
+            .collect()
         }
 
         MotionAction::Move => {
             // Move events carry all pointers — emit one event per pointer
             event
                 .pointers()
-                .map(|pointer| {
+                .filter_map(|pointer| {
                     let info = make_pointer_info(&pointer);
                     let state = make_pointer_state(
                         &pointer,
@@ -101,12 +110,15 @@ pub fn convert_motion_event(
                         0,
                     );
 
-                    PlatformInput::Pointer(PointerEvent::Move(PointerUpdate {
-                        pointer: info,
-                        current: state,
-                        coalesced: Vec::new(),
-                        predicted: Vec::new(),
-                    }))
+                    pointer_input(
+                        PointerEvent::Move(PointerUpdate {
+                            pointer: info,
+                            current: state,
+                            coalesced: Vec::new(),
+                            predicted: Vec::new(),
+                        }),
+                        time_ns,
+                    )
                 })
                 .collect()
         }
@@ -115,9 +127,9 @@ pub fn convert_motion_event(
             // Cancel all active pointers
             event
                 .pointers()
-                .map(|pointer| {
+                .filter_map(|pointer| {
                     let info = make_pointer_info(&pointer);
-                    PlatformInput::Pointer(PointerEvent::Cancel(info))
+                    pointer_input(PointerEvent::Cancel(info), time_ns)
                 })
                 .collect()
         }
@@ -126,21 +138,25 @@ pub fn convert_motion_event(
             let idx = event.pointer_index();
             let pointer = event.pointer_at_index(idx);
             let info = make_pointer_info(&pointer);
-            vec![PlatformInput::Pointer(PointerEvent::Enter(info))]
+            pointer_input(PointerEvent::Enter(info), time_ns)
+                .into_iter()
+                .collect()
         }
 
         MotionAction::HoverExit => {
             let idx = event.pointer_index();
             let pointer = event.pointer_at_index(idx);
             let info = make_pointer_info(&pointer);
-            vec![PlatformInput::Pointer(PointerEvent::Leave(info))]
+            pointer_input(PointerEvent::Leave(info), time_ns)
+                .into_iter()
+                .collect()
         }
 
         MotionAction::HoverMove => {
             // Treat hover move as a regular move (stylus hovering, mouse)
             event
                 .pointers()
-                .map(|pointer| {
+                .filter_map(|pointer| {
                     let info = make_pointer_info(&pointer);
                     let state = make_pointer_state(
                         &pointer,
@@ -151,12 +167,15 @@ pub fn convert_motion_event(
                         0,
                     );
 
-                    PlatformInput::Pointer(PointerEvent::Move(PointerUpdate {
-                        pointer: info,
-                        current: state,
-                        coalesced: Vec::new(),
-                        predicted: Vec::new(),
-                    }))
+                    pointer_input(
+                        PointerEvent::Move(PointerUpdate {
+                            pointer: info,
+                            current: state,
+                            coalesced: Vec::new(),
+                            predicted: Vec::new(),
+                        }),
+                        time_ns,
+                    )
                 })
                 .collect()
         }
@@ -194,15 +213,18 @@ pub fn convert_key_event(event: &android_activity::input::KeyEvent<'_>) -> Optio
     let modifiers = convert_meta_state(event.meta_state());
     let repeat = event.repeat_count() > 0;
 
-    Some(PlatformInput::Keyboard(KeyboardEvent {
-        state,
-        key,
-        code,
-        location,
-        modifiers,
-        repeat,
-        is_composing: false,
-    }))
+    Some(keyboard_input(
+        KeyboardEvent {
+            state,
+            key,
+            code,
+            location,
+            modifiers,
+            repeat,
+            is_composing: false,
+        },
+        crate::shared::events::event_timestamp_ns(),
+    ))
 }
 
 // ============================================================================

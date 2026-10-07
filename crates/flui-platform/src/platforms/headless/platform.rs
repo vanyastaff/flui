@@ -1278,8 +1278,8 @@ impl PlatformWindow for MockWindow {
         Point::default()
     }
 
-    fn modifiers(&self) -> keyboard_types::Modifiers {
-        self.state.lock().modifiers
+    fn modifiers(&self) -> flui_platform_api::keyboard::Modifiers {
+        crate::shared::input_vocabulary::modifiers(self.state.lock().modifiers)
     }
 
     fn appearance(&self) -> WindowAppearance {

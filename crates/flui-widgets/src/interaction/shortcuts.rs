@@ -24,9 +24,9 @@
 use std::any::Any;
 use std::rc::Rc;
 
-use flui_interaction::events::{Key, KeyEvent, NamedKey};
 use flui_interaction::routing::{FocusNode, KeyEventResult};
 use flui_platform_api::TargetPlatform;
+use flui_platform_api::keyboard::{Key, KeyEvent, KeyRepeat, KeyState, Modifiers, NamedKey};
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use flui_view::{EventCx, EventOutcome};
@@ -81,7 +81,7 @@ impl SingleActivator {
     /// An activator for the character `character` produces — `"c"`, `"+"`.
     #[must_use]
     pub fn character(character: impl Into<String>) -> Self {
-        Self::new(Key::Character(character.into()))
+        Self::new(Key::character(character))
     }
 
     /// A character trigger independent of the Shift key needed to produce it.
@@ -145,15 +145,15 @@ impl SingleActivator {
     /// Lock or Shift. The exact Shift check still tells Ctrl+Shift+C apart.
     #[must_use]
     pub fn matches(&self, event: &KeyEvent) -> bool {
-        event.state.is_down()
-            && (self.include_repeats || !event.repeat)
+        event.state() == KeyState::Down
+            && (self.include_repeats || event.repeat() == KeyRepeat::First)
             && trigger_matches(&self.trigger, &event.key)
-            && event.modifiers.ctrl() == self.control
+            && event.modifiers.contains(Modifiers::CONTROL) == self.control
             && self
                 .shift
-                .is_none_or(|required| event.modifiers.shift() == required)
-            && event.modifiers.alt() == self.alt
-            && event.modifiers.meta() == self.meta
+                .is_none_or(|required| event.modifiers.contains(Modifiers::SHIFT) == required)
+            && event.modifiers.contains(Modifiers::ALT) == self.alt
+            && event.modifiers.contains(Modifiers::META) == self.meta
     }
 }
 
@@ -161,6 +161,8 @@ impl SingleActivator {
 fn trigger_matches(trigger: &Key, pressed: &Key) -> bool {
     match (trigger, pressed) {
         (Key::Character(trigger), Key::Character(pressed)) => {
+            let trigger = trigger.as_str();
+            let pressed = pressed.as_str();
             trigger == pressed
                 || (trigger.len() == 1
                     && trigger.bytes().all(|byte| byte.is_ascii_alphabetic())

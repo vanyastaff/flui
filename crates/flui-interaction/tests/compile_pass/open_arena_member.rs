@@ -17,9 +17,9 @@ fn main() {
     let arena = GestureArena::new();
     let concrete = Rc::new(ExternalMember);
     let member: Rc<dyn GestureArenaMember> = concrete.clone();
-    let _entry = arena.add(PointerId::PRIMARY, &concrete);
-    arena.accept(PointerId::PRIMARY, &member);
-    arena.resolve(PointerId::PRIMARY, Some(&member));
+    let _entry = arena.add(PointerId::new(std::num::NonZeroU64::MIN), &concrete);
+    arena.accept(PointerId::new(std::num::NonZeroU64::MIN), &member);
+    arena.resolve(PointerId::new(std::num::NonZeroU64::MIN), Some(&member));
     // Primitive operations borrow the caller's owner rather than consume it.
     accepts_member(member.as_ref());
 }

@@ -3,7 +3,7 @@ use flui_foundation::geometry::Offset;
 use flui_interaction::{
     CancelOutcome, EagerGestureRecognizer, GestureArena, GestureRecognizer, PointerId,
     TapAndDragGestureRecognizer,
-    events::{PointerType, make_down_event_for_id, make_up_event_for_id},
+    events::{PointerKind, make_down_event_for_id, make_up_event_for_id},
     routing::PointerDispatch,
 };
 use std::{cell::RefCell, rc::Rc};
@@ -32,11 +32,13 @@ fn cancelling_tapdrag_from_tap_down_invalidates_the_queued_tap_up() {
         .on_cancel(move || cancel_log.borrow_mut().push("cancel"))
         .build();
     *owner.borrow_mut() = Rc::downgrade(&recognizer);
-    let pointer = PointerId::PRIMARY;
-    let down = make_down_event_for_id(pointer, Offset::ZERO, PointerType::Touch);
+    let pointer = PointerId::new(std::num::NonZeroU64::MIN);
+    let down = make_down_event_for_id(pointer, Offset::ZERO, PointerKind::Touch)
+        .expect("valid fixture sample");
     recognizer.add_pointer(PointerDispatch::at_root(&down));
     arena.close(pointer);
-    let up = make_up_event_for_id(pointer, Offset::ZERO, PointerType::Touch);
+    let up = make_up_event_for_id(pointer, Offset::ZERO, PointerKind::Touch)
+        .expect("valid fixture sample");
     recognizer.handle_event(PointerDispatch::at_root(&up));
     assert_eq!(&*log.borrow(), &["down", "cancel"]);
     assert_eq!(recognizer.cancel(), CancelOutcome::Idle);
@@ -50,23 +52,26 @@ fn tapdrag_cancel_is_reusable_and_eager_refuses_a_second_contact() {
     let recognizer = TapAndDragGestureRecognizer::builder(arena.clone())
         .on_tap_up(move |details| output.borrow_mut().push(details.consecutive_tap_count))
         .build();
-    let pointer = PointerId::PRIMARY;
-    let down = make_down_event_for_id(pointer, Offset::ZERO, PointerType::Touch);
+    let pointer = PointerId::new(std::num::NonZeroU64::MIN);
+    let down = make_down_event_for_id(pointer, Offset::ZERO, PointerKind::Touch)
+        .expect("valid fixture sample");
     recognizer.add_pointer(PointerDispatch::at_root(&down));
     assert_eq!(recognizer.cancel(), CancelOutcome::Cancelled);
     assert_eq!(recognizer.cancel(), CancelOutcome::Idle);
     recognizer.add_pointer(PointerDispatch::at_root(&down));
     arena.close(pointer);
     arena.drain_deferred_resolutions();
-    let up = make_up_event_for_id(pointer, Offset::ZERO, PointerType::Touch);
+    let up = make_up_event_for_id(pointer, Offset::ZERO, PointerKind::Touch)
+        .expect("valid fixture sample");
     recognizer.handle_event(PointerDispatch::at_root(&up));
     assert_eq!(&*log.borrow(), &[1]);
 
     let arena = GestureArena::new();
     let eager = EagerGestureRecognizer::builder(arena.clone()).build();
     eager.add_pointer(PointerDispatch::at_root(&down));
-    let other = PointerId::new(72).expect("nonzero fixture id");
-    let other_down = make_down_event_for_id(other, Offset::ZERO, PointerType::Touch);
+    let other = PointerId::new(std::num::NonZeroU64::new(72).expect("nonzero fixture id"));
+    let other_down = make_down_event_for_id(other, Offset::ZERO, PointerKind::Touch)
+        .expect("valid fixture sample");
     eager.add_pointer(PointerDispatch::at_root(&other_down));
     assert!(
         !arena.contains(other),

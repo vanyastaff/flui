@@ -10,8 +10,7 @@ use std::{
 use flui_interaction::events::ScrollEventData;
 use flui_interaction::routing::{EventPropagation, PanZoomTarget, ScrollTarget};
 use flui_interaction::{
-    GestureRecognizer, PointerDispatch, PointerPanZoomEvent, PointerTarget, RecognizerSet,
-    from_w3c_event,
+    GestureRecognizer, PanZoomEvent, PanZoomPhase, PointerDispatch, PointerTarget, RecognizerSet,
 };
 use flui_objects::RenderListener;
 use flui_rendering::hit_testing::{HitTestBehavior, PointerEvent};
@@ -28,8 +27,8 @@ use crate::support::{RefCallback, ref_callback};
 /// Stored already adapted to report its outcome.
 type PointerCallback = Rc<dyn Fn(&mut EventCx<'_>, PointerDispatch<'_>)>;
 
-/// A trackpad pan/zoom callback routed from a [`PointerEvent::Gesture`] update.
-type PointerPanZoomCallback = RefCallback<PointerPanZoomEvent>;
+/// A trackpad pan/zoom callback routed from a [`PointerEvent::PanZoom`] update.
+type PointerPanZoomCallback = RefCallback<PanZoomEvent>;
 
 /// Store a pointer callback, adapted to report its outcome.
 fn pointer_callback<F, R>(callback: F) -> PointerCallback
@@ -48,7 +47,7 @@ type ScrollClaimCallback = Rc<dyn Fn(&ScrollEventData) -> EventPropagation>;
 
 /// An arbitrated trackpad pan-zoom handler: returns
 /// [`EventPropagation::Stop`] to claim the tick, ending the leaf-first walk.
-type PanZoomClaimCallback = Rc<dyn Fn(&PointerPanZoomEvent) -> EventPropagation>;
+type PanZoomClaimCallback = Rc<dyn Fn(&PanZoomEvent) -> EventPropagation>;
 
 /// Calls callbacks in response to raw pointer events on its child.
 ///
@@ -73,10 +72,9 @@ type PanZoomClaimCallback = Rc<dyn Fn(&PointerPanZoomEvent) -> EventPropagation>
 /// measure against its size or child offsets) and `global` (the root's space,
 /// the value to compare against another widget's position or to hand to a
 /// fresh hit test). FLUI's pointer events come from
-/// [`ui_events`] and hold one position each, so the pair is delivered
+/// FLUI's owned input vocabulary and hold one position each, so the pair is delivered
 /// alongside the event instead of on it.
 ///
-/// [`ui_events`]: https://docs.rs/ui-events
 #[derive(Clone)]
 pub struct Listener {
     recognizers: RecognizerSet,
@@ -274,8 +272,8 @@ impl Listener {
 
     /// Called when a trackpad pan/zoom update reaches the listener.
     ///
-    /// Current FLUI routing converts upstream [`PointerEvent::Gesture`] into a
-    /// [`PointerPanZoomEvent::Update`]. Start/end callbacks are
+    /// FLUI routing delivers owned [`PointerEvent::PanZoom`] events.
+    /// [`PanZoomPhase::Update`] invokes this callback. Start/end callbacks are
     /// intentionally not exposed until the platform layer can provide reliable
     /// gesture-boundary events.
     ///
@@ -287,7 +285,7 @@ impl Listener {
     #[must_use]
     pub fn on_pointer_pan_zoom_update<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, &PointerPanZoomEvent) -> R + 'static,
+        F: Fn(&mut EventCx<'_>, &PanZoomEvent) -> R + 'static,
         R: EventOutcome,
     {
         self.on_pointer_pan_zoom_update = Some(ref_callback(callback));
@@ -310,7 +308,7 @@ impl Listener {
     #[must_use]
     pub fn on_pointer_pan_zoom_claim(
         mut self,
-        callback: impl Fn(&PointerPanZoomEvent) -> EventPropagation + 'static,
+        callback: impl Fn(&PanZoomEvent) -> EventPropagation + 'static,
     ) -> Self {
         self.on_pointer_pan_zoom_claim = Some(Rc::new(callback));
         self
@@ -344,16 +342,16 @@ impl Listener {
                 let callback = match dispatch.local {
                     PointerEvent::Down(_) => &on_down,
                     PointerEvent::Up(_) => &on_up,
-                    PointerEvent::Move(update) if update.current.buttons.is_empty() => &on_hover,
+                    PointerEvent::Move(update) if update.buttons.is_empty() => &on_hover,
                     PointerEvent::Move(_) => &on_move,
+                    PointerEvent::ButtonChange(_) => &on_move,
                     PointerEvent::Cancel(_) => &on_cancel,
                     PointerEvent::Scroll(_) => &on_signal,
-                    PointerEvent::Gesture(_) => {
+                    PointerEvent::PanZoom(pan_zoom) => {
                         if let Some(callback) = &on_pan_zoom_update
-                            && let Some(pan_zoom) = from_w3c_event(dispatch.local)
-                            && pan_zoom.is_update()
+                            && matches!(pan_zoom.phase, PanZoomPhase::Update(_))
                         {
-                            writer.write(|cx| callback(cx, &pan_zoom));
+                            writer.write(|cx| callback(cx, pan_zoom));
                         }
                         return;
                     }

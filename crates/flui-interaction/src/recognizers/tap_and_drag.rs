@@ -49,11 +49,11 @@ use web_time::Instant;
 use super::{
     ArenaMembership, CancelOutcome, PrimaryContact,
     callback_containment::{finish_containment, invoke_callback, retire_callbacks},
-    recognizer::{EventTimeline, GestureRecognizer, event_time, is_primary_down},
+    recognizer::{EventTimeline, GestureRecognizer, event_time, is_primary_down, motion_history},
 };
 use crate::{
     arena::{GestureArenaEntry, GestureArenaMember, GestureDisposition, SweepModel},
-    events::{PointerEvent, PointerEventExt, PointerType},
+    events::{PointerEvent, PointerEventExt, PointerKind},
     ids::PointerId,
     processing::{Velocity, VelocityTracker},
     routing::{PointerDispatch, RoutePanic},
@@ -73,7 +73,7 @@ pub struct TapDragDownDetails {
     /// Local position (relative to widget).
     pub local_position: Offset<f64>,
     /// Pointer device kind.
-    pub kind: PointerType,
+    pub kind: PointerKind,
     /// This contact's place in a run of consecutive taps, starting at `1`.
     pub consecutive_tap_count: u32,
 }
@@ -87,7 +87,7 @@ pub struct TapDragUpDetails {
     /// Local position (relative to widget).
     pub local_position: Offset<f64>,
     /// Pointer device kind.
-    pub kind: PointerType,
+    pub kind: PointerKind,
     /// This tap's place in a run of consecutive taps, starting at `1`.
     pub consecutive_tap_count: u32,
 }
@@ -101,7 +101,7 @@ pub struct TapDragStartDetails {
     /// Local position.
     pub local_position: Offset<f64>,
     /// Pointer device kind.
-    pub kind: PointerType,
+    pub kind: PointerKind,
     /// The dragging contact's place in a run of consecutive taps: `2` for a
     /// drag that follows one tap (double-click-drag).
     pub consecutive_tap_count: u32,
@@ -119,7 +119,7 @@ pub struct TapDragUpdateDetails {
     /// first update).
     pub delta: Offset<f64>,
     /// Pointer device kind.
-    pub kind: PointerType,
+    pub kind: PointerKind,
     /// The dragging contact's place in a run of consecutive taps.
     pub consecutive_tap_count: u32,
 }
@@ -212,7 +212,7 @@ struct TapDragState {
     tap_down_delivered: bool,
     /// `false` once the pointer wandered past tap slop.
     tap_viable: bool,
-    kind: PointerType,
+    kind: PointerKind,
     count: u32,
     initial: Offset<f64>,
     initial_global: Offset<f64>,
@@ -237,7 +237,7 @@ impl Default for TapDragState {
             won: false,
             tap_down_delivered: false,
             tap_viable: true,
-            kind: PointerType::Touch,
+            kind: PointerKind::Touch,
             count: 1,
             initial: Offset::ZERO,
             initial_global: Offset::ZERO,
@@ -546,7 +546,13 @@ impl TapAndDragGestureRecognizer {
         }
     }
 
-    fn handle_move(&self, position: Offset<f64>, global_position: Offset<f64>, stamp: Option<u64>) {
+    fn handle_move(
+        &self,
+        position: Offset<f64>,
+        global_position: Offset<f64>,
+        stamp: Option<u64>,
+        history: &[(Option<u64>, Offset<f64>)],
+    ) {
         if !position.is_finite() {
             return;
         }
@@ -567,6 +573,10 @@ impl TapAndDragGestureRecognizer {
         let mut notices = Vec::new();
         let mut step = ArenaStep::None;
         let mut state = self.gesture_state.borrow_mut();
+        for &(stamp, position) in history {
+            let timestamp = state.timeline.instant(stamp, now);
+            state.velocity_tracker.add_position(timestamp, position);
+        }
         let now = state.timeline.instant(stamp, now);
         state.kind = kind;
         state.last = position;
@@ -689,9 +699,13 @@ impl GestureRecognizer for TapAndDragGestureRecognizer {
         if !is_primary_down(down.local) {
             return;
         }
-        let pointer = down.local.pointer_id();
-        let position = down.local.position();
-        let global_position = down.global.position();
+        let (Some(pointer), Some(position), Some(global_position)) = (
+            down.local.pointer_id(),
+            down.local.position(),
+            down.global.position(),
+        ) else {
+            return;
+        };
         // per-impl span (trait fn disallows `#[instrument]`).
         let _span = tracing::info_span!(
             "tap_and_drag.add_pointer",
@@ -730,7 +744,7 @@ impl GestureRecognizer for TapAndDragGestureRecognizer {
         };
         state.initial_global = global_position;
         if let PointerEvent::Down(data) = down.local {
-            state.kind = data.pointer.pointer_type;
+            state.kind = data.pointer.kind;
         }
         state.last = position;
         state.last_global = global_position;
@@ -748,30 +762,35 @@ impl GestureRecognizer for TapAndDragGestureRecognizer {
             kind = %crate::observability::pointer_event_kind(event),
             event = %crate::observability::GestureEvent::EventReceived,
         );
-        if self.gesture_state.borrow_mut().pointer != Some(event.pointer_id()) {
+        if self.gesture_state.borrow().pointer != event.pointer_id() {
             return;
         }
         // Read once, here: this is the only point at which the untransformed
         // position is available at all (issue #908).
-        let global_position = dispatch.global.position();
+        let global_position = dispatch
+            .global
+            .position()
+            .unwrap_or_else(|| self.gesture_state.borrow().last_global);
 
         match event {
             PointerEvent::Down(data) => {
                 let now = self.contact.now();
                 let mut state = self.gesture_state.borrow_mut();
-                state.kind = data.pointer.pointer_type;
+                state.kind = data.pointer.kind;
                 state.timeline.instant(event_time(event), now);
             }
             PointerEvent::Move(data) => {
-                let pos = data.current.position;
+                let pos = data.current().position.get();
+                let history = motion_history(event);
                 self.handle_move(
                     Offset::new(pos.x, pos.y),
                     global_position,
                     event_time(event),
+                    &history,
                 );
             }
             PointerEvent::Up(data) => {
-                let pos = data.state.position;
+                let pos = data.sample.position.get();
                 self.handle_up(
                     Offset::new(pos.x, pos.y),
                     global_position,

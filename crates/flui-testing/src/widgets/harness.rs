@@ -27,7 +27,7 @@ use flui_foundation::geometry::Bounds;
 use flui_foundation::geometry::Offset;
 use flui_interaction::PointerId;
 use flui_interaction::events::{
-    PointerType, make_cancel_event_for_id, make_down_event_for_id, make_move_event_for_id,
+    PointerKind, make_cancel_event_for_id, make_down_event_for_id, make_move_event_for_id,
     make_up_event_for_id,
 };
 use flui_painting::Alignment;
@@ -184,7 +184,8 @@ impl Harness {
     /// render tree.
     pub fn dispatch_pointer_down(&self, x: f64, y: f64) {
         let event =
-            make_down_event_for_id(self.contacts.begin(), Offset::new(x, y), PointerType::Mouse);
+            make_down_event_for_id(self.contacts.begin(), Offset::new(x, y), PointerKind::Mouse)
+                .expect("headless pointer positions must be finite");
         self.host.dispatch_pointer(&event);
     }
 
@@ -195,8 +196,9 @@ impl Harness {
         let event = make_move_event_for_id(
             self.current_contact(),
             Offset::new(x, y),
-            PointerType::Mouse,
-        );
+            PointerKind::Mouse,
+        )
+        .expect("headless pointer positions must be finite");
         self.host.dispatch_pointer(&event);
     }
 
@@ -205,8 +207,9 @@ impl Harness {
         let event = make_up_event_for_id(
             self.current_contact(),
             Offset::new(x, y),
-            PointerType::Mouse,
-        );
+            PointerKind::Mouse,
+        )
+        .expect("headless pointer positions must be finite");
         self.host.dispatch_pointer(&event);
     }
 
@@ -214,7 +217,7 @@ impl Harness {
     /// (a system gesture taking over, a window losing the pointer). Carries no
     /// position, matching `make_cancel_event_for_id`.
     pub fn dispatch_pointer_cancel(&self) {
-        let event = make_cancel_event_for_id(self.current_contact(), PointerType::Mouse);
+        let event = make_cancel_event_for_id(self.current_contact(), PointerKind::Mouse);
         self.host.dispatch_pointer(&event);
     }
 

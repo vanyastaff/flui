@@ -10,7 +10,7 @@ use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use flui_foundation::geometry::Offset;
 use flui_interaction::arena::GestureArena;
 use flui_interaction::events::{
-    PointerButton, PointerEvent, PointerType, make_down_event_for_id_with_button,
+    PointerButton, PointerEvent, PointerKind, make_down_event_for_id_with_button,
     make_move_event_for_id, make_up_event_for_id_with_button,
 };
 use flui_interaction::{
@@ -31,7 +31,7 @@ impl TapFixture {
         if callbacks {
             let (down, up, tap) = (Rc::clone(&calls), Rc::clone(&calls), Rc::clone(&calls));
             recognizer = match button {
-                PointerButton::Secondary => recognizer
+                PointerButton::SECONDARY => recognizer
                     .on_secondary_tap_down(move |_| down.set(down.get() + 1))
                     .on_secondary_tap_up(move |_| up.set(up.get() + 1))
                     .on_secondary_tap(move |_| tap.set(tap.get() + 1)),
@@ -88,12 +88,15 @@ impl AttachedTapFixture {
 }
 
 fn events(button: PointerButton) -> [PointerEvent; 3] {
-    let pointer = PointerId::PRIMARY;
+    let pointer = PointerId::new(std::num::NonZeroU64::MIN);
     let position = Offset::new(100.0, 100.0);
     [
-        make_down_event_for_id_with_button(pointer, position, PointerType::Touch, button),
-        make_move_event_for_id(pointer, Offset::new(101.0, 101.0), PointerType::Touch),
-        make_up_event_for_id_with_button(pointer, position, PointerType::Touch, button),
+        make_down_event_for_id_with_button(pointer, position, PointerKind::Touch, button)
+            .expect("valid fixture sample"),
+        make_move_event_for_id(pointer, Offset::new(101.0, 101.0), PointerKind::Touch)
+            .expect("valid fixture sample"),
+        make_up_event_for_id_with_button(pointer, position, PointerKind::Touch, button)
+            .expect("valid fixture sample"),
     ]
 }
 
@@ -102,17 +105,17 @@ fn bench_tap_sequences(c: &mut Criterion) {
         (
             "handle_event/static/no_callbacks",
             false,
-            PointerButton::Primary,
+            PointerButton::PRIMARY,
         ),
         (
             "handle_event/static/primary_callbacks",
             true,
-            PointerButton::Primary,
+            PointerButton::PRIMARY,
         ),
         (
             "handle_event/static/secondary_callbacks",
             true,
-            PointerButton::Secondary,
+            PointerButton::SECONDARY,
         ),
     ] {
         let events = events(button);
@@ -134,10 +137,10 @@ fn bench_tap_sequences(c: &mut Criterion) {
 }
 
 fn bench_admission(c: &mut Criterion) {
-    let [down, _, _] = events(PointerButton::Primary);
+    let [down, _, _] = events(PointerButton::PRIMARY);
     c.bench_function("add_pointer/static", |b| {
         b.iter_batched_ref(
-            || TapFixture::new(false, PointerButton::Primary),
+            || TapFixture::new(false, PointerButton::PRIMARY),
             |fixture| {
                 fixture
                     .recognizer
@@ -155,17 +158,17 @@ fn bench_attached_tap_sequences(c: &mut Criterion) {
         (
             "handle_event/dyn/no_callbacks",
             false,
-            PointerButton::Primary,
+            PointerButton::PRIMARY,
         ),
         (
             "handle_event/dyn/primary_callbacks",
             true,
-            PointerButton::Primary,
+            PointerButton::PRIMARY,
         ),
         (
             "handle_event/dyn/secondary_callbacks",
             true,
-            PointerButton::Secondary,
+            PointerButton::SECONDARY,
         ),
     ] {
         let events = events(button);

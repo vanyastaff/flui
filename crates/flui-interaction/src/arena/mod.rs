@@ -123,7 +123,7 @@ impl GestureDisposition {
 /// }
 ///
 /// let arena = GestureArena::new();
-/// let pointer = PointerId::PRIMARY;
+/// let pointer = PointerId::new(core::num::NonZeroU64::MIN);
 /// let recognizer = std::rc::Rc::new(MyRecognizer { /* ... */ });
 /// let entry = arena.add(pointer, &recognizer);
 /// // Later: entry.resolve(GestureDisposition::Accepted);
@@ -186,7 +186,7 @@ pub trait GestureArenaMember {
 /// }
 ///
 /// let arena = GestureArena::new();
-/// let pointer = PointerId::PRIMARY;
+/// let pointer = PointerId::new(core::num::NonZeroU64::MIN);
 /// let recognizer: Rc<R> = Rc::new(R);
 ///
 /// let entry = arena.add(pointer, &recognizer);
@@ -920,7 +920,7 @@ pub fn run_pointer_lifecycle(arena: &GestureArena, event: &crate::events::Pointe
 /// }
 ///
 /// let arena = GestureArena::new();
-/// let pointer = PointerId::PRIMARY;
+/// let pointer = PointerId::new(core::num::NonZeroU64::MIN);
 /// let tap = Rc::new(Counter(AtomicUsize::new(0), AtomicUsize::new(0)));
 /// let drag = Rc::new(Counter(AtomicUsize::new(0), AtomicUsize::new(0)));
 ///
@@ -1193,7 +1193,7 @@ impl GestureArena {
     /// }
     ///
     /// let arena = GestureArena::new();
-    /// let pointer = PointerId::PRIMARY;
+    /// let pointer = PointerId::new(core::num::NonZeroU64::MIN);
     /// let recognizer: Rc<R> = Rc::new(R);
     /// let entry = arena.add(pointer, &recognizer);
     /// // Resolve the gesture via the entry handle.
@@ -2138,7 +2138,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
             let arena = GestureArena::new();
-            let pointer = PointerId::PRIMARY;
+            let pointer = PointerId::new(core::num::NonZeroU64::MIN);
             let reentrant = Rc::new(ReentrantMember {
                 arena: arena.clone(),
                 rejected: Rc::new(Mutex::new(false)),
@@ -2183,7 +2183,7 @@ mod tests {
 
     fn close_defers_a_lone_default_winner() {
         let arena = GestureArena::new();
-        let pointer = PointerId::PRIMARY;
+        let pointer = PointerId::new(core::num::NonZeroU64::MIN);
         let member = Rc::new(MockMember::new());
         arena.add(pointer, &member);
 
@@ -2198,7 +2198,7 @@ mod tests {
 
     fn explicit_resolution_removes_slot_rejects_losers_then_finishes_panicking_winner() {
         let arena = GestureArena::new();
-        let pointer = PointerId::PRIMARY;
+        let pointer = PointerId::new(core::num::NonZeroU64::MIN);
         let calls = Rc::new(Mutex::new(Vec::new()));
         let winner = Rc::new(OrderedMember {
             name: "winner.accept",
@@ -2233,7 +2233,7 @@ mod tests {
 
     fn stale_entry_cannot_resolve_a_reused_pointer_slot() {
         let arena = GestureArena::new();
-        let pointer = PointerId::PRIMARY;
+        let pointer = PointerId::new(core::num::NonZeroU64::MIN);
         let old = Rc::new(MockMember::new());
         let stale_entry = arena.add(pointer, &old);
         arena.close(pointer);
@@ -2258,7 +2258,7 @@ mod tests {
 
     fn test_first_eager_winner_wins() {
         let arena = GestureArena::new();
-        let pointer = PointerId::PRIMARY;
+        let pointer = PointerId::new(core::num::NonZeroU64::MIN);
 
         let member1 = Rc::new(MockMember::new());
         let member2 = Rc::new(MockMember::new());

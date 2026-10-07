@@ -266,6 +266,80 @@ fn event_times_subtract_without_underflow() {
     assert_eq!(T0.saturating_duration_since(later), Duration::ZERO);
 }
 
+fn coalescing_preserves_the_latest_dispatch_and_real_history() {
+    use flui_platform_api::keyboard::Modifiers;
+    let old_current = sampled_at(10);
+    let changed_sensor = old_current.with_pressure(Pressure::try_new(0.2).expect("valid pressure"));
+    let older = PointerMove::new(mouse(), PointerButtons::NONE, old_current)
+        .with_coalesced(vec![sampled_at(0), changed_sensor, sampled_at(5)])
+        .with_predicted(vec![sampled_at(15)]);
+    let mut newer = PointerMove::new(
+        mouse(),
+        PointerButtons::only(PointerButton::PRIMARY),
+        sampled_at(20),
+    )
+    .with_modifiers(Modifiers::SHIFT)
+    .with_coalesced(vec![old_current, changed_sensor, sampled_at(18)])
+    .with_predicted(vec![sampled_at(25)]);
+    let accepted_older = older.clone();
+    newer.try_coalesce(&older).expect("same pointer metadata");
+    assert_eq!(
+        older, accepted_older,
+        "the accepted earlier dispatch remains owned"
+    );
+    assert_eq!(*newer.current(), sampled_at(20));
+    assert_eq!(newer.predicted(), &[sampled_at(25)]);
+    assert_eq!(newer.buttons, PointerButtons::only(PointerButton::PRIMARY));
+    assert_eq!(newer.modifiers, Modifiers::SHIFT);
+    assert_eq!(
+        newer.coalesced(),
+        &[
+            sampled_at(0),
+            sampled_at(5),
+            changed_sensor,
+            old_current,
+            old_current,
+            changed_sensor,
+            sampled_at(18)
+        ]
+    );
+}
+
+fn coalescing_refuses_every_pointer_metadata_mismatch_without_mutation() {
+    use flui_platform_api::pointer::{DeviceId, MismatchedPointerInfo};
+    let base = mouse();
+    for other in [
+        PointerInfo::new(PointerId::try_from(2_u64).expect("nonzero"), base.kind)
+            .with_role(base.role),
+        base.with_device(DeviceId::try_from(3_u64).expect("nonzero")),
+        PointerInfo::new(base.id, PointerKind::Touch).with_role(base.role),
+        base.with_role(PointerRole::Additional),
+    ] {
+        let older = PointerMove::new(other, PointerButtons::NONE, sampled_at(0));
+        let mut newer = PointerMove::new(base, PointerButtons::NONE, sampled_at(20));
+        let before = newer.clone();
+        assert_eq!(newer.try_coalesce(&older), Err(MismatchedPointerInfo));
+        assert_eq!(newer, before);
+        assert_eq!(*older.current(), sampled_at(0));
+        assert_eq!(older.pointer, other);
+    }
+}
+
+fn coalescing_keeps_distinct_current_time_readings_and_excludes_future_history() {
+    let current = sampled_at(20);
+    let same_time_sensor = current.with_pressure(Pressure::try_new(0.5).expect("valid pressure"));
+    let older = PointerMove::new(mouse(), PointerButtons::NONE, sampled_at(30))
+        .with_coalesced(vec![sampled_at(10), current, same_time_sensor]);
+    let mut newer = PointerMove::new(mouse(), PointerButtons::NONE, current)
+        .with_coalesced(vec![sampled_at(10)]);
+    newer.try_coalesce(&older).expect("same pointer metadata");
+    assert_eq!(
+        newer.coalesced(),
+        &[sampled_at(10), sampled_at(10), same_time_sensor]
+    );
+    assert_eq!(*newer.current(), current);
+}
+
 #[test]
 fn input_vocabulary_contract() {
     run_table(
@@ -332,6 +406,18 @@ fn input_vocabulary_contract() {
             (
                 "event_times_subtract_without_underflow",
                 event_times_subtract_without_underflow,
+            ),
+            (
+                "coalescing_preserves_the_latest_dispatch_and_real_history",
+                coalescing_preserves_the_latest_dispatch_and_real_history,
+            ),
+            (
+                "coalescing_refuses_every_pointer_metadata_mismatch_without_mutation",
+                coalescing_refuses_every_pointer_metadata_mismatch_without_mutation,
+            ),
+            (
+                "coalescing_keeps_distinct_current_time_readings_and_excludes_future_history",
+                coalescing_keeps_distinct_current_time_readings_and_excludes_future_history,
             ),
         ],
     );

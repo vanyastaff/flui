@@ -77,7 +77,7 @@ impl Drop for Member {
 
 fn dropped_member_without_cancel_leaves_the_arena() {
     let arena = GestureArena::new();
-    let pointer = PointerId::PRIMARY;
+    let pointer = PointerId::new(std::num::NonZeroU64::MIN);
     let departed = Member::new(None);
     let retired = Rc::clone(&departed.retired);
     let rival = Member::new(None);
@@ -112,7 +112,7 @@ fn custom_member_owns_a_deadline() {
     let arena = GestureArena::with_clock(Arc::new(clock.clone()));
     let due = clock.now() + Duration::from_millis(20);
     let member = Member::new(Some(due));
-    arena.add(PointerId::PRIMARY, &member);
+    arena.add(PointerId::new(std::num::NonZeroU64::MIN), &member);
 
     assert!(arena.has_pending_deadlines());
     assert_eq!(arena.next_deadline(), Some(due));
@@ -134,7 +134,7 @@ fn custom_member_owns_a_deadline() {
 fn a_verdict_callback_can_drop_a_later_notification_owner() {
     for later_wins in [false, true] {
         let arena = GestureArena::new();
-        let pointer = PointerId::PRIMARY;
+        let pointer = PointerId::new(std::num::NonZeroU64::MIN);
         let first = Member::new(None);
         let later = Member::new(None);
         let survivor = Member::new(None);
@@ -200,7 +200,7 @@ fn panicking_deadline_query_does_not_hide_other_deadlines() {
                     .set(Some("second deadline query failed"));
             }
             for member in [&first, &second, &healthy] {
-                arena.add(PointerId::PRIMARY, member);
+                arena.add(PointerId::new(std::num::NonZeroU64::MIN), member);
             }
 
             let failure = catch_unwind(AssertUnwindSafe(|| {

@@ -4,7 +4,7 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use flui_foundation::geometry::Offset;
-use flui_interaction::events::{PointerType, make_down_event, make_up_event};
+use flui_interaction::events::{PointerKind, make_down_event, make_up_event};
 use flui_interaction::routing::{FocusNode, KeyEventResult};
 use flui_interaction::testing::input::KeyEventBuilder;
 use flui_rendering::hit_testing::HitTestBehavior;
@@ -60,7 +60,8 @@ pub(crate) fn input_stamped_for_b_never_reaches_as_arena() {
     let a_id = realm.presentation_id();
     let b_id = realm.install_second_presentation_for_test();
 
-    let down = make_down_event(Offset::new(4.0, 6.0), PointerType::Mouse);
+    let down =
+        make_down_event(Offset::new(4.0, 6.0), PointerKind::Mouse).expect("finite test position");
     realm.enter(|realm| {
         realm.handle_input_addressed(b_id, PlatformInput::Pointer(down));
     });
@@ -213,7 +214,10 @@ fn press(realm: &UiRealm, id: PresentationId) {
     realm.enter(|realm| {
         realm.handle_input_addressed(
             id,
-            PlatformInput::Pointer(make_down_event(Offset::new(4.0, 6.0), PointerType::Touch)),
+            PlatformInput::Pointer(
+                make_down_event(Offset::new(4.0, 6.0), PointerKind::Touch)
+                    .expect("finite test position"),
+            ),
         );
     });
 }
@@ -236,7 +240,10 @@ fn release(realm: &UiRealm, id: PresentationId) {
     realm.enter(|realm| {
         realm.handle_input_addressed(
             id,
-            PlatformInput::Pointer(make_up_event(Offset::new(4.0, 6.0), PointerType::Touch)),
+            PlatformInput::Pointer(
+                make_up_event(Offset::new(4.0, 6.0), PointerKind::Touch)
+                    .expect("finite test position"),
+            ),
         );
     });
 }

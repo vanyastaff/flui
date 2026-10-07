@@ -548,8 +548,9 @@ mod tests {
                 flui_platform_api::PlatformInput::Pointer(
                     flui_interaction::events::make_down_event(
                         flui_foundation::geometry::Offset::new(1.0, 1.0),
-                        flui_interaction::events::PointerType::Mouse,
-                    ),
+                        flui_interaction::events::PointerKind::Mouse,
+                    )
+                    .expect("finite test position"),
                 ),
             );
         });

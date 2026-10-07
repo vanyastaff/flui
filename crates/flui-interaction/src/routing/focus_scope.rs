@@ -15,11 +15,12 @@ use std::{
 use flui_foundation::ListenerId;
 use flui_foundation::geometry::Rect;
 use flui_painting::typography::TextDirection;
+use flui_platform_api::keyboard::KeyEvent;
 use thiserror::Error;
 
 use super::focus::FocusClosePanic;
 use crate::__runtime::{CloseMode, CloseTombstone};
-use crate::{FocusManager, events::KeyEvent};
+use crate::FocusManager;
 
 pub use crate::ids::FocusNodeId;
 

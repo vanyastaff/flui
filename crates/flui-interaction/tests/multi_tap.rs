@@ -4,25 +4,27 @@ use std::{cell::RefCell, rc::Rc};
 use flui_foundation::geometry::Offset;
 use flui_interaction::arena::GestureArena;
 use flui_interaction::events::{
-    PointerType, make_cancel_event_for_id, make_down_event_for_id, make_move_event_for_id,
+    PointerKind, make_cancel_event_for_id, make_down_event_for_id, make_move_event_for_id,
     make_up_event_for_id,
 };
 use flui_interaction::routing::PointerDispatch;
 use flui_interaction::{GestureRecognizer, MultiTapGestureRecognizer, PointerId};
 
 fn contact(id: u64) -> PointerId {
-    PointerId::new(id).expect("nonzero contact")
+    PointerId::new(std::num::NonZeroU64::new(id).expect("nonzero contact"))
 }
 
 fn pair(recognizer: &Rc<MultiTapGestureRecognizer>, a: u64, b: u64) {
     for (id, position) in [(a, Offset::new(10.0, 10.0)), (b, Offset::new(100.0, 10.0))] {
-        let event = make_down_event_for_id(contact(id), position, PointerType::Touch);
+        let event = make_down_event_for_id(contact(id), position, PointerKind::Touch)
+            .expect("valid fixture sample");
         recognizer.add_pointer(PointerDispatch::at_root(&event));
     }
 }
 
 fn complete(recognizer: &MultiTapGestureRecognizer, id: u64) {
-    let event = make_up_event_for_id(contact(id), Offset::ZERO, PointerType::Touch);
+    let event = make_up_event_for_id(contact(id), Offset::ZERO, PointerKind::Touch)
+        .expect("valid fixture sample");
     recognizer.handle_event(PointerDispatch::at_root(&event));
 }
 
@@ -66,7 +68,8 @@ fn secondary_motion_uses_its_own_slop_origin() {
         .on_multi_tap(move |_| *captured.borrow_mut() += 1)
         .build();
     pair(&recognizer, 2, 3);
-    let motion = make_move_event_for_id(contact(3), Offset::new(101.0, 10.0), PointerType::Touch);
+    let motion = make_move_event_for_id(contact(3), Offset::new(101.0, 10.0), PointerKind::Touch)
+        .expect("valid fixture sample");
     recognizer.handle_event(PointerDispatch::at_root(&motion));
     complete(&recognizer, 2);
     complete(&recognizer, 3);
@@ -84,7 +87,7 @@ fn unrelated_cancel_does_not_erase_the_pair() {
         .on_multi_tap(move |_| *captured.borrow_mut() += 1)
         .build();
     pair(&recognizer, 2, 3);
-    let cancel = make_cancel_event_for_id(contact(9), PointerType::Touch);
+    let cancel = make_cancel_event_for_id(contact(9), PointerKind::Touch);
     recognizer.handle_event(PointerDispatch::at_root(&cancel));
     complete(&recognizer, 2);
     complete(&recognizer, 3);
@@ -102,7 +105,7 @@ fn tracked_cancel_allows_a_new_pair() {
         .on_multi_tap(move |_| *captured.borrow_mut() += 1)
         .build();
     pair(&recognizer, 2, 3);
-    let cancel = make_cancel_event_for_id(contact(3), PointerType::Touch);
+    let cancel = make_cancel_event_for_id(contact(3), PointerKind::Touch);
     recognizer.handle_event(PointerDispatch::at_root(&cancel));
     complete(&recognizer, 2);
     complete(&recognizer, 3);

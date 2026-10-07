@@ -2,7 +2,7 @@
 use flui_foundation::geometry::Offset;
 use flui_interaction::arena::GestureArena;
 use flui_interaction::events::{
-    PointerType, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
+    PointerKind, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
 };
 use flui_interaction::recognizers::{
     MultiDragAxis, MultiDragEndDetails, MultiDragGestureRecognizer, MultiDragHandle,
@@ -39,7 +39,9 @@ fn multidrag_contacts_update_independently() {
     let recognizer = MultiDragGestureRecognizer::builder(arena.clone(), MultiDragAxis::Free)
         .on_start(move |pointer, _| {
             Some(Rc::new(CountingHandle {
-                updates: if pointer == PointerId::new(1).expect("nonzero pointer") {
+                updates: if pointer
+                    == PointerId::new(std::num::NonZeroU64::new(1).expect("nonzero pointer"))
+                {
                     a.clone()
                 } else {
                     b.clone()
@@ -51,8 +53,9 @@ fn multidrag_contacts_update_independently() {
         })
         .build();
     for (raw, position) in [(1, Offset::ZERO), (2, Offset::new(50.0, 50.0))] {
-        let pointer = PointerId::new(raw).expect("nonzero pointer");
-        let event = make_down_event_for_id(pointer, position, PointerType::Touch);
+        let pointer = PointerId::new(std::num::NonZeroU64::new(raw).expect("nonzero pointer"));
+        let event = make_down_event_for_id(pointer, position, PointerKind::Touch)
+            .expect("valid fixture sample");
         recognizer.add_pointer(PointerDispatch::at_root(&event));
         arena.close(pointer);
     }
@@ -62,10 +65,11 @@ fn multidrag_contacts_update_independently() {
         (2, Offset::new(70.0, 50.0)),
     ] {
         let event = make_move_event_for_id(
-            PointerId::new(raw).expect("nonzero pointer"),
+            PointerId::new(std::num::NonZeroU64::new(raw).expect("nonzero pointer")),
             position,
-            PointerType::Touch,
-        );
+            PointerKind::Touch,
+        )
+        .expect("valid fixture sample");
         recognizer.handle_event(PointerDispatch::at_root(&event));
     }
     assert_eq!((first_updates.get(), second_updates.get()), (2, 1));
@@ -83,21 +87,26 @@ fn multidrag_cancel_finishes_every_contact_and_recovers() {
             Some(Rc::new(CountingHandle {
                 updates: Rc::new(Cell::new(0)),
                 ends: e.clone(),
-                cancels: if pointer == PointerId::new(12).expect("nonzero pointer") {
+                cancels: if pointer
+                    == PointerId::new(std::num::NonZeroU64::new(12).expect("nonzero pointer"))
+                {
                     Rc::new(Cell::new(0))
                 } else {
                     c.clone()
                 },
-                fail_cancel: pointer == PointerId::new(12).expect("nonzero pointer"),
+                fail_cancel: pointer
+                    == PointerId::new(std::num::NonZeroU64::new(12).expect("nonzero pointer")),
             }) as Rc<dyn MultiDragHandle>)
         })
         .build();
     for raw in [12, 13] {
-        let pointer = PointerId::new(raw).expect("nonzero pointer");
-        let event = make_down_event_for_id(pointer, Offset::ZERO, PointerType::Touch);
+        let pointer = PointerId::new(std::num::NonZeroU64::new(raw).expect("nonzero pointer"));
+        let event = make_down_event_for_id(pointer, Offset::ZERO, PointerKind::Touch)
+            .expect("valid fixture sample");
         recognizer.add_pointer(PointerDispatch::at_root(&event));
         arena.close(pointer);
-        let event = make_move_event_for_id(pointer, Offset::new(25.0, 0.0), PointerType::Touch);
+        let event = make_move_event_for_id(pointer, Offset::new(25.0, 0.0), PointerKind::Touch)
+            .expect("valid fixture sample");
         recognizer.handle_event(PointerDispatch::at_root(&event));
     }
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| recognizer.cancel()))
@@ -112,13 +121,16 @@ fn multidrag_cancel_finishes_every_contact_and_recovers() {
         "hostile client cannot starve another contact"
     );
     assert!(arena.is_empty());
-    let pointer = PointerId::new(14).expect("nonzero pointer");
-    let down = make_down_event_for_id(pointer, Offset::ZERO, PointerType::Touch);
+    let pointer = PointerId::new(std::num::NonZeroU64::new(14).expect("nonzero pointer"));
+    let down = make_down_event_for_id(pointer, Offset::ZERO, PointerKind::Touch)
+        .expect("valid fixture sample");
     recognizer.add_pointer(PointerDispatch::at_root(&down));
     arena.close(pointer);
-    let movement = make_move_event_for_id(pointer, Offset::new(25.0, 0.0), PointerType::Touch);
+    let movement = make_move_event_for_id(pointer, Offset::new(25.0, 0.0), PointerKind::Touch)
+        .expect("valid fixture sample");
     recognizer.handle_event(PointerDispatch::at_root(&movement));
-    let up = make_up_event_for_id(pointer, Offset::new(25.0, 0.0), PointerType::Touch);
+    let up = make_up_event_for_id(pointer, Offset::new(25.0, 0.0), PointerKind::Touch)
+        .expect("valid fixture sample");
     recognizer.handle_event(PointerDispatch::at_root(&up));
     assert_eq!(
         ends.get(),

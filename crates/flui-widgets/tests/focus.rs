@@ -205,18 +205,22 @@ fn reading_order_tree(
     )
 }
 
-fn tab_event(backward: bool) -> flui_interaction::events::KeyEvent {
-    use flui_interaction::events::{Key, KeyEvent, KeyState, Modifiers, NamedKey};
-    KeyEvent {
-        state: KeyState::Down,
-        key: Key::Named(NamedKey::Tab),
-        modifiers: if backward {
-            Modifiers::SHIFT
-        } else {
-            Modifiers::empty()
-        },
-        ..KeyEvent::default()
-    }
+fn tab_event(backward: bool) -> flui_platform_api::keyboard::KeyEvent {
+    use flui_platform_api::{
+        EventTime,
+        keyboard::{Code, Key, KeyEvent, KeyState, Modifiers, NamedKey},
+    };
+    KeyEvent::new(
+        KeyState::Down,
+        Key::Named(NamedKey::Tab),
+        Code::Tab,
+        EventTime::from_nanos(0),
+    )
+    .with_modifiers(if backward {
+        Modifiers::SHIFT
+    } else {
+        Modifiers::NONE
+    })
 }
 
 fn assert_widget_reading_order(

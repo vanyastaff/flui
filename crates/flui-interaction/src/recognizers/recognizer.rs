@@ -4,6 +4,7 @@ use crate::{
     events::{PointerButton, PointerEvent},
     routing::{PointerDispatch, RoutePanic},
 };
+use flui_foundation::geometry::Offset;
 use web_time::{Duration, Instant};
 
 /// A recognizer admits Down and receives the remaining pointer stream.
@@ -50,18 +51,29 @@ pub fn cancel_all<'a>(
 }
 
 pub(crate) fn is_primary_down(event: &PointerEvent) -> bool {
-    matches!(event, PointerEvent::Down(data) if data.button.is_none_or(|button| button == PointerButton::Primary))
+    matches!(event, PointerEvent::Down(data) if data.button() == PointerButton::PRIMARY)
 }
 
 pub(crate) fn event_time(event: &PointerEvent) -> Option<u64> {
-    let nanos = match event {
-        PointerEvent::Down(data) | PointerEvent::Up(data) => data.state.time,
-        PointerEvent::Move(data) => data.current.time,
-        PointerEvent::Scroll(data) => data.state.time,
-        PointerEvent::Gesture(data) => data.state.time,
-        PointerEvent::Cancel(_) | PointerEvent::Enter(_) | PointerEvent::Leave(_) => 0,
+    crate::events::get_event_time(event).map(flui_platform_api::EventTime::as_nanos)
+}
+
+/// Historical local positions only. Geometry and callbacks still publish the
+/// frame's current sample, while the tracker consumes every hardware timestamp.
+pub(crate) fn motion_history(
+    event: &PointerEvent,
+) -> impl Iterator<Item = (Option<u64>, Offset<f64>)> + '_ {
+    let samples = match event {
+        PointerEvent::Move(movement) => movement.coalesced(),
+        _ => &[],
     };
-    (nanos != 0).then_some(nanos)
+    samples.iter().map(|sample| {
+        let position = sample.position.get();
+        (
+            Some(sample.time.as_nanos()),
+            Offset::new(position.x, position.y),
+        )
+    })
 }
 
 /// Places device production timestamps on the arena clock.

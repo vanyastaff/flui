@@ -338,9 +338,9 @@ const fn px_f32(v: f64) -> f64 {
 /// # Event Coalescing
 ///
 /// Desktop platforms can generate 100+ mouse move events per second.
-/// GestureBinding coalesces these by storing only the latest move event
-/// per pointer. Call `flush_pending_moves()` once per frame to process
-/// the coalesced events.
+/// GestureBinding delivers one current move per pointer and frame, retaining
+/// earlier hardware samples in its coalesced history for velocity consumers.
+/// Call `flush_pending_moves()` once per frame to process the events.
 ///
 /// # Thread affinity
 ///
@@ -1099,6 +1099,18 @@ impl GestureBinding {
             return;
         }
 
+        let position = match event {
+            PointerEvent::Move(data) => Some(data.current.position),
+            PointerEvent::Scroll(data) => Some(data.state.position),
+            PointerEvent::Gesture(data) => Some(data.state.position),
+            _ => None,
+        };
+        if position.is_some_and(|position| !position.x.is_finite() || !position.y.is_finite()) {
+            // Refusing an invalid nonterminal sample preserves the admitted
+            // contact's route and its later Up/Cancel delivery obligation.
+            return;
+        }
+
         let refused_tail = !self.hit_tests.contains_key(&pointer_id)
             && self.refused_contacts.borrow().contains(pointer_id);
         match event {
@@ -1425,10 +1437,52 @@ impl GestureBinding {
         PendingMoveGeneration(generation)
     }
 
-    fn queue_pending_move(&self, pointer_id: PointerId, pending: PendingMove) {
+    fn queue_pending_move(&self, pointer_id: PointerId, mut pending: PendingMove) {
         let generation = self.allocate_pending_move_generation();
-        self.pending_moves
+        let mut previous = self
+            .pending_moves
+            .remove(&pointer_id)
+            .map(|(_, state)| state);
+        match (&mut previous, &mut pending) {
+            (
+                Some(PendingMoveState {
+                    pending:
+                        Some(PendingMove::Contact {
+                            event: previous,
+                            sequence: old,
+                        }),
+                    ..
+                }),
+                PendingMove::Contact {
+                    event: latest,
+                    sequence: new,
+                },
+            ) if old == new => {
+                crate::recognizers::recognizer::merge_motion_history(previous, latest);
+            }
+            (
+                Some(PendingMoveState {
+                    pending:
+                        Some(PendingMove::Hover {
+                            event: previous, ..
+                        }),
+                    ..
+                }),
+                PendingMove::Hover { event: latest, .. },
+            ) => {
+                crate::recognizers::recognizer::merge_motion_history(previous, latest);
+            }
+            (_, PendingMove::Contact { event, .. } | PendingMove::Hover { event, .. }) => {
+                crate::recognizers::recognizer::normalise_motion_history(event);
+            }
+        }
+        let replaced = self
+            .pending_moves
             .insert(pointer_id, PendingMoveState::queued(generation, pending));
+        // Commit the accepted replacement before retiring outgoing ownership,
+        // and never retire a route or payload while holding a map guard.
+        drop(previous);
+        drop(replaced);
     }
 
     fn is_pending_move_in_flight(

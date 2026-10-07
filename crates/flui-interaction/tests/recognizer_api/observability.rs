@@ -11,7 +11,7 @@ use flui_interaction::{
     EagerGestureRecognizer, GestureRecognizer, LongPressGestureRecognizer, MultiDragAxis,
     MultiDragGestureRecognizer, PointerId, TapAndDragGestureRecognizer, TapGestureRecognizer,
     arena::GestureArena,
-    events::{PointerType, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id},
+    events::{PointerKind, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id},
     routing::PointerDispatch,
 };
 
@@ -86,14 +86,17 @@ enum RecognizerKind {
 }
 
 fn dispatch_contact(recognizer: &dyn GestureRecognizer, arena: &GestureArena) {
-    let pointer = PointerId::new(1).expect("nonzero pointer");
-    let down = make_down_event_for_id(pointer, Offset::ZERO, PointerType::Touch);
+    let pointer = PointerId::new(std::num::NonZeroU64::new(1).expect("nonzero pointer"));
+    let down = make_down_event_for_id(pointer, Offset::ZERO, PointerKind::Touch)
+        .expect("valid fixture sample");
     recognizer.add_pointer(PointerDispatch::at_root(&down));
     arena.close(pointer);
     arena.drain_deferred_resolutions();
-    let movement = make_move_event_for_id(pointer, Offset::new(2.0, 0.0), PointerType::Touch);
+    let movement = make_move_event_for_id(pointer, Offset::new(2.0, 0.0), PointerKind::Touch)
+        .expect("valid fixture sample");
     recognizer.handle_event(PointerDispatch::at_root(&movement));
-    let up = make_up_event_for_id(pointer, Offset::new(2.0, 0.0), PointerType::Touch);
+    let up = make_up_event_for_id(pointer, Offset::new(2.0, 0.0), PointerKind::Touch)
+        .expect("valid fixture sample");
     recognizer.handle_event(PointerDispatch::at_root(&up));
     arena.drain_deferred_resolutions();
 }

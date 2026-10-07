@@ -16,7 +16,7 @@ use super::{
 use crate::{
     ForcePressDetails,
     arena::{GestureArena, GestureArenaEntry, GestureArenaMember, GestureDisposition},
-    events::{PointerEvent, PointerEventExt, PointerType},
+    events::{PointerEvent, PointerEventExt},
     ids::PointerId,
     routing::{PointerDispatch, RoutePanic},
     settings::GestureSettings,
@@ -88,8 +88,6 @@ enum ForcePressPhase {
 struct ForcePressState {
     phase: ForcePressPhase,
     won: bool,
-    sensor: bool,
-    first_reading: Option<f64>,
     position: Offset<f64>,
     global_position: Offset<f64>,
     pressure: f64,
@@ -105,21 +103,6 @@ impl ForcePressState {
             self.phase,
             ForcePressPhase::Started | ForcePressPhase::Peaked
         )
-    }
-
-    fn record_pressure(&mut self, pressure: f64, kind: PointerType) -> bool {
-        if !pressure.is_finite() {
-            return false;
-        }
-        if kind != PointerType::Mouse && pressure != 0.0 {
-            match self.first_reading {
-                None => self.first_reading = Some(pressure),
-                Some(first) if first != pressure => self.sensor = true,
-                Some(_) => {}
-            }
-        }
-        self.pressure = pressure;
-        true
     }
 
     fn start(&mut self, peak: f64, notices: &mut Vec<Notice>) {
@@ -306,18 +289,14 @@ impl ForcePressGestureRecognizer {
         if global.is_finite() {
             state.global_position = global;
         }
-        if !state.record_pressure(pressure, contact.kind) {
-            return;
-        }
+        state.pressure = pressure;
         let mut step = ArenaStep::None;
         match state.phase {
             ForcePressPhase::Claiming if state.pressure < self.thresholds.start => {
                 state.retire(&mut notices);
                 step = ArenaStep::Withdraw;
             }
-            ForcePressPhase::Possible
-                if state.sensor && state.pressure >= self.thresholds.start =>
-            {
+            ForcePressPhase::Possible if state.pressure >= self.thresholds.start => {
                 if state.won {
                     state.start(self.thresholds.peak, &mut notices);
                 } else {
@@ -351,12 +330,10 @@ impl ForcePressGestureRecognizer {
         let mut notices = Vec::new();
         let mut state = self.gesture_state.borrow_mut();
         if let Some(dispatch) = dispatch {
-            let position = dispatch.local.position();
-            let global = dispatch.global.position();
-            if position.is_finite() {
+            if let Some(position) = dispatch.local.position() {
                 state.position = position;
             }
-            if global.is_finite() {
+            if let Some(global) = dispatch.global.position() {
                 state.global_position = global;
             }
         }
@@ -384,30 +361,40 @@ impl GestureRecognizer for ForcePressGestureRecognizer {
             global_position: contact.global,
             ..ForcePressState::default()
         };
-        if let PointerEvent::Down(data) = down.local {
-            self.handle_sample(
-                contact.local,
-                contact.global,
-                f64::from(data.state.pressure),
-            );
+        if let PointerEvent::Down(data) = down.local
+            && let Some(pressure) = data.sample.pressure
+        {
+            self.handle_sample(contact.local, contact.global, f64::from(pressure.get()));
         }
     }
 
     fn handle_event(&self, dispatch: PointerDispatch<'_>) {
-        if !self.contact.tracks(dispatch.local.pointer_id()) {
+        if !dispatch
+            .local
+            .pointer_id()
+            .is_some_and(|pointer| self.contact.tracks(pointer))
+        {
             return;
         }
         match dispatch.local {
-            PointerEvent::Down(data) => self.handle_sample(
-                dispatch.local.position(),
-                dispatch.global.position(),
-                f64::from(data.state.pressure),
-            ),
-            PointerEvent::Move(data) => self.handle_sample(
-                dispatch.local.position(),
-                dispatch.global.position(),
-                f64::from(data.current.pressure),
-            ),
+            PointerEvent::Down(data) => {
+                if let (Some(pressure), Some(local), Some(global)) = (
+                    data.sample.pressure,
+                    dispatch.local.position(),
+                    dispatch.global.position(),
+                ) {
+                    self.handle_sample(local, global, f64::from(pressure.get()));
+                }
+            }
+            PointerEvent::Move(data) => {
+                if let (Some(pressure), Some(local), Some(global)) = (
+                    data.current().pressure,
+                    dispatch.local.position(),
+                    dispatch.global.position(),
+                ) {
+                    self.handle_sample(local, global, f64::from(pressure.get()));
+                }
+            }
             PointerEvent::Up(_) => self.end(Some(dispatch), ArenaStep::Finish),
             PointerEvent::Cancel(_) => {
                 self.cancel();

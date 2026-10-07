@@ -1,1049 +1,341 @@
-//! Event types for user interactions.
+//! Owned input vocabulary shared with the platform boundary.
 //!
-//! # The pointer field contract (one contract, both wires)
-//!
-//! Every live translation and every synthetic constructor stamps the same
-//! values, so a recognizer developed against either wire meets the other
-//! unchanged:
-//!
-//! - `time` — **nanoseconds**, monotonic, process-start base (upstream
-//!   ui-events documents the unit; the base only has to agree per device).
-//! - `buttons` — the set held at the instant, transition included on Down /
-//!   excluded on Up; a Move with an empty set IS a hover.
-//! - `pressure` — `0.5` while any button/contact is active on hardware
-//!   without a pressure sensor (the W3C default), `0.0` otherwise; real
-//!   sensors (touch force, pen) report their normalized value.
-//! - `count` — click/tap count: `1` on Down/Up, `0` on motion, hover,
-//!   scroll and gesture states.
-//! - Events that arrive before any position is known are DROPPED at the
-//!   platform boundary, never delivered at a made-up origin.
-//!
-//! This module provides standardized event types following W3C specifications:
-//!
-//! - **Pointer events** - Mouse, touch, pen input via [`ui_events`]
-//! - **Keyboard events** - Key presses and releases via [`ui_events`]
-//! - **Cursor icons** - Standard cursor appearances via [`cursor_icon`]
-//!
-//! # Input Events
-//!
-//! The [`InputEvent`] enum wraps W3C-compliant events and adds device
-//! lifecycle:
-//!
-//! ```rust,ignore
-//! use flui_interaction::events::{InputEvent, PointerEvent};
-//!
-//! fn handle_event(event: &InputEvent) {
-//!     match event {
-//!         InputEvent::Pointer(PointerEvent::Down(button_event)) => {
-//!             println!("Button pressed: {:?}", button_event.button);
-//!         }
-//!         InputEvent::DeviceAdded { device_id, pointer_type } => {
-//!             println!("Device connected: {:?}", device_id);
-//!         }
-//!         _ => {}
-//!     }
-//! }
-//! ```
-//!
-//! # Keyboard Events
-//!
-//! ```rust,ignore
-//! use flui_interaction::events::{KeyboardEvent, Key, KeyState};
-//!
-//! fn handle_key(event: &KeyboardEvent) {
-//!     if event.state == KeyState::Down {
-//!         println!("Key pressed: {:?}", event.key);
-//!     }
-//! }
-//! ```
-//!
-//! # Cursor Icons
-//!
-//! ```rust,ignore
-//! use flui_interaction::events::CursorIcon;
-//!
-//! let cursor = CursorIcon::Pointer; // Hand cursor for clickable elements
-//! let text_cursor = CursorIcon::Text; // I-beam for text selection
-//! ```
-//!
-//! # Scroll Delta Contract
-//!
-//! Every [`ScrollDelta`] delivered here obeys one cross-backend convention,
-//! normalized by each platform backend at ITS translation boundary
-//! (`flui-platform`'s `shared::scroll` module holds the per-backend sign/unit
-//! table) — consumers must never re-flip or re-scale per platform:
-//!
-//! - **Sign**: positive = content scrolls down / right (the scroll offset
-//!   increases) — the W3C `WheelEvent.deltaX`/`deltaY` convention.
-//! - **`PixelDelta`** is LOGICAL pixels (scale-factor independent, like
-//!   pointer positions).
-//! - **`LineDelta`** is unit-less wheel lines; THIS crate owns the line
-//!   height and converts at 53 logical pixels per line in
-//!   [`ScrollEventData::delta_to_offset`].
-//! - **`PageDelta`** is unit-less pages, likewise converted only here.
+//! Pointer samples carry checked positions and optional sensor readings. Device
+//! lifecycle and cancellation events need not carry a position or contact identity.
 
 use flui_foundation::geometry::Offset;
 
-// ============================================================================
-// Re-exports from ui-events (W3C UI Events specification)
-// ============================================================================
-
-/// Pointer event types from ui-events.
+/// The platform's owned pointer vocabulary.
 pub mod pointer {
-    pub use ui_events::pointer::{
-        ContactGeometry, PersistentDeviceId, PointerButton, PointerButtonEvent, PointerButtons,
-        PointerEvent, PointerGesture, PointerGestureEvent, PointerId, PointerInfo,
-        PointerOrientation, PointerScrollEvent, PointerState, PointerType, PointerUpdate,
-    };
+    pub use flui_platform_api::pointer::*;
 }
 
-/// Keyboard event types from ui-events.
+/// The platform's owned keyboard vocabulary.
 pub mod keyboard {
-    pub use ui_events::keyboard::{
-        Code, CompositionEvent, CompositionState, Key, KeyState, KeyboardEvent, Location,
-        Modifiers, NamedKey, ShortcutMatcher,
-    };
+    pub use flui_platform_api::keyboard::*;
 }
 
-// ============================================================================
-// Re-exports from cursor-icon (W3C CSS specification)
-// ============================================================================
-/// Cursor icon following W3C CSS cursor specification.
-///
-/// Standard cursor appearances for different interaction states.
-///
-/// # Common Cursors
-///
-/// - [`CursorIcon::Default`] - Standard arrow cursor
-/// - [`CursorIcon::Pointer`] - Hand cursor for clickable elements
-/// - [`CursorIcon::Text`] - I-beam for text selection
-/// - [`CursorIcon::Wait`] - Busy/loading cursor
-/// - [`CursorIcon::Grab`] / [`CursorIcon::Grabbing`] - Drag cursors
-/// - [`CursorIcon::NotAllowed`] - Forbidden action
-///
-/// # Resize Cursors
-///
-/// - [`CursorIcon::EwResize`] - Horizontal resize
-/// - [`CursorIcon::NsResize`] - Vertical resize
-/// - [`CursorIcon::NwseResize`] / [`CursorIcon::NeswResize`] - Diagonal resize
 pub use cursor_icon::CursorIcon;
-// Keyboard types from ui-events
-pub use keyboard::{Code, Key, KeyState, KeyboardEvent, Modifiers, NamedKey};
-// ============================================================================
-// Convenience re-exports at module level
-// ============================================================================
-
-// Pointer types from ui-events
+pub use keyboard::{Code, Key, KeyEvent, KeyState, Modifiers, NamedKey};
 pub use pointer::{
-    PointerButton, PointerButtonEvent, PointerButtons, PointerEvent, PointerId, PointerInfo,
-    PointerScrollEvent, PointerState, PointerType, PointerUpdate,
+    ButtonChange, CancelReason, DeviceId, InputValueError, PanZoomEvent, PanZoomPhase,
+    PanZoomTransform, PointerButton, PointerButtons, PointerCancel, PointerEvent, PointerId,
+    PointerInfo, PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease,
+    PointerRole, PointerSample, PointerSignal, ScrollDelta, ScrollEvent,
 };
-/// Scroll delta types.
-pub use ui_events::ScrollDelta;
-// `PointerPanZoomEvent` and the `from_w3c_event` / `convert_gesture` helpers
-// are re-exported from the crate root (`crate::PointerPanZoomEvent`)
-// so the events module stays a thin W3C re-export surface and recognizers
-// reach the trackpad type through the canonical path.
 
-/// Alias for KeyboardEvent for compatibility
-pub type KeyEvent = KeyboardEvent;
-
-/// Generic event enum covering all input types
-#[derive(Debug, Clone)]
-pub enum Event {
-    /// Pointer event (mouse, touch, pen)
-    Pointer(PointerEvent),
-    /// Keyboard event
-    Keyboard(KeyboardEvent),
-    /// Key event (alias for Keyboard)
-    Key(KeyboardEvent),
-    /// Scroll event
-    Scroll(ScrollEventData),
-}
-
-// ============================================================================
-// Compatibility PointerEventData struct (testing-only)
-// ============================================================================
-//
-// PointerEventData + PointerEventKind + make_*_event helpers are
-// gated behind `#[cfg(any(test, feature = "testing"))]`. They previously
-// shipped in release binaries; only the testing/ submodule and the
-// in-crate test modules consume them. Gating eliminates the legacy
-// compat surface from release builds without forcing call-site
-// migration in the testing module.
-
-/// Base pointer event data for gesture recognition (test-only).
-///
-/// This struct provides compatibility with legacy gesture recognizers
-/// while wrapping W3C-compliant ui-events underneath. Available only
-/// under `#[cfg(any(test, feature = "testing"))]`.
-#[cfg(any(test, feature = "testing"))]
-#[derive(Debug, Clone)]
-pub struct PointerEventData {
-    /// Position in global coordinates
-    pub position: Offset<f64>,
-    /// Position in local widget coordinates (set during hit testing)
-    pub local_position: Offset<f64>,
-    /// Device that generated the event
-    pub device_kind: PointerType,
-    /// Pointer device ID
-    pub device: i32,
-    /// Buttons currently pressed
-    pub buttons: PointerButtons,
-    /// Pressure of the touch (0.0 to 1.0)
-    pub pressure: f64,
-    /// Time stamp in nanoseconds
-    pub time_stamp: u64,
-}
-
-#[cfg(any(test, feature = "testing"))]
-impl PointerEventData {
-    /// Create new pointer event data
-    pub fn new(position: Offset<f64>, device_kind: PointerType) -> Self {
-        Self {
-            position,
-            local_position: position,
-            device_kind,
-            device: 0,
-            buttons: PointerButtons::new(),
-            pressure: 0.0,
-            time_stamp: 0,
-        }
-    }
-
-    /// Create with device ID
-    pub fn with_device(mut self, device: i32) -> Self {
-        self.device = device;
-        self
-    }
-
-    /// Create with pressure
-    pub fn with_pressure(mut self, pressure: f64) -> Self {
-        self.pressure = pressure.clamp(0.0, 1.0);
-        self
-    }
-
-    /// Create with buttons
-    pub fn with_buttons(mut self, buttons: PointerButtons) -> Self {
-        self.buttons = buttons;
-        self
-    }
-
-    /// Create with time stamp
-    pub fn with_time_stamp(mut self, time_stamp: u64) -> Self {
-        self.time_stamp = time_stamp;
-        self
-    }
-
-    /// Returns the normalized pressure (0.0 to 1.0)
-    pub fn normalized_pressure(&self) -> f64 {
-        self.pressure
-    }
-
-    /// Returns true if the device supports pressure sensing
-    pub fn supports_pressure(&self) -> bool {
-        self.pressure > 0.0
-    }
-
-    /// Returns true if this is a force press (pressure > threshold)
-    ///
-    /// Default threshold is 0.4 (40% of max pressure).
-    pub fn is_force_press(&self) -> bool {
-        self.is_force_press_at(0.4)
-    }
-
-    /// Returns true if pressure exceeds the given threshold (0.0 to 1.0)
-    pub fn is_force_press_at(&self, threshold: f64) -> bool {
-        self.normalized_pressure() >= threshold
-    }
-
-    /// Create from a ui-events PointerEvent
-    pub fn from_pointer_event(event: &PointerEvent) -> Option<Self> {
-        let info = get_pointer_info(event);
-        let state = get_pointer_state(event);
-
-        let (position, time_stamp, buttons) = if let Some(s) = state {
-            let pos = s.position;
-            (
-                Offset::new(pos.x, pos.y),
-                s.time, // time is already u64 nanoseconds
-                s.buttons,
-            )
-        } else {
-            (Offset::ZERO, 0, PointerButtons::new())
-        };
-
-        // Convert pointer ID into the legacy `device: i32` field.
-        // ui_events PointerId carries `NonZeroU64`; clamp into the i32
-        // range used by the test-only `PointerEventData` compat surface.
-        // Primary pointer ⇒ 0 (preserves the legacy mouse sentinel inside
-        // the testing layer); other pointers ⇒ low 31 bits of the
-        // NonZeroU64. Saturates on overflow (no platform produces
-        // pointer ids > i32::MAX in practice).
-        let device = match info.pointer_id {
-            Some(id) if id.is_primary_pointer() => 0_i32,
-            Some(id) => (id.get_inner().get() & 0x7FFF_FFFF) as i32,
-            None => 0,
-        };
-
-        Some(Self {
-            position,
-            local_position: position,
-            device_kind: info.pointer_type,
-            device,
-            buttons,
-            pressure: state.map_or(0.0, |s| f64::from(s.pressure)),
-            time_stamp,
-        })
-    }
-}
-
-// ============================================================================
-// Extended Input Event (wraps ui-events + device lifecycle)
-// ============================================================================
-
-/// Device identifier type.
-///
-/// This is a simple integer ID for device tracking. For more detailed
-/// device identification, use [`PointerInfo::persistent_device_id`].
-pub type DeviceId = i32;
-
-/// Extended input event that wraps W3C-compliant events.
-///
-/// This enum extends [`ui_events::pointer::PointerEvent`] with:
-/// - Device lifecycle events (`DeviceAdded`, `DeviceRemoved`)
-/// - Keyboard events
-/// - Scroll events with position
-///
-/// # Device Lifecycle
-///
-/// Unlike the W3C spec, we track device connection/disconnection:
-///
-/// ```rust,ignore
-/// match event {
-///     InputEvent::DeviceAdded { device_id, pointer_type } => {
-///         // New pointing device connected
-///     }
-///     InputEvent::DeviceRemoved { device_id } => {
-///         // Device disconnected
-///     }
-///     _ => {}
-/// }
-/// ```
-#[derive(Debug, Clone)]
-#[non_exhaustive]
-pub enum InputEvent {
-    /// A pointer event (down, up, move, enter, leave, etc.)
-    Pointer(PointerEvent),
-
-    /// A keyboard event.
-    Keyboard(KeyboardEvent),
-
-    /// A pointing device was added/connected.
-    ///
-    /// This is not part of W3C spec but useful for device tracking.
-    DeviceAdded {
-        /// The device identifier.
-        device_id: DeviceId,
-        /// The type of pointing device.
-        pointer_type: PointerType,
-    },
-
-    /// A pointing device was removed/disconnected.
-    ///
-    /// This is not part of W3C spec but useful for device tracking.
-    DeviceRemoved {
-        /// The device identifier.
-        device_id: DeviceId,
-    },
-}
-
-impl InputEvent {
-    /// Returns the device ID if this is a device-related event.
-    ///
-    /// For pointer events, returns 0 for primary pointer, or uses
-    /// a hash of the persistent device ID if available.
-    pub fn device_id(&self) -> Option<DeviceId> {
-        match self {
-            InputEvent::DeviceAdded { device_id, .. } | InputEvent::DeviceRemoved { device_id } => {
-                Some(*device_id)
-            }
-            InputEvent::Pointer(event) => Some(event.device_id()),
-            InputEvent::Keyboard(_) => None,
-        }
-    }
-
-    /// Returns true if this is a pointer event.
-    pub fn is_pointer(&self) -> bool {
-        matches!(self, InputEvent::Pointer(_))
-    }
-
-    /// Returns true if this is a keyboard event.
-    pub fn is_keyboard(&self) -> bool {
-        matches!(self, InputEvent::Keyboard(_))
-    }
-
-    /// Returns true if this is a device lifecycle event.
-    pub fn is_device_lifecycle(&self) -> bool {
-        matches!(
-            self,
-            InputEvent::DeviceAdded { .. } | InputEvent::DeviceRemoved { .. }
-        )
-    }
-
-    /// Returns the pointer event if this is one.
-    pub fn as_pointer(&self) -> Option<&PointerEvent> {
-        match self {
-            InputEvent::Pointer(event) => Some(event),
-            _ => None,
-        }
-    }
-
-    /// Returns the keyboard event if this is one.
-    pub fn as_keyboard(&self) -> Option<&KeyboardEvent> {
-        match self {
-            InputEvent::Keyboard(event) => Some(event),
-            _ => None,
-        }
-    }
-}
-
-impl From<PointerEvent> for InputEvent {
-    fn from(event: PointerEvent) -> Self {
-        InputEvent::Pointer(event)
-    }
-}
-
-impl From<KeyboardEvent> for InputEvent {
-    fn from(event: KeyboardEvent) -> Self {
-        InputEvent::Keyboard(event)
-    }
-}
-
-// ============================================================================
-// Helper functions for extracting data from pointer events
-// ============================================================================
-
-/// Extracts PointerInfo from a PointerEvent.
-///
-/// Infallible: every `PointerEvent` variant carries a `PointerInfo`.
-#[inline]
-fn get_pointer_info(event: &PointerEvent) -> &PointerInfo {
+/// Extract the contact metadata when this event describes a contact.
+#[must_use]
+pub fn get_pointer_info(event: &PointerEvent) -> Option<&PointerInfo> {
     match event {
-        PointerEvent::Down(e) | PointerEvent::Up(e) => &e.pointer,
-        PointerEvent::Move(e) => &e.pointer,
-        PointerEvent::Cancel(info) | PointerEvent::Enter(info) | PointerEvent::Leave(info) => info,
-        PointerEvent::Scroll(e) => &e.pointer,
-        PointerEvent::Gesture(e) => &e.pointer,
-    }
-}
-
-/// Extracts PointerState from a PointerEvent.
-#[inline]
-fn get_pointer_state(event: &PointerEvent) -> Option<&PointerState> {
-    match event {
-        PointerEvent::Down(e) | PointerEvent::Up(e) => Some(&e.state),
-        PointerEvent::Move(e) => Some(&e.current),
-        PointerEvent::Scroll(e) => Some(&e.state),
-        PointerEvent::Gesture(e) => Some(&e.state),
+        PointerEvent::Down(data) => Some(&data.pointer),
+        PointerEvent::Up(data) => Some(&data.pointer),
+        PointerEvent::ButtonChange(ButtonChange::Pressed(data)) => Some(&data.pointer),
+        PointerEvent::ButtonChange(ButtonChange::Released(data)) => Some(&data.pointer),
+        PointerEvent::Move(data) => Some(&data.pointer),
+        PointerEvent::Cancel(data) => Some(&data.pointer),
+        PointerEvent::Enter(data)
+        | PointerEvent::Leave(data)
+        | PointerEvent::ScrollInertiaCancel(data) => Some(&data.pointer),
+        PointerEvent::Scroll(data) => Some(&data.pointer),
+        PointerEvent::PanZoom(data) => Some(data.pointer()),
         _ => None,
     }
 }
 
-// ============================================================================
-// Pointer event geometry and identity queries
-// ============================================================================
+/// Extract the current measured sample, excluding predictions.
+#[must_use]
+pub fn get_pointer_sample(event: &PointerEvent) -> Option<&PointerSample> {
+    match event {
+        PointerEvent::Down(data) => Some(&data.sample),
+        PointerEvent::Up(data) => Some(&data.sample),
+        PointerEvent::ButtonChange(ButtonChange::Pressed(data)) => Some(&data.sample),
+        PointerEvent::ButtonChange(ButtonChange::Released(data)) => Some(&data.sample),
+        PointerEvent::Move(data) => Some(data.current()),
+        _ => None,
+    }
+}
+
+/// Extract the platform's timestamp, including the valid epoch value zero.
+#[must_use]
+pub fn get_event_time(event: &PointerEvent) -> Option<flui_platform_api::EventTime> {
+    Some(match event {
+        PointerEvent::Down(data) => data.sample.time,
+        PointerEvent::Up(data) => data.sample.time,
+        PointerEvent::ButtonChange(ButtonChange::Pressed(data)) => data.sample.time,
+        PointerEvent::ButtonChange(ButtonChange::Released(data)) => data.sample.time,
+        PointerEvent::Move(data) => data.current().time,
+        PointerEvent::Scroll(data) => data.time,
+        PointerEvent::PanZoom(data) => data.time,
+        PointerEvent::Cancel(data) => data.time,
+        PointerEvent::Enter(data)
+        | PointerEvent::Leave(data)
+        | PointerEvent::ScrollInertiaCancel(data) => data.time,
+        PointerEvent::DeviceAdded(data) | PointerEvent::DeviceRemoved(data) => data.time,
+        _ => return None,
+    })
+}
+
+/// Extract a contact identity without inventing one for device lifecycle events.
+#[must_use]
+pub fn extract_pointer_id(event: &PointerEvent) -> Option<PointerId> {
+    get_pointer_info(event).map(|pointer| pointer.id)
+}
 
 /// Canonical geometry and identity queries for pointer events.
 pub trait PointerEventExt {
-    /// Returns the position of the pointer event.
-    fn position(&self) -> Offset<f64>;
-
-    /// Returns the pointer identity.
-    fn pointer_id(&self) -> PointerId;
-
-    /// Returns the pointer type if available.
-    fn pointer_type(&self) -> Option<PointerType>;
-
-    /// Returns the logical device identity used by mouse tracking.
-    fn device_id(&self) -> DeviceId;
+    /// The reported position, when this event carries one.
+    fn position(&self) -> Option<Offset<f64>>;
+    /// The contact identity, absent for device lifecycle events.
+    fn pointer_id(&self) -> Option<PointerId>;
+    /// The device kind, including device lifecycle events.
+    fn pointer_kind(&self) -> Option<PointerKind>;
+    /// The hardware identity, when the platform reports it.
+    fn device_id(&self) -> Option<DeviceId>;
 }
 
 impl PointerEventExt for PointerEvent {
-    #[inline]
-    fn position(&self) -> Offset<f64> {
-        if let Some(state) = get_pointer_state(self) {
-            let pos = state.position;
-            Offset::new(pos.x, pos.y)
+    fn position(&self) -> Option<Offset<f64>> {
+        let position = if let Some(sample) = get_pointer_sample(self) {
+            Some(sample.position)
         } else {
-            Offset::ZERO
-        }
+            match self {
+                PointerEvent::Enter(data)
+                | PointerEvent::Leave(data)
+                | PointerEvent::ScrollInertiaCancel(data) => data.position,
+                PointerEvent::Scroll(data) => Some(data.position),
+                PointerEvent::PanZoom(data) => Some(data.position),
+                _ => None,
+            }
+        }?;
+        let point = position.get();
+        Some(Offset::new(point.x, point.y))
     }
 
-    #[inline]
-    fn pointer_id(&self) -> PointerId {
+    fn pointer_id(&self) -> Option<PointerId> {
         extract_pointer_id(self)
     }
 
-    #[inline]
-    fn pointer_type(&self) -> Option<PointerType> {
-        Some(get_pointer_info(self).pointer_type)
-    }
-
-    #[inline]
-    fn device_id(&self) -> DeviceId {
-        let id = get_pointer_info(self).pointer_id;
-        match id {
-            Some(id) if id.is_primary_pointer() => 0,
-            Some(id) => (id.get_inner().get() & 0x7FFF_FFFF) as DeviceId,
-            None => 0,
-        }
-    }
-}
-
-// ============================================================================
-// Scroll event data (compatibility with existing code)
-// ============================================================================
-
-/// Scroll event data with position and delta.
-///
-/// This provides a simpler interface than [`PointerScrollEvent`] for
-/// common scroll handling scenarios.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ScrollEventData {
-    /// Position where the scroll occurred.
-    pub position: Offset<f64>,
-    /// Scroll delta in pixels (converted from any scroll unit).
-    pub delta: Offset<f64>,
-    /// Keyboard modifiers active during scroll.
-    pub modifiers: Modifiers,
-}
-
-impl ScrollEventData {
-    /// Creates new scroll event data.
-    pub fn new(position: Offset<f64>, delta: Offset<f64>, modifiers: Modifiers) -> Self {
-        Self {
-            position,
-            delta,
-            modifiers,
+    fn pointer_kind(&self) -> Option<PointerKind> {
+        match self {
+            PointerEvent::DeviceAdded(data) | PointerEvent::DeviceRemoved(data) => Some(data.kind),
+            _ => get_pointer_info(self).map(|pointer| pointer.kind),
         }
     }
 
-    /// Converts a ScrollDelta to a logical-pixel offset.
-    ///
-    /// This is the single owner of the line-height and page-height factors
-    /// in the scroll delta contract (see the module docs): backends deliver
-    /// normalized signs and units, and only this function turns lines and
-    /// pages into pixels.
-    pub fn delta_to_offset(delta: &ScrollDelta) -> Offset<f64> {
-        match delta {
-            ScrollDelta::PixelDelta(pos) => Offset::new(pos.x, pos.y),
-            ScrollDelta::LineDelta(x, y) => {
-                // One wheel line = 53 logical pixels — the factor commonly
-                // applied to GTK scroll units, so wheel speed and
-                // `InteractiveViewer`'s scroll-to-scale math feel the same
-                // as other Linux UI toolkits tick for tick.
-                Offset::new(f64::from(*x) * 53.0, f64::from(*y) * 53.0)
+    fn device_id(&self) -> Option<DeviceId> {
+        match self {
+            PointerEvent::DeviceAdded(data) | PointerEvent::DeviceRemoved(data) => {
+                Some(data.device)
             }
-            ScrollDelta::PageDelta(x, y) => {
-                // Approximate: 1 page ≈ 400 pixels
-                Offset::new(f64::from(*x) * 400.0, f64::from(*y) * 400.0)
-            }
+            _ => get_pointer_info(self).and_then(|pointer| pointer.device),
         }
     }
 }
 
-impl From<&PointerScrollEvent> for ScrollEventData {
-    fn from(event: &PointerScrollEvent) -> Self {
-        let pos = event.state.position;
-        Self {
-            position: Offset::new(pos.x, pos.y),
-            delta: Self::delta_to_offset(&event.delta),
-            modifiers: event.state.modifiers,
-        }
-    }
-}
-
-// ============================================================================
-// Test helper functions — gated behind `testing` feature
-// ============================================================================
-//
-// These `make_*_event` helpers + `PointerEventData` / `PointerEventKind`
-// only compile in test builds or when the `testing` Cargo feature is
-// active. Removes ~480 LOC of legacy compat construction surface from
-// release binaries.
-
-/// Create a PointerEvent::Down for testing
 #[cfg(any(test, feature = "testing"))]
-pub fn make_down_event(position: Offset<f64>, pointer_type: PointerType) -> PointerEvent {
-    make_down_event_for_id(PointerId::PRIMARY, position, pointer_type)
+fn test_pointer_id() -> PointerId {
+    PointerId::new(core::num::NonZeroU64::MIN)
 }
 
-/// Create a PointerEvent::Down for testing with an explicit pointer id.
-///
-/// Use this when constructing multi-pointer event streams
-/// (`MultiDragGestureRecognizer` per-pointer state) — the default
-/// `make_down_event` hard-codes `PointerId::PRIMARY`.
+#[cfg(any(test, feature = "testing"))]
+fn test_sample(position: Offset<f64>) -> Result<PointerSample, InputValueError> {
+    use flui_foundation::geometry::Point;
+    Ok(PointerSample::new(
+        flui_platform_api::EventTime::from_nanos(0),
+        PointerPosition::try_new(Point::new(position.dx, position.dy))?,
+    ))
+}
+
+/// Construct a checked synthetic Down with the fixture's default contact identity.
+#[cfg(any(test, feature = "testing"))]
+pub fn make_down_event(
+    position: Offset<f64>,
+    kind: PointerKind,
+) -> Result<PointerEvent, InputValueError> {
+    make_down_event_for_id(test_pointer_id(), position, kind)
+}
+
+/// Construct a checked synthetic Down for the specified contact.
 #[cfg(any(test, feature = "testing"))]
 pub fn make_down_event_for_id(
-    pointer_id: PointerId,
+    id: PointerId,
     position: Offset<f64>,
-    pointer_type: PointerType,
-) -> PointerEvent {
-    use ui_events::pointer::{
-        ContactGeometry, PointerButtonEvent, PointerOrientation, PointerState,
-    };
-
-    PointerEvent::Down(PointerButtonEvent {
-        button: Some(PointerButton::Primary),
-        pointer: PointerInfo {
-            pointer_id: Some(pointer_id),
-            pointer_type,
-            persistent_device_id: None,
-        },
-        state: PointerState {
-            time: 0,
-            position: dpi::PhysicalPosition::new(position.dx, position.dy),
-            buttons: PointerButtons::from(PointerButton::Primary),
-            modifiers: Modifiers::empty(),
-            count: 1,
-            contact_geometry: ContactGeometry {
-                width: 1.0,
-                height: 1.0,
-            },
-            orientation: PointerOrientation::default(),
-            // The W3C default for active-button hardware with no pressure
-            // sensor — the value every live translation stamps; a synthetic
-            // 1.0 here let tests pass against a contract no real wire meets.
-            pressure: 0.5,
-            tangential_pressure: 0.0,
-            scale_factor: 1.0,
-        },
-    })
+    kind: PointerKind,
+) -> Result<PointerEvent, InputValueError> {
+    make_down_event_for_id_with_button(id, position, kind, PointerButton::PRIMARY)
 }
 
+/// Construct a checked synthetic Down for a specific button.
 #[cfg(any(test, feature = "testing"))]
-/// Create a PointerEvent::Up for testing
-pub fn make_up_event(position: Offset<f64>, pointer_type: PointerType) -> PointerEvent {
-    make_up_event_for_id(PointerId::PRIMARY, position, pointer_type)
-}
-
-#[cfg(any(test, feature = "testing"))]
-/// Create a PointerEvent::Up for testing with an explicit pointer id.
-///
-/// See [`make_down_event_for_id`] for rationale.
-pub fn make_up_event_for_id(
-    pointer_id: PointerId,
-    position: Offset<f64>,
-    pointer_type: PointerType,
-) -> PointerEvent {
-    use ui_events::pointer::{
-        ContactGeometry, PointerButtonEvent, PointerOrientation, PointerState,
-    };
-
-    PointerEvent::Up(PointerButtonEvent {
-        button: Some(PointerButton::Primary),
-        pointer: PointerInfo {
-            pointer_id: Some(pointer_id),
-            pointer_type,
-            persistent_device_id: None,
-        },
-        state: PointerState {
-            time: 0,
-            position: dpi::PhysicalPosition::new(position.dx, position.dy),
-            buttons: PointerButtons::new(),
-            modifiers: Modifiers::empty(),
-            count: 1,
-            contact_geometry: ContactGeometry {
-                width: 1.0,
-                height: 1.0,
-            },
-            orientation: PointerOrientation::default(),
-            pressure: 0.0,
-            tangential_pressure: 0.0,
-            scale_factor: 1.0,
-        },
-    })
-}
-
-#[cfg(any(test, feature = "testing"))]
-/// Create a PointerEvent::Move for testing
-pub fn make_move_event(position: Offset<f64>, pointer_type: PointerType) -> PointerEvent {
-    make_move_event_for_id(PointerId::PRIMARY, position, pointer_type)
-}
-
-#[cfg(any(test, feature = "testing"))]
-/// Create a PointerEvent::Move for testing with an explicit pointer id.
-///
-/// See [`make_down_event_for_id`] for rationale.
-pub fn make_move_event_for_id(
-    pointer_id: PointerId,
-    position: Offset<f64>,
-    pointer_type: PointerType,
-) -> PointerEvent {
-    use ui_events::pointer::{ContactGeometry, PointerOrientation, PointerState, PointerUpdate};
-
-    PointerEvent::Move(PointerUpdate {
-        pointer: PointerInfo {
-            pointer_id: Some(pointer_id),
-            pointer_type,
-            persistent_device_id: None,
-        },
-        current: PointerState {
-            time: 0,
-            position: dpi::PhysicalPosition::new(position.dx, position.dy),
-            buttons: PointerButtons::from(PointerButton::Primary),
-            modifiers: Modifiers::empty(),
-            count: 0,
-            contact_geometry: ContactGeometry {
-                width: 1.0,
-                height: 1.0,
-            },
-            orientation: PointerOrientation::default(),
-            // The W3C default for active-button hardware with no pressure
-            // sensor — the value every live translation stamps; a synthetic
-            // 1.0 here let tests pass against a contract no real wire meets.
-            pressure: 0.5,
-            tangential_pressure: 0.0,
-            scale_factor: 1.0,
-        },
-        coalesced: vec![],
-        predicted: vec![],
-    })
-}
-
-#[cfg(any(test, feature = "testing"))]
-/// Create a PointerEvent::Cancel for testing
-pub fn make_cancel_event(pointer_type: PointerType) -> PointerEvent {
-    make_cancel_event_for_id(PointerId::PRIMARY, pointer_type)
-}
-
-#[cfg(any(test, feature = "testing"))]
-/// Create a PointerEvent::Cancel for testing with an explicit pointer id.
-///
-/// See [`make_down_event_for_id`] for rationale — a multi-contact stream needs
-/// the cancel routed to the same id its down/up carried.
-pub fn make_cancel_event_for_id(pointer_id: PointerId, pointer_type: PointerType) -> PointerEvent {
-    PointerEvent::Cancel(PointerInfo {
-        pointer_id: Some(pointer_id),
-        pointer_type,
-        persistent_device_id: None,
-    })
-}
-
-#[cfg(any(test, feature = "testing"))]
-/// Create a PointerEvent::Down for testing with an explicit button.
-///
-/// Secondary/tertiary button parity — defaults to
-/// [`PointerButton::Primary`], pass [`PointerButton::Secondary`] for
-/// right-click and [`PointerButton::Auxiliary`] for middle-click.
 pub fn make_down_event_with_button(
     position: Offset<f64>,
-    pointer_type: PointerType,
+    kind: PointerKind,
     button: PointerButton,
-) -> PointerEvent {
-    make_down_event_for_id_with_button(PointerId::PRIMARY, position, pointer_type, button)
+) -> Result<PointerEvent, InputValueError> {
+    make_down_event_for_id_with_button(test_pointer_id(), position, kind, button)
 }
 
+/// Construct a checked synthetic Down for a contact and button.
 #[cfg(any(test, feature = "testing"))]
-/// Create a PointerEvent::Down for testing with an explicit pointer id and
-/// button.
 pub fn make_down_event_for_id_with_button(
-    pointer_id: PointerId,
+    id: PointerId,
     position: Offset<f64>,
-    pointer_type: PointerType,
+    kind: PointerKind,
     button: PointerButton,
-) -> PointerEvent {
-    use ui_events::pointer::{
-        ContactGeometry, PointerButtonEvent, PointerOrientation, PointerState,
-    };
-
-    PointerEvent::Down(PointerButtonEvent {
-        button: Some(button),
-        pointer: PointerInfo {
-            pointer_id: Some(pointer_id),
-            pointer_type,
-            persistent_device_id: None,
-        },
-        state: PointerState {
-            time: 0,
-            position: dpi::PhysicalPosition::new(position.dx, position.dy),
-            buttons: PointerButtons::from(button),
-            modifiers: Modifiers::empty(),
-            count: 1,
-            contact_geometry: ContactGeometry {
-                width: 1.0,
-                height: 1.0,
-            },
-            orientation: PointerOrientation::default(),
-            // The W3C default for active-button hardware with no pressure
-            // sensor — the value every live translation stamps; a synthetic
-            // 1.0 here let tests pass against a contract no real wire meets.
-            pressure: 0.5,
-            tangential_pressure: 0.0,
-            scale_factor: 1.0,
-        },
-    })
+) -> Result<PointerEvent, InputValueError> {
+    Ok(PointerEvent::Down(PointerPress::new(
+        PointerInfo::new(id, kind).with_role(PointerRole::Primary),
+        button,
+        PointerButtons::NONE,
+        test_sample(position)?,
+    )))
 }
 
+/// Construct a checked synthetic Up with the fixture's default contact identity.
 #[cfg(any(test, feature = "testing"))]
-/// Create a PointerEvent::Up for testing with an explicit button.
+pub fn make_up_event(
+    position: Offset<f64>,
+    kind: PointerKind,
+) -> Result<PointerEvent, InputValueError> {
+    make_up_event_for_id(test_pointer_id(), position, kind)
+}
+
+/// Construct a checked synthetic Up for the specified contact.
+#[cfg(any(test, feature = "testing"))]
+pub fn make_up_event_for_id(
+    id: PointerId,
+    position: Offset<f64>,
+    kind: PointerKind,
+) -> Result<PointerEvent, InputValueError> {
+    make_up_event_for_id_with_button(id, position, kind, PointerButton::PRIMARY)
+}
+
+/// Construct a checked synthetic Up for a specific button.
+#[cfg(any(test, feature = "testing"))]
 pub fn make_up_event_with_button(
     position: Offset<f64>,
-    pointer_type: PointerType,
+    kind: PointerKind,
     button: PointerButton,
-) -> PointerEvent {
-    make_up_event_for_id_with_button(PointerId::PRIMARY, position, pointer_type, button)
+) -> Result<PointerEvent, InputValueError> {
+    make_up_event_for_id_with_button(test_pointer_id(), position, kind, button)
 }
 
+/// Construct a checked synthetic Up for a contact and button.
 #[cfg(any(test, feature = "testing"))]
-/// Create a PointerEvent::Up for testing with an explicit pointer id and
-/// button.
 pub fn make_up_event_for_id_with_button(
-    pointer_id: PointerId,
+    id: PointerId,
     position: Offset<f64>,
-    pointer_type: PointerType,
+    kind: PointerKind,
     button: PointerButton,
-) -> PointerEvent {
-    use ui_events::pointer::{
-        ContactGeometry, PointerButtonEvent, PointerOrientation, PointerState,
-    };
-
-    PointerEvent::Up(PointerButtonEvent {
-        button: Some(button),
-        pointer: PointerInfo {
-            pointer_id: Some(pointer_id),
-            pointer_type,
-            persistent_device_id: None,
-        },
-        state: PointerState {
-            time: 0,
-            position: dpi::PhysicalPosition::new(position.dx, position.dy),
-            buttons: PointerButtons::new(),
-            modifiers: Modifiers::empty(),
-            count: 1,
-            contact_geometry: ContactGeometry {
-                width: 1.0,
-                height: 1.0,
-            },
-            orientation: PointerOrientation::default(),
-            pressure: 0.0,
-            tangential_pressure: 0.0,
-            scale_factor: 1.0,
-        },
-    })
+) -> Result<PointerEvent, InputValueError> {
+    Ok(PointerEvent::Up(PointerRelease::new(
+        PointerInfo::new(id, kind).with_role(PointerRole::Primary),
+        button,
+        PointerButtons::only(button),
+        test_sample(position)?,
+    )))
 }
 
+/// Construct a checked synthetic contact Move.
 #[cfg(any(test, feature = "testing"))]
-/// Create a PointerEvent::Move for testing with an explicit button.
+pub fn make_move_event(
+    position: Offset<f64>,
+    kind: PointerKind,
+) -> Result<PointerEvent, InputValueError> {
+    make_move_event_for_id(test_pointer_id(), position, kind)
+}
+
+/// Construct a checked synthetic contact Move for the specified contact.
+#[cfg(any(test, feature = "testing"))]
+pub fn make_move_event_for_id(
+    id: PointerId,
+    position: Offset<f64>,
+    kind: PointerKind,
+) -> Result<PointerEvent, InputValueError> {
+    Ok(PointerEvent::Move(PointerMove::new(
+        PointerInfo::new(id, kind).with_role(PointerRole::Primary),
+        PointerButtons::only(PointerButton::PRIMARY),
+        test_sample(position)?,
+    )))
+}
+
+/// Construct a checked synthetic Move for a specific held button.
+#[cfg(any(test, feature = "testing"))]
 pub fn make_move_event_with_button(
     position: Offset<f64>,
-    pointer_type: PointerType,
+    kind: PointerKind,
     button: PointerButton,
-) -> PointerEvent {
-    use ui_events::pointer::{ContactGeometry, PointerOrientation, PointerState, PointerUpdate};
-
-    // `PointerEvent::Move` wraps `PointerUpdate` which carries no
-    // `button` field — the active button is implicit in the
-    // `state.buttons` mask (down buttons, not the press that triggered
-    // the move). The move-event path is mostly a passthrough for
-    // existing tests; we encode the requested button as a one-hot
-    // active-mask bit so the recogniser sees the same payload shape
-    // as the down/up variants.
-    PointerEvent::Move(PointerUpdate {
-        pointer: PointerInfo {
-            pointer_id: Some(PointerId::PRIMARY),
-            pointer_type,
-            persistent_device_id: None,
-        },
-        current: PointerState {
-            time: 0,
-            position: dpi::PhysicalPosition::new(position.dx, position.dy),
-            buttons: PointerButtons::from(button),
-            modifiers: Modifiers::empty(),
-            count: 0,
-            contact_geometry: ContactGeometry {
-                width: 1.0,
-                height: 1.0,
-            },
-            orientation: PointerOrientation::default(),
-            // The W3C default for active-button hardware with no pressure
-            // sensor — the value every live translation stamps; a synthetic
-            // 1.0 here let tests pass against a contract no real wire meets.
-            pressure: 0.5,
-            tangential_pressure: 0.0,
-            scale_factor: 1.0,
-        },
-        coalesced: vec![],
-        predicted: vec![],
-    })
+) -> Result<PointerEvent, InputValueError> {
+    Ok(PointerEvent::Move(PointerMove::new(
+        PointerInfo::new(test_pointer_id(), kind).with_role(PointerRole::Primary),
+        PointerButtons::only(button),
+        test_sample(position)?,
+    )))
 }
 
+/// Construct a synthetic cancellation without inventing a position or sensor value.
 #[cfg(any(test, feature = "testing"))]
-/// Create a trackpad pinch `PointerEvent::Gesture` tick for testing — the
-/// shape the platform gesture producers emit (shared synthetic identity,
-/// touch-typed, per-tick magnification fraction).
-pub fn make_pinch_gesture_event(position: Offset<f64>, fraction: f64) -> PointerEvent {
-    use ui_events::pointer::{
-        ContactGeometry, PointerGesture, PointerGestureEvent, PointerOrientation, PointerState,
+pub fn make_cancel_event(kind: PointerKind) -> PointerEvent {
+    make_cancel_event_for_id(test_pointer_id(), kind)
+}
+
+/// Construct a synthetic cancellation for the specified contact.
+#[cfg(any(test, feature = "testing"))]
+pub fn make_cancel_event_for_id(id: PointerId, kind: PointerKind) -> PointerEvent {
+    PointerEvent::Cancel(PointerCancel::new(
+        PointerInfo::new(id, kind).with_role(PointerRole::Primary),
+        flui_platform_api::EventTime::from_nanos(0),
+        CancelReason::Platform,
+    ))
+}
+
+/// Construct a synthetic one-update pinch with checked position and cumulative scale.
+#[cfg(any(test, feature = "testing"))]
+pub fn make_pinch_gesture_event(
+    position: Offset<f64>,
+    fraction: f64,
+) -> Result<PointerEvent, InputValueError> {
+    use flui_platform_api::{
+        EventTime,
+        pointer::{PanZoomPhase, PanZoomTransform},
     };
-
-    PointerEvent::Gesture(PointerGestureEvent {
-        pointer: PointerInfo {
-            pointer_id: PointerId::new(u64::MAX),
-            pointer_type: PointerType::Touch,
-            persistent_device_id: None,
-        },
-        gesture: PointerGesture::Pinch(fraction as f32),
-        state: PointerState {
-            time: 0,
-            position: dpi::PhysicalPosition::new(position.dx, position.dy),
-            buttons: PointerButtons::new(),
-            modifiers: Modifiers::empty(),
-            count: 0,
-            contact_geometry: ContactGeometry {
-                width: 1.0,
-                height: 1.0,
-            },
-            orientation: PointerOrientation::default(),
-            pressure: 0.0,
-            tangential_pressure: 0.0,
-            scale_factor: 1.0,
-        },
-    })
+    let pointer = PointerInfo::new(
+        PointerId::try_from(u64::MAX).expect("BUG: nonzero synthetic gesture identity"),
+        PointerKind::Trackpad,
+    );
+    let position = test_sample(position)?.position;
+    let value = PanZoomTransform::try_new(Offset::ZERO, 1.0 + fraction, 0.0)?;
+    Ok(PointerEvent::PanZoom(PanZoomEvent::new(
+        pointer,
+        EventTime::from_nanos(0),
+        position,
+        PanZoomPhase::Update(value),
+    )))
 }
 
+/// Construct a checked synthetic pixel scroll.
 #[cfg(any(test, feature = "testing"))]
-/// Create a PointerEvent::Scroll for testing
-pub fn make_scroll_event(position: Offset<f64>, delta: Offset<f64>) -> PointerEvent {
-    make_scroll_event_with_modifiers(position, delta, Modifiers::empty())
+pub fn make_scroll_event(
+    position: Offset<f64>,
+    delta: Offset<f64>,
+) -> Result<PointerEvent, InputValueError> {
+    make_scroll_event_with_modifiers(position, delta, Modifiers::NONE)
 }
 
+/// Construct a checked synthetic pixel scroll with explicit modifiers.
 #[cfg(any(test, feature = "testing"))]
-/// As `make_scroll_event`, with an explicit modifier set — for asserting
-/// chord-gated scroll consumers (ctrl+wheel zoom vs plain-wheel scroll).
 pub fn make_scroll_event_with_modifiers(
     position: Offset<f64>,
     delta: Offset<f64>,
     modifiers: Modifiers,
-) -> PointerEvent {
-    use ui_events::pointer::{
-        ContactGeometry, PointerOrientation, PointerScrollEvent, PointerState,
-    };
-
-    PointerEvent::Scroll(PointerScrollEvent {
-        pointer: PointerInfo {
-            pointer_id: Some(PointerId::PRIMARY),
-            pointer_type: PointerType::Mouse,
-            persistent_device_id: None,
-        },
-        delta: ScrollDelta::PixelDelta(dpi::PhysicalPosition::new(delta.dx, delta.dy)),
-        state: PointerState {
-            time: 0,
-            position: dpi::PhysicalPosition::new(position.dx, position.dy),
-            buttons: PointerButtons::new(),
-            modifiers,
-            count: 0,
-            contact_geometry: ContactGeometry {
-                width: 1.0,
-                height: 1.0,
-            },
-            orientation: PointerOrientation::default(),
-            pressure: 0.0,
-            tangential_pressure: 0.0,
-            scale_factor: 1.0,
-        },
-    })
-}
-
-// ============================================================================
-// Pointer ID extraction utility (shared across routing modules)
-// ============================================================================
-
-/// Extracts a stable `PointerId` from a `PointerEvent`.
-///
-/// Returns the event's `pointer_id` directly when present, falling back to
-/// [`PointerId::PRIMARY`] for events without a pointer id (e.g. virtual or
-/// uninitialised events). Used by event routing, pointer routing, and raw
-/// input modules as a single canonical extraction point.
-///
-/// This fn previously allocated a fresh `DefaultHasher` on every event to fold
-/// the `NonZeroU64` id down into the local `PointerId(i32)`. After widening
-/// to `ui_events::pointer::PointerId` this is a zero-cost field load — the
-/// id is already in its canonical form.
-#[inline]
-#[must_use]
-pub fn extract_pointer_id(event: &PointerEvent) -> crate::ids::PointerId {
-    let info = match event {
-        PointerEvent::Down(e) | PointerEvent::Up(e) => &e.pointer,
-        PointerEvent::Move(e) => &e.pointer,
-        PointerEvent::Cancel(info) | PointerEvent::Enter(info) | PointerEvent::Leave(info) => info,
-        PointerEvent::Scroll(e) => &e.pointer,
-        PointerEvent::Gesture(e) => &e.pointer,
-    };
-    info.pointer_id.unwrap_or(crate::ids::PointerId::PRIMARY)
-}
-
-#[cfg(any(test, feature = "testing"))]
-/// Kind of pointer event for event construction
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PointerEventKind {
-    /// Pointer down
-    Down,
-    /// Pointer move
-    Move,
-    /// Pointer up
-    Up,
-    /// Pointer cancel
-    Cancel,
-}
-
-#[cfg(any(test, feature = "testing"))]
-/// Create a PointerEvent from PointerEventData
-pub fn make_pointer_event(kind: PointerEventKind, data: PointerEventData) -> PointerEvent {
-    use ui_events::pointer::{
-        ContactGeometry, PointerButtonEvent, PointerOrientation, PointerState, PointerUpdate,
-    };
-
-    let pointer_info = PointerInfo {
-        pointer_id: Some(PointerId::PRIMARY),
-        pointer_type: data.device_kind,
-        persistent_device_id: None,
-    };
-
-    let state = PointerState {
-        time: data.time_stamp,
-        position: dpi::PhysicalPosition::new(data.position.dx, data.position.dy),
-        buttons: data.buttons,
-        modifiers: Modifiers::empty(),
-        count: 1,
-        contact_geometry: ContactGeometry {
-            width: 1.0,
-            height: 1.0,
-        },
-        orientation: PointerOrientation::default(),
-        pressure: data.pressure as f32,
-        tangential_pressure: 0.0,
-        scale_factor: 1.0,
-    };
-
-    match kind {
-        PointerEventKind::Down => PointerEvent::Down(PointerButtonEvent {
-            button: Some(PointerButton::Primary),
-            pointer: pointer_info,
-            state,
-        }),
-        PointerEventKind::Up => PointerEvent::Up(PointerButtonEvent {
-            button: Some(PointerButton::Primary),
-            pointer: pointer_info,
-            state,
-        }),
-        PointerEventKind::Move => PointerEvent::Move(PointerUpdate {
-            pointer: pointer_info,
-            current: state,
-            coalesced: vec![],
-            predicted: vec![],
-        }),
-        PointerEventKind::Cancel => PointerEvent::Cancel(pointer_info),
-    }
+) -> Result<PointerEvent, InputValueError> {
+    use flui_platform_api::{EventTime, pointer::ScrollUnit};
+    let pointer = PointerInfo::new(test_pointer_id(), PointerKind::Mouse);
+    let position = test_sample(position)?.position;
+    let delta = ScrollDelta::try_new(ScrollUnit::Pixels, delta.dx, delta.dy)?;
+    Ok(PointerEvent::Scroll(
+        ScrollEvent::new(pointer, EventTime::from_nanos(0), position, delta)
+            .with_modifiers(modifiers),
+    ))
 }

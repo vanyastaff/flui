@@ -1552,7 +1552,9 @@ impl WindowsPlatform {
 
                         use super::events::mouse_move_event;
                         let event = mouse_move_event(wparam, lparam, ctx.scale_factor.get(), time);
-                        ctx.callbacks.dispatch_input(event);
+                        if let Some(event) = event {
+                            ctx.callbacks.dispatch_input(event);
+                        }
                     }
                     LRESULT(0)
                 }
@@ -1602,7 +1604,9 @@ impl WindowsPlatform {
                             ctx.scale_factor.get(),
                             time,
                         );
-                        ctx.callbacks.dispatch_input(event);
+                        if let Some(event) = event {
+                            ctx.callbacks.dispatch_input(event);
+                        }
                     }
                     LRESULT(0)
                 }
@@ -1612,7 +1616,11 @@ impl WindowsPlatform {
                     // the capture mid-press: this window will never see the
                     // sequence's release, so end it here.
                     if let Some(ctx) = ctx
-                        && let Some(cancel) = super::events::capture_changed_event(hwnd, lparam)
+                        && let Some(cancel) = super::events::capture_changed_event(
+                            hwnd,
+                            lparam,
+                            ctx.message_clock.message_time(),
+                        )
                     {
                         ctx.callbacks.dispatch_input(cancel);
                     }
@@ -1625,7 +1633,9 @@ impl WindowsPlatform {
                         let time = ctx.message_clock.message_time();
                         let event =
                             mouse_wheel_event(hwnd, wparam, lparam, ctx.scale_factor.get(), time);
-                        ctx.callbacks.dispatch_input(event);
+                        if let Some(event) = event {
+                            ctx.callbacks.dispatch_input(event);
+                        }
                     }
                     LRESULT(0)
                 }
@@ -1636,7 +1646,9 @@ impl WindowsPlatform {
                         let time = ctx.message_clock.message_time();
                         let event =
                             mouse_hwheel_event(hwnd, wparam, lparam, ctx.scale_factor.get(), time);
-                        ctx.callbacks.dispatch_input(event);
+                        if let Some(event) = event {
+                            ctx.callbacks.dispatch_input(event);
+                        }
                     }
                     LRESULT(0)
                 }

@@ -1204,7 +1204,9 @@ impl ApplicationHandler for WinitApp {
                     let scale = win.scale_factor();
                     let input =
                         winit_events::cursor_moved_event(position, scale, modifiers, held_buttons);
-                    win.callbacks().dispatch_input(input);
+                    if let Some(input) = input {
+                        win.callbacks().dispatch_input(input);
+                    }
                 }
             }
             WinitWindowEvent::MouseInput { state, button, .. } => {
@@ -1278,7 +1280,9 @@ impl ApplicationHandler for WinitApp {
                         modifiers,
                         held_buttons,
                     );
-                    win.callbacks().dispatch_input(input);
+                    if let Some(input) = input {
+                        win.callbacks().dispatch_input(input);
+                    }
                 }
             }
             // NaN (documented possible) folds to None in the shared
@@ -1311,7 +1315,9 @@ impl ApplicationHandler for WinitApp {
                         win.scale_factor(),
                         modifiers,
                     );
-                    win.callbacks().dispatch_input(input);
+                    if let Some(input) = input {
+                        win.callbacks().dispatch_input(input);
+                    }
                 }
             }
             WinitWindowEvent::RotationGesture { delta, .. } => {
@@ -1337,7 +1343,9 @@ impl ApplicationHandler for WinitApp {
                         win.scale_factor(),
                         modifiers,
                     );
-                    win.callbacks().dispatch_input(input);
+                    if let Some(input) = input {
+                        win.callbacks().dispatch_input(input);
+                    }
                 }
             }
             WinitWindowEvent::Touch(touch) => {
@@ -1353,7 +1361,9 @@ impl ApplicationHandler for WinitApp {
                 if let Some(ref win) = window {
                     let scale = win.scale_factor();
                     let input = winit_events::touch_event(touch, pointer_id, scale, modifiers);
-                    win.callbacks().dispatch_input(input);
+                    if let Some(input) = input {
+                        win.callbacks().dispatch_input(input);
+                    }
                 }
             }
             WinitWindowEvent::MouseWheel { delta, .. } => {
@@ -1377,7 +1387,9 @@ impl ApplicationHandler for WinitApp {
                     let scale = win.scale_factor();
                     let input =
                         winit_events::mouse_wheel_event(delta, cursor_pos, scale, modifiers);
-                    win.callbacks().dispatch_input(input);
+                    if let Some(input) = input {
+                        win.callbacks().dispatch_input(input);
+                    }
                 }
             }
             WinitWindowEvent::KeyboardInput {

@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use flui_foundation::geometry::Offset;
 use flui_interaction::arena::GestureArena;
-use flui_interaction::events::{PointerType, make_down_event_for_id};
+use flui_interaction::events::{PointerKind, make_down_event_for_id};
 use flui_interaction::routing::PointerDispatch;
 use flui_interaction::settings::GestureSettings;
 use flui_interaction::{GestureRecognizer, LongPressGestureRecognizer, ManualClock, PointerId};
@@ -37,8 +37,9 @@ fn long_press_fires_on_pumped_virtual_frames_without_sleeping() {
         .build();
 
     // Pointer down captures `down_time` from the VIRTUAL clock (now = base + 0).
-    let pointer = PointerId::new(2).expect("nonzero pointer id");
-    let event = make_down_event_for_id(pointer, Offset::new(10.0, 10.0), PointerType::Touch);
+    let pointer = PointerId::new(std::num::NonZeroU64::new(2).expect("nonzero pointer id"));
+    let event = make_down_event_for_id(pointer, Offset::new(10.0, 10.0), PointerKind::Touch)
+        .expect("valid fixture sample");
     recognizer.add_pointer(PointerDispatch::at_root(&event));
 
     // Hold still; pump virtual frames totalling < 500ms — must NOT fire.

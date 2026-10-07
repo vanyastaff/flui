@@ -1035,9 +1035,11 @@ impl PlatformWindow for WindowsWindow {
         }
     }
 
-    fn modifiers(&self) -> keyboard_types::Modifiers {
-        super::platform::with_window_context(self.hwnd, "modifiers", |ctx| ctx.modifiers.get())
-            .unwrap_or_else(keyboard_types::Modifiers::empty)
+    fn modifiers(&self) -> flui_platform_api::keyboard::Modifiers {
+        crate::shared::input_vocabulary::modifiers(
+            super::platform::with_window_context(self.hwnd, "modifiers", |ctx| ctx.modifiers.get())
+                .unwrap_or_else(keyboard_types::Modifiers::empty),
+        )
     }
 
     fn appearance(&self) -> WindowAppearance {

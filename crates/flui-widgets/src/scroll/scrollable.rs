@@ -73,8 +73,11 @@ use crate::animated::VsyncScope;
 use crate::localization::axis_direction_from_axis_reverse_and_directionality;
 use crate::scroll::{ClampingScrollPhysics, ScrollController, ScrollMetrics, SharedScrollPhysics};
 use crate::{GestureDetector, Listener, Semantics, SingleChildScrollView};
-use flui_interaction::events::ScrollEventData;
 use flui_interaction::routing::EventPropagation;
+use flui_platform_api::{
+    keyboard::Modifiers,
+    pointer::{ScrollEvent, ScrollUnit},
+};
 use flui_scheduler::PostFrameHandle;
 
 use super::scroll_position_scope::ScrollPositionScope;
@@ -720,13 +723,17 @@ impl ViewState<Scrollable> for ScrollableState {
             let post_frame_wheel = post_frame.clone();
             let fling_wheel = fling_controller.clone();
             let listener = Listener::new()
-                .on_scroll_claim(move |data: &ScrollEventData| {
+                .on_scroll_claim(move |data: &ScrollEvent| {
                     // Deliberately modifier-agnostic: a ctrl+wheel tick over a
                     // plain list scrolls like any other. The ctrl+wheel-zooms contract needs no
                     // decline here: a chord-gated zoom consumer sits INSIDE
                     // the scrollable, and the leaf-first claim walk asks it
                     // first.
-                    let axis_delta = wheel_axis_delta(scroll_direction, data);
+                    let axis_delta = wheel_axis_delta(
+                        scroll_direction,
+                        data,
+                        ctrl_wheel.position().viewport_dimension(),
+                    );
                     // Platform deltas arrive already normalized —
                     // positive = content scrolls down (each backend converts its native axes
                     // and units at its own boundary). Only the reversed-axis
@@ -735,7 +742,7 @@ impl ViewState<Scrollable> for ScrollableState {
                     if axis_direction.is_reversed() {
                         delta = -delta;
                     }
-                    if delta == 0.0 {
+                    if delta == 0.0 || !delta.is_finite() {
                         return EventPropagation::Continue;
                     }
                     let position = ctrl_wheel.position();
@@ -939,12 +946,21 @@ fn scroll_semantics(
 /// nothing from it, so an enclosing horizontal one can. A device that already
 /// reports horizontal motion (a trackpad, a tilt wheel, or macOS, which swaps
 /// the axes itself) is passed through unchanged.
-fn wheel_axis_delta(axis: Axis, data: &ScrollEventData) -> f64 {
-    let shifted = data.modifiers.shift() && data.delta.dx == 0.0;
-    match axis {
+fn wheel_axis_delta(axis: Axis, data: &ScrollEvent, viewport_dimension: f64) -> f64 {
+    let shifted = data.modifiers.contains(Modifiers::SHIFT) && data.delta.x() == 0.0;
+    let delta = match axis {
         Axis::Vertical if shifted => 0.0,
-        Axis::Vertical => data.delta.dy,
-        Axis::Horizontal if shifted => data.delta.dy,
-        Axis::Horizontal => data.delta.dx,
-    }
+        Axis::Vertical => data.delta.y(),
+        Axis::Horizontal if shifted => data.delta.y(),
+        Axis::Horizontal => data.delta.x(),
+    };
+    let pixels_per_unit = match data.delta.unit() {
+        ScrollUnit::Pixels => 1.0,
+        // Existing consumer policy until the platform-layer preference producer
+        // supplies the system wheel line step. This is not a host preference.
+        ScrollUnit::Lines => 53.0,
+        ScrollUnit::Pages => viewport_dimension,
+        _ => return 0.0,
+    };
+    delta * pixels_per_unit
 }

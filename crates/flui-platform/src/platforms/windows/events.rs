@@ -19,7 +19,7 @@
 //!   onto the shared monotonic epoch before any reentrant callbacks run.
 
 use dpi::{PhysicalPosition, PhysicalSize};
-use keyboard_types::{Modifiers as KeyboardModifiers, NamedKey};
+use keyboard_types::{Key, Modifiers as KeyboardModifiers, NamedKey};
 use ui_events::{
     keyboard::{Code, KeyState, KeyboardEvent, Location},
     pointer::{
@@ -172,8 +172,11 @@ mod message_clock_contract {
 use super::util::{get_x_lparam, get_y_lparam};
 use crate::{
     shared::events::{event_timestamp_ns, primary_mouse_info},
-    shared::keys,
-    traits::{Key, PlatformInput, device_to_logical},
+    shared::{
+        input_vocabulary::{keyboard_input, pointer_input},
+        keys,
+    },
+    traits::{PlatformInput, device_to_logical},
 };
 
 // ============================================================================
@@ -308,13 +311,18 @@ pub(super) fn release_capture_after(hwnd: HWND, wparam: WPARAM) {
 /// every button there is up. Another window, a modal loop or `WM_CANCELMODE`
 /// taking the capture mid-drag leaves a button down, and without the cancel
 /// this window would never see that sequence's release.
-pub(super) fn capture_changed_event(hwnd: HWND, lparam: LPARAM) -> Option<PlatformInput> {
+pub(super) fn capture_changed_event(
+    hwnd: HWND,
+    lparam: LPARAM,
+    time: u64,
+) -> Option<PlatformInput> {
     let gaining = HWND(lparam.0 as *mut core::ffi::c_void);
     let held = [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON]
         .into_iter()
         .any(key_down_in_queue);
     (gaining != hwnd && held)
-        .then(|| PlatformInput::Pointer(PointerEvent::Cancel(primary_mouse_info())))
+        .then(|| pointer_input(PointerEvent::Cancel(primary_mouse_info()), time))
+        .flatten()
 }
 
 /// Build a `PointerState` from LPARAM coordinates and scale factor.
@@ -384,7 +392,7 @@ pub fn mouse_button_event(
     lparam: LPARAM,
     scale_factor: f64,
     time: u64,
-) -> PlatformInput {
+) -> Option<PlatformInput> {
     let state = pointer_state(
         lparam,
         scale_factor,
@@ -398,11 +406,14 @@ pub fn mouse_button_event(
         state,
         button: Some(button),
     };
-    PlatformInput::Pointer(if is_down {
-        PointerEvent::Down(event)
-    } else {
-        PointerEvent::Up(event)
-    })
+    pointer_input(
+        if is_down {
+            PointerEvent::Down(event)
+        } else {
+            PointerEvent::Up(event)
+        },
+        time,
+    )
 }
 
 /// Convert WM_MOUSEMOVE to a W3C pointer Move.
@@ -411,7 +422,7 @@ pub fn mouse_move_event(
     lparam: LPARAM,
     scale_factor: f64,
     time: u64,
-) -> PlatformInput {
+) -> Option<PlatformInput> {
     let held = held_buttons(wparam);
     // Sensor-less pressure rule: 0.5 while any button is held (a drag),
     // 0.0 on a hover.
@@ -420,12 +431,15 @@ pub fn mouse_move_event(
     } else {
         0.5
     };
-    PlatformInput::Pointer(PointerEvent::Move(PointerUpdate {
-        pointer: primary_mouse_info(),
-        current: pointer_state(lparam, scale_factor, pressure, held, 0, time),
-        coalesced: Vec::new(),
-        predicted: Vec::new(),
-    }))
+    pointer_input(
+        PointerEvent::Move(PointerUpdate {
+            pointer: primary_mouse_info(),
+            current: pointer_state(lparam, scale_factor, pressure, held, 0, time),
+            coalesced: Vec::new(),
+            predicted: Vec::new(),
+        }),
+        time,
+    )
 }
 
 /// The signed scroll distance both wheel messages carry in the high word of
@@ -488,14 +502,15 @@ pub fn mouse_wheel_event(
     lparam: LPARAM,
     scale_factor: f64,
     time: u64,
-) -> PlatformInput {
-    PlatformInput::Pointer(PointerEvent::Scroll(
-        ui_events::pointer::PointerScrollEvent {
+) -> Option<PlatformInput> {
+    pointer_input(
+        PointerEvent::Scroll(ui_events::pointer::PointerScrollEvent {
             pointer: primary_mouse_info(),
             state: wheel_pointer_state(hwnd, wparam, lparam, scale_factor, time),
             delta: crate::shared::scroll::from_win32_wheel(wheel_distance(wparam)),
-        },
-    ))
+        }),
+        time,
+    )
 }
 
 /// Convert WM_MOUSEHWHEEL to a W3C pointer Scroll.
@@ -511,14 +526,15 @@ pub fn mouse_hwheel_event(
     lparam: LPARAM,
     scale_factor: f64,
     time: u64,
-) -> PlatformInput {
-    PlatformInput::Pointer(PointerEvent::Scroll(
-        ui_events::pointer::PointerScrollEvent {
+) -> Option<PlatformInput> {
+    pointer_input(
+        PointerEvent::Scroll(ui_events::pointer::PointerScrollEvent {
             pointer: primary_mouse_info(),
             state: wheel_pointer_state(hwnd, wparam, lparam, scale_factor, time),
             delta: crate::shared::scroll::from_win32_hwheel(wheel_distance(wparam)),
-        },
-    ))
+        }),
+        time,
+    )
 }
 
 // ============================================================================
@@ -573,15 +589,18 @@ pub fn key_down_event(
         )
     };
 
-    PlatformInput::Keyboard(KeyboardEvent {
-        state: KeyState::Down,
-        key,
-        code,
-        location: keys::location_for_code(code),
-        modifiers,
-        repeat: is_repeat,
-        is_composing: false,
-    })
+    keyboard_input(
+        KeyboardEvent {
+            state: KeyState::Down,
+            key,
+            code,
+            location: keys::location_for_code(code),
+            modifiers,
+            repeat: is_repeat,
+            is_composing: false,
+        },
+        event_timestamp_ns(),
+    )
 }
 
 /// Convert WM_KEYUP to W3C KeyboardEvent.
@@ -605,15 +624,18 @@ pub fn key_up_event(wparam: WPARAM, lparam: LPARAM, held_dead: &mut HeldDeadKeys
     };
     let code = keys::scancode_to_code(scan_code, extended);
 
-    PlatformInput::Keyboard(KeyboardEvent {
-        state: KeyState::Up,
-        key,
-        code,
-        location: keys::location_for_code(code),
-        modifiers,
-        repeat: false,
-        is_composing: false,
-    })
+    keyboard_input(
+        KeyboardEvent {
+            state: KeyState::Up,
+            key,
+            code,
+            location: keys::location_for_code(code),
+            modifiers,
+            repeat: false,
+            is_composing: false,
+        },
+        event_timestamp_ns(),
+    )
 }
 
 /// Build the KeyboardEvent for an out-of-band `WM_CHAR` — one that reached
@@ -624,15 +646,18 @@ pub fn key_up_event(wparam: WPARAM, lparam: LPARAM, held_dead: &mut HeldDeadKeys
 pub fn stray_char_event(text: String) -> PlatformInput {
     let modifiers = message_modifiers();
 
-    PlatformInput::Keyboard(KeyboardEvent {
-        state: KeyState::Down,
-        key: Key::Character(text),
-        code: Code::Unidentified,
-        location: Location::Standard,
-        modifiers,
-        repeat: false,
-        is_composing: false,
-    })
+    keyboard_input(
+        KeyboardEvent {
+            state: KeyState::Down,
+            key: Key::Character(text),
+            code: Code::Unidentified,
+            location: Location::Standard,
+            modifiers,
+            repeat: false,
+            is_composing: false,
+        },
+        event_timestamp_ns(),
+    )
 }
 
 /// What `TranslateMessage` produced for one keydown.

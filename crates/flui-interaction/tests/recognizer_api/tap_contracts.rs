@@ -7,7 +7,7 @@ use flui_foundation::geometry::Offset;
 use flui_interaction::{
     CancelOutcome, DoubleTapGestureRecognizer, GestureArena, GestureRecognizer,
     TapGestureRecognizer,
-    events::{PointerEventExt, PointerType, make_down_event, make_up_event},
+    events::{PointerEventExt, PointerKind, make_down_event, make_up_event},
     routing::PointerDispatch,
 };
 
@@ -109,14 +109,14 @@ fn panicking_cancel_callback_cannot_strand_tap_tracking() {
             move |_| taps.set(taps.get() + 1)
         })
         .build();
-    let down = make_down_event(Offset::ZERO, PointerType::Touch);
-    let up = make_up_event(Offset::ZERO, PointerType::Touch);
+    let down = make_down_event(Offset::ZERO, PointerKind::Touch).expect("valid fixture sample");
+    let up = make_up_event(Offset::ZERO, PointerKind::Touch).expect("valid fixture sample");
     recognizer.add_pointer(PointerDispatch::at_root(&down));
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| recognizer.cancel()));
     assert!(failure.is_err());
     assert_eq!(recognizer.cancel(), CancelOutcome::Idle);
     recognizer.add_pointer(PointerDispatch::at_root(&down));
-    arena.close(down.pointer_id());
+    arena.close(down.pointer_id().expect("fixture contact identity"));
     recognizer.handle_event(PointerDispatch::at_root(&up));
     arena.drain_deferred_resolutions();
     assert_eq!(cancels.get(), 1);
@@ -137,13 +137,13 @@ fn cancel_reuses_tap() {
             move |_| cancels.set(cancels.get() + 1)
         })
         .build();
-    let down = make_down_event(Offset::ZERO, PointerType::Touch);
-    let up = make_up_event(Offset::ZERO, PointerType::Touch);
+    let down = make_down_event(Offset::ZERO, PointerKind::Touch).expect("valid fixture sample");
+    let up = make_up_event(Offset::ZERO, PointerKind::Touch).expect("valid fixture sample");
     recognizer.add_pointer(PointerDispatch::at_root(&down));
     assert_eq!(recognizer.cancel(), CancelOutcome::Cancelled);
     assert_eq!(recognizer.cancel(), CancelOutcome::Idle);
     recognizer.add_pointer(PointerDispatch::at_root(&down));
-    arena.close(down.pointer_id());
+    arena.close(down.pointer_id().expect("fixture contact identity"));
     recognizer.handle_event(PointerDispatch::at_root(&up));
     arena.drain_deferred_resolutions();
     assert_eq!(taps.get(), 1);
@@ -167,10 +167,10 @@ fn cancel_during_up_suppresses_tap() {
         })
         .build();
     *holder.borrow_mut() = Some(recognizer.clone());
-    let down = make_down_event(Offset::ZERO, PointerType::Touch);
-    let up = make_up_event(Offset::ZERO, PointerType::Touch);
+    let down = make_down_event(Offset::ZERO, PointerKind::Touch).expect("valid fixture sample");
+    let up = make_up_event(Offset::ZERO, PointerKind::Touch).expect("valid fixture sample");
     recognizer.add_pointer(PointerDispatch::at_root(&down));
-    arena.close(down.pointer_id());
+    arena.close(down.pointer_id().expect("fixture contact identity"));
     arena.drain_deferred_resolutions();
     recognizer.handle_event(PointerDispatch::at_root(&up));
     assert_eq!(taps.get(), 0);
@@ -186,16 +186,16 @@ fn cancel_reuses_double_tap() {
             move |_| doubles.set(doubles.get() + 1)
         })
         .build();
-    let down = make_down_event(Offset::ZERO, PointerType::Touch);
-    let up = make_up_event(Offset::ZERO, PointerType::Touch);
+    let down = make_down_event(Offset::ZERO, PointerKind::Touch).expect("valid fixture sample");
+    let up = make_up_event(Offset::ZERO, PointerKind::Touch).expect("valid fixture sample");
     recognizer.add_pointer(PointerDispatch::at_root(&down));
     assert_eq!(recognizer.cancel(), CancelOutcome::Cancelled);
     assert_eq!(recognizer.cancel(), CancelOutcome::Idle);
     for _ in 0..2 {
         recognizer.add_pointer(PointerDispatch::at_root(&down));
-        arena.close(down.pointer_id());
+        arena.close(down.pointer_id().expect("fixture contact identity"));
         recognizer.handle_event(PointerDispatch::at_root(&up));
-        arena.sweep(down.pointer_id());
+        arena.sweep(down.pointer_id().expect("fixture contact identity"));
     }
     assert_eq!(doubles.get(), 1);
     assert_eq!(recognizer.cancel(), CancelOutcome::Idle);

@@ -13,30 +13,32 @@ use flui_interaction::{
     CancelOutcome, GestureArena, GestureArenaMember, GestureRecognizer, GestureSettings,
     LongPressGestureRecognizer, ManualClock, MultiTapGestureRecognizer, PointerId,
     events::{
-        PointerButton, PointerType, make_down_event_for_id_with_button, make_up_event_for_id,
+        PointerButton, PointerKind, make_down_event_for_id_with_button, make_up_event_for_id,
     },
     routing::PointerDispatch,
 };
 
 fn pointer(raw: u64) -> PointerId {
-    PointerId::new(raw).expect("nonzero fixture pointer")
+    PointerId::new(std::num::NonZeroU64::new(raw).expect("nonzero fixture pointer"))
 }
 
 fn down(raw: u64) -> flui_interaction::events::PointerEvent {
     make_down_event_for_id_with_button(
         pointer(raw),
         Offset::new(raw as f64, 4.0),
-        PointerType::Touch,
-        PointerButton::Primary,
+        PointerKind::Touch,
+        PointerButton::PRIMARY,
     )
+    .expect("valid fixture sample")
 }
 
 fn up(recognizer: &dyn GestureRecognizer, raw: u64) {
     let event = make_up_event_for_id(
         pointer(raw),
         Offset::new(raw as f64, 4.0),
-        PointerType::Touch,
-    );
+        PointerKind::Touch,
+    )
+    .expect("valid fixture sample");
     recognizer.handle_event(PointerDispatch::at_root(&event));
 }
 
@@ -106,9 +108,10 @@ fn unsupported_long_press_button_is_not_admitted() {
     let secondary = make_down_event_for_id_with_button(
         pointer(35),
         Offset::ZERO,
-        PointerType::Mouse,
-        PointerButton::Secondary,
-    );
+        PointerKind::Mouse,
+        PointerButton::SECONDARY,
+    )
+    .expect("valid fixture sample");
     recognizer.add_pointer(PointerDispatch::at_root(&secondary));
     assert!(recognizer.deadline().is_none());
     assert_eq!(recognizer.cancel(), CancelOutcome::Idle);
@@ -177,9 +180,10 @@ fn multi_tap_center_stays_finite_at_admitted_coordinate_extremes() {
             let event = make_down_event_for_id_with_button(
                 pointer(raw),
                 Offset::new(x, x),
-                PointerType::Touch,
-                PointerButton::Primary,
-            );
+                PointerKind::Touch,
+                PointerButton::PRIMARY,
+            )
+            .expect("valid fixture sample");
             recognizer.add_pointer(PointerDispatch::at_root(&event));
         }
         up(recognizer.as_ref(), 61);

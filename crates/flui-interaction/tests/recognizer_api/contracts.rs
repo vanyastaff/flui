@@ -20,7 +20,7 @@ use flui_interaction::{
     arena::run_pointer_lifecycle,
     cancel_all,
     events::{
-        PointerButton, PointerEvent, PointerType, make_down_event_for_id_with_button,
+        PointerButton, PointerEvent, PointerKind, make_down_event_for_id_with_button,
         make_up_event_for_id,
     },
     routing::PointerDispatch,
@@ -128,16 +128,17 @@ impl GestureRecognizer for Extension {
 }
 
 fn pointer(raw: u64) -> PointerId {
-    PointerId::new(raw).expect("nonzero fixture pointer")
+    PointerId::new(std::num::NonZeroU64::new(raw).expect("nonzero fixture pointer"))
 }
 
 fn down(pointer: PointerId) -> PointerEvent {
     make_down_event_for_id_with_button(
         pointer,
         Offset::new(3.0, 4.0),
-        PointerType::Touch,
-        PointerButton::Primary,
+        PointerKind::Touch,
+        PointerButton::PRIMARY,
     )
+    .expect("valid fixture sample")
 }
 
 fn second_pointer_does_not_replace_the_primary_contact() {
@@ -157,7 +158,7 @@ fn second_pointer_does_not_replace_the_primary_contact() {
     assert!(!owner.contact.tracks(pointer(72)));
     let snapshot = owner.contact.current().expect("first contact remains");
     assert_eq!(snapshot.pointer, pointer(71));
-    assert_eq!(snapshot.kind, PointerType::Touch);
+    assert_eq!(snapshot.kind, PointerKind::Touch);
     assert_eq!(snapshot.local, Offset::new(3.0, 4.0));
     assert_eq!(snapshot.settings.touch_slop(), settings.touch_slop());
     owner.contact.withdraw();
@@ -232,7 +233,8 @@ fn recognizer_set_preserves_first_failure_and_recovers() {
     first.fail_delivery.set(false);
     second.fail_delivery.set(false);
     log.borrow_mut().clear();
-    let up = make_up_event_for_id(pointer(74), Offset::new(3.0, 4.0), PointerType::Touch);
+    let up = make_up_event_for_id(pointer(74), Offset::new(3.0, 4.0), PointerKind::Touch)
+        .expect("valid fixture sample");
     set.dispatch(PointerDispatch::at_root(&up));
     assert!(first.contact.current().is_none());
     assert!(second.contact.current().is_none());
@@ -259,7 +261,8 @@ fn predicates_only_gate_admission_and_sets_do_not_own_recognizers() {
     let event = down(pointer(75));
     set.dispatch(PointerDispatch::at_root(&event));
     assert!(log.borrow().is_empty());
-    let up = make_up_event_for_id(pointer(75), Offset::new(3.0, 4.0), PointerType::Touch);
+    let up = make_up_event_for_id(pointer(75), Offset::new(3.0, 4.0), PointerKind::Touch)
+        .expect("valid fixture sample");
     set.dispatch(PointerDispatch::at_root(&up));
     assert_eq!(*log.borrow(), ["owner"]);
     assert_eq!(predicate_calls.get(), 1);
@@ -355,7 +358,8 @@ fn stale_contact_drop_cannot_withdraw_a_reused_pointer() {
 
 fn invalid_admission_remains_idle_and_settings_are_frozen() {
     let owner = Extension::new(GestureArena::new(), "owner", Log::default());
-    let up = make_up_event_for_id(pointer(80), Offset::ZERO, PointerType::Mouse);
+    let up = make_up_event_for_id(pointer(80), Offset::ZERO, PointerKind::Mouse)
+        .expect("valid fixture sample");
     assert!(matches!(
         owner
             .contact
@@ -366,16 +370,13 @@ fn invalid_admission_remains_idle_and_settings_are_frozen() {
         let event = make_down_event_for_id_with_button(
             pointer(80),
             position,
-            PointerType::Mouse,
-            PointerButton::Primary,
+            PointerKind::Mouse,
+            PointerButton::PRIMARY,
         );
-        assert!(matches!(
-            owner.contact.begin(
-                PointerDispatch::at_root(&event),
-                &GestureSettings::default()
-            ),
-            Err(BeginContactError::NonFinite)
-        ));
+        assert!(
+            event.is_err(),
+            "checked pointer positions refuse nonfinite input before admission"
+        );
         assert!(owner.contact.current().is_none());
     }
     let event = down(pointer(80));
@@ -497,7 +498,8 @@ fn diagnostic_panic_cannot_replace_first_delivery_failure_or_skip_a_peer() {
     assert_eq!(*log.borrow(), ["first", "second", "third"]);
     first.fail_delivery.set(false);
     second.fail_delivery.set(false);
-    let up = make_up_event_for_id(pointer(82), Offset::ZERO, PointerType::Touch);
+    let up = make_up_event_for_id(pointer(82), Offset::ZERO, PointerKind::Touch)
+        .expect("valid fixture sample");
     set.dispatch(PointerDispatch::at_root(&up));
     assert!(first.contact.current().is_none());
     assert!(second.contact.current().is_none());
@@ -538,7 +540,8 @@ fn held_recognizer_drop_releases_pending_sweep(
         owner.add_pointer(PointerDispatch::at_root(&another));
         run_pointer_lifecycle(&arena, &another);
     }
-    let up = make_up_event_for_id(pointer(83), Offset::new(3.0, 4.0), PointerType::Touch);
+    let up = make_up_event_for_id(pointer(83), Offset::new(3.0, 4.0), PointerKind::Touch)
+        .expect("valid fixture sample");
     owner.handle_event(PointerDispatch::at_root(&up));
     run_pointer_lifecycle(&arena, &up);
     assert!(arena.is_held(pointer(83)), "actual recognizer owns a hold");

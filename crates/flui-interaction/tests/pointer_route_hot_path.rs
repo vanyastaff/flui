@@ -7,7 +7,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use flui_interaction::events::{PointerType, make_move_event};
+use flui_interaction::events::{PointerKind, make_move_event};
 use flui_interaction::{HitTestEntry, InteractionLane, Offset, PointerTarget, RenderId};
 
 static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
@@ -58,7 +58,7 @@ fn resolved_route_move_invocation_allocates_no_heap_after_setup() {
     let lane = InteractionLane::try_new().expect("lane");
     let handle = lane.dispatch_handle();
     let deliveries = Rc::new(Cell::new(0));
-    let event = make_move_event(Offset::ZERO, PointerType::Mouse);
+    let event = make_move_event(Offset::ZERO, PointerKind::Mouse).expect("valid fixture sample");
 
     lane.enter(|| {
         let targets: Vec<_> = (0..4)

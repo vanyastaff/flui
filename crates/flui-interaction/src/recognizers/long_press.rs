@@ -7,7 +7,7 @@ use super::{
 };
 use crate::{
     arena::{GestureArena, GestureArenaMember},
-    events::{PointerEvent, PointerEventExt, PointerType},
+    events::{PointerEvent, PointerEventExt, PointerKind},
     ids::PointerId,
     routing::{PointerDispatch, RoutePanic},
     settings::GestureSettings,
@@ -36,7 +36,7 @@ pub struct LongPressDownDetails {
     /// Recognizer-local position.
     pub local_position: Offset<f64>,
     /// Admitted device kind.
-    pub kind: PointerType,
+    pub kind: PointerKind,
 }
 /// Contact at recognition time.
 #[derive(Debug, Clone, PartialEq)]
@@ -46,7 +46,7 @@ pub struct LongPressStartDetails {
     /// Recognizer-local position.
     pub local_position: Offset<f64>,
     /// Admitted device kind.
-    pub kind: PointerType,
+    pub kind: PointerKind,
 }
 /// Contact at movement, release, or cancellation.
 #[derive(Debug, Clone, PartialEq)]
@@ -56,7 +56,7 @@ pub struct LongPressDetails {
     /// Recognizer-local position.
     pub local_position: Offset<f64>,
     /// Admitted device kind.
-    pub kind: PointerType,
+    pub kind: PointerKind,
 }
 
 #[derive(Default)]
@@ -188,7 +188,7 @@ impl LongPressGestureRecognizer {
             settings: GestureSettings::default(),
         }
     }
-    fn details(&self, kind: PointerType) -> LongPressDetails {
+    fn details(&self, kind: PointerKind) -> LongPressDetails {
         let state = self.state.borrow();
         LongPressDetails {
             global_position: state.global,
@@ -295,12 +295,12 @@ impl GestureRecognizer for LongPressGestureRecognizer {
         let Some(contact) = self.contact.current() else {
             return;
         };
-        if dispatch.local.pointer_id() != contact.pointer {
+        if dispatch.local.pointer_id() != Some(contact.pointer) {
             return;
         }
         if matches!(dispatch.local, PointerEvent::Move(_) | PointerEvent::Up(_)) {
-            let local = dispatch.local.position();
-            let global = dispatch.global.position();
+            let local = dispatch.local.position().unwrap_or(contact.local);
+            let global = dispatch.global.position().unwrap_or(contact.global);
             if !local.dx.is_finite()
                 || !local.dy.is_finite()
                 || !global.dx.is_finite()
@@ -312,8 +312,8 @@ impl GestureRecognizer for LongPressGestureRecognizer {
         }
         match dispatch.local {
             PointerEvent::Move(_) => {
-                let local = dispatch.local.position();
-                let global = dispatch.global.position();
+                let local = dispatch.local.position().unwrap_or(contact.local);
+                let global = dispatch.global.position().unwrap_or(contact.global);
                 let phase = self.state.borrow().phase;
                 if phase == LongPressPhase::Possible
                     && self
@@ -349,8 +349,8 @@ impl GestureRecognizer for LongPressGestureRecognizer {
                     let mut state = self.state.borrow_mut();
                     let started = state.phase == LongPressPhase::Started;
                     state.phase = LongPressPhase::Ready;
-                    state.local = dispatch.local.position();
-                    state.global = dispatch.global.position();
+                    state.local = dispatch.local.position().unwrap_or(contact.local);
+                    state.global = dispatch.global.position().unwrap_or(contact.global);
                     started
                 };
                 let details = self.details(contact.kind);
