@@ -23,6 +23,7 @@ mod file_length;
 mod fonts;
 mod globals;
 mod host_lock;
+mod key_vocabulary;
 mod markers;
 mod module_dag;
 mod perf;
@@ -130,6 +131,8 @@ enum Command {
     FileLength(file_length::FileLengthArgs),
     /// Check for process markers outside the archival roots (ADR-0078 §4).
     Markers(markers::MarkersArgs),
+    /// Check (or --write) the W3C key tables generated from keyboard-types (ADR-0089 §4).
+    KeyVocabulary(key_vocabulary::KeyVocabularyArgs),
     /// Validate changelog.d fragments; --write merges them into CHANGELOG.md and deletes them.
     Changelog(changelog::ChangelogArgs),
     /// List missing tools for `ci` / `ci-full`.
@@ -200,6 +203,7 @@ impl Command {
             | Self::FontAssets(_)
             | Self::FileLength(_)
             | Self::Markers(_)
+            | Self::KeyVocabulary(_)
             | Self::Changelog(_)
             | Self::Doctor(_) => return false,
         };
@@ -263,6 +267,7 @@ fn main() -> ExitCode {
         Command::FontAssets(args) => fonts::font_assets(&args),
         Command::FileLength(args) => file_length::file_length(&args),
         Command::Markers(args) => markers::markers(&args),
+        Command::KeyVocabulary(args) => key_vocabulary::key_vocabulary(&args),
         Command::Changelog(args) => changelog::changelog(&args),
         Command::Doctor(args) => doctor::doctor(&args),
         Command::BenchCollect(args) => bench::bench_collect(&args),
@@ -337,6 +342,8 @@ mod tests {
         ("font-assets", false),
         ("file-length", false),
         ("markers", false),
+        ("key-vocabulary", false),
+        ("key-vocabulary --write", false),
         ("changelog --check", false),
         ("doctor", false),
         ("worktree list", false),

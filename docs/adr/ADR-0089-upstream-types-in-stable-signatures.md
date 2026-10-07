@@ -193,7 +193,8 @@ scratch crate with `pub fn f() -> accesskit::Role` must be rejected (its `--self
 
 ## Verification
 
-None of these exist yet.
+Only §4's generator, round trip and diff check exist so far
+([ADR-0143](ADR-0143-flui-owned-input-event-vocabulary.md) §4); the rest do not yet.
 
 - `api-closure` with its self-test probe (§6), in `cargo xtask checks`.
 - The outbound `ALL` test and the exhaustive inbound matches in `flui-semantics` (§3).
