@@ -387,6 +387,18 @@ mod native_windows {
             "queued_mouse_samples_keep_native_message_time",
             queued_mouse_samples_keep_native_message_time,
         ),
+        (
+            "extended_mouse_buttons_share_contact_and_capture",
+            extended_mouse_buttons_share_contact_and_capture,
+        ),
+        (
+            "extended_mouse_capture_loss_cancels_and_recovers",
+            extended_mouse_capture_loss_cancels_and_recovers,
+        ),
+        (
+            "unknown_native_pointer_messages_do_not_invent_contacts",
+            unknown_native_pointer_messages_do_not_invent_contacts,
+        ),
     ];
 
     pub(super) fn run_requested_child() -> bool {
@@ -2312,6 +2324,14 @@ mod native_windows {
             (VK_LBUTTON, mask & MK_LBUTTON != 0),
             (VK_RBUTTON, mask & MK_RBUTTON != 0),
             (VK_MBUTTON, false),
+            (
+                windows::Win32::UI::Input::KeyboardAndMouse::VK_XBUTTON1,
+                mask & 0x0020 != 0,
+            ),
+            (
+                windows::Win32::UI::Input::KeyboardAndMouse::VK_XBUTTON2,
+                mask & 0x0040 != 0,
+            ),
             (VK_SHIFT, mask & MK_SHIFT != 0),
             (VK_LSHIFT, mask & MK_SHIFT != 0),
         ])
@@ -2404,6 +2424,133 @@ mod native_windows {
         assert!(captured().is_invalid(), "the release lets go");
         assert_eq!(kinds(&events), ["down", "cancel", "down", "up"]);
         thief.close();
+        window.close();
+    }
+
+    fn extended_mouse_buttons_share_contact_and_capture() {
+        use flui_platform_api::pointer::{ButtonChange, PointerButton, PointerEvent};
+        use windows::Win32::UI::WindowsAndMessaging::{WM_XBUTTONDOWN, WM_XBUTTONUP};
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let window = open(&platform, true);
+        let hwnd = hwnd_of(&window);
+        let events = record_pointer(&window);
+        send_mouse(
+            hwnd,
+            WM_XBUTTONDOWN,
+            (1 << 16) | 0x0020,
+            mouse_lparam(10, 10),
+        );
+        assert_eq!(captured(), hwnd, "the first extended button captures");
+        send_mouse(
+            hwnd,
+            WM_XBUTTONDOWN,
+            (2 << 16) | 0x0060,
+            mouse_lparam(10, 10),
+        );
+        send_mouse(hwnd, WM_XBUTTONUP, (1 << 16) | 0x0040, mouse_lparam(10, 10));
+        assert_eq!(captured(), hwnd, "another extended button retains capture");
+        send_mouse(hwnd, WM_XBUTTONUP, 2 << 16, mouse_lparam(-30, -20));
+        assert!(
+            captured().is_invalid(),
+            "the final extended release lets go"
+        );
+        assert_eq!(kinds(&events), ["down", "button_down", "button_up", "up"]);
+        let log = events.lock().expect("pointer log");
+        let [
+            PointerEvent::Down(first),
+            PointerEvent::ButtonChange(ButtonChange::Pressed(second)),
+            PointerEvent::ButtonChange(ButtonChange::Released(released)),
+            PointerEvent::Up(last),
+        ] = log.as_slice()
+        else {
+            panic!("the checked extended-button transitions");
+        };
+        assert_eq!(first.button(), PointerButton::BACK);
+        assert_eq!(second.button(), PointerButton::FORWARD);
+        assert!(second.buttons().contains(PointerButton::BACK));
+        assert!(second.buttons().contains(PointerButton::FORWARD));
+        assert!(!released.buttons().contains(PointerButton::BACK));
+        assert!(released.buttons().contains(PointerButton::FORWARD));
+        assert_eq!(last.button(), PointerButton::FORWARD);
+        assert!(last.buttons().is_empty());
+        assert_eq!(first.pointer.id, second.pointer.id);
+        assert_eq!(first.pointer.id, released.pointer.id);
+        assert_eq!(first.pointer.id, last.pointer.id);
+        assert_eq!(first.sample.pressure, None, "a mouse reports no sensor");
+        drop(log);
+        window.close();
+    }
+
+    #[expect(
+        unsafe_code,
+        reason = "moves capture between actual owned hidden windows"
+    )]
+    fn extended_mouse_capture_loss_cancels_and_recovers() {
+        use flui_platform_api::pointer::{CancelReason, PointerEvent};
+        use windows::Win32::UI::WindowsAndMessaging::{WM_XBUTTONDOWN, WM_XBUTTONUP};
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let window = open(&platform, true);
+        let thief = open(&platform, true);
+        let hwnd = hwnd_of(&window);
+        let events = record_pointer(&window);
+        send_mouse(
+            hwnd,
+            WM_XBUTTONDOWN,
+            (1 << 16) | 0x0020,
+            mouse_lparam(10, 10),
+        );
+        assert_eq!(captured(), hwnd, "an extended press captures");
+        let mut held = queue_state_for(0x0020);
+        // SAFETY: another live window created by this fixture on this thread.
+        unsafe { SetCapture(hwnd_of(&thief)) };
+        held.restore();
+        assert_eq!(kinds(&events), ["down", "cancel"]);
+        {
+            let log = events.lock().expect("pointer log");
+            let PointerEvent::Cancel(cancel) = &log[1] else {
+                panic!("capture loss must cancel");
+            };
+            assert_eq!(cancel.reason, CancelReason::CaptureLost);
+        }
+        // SAFETY: release this owner thread's fixture capture; no arguments.
+        unsafe { ReleaseCapture() }.expect("release the thief's capture");
+        send_mouse(
+            hwnd,
+            WM_XBUTTONDOWN,
+            (2 << 16) | 0x0040,
+            mouse_lparam(10, 10),
+        );
+        assert_eq!(captured(), hwnd, "a fresh press captures again");
+        send_mouse(hwnd, WM_XBUTTONUP, 2 << 16, mouse_lparam(10, 10));
+        assert_eq!(kinds(&events), ["down", "cancel", "down", "up"]);
+        assert!(captured().is_invalid());
+        thief.close();
+        window.close();
+    }
+
+    fn unknown_native_pointer_messages_do_not_invent_contacts() {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            WM_POINTERCAPTURECHANGED, WM_POINTERDOWN, WM_POINTERENTER, WM_POINTERLEAVE,
+            WM_POINTERUP, WM_POINTERUPDATE,
+        };
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let window = open(&platform, true);
+        let hwnd = hwnd_of(&window);
+        let events = record_pointer(&window);
+        for message in [
+            WM_POINTERDOWN,
+            WM_POINTERUPDATE,
+            WM_POINTERUP,
+            WM_POINTERCAPTURECHANGED,
+            WM_POINTERENTER,
+            WM_POINTERLEAVE,
+        ] {
+            send_mouse(hwnd, message, 0xffff, mouse_lparam(10, 10));
+        }
+        assert!(events.lock().expect("pointer log").is_empty());
+        send_mouse(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, mouse_lparam(10, 10));
+        send_mouse(hwnd, WM_LBUTTONUP, 0, mouse_lparam(10, 10));
+        assert_eq!(kinds(&events), ["down", "up"], "ordinary input recovers");
         window.close();
     }
 
