@@ -656,7 +656,7 @@ impl NativePointerState {
                 owned::ScrollUnit::Lines,
                 -f64::from(*x),
                 -f64::from(*y),
-                owned::ScrollPrecision::Discrete,
+                owned::ScrollPrecision::Notched,
             ),
             MouseScrollDelta::PixelDelta(delta) => (
                 owned::ScrollUnit::Pixels,
@@ -1180,7 +1180,7 @@ mod pointer_translation_tests {
                     if pixels {
                         owned::ScrollPrecision::Precise
                     } else {
-                        owned::ScrollPrecision::Discrete
+                        owned::ScrollPrecision::Notched
                     }
                 );
                 assert!(
