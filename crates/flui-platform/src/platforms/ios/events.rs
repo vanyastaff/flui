@@ -20,7 +20,7 @@ use objc2_foundation::NSObjectProtocol;
 use objc2_foundation::NSProcessInfo;
 use objc2_ui_kit::{
     UIForceTouchCapability, UIGestureRecognizerState, UIHoverGestureRecognizer, UITouch,
-    UITouchType, UIView,
+    UITouchType, UITraitEnvironment, UIView,
 };
 
 use crate::traits::PlatformInput;
