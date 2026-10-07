@@ -232,15 +232,34 @@ impl Measure {
         if contacts.len() < 2 {
             return None;
         }
-        let focal = Offset::new(
-            scaled_mean(contacts.iter().map(|c| c.position.dx)),
-            scaled_mean(contacts.iter().map(|c| c.position.dy)),
-        );
-        let deltas = || contacts.iter().map(|c| c.position - focal);
+        // Work in coordinates divided by the largest magnitude, so neither the
+        // centroid sum nor a contact's deviation from it (up to twice the
+        // largest coordinate) overflows; only the final means are scaled back.
+        let scale = contacts.iter().fold(0.0_f64, |largest, c| {
+            largest.max(c.position.dx.abs()).max(c.position.dy.abs())
+        });
+        if !scale.is_finite() {
+            return None;
+        }
+        let unit = if scale > 0.0 { scale } else { 1.0 };
+        let count = contacts.len() as f64;
+        let scaled = || contacts.iter().map(|c| c.position / unit);
+        let mut focal_scaled = Offset::ZERO;
+        for position in scaled() {
+            focal_scaled += position / count;
+        }
+        let (mut span, mut horizontal, mut vertical) = (0.0, 0.0, 0.0);
+        for position in scaled() {
+            let delta = position - focal_scaled;
+            span += delta.distance() / count;
+            horizontal += delta.dx.abs() / count;
+            vertical += delta.dy.abs() / count;
+        }
+        let focal = focal_scaled * unit;
         let measure = Self {
-            span: scaled_mean(deltas().map(Offset::distance)),
-            horizontal: scaled_mean(deltas().map(|d| d.dx.abs())),
-            vertical: scaled_mean(deltas().map(|d| d.dy.abs())),
+            span: span * unit,
+            horizontal: horizontal * unit,
+            vertical: vertical * unit,
             focal,
         };
         (measure.span.is_finite()
@@ -776,7 +795,13 @@ impl GestureRecognizer for ScaleGestureRecognizer {
             return;
         }
         if self.gesture_state.lock().index_of(pointer).is_some() {
-            return;
+            // The same pointer going down again means its Up or Cancel never
+            // arrived: that sequence ends here, and the new contact joins the
+            // new arena instead of standing in for the old one.
+            self.handle_cancel(pointer);
+            if self.state.is_disposed() {
+                return;
+            }
         }
         let member: Arc<dyn GestureArenaMember> = self.clone();
         let entry = self.state.arena().add(pointer, member);
@@ -961,26 +986,4 @@ impl GestureArenaMember for ScaleGestureRecognizer {
         self.sync_primary(primary);
         self.deliver(outcome);
     }
-}
-
-/// The mean of `values` without overflowing on the way: each value is divided
-/// by the largest magnitude before summing, so the running sum stays within
-/// the count, and the result is finite whenever every value is. A non-finite
-/// value makes the mean non-finite, which the caller refuses.
-fn scaled_mean(values: impl Iterator<Item = f64> + Clone) -> f64 {
-    let scale = values
-        .clone()
-        .fold(0.0_f64, |largest, value| largest.max(value.abs()));
-    let mut count = 0.0;
-    let mut sum = 0.0;
-    for value in values {
-        count += 1.0;
-        if scale > 0.0 {
-            sum += value / scale;
-        }
-    }
-    if count == 0.0 || scale == 0.0 {
-        return 0.0;
-    }
-    scale * (sum / count)
 }

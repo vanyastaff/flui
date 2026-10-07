@@ -195,12 +195,19 @@ impl ForcePressState {
 
     /// Record one pressure sample. A non-finite sample is ignored and reported
     /// as not admitted, so the caller makes no transition from it.
+    ///
+    /// A mouse is never evidence of a pressure sensor, whatever it reports:
+    /// platforms give a pressed mouse a constant (0.5 on the W3C convention,
+    /// 1.0 on Android), and only a pen or a touch surface can measure force.
     #[must_use]
-    fn record_pressure(&mut self, pressure: f64) -> bool {
+    fn record_pressure(&mut self, pressure: f64, kind: Option<PointerType>) -> bool {
         if !pressure.is_finite() {
             return false;
         }
-        if pressure != SENSORLESS_ACTIVE_PRESSURE && pressure != 0.0 {
+        if kind != Some(PointerType::Mouse)
+            && pressure != SENSORLESS_ACTIVE_PRESSURE
+            && pressure != 0.0
+        {
             self.sensor = true;
         }
         self.pressure = pressure;
@@ -459,7 +466,7 @@ impl ForcePressGestureRecognizer {
         if global_position.is_finite() {
             state.global_position = global_position;
         }
-        if !state.record_pressure(pressure) {
+        if !state.record_pressure(pressure, kind) {
             // An ignored sample makes no transition: no update or peak from a
             // stale pressure paired with the new position.
             return;
@@ -573,7 +580,7 @@ impl GestureRecognizer for ForcePressGestureRecognizer {
                     Offset::new(pos.x, pos.y),
                     global_position,
                     f64::from(data.state.pressure),
-                    None,
+                    Some(data.pointer.pointer_type),
                 );
             }
             PointerEvent::Move(data) => {

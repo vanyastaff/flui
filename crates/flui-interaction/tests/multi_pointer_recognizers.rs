@@ -501,6 +501,10 @@ fn scale_publishes_finite_continuous_values_and_owns_its_contacts() {
                 scale_measures_three_contacts_at_the_largest_coordinate,
             ),
             (
+                "contacts spanning the whole range",
+                scale_measures_contacts_spanning_the_whole_range,
+            ),
+            (
                 "zero horizontal baseline",
                 scale_axis_with_zero_baseline_holds_finite,
             ),
@@ -696,6 +700,10 @@ fn force_press_needs_a_sensor_and_the_arena() {
             ),
             ("cancel", force_press_cancel_ends_once),
             ("dispose from start", force_press_disposed_from_its_start),
+            (
+                "mouse at full pressure",
+                a_mouse_at_full_pressure_never_force_presses,
+            ),
             (
                 "non-finite pressure ignored",
                 force_press_ignores_a_non_finite_pressure_sample,
@@ -1093,4 +1101,36 @@ fn scale_measures_three_contacts_at_the_largest_coordinate() {
         updates.iter().all(|update| update.focal_point.dx == top),
         "the focal point is the contacts' finite centroid"
     );
+}
+
+/// Contacts on both sides of the largest coordinate: each deviation from the
+/// finite centroid exceeds the largest finite value before averaging, yet the
+/// mean deviation is finite, so the scale still measures and starts.
+fn scale_measures_contacts_spanning_the_whole_range() {
+    let rig = Rig::new();
+    let (_scale, log) = scale_on(&rig);
+    let top = f64::MAX;
+    rig.down(1, -top, 0.0);
+    rig.down(2, -top, 100.0);
+    rig.down(3, top, 0.0);
+    rig.frame();
+    rig.move_to(2, -top, 200.0);
+    assert_eq!(
+        log.starts.get(),
+        1,
+        "the scale started from a real measurement"
+    );
+}
+
+/// A mouse reports a constant pressure while pressed (1.0 on Android); it is
+/// never a sensor, so a mouse click does not force press.
+fn a_mouse_at_full_pressure_never_force_presses() {
+    let rig = Rig::new();
+    let (press_rec, log) = press_on(&rig);
+    rig.attach(&press_rec, None);
+    rig.down_with(1, 100.0, 100.0, PointerType::Mouse, 1.0);
+    rig.frame();
+    rig.move_with(1, 100.0, 100.0, PointerType::Mouse, 1.0);
+    rig.up_with(1, 100.0, 100.0, PointerType::Mouse);
+    assert_eq!(log.starts.get(), 0, "a mouse is not a pressure sensor");
 }
