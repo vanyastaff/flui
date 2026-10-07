@@ -13,6 +13,7 @@ pre { position: relative; z-index: 9999; background: white; width: max-content; 
   <button id="capture-loss">Check capture loss</button>
   <button id="fractional">Check fractional positions</button>
   <button id="pen-samples">Check pen samples</button>
+  <button id="chord">Check native pointer chord</button>
   <button id="capture">Arm trusted capture check</button>
   <button id="display">Check display</button>
   <button id="created">Check created callback</button>
@@ -83,10 +84,11 @@ document.getElementById('events').onclick = () => check('events-check', () => {
   canvas.dispatchEvent(new PointerEvent('pointermove', { ...common, button: -1, buttons: 24 }));
   canvas.dispatchEvent(new WheelEvent('wheel', { ...common, buttons: 24, deltaX: 3, deltaY: 6, deltaMode: 0 }));
   canvas.dispatchEvent(new PointerEvent('pointerup', { ...common, button: 4, buttons: 8 }));
-  for (const kind of ['down', 'move', 'scroll', 'up']) {
+  for (const kind of ['button-press', 'move', 'scroll', 'button-release']) {
     const actual = JSON.parse(document.getElementById(kind)?.textContent ?? 'null');
     if (!actual) throw new Error(`${kind} was not delivered`);
-    equal(actual, { x: 80, y: 40, scale: devicePixelRatio, x1: true, x2: kind !== 'up' });
+    equal(actual, { x: 80, y: 40 });
+    if (kind !== 'scroll') equal(actual, { x1: true, x2: kind !== 'button-release' });
   }
 });
 document.getElementById('cancel').onclick = () => check('cancel-check', () => {
@@ -214,5 +216,20 @@ document.getElementById('pen-samples').onclick = () => check('samples-check', ()
   equal({ times: actual.predicted.map(s => s.time).join(',') }, { times: '40000000,50000000' });
   equal(actual.coalesced[0], { x: 20.25, pressure: .125 });
   equal(actual.predicted[1], { x: 80.5, pressure: .75 });
+});
+
+document.getElementById('chord').onclick = () => check('chord-check', () => {
+  const canvas = document.querySelector('canvas');
+  if (!canvas) throw new Error('Install input first');
+  report('sequence', '');
+  const common = { pointerId: 17, pointerType: 'mouse', isPrimary: true, bubbles: true, clientX: 80, clientY: 40 };
+  canvas.dispatchEvent(new PointerEvent('pointerdown', { ...common, button: 0, buttons: 1 }));
+  // W3C emits pointermove for further mouse-button edges while contact remains.
+  canvas.dispatchEvent(new PointerEvent('pointermove', { ...common, button: 2, buttons: 3 }));
+  equal(JSON.parse(document.getElementById('button-press')?.textContent ?? 'null'), { primary: true, secondary: true });
+  canvas.dispatchEvent(new PointerEvent('pointermove', { ...common, button: 2, buttons: 1 }));
+  equal(JSON.parse(document.getElementById('button-release')?.textContent ?? 'null'), { primary: true, secondary: false });
+  canvas.dispatchEvent(new PointerEvent('pointerup', { ...common, button: 0, buttons: 0 }));
+  equal({ sequence: document.getElementById('sequence')?.textContent }, { sequence: 'down,button-press,button-release,up,' });
 });
 </script>
