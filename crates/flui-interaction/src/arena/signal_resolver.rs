@@ -285,7 +285,7 @@ mod tests {
     #[test]
     fn signal_handler_exhaustion_refuses_permanently_without_losing_registration() {
         let resolver = PointerSignalResolver::new();
-        let pointer = PointerId::PRIMARY;
+        let pointer = PointerId::new(core::num::NonZeroU64::MIN);
         resolver.inner.borrow_mut().next_handler_id = u64::MAX - 1;
         let last = resolver.register(pointer, SignalPriority::Normal, |_| {});
         assert_eq!(last.get(), u64::MAX - 1);

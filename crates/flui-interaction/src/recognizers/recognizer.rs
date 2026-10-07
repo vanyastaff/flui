@@ -52,18 +52,26 @@ pub fn cancel_all<'a>(
 }
 
 pub(crate) fn is_primary_down(event: &PointerEvent) -> bool {
-    matches!(event, PointerEvent::Down(data) if data.button.is_none_or(|button| button == PointerButton::Primary))
+    matches!(event, PointerEvent::Down(data) if data.button() == PointerButton::PRIMARY)
 }
 
 pub(crate) fn event_time(event: &PointerEvent) -> Option<u64> {
-    let nanos = match event {
-        PointerEvent::Down(data) | PointerEvent::Up(data) => data.state.time,
-        PointerEvent::Move(data) => data.current.time,
-        PointerEvent::Scroll(data) => data.state.time,
-        PointerEvent::Gesture(data) => data.state.time,
-        PointerEvent::Cancel(_) | PointerEvent::Enter(_) | PointerEvent::Leave(_) => 0,
+    let time = match event {
+        PointerEvent::Down(data) => data.sample.time,
+        PointerEvent::Up(data) => data.sample.time,
+        PointerEvent::ButtonChange(crate::events::ButtonChange::Pressed(data)) => data.sample.time,
+        PointerEvent::ButtonChange(crate::events::ButtonChange::Released(data)) => data.sample.time,
+        PointerEvent::Move(data) => data.current().time,
+        PointerEvent::Scroll(data) => data.time,
+        PointerEvent::PanZoom(data) => data.time,
+        PointerEvent::Cancel(data) => data.time,
+        PointerEvent::Enter(data)
+        | PointerEvent::Leave(data)
+        | PointerEvent::ScrollInertiaCancel(data) => data.time,
+        PointerEvent::DeviceAdded(data) | PointerEvent::DeviceRemoved(data) => data.time,
+        _ => return None,
     };
-    (nanos != 0).then_some(nanos)
+    Some(time.as_nanos())
 }
 
 /// Keep complete hardware samples; a fit window belongs to the velocity

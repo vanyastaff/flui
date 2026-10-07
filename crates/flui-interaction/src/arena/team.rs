@@ -547,7 +547,7 @@ mod tests {
         let captain = MockMember::new(0);
         let team = GestureArenaTeam::with_captain(captain.clone());
         let arena = GestureArena::new();
-        let pointer = PointerId::PRIMARY;
+        let pointer = PointerId::new(core::num::NonZeroU64::MIN);
 
         let member1 = MockMember::new(1);
         let member2 = MockMember::new(2);
