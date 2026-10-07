@@ -206,6 +206,9 @@ struct LastTap {
 
 #[derive(Debug, Clone)]
 struct TapDragState {
+    /// Bumped whenever the sequence resets, so callbacks queued for a
+    /// sequence that a reentrant transition already ended are not delivered.
+    generation: u64,
     phase: Phase,
     pointer: Option<PointerId>,
     entry: Option<GestureArenaEntry>,
@@ -232,6 +235,7 @@ struct TapDragState {
 impl Default for TapDragState {
     fn default() -> Self {
         Self {
+            generation: 0,
             phase: Phase::Ready,
             pointer: None,
             entry: None,
@@ -276,7 +280,10 @@ impl TapDragState {
     /// Clear the sequence, keeping the consecutive-tap chain.
     fn reset_sequence(&mut self) {
         let last_tap = self.last_tap;
+        // Only compared for change; wrapping after 2^64 resets is harmless.
+        let generation = self.generation.wrapping_add(1);
         *self = Self {
+            generation,
             last_tap,
             ..Self::default()
         };
@@ -346,8 +353,9 @@ impl TapDragState {
 /// is down does not join; the same pointer going down again retires its
 /// previous sequence first. Callbacks run after the recogniser has committed
 /// its state, with no borrow held, so a callback may dispose the recogniser.
-/// A panicking callback propagates to the dispatcher; the transition's
-/// remaining callbacks are dropped and the next contact starts clean.
+/// A panicking callback does not stop the transition: its remaining callbacks
+/// are still delivered, and the first panic resumes afterwards. Callbacks
+/// queued for a sequence that a callback ended reentrantly are dropped.
 #[derive(Clone)]
 pub struct TapAndDragGestureRecognizer {
     state: RecognizerBase,
@@ -481,6 +489,7 @@ impl TapAndDragGestureRecognizer {
     /// committed beforehand; the first panic is resumed after the arena step
     /// ran and every notice of the transition was delivered.
     fn finish(&self, step: ArenaStep, notices: Vec<Notice>) {
+        let generation = self.gesture_state.lock().generation;
         let self_driven = self.state.arena().sweep_model() == SweepModel::SelfDriven;
         let mut first = match step {
             ArenaStep::None => None,
@@ -503,6 +512,12 @@ impl TapAndDragGestureRecognizer {
         // `on_tap_down` cannot strand a started drag without its end or a tap
         // without its up. The first failure resumes after the rest.
         for notice in notices {
+            // A callback that ended this sequence reentrantly (a cancel, a
+            // dispose) already delivered its own end; what is left belongs to
+            // a sequence that no longer exists.
+            if self.gesture_state.lock().generation != generation {
+                break;
+            }
             RoutePanic::preserve_first(
                 &mut first,
                 RoutePanic::capture(|| self.deliver(notice)),

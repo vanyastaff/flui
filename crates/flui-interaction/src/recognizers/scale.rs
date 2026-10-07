@@ -309,6 +309,9 @@ struct ScaleState {
     rotation_reference: Option<f64>,
     /// Last committed focal point.
     focal_point: Offset<f64>,
+    /// The focal point the last start or update published, which `End` reports;
+    /// a re-measure after a contact leaves changes `focal_point` silently.
+    published_focal: Offset<f64>,
     /// Velocity tracker for scale changes.
     scale_velocity_tracker: VelocityTracker,
 }
@@ -326,6 +329,7 @@ impl Default for ScaleState {
             rotation: 0.0,
             rotation_reference: None,
             focal_point: Offset::ZERO,
+            published_focal: Offset::ZERO,
             scale_velocity_tracker: VelocityTracker::new(),
         }
     }
@@ -364,7 +368,8 @@ impl ScaleState {
     }
 
     /// The update the current factors publish.
-    fn update_details(&self) -> ScaleUpdateDetails {
+    fn update_details(&mut self) -> ScaleUpdateDetails {
+        self.published_focal = self.focal_point;
         ScaleUpdateDetails {
             focal_point: self.focal_point,
             local_focal_point: self.focal_point,
@@ -470,6 +475,7 @@ impl ScaleState {
         // Never start from a stale focal point: the contacts must measure.
         let measure = Measure::of(&self.contacts)?;
         self.focal_point = measure.focal;
+        self.published_focal = measure.focal;
         self.phase = ScalePhase::Started;
         Some(ScaleStartDetails {
             focal_point: self.focal_point,
@@ -485,7 +491,7 @@ impl ScaleState {
             .pixels_per_second
             .dx;
         ScaleEndDetails {
-            focal_point: self.focal_point,
+            focal_point: self.published_focal,
             scale: self.current.scale,
             rotation: self.rotation,
             velocity: if velocity.is_finite() { velocity } else { 0.0 },
@@ -853,7 +859,9 @@ impl GestureRecognizer for ScaleGestureRecognizer {
             // arrived: that sequence ends here, and the new contact joins the
             // new arena instead of standing in for the old one.
             self.handle_cancel(pointer);
-            if self.state.is_disposed() {
+            // The cancel callback may have disposed this recognizer or admitted
+            // contacts of its own; either way this admission is void.
+            if self.state.is_disposed() || !self.gesture_state.lock().contacts.is_empty() {
                 return;
             }
         }

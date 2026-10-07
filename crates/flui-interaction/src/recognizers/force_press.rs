@@ -531,9 +531,16 @@ impl GestureRecognizer for ForcePressGestureRecognizer {
         position: Offset<f64>,
         global_position: Offset<f64>,
     ) {
-        if !self.state.assert_not_disposed("add_pointer") {
+        if !self.state.assert_not_disposed("add_pointer") || !position.is_finite() {
             return;
         }
+        // A non-finite global position is never published: the local one
+        // stands in until a finite sample arrives.
+        let global_position = if global_position.is_finite() {
+            global_position
+        } else {
+            position
+        };
         // One contact at a time: a second contact while one is tracked does
         // not join. The same pointer going down again means its previous
         // sequence never saw its end, so that sequence is retired first.
