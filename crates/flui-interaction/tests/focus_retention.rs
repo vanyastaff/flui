@@ -348,9 +348,121 @@ fn reentrant_listener_replacement_survives_a_failed_notification() {
     drop(attachment);
 }
 
+fn node_failure_keeps_accepted_focus_requests_deliverable() {
+    assert_queued_focus_recovery(true, false);
+}
+
+fn manager_failure_keeps_accepted_focus_requests_deliverable() {
+    assert_queued_focus_recovery(false, false);
+}
+
+fn competing_queued_focus_failures_preserve_the_first_failure() {
+    assert_queued_focus_recovery(false, true);
+}
+
+fn assert_queued_focus_recovery(from_node: bool, competing: bool) {
+    let manager = FocusManager::new();
+    let nodes = [
+        FocusNode::with_debug_label("first"),
+        FocusNode::with_debug_label("second"),
+        FocusNode::with_debug_label("last"),
+    ];
+    let attachments: Vec<_> = nodes
+        .iter()
+        .map(|node| manager.root_scope().attach_node(node).expect("attach"))
+        .collect();
+    let fail = Rc::new(Cell::new(true));
+    let manager_probe = Rc::downgrade(&manager);
+    let second_probe = Rc::downgrade(&nodes[1]);
+    let last_probe = Rc::downgrade(&nodes[2]);
+    let fail_probe = Rc::clone(&fail);
+    let queue_then_fail = Rc::new(move || {
+        if !fail_probe.get() {
+            return;
+        }
+        let manager = manager_probe.upgrade().expect("live manager");
+        assert!(second_probe.upgrade().expect("live second").request_focus());
+        manager.unfocus();
+        assert!(last_probe.upgrade().expect("live last").request_focus());
+        std::panic::panic_any("first queued focus failure");
+    });
+    let first_id = nodes[0].id();
+    if from_node {
+        let first_probe = Rc::downgrade(&nodes[0]);
+        nodes[0].add_listener(Rc::new(move || {
+            if first_probe
+                .upgrade()
+                .expect("live first")
+                .has_primary_focus()
+            {
+                queue_then_fail();
+            }
+        }));
+    } else {
+        manager.add_listener(Rc::new(move |_, new| {
+            if new.as_ref().is_some_and(|node| node.id() == first_id) {
+                queue_then_fail();
+            }
+        }));
+    }
+    let second_id = nodes[1].id();
+    let later_failure = Rc::clone(&fail);
+    manager.add_listener(Rc::new(move |_, new| {
+        if competing
+            && later_failure.get()
+            && new.as_ref().is_some_and(|node| node.id() == second_id)
+        {
+            std::panic::panic_any("second queued focus failure");
+        }
+    }));
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let edge_log = Rc::clone(&log);
+    manager.add_listener(Rc::new(move |previous, new| {
+        edge_log.borrow_mut().push((
+            previous.as_ref().map(|node| node.id()),
+            new.as_ref().map(|node| node.id()),
+        ));
+    }));
+    let payload = catch_unwind(AssertUnwindSafe(|| nodes[0].request_focus()))
+        .expect_err("first listener failure propagates after delivery");
+    assert_eq!(
+        payload.downcast_ref::<&str>(),
+        Some(&"first queued focus failure")
+    );
+    let last_id = nodes[2].id();
+    assert_eq!(
+        *log.borrow(),
+        [
+            (None, Some(first_id)),
+            (Some(first_id), Some(second_id)),
+            (Some(second_id), None),
+            (None, Some(last_id)),
+        ],
+        "every accepted request publishes FIFO before the first failure resumes"
+    );
+    assert!(nodes[2].has_primary_focus());
+    fail.set(false);
+    log.borrow_mut().clear();
+    manager.unfocus();
+    assert_eq!(*log.borrow(), [(Some(last_id), None)]);
+    drop(attachments);
+}
+
 #[test]
 fn caught_callback_failures_leave_captures_with_their_owner() {
     let cases: &[(&str, fn())] = &[
+        (
+            "accepted focus requests after node failure",
+            node_failure_keeps_accepted_focus_requests_deliverable,
+        ),
+        (
+            "accepted focus requests after manager failure",
+            manager_failure_keeps_accepted_focus_requests_deliverable,
+        ),
+        (
+            "competing queued focus failures",
+            competing_queued_focus_failures_preserve_the_first_failure,
+        ),
         (
             "node notification failure",
             node_listener_failure_publishes_every_committed_edge,
