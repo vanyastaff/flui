@@ -367,6 +367,78 @@ pub(crate) fn clearing_pan_callbacks_mid_drag_still_finishes_the_drag() {
     assert_eq!(ends.get(), 1);
 }
 
+pub(crate) fn mounted_drag_policy_replaces_targets_before_cancellation_and_recovers() {
+    use crate::common::{ProbeSignals, SignalProbe};
+    use flui_interaction::{DragPointerStrategy, GestureEndReason};
+    use flui_interaction::events::{make_down_event_for_id, make_move_event_for_id, make_up_event_for_id, PointerKind};
+    use flui_foundation::geometry::Offset;
+    use flui_view::SignalWriteExt;
+    use std::{cell::Cell, rc::Rc};
+
+    for cancel_panics in [false, true] {
+        let policy = Rc::new(Cell::new(DragPointerStrategy::PrimaryOnly));
+        let starts = Rc::new(Cell::new(0));
+        let cancelled = Rc::new(Cell::new(0));
+        let completed = Rc::new(Cell::new(0));
+        let updates = Rc::new(std::cell::RefCell::new(Vec::new()));
+        let signal = Rc::new(Cell::new(None));
+        let (p, s, c, e, u, remembered) = (policy.clone(), starts.clone(), cancelled.clone(), completed.clone(), updates.clone(), signal.clone());
+        let fail_once = Rc::new(Cell::new(cancel_panics));
+        let probe = SignalProbe::new(move |ProbeSignals { count, .. }| {
+            remembered.set(Some(count));
+            let (s, c, e, u, fail) = (s.clone(), c.clone(), e.clone(), u.clone(), fail_once.clone());
+            GestureDetector::new()
+                .drag_pointer_strategy(p.get())
+                .on_pan_start(move |_, _| s.set(s.get() + 1))
+                .on_pan_update(move |_, details| u.borrow_mut().push(details.delta.dy))
+                .on_pan_end(move |_, details| match details.reason {
+                    GestureEndReason::Completed => e.set(e.get() + 1),
+                    GestureEndReason::Cancelled => {
+                        c.set(c.get() + 1);
+                        if fail.replace(false) { panic!("drag policy cancellation"); }
+                    }
+                })
+                .child(ColoredBox::new(Color::rgb(10, 20, 30)))
+        });
+        let mut laid = lay_out(probe.view(), tight(100.0, 100.0));
+        let send = |laid: &crate::common::LaidOut, id: u64, y, phase| {
+            let pointer = flui_interaction::PointerId::try_from(id).expect("nonzero touch");
+            let position = Offset::new(50.0, y);
+            let event = match phase {
+                0 => make_down_event_for_id(pointer, position, PointerKind::Touch),
+                1 => make_move_event_for_id(pointer, position, PointerKind::Touch),
+                2 => make_up_event_for_id(pointer, position, PointerKind::Touch),
+                _ => unreachable!("scripted phase"),
+            }.expect("finite touch fixture");
+            laid.dispatch_pointer_event(&event);
+        };
+        send(&laid, 2, 10.0, 0);
+        send(&laid, 2, 50.0, 1);
+        assert_eq!(starts.get(), 1);
+        policy.set(DragPointerStrategy::ContinueWithRemaining);
+        probe.write(|cx| signal.get().expect("mounted probe").set(cx, 1)).expect("write policy rebuild");
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| laid.pump()));
+        if cancel_panics {
+            let payload = result.expect_err("outgoing cancel failure remains authoritative");
+            assert_eq!(payload.downcast_ref::<&str>(), Some(&"drag policy cancellation"));
+        } else { result.expect("healthy policy replacement"); }
+        assert_eq!(cancelled.get(), 1, "old accepted drag is cancelled once");
+        send(&laid, 2, 50.0, 2);
+        assert_eq!(completed.get(), 0, "stale release cannot complete a replacement");
+
+        send(&laid, 2, 10.0, 0);
+        send(&laid, 2, 50.0, 1);
+        send(&laid, 3, 20.0, 0);
+        send(&laid, 3, 30.0, 1);
+        send(&laid, 2, 50.0, 2);
+        assert_eq!(completed.get(), 0, "mounted listener must route to the new continuation mode");
+        send(&laid, 3, 40.0, 1);
+        assert_eq!(updates.borrow().last(), Some(&10.0), "replacement survives old cancellation failure and rebases handoff");
+        send(&laid, 3, 40.0, 2);
+        assert_eq!((starts.get(), cancelled.get(), completed.get()), (2, 1, 1));
+    }
+}
+
 pub(crate) fn unmount_mid_drag_cancels_once_and_hands_the_arena_to_the_rival() {
     use crate::common::{ProbeSignals, SignalProbe};
     use flui_view::{IntoView, SignalWriteExt, ViewExt};
