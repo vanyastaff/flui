@@ -3,19 +3,59 @@
 use std::{cell::RefCell, rc::Rc};
 
 use crate::common::{lay_out, tight};
-use flui_foundation::geometry::Point;
+use flui_foundation::geometry::{EdgeInsets, Offset, Point};
 use flui_interaction::routing::EventPropagation;
 use flui_platform_api::{
     EventTime,
     keyboard::Modifiers,
     pointer::{
-        DeviceId, PointerButton, PointerButtons, PointerEvent, PointerId, PointerInfo, PointerKind,
-        PointerMove, PointerPosition, PointerPress, PointerRelease, PointerRole, PointerSample,
-        ScrollDelta, ScrollEvent, ScrollPhase, ScrollPrecision, ScrollUnit,
+        DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerButton, PointerButtons,
+        PointerEvent, PointerId, PointerInfo, PointerKind, PointerMove, PointerPosition,
+        PointerPress, PointerRelease, PointerRole, PointerSample, ScrollDelta, ScrollEvent,
+        ScrollPhase, ScrollPrecision, ScrollUnit,
     },
 };
 use flui_view::IntoView;
 use flui_widgets::{Listener, ScrollController, Scrollable, SingleChildScrollView, SizedBox};
+
+fn viewer(
+    controller: flui_widgets::TransformationController,
+    scales: Rc<RefCell<Vec<f64>>>,
+) -> flui_widgets::InteractiveViewer {
+    use flui_painting::styling::Color;
+    use flui_widgets::{ColoredBox, InteractiveViewer};
+    InteractiveViewer::new()
+        .controller(controller)
+        .boundary_margin(EdgeInsets::all(1000.0))
+        .on_interaction_update(move |_, details| scales.borrow_mut().push(details.scale))
+        .child(ColoredBox::new(Color::rgb(10, 20, 30)))
+}
+
+fn pan_zoom(phase: PanZoomPhase) -> PointerEvent {
+    PointerEvent::PanZoom(PanZoomEvent::new(
+        mouse(),
+        EventTime::from_nanos(70),
+        position(50.0, 50.0),
+        phase,
+    ))
+}
+
+fn zoom_update(scale: f64) -> PointerEvent {
+    pan_zoom(PanZoomPhase::Update(
+        PanZoomTransform::try_new(Offset::ZERO, scale, 0.0).expect("positive finite scale"),
+    ))
+}
+
+fn scale_of(controller: &flui_widgets::TransformationController) -> f64 {
+    controller.value().to_col_major_array()[0]
+}
+
+fn assert_scale(actual: f64, expected: f64) {
+    assert!(
+        (actual - expected).abs() < 1e-12,
+        "scale {actual}, expected {expected}"
+    );
+}
 
 fn mouse() -> PointerInfo {
     PointerInfo::new(
@@ -165,5 +205,138 @@ pub(crate) fn viewer_page_zoom_resolves_against_the_actual_viewport() {
             (scale - expected).abs() < 1e-12,
             "half page in {height}px viewer"
         );
+    }
+}
+
+pub(crate) fn viewer_cumulative_zoom_survives_rebuild_and_resets() {
+    use flui_widgets::TransformationController;
+    let controller = TransformationController::new();
+    let scales = Rc::new(RefCell::new(Vec::new()));
+    let mut laid = lay_out(
+        viewer(controller.clone(), scales.clone()),
+        tight(100.0, 100.0),
+    );
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::Start));
+    laid.dispatch_pointer_event(&zoom_update(1.2));
+    assert_scale(scale_of(&controller), 1.2);
+    laid.pump_widget(viewer(controller.clone(), scales.clone()));
+    laid.pump();
+    for cumulative in [1.5, 1.5] {
+        laid.dispatch_pointer_event(&zoom_update(cumulative));
+        assert_scale(scale_of(&controller), 1.5);
+    }
+    let observed = scales.borrow();
+    assert_eq!(observed.len(), 3);
+    for (actual, expected) in observed.iter().zip([1.2, 1.25, 1.0]) {
+        assert_scale(*actual, expected);
+    }
+    drop(observed);
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::End));
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::Start));
+    laid.dispatch_pointer_event(&zoom_update(1.2));
+    assert_scale(scale_of(&controller), 1.8);
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::Cancelled));
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::Start));
+    laid.dispatch_pointer_event(&zoom_update(1.1));
+    assert_scale(scale_of(&controller), 1.98);
+}
+
+pub(crate) fn viewer_unstarted_pinch_updates_remain_independent_steps() {
+    use flui_interaction::events::make_pinch_gesture_event;
+    use flui_widgets::TransformationController;
+    let controller = TransformationController::new();
+    let scales = Rc::new(RefCell::new(Vec::new()));
+    let laid = lay_out(
+        viewer(controller.clone(), scales.clone()),
+        tight(100.0, 100.0),
+    );
+    // The legacy backend bridge has no Start/End to send. Its two 10% ticks
+    // are independent steps, while a started stream carries cumulative values.
+    for _ in 0..2 {
+        laid.dispatch_pointer_event(
+            &make_pinch_gesture_event(Offset::new(50.0, 50.0), 0.1)
+                .expect("finite synthetic legacy pinch"),
+        );
+    }
+    assert_scale(scale_of(&controller), 1.21);
+    assert_eq!(scales.borrow().len(), 2);
+    for step in scales.borrow().iter() {
+        assert_scale(*step, 1.1);
+    }
+}
+
+pub(crate) fn viewer_extreme_zoom_reports_the_finite_applied_change() {
+    use flui_widgets::TransformationController;
+    let controller = TransformationController::new();
+    let scales = Rc::new(RefCell::new(Vec::new()));
+    let laid = lay_out(
+        viewer(controller.clone(), scales.clone()),
+        tight(100.0, 100.0),
+    );
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::Start));
+    for (cumulative, expected) in [
+        (f64::from_bits(1), 0.8),
+        (1e300, 2.5),
+        (f64::from_bits(1), 0.8),
+    ] {
+        let before = scale_of(&controller);
+        laid.dispatch_pointer_event(&zoom_update(cumulative));
+        assert_scale(scale_of(&controller), expected);
+        assert!(
+            controller
+                .value()
+                .to_col_major_array()
+                .iter()
+                .all(|value| value.is_finite())
+        );
+        let applied = *scales.borrow().last().expect("update callback");
+        assert!(applied.is_finite() && applied > 0.0);
+        // The documented callback reports the applied change, including clamps.
+        // A saturated unrepresentable raw ratio would be an invented result.
+        assert_scale(applied, expected / before);
+    }
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::End));
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::Start));
+    laid.dispatch_pointer_event(&zoom_update(1.25));
+    assert_scale(scale_of(&controller), 1.0);
+}
+
+pub(crate) fn viewer_page_overflow_and_empty_viewport_recover() {
+    use flui_widgets::TransformationController;
+    for height in [0.0, 100.0] {
+        let controller = TransformationController::new();
+        let scales = Rc::new(RefCell::new(Vec::new()));
+        let mut laid = lay_out(
+            SizedBox::new(100.0, height).child(viewer(controller.clone(), scales.clone())),
+            crate::common::loose(100.0),
+        );
+        let scroll = |delta| {
+            PointerEvent::Scroll(ScrollEvent::new(
+                mouse(),
+                EventTime::from_nanos(80),
+                position(50.0, 0.0),
+                ScrollDelta::try_new(ScrollUnit::Pages, 0.0, delta).expect("finite pages"),
+            ))
+        };
+        laid.dispatch_pointer_event(&scroll(-f64::MAX));
+        assert_scale(scale_of(&controller), 1.0);
+        assert!(
+            scales.borrow().is_empty(),
+            "no interaction for empty/overflowing page geometry"
+        );
+        // Reconcile the same viewer under a non-empty actual viewport before
+        // the next event, retaining its controller and owner-local state.
+        laid.pump_widget(
+            SizedBox::new(100.0, 100.0).child(viewer(controller.clone(), scales.clone())),
+        );
+        laid.pump();
+        laid.dispatch_pointer_event(&PointerEvent::Scroll(ScrollEvent::new(
+            mouse(),
+            EventTime::from_nanos(81),
+            position(50.0, 50.0),
+            ScrollDelta::try_new(ScrollUnit::Pages, 0.0, -0.5).expect("finite pages"),
+        )));
+        assert_scale(scale_of(&controller), (50.0 / 200.0_f64).exp());
+        assert_eq!(scales.borrow().len(), 1);
     }
 }
