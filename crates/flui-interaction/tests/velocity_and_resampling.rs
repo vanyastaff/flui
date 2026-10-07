@@ -8,8 +8,9 @@ use std::{cell::RefCell, rc::Rc, time::Duration};
 
 use flui_foundation::geometry::Offset;
 use flui_interaction::events::{
-    PointerEvent, PointerType, make_cancel_event_for_id, make_down_event_for_id,
-    make_move_event_for_id, make_pinch_gesture_event, make_scroll_event, make_up_event_for_id,
+    PointerEvent, PointerInfo, PointerKind, PointerPosition, ScrollDelta, ScrollEvent,
+    make_cancel_event_for_id, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
+    pointer::ScrollUnit,
 };
 use flui_interaction::processing::{
     ImpulseVelocityTracker, InputPredictor, IosFlingVelocityTracker, MacosFlingVelocityTracker,
@@ -17,8 +18,7 @@ use flui_interaction::processing::{
 };
 use flui_interaction::{
     DEFAULT_MAX_FLING_VELOCITY, GestureBinding, GestureSettings, GestureSettingsError,
-    HitTestResult, PointerId, PointerPanZoomEvent, PointerRouteHandler, Velocity, VelocityEstimate,
-    from_w3c_event,
+    HitTestResult, PointerId, PointerRouteHandler, Velocity, VelocityEstimate,
 };
 use proptest::prelude::*;
 use web_time::Instant;
@@ -72,34 +72,50 @@ fn assert_bounded(estimate: Option<VelocityEstimate>, what: &str) {
 }
 
 fn contact() -> PointerId {
-    PointerId::new(7).expect("non-zero pointer id")
+    PointerId::new(std::num::NonZeroU64::new(7).expect("non-zero pointer id"))
 }
 
 fn with_time(mut event: PointerEvent, nanos: u64) -> PointerEvent {
     match &mut event {
-        PointerEvent::Down(button) | PointerEvent::Up(button) => button.state.time = nanos,
-        PointerEvent::Move(update) => update.current.time = nanos,
+        PointerEvent::Down(button) => {
+            button.sample.time = flui_platform_api::EventTime::from_nanos(nanos)
+        }
+        PointerEvent::Up(button) => {
+            button.sample.time = flui_platform_api::EventTime::from_nanos(nanos)
+        }
+        PointerEvent::Move(update) => {
+            let mut sample = *update.current();
+            sample.time = flui_platform_api::EventTime::from_nanos(nanos);
+            *update =
+                flui_interaction::events::PointerMove::new(update.pointer, update.buttons, sample)
+                    .with_modifiers(update.modifiers)
+                    .with_coalesced(update.coalesced().to_vec())
+                    .with_predicted(update.predicted().to_vec());
+        }
         _ => {}
     }
     event
 }
 
 fn move_to(x: f64) -> PointerEvent {
-    make_move_event_for_id(contact(), Offset::new(x, 0.0), PointerType::Touch)
+    make_move_event_for_id(contact(), Offset::new(x, 0.0), PointerKind::Touch)
+        .expect("valid fixture sample")
 }
 
 fn event_time(event: &PointerEvent) -> Option<u64> {
     match event {
-        PointerEvent::Down(button) | PointerEvent::Up(button) => Some(button.state.time),
-        PointerEvent::Move(update) => Some(update.current.time),
+        PointerEvent::Down(button) => Some(button.sample.time.as_nanos()),
+        PointerEvent::Up(button) => Some(button.sample.time.as_nanos()),
+        PointerEvent::Move(update) => Some(update.current().time.as_nanos()),
         _ => None,
     }
 }
 
 fn event_x(event: &PointerEvent) -> Option<f64> {
     match event {
-        PointerEvent::Down(button) | PointerEvent::Up(button) => Some(button.state.position.x),
-        PointerEvent::Move(update) => Some(update.current.position.x),
+        PointerEvent::Down(button) => Some(button.sample.position.get().x),
+        PointerEvent::Up(button) => Some(button.sample.position.get().x),
+        PointerEvent::Move(update) => Some(update.current().position.get().x),
         _ => None,
     }
 }
@@ -466,7 +482,8 @@ fn overflow_keeps_terminals_and_the_newest_move() {
     let resampler = PointerEventResampler::new(contact());
     resampler.add_event_at(
         with_time(
-            make_down_event_for_id(contact(), Offset::ZERO, PointerType::Touch),
+            make_down_event_for_id(contact(), Offset::ZERO, PointerKind::Touch)
+                .expect("valid fixture sample"),
             1,
         ),
         t0,
@@ -479,7 +496,8 @@ fn overflow_keeps_terminals_and_the_newest_move() {
     }
     resampler.add_event_at(
         with_time(
-            make_up_event_for_id(contact(), Offset::new(150.0, 0.0), PointerType::Touch),
+            make_up_event_for_id(contact(), Offset::new(150.0, 0.0), PointerKind::Touch)
+                .expect("valid fixture sample"),
             151_000_000,
         ),
         t0 + ms(151.0),
@@ -527,7 +545,8 @@ fn manual_clock_does_not_starve_moves() {
     binding
         .pointer_router()
         .add_route(contact(), Rc::clone(&handler));
-    let down = make_down_event_for_id(contact(), Offset::ZERO, PointerType::Touch);
+    let down = make_down_event_for_id(contact(), Offset::ZERO, PointerKind::Touch)
+        .expect("valid fixture sample");
     binding.handle_pointer_event(&down, |_| HitTestResult::new());
     binding.handle_pointer_event(&move_to(10.0), |_| HitTestResult::new());
     assert_eq!(
@@ -536,7 +555,8 @@ fn manual_clock_does_not_starve_moves() {
         "the frame flushes the queued move"
     );
     assert_eq!(*moves.borrow(), 1);
-    let up = make_up_event_for_id(contact(), Offset::new(10.0, 0.0), PointerType::Touch);
+    let up = make_up_event_for_id(contact(), Offset::new(10.0, 0.0), PointerKind::Touch)
+        .expect("valid fixture sample");
     binding.handle_pointer_event(&up, |_| HitTestResult::new());
     binding.pointer_router().remove_route(contact(), &handler);
 }
@@ -548,19 +568,27 @@ fn interleaved_non_moves_stay_bounded() {
     let t0 = origin();
     let resampler = PointerEventResampler::new(contact());
     resampler.add_event_at(
-        make_down_event_for_id(contact(), Offset::ZERO, PointerType::Touch),
+        make_down_event_for_id(contact(), Offset::ZERO, PointerKind::Touch)
+            .expect("valid fixture sample"),
         t0,
     );
     for i in 1..=500_u32 {
         let x = f64::from(i);
         resampler.add_event_at(
-            make_scroll_event(Offset::new(x, 0.0), Offset::new(0.0, 1.0)),
+            PointerEvent::Scroll(ScrollEvent::new(
+                PointerInfo::new(contact(), PointerKind::Mouse),
+                flui_platform_api::EventTime::from_nanos(0),
+                PointerPosition::try_new(flui_foundation::geometry::Point::new(x, 0.0))
+                    .expect("finite scroll position"),
+                ScrollDelta::try_new(ScrollUnit::Pixels, 0.0, 1.0).expect("finite scroll delta"),
+            )),
             t0 + ms(x),
         );
         resampler.add_event_at(move_to(x), t0 + ms(x));
     }
     resampler.add_event_at(
-        make_up_event_for_id(contact(), Offset::new(500.0, 0.0), PointerType::Touch),
+        make_up_event_for_id(contact(), Offset::new(500.0, 0.0), PointerKind::Touch)
+            .expect("valid fixture sample"),
         t0 + ms(501.0),
     );
     assert!(
@@ -648,22 +676,19 @@ fn queue_diagnostic_permits_inspection() {
             }
         };
         for _ in 0..50 {
-            enqueue(make_down_event_for_id(
-                contact(),
-                Offset::ZERO,
-                PointerType::Touch,
-            ));
-            enqueue(make_up_event_for_id(
-                contact(),
-                Offset::ZERO,
-                PointerType::Touch,
-            ));
+            enqueue(
+                make_down_event_for_id(contact(), Offset::ZERO, PointerKind::Touch)
+                    .expect("valid fixture sample"),
+            );
+            enqueue(
+                make_up_event_for_id(contact(), Offset::ZERO, PointerKind::Touch)
+                    .expect("valid fixture sample"),
+            );
         }
-        enqueue(make_down_event_for_id(
-            contact(),
-            Offset::ZERO,
-            PointerType::Touch,
-        ));
+        enqueue(
+            make_down_event_for_id(contact(), Offset::ZERO, PointerKind::Touch)
+                .expect("valid fixture sample"),
+        );
         let observed = Arc::new(AtomicUsize::new(0));
         flui_testing::log_capture::disarm_interest_cache();
         tracing::subscriber::with_default(
@@ -702,8 +727,8 @@ fn op() -> impl Strategy<Value = Op> {
 
 fn terminal_tag(event: &PointerEvent) -> Option<(char, u64)> {
     match event {
-        PointerEvent::Down(button) => Some(('d', button.state.position.y.to_bits())),
-        PointerEvent::Up(button) => Some(('u', button.state.position.y.to_bits())),
+        PointerEvent::Down(button) => Some(('d', button.sample.position.get().y.to_bits())),
+        PointerEvent::Up(button) => Some(('u', button.sample.position.get().y.to_bits())),
         PointerEvent::Cancel(_) => Some(('c', 0)),
         _ => None,
     }
@@ -736,17 +761,17 @@ proptest! {
             let (event, at) = match *op {
                 Op::Down(t) => {
                     let (ns, at) = stamp(t);
-                    (with_time(make_down_event_for_id(contact(), Offset::new(0.0, tag), PointerType::Touch), ns), at)
+                    (with_time(make_down_event_for_id(contact(), Offset::new(0.0, tag), PointerKind::Touch), ns), at)
                 }
                 Op::Move(t, x) => {
                     let (ns, at) = stamp(t);
-                    (with_time(make_move_event_for_id(contact(), Offset::new(x, 0.0), PointerType::Touch), ns), at)
+                    (with_time(make_move_event_for_id(contact(), Offset::new(x, 0.0), PointerKind::Touch), ns), at)
                 }
                 Op::Up(t) => {
                     let (ns, at) = stamp(t);
-                    (with_time(make_up_event_for_id(contact(), Offset::new(0.0, tag), PointerType::Touch), ns), at)
+                    (with_time(make_up_event_for_id(contact(), Offset::new(0.0, tag), PointerKind::Touch), ns), at)
                 }
-                Op::Cancel => (make_cancel_event_for_id(contact(), PointerType::Touch), t0),
+                Op::Cancel => (make_cancel_event_for_id(contact(), PointerKind::Touch), t0),
                 Op::Sample(step) => {
                     frame += Duration::from_millis(step);
                     resampler.sample(frame, frame + ms(16.0), |event| emitted.push(event));
@@ -789,7 +814,8 @@ fn raw_input_callback_can_replace_itself() {
         let second = Rc::clone(&second);
         reentrant.set_callback(move |_| second.borrow_mut().push("second"));
     });
-    let down = make_down_event_for_id(contact(), Offset::ZERO, PointerType::Touch);
+    let down = make_down_event_for_id(contact(), Offset::ZERO, PointerKind::Touch)
+        .expect("valid fixture sample");
     handler.handle_event(&down);
     handler.handle_event(&move_to(4.0));
     assert_eq!(*seen.borrow(), ["first", "second"]);
@@ -822,25 +848,49 @@ fn prediction_stays_finite_and_bounded() {
 }
 
 fn pinch_scale_is_finite_and_positive() {
-    for fraction in [f64::NAN, -1.0, -3.0, f64::INFINITY] {
-        let event = make_pinch_gesture_event(Offset::ZERO, fraction);
-        let Some(PointerPanZoomEvent::Update {
-            scale, rotation, ..
-        }) = from_w3c_event(&event)
-        else {
-            panic!("a gesture event converts to an Update");
-        };
+    use flui_interaction::events::{PanZoomEvent, PanZoomPhase, PanZoomTransform};
+    use flui_interaction::{EventPropagation, HitTestEntry, routing::InteractionLane};
+
+    // The old upstream pinch fractions NaN/-1/-3/inf imply these invalid
+    // cumulative scales. Checked transport refuses them before routing.
+    for scale in [f64::NAN, 0.0, -2.0, f64::INFINITY] {
         assert!(
-            scale.is_finite() && scale > 0.0,
-            "pinch {fraction} gave scale {scale}"
+            PanZoomTransform::try_new(Offset::ZERO, scale, 0.0).is_err(),
+            "invalid cumulative scale {scale}"
         );
-        assert!(rotation.is_finite());
     }
-    let event = make_pinch_gesture_event(Offset::ZERO, 0.25);
-    let Some(PointerPanZoomEvent::Update { scale, .. }) = from_w3c_event(&event) else {
-        panic!("a gesture event converts to an Update");
-    };
-    assert_eq!(scale, 1.25, "a valid per-tick pinch passes through");
+    let lane = InteractionLane::try_new().expect("panzoom owner");
+    let handle = lane.dispatch_handle();
+    let observed = Rc::new(RefCell::new(Vec::new()));
+    lane.enter(|| {
+        let sink = observed.clone();
+        let target = handle
+            .register_pan_zoom(move |event| {
+                if let PanZoomPhase::Update(transform) = event.phase {
+                    sink.borrow_mut()
+                        .push((transform.scale(), transform.rotation()));
+                }
+                EventPropagation::Continue
+            })
+            .expect("panzoom target");
+        let mut path = HitTestResult::new();
+        path.add(HitTestEntry::new(flui_foundation::RenderId::new(1)).pan_zoom_target(target));
+        let event = PointerEvent::PanZoom(PanZoomEvent::new(
+            PointerInfo::new(contact(), PointerKind::Trackpad),
+            flui_platform_api::EventTime::from_nanos(1_000),
+            PointerPosition::try_new(flui_foundation::geometry::Point::ZERO)
+                .expect("finite focal position"),
+            PanZoomPhase::Update(
+                PanZoomTransform::try_new(Offset::ZERO, 1.25, 0.0).expect("valid zoom"),
+            ),
+        ));
+        GestureBinding::new().handle_pointer_event_with_result(&event, &path);
+    });
+    assert_eq!(
+        &*observed.borrow(),
+        &[(1.25, 0.0)],
+        "checked cumulative pinch reaches its actual target"
+    );
 }
 
 #[test]
