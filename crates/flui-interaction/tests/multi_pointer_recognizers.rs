@@ -1071,6 +1071,11 @@ fn tap_drag_disposed_from_its_drag_start() {
                 live.set(false);
             }
             let retiring = s.borrow_mut().take();
+            if let Some(recognizer) = retiring.as_ref() {
+                // Unmount cancels before releasing its owner; this delivery
+                // still holds the route's upgraded Rc until it returns.
+                recognizer.cancel();
+            }
             drop(retiring);
         })
         .on_drag_update(move |_| n.set(n.get() + 1))
@@ -1083,6 +1088,52 @@ fn tap_drag_disposed_from_its_drag_start() {
     rig.move_to(1, 200.0, 100.0);
     rig.up(1, 200.0, 100.0);
     assert_eq!(later.get(), 0, "a disposed recogniser reports nothing more");
+}
+
+fn tap_drag_cancelled_from_its_start_recovers() {
+    let rig = Rig::new();
+    let slot = Rc::new(RefCell::new(
+        std::rc::Weak::<TapAndDragGestureRecognizer>::new(),
+    ));
+    let cancel_once = Rc::new(Cell::new(true));
+    let log = Rc::new(TapDragLog::default());
+    let (s, c, start, update, end, cancelled) = (
+        slot.clone(),
+        cancel_once.clone(),
+        log.clone(),
+        log.clone(),
+        log.clone(),
+        log.clone(),
+    );
+    let recognizer = TapAndDragGestureRecognizer::builder(rig.binding.arena().clone())
+        .on_drag_start(move |_| {
+            start.events.borrow_mut().push("start".to_owned());
+            if c.replace(false) {
+                let recognizer = s.borrow().upgrade().expect("active owner");
+                recognizer.cancel();
+            }
+        })
+        .on_drag_update(move |_| update.events.borrow_mut().push("update".to_owned()))
+        .on_drag_end(move |_| end.events.borrow_mut().push("end".to_owned()))
+        .on_cancel(move || cancelled.events.borrow_mut().push("cancel".to_owned()))
+        .build();
+    *slot.borrow_mut() = Rc::downgrade(&recognizer);
+    rig.attach(&recognizer, None);
+    rig.down(1, 100.0, 100.0);
+    rig.frame();
+    rig.move_to(1, 200.0, 100.0);
+    rig.move_to(1, 220.0, 100.0);
+    rig.up(1, 220.0, 100.0);
+    assert_eq!(*log.events.borrow(), ["start", "cancel"]);
+    rig.down(2, 300.0, 100.0);
+    rig.frame();
+    rig.move_to(2, 400.0, 100.0);
+    rig.move_to(2, 420.0, 100.0);
+    rig.up(2, 420.0, 100.0);
+    assert_eq!(
+        *log.events.borrow(),
+        ["start", "cancel", "start", "update", "update", "end"]
+    );
 }
 
 #[test]
@@ -1115,6 +1166,10 @@ fn tap_and_drag_resolves_through_the_shared_arena() {
             (
                 "dispose from drag start",
                 tap_drag_disposed_from_its_drag_start,
+            ),
+            (
+                "cancel from drag start then recover",
+                tap_drag_cancelled_from_its_start_recovers,
             ),
         ],
     );

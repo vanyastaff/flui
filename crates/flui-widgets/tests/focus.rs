@@ -230,6 +230,15 @@ fn assert_widget_reading_order(
         .collect();
     let harness = mount(reading_order_tree(direction, &scope, &nodes, geometry));
     let manager = harness.focus_manager();
+    let order = harness.enter_owner_scope(|| scope.sorted_traversal_order(None));
+    assert_eq!(
+        order.iter().map(|node| node.id()).collect::<Vec<_>>(),
+        expected
+            .iter()
+            .map(|&index| nodes[index].id())
+            .collect::<Vec<_>>(),
+        "the mounted geometry determines the complete order, including its first stop"
+    );
     harness.enter_owner_scope(|| nodes[expected[0]].request_focus());
     for &next in expected.iter().skip(1).chain(expected.iter().take(1)) {
         assert!(
@@ -287,6 +296,78 @@ pub(crate) fn a_tall_widget_cannot_bridge_disjoint_reading_rows() {
         ],
         &[1, 0, 2],
     );
+}
+
+pub(crate) fn spatial_tab_preserves_geometric_ties_and_row_boundaries() {
+    use flui_painting::typography::TextDirection::{Ltr, Rtl};
+    for (case, direction, geometry, expected) in [
+        (
+            "fractional vertical intersection",
+            Ltr,
+            &[
+                (30.0, 0.25, 10.0, 0.5),
+                (0.0, 0.5, 10.0, 0.5),
+                (0.0, 2.0, 10.0, 1.0),
+            ][..],
+            &[1, 0, 2][..],
+        ),
+        (
+            "touching row boundaries",
+            Ltr,
+            &[
+                (30.0, 0.0, 10.0, 10.0),
+                (0.0, 10.0, 10.0, 10.0),
+                (60.0, 0.0, 10.0, 10.0),
+            ][..],
+            &[0, 2, 1][..],
+        ),
+        (
+            "rtl leading right edge",
+            Rtl,
+            &[
+                (0.0, 0.0, 80.0, 10.0),
+                (50.0, 0.0, 20.0, 10.0),
+                (0.0, 30.0, 10.0, 10.0),
+            ][..],
+            &[0, 1, 2][..],
+        ),
+        (
+            "equal leading edge at different tops",
+            Ltr,
+            &[
+                (30.0, 1.0, 10.0, 10.0),
+                (30.0, 0.0, 10.0, 10.0),
+                (0.0, 30.0, 10.0, 10.0),
+            ][..],
+            &[0, 1, 2][..],
+        ),
+        (
+            "zero-sized fallback",
+            Ltr,
+            &[
+                (0.0, -10.0, 0.0, 10.0),
+                (40.0, 0.0, 10.0, 10.0),
+                (0.0, 0.0, 10.0, 10.0),
+                (0.0, 30.0, 10.0, 10.0),
+            ][..],
+            &[2, 1, 3, 0][..],
+        ),
+        (
+            "signed-zero geometric tie",
+            Ltr,
+            &[
+                (0.0, 0.0, 10.0, 10.0),
+                (-0.0, 0.0, 10.0, 10.0),
+                (30.0, 0.0, 10.0, 10.0),
+            ][..],
+            &[0, 1, 2][..],
+        ),
+    ] {
+        let result = std::panic::catch_unwind(|| {
+            assert_widget_reading_order(direction, geometry, expected);
+        });
+        assert!(result.is_ok(), "spatial geometry case failed: {case}");
+    }
 }
 
 pub(crate) fn a_directionality_update_changes_tab_order_without_replacing_focus_nodes() {

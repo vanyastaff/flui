@@ -1,0 +1,253 @@
+error[E0277]: `Rc<std::cell::Cell<bool>>` cannot be sent between threads safely
+ --> tests/compile_fail/builder_stays_on_its_thread.rs:9:24
+  |
+9 |     std::thread::spawn(move || drop(builder));
+  |     ------------------ -------^^^^^^^^^^^^^^
+  |     |                  |
+  |     |                  `Rc<std::cell::Cell<bool>>` cannot be sent between threads safely
+  |     |                  within this `{closure@$DIR/tests/compile_fail/builder_stays_on_its_thread.rs:9:24: 9:31}`
+  |     required by a bound introduced by this call
+  |
+  = help: within `{closure@$DIR/tests/compile_fail/builder_stays_on_its_thread.rs:9:24: 9:31}`, the trait `Send` is not implemented for `Rc<std::cell::Cell<bool>>`
+note: required because it appears within the type `GestureArena`
+ --> src/arena/mod.rs
+  |
+  | pub struct GestureArena {
+  |            ^^^^^^^^^^^^
+note: required because it appears within the type `TapGestureRecognizerBuilder`
+ --> src/recognizers/tap.rs
+  |
+  | pub struct TapGestureRecognizerBuilder {
+  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required because it's used within this closure
+ --> tests/compile_fail/builder_stays_on_its_thread.rs:9:24
+  |
+9 |     std::thread::spawn(move || drop(builder));
+  |                        ^^^^^^^
+note: required by a bound in `spawn`
+ --> $RUST/std/src/thread/functions.rs
+  |
+  | pub fn spawn<F, T>(f: F) -> JoinHandle<T>
+  |        ----- required by a bound in this function
+...
+  |     F: Send + 'static,
+  |        ^^^^ required by this bound in `spawn`
+
+error[E0277]: `Rc<RefCell<BTreeMap<PointerId, Rc<arena::ArenaSlot>>>>` cannot be sent between threads safely
+ --> tests/compile_fail/builder_stays_on_its_thread.rs:9:24
+  |
+9 |     std::thread::spawn(move || drop(builder));
+  |     ------------------ -------^^^^^^^^^^^^^^
+  |     |                  |
+  |     |                  `Rc<RefCell<BTreeMap<PointerId, Rc<arena::ArenaSlot>>>>` cannot be sent between threads safely
+  |     |                  within this `{closure@$DIR/tests/compile_fail/builder_stays_on_its_thread.rs:9:24: 9:31}`
+  |     required by a bound introduced by this call
+  |
+  = help: within `{closure@$DIR/tests/compile_fail/builder_stays_on_its_thread.rs:9:24: 9:31}`, the trait `Send` is not implemented for `Rc<RefCell<BTreeMap<PointerId, Rc<arena::ArenaSlot>>>>`
+note: required because it appears within the type `GestureArena`
+ --> src/arena/mod.rs
+  |
+  | pub struct GestureArena {
+  |            ^^^^^^^^^^^^
+note: required because it appears within the type `TapGestureRecognizerBuilder`
+ --> src/recognizers/tap.rs
+  |
+  | pub struct TapGestureRecognizerBuilder {
+  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required because it's used within this closure
+ --> tests/compile_fail/builder_stays_on_its_thread.rs:9:24
+  |
+9 |     std::thread::spawn(move || drop(builder));
+  |                        ^^^^^^^
+note: required by a bound in `spawn`
+ --> $RUST/std/src/thread/functions.rs
+  |
+  | pub fn spawn<F, T>(f: F) -> JoinHandle<T>
+  |        ----- required by a bound in this function
+...
+  |     F: Send + 'static,
+  |        ^^^^ required by this bound in `spawn`
+
+error[E0277]: `Rc<RefCell<BTreeMap<arena::ArenaGeneration, Rc<arena::ArenaSlot>>>>` cannot be sent between threads safely
+ --> tests/compile_fail/builder_stays_on_its_thread.rs:9:24
+  |
+9 |     std::thread::spawn(move || drop(builder));
+  |     ------------------ -------^^^^^^^^^^^^^^
+  |     |                  |
+  |     |                  `Rc<RefCell<BTreeMap<arena::ArenaGeneration, Rc<arena::ArenaSlot>>>>` cannot be sent between threads safely
+  |     |                  within this `{closure@$DIR/tests/compile_fail/builder_stays_on_its_thread.rs:9:24: 9:31}`
+  |     required by a bound introduced by this call
+  |
+  = help: within `{closure@$DIR/tests/compile_fail/builder_stays_on_its_thread.rs:9:24: 9:31}`, the trait `Send` is not implemented for `Rc<RefCell<BTreeMap<arena::ArenaGeneration, Rc<arena::ArenaSlot>>>>`
+note: required because it appears within the type `GestureArena`
+ --> src/arena/mod.rs
+  |
+  | pub struct GestureArena {
+  |            ^^^^^^^^^^^^
+note: required because it appears within the type `TapGestureRecognizerBuilder`
+ --> src/recognizers/tap.rs
+  |
+  | pub struct TapGestureRecognizerBuilder {
+  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required because it's used within this closure
+ --> tests/compile_fail/builder_stays_on_its_thread.rs:9:24
+  |
+9 |     std::thread::spawn(move || drop(builder));
+  |                        ^^^^^^^
+note: required by a bound in `spawn`
+ --> $RUST/std/src/thread/functions.rs
+  |
+  | pub fn spawn<F, T>(f: F) -> JoinHandle<T>
+  |        ----- required by a bound in this function
+...
+  |     F: Send + 'static,
+  |        ^^^^ required by this bound in `spawn`
+
+error[E0277]: `Rc<RefCell<VecDeque<arena::DeferredResolution>>>` cannot be sent between threads safely
+ --> tests/compile_fail/builder_stays_on_its_thread.rs:9:24
+  |
+9 |     std::thread::spawn(move || drop(builder));
+  |     ------------------ -------^^^^^^^^^^^^^^
+  |     |                  |
+  |     |                  `Rc<RefCell<VecDeque<arena::DeferredResolution>>>` cannot be sent between threads safely
+  |     |                  within this `{closure@$DIR/tests/compile_fail/builder_stays_on_its_thread.rs:9:24: 9:31}`
+  |     required by a bound introduced by this call
+  |
+  = help: within `{closure@$DIR/tests/compile_fail/builder_stays_on_its_thread.rs:9:24: 9:31}`, the trait `Send` is not implemented for `Rc<RefCell<VecDeque<arena::DeferredResolution>>>`
+note: required because it appears within the type `GestureArena`
+ --> src/arena/mod.rs
+  |
+  | pub struct GestureArena {
+  |            ^^^^^^^^^^^^
+note: required because it appears within the type `TapGestureRecognizerBuilder`
+ --> src/recognizers/tap.rs
+  |
+  | pub struct TapGestureRecognizerBuilder {
+  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required because it's used within this closure
+ --> tests/compile_fail/builder_stays_on_its_thread.rs:9:24
+  |
+9 |     std::thread::spawn(move || drop(builder));
+  |                        ^^^^^^^
+note: required by a bound in `spawn`
+ --> $RUST/std/src/thread/functions.rs
+  |
+  | pub fn spawn<F, T>(f: F) -> JoinHandle<T>
+  |        ----- required by a bound in this function
+...
+  |     F: Send + 'static,
+  |        ^^^^ required by this bound in `spawn`
+
+error[E0277]: `Rc<arena::DeadlineRegistry>` cannot be sent between threads safely
+ --> tests/compile_fail/builder_stays_on_its_thread.rs:9:24
+  |
+9 |     std::thread::spawn(move || drop(builder));
+  |     ------------------ -------^^^^^^^^^^^^^^
+  |     |                  |
+  |     |                  `Rc<arena::DeadlineRegistry>` cannot be sent between threads safely
+  |     |                  within this `{closure@$DIR/tests/compile_fail/builder_stays_on_its_thread.rs:9:24: 9:31}`
+  |     required by a bound introduced by this call
+  |
+  = help: within `{closure@$DIR/tests/compile_fail/builder_stays_on_its_thread.rs:9:24: 9:31}`, the trait `Send` is not implemented for `Rc<arena::DeadlineRegistry>`
+note: required because it appears within the type `GestureArena`
+ --> src/arena/mod.rs
+  |
+  | pub struct GestureArena {
+  |            ^^^^^^^^^^^^
+note: required because it appears within the type `TapGestureRecognizerBuilder`
+ --> src/recognizers/tap.rs
+  |
+  | pub struct TapGestureRecognizerBuilder {
+  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required because it's used within this closure
+ --> tests/compile_fail/builder_stays_on_its_thread.rs:9:24
+  |
+9 |     std::thread::spawn(move || drop(builder));
+  |                        ^^^^^^^
+note: required by a bound in `spawn`
+ --> $RUST/std/src/thread/functions.rs
+  |
+  | pub fn spawn<F, T>(f: F) -> JoinHandle<T>
+  |        ----- required by a bound in this function
+...
+  |     F: Send + 'static,
+  |        ^^^^ required by this bound in `spawn`
+
+error[E0277]: `Rc<std::cell::Cell<u64>>` cannot be sent between threads safely
+ --> tests/compile_fail/builder_stays_on_its_thread.rs:9:24
+  |
+9 |     std::thread::spawn(move || drop(builder));
+  |     ------------------ -------^^^^^^^^^^^^^^
+  |     |                  |
+  |     |                  `Rc<std::cell::Cell<u64>>` cannot be sent between threads safely
+  |     |                  within this `{closure@$DIR/tests/compile_fail/builder_stays_on_its_thread.rs:9:24: 9:31}`
+  |     required by a bound introduced by this call
+  |
+  = help: within `{closure@$DIR/tests/compile_fail/builder_stays_on_its_thread.rs:9:24: 9:31}`, the trait `Send` is not implemented for `Rc<std::cell::Cell<u64>>`
+note: required because it appears within the type `GestureArena`
+ --> src/arena/mod.rs
+  |
+  | pub struct GestureArena {
+  |            ^^^^^^^^^^^^
+note: required because it appears within the type `TapGestureRecognizerBuilder`
+ --> src/recognizers/tap.rs
+  |
+  | pub struct TapGestureRecognizerBuilder {
+  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required because it's used within this closure
+ --> tests/compile_fail/builder_stays_on_its_thread.rs:9:24
+  |
+9 |     std::thread::spawn(move || drop(builder));
+  |                        ^^^^^^^
+note: required by a bound in `spawn`
+ --> $RUST/std/src/thread/functions.rs
+  |
+  | pub fn spawn<F, T>(f: F) -> JoinHandle<T>
+  |        ----- required by a bound in this function
+...
+  |     F: Send + 'static,
+  |        ^^^^ required by this bound in `spawn`
+
+error[E0277]: `Rc<(dyn std::ops::Fn(TapDetails) + 'static)>` cannot be sent between threads safely
+ --> tests/compile_fail/builder_stays_on_its_thread.rs:9:24
+  |
+9 |     std::thread::spawn(move || drop(builder));
+  |     ------------------ -------^^^^^^^^^^^^^^
+  |     |                  |
+  |     |                  `Rc<(dyn std::ops::Fn(TapDetails) + 'static)>` cannot be sent between threads safely
+  |     |                  within this `{closure@$DIR/tests/compile_fail/builder_stays_on_its_thread.rs:9:24: 9:31}`
+  |     required by a bound introduced by this call
+  |
+  = help: within `{closure@$DIR/tests/compile_fail/builder_stays_on_its_thread.rs:9:24: 9:31}`, the trait `Send` is not implemented for `Rc<(dyn std::ops::Fn(TapDetails) + 'static)>`
+note: required because it appears within the type `Option<Rc<(dyn std::ops::Fn(TapDetails) + 'static)>>`
+ --> $RUST/core/src/option.rs
+  |
+  | pub enum Option<T> {
+  |          ^^^^^^
+note: required because it appears within the type `tap::TapCallbacks`
+ --> src/recognizers/tap.rs
+  |
+  | struct TapCallbacks {
+  |        ^^^^^^^^^^^^
+note: required because it appears within the type `TapGestureRecognizerBuilder`
+ --> src/recognizers/tap.rs
+  |
+  | pub struct TapGestureRecognizerBuilder {
+  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required because it's used within this closure
+ --> tests/compile_fail/builder_stays_on_its_thread.rs:9:24
+  |
+9 |     std::thread::spawn(move || drop(builder));
+  |                        ^^^^^^^
+note: required by a bound in `spawn`
+ --> $RUST/std/src/thread/functions.rs
+  |
+  | pub fn spawn<F, T>(f: F) -> JoinHandle<T>
+  |        ----- required by a bound in this function
+...
+  |     F: Send + 'static,
+  |        ^^^^ required by this bound in `spawn`
+help: use parentheses to call this trait object
+  |
+9 |     std::thread::spawn((move || drop(builder))(/* TapDetails */));
+  |                        +                     +++++++++++++++++++

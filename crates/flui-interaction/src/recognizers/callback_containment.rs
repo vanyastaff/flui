@@ -2,7 +2,7 @@
 
 use crate::{
     arena::{GestureArena, GestureArenaEntry, SweepModel},
-    retain::Retain,
+    retain::{Owned, Retain},
     routing::RoutePanic,
 };
 use std::rc::Rc;
@@ -13,6 +13,21 @@ pub(crate) fn retire_callback<T: ?Sized>(callback: Option<Rc<T>>, first: &mut Op
     } else {
         let candidate = RoutePanic::capture(|| drop(callback));
         RoutePanic::preserve_first(first, candidate, "recognizer callback retirement");
+    }
+}
+
+fn retire_delivery_snapshot<T: ?Sized>(
+    callback: Option<Rc<T>>,
+    first: &mut Option<RoutePanic>,
+    incoming_failure: bool,
+) {
+    if first.is_some() || incoming_failure {
+        // The immutable field still owns this callback. Keep the failed
+        // delivery's ownership too, so a later healthy owner Drop cannot
+        // destroy its opaque captures outside the failure that retired it.
+        Owned(callback).retain();
+    } else {
+        retire_callback(callback, first);
     }
 }
 
@@ -31,14 +46,14 @@ impl CallbackSequence {
     }
     pub(crate) fn call<T: ?Sized>(&mut self, callback: Option<Rc<T>>, invoke: impl FnOnce(&T)) {
         if self.incoming_failure {
-            callback.retain();
+            Owned(callback).retain();
             return;
         }
         if let Some(callback) = callback.as_ref() {
             let candidate = RoutePanic::capture(|| invoke(callback.as_ref()));
             RoutePanic::preserve_first(&mut self.first, candidate, "recognizer callback");
         }
-        retire_callback(callback, &mut self.first);
+        retire_delivery_snapshot(callback, &mut self.first, self.incoming_failure);
     }
     pub(crate) fn retire<T: ?Sized>(&mut self, callback: Option<Rc<T>>) {
         if self.incoming_failure {
@@ -83,7 +98,7 @@ pub(crate) fn invoke_callback<T: ?Sized>(
     {
         first = RoutePanic::capture(|| invoke(callback.as_ref()));
     }
-    retire_callback(callback, &mut first);
+    retire_delivery_snapshot(callback, &mut first, incoming_failure);
     finish_containment(first, incoming_failure);
 }
 

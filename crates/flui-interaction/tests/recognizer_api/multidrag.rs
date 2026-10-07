@@ -39,7 +39,7 @@ fn multidrag_contacts_update_independently() {
     let recognizer = MultiDragGestureRecognizer::builder(arena.clone(), MultiDragAxis::Free)
         .on_start(move |pointer, _| {
             Some(Rc::new(CountingHandle {
-                updates: if pointer.get() == 1 {
+                updates: if pointer == PointerId::new(1).expect("nonzero pointer") {
                     a.clone()
                 } else {
                     b.clone()
@@ -83,12 +83,12 @@ fn multidrag_cancel_finishes_every_contact_and_recovers() {
             Some(Rc::new(CountingHandle {
                 updates: Rc::new(Cell::new(0)),
                 ends: e.clone(),
-                cancels: if pointer.get() == 12 {
+                cancels: if pointer == PointerId::new(12).expect("nonzero pointer") {
                     Rc::new(Cell::new(0))
                 } else {
                     c.clone()
                 },
-                fail_cancel: pointer.get() == 12,
+                fail_cancel: pointer == PointerId::new(12).expect("nonzero pointer"),
             }) as Rc<dyn MultiDragHandle>)
         })
         .build();

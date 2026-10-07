@@ -513,7 +513,7 @@ fn double_tap_drop_releases_a_pending_sweep_without_inline_notifications() {
 
 fn multi_tap_drop_releases_a_pending_sweep_without_inline_notifications() {
     held_recognizer_drop_releases_pending_sweep(
-        |arena| MultiTapGestureRecognizer::builder(arena).build(),
+        |arena| MultiTapGestureRecognizer::builder(arena, 2).build(),
         true,
     );
 }

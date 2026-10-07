@@ -1444,7 +1444,7 @@ fn drag_callback_body_failure_retains_its_capture() {
 
 fn drag_self_dispose_from_callback(body_failure: bool) {
     use flui_interaction::arena::GestureArena;
-    use flui_interaction::{DragAxis, DragGestureRecognizer, GestureRecognizer, Offset, PointerId};
+    use flui_interaction::{DragAxis, DragGestureRecognizer, GestureRecognizer, Offset};
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::{cell::{Cell, RefCell}, rc::{Rc, Weak}};
 
@@ -1496,7 +1496,7 @@ fn drag_disposal_commits_tracking_before_rejection_diagnostics() {
 
     use flui_interaction::arena::GestureArena;
     use flui_interaction::arena::GestureArenaMember;
-    use flui_interaction::{DragAxis, DragGestureRecognizer, GestureRecognizer, Offset, PointerId};
+    use flui_interaction::{ArenaMembership, GestureSettings, Offset, PointerId, PrimaryContact};
 
     struct RejectEventPanic(Arc<AtomicBool>);
     impl tracing::Subscriber for RejectEventPanic {
@@ -1526,10 +1526,22 @@ fn drag_disposal_commits_tracking_before_rejection_diagnostics() {
         }
     }
 
+    struct WithdrawingContact(PrimaryContact);
+    impl GestureArenaMember for WithdrawingContact {
+        fn accept_gesture(&self, _: PointerId) {
+            panic!("withdrawing member must not win its old competition");
+        }
+        fn reject_gesture(&self, _: PointerId) {
+            panic!("locally retired contact must not receive its own rejection");
+        }
+    }
+
     let arena = GestureArena::new();
-    let recognizer = DragGestureRecognizer::builder(arena.clone(), DragAxis::Horizontal).build();
+    let recognizer = Rc::new_cyclic(|this: &std::rc::Weak<WithdrawingContact>| {
+        WithdrawingContact(PrimaryContact::new(ArenaMembership::new(arena.clone(), this.clone())))
+    });
     let down = flui_interaction::events::make_down_event(Offset::ZERO, flui_interaction::events::PointerType::Touch);
-    recognizer.add_pointer(flui_interaction::routing::PointerDispatch::at_root(&down));
+    recognizer.0.begin(flui_interaction::routing::PointerDispatch::at_root(&down), &GestureSettings::default()).expect("contact admitted");
     let sibling_accepts = Rc::new(Cell::new(0));
     let sibling = Rc::new(Sibling(sibling_accepts.clone()));
     arena.add(PointerId::PRIMARY, &sibling);
@@ -1539,7 +1551,7 @@ fn drag_disposal_commits_tracking_before_rejection_diagnostics() {
     let diagnostic_ran = Arc::new(AtomicBool::new(false));
     let result =
         tracing::subscriber::with_default(RejectEventPanic(diagnostic_ran.clone()), || {
-            catch_unwind(AssertUnwindSafe(|| recognizer.cancel()))
+            catch_unwind(AssertUnwindSafe(|| recognizer.0.withdraw()))
         });
     let payload = result.expect_err("the actual debug event subscriber must fail");
     assert_eq!(
@@ -1551,7 +1563,7 @@ fn drag_disposal_commits_tracking_before_rejection_diagnostics() {
         "the event actually ran"
     );
     assert!(
-        recognizer.cancel() == flui_interaction::CancelOutcome::Idle,
+        recognizer.0.current().is_none(),
         "tracking commits before diagnostic code"
     );
     assert_eq!(
@@ -1566,7 +1578,13 @@ fn drag_disposal_commits_tracking_before_rejection_diagnostics() {
         "the sibling still makes progress after diagnostic failure"
     );
     assert!(arena.is_empty());
-    assert_eq!(recognizer.cancel(), flui_interaction::CancelOutcome::Idle);
+    assert!(recognizer.0.withdraw().is_none());
+    let next = recognizer.0.begin(flui_interaction::routing::PointerDispatch::at_root(&down), &GestureSettings::default()).expect("withdrawn owner admits next contact");
+    assert!(recognizer.0.is_current(next));
+    arena.close(PointerId::PRIMARY);
+    assert_eq!(recognizer.0.withdraw().expect("healthy next withdrawal").id, next);
+    assert!(recognizer.0.current().is_none());
+    assert!(arena.is_empty());
     fresh_drag_completes_after_retirement();
 }
 

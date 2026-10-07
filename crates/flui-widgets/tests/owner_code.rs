@@ -3555,7 +3555,24 @@ fn editable_update_whose_observer_and_focus_listener_panic() {
     let _listening = old.add_listener(Rc::new(move || {
         assert!(listener.replace(true), "focus listener failure");
     }));
+    let previous_elements = harness.elements_of_type(std::any::TypeId::of::<EditableText>());
     harness.swap_root(EditableText::new(controller.clone(), Rc::clone(&new)).obscure_text(true));
+    eprintln!(
+        "editable update recovery: editable_elements={}, active_store={}, old_attached={}, replacement_attached={}",
+        harness.elements_of_type(std::any::TypeId::of::<EditableText>()).len(),
+        harness.active_text_store().is_some(),
+        old.is_attached(),
+        new.is_attached(),
+    );
+    let current_elements = harness.elements_of_type(std::any::TypeId::of::<EditableText>());
+    let retired_grant = field.request_lock(LockGrant::read(|_| {}), LockTiming::Sync);
+    let focused_replacement = new.request_focus();
+    let current_store = harness.active_text_store();
+    eprintln!(
+        "editable identities: previous={previous_elements:?}, current={current_elements:?}, retired_grant={retired_grant:?}, focus={focused_replacement:?}, same_store={:?}, current_grant={:?}",
+        current_store.as_ref().map(|current| Rc::ptr_eq(&field, current)),
+        current_store.as_ref().map(|current| current.request_lock(LockGrant::read(|_| {}), LockTiming::Sync)),
+    );
     field.set_observer(None);
     assert!(heard.get(), "the old node heard its focus loss");
     assert!(!old.is_attached(), "the old node was replaced");

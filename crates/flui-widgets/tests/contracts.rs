@@ -192,6 +192,7 @@ fn focus_actions_and_shortcuts() {
             ("focus::tab_reads_an_rtl_scope_from_its_inherited_directionality", crate::focus::tab_reads_an_rtl_scope_from_its_inherited_directionality as fn()),
             ("focus::a_tall_widget_cannot_bridge_disjoint_reading_rows", crate::focus::a_tall_widget_cannot_bridge_disjoint_reading_rows as fn()),
             ("focus::a_directionality_update_changes_tab_order_without_replacing_focus_nodes", crate::focus::a_directionality_update_changes_tab_order_without_replacing_focus_nodes as fn()),
+            ("focus::spatial_tab_preserves_geometric_ties_and_row_boundaries", crate::focus::spatial_tab_preserves_geometric_ties_and_row_boundaries as fn()),
             ("focus::platform_focus_requests_the_mounted_node_and_rejects_disabled_focus", crate::focus::platform_focus_requests_the_mounted_node_and_rejects_disabled_focus as fn()),
             ("focus::an_adopted_external_node_ignores_the_old_elements_focus_action", crate::focus::an_adopted_external_node_ignores_the_old_elements_focus_action as fn()),
             ("actions::the_nearest_enabled_action_wins_and_receives_the_payload", crate::actions::the_nearest_enabled_action_wins_and_receives_the_payload as fn()),

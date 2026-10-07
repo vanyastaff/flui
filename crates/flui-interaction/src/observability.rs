@@ -2,22 +2,18 @@
 //!
 //! This module provides the **shape** of observability events emitted by
 //! `flui-interaction` — typed [`GestureEvent`] names + [`SPAN_RECOGNIZER`] /
-//! [`SPAN_ARENA`] span-name constants — and a small test-only subscriber
-//! helper. The crate emits events via [`tracing`]; **consumers wire their
-//! own subscriber** at the application boundary — `flui-app` and `flui-cli`
-//! do that through `flui-log`, and an embedded host does it however it
-//! already does. `flui-interaction` depends on neither. Per
-//! [`docs/architecture.md`](../docs/architecture.md) policy:
+//! [`SPAN_ARENA`] component-name constants. The crate emits events via
+//! [`tracing`]; **consumers wire their
+//! own subscriber** at the application boundary. `flui-app` configures
+//! `flui-log`; an embedded host uses its own subscriber. `flui-interaction`
+//! depends on neither.
 //!
-//! > **Logging:** `tracing` only — never `println!`, `eprintln!`, or `dbg!`.
-//! > Use `#[tracing::instrument]` on hot paths and lifecycle methods.
-//!
-//! This module is the Observability-as-DoD closure pass: hot paths
-//! in [`crate::recognizers::RecognizerBase`] and [`crate::arena::GestureArena`]
-//! are now annotated with `#[tracing::instrument]` (plus typed
-//! `event = GestureEvent::*` span fields), and the trait impls in
-//! `tap.rs` / `long_press.rs` / `eager.rs` / `tap_and_drag.rs` /
-//! `multidrag.rs` enter an `info_span!` on the per-pointer hot path.
+//! Recognizer admission and dispatch spans carry typed `event` fields, while
+//! [`crate::recognizers::PrimaryContact`] reports tracking transitions and
+//! [`crate::arena::GestureArena`] reports competition lifecycle events.
+//! Subscriber code can reenter or panic: diagnostics run without recognizer
+//! state borrows. Event-kind strings describe the observation; they do not
+//! prescribe a span hierarchy or a devtools integration.
 //!
 //! # How to consume
 //!
@@ -46,38 +42,37 @@
 //! assert_eq!(GestureEvent::ArenaAccepted.as_str(), "arena_accepted");
 //! ```
 
-/// Span name for the `RecognizerBase` lifecycle methods
-/// ([`crate::recognizers::RecognizerBase::start_tracking`], [`accept_tracked`](crate::recognizers::RecognizerBase::accept_tracked),
-/// [`reject`](crate::recognizers::RecognizerBase::reject), etc.).
+/// Stable component name for application-defined recognizer spans.
 ///
 /// Use as the `name` of a manually-entered `tracing::info_span!` or as a
-/// filter token in `RUST_LOG`.
+/// tag in an application subscriber. Individual recognizer operations use
+/// their own span names.
 pub const SPAN_RECOGNIZER: &str = "gesture.recognizer";
 
-/// Span name for the [`crate::arena::GestureArena`] lifecycle methods
-/// ([`add`](crate::arena::GestureArena::add), [`close`](crate::arena::GestureArena::close),
-/// [`resolve`](crate::arena::GestureArena::resolve), [`sweep`](crate::arena::GestureArena::sweep)).
+/// Stable component name for application-defined arena spans.
+/// [`crate::arena::GestureArena`] operations use their own span names.
 pub const SPAN_ARENA: &str = "gesture.arena";
 
 /// Typed names for gesture-lifecycle events emitted on the `tracing`
 /// span hierarchy.
 ///
-/// Use as the `event.kind` field value for filter routing. The string
+/// Used as the `event` field value for filter routing. The string
 /// form is stable: tests and downstream `RUST_LOG` filters depend on it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum GestureEvent {
-    /// `RecognizerBase::add_pointer` invoked.
+    /// Recognizer admission was invoked.
     RecognizerAdded,
-    /// A `RecognizerBase::handle_event` was invoked.
+    /// A recognizer received a pointer dispatch.
     EventReceived,
-    /// `RecognizerBase::accept_tracked` won the arena.
+    /// Stable vocabulary for an accepted recognizer.
     ArenaAccepted,
-    /// `RecognizerBase::reject` lost the arena or was rejected explicitly.
+    /// Contact membership was withdrawn from its arena.
     ArenaRejected,
-    /// `RecognizerBase::stop_tracking` cleared the slot.
+    /// A primary contact finished pointer-up tracking.
     StoppedTracking,
-    /// `RecognizerBase::assert_not_disposed` fired in release mode.
+    /// Legacy disposal diagnostic spelling, retained for consumers of old traces.
+    /// Owner-local recognizers have no disposal operation.
     UsedAfterDispose,
     /// `GestureArena::sweep` removed the entry.
     ArenaSwept,
@@ -85,7 +80,7 @@ pub enum GestureEvent {
     ArenaClosed,
     /// `GestureArena::resolve` resolved with a winner.
     ArenaResolved,
-    /// `RecognizerBase::start_tracking` initialised tracking.
+    /// A primary contact was admitted and began tracking.
     StartedTracking,
 }
 

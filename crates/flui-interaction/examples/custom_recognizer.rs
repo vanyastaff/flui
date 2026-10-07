@@ -9,7 +9,7 @@ use std::{cell::Cell, rc::Rc};
 
 use flui_interaction::{
     ArenaMembership, CancelOutcome, GestureArenaMember, GestureRecognizer, GestureSettings, Offset,
-    PointerDispatch, PointerId, PrimaryContact, RecognizerSet,
+    PointerDispatch, PointerId, PointerEventExt, PrimaryContact, RecognizerSet,
     arena::GestureArena,
     events::{PointerEvent, PointerType, make_down_event_for_id, make_up_event_for_id},
 };

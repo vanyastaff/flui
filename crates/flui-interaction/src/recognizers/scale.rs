@@ -549,6 +549,14 @@ pub struct ScaleGestureRecognizerBuilder {
     callbacks: ScaleCallbacks,
 }
 
+impl std::fmt::Debug for ScaleGestureRecognizerBuilder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScaleGestureRecognizerBuilder")
+            .field("settings", &self.settings)
+            .finish_non_exhaustive()
+    }
+}
+
 impl ScaleGestureRecognizerBuilder {
     /// Freeze device-specific tolerances before contact admission.
     pub fn settings(mut self, settings: GestureSettings) -> Self {

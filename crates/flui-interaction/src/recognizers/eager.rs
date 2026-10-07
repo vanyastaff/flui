@@ -55,11 +55,22 @@ impl EagerGestureRecognizer {
 
 impl GestureRecognizer for EagerGestureRecognizer {
     fn add_pointer(&self, down: PointerDispatch<'_>) {
+        let pointer = down.local.pointer_id();
+        let _span = tracing::info_span!(
+            "eager.add_pointer",
+            pointer = ?pointer,
+            event = %crate::observability::GestureEvent::RecognizerAdded,
+        );
         if self.contact.begin(down, &self.settings).is_ok() {
             self.contact.accept();
         }
     }
     fn handle_event(&self, dispatch: PointerDispatch<'_>) {
+        let _span = tracing::info_span!(
+            "eager.handle_event",
+            kind = %crate::observability::pointer_event_kind(dispatch.local),
+            event = %crate::observability::GestureEvent::EventReceived,
+        );
         if !self.contact.tracks(dispatch.local.pointer_id()) {
             return;
         }
