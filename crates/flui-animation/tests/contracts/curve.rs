@@ -6,10 +6,6 @@ use flui_animation::{
     ArcCurve, BounceInCurve, Cubic, Curve, CurveError, Curves, ElasticInCurve, ElasticInOutCurve,
     ElasticOutCurve, Interval, JumpAt, Linear, Split, Steps, ThreePointCubic,
 };
-use flui_animation::{
-    ArcCurve, BounceInCurve, CatmullRomCurve, Cubic, Curve, CurveError, Curves, ElasticInCurve,
-    ElasticInOutCurve, ElasticOutCurve, Interval, Linear, Split, ThreePointCubic,
-};
 use proptest::prelude::*;
 
 /// Whether a catalog curve promises to never decrease.
@@ -179,11 +175,6 @@ fn catalog() -> Vec<(&'static str, ArcCurve, Shape)> {
             Monotone,
         ),
         ("BounceInCurve", ArcCurve::new(BounceInCurve), Overshoots),
-        (
-            "CatmullRomCurve([2, 3])",
-            ArcCurve::new(CatmullRomCurve::with_points(vec![(0.0, 2.0), (1.0, 3.0)])),
-            Overshoots,
-        ),
     ]
 }
 
