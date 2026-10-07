@@ -106,7 +106,7 @@ impl ScrollMetrics {
         }
     }
 
-    /// The rest tolerance for a ballistic run under these metrics: half a
+    /// The rest tolerance for a ballistic run under these metrics (ADR-0155): half a
     /// device pixel. `None` for a ratio that is not finite and positive.
     pub(crate) fn ballistic_tolerance(&self) -> Option<Tolerance> {
         Tolerance::for_device_pixel_ratio(self.device_pixel_ratio).ok()

@@ -836,3 +836,121 @@ proptest! {
         prop_assert_eq!(stepped.is_settled(), once.is_settled());
     }
 }
+
+// --- extremes of the admitted domain ------------------------------------------
+
+/// Every sample of `sim` is finite and the simulation comes to rest.
+fn assert_finite_and_resting(label: &str, sim: &SpringSimulation) {
+    let mut times = vec![0.0, f64::MIN_POSITIVE, 1e-9, f64::INFINITY, f64::MAX];
+    for exponent in -9..=307 {
+        let decade = 10_f64.powi(exponent);
+        times.extend([decade, 1.8 * decade, 4.2 * decade]);
+    }
+    for t in times {
+        let (x, v) = (sim.x(t), sim.dx(t));
+        assert!(
+            x.is_finite() && v.is_finite(),
+            "{label}: t = {t}: x = {x}, dx = {v}"
+        );
+    }
+    assert!(sim.is_done(f64::MAX), "{label}: never rests");
+}
+
+/// `ω_d·t` passes `f64::MAX` long before an almost undamped, very stiff
+/// spring rests.
+fn phase_past_f64_range() {
+    let spring = SpringDescription::with_damping_ratio(1.0, 1e308, 1e-308);
+    if let Ok(sim) = SpringSimulation::try_new(spring, 1.0, 0.0, 0.0, Tolerance::DEFAULT) {
+        assert_finite_and_resting("phase", &sim);
+    }
+}
+
+/// The signed coefficients cancel, but their absolute sum overflows.
+fn rest_envelope_past_f64_range() {
+    let spring = SpringDescription::with_damping_ratio(1.0, 1.0, 1.0);
+    let sim = SpringSimulation::try_new(spring, 1e308, 0.0, -1e308, Tolerance::DEFAULT)
+        .expect("the displacement and its rates are finite");
+    assert_finite_and_resting("envelope", &sim);
+    assert!(sim.is_done(1e3), "both samples are at rest by t = 1000");
+}
+
+/// The displacement is finite but `end + displacement` is not.
+fn position_past_f64_range() {
+    let spring = SpringDescription::with_damping_ratio(1.0, 1e-6, 1.0);
+    let sim = SpringSimulation::try_new(spring, f64::MAX, f64::MAX, 1e307, Tolerance::DEFAULT)
+        .expect("the displacement and its rates are finite");
+    assert_finite_and_resting("translation", &sim);
+    assert_eq!(sim.x(1.0), f64::MAX, "the overflowing sample saturates");
+}
+
+/// The infallible constructor rests at `end` at once instead of panicking
+/// when the motion's constants overflow.
+fn infallible_constructor_rests_on_overflow() {
+    let spring = SpringDescription::with_damping_ratio(1.0, 1e308, 1.0);
+    let sim = SpringSimulation::new(spring, 1e308, 1.1e308, 1.0);
+    assert!(sim.is_done(0.0));
+    assert_eq!((sim.x(0.0), sim.dx(0.0)), (1.1e308, 0.0));
+    assert_eq!(sim.spring_type(), SpringType::CriticallyDamped);
+}
+
+/// A finite fling whose spring overflows does not unwind the caller.
+fn fling_with_overflowing_spring_does_not_panic() {
+    let controller =
+        AnimationController::without_ticker_bounds(Duration::from_secs(1), 1e308, 1.1e308)
+            .expect("finite range");
+    let spring = SpringDescription::with_damping_ratio(1.0, 1e308, 1.0);
+    let flung = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        controller.fling_with(1.0, Some(spring)).is_ok()
+    }));
+    assert!(flung.is_ok(), "fling_with panicked");
+    controller.tick_at(0.016);
+    assert!(controller.value().is_finite());
+}
+
+#[test]
+fn springs_at_the_edge_of_f64_stay_finite_and_rest() {
+    crate::run_table(&[
+        ("phase past f64 range", phase_past_f64_range),
+        ("rest envelope past f64 range", rest_envelope_past_f64_range),
+        ("position past f64 range", position_past_f64_range),
+        (
+            "infallible constructor rests on overflow",
+            infallible_constructor_rests_on_overflow,
+        ),
+        (
+            "fling with overflowing spring does not panic",
+            fling_with_overflowing_spring_does_not_panic,
+        ),
+    ]);
+}
+
+/// Any finite `f64` magnitude, either sign.
+fn any_magnitude() -> impl Strategy<Value = f64> {
+    (any::<bool>(), -1074.0..=1023.99_f64).prop_map(|(negative, exponent)| {
+        let magnitude = exponent.exp2();
+        if negative { -magnitude } else { magnitude }
+    })
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(512))]
+
+    #[test]
+    fn every_built_spring_is_finite_and_rests(
+        mass in log_uniform(1e-300, 1e300),
+        stiffness in log_uniform(1e-300, 1e300),
+        damping in log_uniform(1e-300, 1e300),
+        start in any_magnitude(),
+        end in any_magnitude(),
+        velocity in any_magnitude(),
+    ) {
+        let Ok(spring) = SpringDescription::new(mass, stiffness, damping) else {
+            return Ok(());
+        };
+        if let Ok(sim) = SpringSimulation::try_new(spring, start, end, velocity, Tolerance::DEFAULT) {
+            assert_finite_and_resting("property", &sim);
+        }
+        let sim = SpringSimulation::new(spring, start, end, velocity);
+        assert_finite_and_resting("infallible", &sim);
+    }
+}

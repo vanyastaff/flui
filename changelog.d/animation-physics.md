@@ -7,7 +7,13 @@
   `Duration`; an undamped or non-finite spring is refused in debug and release.
   `SpringSimulation::try_new` takes a `Tolerance` and returns `Result`;
   `SpringSimulation::new` and `SpringDescription::with_damping_ratio` remain for
-  constants and panic on invalid input.
+  constants and panic on non-finite or non-positive input; where `try_new`
+  would refuse finite inputs as unrepresentable, `SpringSimulation::new`
+  returns a spring already at rest at `end`.
+- `flui-animation`: every spring `try_new` builds publishes finite samples at
+  every time and rests at a finite time; a position past the `f64` range
+  saturates at `±f64::MAX`, and a spring whose rest or oscillation phase is not
+  representable is refused with `SimulationError::Overflow`.
 - `flui-animation`: springs are evaluated in one closed form for every damping
   ratio, finite for every time (including very heavy damping and `t = ∞`), and
   continuous through critical damping.

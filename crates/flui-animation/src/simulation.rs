@@ -50,7 +50,7 @@ pub enum SimulationParameter {
     Stiffness,
     /// A spring's damping coefficient.
     Damping,
-    /// A spring's damping ratio `ζ`.
+    /// A spring's damping ratio `Î¶`.
     DampingRatio,
     /// A perceptual spring's duration or response, in seconds.
     Duration,
@@ -102,8 +102,8 @@ pub enum SimulationError {
         value: f64,
     },
     /// Every input is in range, but a constant derived from them is not a
-    /// finite non-zero `f64` (for example `ω²` of an extremely stiff, light
-    /// spring, or an initial displacement `start − end` that overflows).
+    /// finite non-zero `f64` (for example `Ï‰Â²` of an extremely stiff, light
+    /// spring, or an initial displacement `start âˆ’ end` that overflows).
     #[error("simulation constants are not representable as finite f64 values")]
     Overflow,
     /// Bounds that are not finite or whose `min > max`.
@@ -160,7 +160,7 @@ fn before_start(time: f64) -> bool {
 /// A simulation rests from the first moment after which it stays within
 /// `distance` of its resting position and, unless the velocity limit is
 /// infinite, below `velocity` in speed. With an infinite velocity limit the
-/// simulation derives one from its own time scale: `distance · ω` for a
+/// simulation derives one from its own time scale: `distance Â· Ï‰` for a
 /// spring, and for friction the speed at which the remaining glide is
 /// `distance`.
 ///
@@ -319,13 +319,13 @@ impl<S: Simulation + ?Sized> Simulation for Box<S> {
 // SpringDescription
 // ---------------------------------------------------------------------------
 
-/// A damped spring, stored as its natural angular frequency `ω` (radians per
-/// second) and damping ratio `ζ`.
+/// A damped spring, stored as its natural angular frequency `Ï‰` (radians per
+/// second) and damping ratio `Î¶`.
 ///
-/// The fields are private, so a spring outside the admitted domain — `ω` and
-/// `ζ` finite and positive, `ω²` and `ζω` finite — cannot be written down.
-/// Mass does not appear: motion depends on `ω = √(k/m)` and
-/// `ζ = c / (2√(km))` only. An undamped spring (`ζ = 0`) is refused because
+/// The fields are private, so a spring outside the admitted domain â€” `Ï‰` and
+/// `Î¶` finite and positive, `Ï‰Â²` and `Î¶Ï‰` finite â€” cannot be written down.
+/// Mass does not appear: motion depends on `Ï‰ = âˆš(k/m)` and
+/// `Î¶ = c / (2âˆš(km))` only. An undamped spring (`Î¶ = 0`) is refused because
 /// it never comes to rest.
 ///
 /// ```compile_fail
@@ -346,7 +346,7 @@ impl SpringDescription {
     /// # Errors
     ///
     /// [`SimulationError::OutOfRange`] naming the first input that is NaN,
-    /// infinite or not positive; [`SimulationError::Overflow`] when `ω` or `ζ`
+    /// infinite or not positive; [`SimulationError::Overflow`] when `Ï‰` or `Î¶`
     /// is not representable.
     ///
     /// # Examples
@@ -374,7 +374,7 @@ impl SpringDescription {
     ///
     /// # Panics
     ///
-    /// When an input is NaN, infinite or not positive, or `ω` is not
+    /// When an input is NaN, infinite or not positive, or `Ï‰` is not
     /// representable.
     ///
     /// # Examples
@@ -400,18 +400,18 @@ impl SpringDescription {
 
     /// A spring that completes a perceptual `duration` with `bounce`, the
     /// parameterization of SwiftUI's `Spring(duration:bounce:)`:
-    /// `ω = 2π / duration`; `ζ = 1 − bounce` for `bounce ≥ 0`.
+    /// `Ï‰ = 2Ï€ / duration`; `Î¶ = 1 âˆ’ bounce` for `bounce â‰¥ 0`.
     ///
-    /// `bounce` is in the open range `(−1, 1)`: `0` is critically damped,
-    /// positive values overshoot. For a negative bounce, `ζ = 1 / (1 + bounce)`
-    /// (an overdamped spring) — a mapping that is not confirmed against
+    /// `bounce` is in the open range `(âˆ’1, 1)`: `0` is critically damped,
+    /// positive values overshoot. For a negative bounce, `Î¶ = 1 / (1 + bounce)`
+    /// (an overdamped spring) â€” a mapping that is not confirmed against
     /// Apple's documentation.
     ///
     /// # Errors
     ///
     /// [`SimulationError::OutOfRange`] for a zero `duration` or a `bounce`
-    /// outside `(−1, 1)`; [`SimulationError::Overflow`] for a `duration` so
-    /// short that `ω²` overflows.
+    /// outside `(âˆ’1, 1)`; [`SimulationError::Overflow`] for a `duration` so
+    /// short that `Ï‰Â²` overflows.
     ///
     /// # Examples
     ///
@@ -441,15 +441,15 @@ impl SpringDescription {
 
     /// A spring with a natural period of `response` and a damping ratio of
     /// `damping_fraction` (`> 0`), the parameterization of SwiftUI's
-    /// `spring(response:dampingFraction:)`: `ω = 2π / response`,
-    /// `ζ = damping_fraction`. The `response` mapping is not confirmed
+    /// `spring(response:dampingFraction:)`: `Ï‰ = 2Ï€ / response`,
+    /// `Î¶ = damping_fraction`. The `response` mapping is not confirmed
     /// against Apple's documentation.
     ///
     /// # Errors
     ///
     /// [`SimulationError::OutOfRange`] for a zero `response` or a NaN,
     /// infinite or non-positive `damping_fraction`;
-    /// [`SimulationError::Overflow`] when `ω²` or `ζω` overflows.
+    /// [`SimulationError::Overflow`] when `Ï‰Â²` or `Î¶Ï‰` overflows.
     ///
     /// # Examples
     ///
@@ -496,7 +496,7 @@ impl SpringDescription {
     }
 }
 
-/// `2π / period`, refusing a zero period.
+/// `2Ï€ / period`, refusing a zero period.
 fn angular_frequency(period: Duration) -> Result<f64, SimulationError> {
     let seconds = period.as_secs_f64();
     if seconds > 0.0 {
@@ -510,11 +510,11 @@ fn angular_frequency(period: Duration) -> Result<f64, SimulationError> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum SpringType {
-    /// `ζ = 1`: no overshoot, the fastest approach without one.
+    /// `Î¶ = 1`: no overshoot, the fastest approach without one.
     CriticallyDamped,
-    /// `ζ < 1`: oscillates while it settles.
+    /// `Î¶ < 1`: oscillates while it settles.
     Underdamped,
-    /// `ζ > 1`: no overshoot, slower than critical damping.
+    /// `Î¶ > 1`: no overshoot, slower than critical damping.
     Overdamped,
 }
 
@@ -522,13 +522,13 @@ pub enum SpringType {
 // SpringSimulation
 // ---------------------------------------------------------------------------
 
-/// Below this `|q t²|`, `cos`/`sin` and `cosh`/`sinh` are summed as series so
-/// the motion is continuous through `ζ = 1` and exact at `t → 0`.
+/// Below this `|q tÂ²|`, `cos`/`sin` and `cosh`/`sinh` are summed as series so
+/// the motion is continuous through `Î¶ = 1` and exact at `t â†’ 0`.
 const SERIES_LIMIT: f64 = 1e-2;
 
 /// A spring moving from `start` toward `end`.
 ///
-/// The motion is the closed-form solution of `x'' + 2ζω x' + ω² x = 0` in one
+/// The motion is the closed-form solution of `x'' + 2Î¶Ï‰ x' + Ï‰Â² x = 0` in one
 /// form for every damping ratio, finite for every `t`. The spring rests at a
 /// time computed at construction from a conservative envelope of the motion:
 /// from then on it stays within its [`Tolerance`], [`x`](Simulation::x) is
@@ -537,13 +537,13 @@ const SERIES_LIMIT: f64 = 1e-2;
 pub struct SpringSimulation {
     start: f64,
     end: f64,
-    /// Initial displacement `start − end` and velocity.
+    /// Initial displacement `start âˆ’ end` and velocity.
     x0: f64,
     v0: f64,
-    /// `a = ζω` and `q = ω²(1 − ζ²)`.
+    /// `a = Î¶Ï‰` and `q = Ï‰Â²(1 âˆ’ Î¶Â²)`.
     a: f64,
     q: f64,
-    /// `a·x0 + v0` and `ω²·x0 + a·v0`: the coefficients of `e^{−at}·S`.
+    /// `aÂ·x0 + v0` and `Ï‰Â²Â·x0 + aÂ·v0`: the coefficients of `e^{âˆ’at}Â·S`.
     position_s: f64,
     velocity_s: f64,
     omega: f64,
@@ -556,12 +556,12 @@ pub struct SpringSimulation {
 /// The decay rates the propagator and the rest envelopes need.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Roots {
-    /// `ζ < 1`: damped angular frequency `ω_d = √q`.
+    /// `Î¶ < 1`: damped angular frequency `Ï‰_d = âˆšq`.
     Oscillating { damped_omega: f64 },
-    /// `ζ = 1`.
+    /// `Î¶ = 1`.
     Critical,
-    /// `ζ > 1`: `s = √(−q)` and the slow and fast roots `λs = −a + s`,
-    /// `λf = −a − s`, each computed without cancellation.
+    /// `Î¶ > 1`: `s = âˆš(âˆ’q)` and the slow and fast roots `Î»s = âˆ’a + s`,
+    /// `Î»f = âˆ’a âˆ’ s`, each computed without cancellation.
     Decaying { s: f64, slow: f64, fast: f64 },
 }
 
@@ -570,12 +570,13 @@ impl SpringSimulation {
     /// [`Tolerance::DEFAULT`].
     ///
     /// Meant for inputs already known to be finite; [`try_new`](Self::try_new)
-    /// is the fallible form.
+    /// is the fallible form. Where `try_new` would refuse finite inputs with
+    /// [`SimulationError::Overflow`], this returns a spring already at rest:
+    /// it reports done from `t = 0` on, at `end` with zero velocity.
     ///
     /// # Panics
     ///
-    /// When `start`, `end` or `velocity` is not finite, or the motion's
-    /// constants overflow.
+    /// When `start`, `end` or `velocity` is not finite.
     ///
     /// # Examples
     ///
@@ -590,6 +591,21 @@ impl SpringSimulation {
     pub fn new(spring: SpringDescription, start: f64, end: f64, velocity: f64) -> Self {
         match Self::try_new(spring, start, end, velocity, Tolerance::DEFAULT) {
             Ok(simulation) => simulation,
+            Err(SimulationError::Overflow) => Self {
+                start,
+                end,
+                x0: 0.0,
+                v0: velocity,
+                a: 0.0,
+                q: 0.0,
+                position_s: 0.0,
+                velocity_s: 0.0,
+                omega: spring.omega,
+                zeta: spring.zeta,
+                roots: Roots::Critical,
+                rest_secs: 0.0,
+                tolerance: Tolerance::DEFAULT,
+            },
             Err(error) => panic!("invalid spring simulation: {error}"),
         }
     }
@@ -601,8 +617,12 @@ impl SpringSimulation {
     ///
     /// [`SimulationError::OutOfRange`] naming [`SimulationParameter::Position`]
     /// or [`SimulationParameter::Velocity`] for a non-finite input;
-    /// [`SimulationError::Overflow`] when `start − end` or a product of it
-    /// with the spring's rates is not finite.
+    /// [`SimulationError::Overflow`] when `start âˆ’ end` or a product of it
+    /// with the spring's rates is not finite, or the motion would not come to
+    /// rest at a finite time whose oscillation phase `Ï‰_dÂ·t` is finite.
+    ///
+    /// A built spring publishes finite samples at every `t`: a position
+    /// beyond the `f64` range saturates at `Â±f64::MAX`.
     ///
     /// # Examples
     ///
@@ -635,8 +655,8 @@ impl SpringSimulation {
             },
             SpringType::CriticallyDamped => Roots::Critical,
             SpringType::Overdamped => {
-                // √(ζ² − 1): factored near one (no cancellation), scaled
-                // for a huge ζ (no overflow of ζ²).
+                // âˆš(Î¶Â² âˆ’ 1): factored near one (no cancellation), scaled
+                // for a huge Î¶ (no overflow of Î¶Â²).
                 let root = if zeta < 1e100 {
                     ((zeta - 1.0) * (zeta + 1.0)).sqrt()
                 } else {
@@ -671,7 +691,13 @@ impl SpringSimulation {
             rest_secs: 0.0,
             tolerance,
         };
-        simulation.rest_secs = simulation.settle_time(tolerance);
+        let rest_secs = representable(simulation.settle_time(tolerance))?;
+        // The propagator is evaluated only before rest, so a finite phase
+        // there keeps `sin_cos` finite.
+        if let Roots::Oscillating { damped_omega } = roots {
+            representable(damped_omega * rest_secs)?;
+        }
+        simulation.rest_secs = rest_secs;
         Ok(simulation)
     }
 
@@ -692,12 +718,12 @@ impl SpringSimulation {
         self
     }
 
-    /// `(e^{−at}·C(t), e^{−at}·S(t))`, where `C = cos(ω_d t)`,
-    /// `S = sin(ω_d t)/ω_d` (and their hyperbolic and `ζ = 1` limits).
+    /// `(e^{âˆ’at}Â·C(t), e^{âˆ’at}Â·S(t))`, where `C = cos(Ï‰_d t)`,
+    /// `S = sin(Ï‰_d t)/Ï‰_d` (and their hyperbolic and `Î¶ = 1` limits).
     fn propagator(&self, t: f64) -> (f64, f64) {
         let qt2 = self.q * t * t;
         if qt2.abs() < SERIES_LIMIT {
-            // C = Σ (−q t²)ⁿ/(2n)!, S = t·Σ (−q t²)ⁿ/(2n+1)!.
+            // C = Î£ (âˆ’q tÂ²)â¿/(2n)!, S = tÂ·Î£ (âˆ’q tÂ²)â¿/(2n+1)!.
             let ratio = -qt2;
             let mut cosine = 1.0;
             let mut sine_over_t = 1.0;
@@ -725,8 +751,8 @@ impl SpringSimulation {
                 (decay, decay * t)
             }
             Roots::Decaying { s, slow, .. } => {
-                // e^{−at}cosh(st) = ½e^{λs t}(1 + e^{−2st}),
-                // e^{−at}sinh(st)/s = e^{λs t}(1 − e^{−2st})/(2s).
+                // e^{âˆ’at}cosh(st) = Â½e^{Î»s t}(1 + e^{âˆ’2st}),
+                // e^{âˆ’at}sinh(st)/s = e^{Î»s t}(1 âˆ’ e^{âˆ’2st})/(2s).
                 let slow_decay = (slow * t).exp();
                 let gap = (-2.0 * s * t).exp_m1();
                 (
@@ -737,13 +763,13 @@ impl SpringSimulation {
         }
     }
 
-    /// The analytic displacement from `end` at `t ≥ 0`, ignoring rest.
+    /// The analytic displacement from `end` at `t â‰¥ 0`, ignoring rest.
     fn displacement(&self, t: f64) -> f64 {
         let (c, s) = self.propagator(t);
         c * self.x0 + s * self.position_s
     }
 
-    /// The analytic velocity at `t ≥ 0`, ignoring rest.
+    /// The analytic velocity at `t â‰¥ 0`, ignoring rest.
     fn velocity(&self, t: f64) -> f64 {
         let (c, s) = self.propagator(t);
         c * self.v0 - s * self.velocity_s
@@ -755,8 +781,8 @@ impl SpringSimulation {
         let distance = tolerance.distance;
         let speed = tolerance.velocity_limit(self.omega);
         let (x0, v0) = (self.x0.abs(), self.v0.abs());
-        // e^{−at}|C + aS| ≤ (1 + at)e^{−rt} and e^{−at}|S| ≤ t·e^{−rt}, with
-        // r = a (ζ ≤ 1) or −λs (ζ > 1).
+        // x = CÂ·x0 + SÂ·(aÂ·x0 + v0) and v = CÂ·v0 âˆ’ SÂ·(Ï‰Â²Â·x0 + aÂ·v0), with
+        // |C| â‰¤ e^{âˆ’rt} and |S| â‰¤ tÂ·e^{âˆ’rt} for r = a (Î¶ â‰¤ 1) or âˆ’Î»s (Î¶ > 1).
         let rate = match self.roots {
             Roots::Decaying { slow, .. } => -slow,
             _ => self.a,
@@ -765,7 +791,7 @@ impl SpringSimulation {
         // searched only below it.
         let (position, velocity) = match self.roots {
             Roots::Oscillating { damped_omega } => {
-                // |x| ≤ A·e^{−at}, |v| ≤ B·e^{−at}.
+                // |x| â‰¤ AÂ·e^{âˆ’at}, |v| â‰¤ BÂ·e^{âˆ’at}.
                 let amplitude_x = self.x0.hypot(self.position_s / damped_omega);
                 let amplitude_v = self.v0.hypot(self.velocity_s / damped_omega);
                 (
@@ -775,7 +801,7 @@ impl SpringSimulation {
             }
             Roots::Critical => (f64::INFINITY, f64::INFINITY),
             Roots::Decaying { s, slow, fast } => {
-                // x = c_s·e^{λs t} + c_f·e^{λf t}.
+                // x = c_sÂ·e^{Î»s t} + c_fÂ·e^{Î»f t}.
                 let slow_coefficient = (self.v0 - fast * self.x0) / (2.0 * s);
                 let fast_coefficient = self.x0 - slow_coefficient;
                 (
@@ -792,14 +818,26 @@ impl SpringSimulation {
                 )
             }
         };
-        let position = settle_polynomial(x0, self.a * x0 + v0, rate, distance, position);
-        let velocity = settle_polynomial(
-            v0,
-            self.omega * self.omega * x0 + self.a * v0,
-            rate,
-            speed,
-            velocity,
+        // The signed coefficients `aÂ·x0 + v0` and `Ï‰Â²Â·x0 + aÂ·v0` were checked
+        // finite at construction; their absolute values stay tight (and
+        // finite) where the terms cancel.
+        let position = settle_polynomial(x0, self.position_s.abs(), rate, distance, position);
+        let velocity = settle_polynomial(v0, self.velocity_s.abs(), rate, speed, velocity);
+        if matches!(self.roots, Roots::Oscillating { .. }) {
+            return position.max(velocity);
+        }
+        // Without oscillation the bounds above lose tightness where the
+        // modes cancel; the motion itself is then searched below them.
+        let acceleration = |t: f64| {
+            -self.omega * self.omega * self.displacement(t) - 2.0 * self.a * self.velocity(t)
+        };
+        let position = settle_sampled(
+            position,
+            distance,
+            |t| self.displacement(t),
+            |t| self.velocity(t),
         );
+        let velocity = settle_sampled(velocity, speed, |t| self.velocity(t), acceleration);
         position.max(velocity)
     }
 }
@@ -811,7 +849,7 @@ impl Simulation for SpringSimulation {
         } else if time >= self.rest_secs {
             self.end
         } else {
-            self.end + self.displacement(time)
+            saturate(self.end + self.displacement(time))
         }
     }
 
@@ -821,7 +859,7 @@ impl Simulation for SpringSimulation {
         } else if time >= self.rest_secs {
             0.0
         } else {
-            self.velocity(time)
+            saturate(self.velocity(time))
         }
     }
 
@@ -845,7 +883,7 @@ const BISECTION_STEPS: u32 = 128;
 /// conservative); a frame is millions of times longer.
 const REST_RESOLUTION_SECS: f64 = 1e-7;
 
-/// The smallest `T` with `envelope(t) ≤ limit` for all `t ≥ T`, given that
+/// The smallest `T` with `envelope(t) â‰¤ limit` for all `t â‰¥ T`, given that
 /// `envelope` (supplied as its natural logarithm) is non-increasing from
 /// `from` on and already within `limit` at `known` (pass `+inf` when no
 /// such time is known). Returns `from` when the limit holds there and
@@ -888,27 +926,74 @@ fn settle_monotone(
     high
 }
 
-/// Rest time of `e^{−rt}(p + q·t) ≤ limit`, `p, q ≥ 0`, `r > 0`, or `known`
-/// when that is earlier (another valid bound of the same motion).
+/// The smallest `t` in `(low, high]` with `past(t)`, to the rest resolution,
+/// given `past` is false at `low`, true at `high` and monotone between.
+fn bisect(mut low: f64, mut high: f64, past: impl Fn(f64) -> bool) -> f64 {
+    for _ in 0..BISECTION_STEPS {
+        if high - low <= REST_RESOLUTION_SECS.max(high * f64::EPSILON) {
+            break;
+        }
+        let middle = low + 0.5 * (high - low);
+        if past(middle) {
+            high = middle;
+        } else {
+            low = middle;
+        }
+    }
+    high
+}
+
+/// Rest time of `|f| â‰¤ limit` for a non-oscillating spring quantity `f`
+/// with derivative `df`, at most `bound` (a valid rest time). Each of `f`
+/// and `df` is a sum of two decaying exponentials (or `e^{âˆ’at}(p + qÂ·t)`),
+/// so `df` changes sign at most once; past that change `f` is monotone
+/// toward zero and `|f|` decreases.
+fn settle_sampled(bound: f64, limit: f64, f: impl Fn(f64) -> f64, df: impl Fn(f64) -> f64) -> f64 {
+    if !(bound.is_finite() && bound > 0.0) {
+        return bound;
+    }
+    let (initial, last) = (df(0.0), df(bound));
+    if last == 0.0 || !(initial.is_finite() && last.is_finite()) {
+        return bound;
+    }
+    let monotone_from = if initial == 0.0 || initial.signum() == last.signum() {
+        0.0
+    } else {
+        bisect(0.0, bound, |t| df(t).signum() == last.signum())
+    };
+    if f(monotone_from).abs() <= limit {
+        return monotone_from;
+    }
+    bisect(monotone_from, bound, |t| f(t).abs() <= limit)
+}
+
+/// A sample past the `f64` range, held at `Â±f64::MAX`.
+fn saturate(value: f64) -> f64 {
+    value.clamp(-f64::MAX, f64::MAX)
+}
+
+/// `ln(e^x + e^y)` without overflowing; `âˆ’inf` stands for a zero term.
+fn ln_sum_exp(x: f64, y: f64) -> f64 {
+    let (high, low) = if x >= y { (x, y) } else { (y, x) };
+    if high == f64::NEG_INFINITY {
+        high
+    } else {
+        high + (low - high).exp().ln_1p()
+    }
+}
+
+/// Rest time of `e^{âˆ’rt}(p + qÂ·t) â‰¤ limit`, `p, q â‰¥ 0`, `r > 0`, or `known`
+/// when that is earlier (another valid bound of the same motion). Evaluated
+/// in log space, so `p + qÂ·t` may exceed the `f64` range.
 fn settle_polynomial(p: f64, q: f64, rate: f64, limit: f64, known: f64) -> f64 {
     if p == 0.0 && q == 0.0 {
         return 0.0;
     }
+    let (ln_p, ln_q) = (p.ln(), q.ln());
     let ln_limit = limit.ln();
-    let ln_envelope = |t: f64| {
-        let linear = if q == 0.0 {
-            p.ln()
-        } else {
-            q.ln() + (t + p / q).ln()
-        };
-        linear - rate * t
-    };
-    // The envelope peaks at 1/r − p/q and decreases after it.
-    let peak = if q == 0.0 {
-        0.0
-    } else {
-        (rate.recip() - p / q).max(0.0)
-    };
+    let ln_envelope = |t: f64| ln_sum_exp(ln_p, ln_q + t.ln()) - rate * t;
+    // The envelope peaks at 1/r âˆ’ p/q and decreases after it.
+    let peak = (rate.recip() - (ln_p - ln_q).exp()).max(0.0);
     if ln_envelope(peak) <= ln_limit {
         return 0.0;
     }
@@ -920,7 +1005,7 @@ fn settle_polynomial(p: f64, q: f64, rate: f64, limit: f64, known: f64) -> f64 {
     settle_monotone(peak, rate.recip(), ln_limit, known, ln_envelope)
 }
 
-/// Rest time of `amplitude·e^{−rt} ≤ limit`.
+/// Rest time of `amplitudeÂ·e^{âˆ’rt} â‰¤ limit`.
 fn settle_exponential(amplitude: f64, rate: f64, limit: f64) -> f64 {
     if amplitude <= limit {
         0.0
@@ -931,8 +1016,8 @@ fn settle_exponential(amplitude: f64, rate: f64, limit: f64) -> f64 {
     }
 }
 
-/// Rest time of `c_s·e^{λs t} + c_f·e^{λf t} ≤ limit`, each term given as
-/// `(cᵢ ≥ 0, λᵢ < 0)`.
+/// Rest time of `c_sÂ·e^{Î»s t} + c_fÂ·e^{Î»f t} â‰¤ limit`, each term given as
+/// `(cáµ¢ â‰¥ 0, Î»áµ¢ < 0)`.
 fn settle_two_exponentials(slow: (f64, f64), fast: (f64, f64), limit: f64) -> f64 {
     let ((slow_amplitude, slow_rate), (fast_amplitude, fast_rate)) = (slow, fast);
     if !(slow_amplitude.is_finite() && fast_amplitude.is_finite()) {
@@ -964,7 +1049,7 @@ fn settle_two_exponentials(slow: (f64, f64), fast: (f64, f64), limit: f64) -> f6
 // Friction
 // ---------------------------------------------------------------------------
 
-/// Motion decelerating by drag: velocity `v₀·dragᵗ`, coasting toward
+/// Motion decelerating by drag: velocity `vâ‚€Â·dragáµ—`, coasting toward
 /// [`final_x`](Self::final_x).
 ///
 /// It rests once the remaining glide is within the tolerance's distance (and
@@ -1016,7 +1101,7 @@ impl FrictionSimulation {
         let velocity = finite(SimulationParameter::Velocity, velocity)?;
         let drag_log = drag.ln();
         let final_x = representable(position - velocity / drag_log)?;
-        // Remaining glide |v(t)/ln d| ≤ distance, and |v(t)| ≤ the limit.
+        // Remaining glide |v(t)/ln d| â‰¤ distance, and |v(t)| â‰¤ the limit.
         let speed_limit = tolerance
             .velocity_limit(-drag_log)
             .min(tolerance.distance * -drag_log);
@@ -1054,7 +1139,7 @@ impl FrictionSimulation {
         if x == self.position {
             return 0.0;
         }
-        // x(t) = x₀ + v·(dᵗ − 1)/ln d  ⇒  t = ln(1 + ln d·(x − x₀)/v)/ln d.
+        // x(t) = xâ‚€ + vÂ·(dáµ— âˆ’ 1)/ln d  â‡’  t = ln(1 + ln dÂ·(x âˆ’ xâ‚€)/v)/ln d.
         let time = (self.drag_log * (x - self.position) / self.velocity).ln_1p() / self.drag_log;
         if time > 0.0 { time } else { f64::INFINITY }
     }
