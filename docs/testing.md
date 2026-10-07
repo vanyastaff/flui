@@ -33,7 +33,7 @@ the same bug found by a whole-demo snapshot names a demo.
 | Render object | A real `PipelineOwner` — layout, paint, hit-test, intrinsics | `flui_rendering::testing::{RenderTester, Probe}` | `flui-rendering/testing` |
 | **Frame** | A **whole headless frame** on a virtual clock: build → layout → paint → composite, gestures, animation, async tasks | `flui_testing::HeadlessBinding` | dev-dependency |
 | Realm | A `UiRealm`'s own frame transaction, multi-presentation routing and failure containment, submitting to a scripted sink | `flui_runtime::ui_realm::UiRealm::for_test` with `flui_runtime::testing::{ScriptedSink, TestWindow}` (the realm tests live in `crates/flui-runtime/src/ui_realm/`) | `flui-runtime/test-support` |
-| **Widget** | A mounted widget tree with geometry probes and synthetic input, every frame the realm's own `UiRealm::pump` on a manual clock | `flui_testing::widgets::{lay_out, LaidOut}`, `flui_testing::HeadlessRealm` | dev-dependency |
+| **Widget** | A mounted widget tree with geometry probes and synthetic input, every frame the realm's own `UiRealm::pump` on a manual clock | `flui_testing::widgets::{lay_out, LaidOut}`, `flui_testing::HeadlessHost` | dev-dependency |
 | Accessibility | The assembled semantics tree, queried by role | `flui_testing::a11y::{A11yTree, A11yQuery}` | dev-dependency |
 | Gesture replay | A scripted gesture replayed with its timing | `flui_testing::replay::PointerScript` | dev-dependency |
 | Log capture | The `tracing` events a frame emitted | `flui_testing::log_capture::capture` | dev-dependency |
@@ -46,7 +46,7 @@ Two structural rules hold across the stack:
 - **Test-only APIs live in `flui-testing`**, not behind a `testing` feature on a
   shipped crate. It sits above the frame runtime and the widget catalog, so
   the widget harness lives there too and drives the product frame
-  transaction: `lay_out` mounts its tree in a `HeadlessRealm`, whose frames are
+  transaction: `lay_out` mounts its tree in a `HeadlessHost`, whose frames are
   `UiRealm::pump` (ADR-0083 §4).
 - **On the substrate driver, mount through `HeadlessBinding::mount_root`.** It owns the eight-step
   bootstrap whose ordering is load-bearing, and its contract is that the
@@ -144,6 +144,21 @@ passes `--strict`, which makes a missing one a failure. The flui-platform step
 of `test` needs `xvfb-run` on Linux (`apt install xvfb`), runs without it on
 Windows, and is skipped with a message on macOS.
 
+The xtask commands that build or test the workspace (`check-changed`, `test`,
+`ci`, `gate`, `lint`, `gpu-test` and the rest; `Command::is_heavy` in
+`tools/xtask/src/main.rs` is the list) take one lock for the user on this
+machine: `%LOCALAPPDATA%\flui\xtask-heavy.lock` on Windows,
+`$HOME/.cache/flui/xtask-heavy.lock` elsewhere (`XDG_RUNTIME_DIR` is not
+consulted), a per-user directory in the temporary directory when that
+variable is unset or relative, or an absolute `FLUI_XTASK_LOCK_FILE` (a
+relative one is refused with a warning). `clean-nested` and `worktree prune`
+take it too, since they delete what a running build uses. Runs from different
+checkouts queue instead of oversubscribing the machine, and a
+waiting run names the one it waits for (best effort). The OS releases the lock
+when its holder exits, crashed or not. One composite command running another,
+in-process or as a child process, does not wait for itself.
+`FLUI_XTASK_NO_LOCK=1` skips the lock; `--dry-run` never takes it.
+
 **Adding a new gate** means two changes together, not one: a `cargo xtask`
 command (so a contributor can run it standalone) *and* a step in
 `.github/workflows/ci.yml`'s `checks` job (so CI actually runs it — `gate` and
@@ -155,7 +170,7 @@ only runs when someone remembers to run it by hand.
 
 One scope for the whole local suite:
 `--workspace --exclude flui-platform --lib --bins --tests
---features flui/material,flui/cupertino,flui-devtools/agent`, run as the two
+--features flui/material,flui/cupertino,flui/persist,flui-devtools/agent`, run as the two
 stages below. Text-size tests measure on Parley because the default build does
 (ADR-0092 §10 step 4a); no feature selects another measurement.
 Two choices in it differ from CI on purpose:
@@ -279,6 +294,40 @@ So:
   from scratch;
 - a worktree's `target/` is deleted with the worktree once its branch merges.
 
+### Bounding disk use of agent worktrees
+
+A worktree's `target/` reaches 30-60 GB after a workspace build and the full
+suite. A Claude Code subagent started with worktree isolation gets a checkout
+of its own under `.claude/worktrees/`, so a session that fans out agents
+multiplies that. To keep it bounded:
+
+- **An agent that only reads needs no worktree.** Searching, answering a
+  question or reviewing a PR (`gh pr diff`) runs in an existing checkout;
+  isolation is for agents that edit.
+- **A writing agent builds only what it touched:** `cargo check -p <crate>`
+  and `cargo nextest run -p <crate>` while iterating, then
+  `cargo xtask check-changed` once before the PR. A `--workspace` build or
+  `cargo xtask test` is most of a short-lived worktree's disk.
+- **`CARGO_INCREMENTAL=0` in a short-lived worktree.** Incremental caches are
+  over half of a used debug directory (9.30 GB against 4.06 GB without them,
+  [build-footprint.md](../design/build-footprint.md) R2); they pay off only
+  across many edits to one crate, which a one-PR agent rarely makes.
+- **Delete a worktree's `target/` once its branch is pushed.** From then on CI
+  is the proof; a review fix rebuilds in minutes, while keeping the directory
+  costs tens of GB until the merge.
+- **After the merge, `cargo xtask worktree prune`.** It surveys every worktree
+  git knows, `.claude/worktrees/` included, not only `.worktrees/`, and removes
+  a merged one with its `target/` and branch. It keeps a worktree that is
+  locked (Claude Code locks an agent's worktree while the agent runs, and a
+  lock left by a process that died stays until `git worktree unlock`),
+  detached, unmerged, or holding modified, untracked or ignored files other
+  than `TASKS.md` and `target/`. `cargo xtask worktree prune --dry-run` names
+  each kept one and why; deleting a kept one's `target/` by hand still frees
+  the space.
+- **The main checkout:** `cargo xtask clean-nested` drops the nested-test
+  caches, then `cargo sweep --installed .` and `cargo sweep --maxsize 12GB .`
+  bound the rest ([Nested-cargo tests](#nested-cargo-tests)).
+
 ## Build
 
 ```bash
@@ -292,19 +341,15 @@ A bare `cargo build` at the root builds only the `flui` facade; pass `--workspac
 
 ### Local machine mode (shared, memory-limited)
 
-On a shared, memory-constrained dev machine — several agent worktrees against the same checkout,
-one compiling worker at a time (see AGENTS.md's Commands table) — every worktree points at the
-same `CARGO_TARGET_DIR`, and `CARGO_BUILD_JOBS` is sized to available RAM rather than core count.
-A docs-only change never needs a workspace build: `cargo xtask checks`, which builds only
-xtask, is the full local gate for it, which is what lets a docs worktree stay green without
-contending for the shared build. One concrete consequence of the shared
-`CARGO_TARGET_DIR`: the trybuild suites (`flui-engine::compile_fail`, `flui-rendering::compile_fail`,
-`flui-painting::compile_fail`, `trybuild_ui::ui_tests`) each drive a
-real `rustc` invocation per fixture into scratch output under `target/`, so two of them compiling
-concurrently from different worktrees against the same target dir can spuriously fail on artifact
-contention rather than on the fixture's actual `compile_fail` assertion — keep trybuild runs
-serialized with the rest of the machine's one-worker-at-a-time rule, not fanned out across parallel
-agent sessions.
+On a shared, memory-constrained dev machine — several agent worktrees off the same checkout —
+run one compiling worker at a time (the heavy xtask commands queue behind one host-wide lock for
+this, see AGENTS.md's Commands section) and size `CARGO_BUILD_JOBS` to available RAM rather than
+core count. Each worktree still builds into its own `target/`
+("One target directory per checkout", under [Nested-cargo tests](#nested-cargo-tests)); memory is bounded by serializing
+builds, never by sharing a target directory, and disk by the
+[agent-worktree rules](#bounding-disk-use-of-agent-worktrees). A docs-only change never needs a
+workspace build: `cargo xtask checks`, which builds only xtask, is the full local gate for it,
+so a docs worktree stays green without a multi-GB `target/` or a wait for the workspace builds.
 
 ## Test Commands
 
@@ -645,7 +690,7 @@ binding.pump_frame(Duration::from_millis(16));
 ```
 
 `flui_testing::widgets::lay_out` is the widget tier: it mounts the tree in a
-`HeadlessRealm`, under the realm's own root scopes, and adds geometry probes;
+`HeadlessHost`, under the realm's own root scopes, and adds geometry probes;
 every frame, the mount included, is `UiRealm::pump`. It is one harness, shared verbatim by
 `flui-widgets`, `flui-material`, and `flui-cupertino` — the per-crate
 `tests/common/mod.rs` files are thin re-export shims, so mount ordering,

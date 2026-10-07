@@ -60,7 +60,7 @@ flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev", features 
 # `GestureArenaScope`), and the concrete render objects its probes downcast.
 flui-widgets = { path = "../flui-widgets", version = "=0.2.0-dev" }
 flui-objects = { workspace = true }
-# `HeadlessRealm` hosts a `UiRealm` and drives its frame transaction
+# `HeadlessHost` hosts a `UiRealm` and drives its frame transaction
 # (`UiRealm::pump`, ADR-0083 §4). The runtime admits this crate as a normal
 # dependent beside the host. `test-support` exposes the test-only realm hooks
 # the harness reads (`UiRealm::active_text_store`).

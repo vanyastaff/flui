@@ -890,7 +890,7 @@ The gate 1 prototype exists on `spike/parley_atlas` (not merged). Everything bel
 - Realm tests (§10 step 2b), in `crates/flui-runtime/src/ui_realm/tests/text_context.rs`:
   `two_realms_hold_contexts_over_the_one_collection_they_were_given`,
   `dropping_a_realm_releases_its_text_context` and `a_second_presentation_adds_no_text_context`;
-  in flui-app, `separate_realm_windows_shape_over_the_runtimes_font_collection` (through
+  in flui-app, `isolated_windows_shape_over_the_runtimes_font_collection` (through
   `build_runtime_realm`, the one call every runner site builds its realm with) and the rows of
   `font_collection_contract`: `the_runtime_launches_one_host_feed_for_every_realm` (repeated
   calls on one runtime return the collection the services own, one feed is launched for it,

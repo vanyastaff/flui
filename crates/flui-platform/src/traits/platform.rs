@@ -47,6 +47,38 @@ use crate::{
 /// one error library.
 pub type PlatformReadyCallback = Box<dyn FnOnce(OwnerPlatform) -> Result<(), BootstrapError>>;
 
+/// A phase of the user's session ending, as the platform reports it to
+/// [`Platform::on_session_end`].
+///
+/// On Windows a session end is a query to every top-level window
+/// (`WM_QUERYENDSESSION`), then its outcome (`WM_ENDSESSION`): either the
+/// session ends, and the process is terminated soon after the callback
+/// returns, or it was cancelled, by the user or by another application.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum SessionEndPhase {
+    /// The session is about to end; the answer says whether the application
+    /// asks the user to wait.
+    Query,
+    /// The session end was cancelled; the session goes on.
+    Cancelled,
+    /// The session is ending now; the process will not outlive it for long.
+    Ending,
+}
+
+/// The application's answer to a [`SessionEndPhase`]. Only an answer to
+/// [`SessionEndPhase::Query`] is read; the platform ignores the others.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum SessionEndAnswer {
+    /// Let the session end.
+    Proceed,
+    /// Ask the user to wait: work that cannot be written without a decision
+    /// would be lost. The operating system shows the application as blocking
+    /// and lets the user end the session anyway.
+    Block,
+}
+
 /// Core platform abstraction trait
 ///
 /// This trait provides the complete interface for platform-specific operations.
@@ -365,6 +397,17 @@ pub trait Platform: Send + Sync + 'static {
 
     /// Register a callback for when the application should quit
     fn on_quit(&self, callback: Box<dyn FnMut() + Send>);
+
+    /// Register the callback the platform asks when the user's session ends
+    /// (log off, restart, shut down), replacing any earlier one. It runs on
+    /// the owner thread, possibly inside a nested native loop, once per
+    /// phase of each session end; see [`SessionEndPhase`].
+    ///
+    /// A backend without session-end messages never calls it, and the
+    /// default implementation drops it unused.
+    fn on_session_end(&self, callback: Box<dyn FnMut(SessionEndPhase) -> SessionEndAnswer + Send>) {
+        let _ = callback;
+    }
 
     /// Register the macOS application's reopen signal callback.
     ///

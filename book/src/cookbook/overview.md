@@ -12,7 +12,7 @@ checkout root used in [Installation](../getting-started/installation.md).
 | Animate a value over time | [Animation](animation.md) |
 | Exercise a view without opening a window | [Testing](testing.md) |
 
-For typed navigation, run `cargo run --example two_screens --features material`. It roots an
+For typed navigation, run `cargo run --example two_screens --features material,persist`. It roots an
 app in `WidgetsApp::router` over a `#[derive(Routable)]` route enum, and its pages push and pop
 route values through a `RouterHandle` (ADR-0093; see the [mapping](../mapping.md) notes).
 Read its [source](https://github.com/vanyastaff/flui/blob/main/examples/two_screens/tree.rs)

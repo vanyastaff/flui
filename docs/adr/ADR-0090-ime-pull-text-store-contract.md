@@ -4,6 +4,11 @@
   plan's IME text-store row); §3 waits for the Win32 TSF backend, §5 for exit B1. §2 was amended
   on acceptance: the projection takes an asynchronous lock, not a synchronous one (see §2).
 - **Date:** 2026-09-25
+- **Superseded-by:** [ADR-0142](ADR-0142-text-store-commit-gate-and-owner-code-containment.md),
+  in part: §1's one change notification per session (the owner hears only of committed-text
+  changes, after the lock is released), §2's reporting of a failure after a projected grant, §3's
+  reading of `TextInputOwner::active_store`, and the interim implementation's write-back. The
+  rest of this ADR stands.
 - **Supersedes in part:** [ADR-0030](ADR-0030-platform-text-input-ime-capability.md) §1
   (the winit-shaped push vocabulary as the contract) and the push-only shape of §2
 - **Related:** [ADR-0037](ADR-0037-presentation-ownership-domains.md) §5 (who owns a text-input
@@ -121,7 +126,9 @@ The surface is `flui_platform_api::text_store`:
   transaction keeps its queued grants for that anchor.
 - One read-write session is one change notification to the widget. There is no undo stack in
   the framework yet, so "one undo step" has nothing to apply to; it binds the first undo
-  implementation.
+  implementation. Under [ADR-0142](ADR-0142-text-store-commit-gate-and-owner-code-containment.md)
+  items 1 and 2, the owner of the field — `on_changed`, a form field — hears of a session only
+  when it changed the committed text, and only after the session's lock is released.
 
 ### 2. The push vocabulary becomes a projection
 
@@ -160,9 +167,10 @@ several UTF-16 units, composing ranges, async grants that arrive after a frame, 
 synchronous locks, and rect/point queries against layout. The built-in text field passes the same
 kit. This kit, not a live session, is the H0 gate for IME.
 
-The kit is `flui_testing::text_store_kit`, versioned by `KIT_VERSION` (1): a field supplies a
-`TextStoreFixture` (its store, a reset, an app-side edit, a commit anchor, its own change count
-and its capabilities) and calls `assert_conforms`. The kit holds frame transactions itself,
+The kit is `flui_testing::text_store_kit`, versioned by `KIT_VERSION` (2 since ADR-0142's owner
+notification rules; version 1's cases are unchanged): a field supplies a `TextStoreFixture` (its store, a
+reset, an app-side edit, a commit anchor, its own change count, a hook run inside its owner
+notification, and its capabilities) and calls `assert_conforms`. The kit holds frame transactions itself,
 through a `CommitGate` it installs with `set_commit_gate`, so no fixture can stand in for a
 store that ignores its gate. Each `Case` names the
 version that added it, so a pinned version never grows. `flui_platform_api::text_store::
@@ -170,24 +178,33 @@ InMemoryTextStore` is the test-only minimal field, with `text_store_kit::InMemor
 worked example; the kit's own tests wrap it with one fault each and assert the kit catches every
 one.
 
+## Owner notification and owner-code containment
+
+[ADR-0142](ADR-0142-text-store-commit-gate-and-owner-code-containment.md) decides what the
+field's owner sees (the committed text), when it hears of a session (after the lock is released,
+before the next grant), what happens to a session the application overtook, how a field resolves
+a composition when it loses its input, and how every call into code the store does not control is
+contained.
+
 ## Interim implementation
 
 `EditableText` implements `TextStore` over `TextEditingController` and `RenderEditable`
 (`crates/flui-widgets/src/text/text_store.rs`) until ADR-0092's `TextFieldState` replaces both
 behind the same trait. The controller's `Arc<Mutex<…>>` survives behind the trait for now: the
-store reads a snapshot of it when a lock opens and writes a read-write session back once. There is
-no undo stack. Converting offsets walks the text (O(n)), fine for single-line fields; multiline
+store reads a snapshot of it when a lock opens and writes a read-write session back once,
+checking the controller's generation in the same critical section (ADR-0142 item 3); its
+listeners and `on_changed` run in `settle` (ADR-0142 item 2). There is no undo stack. Converting offsets walks the text (O(n)), fine for single-line fields; multiline
 needs a cached index. A push event queued behind a frame lands before a later key press (the key
 handler runs queued grants first), but a programmatic `set_text` made while a grant is queued goes
 ahead of it. App edits reach the observer at the next frame, key press or lock request, since
 controller listeners are `Send + Sync` and the store is not.
 
-No platform backend holds a store yet: `PlatformTextInput` is `Send + Sync` and the store is an
-owner-thread `Rc`, so the pull connection waits for ADR-0082's owner-thread capability split. Until
-then the production caller is the push projection. `TextInputOwner::active_store` is
-`#[doc(hidden)]` until the Win32 TSF backend (§3) reads it, and the observer,
-`rect_for_range`, `index_at_point` and `document_bounds` have no production caller before then
-either.
+A pull platform receives the focused store through an owner-thread `TextStoreHost`
+([ADR-0135](ADR-0135-win32-text-services-hold-the-text-store-on-the-owner-thread.md));
+`TextInputOwner::active_store` is removed (ADR-0142 item 7). No window offers a host yet, so the
+production caller is still the push projection, and the observer, `rect_for_range`,
+`index_at_point` and `document_bounds` have no production caller until the Win32 window offers
+its host.
 
 ## Divergences
 
@@ -209,7 +226,7 @@ No backend code exists for any of these yet; this is the shape each backend impl
 
 | Platform | Mapping |
 |---|---|
-| Windows, TSF `ITextStoreACP` (ACP offsets are UTF-16) | `RequestLock(TS_LF_READ\|TS_LF_READWRITE [\|TS_LF_SYNC])` → `LockGrant::{Read, ReadWrite}` with `LockTiming::{Sync, Async}`; `Granted` sets `*phrSession` to `OnLockGranted`'s HRESULT (the grant calls it), `Deferred` returns `TS_S_ASYNC`, `SyncLockUnavailable` returns `TS_E_SYNCHRONOUS`. `GetStatus` → `status()` (protected → an `IS_PASSWORD` input scope); `GetEndACP` → `document_len`; `GetText` → `text`, one `TS_RT_PLAIN` run; `GetSelection` → `selection()` (`TS_AE_START` when active < anchor, `fInterimChar` false). `SetSelection` → `set_selection`; `SetText` → `replace`; `InsertTextAtSelection` → `insert_at_selection` (`TF_IAS_QUERYONLY` answered from `selection()`); `QueryInsert` returns the range as given. `GetTextExt` → `rect_for_range` in screen physical pixels (`pfClipped` from `clipped`, `NoLayout` → `TS_E_NOLAYOUT`); `GetScreenExt` → `document_bounds`; `GetACPFromPoint` → `index_at_point` (`GXFPF_NEAREST` → `Nearest`, else `Exact`; `PointOutside` → `TS_E_INVALIDPOINT`). `AdviseSink`/`UnadviseSink` → `set_observer` (`OnTextChange`, `OnSelectionChange`, `OnLayoutChange(TS_LC_CHANGE)`, `OnStatusChange`). `ITfContextOwnerCompositionSink` `OnStart`/`OnUpdate`/`OnEndComposition` → `set_composition` inside the text service's read-write session. Embedded-object verbs return `E_NOTIMPL`; no attributes are reported. Errors: `Offset` → `TS_E_INVALIDPOS`, `Detached` → `E_UNEXPECTED`, `DeferredQueueFull` → `E_FAIL`. No field is read-only yet, so `TS_SD_READONLY` and `TS_E_READONLY` have no source; the status flag and the error are added with the first read-only field. UIA `TextPattern`/`ValuePattern` read the same store under sync read locks. |
+| Windows, TSF `ITextStoreACP` (ACP offsets are UTF-16) | `RequestLock(TS_LF_READ\|TS_LF_READWRITE [\|TS_LF_SYNC])` → `LockGrant::{Read, ReadWrite}` with `LockTiming::{Sync, Async}`; `Granted` sets `*phrSession` to `OnLockGranted`'s HRESULT (the grant calls it), `Deferred` returns `TS_S_ASYNC`, `SyncLockUnavailable` returns `TS_E_SYNCHRONOUS`. `GetStatus` → `status()` (protected → an `IS_PASSWORD` input scope); `GetEndACP` → `document_len`; `GetText` → `text`, one `TS_RT_PLAIN` run; `GetSelection` → `selection()` (`TS_AE_START` when active < anchor, `fInterimChar` false). `SetSelection` → `set_selection`; `SetText` → `replace`; `InsertTextAtSelection` → `insert_at_selection` (`TF_IAS_QUERYONLY` answered from `selection()`); `QueryInsert` returns the range as given. `GetTextExt` → `rect_for_range` in screen physical pixels (`pfClipped` from `clipped`, `NoLayout` → `TS_E_NOLAYOUT`); `GetScreenExt` → `document_bounds`; `GetACPFromPoint` → `index_at_point` (`GXFPF_NEAREST` → `Nearest`, else `Exact`; `PointOutside` → `TS_E_INVALIDPOINT`). `AdviseSink`/`UnadviseSink` → `set_observer` (`OnTextChange`, `OnSelectionChange`, `OnLayoutChange(TS_LC_CHANGE)`, `OnStatusChange`). `ITfContextOwnerCompositionSink` `OnStart`/`OnUpdate`/`OnEndComposition` → `set_composition` inside the text service's read-write session. Embedded-object verbs return `E_NOTIMPL`; no attributes are reported. Errors: `Offset` → `TS_E_INVALIDPOS`, `Detached` → `E_UNEXPECTED`, `DeferredQueueFull` → `E_FAIL`. A panic in the owner's notification after a grant (ADR-0142 item 2) does not change the answer: `S_OK`, with `*phrSession` from `OnLockGranted`. No field is read-only yet, so `TS_SD_READONLY` and `TS_E_READONLY` have no source; the status flag and the error are added with the first read-only field. UIA `TextPattern`/`ValuePattern` read the same store under sync read locks. |
 | macOS, `NSTextInputClient` (`NSRange` is UTF-16) | Every call is synchronous and uses `Sync`; a refused lock returns today's empty answers (`nil`, `{NSNotFound, 0}`), never blocks. `markedRange`/`hasMarkedText` → `composition`; `selectedRange` → `selection().range()`; `attributedSubstringForProposedRange:actualRange:` → `text` over the clamped range, returned as `actualRange`; `firstRectForCharacterRange:actualRange:` → `rect_for_range` through `convertRectToScreen` with a flipped y (single-line today); `characterIndexForPoint:` → `index_at_point(Nearest)` or `NSNotFound`. `setMarkedText:selectedRange:replacementRange:` → `replace` of the replacement range, else the composition, else the selection, then `set_composition(hides_caret: false)` and `set_selection`; `insertText:replacementRange:` → `replace` and clear the composition; `unmarkText` → clear the composition keeping the text (unlike winit's `Disabled`). `layout_changed` → `invalidateCharacterCoordinates`; an app edit overlapping the composition → `discardMarkedText`. The backend's own UTF-16 converter is replaced by `text_store::utf16`. |
 | Linux, winit (X11 XIM, Wayland) | Push-only: through `project_ime_event`. The candidate area comes from `rect_for_range` over the composition or the caret. |
 | Linux, native Wayland `text-input-v3` (if a backend bypasses winit) | `set_surrounding_text` takes UTF-8 byte cursor and anchor (at most 4000 bytes), read under a sync read lock; `delete_surrounding_text` → `replace`; `preedit_string` byte cursors are handled as the projection handles them; `done(serial)` is one read-write lock. |

@@ -473,6 +473,46 @@ pub trait LifecycleContext: BuildContext {
     /// capability registry lands; the handle it returns stays the same.
     fn clipboard_handle(&self) -> Option<flui_interaction::ClipboardHandle>;
 
+    /// The realm's byte storage, which a
+    /// [`Persisted`](crate::persist::Persisted) document reads and writes
+    /// through.
+    ///
+    /// `None` when the realm has none: a platform without files, an
+    /// application that configured no storage, or a bare owner in a unit
+    /// test. Acquire it in a lifecycle hook (`init_state` /
+    /// `did_change_dependencies`), the same rule `clipboard_handle` follows.
+    ///
+    /// A value written here directly is not flushed when the application or
+    /// the session ends: a write still in flight then may be lost. Only what
+    /// a [`Persisted`](crate::persist::Persisted) document publishes goes
+    /// through the host's flush registry, which the host writes at teardown.
+    fn storage(&self) -> Option<std::sync::Arc<dyn flui_platform_api::Storage>> {
+        None
+    }
+
+    /// The presentation's close guard: hold the window's close while work
+    /// that must not be lost finishes.
+    ///
+    /// `None` on a bare owner in a unit test, and until a host installs a
+    /// guard. Acquire it in a lifecycle hook (`init_state` /
+    /// `did_change_dependencies`), the same rule `clipboard_handle` follows.
+    fn close_guard(&self) -> Option<crate::CloseGuard> {
+        None
+    }
+
+    /// The host's flush registry, which a
+    /// [`Persisted`](crate::persist::Persisted) document publishes into.
+    /// Uncallable outside `flui-view`: it takes a crate-private token, so
+    /// the registry is not part of the widget surface.
+    #[doc(hidden)]
+    fn flush_registry_in_crate(
+        &self,
+        token: sealed::CrateToken,
+    ) -> Option<crate::flush_registry::FlushRegistry> {
+        let _ = token;
+        None
+    }
+
     /// The realm's fresh-hit-test capability, if a binding installed an
     /// interaction lane.
     ///

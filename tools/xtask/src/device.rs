@@ -454,7 +454,7 @@ impl DeviceCheck {
                     "--example",
                     "two_screens",
                     "--features",
-                    "material,a11y",
+                    "material,persist,a11y",
                 ]),
                 Step::Native {
                     check: Native::WindowsNotes {
@@ -1065,7 +1065,7 @@ mod tests {
         assert_plan(
             &DeviceCheck::WindowsNotes,
             &[
-                "cargo build -p flui --locked --release --example two_screens --features material,a11y",
+                "cargo build -p flui --locked --release --example two_screens --features material,persist,a11y",
                 "native-notes target/release/examples/two_screens.exe; if rc=2: echo 'windows-notes CANNOT VERIFY: COM, DPI, foreground or native input was refused (details above)'; elif rc!=0: echo 'windows-notes FAILED: a Notes workflow observation or graceful close failed (tree dump above)'; exit $rc",
             ],
         );

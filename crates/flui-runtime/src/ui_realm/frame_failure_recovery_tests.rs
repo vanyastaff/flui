@@ -34,6 +34,7 @@ enum ObservedKind {
         phase: SegmentPhase,
     },
     Pipeline,
+    Callback,
 }
 
 fn install_collecting_handler(realm: &UiRealm) -> Arc<Mutex<Vec<ObservedFailure>>> {
@@ -56,6 +57,7 @@ fn install_collecting_handler(realm: &UiRealm) -> Arc<Mutex<Vec<ObservedFailure>
             },
             FrameFailureKind::SegmentPanic { phase, .. } => ObservedKind::Segment { phase: *phase },
             FrameFailureKind::Pipeline { .. } => ObservedKind::Pipeline,
+            FrameFailureKind::CallbackPanic { .. } => ObservedKind::Callback,
         };
         handler_observed
             .lock()

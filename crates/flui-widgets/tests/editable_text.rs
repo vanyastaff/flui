@@ -22,7 +22,7 @@ pub(crate) mod native_actions {
     use flui_rendering::pipeline::PipelineCell;
     use flui_testing::a11y::Role;
     use flui_testing::{
-        A11yTree, Action, ActionData, ActionRequest, HeadlessRealm, HeadlessWindow, NodeId, TreeId,
+        A11yTree, Action, ActionData, ActionRequest, HeadlessHost, HeadlessWindow, NodeId, TreeId,
     };
     use flui_view::prelude::*;
     use flui_widgets::{EditableText, SizedBox, TextEditingController};
@@ -68,7 +68,7 @@ pub(crate) mod native_actions {
     }
 
     struct Fixture {
-        realm: HeadlessRealm,
+        realm: HeadlessHost,
         probe: SignalProbe,
         controller: Rc<RefCell<TextEditingController>>,
         node: Rc<RefCell<Rc<FocusNode>>>,
@@ -116,7 +116,7 @@ pub(crate) mod native_actions {
                     child,
                 }
             });
-            let mut realm = HeadlessRealm::new(HeadlessWindow::new(400, 100).with_text_input());
+            let mut realm = HeadlessHost::new(HeadlessWindow::new(400, 100).with_text_input());
             realm.attach(&probe.view()).expect("fresh realm");
             realm.enable_semantics();
             let _ = realm.pump(Duration::ZERO);
@@ -993,8 +993,8 @@ pub(crate) mod text_store {
 
     use flui_interaction::routing::FocusNode;
     use flui_platform_api::text_store::{
-        LockGrant, LockOutcome, LockTiming, Selection, TextStore, TextStoreEdit, TextStoreRead,
-        Utf16Offset,
+        LockGrant, LockOutcome, LockTiming, Selection, TextStore, TextStoreEdit, TextStoreError,
+        TextStoreRead, Utf16Offset,
     };
     use flui_widgets::{EditableText, TextEditingController};
 
@@ -1167,6 +1167,451 @@ pub(crate) mod text_store {
         assert_eq!(controller.text(), "Ab");
     }
 
+    /// `on_changed` runs once the platform's session has released its lock:
+    /// it receives the committed text (the composition left out), and a
+    /// synchronous lock it requests is granted and sees the session's
+    /// result.
+    ///
+    /// Red-check: call `on_changed` from the session's write-back, under the
+    /// lock — the nested request is refused; or compare the whole text — the
+    /// owner receives the preedit.
+    pub(crate) fn on_changed_runs_after_the_lock_is_released() {
+        use flui_platform_api::text_store::{Composition, Utf16Range};
+        type Seen = (
+            Result<LockOutcome, TextStoreError>,
+            Option<(Utf16Offset, Option<Utf16Range>)>,
+        );
+        let controller = TextEditingController::new();
+        let focus_node = FocusNode::with_debug_label("settled field");
+        let slot: Rc<RefCell<Option<Rc<dyn TextStore>>>> = Rc::new(RefCell::new(None));
+        type Heard = Rc<RefCell<Vec<(String, Option<Seen>)>>>;
+        let heard: Heard = Rc::new(RefCell::new(Vec::new()));
+        let (store_slot, sink) = (Rc::clone(&slot), Rc::clone(&heard));
+        let mut harness = mount_with_ime(
+            EditableText::new(controller.clone(), Rc::clone(&focus_node)).on_changed(
+                move |_cx, text| {
+                    let store = store_slot.borrow().clone();
+                    let seen = store.map(|store| {
+                        let read = Rc::new(RefCell::new(None));
+                        let out = Rc::clone(&read);
+                        let outcome = store.request_lock(
+                            LockGrant::read(move |session| {
+                                *out.borrow_mut() = Some((
+                                    session.document_len(),
+                                    session.composition().map(|composition| composition.range),
+                                ));
+                            }),
+                            LockTiming::Sync,
+                        );
+                        (outcome, read.take())
+                    });
+                    sink.borrow_mut().push((text.to_owned(), seen));
+                },
+            ),
+        );
+        focus_node.request_focus();
+        harness.tick();
+        let field = store(&harness);
+        *slot.borrow_mut() = Some(Rc::clone(&field));
+        let composing = Utf16Range::new(at(2), at(6)).expect("ordered");
+        edit(&field, move |session| {
+            session.insert_at_selection("東京").expect("in range");
+            session.insert_at_selection("おおさか").expect("in range");
+            session
+                .set_composition(Some(Composition {
+                    range: composing,
+                    hides_caret: false,
+                }))
+                .expect("in range");
+        });
+        // The store holds `on_changed`, which holds the slot.
+        slot.borrow_mut().take();
+        assert_eq!(
+            *heard.borrow(),
+            vec![(
+                "東京".to_owned(),
+                Some((Ok(LockOutcome::Granted), Some((at(6), Some(composing))))),
+            )],
+            "one owner notification with the committed text, its lock granted after the session"
+        );
+        assert_eq!(controller.text(), "東京おおさか");
+    }
+
+    /// A field that gains focus is the store the window's input-method host
+    /// serves; losing focus takes it away (ADR-0135). The pull window is the
+    /// one Windows offers.
+    ///
+    /// Red-check: have the presentation's text-input owner skip its host —
+    /// the host hears nothing and serves no store.
+    pub(crate) fn focus_gain_and_loss_reach_the_store_host() {
+        use flui_testing::StoreHostCall;
+
+        let controller = TextEditingController::with_text("ab");
+        let (mut harness, focus_node) = focused(&controller);
+        assert_eq!(harness.store_host_calls(), [StoreHostCall::Focus]);
+        edit(&store(&harness), |session| {
+            session.insert_at_selection("c").expect("insert");
+        });
+        assert_eq!(controller.text(), "abc", "the host serves this field");
+
+        focus_node.unfocus();
+        harness.tick();
+        assert_eq!(
+            harness.store_host_calls(),
+            [StoreHostCall::Focus, StoreHostCall::Unfocus]
+        );
+        assert!(harness.active_text_store().is_none());
+    }
+
+    thread_local! {
+        /// The field a controller listener reaches: a listener is
+        /// `Send + Sync` and the store is not.
+        static LISTENED_FIELD: RefCell<Option<Rc<dyn TextStore>>> = const { RefCell::new(None) };
+    }
+
+    /// A controller listener that answers the session it hears of with a
+    /// synchronous session of its own: each committed session is one
+    /// `on_changed`, in commit order, with the committed text that session
+    /// produced; the nested one settles inside the outer's and absorbs
+    /// nothing of it.
+    ///
+    /// Red-check: take the owed `on_changed` after the controller's
+    /// listeners run — the owner hears once; or deliver the live committed
+    /// text after the listeners — the owner hears "ab" twice.
+    pub(crate) fn a_listener_session_inside_settle_is_its_own_on_changed() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        use flui_foundation::Listenable as _;
+
+        let controller = TextEditingController::new();
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let sink = Rc::clone(&calls);
+        let focus_node = FocusNode::with_debug_label("listener session field");
+        let mut harness = mount_with_ime(
+            EditableText::new(controller.clone(), Rc::clone(&focus_node))
+                .on_changed(move |_cx, text| sink.borrow_mut().push(text.to_owned())),
+        );
+        focus_node.request_focus();
+        harness.tick();
+        let field = store(&harness);
+        LISTENED_FIELD.with(|slot| *slot.borrow_mut() = Some(Rc::clone(&field)));
+        let answered = Arc::new(AtomicBool::new(false));
+        let once = Arc::clone(&answered);
+        let listener = controller.add_listener(Arc::new(move || {
+            if once.swap(true, Ordering::SeqCst) {
+                return;
+            }
+            let field = LISTENED_FIELD.with(|slot| slot.borrow().clone());
+            if let Some(field) = field {
+                let outcome = field.request_lock(
+                    LockGrant::read_write(|session| {
+                        session.insert_at_selection("b").expect("in range");
+                    }),
+                    LockTiming::Sync,
+                );
+                assert_eq!(outcome, Ok(LockOutcome::Granted), "the listener's session");
+            }
+        }));
+        edit(&field, |session| {
+            session.insert_at_selection("a").expect("in range");
+        });
+        controller.remove_listener(listener);
+        LISTENED_FIELD.with(|slot| slot.borrow_mut().take());
+        assert!(
+            answered.load(Ordering::SeqCst),
+            "the listener heard the session"
+        );
+        assert_eq!(controller.text(), "ab");
+        assert_eq!(
+            *calls.borrow(),
+            ["a", "ab"],
+            "one on_changed per committed session, in commit order, each with the text it committed"
+        );
+    }
+
+    /// The application edits the field while the platform holds a lock (a
+    /// nested modal loop, an async task): the platform's session is dropped,
+    /// the application's edit stays, and the platform hears of it once the
+    /// lock is released.
+    ///
+    /// Red-check: write the session back without comparing the controller's
+    /// generation — the text reads "ime" and the observer hears nothing.
+    pub(crate) fn an_app_edit_during_a_lock_is_not_overwritten() {
+        use flui_platform_api::text_store::{TextChange, TextStoreObserver};
+        struct Changes(Rc<RefCell<Vec<TextChange>>>);
+        impl TextStoreObserver for Changes {
+            fn text_changed(&self, change: TextChange) {
+                self.0.borrow_mut().push(change);
+            }
+            fn selection_changed(&self) {}
+            fn layout_changed(&self) {}
+            fn status_changed(&self) {}
+        }
+        let controller = TextEditingController::new();
+        let (harness, _focus) = focused(&controller);
+        let field = store(&harness);
+        let heard = Rc::new(RefCell::new(Vec::new()));
+        field.set_observer(Some(Rc::new(Changes(Rc::clone(&heard)))));
+        let app = controller.clone();
+        edit(&field, move |session| {
+            session.insert_at_selection("ime").expect("in range");
+            app.set_text("app");
+        });
+        field.set_observer(None);
+        assert_eq!(controller.text(), "app", "the application's edit stays");
+        assert_eq!(
+            *heard.borrow(),
+            [TextChange {
+                start: at(0),
+                old_end: at(0),
+                new_end: at(3),
+            }],
+            "the platform hears of the application's edit after the lock"
+        );
+    }
+
+    /// The application gives the field another controller while an input
+    /// method holds a read-write lock (a rebuild in a nested owner-thread
+    /// loop): the session was made against the replaced controller, so it is
+    /// dropped, and neither controller receives it.
+    ///
+    /// Red-check: drop the `is_same_controller` check in the store's
+    /// write-back — the replaced controller, whose generation did not move,
+    /// receives "ime".
+    pub(crate) fn swapping_the_controller_during_a_grant_drops_the_session() {
+        let old = TextEditingController::with_text("old");
+        let new = TextEditingController::with_text("new");
+        let focus_node = FocusNode::with_debug_label("swapped field");
+        let harness = Rc::new(RefCell::new(mount_with_ime(EditableText::new(
+            old.clone(),
+            Rc::clone(&focus_node),
+        ))));
+        focus_node.request_focus();
+        harness.borrow_mut().tick();
+        let field = store(&harness.borrow());
+        let (nested, replacement, node) =
+            (Rc::clone(&harness), new.clone(), Rc::clone(&focus_node));
+        edit(&field, move |session| {
+            session.insert_at_selection("ime").expect("in range");
+            nested
+                .borrow_mut()
+                .swap_root(EditableText::new(replacement, node));
+        });
+        assert_eq!(old.text(), "old", "the replaced controller is not written");
+        assert_eq!(
+            new.text(),
+            "new",
+            "the new controller keeps the application's text"
+        );
+    }
+
+    /// A focused field whose `on_changed` runs `on_changed`.
+    fn focused_with(
+        controller: &TextEditingController,
+        on_changed: impl Fn(&str) + 'static,
+    ) -> (Harness, Rc<FocusNode>) {
+        let focus_node = FocusNode::with_debug_label("owner failure field");
+        let mut harness = mount_with_ime(
+            EditableText::new(controller.clone(), Rc::clone(&focus_node))
+                .on_changed(move |_cx, text| on_changed(text)),
+        );
+        focus_node.request_focus();
+        harness.tick();
+        (harness, focus_node)
+    }
+
+    /// The text of the panic `run` raised, if it raised one.
+    fn raised(run: impl FnOnce()) -> Option<String> {
+        let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(run)).err()?;
+        let text = flui_foundation::panic::payload_text(&*payload)
+            .unwrap_or("an opaque payload")
+            .to_owned();
+        flui_foundation::panic::retain_opaque_payload(payload);
+        Some(text)
+    }
+
+    /// An `on_changed` that records each committed text it receives and
+    /// panics, naming the text, for the texts in `failing`.
+    fn failing_owner(
+        failing: &'static [&'static str],
+    ) -> (Rc<RefCell<Vec<String>>>, impl Fn(&str) + 'static) {
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let sink = Rc::clone(&calls);
+        (calls, move |text: &str| {
+            sink.borrow_mut().push(text.to_owned());
+            assert!(!failing.contains(&text), "owner failure on {text}");
+        })
+    }
+
+    /// Queue `grants` read-write grants from a post-frame callback, inside
+    /// the frame's transaction, so the next commit anchor runs them in order.
+    fn queue_in_a_frame(harness: &mut Harness, field: &Rc<dyn TextStore>, grants: Vec<LockGrant>) {
+        let field = Rc::clone(field);
+        harness
+            .local_post_frame_handle()
+            .schedule_local(move |_| {
+                for grant in grants {
+                    assert_eq!(
+                        field.request_lock(grant, LockTiming::Async),
+                        Ok(LockOutcome::Deferred)
+                    );
+                }
+            })
+            .expect("post-frame handle installed");
+    }
+
+    fn insert(text: &'static str) -> LockGrant {
+        LockGrant::read_write(move |session| {
+            session.insert_at_selection(text).expect("in range");
+        })
+    }
+
+    /// A failure-path matrix for an `on_changed` that panics after an input
+    /// method's grant (ADR-0142 item 2): the grant stands, the
+    /// failure reaches the realm's report exactly once, the first of two
+    /// stays authoritative, the field keeps working, and the platform hears
+    /// of an owner's edit before the next grant runs.
+    pub(crate) fn a_panicking_on_changed_is_reported_once_and_the_field_keeps_working() {
+        crate::common::cases::run_cases(
+            "panicking on_changed",
+            &[
+                (
+                    "a failure after a direct grant reaches the next owner turn once",
+                    a_failure_after_a_direct_grant_reaches_the_next_owner_turn_once as fn(),
+                ),
+                (
+                    "a failure in a dispatched commit is raised by the dispatch",
+                    a_failure_in_a_dispatched_commit_is_raised_by_the_dispatch,
+                ),
+                (
+                    "of two failures at one anchor the first is reported",
+                    of_two_failures_at_one_anchor_the_first_is_reported,
+                ),
+                (
+                    "the platform hears of an owner edit before the next grant",
+                    the_platform_hears_of_an_owner_edit_before_the_next_grant,
+                ),
+            ],
+        );
+    }
+
+    fn a_failure_after_a_direct_grant_reaches_the_next_owner_turn_once() {
+        let controller = TextEditingController::new();
+        let (calls, owner) = failing_owner(&["a"]);
+        let (mut harness, _focus) = focused_with(&controller, owner);
+        let field = store(&harness);
+        assert_eq!(
+            field.request_lock(insert("a"), LockTiming::Sync),
+            Ok(LockOutcome::Granted),
+            "the owner's failure does not undo the grant"
+        );
+        assert_eq!(controller.text(), "a");
+        assert_eq!(
+            raised(|| harness.tick()),
+            Some("owner failure on a".to_owned()),
+            "the next owner turn reports the failure"
+        );
+        assert_eq!(raised(|| harness.tick()), None, "and reports it once");
+        edit(&field, |session| {
+            session.insert_at_selection("b").expect("in range");
+        });
+        assert_eq!(controller.text(), "ab", "the next grant runs");
+        assert_eq!(*calls.borrow(), ["a", "ab"], "and its owner hears of it");
+    }
+
+    fn a_failure_in_a_dispatched_commit_is_raised_by_the_dispatch() {
+        let controller = TextEditingController::new();
+        let (calls, owner) = failing_owner(&["a"]);
+        let (mut harness, _focus) = focused_with(&controller, owner);
+        assert_eq!(
+            raised(|| harness.dispatch_ime(&flui_platform_api::ImeEvent::Commit("a".to_owned()))),
+            Some("owner failure on a".to_owned()),
+            "the dispatch that ran the grant reports the failure"
+        );
+        assert_eq!(controller.text(), "a");
+        assert_eq!(raised(|| harness.tick()), None, "it is reported once");
+        harness.dispatch_ime(&flui_platform_api::ImeEvent::Commit("b".to_owned()));
+        assert_eq!(controller.text(), "ab");
+        assert_eq!(*calls.borrow(), ["a", "ab"]);
+    }
+
+    fn of_two_failures_at_one_anchor_the_first_is_reported() {
+        let controller = TextEditingController::new();
+        let (calls, owner) = failing_owner(&["a", "ab"]);
+        let (mut harness, _focus) = focused_with(&controller, owner);
+        let field = store(&harness);
+        queue_in_a_frame(&mut harness, &field, vec![insert("a"), insert("b")]);
+        assert_eq!(
+            raised(|| harness.tick()),
+            Some("owner failure on a".to_owned()),
+            "the first failure stays authoritative"
+        );
+        assert_eq!(
+            controller.text(),
+            "ab",
+            "the queue drained past the failure"
+        );
+        assert_eq!(*calls.borrow(), ["a", "ab"]);
+        assert_eq!(
+            raised(|| harness.tick()),
+            None,
+            "the second failure is retained, not reported"
+        );
+        edit(&field, |session| {
+            session.insert_at_selection("c").expect("in range");
+        });
+        assert_eq!(
+            *calls.borrow(),
+            ["a", "ab", "abc"],
+            "the next grant reaches its owner"
+        );
+    }
+
+    fn the_platform_hears_of_an_owner_edit_before_the_next_grant() {
+        use flui_platform_api::text_store::{TextChange, TextStoreObserver};
+        struct Logged(Rc<RefCell<Vec<&'static str>>>);
+        impl TextStoreObserver for Logged {
+            fn text_changed(&self, _: TextChange) {
+                self.0.borrow_mut().push("platform heard the owner's edit");
+            }
+            fn selection_changed(&self) {}
+            fn layout_changed(&self) {}
+            fn status_changed(&self) {}
+        }
+        let controller = TextEditingController::new();
+        let app = controller.clone();
+        let (mut harness, _focus) = focused_with(&controller, move |text| {
+            if text == "a" {
+                app.set_text("app");
+                panic!("owner failure on {text}");
+            }
+        });
+        let field = store(&harness);
+        let log = Rc::new(RefCell::new(Vec::new()));
+        field.set_observer(Some(Rc::new(Logged(Rc::clone(&log)))));
+        let second = Rc::clone(&log);
+        queue_in_a_frame(
+            &mut harness,
+            &field,
+            vec![
+                insert("a"),
+                LockGrant::read_write(move |_| second.borrow_mut().push("second grant")),
+            ],
+        );
+        assert_eq!(
+            raised(|| harness.tick()),
+            Some("owner failure on a".to_owned())
+        );
+        field.set_observer(None);
+        assert_eq!(
+            *log.borrow(),
+            ["platform heard the owner's edit", "second grant"],
+            "the owner's edit is reported before the next grant, though the owner panicked"
+        );
+        assert_eq!(controller.text(), "app");
+    }
+
     /// Text entered through the focus manager remains editable in a narrow
     /// viewport: geometry, candidate placement and pointer insertion agree.
     pub(crate) fn long_input_reveals_the_caret_and_maps_visible_pointer_positions() {
@@ -1176,8 +1621,58 @@ pub(crate) mod text_store {
                 ("latin input", long_latin_input as fn()),
                 ("rtl input", long_rtl_input),
                 ("obscured input", long_obscured_input),
+                (
+                    "push candidate area",
+                    long_input_reports_the_visible_candidate_area,
+                ),
             ],
         );
+    }
+
+    /// A push-model platform places its candidate window from the area the
+    /// field reports, which follows the visible caret, not its position in
+    /// the whole text.
+    fn long_input_reports_the_visible_candidate_area() {
+        use flui_interaction::events::{Code, Key, KeyState, Modifiers, NamedKey};
+        use flui_interaction::testing::input::KeyEventBuilder;
+        use flui_widgets::SizedBox;
+
+        let controller = TextEditingController::new();
+        let focus = FocusNode::new();
+        let mut harness = crate::common::harness::mount_with_push_ime(
+            SizedBox::new(60.0, 30.0).child(EditableText::new(controller, Rc::clone(&focus))),
+        );
+        focus.request_focus();
+        let assert_visible = |harness: &Harness| {
+            let candidate = harness
+                .cursor_area_calls()
+                .last()
+                .copied()
+                .expect("candidate area reported");
+            assert!(
+                candidate.origin.x >= -0.001 && candidate.origin.x + candidate.size.width <= 60.001,
+                "IME candidate tracks the visible caret: {candidate:?}"
+            );
+        };
+        for ch in "abcdefghijklmnopqrstuvwxyz".chars() {
+            assert!(
+                harness
+                    .focus_manager()
+                    .dispatch_key_event(&super::character_key_event(ch))
+            );
+            harness.tick();
+        }
+        assert_visible(&harness);
+        for key in [NamedKey::Home, NamedKey::End] {
+            let event = KeyEventBuilder::new(Code::Home)
+                .with_key(Key::Named(key))
+                .with_state(KeyState::Down)
+                .with_modifiers(Modifiers::empty())
+                .build();
+            assert!(harness.focus_manager().dispatch_key_event(&event));
+            harness.tick();
+            assert_visible(&harness);
+        }
     }
 
     fn long_latin_input() {
@@ -1215,7 +1710,7 @@ pub(crate) mod text_store {
         }
         assert_eq!(controller.text(), text);
         let field = store(&harness);
-        let assert_visible = |harness: &Harness| {
+        let assert_visible = |_: &Harness| {
             let caret = controller.caret_byte_offset();
             let units =
                 flui_platform_api::text_store::utf16::utf16_offset(&controller.text(), caret)
@@ -1254,15 +1749,6 @@ pub(crate) mod text_store {
                 }
                 assert!(hidden > 0, "long input has offscreen glyphs");
             });
-            let candidate = harness
-                .cursor_area_calls()
-                .last()
-                .copied()
-                .expect("candidate area reported");
-            assert!(
-                candidate.origin.x >= -0.001 && candidate.origin.x + candidate.size.width <= 60.001,
-                "IME candidate tracks the visible caret: {candidate:?}"
-            );
             rect
         };
         assert_visible(&harness);

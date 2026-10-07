@@ -24,6 +24,7 @@ use flui_interaction::FocusManager;
 use flui_rendering::pipeline::DetachedRenderSubtrees;
 use parking_lot::Mutex;
 
+use super::dirty_queue::{DirtyElement, DirtyQueue};
 use crate::{
     element::child_manager::{ChildManager, ChildManagerRegistry},
     owner::{
@@ -39,6 +40,7 @@ use crate::{
 };
 
 pub(crate) use super::external_build_inbox::ExternalBuildInbox;
+use super::external_build_inbox::PendingBuilds;
 
 #[cfg(test)]
 thread_local! {
@@ -123,15 +125,7 @@ impl ExternalBuildScheduler {
             }
             let mut any_newly_queued = false;
             for id in ids {
-                match inbox.entry(id) {
-                    std::collections::hash_map::Entry::Vacant(entry) => {
-                        entry.insert(RebuildReasons::from_reason(reason));
-                        any_newly_queued = true;
-                    }
-                    std::collections::hash_map::Entry::Occupied(mut entry) => {
-                        entry.get_mut().insert(reason);
-                    }
-                }
+                any_newly_queued |= inbox.merge(id, RebuildReasons::from_reason(reason));
             }
             any_newly_queued
         };
@@ -162,15 +156,6 @@ impl std::fmt::Debug for ExternalBuildScheduler {
             .field("has_request_frame", &self.request_frame.is_some())
             .finish()
     }
-}
-
-/// Entry in the dirty elements heap.
-///
-/// Sorted by depth (shallowest first) for top-down processing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct DirtyElement {
-    id: ElementId,
-    depth: usize,
 }
 
 /// Which finalize step a lazy-sliver service pass ends with — see
@@ -233,14 +218,14 @@ pub(crate) struct BuildDrainResult {
 /// coexist with `&mut self` calls elsewhere in the loop.
 struct CappedLeftoverGuard {
     inbox: Arc<ExternalBuildInbox>,
-    leftover: HashMap<ElementId, RebuildReasons>,
+    leftover: PendingBuilds,
 }
 
 impl CappedLeftoverGuard {
     fn new(inbox: Arc<ExternalBuildInbox>) -> Self {
         Self {
             inbox,
-            leftover: HashMap::new(),
+            leftover: PendingBuilds::default(),
         }
     }
 }
@@ -251,15 +236,8 @@ impl Drop for CappedLeftoverGuard {
             return;
         }
         let mut inbox = self.inbox.lock();
-        for (id, reasons) in self.leftover.drain() {
-            match inbox.entry(id) {
-                std::collections::hash_map::Entry::Vacant(entry) => {
-                    entry.insert(reasons);
-                }
-                std::collections::hash_map::Entry::Occupied(mut entry) => {
-                    entry.get_mut().merge(reasons);
-                }
-            }
+        for (id, reasons) in self.leftover.take() {
+            inbox.merge(id, reasons);
         }
     }
 }
@@ -350,39 +328,6 @@ impl FrameBuildReport {
     }
 }
 
-impl DirtyElement {
-    /// Construct a new dirty-elements heap entry.
-    pub(crate) fn new(id: ElementId, depth: usize) -> Self {
-        Self { id, depth }
-    }
-
-    /// The element id queued for rebuild.
-    pub(crate) fn id(&self) -> ElementId {
-        self.id
-    }
-
-    /// Depth used to order the heap (shallowest first).
-    ///
-    /// Used when an unwinding rebuild is restored to the active queue without
-    /// changing the ordering key it had at the start of the attempt.
-    pub(crate) fn depth(&self) -> usize {
-        self.depth
-    }
-}
-
-impl Ord for DirtyElement {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        // Min-heap by depth (process shallowest first)
-        self.depth.cmp(&other.depth)
-    }
-}
-
-impl PartialOrd for DirtyElement {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
 /// Manages the build phase of the element lifecycle.
 ///
 /// BuildOwner tracks which elements need rebuilding and processes them
@@ -404,7 +349,7 @@ pub struct BuildOwner {
     /// split-borrow can pin a `&mut` reference to just this field
     /// during the recursive Element traversal — no full `&mut
     /// BuildOwner` needed.
-    pub(crate) dirty_elements: BinaryHeap<Reverse<DirtyElement>>,
+    pub(crate) dirty_elements: DirtyQueue,
 
     /// Accumulated rebuild causes for every id present in `dirty_elements`.
     ///
@@ -638,6 +583,16 @@ pub struct BuildOwner {
     /// a realm installs one over its platform's clipboard.
     pub(crate) clipboard_handle: Option<flui_interaction::ClipboardHandle>,
 
+    /// The realm's byte storage. `None` on a bare owner and under a realm
+    /// that has none, which `LifecycleContext::storage` reports as such.
+    pub(crate) storage: Option<std::sync::Arc<dyn flui_platform_api::Storage>>,
+
+    /// The host's flush registry, which `Persisted` publishes into through
+    /// the crate-private `LifecycleContext::flush_registry_in_crate`. `None`
+    /// on a bare owner, and under every realm until the host's installer
+    /// lands with the registry's wiring.
+    pub(crate) flush_registry: Option<crate::flush_registry::FlushRegistry>,
+
     /// The binding's owner-local interaction dispatch capability (ADR-0027).
     ///
     /// `None` means the owner was built detached from a runtime interaction lane;
@@ -770,7 +725,7 @@ impl BuildOwner {
         let owner_tag = mint();
         let focus_manager = std::mem::ManuallyDrop::into_inner(focus_manager);
         let owner = Self {
-            dirty_elements: BinaryHeap::new(),
+            dirty_elements: DirtyQueue::default(),
             dirty_reasons: HashMap::new(),
             global_keys: GlobalKeyRegistry::new(),
             global_key_reservations: Box::new(GlobalKeyReservations::new()),
@@ -804,6 +759,8 @@ impl BuildOwner {
             local_post_frame_handle: None,
             text_input_handle: None,
             clipboard_handle: None,
+            storage: None,
+            flush_registry: None,
             interaction_dispatch: None,
             hit_test_handle: None,
             owner_tag,
@@ -890,6 +847,14 @@ impl BuildOwner {
     /// answers `Some` under every realm.
     pub fn set_clipboard_handle(&mut self, handle: flui_interaction::ClipboardHandle) {
         self.clipboard_handle = Some(handle);
+    }
+
+    /// Install the realm's byte storage.
+    ///
+    /// Called during presentation construction when the realm has storage,
+    /// so `LifecycleContext::storage` answers `Some` under it.
+    pub fn set_storage(&mut self, storage: std::sync::Arc<dyn flui_platform_api::Storage>) {
+        self.storage = Some(storage);
     }
 
     /// Install the binding's owner-local interaction dispatch handle (ADR-0027).
@@ -1021,6 +986,12 @@ impl BuildOwner {
         self.clipboard_handle.as_ref()
     }
 
+    /// The realm's byte storage, if one was installed.
+    #[must_use]
+    pub fn storage(&self) -> Option<&std::sync::Arc<dyn flui_platform_api::Storage>> {
+        self.storage.as_ref()
+    }
+
     /// Set the callback for when a build is scheduled.
     ///
     /// This is called by `schedule_build_for` to notify the binding
@@ -1059,8 +1030,7 @@ impl BuildOwner {
         let newly_queued = match self.dirty_reasons.entry(id) {
             std::collections::hash_map::Entry::Vacant(entry) => {
                 entry.insert(RebuildReasons::from_reason(reason));
-                self.dirty_elements
-                    .push(Reverse(DirtyElement::new(id, depth)));
+                self.dirty_elements.push(id, depth);
                 true
             }
             std::collections::hash_map::Entry::Occupied(mut entry) => {
@@ -1110,19 +1080,17 @@ impl BuildOwner {
     /// the shallowest-first contract. Rebuilding the heap keyed on each
     /// node's current depth (`ElementNode::depth`, the same authority the
     /// external-inbox drain uses) keeps the contract regardless of what
-    /// `schedule_build_for` was told.
+    /// `schedule_build_for` was told. Each entry keeps its queue order.
     fn rekey_dirty_depths(&mut self, tree: &ElementTree) {
         if self.dirty_elements.is_empty() {
             return;
         }
-        let queued: Vec<ElementId> = std::mem::take(&mut self.dirty_elements)
-            .into_iter()
-            .map(|Reverse(dirty)| dirty.id())
-            .collect();
-        for id in queued {
-            let depth = tree.get(id).map_or(0, crate::tree::ElementNode::depth);
-            self.dirty_elements
-                .push(Reverse(DirtyElement::new(id, depth)));
+        let queued: Vec<DirtyElement> = self.dirty_elements.take_entries().collect();
+        for dirty in queued {
+            let depth = tree
+                .get(dirty.id())
+                .map_or(0, crate::tree::ElementNode::depth);
+            self.dirty_elements.requeue(dirty.at_depth(depth));
         }
     }
 
@@ -1188,11 +1156,7 @@ impl BuildOwner {
                 scratch.extend(bucket.into_iter().map(|Reverse(dirty)| dirty));
             }
         }
-        scratch.extend(
-            std::mem::take(&mut self.dirty_elements)
-                .into_iter()
-                .map(|Reverse(dirty)| dirty),
-        );
+        scratch.extend(self.dirty_elements.take_entries());
         self.build_scope_queues
             .get_or_insert_with(|| Box::new(BuildScopeQueues::default()))
             .scratch = scratch;
@@ -1211,9 +1175,10 @@ impl BuildOwner {
             .scratch
             .pop()
         {
-            dirty.depth = tree
+            let depth = tree
                 .get(dirty.id())
                 .map_or(0, crate::tree::ElementNode::depth);
+            dirty = dirty.at_depth(depth);
             let scope = Self::nearest_layout_builder_scope(tree, dirty.id(), live_scopes);
             self.defer_dirty_element(scope, dirty);
         }
@@ -1311,6 +1276,8 @@ impl BuildOwner {
             local_post_frame_handle: &self.local_post_frame_handle,
             text_input_handle: &self.text_input_handle,
             clipboard_handle: &self.clipboard_handle,
+            storage: &self.storage,
+            flush_registry: &self.flush_registry,
             interaction_dispatch: &self.interaction_dispatch,
             hit_test_handle: &self.hit_test_handle,
             global_key_scope: &mut self.global_key_scope,
@@ -1418,7 +1385,7 @@ impl BuildOwner {
     #[must_use]
     pub fn pending_rebuild_reasons(&self, element: ElementId) -> Option<RebuildReasons> {
         let mut pending = self.dirty_reasons.get(&element).copied();
-        let external = self.external_inbox.lock().get(&element).copied();
+        let external = self.external_inbox.lock().get(element);
         if let Some(external) = external {
             match &mut pending {
                 Some(reasons) => reasons.merge(external),
@@ -1576,8 +1543,7 @@ impl BuildOwner {
         })) {
             Ok(view) => view,
             Err(factory_payload) => {
-                self.dirty_elements
-                    .push(Reverse(DirtyElement::new(dirty.id(), dirty.depth())));
+                self.dirty_elements.requeue(dirty);
                 std::panic::resume_unwind(factory_payload)
             }
         };
@@ -1700,7 +1666,7 @@ impl BuildOwner {
                 absorbed_mid_drain += absorbed_this_pop;
             }
             first_pop = false;
-            let Some(Reverse(dirty)) = self.dirty_elements.pop() else {
+            let Some(dirty) = self.dirty_elements.pop() else {
                 break;
             };
             let id = dirty.id();
@@ -1835,6 +1801,8 @@ impl BuildOwner {
                     local_post_frame_handle: &self.local_post_frame_handle,
                     text_input_handle: &self.text_input_handle,
                     clipboard_handle: &self.clipboard_handle,
+                    storage: &self.storage,
+                    flush_registry: &self.flush_registry,
                     interaction_dispatch: &self.interaction_dispatch,
                     hit_test_handle: &self.hit_test_handle,
                     global_key_scope: &mut self.global_key_scope,
@@ -1891,13 +1859,11 @@ impl BuildOwner {
                 Err(payload) => {
                     let staged = self.lifecycle_panic_handoff.take().into_staged();
                     let Some((parent, slot)) = replacement_location else {
-                        self.dirty_elements
-                            .push(Reverse(DirtyElement::new(dirty.id(), dirty.depth())));
+                        self.dirty_elements.requeue(dirty);
                         std::panic::resume_unwind(payload)
                     };
                     let Some(staged) = staged else {
-                        self.dirty_elements
-                            .push(Reverse(DirtyElement::new(dirty.id(), dirty.depth())));
+                        self.dirty_elements.requeue(dirty);
                         std::panic::resume_unwind(payload)
                     };
 
@@ -2049,6 +2015,8 @@ impl BuildOwner {
                     local_post_frame_handle: &self.local_post_frame_handle,
                     text_input_handle: &self.text_input_handle,
                     clipboard_handle: &self.clipboard_handle,
+                    storage: &self.storage,
+                    flush_registry: &self.flush_registry,
                     interaction_dispatch: &self.interaction_dispatch,
                     hit_test_handle: &self.hit_test_handle,
                     global_key_scope: &mut self.global_key_scope,
@@ -2071,8 +2039,7 @@ impl BuildOwner {
                 match self.dirty_reasons.entry(id) {
                     std::collections::hash_map::Entry::Vacant(entry) => {
                         entry.insert(reasons);
-                        self.dirty_elements
-                            .push(Reverse(DirtyElement::new(dirty.id(), dirty.depth())));
+                        self.dirty_elements.requeue(dirty);
                     }
                     std::collections::hash_map::Entry::Occupied(mut entry) => {
                         entry.get_mut().merge(reasons);
@@ -2190,14 +2157,14 @@ impl BuildOwner {
     fn absorb_mid_drain_inbox(
         &mut self,
         tree: &mut ElementTree,
-        capped_leftover: &mut HashMap<ElementId, RebuildReasons>,
+        capped_leftover: &mut PendingBuilds,
     ) -> usize {
-        let landed: Vec<(ElementId, RebuildReasons)> = {
+        let landed = {
             let mut inbox = self.external_inbox.lock();
             if inbox.is_empty() {
                 return 0;
             }
-            inbox.drain().collect()
+            inbox.take()
         };
 
         let mut absorbed = 0usize;
@@ -2218,14 +2185,7 @@ impl BuildOwner {
             if self.built_this_frame.contains(&id) {
                 let Some(remaining) = self.mid_drain_absorbs_left.checked_sub(1) else {
                     newly_capped_ids.push(id);
-                    match capped_leftover.entry(id) {
-                        std::collections::hash_map::Entry::Vacant(entry) => {
-                            entry.insert(reasons);
-                        }
-                        std::collections::hash_map::Entry::Occupied(mut entry) => {
-                            entry.get_mut().merge(reasons);
-                        }
-                    }
+                    capped_leftover.merge(id, reasons);
                     continue;
                 };
                 self.mid_drain_absorbs_left = remaining;
@@ -2235,8 +2195,7 @@ impl BuildOwner {
             // Push straight onto the heap: `drain_build_scope`'s pop already
             // re-derives this id's scope and defers non-accepted ids, so
             // classifying scope here too would only duplicate that work.
-            self.dirty_elements
-                .push(Reverse(DirtyElement::new(id, depth)));
+            self.dirty_elements.push(id, depth);
             absorbed += 1;
         }
 
@@ -2483,6 +2442,8 @@ impl BuildOwner {
                 local_post_frame_handle: &self.local_post_frame_handle,
                 text_input_handle: &self.text_input_handle,
                 clipboard_handle: &self.clipboard_handle,
+                storage: &self.storage,
+                flush_registry: &self.flush_registry,
                 interaction_dispatch: &self.interaction_dispatch,
                 hit_test_handle: &self.hit_test_handle,
                 global_key_scope: &mut self.global_key_scope,
@@ -2690,6 +2651,8 @@ impl BuildOwner {
             local_post_frame_handle: &self.local_post_frame_handle,
             text_input_handle: &self.text_input_handle,
             clipboard_handle: &self.clipboard_handle,
+            storage: &self.storage,
+            flush_registry: &self.flush_registry,
             interaction_dispatch: &self.interaction_dispatch,
             hit_test_handle: &self.hit_test_handle,
             global_key_scope: &mut self.global_key_scope,
@@ -3730,7 +3693,7 @@ mod tests {
         let victim = insert_child(&mut tree, &mut owner, root, 0);
         owner.built_this_frame.insert(victim);
         owner.mid_drain_absorbs_left = 0;
-        owner.external_inbox.lock().insert(
+        owner.external_inbox.lock().merge(
             victim,
             RebuildReasons::from_reason(RebuildReason::StateChange),
         );

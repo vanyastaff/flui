@@ -64,6 +64,7 @@ fn reactivity_and_dependencies() {
         "reactivity_and_dependencies",
         &[
             ("signals::writing_a_signal_rebuilds_exactly_its_readers", crate::signals::writing_a_signal_rebuilds_exactly_its_readers as fn()),
+            ("signals::same_depth_readers_rebuild_in_child_order", crate::signals::same_depth_readers_rebuild_in_child_order),
             ("signals_legal_shapes::the_accepted_shapes_compile_and_run", crate::signals_legal_shapes::the_accepted_shapes_compile_and_run),
             ("editable_text::event_cx::typing_writes_through_on_changed_and_rebuilds_its_reader", crate::editable_text::event_cx::typing_writes_through_on_changed_and_rebuilds_its_reader),
             ("gesture_detector::event_cx::a_tap_writes_a_signal_and_rebuilds_its_reader", crate::gesture_detector::event_cx::a_tap_writes_a_signal_and_rebuilds_its_reader),
@@ -109,6 +110,15 @@ fn text_editing() {
             ("editable_text::focus_gain_attaches_an_ime_client_and_routes_preedit_to_the_controller", crate::editable_text::focus_gain_attaches_an_ime_client_and_routes_preedit_to_the_controller),
             ("editable_text::text_store::store_offsets_match_controller_bytes_across_surrogates_and_graphemes", crate::editable_text::text_store::store_offsets_match_controller_bytes_across_surrogates_and_graphemes),
             ("editable_text::text_store::typing_after_a_deferred_commit_lands_after_the_commit", crate::editable_text::text_store::typing_after_a_deferred_commit_lands_after_the_commit),
+            ("editable_text::text_store::on_changed_runs_after_the_lock_is_released", crate::editable_text::text_store::on_changed_runs_after_the_lock_is_released),
+            ("editable_text::text_store::an_app_edit_during_a_lock_is_not_overwritten", crate::editable_text::text_store::an_app_edit_during_a_lock_is_not_overwritten),
+            ("editable_text::text_store::focus_gain_and_loss_reach_the_store_host", crate::editable_text::text_store::focus_gain_and_loss_reach_the_store_host),
+            ("editable_text::text_store::swapping_the_controller_during_a_grant_drops_the_session", crate::editable_text::text_store::swapping_the_controller_during_a_grant_drops_the_session),
+            ("editable_text::text_store::a_panicking_on_changed_is_reported_once_and_the_field_keeps_working", crate::editable_text::text_store::a_panicking_on_changed_is_reported_once_and_the_field_keeps_working),
+            ("form::a_text_form_field_validates_and_saves_the_committed_text", crate::form::a_text_form_field_validates_and_saves_the_committed_text),
+            ("form::dropping_a_composing_controller_keeps_the_preedit_out_of_the_value", crate::form::dropping_a_composing_controller_keeps_the_preedit_out_of_the_value),
+            ("form::setting_the_shown_text_as_the_value_ends_a_reconversion", crate::form::setting_the_shown_text_as_the_value_ends_a_reconversion),
+            ("form::setting_the_shown_preedit_as_the_value_commits_it", crate::form::setting_the_shown_preedit_as_the_value_commits_it),
             ("editable_text::text_store::long_input_reveals_the_caret_and_maps_visible_pointer_positions", crate::editable_text::text_store::long_input_reveals_the_caret_and_maps_visible_pointer_positions),
             ("editable_text::text_store::editable_paint_places_long_text_under_the_viewport_clip", crate::editable_text::text_store::editable_paint_places_long_text_under_the_viewport_clip),
             ("editable_text_clipboard::copy_and_cut_on_an_obscured_field_leave_the_clipboard_untouched_and_the_key_unconsumed", crate::editable_text_clipboard::copy_and_cut_on_an_obscured_field_leave_the_clipboard_untouched_and_the_key_unconsumed),
@@ -174,6 +184,7 @@ fn focus_actions_and_shortcuts() {
             ("actions::callback_action_writes_through_the_key_events_cx", crate::actions::callback_action_writes_through_the_key_events_cx),
             ("actions::a_refused_write_in_a_callback_action_is_reported_not_panicked", crate::actions::a_refused_write_in_a_callback_action_is_reported_not_panicked),
             ("shortcuts::activation_tests::enter_space_and_select_activate_the_focused_control", crate::shortcuts::activation_tests::enter_space_and_select_activate_the_focused_control),
+            ("shortcuts::activator_tests::a_shift_produced_character_matches_when_shift_is_ignored", crate::shortcuts::activator_tests::a_shift_produced_character_matches_when_shift_is_ignored),
             ("shortcuts::intent_tests::a_shortcut_dispatches_its_intent_through_the_actions_chain", crate::shortcuts::intent_tests::a_shortcut_dispatches_its_intent_through_the_actions_chain),
             ("shortcuts::tab_tests::tab_and_shift_tab_move_the_focus_through_the_actions_chain", crate::shortcuts::tab_tests::tab_and_shift_tab_move_the_focus_through_the_actions_chain),
             ("shortcuts::tab_tests::tab_traversal_preserves_failure_before_policy_and_candidate_retirement", crate::shortcuts::tab_tests::tab_traversal_preserves_failure_before_policy_and_candidate_retirement),
@@ -201,6 +212,7 @@ fn semantics_translation_and_routing() {
             ("semantics::a_set_text_request_without_a_payload_is_dropped_rather_than_emptied", crate::semantics::a_set_text_request_without_a_payload_is_dropped_rather_than_emptied as fn()),
             ("semantics::a_tap_handler_round_trips_from_a_platform_click_to_the_callback", crate::semantics::a_tap_handler_round_trips_from_a_platform_click_to_the_callback),
             ("semantics::merge_semantics_collapses_its_descendants_in_the_a11y_tree", crate::semantics::merge_semantics_collapses_its_descendants_in_the_a11y_tree),
+            ("semantics::published_bounds_are_physical_and_follow_the_scale_factor", crate::semantics::published_bounds_are_physical_and_follow_the_scale_factor),
             ("semantics::a_covered_retained_form_stays_absent_after_a_late_controller_update", crate::semantics::a_covered_retained_form_stays_absent_after_a_late_controller_update),
             ("semantics::rebuilding_with_fresh_handlers_keeps_the_configuration_and_runs_the_new_one", crate::semantics::rebuilding_with_fresh_handlers_keeps_the_configuration_and_runs_the_new_one),
             ("semantics::unmounting_a_node_releases_its_action_table", crate::semantics::unmounting_a_node_releases_its_action_table),
@@ -235,6 +247,10 @@ fn scroll_physics_and_activity() {
             ("scroll::reversing_a_pull_consumes_it_before_scrolling_content", crate::scroll::reversing_a_pull_consumes_it_before_scrolling_content as fn()),
             ("scroll::a_refresh_controller_swap_retires_the_old_fling_and_drives_the_new_position", crate::scroll::a_refresh_controller_swap_retires_the_old_fling_and_drives_the_new_position as fn()),
             ("scroll::rebuilding_refresh_content_with_the_same_position_preserves_its_fling", crate::scroll::rebuilding_refresh_content_with_the_same_position_preserves_its_fling as fn()),
+            (
+                "scroll::shift_wheel_scrolls_the_horizontal_axis",
+                crate::scroll::shift_wheel_scrolls_the_horizontal_axis as fn(),
+            ),
             (
                 "scroll::a_wheel_tick_over_nested_scrollables_moves_only_the_inner",
                 crate::scroll::a_wheel_tick_over_nested_scrollables_moves_only_the_inner as fn(),
@@ -328,13 +344,31 @@ fn router_and_widgets_app() {
             ("router::router_push_preserves_its_commit_after_an_observer_panic", crate::router::router_push_preserves_its_commit_after_an_observer_panic),
             ("router::router_go_preserves_its_commit_after_an_observer_panic", crate::router::router_go_preserves_its_commit_after_an_observer_panic),
             ("router::removing_a_router_value_retires_it_after_releasing_the_stack_borrow", crate::router::removing_a_router_value_retires_it_after_releasing_the_stack_borrow),
+            ("router::empty_stack_is_refused", crate::router::empty_stack_is_refused),
             ("widgets_app::builder_only_app_receives_no_routing_and_supplies_the_subtree", crate::widgets_app::builder_only_app_receives_no_routing_and_supplies_the_subtree),
             ("widgets_app::home_is_seeded_once_as_the_root_route", crate::widgets_app::home_is_seeded_once_as_the_root_route),
             ("widgets_app::observers_attach_at_mount_and_see_the_home_route", crate::widgets_app::observers_attach_at_mount_and_see_the_home_route),
+            ("widgets_app_router::a_pushed_route_focuses_its_first_control_in_every_mount", crate::widgets_app_router::a_pushed_route_focuses_its_first_control_in_every_mount),
             ("widgets_app_router::switching_widgets_app_from_home_to_router_releases_the_navigator", crate::widgets_app_router::switching_widgets_app_from_home_to_router_releases_the_navigator),
             ("widgets_app_router::widgets_app_router_navigates_by_handle_and_the_url_follows", crate::widgets_app_router::widgets_app_router_navigates_by_handle_and_the_url_follows),
         ],
     );
+}
+
+/// A router reopened on a saved stack keeps its Back order. Joins
+/// `router_and_widgets_app` once `Router::from_stack` places the whole stack.
+#[test]
+#[ignore = "contract: Router::from_stack places every saved route"]
+fn from_stack_restores_back_order() {
+    crate::router::from_stack_restores_back_order();
+}
+
+/// `RouterHandle::stack` reads the whole stack. Joins
+/// `router_and_widgets_app` once it does.
+#[test]
+#[ignore = "contract: RouterHandle::stack reads every page on the stack"]
+fn stack_reads_every_committed_edit() {
+    crate::router::stack_reads_every_committed_edit();
 }
 
 /// Hero flights: state survival, curves, diversion by a pop, gesture release.

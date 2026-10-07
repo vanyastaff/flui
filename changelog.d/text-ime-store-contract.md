@@ -1,0 +1,63 @@
+### Added
+
+- **`TextEditingController::committed_text`** (`flui-widgets`): the text with the IME
+  composition replaced by what it stands for (nothing for a new preedit, the original words for a
+  reconversion), the text a field's owner works with
+  ([ADR-0142](/docs/adr/ADR-0142-text-store-commit-gate-and-owner-code-containment.md)).
+- **`CommitGate::defer_failure` and `take_failure`** (`flui-platform-api`): a panic caught while
+  a text store settled a grant waits at its presentation's gate for the owner to report; the
+  first is kept, later ones are retained.
+- **`InMemoryTextStore::set_owner_listener`** (`flui-platform-api`): run code in the reference
+  store's owner notification, as a field's `on_changed` runs.
+- **`text_store::EditGeneration`** (`flui-platform-api`): the count of application edits a
+  platform session is checked against before it writes back. It never wraps, and once
+  exhausted it admits no session; `TextEditingController` and `InMemoryTextStore` both use it.
+- **Text-store kit version 2** (`flui_testing::text_store_kit::KIT_VERSION` is 2):
+  `composition_over_a_selection_replaces_the_selection`,
+  `composition_only_sessions_do_not_notify_the_owner`,
+  `owner_notification_runs_after_release` and
+  `reconverting_committed_text_notifies_only_on_commit`, with
+  `TextStoreFixture::set_owner_hook` (a provided method; a fixture keeping its default fails
+  the owner case). A suite pinned to version 1 is unchanged.
+- **`text_store::CompositionLedger` and `text_store::committed_text`** (`flui-platform-api`):
+  how a store keeps what its composition stands for through a session's edits. The ledger opens
+  on the document's text (`open(text, composition)`), records each edit with the text before
+  it and the inserted text (`replace(text, edit, inserted)`), and reads the text it is given
+  for `origin(text)` and `committed(text)`.
+- **`text_store::OwnerCalls` and `RetainOnFailure`** (`flui-platform-api`): the one
+  containment a store, its arbiter and its presentation run owner code in: each call contained,
+  the first failure in time authoritative, snapshots retired or retained (ADR-0127).
+  `OwnerCalls::parking_gate` names the gate a settle scope parks in, so a store's flush after
+  its grants runs behind the gate the last grant settled under.
+- **`LockArbiter::owner_gate`** (`flui-platform-api`): the gate an owner installed, which a
+  store reads before owner code runs.
+
+### Changed
+
+- **`LockArbiter::request` and `run_deferred`** take a second function, `settle`, called with
+  an `OwnerCalls` scope after each grant releases its lock and before the next queued grant: a
+  store notifies its owner there. A failure in it goes to the admitting `CommitGate` as soon as
+  it is caught, and the queue keeps running. A request behind a failing queued grant is queued
+  (asynchronous) or retained (synchronous), not lost.
+- **`EditableText::on_changed`** receives the committed text and is called only when it
+  changes, after the input method's lock is released: a session that only composes or cancels a
+  composition no longer calls it, and a lock `on_changed` requests is granted. Controller
+  listeners also run after the lock is released. An edit is reported to the `on_changed`
+  installed when it was accepted, though a controller listener rebuilds the field and removes or
+  replaces the callback first.
+- **A text form field** validates and saves the committed text (`RawTextFormField`,
+  `flui_material::TextFormField`), and reporting it no longer writes it back over a composition.
+- **An application edit made while an input method holds the field's lock** wins: the input
+  method's session is dropped and the method hears of the application's edit.
+- **`InMemoryTextStore::owner_notifications`** counts sessions that changed the committed text,
+  delivered after each lock is released.
+- **`TextInputOwner::dispatch` and `run_deferred_grants`** (`flui-interaction`) resume a
+  panic a store parked in the presentation's commit gate (a field's `on_changed` failing after an
+  input method's grant), so it reaches the realm's report; the grant itself stands.
+- **`TextInputOwner::close`** (`flui-interaction`) reports a failure a store parked for the
+  presentation's next turn, after the close's own work.
+- **`TextInputHandle::attach`** (`flui-interaction`) returns the client's token once the client
+  is active; a failure after that point waits in the presentation's commit gate for its next
+  turn instead of being raised by the attach. A store whose `set_commit_gate` panics is
+  rejected, and a failure its grants of other stores parked in the gate meanwhile is raised
+  ahead of its own; one parked during its panic's unwind is kept behind it.

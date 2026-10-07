@@ -423,3 +423,36 @@ versioned documents».** Решение:
 3. **Windows-эксперимент.** `LockFileEx` и `MoveFileExW` на OneDrive-каталоге с файлами по
    запросу; укладывается ли удержание файла антивирусом в бюджет повтора (~1,5 с) и inline-сброс
    реестра — в 3 с завершения сеанса. Если нет — бюджеты пересматриваются до RC.
+
+## Изменения контракта после заморозки (2026-10-06, решение оркестратора)
+
+Основание — отчёт P1 (`persistence/contract` @ `b6c419ca7`). Зависимые задачи — P2 (`FileStore`) и P6
+(хостовое хранилище).
+
+1. **`StorageName::is_machine_local(&self) -> bool`** входит в контракт: без него реализация `Storage`
+   не может выбрать между roaming- и local-корнем. Добавляет P2.
+2. **`StoredVersion::of_bytes(&[u8]) -> StoredVersion`** принят: версии нужны реализациям вне
+   `flui-platform-api` (`MemoryStorage`, `FileStore`).
+3. **Тест «каталог хранения доходит до `LifecycleContext`»** живёт внутри `flui-app`
+   (`realm_dispatch/tests.rs`): публичного пути собрать realm runner'а без GPU нет. Тот же предел у
+   P6 `a_runner_write_lands_under_the_configured_roots` — он тоже in-crate.
+
+## Изменения контракта после ревью P1 (2026-10-06, решение оркестратора)
+
+Основание — независимое ревью `persistence/contract` @ `b6c419ca7` (блокеров нет). Исправляется до
+merge: это публичные типы, и после заморозки правка была бы ломающей.
+
+1. **Хранилище — одно на хост.** Определяется один раз из конфигурации запуска при старте хоста,
+   лежит в состоянии хоста `APP_RUNTIME`; все runner'ы и вторичные окна берут его оттуда.
+   Контрактный тест проверяет путь главной конфигурации.
+2. **`SaveStatus::ReadOnly(ReadOnlyReason)`**, `#[non_exhaustive] enum ReadOnlyReason { NewerVersion
+   { found: u32, supported: u32 }, LockUnsupported }`.
+   **`PersistError::Panicked { during: CodecStep }`**, `enum CodecStep { Encode, Decode }`.
+3. **`UiRealm::new(window, device_pixel_ratio, host: RealmHostServices<'_>)`**: wake, needs_redraw,
+   clipboard, storage, fonts и clock — поля одной структуры; `RealmServices::construct` берёт её же.
+   `#[expect(clippy::too_many_arguments)]` уходит.
+4. `PersistError::Storage` — `#[error(transparent)]` с `#[from]`; `trait Document: Sized + 'static`;
+   `StorageName::as_str(&self) -> &'static str`; `MemoryStorage`: один барьер коммитов за раз (второй
+   отказывается) или подсчёт — коммит и отмена только когда барьеров не осталось; фича `persist` в
+   `COMBOS` (`facade.rs`) и `FACADE_CATALOGS` (`lane_args.rs`); строка `persist` в списке
+   `flui-sdk/tests/surface.rs`; `load()` не обещает `Unpin` (документировать или обернуть).

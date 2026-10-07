@@ -5,7 +5,7 @@
 //! It mounts a root [`View`] (a widget tree) as the render-tree root, runs a
 //! build pass (reconciling and mounting the whole subtree's render objects),
 //! then drives a real headless frame and exposes the resulting render-node
-//! geometry. The tree is the root of a [`HeadlessRealm`](crate::HeadlessRealm):
+//! geometry. The tree is the root of a [`HeadlessHost`](crate::HeadlessHost):
 //! every frame is the realm's own `UiRealm::pump` on a manual clock, under
 //! the realm's root scopes (`GestureArenaScope`, `VsyncScope`, `FocusRoot`,
 //! `MediaQuery`), exactly as a runner drives it on screen. No GPU, no OS
@@ -64,9 +64,9 @@ use flui_view::element::InheritedElementAccess;
 use flui_widgets::{Align, ConstrainedBox, UnconstrainedBox};
 
 use self::host::WidgetHost;
-use crate::realm::HeadlessWindow;
+use crate::host::HeadlessWindow;
 
-/// A laid-out widget tree, mounted in a [`HeadlessRealm`](crate::HeadlessRealm)
+/// A laid-out widget tree, mounted in a [`HeadlessHost`](crate::HeadlessHost)
 /// so geometry can be queried after layout, and re-driven with
 /// [`LaidOut::pump`] / [`LaidOut::tick`] / [`LaidOut::pump_for`]. Every frame
 /// is the realm's own `UiRealm::pump`.
@@ -305,6 +305,26 @@ fn surface_for(constraints: &BoxConstraints) -> (u32, u32) {
 /// with `UnconstrainedBox`, so a `ListBody` or `Flex` does not see the
 /// clamped surface and trip "must have unlimited space along its main axis".
 pub fn lay_out(root: impl View, constraints: BoxConstraints) -> LaidOut {
+    mount_laid_out(root, constraints, None)
+}
+
+/// Like [`lay_out`], with `storage` as the realm's byte storage: the tree's
+/// widgets reach it through `LifecycleContext::storage`. Mounting a new tree
+/// over the same storage after dropping the first is how a test restarts an
+/// application.
+pub fn lay_out_with_storage(
+    root: impl View,
+    constraints: BoxConstraints,
+    storage: impl flui_platform_api::Storage,
+) -> LaidOut {
+    mount_laid_out(root, constraints, Some(Arc::new(storage)))
+}
+
+fn mount_laid_out(
+    root: impl View,
+    constraints: BoxConstraints,
+    storage: Option<Arc<dyn flui_platform_api::Storage>>,
+) -> LaidOut {
     let logical_root_type = root.view_type_id();
     let surface = surface_for(&constraints);
     let exact_surface =
@@ -327,7 +347,7 @@ pub fn lay_out(root: impl View, constraints: BoxConstraints) -> LaidOut {
         reapply_constraints,
         unconstrained_wrap,
     );
-    let host = WidgetHost::mount(wrapped, HeadlessWindow::new(surface.0, surface.1));
+    let host = WidgetHost::mount(wrapped, HeadlessWindow::new(surface.0, surface.1), storage);
     let pipeline_owner = host.pipeline().clone();
 
     LaidOut {
@@ -435,6 +455,30 @@ impl LaidOut {
         self.host.realm().enter(|_| callback())
     }
 
+    /// Close the tree's presentation for `reason`, as the host does once the
+    /// close is agreed: its lifecycle observers are told it is detached, its
+    /// held input is dropped, and later lifecycle updates are ignored. The
+    /// tree stays mounted until this `LaidOut` drops.
+    ///
+    /// Not yet the host's shared close delivery: `reason` is not consulted,
+    /// so a close guard's holds do not refuse it.
+    pub fn request_close(&self, reason: flui_view::CloseReason) {
+        let _ = reason;
+        self.host
+            .realm()
+            .enter(flui_runtime::ui_realm::UiRealm::stop_presentations);
+    }
+
+    /// End the session the tree runs in, as the operating system does at log
+    /// off or shut down: the presentation is closed for
+    /// [`CloseReason::SessionEnd`](flui_view::CloseReason::SessionEnd).
+    ///
+    /// Not yet the host's session end: nothing is flushed, and the close is
+    /// [`request_close`](Self::request_close)'s.
+    pub fn end_session(&self) {
+        self.request_close(flui_view::CloseReason::SessionEnd);
+    }
+
     /// Deliver an accessibility action to the node it addresses, as a platform
     /// adapter would, inside this tree's realm — where a widget's owner-local
     /// action handlers run.
@@ -480,7 +524,7 @@ impl LaidOut {
 
     /// The listener the realm registered on its window for actions assistive
     /// technology requests; see
-    /// [`HeadlessRealm::accessibility_action_listener`](crate::HeadlessRealm::accessibility_action_listener).
+    /// [`HeadlessHost::accessibility_action_listener`](crate::HeadlessHost::accessibility_action_listener).
     pub fn accessibility_action_listener(
         &self,
     ) -> Option<flui_semantics::platform::AccessibilityActionListener> {

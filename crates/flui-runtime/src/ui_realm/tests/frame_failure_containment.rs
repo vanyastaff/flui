@@ -32,6 +32,10 @@ enum SeenKind {
     RecoveredPanic {
         hook: flui_view::LifecycleHook,
     },
+    CallbackPanic {
+        message: PanicText,
+        internal_invariant: bool,
+    },
 }
 
 fn install_collecting_handler(realm: &UiRealm) -> Arc<StdMutex<Vec<SeenFailure>>> {
@@ -54,6 +58,13 @@ fn install_collecting_handler(realm: &UiRealm) -> Arc<StdMutex<Vec<SeenFailure>>
             FrameFailureKind::RecoveredPanic { hook, .. } => {
                 SeenKind::RecoveredPanic { hook: *hook }
             }
+            FrameFailureKind::CallbackPanic {
+                message,
+                internal_invariant,
+            } => SeenKind::CallbackPanic {
+                message: message.clone(),
+                internal_invariant: *internal_invariant,
+            },
         };
         sink.lock().expect("handler mutex").push(SeenFailure {
             presentation: report.address.presentation_id,
@@ -352,6 +363,7 @@ pub(crate) fn a_panicking_handler_during_a_pipeline_report_is_delivered_once_not
             FrameFailureKind::SegmentPanic { .. } => "segment_panic",
             FrameFailureKind::Pipeline { .. } => "pipeline",
             FrameFailureKind::RecoveredPanic { .. } => "recovered_panic",
+            FrameFailureKind::CallbackPanic { .. } => "callback_panic",
         });
         panic!("FrameFailureHandler — intentional embedder-bug test panic");
     })));
@@ -519,4 +531,44 @@ pub(crate) fn competing_opaque_frame_failures_keep_one_report_and_retry() {
 
 pub(crate) fn a_failed_handler_envelope_is_retained_through_realm_teardown() {
     opaque_frame_child("captures");
+}
+
+/// A callback panic the host contained reaches the registered handler as
+/// exactly one contained `CallbackPanic`, addressed to the presentation the
+/// host named, with the panic's text; the dropped-frame streak is untouched.
+#[test]
+#[ignore = "contract: a contained callback panic reaches the frame-failure handler"]
+fn a_contained_callback_panic_reports_once() {
+    let realm = UiRealm::for_test();
+    let seen = install_collecting_handler(&realm);
+    let address = flui_foundation::PresentationAddress {
+        realm_id: realm.realm_id(),
+        presentation_id: realm.presentation_id(),
+    };
+    let payload: Box<dyn std::any::Any + Send> = Box::new("tap handler — intentional test panic");
+
+    realm.report_contained_panic(address, &*payload);
+
+    let seen = seen.lock().expect("handler mutex");
+    assert_eq!(
+        seen.len(),
+        1,
+        "one contained callback panic is one report: {seen:?}"
+    );
+    assert_eq!(
+        seen[0],
+        SeenFailure {
+            presentation: address.presentation_id,
+            realm: address.realm_id,
+            disposition: FailureDisposition::Contained,
+            consecutive: 0,
+            kind: SeenKind::CallbackPanic {
+                message: crate::frame_failure::panic_text(
+                    realm.frame_failure_detail_for_test(),
+                    &*payload,
+                ),
+                internal_invariant: false,
+            },
+        }
+    );
 }

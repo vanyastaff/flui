@@ -124,7 +124,9 @@ The root `ARCHITECTURE.md` is the facade's. `docs/architecture.md` describes the
   point several worktrees at one `CARGO_TARGET_DIR` (Cargo then links another worktree's
   sources — `docs/testing.md`, "One target directory per checkout"). Run
   `cargo xtask worktree prune` after a merge. Review someone else's PR from your own directory
-  (`gh pr diff`/`checkout`), not inside their worktree.
+  (`gh pr diff`/`checkout`), not inside their worktree. An agent worktree (including Claude
+  Code's under `.claude/worktrees/`) can reach 30–60 GB: a read-only agent needs none, and the
+  rest follow `docs/testing.md`, "Bounding disk use of agent worktrees".
 - **Commits** `area: what changed`, one logical change each. **PRs** are one task each, with
   `cargo xtask check-changed` green first; CI is the proof. Review your own branch against
   `main` before asking for review. CI runs Linux (and wasm32) only; Windows, macOS, Android and
@@ -180,7 +182,28 @@ touches genuinely process-global state (the global `tracing` subscriber `flui-lo
 global ID counter such as `flui-foundation`'s key counters) — scope a lock to that test module
 rather than serializing the suite. A docs-only change needs only `cargo xtask checks`, which
 builds xtask and not the workspace. `rust-toolchain.toml` is the toolchain's source of truth;
-pre-1.0 the MSRV tracks latest stable.
+pre-1.0 the MSRV tracks latest stable. xtask commands that build or test the workspace
+(`check-changed`, `test`, `ci`, `gate`, `gpu-test`, …) queue behind one lock for the user on this
+machine; `FLUI_XTASK_NO_LOCK=1` opts out.
+
+### Running checks without fighting other runs
+
+Several agents and checkouts often share one machine. Every redundant run slows down every other
+run, and an oversubscribed host makes slow tests look hung.
+
+- **While iterating, test only what you touched:** `cargo nextest run -p <crate> [<filter>]`.
+  Run `cargo xtask check-changed` once, as the last step before a PR. It already runs fmt, clippy
+  and nextest, so don't also run them by hand.
+- **Don't re-run a gate that passed** unless the code changed since. Quote the earlier result
+  instead.
+- **One heavy run at a time per host.** `check-changed`, `test`, `ci`, `gate` and `gpu-test` take a
+  host-wide lock and queue behind each other. Don't start a second one in the background to "save
+  time", and don't kill a queued run.
+- **Cap parallelism on a shared host:** `CARGO_BUILD_JOBS=6` and `NEXTEST_TEST_THREADS=4`. GPU
+  readback suites stay at one test thread. In nextest, `-j` sets test threads; use `--build-jobs`
+  for the build.
+- **A test past its `slow-timeout` on a loaded host is not a hang by default.** Before calling it
+  a bug, re-run that one test alone (`--test-threads 1`) and report how long it took.
 
 ## What the compiler and gates enforce
 
@@ -213,7 +236,7 @@ the history.
 |--------|---------------|
 | **Render object** (`RenderBox`/`RenderSliver`) | Implement in `flui-objects` (protocol in `flui-rendering`) → register in `RENDER_OBJECT_TYPES` → `harness_*` tests in `render_object_harness` → record a non-obvious decision in the crate's `## Mapping decisions` |
 | **Widget** | `View`/`ViewState` in `flui-widgets` or the facade, backed by a render object → `SemanticsConfiguration` for assistive tech → a test that fails without it |
-| **Text-editing widget** | Implement `flui_platform_api::TextStore` (embed a `LockArbiter` and pass it the `CommitGate` that `set_commit_gate` receives; the store keeps no transaction flag of its own), attach it through `TextInputHandle::attach` while focused, which installs the presentation's frame-transaction gate → pass `flui_testing::text_store_kit::assert_conforms` (ADR-0090) |
+| **Text-editing widget** | Implement `flui_platform_api::TextStore` (embed a `LockArbiter` and pass it the `CommitGate` that `set_commit_gate` receives; the store keeps no transaction flag of its own), attach it through `TextInputHandle::attach` while focused, which installs the presentation's frame-transaction gate → run owner code through `OwnerCalls` → pass `flui_testing::text_store_kit::assert_conforms` (ADR-0090, ADR-0142) |
 | **Platform capability** (a new handle) | Trait in `flui-platform-api`, backend in `flui-platform` with no platform types leaking out → a method on `LifecycleContext`, not `BuildContext`, so `build` cannot reach it → a test that fails without it → ADR if it changes a cross-crate contract |
 | **Crate** | A workspace `members` entry and `[package.metadata.flui]` `tier`, `tier-kind`, `order` and `layer = N` (names: root `[workspace.metadata.flui] tiers` and `layers`); `cargo xtask workspace` checks the rest. Why a crate must be a layer: `docs/crates.md` "Adding a New Crate", [ADR-0041](docs/adr/ADR-0041-workspace-topology-contract.md) |
 | **Official package** | Under `packages/<name>/`, `tier = "pkg"`, `tier-kind = "official"`, no `edge-exceptions`; its only FLUI normal dependency is `flui-sdk` (plus the contract crates), and its code names the framework as `flui_sdk::…` (the view, inherited and animation derives resolve through it; `Diagnosticable`'s has no SDK path yet). An item the SDK lacks is added to `flui-sdk` by ADR-0088 §4, with a line in its `tests/surface.rs` pinned list |
@@ -275,10 +298,32 @@ A green gate proves the gates pass, not that the behavior exists. So a change is
 
 Pull requests are reviewed by Codex, which reads this section; a human reviewer can use it the
 same way. fmt, clippy (pedantic, `unwrap_used`, the lints in the table above), rustdoc and the
-script gates already run in CI, so style and anything they catch is not worth a comment.
+script gates already run in CI, so formatting and anything they catch is not worth a comment.
 
 - **What to report:** defects that would block the merge, each with a concrete failure
   scenario; without one, it is a hypothesis.
+- **Code quality is a merge criterion, not style.** The bar is code an experienced Rust developer
+  is not embarrassed by. Report, with a concrete better shape:
+  - **Simplicity.** A second abstraction layer, generic parameter or trait with one user. A
+    builder, newtype or enum is fine when it removes a mistake class.
+  - **Ownership.** Moving instead of cloning; `Rc`/`Arc` only where ownership is really shared;
+    `RefCell`/`Mutex` only where no `&mut` path exists. No borrow held across user code.
+  - **Lifetimes and borrowing.** A borrowed view (`&str`, `&[T]`, `impl Iterator`) instead of an
+    owned copy, with no lifetime gymnastics a reader has to decode.
+  - **Generics, traits and GATs.** Static dispatch where the type is known, `dyn` where a
+    heterogeneous collection or an object boundary needs it. Associated types and GATs over
+    parameter soup. Sealed traits for closed sets.
+  - **Types over conventions.** Illegal states unrepresentable (enums over flags plus options,
+    typestate where it pays). Errors as `thiserror` enums a caller can match.
+  - **Current stable Rust** (the toolchain in `rust-toolchain.toml`): let-chains, `let`-`else`,
+    async closures, return-position `impl Trait` in traits, precise capturing, trait upcasting
+    and current std APIs (`get_disjoint_mut`, `LazyLock`, …) where they make the code simpler.
+    Check the release notes of the pinned version rather than recalling them.
+  - **Conventions.** The Rust API Guidelines: naming, `as_`/`to_`/`into_`, getters without
+    `get_`, `From`/`TryFrom`/`Display`/`Default` where they apply, `#[must_use]`,
+    `#[non_exhaustive]` on public enums that will grow.
+  - **Architecture.** One responsibility per module, dependencies down the layers, no
+    behavior-free pass-through types.
 - **Tests:** for each behavior change, find the test that covers it and ask whether it would fail
   with the production hunk reverted. Tests here have passed both ways by reimplementing the
   predicate they pin, asserting that a widget exists rather than that it was laid out or

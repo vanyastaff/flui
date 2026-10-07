@@ -157,22 +157,27 @@ impl TextFormFieldCore {
             .unwrap_or_else(|| TextEditingController::with_text(config.initial_value.clone()));
         let handle = config.handle.clone().unwrap_or_default();
         Self {
-            initial_value: controller.text(),
+            initial_value: controller.committed_text(),
             controller,
             handle,
         }
     }
 
-    /// Follow a reconfiguration: a new caller controller is
-    /// edited from now on; dropping the caller's controller moves the text
-    /// into one the field owns; a new handle takes the field over.
+    /// Follow a reconfiguration: a new caller controller is edited from now
+    /// on; dropping the caller's controller moves its committed text into one
+    /// the field owns; a new handle takes the field over.
     pub fn update(&mut self, old: &TextFormFieldConfig, new: &TextFormFieldConfig) {
         match (&old.controller, &new.controller) {
             (_, Some(controller)) if !controller.is_same_controller(&self.controller) => {
                 self.controller = controller.clone();
             }
             (Some(_), None) => {
-                self.controller = TextEditingController::with_text(self.controller.text());
+                // The committed text, which is the field's value (ADR-0090):
+                // a preedit stays with the caller's controller and the input
+                // method composing in it, and is never committed by a
+                // reconfiguration.
+                self.controller =
+                    TextEditingController::with_text(self.controller.committed_text());
             }
             _ => {}
         }
@@ -210,9 +215,28 @@ impl TextFormFieldCore {
         .enabled(config.enabled)
         .autovalidate_mode(config.autovalidate_mode)
         .handle(self.handle.clone())
+        // The field's value is the committed text (ADR-0090): what an input
+        // method is still composing is neither validated nor saved, and a
+        // value the controller already holds is not written back over the
+        // composition.
         .value_binding(
-            Rc::new(move |value: &String| sink.set_text(value.clone())),
-            Rc::new(move || source.text()),
+            Rc::new(move |value: &String| {
+                if sink.committed_text() == *value {
+                    return;
+                }
+                if sink.text() == *value {
+                    // The text shown is already the value, but a composition
+                    // stands for other text (a reconversion): ending it makes
+                    // the shown text committed. `set_text` would see an equal
+                    // buffer and leave the composition, and it must stay a
+                    // no-op there for an owner that re-sets the same text on
+                    // every build while the user composes.
+                    sink.end_composition();
+                } else {
+                    sink.set_text(value.clone());
+                }
+            }),
+            Rc::new(move || source.committed_text()),
         );
         field.validator.clone_from(&config.validator);
         field.on_saved.clone_from(&config.on_saved);

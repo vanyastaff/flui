@@ -180,6 +180,10 @@ pub mod platforms;
 #[cfg(any(test, target_os = "android"))]
 mod redraw_poll;
 pub mod shared;
+#[cfg(feature = "storage")]
+pub mod storage;
+#[cfg(all(test, feature = "storage", not(target_arch = "wasm32")))]
+mod table_test;
 pub mod task;
 pub mod traits;
 pub mod window;
@@ -234,9 +238,9 @@ pub use traits::{
     CursorError, DesktopCapabilities, DispatchEventResult, DisplayId, HostWindow,
     MobileCapabilities, PathPromptOptions, Platform, PlatformAccessibility, PlatformCapabilities,
     PlatformDisplay, PlatformExecutor, PlatformHaptics, PlatformReadyCallback, PlatformTextInput,
-    PlatformWindow, WebCapabilities, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
-    WindowEvent, WindowExecutionState, WindowId, WindowMode, WindowOptions, WindowReveal,
-    WindowShowError,
+    PlatformWindow, SessionEndAnswer, SessionEndPhase, WebCapabilities, WindowAppearance,
+    WindowBackgroundAppearance, WindowBounds, WindowEvent, WindowExecutionState, WindowId,
+    WindowMode, WindowOptions, WindowReveal, WindowShowError,
 };
 // The owner-thread capability (ADR-0039 §1): minted only by a backend,
 // handed to `on_ready`, never re-exported with a public minting seam.

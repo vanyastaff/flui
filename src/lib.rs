@@ -70,6 +70,7 @@ await its returned request or poll `try_result` to obtain the window result."
 //! | `material` | off | `flui::material` and the Material half of [`prelude`] |
 //! | `cupertino` | off | `flui::cupertino` |
 //! | `localizations` | off | nothing; deprecated, kept so existing feature lists resolve |
+//! | `persist` | off | `AppConfig::with_storage_dir`: storage under the per-user data directories for [`view::persist`] documents |
 //! | `hot-reload` | off | re-exports `flui-hot-reload` as `hot_reload`; install its hook with `AppConfig::with_dev_reload` |
 //!
 //! Nothing is on by default (ADR-0088 §6): an application names the catalog it
@@ -239,7 +240,7 @@ pub use flui_app::app::open_secondary_window;
 /// Open an additional top-level window with mounted widget content.
 ///
 /// Desktop only. Call on the owner thread while its event loop is live, with
-/// [`WindowPolicy::SeparateRealms`]. `SharedRealm` is refused with
+/// [`WindowPolicy::Isolated`]. `WindowPolicy::Shared` is refused with
 /// [`AppWindowError::UnsupportedPolicy`]. As with [`open_secondary_window`],
 /// success can mean admission for deferred creation rather than completed
 /// installation; see [`app::app::open_window`] for the error contract.

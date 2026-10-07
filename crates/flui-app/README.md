@@ -73,8 +73,8 @@ realm-owned now — `AppBinding` is deleted, not slimmed, and no test needs a
 serialization guard against shared binding state any more (each test
 constructs its own independent realm). `AppRuntime` now hosts any number of
 `RealmId`-keyed realms, and each `UiRealm` owns an insertion-ordered
-presentation forest. `WindowPolicy::SeparateRealms` installs a new realm for a
-secondary window; `WindowPolicy::SharedRealm` installs another presentation in
+presentation forest. `WindowPolicy::Isolated` installs a new realm for a
+secondary window; `WindowPolicy::Shared` installs another presentation in
 the first hosted realm. The remaining hosting gap is content and rendering:
 `open_secondary_window` mounts no root widget, constructs no GPU renderer, and
 registers no frame callback for the new window. Production multi-presentation

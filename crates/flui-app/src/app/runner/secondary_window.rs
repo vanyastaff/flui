@@ -91,18 +91,18 @@ use flui_view::View;
 /// `on_ready` — e.g. from a `window.on_input`/`window.on_should_close`
 /// callback the FIRST window already registered).
 ///
-/// # [`WindowPolicy::SeparateRealms`]
+/// # [`WindowPolicy::Isolated`]
 ///
 /// Opens a fully independent second realm: its own `UiRealm`, its own
 /// `GlobalKeyScope`, its own `UpdateScheduler` — installed via
 /// `install_realm_alongside`, never `install_platform_realm`'s displacing
-/// legacy path. `two_realms_via_separate_windows_policy_share_nothing` pins
+/// legacy path. `two_realms_via_isolated_policy_share_nothing` pins
 /// the "share nothing but `SharedEngineServices`" guarantee this policy
 /// claims. Input/close/should-close/focus/visibility/resize dispatch are
 /// wired and addressed to this new realm exactly like the FIRST window's
 /// own dispatch.
 ///
-/// # [`WindowPolicy::SharedRealm`]
+/// # [`WindowPolicy::Shared`]
 ///
 /// Installs a second PRESENTATION into the FIRST realm hosted on this
 /// thread (via `install_presentation_alongside`) — real forest membership,
@@ -139,7 +139,7 @@ use flui_view::View;
 ///
 /// # Errors
 ///
-/// Window creation ([`AppWindowError::Native`]) and (`SeparateRealms` only)
+/// Window creation ([`AppWindowError::Native`]) and (`WindowPolicy::Isolated` only)
 /// `UiRealm` construction ([`AppWindowError::Mount`]) surface as `Err`
 /// exactly like `bootstrap_desktop`'s own first-window failures — this call
 /// does not tear down or exit the loop on failure, unlike a first-window
@@ -147,7 +147,7 @@ use flui_view::View;
 /// loop): the caller decides what a failed secondary-window open means for
 /// their app. A call from a thread with no running loop is
 /// [`AppWindowError::NoOwnerLoop`]; one made while the application is
-/// quitting is [`AppWindowError::AdmissionClosed`]; `SharedRealm` with no
+/// quitting is [`AppWindowError::AdmissionClosed`]; `WindowPolicy::Shared` with no
 /// realm hosted on this thread yet is [`AppWindowError::UnsupportedPolicy`].
 #[cfg(all(
     not(target_os = "android"),
@@ -174,9 +174,9 @@ pub fn open_secondary_window(
 ///
 /// # Policy
 ///
-/// `WindowPolicy::SeparateRealms` is the only policy that admits content:
+/// `WindowPolicy::Isolated` is the only policy that admits content:
 /// each such window owns its own `UiRealm`, its own widget tree, its own
-/// raster lane. `WindowPolicy::SharedRealm` currently refuses content at
+/// raster lane. `WindowPolicy::Shared` currently refuses content at
 /// admission with an `Err` — the realm's single-raster-lane contract would
 /// have to be relaxed before a presentation inside one shared realm could
 /// own its own renderer, and that relaxation is deliberately not smuggled
@@ -187,7 +187,7 @@ pub fn open_secondary_window(
 /// The same as [`open_secondary_window`], plus the renderer-initialization
 /// failures `install_desktop_window` can produce: GPU init
 /// ([`AppWindowError::Renderer`]), mount ([`AppWindowError::Mount`]).
-/// `SharedRealm` is refused as [`AppWindowError::UnsupportedPolicy`].
+/// `WindowPolicy::Shared` is refused as [`AppWindowError::UnsupportedPolicy`].
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
@@ -540,7 +540,7 @@ fn secondary_install_admitted(identity: &Arc<()>) -> bool {
 /// requires of its own callers, and for the identical reason:
 /// `finish_open_secondary_window` calls `install_presentation_alongside`/
 /// `install_realm_alongside`, both of which need to actually apply rather
-/// than defer (`SharedRealm`'s `install_presentation_alongside` has no
+/// than defer (`WindowPolicy::Shared`'s `install_presentation_alongside` has no
 /// defer-to-idle queue of its own, so calling this before the checkout
 /// clears would just reproduce the same `DispatchInFlight` refusal one level
 /// up).
@@ -689,12 +689,12 @@ pub(super) fn open_secondary_window_impl(
         return Err(AppWindowError::AdmissionClosed);
     }
 
-    let shared_with = if policy == WindowPolicy::SharedRealm {
+    let shared_with = if policy == WindowPolicy::Shared {
         Some(
             APP_RUNTIME
                 .with(|slot| slot.borrow().realms.iter().next().map(|(id, _)| *id))
                 .ok_or(AppWindowError::UnsupportedPolicy {
-                    reason: "SharedRealm requires a realm already hosted on this thread to \
+                    reason: "WindowPolicy::Shared requires a realm already hosted on this thread to \
                              share with",
                 })?,
         )
@@ -735,7 +735,7 @@ pub(super) fn open_secondary_window_impl(
 /// the bare-shell `finish_open_secondary_window` — the realm owns a widget
 /// tree, a GPU raster lane, and a frame pump.
 ///
-/// `SharedRealm` is refused at admission, before any window creation
+/// `WindowPolicy::Shared` is refused at admission, before any window creation
 /// work runs: the realm's raster lane and content renderer are per-realm,
 /// not per-presentation today, so a shared realm presenting N windows
 /// with content would need a lane-per-presentation redesign before this
@@ -755,9 +755,9 @@ where
 {
     use flui_platform::{WindowOpen, WindowOptions};
 
-    if policy == WindowPolicy::SharedRealm {
+    if policy == WindowPolicy::Shared {
         return Err(AppWindowError::UnsupportedPolicy {
-            reason: "open_window with content requires WindowPolicy::SeparateRealms; SharedRealm \
+            reason: "open_window with content requires WindowPolicy::Isolated; WindowPolicy::Shared \
                      would imply a lane-per-presentation raster contract the realm does not \
                      provide today",
         });
@@ -939,7 +939,7 @@ fn finish_open_secondary_window(
     } = config;
 
     let realm_dispatch = match policy {
-        WindowPolicy::SharedRealm => {
+        WindowPolicy::Shared => {
             // Failure detail is realm-scoped. A secondary presentation
             // inherits the already-hosted realm's policy; its window config
             // must not mutate that policy for existing siblings.
@@ -957,7 +957,7 @@ fn finish_open_secondary_window(
                     })
                 })
                 .ok_or(AppWindowError::UnsupportedPolicy {
-                    reason: "WindowPolicy::SharedRealm requires an already-hosted realm to share \
+                    reason: "WindowPolicy::Shared requires an already-hosted realm to share \
                              with; none is installed on this thread",
                 })?;
             install_presentation_alongside(
@@ -966,7 +966,7 @@ fn finish_open_secondary_window(
             )
             .map_err(mount_error)?
         }
-        WindowPolicy::SeparateRealms => {
+        WindowPolicy::Isolated => {
             let scale_factor = window.scale_factor();
             let wake = runtime_wake_callback();
             let ui_realm = super::host::build_runtime_realm(
@@ -1012,8 +1012,8 @@ fn finish_open_secondary_window(
 
     // Window close -> close THIS window's own presentation, exactly like
     // `run_desktop`'s primary window (see `close_this_window`'s own doc):
-    // `SeparateRealms` reduces to a full uninstall of this new, independent
-    // realm (its sole presentation); `SharedRealm` removes just this
+    // `WindowPolicy::Isolated` reduces to a full uninstall of this new, independent
+    // realm (its sole presentation); `WindowPolicy::Shared` removes just this
     // presentation from the shared realm's forest while the primary (and
     // any other sibling) survives untouched -- never a blind
     // `request_realm_uninstall`, which would tear down the WHOLE shared

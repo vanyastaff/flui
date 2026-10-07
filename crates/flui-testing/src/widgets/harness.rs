@@ -10,8 +10,10 @@
 //! sample-interval policy as the canonical harness via [`PointerContacts`] /
 //! [`POINTER_SAMPLE_INTERVAL`].
 //!
-//! [`mount_with_ime`] gives the realm's window a recording text input, so the
-//! realm's presentation owns the IME session and its frames are text-store
+//! [`mount_with_ime`] gives the realm's window a recording input-method host
+//! (pull-model, as on Windows) and [`mount_with_push_ime`] a recording push
+//! text input (as with winit), so the realm's presentation owns the IME
+//! session and its frames are text-store
 //! transactions exactly as on screen: commits close for the frame's
 //! duration, and the grants queued meanwhile run once it returns.
 
@@ -36,7 +38,7 @@ use flui_widgets::Align;
 
 use super::host::WidgetHost;
 use super::{POINTER_SAMPLE_INTERVAL, PointerContacts};
-use crate::realm::HeadlessWindow;
+use crate::host::HeadlessWindow;
 
 /// The surface every [`Harness`] mounts into.
 const SURFACE: (u32, u32) = (800, 600);
@@ -68,11 +70,24 @@ pub fn mount(root: impl View) -> Harness {
     mount_in(root, HeadlessWindow::new(SURFACE.0, SURFACE.1))
 }
 
-/// [`mount`], with a window that offers a recording text input: the realm's
-/// presentation owns the IME session, [`Harness::dispatch_ime`] delivers
-/// platform IME events to it, and [`Harness::cursor_area_calls`] /
-/// [`Harness::ime_allowed_calls`] read back what it asked of the platform.
+/// [`mount`], with a window whose input method pulls from the focused field,
+/// as the Win32 text services do (ADR-0135): the realm's presentation tells
+/// a recording host which field's store takes input
+/// ([`Harness::active_text_store`], [`Harness::store_host_calls`]), and
+/// [`Harness::dispatch_ime`] still delivers push events to the active field.
 pub fn mount_with_ime(root: impl View) -> Harness {
+    mount_in(
+        root,
+        HeadlessWindow::new(SURFACE.0, SURFACE.1).with_text_store_host(),
+    )
+}
+
+/// [`mount`], with a window that offers a recording push-model text input,
+/// as winit does: the realm's presentation enables the IME and reports the
+/// candidate area ([`Harness::cursor_area_calls`],
+/// [`Harness::ime_allowed_calls`]), and [`Harness::dispatch_ime`] delivers
+/// platform IME events to it.
+pub fn mount_with_push_ime(root: impl View) -> Harness {
     mount_in(
         root,
         HeadlessWindow::new(SURFACE.0, SURFACE.1).with_text_input(),
@@ -81,7 +96,7 @@ pub fn mount_with_ime(root: impl View) -> Harness {
 
 fn mount_in(root: impl View, window: HeadlessWindow) -> Harness {
     let logical_root_type = root.view_type_id();
-    let host = WidgetHost::mount(aligned(root), window);
+    let host = WidgetHost::mount(aligned(root), window, None);
     let pipeline_owner = host.pipeline().clone();
     Harness {
         host,
@@ -212,14 +227,16 @@ impl Harness {
     ///
     /// # Panics
     ///
-    /// Panics if the harness was mounted with [`mount`] rather than
-    /// [`mount_with_ime`]: that window offers no text input, so there is
+    /// Panics unless the harness was mounted with [`mount_with_push_ime`]:
+    /// no other window offers a push text input, so there is
     /// nothing to record, and a test reading this without it is testing the
     /// wrong harness.
     pub fn cursor_area_calls(&self) -> Vec<Bounds<f64>> {
-        self.host.realm().window().ime_cursor_areas().expect(
-            "cursor_area_calls requires a window with a text input (mount_with_ime, not mount)",
-        )
+        self.host
+            .realm()
+            .window()
+            .ime_cursor_areas()
+            .expect("cursor_area_calls requires a window with a text input (mount_with_push_ime)")
     }
 
     /// Platform IME enable/disable calls in delivery order.
@@ -232,7 +249,7 @@ impl Harness {
             .realm()
             .window()
             .ime_allowed_calls()
-            .expect("ime_allowed_calls requires mount_with_ime")
+            .expect("ime_allowed_calls requires mount_with_push_ime")
     }
 
     /// Deliver an IME event to the realm's primary presentation, as the
@@ -243,16 +260,41 @@ impl Harness {
             .dispatch(PlatformInput::Ime(event.clone()));
     }
 
-    /// Number of active clients in the realm's presentation-local registry
-    /// (zero or one).
+    /// Number of fields the realm's input-method host serves (zero or one).
+    ///
+    /// # Panics
+    ///
+    /// As [`Self::store_host_calls`].
     pub fn active_ime_clients(&self) -> usize {
         usize::from(self.active_text_store().is_some())
     }
 
-    /// The text store of the field attached as the IME client, if any: the
-    /// surface a platform input method pulls from (ADR-0090).
+    /// The text store the realm's presentation last told its host to serve:
+    /// the surface a platform input method pulls from (ADR-0090).
+    ///
+    /// # Panics
+    ///
+    /// As [`Self::store_host_calls`].
     pub fn active_text_store(&self) -> Option<Rc<dyn flui_platform_api::TextStore>> {
-        self.host.realm().realm().active_text_store()
+        self.store_host().focused_store()
+    }
+
+    /// Every call the realm's presentation made on its input-method host, in
+    /// order.
+    ///
+    /// # Panics
+    ///
+    /// Panics unless the harness was mounted with [`mount_with_ime`]: no
+    /// other window offers a host.
+    pub fn store_host_calls(&self) -> Vec<crate::StoreHostCall> {
+        self.store_host().calls()
+    }
+
+    fn store_host(&self) -> &Rc<crate::RecordingTextStoreHost> {
+        self.host
+            .realm()
+            .text_store_host()
+            .expect("the input-method host requires mount_with_ime")
     }
 
     /// The root element id.

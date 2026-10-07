@@ -97,3 +97,4 @@
 | ADR-0139 | focus-keyboard | Pinned lazy children |
 | ADR-0140 | focus-keyboard | Key-press records, input modality and navigation keys |
 | ADR-0141 | authoring-styles | (резерв) |
+| Тяжёлые команды xtask (`check-changed`, `test`, `ci`, `gate`, `gpu-test`) берут общий для хоста файловый замок (`std::fs::File::lock`) и ждут в очереди с понятным сообщением; протокол запуска проверок в AGENTS.md | на хосте шли 5 параллельных `check-changed`, тест `worktree_contract` выглядел зависшим | в работе (`xtask/heavy-run-lock`) |

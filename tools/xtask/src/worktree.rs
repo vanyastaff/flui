@@ -69,6 +69,17 @@ pub(crate) struct WorktreeArgs {
     action: Action,
 }
 
+impl WorktreeArgs {
+    /// Whether this action deletes checkouts and their `target/` directories,
+    /// which a build running in one of them would lose mid-run.
+    pub(crate) fn deletes(&self) -> bool {
+        match self.action {
+            Action::Prune { dry_run } => !dry_run,
+            Action::New { .. } | Action::List => false,
+        }
+    }
+}
+
 #[derive(Debug, clap::Subcommand)]
 enum Action {
     /// Create branch `<area>/<slug>` from origin/main at `.worktrees/<slug>` in the main checkout.

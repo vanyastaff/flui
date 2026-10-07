@@ -45,10 +45,14 @@ pub use flui_semantics::platform::{
     AccessibilityActionListener, AccessibilityActivationListener, PlatformAccessibility,
 };
 pub use host_window::HostWindow;
+pub(crate) use host_window::OwnerThreadToken;
 // Re-export keyboard-types for convenience
 pub use keyboard_types::NamedKey;
 pub use owner::{
     OpenWindowError, OwnerPlatform, PendingWindow, PlatformProxy, ProxySendError, SharedPlatform,
     WaitError, WakeRegistrationError, WindowOpen,
 };
-pub use platform::{PathPromptOptions, Platform, PlatformExecutor, PlatformReadyCallback};
+pub use platform::{
+    PathPromptOptions, Platform, PlatformExecutor, PlatformReadyCallback, SessionEndAnswer,
+    SessionEndPhase,
+};

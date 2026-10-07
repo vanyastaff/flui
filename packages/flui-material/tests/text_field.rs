@@ -33,7 +33,7 @@ use crate::common;
 use std::rc::Rc;
 
 use common::{lay_out, tight};
-use flui_material::{TextField, Theme, ThemeData};
+use flui_material::{InputDecoration, TextField, Theme, ThemeData};
 use flui_sdk::interaction::FocusNode;
 use flui_sdk::widgets::TextEditingController;
 
@@ -78,9 +78,13 @@ pub fn tapping_the_decorated_area_focuses_the_field_and_reaches_the_decorator() 
     );
 
     // A real down+up inside the decorated area — not a direct
-    // `FocusManager::request_focus` call.
-    laid.dispatch_pointer_down(150.0, 50.0);
-    laid.dispatch_pointer_up(150.0, 50.0);
+    // `FocusManager::request_focus` call. The container keeps its content
+    // height inside the tight parent, so the tap aims at its own centre.
+    let origin = laid.absolute_offset(decorated_box);
+    let size = laid.size(decorated_box);
+    let (x, y) = (origin.dx + size.width / 2.0, origin.dy + size.height / 2.0);
+    laid.dispatch_pointer_down(x, y);
+    laid.dispatch_pointer_up(x, y);
     laid.tick();
 
     let focused = laid
@@ -148,3 +152,95 @@ pub fn tapping_the_decorated_area_focuses_the_field_and_reaches_the_decorator() 
 // ============================================================================
 // Parity anchor — "TextField errorText trumps helperText" (text_field_test.dart, tag 3.44.0)
 // ============================================================================
+
+// ============================================================================
+// Supporting line — below the indicator, outside the container
+// ============================================================================
+
+/// The error line sits below the active indicator, outside the decorated
+/// container: its top is the M3 4dp gap below the container's bottom edge
+/// (where the indicator is drawn), it starts where the content starts, the
+/// field's content stays above the indicator, and a tap on the error line is
+/// not a tap on the field.
+///
+/// Fails if the error line is laid out inside the container: its top is
+/// then above the indicator, and the container's tap target covers it.
+pub fn error_line_sits_below_the_indicator_outside_the_tap_target() {
+    let focus_node = FocusNode::with_debug_label("error-line");
+    let decoration = InputDecoration {
+        error_text: Some("Enter a title".to_owned()),
+        filled: true,
+        ..InputDecoration::default()
+    };
+
+    let mut laid = lay_out(
+        Theme::new(
+            ThemeData::light(),
+            TextField::new(TextEditingController::new())
+                .decoration(decoration)
+                .focus_node(Rc::clone(&focus_node)),
+        ),
+        tight(300.0, 150.0),
+    );
+
+    let container = laid.find_by_render_type("RenderDecoratedBox");
+    let container_origin = laid.absolute_offset(container);
+    let container_size = laid.size(container);
+    // The indicator is the container's bottom border, so it ends at the
+    // container's bottom edge; an unfocused error indicator is 1dp wide.
+    let indicator_bottom = container_origin.dy + container_size.height;
+    let indicator_top = indicator_bottom - 1.0;
+
+    let content = laid.find_by_render_type("RenderEditable");
+    let content_origin = laid.absolute_offset(content);
+    let content_bottom = content_origin.dy + laid.size(content).height;
+    assert!(
+        content_bottom <= indicator_top,
+        "the content must stay above the indicator: content bottom {content_bottom}, \
+         indicator top {indicator_top}"
+    );
+
+    let error = laid
+        .find_text("Enter a title")
+        .expect("the error line renders");
+    let error_origin = laid.absolute_offset(error);
+    let error_size = laid.size(error);
+    assert!(
+        (error_origin.dy - (indicator_bottom + 4.0)).abs() < 1e-9,
+        "the error line must start 4dp below the indicator: error top {}, indicator bottom \
+         {indicator_bottom}",
+        error_origin.dy
+    );
+    assert!(
+        (error_origin.dx - content_origin.dx).abs() < 1e-9,
+        "the error line must start where the content starts: error left {}, content left {}",
+        error_origin.dx,
+        content_origin.dx
+    );
+
+    // A tap on the error line does not focus the field; a tap on the
+    // container does.
+    let (error_x, error_y) = (
+        error_origin.dx + error_size.width / 2.0,
+        error_origin.dy + error_size.height / 2.0,
+    );
+    laid.dispatch_pointer_down(error_x, error_y);
+    laid.dispatch_pointer_up(error_x, error_y);
+    laid.tick();
+    assert!(
+        !focus_node.has_focus(),
+        "a tap on the error line must not focus the field"
+    );
+
+    let (container_x, container_y) = (
+        container_origin.dx + container_size.width / 2.0,
+        container_origin.dy + container_size.height / 2.0,
+    );
+    laid.dispatch_pointer_down(container_x, container_y);
+    laid.dispatch_pointer_up(container_x, container_y);
+    laid.tick();
+    assert!(
+        focus_node.has_focus(),
+        "a tap on the container must focus the field"
+    );
+}

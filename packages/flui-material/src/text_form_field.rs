@@ -3,7 +3,9 @@
 //! The field's error reaches the decoration's error line
 //! (`decoration.copyWith(errorText: field.errorText)`), a user edit is the
 //! field's `didChange`, and a reset writes the initial text back into the
-//! controller. `flui_sdk::widgets::RawTextFormField` is the theme-free sibling;
+//! controller. The field's value is the controller's committed text: what an
+//! input method is still composing is neither validated nor saved (ADR-0090).
+//! `flui_sdk::widgets::RawTextFormField` is the theme-free sibling;
 //! both share `flui_sdk::widgets::__private::TextFormFieldCore`, and this type
 //! supplies only the Material input.
 //!

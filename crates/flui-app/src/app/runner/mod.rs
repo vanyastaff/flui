@@ -76,17 +76,29 @@ pub use secondary_window::open_window;
 use web::run_web;
 
 /// The presentation window for a freshly opened host window: the window
-/// itself, upcast to the contract the realm drives, and the accessibility
-/// bridge its backend fixed when it built it.
+/// itself, upcast to the contract the realm drives, the accessibility
+/// bridge its backend fixed when it built it, and its text-store host when
+/// the backend's input methods pull from the field (ADR-0135).
 ///
 /// The one place the runner turns an `open_window` result into what a realm
-/// constructor takes. Reading the bridge here, once, is sound because every
-/// backend sets it at construction and never swaps it.
+/// constructor takes. Reading the bridge and the host here, once, is sound
+/// because every backend sets both at construction and never swaps them.
+/// The host is owner-thread state, so it is read through the loop's
+/// [`OwnerPlatform`](flui_platform::OwnerPlatform); without one installed
+/// (no loop on this thread) the window has none.
 pub(crate) fn presentation_window(
     host: std::sync::Arc<dyn flui_platform::traits::HostWindow>,
 ) -> crate::app::presentation::PresentationWindow {
     let accessibility = host.accessibility();
+    let text_store_host = text_store_host_of(&host);
     crate::app::presentation::PresentationWindow::new(host, accessibility)
+        .with_text_store_host(text_store_host)
+}
+
+fn text_store_host_of(
+    window: &std::sync::Arc<dyn flui_platform::traits::HostWindow>,
+) -> Option<std::rc::Rc<dyn flui_platform_api::TextStoreHost>> {
+    host::with_owner_platform(|owner| owner.text_store_host(window)).flatten()
 }
 
 /// Wire one presentation into the close-request seam (issue #558):
@@ -142,7 +154,7 @@ pub(crate) fn install_close_request_wiring(
 
     let consulting = std::sync::Arc::clone(&router);
     window.on_should_close(Box::new(move || {
-        let response = consulting.consult(address);
+        let response = consulting.consult(address, crate::app::close_request::CloseReason::User);
         tracing::debug!(?address, ?response, "window close requested");
         matches!(response, CloseResponse::Close)
     }));
@@ -433,6 +445,73 @@ mod tests {
         );
     }
 
+    /// A host that records what it was told to focus, from wherever the
+    /// headless platform's factory built it.
+    struct FocusLog(std::sync::Arc<parking_lot::Mutex<Vec<bool>>>);
+
+    impl flui_platform_api::text_store::TextStoreHost for FocusLog {
+        fn focus_store(&self, store: Option<std::rc::Rc<dyn flui_platform_api::TextStore>>) {
+            self.0.lock().push(store.is_some());
+        }
+
+        fn complete_composition(
+            &self,
+            _: &std::rc::Rc<dyn flui_platform_api::TextStore>,
+        ) -> Result<
+            flui_platform_api::text_store::CompositionEnd,
+            flui_platform_api::text_store::TextStoreHostError,
+        > {
+            Ok(flui_platform_api::text_store::CompositionEnd::Committed)
+        }
+    }
+
+    /// A pull-model window's host reaches the presentation the runner builds
+    /// for it: a field that attaches is focused on the host
+    /// (`presentation_window`, ADR-0135).
+    ///
+    /// Red-check: pass `None` to `with_text_store_host` in
+    /// `presentation_window` — the presentation falls back to the window's
+    /// push capability and the host hears nothing.
+    fn presentation_window_hands_a_pull_window_s_host_to_its_presentation() {
+        use std::sync::Arc;
+
+        use flui_platform::Platform as _;
+
+        let heard = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let log = Arc::clone(&heard);
+        let platform = flui_platform::HeadlessPlatform::new()
+            .with_text_store_host(move || std::rc::Rc::new(FocusLog(Arc::clone(&log))));
+        let _clear_guard = OwnerHostClearGuard::arm();
+        Box::new(platform)
+            .run(Box::new(|owner| {
+                install_owner_platform(owner).expect("install owner wake transport");
+                let window = with_owner_platform(|owner| {
+                    owner.open_window(flui_platform::WindowOptions::default())
+                })
+                .expect("BUG: install_owner_platform just ran above")
+                .and_then(flui_platform::WindowOpen::try_ready)
+                .expect("headless open_window is always Ready");
+                let realm = host::build_runtime_realm(
+                    &host::runtime_wake_callback(),
+                    presentation_window(window),
+                    1.0,
+                )
+                .expect("realm");
+                let store = flui_platform_api::text_store::InMemoryTextStore::new("");
+                let _token = realm
+                    .text_input_handle()
+                    .attach(flui_interaction::TextInputClient::new(store))
+                    .expect("the presentation takes text input");
+                Ok(())
+            }))
+            .expect("headless run");
+        assert_eq!(
+            *heard.lock(),
+            [true, false],
+            "focused, then unfocused at teardown"
+        );
+    }
+
     #[test]
     fn runner_bootstrap_matrix() {
         crate::table_test::run_table(
@@ -440,6 +519,7 @@ mod tests {
             &[
                 ("desktop_bootstrap_stores_the_window_before_the_first_synchronous_redraw_observes_it", desktop_bootstrap_stores_the_window_before_the_first_synchronous_redraw_observes_it as fn()),
                 ("owner_platform_host_panic_in_on_ready_still_clears", owner_platform_host_panic_in_on_ready_still_clears as fn()),
+                ("presentation_window_hands_a_pull_window_s_host_to_its_presentation", presentation_window_hands_a_pull_window_s_host_to_its_presentation as fn()),
             ],
         );
     }

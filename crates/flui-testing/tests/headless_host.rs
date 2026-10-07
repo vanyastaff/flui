@@ -1,16 +1,22 @@
-//! [`HeadlessRealm`]'s failure contract: a frame failure the realm contains
+//! [`HeadlessHost`]'s failure contract: a frame failure the realm contains
 //! is raised after the pump, the first failure of a pump stays authoritative,
 //! and the realm keeps producing frames once the cause is gone.
 
+use std::cell::{Cell, RefCell};
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::rc::{Rc, Weak};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use flui_foundation::geometry::Size;
 use flui_rendering::prelude::{BoxLayoutContext, BoxParentData, Leaf, PaintCx, RenderBox};
-use flui_testing::{HeadlessRealm, HeadlessWindow};
-use flui_view::{RenderView, View};
+use flui_testing::widgets::{LaidOut, lay_out, tight};
+use flui_testing::{HeadlessHost, HeadlessWindow};
+use flui_view::{
+    AppLifecycleState, BuildContext, CloseReason, IntoView, LifecycleContext, RenderView,
+    StatefulView, View, ViewState,
+};
 
 /// A 40 × 24 leaf whose paint panics while `armed` is set. A paint panic is
 /// what the pipeline refuses the frame for (`RenderError::Poisoned`); a
@@ -66,9 +72,9 @@ impl View for Tripwire {
 }
 
 /// A realm with a tripwire root, armed as asked, before its first frame.
-fn tripwire_realm(armed: bool) -> (HeadlessRealm, Arc<AtomicBool>) {
+fn tripwire_realm(armed: bool) -> (HeadlessHost, Arc<AtomicBool>) {
     let armed = Arc::new(AtomicBool::new(armed));
-    let realm = HeadlessRealm::new(HeadlessWindow::new(40, 24));
+    let realm = HeadlessHost::new(HeadlessWindow::new(40, 24));
     realm
         .attach(&Tripwire {
             armed: Arc::clone(&armed),
@@ -129,7 +135,7 @@ fn the_realm_makes_progress_after_a_raised_failure() {
 
 /// Schedule a post-frame callback that panics, through the realm's own
 /// owner-local lane.
-fn schedule_post_frame_panic(realm: &HeadlessRealm) {
+fn schedule_post_frame_panic(realm: &HeadlessHost) {
     realm
         .local_post_frame_handle()
         .schedule_local(|_timing| panic!("post-frame callback panicked"))
@@ -140,7 +146,7 @@ fn schedule_post_frame_panic(realm: &HeadlessRealm) {
 /// post-frame lane the unwind went through still runs a callback. A frame is
 /// requested first, so the frame latch the unwind left behind must let it
 /// through.
-fn assert_progress_after_unwind(realm: &mut HeadlessRealm) -> flui_runtime::pump::FrameOutcome {
+fn assert_progress_after_unwind(realm: &mut HeadlessHost) -> flui_runtime::pump::FrameOutcome {
     let ran = Arc::new(AtomicBool::new(false));
     let ran_in_callback = Arc::clone(&ran);
     realm
@@ -209,4 +215,89 @@ fn an_uncontained_unwind_is_raised_as_itself() {
 
     assert_eq!(panic_text(&*raised), "post-frame callback panicked");
     let _outcome = assert_progress_after_unwind(&mut realm);
+}
+
+/// Counts the Detached deliveries its presentation makes, and asks for the
+/// close again from inside the first one, as an application closing its
+/// window from a lifecycle observer does.
+#[derive(Clone)]
+struct ClosesAgainOnDetach {
+    detached: Rc<Cell<usize>>,
+    tree: Rc<RefCell<Weak<LaidOut>>>,
+}
+
+struct ClosesAgainOnDetachState {
+    view: ClosesAgainOnDetach,
+    observation: Option<flui_view::LifecycleSubscription>,
+}
+
+impl StatefulView for ClosesAgainOnDetach {
+    type State = ClosesAgainOnDetachState;
+
+    fn create_state(&self) -> Self::State {
+        ClosesAgainOnDetachState {
+            view: self.clone(),
+            observation: None,
+        }
+    }
+}
+
+impl View for ClosesAgainOnDetach {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
+    }
+}
+
+impl ViewState<ClosesAgainOnDetach> for ClosesAgainOnDetachState {
+    fn init_state(&mut self, cx: &dyn LifecycleContext) {
+        let ClosesAgainOnDetach { detached, tree } = self.view.clone();
+        let (_, observation) = cx
+            .lifecycle_handle()
+            .expect("a realm presentation has a lifecycle")
+            .subscribe(move |state| {
+                if state == AppLifecycleState::Detached {
+                    detached.set(detached.get() + 1);
+                    if let Some(tree) = tree.borrow().upgrade() {
+                        tree.request_close(CloseReason::User);
+                    }
+                }
+            })
+            .expect("the presentation is open");
+        self.observation = Some(observation);
+    }
+
+    fn build(&self, _view: &ClosesAgainOnDetach, _cx: &dyn BuildContext) -> impl IntoView {
+        flui_widgets::SizedBox::new(10.0, 10.0)
+    }
+}
+
+/// One close is delivered once: a close requested again from inside the
+/// Detached observer, and the close the realm repeats when it drops, deliver
+/// nothing a second time.
+///
+/// Holds before the shared close delivery exists, because the lifecycle
+/// source commits Detached only once; it stays as the guard that the
+/// delivery's latch keeps it so.
+#[test]
+fn close_delivery_is_idempotent() {
+    let detached = Rc::new(Cell::new(0));
+    let slot = Rc::new(RefCell::new(Weak::new()));
+    let tree = Rc::new(lay_out(
+        ClosesAgainOnDetach {
+            detached: Rc::clone(&detached),
+            tree: Rc::clone(&slot),
+        },
+        tight(10.0, 10.0),
+    ));
+    *slot.borrow_mut() = Rc::downgrade(&tree);
+
+    tree.request_close(CloseReason::User);
+    tree.request_close(CloseReason::Program);
+    drop(tree);
+
+    assert_eq!(
+        detached.get(),
+        1,
+        "the presentation is told it is detached exactly once"
+    );
 }

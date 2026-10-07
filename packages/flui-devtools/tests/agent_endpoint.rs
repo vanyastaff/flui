@@ -18,7 +18,7 @@ use flui_protocol::{Node, Tree};
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{Signal, StatefulView, ViewState};
 use flui_sdk::widgets::{Column, RawButton, Text, column};
-use flui_testing::{HeadlessDevAgent, HeadlessRealm, HeadlessWindow};
+use flui_testing::{HeadlessDevAgent, HeadlessHost, HeadlessWindow};
 use interprocess::local_socket::Stream;
 use interprocess::local_socket::traits::Stream as _;
 use serde_json::{Value, json};
@@ -356,7 +356,7 @@ impl OwnerHandle {
 
 struct Owner {
     agent: Option<HeadlessDevAgent>,
-    realm: Option<HeadlessRealm>,
+    realm: Option<HeadlessHost>,
     presses: Arc<AtomicU32>,
 }
 
@@ -364,7 +364,7 @@ impl Owner {
     fn new(server: AgentServer) -> Self {
         let agent = HeadlessDevAgent::attach(server);
         let presses = Arc::new(AtomicU32::new(0));
-        let realm = HeadlessRealm::new(HeadlessWindow::new(400, 300)).with_dev_agent(&agent);
+        let realm = HeadlessHost::new(HeadlessWindow::new(400, 300)).with_dev_agent(&agent);
         realm
             .attach(&Counter {
                 presses: Arc::clone(&presses),

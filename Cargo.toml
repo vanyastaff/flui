@@ -231,6 +231,10 @@ accesskit_consumer = "0.39.1"
 # Win32 bindings: the Windows platform backend, hot-reload's library loader,
 # and xtask's UI Automation client. Each member names the API families it uses.
 windows = "0.62"
+# The COM runtime under `windows`, named directly because `#[implement]`
+# expands to `::windows_core` paths (the Win32 text services implement
+# `ITextStoreACP`). The same 0.62 line, so no second copy.
+windows-core = "0.62"
 
 # COLLECTIONS - Used by multiple crates
 smallvec = { version = "1.13", features = ["union", "const_generics"] }
@@ -263,6 +267,11 @@ core-graphics = "0.25"
 # DX TOOLING - flui-cli / flui-devtools
 tempfile = "3" # scratch dirs/files (build staging and tests)
 which = "8"    # locate toolchain executables (build/cli)
+
+# PERSISTENCE — the per-user data directories `flui-platform`'s `storage`
+# feature writes documents under (roaming and machine-local roots, which follow
+# a redirected AppData or OneDrive folder).
+dirs = "6"
 
 # CONTRACTS — the semantics and agent-protocol vocabulary (ADR-0095); shared by
 # flui-semantics and the desktop agent server.
@@ -794,6 +803,13 @@ hot-reload = ["dep:flui-hot-reload", "flui-hot-reload/app-plugin", "flui-hot-rel
 # carries a D-Bus stack); `cargo xtask device macos-a11y` is the executable check.
 a11y = ["flui-app/a11y"]
 
+# Persistence: `AppConfig::with_storage_dir`, the storage widgets reach through
+# `LifecycleContext::storage` and `flui::view::persist` documents write
+# through. Off by default: without it no file store, `dirs` or `tempfile` is
+# linked. No serialization crate comes with it; an application encodes its
+# documents with its own.
+persist = ["flui-app/persist"]
+
 # === Core Features ===
 # Serialization of the value types, in every crate that owns some: geometry
 # (foundation, through painting), paint and style (painting), locale and
@@ -839,7 +855,14 @@ path = "examples/todo.rs"
 [[example]]
 name = "two_screens"
 path = "examples/two_screens.rs"
-required-features = ["material"]
+required-features = ["material", "persist"]
+
+# Notes with a fault injected by mode, for the native teardown checks. With no
+# mode it runs Notes; a mode it does not know exits with code 2.
+[[example]]
+name = "notes_faults"
+path = "examples/notes_faults.rs"
+required-features = ["material", "persist"]
 
 # `cargo xtask facade-combos` builds every isolated feature combination, and
 # `form.rs` uses `TextFormField`/`ElevatedButton`/`Theme` from the Material

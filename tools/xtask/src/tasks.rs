@@ -48,6 +48,9 @@ const PLATFORM_TARGETS: [&str; 4] = [WINDOWS_TARGET, MACOS_TARGET, ANDROID_TARGE
 /// - `flui-devtools/agent`: the development agent server, off by default
 ///   because it opens an endpoint; on here so its `agent_endpoint` test runs
 ///   in the same jobs.
+/// - `flui/persist`: the storage seam the runner hands realms, off by default
+///   because it links the file store; on here so its runner tests and the
+///   Notes example, which needs it, are covered.
 /// - `--lib --bins --tests`: build and run what has tests without LINKING the
 ///   ~60 examples, which `cargo nextest run` otherwise links on every run.
 ///   Examples still compile in `lint` (`--all-targets`);
@@ -68,7 +71,7 @@ pub(crate) const TEST_SCOPE: [&str; 10] = [
 ];
 
 /// The features [`TEST_SCOPE`] turns on (see there for each one's reason).
-const TEST_FEATURES: &str = "flui/material,flui/cupertino,flui-devtools/agent";
+const TEST_FEATURES: &str = "flui/material,flui/cupertino,flui/persist,flui-devtools/agent";
 
 /// The build that links the examples and benches: the workspace's
 /// `--all-targets` with [`TEST_SCOPE`]'s features, so it reuses what a test
@@ -98,7 +101,7 @@ fn build_all_targets() -> Cmd {
 pub(crate) struct RunOpts {
     /// Print the commands instead of running them.
     #[arg(long)]
-    dry_run: bool,
+    pub(crate) dry_run: bool,
 }
 
 impl RunOpts {
@@ -692,7 +695,7 @@ pub(crate) struct ChecksArgs {
     #[arg(long)]
     strict: bool,
     #[command(flatten)]
-    run: RunOpts,
+    pub(crate) run: RunOpts,
 }
 
 /// `cargo xtask checks`: run the source checks that need no workspace build (the CI `checks` job).
@@ -709,7 +712,7 @@ pub(crate) fn checks(args: &ChecksArgs) -> anyhow::Result<ExitCode> {
 #[derive(Debug, clap::Args)]
 pub(crate) struct LintArgs {
     #[command(flatten)]
-    run: RunOpts,
+    pub(crate) run: RunOpts,
 }
 
 /// `cargo xtask lint`: run clippy the way CI does.
@@ -721,7 +724,7 @@ pub(crate) fn lint(args: &LintArgs) -> anyhow::Result<ExitCode> {
 #[derive(Debug, clap::Args)]
 pub(crate) struct GateArgs {
     #[command(flatten)]
-    run: RunOpts,
+    pub(crate) run: RunOpts,
 }
 
 /// `cargo xtask gate`: `checks`, `lint` and `doc-strict`.
@@ -764,7 +767,7 @@ pub(crate) struct TestArgs {
     #[arg(long, conflicts_with_all = ["fast", "nested"])]
     no_trybuild: bool,
     #[command(flatten)]
-    run: RunOpts,
+    pub(crate) run: RunOpts,
 }
 
 /// `cargo xtask test`: run the workspace test suite the way CI does.
@@ -786,7 +789,7 @@ pub(crate) fn test(args: &TestArgs) -> anyhow::Result<ExitCode> {
 #[derive(Debug, clap::Args)]
 pub(crate) struct PlatformTestArgs {
     #[command(flatten)]
-    run: RunOpts,
+    pub(crate) run: RunOpts,
 }
 
 /// Run the platform suites without compiling unrelated framework crates.
@@ -802,7 +805,7 @@ pub(crate) fn platform_test(args: &PlatformTestArgs) -> anyhow::Result<ExitCode>
 #[derive(Debug, clap::Args)]
 pub(crate) struct CliTestArgs {
     #[command(flatten)]
-    run: RunOpts,
+    pub(crate) run: RunOpts,
 }
 
 /// Run the same CLI suite in either native CI job or locally.
@@ -814,7 +817,7 @@ pub(crate) fn cli_test(args: &CliTestArgs) -> anyhow::Result<ExitCode> {
 #[derive(Debug, clap::Args)]
 pub(crate) struct BuildAllTargetsArgs {
     #[command(flatten)]
-    run: RunOpts,
+    pub(crate) run: RunOpts,
 }
 
 /// `cargo xtask build-all-targets`: link the examples and benches the test features reach (see [`build_all_targets`]).
@@ -826,7 +829,7 @@ pub(crate) fn build_all_targets_task(args: &BuildAllTargetsArgs) -> anyhow::Resu
 #[derive(Debug, clap::Args)]
 pub(crate) struct CiArgs {
     #[command(flatten)]
-    run: RunOpts,
+    pub(crate) run: RunOpts,
 }
 
 /// `cargo xtask ci`: `gate`, `test` and the doctests: the local mirror of CI's required checks.
@@ -838,7 +841,7 @@ pub(crate) fn ci(args: &CiArgs) -> anyhow::Result<ExitCode> {
 #[derive(Debug, clap::Args)]
 pub(crate) struct CiFullArgs {
     #[command(flatten)]
-    run: RunOpts,
+    pub(crate) run: RunOpts,
 }
 
 /// `cargo xtask ci-full`: `ci` plus every heavy CI job this host can run.
@@ -885,7 +888,7 @@ pub(crate) struct CheckChangedArgs {
     #[arg(long, default_value = "origin/main")]
     base: String,
     #[command(flatten)]
-    run: RunOpts,
+    pub(crate) run: RunOpts,
 }
 
 /// `cargo xtask check-changed`: fmt, clippy and tests over the crates a change touches.
@@ -911,7 +914,7 @@ pub(crate) struct DepsArgs {
     #[arg(long)]
     strict: bool,
     #[command(flatten)]
-    run: RunOpts,
+    pub(crate) run: RunOpts,
 }
 
 /// The cargo subcommands `cargo xtask deps` runs, each with the crate that
@@ -941,7 +944,7 @@ pub(crate) struct FeatureMatrixArgs {
     #[arg(long, default_value = "all", value_parser = Slice::parse)]
     slice: Slice,
     #[command(flatten)]
-    run: RunOpts,
+    pub(crate) run: RunOpts,
 }
 
 /// `cargo xtask feature-matrix`: clippy every feature on its own (cargo-hack).
@@ -956,7 +959,7 @@ pub(crate) fn feature_matrix(args: &FeatureMatrixArgs) -> anyhow::Result<ExitCod
 #[derive(Debug, clap::Args)]
 pub(crate) struct FacadeCombosArgs {
     #[command(flatten)]
-    run: RunOpts,
+    pub(crate) run: RunOpts,
 }
 
 /// `cargo xtask facade-combos`: build each supported facade feature combination on its own.
@@ -968,7 +971,7 @@ pub(crate) fn facade_combos(args: &FacadeCombosArgs) -> anyhow::Result<ExitCode>
 #[derive(Debug, clap::Args)]
 pub(crate) struct CrossTypecheckArgs {
     #[command(flatten)]
-    run: RunOpts,
+    pub(crate) run: RunOpts,
 }
 
 /// `cargo xtask cross-typecheck`: clippy the Win32, AppKit, Android and iOS backends without linking.
@@ -987,7 +990,7 @@ pub(crate) fn cross_typecheck(args: &CrossTypecheckArgs) -> anyhow::Result<ExitC
 #[derive(Debug, clap::Args)]
 pub(crate) struct WasmCheckArgs {
     #[command(flatten)]
-    run: RunOpts,
+    pub(crate) run: RunOpts,
 }
 
 /// `cargo xtask wasm-check`: check and clippy the workspace for wasm32.
@@ -999,7 +1002,7 @@ pub(crate) fn wasm_check(args: &WasmCheckArgs) -> anyhow::Result<ExitCode> {
 #[derive(Debug, clap::Args)]
 pub(crate) struct WasmLinkArgs {
     #[command(flatten)]
-    run: RunOpts,
+    pub(crate) run: RunOpts,
 }
 
 /// `cargo xtask wasm-link`: link the wasm demos and check their imports.
@@ -1011,7 +1014,7 @@ pub(crate) fn wasm_link(args: &WasmLinkArgs) -> anyhow::Result<ExitCode> {
 #[derive(Debug, clap::Args)]
 pub(crate) struct WasmTestArgs {
     #[command(flatten)]
-    run: RunOpts,
+    pub(crate) run: RunOpts,
 }
 
 /// `cargo xtask wasm-test`: run the wasm32 tests under wasm-bindgen-test-runner.
@@ -1028,7 +1031,7 @@ pub(crate) struct LiveSmokeArgs {
     #[arg(long)]
     wayland: bool,
     #[command(flatten)]
-    run: RunOpts,
+    pub(crate) run: RunOpts,
 }
 
 /// `cargo xtask live-smoke`: real-window smoke test under X11 (or Wayland).
@@ -1040,7 +1043,7 @@ pub(crate) fn live_smoke(args: &LiveSmokeArgs) -> anyhow::Result<ExitCode> {
 #[derive(Debug, clap::Args)]
 pub(crate) struct GpuTestArgs {
     #[command(flatten)]
-    run: RunOpts,
+    pub(crate) run: RunOpts,
 }
 
 /// `cargo xtask gpu-test`: the GPU readback suites.
@@ -1056,7 +1059,7 @@ pub(crate) fn gpu_test(args: &GpuTestArgs) -> anyhow::Result<ExitCode> {
 #[derive(Debug, clap::Args)]
 pub(crate) struct MiriArgs {
     #[command(flatten)]
-    run: RunOpts,
+    pub(crate) run: RunOpts,
 }
 
 /// `cargo xtask miri`: the unsafe-code paths under Miri.
@@ -1070,7 +1073,7 @@ pub(crate) fn miri(args: &MiriArgs) -> anyhow::Result<ExitCode> {
 #[derive(Debug, clap::Args)]
 pub(crate) struct BenchCompileArgs {
     #[command(flatten)]
-    run: RunOpts,
+    pub(crate) run: RunOpts,
 }
 
 /// `cargo xtask bench-compile`: compile the benchmarks without running them.
@@ -1082,7 +1085,7 @@ pub(crate) fn bench_compile(args: &BenchCompileArgs) -> anyhow::Result<ExitCode>
 #[derive(Debug, clap::Args)]
 pub(crate) struct DemoSnapshotsArgs {
     #[command(flatten)]
-    run: RunOpts,
+    pub(crate) run: RunOpts,
 }
 
 /// `cargo xtask demo-snapshots`: the demo layer snapshot suite.
@@ -1110,7 +1113,7 @@ pub(crate) fn demo_snapshots(args: &DemoSnapshotsArgs) -> anyhow::Result<ExitCod
 #[derive(Debug, clap::Args)]
 pub(crate) struct CleanNestedArgs {
     #[command(flatten)]
-    run: RunOpts,
+    pub(crate) run: RunOpts,
 }
 
 /// `cargo xtask clean-nested`: remove the nested-cargo test caches under the target directory.
@@ -1154,7 +1157,7 @@ mod tests {
         steps.iter().map(ToString::to_string).collect()
     }
 
-    const SCOPE: &str = "--workspace --exclude flui-platform --locked --no-fail-fast --lib --bins --tests --features flui/material,flui/cupertino,flui-devtools/agent";
+    const SCOPE: &str = "--workspace --exclude flui-platform --locked --no-fail-fast --lib --bins --tests --features flui/material,flui/cupertino,flui/persist,flui-devtools/agent";
 
     fn native_host_suites_only_build_their_packages() {
         assert_eq!(

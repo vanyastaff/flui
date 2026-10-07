@@ -346,7 +346,11 @@ fn transfer_request_recovery() {
     for (name, _) in cases {
         let mut child =
             std::process::Command::new(std::env::current_exe().expect("test executable"))
-                .args(["--exact", "transfer_request_recovery", "--nocapture"])
+                .args([
+                    "--exact",
+                    "transfer_request::transfer_request_recovery",
+                    "--nocapture",
+                ])
                 .env(SELECTED, name)
                 .env("RUST_BACKTRACE", "0")
                 .stdout(std::process::Stdio::piped())

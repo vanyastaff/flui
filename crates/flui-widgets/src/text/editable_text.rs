@@ -26,6 +26,7 @@ use flui_painting::{
     typography::{TextDirection, TextSpan, TextStyle},
 };
 use flui_platform_api::TargetPlatform;
+use flui_platform_api::text_store::OwnerCalls;
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::pipeline::PipelineCell;
 use flui_rendering::protocol::BoxProtocol;
@@ -262,8 +263,9 @@ pub(super) fn source_offset_for_masked_offset(
 /// IME client attached), and a disposed field refuses every lock.
 ///
 /// A platform session is one change to the field: its edits are written to
-/// the controller once when the lock is released, with one listener
-/// notification and at most one [`EditableText::on_changed`] call. A
+/// the controller once, and after the lock is released the listeners hear
+/// of it once and [`EditableText::on_changed`] runs at most once, only when
+/// the committed text (the text without the composition) changed. A
 /// platform selection is kept exactly, even inside a grapheme cluster; a tap
 /// or an arrow key still snaps to one (Mapping decisions #33 and #34 in
 /// `flui-widgets/ARCHITECTURE.md`). An obscured field reports itself
@@ -543,6 +545,12 @@ impl EditableText {
     /// with no borrow of the field held, inside a write the field opens: the
     /// callback receives that `&mut EventCx<'_>` first (ADR-0086). An IME
     /// commit reaches it once the frame that deferred the commit has ended.
+    ///
+    /// The text is the committed text
+    /// ([`TextEditingController::committed_text`]): an input method's
+    /// composition is left out, and a session that only composes or
+    /// cancels a composition does not call it. For an input-method edit it
+    /// runs after the method's lock is released, so it may edit the field.
     #[must_use]
     pub fn on_changed<F, R>(mut self, callback: F) -> Self
     where
@@ -1025,22 +1033,29 @@ impl EditableTextState {
         let edits = self.edit_observer();
         let store = self.text_store.clone();
         Rc::new(move |event| {
+            // Each step runs though an earlier one failed (a queued grant,
+            // `on_changed`, the observer): the platform hears of the key's
+            // edit before the first failure is resumed.
+            let mut calls = OwnerCalls::new();
             // An IME grant still queued from the last frame lands first, so
             // this key's edit follows it rather than overtaking it.
             if let Some(store) = &store {
-                store.run_deferred_before_app_edit();
+                calls.run(|| store.run_deferred_before_app_edit());
             }
             // Enter only submits; a controller change there is the submit
             // callback's own programmatic edit, not the user's.
-            let result = if matches!(event.key, Key::Named(NamedKey::Enter)) {
-                handler(event)
-            } else {
-                edits.around(|| handler(event))
-            };
+            let result = calls.run(|| {
+                if matches!(event.key, Key::Named(NamedKey::Enter)) {
+                    handler(event)
+                } else {
+                    edits.around(|| handler(event))
+                }
+            });
             if let Some(store) = &store {
-                store.controller_changed();
+                calls.run(|| store.controller_changed());
             }
-            result
+            calls.resume();
+            result.expect("BUG: a key edit that failed resumed its failure above")
         })
     }
 
@@ -1131,19 +1146,22 @@ impl FieldSemanticsActions {
         if self.edits.writer.check_context(cx).is_err() || self.live_node().is_none() {
             return;
         }
+        // Each step runs though an earlier one failed: the platform hears of
+        // the edit before the first failure is resumed.
+        let mut calls = OwnerCalls::new();
         // Accepted platform grants precede app edits, just as they precede a
         // key edit. A grant can re-enter and replace or detach the field.
         if let Some(store) = &self.store {
-            store.run_deferred_before_app_edit();
+            calls.run(|| store.run_deferred_before_app_edit());
         }
-        if self.edits.writer.check_context(cx).is_err() || self.live_node().is_none() {
-            return;
+        if self.edits.writer.check_context(cx).is_ok() && self.live_node().is_some() {
+            let controller = self.edits.controller.borrow().clone();
+            calls.run(|| self.edits.around(|| controller.set_text(text)));
+            if let Some(store) = &self.store {
+                calls.run(|| store.controller_changed());
+            }
         }
-        let controller = self.edits.controller.borrow().clone();
-        self.edits.around(|| controller.set_text(text));
-        if let Some(store) = &self.store {
-            store.controller_changed();
-        }
+        calls.resume();
     }
 }
 
@@ -1160,8 +1178,9 @@ impl Action<SelectAllTextIntent> for SelectAllTextAction {
 }
 
 /// Reports a user edit through [`EditableText::on_changed`]: compares the
-/// text before and after the edit, and calls the callback with no borrow
-/// held when they differ, inside a write `writer` opens.
+/// committed text (the text without the IME composition) before and after
+/// the edit, and calls the callback with the new committed text, with no
+/// borrow held, when they differ, inside a write `writer` opens.
 #[derive(Clone)]
 pub(super) struct EditObserver {
     controller: Rc<RefCell<TextEditingController>>,
@@ -1171,24 +1190,61 @@ pub(super) struct EditObserver {
 
 impl EditObserver {
     fn around<R>(&self, edit: impl FnOnce() -> R) -> R {
-        if self.on_changed.borrow().is_none() {
+        // The callback this edit is owed to is the one installed when it is
+        // accepted: the edit notifies the controller's listeners, which may
+        // rebuild the field and remove or replace `on_changed` before the
+        // owner hears of the change.
+        let Some(on_changed) = self.accept() else {
             return edit();
+        };
+        // So is the controller it edits: a listener's rebuild may hand the
+        // field another controller, whose text is not this edit's result.
+        let controller = self.controller.borrow().clone();
+        let before = controller.committed_text();
+        // The listeners' retirement can fail after the text changed: the
+        // owner still hears of the change, and the first failure is resumed
+        // after it.
+        let mut calls = OwnerCalls::new();
+        let result = calls.run(edit);
+        let after = controller.committed_text();
+        if after == before {
+            calls.retire(on_changed);
+        } else {
+            self.deliver(on_changed, &after, &mut calls);
         }
-        let before = self.controller.borrow().text();
-        let result = edit();
-        self.report_if_changed(&before);
-        result
+        calls.resume();
+        result.expect("BUG: an edit that failed resumed its failure above")
     }
 
-    pub(super) fn report_if_changed(&self, before: &str) {
-        let after = self.controller.borrow().text();
-        if after == before {
-            return;
-        }
-        let callback = self.on_changed.borrow().clone();
-        if let Some(callback) = callback {
-            self.writer.write(|cx| callback(cx, &after));
-        }
+    /// The `on_changed` an edit accepted now is owed to: a snapshot of the
+    /// installed callback, which [`Self::deliver`] calls though the field
+    /// removed or replaced it meanwhile. `None` when none is installed: the
+    /// edit then owes nothing.
+    pub(super) fn accept(&self) -> Option<TextChanged> {
+        self.on_changed.borrow().clone()
+    }
+
+    /// Retire this observer's handles to the controller and `on_changed`
+    /// inside `calls`, for an owner (a store outliving its field) going
+    /// away: a last owner's captures are other code, retained after a
+    /// failure (ADR-0127).
+    pub(super) fn retire(&mut self, calls: &mut OwnerCalls) {
+        let controller = std::mem::replace(
+            &mut self.controller,
+            Rc::new(RefCell::new(TextEditingController::new())),
+        );
+        let on_changed = std::mem::replace(&mut self.on_changed, Rc::new(RefCell::new(None)));
+        calls.retire(on_changed);
+        calls.retire(controller);
+    }
+
+    /// Call `on_changed`, the snapshot [`Self::accept`] took when the edit
+    /// was accepted, with `committed`, inside `calls`. A field that replaced
+    /// or removed the callback since (a rebuild) left the snapshot its last
+    /// owner, which retires inside `calls`.
+    pub(super) fn deliver(&self, on_changed: TextChanged, committed: &str, calls: &mut OwnerCalls) {
+        calls.run(|| self.writer.write(|cx| on_changed(cx, committed)));
+        calls.retire(on_changed);
     }
 }
 
@@ -1428,18 +1484,26 @@ impl ViewState<EditableText> for EditableTextState {
                     );
                 }
             } else {
-                if let Some(token) = ime_token_for_focus.borrow_mut().take()
-                    && let Err(error) = handle.detach(token)
+                // The token is taken in a statement of its own: a borrow
+                // held across the detach (which runs other code) would be
+                // refused by a reentrant focus change.
+                let token = ime_token_for_focus.borrow_mut().take();
+                let mut calls = OwnerCalls::new();
+                if let Some(token) = token
+                    && let Some(Err(error)) = calls.run(|| handle.detach(token))
                 {
-                    tracing::trace!(
-                        ?error,
-                        "IME detach reached a presentation that was already closing"
-                    );
+                    calls.run(|| {
+                        tracing::trace!(
+                            ?error,
+                            "IME detach reached a presentation that was already closing"
+                        );
+                    });
                 }
                 let alive = cursor_area_alive_for_focus.borrow_mut().take();
                 if let Some(alive) = alive {
                     alive.set(false);
                 }
+                calls.resume();
             }
         });
         self.ime_focus_transition = Some(Rc::clone(&ime_focus_transition));
@@ -1486,12 +1550,16 @@ impl ViewState<EditableText> for EditableTextState {
         self.on_changed
             .borrow_mut()
             .clone_from(&new_view.on_changed);
+        // The platform hears of changes through observer code; every change
+        // this update makes still lands though one of those calls failed,
+        // and the first failure is resumed once the update is complete.
+        let mut calls = OwnerCalls::new();
         let was_obscured = self.obscure.replace(new_view.obscure_text);
         self.obscuring_character.set(new_view.obscuring_character);
         if was_obscured != new_view.obscure_text
             && let Some(store) = &self.text_store
         {
-            store.status_changed();
+            calls.run(|| store.status_changed());
         }
 
         // A parent rebuilding with a DIFFERENT controller retargets the
@@ -1514,10 +1582,13 @@ impl ViewState<EditableText> for EditableTextState {
             if let Some(id) = self.controller_listener_id.take() {
                 self.controller.borrow().remove_listener(id);
             }
-            let _prev = std::mem::replace(
+            // The replaced controller retires inside the update's scope: it
+            // may hold the last handle to listeners the application added.
+            let replaced = std::mem::replace(
                 &mut *self.controller.borrow_mut(),
                 new_view.controller.clone(),
             );
+            calls.retire(replaced);
             let rebuild_notifier_for_text = self.rebuild_notifier.clone();
             self.controller_listener_id =
                 Some(self.controller.borrow().add_listener(Arc::new(move || {
@@ -1529,7 +1600,7 @@ impl ViewState<EditableText> for EditableTextState {
             self.rebuild_notifier.notify_listeners();
             // The input method's document is the replacement's too.
             if let Some(store) = &self.text_store {
-                store.controller_changed();
+                calls.run(|| store.controller_changed());
             }
         }
 
@@ -1561,30 +1632,75 @@ impl ViewState<EditableText> for EditableTextState {
             // Once replacement commits, the old generation is already stale
             // before focus listeners run, so semantic reentry is refused until
             // the returned replacement authority is installed below.
-            let replacement_attachment = attachment
-                .replace_node(&replacement)
-                .expect("BUG: EditableText could not atomically replace its focus node");
+            //
+            // The focus listeners the replacement notifies are application
+            // code, run inside this update's scope. One that panics unwinds
+            // out of the notifications after the replacement committed,
+            // taking the returned handle and the notifications after it
+            // (this field's own focus listener among them) with it: the
+            // field re-adopts the replacement in place for a handle, then
+            // reconciles its IME session with the focus the listeners left.
+            //
+            // A node the focus tree refuses (one attached to another field)
+            // is a usage error, raised as the update's failure behind any
+            // earlier one in its scope, so the update still completes: the
+            // field keeps its node and handle, and the replacement's
+            // registrations go with this block. It is never re-adopted.
+            let outcome = calls.run(|| attachment.replace_node(&replacement));
+            if let Some(Err(rejection)) = outcome {
+                calls.run(|| {
+                    panic!(
+                        "BUG: EditableText could not atomically replace its focus node: {rejection}"
+                    )
+                });
+            } else {
+                let replaced = outcome.and_then(Result::ok);
+                let notified = replaced.is_some();
+                let replacement_attachment = replaced.or_else(|| {
+                    let parent = self
+                        .parent
+                        .clone()
+                        .expect("BUG: a mounted EditableText holds its focus parent");
+                    calls
+                        .run(|| parent.adopt_node(&replacement))
+                        .map(|adopted| {
+                            adopted.expect(
+                                "BUG: EditableText could not adopt its replacement focus node",
+                            )
+                        })
+                });
 
-            self.key_handler_registration.take();
-            self.rect_provider_registration.take();
-            self.action_chain_registration.take();
-            self.focus_node = replacement;
-            self.key_handler_registration = Some(replacement_key_handler_registration);
-            self.rect_provider_registration = replacement_rect_provider_registration;
-            self.action_chain_registration = replacement_action_chain_registration;
-            let _prev = std::mem::replace(
-                &mut *self.observed_focus_node.borrow_mut(),
-                Rc::clone(&self.focus_node),
-            );
-            let previous = self
-                .focus_attachment
-                .replace(Some(Rc::new(replacement_attachment)));
-            drop(previous);
+                self.key_handler_registration.take();
+                self.rect_provider_registration.take();
+                self.action_chain_registration.take();
+                self.focus_node = replacement;
+                self.key_handler_registration = Some(replacement_key_handler_registration);
+                self.rect_provider_registration = replacement_rect_provider_registration;
+                self.action_chain_registration = replacement_action_chain_registration;
+                let observed = std::mem::replace(
+                    &mut *self.observed_focus_node.borrow_mut(),
+                    Rc::clone(&self.focus_node),
+                );
+                calls.retire(observed);
+                // With no handle (the re-adoption failed too) the stale one
+                // stays: it refuses semantic reentry, as the replacement's would
+                // until installed.
+                if let Some(replacement_attachment) = replacement_attachment {
+                    let previous = self
+                        .focus_attachment
+                        .replace(Some(Rc::new(replacement_attachment)));
+                    drop(previous);
+                }
 
-            if self.focus_node.has_primary_focus() {
-                self.rebuild_notifier.notify_listeners();
-                if let Some(transition) = &self.ime_focus_transition {
-                    transition(true);
+                if self.focus_node.has_primary_focus() {
+                    self.rebuild_notifier.notify_listeners();
+                    if let Some(transition) = &self.ime_focus_transition {
+                        calls.run(|| transition(true));
+                    }
+                } else if !notified && let Some(transition) = &self.ime_focus_transition {
+                    // The notifications were cut short before this field heard
+                    // its old node lose focus: its IME session ends here.
+                    calls.run(|| transition(false));
                 }
             }
         }
@@ -1595,7 +1711,8 @@ impl ViewState<EditableText> for EditableTextState {
         // itself releases primary focus on a true-to-false change, so this
         // call alone covers the unfocus — no separate `has_primary_focus` check needed.
         //
-        self.focus_node.set_can_request_focus(new_view.enabled);
+        calls.run(|| self.focus_node.set_can_request_focus(new_view.enabled));
+        calls.resume();
     }
 
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
@@ -1706,19 +1823,28 @@ impl ViewState<EditableText> for EditableTextState {
         // attachment is detached below, so this is the one path that unconditionally
         // closes the IME session on unmount. Harmless no-op if the field
         // already blurred (and so already detached) before unmounting.
-        if let Some(token) = self.ime_token.borrow_mut().take()
+        //
+        // Detaching runs owner code (a retired client, a failure the
+        // presentation reports): every later step still runs, and the first
+        // failure is resumed once dispose is complete.
+        let mut calls = OwnerCalls::new();
+        let token = self.ime_token.borrow_mut().take();
+        if let Some(token) = token
             && let Some(handle) = &self.ime_handle
-            && let Err(error) = handle.detach(token)
+            && let Some(Err(error)) = calls.run(|| handle.detach(token))
         {
-            tracing::trace!(
-                ?error,
-                "IME dispose detach reached a presentation that was already closing"
-            );
+            calls.run(|| {
+                tracing::trace!(
+                    ?error,
+                    "IME dispose detach reached a presentation that was already closing"
+                );
+            });
         }
         // A platform that still holds the store (or a grant queued in it)
         // must not reach the controller of a field that is gone.
         if let Some(store) = self.text_store.take() {
-            store.detach();
+            calls.run(|| store.detach());
+            calls.retire(store);
         }
 
         // Stop the IME cursor-area loop (ADR-0030) if one is running — the
@@ -1734,15 +1860,17 @@ impl ViewState<EditableText> for EditableTextState {
 
         // Detach through the generation-checked lifecycle authority.
         if let Some(attachment) = attachment {
-            let _ = attachment.detach();
+            calls.run(|| attachment.detach());
         }
         self.parent = None;
 
         // Remove the controller listener we registered in init_state.
         if let Some(id) = self.controller_listener_id.take() {
-            self.controller.borrow().remove_listener(id);
+            let controller = self.controller.borrow().clone();
+            calls.run(|| controller.remove_listener(id));
         }
         self.focus_manager = None;
+        calls.resume();
 
         // Deliberately NOT disposed here: `self.rebuild_notifier` is also
         // held by the `AnimatedBuilder` this state's own `build()` output
@@ -1823,9 +1951,13 @@ impl CursorAreaLoop {
         if !self.alive.get() {
             return;
         }
+        // The observer, the platform and diagnostics are other code: each
+        // runs though an earlier one failed, the loop is rescheduled, and the
+        // first failure is resumed after that.
+        let mut calls = OwnerCalls::new();
         let store = self.store.upgrade();
         if let Some(store) = &store {
-            store.controller_changed();
+            calls.run(|| store.controller_changed());
         }
         // A `None` read is a transient miss (the anchored subtree unmounted
         // mid-rebuild, or a transform is momentarily unavailable) — skip
@@ -1834,20 +1966,29 @@ impl CursorAreaLoop {
         if let Some(rect) = self.global_caret_rect()
             && Some(rect) != self.last_sent.get()
         {
-            if let Err(error) = self.text_input.set_cursor_area(rect) {
-                self.alive.set(false);
-                tracing::warn!(
-                    ?error,
-                    "IME cursor-area tracking stopped because its presentation is unavailable"
-                );
-                return;
-            }
-            self.last_sent.set(Some(rect));
-            if let Some(store) = &store {
-                store.layout_changed();
+            match calls.run(|| self.text_input.set_cursor_area(rect)) {
+                Some(Err(error)) => {
+                    self.alive.set(false);
+                    calls.run(|| {
+                        tracing::warn!(
+                            ?error,
+                            "IME cursor-area tracking stopped because its presentation is unavailable"
+                        );
+                    });
+                    calls.resume();
+                    return;
+                }
+                Some(Ok(())) => {
+                    self.last_sent.set(Some(rect));
+                    if let Some(store) = &store {
+                        calls.run(|| store.layout_changed());
+                    }
+                }
+                None => {}
             }
         }
-        self.schedule();
+        calls.run(|| self.schedule());
+        calls.resume();
     }
 
     /// The IME candidate window's current target rect in window-root-space
@@ -2004,7 +2145,9 @@ fn build_key_handler(
     // doc for why the compile-time source itself is a known limitation.
     let platform = TargetPlatform::current();
     Rc::new(move |event| {
-        let controller = controller.borrow();
+        // Cloned out, so no borrow of the cell is held while the edit's
+        // listeners run: one may rebuild the field onto another controller.
+        let controller = controller.borrow().clone();
         if !focus_node.can_request_focus() {
             return KeyEventResult::Ignored;
         }

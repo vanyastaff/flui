@@ -636,7 +636,7 @@ pub(super) fn install_platform_realm(
 /// already returned by the time a deferred mutation applies.
 ///
 /// Production caller: [`open_secondary_window`](super::secondary_window::open_secondary_window) under
-/// [`crate::app::runtime::WindowPolicy::SeparateRealms`] — the embedder-facing
+/// [`crate::app::runtime::WindowPolicy::Isolated`] — the embedder-facing
 /// seam issue #555 adds. Also exercised directly by this module's own
 /// tests.
 ///
@@ -788,7 +788,7 @@ pub(super) enum InstallPresentationError {
 /// `request_realm_uninstall`, this path does not yet defer to loop idle
 /// through `AppRuntime::pending_realm_mutations`; [`open_secondary_window`](super::secondary_window::open_secondary_window)
 /// (its production caller, under
-/// [`crate::app::runtime::WindowPolicy::SharedRealm`]) never calls this from
+/// [`crate::app::runtime::WindowPolicy::Shared`]) never calls this from
 /// inside a dispatched callback, so there is nothing forcing that
 /// generalization today. Extending the deferral queue to
 /// presentation-install requests is follow-up work, not silently skipped:
@@ -948,11 +948,11 @@ fn close_presentation(
 /// primary, both [`open_secondary_window`](super::secondary_window::open_secondary_window) policies). Routes through
 /// [`close_presentation`], which correctly reduces to a full realm uninstall
 /// when `dispatcher`'s presentation is its realm's ONLY one (a
-/// [`WindowPolicy::SeparateRealms`](crate::app::runtime::WindowPolicy::SeparateRealms) window, or the last surviving
-/// presentation of a [`WindowPolicy::SharedRealm`](crate::app::runtime::WindowPolicy::SharedRealm) group), or removes just
+/// [`WindowPolicy::Isolated`](crate::app::runtime::WindowPolicy::Isolated) window, or the last surviving
+/// presentation of a [`WindowPolicy::Shared`](crate::app::runtime::WindowPolicy::Shared) group), or removes just
 /// that one presentation while its realm and any sibling presentation
 /// survive otherwise — never `request_realm_uninstall` directly, which
-/// would tear down an ENTIRE `SharedRealm` group out from under a still-open
+/// would tear down an ENTIRE `WindowPolicy::Shared` group out from under a still-open
 /// sibling window.
 #[cfg_attr(
     not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),

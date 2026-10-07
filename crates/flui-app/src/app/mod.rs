@@ -21,6 +21,7 @@ pub(crate) mod logging;
 pub(crate) mod raster_lane;
 pub mod runner;
 pub(crate) mod runtime;
+pub(crate) mod storage_host;
 pub(crate) mod window_registry;
 // The realm core lives in the frame runtime (ADR-0083); these aliases keep
 // its `crate::app::…` paths for the runners and the dispatch layer that
@@ -29,7 +30,9 @@ pub(crate) use flui_runtime::{lifecycle_state, presentation, ui_realm};
 #[cfg(test)]
 pub(crate) mod window_test_support;
 
-pub use close_request::{CloseRequest, CloseRequestError, CloseRequestHandler, CloseResponse};
+pub use close_request::{
+    CloseReason, CloseRequest, CloseRequestError, CloseRequestHandler, CloseResponse,
+};
 pub use config::{AppConfig, DiagnosticsProfile};
 pub use dev_agent::DevAgent;
 pub use direct::run_direct;

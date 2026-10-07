@@ -2,7 +2,7 @@
 //! (`UiRealm::pump`, ADR-0083 §1) on a manual clock, a window double and a
 //! sink that keeps what the frame composited.
 //!
-//! [`HeadlessRealm`] is to a realm what a runner is on screen: it owns the
+//! [`HeadlessHost`] is to a realm what a runner is on screen: it owns the
 //! window the realm presents into, the sink a frame is submitted through and
 //! the clock the frame reads, and it drives frames and input through the
 //! realm's own entry points. Nothing here re-implements a phase of the frame:
@@ -11,16 +11,16 @@
 //!
 //! One [`ManualClock`] drives the whole realm: the realm reads it as its
 //! [`ClockSource`] (frame-time origin, gesture-arena deadlines, the
-//! presentation's `FrameClock`), and [`HeadlessRealm::pump`] hands a clone to
+//! presentation's `FrameClock`), and [`HeadlessHost::pump`] hands a clone to
 //! the pump as the frame's timestamp. A test advances time only through
-//! [`HeadlessRealm::pump`] or [`HeadlessRealm::clock`].
+//! [`HeadlessHost::pump`] or [`HeadlessHost::clock`].
 //!
 //! # Failures
 //!
 //! A realm contains a panic that escapes a frame segment, and a pipeline
 //! error, as a dropped frame (ADR-0048) and reports it to its frame-failure
 //! handler; on screen the process survives. Under test that containment would
-//! hide the failure, so [`HeadlessRealm::pump`] raises the first dropped-frame
+//! hide the failure, so [`HeadlessHost::pump`] raises the first dropped-frame
 //! report of the pump as a panic once the pump has returned, carrying the
 //! report's text (the realm retains it verbatim here). A later panic that
 //! unwinds out of the same pump does not replace it: the first failure stays
@@ -29,12 +29,14 @@
 //! substitution) is not raised: the frame it happened in completed.
 
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use flui_foundation::ManualClock;
 use flui_foundation::geometry::{Bounds, Size};
+use flui_platform_api::TextStoreHost;
 use flui_platform_api::{
     CursorError, CursorIcon, InMemoryClipboard, PlatformInput, PlatformTextInput, PlatformWindow,
     WindowId,
@@ -48,7 +50,7 @@ use flui_runtime::frame_failure::{
 use flui_runtime::presentation::PresentationWindow;
 use flui_runtime::pump::FrameOutcome;
 use flui_runtime::sink::{FrameSink, SubmitVerdict};
-use flui_runtime::ui_realm::UiRealm;
+use flui_runtime::ui_realm::{RealmHostServices, UiRealm};
 use flui_scheduler::{ClockSource, LocalPostFrameHandle};
 use flui_semantics::platform::{
     AccessibilityActionListener, AccessibilityActivationListener, PlatformAccessibility,
@@ -56,7 +58,9 @@ use flui_semantics::platform::{
 use flui_view::dev_agent::DevAgentHook;
 use parking_lot::Mutex;
 
-/// The window a [`HeadlessRealm`] presents into: window 1 at scale factor 1,
+use crate::text_store_host::RecordingTextStoreHost;
+
+/// The window a [`HeadlessHost`] presents into: window 1 at scale factor 1,
 /// focused and visible, with the logical size the realm was built at.
 ///
 /// It records what the realm asks of a window that a test asserts on: the
@@ -66,6 +70,7 @@ pub struct HeadlessWindow {
     size: Size<f64>,
     cursor: Mutex<CursorIcon>,
     text_input: Option<Arc<RecordingTextInput>>,
+    text_store_host: bool,
 }
 
 impl std::fmt::Debug for HeadlessWindow {
@@ -85,7 +90,18 @@ impl HeadlessWindow {
             size: Size::new(f64::from(width), f64::from(height)),
             cursor: Mutex::new(CursorIcon::Default),
             text_input: None,
+            text_store_host: false,
         }
+    }
+
+    /// Offer a pull-model text input instead: the realm's presentation gets
+    /// a [`RecordingTextStoreHost`] ([`HeadlessHost::text_store_host`]) and
+    /// tells it which field's store takes input, as it tells the Win32 text
+    /// services. It wins over [`Self::with_text_input`].
+    #[must_use]
+    pub fn with_text_store_host(mut self) -> Self {
+        self.text_store_host = true;
+        self
     }
 
     /// Offer a text-input capability that records every call the realm's
@@ -190,7 +206,7 @@ impl PlatformTextInput for RecordingTextInput {
     }
 }
 
-/// The accessibility bridge of a [`HeadlessRealm`]'s window: assistive
+/// The accessibility bridge of a [`HeadlessHost`]'s window: assistive
 /// technology attaches when a test asks, published trees are dropped (the
 /// harness reads the assembled tree from the pipeline instead), and the
 /// action listener the realm registers is handed to a test that plays the
@@ -231,7 +247,7 @@ impl PlatformAccessibility for HeadlessAccessibility {
     }
 }
 
-/// The frame sink of a [`HeadlessRealm`]: a surface of fixed size that
+/// The frame sink of a [`HeadlessHost`]: a surface of fixed size that
 /// presents every scene and keeps the last one.
 #[derive(Debug)]
 pub struct HeadlessSink {
@@ -280,7 +296,7 @@ impl FrameSink for HeadlessSink {
 /// A development-agent hook attached the way a runner's event loop attaches
 /// it: once, when this value is built, and detached when it is dropped.
 ///
-/// Every [`HeadlessRealm`] built [`with`](HeadlessRealm::with_dev_agent) it
+/// Every [`HeadlessHost`] built [`with`](HeadlessHost::with_dev_agent) it
 /// hands the hook its window, as a runner hands it each window it opens, so
 /// one hook can serve several realms, and a realm dropped before the hook is
 /// a window that closed while the tool kept running. Containment is the
@@ -317,22 +333,24 @@ impl std::fmt::Debug for HeadlessDevAgent {
 
 /// A [`UiRealm`] hosted headlessly, driven frame by frame on a manual clock.
 /// See the [module docs](self).
-pub struct HeadlessRealm {
+#[doc(alias = "HeadlessRealm")]
+pub struct HeadlessHost {
     realm: UiRealm,
     clock: ManualClock,
     sink: HeadlessSink,
     window: Arc<HeadlessWindow>,
     accessibility: Arc<HeadlessAccessibility>,
     clipboard: Arc<InMemoryClipboard>,
+    text_store_host: Option<Rc<RecordingTextStoreHost>>,
     /// Dropped-frame reports not yet raised, as the text a raised failure
     /// carries: those of the pump in progress, and any the realm made
     /// between pumps, which the next pump raises before it frames.
     failures: Arc<Mutex<Vec<String>>>,
 }
 
-impl std::fmt::Debug for HeadlessRealm {
+impl std::fmt::Debug for HeadlessHost {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("HeadlessRealm")
+        f.debug_struct("HeadlessHost")
             .field("realm", &self.realm)
             .field("window", &self.window)
             .field("sink", &self.sink)
@@ -340,7 +358,7 @@ impl std::fmt::Debug for HeadlessRealm {
     }
 }
 
-impl HeadlessRealm {
+impl HeadlessHost {
     /// A realm over `window`, whose surface has the window's size.
     ///
     /// # Panics
@@ -349,32 +367,54 @@ impl HeadlessRealm {
     /// is exhausted).
     #[must_use]
     pub fn new(window: HeadlessWindow) -> Self {
+        Self::with_storage(window, None)
+    }
+
+    /// [`Self::new`], its widgets reaching `storage` through
+    /// `LifecycleContext::storage`.
+    pub(crate) fn with_storage(
+        window: HeadlessWindow,
+        storage: Option<Arc<dyn flui_platform_api::Storage>>,
+    ) -> Self {
         #[expect(
             clippy::cast_possible_truncation,
             clippy::cast_sign_loss,
             reason = "the window size came from u32 pixel counts"
         )]
         let surface = (window.size.width as u32, window.size.height as u32);
+        let text_store_host = window.text_store_host.then(RecordingTextStoreHost::new);
         let window = Arc::new(window);
         let accessibility = Arc::new(HeadlessAccessibility::default());
         let clipboard = Arc::new(InMemoryClipboard::new());
         let clock = ManualClock::new();
-        let realm = UiRealm::new(
+        // A collection of its own: the realm owns a `TextContext` over it
+        // (ADR-0092 §3), exactly as a hosted realm does. Deliberately
+        // bundled-only, unlike the app's host-fed one
+        // (`FontCollection::with_host_fonts`), so text measures the same on
+        // every host a test runs on.
+        let fonts = flui_painting::FontCollection::new();
+        let mut host = RealmHostServices::new(
             Arc::new(|| {}),
+            Arc::new(AtomicBool::new(false)),
+            Arc::clone(&clipboard) as Arc<dyn flui_platform_api::Clipboard>,
+            &fonts,
+            ClockSource::Manual(clock.clone()),
+        );
+        if let Some(storage) = storage {
+            host = host.with_storage(storage);
+        }
+        let realm = UiRealm::new(
             PresentationWindow::new(
                 Arc::clone(&window) as Arc<dyn PlatformWindow>,
                 Some(Arc::clone(&accessibility) as Arc<dyn PlatformAccessibility>),
+            )
+            .with_text_store_host(
+                text_store_host
+                    .clone()
+                    .map(|host| host as Rc<dyn TextStoreHost>),
             ),
             1.0,
-            Arc::new(AtomicBool::new(false)),
-            Arc::clone(&clipboard) as Arc<dyn flui_platform_api::Clipboard>,
-            // A collection of its own: the realm owns a `TextContext` over it
-            // (ADR-0092 §3), exactly as a hosted realm does. Deliberately
-            // bundled-only, unlike the app's host-fed one
-            // (`FontCollection::with_host_fonts`), so text measures the same
-            // on every host a test runs on.
-            &flui_painting::FontCollection::new(),
-            ClockSource::Manual(clock.clone()),
+            host,
         )
         .expect("BUG: interaction lane identity exhausted");
         let failures = Arc::new(Mutex::new(Vec::new()));
@@ -392,6 +432,7 @@ impl HeadlessRealm {
             window,
             accessibility,
             clipboard,
+            text_store_host,
             failures,
         }
     }
@@ -605,6 +646,13 @@ impl HeadlessRealm {
         &self.window
     }
 
+    /// The pull-model host the realm's presentation speaks to, for a window
+    /// built [`HeadlessWindow::with_text_store_host`].
+    #[must_use]
+    pub fn text_store_host(&self) -> Option<&Rc<RecordingTextStoreHost>> {
+        self.text_store_host.as_ref()
+    }
+
     /// The clipboard the realm hands its widgets.
     #[must_use]
     pub fn clipboard(&self) -> Arc<InMemoryClipboard> {
@@ -632,7 +680,7 @@ mod tests {
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::time::Duration;
 
-    use super::{HeadlessRealm, HeadlessWindow};
+    use super::{HeadlessHost, HeadlessWindow};
 
     /// A dropped-frame report the realm made between pumps (from input
     /// delivery, say) is raised by the next pump, before it frames or moves
@@ -642,7 +690,7 @@ mod tests {
     /// report is erased unseen and the pump returns normally.
     #[test]
     fn a_report_made_between_pumps_is_raised_by_the_next_pump() {
-        let mut realm = HeadlessRealm::new(HeadlessWindow::new(40, 24));
+        let mut realm = HeadlessHost::new(HeadlessWindow::new(40, 24));
         realm
             .failures
             .lock()

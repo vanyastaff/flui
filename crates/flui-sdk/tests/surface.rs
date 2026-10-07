@@ -115,6 +115,7 @@ fn the_re_exports_are_the_facades_types() {
     let _: fn(flui::view::RebuildHandle) -> flui_sdk::view::RebuildHandle = |x| x;
     let _: fn(flui::view::WidgetsBinding) -> flui_sdk::view::WidgetsBinding = |x| x;
     let _: fn(flui::view::dev_reload::ReloadWake) -> flui_sdk::view::dev_reload::ReloadWake = |x| x;
+    let _: fn(flui::view::persist::SaveStatus) -> flui_sdk::view::persist::SaveStatus = |x| x;
     let _: fn(flui::widgets::Text) -> flui_sdk::widgets::Text = |x| x;
 
     let _: fn(flui::interaction::GestureEndReason) -> flui_sdk::interaction::GestureEndReason =

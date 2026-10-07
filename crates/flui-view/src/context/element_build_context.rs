@@ -611,6 +611,15 @@ impl LifecycleContext for ElementBuildContext {
     fn clipboard_handle(&self) -> Option<flui_interaction::ClipboardHandle> {
         self.owner.read().clipboard_handle().cloned()
     }
+    fn storage(&self) -> Option<std::sync::Arc<dyn flui_platform_api::Storage>> {
+        self.owner.read().storage().cloned()
+    }
+    fn flush_registry_in_crate(
+        &self,
+        _token: super::build_context::sealed::CrateToken,
+    ) -> Option<crate::flush_registry::FlushRegistry> {
+        self.owner.read().flush_registry.clone()
+    }
     fn hit_test_handle(&self) -> Option<flui_interaction::HitTestHandle> {
         self.owner.read().hit_test_handle().cloned()
     }
@@ -694,6 +703,10 @@ pub(crate) struct BuildCapabilities {
     pub(crate) text_input_handle: Option<flui_interaction::TextInputHandle>,
     /// The presentation's plain-text clipboard.
     pub(crate) clipboard_handle: Option<flui_interaction::ClipboardHandle>,
+    /// The realm's byte storage.
+    pub(crate) storage: Option<std::sync::Arc<dyn flui_platform_api::Storage>>,
+    /// The host's flush registry; crate-private, for `Persisted`.
+    pub(crate) flush_registry: Option<crate::flush_registry::FlushRegistry>,
     /// The realm's fresh-hit-test capability, narrowed from its interaction
     /// dispatch handle.
     pub(crate) hit_test_handle: Option<flui_interaction::HitTestHandle>,
@@ -1034,6 +1047,15 @@ impl LifecycleContext for BuildCtx<'_> {
     }
     fn clipboard_handle(&self) -> Option<flui_interaction::ClipboardHandle> {
         self.capabilities.clipboard_handle.clone()
+    }
+    fn storage(&self) -> Option<std::sync::Arc<dyn flui_platform_api::Storage>> {
+        self.capabilities.storage.clone()
+    }
+    fn flush_registry_in_crate(
+        &self,
+        _token: super::build_context::sealed::CrateToken,
+    ) -> Option<crate::flush_registry::FlushRegistry> {
+        self.capabilities.flush_registry.clone()
     }
     fn hit_test_handle(&self) -> Option<flui_interaction::HitTestHandle> {
         self.capabilities.hit_test_handle.clone()
