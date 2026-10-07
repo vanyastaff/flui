@@ -9,9 +9,6 @@
 
 use flui_animation::{Animatable, TwoWayConverter};
 
-#[path = "contracts/motion_clock.rs"]
-mod motion_clock;
-
 #[derive(Clone, Animatable)]
 struct Translation {
     x: f64,
