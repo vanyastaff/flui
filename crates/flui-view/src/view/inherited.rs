@@ -94,6 +94,7 @@ impl std::ops::BitOrAssign for FieldSet {
 /// use flui_view::FieldMask;
 ///
 /// struct Size;
+/// struct Theme;
 ///
 /// fn wants_size(_mask: FieldMask<Size>) {}
 /// wants_size(FieldMask::<Size>::bit(0));
