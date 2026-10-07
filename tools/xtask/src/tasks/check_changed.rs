@@ -16,8 +16,8 @@ use anyhow::{Context, bail};
 use super::exec::{Cmd, Host, Runner, Step, installed, installed_targets};
 use super::{
     ANDROID_TARGET, IOS_TARGET, MACOS_TARGET, PLATFORM_TARGETS, WASM_TARGET, WINDOWS_TARGET,
-    android_runner, cli_windows, desktop_mcp_clippy, engine_testing_clippy, hack_passes,
-    ios_runner, platform_clippy, wasm_facade_check,
+    android_runner, cli_windows, desktop_mcp_clippy, driver_tests, engine_testing_clippy,
+    hack_passes, ios_runner, platform_clippy, wasm_facade_check,
 };
 use crate::change_scope;
 use crate::util::repo_root;
@@ -137,13 +137,18 @@ fn plan(lane: &Lane, host: Host, targets: &BTreeSet<String>, have_hack: bool) ->
         steps.push(engine_testing_clippy().into());
     }
     if !lane.test_args.is_empty() {
-        steps.push(
-            Cmd::cargo(["nextest", "run"])
-                .split(&lane.test_args)
-                .args(["--locked", "--no-fail-fast", "--no-tests=pass"])
-                .split(&lane.features)
-                .into(),
-        );
+        let split_driver = host == Host::Windows && lane.packages.is_empty();
+        if split_driver {
+            steps.push(driver_tests().into());
+        }
+        let mut tests = Cmd::cargo(["nextest", "run"])
+            .split(&lane.test_args)
+            .args(["--locked", "--no-fail-fast", "--no-tests=pass"])
+            .split(&lane.features);
+        if split_driver {
+            tests = tests.args(["--exclude", "xtask"]);
+        }
+        steps.push(tests.into());
     }
     if !lane.doc_args.is_empty() {
         steps.push(
@@ -397,6 +402,34 @@ mod tests {
         assert!(Lane::from_fields(bad).is_err());
     }
 
+    fn windows_workspace_testing_preserves_the_driver_suite() {
+        let mut lane = material();
+        lane.packages = String::new();
+        lane.pkg_args = "--workspace".to_owned();
+        lane.test_args = "--workspace --exclude flui-platform --lib --bins --tests".to_owned();
+        let nextest = |host| {
+            lines(&plan(&lane, host, &all_targets(), true))
+                .into_iter()
+                .filter(|line| line.starts_with("$ cargo nextest run"))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            nextest(Host::Windows),
+            [
+                "$ cargo nextest run -p xtask --bins --tests --locked --no-fail-fast --no-tests=pass",
+                "$ cargo nextest run --workspace --exclude flui-platform --lib --bins --tests --locked --no-fail-fast --no-tests=pass --features flui/cupertino --exclude xtask",
+            ]
+        );
+        for host in [Host::Linux, Host::MacOs] {
+            assert_eq!(
+                nextest(host),
+                [
+                    "$ cargo nextest run --workspace --exclude flui-platform --lib --bins --tests --locked --no-fail-fast --no-tests=pass --features flui/cupertino",
+                ]
+            );
+        }
+    }
+
     fn a_target_dir_outside_the_checkout_is_refused() {
         let scratch = std::env::temp_dir().join(format!("xtask-checkout-{}", std::process::id()));
         let checkout = scratch.join("flui");
@@ -449,6 +482,10 @@ mod tests {
                 (
                     "the_lane_reads_every_field_change_scope_gives",
                     the_lane_reads_every_field_change_scope_gives as fn(),
+                ),
+                (
+                    "windows_workspace_testing_preserves_the_driver_suite",
+                    windows_workspace_testing_preserves_the_driver_suite as fn(),
                 ),
                 (
                     "a_target_dir_outside_the_checkout_is_refused",
