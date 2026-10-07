@@ -33,6 +33,7 @@ use std::{
 };
 
 use crate::anchored_box::AnchoredBox;
+use crate::localization::Directionality;
 use crate::semantics::Semantics;
 use crate::support::value_callback;
 use flui_foundation::ListenerId;
@@ -1132,6 +1133,8 @@ impl FocusScopeState {
 
 impl ViewState<FocusScope> for FocusScopeState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        self.scope
+            .set_text_direction(Directionality::maybe_of(ctx).unwrap_or_default());
         self.focus_manager = Some(ctx.focus_manager());
         self.rebuild_handle = Some(ctx.rebuild_handle());
         self.focus_listener_id = Some(self.add_focus_listener(self.scope.as_focus_node()));
@@ -1151,6 +1154,8 @@ impl ViewState<FocusScope> for FocusScopeState {
     }
 
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
+        self.scope
+            .set_text_direction(Directionality::maybe_of(ctx).unwrap_or_default());
         // An enclosing provider changed: move this scope — subtree, focus and
         // all — under the new parent (ADR-0026).
         let parent = enclosing_focus_parent(ctx);
@@ -1191,6 +1196,7 @@ impl ViewState<FocusScope> for FocusScopeState {
             .external_scope
             .clone()
             .unwrap_or_else(|| FocusScopeNode::with_debug_label("FocusScope"));
+        replacement.set_text_direction(self.scope.text_direction());
         let replacement_listener_id = self.add_focus_listener(replacement.as_focus_node());
         let replacement_context_registration = self.action_chain.as_ref().map(|chain| {
             replacement

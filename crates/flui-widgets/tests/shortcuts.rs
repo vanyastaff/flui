@@ -73,6 +73,7 @@ pub(crate) mod tab_tests {
         FocusAttachment, FocusDetachOutcome, FocusNode, FocusScopeNode, FocusTraversalPolicy,
         ReadingOrderPolicy,
     };
+    use flui_painting::typography::TextDirection;
     use flui_view::ViewExt;
     use flui_view::prelude::*;
     use flui_widgets::interaction::{Focus, FocusScope};
@@ -100,14 +101,13 @@ pub(crate) mod tab_tests {
     }
 
     impl FocusTraversalPolicy for ReplacingPolicy {
-        fn sort_descendants(&self, nodes: &[Rc<FocusNode>]) -> Vec<Rc<FocusNode>> {
+        fn order(&self, nodes: &mut [Rc<FocusNode>], direction: TextDirection) {
             self.scope
                 .upgrade()
                 .expect("the mounted scope remains alive")
                 .set_traversal_policy(Rc::new(ReadingOrderPolicy));
-            let mut order = ReadingOrderPolicy.sort_descendants(nodes);
-            order.reverse();
-            order
+            ReadingOrderPolicy.order(nodes, direction);
+            nodes.reverse();
         }
     }
 
@@ -212,7 +212,7 @@ pub(crate) mod tab_tests {
     }
 
     impl FocusTraversalPolicy for UnwindingPolicy {
-        fn sort_descendants(&self, nodes: &[Rc<FocusNode>]) -> Vec<Rc<FocusNode>> {
+        fn order(&self, nodes: &mut [Rc<FocusNode>], _: TextDirection) {
             let _ = &self.capture;
             self.scope
                 .upgrade()
@@ -223,7 +223,7 @@ pub(crate) mod tab_tests {
                 FocusDetachOutcome::Detached
             );
             assert!(!self.panic_sort, "first traversal sort failure");
-            nodes.iter().rev().cloned().collect()
+            nodes.reverse();
         }
     }
 
