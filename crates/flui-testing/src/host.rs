@@ -764,7 +764,11 @@ impl HeadlessHost {
         if window == self.primary_window() {
             return self.attach(view);
         }
-        self.realm.attach_root_widget_to_for_test(window.0, view)
+        // The same environment the primary root gets: this window's own
+        // `MediaQuery` and its size.
+        let size = self.secondary_of(window).window.size;
+        self.realm
+            .attach_root_widget_with_size_to(window.0, view, size.width, size.height)
     }
 
     /// Attach assistive technology to `window`; see

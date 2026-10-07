@@ -106,3 +106,54 @@ pub(crate) fn rescaling_a_secondary_window_updates_only_its_semantics_bounds() {
 pub(crate) fn rescaling_the_primary_window_updates_only_its_semantics_bounds() {
     rescaling_one_window_leaves_the_other(|primary, secondary| (primary, secondary));
 }
+
+/// Records the `MediaQuery` each of its builds reads.
+#[derive(Clone, flui_view::prelude::StatelessView)]
+struct MediaQueryReader {
+    seen: std::rc::Rc<std::cell::RefCell<Vec<flui_widgets::MediaQueryData>>>,
+}
+
+impl flui_view::prelude::StatelessView for MediaQueryReader {
+    fn build(
+        &self,
+        ctx: &dyn flui_view::prelude::BuildContext,
+    ) -> impl flui_view::prelude::IntoView {
+        self.seen
+            .borrow_mut()
+            .push(flui_widgets::MediaQuery::of(ctx));
+        SizedBox::new(10.0, 10.0)
+    }
+}
+
+/// A widget under a secondary window reads that window's own `MediaQuery`
+/// (its size and scale, not the primary's), and rebuilds with the new ratio
+/// when the window moves to another monitor.
+pub(crate) fn a_secondary_window_publishes_its_own_media_query() {
+    let mut host = HeadlessHost::new(HeadlessWindow::new(40, 24));
+    let second = host.open_window(HeadlessWindow::new(60, 30));
+    let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    host.attach_to(
+        second,
+        &MediaQueryReader {
+            seen: std::rc::Rc::clone(&seen),
+        },
+    )
+    .expect("a freshly opened window has no root yet");
+    let _ = host.pump(Duration::from_millis(16));
+    let first = seen.borrow().last().cloned().expect("the reader built");
+    assert_eq!(
+        first.size,
+        flui_foundation::geometry::Size::new(60.0, 30.0),
+        "the secondary window publishes its own size"
+    );
+    assert!((first.device_pixel_ratio - 1.0).abs() < f64::EPSILON);
+
+    host.set_scale_factor(second, 2.0);
+    let _ = host.pump(Duration::from_millis(16));
+    let rescaled = seen.borrow().last().cloned().expect("the reader built");
+    assert!(
+        (rescaled.device_pixel_ratio - 2.0).abs() < f64::EPSILON,
+        "the reader rebuilds with the window's new ratio, read {}",
+        rescaled.device_pixel_ratio
+    );
+}
