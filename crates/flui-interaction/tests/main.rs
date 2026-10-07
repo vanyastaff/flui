@@ -23,7 +23,7 @@ mod focus_retention;
 #[path = "text_store_host.rs"]
 mod text_store_host;
 
-#[path = "multi_pointer_recognizers.rs"]
-mod multi_pointer_recognizers;
 #[path = "mouse_tracking.rs"]
 mod mouse_tracking;
+#[path = "multi_pointer_recognizers.rs"]
+mod multi_pointer_recognizers;
