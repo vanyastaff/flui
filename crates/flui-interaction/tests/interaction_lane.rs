@@ -56,8 +56,8 @@ fn binding_input_contract_matrix() {
             frame_coalesced_history_reaches_tap_drag_velocity,
         ),
         (
-            "non_finite_down_refuses_its_continuation",
-            non_finite_down_refuses_its_continuation,
+            "checked_down_refuses_non_finite_position",
+            checked_down_refuses_non_finite_position,
         ),
         (
             "capped_contact_never_becomes_hover",
@@ -104,14 +104,11 @@ fn binding_input_contract_matrix() {
     assert!(failures.is_empty(), "failed rows:\n{}", failures.join("\n"));
 }
 
-fn non_finite_down_refuses_its_continuation() {
+fn checked_down_refuses_non_finite_position() {
     use flui_foundation::geometry::Offset;
-    use flui_interaction::events::{
-        PointerType, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
-    };
+    use flui_interaction::events::{PointerKind, make_down_event_for_id, make_up_event_for_id};
     use flui_interaction::{GestureBinding, HitTestResult, PointerId};
     use std::{cell::Cell, rc::Rc};
-
     for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
         for position in [Offset::new(bad, 0.0), Offset::new(0.0, bad)] {
             let binding = GestureBinding::new();
@@ -121,66 +118,36 @@ fn non_finite_down_refuses_its_continuation() {
             binding
                 .pointer_router()
                 .add_global_handler(Rc::new(move |_| log.set(log.get() + 1)));
-            let pointer = PointerId::new(2).expect("nonzero pointer");
-            let result = |_| {
+            let pointer = PointerId::try_from(2).expect("nonzero pointer");
+            assert!(
+                make_down_event_for_id(pointer, position, PointerKind::Touch).is_err(),
+                "checked vocabulary refuses invalid Down before binding admission"
+            );
+            assert_eq!(hits.get(), 0);
+            assert_eq!(deliveries.get(), 0);
+            let route = |_| {
                 hits.set(hits.get() + 1);
                 HitTestResult::new()
             };
             binding.handle_pointer_event(
-                &make_down_event_for_id(pointer, position, PointerType::Touch),
-                result,
-            );
-            assert_eq!(hits.get(), 0, "an invalid Down must not reach hit testing");
-            assert_eq!(
-                deliveries.get(),
-                0,
-                "an invalid Down must not reach a recognizer route"
+                &make_down_event_for_id(pointer, Offset::ZERO, PointerKind::Touch)
+                    .expect("finite input"),
+                route,
             );
             binding.handle_pointer_event(
-                &make_down_event_for_id(pointer, Offset::ZERO, PointerType::Touch),
-                result,
-            );
-            assert_eq!(
-                hits.get(),
-                0,
-                "another Down cannot erase the refused contact before its terminal event"
-            );
-            binding.handle_pointer_event(
-                &make_move_event_for_id(pointer, Offset::ZERO, PointerType::Touch),
-                result,
-            );
-            binding.flush_pending_moves();
-            binding.handle_pointer_event(
-                &make_up_event_for_id(pointer, Offset::ZERO, PointerType::Touch),
-                result,
-            );
-            assert_eq!(
-                hits.get(),
-                0,
-                "a refused contact's Move must not become hover"
-            );
-            assert_eq!(
-                deliveries.get(),
-                0,
-                "a refused contact's tail is not delivered"
-            );
-            binding.handle_pointer_event(
-                &make_down_event_for_id(pointer, Offset::ZERO, PointerType::Touch),
-                result,
-            );
-            binding.handle_pointer_event(
-                &make_up_event_for_id(pointer, Offset::ZERO, PointerType::Touch),
-                result,
+                &make_up_event_for_id(pointer, Offset::ZERO, PointerKind::Touch)
+                    .expect("finite input"),
+                route,
             );
             assert_eq!(
                 hits.get(),
                 1,
-                "the pointer ID is reusable after the refused Up"
+                "healthy contact can be admitted after constructor refusal"
             );
             assert_eq!(
                 deliveries.get(),
                 2,
-                "healthy replacement contact is delivered"
+                "healthy contact and terminal event are delivered"
             );
         }
     }
@@ -198,8 +165,9 @@ enum NonFiniteInput {
 fn assert_non_finite_motion_or_signal_is_refused(input: NonFiniteInput) {
     use flui_foundation::geometry::Offset;
     use flui_interaction::events::{
-        PointerType, make_down_event_for_id, make_move_event_for_id, make_pinch_gesture_event,
-        make_scroll_event, make_up_event_for_id,
+        PointerKind, make_down_event_for_id, make_move_event_for_id as checked_move,
+        make_pinch_gesture_event as checked_pinch, make_scroll_event as checked_scroll,
+        make_up_event_for_id,
     };
     use flui_interaction::{GestureBinding, HitTestResult, PointerId};
     use std::{cell::Cell, rc::Rc};
@@ -214,9 +182,9 @@ fn assert_non_finite_motion_or_signal_is_refused(input: NonFiniteInput) {
                 .pointer_router()
                 .add_global_handler(Rc::new(move |_| log.set(log.get() + 1)));
             let pointer = if matches!(input, NonFiniteInput::CapturedPinch) {
-                PointerId::new(u64::MAX).expect("synthetic pinch identity")
+                PointerId::try_from(u64::MAX).expect("synthetic pinch identity")
             } else {
-                PointerId::PRIMARY
+                PointerId::new(core::num::NonZeroU64::MIN)
             };
             let route = |_| {
                 hits.set(hits.get() + 1);
@@ -228,7 +196,8 @@ fn assert_non_finite_motion_or_signal_is_refused(input: NonFiniteInput) {
             );
             if captured {
                 binding.handle_pointer_event(
-                    &make_down_event_for_id(pointer, Offset::ZERO, PointerType::Touch),
+                    &make_down_event_for_id(pointer, Offset::ZERO, PointerKind::Touch)
+                        .expect("finite input"),
                     route,
                 );
                 assert_eq!(deliveries.get(), 1, "healthy contact was admitted");
@@ -237,14 +206,17 @@ fn assert_non_finite_motion_or_signal_is_refused(input: NonFiniteInput) {
             deliveries.set(0);
             let event = |position| match input {
                 NonFiniteInput::HoverMove | NonFiniteInput::ContactMove => {
-                    make_move_event_for_id(pointer, position, PointerType::Touch)
+                    checked_move(pointer, position, PointerKind::Touch)
                 }
-                NonFiniteInput::Wheel => make_scroll_event(position, Offset::new(0.0, 10.0)),
+                NonFiniteInput::Wheel => checked_scroll(position, Offset::new(0.0, 10.0)),
                 NonFiniteInput::Pinch | NonFiniteInput::CapturedPinch => {
-                    make_pinch_gesture_event(position, 0.1)
+                    checked_pinch(position, 0.1)
                 }
             };
-            binding.handle_pointer_event(&event(position), route);
+            assert!(
+                event(position).is_err(),
+                "checked position refuses invalid input before delivery"
+            );
             binding.flush_pending_moves();
             assert_eq!(hits.get(), 0, "invalid position must not reach hit testing");
             assert_eq!(
@@ -253,7 +225,8 @@ fn assert_non_finite_motion_or_signal_is_refused(input: NonFiniteInput) {
                 "invalid position must not reach pointer consumers"
             );
 
-            binding.handle_pointer_event(&event(Offset::new(2.0, 0.0)), route);
+            binding
+                .handle_pointer_event(&event(Offset::new(2.0, 0.0)).expect("finite input"), route);
             binding.flush_pending_moves();
             assert_eq!(deliveries.get(), 1, "healthy input follows refused input");
             if captured {
@@ -263,7 +236,8 @@ fn assert_non_finite_motion_or_signal_is_refused(input: NonFiniteInput) {
                     "the admitted contact retains its capture route"
                 );
                 binding.handle_pointer_event(
-                    &make_up_event_for_id(pointer, Offset::ZERO, PointerType::Touch),
+                    &make_up_event_for_id(pointer, Offset::ZERO, PointerKind::Touch)
+                        .expect("finite input"),
                     route,
                 );
                 assert_eq!(
@@ -300,8 +274,20 @@ fn hardware_trace_event(
 ) -> flui_interaction::events::PointerEvent {
     use flui_interaction::events::PointerEvent;
     match &mut event {
-        PointerEvent::Down(data) | PointerEvent::Up(data) => data.state.time = nanos,
-        PointerEvent::Move(data) => data.current.time = nanos,
+        PointerEvent::Down(data) => {
+            data.sample.time = flui_platform_api::EventTime::from_nanos(nanos)
+        }
+        PointerEvent::Up(data) => {
+            data.sample.time = flui_platform_api::EventTime::from_nanos(nanos)
+        }
+        PointerEvent::Move(data) => {
+            let mut sample = *data.current();
+            sample.time = flui_platform_api::EventTime::from_nanos(nanos);
+            *data = flui_interaction::events::PointerMove::new(data.pointer, data.buttons, sample)
+                .with_modifiers(data.modifiers)
+                .with_coalesced(data.coalesced().to_vec())
+                .with_predicted(data.predicted().to_vec());
+        }
         _ => {}
     }
     event
@@ -311,7 +297,7 @@ fn curved_hardware_moves() -> Vec<flui_interaction::events::PointerEvent> {
     use flui_foundation::geometry::Offset;
     use flui_interaction::{
         PointerId,
-        events::{PointerEvent, PointerType, make_move_event_for_id},
+        events::{PointerEvent, PointerKind, make_move_event_for_id},
     };
     // x = 20_000 t², in logical pixels and seconds. The hardware's last
     // velocity is 2_000 px/s; retaining only the endpoints loses the curvature.
@@ -319,21 +305,27 @@ fn curved_hardware_moves() -> Vec<flui_interaction::events::PointerEvent> {
         .into_iter()
         .map(|(millis, x)| {
             hardware_trace_event(
-                make_move_event_for_id(PointerId::PRIMARY, Offset::new(x, 0.0), PointerType::Touch),
+                make_move_event_for_id(
+                    PointerId::new(core::num::NonZeroU64::MIN),
+                    Offset::new(x, 0.0),
+                    PointerKind::Touch,
+                )
+                .expect("finite input"),
                 1_000_000_000 + millis * 1_000_000,
             )
         })
         .collect();
     let earlier = hardware_trace_event(
         make_move_event_for_id(
-            PointerId::PRIMARY,
+            PointerId::new(core::num::NonZeroU64::MIN),
             Offset::new(2.0, 0.0),
-            PointerType::Touch,
-        ),
+            PointerKind::Touch,
+        )
+        .expect("finite input"),
         1_010_000_000,
     );
     if let (PointerEvent::Move(first), PointerEvent::Move(earlier)) = (&mut moves[0], earlier) {
-        first.coalesced.push(earlier.current);
+        *first = first.clone().with_coalesced(vec![*earlier.current()]);
     }
     moves
 }
@@ -342,7 +334,7 @@ fn frame_coalescing_preserves_hardware_history() {
     use flui_foundation::geometry::Offset;
     use flui_interaction::{
         GestureBinding, HitTestResult, PointerId,
-        events::{PointerEvent, PointerType, make_down_event_for_id, make_up_event_for_id},
+        events::{PointerEvent, PointerKind, make_down_event_for_id, make_up_event_for_id},
     };
     use std::{cell::RefCell, rc::Rc};
     let binding = GestureBinding::new();
@@ -353,13 +345,13 @@ fn frame_coalescing_preserves_hardware_history() {
         .add_global_handler(Rc::new(move |event| {
             if let PointerEvent::Move(movement) = event {
                 let history: Vec<_> = movement
-                    .coalesced
+                    .coalesced()
                     .iter()
-                    .map(|sample| (sample.time, sample.position.x))
+                    .map(|sample| (sample.time.as_nanos(), sample.position.get().x))
                     .collect();
                 log.borrow_mut().push((
-                    movement.current.time,
-                    movement.current.position.x,
+                    movement.current().time.as_nanos(),
+                    movement.current().position.get().x,
                     history,
                 ));
             }
@@ -368,7 +360,12 @@ fn frame_coalescing_preserves_hardware_history() {
         observed.borrow_mut().clear();
         binding.handle_pointer_event(
             &hardware_trace_event(
-                make_down_event_for_id(PointerId::PRIMARY, Offset::ZERO, PointerType::Touch),
+                make_down_event_for_id(
+                    PointerId::new(core::num::NonZeroU64::MIN),
+                    Offset::ZERO,
+                    PointerKind::Touch,
+                )
+                .expect("finite input"),
                 1_000_000_000,
             ),
             |_| HitTestResult::new(),
@@ -383,10 +380,11 @@ fn frame_coalescing_preserves_hardware_history() {
         binding.handle_pointer_event(
             &hardware_trace_event(
                 make_up_event_for_id(
-                    PointerId::PRIMARY,
+                    PointerId::new(core::num::NonZeroU64::MIN),
                     Offset::new(50.0, 0.0),
-                    PointerType::Touch,
-                ),
+                    PointerKind::Touch,
+                )
+                .expect("finite input"),
                 1_050_000_000,
             ),
             |_| HitTestResult::new(),
@@ -435,7 +433,7 @@ fn velocity_for_hardware_trace(producer: HardwareVelocityProducer, flush_each: b
         ManualClock, MultiDragAxis, MultiDragEndDetails, MultiDragGestureRecognizer,
         MultiDragHandle, MultiDragUpdateDetails, PointerId, ScaleGestureRecognizer,
         TapAndDragGestureRecognizer,
-        events::{PointerEvent, PointerType, make_down_event_for_id, make_up_event_for_id},
+        events::{PointerEvent, PointerKind, make_down_event_for_id, make_up_event_for_id},
         routing::PointerDispatch,
     };
     use std::{cell::RefCell, rc::Rc, sync::Arc};
@@ -486,16 +484,22 @@ fn velocity_for_hardware_trace(producer: HardwareVelocityProducer, flush_each: b
         }));
     binding.handle_pointer_event(
         &hardware_trace_event(
-            make_down_event_for_id(PointerId::PRIMARY, Offset::ZERO, PointerType::Touch),
+            make_down_event_for_id(
+                PointerId::new(core::num::NonZeroU64::MIN),
+                Offset::ZERO,
+                PointerKind::Touch,
+            )
+            .expect("finite input"),
             1_000_000_000,
         ),
         |_| HitTestResult::new(),
     );
-    let second_pointer = PointerId::new(2).expect("nonzero pointer");
+    let second_pointer = PointerId::try_from(2).expect("nonzero pointer");
     if matches!(producer, HardwareVelocityProducer::Scale) {
         binding.handle_pointer_event(
             &hardware_trace_event(
-                make_down_event_for_id(second_pointer, Offset::new(100.0, 0.0), PointerType::Touch),
+                make_down_event_for_id(second_pointer, Offset::new(100.0, 0.0), PointerKind::Touch)
+                    .expect("finite input"),
                 1_000_000_000,
             ),
             |_| HitTestResult::new(),
@@ -511,10 +515,11 @@ fn velocity_for_hardware_trace(producer: HardwareVelocityProducer, flush_each: b
     binding.handle_pointer_event(
         &hardware_trace_event(
             make_up_event_for_id(
-                PointerId::PRIMARY,
+                PointerId::new(core::num::NonZeroU64::MIN),
                 Offset::new(50.0, 0.0),
-                PointerType::Touch,
-            ),
+                PointerKind::Touch,
+            )
+            .expect("finite input"),
             1_050_000_000,
         ),
         |_| HitTestResult::new(),
@@ -522,7 +527,8 @@ fn velocity_for_hardware_trace(producer: HardwareVelocityProducer, flush_each: b
     if matches!(producer, HardwareVelocityProducer::Scale) {
         binding.handle_pointer_event(
             &hardware_trace_event(
-                make_up_event_for_id(second_pointer, Offset::new(100.0, 0.0), PointerType::Touch),
+                make_up_event_for_id(second_pointer, Offset::new(100.0, 0.0), PointerKind::Touch)
+                    .expect("finite input"),
                 1_050_000_000,
             ),
             |_| HitTestResult::new(),
@@ -575,7 +581,7 @@ fn assert_frame_coalesced_velocity(producer: HardwareVelocityProducer, expected:
 fn capped_contact_never_becomes_hover() {
     use flui_foundation::geometry::Offset;
     use flui_interaction::events::{
-        PointerType, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
+        PointerKind, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
     };
     use flui_interaction::{GestureBinding, HitTestResult, PointerId};
     use std::cell::Cell;
@@ -587,30 +593,36 @@ fn capped_contact_never_becomes_hover() {
         HitTestResult::new()
     };
     for raw in 1..=33 {
-        let pointer = PointerId::new(raw).expect("nonzero pointer");
+        let pointer = PointerId::try_from(raw).expect("nonzero pointer");
         binding.handle_pointer_event(
-            &make_down_event_for_id(pointer, Offset::ZERO, PointerType::Touch),
+            &make_down_event_for_id(pointer, Offset::ZERO, PointerKind::Touch)
+                .expect("finite input"),
             result,
         );
     }
     assert_eq!(hits.get(), 32, "the thirty-third contact is refused");
-    let refused = PointerId::new(33).expect("nonzero pointer");
+    let refused = PointerId::try_from(33).expect("nonzero pointer");
     binding.handle_pointer_event(
-        &make_move_event_for_id(refused, Offset::ZERO, PointerType::Touch),
+        &make_move_event_for_id(refused, Offset::ZERO, PointerKind::Touch).expect("finite input"),
         result,
     );
     binding.flush_pending_moves();
     assert_eq!(hits.get(), 32, "the refused contact does not become hover");
     binding.handle_pointer_event(
-        &make_up_event_for_id(refused, Offset::ZERO, PointerType::Touch),
+        &make_up_event_for_id(refused, Offset::ZERO, PointerKind::Touch).expect("finite input"),
         result,
     );
     binding.handle_pointer_event(
-        &make_up_event_for_id(PointerId::PRIMARY, Offset::ZERO, PointerType::Touch),
+        &make_up_event_for_id(
+            PointerId::new(core::num::NonZeroU64::MIN),
+            Offset::ZERO,
+            PointerKind::Touch,
+        )
+        .expect("finite input"),
         result,
     );
     binding.handle_pointer_event(
-        &make_down_event_for_id(refused, Offset::ZERO, PointerType::Touch),
+        &make_down_event_for_id(refused, Offset::ZERO, PointerKind::Touch).expect("finite input"),
         result,
     );
     assert_eq!(hits.get(), 33, "a released slot accepts the next sequence");
@@ -620,7 +632,7 @@ fn capped_contact_never_becomes_hover() {
 fn refusal_saturation_preserves_admitted_contacts_and_resets_with_lifecycle() {
     use flui_foundation::geometry::Offset;
     use flui_interaction::events::{
-        PointerType, make_cancel_event_for_id, make_down_event_for_id, make_move_event_for_id,
+        PointerKind, make_cancel_event_for_id, make_down_event_for_id, make_move_event_for_id,
         make_up_event_for_id,
     };
     use flui_interaction::{GestureBinding, HitTestResult, PointerId};
@@ -635,16 +647,22 @@ fn refusal_saturation_preserves_admitted_contacts_and_resets_with_lifecycle() {
     for raw in 1..=65 {
         binding.handle_pointer_event(
             &make_down_event_for_id(
-                PointerId::new(raw).expect("nonzero pointer"),
+                PointerId::try_from(raw).expect("nonzero pointer"),
                 Offset::ZERO,
-                PointerType::Touch,
-            ),
+                PointerKind::Touch,
+            )
+            .expect("finite input"),
             |_| HitTestResult::new(),
         );
     }
     delivered.set(0);
     binding.handle_pointer_event(
-        &make_move_event_for_id(PointerId::PRIMARY, Offset::ZERO, PointerType::Touch),
+        &make_move_event_for_id(
+            PointerId::new(core::num::NonZeroU64::MIN),
+            Offset::ZERO,
+            PointerKind::Touch,
+        )
+        .expect("finite input"),
         |_| HitTestResult::new(),
     );
     binding.flush_pending_moves();
@@ -654,18 +672,18 @@ fn refusal_saturation_preserves_admitted_contacts_and_resets_with_lifecycle() {
         "saturation preserves an admitted contact's Move"
     );
     delivered.set(0);
-    let unknown = PointerId::new(200).expect("nonzero pointer");
+    let unknown = PointerId::try_from(200).expect("nonzero pointer");
     binding.handle_pointer_event(
-        &make_move_event_for_id(unknown, Offset::ZERO, PointerType::Touch),
+        &make_move_event_for_id(unknown, Offset::ZERO, PointerKind::Touch).expect("finite input"),
         |_| HitTestResult::new(),
     );
     binding.flush_pending_moves();
     binding.handle_pointer_event(
-        &make_up_event_for_id(unknown, Offset::ZERO, PointerType::Touch),
+        &make_up_event_for_id(unknown, Offset::ZERO, PointerKind::Touch).expect("finite input"),
         |_| HitTestResult::new(),
     );
     binding.handle_pointer_event(
-        &make_cancel_event_for_id(unknown, PointerType::Touch),
+        &make_cancel_event_for_id(unknown, PointerKind::Touch),
         |_| HitTestResult::new(),
     );
     assert_eq!(
@@ -674,20 +692,25 @@ fn refusal_saturation_preserves_admitted_contacts_and_resets_with_lifecycle() {
         "saturation suppresses every untracked tail"
     );
     binding.handle_pointer_event(
-        &make_up_event_for_id(PointerId::PRIMARY, Offset::ZERO, PointerType::Touch),
+        &make_up_event_for_id(
+            PointerId::new(core::num::NonZeroU64::MIN),
+            Offset::ZERO,
+            PointerKind::Touch,
+        )
+        .expect("finite input"),
         |_| HitTestResult::new(),
     );
     binding.handle_pointer_event(
-        &make_down_event_for_id(unknown, Offset::ZERO, PointerType::Touch),
+        &make_down_event_for_id(unknown, Offset::ZERO, PointerKind::Touch).expect("finite input"),
         |_| HitTestResult::new(),
     );
     binding.handle_pointer_event(
-        &make_move_event_for_id(unknown, Offset::ZERO, PointerType::Touch),
+        &make_move_event_for_id(unknown, Offset::ZERO, PointerKind::Touch).expect("finite input"),
         |_| HitTestResult::new(),
     );
     binding.flush_pending_moves();
     binding.handle_pointer_event(
-        &make_up_event_for_id(unknown, Offset::ZERO, PointerType::Touch),
+        &make_up_event_for_id(unknown, Offset::ZERO, PointerKind::Touch).expect("finite input"),
         |_| HitTestResult::new(),
     );
     assert_eq!(
@@ -697,14 +720,15 @@ fn refusal_saturation_preserves_admitted_contacts_and_resets_with_lifecycle() {
     );
     binding.handle_pointer_event(
         &make_up_event_for_id(
-            PointerId::new(33).expect("nonzero pointer"),
+            PointerId::try_from(33).expect("nonzero pointer"),
             Offset::ZERO,
-            PointerType::Touch,
-        ),
+            PointerKind::Touch,
+        )
+        .expect("finite input"),
         |_| HitTestResult::new(),
     );
     binding.handle_pointer_event(
-        &make_move_event_for_id(unknown, Offset::ZERO, PointerType::Touch),
+        &make_move_event_for_id(unknown, Offset::ZERO, PointerKind::Touch).expect("finite input"),
         |_| HitTestResult::new(),
     );
     binding.flush_pending_moves();
@@ -715,7 +739,7 @@ fn refusal_saturation_preserves_admitted_contacts_and_resets_with_lifecycle() {
     );
     binding.handle_lifecycle_pause();
     binding.handle_pointer_event(
-        &make_move_event_for_id(unknown, Offset::ZERO, PointerType::Touch),
+        &make_move_event_for_id(unknown, Offset::ZERO, PointerKind::Touch).expect("finite input"),
         |_| HitTestResult::new(),
     );
     binding.flush_pending_moves();
@@ -736,7 +760,7 @@ enum SignalRoute {
 fn assert_signal_claim_delivery(route: SignalRoute, competing: bool) {
     use flui_foundation::geometry::Offset;
     use flui_interaction::events::{
-        PointerEvent, PointerType, make_down_event_for_id, make_pinch_gesture_event,
+        PointerEvent, PointerKind, make_down_event_for_id, make_pinch_gesture_event,
         make_scroll_event, make_up_event_for_id,
     };
     use flui_interaction::{EventPropagation, GestureBinding, HitTestResult, PointerId};
@@ -758,7 +782,7 @@ fn assert_signal_claim_delivery(route: SignalRoute, competing: bool) {
             .register_pointer(move |dispatch| {
                 if matches!(
                     dispatch.local,
-                    PointerEvent::Scroll(_) | PointerEvent::Gesture(_)
+                    PointerEvent::Scroll(_) | PointerEvent::PanZoom(_)
                 ) && fail.get()
                 {
                     panic!("pointer listener first failure");
@@ -770,7 +794,7 @@ fn assert_signal_claim_delivery(route: SignalRoute, competing: bool) {
             .register_pointer(move |dispatch| {
                 if matches!(
                     dispatch.local,
-                    PointerEvent::Scroll(_) | PointerEvent::Gesture(_)
+                    PointerEvent::Scroll(_) | PointerEvent::PanZoom(_)
                 ) {
                     later.set(later.get() + 1);
                 }
@@ -801,15 +825,18 @@ fn assert_signal_claim_delivery(route: SignalRoute, competing: bool) {
         path.add(entry);
         path.add(hit_entry(observer));
         let signal = match route {
-            SignalRoute::Wheel => make_scroll_event(Offset::ZERO, Offset::new(0.0, 10.0)),
+            SignalRoute::Wheel => {
+                make_scroll_event(Offset::ZERO, Offset::new(0.0, 10.0)).expect("finite input")
+            }
             SignalRoute::Pinch | SignalRoute::CapturedPinch => {
-                make_pinch_gesture_event(Offset::ZERO, 0.1)
+                make_pinch_gesture_event(Offset::ZERO, 0.1).expect("finite input")
             }
         };
-        let pointer = PointerId::new(u64::MAX).expect("synthetic pinch identity");
+        let pointer = PointerId::try_from(u64::MAX).expect("synthetic pinch identity");
         if matches!(route, SignalRoute::CapturedPinch) {
             binding.handle_pointer_event(
-                &make_down_event_for_id(pointer, Offset::ZERO, PointerType::Touch),
+                &make_down_event_for_id(pointer, Offset::ZERO, PointerKind::Touch)
+                    .expect("finite input"),
                 |_| path.clone(),
             );
         }
@@ -834,7 +861,8 @@ fn assert_signal_claim_delivery(route: SignalRoute, competing: bool) {
         assert_eq!(claims.get(), 2, "healthy claim follows containment");
         if matches!(route, SignalRoute::CapturedPinch) {
             binding.handle_pointer_event(
-                &make_up_event_for_id(pointer, Offset::ZERO, PointerType::Touch),
+                &make_up_event_for_id(pointer, Offset::ZERO, PointerKind::Touch)
+                    .expect("finite input"),
                 |_| path.clone(),
             );
         }
@@ -966,7 +994,7 @@ fn assert_pointer_route_retirement(panic_after_reentry: bool) {
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::rc::{Rc, Weak};
 
-    use flui_interaction::events::{PointerType, make_down_event, make_up_event};
+    use flui_interaction::events::{PointerKind, make_down_event, make_up_event};
     use flui_interaction::{GestureBinding, HitTestResult, Offset, PointerId};
 
     struct RetireRoute {
@@ -981,14 +1009,14 @@ fn assert_pointer_route_retirement(panic_after_reentry: bool) {
             let binding = self.binding.upgrade().expect("binding outlives removal");
             let router = binding.pointer_router();
             assert!(
-                !router.has_routes(PointerId::PRIMARY),
+                !router.has_routes(PointerId::new(core::num::NonZeroU64::MIN)),
                 "the retired route must already be absent during destruction"
             );
             // Removing an already-absent ID must also be reentrant.
-            router.remove_all_routes(PointerId::PRIMARY);
+            router.remove_all_routes(PointerId::new(core::num::NonZeroU64::MIN));
             let deliveries = Rc::clone(&self.deliveries);
             router.add_route(
-                PointerId::PRIMARY,
+                PointerId::new(core::num::NonZeroU64::MIN),
                 Rc::new(move |_| deliveries.set(deliveries.get() + 1)),
             );
             self.retired.set(true);
@@ -1006,7 +1034,7 @@ fn assert_pointer_route_retirement(panic_after_reentry: bool) {
         panic_after_reentry,
     };
     binding.pointer_router().add_route(
-        PointerId::PRIMARY,
+        PointerId::new(core::num::NonZeroU64::MIN),
         Rc::new(move |_| {
             let _keep_capture_alive = &retire;
             panic!("a retired route must not receive the next contact");
@@ -1016,7 +1044,7 @@ fn assert_pointer_route_retirement(panic_after_reentry: bool) {
     let removal = catch_unwind(AssertUnwindSafe(|| {
         binding
             .pointer_router()
-            .remove_all_routes(PointerId::PRIMARY);
+            .remove_all_routes(PointerId::new(core::num::NonZeroU64::MIN));
     }));
     if panic_after_reentry {
         let payload = removal.expect_err("capture panic must propagate");
@@ -1034,16 +1062,18 @@ fn assert_pointer_route_retirement(panic_after_reentry: bool) {
 
     // Deliver a real new contact through the production binding, rather than
     // checking only registry counters or calling the replacement directly.
-    binding.handle_pointer_event(&make_down_event(Offset::ZERO, PointerType::Touch), |_| {
-        HitTestResult::new()
-    });
-    binding.handle_pointer_event(&make_up_event(Offset::ZERO, PointerType::Touch), |_| {
-        HitTestResult::new()
-    });
+    binding.handle_pointer_event(
+        &make_down_event(Offset::ZERO, PointerKind::Touch).expect("finite input"),
+        |_| HitTestResult::new(),
+    );
+    binding.handle_pointer_event(
+        &make_up_event(Offset::ZERO, PointerKind::Touch).expect("finite input"),
+        |_| HitTestResult::new(),
+    );
     assert_eq!(deliveries.get(), 2);
     binding
         .pointer_router()
-        .remove_all_routes(PointerId::PRIMARY);
+        .remove_all_routes(PointerId::new(core::num::NonZeroU64::MIN));
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1056,7 +1086,8 @@ enum RouterCleanup {
 impl RouterCleanup {
     fn remove(self, router: &flui_interaction::PointerRouter) {
         match self {
-            Self::Pointer => router.remove_all_routes(flui_interaction::PointerId::PRIMARY),
+            Self::Pointer => router
+                .remove_all_routes(flui_interaction::PointerId::new(core::num::NonZeroU64::MIN)),
             Self::Global => router.clear_global_handlers(),
             Self::All => router.clear(),
         }
@@ -1157,7 +1188,7 @@ fn assert_router_retirement_recovery(cleanup: RouterCleanup, competing: bool, ac
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::rc::{Rc, Weak};
 
-    use flui_interaction::events::{PointerType, make_down_event, make_up_event};
+    use flui_interaction::events::{PointerKind, make_down_event, make_up_event};
     use flui_interaction::{GestureBinding, HitTestResult, Offset, PointerId};
 
     struct RetireCapture {
@@ -1172,7 +1203,7 @@ fn assert_router_retirement_recovery(cleanup: RouterCleanup, competing: bool, ac
             let binding = self.binding.upgrade().expect("live binding");
             let deliveries = Rc::clone(&self.deliveries);
             binding.pointer_router().add_route(
-                PointerId::PRIMARY,
+                PointerId::new(core::num::NonZeroU64::MIN),
                 Rc::new(move |_| deliveries.set(deliveries.get() + 1)),
             );
             std::panic::panic_any(self.message);
@@ -1219,7 +1250,7 @@ fn assert_router_retirement_recovery(cleanup: RouterCleanup, competing: bool, ac
         } else {
             binding
                 .pointer_router()
-                .add_route(PointerId::PRIMARY, handler);
+                .add_route(PointerId::new(core::num::NonZeroU64::MIN), handler);
         }
     }
 
@@ -1227,9 +1258,10 @@ fn assert_router_retirement_recovery(cleanup: RouterCleanup, competing: bool, ac
     // router's clone runs no user code, so retirement must release it.
     let shared: flui_interaction::PointerRouteHandler = Rc::new(|_| {});
     if matches!(cleanup, RouterCleanup::Pointer) {
-        binding
-            .pointer_router()
-            .add_route(PointerId::PRIMARY, Rc::clone(&shared));
+        binding.pointer_router().add_route(
+            PointerId::new(core::num::NonZeroU64::MIN),
+            Rc::clone(&shared),
+        );
     } else {
         binding
             .pointer_router()
@@ -1266,16 +1298,18 @@ fn assert_router_retirement_recovery(cleanup: RouterCleanup, competing: bool, ac
     if active_unwind {
         let deliveries = Rc::clone(&deliveries);
         binding.pointer_router().add_route(
-            PointerId::PRIMARY,
+            PointerId::new(core::num::NonZeroU64::MIN),
             Rc::new(move |_| deliveries.set(deliveries.get() + 1)),
         );
     }
-    binding.handle_pointer_event(&make_down_event(Offset::ZERO, PointerType::Touch), |_| {
-        HitTestResult::new()
-    });
-    binding.handle_pointer_event(&make_up_event(Offset::ZERO, PointerType::Touch), |_| {
-        HitTestResult::new()
-    });
+    binding.handle_pointer_event(
+        &make_down_event(Offset::ZERO, PointerKind::Touch).expect("finite input"),
+        |_| HitTestResult::new(),
+    );
+    binding.handle_pointer_event(
+        &make_up_event(Offset::ZERO, PointerKind::Touch).expect("finite input"),
+        |_| HitTestResult::new(),
+    );
     assert_eq!(
         deliveries.get(),
         2,
@@ -1332,7 +1366,7 @@ fn assert_router_owner_retirement(competing: bool, active_unwind: bool) {
             let _keep_capture_alive = &capture;
         });
         if index == 0 {
-            owner.add_route(PointerId::PRIMARY, handler);
+            owner.add_route(PointerId::new(core::num::NonZeroU64::MIN), handler);
         } else {
             owner.add_global_handler(handler);
         }
@@ -1374,7 +1408,7 @@ fn assert_saved_route_entry_retirement() {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use flui_interaction::events::{PointerType, make_down_event};
+    use flui_interaction::events::{PointerKind, make_down_event};
     use flui_interaction::{HitTestResult, Offset};
 
     struct FailingCapture {
@@ -1434,7 +1468,7 @@ fn assert_saved_route_entry_retirement() {
             .resolve_pointer_route(&[hit_entry(next)])
             .expect("next route")
             .token();
-        let event = make_down_event(Offset::ZERO, PointerType::Touch);
+        let event = make_down_event(Offset::ZERO, PointerKind::Touch).expect("finite input");
         assert!(
             handle
                 .invoke_pointer_route(token, &event)
@@ -1573,7 +1607,7 @@ fn drag_callback_ownership_and_retirement() {
 
 fn fresh_drag_completes_after_retirement() {
     use flui_interaction::arena::GestureArena;
-    use flui_interaction::events::{PointerType, make_move_event, make_up_event};
+    use flui_interaction::events::{PointerKind, make_move_event, make_up_event};
     use flui_interaction::routing::PointerDispatch;
     use flui_interaction::{DragAxis, DragGestureRecognizer, GestureRecognizer, Offset, PointerId};
     use std::{cell::Cell, rc::Rc};
@@ -1587,13 +1621,15 @@ fn fresh_drag_completes_after_retirement() {
         .on_start(move |_| observed_start.set(observed_start.get() + 1))
         .on_end(move |_| observed_end.set(observed_end.get() + 1))
         .build();
-    let down = flui_interaction::events::make_down_event(Offset::ZERO, PointerType::Touch);
+    let down = flui_interaction::events::make_down_event(Offset::ZERO, PointerKind::Touch)
+        .expect("finite input");
     recognizer.add_pointer(PointerDispatch::at_root(&down));
-    arena.close(PointerId::PRIMARY);
+    arena.close(PointerId::new(core::num::NonZeroU64::MIN));
     arena.drain_deferred_resolutions();
-    let movement = make_move_event(Offset::new(30.0, 0.0), PointerType::Touch);
+    let movement =
+        make_move_event(Offset::new(30.0, 0.0), PointerKind::Touch).expect("finite input");
     recognizer.handle_event(PointerDispatch::at_root(&movement));
-    let release = make_up_event(Offset::new(30.0, 0.0), PointerType::Touch);
+    let release = make_up_event(Offset::new(30.0, 0.0), PointerKind::Touch).expect("finite input");
     recognizer.handle_event(PointerDispatch::at_root(&release));
     assert_eq!((started.get(), ended.get()), (1, 1));
     assert_eq!(recognizer.cancel(), flui_interaction::CancelOutcome::Idle);
@@ -1602,14 +1638,21 @@ fn fresh_drag_completes_after_retirement() {
 fn drag_dispose_capture_reentry() {
     use flui_interaction::arena::GestureArena;
     use flui_interaction::{DragAxis, DragGestureRecognizer, GestureRecognizer};
-    use std::{cell::{Cell, RefCell}, rc::{Rc, Weak}};
+    use std::{
+        cell::{Cell, RefCell},
+        rc::{Rc, Weak},
+    };
 
     let owner = Rc::new(RefCell::new(Weak::<DragGestureRecognizer>::new()));
     let weak = owner.clone();
     struct Rival(Rc<Cell<usize>>);
     impl flui_interaction::arena::GestureArenaMember for Rival {
-        fn accept_gesture(&self, _: flui_interaction::PointerId) { self.0.set(self.0.get() + 1); }
-        fn reject_gesture(&self, _: flui_interaction::PointerId) { panic!("retiring owner must not reject its rival"); }
+        fn accept_gesture(&self, _: flui_interaction::PointerId) {
+            self.0.set(self.0.get() + 1);
+        }
+        fn reject_gesture(&self, _: flui_interaction::PointerId) {
+            panic!("retiring owner must not reject its rival");
+        }
     }
     let arena = GestureArena::new();
     let reentrant_arena = arena.clone();
@@ -1618,22 +1661,42 @@ fn drag_dispose_capture_reentry() {
     let retired = Rc::new(Cell::new(false));
     let observed = retired.clone();
     let probe = DragRetirementProbe(Box::new(move || {
-        assert!(weak.borrow().upgrade().is_none(), "final owner is already unavailable to reentry");
-        assert_eq!(reentrant_arena.drain_deferred_resolutions(), 1, "capture retirement may reenter the exact owner arena");
+        assert!(
+            weak.borrow().upgrade().is_none(),
+            "final owner is already unavailable to reentry"
+        );
+        assert_eq!(
+            reentrant_arena.drain_deferred_resolutions(),
+            1,
+            "capture retirement may reenter the exact owner arena"
+        );
         assert!(reentrant_arena.is_empty());
         observed.set(true);
     }));
-    let recognizer = DragGestureRecognizer::builder(arena.clone(), DragAxis::Horizontal).on_down(move |_| {
-        let _capture = &probe;
-    }).build();
+    let recognizer = DragGestureRecognizer::builder(arena.clone(), DragAxis::Horizontal)
+        .on_down(move |_| {
+            let _capture = &probe;
+        })
+        .build();
     *owner.borrow_mut() = Rc::downgrade(&recognizer);
-    let down = flui_interaction::events::make_down_event(flui_interaction::Offset::ZERO, flui_interaction::events::PointerType::Touch);
+    let down = flui_interaction::events::make_down_event(
+        flui_interaction::Offset::ZERO,
+        flui_interaction::events::PointerKind::Touch,
+    )
+    .expect("finite input");
     recognizer.add_pointer(flui_interaction::routing::PointerDispatch::at_root(&down));
-    arena.add(flui_interaction::PointerId::PRIMARY, &rival);
-    arena.close(flui_interaction::PointerId::PRIMARY);
+    arena.add(
+        flui_interaction::PointerId::new(core::num::NonZeroU64::MIN),
+        &rival,
+    );
+    arena.close(flui_interaction::PointerId::new(core::num::NonZeroU64::MIN));
     drop(recognizer);
     assert!(retired.get());
-    assert_eq!(accepts.get(), 1, "reentrant retirement delivers the accepted rival once");
+    assert_eq!(
+        accepts.get(),
+        1,
+        "reentrant retirement delivers the accepted rival once"
+    );
     fresh_drag_completes_after_retirement();
 }
 
@@ -1643,7 +1706,8 @@ fn drag_callback_replacements_commit_before_retirement() {
     use std::{cell::Cell, rc::Rc};
 
     for slot in 0..5 {
-        let recognizer = DragGestureRecognizer::builder(GestureArena::new(), DragAxis::Horizontal).build();
+        let recognizer =
+            DragGestureRecognizer::builder(GestureArena::new(), DragAxis::Horizontal).build();
         let weak = Rc::downgrade(&recognizer);
         let retired = Rc::new(Cell::new(false));
         let observed = retired.clone();
@@ -1806,7 +1870,8 @@ fn drag_caller_keeps_previously_caught_failure() {
     let recognizer = DragGestureRecognizer::builder(GestureArena::new(), DragAxis::Horizontal)
         .on_down(move |_| {
             let _capture = &probe;
-        }).build();
+        })
+        .build();
     let outcome = catch_unwind(AssertUnwindSafe(|| drop(recognizer)));
     assert_eq!(
         outcome
@@ -1872,7 +1937,10 @@ fn drag_self_dispose_from_callback(body_failure: bool) {
     use flui_interaction::arena::GestureArena;
     use flui_interaction::{DragAxis, DragGestureRecognizer, GestureRecognizer, Offset};
     use std::panic::{AssertUnwindSafe, catch_unwind};
-    use std::{cell::{Cell, RefCell}, rc::{Rc, Weak}};
+    use std::{
+        cell::{Cell, RefCell},
+        rc::{Rc, Weak},
+    };
 
     let owner = Rc::new(RefCell::new(Weak::<DragGestureRecognizer>::new()));
     let weak = owner.clone();
@@ -1882,15 +1950,24 @@ fn drag_self_dispose_from_callback(body_failure: bool) {
         observed.set(observed.get() + 1);
         assert!(!body_failure, "drag body capture failure");
     }));
-    let recognizer = DragGestureRecognizer::builder(GestureArena::new(), DragAxis::Horizontal).on_down(move |_| {
-        let _capture = &probe;
-        let recognizer = weak.borrow().upgrade().expect("live recognizer callback");
-        assert_eq!(recognizer.cancel(), flui_interaction::CancelOutcome::Cancelled);
-        assert!(!body_failure, "drag callback body failure");
-    }).build();
+    let recognizer = DragGestureRecognizer::builder(GestureArena::new(), DragAxis::Horizontal)
+        .on_down(move |_| {
+            let _capture = &probe;
+            let recognizer = weak.borrow().upgrade().expect("live recognizer callback");
+            assert_eq!(
+                recognizer.cancel(),
+                flui_interaction::CancelOutcome::Cancelled
+            );
+            assert!(!body_failure, "drag callback body failure");
+        })
+        .build();
     *owner.borrow_mut() = Rc::downgrade(&recognizer);
     let outcome = catch_unwind(AssertUnwindSafe(|| {
-        let down = flui_interaction::events::make_down_event(Offset::ZERO, flui_interaction::events::PointerType::Touch);
+        let down = flui_interaction::events::make_down_event(
+            Offset::ZERO,
+            flui_interaction::events::PointerKind::Touch,
+        )
+        .expect("finite input");
         recognizer.add_pointer(flui_interaction::routing::PointerDispatch::at_root(&down));
     }));
     if body_failure {
@@ -1903,11 +1980,19 @@ fn drag_self_dispose_from_callback(body_failure: bool) {
         assert_eq!(drops.get(), 0, "failed body retains its opaque capture");
     } else {
         outcome.expect("callback self disposal is reentrant");
-        assert_eq!(drops.get(), 0, "cancel preserves immutable callbacks for the next contact");
+        assert_eq!(
+            drops.get(),
+            0,
+            "cancel preserves immutable callbacks for the next contact"
+        );
     }
     assert_eq!(recognizer.cancel(), flui_interaction::CancelOutcome::Idle);
     drop(recognizer);
-    assert_eq!(drops.get(), usize::from(!body_failure), "only healthy final ownership retires the opaque capture");
+    assert_eq!(
+        drops.get(),
+        usize::from(!body_failure),
+        "only healthy final ownership retires the opaque capture"
+    );
     fresh_drag_completes_after_retirement();
 }
 
@@ -1964,15 +2049,31 @@ fn drag_disposal_commits_tracking_before_rejection_diagnostics() {
 
     let arena = GestureArena::new();
     let recognizer = Rc::new_cyclic(|this: &std::rc::Weak<WithdrawingContact>| {
-        WithdrawingContact(PrimaryContact::new(ArenaMembership::new(arena.clone(), this.clone())))
+        WithdrawingContact(PrimaryContact::new(ArenaMembership::new(
+            arena.clone(),
+            this.clone(),
+        )))
     });
-    let down = flui_interaction::events::make_down_event(Offset::ZERO, flui_interaction::events::PointerType::Touch);
-    recognizer.0.begin(flui_interaction::routing::PointerDispatch::at_root(&down), &GestureSettings::default()).expect("contact admitted");
+    let down = flui_interaction::events::make_down_event(
+        Offset::ZERO,
+        flui_interaction::events::PointerKind::Touch,
+    )
+    .expect("finite input");
+    recognizer
+        .0
+        .begin(
+            flui_interaction::routing::PointerDispatch::at_root(&down),
+            &GestureSettings::default(),
+        )
+        .expect("contact admitted");
     let sibling_accepts = Rc::new(Cell::new(0));
     let sibling = Rc::new(Sibling(sibling_accepts.clone()));
-    arena.add(PointerId::PRIMARY, &sibling);
-    arena.close(PointerId::PRIMARY);
-    assert_eq!(arena.member_count(PointerId::PRIMARY), 2);
+    arena.add(PointerId::new(core::num::NonZeroU64::MIN), &sibling);
+    arena.close(PointerId::new(core::num::NonZeroU64::MIN));
+    assert_eq!(
+        arena.member_count(PointerId::new(core::num::NonZeroU64::MIN)),
+        2
+    );
 
     let diagnostic_ran = Arc::new(AtomicBool::new(false));
     let result =
@@ -1993,7 +2094,7 @@ fn drag_disposal_commits_tracking_before_rejection_diagnostics() {
         "tracking commits before diagnostic code"
     );
     assert_eq!(
-        arena.member_count(PointerId::PRIMARY),
+        arena.member_count(PointerId::new(core::num::NonZeroU64::MIN)),
         1,
         "only the sibling remains admitted"
     );
@@ -2005,10 +2106,19 @@ fn drag_disposal_commits_tracking_before_rejection_diagnostics() {
     );
     assert!(arena.is_empty());
     assert!(recognizer.0.withdraw().is_none());
-    let next = recognizer.0.begin(flui_interaction::routing::PointerDispatch::at_root(&down), &GestureSettings::default()).expect("withdrawn owner admits next contact");
+    let next = recognizer
+        .0
+        .begin(
+            flui_interaction::routing::PointerDispatch::at_root(&down),
+            &GestureSettings::default(),
+        )
+        .expect("withdrawn owner admits next contact");
     assert!(recognizer.0.is_current(next));
-    arena.close(PointerId::PRIMARY);
-    assert_eq!(recognizer.0.withdraw().expect("healthy next withdrawal").id, next);
+    arena.close(PointerId::new(core::num::NonZeroU64::MIN));
+    assert_eq!(
+        recognizer.0.withdraw().expect("healthy next withdrawal").id,
+        next
+    );
     assert!(recognizer.0.current().is_none());
     assert!(arena.is_empty());
     fresh_drag_completes_after_retirement();
@@ -2016,7 +2126,7 @@ fn drag_disposal_commits_tracking_before_rejection_diagnostics() {
 
 fn drag_completion_commits_tracking_before_stop_diagnostics() {
     use flui_interaction::arena::GestureArena;
-    use flui_interaction::events::{PointerType, make_move_event, make_up_event};
+    use flui_interaction::events::{PointerKind, make_move_event, make_up_event};
     use flui_interaction::routing::PointerDispatch;
     use flui_interaction::{DragAxis, DragGestureRecognizer, GestureRecognizer, Offset, PointerId};
     use std::cell::Cell;
@@ -2053,13 +2163,16 @@ fn drag_completion_commits_tracking_before_stop_diagnostics() {
     let observed_end = ends.clone();
     let recognizer = DragGestureRecognizer::builder(arena.clone(), DragAxis::Horizontal)
         .on_start(move |_| observed_start.set(observed_start.get() + 1))
-        .on_end(move |_| observed_end.set(observed_end.get() + 1)).build();
-    let down = flui_interaction::events::make_down_event(Offset::ZERO, PointerType::Touch);
+        .on_end(move |_| observed_end.set(observed_end.get() + 1))
+        .build();
+    let down = flui_interaction::events::make_down_event(Offset::ZERO, PointerKind::Touch)
+        .expect("finite input");
     recognizer.add_pointer(PointerDispatch::at_root(&down));
-    arena.close(PointerId::PRIMARY);
+    arena.close(PointerId::new(core::num::NonZeroU64::MIN));
     arena.drain_deferred_resolutions();
-    let movement = make_move_event(Offset::new(30.0, 0.0), PointerType::Touch);
-    let release = make_up_event(Offset::new(30.0, 0.0), PointerType::Touch);
+    let movement =
+        make_move_event(Offset::new(30.0, 0.0), PointerKind::Touch).expect("finite input");
+    let release = make_up_event(Offset::new(30.0, 0.0), PointerKind::Touch).expect("finite input");
     recognizer.handle_event(PointerDispatch::at_root(&movement));
     assert_eq!(starts.get(), 1);
 
@@ -2092,7 +2205,7 @@ fn drag_completion_commits_tracking_before_stop_diagnostics() {
     // A second actual drag on the same recognizer proves the failed terminal
     // contact did not wedge its tracking or delete subsequent work.
     recognizer.add_pointer(PointerDispatch::at_root(&down));
-    arena.close(PointerId::PRIMARY);
+    arena.close(PointerId::new(core::num::NonZeroU64::MIN));
     arena.drain_deferred_resolutions();
     recognizer.handle_event(PointerDispatch::at_root(&movement));
     recognizer.handle_event(PointerDispatch::at_root(&release));
@@ -2122,22 +2235,30 @@ fn stop_tracking_pointer_sweep_starts_the_unresolved_drag() {
     let starts = Rc::new(Cell::new(0));
     let observed = starts.clone();
     let recognizer = DragGestureRecognizer::builder(arena.clone(), DragAxis::Horizontal)
-        .on_start(move |_| observed.set(observed.get() + 1)).build();
-    let down = flui_interaction::events::make_down_event(Offset::ZERO, flui_interaction::events::PointerType::Touch);
+        .on_start(move |_| observed.set(observed.get() + 1))
+        .build();
+    let down = flui_interaction::events::make_down_event(
+        Offset::ZERO,
+        flui_interaction::events::PointerKind::Touch,
+    )
+    .expect("finite input");
     recognizer.add_pointer(flui_interaction::routing::PointerDispatch::at_root(&down));
     let rejections = Rc::new(Cell::new(0));
     let rival = Rc::new(Rival(rejections.clone()));
-    arena.add(PointerId::PRIMARY, &rival);
-    arena.close(PointerId::PRIMARY);
+    arena.add(PointerId::new(core::num::NonZeroU64::MIN), &rival);
+    arena.close(PointerId::new(core::num::NonZeroU64::MIN));
     assert_eq!(starts.get(), 0, "the competition is still open");
 
-    arena.sweep(PointerId::PRIMARY);
+    arena.sweep(PointerId::new(core::num::NonZeroU64::MIN));
     assert_eq!(
         (starts.get(), rejections.get()),
         (1, 1),
         "the sweep accepts the retiring drag and starts it"
     );
-    assert_eq!(recognizer.cancel(), flui_interaction::CancelOutcome::Cancelled);
+    assert_eq!(
+        recognizer.cancel(),
+        flui_interaction::CancelOutcome::Cancelled
+    );
     assert!(arena.is_empty());
     assert_eq!(recognizer.cancel(), flui_interaction::CancelOutcome::Idle);
     fresh_drag_completes_after_retirement();
@@ -2154,9 +2275,9 @@ fn stop_tracking_preserves_reentrant_contact_after_sweep_failure() {
 fn assert_stop_tracking_preserves_reentrant_contact(fail_after_admission: bool) {
     use flui_interaction::arena::GestureArena;
     use flui_interaction::arena::GestureArenaMember;
-    use flui_interaction::{ArenaMembership, PrimaryContact, GestureSettings, Offset, PointerId};
-    use flui_interaction::events::{make_down_event, PointerType};
+    use flui_interaction::events::{PointerKind, make_down_event};
     use flui_interaction::routing::PointerDispatch;
+    use flui_interaction::{ArenaMembership, GestureSettings, Offset, PointerId, PrimaryContact};
     use std::cell::Cell;
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::rc::Rc;
@@ -2181,8 +2302,11 @@ fn assert_stop_tracking_preserves_reentrant_contact(fail_after_admission: bool) 
             // Reuse the platform pointer ID while the old exact-generation
             // sweep is delivering. The new arena slot belongs to this contact.
             self.contact.withdraw().expect("retiring contact");
-            let down = make_down_event(Offset::new(7.0, 3.0), PointerType::Touch);
-            self.contact.begin(PointerDispatch::at_root(&down), &GestureSettings::default()).expect("next generation admitted");
+            let down =
+                make_down_event(Offset::new(7.0, 3.0), PointerKind::Touch).expect("finite input");
+            self.contact
+                .begin(PointerDispatch::at_root(&down), &GestureSettings::default())
+                .expect("next generation admitted");
             assert!(
                 !self.fail_after_admission,
                 "sweep failure after next contact admission"
@@ -2200,8 +2324,11 @@ fn assert_stop_tracking_preserves_reentrant_contact(fail_after_admission: bool) 
         next_accepts: next_accepts.clone(),
         fail_after_admission,
     });
-    let down = make_down_event(Offset::ZERO, PointerType::Touch);
-    let retiring = member.contact.begin(PointerDispatch::at_root(&down), &GestureSettings::default()).expect("initial generation admitted");
+    let down = make_down_event(Offset::ZERO, PointerKind::Touch).expect("finite input");
+    let retiring = member
+        .contact
+        .begin(PointerDispatch::at_root(&down), &GestureSettings::default())
+        .expect("initial generation admitted");
     let result = catch_unwind(AssertUnwindSafe(|| member.contact.finish()));
     if fail_after_admission {
         assert_eq!(
@@ -2213,17 +2340,34 @@ fn assert_stop_tracking_preserves_reentrant_contact(fail_after_admission: bool) 
     } else {
         result.expect("reentrant sweep finishes");
     }
-    let next = member.contact.current().expect("reentrant contact survives old cleanup");
-    assert_ne!(next.id, retiring, "reused pointer gets a distinct contact generation");
-    assert_eq!(next.pointer, PointerId::PRIMARY);
+    let next = member
+        .contact
+        .current()
+        .expect("reentrant contact survives old cleanup");
+    assert_ne!(
+        next.id, retiring,
+        "reused pointer gets a distinct contact generation"
+    );
+    assert_eq!(next.pointer, PointerId::new(core::num::NonZeroU64::MIN));
     assert_eq!(next.local, Offset::new(7.0, 3.0));
     assert_eq!(next.global, Offset::new(7.0, 3.0));
-    assert!(member.contact.tracks(PointerId::PRIMARY));
-    assert_eq!(arena.member_count(PointerId::PRIMARY), 1);
-    assert!(arena.is_open(PointerId::PRIMARY));
+    assert!(
+        member
+            .contact
+            .tracks(PointerId::new(core::num::NonZeroU64::MIN))
+    );
+    assert_eq!(
+        arena.member_count(PointerId::new(core::num::NonZeroU64::MIN)),
+        1
+    );
+    assert!(arena.is_open(PointerId::new(core::num::NonZeroU64::MIN)));
     member.contact.finish();
     assert!(member.contact.current().is_none());
-    assert!(!member.contact.tracks(PointerId::PRIMARY));
+    assert!(
+        !member
+            .contact
+            .tracks(PointerId::new(core::num::NonZeroU64::MIN))
+    );
     assert_eq!(next_accepts.get(), 1, "accepted tail remains deliverable");
     assert!(arena.is_empty());
     fresh_drag_completes_after_retirement();
@@ -2311,11 +2455,11 @@ fn closing_regions(on_enter: bool) -> ClosingRegions {
 /// A buttonless mouse move: the only shape that carries hover semantics.
 fn hover_move() -> flui_interaction::events::PointerEvent {
     use flui_foundation::geometry::Offset;
-    use flui_interaction::events::{PointerButtons, PointerEvent, PointerType, make_move_event};
+    use flui_interaction::events::{PointerButtons, PointerEvent, PointerKind, make_move_event};
 
-    let mut event = make_move_event(Offset::ZERO, PointerType::Mouse);
+    let mut event = make_move_event(Offset::ZERO, PointerKind::Mouse).expect("finite input");
     if let PointerEvent::Move(update) = &mut event {
-        update.current.buttons = PointerButtons::new();
+        update.buttons = PointerButtons::NONE;
     }
     event
 }
@@ -2383,8 +2527,10 @@ impl Drop for CaptureProbe {
 fn non_pointer_invocation_retains_its_snapshot_across_a_reentrant_close() {
     use flui_foundation::geometry::{Offset, Rect, Size};
     use flui_interaction::__runtime::{CloseMode, close_dispatch, presentation_dispatch};
-    use flui_interaction::events::{Modifiers, ScrollEventData};
-    use flui_interaction::{PointerDeviceKind, PointerId, PointerPanZoomEvent};
+    use flui_interaction::PointerId;
+    use flui_interaction::events::{
+        PanZoomEvent, PanZoomPhase, PointerInfo, PointerKind, PointerPosition, ScrollEventData,
+    };
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::rc::Rc;
 
@@ -2405,20 +2551,29 @@ fn non_pointer_invocation_retains_its_snapshot_across_a_reentrant_close() {
                     let target = owner
                         .register_scroll(move |_| close_then_fail())
                         .expect("scroll target");
-                    let event =
-                        ScrollEventData::new(Offset::ZERO, Offset::ZERO, Modifiers::empty());
+                    let flui_interaction::events::PointerEvent::Scroll(scroll) =
+                        flui_interaction::events::make_scroll_event(Offset::ZERO, Offset::ZERO)
+                            .expect("finite scroll")
+                    else {
+                        unreachable!()
+                    };
+                    let event = ScrollEventData::from(&scroll);
                     let _ = owner.invoke_scroll_target(target, &event);
                 }
                 "pan-zoom" => {
                     let target = owner
                         .register_pan_zoom(move |_| close_then_fail())
                         .expect("pan-zoom target");
-                    let event = PointerPanZoomEvent::Start {
-                        pointer_id: PointerId::new(1).expect("nonzero pointer id"),
-                        position: Offset::ZERO,
-                        timestamp_nanos: 0,
-                        device_kind: PointerDeviceKind::Trackpad,
-                    };
+                    let event = PanZoomEvent::new(
+                        PointerInfo::new(
+                            PointerId::try_from(1).expect("nonzero pointer id"),
+                            PointerKind::Trackpad,
+                        ),
+                        flui_platform_api::EventTime::from_nanos(0),
+                        PointerPosition::try_new(flui_foundation::geometry::Point::ZERO)
+                            .expect("finite position"),
+                        PanZoomPhase::Start,
+                    );
                     let _ = owner.invoke_pan_zoom_target(target, &event);
                 }
                 "path clip" => {
