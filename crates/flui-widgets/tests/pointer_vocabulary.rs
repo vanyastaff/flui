@@ -115,6 +115,9 @@ pub(crate) fn scroll_claim_preserves_owned_source_units_and_phase() {
 }
 
 pub(crate) fn pointer_delivery_preserves_source_and_sample_families() {
+    use flui_foundation::geometry::Size;
+    use flui_platform_api::pointer::{ContactSize, PenOrientation, PenTool, Pressure, Twist};
+
     let observed = Rc::new(RefCell::new(Vec::<PointerMove>::new()));
     let sink = observed.clone();
     let laid = lay_out(
@@ -128,22 +131,38 @@ pub(crate) fn pointer_delivery_preserves_source_and_sample_families() {
             .child(SizedBox::new(100.0, 100.0)),
         tight(100.0, 100.0),
     );
-    let sample = |time, x| PointerSample::new(EventTime::from_nanos(time), position(x, 30.0));
+    let pointer = PointerInfo::new(
+        PointerId::try_from(3_u64).expect("authored contact"),
+        PointerKind::Pen {
+            tool: PenTool::Eraser,
+        },
+    )
+    .with_device(DeviceId::try_from(13_u64).expect("authored hardware"))
+    .with_role(PointerRole::Secondary);
+    let sample = |time, x| {
+        PointerSample::new(EventTime::from_nanos(time), position(x, 30.0))
+            .with_pressure(Pressure::try_new((x / 100.0) as f32).expect("authored pressure"))
+            .with_contact_size(
+                ContactSize::try_new(Size::new(x / 10.0, 2.0)).expect("finite contact"),
+            )
+            .with_orientation(PenOrientation::try_altitude(0.5).expect("authored altitude"))
+            .with_twist(Twist::try_new(x / 100.0).expect("finite twist"))
+    };
     let down = PointerPress::new(
-        mouse(),
+        pointer,
         PointerButton::PRIMARY,
         PointerButtons::NONE,
         sample(10, 10.0),
     );
     laid.dispatch_pointer_event(&PointerEvent::Down(down));
     let held = PointerButtons::NONE.with(PointerButton::PRIMARY);
-    let event = PointerMove::new(mouse(), held, sample(30, 30.0))
-        .with_coalesced(vec![sample(20, 20.0)])
+    let event = PointerMove::new(pointer, held, sample(30, 30.0))
+        .with_coalesced(vec![sample(0, 20.0)])
         .with_predicted(vec![sample(40, 40.0)])
         .with_modifiers(Modifiers::CONTROL);
     laid.dispatch_pointer_event(&PointerEvent::Move(event.clone()));
     // Terminal dispatch drains pending Move through GestureBinding.
-    let up = PointerRelease::new(mouse(), PointerButton::PRIMARY, held, sample(50, 50.0));
+    let up = PointerRelease::new(pointer, PointerButton::PRIMARY, held, sample(50, 50.0));
     laid.dispatch_pointer_event(&PointerEvent::Up(up));
     assert_eq!(observed.borrow().as_slice(), &[event]);
 }
