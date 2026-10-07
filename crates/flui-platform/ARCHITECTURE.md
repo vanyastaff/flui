@@ -62,6 +62,32 @@ older sent timestamps, epoch rebasing and saturation: there is no public API
 that advances the OS uptime by 49.7 days. These checks do not establish physical
 mouse delivery, pen/touch translation, or other backend clocks.
 
+### Browser capture ends each admitted contact once
+
+The canvas requests native pointer capture before delivering Down. Its
+owner-local admission set is updated before release or input callbacks:
+Up and browser Cancel consume admission, and a capture loss cancels only a
+still-admitted contact. The loss following a normal terminal event stays inert,
+and a later contact can reuse the pointer identity. Native capture refusal is
+reported through diagnostics without discarding the original Down. Synthetic
+DOM events do not create native capture admission.
+
+The DOM's floating-point `offsetX`/`offsetY` getters supply logical pointer and
+wheel positions. Local wasm-bindgen getters preserve their CSSOM View double
+precision where web-sys exposes the historical integer signatures. Some
+browsers round wheel offsets themselves. For a canvas whose whole ancestry
+has no CSS coordinate transform or zoom, viewport coordinates minus its border
+box origin and border widths recover the padding-edge position, including
+fractional origins. A transformed canvas retains the browser's local offsets;
+its wheel precision remains browser-limited rather than applying an incorrect
+bounding-rectangle inversion.
+
+`examples/browser_input_probe` checks browser cancellation, duplicate capture
+loss and recovery, fractional pointer/wheel positions, and a trusted drag whose
+release occurs outside the canvas. Its README describes execution. These are
+browser smoke contracts, not automatically executed CI tests; a wasm compile
+does not prove that they pass. Browser touch-action policy remains page-owned.
+
 ### Native Win32 delivers admitted idle deadlines through live window paints
 
 The owner loop keeps admitted deadline delivery separate from the next hook

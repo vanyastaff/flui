@@ -122,6 +122,12 @@ document.getElementById('fractional').onclick = () => check('fractional-check', 
     report('wheel-source', JSON.stringify({ clientX: wheel.clientX, clientY: wheel.clientY, left: wheelRect.left, top: wheelRect.top, border: 2, padding: 3 }));
     canvas.dispatchEvent(wheel);
     equal(JSON.parse(document.getElementById('scroll')?.textContent ?? 'null'), { x: 89.75, y: 46.25 });
+    // A viewport rectangle cannot invert a transformed canvas. The browser's
+    // own local-offset path must remain authoritative for this shape.
+    canvas.style.transform = 'scale(2)';
+    canvas.style.transformOrigin = '0 0';
+    canvas.dispatchEvent(new WheelEvent('wheel', { clientX: 100, clientY: 100, bubbles: true, deltaY: 1 }));
+    equal(JSON.parse(document.getElementById('scroll')?.textContent ?? 'null'), { x: 44, y: 22 });
   } finally {
     if (originalStyle === null) canvas.removeAttribute('style');
     else canvas.setAttribute('style', originalStyle);
