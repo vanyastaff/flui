@@ -61,12 +61,12 @@ fn format_millis(duration: Duration) -> String {
 pub(crate) struct RealmCapabilities<'a> {
     /// The realm's cross-tree `GlobalKey` uniqueness domain (ADR-0043).
     pub(crate) global_key_scope: GlobalKeyScope,
-    /// The realm's shared async-task driver (`build_owner.rs:296` is
-    /// realm-level; see the presentation-teardown contract for the
-    /// consequence of that when this presentation closes).
+    /// A `Weak` handle to the realm's shared async tasks (realm-level; see
+    /// the presentation-teardown contract for the consequence of that when
+    /// this presentation closes).
     pub(crate) async_driver: AsyncDriver,
     /// The realm's owner-local post-frame callback capability — addresses
-    /// the realm's [`flui_scheduler::LocalPostFrameLane`] directly, so it can
+    /// the realm's [`flui_scheduler::OwnerFrame`] directly, so it can
     /// capture `Rc`/`RefCell` widget state.
     pub(crate) local_post_frame_handle: LocalPostFrameHandle,
     /// The realm's interaction dispatch lane.

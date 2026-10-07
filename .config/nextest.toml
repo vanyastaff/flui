@@ -56,7 +56,7 @@ leak-timeout = "1s"
 # run to run with cache state -- a 4-minute global killed both template tests
 # once.
 [[profile.default.overrides]]
-filter = 'binary_id(flui-engine::compile_fail) | binary_id(flui-rendering::compile_fail) | binary_id(flui-widgets::routable_ui) | (binary_id(flui-painting::painting_it) & test(=compile_fail::trybuild_ui)) | test(=trybuild_ui::ui_tests)'
+filter = 'binary_id(flui-engine::compile_fail) | binary_id(flui-rendering::compile_fail) | binary_id(flui-widgets::routable_ui) | binary_id(flui::thread_boundary_ui) | (binary_id(flui-painting::painting_it) & test(=compile_fail::trybuild_ui)) | test(=trybuild_ui::ui_tests)'
 slow-timeout = { period = "300s", terminate-after = 4 }
 test-group = 'trybuild'
 

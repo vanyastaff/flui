@@ -298,7 +298,7 @@ impl HeadlessBinding {
     ///
     /// It is a **pipeline step, not a whole scheduler frame.**
     /// [`pump_frame`](Self::pump_frame) wraps the same pipeline in
-    /// [`flui_scheduler::UpdateScheduler::drive_frame_with_lane`], which adds begin-frame
+    /// [`flui_scheduler::UpdateScheduler::drive_frame`], which adds begin-frame
     /// work (transient callbacks, microtasks, the async-driver poll), the
     /// stationary-device re-hit-test, and `end_frame`'s post-frame callbacks.
     /// None of those run here. A post-frame callback scheduled from
@@ -339,7 +339,7 @@ impl HeadlessBinding {
                 self.install_hit_test_capability(&mut build_owner, &pipeline_owner);
             }
             BuildCapabilities::AsyncDriverOnly => {
-                build_owner.set_async_driver(self.scheduler().async_driver().clone());
+                build_owner.set_async_driver(self.async_driver());
             }
         }
 

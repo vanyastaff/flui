@@ -38,6 +38,11 @@
 
 ## Context
 
+**Superseded-by:** [ADR-0136 §2](ADR-0136-owner-local-ui-surfaces.md) for the frame
+entry API: `drive_frame(&OwnerFrame, ..)` replaces the former lane-specific driver
+named in this record's migration history. `UiRealm::pump` retains the transaction;
+its background arm calls `finish_async_pump()` then `OwnerFrame::poll_ready()`.
+
 A frame is produced by two different implementations.
 
 - **The product.** The desktop, Android, iOS and wasm runners drive each presentation through

@@ -70,9 +70,12 @@ pub(crate) fn the_production_frame_polls_the_realms_async_driver_once_before_the
 
     let polls = Arc::new(AtomicUsize::new(0));
     let polls_for_task = Arc::clone(&polls);
-    let _token = scheduler.spawn_local(Box::pin(async move {
-        polls_for_task.fetch_add(1, Ordering::Release);
-    }));
+    let _token = realm
+        .owner_frame()
+        .async_driver()
+        .spawn_local(Box::pin(async move {
+            polls_for_task.fetch_add(1, Ordering::Release);
+        }));
     assert_eq!(
         polls.load(Ordering::Acquire),
         0,
@@ -83,14 +86,14 @@ pub(crate) fn the_production_frame_polls_the_realms_async_driver_once_before_the
     let flag = Arc::clone(&polled_before_pipeline);
     let polls_probe = Arc::clone(&polls);
 
-    scheduler.drive_frame_with_lane(
+    scheduler.drive_frame(
+        realm.owner_frame(),
         flui_scheduler::Instant::now(),
         flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
         || {
             flag.store(polls_probe.load(Ordering::Acquire) == 1, Ordering::Release);
             let _ = realm.draw_frame(test_constraints());
         },
-        realm.local_post_frame_lane(),
     );
 
     assert!(

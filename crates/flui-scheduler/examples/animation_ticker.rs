@@ -16,6 +16,7 @@ use std::{
 };
 
 use flui_scheduler::{
+    OwnerFrame,
     scheduler::UpdateScheduler,
     ticker::{Ticker, TickerFuture},
 };
@@ -84,6 +85,7 @@ fn demo_manual_ticker() {
 
 fn demo_auto_scheduling_ticker() {
     let scheduler = UpdateScheduler::new();
+    let owner = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
     let mut ticker = Ticker::new_with_scheduler(&scheduler);
 
     println!("Created auto-scheduling Ticker with ID: {:?}", ticker.id());
@@ -104,7 +106,7 @@ fn demo_auto_scheduling_ticker() {
     // Execute a few frames
     println!("\nExecuting 5 frames:");
     for i in 1..=5 {
-        scheduler.execute_frame();
+        scheduler.execute_frame(&owner);
         let progress = *animation_progress.lock();
         println!("  Frame {}: Progress = {:.1}%", i, progress * 100.0);
         std::thread::sleep(Duration::from_millis(100));
