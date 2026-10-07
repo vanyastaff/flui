@@ -1,4 +1,4 @@
-﻿//! `RenderAnimatedTransform` â€” a transform that follows an animation without
+//! `RenderAnimatedTransform` â€” a transform that follows an animation without
 //! rebuilding the element tree.
 //!
 //! # One cached sample
@@ -447,6 +447,9 @@ fn commit(
     // delivered value proves nothing and the class it painted is unknown.
     let in_flight = replaced > delivered.generation;
     if !in_flight && old.0.to_bits() == value.0.to_bits() && old.1.to_bits() == value.1.to_bits() {
+        // This generation owes no marks. Record its completed delivery so a
+        // later equal notification cannot mistake it for outstanding work.
+        let _ = cell.delivered.publish(entry);
         return false;
     }
     let size = cell.size();
@@ -925,8 +928,26 @@ mod tests {
             (0.125, 0.0),
             "the tick reached the cache"
         );
-        let used = matrix(node.kind, node.take_hit_sample(), size);
-        assert_eq!(used, entry, "hit_test must reuse the visit's sample");
+        node.has_child = true;
+        let observed = std::cell::Cell::new(None);
+        let mut hit_child = |index, position, _transform| {
+            assert_eq!(index, 0);
+            observed.set(position);
+            true
+        };
+        let inner =
+            flui_rendering::protocol::BoxHitTestCtx::<Single, BoxParentData>::with_child_callback(
+                Offset::new(30.0, 20.0),
+                &mut hit_child,
+            );
+        let mut ctx = BoxHitTestContext::new(inner, size);
+        assert!(node.hit_test(&mut ctx));
+        let position = observed.get().expect("child was hit");
+        assert!((position.dx - 20.0).abs() < 1e-10);
+        assert!(
+            (position.dy - 10.0).abs() < 1e-10,
+            "the child must use the quarter-turn entry, not the later eighth turn: {position:?}; {entry:?}"
+        );
         node.detach();
     }
 

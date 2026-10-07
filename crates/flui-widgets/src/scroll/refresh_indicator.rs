@@ -495,8 +495,23 @@ fn listen_for_phase_flips(
             }
         }
     }));
-    if tracker.advance(controller.phase()) {
-        on_flip();
+    let catch_up = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if tracker.advance(controller.phase()) {
+            on_flip();
+        }
+    }));
+    if let Err(payload) = catch_up {
+        // The caller has not received the subscription ID yet. Withdraw it
+        // while our local callback ownership prevents opaque destruction.
+        if let Err(secondary) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            controller.inner.remove_listener(id);
+        })) {
+            flui_foundation::panic::retain_opaque_payload(secondary);
+        }
+        // A callback's capture destructor must not replace its failure as
+        // the original panic resumes (ADR-0127).
+        std::mem::forget(on_flip);
+        std::panic::resume_unwind(payload);
     }
     id
 }
@@ -748,7 +763,7 @@ mod tests {
         let stale = controller.phase();
         controller.finish();
         let flips = Arc::new(AtomicUsize::new(0));
-        let _id = listen_for_phase_flips(&controller, stale, {
+        let id = listen_for_phase_flips(&controller, stale, {
             let flips = Arc::clone(&flips);
             move || {
                 flips.fetch_add(1, Ordering::SeqCst);
@@ -764,6 +779,33 @@ mod tests {
             flips.load(Ordering::SeqCst),
             2,
             "the next refresh must flip"
+        );
+        controller.inner.remove_listener(id);
+
+        let stale = controller.phase();
+        controller.finish();
+        let failures = Arc::new(AtomicUsize::new(0));
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            listen_for_phase_flips(&controller, stale, {
+                let failures = Arc::clone(&failures);
+                move || {
+                    failures.fetch_add(1, Ordering::SeqCst);
+                    panic!("catch-up scheduling failure");
+                }
+            })
+        }));
+        let payload = result.expect_err("catch-up failure propagates");
+        assert_eq!(
+            flui_foundation::panic::payload_text(&*payload),
+            Some("catch-up scheduling failure")
+        );
+        assert_eq!(failures.load(Ordering::SeqCst), 1);
+        controller.begin_refresh();
+        controller.finish();
+        assert_eq!(
+            failures.load(Ordering::SeqCst),
+            1,
+            "the failed registration must no longer observe phase changes"
         );
     }
 }
