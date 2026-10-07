@@ -2678,11 +2678,13 @@ mod tests {
 
             let first_token = binding
                 .hit_tests
+                .borrow()
                 .get(&first_pointer)
                 .and_then(|cached| cached.token)
                 .expect("first cached route token");
             let later_token = binding
                 .hit_tests
+                .borrow()
                 .get(&later_pointer)
                 .and_then(|cached| cached.token)
                 .expect("later cached route token");
