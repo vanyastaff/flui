@@ -30,7 +30,7 @@ pub(crate) fn raw_text_field_callbacks_write_through_the_forwarded_cx() {
     focus_node.request_focus();
 
     let typed = KeyEventBuilder::new(Code::KeyA)
-        .with_key(Key::Character("a".to_owned()))
+        .with_key(Key::character("a"))
         .with_state(KeyState::Down)
         .build();
     harness.focus_manager().dispatch_key_event(&typed);
