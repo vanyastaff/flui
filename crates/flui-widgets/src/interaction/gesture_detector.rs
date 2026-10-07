@@ -8,6 +8,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use flui_interaction::arena::GestureCompetition;
 use flui_interaction::recognizers::scale::{
     ScaleEndDetails, ScaleGestureRecognizer, ScaleStartDetails, ScaleStartMode, ScaleUpdateDetails,
 };
@@ -1060,6 +1061,10 @@ impl ViewState<GestureDetector> for GestureDetectorState {
         }));
         let arena = GestureArenaScope::of(ctx);
         let settings = GestureArenaScope::settings_of(ctx);
+        let (double_tap_arena, tap_arena) = arena
+            .compose(GestureCompetition::RequireFirstFailure)
+            .expect("BUG: the presentation scope provides an uncomposed arena")
+            .into_branches();
         self.recognizer_configuration = Some(RecognizerConfiguration {
             arena: arena.clone(),
             settings: settings.clone(),
@@ -1077,7 +1082,7 @@ impl ViewState<GestureDetector> for GestureDetectorState {
             let secondary_slot = Rc::clone(&self.secondary_tap_slot);
             let primary_writer = writer.clone();
             let secondary_writer = writer.clone();
-            TapGestureRecognizer::builder(arena.clone())
+            TapGestureRecognizer::builder(tap_arena)
                 .settings(settings.clone())
                 .on_tap(move |_details| {
                     let handler = primary_slot.borrow().clone();
@@ -1113,7 +1118,7 @@ impl ViewState<GestureDetector> for GestureDetectorState {
             let down_slot = Rc::clone(&self.double_tap_down_slot);
             let tap_writer = writer.clone();
             let down_writer = writer.clone();
-            DoubleTapGestureRecognizer::builder(arena.clone())
+            DoubleTapGestureRecognizer::builder(double_tap_arena)
                 .settings(settings.clone())
                 .on_double_tap(move |_details| {
                     let handler = slot.borrow().clone();

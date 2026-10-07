@@ -164,14 +164,19 @@ type TapLog = Rc<RefCell<Vec<Offset<f64>>>>;
 
 /// A tap and a double tap on one detector, recording where taps fired.
 fn tap_and_double_tap(lane: &mut Lane) -> (TapLog, Rc<Cell<u32>>) {
+    let (double_tap_arena, tap_arena) = lane
+        .arena
+        .compose(GestureCompetition::RequireFirstFailure)
+        .expect("root composition")
+        .into_branches();
     let taps = Rc::new(RefCell::new(Vec::new()));
     let doubles = counter();
     let tap_log = Rc::clone(&taps);
-    let tap = TapGestureRecognizer::builder(lane.arena.clone())
+    let tap = TapGestureRecognizer::builder(tap_arena)
         .on_tap(move |details| tap_log.borrow_mut().push(details.local_position))
         .build();
     let double_log = Rc::clone(&doubles);
-    let double_tap = DoubleTapGestureRecognizer::builder(lane.arena.clone())
+    let double_tap = DoubleTapGestureRecognizer::builder(double_tap_arena)
         .on_double_tap(move |_| double_log.set(double_log.get() + 1))
         .build();
     lane.join(&tap);
