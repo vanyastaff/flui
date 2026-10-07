@@ -1047,6 +1047,138 @@ fn tap_and_drag_release_uses_terminal_event_time() {
     terminal_velocity_cases(&lane, &velocities, false);
 }
 
+fn selected_velocity_cases(family: &str) {
+    use flui_interaction::{GestureSettings, processing::VelocityEstimator};
+
+    for (estimator, expected) in [
+        (VelocityEstimator::LeastSquares, 500.0),
+        (VelocityEstimator::Impulse, 1589.9257985831982),
+        (VelocityEstimator::Ios, 2550.0),
+        (VelocityEstimator::Macos, 1950.0),
+    ] {
+        let mut lane = Lane::new();
+        let velocities = Rc::new(RefCell::new(Vec::new()));
+        let log = Rc::clone(&velocities);
+        let settings = GestureSettings::default().with_velocity_estimator(estimator);
+        match family {
+            "drag" => lane.join(
+                &DragGestureRecognizer::builder(lane.arena.clone(), DragAxis::Horizontal)
+                    .settings(settings)
+                    .on_end(move |details| log.borrow_mut().push(details.velocity.dx()))
+                    .build(),
+            ),
+            "multi-drag" => lane.join(
+                &MultiDragGestureRecognizer::builder(lane.arena.clone(), MultiDragAxis::Horizontal)
+                    .settings(settings)
+                    .on_start(move |_, _| {
+                        Some(Rc::new(VelocityHandle(Rc::clone(&log))) as Rc<dyn MultiDragHandle>)
+                    })
+                    .build(),
+            ),
+            "tap-and-drag" => lane.join(
+                &TapAndDragGestureRecognizer::builder(lane.arena.clone())
+                    .settings(settings)
+                    .on_drag_end(move |details| log.borrow_mut().push(details.velocity.dx()))
+                    .build(),
+            ),
+            "scale" => lane.join(
+                &ScaleGestureRecognizer::builder(lane.arena.clone())
+                    .settings(settings)
+                    .on_end(move |details| log.borrow_mut().push(details.velocity))
+                    .build(),
+            ),
+            _ => unreachable!("known fixture producer"),
+        }
+        for (sequence, gap) in [(0_u64, 0_u64), (1, 100), (2, 0)] {
+            let base = sequence * 1_000_000_000;
+            let scale = family == "scale";
+            let start = if scale { 0.0 } else { 10.0 };
+            lane.send(&stamped(
+                down(id(2), at(start, 0.0), PointerKind::Touch),
+                base,
+            ));
+            if scale {
+                lane.send(&stamped(
+                    down(id(3), at(100.0, 0.0), PointerKind::Touch),
+                    base,
+                ));
+            }
+            let samples: &[(u64, f64)] = if scale {
+                &[(0, -10.0), (10, -40.0), (20, -60.0), (30, -70.0)]
+            } else {
+                &[(10, 40.0), (20, 60.0), (30, 70.0)]
+            };
+            // Deliver historical samples in one current Move, while the host
+            // clock stays fixed. Scale must fit ratios from that history;
+            // the other producers fit admitted positions.
+            let sample = |millis: u64, x| {
+                flui_platform_api::pointer::PointerSample::new(
+                    flui_platform_api::EventTime::from_nanos(base + millis * 1_000_000),
+                    flui_platform_api::pointer::PointerPosition::try_new(
+                        flui_foundation::geometry::Point::new(x, 0.0),
+                    )
+                    .expect("finite position"),
+                )
+            };
+            let last = samples.last().expect("authored history");
+            let movement = flui_platform_api::pointer::PointerMove::new(
+                flui_platform_api::pointer::PointerInfo::new(id(2), PointerKind::Touch),
+                flui_platform_api::pointer::PointerButtons::NONE.with(PointerButton::PRIMARY),
+                sample(last.0, last.1),
+            )
+            .with_coalesced(
+                samples[..samples.len() - 1]
+                    .iter()
+                    .map(|&(time, x)| sample(time, x))
+                    .collect(),
+            );
+            lane.send(&PointerEvent::Move(movement));
+            let terminal = base + (30 + gap) * 1_000_000;
+            lane.send(&stamped(
+                up(id(2), at(last.1, 0.0), PointerKind::Touch),
+                terminal,
+            ));
+            if scale {
+                lane.send(&stamped(
+                    up(id(3), at(100.0, 0.0), PointerKind::Touch),
+                    terminal,
+                ));
+            }
+            let delivered = velocities.borrow();
+            assert_eq!(
+                delivered.len(),
+                usize::try_from(sequence + 1).expect("small sequence")
+            );
+            let actual = *delivered.last().expect("completed gesture");
+            let expected = if gap != 0 {
+                0.0
+            } else if scale {
+                expected / 100.0
+            } else {
+                expected
+            };
+            assert!(
+                (actual - expected).abs() < 1e-6,
+                "{family}, {estimator:?}, sequence={sequence}: got {actual}, expected {expected}"
+            );
+            assert!(lane.arena.is_empty());
+        }
+    }
+}
+
+fn drag_captures_the_selected_estimator() {
+    selected_velocity_cases("drag");
+}
+fn multidrag_captures_the_selected_estimator() {
+    selected_velocity_cases("multi-drag");
+}
+fn tap_and_drag_captures_the_selected_estimator() {
+    selected_velocity_cases("tap-and-drag");
+}
+fn scale_captures_the_selected_estimator() {
+    selected_velocity_cases("scale");
+}
+
 #[test]
 fn gesture_lifecycle_matrix() {
     let cases: &[(&str, fn())] = &[
@@ -1165,6 +1297,22 @@ fn gesture_lifecycle_matrix() {
         (
             "tap_and_drag_release_uses_terminal_event_time",
             tap_and_drag_release_uses_terminal_event_time,
+        ),
+        (
+            "drag_captures_the_selected_estimator",
+            drag_captures_the_selected_estimator,
+        ),
+        (
+            "multidrag_captures_the_selected_estimator",
+            multidrag_captures_the_selected_estimator,
+        ),
+        (
+            "tap_and_drag_captures_the_selected_estimator",
+            tap_and_drag_captures_the_selected_estimator,
+        ),
+        (
+            "scale_captures_the_selected_estimator",
+            scale_captures_the_selected_estimator,
         ),
         (
             "verdict_by_pointer_cannot_pick_a_tap_sequence",
