@@ -217,7 +217,7 @@ decoration).
 
 ## Thread safety
 
-No locks. Material widgets are built and mutated on the UI realm thread;
+No locks. Material widgets are built and mutated on the UI UI runtime thread;
 shared interaction state uses `WidgetStatesController` / `Rc` callbacks as
 elsewhere in the widget layer.
 
@@ -335,7 +335,7 @@ family separately injects completion, entrance-listener and scaffold-delivery
 failures, individually and in chronological competition. Lifecycle-acquired
 rebuild probes have distinct mounted owner inboxes so each fanout wake is
 observable. Their private map registration is a delivery fault seam, not
-supported cross-realm Messenger topology. Rows check the first failure, every
+supported cross-UI runtime Messenger topology. Rows check the first failure, every
 eligible delivery, actual subsequent rebuilds and accepted queue progress.
 Four bounded children add hostile secondary payloads with several panicking
 destructors and assert that none retire before or after recovery. Readiness is

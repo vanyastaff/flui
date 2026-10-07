@@ -15,8 +15,8 @@ use std::cell::Cell;
 use flui_engine::{EngineError, RasterBackend, RasterOwner};
 use flui_foundation::geometry::Rect;
 use flui_foundation::{
-    FrameEpoch, FrameStamp, GpuResourceGeneration, PresentationAddress, PresentationId, RealmId,
-    SurfaceGeneration,
+    FrameEpoch, FrameStamp, GpuResourceGeneration, PresentationAddress, PresentationId,
+    SurfaceGeneration, UiRuntimeId,
 };
 use flui_layer::{CanvasLayer, DamageRegion, Layer, Scene, SceneSnapshot};
 
@@ -125,7 +125,7 @@ impl RasterBackend for NoOpBackend {
 
 fn address() -> PresentationAddress {
     PresentationAddress {
-        realm_id: RealmId::new(1),
+        ui_runtime_id: UiRuntimeId::new(1),
         presentation_id: PresentationId::new(1),
     }
 }

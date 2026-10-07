@@ -28,7 +28,7 @@ mod host;
 #[cfg(target_os = "ios")]
 pub(super) mod ios;
 
-mod realm_dispatch;
+mod owner_dispatch;
 // Unconditional, like `device_recovery` above: the backoff's trait and
 // outcome are portable and its tests are host-run, so a
 // `cfg(target_os = "android")` here would hide the whole file from every gate
@@ -59,7 +59,7 @@ pub use fonts::{FontRegistrationError, register_font};
 pub(crate) use host::{OwnerHostClearGuard, install_owner_platform, with_owner_platform};
 #[cfg(target_os = "ios")]
 pub use ios::{run_app_ios, run_app_ios_with_config};
-pub(in crate::app) use realm_dispatch::{RealmDispatcher, RealmTask, SurfaceApplier};
+pub(in crate::app) use owner_dispatch::{PresentationDispatcher, RuntimeTask, SurfaceApplier};
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
@@ -76,11 +76,11 @@ pub use secondary_window::open_window;
 use web::run_web;
 
 /// The presentation window for a freshly opened host window: the window
-/// itself, upcast to the contract the realm drives, the accessibility
+/// itself, upcast to the contract the UI runtime drives, the accessibility
 /// bridge its backend fixed when it built it, and its text-store host when
 /// the backend's input methods pull from the field (ADR-0135).
 ///
-/// The one place the runner turns an `open_window` result into what a realm
+/// The one place the runner turns an `open_window` result into what a UI runtime
 /// constructor takes. Reading the bridge and the host here, once, is sound
 /// because every backend sets both at construction and never swaps them.
 /// The host is owner-thread state, so it is read through the loop's
@@ -119,7 +119,7 @@ fn text_store_host_of(
 ///
 /// The router is cloned into the callback rather than resolved from
 /// `APP_RUNTIME` at fire time. That is load-bearing: a close request can
-/// arrive while this realm is checked out for dispatch, and a router
+/// arrive while this UI runtime is checked out for dispatch, and a router
 /// reached through the thread-local would then have to fail closed on a
 /// bookkeeping detail the application never asked about.
 ///
@@ -176,7 +176,7 @@ pub(crate) fn install_close_request_wiring(
 /// same reason (AppKit's `-close` does not send `windowShouldClose:`;
 /// Win32's `DestroyWindow` does not send `WM_CLOSE`).
 ///
-/// Owner-thread only, like every other operation on a hosted realm — a
+/// Owner-thread only, like every other operation on a hosted UI runtime — a
 /// call from a worker thread is REFUSED with a typed error rather than
 /// silently doing nothing. That matters for the deferral case above: the
 /// work an application finishes before calling this often finishes on a
@@ -311,7 +311,7 @@ mod tests {
 
     use super::host::APP_RUNTIME;
 
-    // `teardown_platform_realm` is `cfg(all(not(ios), not(wasm32)))` -- neither
+    // `teardown_platform_ui_runtime` is `cfg(all(not(ios), not(wasm32)))` -- neither
     // platform runs the desktop teardown path it exercises.
 
     use super::*;
@@ -347,7 +347,7 @@ mod tests {
     ///
     /// No test lock: this touches `APP_RUNTIME`, a `thread_local!`, and the
     /// standard library test harness runs each `#[test]` on its own freshly
-    /// spawned thread, so a fresh `AppRuntime` (no realm, no owner platform)
+    /// spawned thread, so a fresh `AppRuntime` (no UI runtime, no owner platform)
     /// is what this test's thread starts from regardless of what any other
     /// concurrently-running test does on ITS OWN thread — the same reasoning
     /// this file's other thread-local-only tests below rely on. The retired
@@ -357,7 +357,7 @@ mod tests {
     /// ported forward, because the state each one guarded
     /// (`AppBinding::instance()`'s active window, and the process-global
     /// half of the `UpdateScheduler` singleton respectively) no longer exists —
-    /// `AppBinding` is gone entirely and every `UiRealm` owns its own fresh
+    /// `AppBinding` is gone entirely and every `UiRuntime` owns its own fresh
     /// `UpdateScheduler` value — and because a per-test-thread thread-local needs
     /// no cross-test lock in the first place.
     fn desktop_bootstrap_stores_the_window_before_the_first_synchronous_redraw_observes_it() {
@@ -375,7 +375,7 @@ mod tests {
             .expect("headless platform always opens a window");
 
         // `on_request_frame` requires `Send` on the callback; `AppRuntime` is
-        // not `Send` (it holds owner-thread-affine realm state), so the
+        // not `Send` (it holds owner-thread-affine ui_runtime state), so the
         // closure below cannot capture a specific `&AppRuntime`. Resolving
         // `APP_RUNTIME` fresh inside the closure (zero captures for the
         // runtime itself) sidesteps that entirely.
@@ -491,14 +491,14 @@ mod tests {
                 .expect("BUG: install_owner_platform just ran above")
                 .and_then(flui_platform::WindowOpen::try_ready)
                 .expect("headless open_window is always Ready");
-                let realm = host::build_runtime_realm(
+                let ui_runtime = host::build_ui_runtime(
                     &host::runtime_wake_callback(),
                     presentation_window(window),
                     1.0,
                 )
-                .expect("realm");
+                .expect("ui_runtime");
                 let store = flui_platform_api::text_store::InMemoryTextStore::new("");
-                let _token = realm
+                let _token = ui_runtime
                     .text_input_handle()
                     .attach(flui_interaction::TextInputClient::new(store))
                     .expect("the presentation takes text input");

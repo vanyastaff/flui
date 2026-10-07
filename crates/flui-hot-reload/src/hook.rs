@@ -12,7 +12,7 @@
 //! - [`WorkerReloadHook`] — the host/worker split `flui create --hot-reload`
 //!   generates: reloads the worker `cdylib` when its artifact changes, and
 //!   turns a worker's [`request_rebuild`](crate::request_rebuild) into a
-//!   reassemble of every realm.
+//!   reassemble of every UI runtime.
 //! - [`ScenePluginHook`] — `flui run --scene`: a scene plugin that draws
 //!   whole frames instead of the widget tree.
 
@@ -40,7 +40,7 @@ use crate::{
 ///   edit; with the `app-plugin` feature it also receives the worker's
 ///   [`request_rebuild`](crate::request_rebuild) calls.
 /// - **Polled**, it reloads a changed worker on the owner thread and reports
-///   [`ReloadEvent::Patched`], which reassembles every realm. A reload whose
+///   [`ReloadEvent::Patched`], which reassembles every UI runtime. A reload whose
 ///   shared-type layout changed, or that failed, is logged loudly and keeps
 ///   the last good tree.
 /// - **Detached** or dropped, it stops and joins the watcher and drops its

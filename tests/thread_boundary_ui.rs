@@ -1,4 +1,4 @@
-//! Realm-bound handles stay on their owner thread: each fixture under
+//! Runtime-bound handles stay on their owner thread: each fixture under
 //! `tests/ui/thread_boundary/` hands one to `std::thread::spawn` through the
 //! facade, and the compiler must refuse it, naming the public type.
 

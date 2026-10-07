@@ -20,7 +20,7 @@ use crate::LayerTree;
 /// The identity shared by one leader and any number of followers.
 ///
 /// Minted from a process-wide counter: a link is a `Copy` token a widget in
-/// one realm may hand to a widget in another, so a realm-scoped counter would
+/// one UI runtime may hand to a widget in another, so a UI runtime-scoped counter would
 /// invite collisions where a global one cannot. `Ordering::Relaxed` is enough
 /// because uniqueness is the only requirement — the read-modify-write is
 /// atomic under every ordering, and no other memory is published through it.

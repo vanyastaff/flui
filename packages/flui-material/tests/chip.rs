@@ -87,7 +87,7 @@ fn chip_only_point() -> (f64, f64) {
 // ------------------------------------------------------------------
 
 /// The shared root arena installed by the binding makes the nested delete
-/// target and chip body compete exactly as they do in a production `UiRealm`.
+/// target and chip body compete exactly as they do in a production `UiRuntime`.
 pub fn tapping_the_delete_icon_fires_on_deleted_only_not_the_chip_tap() {
     let presses = Rc::new(RefCell::new(0_u32));
     let deletions = Rc::new(RefCell::new(0_u32));

@@ -237,7 +237,7 @@ immediately instead of hanging while trying to re-enter the same mutex.
 ### Standalone AppKit stops its loop and returns through Rust cleanup
 
 The existing `Platform` exit-policy hook remains the boundary: `flui-app`
-owns realm/service policy; `flui-platform` owns window bookkeeping and native
+owns UI runtime/service policy; `flui-platform` owns window bookkeeping and native
 loop actuation. AppKit now implements both policy installation and coalesced,
 any-thread re-evaluation. Close callbacks finish before the deferred owner turn
 consults the hook. Hooks run outside locks, and both loop phase and window count
@@ -826,9 +826,9 @@ gpui), and the macOS module's own header already commits to migrating there.
 
 **Why `applicationWillTerminate:`.** `UIApplicationMain` never returns, so
 there is no "after `Platform::run`" for the runner to use — the desktop and
-Android runners call `teardown_platform_realm()` there. Without a deliberate
+Android runners call `teardown_platform_ui_runtime()` there. Without a deliberate
 choice the framework never receives its loop-exit signal on iOS and leaks every
-realm, service pool and the clipboard for the process's life. That delegate
+UI runtime, service pool and the clipboard for the process's life. That delegate
 method is the only pre-exit notification iOS sends, so the platform fires its
 quit handler from it and the runner runs the teardown.
 
@@ -929,7 +929,7 @@ provides `HeadlessOwnerTurns`, an owner-local driver and one-shot posting failur
 injection for deterministic app recovery tests. Successful headless run return
 leaves the retained logical owner alive; failed bootstrap, quit and destruction
 close it. The app uses this transport for pending-window completion without a
-window or realm frame. It is not a generic closure executor.
+window or UI runtime frame. It is not a generic closure executor.
 
 Run the live macOS oracle with a GUI session:
 

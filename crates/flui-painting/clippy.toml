@@ -5,7 +5,7 @@ allow-unwrap-in-tests = true
 allow-expect-in-tests = true
 allow-print-in-tests = true
 
-# No FLUI lock on the text path (ADR-0092 §3): each realm shapes through its own
+# No FLUI lock on the text path (ADR-0092 §3): each UI runtime shapes through its own
 # `TextContext` behind `&mut`.
 disallowed-types = [
     { path = "parking_lot::Mutex", reason = "the text path takes no FLUI lock (ADR-0092 §3)" },

@@ -48,7 +48,7 @@ const PLATFORM_TARGETS: [&str; 4] = [WINDOWS_TARGET, MACOS_TARGET, ANDROID_TARGE
 /// - `flui-devtools/agent`: the development agent server, off by default
 ///   because it opens an endpoint; on here so its `agent_endpoint` test runs
 ///   in the same jobs.
-/// - `flui/persist`: the storage seam the runner hands realms, off by default
+/// - `flui/persist`: the storage seam the runner hands UI runtimes, off by default
 ///   because it links the file store; on here so its runner tests and the
 ///   Notes example, which needs it, are covered.
 /// - `--lib --bins --tests`: build and run what has tests without LINKING the

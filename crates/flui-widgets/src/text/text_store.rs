@@ -3,7 +3,7 @@
 //!
 //! The store is built over the field's existing state — the
 //! [`TextEditingController`] and the laid-out `RenderEditable` — until the
-//! per-realm editing state of ADR-0092 replaces them behind the same trait.
+//! per-UI runtime editing state of ADR-0092 replaces them behind the same trait.
 //! The controller's UTF-8 offsets are converted at this boundary with
 //! `flui_platform_api::text_store::utf16`, and nowhere else.
 //!

@@ -5,7 +5,7 @@
 - **Supersedes:** ADR-0087 §4 only where it permits rendering into and invalidating
   the previous retained image before a replacement frame is prepared and submitted.
 - **Related:** ADR-0006 (record/replay), ADR-0068 (presentation disposition),
-  ADR-0091 (realm and GPU ownership).
+  ADR-0091 (UI runtime and GPU ownership).
 
 ## Context
 

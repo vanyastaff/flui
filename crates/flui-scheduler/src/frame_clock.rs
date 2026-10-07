@@ -245,7 +245,7 @@ pub enum ClockSource {
 }
 
 /// A clock source is itself a clock: whatever reads time through it (a
-/// presentation's [`FrameClock`], a realm's gesture arena and frame-time
+/// presentation's [`FrameClock`], a UI runtime's gesture arena and frame-time
 /// origin) observes the one timeline it names.
 impl MonotonicClock for ClockSource {
     fn now(&self) -> Instant {
@@ -482,7 +482,7 @@ impl FrameClock {
     /// structurally live in the caller, not here.
     ///
     /// **`Hidden` is now wired and closed:** `flui-app`'s
-    /// `UiRealm::set_presentation_hidden` calls
+    /// `UiRuntime::set_presentation_hidden` calls
     /// [`set_hidden`](Self::set_hidden) from production
     /// (`PlatformToUi::WindowVisibility`), and its own unhide branch is the
     /// closing edge — it wakes the platform loop UNCONDITIONALLY when the
@@ -1143,7 +1143,7 @@ mod tests {
     /// exactly the multi-refresh-rate independence a single shared clock
     /// could never reproduce (companion to `flui-testing`'s own
     /// multi-presentation cadence test, at the bare-clock level with no
-    /// realm/vsync machinery at all). Demand is marked explicitly each
+    /// ui_runtime/vsync machinery at all). Demand is marked explicitly each
     /// iteration (`record_compositor_tick` marks none of its own, per the
     /// fix above) -- this mirrors production, where a compositor tick
     /// never arrives except in response to a `request_redraw()` already

@@ -57,7 +57,7 @@ pub fn retire_dispatch(custody: DispatchCustody, mode: CloseMode) {
     custody.retire(mode);
 }
 
-/// Withdraw through the physical lane during realm destruction, without TLS activation.
+/// Withdraw through the physical lane during UI runtime destruction, without TLS activation.
 pub fn close_dispatch_in(
     lane: &crate::InteractionLane,
     handle: &crate::InteractionDispatchHandle,
@@ -72,7 +72,7 @@ pub fn close_focus(owner: &FocusManager, mode: CloseMode) {
 }
 
 /// Refuse later focus requests without running user code; [`close_focus`]
-/// still retires the owner. A realm closing several presentations withdraws
+/// still retires the owner. A UI runtime closing several presentations withdraws
 /// every one before any of them runs a callback (ADR-0123).
 pub fn withdraw_focus(owner: &FocusManager) {
     owner.withdraw();

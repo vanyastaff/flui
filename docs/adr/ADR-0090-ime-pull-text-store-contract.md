@@ -116,10 +116,10 @@ The surface is `flui_platform_api::text_store`:
   `TextChange`), `set_selection`, `set_composition`.
 - Offsets are `Utf16Offset`/`Utf16Range`; `text_store::utf16` is the one converter, and an
   offset past the end or inside a surrogate pair is an `OffsetError`, never a clamp.
-- "Commits closed" is the realm's frame transaction, and a type a store cannot skip: each
+- "Commits closed" is the UI runtime's frame transaction, and a type a store cannot skip: each
   presentation's `TextInputOwner` holds a `CommitGate` and installs it into every store it
   attaches (`TextStore::set_commit_gate`), and the store's `LockArbiter` reads it on every
-  request, so a store has no transaction flag of its own. `flui-app`'s `UiRealm::drive_frame`
+  request, so a store has no transaction flag of its own. `flui-app`'s `UiRuntime::drive_frame`
   shuts every presentation's gate for the whole `drive_frame_with_lane` call (begin frame
   through post-frame callbacks) and runs the commit anchor (`run_deferred_grants`) after it
   returns, with the scheduler `Idle`, per ADR-0027 §3. A store replaced or detached inside the
@@ -287,12 +287,12 @@ In place:
   empty preedit with and without a composition, X11 start/end, commit, direct commit,
   `Disabled`, and a push event while commits are closed applying in order at the next anchor);
   `flui-widgets` `focus_gain_attaches_an_ime_client_and_routes_preedit_to_the_controller` (an
-  IME event the realm receives is projected onto the attached store) and
+  IME event the UI runtime receives is projected onto the attached store) and
   `typing_after_a_deferred_commit_lands_after_the_commit` (an attached store follows the
   owner's frame transaction); `flui-runtime`
   `a_text_store_lock_requested_during_a_frame_is_granted_after_the_drive_returns` (the grant
   runs in `Idle`); `flui-app` `runner_frame_ordering`'s scan that every runner drives frames
-  through `UiRealm::drive_frame`; the existing `EditableText` IME tests, now through the projection.
+  through `UiRuntime::drive_frame`; the existing `EditableText` IME tests, now through the projection.
 - §4: `flui-testing` `tests/text_store_kit.rs` (`in_memory_store_conforms_to_kit_v1` and one
   `kit_fails_a_store_that_…` test per fault, including a store that ignores the commit gate it
   is handed and one that notifies inside a transaction); `flui-widgets` `tests/text_store_kit.rs`

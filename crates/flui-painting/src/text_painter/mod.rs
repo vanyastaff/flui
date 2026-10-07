@@ -6,7 +6,7 @@
 //! - `paint` — `paint` and the cursor queries.
 //!
 //! Every measurement shapes on Parley through the lent
-//! [`TextContext`](crate::TextContext): a render object lends its realm's,
+//! [`TextContext`](crate::TextContext): a render object lends its UI runtime's,
 //! `paint` records the runs of the layout that measured, and carets,
 //! selection, line metrics, hit-testing and word boundaries read that same
 //! layout (flui-painting `ARCHITECTURE.md`, mapping decision 15).
@@ -93,7 +93,7 @@ pub struct TextPainter {
 #[derive(Debug)]
 pub(super) struct TextLayoutCache {
     /// The collection the layout was measured on and its generation, so a
-    /// layout from another realm's fonts, or from before a registration, is
+    /// layout from another UI runtime's fonts, or from before a registration, is
     /// measured again.
     pub(super) fonts: crate::text_layout::FontsKey,
     /// The min width constraint used for layout.

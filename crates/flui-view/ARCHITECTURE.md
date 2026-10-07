@@ -449,25 +449,25 @@ The stream is typed and zero-cost when nothing subscribes.
 from inside the frame of the binding that hosts the key: from `build`, a lifecycle hook,
 `dispose`, or a layout-builder build, all of which run while `WidgetsBinding` holds its own state
 lock. The registry closures take that lock with a non-blocking recursive read and report
-`RegistryBusy` when it is held; the realm composite skips a busy member and keeps trying the
-others, so keys held by other presentations of the realm resolve normally. The binding is
+`RegistryBusy` when it is held; the UI runtime composite skips a busy member and keeps trying the
+others, so keys held by other presentations of the UI runtime resolve normally. The binding is
 `!Send` (pinned by a static assertion), so a held lock can only mean re-entry on the owner
 thread. Before this rule such a read blocked on its own thread forever. The skip is logged at
 `debug`, not `warn`: the running presentation is busy for every read in its frame, so a key
 mounted nowhere reports the same skip, and a warning there would fire every frame.
 **Unasserted:** no test pins this.
 
-Closing a presentation uses the same composite as every other realm entry, the closing
+Closing a presentation uses the same composite as every other UI runtime entry, the closing
 presentation included. Its keys resolve until its tree teardown takes the binding lock (a
 lifecycle observer told the presentation is detaching sees them), and resolve to nothing during
 the teardown, where `dispose` runs. **Unasserted:** no test pins this.
 
 **Limitation.** A read returns nothing for keys of the presentation whose frame is
-running. The exit is to serve those reads from the frame's own tree once the realm owns the
+running. The exit is to serve those reads from the frame's own tree once the UI runtime owns the
 binding by value (ADR-0083). Pinned by
 `global_key_lookup_from_build_during_draw_frame_returns_instead_of_deadlocking` (`binding.rs`),
-and through the realm by `state_read_across_presentations_during_a_segment_resolves`
-(`ui_realm/tests/global_key_lookup_during_frame.rs` in `flui-runtime`), which reads a key held
+and through the UI runtime by `state_read_across_presentations_during_a_segment_resolves`
+(`ui_runtime/tests/global_key_lookup_during_frame.rs` in `flui-runtime`), which reads a key held
 by another presentation while the reader's own frame lock is held. For a read from `dispose`
 during detach: **Unasserted:** no test pins this.
 
@@ -499,7 +499,7 @@ closed window alive. Flutter has no counterpart. Pinned by
 
 ### The composition-root seam is a hidden module, not a feature
 
-What the realm-owning crates (`flui-runtime`, `flui-app`, `flui-testing`, `flui-hot-reload`)
+What the UI runtime-owning crates (`flui-runtime`, `flui-app`, `flui-testing`, `flui-hot-reload`)
 need from a binding lives in `#[doc(hidden)] pub mod __runtime` (ADR-0081 §4): the
 `GlobalKey` registry activation, the frame-phase stamp at the build-to-finalize boundary
 (`FramePhaseMarker`), the multi-presentation `GlobalKeyRegistryComposite`, and the terminal
@@ -516,7 +516,7 @@ outside the crate by `tests/runtime_seam.rs`.
 
 A branded `Cx<'build>` token (its role is taken by the `BuildContext`/`LifecycleContext` split,
 ADR-0078); a `Mounted<'_>` re-entry token with RAII effect scopes (async and listener re-entry go
-through `RebuildHandle` and the realm inbox, ADR-0027 §3; derived state and effects are
+through `RebuildHandle` and the UI runtime inbox, ADR-0027 §3; derived state and effects are
 ADR-0075's subject); shrinking `ElementBase` into a capability-typed `Element<V, P>`.
 
 ### A scene-plugin rendering callback has an explicit unsafe lifetime contract
@@ -710,7 +710,7 @@ task ownership can also pin its snapshot, so that row is not a guard-only oracle
 all further allocations. Zero is an internal exhaustion sentinel, never a key.
 The atomic transition publishes the last identity and sentinel together, so
 catching a refusal cannot wrap the allocator into an earlier identity. This
-changes identity admission only; GlobalKey registries remain realm-owned.
+changes identity admission only; GlobalKey registries remain UI runtime-owned.
 
 `exhausted_global_key_counter_never_reissues_an_identity` joins the existing
 private `element_tree_contract_matrix`. It drives the production mint helper
@@ -721,7 +721,7 @@ checks subsequent ordinary allocation from an independent local counter.
 ### Closed presentation authority
 
 Closing a presentation withdraws its signal graph, external build inbox,
-rebuild handles and local and realm GlobalKey lookup before any optional
+rebuild handles and local and UI runtime GlobalKey lookup before any optional
 terminal callback runs
 ([ADR-0123](../../docs/adr/ADR-0123-exceptional-presentation-close.md)). The
 closed graph refuses reads, writes and new signals with

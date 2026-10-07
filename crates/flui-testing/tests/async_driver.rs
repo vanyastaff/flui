@@ -1,8 +1,8 @@
 //! `HeadlessBinding::pump_frame` runs the shared async-driver step, and a
-//! realm owns the tasks its widgets spawn.
+//! UI runtime owns the tasks its widgets spawn.
 //!
-//! `flui-app` carries the mirror-image test for `UiRealm::draw_frame`. Both
-//! poll the realm's owner-local tasks in the frame's mid-frame slot; if either
+//! `flui-app` carries the mirror-image test for `UiRuntime::draw_frame`. Both
+//! poll the UI runtime's owner-local tasks in the frame's mid-frame slot; if either
 //! stopped, exactly one of the two would fail — which is the
 //! headless↔production divergence this pair exists to catch.
 
@@ -84,7 +84,7 @@ pub(crate) fn headless_wake_from_another_thread_is_polled_on_the_frame_thread() 
 }
 
 // ---------------------------------------------------------------------------
-// Owner-local tasks: the realm owns them, widget handles only reach them
+// Owner-local tasks: the ui_runtime owns them, widget handles only reach them
 // ---------------------------------------------------------------------------
 
 /// An owner-thread value whose destructor records the thread it ran on.
@@ -159,14 +159,14 @@ pub(crate) fn owner_local_future_completes_after_a_worker_wake() {
 }
 
 /// What a mounted [`TaskOwner`] hands back to the test, and what outlives
-/// its realm.
+/// its UI runtime.
 #[derive(Clone, Default)]
 struct Parked {
     /// Every task token the widget spawned: held here, not in the widget's
     /// state, so unmounting the widget does not cancel the task and the
-    /// realm's own teardown is what has to retire it.
+    /// UI runtime's own teardown is what has to retire it.
     tokens: Rc<RefCell<Vec<TaskToken>>>,
-    /// The widget's driver handle, kept past the realm.
+    /// The widget's driver handle, kept past the UI runtime.
     driver: Rc<RefCell<Option<AsyncDriver>>>,
 }
 
@@ -196,7 +196,7 @@ impl ViewState<TaskOwner> for TaskOwnerState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         let driver = ctx
             .async_driver()
-            .expect("a realm's presentation installs its async driver");
+            .expect("a ui_runtime's presentation installs its async driver");
         let capture = Capture {
             drops: Rc::clone(&self.view.drops),
         };
@@ -233,7 +233,7 @@ fn mount_task_owner(state_drop_panics: bool) -> (LaidOut, TaskOwner) {
     (laid, view)
 }
 
-/// Dropping the realm retires its pending tasks on the owner thread, and a
+/// Dropping the UI runtime retires its pending tasks on the owner thread, and a
 /// completion arriving afterwards from a worker finds nothing to deliver to.
 fn late_completion_after_an_ordinary_teardown() {
     let (laid, view) = mount_task_owner(false);
@@ -242,19 +242,19 @@ fn late_completion_after_an_ordinary_teardown() {
     assert_eq!(
         *view.drops.borrow(),
         [std::thread::current().id()],
-        "the task's capture is dropped once, by the realm, on the owner thread"
+        "the task's capture is dropped once, by the ui_runtime, on the owner thread"
     );
     view.parked.tokens.borrow_mut().clear();
     assert_eq!(view.drops.borrow().len(), 1, "a dead token retires nothing");
 }
 
 /// The same when a widget state's destructor panics during the teardown: the
-/// realm still retires its tasks on the owner thread before raising the
+/// UI runtime still retires its tasks on the owner thread before raising the
 /// first failure.
 fn late_completion_after_a_teardown_that_panics() {
     let (laid, view) = mount_task_owner(true);
     let teardown = catch_unwind(AssertUnwindSafe(move || drop(laid)));
-    let payload = teardown.expect_err("the destructor panic reaches the realm's owner");
+    let payload = teardown.expect_err("the destructor panic reaches the ui_runtime's owner");
     assert_eq!(
         payload.downcast_ref::<&str>().copied(),
         Some("state drop probe"),
@@ -268,15 +268,15 @@ fn late_completion_after_a_teardown_that_panics() {
     );
 }
 
-pub(crate) fn late_completion_after_realm_drop_drops_captures_on_the_owner() {
+pub(crate) fn late_completion_after_ui_runtime_drop_drops_captures_on_the_owner() {
     late_completion_after_an_ordinary_teardown();
     late_completion_after_a_teardown_that_panics();
 }
 
-/// A driver handle a widget leaked past its realm keeps no task alive, and
+/// A driver handle a widget leaked past its UI runtime keeps no task alive, and
 /// spawning through it retires the future at once instead of queueing it
 /// somewhere no frame will ever poll.
-pub(crate) fn a_leaked_async_driver_holds_no_task_after_the_realm() {
+pub(crate) fn a_leaked_async_driver_holds_no_task_after_the_ui_runtime() {
     let (laid, view) = mount_task_owner(false);
     let leaked = view
         .parked
@@ -288,7 +288,7 @@ pub(crate) fn a_leaked_async_driver_holds_no_task_after_the_realm() {
     assert_eq!(
         *view.drops.borrow(),
         [std::thread::current().id()],
-        "the realm's teardown retired the task the leaked handle could reach"
+        "the ui_runtime's teardown retired the task the leaked handle could reach"
     );
     assert_eq!(leaked.pending_task_count(), 0);
 
@@ -306,7 +306,7 @@ pub(crate) fn a_leaked_async_driver_holds_no_task_after_the_realm() {
         "the refused future is dropped at once, on the caller's thread"
     );
 
-    // Nor does it keep the realm's task store: a hook installed through it
+    // Nor does it keep the ui_runtime's task store: a hook installed through it
     // lands nowhere and is dropped at once.
     let hook_drops = Arc::new(AtomicUsize::new(0));
     let hook_capture = HookCapture(Arc::clone(&hook_drops));
@@ -316,7 +316,7 @@ pub(crate) fn a_leaked_async_driver_holds_no_task_after_the_realm() {
     assert_eq!(
         hook_drops.load(Ordering::SeqCst),
         1,
-        "a handle that outlived its realm retains nothing"
+        "a handle that outlived its ui_runtime retains nothing"
     );
 }
 
@@ -339,12 +339,12 @@ fn owner_local_task_matrix() {
                 owner_local_future_completes_after_a_worker_wake as fn(),
             ),
             (
-                "late_completion_after_realm_drop_drops_captures_on_the_owner",
-                late_completion_after_realm_drop_drops_captures_on_the_owner as fn(),
+                "late_completion_after_ui_runtime_drop_drops_captures_on_the_owner",
+                late_completion_after_ui_runtime_drop_drops_captures_on_the_owner as fn(),
             ),
             (
-                "a_leaked_async_driver_holds_no_task_after_the_realm",
-                a_leaked_async_driver_holds_no_task_after_the_realm as fn(),
+                "a_leaked_async_driver_holds_no_task_after_the_ui_runtime",
+                a_leaked_async_driver_holds_no_task_after_the_ui_runtime as fn(),
             ),
         ],
     );

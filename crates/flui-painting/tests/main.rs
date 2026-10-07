@@ -532,7 +532,7 @@ fn caret_contract() {
 
 /// A painter measures on Parley through the context it is lent, and its cache
 /// answers only for the fonts that measured it (ADR-0092 §10 steps 3a and 4a);
-/// realms' contexts over one collection shape in parallel and share its faces
+/// UI runtimes' contexts over one collection shape in parallel and share its faces
 /// (§2–§3).
 #[test]
 fn text_context_contract() {
@@ -557,12 +557,12 @@ fn text_context_contract() {
                 text_context::collection_handles_are_shared_and_counted,
             ),
             (
-                "two_realms_shape_in_parallel",
-                text_context::two_realms_shape_in_parallel,
+                "two_ui_runtimes_shape_in_parallel",
+                text_context::two_ui_runtimes_shape_in_parallel,
             ),
             (
-                "a_face_registered_after_the_fork_shapes_in_every_realm",
-                text_context::a_face_registered_after_the_fork_shapes_in_every_realm,
+                "a_face_registered_after_the_fork_shapes_in_every_ui_runtime",
+                text_context::a_face_registered_after_the_fork_shapes_in_every_ui_runtime,
             ),
         ],
     );

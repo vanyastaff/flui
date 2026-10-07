@@ -317,7 +317,7 @@ does not change the public runtime contract or any crate layer.
 - The opaque representation prevents consumers from manufacturing invalid or
   future-reserved bit combinations.
 - Opaque path-source tokens prevent raw callback pointers from becoming public
-  identity and introduce no process-global counter into realm-isolated state.
+  identity and introduce no process-global counter into UI runtime-isolated state.
 
 **Negative / trade-offs**
 

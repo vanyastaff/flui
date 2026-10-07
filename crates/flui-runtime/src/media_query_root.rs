@@ -10,9 +10,9 @@ use flui_widgets::{MediaQuery, MediaQueryData};
 
 /// Owner-local shared cell for the root media-query data.
 ///
-/// The realm mutates it from platform signals; the `MediaQueryRoot`
+/// The UI runtime mutates it from platform signals; the `MediaQueryRoot`
 /// element reads it during build. Deliberately `!Send` (`Rc`/`RefCell`):
-/// every write side runs on the realm's owner thread.
+/// every write side runs on the UI runtime's owner thread.
 #[derive(Default)]
 pub struct MediaQuerySource {
     data: RefCell<MediaQueryData>,
@@ -117,7 +117,7 @@ impl Drop for MediaQueryRegistration {
 
 /// Publishes one presentation's [`MediaQuerySource`] as the root `MediaQuery`.
 ///
-/// Currently installed from the `primary()` attach path only (`UiRealm::
+/// Currently installed from the `primary()` attach path only (`UiRuntime::
 /// attach_root_widget_entered` and its sized variant), so a non-primary
 /// presentation's source is written by the addressed arms and not yet read —
 /// see `docs/BETA.md` § "iOS safe-area layout" for why that split is stated
@@ -169,12 +169,12 @@ impl flui_view::ViewState<MediaQueryRoot> for MediaQueryRootState {
         if !Rc::ptr_eq(&self.source, &new_view.source) {
             // A registration is only valid for the source that minted it, so
             // a new source means releasing the old slot before taking a new
-            // one. The realm cannot reach this today: it hands the same
+            // one. The ui_runtime cannot reach this today: it hands the same
             // presentation-owned source to every attach, so the `ptr_eq`
             // above holds and this branch stays cold. It is what keeps
             // `MediaQueryRoot` correct as a plain view — a wrapper that can
             // be re-rendered with a different source — rather than only as
-            // the realm's root wrapper.
+            // the ui_runtime's root wrapper.
             self.registration.take();
             self.source = Rc::clone(&new_view.source);
             if let Some(handle) = self.handle.clone() {

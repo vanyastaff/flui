@@ -611,12 +611,12 @@ impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
         }
     }
 
-    /// The text context to measure with: the realm's, lent through the
+    /// The text context to measure with: the UI runtime's, lent through the
     /// pipeline, for as long as the returned [`TextCx`] lives.
     ///
     /// # Panics
     ///
-    /// If the realm's context is already lent, which only a measurement that
+    /// If the UI runtime's context is already lent, which only a measurement that
     /// re-enters another could cause.
     pub fn text(&mut self) -> TextCx<'_> {
         lend_text(BoxLayoutCtxErased::text_source(self))
@@ -1293,7 +1293,7 @@ pub struct ErasedBoxLayoutCtx<'ctx> {
     /// `box_intrinsic_query_borrowed` — the same pre-acquired subtree pool
     /// already used for the Sliver→Box intrinsic path.
     intrinsics_child_callback: Option<BoxChildIntrinsicCallback<'ctx>>,
-    /// The realm's text context, lent to the node this context lays out.
+    /// The UI runtime's text context, lent to the node this context lays out.
     text: TextSource<'ctx>,
 }
 

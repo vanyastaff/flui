@@ -21,7 +21,7 @@ Design decisions are recorded under [Mapping decisions](#mapping-decisions).
 | Recorder | `canvas/{mod,state,transform,clipping,drawing,scoped}.rs` | `Canvas`: the `dart:ui` surface, save/restore, transforms, clips, `draw_*`, and the `with_*` helpers that pair a save with its restore |
 | Wire vocabulary | `display_list/{mod,command,command_ops,paragraph}.rs` | `DisplayList` (commands + cached bounds), `DrawCommand` (the closed enum `flui-engine` matches exhaustively), `DrawCommand::bounds`, `ShapedParagraph` (the shaped text `DrawOp::Paragraph` carries, decision 18) |
 | Text | `text_layout/{host,fallback_chain,fallback_tables,font_resolve}.rs`, `text_painter/{mod,measure,paint,baseline}.rs` | `TextPainter`; `HostFonts` (the one host font scan a collection is fed from), the per-platform fallback lists and the order a fed collection falls back in, family resolution |
-| Per-realm text context | `text_layout/context.rs` | `FontCollection` (the app's shared, add-only fontique collection), `HostFontFeed` (the host's faces, added off the owner thread) and `TextContext` (one realm's Parley font and layout contexts over it, used through `&mut`); constructed by the runtime, one context per realm; every `TextPainter` measurement shapes on it |
+| Per-UI runtime text context | `text_layout/context.rs` | `FontCollection` (the app's shared, add-only fontique collection), `HostFontFeed` (the host's faces, added off the owner thread) and `TextContext` (one UI runtime's Parley font and layout contexts over it, used through `&mut`); constructed by the runtime, one context per UI runtime; every `TextPainter` measurement shapes on it |
 | Parley shaping | `parley_text/{shape,caret}.rs` | `TextContext::shape`: a `ParagraphSpec` (styled spans, width, line height, direction, `max_lines`, ellipsis) to a `ParagraphLayout` whose `metrics()` read the laid-out lines, whose `to_shaped()` is the paragraph paint records, and whose caret, hit-test, selection, line and word queries `TextPainter` answers from (decision 15) |
 | Text boundaries | `text_boundaries.rs` | Grapheme and word boundaries over ICU4X, the segmenters Parley clusters with: what hit-testing snaps to and word selection picks from, and what `flui-widgets`' editor steps through (ADR-0092 §6); each query segments from the start of its line |
 | Raster side | `glyphs/{mod,key,registry,swash}.rs` | `GlyphKey` (a face named by font blob), `FontRegistry` (faces and interned variation instances), `SwashRasterizer` (the engine's atlas draws through it), `GlyphRasterizer`, `PlacedGlyph`, `GlyphImage` |
@@ -74,14 +74,14 @@ stack is a silent no-op for the same reason.
 `TextPainter` is the facade `RenderParagraph` drives. Every measurement takes
 the `TextContext` it shapes through: `layout`, the four intrinsics, `dry_size`
 and `dry_baseline` each take `&mut TextContext`, and a render object lends its
-realm's (decision 14). `layout` shapes the paragraph once on Parley
+UI runtime's (decision 14). `layout` shapes the paragraph once on Parley
 (`TextContext::shape`: a `ParagraphSpec` with the painter's spans, scale,
 width, `max_lines` and ellipsis), reads size and baselines from the
 `ParagraphLayout`'s `metrics()`, and turns the same layout into the
 `ShapedParagraph` it paints (`ParagraphLayout::to_shaped`). Intrinsic widths
 come from a second shape without truncation (`content_widths`, decision 9).
 The painter's cache keys on the context's collection and its
-`FontCollection::generation`, so a layout from another realm's collection, or
+`FontCollection::generation`, so a layout from another UI runtime's collection, or
 from before a registration, shapes again. Equal width constraints, including
 `+INFINITY` for an unbounded maximum, reuse that cache; nearby finite widths
 retain the existing epsilon comparison. Equality is checked before subtraction
@@ -169,9 +169,9 @@ The crate takes no lock of its own: its `clippy.toml` disallows `Mutex` and
 state (`cargo xtask globals`).
 
 The Parley path takes no FLUI lock. A `TextContext` is `Send` and used
-through `&mut` by the realm that owns it (flui-rendering lends it to one
-measurement at a time), so two realms can shape on separate threads.
-`two_realms_shape_in_parallel` (`tests/text_context.rs`) checks that both
+through `&mut` by the UI runtime that owns it (flui-rendering lends it to one
+measurement at a time), so two UI runtimes can shape on separate threads.
+`two_ui_runtimes_shape_in_parallel` (`tests/text_context.rs`) checks that both
 contexts repeatedly produce the reference layout; it makes no assertion about
 OS scheduling or wall-clock overlap. The
 `FontCollection` they share is fontique's shared mode: a registration takes
@@ -435,26 +435,26 @@ platform. Locked by `synthetic_bold_adds_the_interpolated_width` (width gain at
 9, 20, 36 and 144 px) and `synthetic_bold_inks_more_than_regular` (a
 readback, `flui-engine`).
 
-### 11. The font collection is app-scoped and passed explicitly; each realm shapes through its own context
+### 11. The font collection is app-scoped and passed explicitly; each UI runtime shapes through its own context
 
-**Rule:** the Parley path has one `FontCollection` per app, and each realm
+**Rule:** the Parley path has one `FontCollection` per app, and each UI runtime
 shapes through a `TextContext` of its own built from it. A face registered on
 the collection reaches every context built from it, including ones built
 before the registration. The collection offers no removal. This crate provides
 both types; the runtime constructs them (the app's shared engine services hold
-the collection, and each realm owns a context built in its constructor,
+the collection, and each UI runtime owns a context built in its constructor,
 ADR-0092 §10 step 2). Layout, intrinsic and dry queries measure through the
-realm's context (step 3, decision 14); layout measures on it (step 4a).
+UI runtime's context (step 3, decision 14); layout measures on it (step 4a).
 
-**Why:** FLUI runs several realms on their own threads (ADR-0027, ADR-0091).
-An ambient collection behind one lock makes every realm's shaping wait on the
+**Why:** FLUI runs several UI runtimes on their own threads (ADR-0027, ADR-0091).
+An ambient collection behind one lock makes every UI runtime's shaping wait on the
 others, which is what the cosmic-text path's `FONT_SYSTEM` did until ADR-0092
 §10 step 6a removed it, and is process-global state ADR-0097 retires. Passing the collection keeps it out of
-any `static`; a context per realm keeps shaping lock-free. Removal is left out
+any `static`; a context per UI runtime keeps shaping lock-free. Removal is left out
 because a glyph key names its face by blob and must not outlive it
 (ADR-0092 §2).
 
-**Accepted trade-off:** a registration makes each realm deep-copy the
+**Accepted trade-off:** a registration makes each UI runtime deep-copy the
 collection's data once, on its next shape, and `register_font` itself clones
 fontique's local collection data to get the `&mut` its registration takes,
 rather than holding a FLUI lock; both are accepted because registration is
@@ -467,8 +467,8 @@ registration, which bumps fontique's version even for bytes with no family, so
 a refused registration (no face, or a face with no `cmap`) changes nothing.
 `FontCollection::check_font` gives the same verdict with no collection at
 all, for the app to answer a registration made before its first window.
-Locked by `two_realms_shape_in_parallel` and
-`a_face_registered_after_the_fork_shapes_in_every_realm`
+Locked by `two_ui_runtimes_shape_in_parallel` and
+`a_face_registered_after_the_fork_shapes_in_every_ui_runtime`
 (`tests/text_context.rs`), and `registration_contract`
 (`src/text_layout/context.rs`).
 
@@ -519,31 +519,31 @@ shadows, decorations and gradient stops. Locked by
 
 **Rule:** every measuring method of `TextPainter` takes `&mut TextContext`;
 there is no ambient collection to fall back on. A render object lends its
-realm's context (`ctx.text()` in flui-rendering), and the painter's cache is
+UI runtime's context (`ctx.text()` in flui-rendering), and the painter's cache is
 keyed on that context's collection and generation as well as the
 constraints.
 
-**Why:** a realm owns its text context (decision 11), and a realm's layout
+**Why:** a UI runtime owns its text context (decision 11), and a UI runtime's layout
 must measure with it rather than with whichever context is ambient. Passing it
-makes the realm visible in every signature that measures, which is what keeps
-two realms' layouts apart (ADR-0092 §3). Keying the cache on the collection
+makes the UI runtime visible in every signature that measures, which is what keeps
+two UI runtimes' layouts apart (ADR-0092 §3). Keying the cache on the collection
 closes the case a single ambient collection never had: one painter measured
 through two collections.
 
 **Accepted trade-off:** every signature that measures names the context, even
-where only one realm exists. The context is shaped on in every build (ADR-0092
+where only one UI runtime exists. The context is shaped on in every build (ADR-0092
 §10 step 4a). Locked by `measurement_follows_the_context_it_is_given`,
 `intrinsic_widths_follow_the_context_they_are_asked_through` and
 `a_registration_on_the_collection_invalidates_the_painter_cache`
 (`tests/text_painter_unit.rs`, rows of `text_context_contract`), and at the
-realm level by `a_realm_measures_text_with_the_faces_of_its_own_collection`
-(`crates/flui-runtime/src/ui_realm/tests/text_context.rs`).
+UI runtime level by `a_ui_runtime_measures_text_with_the_faces_of_its_own_collection`
+(`crates/flui-runtime/src/ui_runtime/tests/text_context.rs`).
 
 ### 15. Carets, selection and hit-testing read the layout that measured
 
 **Rule:** size, baselines, intrinsic widths, the painted glyphs, line
 metrics, carets, selection boxes, word boundaries and hit-testing all come
-from one Parley layout on the realm's context. `TextPainter`'s cache keeps
+from one Parley layout on the UI runtime's context. `TextPainter`'s cache keeps
 the `ParagraphLayout` beside the paragraph it paints, and the queries
 (`parley_text/caret.rs`) answer in the painted box's coordinates: each
 cluster edge uses the native aligned line offset and cluster advance, just

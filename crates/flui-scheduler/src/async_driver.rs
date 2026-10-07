@@ -11,15 +11,15 @@
 //!
 //! # Ownership
 //!
-//! The tasks live in a `TaskStore` owned by the realm's
+//! The tasks live in a `TaskStore` owned by the UI runtime's
 //! [`OwnerFrame`](crate::OwnerFrame), which holds the only strong reference.
 //! An [`AsyncDriver`] is a `Weak` handle to that store: a widget state keeps
 //! one, and even a leaked one keeps no task — and none of a task's captures —
-//! alive after the realm. Because the futures never leave the owner thread
+//! alive after the UI runtime. Because the futures never leave the owner thread
 //! they need not be `Send`: a task may hold `Rc` state, and its captures are
 //! created, polled and dropped on the owner thread.
 //!
-//! Spawning through a handle whose realm is gone drops the future at once,
+//! Spawning through a handle whose UI runtime is gone drops the future at once,
 //! on the calling (owner) thread, and returns an already-cancelled
 //! [`TaskToken`].
 //!
@@ -34,7 +34,7 @@
 //! frames costs one readiness transition and one successfully delivered frame
 //! request. A failed or absent hook retains delivery debt for the next wake or
 //! hook installation, including a wake through another clone of the same
-//! waker. A wake after the realm is gone upgrades nothing and does nothing.
+//! waker. A wake after the UI runtime is gone upgrades nothing and does nothing.
 //!
 //! Waking is legal from any thread. Polling is not: it happens only inside
 //! [`OwnerFrame::poll_ready`](crate::OwnerFrame::poll_ready), on the owner.
@@ -92,7 +92,7 @@
 //! destruction then could abort the process. A `Waker` held by a cancelled or
 //! retired task is inert — it finds the task's flags closed and does nothing.
 //!
-//! The realm's teardown retires every remaining task explicitly
+//! The UI runtime's teardown retires every remaining task explicitly
 //! ([`OwnerFrame::retire`](crate::OwnerFrame::retire)), on the owner thread,
 //! each future dropped under its own catch, the first panic kept.
 //!
@@ -197,7 +197,7 @@ impl WakeShared {
     }
 }
 
-/// The realm's task set: owner-local, reached through [`AsyncDriver`]'s
+/// The UI runtime's task set: owner-local, reached through [`AsyncDriver`]'s
 /// `Weak` and owned only by [`OwnerFrame`](crate::OwnerFrame).
 pub(crate) struct TaskStore {
     /// `BTreeMap`, not `HashMap`: a `HashMap`'s hash-seed-dependent
@@ -247,7 +247,7 @@ impl TaskStore {
     /// its captures are user code that may re-enter the driver.
     ///
     /// A retired store refuses the hook: it is released at once, under
-    /// [`release_opaque`]'s policy, rather than kept past the realm.
+    /// [`release_opaque`]'s policy, rather than kept past the UI runtime.
     pub(crate) fn set_request_frame(&self, hook: RequestFrame) {
         if self.closed.get() {
             if let Err(payload) = release_opaque(hook) {
@@ -561,7 +561,7 @@ impl RetiringTasks {
 struct TaskWaker {
     id: TaskId,
     flags: Arc<TaskFlags>,
-    /// `Weak`: a waker a worker keeps must not keep the realm's wake state
+    /// `Weak`: a waker a worker keeps must not keep the UI runtime's wake state
     /// alive, and nothing on this side may reach the owner-local tasks.
     shared: Weak<WakeShared>,
 }
@@ -637,14 +637,14 @@ impl TaskToken {
     }
 
     /// The driver-unique id of the task, for diagnostics. `0` for a task the
-    /// driver refused because its realm was gone.
+    /// driver refused because its UI runtime was gone.
     #[must_use]
     pub fn id(&self) -> u64 {
         self.id
     }
 
-    /// Whether the task has been cancelled: explicitly, by its realm's
-    /// teardown, or because its driver's realm was already gone when it was
+    /// Whether the task has been cancelled: explicitly, by its UI runtime's
+    /// teardown, or because its driver's UI runtime was already gone when it was
     /// spawned.
     #[must_use]
     pub fn is_cancelled(&self) -> bool {
@@ -745,7 +745,7 @@ impl Drop for PumpGuard<'_> {
     }
 }
 
-/// A widget's handle to its realm's frame-driven tasks.
+/// A widget's handle to its UI runtime's frame-driven tasks.
 ///
 /// Acquired in `init_state` through `LifecycleContext::async_driver`. Cheap to
 /// clone; every clone reaches the same task set. Owner-local: it may spawn
@@ -754,8 +754,8 @@ impl Drop for PumpGuard<'_> {
 /// [`Waker`]; a worker that needs a frame for any other reason uses a
 /// [`FrameWaker`](crate::FrameWaker).
 ///
-/// A `Weak` handle: the realm's [`OwnerFrame`](crate::OwnerFrame) owns the
-/// tasks, so a handle that outlives its realm holds nothing, and spawning
+/// A `Weak` handle: the UI runtime's [`OwnerFrame`](crate::OwnerFrame) owns the
+/// tasks, so a handle that outlives its UI runtime holds nothing, and spawning
 /// through it drops the future at once.
 #[derive(Clone)]
 pub struct AsyncDriver {
@@ -769,18 +769,18 @@ impl AsyncDriver {
         }
     }
 
-    /// The live store, unless its realm is gone or retiring.
+    /// The live store, unless its UI runtime is gone or retiring.
     fn live_store(&self) -> Option<Rc<TaskStore>> {
         self.store.upgrade().filter(|store| !store.closed.get())
     }
 
     /// Replace the "request a frame" hook. A test probe: production installs
     /// the hook only through [`OwnerFrame::new`](crate::OwnerFrame::new), so a
-    /// widget cannot replace its realm's frame hook.
+    /// widget cannot replace its UI runtime's frame hook.
     ///
     /// Installation retries undelivered demand. The displaced `Arc` is
     /// dropped only after the hook lock is released, since its captured state
-    /// is user code that may re-enter the driver. Once the realm is gone or
+    /// is user code that may re-enter the driver. Once the UI runtime is gone or
     /// retired the hook is refused and dropped at once (retained instead
     /// during an existing unwind).
     ///
@@ -810,7 +810,7 @@ impl AsyncDriver {
     ///
     /// Dropping the returned [`TaskToken`] cancels the task.
     ///
-    /// If this handle's realm is gone, the future is dropped here, at once,
+    /// If this handle's UI runtime is gone, the future is dropped here, at once,
     /// and the returned token is already cancelled.
     ///
     /// # Panics
@@ -852,7 +852,7 @@ impl AsyncDriver {
     /// single task polled at its own subscription point, not the frame's
     /// driver step.
     ///
-    /// If this handle's realm is gone, the future is dropped unpolled and the
+    /// If this handle's UI runtime is gone, the future is dropped unpolled and the
     /// returned token is already cancelled.
     ///
     /// # Panics
@@ -866,7 +866,7 @@ impl AsyncDriver {
         }
     }
 
-    /// Number of tasks the realm is holding; `0` once the realm is gone.
+    /// Number of tasks the UI runtime is holding; `0` once the UI runtime is gone.
     ///
     /// A count, never a guard.
     #[must_use]
@@ -916,7 +916,7 @@ fn refuse(future: BoxedTask) -> TaskToken {
     let released = release_opaque(future);
     let diagnostic = catch_unwind(|| {
         tracing::warn!(
-            "AsyncDriver: the realm that owned this driver is gone; dropping the spawned future"
+            "AsyncDriver: the ui_runtime that owned this driver is gone; dropping the spawned future"
         );
     });
     if let Err(payload) = diagnostic {

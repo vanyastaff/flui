@@ -87,7 +87,7 @@ impl ReadGraph for Writer {
 /// dispatch and dropped when the callback returns.
 ///
 /// It dereferences to the [`Writer`] and carries nothing else: no tree
-/// position, no realm id. A signal write takes it directly:
+/// position, no UI runtime id. A signal write takes it directly:
 /// `count.set(cx, 3)`, `count.update(cx, |n| *n += 1)`. Passing `cx` to a
 /// write reborrows it, so one callback can make several writes.
 /// Current values can be inspected with `signal.peek(cx, |value| ...)`.

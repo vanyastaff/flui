@@ -4,7 +4,7 @@
 //! the way [`RenderImage`](crate::RenderImage) wraps a leaf: the render
 //! object owns a painter, drives its layout from box constraints, and
 //! forwards intrinsics / baseline / paint to it. Every measurement goes
-//! through the realm's text context, lent by the layout, intrinsics and dry
+//! through the UI runtime's text context, lent by the layout, intrinsics and dry
 //! contexts as `ctx.text()` (ADR-0092 §10 step 3). It covers
 //! the renderable core of a paragraph: layout, dry layout, the four
 //! intrinsics, baseline, and paint — with soft wrap, `max_lines`, and

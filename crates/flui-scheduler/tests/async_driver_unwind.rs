@@ -264,9 +264,9 @@ impl Drop for Counted {
     }
 }
 
-/// The realm's frame hook is user code too: retirement drops its captures
+/// The UI runtime's frame hook is user code too: retirement drops its captures
 /// under the same catch as the tasks', keeps the first panic, and refuses a
-/// hook installed afterwards instead of keeping it past the realm.
+/// hook installed afterwards instead of keeping it past the UI runtime.
 fn hook_retirement() {
     let scheduler = UpdateScheduler::new();
     let frame = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
@@ -475,7 +475,7 @@ impl Drop for SpawnOnDrop {
     }
 }
 
-/// A spawn refused because the realm is gone makes the rejected future safe
+/// A spawn refused because the UI runtime is gone makes the rejected future safe
 /// before any diagnostic runs: retained during an unwind, dropped once
 /// otherwise, and a panicking subscriber changes neither.
 fn refused_spawn() {

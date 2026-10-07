@@ -61,7 +61,7 @@ pub(crate) use element_owner::BuildHandle;
 pub use recovered_panic::{LifecycleHook, RecoveredAt, RecoveredPanic};
 pub(crate) use recovered_panic::{LifecyclePanicHandoff, StagedRecoveredPanic};
 
-/// Emit one tree observation through the realm's observer slot (ADR-0040).
+/// Emit one tree observation through the UI runtime's observer slot (ADR-0040).
 ///
 /// Owns the two contract halves every emission site relies on:
 /// - **Laziness**: `f` (which constructs the payload) runs only when an

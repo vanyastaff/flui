@@ -6,8 +6,8 @@
   codes and the protocol version; from §2 the lift of the wire `Role`, `ActionName` and
   `Checked` out of the desktop server, the move of `SemanticsRole` and `SemanticsAction` into
   the crate (with ADR-0089 §3's `ALL` rule), and the semantics-to-wire mapping, amended below
-  to live in `flui-semantics`; from §3 the realm half of the in-process backend (a
-  `SemanticsAgent` that reads and acts through the realm's owner inbox), and the in-process
+  to live in `flui-semantics`; from §3 the UI runtime half of the in-process backend (a
+  `SemanticsAgent` that reads and acts through the UI runtime's owner inbox), and the in-process
   server in `flui-devtools` with its local endpoint (a named pipe or Unix socket, a launch
   token, debug builds only), amended below. Still Proposed: §1's finder criteria, handle kinds
   beyond elements and windows, `effect` as a schema type, widget catalog and event-log shapes;
@@ -114,14 +114,14 @@ the OS reports (`crates/flui-semantics/ARCHITECTURE.md`, mapping decision 7).
 This settles ADR-0080's open item:
 
 - `flui-devtools` becomes the in-process protocol server: a second `AccessibilityBackend` over
-  the realm's own semantics tree, compiled only into development builds that add the package.
+  the UI runtime's own semantics tree, compiled only into development builds that add the package.
 - It listens on a local endpoint only — a named pipe on Windows, a Unix domain socket elsewhere
   — authenticated by a token generated at launch and handed to the tool that launched the app.
   No TCP port.
 - `flui mcp` is an MCP server over stdio that proxies to that endpoint. The agent sees one MCP
   server whether it drives a FLUI app in-process or any app through the OS.
 - The handle table belongs to the backend, not to the MCP session, which keeps the design
-  compatible with a stateless MCP transport. The realm's `SemanticsAgent` reports render
+  compatible with a stateless MCP transport. The UI runtime's `SemanticsAgent` reports render
   identities scoped to one presentation (another window can report the same `e<n>`); the
   backend's table maps them when a session spans windows.
 
@@ -133,7 +133,7 @@ This settles ADR-0080's open item:
   the package reaches through `flui-sdk`; the host attaches it once per event loop and hands it
   an `AgentWindow` per window with content. `flui_runtime::dev_agent::DevAgentHost` holds the
   hook's containment for every host (the desktop and iOS runners, and `flui-testing`'s headless
-  realm, which is how CI exercises it); no transport is in the runtime. An `AgentWindow` holds
+  UI runtime, which is how CI exercises it); no transport is in the runtime. An `AgentWindow` holds
   its window's agent weakly, so a closed window answers `gone` with kind `window` and needs no
   close notification, and holds the window's semantics handle strongly, so semantics are
   collected only while the tool keeps the window. `DevAgentHook::attach` answers whether the
@@ -196,7 +196,7 @@ reader still reads a newer reply: an unknown field is ignored, an unknown role r
 reads as `platform`. Two optional fields are new here: `protocol` on a `Tree` (a reply without it
 reads as unversioned), and `surface_rect` on a `Node`, the bounds from the window's drawing
 surface that the in-process backend reports in place of `rect`, which stays screen pixels: the
-realm knows no window position, and a client that reads `rect` as screen pixels must find none
+UI runtime knows no window position, and a client that reads `rect` as screen pixels must find none
 rather than a misplaced one.
 
 ## Alternatives considered
@@ -265,7 +265,7 @@ For the accepted part:
   `set_value_reaches_set_text_with_its_text`, `a_disabled_node_refuses_with_disabled`,
   `read_honours_max_depth_and_max_nodes_and_says_truncated` and
   `a_read_tree_round_trips_through_json`.
-- **The realm half of §3.** `cargo nextest run -p flui-runtime agent_semantics`: a counter's
+- **The UI runtime half of §3.** `cargo nextest run -p flui-runtime agent_semantics`: a counter's
   tree read as wire nodes, a tap through the agent delivered to the widget's handler (a
   `GestureDetector` runs it in the next frame, so the reply's `Ok` means delivered, and the
   signal's new value reads two frames on), `busy` before the first semantics frame, collection
@@ -289,7 +289,7 @@ For the accepted part:
   `a_client_leaving_mid_request_does_not_stall_the_next`,
   `an_unanswered_request_times_out_and_a_timed_out_act_still_runs`,
   `malformed_and_oversized_lines`, `a_closed_window_answers_gone_and_leaves_the_list`,
-  `detach_closes_the_endpoint`, `a_bind_failure_leaves_the_realm_running`,
+  `detach_closes_the_endpoint`, `a_bind_failure_leaves_the_ui_runtime_running`,
   `traces_carry_no_labels_or_values`); `dev_agent_host_contains_its_hook` in `flui-runtime`
   (each hook method panicking alone, a panicking `Drop`, a nested call, a refused second
   attach, a new loop, nothing vended while unattached); `an_agent_for_a_closed_presentation_answers_gone`

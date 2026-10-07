@@ -81,7 +81,7 @@ The pipeline is **on-demand**. The platform event loop waits (`ControlFlow::Wait
 
 ### Threading & ownership model
 
-The canonical threading/ownership record is [ADR-0027](adr/ADR-0027-owner-affine-ui-realms.md): a multi-threaded runtime of single-writer ownership domains — per-session `UiRealm` (`!Send + !Sync` owner), bounded typed mailboxes committed at Idle, and an owned `SceneSnapshot` handoff to a single-owner raster seam. 
+The canonical threading/ownership record is [ADR-0027](adr/ADR-0027-owner-affine-ui-realms.md): a multi-threaded runtime of single-writer ownership domains — independent `UiRuntime` instances (`!Send + !Sync` owners), bounded typed mailboxes committed at Idle, and an owned `SceneSnapshot` handoff to a single-owner raster seam.
 
 ## Type-Safe Children: the Arity System
 
@@ -111,7 +111,7 @@ impl RenderBox for RenderPadding {
 Slab-based storage uses 0-based indices internally. Every public ID has a niche (a `NonZero*` payload), so `Option<Id>` costs no extra space, but only the plain slab-backed IDs are the slot plus one. There are two shapes in `flui_foundation::id`:
 
 - **Plain IDs** wrap a `NonZeroUsize`. The slab-backed ones (`ViewId`, `LayerId`, `SemanticsId`) are the slot plus one: insert `slab_index + 1`, look up `id.get() - 1`. The rest (`ListenerId`, `ObserverId`, `FrameCallbackId`, `FrameId`, `TaskId`, `TickerId`) are opaque counters with no slot behind them.
-- **Generational IDs** (`ElementId`, `RenderId`, `RealmId`, …) pack the slab index with a `NonZeroU32` generation into a `NonZeroU64`, so an id held across a slot's reuse fails the generation check instead of addressing the new occupant. They have no `get()`; the owning tree's accessors use `.index()` (0-based) and `.generation()`.
+- **Generational IDs** (`ElementId`, `RenderId`, `UiRuntimeId`, …) pack the slab index with a `NonZeroU32` generation into a `NonZeroU64`, so an id held across a slot's reuse fails the generation check instead of addressing the new occupant. They have no `get()`; the owning tree's accessors use `.index()` (0-based) and `.generation()`.
 
 ```rust
 let slab_index = self.nodes.insert(node);
@@ -154,7 +154,7 @@ let platform = current_platform()?; // Result<Box<dyn Platform>, PlatformError>
 
 Backends: `WindowsPlatform` (Win32), `MacOSPlatform` (AppKit), `WebPlatform`, `AndroidPlatform`, `IOSPlatform` (UIKit), `HeadlessPlatform` (CI / tests), and `WinitPlatform` (the `winit-backend` feature), which is the Linux backend: with that feature on (as `flui-app` enables it) `current_platform()` returns it on Linux, and without it the call fails with `PlatformError::Init`. `LinuxPlatform` is an unimplemented placeholder whose constructor panics. The platform backends' types (`windows::*`, `objc2::*`/`objc2-app-kit::*`/`objc2-ui-kit::*`, `winit::*`) stay inside this crate. Three narrow Windows FFI sites live elsewhere: `flui-hot-reload`'s library loading (`LoadLibraryW`/`GetProcAddress`, `src/dynlib.rs`), `flui-cli`'s handle-inheritance call (`SetHandleInformation`, `src/proc.rs`), and `flui-devtools`' agent endpoint, which reads the current user's SID (`OpenProcessToken`/`GetTokenInformation`/`ConvertSidToStringSidW`, `src/agent/endpoint.rs`). The Apple backends both use the `objc2` binding family — macOS/AppKit and iOS/UIKit alike; the older `cocoa`/`objc` crates this backend used are gone (ADR-0071).
 
-Text shaping is **not** a `Platform` method — a platform text-system binding (`PlatformTextSystem`) is deliberately absent. `flui-painting` shapes text with Parley over a per-realm `TextContext`: `TextPainter` measures a paragraph, paints the runs of the same layout and answers carets and selection from it ([ADR-0092](adr/ADR-0092-per-realm-text-over-parley.md)); `flui-engine` rasterizes the runs' glyphs through `flui-painting`'s `SwashRasterizer` into its own glyph atlas.
+Text shaping is **not** a `Platform` method — a platform text-system binding (`PlatformTextSystem`) is deliberately absent. `flui-painting` shapes text with Parley over a per-UI runtime `TextContext`: `TextPainter` measures a paragraph, paints the runs of the same layout and answers carets and selection from it ([ADR-0092](adr/ADR-0092-per-realm-text-over-parley.md)); `flui-engine` rasterizes the runs' glyphs through `flui-painting`'s `SwashRasterizer` into its own glyph atlas.
 
 ## Confinement of `unsafe`
 

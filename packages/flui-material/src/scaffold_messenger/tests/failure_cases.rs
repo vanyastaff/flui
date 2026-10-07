@@ -1,5 +1,5 @@
 //! Distinct mounted owner inboxes expose each fanout delivery failure. They are
-//! a private fault seam, not supported cross-realm Messenger registration.
+//! a private fault seam, not supported cross-UI runtime Messenger registration.
 use super::*;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 

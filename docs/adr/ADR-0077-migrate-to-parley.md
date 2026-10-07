@@ -17,7 +17,7 @@ ADR-0016 and ADR-0059 stay in force.
 
 `flui-painting` depends on cosmic-text 0.19.0 for all text shaping and layout today
 (`crates/flui-painting/Cargo.toml`; the module's own doc comment: "Text shaping and layout
-over cosmic-text"). Per-realm font ownership, BiDi, and further editor text work all build on
+over cosmic-text"). Per-UI runtime font ownership, BiDi, and further editor text work all build on
 whichever shaping stack FLUI settles on.
 
 The spike ran the same six original corpora (Latin, pure-RTL Arabic, bidirectional
@@ -184,15 +184,15 @@ Preconditions 2-6 can proceed in parallel with each other. Precondition 1 is the
 treats as blocking: without it, "migrate" is not a fully-costed decision, since ADR-0059's
 dominant cost concern was never really about shaping speed.
 
-**The font system becomes per-realm, not a process global.** ADR-0016's one shared font source
-for measuring and painting stays; what changes is its scope. Each `UiRealm` owns its font context
+**The font system becomes per-UI runtime, not a process global.** ADR-0016's one shared font source
+for measuring and painting stays; what changes is its scope. Each `UiRuntime` owns its font context
 (parley's `FontContext`/`LayoutContext`, plus the rasterizer's cache) as owner-local state,
-reached through the realm rather than through the `FONT_SYSTEM` static, so layout on one realm
-never observes another realm's in-flight `register_font`. Both stacks need only `&mut` access to
+reached through the UI runtime rather than through the `FONT_SYSTEM` static, so layout on one UI runtime
+never observes another UI runtime's in-flight `register_font`. Both stacks need only `&mut` access to
 their own context with no internal locking, so this is not blocked on the shaper choice, but it
 lands with the migration rather than as a second rewrite of the same surface. How fonts every
-realm should see (the bundled baseline, application-registered faces) reach each realm's context
-is settled with the implementation; sharing one mutable database across realms is not an option.
+UI runtime should see (the bundled baseline, application-registered faces) reach each UI runtime's context
+is settled with the implementation; sharing one mutable database across UI runtimes is not an option.
 
 ## Consequences
 
@@ -212,9 +212,9 @@ is settled with the implementation; sharing one mutable database across realms i
 - `crates/flui-painting/Cargo.toml`'s single `cosmic-text = { version = "0.19" }` line is replaced
   by `parley` plus whichever rasterizer precondition 1 settles on; `crates/flui-engine`'s 5
   test-only occurrences (`paragraph_readback_tests.rs`) get updated to match.
-- The `FONT_SYSTEM` static and `flui_painting::shared_font_system()` give way to a realm-owned
+- The `FONT_SYSTEM` static and `flui_painting::shared_font_system()` give way to a UI runtime-owned
   font context; `SharedEngineServices` stops constructing a process-wide instance, and the
-  cross-realm `register_font` staleness window ADR-0016 accepts disappears.
+  cross-UI runtime `register_font` staleness window ADR-0016 accepts disappears.
 - Every call site in `flui-painting/src/text_layout/` must shape at the paragraph granularity
   (one `Layout` per `RenderParagraph`), never hand parley a whole multi-paragraph buffer as one
   `Layout` -- the Context section's `Item`-boundary behavior makes that the one usage pattern to

@@ -1,20 +1,20 @@
-//! The frame sink: the seam a realm's frame transaction submits through.
+//! The frame sink: the seam a UI runtime's frame transaction submits through.
 //!
 //! A [`FrameSink`] answers the two questions a frame asks of whatever puts it
 //! on screen: the surface size layout must use, and what happened to the
 //! composited scene it was handed. The answer to the second is a
-//! [`SubmitVerdict`], which the realm classifies into retry, device-loss and
+//! [`SubmitVerdict`], which the UI runtime classifies into retry, device-loss and
 //! not-shown handling (ADR-0068). The host implements the trait; this crate
 //! names no backend, surface or GPU type.
 
 use flui_layer::Scene;
 
-/// What one submitted frame did, as the realm's frame transaction needs to
-/// classify it: the behavioral buckets the realm's submit arms distinguish,
+/// What one submitted frame did, as the UI runtime's frame transaction needs to
+/// classify it: the behavioral buckets the UI runtime's submit arms distinguish,
 /// produced uniformly by every [`FrameSink`].
 ///
 /// The enum is deliberately exhaustive: adding a variant must make the
-/// compiler name the realm's one match site (ADR-0068), and that match lives
+/// compiler name the UI runtime's one match site (ADR-0068), and that match lives
 /// in another crate, where `#[non_exhaustive]` would force a wildcard arm and
 /// silently swallow the new variant.
 ///
@@ -72,21 +72,21 @@ pub enum SubmitVerdict {
     Failed,
 }
 
-/// The seam a realm's frame transaction submits through: the surface size
+/// The seam a UI runtime's frame transaction submits through: the surface size
 /// layout must use, and the submit itself.
 ///
 /// Implemented by the host: `flui-app`'s raster lane and its direct sink; a
-/// headless sink arrives with the realm core. Every implementation feeds the
-/// same realm-side classification arms via [`SubmitVerdict`], so the
+/// headless sink arrives with the UI runtime core. Every implementation feeds the
+/// same UI runtime-side classification arms via [`SubmitVerdict`], so the
 /// retry/telemetry semantics cannot drift between them.
 ///
-/// The trait is object-safe: the realm is generic over its sink today, and
-/// will drive it as `&mut dyn FrameSink` through the proposed `Realm::pump`
+/// The trait is object-safe: the UI runtime is generic over its sink today, and
+/// will drive it as `&mut dyn FrameSink` through the proposed `Runtime::pump`
 /// (ADR-0083).
 ///
 /// # Damage
 ///
-/// A submitted scene is always the whole frame; the realm computes no damage.
+/// A submitted scene is always the whole frame; the UI runtime computes no damage.
 /// A host sink that wants partial repaint owns the comparison: `flui-app`'s
 /// raster lane runs a `flui_layer::LayerDiffer` over each scene it is handed
 /// and stamps the result on the frame (ADR-0087 §3). That damage is relative

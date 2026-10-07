@@ -41,7 +41,7 @@ pub fn font_collection_holders(fonts: &FontCollection) -> usize {
 
 /// How many measurements `text` was lent for: one per layout, intrinsic or
 /// dry query a [`TextPainter`](crate::TextPainter) made through it. A
-/// consumer's tests use it to show which realm's context a layout measured
+/// consumer's tests use it to show which UI runtime's context a layout measured
 /// on.
 #[must_use]
 pub fn text_context_lends(text: &TextContext) -> u64 {
@@ -51,7 +51,7 @@ pub fn text_context_lends(text: &TextContext) -> u64 {
 /// Whether `fonts` was fed from a host scan: built by
 /// [`FontCollection::with_host_fonts`], or a [`HostFontFeed`] on it has
 /// finished. A composition root's tests use it to show the collection its
-/// realms share is the host-fed one.
+/// UI runtimes share is the host-fed one.
 #[must_use]
 pub fn host_fed(fonts: &FontCollection) -> bool {
     fonts.host_fed()

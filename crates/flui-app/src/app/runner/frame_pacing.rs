@@ -2,7 +2,7 @@
 // Desktop frame-pacing gate (App.1 vsync pacing)
 // ============================================================================
 //
-// Extracted as free functions — pure, no realm/window/GPU state — so the
+// Extracted as free functions — pure, no ui_runtime/window/GPU state — so the
 // decisions each platform's frame callback makes each wake are unit
 // testable without a live event loop. See the frame-pacing ADR for the
 // full design: a PRESENTED frame is paced at display cadence by the
@@ -45,7 +45,7 @@ pub(super) enum WakeAction {
     /// frames are enabled and there is real work or a scheduled ticker.
     Render,
     /// Frames are disabled (`AppLifecycleState::Hidden`/`Paused`/
-    /// `Detached`): poll only the realm's ready async tasks (`UiRealm::pump_background`) — never
+    /// `Detached`): poll only the UI runtime's ready async tasks (`UiRuntime::pump_background`) — never
     /// begin/draw a frame, tick, run the pipeline, or present. Dirty work
     /// is left untouched; it accumulates until frames re-enable.
     PumpAsync,
@@ -126,7 +126,7 @@ pub(super) fn wake_action(
 ///
 /// Four sources, all required: `inbox_redraw` (a command drained this frame
 /// boundary asked for a redraw), `needs_redraw`/`has_pending_work` (the
-/// realm's own pre-existing dirty state), and `next_attempt_at.is_some()` —
+/// UI runtime's own pre-existing dirty state), and `next_attempt_at.is_some()` —
 /// an armed device-recovery retry deadline. Dropping that last term is
 /// exactly the bug `DeviceRecoveryBackoff`'s own doc describes: a deadline
 /// wired into the wake-deadline hook but invisible to this gate reaches
@@ -143,7 +143,7 @@ pub(super) fn frame_is_dirty(
     next_attempt_at: Option<web_time::Instant>,
     fallback: FallbackGate,
 ) -> bool {
-    // `needs_redraw` is also the realm's OWN echo: every pump with a
+    // `needs_redraw` is also the ui_runtime's OWN echo: every pump with a
     // running ticker ends by re-requesting a frame through `wake_frame`,
     // which sets it. While a fallback wake is pending that echo is exactly
     // the wake being deferred, so it does not count; inbox redraws, pending
@@ -370,7 +370,7 @@ impl FallbackWake {
     /// this method that cleared a just-passed deadline destroyed it in
     /// that window: the hook then answered `None`, the loop parked in
     /// `ControlFlow::Wait`, the poke never happened, and — because a
-    /// pending deferral suppresses the realm's own redraw echo — nothing
+    /// pending deferral suppresses the UI runtime's own redraw echo — nothing
     /// woke the loop again. Measured on a real 164.89 Hz X11 session: the
     /// animation froze mid-flight, `next_wake` observing the deadline 5 µs
     /// late, and stayed frozen for the rest of the run.
@@ -398,7 +398,7 @@ impl FallbackWake {
             // surface withholds redraws). Abandon it rather than re-arming
             // `WaitUntil` in the past every iteration — ADR-0044 §7's
             // measured busy-spin. Clearing it also lifts the suppression of
-            // the realm's own redraw echo, so an ordinary wake produces.
+            // the ui_runtime's own redraw echo, so an ordinary wake produces.
             state.deadline = None;
             tracing::trace!(
                 target: "flui.pace",

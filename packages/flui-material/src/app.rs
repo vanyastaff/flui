@@ -46,7 +46,7 @@
 //!
 //! - With **no `MediaQuery` ancestor**, [`ThemeMode::System`] resolves against
 //!   `MediaQueryData::default()`'s brightness (light) rather than failing.
-//!   Under `run_app` the realm always installs the live
+//!   Under `run_app` the UI runtime always installs the live
 //!   root `MediaQuery`, so this path is reachable only from embedders and
 //!   harnesses that bypass it — and a panic inside `build` would surface as
 //!   a silently-childless subtree (the framework's build-error boundary),
@@ -326,7 +326,7 @@ impl StatelessView for MaterialApp {
         // wraps the routing subtree in the Material bands. `MediaQuery::
         // maybe_of` registers a dependency from the builder's element, so a
         // platform-brightness republish re-runs this closure and re-resolves
-        // `ThemeMode::System` — the live path the realm's root MediaQuery
+        // `ThemeMode::System` — the live path the ui_runtime's root MediaQuery
         // feeds.
         let theme = self.theme.clone();
         let dark_theme = self.dark_theme.clone();

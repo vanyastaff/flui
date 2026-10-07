@@ -1,6 +1,6 @@
-//! Owner-thread state for one presentation of a UI realm.
+//! Owner-thread state for one presentation of a UI ui_runtime.
 //!
-//! Public only so the host that drives a realm (`flui-app`) can name it; it
+//! Public only so the host that drives a UI runtime (`flui-app`) can name it; it
 //! is not an embedder API (ADR-0027 §9). It is the UI-owner domain, not a
 //! cross-thread god object: native event-loop ownership remains in the
 //! runner/window host and raster/surface ownership remains in
@@ -51,59 +51,59 @@ fn format_millis(duration: Duration) -> String {
     format!("{:.1}ms", duration.as_secs_f64() * 1_000.0)
 }
 
-/// Realm-supplied capabilities threaded into a presentation at assembly
+/// Runtime-supplied capabilities threaded into a presentation at assembly
 /// time (ADR-0043 §1): [`Self::global_key_scope`] is installed FIRST — the
 /// underlying `BuildOwner::set_global_key_scope` setter panics with `BUG:`
 /// if called after this owner's own `GlobalKey` registration has begun —
-/// then the realm's shared dispatch handles, before this presentation's own
+/// then the UI runtime's shared dispatch handles, before this presentation's own
 /// focus/IME are wired into its fresh `WidgetsBinding`, all before
 /// attach/mount. See [`PresentationState::new`].
-pub(crate) struct RealmCapabilities<'a> {
-    /// The realm's cross-tree `GlobalKey` uniqueness domain (ADR-0043).
+pub(crate) struct RuntimeCapabilities<'a> {
+    /// The UI runtime's cross-tree `GlobalKey` uniqueness domain (ADR-0043).
     pub(crate) global_key_scope: GlobalKeyScope,
-    /// A `Weak` handle to the realm's shared async tasks (realm-level; see
+    /// A `Weak` handle to the UI runtime's shared async tasks (UI runtime-level; see
     /// the presentation-teardown contract for the consequence of that when
     /// this presentation closes).
     pub(crate) async_driver: AsyncDriver,
-    /// The realm's owner-local post-frame callback capability — addresses
-    /// the realm's [`flui_scheduler::OwnerFrame`] directly, so it can
+    /// The UI runtime's owner-local post-frame callback capability — addresses
+    /// the UI runtime's [`flui_scheduler::OwnerFrame`] directly, so it can
     /// capture `Rc`/`RefCell` widget state.
     pub(crate) local_post_frame_handle: LocalPostFrameHandle,
-    /// The realm's interaction dispatch lane.
+    /// The UI runtime's interaction dispatch lane.
     pub(crate) interaction_dispatch_handle: InteractionDispatchHandle,
-    /// The realm's own scheduler — borrowed only for the duration of
+    /// The UI runtime's own scheduler — borrowed only for the duration of
     /// assembly; the constructed [`RenderingBinding`] keeps just a
     /// `WeakUpdateScheduler` derived from it.
     pub(crate) scheduler: &'a UpdateScheduler,
-    /// The realm's platform wake capability. It is wired as the realm
-    /// scheduler's `on_frame_scheduled` hook (in `UiRealm::construct`) and
+    /// The UI runtime's platform wake capability. It is wired as the UI runtime
+    /// scheduler's `on_frame_scheduled` hook (in `UiRuntime::construct`) and
     /// handed to the platform accessibility bridge; the presentation's own
     /// pipeline wake now routes through the scheduler rather than cloning
     /// this directly.
     pub(crate) wake: Arc<dyn Fn() + Send + Sync>,
-    /// A cross-thread sender into the realm's command inbox, already
+    /// A cross-thread sender into the UI runtime's command inbox, already
     /// stamped with this presentation's id. Handed to the platform
     /// accessibility bridge's action listener, so an assistive-technology
     /// request marshals onto the owner thread as a
     /// [`SemanticsActionRequest`] and resolves at the next Idle drain —
     /// never on the adapter's own thread.
-    pub(crate) command_sender: super::ui_realm::UiCommandSender,
-    /// The realm's platform clipboard, handed to widgets through
+    pub(crate) command_sender: super::ui_runtime::UiCommandSender,
+    /// The UI runtime's platform clipboard, handed to widgets through
     /// `LifecycleContext::clipboard_handle`.
     pub(crate) clipboard: Arc<dyn Clipboard>,
-    /// The realm's byte storage, if it has one, handed to widgets through
+    /// The UI runtime's byte storage, if it has one, handed to widgets through
     /// `LifecycleContext::storage`.
     pub(crate) storage: Option<Arc<dyn flui_platform_api::Storage>>,
-    /// Where the realm reads time: this presentation's gesture arena and
-    /// [`FrameClock`] read the same source as the realm's frame clock.
+    /// Where the UI runtime reads time: this presentation's gesture arena and
+    /// [`FrameClock`] read the same source as the UI runtime's frame clock.
     pub(crate) clock: &'a ClockSource,
-    /// The realm's text context, installed on the presentation's pipeline so
-    /// its layout measures text through the realm (ADR-0092 §10 step 3).
+    /// The UI runtime's text context, installed on the presentation's pipeline so
+    /// its layout measures text through the UI runtime (ADR-0092 §10 step 3).
     pub(crate) text: flui_rendering::TextContextHandle,
 }
 
 /// A fresh in-memory clipboard — the one the headless platform hands out —
-/// for a test realm's `UiRealm::new`.
+/// for a test UI runtime's `UiRuntime::new`.
 #[cfg(any(test, feature = "test-support"))]
 #[must_use]
 pub fn test_clipboard() -> Arc<dyn Clipboard> {
@@ -208,9 +208,9 @@ impl From<&Arc<dyn PlatformWindow>> for PresentationWindow {
     }
 }
 
-/// A realm-backed test window carrying an optional platform text-input
-/// capability — for `UiRealm::for_test_with_text_input`, which needs a real
-/// [`RealmCapabilities`]-assembled presentation (not the standalone
+/// A UI runtime-backed test window carrying an optional platform text-input
+/// capability — for `UiRuntime::for_test_with_text_input`, which needs a real
+/// [`RuntimeCapabilities`]-assembled presentation (not the standalone
 /// `PresentationState::new_for_test` path), just with a test window.
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) fn test_platform_window(
@@ -266,7 +266,7 @@ pub struct PresentationState {
     pub(super) closing_requested: Cell<bool>,
     lifecycle: Cell<PresentationLifecycle>,
     close_mode: Cell<flui_interaction::__runtime::CloseMode>,
-    /// Dispatch captures a realm-wide withdrawal took before this
+    /// Dispatch captures a UI runtime-wide withdrawal took before this
     /// presentation's own close, which retires them.
     withdrawn_dispatch: RefCell<Option<flui_interaction::__runtime::DispatchCustody>>,
     pipeline: PipelineCell,
@@ -276,7 +276,7 @@ pub struct PresentationState {
     /// reliably says "closed". The pipeline's own allocation does not —
     /// `LifecycleContext::pipeline_owner()` hands out a strong `PipelineCell`, so
     /// a widget that stores one keeps the tree alive past the close — and
-    /// under `WindowPolicy::Shared` the realm outlives any single presentation too.
+    /// under `WindowPolicy::Shared` the UI runtime outlives any single presentation too.
     alive: RefCell<Option<Rc<()>>>,
     window: Weak<dyn PlatformWindow>,
     /// The window's accessibility bridge, if its backend has one. `Weak`
@@ -293,30 +293,30 @@ pub struct PresentationState {
     text_input: Rc<TextInputOwner>,
     /// This presentation's semantics enablement gate and platform
     /// accessibility delivery. `close()` clears its announce/event
-    /// callbacks unconditionally (production write); `UiRealm::construct`
-    /// reads `platform_semantics_enabled_handle()` to wire the realm's
+    /// callbacks unconditionally (production write); `UiRuntime::construct`
+    /// reads `platform_semantics_enabled_handle()` to wire the UI runtime's
     /// renderer fan-out (production read) — announce/event delivery itself
     /// still has no production caller.
     semantics: SemanticsHost,
     /// The semantics agent a development agent hook reads this presentation
-    /// through, once `UiRealm::dev_agent_window` has vended it. The hook's
+    /// through, once `UiRuntime::dev_agent_window` has vended it. The hook's
     /// `AgentWindow`s hold it weakly, so dropping it here (at close, or with
     /// the presentation) turns every handle `gone`; they hold the semantics
     /// handle themselves, so collection lasts while the hook keeps one.
     /// Owner thread only.
-    pub(crate) dev_agent: RefCell<Option<crate::ui_realm::DevAgentSlot>>,
+    pub(crate) dev_agent: RefCell<Option<crate::ui_runtime::DevAgentSlot>>,
     /// Owner-local widget framework state. One instance per presentation
-    /// (ADR-0043) — the realm-level singular binding this used to be
+    /// (ADR-0043) — the UI runtime-level singular binding this used to be
     /// dissolves here; every widget-tree operation for this surface enters
     /// through this presentation and activates this binding's own GlobalKey
-    /// registry (composed into the realm's whole-frame composite by
-    /// `UiRealm::enter`, never activated standalone in production).
+    /// registry (composed into the UI runtime's whole-frame composite by
+    /// `UiRuntime::enter`, never activated standalone in production).
     widgets: WidgetsBinding,
     /// Render tree, layout/paint pipeline coordination, and this
     /// presentation's own semantics-enablement fan-out. Moved from the
-    /// retired realm-level singular `UiRealm::renderer`: `render_views`,
+    /// retired UI runtime-level singular `UiRuntime::renderer`: `render_views`,
     /// `first_frame_sent`, and the semantics-enabled listener are
-    /// per-presentation-window facts, not shareable once a realm hosts more
+    /// per-presentation-window facts, not shareable once a UI runtime hosts more
     /// than one presentation.
     renderer: RenderingBinding,
     /// Total frames rendered successfully for this presentation. Moved here
@@ -349,7 +349,7 @@ pub struct PresentationState {
     /// retired `AppBinding` — per-window stats, not a process-wide concern.
     performance_overlay: RefCell<Option<PerformanceStats>>,
     /// This presentation's own wake-only redraw mark (ADR-0043 §3's pump
-    /// segment). Set alongside the realm's own coalesced `needs_redraw` flag
+    /// segment). Set alongside the UI runtime's own coalesced `needs_redraw` flag
     /// by every presentation-scoped operation that isn't otherwise
     /// re-derivable from live pipeline/build state (e.g. `attach_root_widget`
     /// scheduling the very first build); cleared at the START of this
@@ -358,25 +358,25 @@ pub struct PresentationState {
     /// lost. This bit is wake-only, never the truth by itself: the segment's
     /// real dirty predicate is `take_redraw_pending() ||
     /// widgets().has_pending_builds() || <pipeline has_dirty_nodes>`
-    /// (`Self::has_pending_work`) — see `UiRealm::draw_frame_entered`'s
+    /// (`Self::has_pending_work`) — see `UiRuntime::draw_frame_entered`'s
     /// per-presentation loop.
     redraw_pending: Cell<bool>,
     /// This presentation's own controller registry for implicit animations
-    /// (moved from the realm-level `UiRealm::vsync_slot`, issue #556: each
+    /// (moved from the UI runtime-level `UiRuntime::vsync_slot`, issue #556: each
     /// surface paces its own animations independently). `RefCell`, not a
-    /// plain field — mirrors `UiRealm::vsync_slot`'s old `Mutex`: `Self::
+    /// plain field — mirrors `UiRuntime::vsync_slot`'s old `Mutex`: `Self::
     /// set_vsync` replaces the whole handle through `&self`, and the
     /// per-frame `tick_all`/`has_running` calls operate on a cloned `Vsync`
     /// handle (sharing the inner `Arc<Mutex<VsyncInner>>`), so this cell is
     /// only ever borrowed for the length of a clone or a swap.
     vsync: RefCell<Vsync>,
-    /// This presentation's animation clock: maps the realm's raw frame time
+    /// This presentation's animation clock: maps the UI runtime's raw frame time
     /// to the monotonic animation time [`Self::vsync`] is ticked with.
     /// Borrowed only inside [`Self::motion_tick`], never across user code.
     motion_clock: RefCell<MotionClock>,
     /// This presentation's own physical-time produce-gate state machine
     /// (issue #556) — the per-presentation half of the `UpdateScheduler`/
-    /// `FrameClock`/raster three-owner split. `UiRealm::draw_frame_entered`'s
+    /// `FrameClock`/raster three-owner split. `UiRuntime::draw_frame_entered`'s
     /// per-presentation segment loop polls this instead of the old
     /// `take_redraw_pending() || has_pending_work()` predicate directly;
     /// first-frame deferral (`RenderingBinding::send_frames_to_engine`'s
@@ -385,11 +385,11 @@ pub struct PresentationState {
     /// pins this.
     clock: FrameClock,
     /// (segment start, segment end) for the most recently completed
-    /// build+layout+paint segment `UiRealm::draw_frame_entered`'s
+    /// build+layout+paint segment `UiRuntime::draw_frame_entered`'s
     /// per-presentation loop ran for THIS presentation — a side channel for
     /// a caller whose segment-running step and submit-deciding step are two
-    /// separate calls (`UiRealm::draw_frame_entered` runs the segment;
-    /// `UiRealm::render_frame_entered`, its caller, decides whether/how to
+    /// separate calls (`UiRuntime::draw_frame_entered` runs the segment;
+    /// `UiRuntime::render_frame_entered`, its caller, decides whether/how to
     /// submit and is where `FrameClock::record_frame` actually runs, for
     /// whichever presentation's segment produced the outcome being
     /// submitted — see that call site's own doc). Lives here, not on the
@@ -421,13 +421,13 @@ pub struct PresentationState {
     segment_phase: FramePhaseMarker<SegmentPhase>,
     /// Test-only fault injection addressed to one [`SegmentPhase`]. It runs
     /// immediately after that phase is stored and before its matching work,
-    /// so a panic reaches the realm's per-presentation `catch_unwind` with
+    /// so a panic reaches the UI runtime's per-presentation `catch_unwind` with
     /// accurate attribution. The closure stays installed across retries and
     /// must arrange its own one-shot behavior when a clean retry is expected.
     #[cfg(test)]
     segment_probe: RefCell<Option<SegmentProbe>>,
     /// Test-only oracle: how many times this presentation's own
-    /// build+layout+paint segment actually ran (`UiRealm::
+    /// build+layout+paint segment actually ran (`UiRuntime::
     /// draw_frame_for_presentation`), regardless of whether anything was
     /// rebuilt or a scene reached present. This is the "flush count" the
     /// isolation suite's sibling-independence tests read — a rebuild count
@@ -448,11 +448,11 @@ impl PresentationState {
     ///   never a call into a dead adapter.
     /// - **Activation** — assistive technology attaching or detaching
     ///   toggles this presentation's [`SemanticsHost`] flag and wakes the
-    ///   loop; the frame pump's reconcile (`UiRealm::draw_frame_entered`)
+    ///   loop; the frame pump's reconcile (`UiRuntime::draw_frame_entered`)
     ///   then drives `PipelineOwner::set_semantics_enabled`, so tree
     ///   assembly starts and stops on the OWNER thread — the listener runs
     ///   on the adapter's own thread and touches only `Send + Sync` state.
-    /// - **In** — action requests marshal through the realm inbox as
+    /// - **In** — action requests marshal through the UI runtime inbox as
     ///   [`SemanticsActionRequest`]s stamped for this exact presentation
     ///   and resolve at the next Idle drain. Requests FLUI cannot route (a
     ///   zero node id, an action with no counterpart, a full inbox) are
@@ -470,7 +470,7 @@ impl PresentationState {
         pipeline: &PipelineCell,
         semantics: &SemanticsHost,
         wake: &Arc<dyn Fn() + Send + Sync>,
-        command_sender: super::ui_realm::UiCommandSender,
+        command_sender: super::ui_runtime::UiCommandSender,
     ) {
         let Some(bridge) = bridge else {
             return;
@@ -528,7 +528,7 @@ impl PresentationState {
             if let Err(error) = command_sender.send_semantics_action(semantics_request) {
                 tracing::warn!(
                     ?error,
-                    "dropping accessibility action: the realm inbox is full or gone"
+                    "dropping accessibility action: the ui_runtime inbox is full or gone"
                 );
             }
         }));
@@ -543,7 +543,7 @@ impl PresentationState {
         window: &Arc<dyn PlatformWindow>,
         clock: &ClockSource,
     ) -> GestureBinding {
-        // The arena's deadlines read the realm's clock: a recognizer's
+        // The arena's deadlines read the ui_runtime's clock: a recognizer's
         // timeout and the frame that polls it share one timeline.
         let gestures = GestureBinding::with_clock(Arc::new(clock.clone()));
         let cursor_window = Arc::downgrade(window);
@@ -584,20 +584,20 @@ impl PresentationState {
         gestures
     }
 
-    /// Assemble a presentation wired into a realm (ADR-0043 §1): installs
-    /// `capabilities.global_key_scope` FIRST, then the realm's shared
+    /// Assemble a presentation wired into a UI runtime (ADR-0043 §1): installs
+    /// `capabilities.global_key_scope` FIRST, then the UI runtime's shared
     /// dispatch handles, before this presentation's own focus/IME are
     /// wired to its fresh [`WidgetsBinding`] and [`RenderingBinding`]
     /// — all before the caller ever attaches/mounts a root widget.
     ///
-    /// Builds the presentation's pipeline here, from the realm's text
+    /// Builds the presentation's pipeline here, from the UI runtime's text
     /// context, so no presentation pipeline measures on any other; a
     /// `device_pixel_ratio` of `None` keeps the pipeline's default of `1.0`.
     pub(crate) fn new(
         id: PresentationId,
         device_pixel_ratio: Option<f64>,
         window: impl Into<PresentationWindow>,
-        capabilities: RealmCapabilities<'_>,
+        capabilities: RuntimeCapabilities<'_>,
     ) -> Self {
         let PresentationWindow {
             window,
@@ -635,10 +635,10 @@ impl PresentationState {
             if let Some(storage) = capabilities.storage {
                 owner.set_storage(storage);
             }
-            // Paired here, the one place holding both halves: the realm's
+            // Paired here, the one place holding both halves: the ui_runtime's
             // dispatch ticket (identity) and THIS presentation's pipeline
-            // (the tree). A realm may host several presentations, each with
-            // its own `PipelineOwner`, so a probe installed once per realm
+            // (the tree). A ui_runtime may host several presentations, each with
+            // its own `PipelineOwner`, so a probe installed once per ui_runtime
             // would answer every presentation with the first one's tree.
             owner.set_hit_test_handle(flui_interaction::HitTestHandle::new(
                 interaction_dispatch.clone(),
@@ -668,8 +668,8 @@ impl PresentationState {
         // edge) as ticker/`end_of_frame` demand: a dirty mark issued mid-frame
         // on the driving thread no longer reaches `request_redraw` — the
         // in-flight frame's own surplus-frame guard is what picks it up. The
-        // realm-wide wake still happens through the `on_frame_scheduled` hook
-        // (`UiRealm::construct` wires it to this same `wake`), so the closure
+        // ui_runtime-wide wake still happens through the `on_frame_scheduled` hook
+        // (`UiRuntime::construct` wires it to this same `wake`), so the closure
         // no longer calls `wake` directly.
         //
         // Still pokes THIS presentation's own window directly (`Weak`,
@@ -677,7 +677,7 @@ impl PresentationState {
         // the platform's own teardown), because `capabilities.wake` only
         // pokes whichever ONE window `AppRuntime`'s own `redraw_window` slot
         // happens to hold (issue #555's still-single-window wake contract).
-        // Once a realm hosts more than one presentation, each needs its OWN
+        // Once a ui_runtime hosts more than one presentation, each needs its OWN
         // window poked when IT dirties — never a sibling's. The poke is gated
         // on `ensure_visual_update`'s return so it fires only when the
         // scheduler actually accepted the demand.
@@ -758,15 +758,15 @@ impl PresentationState {
         state
     }
 
-    /// Standalone assembly with no realm above it: this presentation's
+    /// Standalone assembly with no UI runtime above it: this presentation's
     /// `WidgetsBinding` lazily self-owns a private `GlobalKeyScope` on first
     /// `GlobalKey` registration (never shared, so it never conflicts with
     /// anything), and its `RenderingBinding` owns its own throwaway
     /// `UpdateScheduler` (see [`RenderingBinding::new_for_test_with_pipeline`]).
     /// Used only by this module's own unit tests, which exercise
     /// presentation-local behavior (gestures/focus/haptics/overlay) in
-    /// isolation; realm-backed tests use [`Self::new`] through
-    /// `UiRealm::for_test`, exactly like production.
+    /// isolation; UI runtime-backed tests use [`Self::new`] through
+    /// `UiRuntime::for_test`, exactly like production.
     #[cfg(test)]
     pub(crate) fn new_for_test_with_window(
         id: PresentationId,
@@ -895,15 +895,15 @@ impl PresentationState {
     /// A clone of this presentation's own implicit-animation controller
     /// registry. `Vsync` is `Arc`-backed, so this is cheap and every clone
     /// observes the same registry — the same handle shape
-    /// `UiRealm::vsync()` used to hand out from its own realm-level slot
+    /// `UiRuntime::vsync()` used to hand out from its own UI runtime-level slot
     /// (issue #556: the registry moved here, one per presentation).
     #[must_use]
     pub(crate) fn vsync(&self) -> Vsync {
         self.vsync.borrow().clone()
     }
 
-    /// This frame's animation tick for the realm's raw frame time `raw`
-    /// (measured from the realm's start): monotonic and finite, so a stale
+    /// This frame's animation tick for the UI runtime's raw frame time `raw`
+    /// (measured from the UI runtime's start): monotonic and finite, so a stale
     /// or repeated `raw` repeats the previous tick.
     ///
     /// The clock's borrow ends inside this call, before the caller hands the
@@ -918,12 +918,12 @@ impl PresentationState {
     }
 
     /// Replace this presentation's registry with a pre-existing shared
-    /// `Vsync` — see `UiRealm::set_vsync`'s doc for the one legitimate use
+    /// `Vsync` — see `UiRuntime::set_vsync`'s doc for the one legitimate use
     /// (a `VsyncScope` built before this presentation's own registry was
     /// acquired).
     #[expect(
         dead_code,
-        reason = "no production caller yet -- forwards from UiRealm::set_vsync, \
+        reason = "no production caller yet -- forwards from UiRuntime::set_vsync, \
                   itself also uncalled in production (see that method's own doc)"
     )]
     pub(crate) fn set_vsync(&self, vsync: Vsync) {
@@ -940,9 +940,9 @@ impl PresentationState {
 
     /// Record this pump's just-completed segment span for THIS
     /// presentation. Called exactly once per pump in which this
-    /// presentation's own segment ran, by `UiRealm::draw_frame_entered`'s
+    /// presentation's own segment ran, by `UiRuntime::draw_frame_entered`'s
     /// per-presentation loop, immediately after
-    /// `UiRealm::draw_frame_for_presentation` returns. See
+    /// `UiRuntime::draw_frame_for_presentation` returns. See
     /// [`Self::last_segment_span`]'s field doc for why this lives here and
     /// not on the shared `FrameClock`.
     pub(crate) fn set_last_segment_span(&self, start: Instant, end: Instant) {
@@ -951,7 +951,7 @@ impl PresentationState {
 
     /// Read AND CLEAR the span [`Self::set_last_segment_span`] most
     /// recently recorded for this presentation. `take`, not `get`: called
-    /// by `UiRealm::render_frame_entered` at most once per pump, exactly
+    /// by `UiRuntime::render_frame_entered` at most once per pump, exactly
     /// when it is about to decide whether to attach a `FrameSnapshot` to
     /// THIS presentation's clock — a pump in which this presentation's own
     /// segment did NOT run must see `None`, never a stale span this same
@@ -990,7 +990,7 @@ impl PresentationState {
     /// This presentation's semantics enablement gate and platform
     /// accessibility delivery — the per-window home the retired
     /// `SemanticsBinding` singleton's enablement/announce/event state moved
-    /// into. `UiRealm::semantics_agent` acquires its enablement handle
+    /// into. `UiRuntime::semantics_agent` acquires its enablement handle
     /// here; announce/event delivery itself still has no production caller
     /// (future platform-embedder wiring).
     #[must_use]
@@ -1037,7 +1037,7 @@ impl PresentationState {
             dead_code,
             reason = "no production caller yet -- haptics through a \
                       presentation is future wiring, forwarded today only by \
-                      UiRealm::perform_haptic_feedback (also uncalled in \
+                      UiRuntime::perform_haptic_feedback (also uncalled in \
                       production)"
         )
     )]
@@ -1131,7 +1131,7 @@ impl PresentationState {
     /// The platform's activation listener may only flip the
     /// [`SemanticsHost`] flag and wake the loop (it runs on the adapter's
     /// thread); this is where the flag becomes pipeline state. Called at
-    /// each segment start in `UiRealm::draw_frame_entered`, BEFORE dirty
+    /// each segment start in `UiRuntime::draw_frame_entered`, BEFORE dirty
     /// sampling, because enabling seeds the root as needing semantics —
     /// exactly the pending work the segment should then observe. A no-op
     /// whenever flag and pipeline already agree, which is every frame but
@@ -1342,7 +1342,7 @@ impl PresentationState {
     ///
     /// When enabled, this pulls `frames_since(None)`, rebuilds both
     /// histograms and shapes the readout's seven labels through `text`, the
-    /// realm's text context, on every composited frame. The cost is bounded — the
+    /// UI runtime's text context, on every composited frame. The cost is bounded — the
     /// telemetry ring is fixed-capacity, so it is O(ring), not O(session) —
     /// and no frame pays it while the overlay is off. But it is not free, and
     /// it lands *inside* the frames the overlay subsequently reports: read the
@@ -1382,7 +1382,7 @@ impl PresentationState {
             diagnostic_line: Some(&diagnostic_line),
         };
 
-        // The readout's labels are shaped here, through the realm's text
+        // The readout's labels are shaped here, through the ui_runtime's text
         // context, so the backend only rasterizes them (ADR-0092). The
         // context is free at scene assembly; were it lent, a debug overlay
         // skips a frame rather than panic it.
@@ -1394,7 +1394,7 @@ impl PresentationState {
                 &sample,
             )
         }) else {
-            tracing::warn!("performance overlay skipped: the realm's text context is lent");
+            tracing::warn!("performance overlay skipped: the ui_runtime's text context is lent");
             return;
         };
 
@@ -1425,7 +1425,7 @@ impl PresentationState {
     ///
     /// `debug_assert!(is_free())` makes the Idle-commit contract this
     /// dispatch site depends on an explicit, production-checked invariant:
-    /// `UiRealm::drain_commands` (the sole caller) only runs at a frame
+    /// `UiRuntime::drain_commands` (the sole caller) only runs at a frame
     /// boundary, so nothing should still hold the pipeline checked out by
     /// the time a semantics-action handler runs. The `flui-testing` test
     /// `an_action_sent_off_thread_is_applied_by_the_next_harness_pump` runs
@@ -1678,13 +1678,13 @@ impl PresentationState {
 
 impl PresentationState {
     /// Withdraw this presentation's authority without running user code, as
-    /// a realm closing several presentations does for every one of them
+    /// a UI runtime closing several presentations does for every one of them
     /// before any closes: dispatch targets, liveness, held input, the graph,
     /// rebuild and key authority, agent ports, focus and text input become
     /// unavailable, so a sibling's callbacks cannot drive this presentation
     /// (ADR-0123). The withdrawn key owners are returned for the caller to
     /// retire; the presentation's own close later retires everything else.
-    pub(crate) fn withdraw_for_realm_close(
+    pub(crate) fn withdraw_for_ui_runtime_close(
         &self,
         lane: &flui_interaction::InteractionLane,
     ) -> Vec<flui_view::__runtime::WithdrawnKey> {
@@ -1875,7 +1875,7 @@ mod tests {
         assert_eq!(presentation.lifecycle(), PresentationLifecycle::Closed);
     }
 
-    /// While the realm's text context is lent, the overlay skips the frame
+    /// While the UI runtime's text context is lent, the overlay skips the frame
     /// and leaves the tree as it was, rather than panic on the borrow; once
     /// the loan ends, the next frame attaches it. Fails if the overlay
     /// borrows the context unconditionally (a panic), or attaches an

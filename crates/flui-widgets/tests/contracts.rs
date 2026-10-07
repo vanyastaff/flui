@@ -44,7 +44,7 @@ fn callback_failure_containment() {
             ("raw_button::a_refused_write_in_a_press_is_reported_not_panicked", crate::raw_button::a_refused_write_in_a_press_is_reported_not_panicked),
             ("draggable_events::a_refused_write_in_a_target_callback_is_reported_not_panicked", crate::draggable_events::a_refused_write_in_a_target_callback_is_reported_not_panicked),
             ("semantics::a_refused_write_in_an_action_handler_is_reported_not_panicked", crate::semantics::a_refused_write_in_an_action_handler_is_reported_not_panicked),
-            ("semantics::an_action_invoked_outside_its_realm_is_dropped_with_a_warning", crate::semantics::an_action_invoked_outside_its_realm_is_dropped_with_a_warning),
+            ("semantics::an_action_invoked_outside_its_ui_runtime_is_dropped_with_a_warning", crate::semantics::an_action_invoked_outside_its_ui_runtime_is_dropped_with_a_warning),
             ("text_field_widget::raw_text_field_callbacks_write_through_the_forwarded_cx", crate::text_field_widget::raw_text_field_callbacks_write_through_the_forwarded_cx),
             ("form::a_panicking_reset_callback_does_not_disable_later_form_validation", crate::form::a_panicking_reset_callback_does_not_disable_later_form_validation),
             ("form::a_form_handle_refuses_a_second_simultaneous_mount_before_mutating_the_first", crate::form::a_form_handle_refuses_a_second_simultaneous_mount_before_mutating_the_first),

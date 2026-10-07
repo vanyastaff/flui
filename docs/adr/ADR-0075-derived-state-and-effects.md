@@ -1,4 +1,4 @@
-# ADR-0075: Derived state and effects on the realm-scoped signal graph
+# ADR-0075: Derived state and effects on the UI runtime-scoped signal graph
 
 - **Status:** Proposed
 - **Date:** 2026-09-22
@@ -12,7 +12,7 @@ keep.
 
 ## Context
 
-ADR-0074 (Accepted) gives the view layer realm-owned `Signal<T>` values and a reader
+ADR-0074 (Accepted) gives the view layer UI runtime-owned `Signal<T>` values and a reader
 registry: a read in `build` subscribes the element, a write schedules exactly the readers.
 The 3-screen app in ADR-0074 §1.2 also needs two things a plain signal does not give:
 
@@ -36,7 +36,7 @@ implementation was unsound in ways the tests did not reach.
    runners are enumerated as call sites.
 2. **A panic inside a computation or effect poisoned the graph.** The node index was
    pushed on `tracking` before the user closure ran and popped after; an unwinding closure
-   left it there forever, so every later read in the realm registered a dead index, and
+   left it there forever, so every later read in the UI runtime registered a dead index, and
    the pending-effects list was lost with it. Requirement: tracking is an RAII guard (or
    `catch_unwind` with the pop on both paths), pending work survives a panicking effect,
    and the panic is contained the way `build_or_recover` contains a `build` panic.
@@ -64,8 +64,8 @@ Two more:
 
 ## Decision (proposed)
 
-Design `Computed<T>` and `Effect` as `Copy` handles into ADR-0074's realm arena, `PartialEq` on a computed output by construction, effects owned by
-their creating element or the realm — with the six requirements above as acceptance
+Design `Computed<T>` and `Effect` as `Copy` handles into ADR-0074's UI runtime arena, `PartialEq` on a computed output by construction, effects owned by
+their creating element or the UI runtime — with the six requirements above as acceptance
 criteria, each backed by a test that fails against the reverted prototype:
 
 | Requirement | Test |
@@ -92,7 +92,7 @@ inherited from ADR-0074 unchanged; this ADR adds node kinds, not a second graph.
 ## Consequences
 
 Until this ADR is accepted, application code derives values in `build` and runs side
-effects from callbacks, `did_update_view` or realm commands. The prototype's numbers in
+effects from callbacks, `did_update_view` or UI runtime commands. The prototype's numbers in
 ADR-0074 §8.1 for the "validity flips" scenario are kept there as a measurement of the
 reverted design, not as a promise.
 

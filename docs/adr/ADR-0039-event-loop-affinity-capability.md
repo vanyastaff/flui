@@ -21,9 +21,9 @@ Three pieces already pointed the right way:
    (`Full`, `OwnerGone`), an admission gate that linearizes shutdown against
    in-flight sends, and a coalesced wake. Owner-thread callers got a typed
    `OwnerWouldBlock` instead of a deadlock.
-2. **Realm dispatch rejects wrong threads** (`RealmDispatchError::WrongThread`),
-   so everything reached through a realm already runs on the owner thread.
-3. **ADR-0027/0037** — `UiRealm` is `!Send + !Sync`; cross-thread traffic is a
+2. **Runtime dispatch rejects wrong threads** (`DispatchError::WrongThread`),
+   so everything reached through a UI runtime already runs on the owner thread.
+3. **ADR-0027/0037** — `UiRuntime` is `!Send + !Sync`; cross-thread traffic is a
    closed, bounded, typed vocabulary, never closures.
 
 Two forces shaped the answer. winit invoked `on_window_event` handlers while
@@ -131,7 +131,7 @@ Delivered ──requester drops─────▶ Abandoned(window)    (owner cl
 Pending   ──owner side dropped──▶ OwnerGone            (waiters resolve, never hang)
 ```
 
-The slot is the at-most-once linearization point. A dying realm or finished
+The slot is the at-most-once linearization point. A dying UI runtime or finished
 worker that drops its `PendingWindow` cannot leak a window in any ordering.
 `PendingWindow` offers `wait()` (worker threads only — on the owner thread it
 returns `WaitError::WouldBlockOwner` with the handle, because waiting there
@@ -155,12 +155,12 @@ foundation suite.
   nested/modal dispatch region or a frame transaction is active, and a wake
   that arrives then re-arms for the next top-level anchor. Each backend's lane
   adoption carries a test that a wake during a nested modal loop defers.
-- **Stale results.** Lane replies never commit mid-frame; they enter realm
+- **Stale results.** Lane replies never commit mid-frame; they enter UI runtime
   state at Idle commit points, where each work class applies its own freshness
-  check (ADR-0027 §6). A window opened for a realm that died meanwhile is
+  check (ADR-0027 §6). A window opened for a UI runtime that died meanwhile is
   reclaimed through the abandoned slot.
 - **Window identity.** `WindowId` stays the platform-internal native key;
-  realm-facing identity is the generational `PresentationAddress`
+  UI runtime-facing identity is the generational `PresentationAddress`
   (ADR-0037 §2). winit's ids are monotonic. The macOS backend's pointer-as-id
   is an ABA hazard to replace with a monotonic mint before multi-window
   sessions on that backend.
@@ -178,9 +178,9 @@ pasteboard items and promised data are the data-transfer design's to place
 
 ### 6. Composition with the runtime
 
-- **The capability is loop-scoped, not realm-scoped.** `AppRuntime` holds it
-  from `on_ready` until `run` returns (on macOS `run` never returns). Realm
-  teardown does not clear it: the loop may host another realm before it exits,
+- **The capability is loop-scoped, not UI runtime-scoped.** `AppRuntime` holds it
+  from `on_ready` until `run` returns (on macOS `run` never returns). Runtime
+  teardown does not clear it: the loop may host another UI runtime before it exits,
   as hot restart does.
 - **Scoped, fenced access.** `with_owner_platform` is `pub(crate)` to
   `flui-app`, never re-exported. It clones the internal `Rc<OwnerPlatform>`,
@@ -205,10 +205,10 @@ Win32 through a dedicated message-only window and class (not the visible
 windows' procedure); headless exposes an owner-local manual driver; mobile and
 web report registration as unsupported.
 
-**Pending secondary windows belong to the loop**, not to the first realm's
+**Pending secondary windows belong to the loop**, not to the first UI runtime's
 async driver. Liveness is reserved before native creation; ready requests are
 polled in finite batches outside TLS borrows; a shared request captures an
-exact `RealmId`. Failures release reservations once and close resolved,
+exact `UiRuntimeId`. Failures release reservations once and close resolved,
 uninstalled windows. A failed physical wake is traced and cancels the request;
 nothing spins.
 
@@ -221,7 +221,7 @@ stays the default). `AppHandle` sends only show and quit intents; a
 resource ownership, so dropping the receiver does not cancel an accepted show.
 Show requests admitted during disposal reserve the next generation; quit
 cancels active and queued generations. A successful reply proves installation
-and a redraw request, not GPU presentation. Renderer, realm, root and input
+and a redraw request, not GPU presentation. Renderer, UI runtime, root and input
 belong to each window; clipboard, execution services, exit hooks and the asset
 watcher belong to the loop. The shape follows Iced's daemon and GPUI's
 owner-context window creation, with a closed command vocabulary instead of

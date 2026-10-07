@@ -315,7 +315,7 @@ impl<B: RasterBackend> RasterLane<B> {
     }
 
     /// Stamps, submits, and synchronously pumps one frame, classifying the
-    /// outcome for the realm's frame transaction.
+    /// outcome for the UI runtime's frame transaction.
     fn submit_and_pump(&mut self, scene: Scene) -> SubmitVerdict {
         self.epoch = self.epoch.next();
         let epoch = self.epoch;
@@ -453,7 +453,7 @@ impl<B: RasterBackend> FrameSink for RasterLane<B> {
 /// raster-mailbox path the desktop and Android runners drive (ADR-0045's
 /// inline lane), and this one, still used by the web runner (whose renderer
 /// arrives asynchronously and recovers across an `.await`, a shape the lane
-/// does not yet accommodate) and by tests that pin the realm's frame
+/// does not yet accommodate) and by tests that pin the UI runtime's frame
 /// transaction against scripted backends.
 #[cfg_attr(
     not(any(target_arch = "wasm32", test)),
@@ -520,14 +520,14 @@ impl<R: RasterBackend> FrameSink for DirectSink<'_, R> {
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(test)]
 mod tests {
-    use flui_foundation::{PresentationId, RealmId};
+    use flui_foundation::{PresentationId, UiRuntimeId};
     use flui_layer::{CanvasLayer, Layer};
 
     use super::*;
 
     fn test_address() -> PresentationAddress {
         PresentationAddress {
-            realm_id: RealmId::new(1),
+            ui_runtime_id: UiRuntimeId::new(1),
             presentation_id: PresentationId::new(1),
         }
     }

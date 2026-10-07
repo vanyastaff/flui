@@ -1,7 +1,7 @@
-//! The Parley path's font collection and per-realm text context
+//! The Parley path's font collection and per-UI runtime text context
 //! (ADR-0092 §2–§3).
 //!
-//! One [`FontCollection`] serves the app: every realm builds its own
+//! One [`FontCollection`] serves the app: every UI runtime builds its own
 //! [`TextContext`] from it, and a face registered on the collection reaches
 //! every context built from it, including ones built earlier. The collection
 //! is add-only: there is no way to remove a face, so a glyph key that names a
@@ -40,7 +40,7 @@ use crate::parley_text::SpanBrush;
 /// The app's font collection: shared, add-only, passed explicitly.
 ///
 /// A clone is the same collection ([`FontCollection::ptr_eq`]). Built once by
-/// the composition root and handed to every realm, which shapes through a
+/// the composition root and handed to every UI runtime, which shapes through a
 /// [`TextContext`] of its own.
 #[derive(Clone)]
 pub struct FontCollection(Arc<FontCollectionInner>);
@@ -361,7 +361,7 @@ impl HostFontFeed {
     ///
     /// Blocking, and meant for a thread other than the owner's: the scan
     /// takes a few milliseconds and the feed, which reads every font file
-    /// the scan found, tens. Each file is added on its own, so a realm
+    /// the scan found, tens. Each file is added on its own, so a UI runtime
     /// shaping meanwhile waits at most for one file's registration, and may
     /// see some of the host's faces before the feed ends; the generation
     /// rises once, at the end, however many sources were added, and not at
@@ -530,7 +530,7 @@ fn register_source(collection: &mut parley::fontique::Collection, data: &HostDat
 
 /// Whether `data` holds a family, read on a scratch collection that shares
 /// nothing. A read that panics answers no: under the shared collection's
-/// lock the same panic would poison it, and every realm would panic at its
+/// lock the same panic would poison it, and every UI runtime would panic at its
 /// next query.
 fn reads_a_family(data: &HostData) -> bool {
     use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -624,11 +624,11 @@ impl fmt::Debug for FontCollection {
     }
 }
 
-/// One realm's text service: Parley's font and layout contexts over a clone
+/// One UI runtime's text service: Parley's font and layout contexts over a clone
 /// of the app's [`FontCollection`].
 ///
-/// Owner-thread state, used through `&mut`. It is `Send`, so a realm can be
-/// built on one thread and run on another, and it holds no lock: two realms
+/// Owner-thread state, used through `&mut`. It is `Send`, so a UI runtime can be
+/// built on one thread and run on another, and it holds no lock: two UI runtimes
 /// shape at the same time without waiting on each other.
 pub struct TextContext {
     fonts: FontCollection,
@@ -1184,7 +1184,7 @@ mod tests {
 
         /// Bytes with no face are refused and move nothing. Fails if a
         /// refused registration bumps the generation, which would lay out
-        /// every realm's text again for nothing.
+        /// every UI runtime's text again for nothing.
         fn bytes_with_no_face_are_refused() {
             let fonts = FontCollection::with_host_fonts(&host());
             let before = fonts.generation();

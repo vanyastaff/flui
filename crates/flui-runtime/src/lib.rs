@@ -1,6 +1,6 @@
 //! The frame runtime of FLUI (ADR-0083 §1).
 //!
-//! This crate is where a realm and its per-presentation frame machinery live,
+//! This crate is where a UI runtime and its per-presentation frame machinery live,
 //! below the hosts that drive it: the runners, the platform wiring and the
 //! raster lane stay in `flui-app`, which is its only normal dependent. It is
 //! internal: nothing here is an embedder API (ADR-0027 §9) except the
@@ -14,16 +14,16 @@
 //! - [`dev_agent`]: the host half of the development-agent seam — attaches
 //!   an installed `DevAgentHook` once per loop, hands it each window with
 //!   content, and contains its panics (ADR-0095 §3);
-//! - [`ui_realm`]: `UiRealm`, the owner-affine realm — the presentations it
+//! - [`ui_runtime`]: `UiRuntime`, the owner-affine UI runtime — the presentations it
 //!   hosts, their frame transaction, input routing, lifecycle and command
 //!   inbox;
-//! - [`presentation`]: one presentation's owner-thread state (a realm keeps
+//! - [`presentation`]: one presentation's owner-thread state (a UI runtime keeps
 //!   its presentations in a private, mount-ordered forest);
 //! - [`lifecycle_state`]: the per-presentation application lifecycle
 //!   derivation;
 //! - [`frame_failure`]: what a contained frame failure reports and how the
 //!   application's handler disposes of it;
-//! - [`media_query_root`]: the `MediaQuery` a realm installs above each root
+//! - [`media_query_root`]: the `MediaQuery` a UI runtime installs above each root
 //!   widget;
 //! - [`renderer_binding`]: the per-presentation rendering binding over a
 //!   pipeline owner;
@@ -35,20 +35,20 @@
 //!   — the compute and IO lanes, their bounded admission and shutdown, and
 //!   the host-injection seam — which only the host constructs;
 //! - [`performance_stats`]: the rolling frame-time window whose numbers a
-//!   presentation's performance overlay records, shaped through the realm's
+//!   presentation's performance overlay records, shaped through the UI runtime's
 //!   text context;
-//! - [`pump`]: what a realm's frame transaction reads and reports — the
+//! - [`pump`]: what a UI runtime's frame transaction reads and reports — the
 //!   [`FrameClockSource`](pump::FrameClockSource) it samples once per frame
 //!   and the [`FrameOutcome`](pump::FrameOutcome) the host paces from;
 //! - `reload` (with the `hot-reload` feature): the development reload tier a
-//!   realm applies, translated from the host's hot-reload driver;
+//!   UI runtime applies, translated from the host's hot-reload driver;
 //! - [`semantics_host`]: per-presentation semantics enablement and platform
 //!   accessibility delivery;
 //! - [`sink`]: the [`FrameSink`](sink::FrameSink) a frame is submitted
-//!   through, and the [`SubmitVerdict`](sink::SubmitVerdict) the realm
+//!   through, and the [`SubmitVerdict`](sink::SubmitVerdict) the UI runtime
 //!   classifies;
 //! - `testing` (with the `test-support` feature): a window double and a
-//!   scripted sink for driving a realm headlessly.
+//!   scripted sink for driving a UI runtime headlessly.
 
 pub mod dev_agent;
 pub mod epoch;
@@ -61,15 +61,15 @@ pub mod performance_stats;
 pub mod presentation;
 mod presentation_forest;
 pub mod pump;
-mod realm_services;
 #[cfg(feature = "hot-reload")]
 pub mod reload;
 pub mod renderer_binding;
+mod runtime_services;
 pub mod semantics_host;
 pub mod sink;
 #[cfg(any(test, feature = "test-support"))]
 pub mod testing;
-pub mod ui_realm;
+pub mod ui_runtime;
 
 #[cfg(test)]
 mod table_test;

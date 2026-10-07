@@ -25,7 +25,7 @@ let list = canvas.finish(); // Save, DrawRect, Restore
   baked in; the closed vocabulary `flui-engine` matches exhaustively.
 - `TextPainter` — lays an inline span out against a width constraint,
   answers caret / hit-test / line queries, paints it. Measurement, paint and
-  the queries read one Parley layout, shaped through the realm's
+  the queries read one Parley layout, shaped through the UI runtime's
   `TextContext`. A face an app registers (`flui::register_font`, through the
   app's `FontCollection`) reaches all three alike.
 - `paint_box_decoration`, `paint_table_border` — the

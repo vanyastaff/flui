@@ -54,7 +54,7 @@ struct Inner(RefCell<State>);
 /// Weak, owner-local capability for one presentation's lifecycle history.
 ///
 /// Acquire from `LifecycleContext::lifecycle_handle` in `init_state` or
-/// `did_change_dependencies`. This is not the realm scheduler aggregate.
+/// `did_change_dependencies`. This is not the UI runtime scheduler aggregate.
 #[derive(Clone)]
 pub struct LifecycleHandle {
     inner: Weak<Inner>,
@@ -275,7 +275,7 @@ impl LifecycleSource {
     /// Claim this presentation's close delivery: the token for the call that
     /// runs it, `None` once a delivery has run or is running, so a close
     /// requested again from inside a Detached observer, or repeated when the
-    /// realm drops, delivers nothing twice. The token records whether the
+    /// UI runtime drops, delivers nothing twice. The token records whether the
     /// delivery completed or was interrupted.
     ///
     /// Not yet latched: every call gets a token.

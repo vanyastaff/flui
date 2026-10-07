@@ -104,7 +104,7 @@ pub(crate) fn run(app_path: &str) -> Result<()> {
 /// in-tree close check (the compositor `WM_DELETE_WINDOW` above, the
 /// Wayland self-close, every headless test) took a different route and
 /// stayed green. This is the only check that drives the programmatic route
-/// through the real app — real `on_close` → realm teardown → exit-policy
+/// through the real app — real `on_close` → UI runtime teardown → exit-policy
 /// hook — on a real GPU surface.
 fn check_programmatic_close(app_path: &str) -> Result<()> {
     let log_path = std::env::temp_dir().join(format!(
@@ -383,7 +383,7 @@ const MOUSE_WHEEL_LINE: &str = "MouseWheel";
 /// Sequence, with the wire under test spelled out:
 /// `VisibilityNotify` → winit `Occluded` → flui-platform's
 /// `dispatch_visibility_status_change` → `PlatformToUi::WindowVisibility` →
-/// `UiRealm::set_presentation_hidden` (per-presentation `FrameClock` gate)
+/// `UiRuntime::set_presentation_hidden` (per-presentation `FrameClock` gate)
 /// plus the `AppLifecycleState` derivation (`frames_enabled`) → the frame
 /// pump stops reaching the renderer: **zero GPU submissions while covered
 /// (the fling freezes), prompt resumption on uncover with no input needed**

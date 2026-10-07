@@ -43,7 +43,7 @@ path.
   accessibility bridge speaks AccessKit, so `flui-platform`'s
   `HostWindow: PlatformWindow` carries it host-side: `open_window` returns an
   `Arc<dyn HostWindow>`, and the runner reads the bridge once before handing
-  the realm an `Arc<dyn PlatformWindow>`. A `compile_fail` doctest on the
+  the UI runtime an `Arc<dyn PlatformWindow>`. A `compile_fail` doctest on the
   trait, paired with a twin that compiles, pins that the method is gone.
 - **The raw-handle impls live with the trait.** `HasWindowHandle` and
   `HasDisplayHandle` for `dyn PlatformWindow` are here because the orphan rule

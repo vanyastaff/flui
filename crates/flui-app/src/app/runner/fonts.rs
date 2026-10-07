@@ -1,17 +1,19 @@
-//! The app's font registration door, and the notice every realm gets when
+//! The app's font registration door, and the notice every UI runtime gets when
 //! the app's fonts change (ADR-0092 §2, §7).
 //!
 //! A face registered here goes into the app's one `FontCollection`, which
-//! every realm measures, paints and places carets with. The host's faces
+//! every UI runtime measures, paints and places carets with. The host's faces
 //! reach the same collection from the feed the runtime started off the owner
-//! thread. Either change raises the collection's generation, and every realm
+//! thread. Either change raises the collection's generation, and every UI runtime
 //! the runtime hosts is told so on an owner turn ([`announce_font_change`]):
 //! its next frame lays out again the text measured before the change.
 
 use flui_painting::RegisterFontError;
 
 use super::host::APP_RUNTIME;
-use super::realm_dispatch::{RealmDispatcher, RealmEvent, RealmTask, dispatch_platform_realm};
+use super::owner_dispatch::{
+    PresentationDispatcher, RuntimeEvent, RuntimeTask, dispatch_platform_ui_runtime,
+};
 
 /// Why [`register_font`] refused a font.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -37,10 +39,10 @@ pub enum FontRegistrationError {
 /// Call on the thread that runs the app, before it starts or while it runs
 /// (from a widget callback, for example). The face is added to the app's
 /// font collection, which measures, paints and places carets in text, and
-/// every realm lays out again, on its next frame, each piece of text it had
+/// every UI runtime lays out again, on its next frame, each piece of text it had
 /// measured; text laid out later measures with the face from the start.
-/// A realm is told on its own owner turn, so a call made from inside one
-/// realm's callback reaches that realm after the callback returns.
+/// A UI runtime is told on its own owner turn, so a call made from inside one
+/// UI runtime's callback reaches that UI runtime after the callback returns.
 ///
 /// Faces are never removed. Called before the app starts, it checks the
 /// bytes and holds them; the first window registers them as it builds the
@@ -66,8 +68,8 @@ pub fn register_font(font_bytes: &[u8]) -> Result<(), FontRegistrationError> {
         let runtime = slot
             .try_borrow()
             .map_err(|_| FontRegistrationError::RuntimeBusy)?;
-        // Held for the first realm when the services are not resolved yet:
-        // whichever realm comes first is built over the collection and
+        // Held for the first ui_runtime when the services are not resolved yet:
+        // whichever ui_runtime comes first is built over the collection and
         // measures with the face from the start, and nothing is announced.
         runtime.register_font(font_bytes)
     })?;
@@ -75,46 +77,46 @@ pub fn register_font(font_bytes: &[u8]) -> Result<(), FontRegistrationError> {
     Ok(())
 }
 
-/// Tells every realm the runtime hosts that the app's fonts changed, if they
+/// Tells every UI runtime the runtime hosts that the app's fonts changed, if they
 /// did since the last notice: a registration, or the host feed landing.
 ///
 /// Called after a registration and at the start of every top-level owner
-/// turn, where the host feed's wake leads. Each realm gets
-/// [`UiRealm::fonts_changed`](crate::app::ui_realm::UiRealm::fonts_changed)
-/// on its own owner turn: a realm that is idle runs it at once, one that is
+/// turn, where the host feed's wake leads. Each UI runtime gets
+/// [`UiRuntime::fonts_changed`](crate::app::ui_runtime::UiRuntime::fonts_changed)
+/// on its own owner turn: a UI runtime that is idle runs it at once, one that is
 /// running (a registration from inside its own callback) after its task
 /// returns. With the runtime borrowed, nothing is taken, and the next turn
 /// announces the change.
 pub(super) fn announce_font_change() {
-    let realms = APP_RUNTIME.with(|slot| {
+    let ui_runtimes = APP_RUNTIME.with(|slot| {
         let Ok(runtime) = slot.try_borrow() else {
             return Vec::new();
         };
         if !runtime.take_font_change() {
             return Vec::new();
         }
-        // No owner thread means no realm installed: a realm built later is
+        // No owner thread means no ui_runtime installed: a ui_runtime built later is
         // built over the collection as it is then.
         let Some(owner_thread) = runtime.owner_thread else {
             return Vec::new();
         };
         runtime
-            .realms
+            .ui_runtimes
             .iter()
-            .map(|(_, realm)| RealmDispatcher {
+            .map(|(_, ui_runtime)| PresentationDispatcher {
                 owner_thread,
-                address: realm.address,
+                address: ui_runtime.address,
             })
             .collect::<Vec<_>>()
     });
-    for dispatcher in realms {
-        // Outside the runtime borrow: a realm that is idle runs the notice
+    for dispatcher in ui_runtimes {
+        // Outside the runtime borrow: a ui_runtime that is idle runs the notice
         // now, one that is checked out (the caller's own) gets it queued
         // behind the running turn.
         if let Err(error) =
-            dispatch_platform_realm(dispatcher, RealmTask::Event(RealmEvent::FontsChanged))
+            dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Event(RuntimeEvent::FontsChanged))
         {
-            // A realm closing or gone needs no layout.
+            // A ui_runtime closing or gone needs no layout.
             tracing::debug!(?dispatcher, ?error, "font change notice not delivered");
         }
     }

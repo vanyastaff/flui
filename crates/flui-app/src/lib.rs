@@ -1,9 +1,9 @@
 //! FLUI Application Framework
 //!
 //! This crate provides the application framework for FLUI, hosting:
-//! - an owner-affine `UiRealm` with `WidgetsBinding` (build phase)
+//! - an owner-affine `UiRuntime` with `WidgetsBinding` (build phase)
 //! - `PipelineOwner` from flui_rendering (layout/paint phases)
-//! - a realm-owned `GestureBinding` from flui_interaction (input handling + event coalescing)
+//! - a UI runtime-owned `GestureBinding` from flui_interaction (input handling + event coalescing)
 //!
 //! # Architecture
 //!
@@ -11,7 +11,7 @@
 //! flui_app
 //!   ├── app/
 //!   │   ├── runtime.rs      - AppRuntime: the loop-scoped composition root
-//!   │   ├── ui_realm/     - owner-affine widget, render, and gesture runtime
+//!   │   ├── ui_runtime/     - owner-affine widget, render, and gesture runtime
 //!   │   ├── presentation.rs - per-presentation window/haptics/frame-accounting state
 //!   │   ├── config.rs       - AppConfig
 //!   │   ├── direct.rs       - direct rendering mode (bypasses the widget tree)
@@ -32,7 +32,7 @@
 //! the app-shell widgets that implement it are tracked in issue #573.
 //!
 //! Applications normally enter through [`run_app`] or
-//! [`run_app_with_config`]; the runner constructs and owns the UI realm.
+//! [`run_app_with_config`]; the runner constructs and owns the UI ui_runtime.
 
 // Proving `flui_engine::Renderer: Send` (for the `Send` frame
 // callbacks that capture it) descends through wgpu-core past the default
@@ -88,7 +88,7 @@ pub use app::{
     FrameFailureReport, LifecycleHook, PanicText, RecoveredAt, SegmentPhase,
 };
 // Multi-window policy knobs (issue #555's embedder-facing seam) — not
-// available on iOS, where `AppRuntime`/`UiRealm`'s realm-hosting machinery
+// available on iOS, where `AppRuntime`/`UiRuntime`'s ui_runtime-hosting machinery
 // itself is not compiled (see `runtime::ExitPolicy`'s own doc).
 #[cfg(not(target_os = "ios"))]
 pub use app::{ExitPolicy, WindowPolicy};

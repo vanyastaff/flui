@@ -178,7 +178,7 @@ pub trait Platform: Send + Sync + 'static {
     /// This is the embedder-facing seam issue #555's `ExitPolicy` /
     /// `AppRuntime::should_exit` wire through: an embedder that hosts more
     /// than one top-level window installs a hook here that consults its own
-    /// realm registry (which the platform layer cannot see — `flui-app`
+    /// UI runtime registry (which the platform layer cannot see — `flui-app`
     /// depends on `flui-platform`, never the reverse) instead of letting
     /// this backend's native window count decide alone.
     ///
@@ -238,8 +238,8 @@ pub trait Platform: Send + Sync + 'static {
     /// instant even when nothing else is dirty and no animation is
     /// running — otherwise an idle `ControlFlow::Wait` loop never calls
     /// back in to resolve it. `flui-app` computes the earliest such instant
-    /// across every realm it hosts on this thread (the platform layer
-    /// cannot see realms — `flui-app` depends on `flui-platform`, never the
+    /// across every UI runtime it hosts on this thread (the platform layer
+    /// cannot see UI runtimes — `flui-app` depends on `flui-platform`, never the
     /// reverse) and installs this hook once, the same seam
     /// [`set_exit_policy_hook`](Self::set_exit_policy_hook) uses.
     ///

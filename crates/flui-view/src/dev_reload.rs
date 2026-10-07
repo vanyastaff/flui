@@ -26,11 +26,11 @@
 //! - [`DevReloadHook::attach`] runs once per event loop, on the owner thread,
 //!   before the first window opens; [`DevReloadHook::detach`] runs once when
 //!   that loop ends. A hook is never attached twice without a detach between.
-//! - [`DevReloadHook::poll`] runs on the owner thread at each realm's frame
+//! - [`DevReloadHook::poll`] runs on the owner thread at each UI runtime's frame
 //!   boundary, before the frame's own work. A [`ReloadEvent::Patched`] it
-//!   returns is applied once to every realm the host drives, each at its own
+//!   returns is applied once to every UI runtime the host drives, each at its own
 //!   next boundary (an idle window applies it when it next draws), and never
-//!   to a realm mounted after the poll.
+//!   to a UI runtime mounted after the poll.
 //! - [`DevReloadHook::scene_frame`] runs on the owner thread at the start of
 //!   each frame, before the widget pipeline.
 //! - A hook that panics in any method is dropped and never called again; the
@@ -52,7 +52,7 @@ use flui_rendering::layer::Scene;
 pub enum ReloadEvent {
     /// Nothing to apply.
     Unchanged,
-    /// Code changed, or reloaded code asked for a rebuild: every realm
+    /// Code changed, or reloaded code asked for a rebuild: every UI runtime
     /// reassembles — every element rebuilds, every `State` is kept.
     Patched,
 }
@@ -140,7 +140,7 @@ pub trait DevReloadHook: Send + 'static {
     /// pairs every `attach` with one `detach`.
     fn detach(&mut self) {}
 
-    /// At each realm's frame boundary: what changed since the last poll.
+    /// At each UI runtime's frame boundary: what changed since the last poll.
     fn poll(&mut self) -> ReloadEvent;
 
     /// Let a loaded scene plugin draw this frame instead of the widget tree

@@ -491,9 +491,9 @@ impl SurfaceRecreationRetry {
 /// and the frame-path retry agree about which failure is genuine.
 ///
 /// Two obligations stay with the caller, because they need the lane lock
-/// released first: dispatch a full repaint of the realm on
-/// [`SurfaceLifecycleOutcome::Recreated`] (the realm half is deferrable and
-/// goes through the realm dispatch), and log the outcome through
+/// released first: dispatch a full repaint of the UI runtime on
+/// [`SurfaceLifecycleOutcome::Recreated`] (the UI runtime half is deferrable and
+/// goes through the UI runtime dispatch), and log the outcome through
 /// [`report_surface_settlement`].
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg_attr(
@@ -558,15 +558,15 @@ pub(super) fn report_surface_settlement(platform: &'static str, outcome: &Surfac
 /// Make the frame path's gated retry attempt, if one is owed and due.
 ///
 /// Runs BEFORE the frame, in its own lane-lock scope, so the generation mint
-/// happens under the lock and the caller's realm half happens outside it —
+/// happens under the lock and the caller's UI runtime half happens outside it —
 /// the same shape [`settle_surface_availability`] uses. Returns `None`
 /// without touching the lane when no retry is armed, when the deadline has
 /// not elapsed, or when the lane is already held by an outer frame dispatch
 /// (logged, like a skipped frame; the deadline stays armed, so the next wake
 /// retries). On [`SurfaceLifecycleOutcome::Recreated`] the caller owes the
-/// realm a full repaint, exactly as it does after an availability-driven
-/// rebuild — and, since the callers run inside the realm's own Frame task,
-/// they mark it on the realm directly so the frame that follows is the one
+/// UI runtime a full repaint, exactly as it does after an availability-driven
+/// rebuild — and, since the callers run inside the UI runtime's own Frame task,
+/// they mark it on the UI runtime directly so the frame that follows is the one
 /// that repaints, rather than queueing another task behind themselves.
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg_attr(

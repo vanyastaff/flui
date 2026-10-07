@@ -12,7 +12,7 @@ impl UpdateScheduler {
     ///
     /// `UpdateScheduler` is `Arc`-backed, so this is pointer identity on the shared
     /// inner state. It exists because a capability handed to a widget must be
-    /// provably pointed at the realm's own scheduler, not some other one.
+    /// provably pointed at the UI runtime's own scheduler, not some other one.
     #[must_use]
     pub fn is_same_instance(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.inner, &other.inner)

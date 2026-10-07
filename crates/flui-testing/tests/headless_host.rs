@@ -1,6 +1,6 @@
-//! [`HeadlessHost`]'s failure contract: a frame failure the realm contains
+//! [`HeadlessHost`]'s failure contract: a frame failure the UI runtime contains
 //! is raised after the pump, the first failure of a pump stays authoritative,
-//! and the realm keeps producing frames once the cause is gone.
+//! and the UI runtime keeps producing frames once the cause is gone.
 
 use std::cell::{Cell, RefCell};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -71,16 +71,16 @@ impl View for Tripwire {
     }
 }
 
-/// A realm with a tripwire root, armed as asked, before its first frame.
-fn tripwire_realm(armed: bool) -> (HeadlessHost, Arc<AtomicBool>) {
+/// A UI runtime with a tripwire root, armed as asked, before its first frame.
+fn tripwire_ui_runtime(armed: bool) -> (HeadlessHost, Arc<AtomicBool>) {
     let armed = Arc::new(AtomicBool::new(armed));
-    let realm = HeadlessHost::new(HeadlessWindow::new(40, 24));
-    realm
+    let ui_runtime = HeadlessHost::new(HeadlessWindow::new(40, 24));
+    ui_runtime
         .attach(&Tripwire {
             armed: Arc::clone(&armed),
         })
-        .expect("a fresh realm has no root yet");
-    (realm, armed)
+        .expect("a fresh ui_runtime has no root yet");
+    (ui_runtime, armed)
 }
 
 fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
@@ -91,71 +91,75 @@ fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
         .unwrap_or_default()
 }
 
-/// A paint panic the realm contains as a dropped frame is raised after the
+/// A paint panic the UI runtime contains as a dropped frame is raised after the
 /// pump, with the pipeline's report.
 ///
-/// Fails against a driver that returns the pump's outcome as is: the realm
+/// Fails against a driver that returns the pump's outcome as is: the UI runtime
 /// contains the panic, the pump returns normally and nothing is raised.
 #[test]
 fn a_contained_frame_failure_is_raised_after_the_pump() {
-    let (mut realm, _armed) = tripwire_realm(true);
+    let (mut ui_runtime, _armed) = tripwire_ui_runtime(true);
 
-    let raised = catch_unwind(AssertUnwindSafe(|| realm.pump(Duration::ZERO)))
+    let raised = catch_unwind(AssertUnwindSafe(|| ui_runtime.pump(Duration::ZERO)))
         .expect_err("the contained paint panic must be raised");
 
     let text = panic_text(&*raised);
     assert!(
         text.contains("frame pipeline failed") && text.contains("paint"),
-        "the raised panic carries the realm's pipeline report, got {text:?}"
+        "the raised panic carries the ui_runtime's pipeline report, got {text:?}"
     );
-    assert_eq!(realm.sink().submits(), 0, "a dropped frame submits nothing");
+    assert_eq!(
+        ui_runtime.sink().submits(),
+        0,
+        "a dropped frame submits nothing"
+    );
 }
 
-/// Once the cause is gone, the next pump paints: the raise left the realm
+/// Once the cause is gone, the next pump paints: the raise left the UI runtime
 /// able to make progress, and the failure is not raised again.
 ///
 /// Fails against a driver that keeps a raised report and raises it on every
-/// later pump, or that leaves the realm unable to frame after the raise.
+/// later pump, or that leaves the UI runtime unable to frame after the raise.
 #[test]
-fn the_realm_makes_progress_after_a_raised_failure() {
-    let (mut realm, armed) = tripwire_realm(true);
-    let _ = catch_unwind(AssertUnwindSafe(|| realm.pump(Duration::ZERO)))
+fn the_ui_runtime_makes_progress_after_a_raised_failure() {
+    let (mut ui_runtime, armed) = tripwire_ui_runtime(true);
+    let _ = catch_unwind(AssertUnwindSafe(|| ui_runtime.pump(Duration::ZERO)))
         .expect_err("the armed tripwire fails the first frame");
 
     armed.store(false, Ordering::SeqCst);
-    let outcome = realm.pump(Duration::ZERO);
+    let outcome = ui_runtime.pump(Duration::ZERO);
 
     assert!(outcome.presented(), "the retried frame presents");
-    assert_eq!(realm.sink().submits(), 1);
+    assert_eq!(ui_runtime.sink().submits(), 1);
     assert!(
-        realm.sink().layer_tree().is_some(),
+        ui_runtime.sink().layer_tree().is_some(),
         "the sink keeps the scene the retried frame composited"
     );
 }
 
-/// Schedule a post-frame callback that panics, through the realm's own
+/// Schedule a post-frame callback that panics, through the UI runtime's own
 /// owner-local lane.
-fn schedule_post_frame_panic(realm: &HeadlessHost) {
-    realm
+fn schedule_post_frame_panic(ui_runtime: &HeadlessHost) {
+    ui_runtime
         .local_post_frame_handle()
         .schedule_local(|_timing| panic!("post-frame callback panicked"))
-        .expect("the realm's post-frame lane is alive");
+        .expect("the ui_runtime's post-frame lane is alive");
 }
 
 /// After a pump that unwound, the next pump runs: it returns, and the
 /// post-frame lane the unwind went through still runs a callback. A frame is
 /// requested first, so the frame latch the unwind left behind must let it
 /// through.
-fn assert_progress_after_unwind(realm: &mut HeadlessHost) -> flui_runtime::pump::FrameOutcome {
+fn assert_progress_after_unwind(ui_runtime: &mut HeadlessHost) -> flui_runtime::pump::FrameOutcome {
     let ran = Arc::new(AtomicBool::new(false));
     let ran_in_callback = Arc::clone(&ran);
-    realm
+    ui_runtime
         .local_post_frame_handle()
         .schedule_local(move |_timing| ran_in_callback.store(true, Ordering::SeqCst))
         .expect("the post-frame lane survives the unwind");
-    realm.request_frame();
+    ui_runtime.request_frame();
 
-    let outcome = realm.pump(Duration::ZERO);
+    let outcome = ui_runtime.pump(Duration::ZERO);
 
     assert!(
         ran.load(Ordering::SeqCst),
@@ -164,19 +168,19 @@ fn assert_progress_after_unwind(realm: &mut HeadlessHost) -> flui_runtime::pump:
     outcome
 }
 
-/// A panic that unwinds out of the pump after the realm contained a failure
+/// A panic that unwinds out of the pump after the UI runtime contained a failure
 /// in the same pump does not replace it: the contained failure is raised.
-/// Once the cause is gone, the realm frames again.
+/// Once the cause is gone, the UI runtime frames again.
 ///
 /// Fails against a driver that resumes the later unwind (the post-frame
 /// callback's text would be raised) or that loses the report when the pump
 /// unwinds.
 #[test]
 fn a_contained_failure_stays_authoritative_over_a_later_unwind() {
-    let (mut realm, armed) = tripwire_realm(true);
-    schedule_post_frame_panic(&realm);
+    let (mut ui_runtime, armed) = tripwire_ui_runtime(true);
+    schedule_post_frame_panic(&ui_runtime);
 
-    let raised = catch_unwind(AssertUnwindSafe(|| realm.pump(Duration::ZERO)))
+    let raised = catch_unwind(AssertUnwindSafe(|| ui_runtime.pump(Duration::ZERO)))
         .expect_err("the pump fails twice and raises once");
 
     let text = panic_text(&*raised);
@@ -190,31 +194,31 @@ fn a_contained_failure_stays_authoritative_over_a_later_unwind() {
     );
 
     armed.store(false, Ordering::SeqCst);
-    let outcome = assert_progress_after_unwind(&mut realm);
+    let outcome = assert_progress_after_unwind(&mut ui_runtime);
     assert!(
         outcome.presented(),
         "the tripwire, still waiting for paint, presents once disarmed"
     );
-    assert_eq!(realm.sink().submits(), 1);
+    assert_eq!(ui_runtime.sink().submits(), 1);
 }
 
 /// With nothing contained, a panic that unwinds out of the pump is raised as
-/// itself, and the realm frames again afterwards: the unwind left its frame
+/// itself, and the UI runtime frames again afterwards: the unwind left its frame
 /// latch and post-frame lane usable.
 ///
 /// Fails against a driver that swallows an unwind it has no report for.
 #[test]
 fn an_uncontained_unwind_is_raised_as_itself() {
-    let (mut realm, _armed) = tripwire_realm(false);
-    let _ = realm.pump(Duration::ZERO);
-    schedule_post_frame_panic(&realm);
-    realm.request_frame();
+    let (mut ui_runtime, _armed) = tripwire_ui_runtime(false);
+    let _ = ui_runtime.pump(Duration::ZERO);
+    schedule_post_frame_panic(&ui_runtime);
+    ui_runtime.request_frame();
 
-    let raised = catch_unwind(AssertUnwindSafe(|| realm.pump(Duration::ZERO)))
+    let raised = catch_unwind(AssertUnwindSafe(|| ui_runtime.pump(Duration::ZERO)))
         .expect_err("the post-frame panic unwinds out of the pump");
 
     assert_eq!(panic_text(&*raised), "post-frame callback panicked");
-    let _outcome = assert_progress_after_unwind(&mut realm);
+    let _outcome = assert_progress_after_unwind(&mut ui_runtime);
 }
 
 /// Counts the Detached deliveries its presentation makes, and asks for the
@@ -253,7 +257,7 @@ impl ViewState<ClosesAgainOnDetach> for ClosesAgainOnDetachState {
         let ClosesAgainOnDetach { detached, tree } = self.view.clone();
         let (_, observation) = cx
             .lifecycle_handle()
-            .expect("a realm presentation has a lifecycle")
+            .expect("a ui_runtime presentation has a lifecycle")
             .subscribe(move |state| {
                 if state == AppLifecycleState::Detached {
                     detached.set(detached.get() + 1);
@@ -272,7 +276,7 @@ impl ViewState<ClosesAgainOnDetach> for ClosesAgainOnDetachState {
 }
 
 /// One close is delivered once: a close requested again from inside the
-/// Detached observer, and the close the realm repeats when it drops, deliver
+/// Detached observer, and the close the UI runtime repeats when it drops, deliver
 /// nothing a second time.
 ///
 /// Holds before the shared close delivery exists, because the lifecycle

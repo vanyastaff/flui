@@ -66,7 +66,7 @@ pub(crate) struct GlobalsArgs {
     seed: bool,
 }
 
-/// The crate that hosts every realm; its one trampoline is `APP_RUNTIME`.
+/// The crate that hosts every UI runtime; its one trampoline is `APP_RUNTIME`.
 /// ADR-0083 moves the host, and this constant with it.
 const HOST: &str = "flui-app";
 
@@ -411,7 +411,7 @@ fn check(source: &dyn Source, crates: &[Krate], adrs: &BTreeSet<String>) -> anyh
                 NEW,
                 format!(
                     "no `[package.metadata.flui] globals` entry in {}; move the state into a \
-                     realm, or list it with the ADR that removes it{moved}",
+                     ui_runtime, or list it with the ADR that removes it{moved}",
                     krate.manifest
                 ),
             ));

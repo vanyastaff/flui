@@ -345,7 +345,7 @@ pub(crate) mod parley_measurement {
     }
 
     /// The same painter measures through whichever context it is lent: the
-    /// probe width through the realm whose collection holds the face, the
+    /// probe width through the UI runtime whose collection holds the face, the
     /// fallback width through one that does not, and on the first exactly
     /// what that context shapes the paragraph to.
     pub(crate) fn measurement_follows_the_context_it_is_given() {

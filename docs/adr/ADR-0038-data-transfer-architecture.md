@@ -45,7 +45,7 @@ Every external datum — a paste, a drop — moves through the same stages:
 | 3. Request | `DataTransferSource::request(id, index, limits)` | consumer |
 | 4. Async delivery | `TransferRequest` (consumer half) / `TransferCompleter` (backend half) | backend thread → frame thread |
 | 5. Decoding | `TransferPayload`, or `TransferError::Decode` | transport |
-| 6. Drop action | resolved at OS drop time from the cached feedback; `conclude_drop(id)` releases protocol resources | backend + realm |
+| 6. Drop action | resolved at OS drop time from the cached feedback; `conclude_drop(id)` releases protocol resources | backend + UI runtime |
 | 7. Completion / cancel | per delivery: drop the request or its `TaskToken`; per offer: source retirement and a generation bump | either side |
 
 Clipboard uses every stage but 6. The payload is lazy: a 10 000-file drop or a
@@ -82,7 +82,7 @@ Offer lifecycle:
   source without change detection holds one long-lived offer whose payload is
   whatever the clipboard holds at fetch time (documented TOCTOU).
 - **No consumer-facing offer cancellation.** Cancelling a delivery is dropping
-  its request; retiring an offer belongs to the source and to the realm's
+  its request; retiring an offer belongs to the source and to the UI runtime's
   single drop-conclusion authority. Letting any consumer retire an offer would
   cancel every other consumer's fetch.
 
@@ -109,7 +109,7 @@ signature:
   against the declared length at request time and the accumulated length
   during delivery.
 - `TransferError` — `StaleOffer`, `UnknownRepresentation`, `TooLarge`,
-  `Decode`, `SourceGone`, `Cancelled` (`#[non_exhaustive]`). Realm-lifecycle
+  `Decode`, `SourceGone`, `Cancelled` (`#[non_exhaustive]`). Runtime-lifecycle
   errors ("owner gone") live in `flui-interaction`, not in the platform
   vocabulary.
 
@@ -128,7 +128,7 @@ dropping the completer without completing resolves the request with
 `SourceGone`, so a crashed producer never leaves a consumer pending.
 `TransferRequest::ready(..)` serves data already in memory.
 
-The consumer spawns the request on the realm scheduler and holds the house
+The consumer spawns the request on the UI runtime scheduler and holds the house
 `TaskToken`; it is polled by the frame-driven async driver, and the
 completer's wake requests a frame. This is the only delivery mechanism — not
 `flui_platform::Task`, not the tokio background executor.
@@ -192,13 +192,13 @@ The clipboard half of a source has two modes:
 The sync-backed source advertises a single `Text` representation without
 probing (probing would block); an empty clipboard resolves to empty text.
 
-### 7. Realm-side capability
+### 7. Runtime-side capability
 
-Widgets reach the transport through a realm-local owner and a weak handle, the
+Widgets reach the transport through a UI runtime-local owner and a weak handle, the
 `TextInputOwner`/`TextInputHandle` shape (ADR-0037 §5):
 
 - `DataTransferOwner` (`flui-interaction`, `!Send`) holds the source and the
-  realm scheduler's spawner, and is the realm's single drop-conclusion
+  UI runtime scheduler's spawner, and is the UI runtime's single drop-conclusion
   authority — widgets never retire offers.
 - `DataTransferHandle` offers `clipboard_offer()`, `fetch(offer, index,
   limits, on_done) -> TaskToken`, `update_drop_feedback` and `conclude_drop`,
@@ -228,7 +228,7 @@ ADR-0039), and stores the `Arc` in `AppRuntime`
 (`set_platform_clipboard` / `clear_platform_clipboard`, read with
 `AppRuntime::clipboard()`, which clones the `Arc` out before returning so a
 re-entrant caller never finds the slot locked). The clipboard belongs to the
-loop, not to a window or realm.
+loop, not to a window or UI runtime.
 
 - **No `PlatformHandle`.** A post-`run()` handle object with
   `clipboard() -> Option<…>` would need a `None` default across every backend,
@@ -249,7 +249,7 @@ loop, not to a window or realm.
 
 Built: the vocabulary, `OfferTable`, the request/completer pair,
 `DataTransferSource` and `NullDataTransferSource`; `Platform::data_transfer()`
-on every backend; `PlatformInput::DragDrop`; the winit file-drop source; realm
+on every backend; `PlatformInput::DragDrop`; the winit file-drop source; UI runtime
 dispatch that logs and drops DnD events. The transport's state machines are
 tested in `crates/flui-app/tests/data_transfer_transport.rs`. A plain-text
 `ClipboardHandle` (`flui-interaction`) over the synchronous `Clipboard`
@@ -258,7 +258,7 @@ read is callback-shaped, so callers do not change when the §6 transport makes
 it asynchronous. `EditableText`'s copy, cut and paste use it.
 
 Not yet built: the clipboard half of the winit source (`clipboard_offer()`
-returns `None`) and its worker/UI-thread modes (§6); the realm owner, handle
+returns `None`) and its worker/UI-thread modes (§6); the UI runtime owner, handle
 and facades (§7) and the first drop-target widget; native Win32/AppKit/Wayland
 transports; image/HTML representations; write-side offers and drag sources.
 
@@ -280,7 +280,7 @@ transports; image/HTML representations; write-side offers and drag sources.
 - **An `async fn` clipboard trait.** A second async mechanism beside the
   scheduler's driver, and an executor question already answered.
 - **DnD on the platform `WindowEvent` enum.** That channel is window
-  lifecycle, not realm input; it bypasses the per-window re-entrancy queue.
+  lifecycle, not UI runtime input; it bypasses the per-window re-entrancy queue.
 - **Synthesized pointer events for drags.** The OS owns the cursor; gesture
   arenas would run on fiction.
 - **`FileDropped(PathBuf)` minimalism, or eager payload in `Dropped`.** No
@@ -303,7 +303,7 @@ transports; image/HTML representations; write-side offers and drag sources.
 - A delivery deadline: whether `TransferLimits` gains `max_duration`, with the
   worker abandoning and respawning — decided once real Wayland latencies are
   measured.
-- Backpressure on concurrent fetches per offer or realm.
+- Backpressure on concurrent fetches per offer or UI runtime.
 - Streaming for multi-gigabyte file contents; `max_bytes` is the only guard.
 - The trust boundary for untrusted input (unsanitized HTML, attacker-shaped
   paths, image decode bombs), stated in one place.

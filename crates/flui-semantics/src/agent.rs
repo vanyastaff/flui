@@ -32,7 +32,7 @@
 //! transform applied, scaled to physical pixels and covered by whole pixels.
 //! They are measured from the window's drawing surface, so they are reported
 //! as [`Node::surface_rect`] and `rect`, which is screen pixels, is left out:
-//! the realm knows no window position.
+//! the UI runtime knows no window position.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 

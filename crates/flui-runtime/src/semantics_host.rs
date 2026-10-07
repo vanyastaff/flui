@@ -14,7 +14,7 @@
 //! that module's own field for the other half of the retired binding's state.
 //!
 //! Handle acquisition keeps semantics collected while an agent reads the
-//! tree: `UiRealm::semantics_agent` holds one handle for all clones of the
+//! tree: `UiRuntime::semantics_agent` holds one handle for all clones of the
 //! agent it vends. Announcements and event delivery have no production
 //! caller yet: they are compiled only for tests and the `test-support`
 //! feature until a platform embedder wires them through a presentation.
@@ -37,7 +37,7 @@ type EventCallback = Arc<dyn Fn(&SemanticsEvent) + Send + Sync>;
 /// shape, now scoped to one presentation instead of a process-wide
 /// singleton.
 ///
-/// Constructed only by [`SemanticsHost::ensure_semantics`]; the realm's
+/// Constructed only by [`SemanticsHost::ensure_semantics`]; the UI runtime's
 /// semantics agent holds one while any clone of it is alive.
 pub(crate) struct SemanticsHandle {
     counter: Arc<AtomicUsize>,
@@ -81,9 +81,9 @@ pub struct SemanticsHost {
     ///
     /// `Arc`-wrapped (not a bare `AtomicBool`) so
     /// [`Self::platform_semantics_enabled_handle`] can hand a cheap clone to
-    /// the realm's `RenderingBinding::add_semantics_enabled_listener`
+    /// the UI runtime's `RenderingBinding::add_semantics_enabled_listener`
     /// fan-out closure without that closure borrowing this host (which lives
-    /// on the same `UiRealm` the renderer does — a self-reference the
+    /// on the same `UiRuntime` the renderer does — a self-reference the
     /// closure's `'static` bound forbids). Mirrors `AppRuntime`'s
     /// `needs_redraw` handle-sharing shape for the identical reason.
     platform_semantics_enabled: Arc<AtomicBool>,
@@ -187,9 +187,9 @@ impl SemanticsHost {
     }
 
     /// A cheap clone of the platform-enablement flag, for wiring into a
-    /// realm's `RenderingBinding::add_semantics_enabled_listener` fan-out
+    /// UI runtime's `RenderingBinding::add_semantics_enabled_listener` fan-out
     /// closure — see this field's own doc for why a handle rather than
-    /// borrowing `&self`. Wired at `UiRealm::construct`.
+    /// borrowing `&self`. Wired at `UiRuntime::construct`.
     #[must_use]
     pub fn platform_semantics_enabled_handle(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.platform_semantics_enabled)

@@ -9,9 +9,9 @@
 //!
 //! - desktop and iOS: the loop attaches the hook when it starts and detaches
 //!   it when it ends; each window that mounts a root view is handed over once
-//!   its realm is installed. The window's agent is vended while the realm is
+//!   its UI runtime is installed. The window's agent is vended while the UI runtime is
 //!   still the runner's, so an installation that fails drops the agent with
-//!   the realm and the hook never sees a half-installed window.
+//!   the UI runtime and the hook never sees a half-installed window.
 //! - Android and web: no call; the runner logs once, at start, that an
 //!   installed hook is not driven there.
 
@@ -47,7 +47,7 @@ mod driven {
     use flui_view::dev_agent::AgentWindow;
 
     use super::DevAgent;
-    use crate::app::ui_realm::UiRealm;
+    use crate::app::ui_runtime::UiRuntime;
 
     impl DevAgent {
         /// Attach the hook for this loop; the attachment detaches it when
@@ -58,13 +58,13 @@ mod driven {
         }
 
         /// Vend `presentation`'s agent window while the runner still owns
-        /// the realm; `None` unless the hook is attached.
+        /// the UI runtime; `None` unless the hook is attached.
         pub(crate) fn vend(
             &self,
-            realm: &UiRealm,
+            ui_runtime: &UiRuntime,
             presentation: PresentationId,
         ) -> Option<AgentWindow> {
-            self.0.vend(realm, presentation)
+            self.0.vend(ui_runtime, presentation)
         }
 
         /// Hand an installed window to the hook.

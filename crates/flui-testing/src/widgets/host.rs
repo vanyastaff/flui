@@ -1,11 +1,11 @@
-//! The realm both widget harnesses mount into.
+//! The UI runtime both widget harnesses mount into.
 //!
 //! [`WidgetHost`] attaches one root, [`HarnessRoot`], to a [`HeadlessHost`]
 //! and never replaces it: the tree under test lives in a slot the root reads
 //! in `build`, so a root swap is a rebuild of that one element and the
-//! realm's own root scopes (`GestureArenaScope`, `VsyncScope`, `FocusRoot`,
-//! `MediaQuery`) stay mounted across it. Every frame is the realm's
-//! `UiRealm::pump`.
+//! UI runtime's own root scopes (`GestureArenaScope`, `VsyncScope`, `FocusRoot`,
+//! `MediaQuery`) stay mounted across it. Every frame is the UI runtime's
+//! `UiRuntime::pump`.
 
 use std::any::TypeId;
 use std::cell::RefCell;
@@ -39,39 +39,39 @@ impl StatelessView for HarnessRoot {
 
 /// A [`HeadlessHost`] hosting one swappable widget tree.
 pub(super) struct WidgetHost {
-    realm: HeadlessHost,
+    ui_runtime: HeadlessHost,
     slot: Rc<RefCell<BoxedView>>,
     pipeline: PipelineCell,
     /// A registry the caller built its own `VsyncScope` over, ticked at each
-    /// frame's time alongside the realm's.
+    /// frame's time alongside the UI runtime's.
     adopted_vsync: Arc<Mutex<Option<Vsync>>>,
     /// Scenes the sink held before the last pump, to tell whether it painted.
     submits_before_last_pump: u64,
 }
 
 impl WidgetHost {
-    /// Attach `tree` to a realm over `window` and run the first frame.
+    /// Attach `tree` to a UI runtime over `window` and run the first frame.
     pub(super) fn mount(
         tree: BoxedView,
         window: HeadlessWindow,
         storage: Option<Arc<dyn flui_platform_api::Storage>>,
     ) -> Self {
-        let realm = HeadlessHost::with_storage(window, storage);
+        let ui_runtime = HeadlessHost::with_storage(window, storage);
         let slot = Rc::new(RefCell::new(tree));
-        realm
+        ui_runtime
             .attach(&HarnessRoot {
                 slot: Rc::clone(&slot),
             })
-            .expect("BUG: a fresh realm has no root attached");
-        let pipeline = realm
-            .realm()
+            .expect("BUG: a fresh ui_runtime has no root attached");
+        let pipeline = ui_runtime
+            .ui_runtime()
             .widgets()
             .pipeline_owner()
-            .expect("BUG: a realm's presentation installs its pipeline");
+            .expect("BUG: a ui_runtime's presentation installs its pipeline");
         let adopted_vsync = Arc::new(Mutex::new(None::<Vsync>));
-        tick_adopted_vsync(&realm, &adopted_vsync);
+        tick_adopted_vsync(&ui_runtime, &adopted_vsync);
         let mut host = Self {
-            realm,
+            ui_runtime,
             slot,
             pipeline,
             adopted_vsync,
@@ -93,7 +93,7 @@ impl WidgetHost {
 
     /// Mark `(element, depth)` dirty, as a `setState` does.
     pub(super) fn schedule_rebuild(&self, (element, depth): (ElementId, usize)) {
-        let widgets = self.realm.realm().widgets();
+        let widgets = self.ui_runtime.ui_runtime().widgets();
         widgets.with_element_tree_mut(|tree| {
             if let Some(node) = tree.get_mut(element) {
                 node.element_mut().mark_needs_build();
@@ -106,17 +106,18 @@ impl WidgetHost {
 
     /// Run one frame `dt` after the last.
     pub(super) fn pump(&mut self, dt: Duration) {
-        self.submits_before_last_pump = self.realm.sink().submits();
-        let _outcome = self.realm.pump(dt);
+        self.submits_before_last_pump = self.ui_runtime.sink().submits();
+        let _outcome = self.ui_runtime.pump(dt);
     }
 
-    /// Deliver a pointer event through the realm's input path.
+    /// Deliver a pointer event through the UI runtime's input path.
     pub(super) fn dispatch_pointer(&self, event: &PointerEvent) {
-        self.realm.dispatch(PlatformInput::Pointer(event.clone()));
+        self.ui_runtime
+            .dispatch(PlatformInput::Pointer(event.clone()));
     }
 
     /// The shallowest mounted element of `view_type` below the harness root
-    /// (the realm's root scopes above it are never a caller's view), with its
+    /// (the UI runtime's root scopes above it are never a caller's view), with its
     /// depth.
     pub(super) fn shallowest(&self, view_type: TypeId) -> Option<(ElementId, usize)> {
         let harness_root = TypeId::of::<HarnessRoot>();
@@ -134,14 +135,17 @@ impl WidgetHost {
         })
     }
 
-    /// Run `f` over the realm's element tree.
+    /// Run `f` over the UI runtime's element tree.
     pub(super) fn with_tree<R>(&self, f: impl FnOnce(&mut ElementTree) -> R) -> R {
-        self.realm.realm().widgets().with_element_tree_mut(f)
+        self.ui_runtime
+            .ui_runtime()
+            .widgets()
+            .with_element_tree_mut(f)
     }
 
-    /// Run `f` over the realm's element tree with a predicate that says
+    /// Run `f` over the UI runtime's element tree with a predicate that says
     /// whether an element belongs to the tree under test (below the harness
-    /// root) rather than to the realm's root scopes.
+    /// root) rather than to the UI runtime's root scopes.
     pub(super) fn with_tree_under_test<R>(
         &self,
         f: impl FnOnce(&ElementTree, &dyn Fn(ElementId) -> bool) -> R,
@@ -160,8 +164,8 @@ impl WidgetHost {
         *self.adopted_vsync.lock() = Some(vsync);
     }
 
-    pub(super) fn realm(&self) -> &HeadlessHost {
-        &self.realm
+    pub(super) fn ui_runtime(&self) -> &HeadlessHost {
+        &self.ui_runtime
     }
 
     pub(super) fn pipeline(&self) -> &PipelineCell {
@@ -169,23 +173,23 @@ impl WidgetHost {
     }
 
     pub(super) fn clock(&self) -> &ManualClock {
-        self.realm.clock()
+        self.ui_runtime.clock()
     }
 
     /// Whether the last pump submitted a scene.
     pub(super) fn did_paint_last_frame(&self) -> bool {
-        self.realm.sink().submits() > self.submits_before_last_pump
+        self.ui_runtime.sink().submits() > self.submits_before_last_pump
     }
 }
 
-/// Tick `adopted` at every frame's time, relative to the realm's start, in
-/// the persistent phase the realm ticks its own registry in.
-fn tick_adopted_vsync(realm: &HeadlessHost, adopted: &Arc<Mutex<Option<Vsync>>>) {
-    let clock = realm.clock().clone();
+/// Tick `adopted` at every frame's time, relative to the UI runtime's start, in
+/// the persistent phase the UI runtime ticks its own registry in.
+fn tick_adopted_vsync(ui_runtime: &HeadlessHost, adopted: &Arc<Mutex<Option<Vsync>>>) {
+    let clock = ui_runtime.clock().clone();
     let start = flui_foundation::MonotonicClock::now(&clock);
     let adopted = Arc::clone(adopted);
-    realm
-        .realm()
+    ui_runtime
+        .ui_runtime()
         .scheduler()
         .add_persistent_frame_callback(Arc::new(move |_timing: &FrameTiming| {
             let vsync = adopted.lock().clone();

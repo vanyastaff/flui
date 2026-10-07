@@ -18,7 +18,7 @@ assert_impl_all!(PointerTarget: Copy, Send, Sync);
 assert_impl_all!(MouseRegionTarget: Copy, Send, Sync);
 assert_impl_all!(ResolvedRouteToken: Copy, Send, Sync);
 
-// Lane capability matrix: least-privilege handle and realm recreation.
+// Lane capability matrix: least-privilege handle and ui_runtime recreation.
 #[test]
 fn lane_capability_matrix() {
     let cases: &[(&str, fn())] = &[
@@ -27,8 +27,8 @@ fn lane_capability_matrix() {
             lane_mints_a_send_safe_least_privilege_handle,
         ),
         (
-            "realm_recreation_rejects_every_old_capability",
-            realm_recreation_rejects_every_old_capability,
+            "ui_runtime_recreation_rejects_every_old_capability",
+            ui_runtime_recreation_rejects_every_old_capability,
         ),
     ];
     for &(name, case) in cases {
@@ -45,7 +45,7 @@ fn lane_mints_a_send_safe_least_privilege_handle() {
     assert_eq!(format!("{handle:?}"), "InteractionDispatchHandle { .. }");
 }
 
-fn realm_recreation_rejects_every_old_capability() {
+fn ui_runtime_recreation_rejects_every_old_capability() {
     let old_lane = InteractionLane::try_new().expect("old lane");
     let old_handle = old_lane.dispatch_handle();
     let (old_target, old_route) = old_lane.enter(|| {
@@ -68,11 +68,11 @@ fn realm_recreation_rejects_every_old_capability() {
     replacement_lane.enter(|| {
         assert_eq!(
             replacement_handle.unregister_pointer(old_target),
-            Err(InteractionDispatchError::WrongRealm)
+            Err(InteractionDispatchError::WrongRuntime)
         );
         assert_eq!(
             replacement_handle.release_route(old_route),
-            Err(InteractionDispatchError::WrongRealm)
+            Err(InteractionDispatchError::WrongRuntime)
         );
     });
 }
@@ -81,8 +81,8 @@ fn realm_recreation_rejects_every_old_capability() {
 // Fresh hit test — the capability a drag needs to discover targets it has moved
 // over, which a replayed pointer-down route can never see.
 //
-// The handle pairs a realm ticket with ONE presentation's probe: identity is
-// realm-wide, the tree is not, and a realm may host several presentations each
+// The handle pairs a ui_runtime ticket with ONE presentation's probe: identity is
+// ui_runtime-wide, the tree is not, and a ui_runtime may host several presentations each
 // with its own render tree.
 // ---------------------------------------------------------------------------
 
@@ -1594,7 +1594,7 @@ fn non_pointer_invocation_retains_its_snapshot_across_a_reentrant_close() {
             "{kind}: the capture is retained, not destroyed by the unwind"
         );
         assert_eq!(
-            owner.check_realm(),
+            owner.check_ui_runtime(),
             Err(InteractionDispatchError::OwnerGone),
             "{kind}: the reentrant close took effect"
         );
@@ -1602,16 +1602,16 @@ fn non_pointer_invocation_retains_its_snapshot_across_a_reentrant_close() {
 }
 
 /// A presentation-scoped handle mutates only the targets its own owner
-/// registered; a sibling presentation sharing the realm is refused.
+/// registered; a sibling presentation sharing the UI runtime is refused.
 #[test]
 fn scoped_handle_cannot_mutate_a_sibling_owners_targets() {
     use flui_interaction::__runtime::presentation_dispatch;
     use flui_interaction::routing::MouseRegionCallbacks;
 
     let lane = InteractionLane::try_new().expect("lane");
-    let realm = lane.dispatch_handle();
-    let owner = presentation_dispatch(&realm);
-    let sibling = presentation_dispatch(&realm);
+    let ui_runtime = lane.dispatch_handle();
+    let owner = presentation_dispatch(&ui_runtime);
+    let sibling = presentation_dispatch(&ui_runtime);
     lane.enter(|| {
         let pointer = owner.register_pointer(|_| {}).expect("pointer target");
         let scroll = owner

@@ -8,12 +8,12 @@
 - **Amended by:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) (the
   `interaction -> platform` edge becomes `interaction -> platform-api`);
   [ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md) in part (§1 and §4:
-  `PresentationState` and the realm that composes it live in `flui-runtime`, not `flui-app`;
+  `PresentationState` and the UI runtime that composes it live in `flui-runtime`, not `flui-app`;
   the ownership domains themselves are unchanged)
 
 ## Context
 
-ADR-0027 separated a realm's serial UI transaction from platform and raster
+ADR-0027 separated a UI runtime's serial UI transaction from platform and raster
 work, but its term `PresentationRuntime` allowed two readings:
 
 1. a logical presentation whose state is physically owned where each operation
@@ -41,9 +41,9 @@ are leapfrog zones under ADR-0027; the three-tree semantics stay Flutter's.
 ```text
 event-loop lane     AppRuntime ── WindowRegistry: WindowId → PresentationAddress
                     backend-owned PlatformWindow (native window, event delivery)
-                         │ closed, addressed events (RealmEvent)
+                         │ closed, addressed events (RuntimeEvent)
                          ▼
-realm owner lane    UiRealm (!Send + !Sync)
+UI runtime owner lane    UiRuntime (!Send + !Sync)
                     └─ PresentationState: element root, pipeline, frame clock,
                        input, focus, semantics, text input
                          │ owned snapshots / closed commands
@@ -55,7 +55,7 @@ raster owner lane   RasterOwner: surface, renderer, GPU submission,
 | Owner | Where | Sole mutable authority |
 |---|---|---|
 | Event-loop side: the backend's `PlatformWindow` plus `AppRuntime`'s `WindowRegistry` | platform/event-loop lane | native window lifetime, event delivery, OS callback registration, redraw requests, the native-window → presentation map |
-| `PresentationState` | stored by value in its `UiRealm`; `!Send + !Sync` (statically asserted) | the presentation's UI root and pipeline, frame/input state, focus, gestures, mouse tracking, text-input session, semantics |
+| `PresentationState` | stored by value in its `UiRuntime`; `!Send + !Sync` (statically asserted) | the presentation's UI root and pipeline, frame/input state, focus, gestures, mouse tracking, text-input session, semantics |
 | `RasterOwner` (`flui-engine`) | raster owner lane | renderer, GPU surface, configure/present ordering, `SurfaceGeneration` |
 
 `PresentationRuntime` survives only as the name of the contract those owners
@@ -67,24 +67,24 @@ layer that already sees platform, interaction, rendering and engine.
 ### 2. Presentation identity is explicit and generational
 
 `PresentationId` is generational; a recycled slot never equals the previous
-incarnation. `PresentationAddress { realm_id, presentation_id }`
+incarnation. `PresentationAddress { ui_runtime_id, presentation_id }`
 (`flui-foundation`) is the address every routable message carries.
 
 `AppRuntime`'s `WindowRegistry` is the only `WindowId → PresentationAddress`
-map. `WindowId` is consumed at the platform demultiplexing boundary; realm-
+map. `WindowId` is consumed at the platform demultiplexing boundary; UI runtime-
 facing code addresses a presentation only by `PresentationAddress`. No second
-map lives in `UiRealm`, an input registry or a platform callback.
+map lives in `UiRuntime`, an input registry or a platform callback.
 
 Late events are harmless by construction: removing the mapping stops new
 routing; queued events carry the old generational address and are dropped by
-the realm; raster channels are lifetime-specific, so a send to a dead owner
+the UI runtime; raster channels are lifetime-specific, so a send to a dead owner
 returns `OwnerGone`.
 
 ### 3. Cross-thread traffic has a closed vocabulary
 
 Owners on different threads exchange owned `Send` data through bounded
 channels or dedicated one-shot completions — never UI closures or a generic
-"run this on the UI thread" job. `RealmEvent` (native/host observations → realm) and
+"run this on the UI thread" job. `RuntimeEvent` (native/host observations → UI runtime) and
 `RasterAck` (raster → UI) are the shipped instances. The rules:
 
 - every routable message carries, or is structurally bound to, its exact
@@ -192,16 +192,16 @@ Install-only callbacks are forbidden. Either the event loop owns delivery and
 yields typed events while the window exists, or registration returns a token
 the event-loop side owns and cancels at teardown, before the mapping and the
 target owners go away. A callback may capture only the typed sender and the
-generational address — never `UiRealm`, `PresentationState`, `PipelineOwner` or
+generational address — never `UiRuntime`, `PresentationState`, `PipelineOwner` or
 an application binding. Web RAF, resize observers, accessibility and text-input
 callbacks follow the same rule; "installed until process exit" is not a
 lifecycle.
 
-### 11. Several presentations in one realm need an element forest
+### 11. Several presentations in one UI runtime need an element forest
 
-`UiRealm 1 → N PresentationState` is allowed only with a real element forest:
+`UiRuntime 1 → N PresentationState` is allowed only with a real element forest:
 one element root, render root and `PipelineOwner` per live presentation;
-realm-local `GlobalKey` rules across the forest; scheduling that can dirty one
+UI runtime-local `GlobalKey` rules across the forest; scheduling that can dirty one
 root without rebuilding another; root removal that disposes only its subtree.
 Cloning one element tree into two pipelines, or sharing one pipeline across
 surfaces, does not qualify. The forest is ADR-0043's `PresentationForest`.
@@ -209,7 +209,7 @@ surfaces, does not qualify. The forest is ADR-0043's `PresentationForest`.
 ### 12. No `flui-presentation` crate
 
 Such a crate would be an anemic handle bag (the real state stays in the
-platform, realm and engine owners), would depend upward on application policy
+platform, UI runtime and engine owners), would depend upward on application policy
 and downward on almost everything, or would become the forbidden fourth owner.
 `flui-app` is already the composition root. A future extraction needs a deep,
 policy-free abstraction with two production consumers and its own ADR.
@@ -235,7 +235,7 @@ policy-free abstraction with two production consumers and its own ADR.
 | Composition in `flui-platform` | layer inversion: platform delivery would own widget/render/input policy |
 | One cross-thread runtime object | needs locks, erased handles or forwarding for owner-affine state |
 | Keep the old intermediaries behind deprecated APIs | keeps dual ownership and lets new code pick the wrong current window |
-| Thread-local focus/gesture/mouse/IME state | cannot represent two realms on one thread; leaks across tests and presentations |
+| Thread-local focus/gesture/mouse/IME state | cannot represent two UI runtimes on one thread; leaks across tests and presentations |
 | A generic UI executor carrying closures | open-ended authority, unreviewable ordering, no backpressure class |
 | `Arc<RwLock<PresentationRuntime>>` | lets the compiler permit ownership violations; a deadlock-prone lock graph |
 

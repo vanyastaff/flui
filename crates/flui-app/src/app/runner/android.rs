@@ -9,9 +9,9 @@ use super::host::{
     APP_RUNTIME, OwnerHostClearGuard, install_owner_platform, runtime_wake_callback,
     with_owner_platform,
 };
-use super::realm_dispatch::{
-    RealmEvent, RealmTask, dispatch_platform_realm, install_input_wiring, install_platform_realm,
-    install_surface_applier, teardown_platform_realm,
+use super::owner_dispatch::{
+    RuntimeEvent, RuntimeTask, dispatch_platform_ui_runtime, install_input_wiring,
+    install_platform_ui_runtime, install_surface_applier, teardown_platform_ui_runtime,
 };
 use super::surface_lifecycle::{
     SurfaceLifecycleOutcome, SurfaceRecreationRetry, report_surface_settlement,
@@ -92,7 +92,7 @@ where
 
     let platform: Box<dyn Platform> = Box::new(AndroidPlatform::new(app));
 
-    /// The actual Android bootstrap: window, GPU, realm, and callback
+    /// The actual Android bootstrap: window, GPU, UI runtime, and callback
     /// wiring. Runs once, synchronously, inside `on_ready` — which this
     /// backend delivers at the first `MainEvent::InitWindow`, not at the
     /// first `Resume` (module doc, `platforms/android/mod.rs`'s
@@ -126,7 +126,7 @@ where
         }
 
         // 0. The platform clipboard (ADR-0038 §9) was installed with the
-        // owner platform; the realm below takes it through `build_runtime_realm`.
+        // owner platform; the ui_runtime below takes it through `build_ui_runtime`.
         //
         // 0b. This window's device-recovery backoff, constructed here (not
         // down at step 6 alongside the renderer it paces) so the
@@ -145,11 +145,11 @@ where
 
         // 0c. Wire the wall-clock-wake hook to both retries. Unlike
         // `install_wake_deadline_hook` (desktop's `bootstrap_desktop`), this
-        // does NOT also fold in `AppRuntime::next_wake()` (realm-level
+        // does NOT also fold in `AppRuntime::next_wake()` (ui_runtime-level
         // deadlines: gesture-arena timers, animation continuations) — this
         // backend's `Platform::set_wake_deadline_hook` override
         // (`flui-platform`'s `platforms/android/mod.rs`) was added
-        // specifically to carry recovery deadlines; folding in realm-level
+        // specifically to carry recovery deadlines; folding in ui_runtime-level
         // deadlines too would change this backend's existing, untested-here
         // wake behavior for gesture/animation timers.
         owner_platform_installed(|owner| {
@@ -194,41 +194,45 @@ where
 
         // 3. Mount root widget (used when no plugin is active) at the
         // LOGICAL size; the paint root's DPR transform maps to physical.
-        // `UiRealm::new` applies the DPR to the freshly built pipeline
+        // `UiRuntime::new` applies the DPR to the freshly built pipeline
         // before returning.
         let scale_factor = window.scale_factor() as f64;
         let wake = runtime_wake_callback();
-        let ui_realm =
-            match super::host::build_runtime_realm(&wake, presentation_window, scale_factor) {
-                Ok(realm) => realm,
+        let ui_runtime =
+            match super::host::build_ui_runtime(&wake, presentation_window, scale_factor) {
+                Ok(ui_runtime) => ui_runtime,
                 Err(error) => {
-                    tracing::error!(%error, "UiRealm construction failed");
-                    return Err(anyhow::anyhow!(error).context("UiRealm construction failed"));
+                    tracing::error!(%error, "UiRuntime construction failed");
+                    return Err(anyhow::anyhow!(error).context("UiRuntime construction failed"));
                 }
             };
 
         // Debug overlay: `Some` stats IS the enable flag, so this is the
         // single point that turns the frame path's overlay work on.
-        ui_realm.set_performance_overlay(config.show_performance_overlay);
+        ui_runtime.set_performance_overlay(config.show_performance_overlay);
 
         // Typed frame-failure route (issue #561) — same wiring as the
         // desktop bootstrap.
-        ui_realm.set_frame_failure_handler(config.frame_failure_handler.clone());
-        ui_realm.set_frame_failure_detail(config.frame_failure_detail);
+        ui_runtime.set_frame_failure_handler(config.frame_failure_handler.clone());
+        ui_runtime.set_frame_failure_detail(config.frame_failure_detail);
 
         let logical = window.logical_size();
-        let attach = ui_realm.enter(|realm| {
-            realm.attach_root_widget_with_size(&root, logical.width as f64, logical.height as f64)
+        let attach = ui_runtime.enter(|ui_runtime| {
+            ui_runtime.attach_root_widget_with_size(
+                &root,
+                logical.width as f64,
+                logical.height as f64,
+            )
         });
         if let Err(e) = attach {
             tracing::error!("Root widget attach failed: {:?}", e);
             return Err(anyhow::anyhow!(e).context("Root widget attach failed"));
         }
-        let realm_dispatch = install_platform_realm(ui_realm, &window);
+        let owner_dispatch = install_platform_ui_runtime(ui_runtime, &window);
 
         // 3b. Start config-declared application services (issue #558) —
         // same wiring and same failure contract as the desktop bootstrap:
-        // the realm install above resolved the loop's execution services,
+        // the ui_runtime install above resolved the loop's execution services,
         // and a declared service failing to start fails the bootstrap
         // rather than being silently ignored. Exit-policy consultation is
         // NOT wired on this backend (its platform installs no exit-policy
@@ -254,18 +258,18 @@ where
         // `SceneSnapshot`.
         let lane = Arc::new(Mutex::new(crate::app::raster_lane::RasterLane::new(
             renderer,
-            realm_dispatch.address,
+            owner_dispatch.address,
             phys_size.width as u32,
             phys_size.height as u32,
         )));
 
         // Install the registration-lifetime surface applier alongside the
-        // realm (cleared together at teardown) — see the desktop bootstrap's
+        // ui_runtime (cleared together at teardown) — see the desktop bootstrap's
         // matching comment for the take/call/restore protocol this feeds.
         {
             let resize_hook = lane.lock().resize_hook();
             install_surface_applier(
-                realm_dispatch.address.realm_id,
+                owner_dispatch.address.ui_runtime_id,
                 move |size, scale_factor| {
                     let w = (size.width * scale_factor) as u32;
                     let h = (size.height * scale_factor) as u32;
@@ -274,8 +278,8 @@ where
             );
         }
 
-        // 5. Register input callback -> entered realm input dispatch
-        install_input_wiring(realm_dispatch, window.as_ref());
+        // 5. Register input callback -> entered ui_runtime input dispatch
+        install_input_wiring(owner_dispatch, window.as_ref());
 
         // 6. Register frame callback -- with hot-reload plugin override
         let lane_frame = Arc::clone(&lane);
@@ -283,17 +287,17 @@ where
         // Reuses the SAME backoff constructed at step 0b (already wired
         // into the wake-deadline hook above) — not a fresh one.
         window.on_request_frame(Box::new(move || {
-            let _owner_callback = super::realm_dispatch::begin_owner_callback();
+            let _owner_callback = super::owner_dispatch::begin_owner_callback();
             let lane_frame = Arc::clone(&lane_frame);
             let hot_reload_frame = hot_reload_frame.clone();
             let device_recovery_backoff = Arc::clone(&device_recovery_backoff);
             let surface_recreation_retry = Arc::clone(&surface_recreation_retry);
-            let _ = dispatch_platform_realm(
-                realm_dispatch,
-                RealmTask::Pump(Box::new(move |realm| {
-                    // The gate half of the wake runs inside one realm entry
-                    // and decides; the pump below enters the realm itself.
-                    let (action, now) = realm.enter(|realm| {
+            let _ = dispatch_platform_ui_runtime(
+                owner_dispatch,
+                RuntimeTask::Pump(Box::new(move |ui_runtime| {
+                    // The gate half of the wake runs inside one ui_runtime entry
+                    // and decides; the pump below enters the ui_runtime itself.
+                    let (action, now) = ui_runtime.enter(|ui_runtime| {
                         let now = web_time::Instant::now();
                         // Owner-inbox drain: commands and worker results commit HERE,
                         // at the frame boundary while the scheduler phase is Idle —
@@ -302,13 +306,13 @@ where
                         // plugin scene fast path below, so a command-driven redraw
                         // request is observed by the very frame its wake produced
                         // regardless of which rendering path this frame takes.
-                        let inbox_redraw = realm.drain_owner_inbox();
+                        let inbox_redraw = ui_runtime.drain_owner_inbox();
 
                         // If a scene plugin is live it owns this presentation frame,
-                        // but the callback still executes inside the realm entry
+                        // but the callback still executes inside the ui_runtime entry
                         // scope. Always `false` without an installed development
                         // reload hook. The plugin renders through the backend directly
-                        // (its own diagnostic scene, not a realm-produced frame),
+                        // (its own diagnostic scene, not a ui_runtime-produced frame),
                         // so it goes through the lane's scoped backend access —
                         // per ADR-0045 decision 6 the plugin path is one of the
                         // named inline-only lanes.
@@ -329,7 +333,7 @@ where
                             }
                         }
 
-                        let has_pending = realm.has_pending_work();
+                        let has_pending = ui_runtime.has_pending_work();
                         // See the desktop closure's matching comment: a wake-
                         // deadline source (here, `set_wake_deadline_hook` forces
                         // a dispatch once due — `flui-platform`'s
@@ -349,7 +353,7 @@ where
                         );
                         let dirty = frame_is_dirty(
                             inbox_redraw,
-                            realm.needs_redraw(),
+                            ui_runtime.needs_redraw(),
                             has_pending,
                             retry_deadline,
                             // Android's wake-deadline hook carries only the retry
@@ -357,7 +361,7 @@ where
                             // (ADR-0058): its backgrounded pump sleeps.
                             FallbackGate::default(),
                         );
-                        let scheduler = realm.scheduler();
+                        let scheduler = ui_runtime.scheduler();
                         let action = wake_action(
                             scheduler.frames_enabled(),
                             dirty,
@@ -370,16 +374,16 @@ where
 
                         // A retry owed by a genuine surface-recreation failure gets
                         // its gated attempt here, BEFORE the frame, through the shared
-                        // helper (its own lane-lock scope, released before the realm
-                        // half). This closure already runs as the realm's Pump task, so
-                        // the full-repaint mark goes to `realm` directly and the frame
+                        // helper (its own lane-lock scope, released before the ui_runtime
+                        // half). This closure already runs as the ui_runtime's Pump task, so
+                        // the full-repaint mark goes to `ui_runtime` directly and the frame
                         // about to run is the one that repaints into the new surface —
                         // re-dispatching it as another task would queue it behind
                         // this one (the dispatcher is mid-phase) and land it a frame late.
                         match retry_surface_recreation(&lane_frame, &surface_recreation_retry, now)
                         {
                             Some(SurfaceLifecycleOutcome::Recreated) => {
-                                realm.mark_primary_needs_full_repaint();
+                                ui_runtime.mark_primary_needs_full_repaint();
                             }
                             Some(SurfaceLifecycleOutcome::Failed(source)) => {
                                 tracing::warn!(
@@ -401,9 +405,9 @@ where
                             // frame, no tickers, no pipeline, no present. See
                             // `wake_action`'s doc for why this is the only thing
                             // keeping a spawned future progressing while
-                            // backgrounded, and `UiRealm::pump_background` for
+                            // backgrounded, and `UiRuntime::pump_background` for
                             // the latch-first order it keeps.
-                            realm.pump_background();
+                            ui_runtime.pump_background();
                             // Unconditional throttle: a self-re-arming task has
                             // no vsync/present call to bound it here either, and
                             // this arm has no gate-open signal to make the pace
@@ -417,7 +421,7 @@ where
                         WakeAction::Render => {}
                     }
 
-                    // The frame: `UiRealm::pump` at `now`, with device-loss
+                    // The frame: `UiRuntime::pump` at `now`, with device-loss
                     // recovery around it, same shape as the desktop path — see
                     // `pump_with_device_recovery`.
                     //
@@ -444,8 +448,12 @@ where
                         );
                         return;
                     };
-                    let _ =
-                        pump_with_device_recovery(realm, &mut *lane, &device_recovery_backoff, now);
+                    let _ = pump_with_device_recovery(
+                        ui_runtime,
+                        &mut *lane,
+                        &device_recovery_backoff,
+                        now,
+                    );
                 })),
             );
         }));
@@ -453,15 +461,15 @@ where
         // 7. Register resize callback -> typed Resized event; the applier
         // installed above (not this closure) actually touches the renderer.
         window.on_resize(Box::new(move |size, scale_factor| {
-            let _ = dispatch_platform_realm(
-                realm_dispatch,
-                RealmTask::Event(RealmEvent::Resized { size, scale_factor }),
+            let _ = dispatch_platform_ui_runtime(
+                owner_dispatch,
+                RuntimeTask::Event(RuntimeEvent::Resized { size, scale_factor }),
             );
         }));
 
         // 8. Lifecycle callbacks
         //
-        // Detached is realm-dispatched so interrupted gesture state is drained
+        // Detached is ui_runtime-dispatched so interrupted gesture state is drained
         // before lifecycle observers run.
 
         // Platform quit -> Detached (frames disabled, listeners notified).
@@ -470,18 +478,19 @@ where
                 tracing::info!("Platform quit");
                 debug_assert_eq!(
                     std::thread::current().id(),
-                    realm_dispatch.owner_thread,
-                    "platform on_quit must fire on the realm's owner thread"
+                    owner_dispatch.owner_thread,
+                    "platform on_quit must fire on the ui_runtime's owner thread"
                 );
-                if let Err(error) =
-                    dispatch_platform_realm(realm_dispatch, RealmTask::Event(RealmEvent::Shutdown))
-                {
-                    // Trace-only: the scheduler died WITH the realm now (each
-                    // realm owns its own), so there is no process-global
+                if let Err(error) = dispatch_platform_ui_runtime(
+                    owner_dispatch,
+                    RuntimeTask::Event(RuntimeEvent::Shutdown),
+                ) {
+                    // Trace-only: the scheduler died WITH the ui_runtime now (each
+                    // ui_runtime owns its own), so there is no process-global
                     // scheduler left to notify as a fallback.
                     tracing::warn!(
                         ?error,
-                        "realm unavailable during Detached lifecycle dispatch"
+                        "ui_runtime unavailable during Detached lifecycle dispatch"
                     );
                 }
             }));
@@ -510,9 +519,9 @@ where
             } else {
                 AppLifecycleState::Paused
             };
-            let _ = dispatch_platform_realm(
-                realm_dispatch,
-                RealmTask::Event(RealmEvent::Lifecycle(target)),
+            let _ = dispatch_platform_ui_runtime(
+                owner_dispatch,
+                RuntimeTask::Event(RuntimeEvent::Lifecycle(target)),
             );
         }));
 
@@ -556,13 +565,13 @@ where
         // it is not self-healing.
         //
         // The off-thread invariant is not the only hazard here, and it does not
-        // cover the same-thread one: `dispatch_platform_realm` drains the realm
+        // cover the same-thread one: `dispatch_platform_ui_runtime` drains the ui_runtime
         // queue inline, so it can reach another owner operation right here, on this
         // thread, where the frame path takes this same lane with `try_lock` and
         // self-skips. Holding the guard across that costs a dropped frame
         // rather than a deadlock, but it is a frame dropped for no reason,
         // because nothing after the mint needs the lane. So the guard's scope
-        // ends at the mint and the dispatch runs outside it; the realm half is
+        // ends at the mint and the dispatch runs outside it; the ui_runtime half is
         // documented as deferrable below, so the ordering does not change.
         //
         // Two more invariants this registration rests on, stated where it is
@@ -599,18 +608,18 @@ where
                 has_surface,
                 now,
             );
-            // The guard ends before the realm dispatch — see the same-thread
+            // The guard ends before the ui_runtime dispatch — see the same-thread
             // hazard named above, which is what puts the `drop` here.
             drop(lane);
             if matches!(outcome, SurfaceLifecycleOutcome::Recreated) {
-                // The realm half is deferrable, so it goes through the realm
+                // The ui_runtime half is deferrable, so it goes through the ui_runtime
                 // dispatch rather than running inline: unlike the release, its
                 // ordering cannot affect completeness (the engine's tracker
                 // mark already ran above, and the mint with it), and the
                 // dispatcher may queue it when it is mid-phase.
-                let _ = dispatch_platform_realm(
-                    realm_dispatch,
-                    RealmTask::Event(RealmEvent::PrimarySurfaceRestored),
+                let _ = dispatch_platform_ui_runtime(
+                    owner_dispatch,
+                    RuntimeTask::Event(RuntimeEvent::PrimarySurfaceRestored),
                 );
             }
             // A release logs nothing here (the engine logs
@@ -625,7 +634,7 @@ where
         // 9. Store the window in AppRuntime's redraw-poke slot — BEFORE
         // marking the lifecycle Resumed or requesting the initial redraw.
         // Both of those can synchronously run the first frame through
-        // `dispatch_platform_realm`; if the slot were still empty at that
+        // `dispatch_platform_ui_runtime`; if the slot were still empty at that
         // point, anything resolving it during that frame would silently
         // no-op instead of waking the loop.
         APP_RUNTIME.with(|slot| slot.borrow().set_redraw_window(window));
@@ -634,12 +643,12 @@ where
         // see `run_desktop`'s matching comment for why.
         debug_assert_eq!(
             std::thread::current().id(),
-            realm_dispatch.owner_thread,
-            "android bootstrap must run on the realm's owner thread"
+            owner_dispatch.owner_thread,
+            "android bootstrap must run on the ui_runtime's owner thread"
         );
-        let _ = dispatch_platform_realm(
-            realm_dispatch,
-            RealmTask::Event(RealmEvent::Lifecycle(AppLifecycleState::Resumed)),
+        let _ = dispatch_platform_ui_runtime(
+            owner_dispatch,
+            RuntimeTask::Event(RuntimeEvent::Lifecycle(AppLifecycleState::Resumed)),
         );
 
         // 10. Request initial redraw, now that the window is stored.
@@ -661,7 +670,7 @@ where
         bootstrap_android(root, config, hot_reload)?;
         Ok(())
     }));
-    teardown_platform_realm();
+    teardown_platform_ui_runtime();
 
     // `on_ready`'s `Err` propagates straight out of `Platform::run`; surface
     // it the same way `run_desktop` does now that the event loop has

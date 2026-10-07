@@ -5,9 +5,9 @@ use super::frame_pacing::{FallbackGate, WakeAction, wake_action};
 use super::host::{
     APP_RUNTIME, install_owner_platform, runtime_wake_callback, with_owner_platform,
 };
-use super::realm_dispatch::{
-    RealmEvent, RealmTask, dispatch_platform_realm, install_input_wiring, install_platform_realm,
-    install_surface_applier,
+use super::owner_dispatch::{
+    RuntimeEvent, RuntimeTask, dispatch_platform_ui_runtime, install_input_wiring,
+    install_platform_ui_runtime, install_surface_applier,
 };
 use crate::app::AppConfig;
 
@@ -45,7 +45,7 @@ where
         }
     };
 
-    /// The actual web bootstrap: canvas window, renderer, realm, and
+    /// The actual web bootstrap: canvas window, renderer, UI runtime, and
     /// callback wiring. Runs once, synchronously, inside `on_ready` —
     /// `WebPlatform::run` invokes it before starting the RAF loop
     /// (ADR-0039 §1; behavior-preserving, since `on_ready`
@@ -64,7 +64,7 @@ where
         }
 
         // 0. The platform clipboard (ADR-0038 §9) was installed with the
-        // owner platform; the realm below takes it through `build_runtime_realm`.
+        // owner platform; the ui_runtime below takes it through `build_ui_runtime`.
         //
         // 1. Open window (creates canvas). `Ready` is guaranteed inside
         // `on_ready` (ADR-0039 §1).
@@ -111,45 +111,49 @@ where
         });
 
         // 3. Mount root widget at the LOGICAL size; the paint root's DPR
-        // transform maps to the physical canvas. `UiRealm::new` applies the
+        // transform maps to the physical canvas. `UiRuntime::new` applies the
         // DPR to the freshly built pipeline before returning.
         let scale_factor = window.scale_factor() as f64;
         let wake = runtime_wake_callback();
-        let ui_realm =
-            match super::host::build_runtime_realm(&wake, presentation_window, scale_factor) {
-                Ok(realm) => realm,
+        let ui_runtime =
+            match super::host::build_ui_runtime(&wake, presentation_window, scale_factor) {
+                Ok(ui_runtime) => ui_runtime,
                 Err(error) => {
-                    tracing::error!(%error, "UiRealm construction failed");
-                    return Err(anyhow::anyhow!(error).context("UiRealm construction failed"));
+                    tracing::error!(%error, "UiRuntime construction failed");
+                    return Err(anyhow::anyhow!(error).context("UiRuntime construction failed"));
                 }
             };
 
         // Debug overlay: `Some` stats IS the enable flag, so this is the
         // single point that turns the frame path's overlay work on.
-        ui_realm.set_performance_overlay(config.show_performance_overlay);
+        ui_runtime.set_performance_overlay(config.show_performance_overlay);
 
         // Typed frame-failure route (issue #561) — same wiring as the
         // desktop bootstrap.
-        ui_realm.set_frame_failure_handler(config.frame_failure_handler.clone());
-        ui_realm.set_frame_failure_detail(config.frame_failure_detail);
+        ui_runtime.set_frame_failure_handler(config.frame_failure_handler.clone());
+        ui_runtime.set_frame_failure_detail(config.frame_failure_detail);
 
         let logical = window.logical_size();
-        let attach = ui_realm.enter(|realm| {
-            realm.attach_root_widget_with_size(&root, logical.width as f64, logical.height as f64)
+        let attach = ui_runtime.enter(|ui_runtime| {
+            ui_runtime.attach_root_widget_with_size(
+                &root,
+                logical.width as f64,
+                logical.height as f64,
+            )
         });
         if let Err(e) = attach {
             tracing::error!("Root widget attach failed: {:?}", e);
             return Err(anyhow::anyhow!(e).context("Root widget attach failed"));
         }
-        let realm_dispatch = install_platform_realm(ui_realm, &window);
+        let owner_dispatch = install_platform_ui_runtime(ui_runtime, &window);
 
         // Install the registration-lifetime surface applier alongside the
-        // realm (cleared together at teardown) — see the desktop bootstrap's
+        // ui_runtime (cleared together at teardown) — see the desktop bootstrap's
         // matching comment for the take/call/restore protocol this feeds.
         {
             let renderer_resize = Arc::clone(&renderer);
             install_surface_applier(
-                realm_dispatch.address.realm_id,
+                owner_dispatch.address.ui_runtime_id,
                 move |size, scale_factor| {
                     if let Some(renderer) = renderer_resize.lock().as_mut() {
                         // Rounded like the backend's `physical_size` and
@@ -164,28 +168,28 @@ where
         }
 
         // 4. Register input callback
-        install_input_wiring(realm_dispatch, window.as_ref());
+        install_input_wiring(owner_dispatch, window.as_ref());
 
         // 5. Register frame callback
         let renderer_frame = Arc::clone(&renderer);
         window.on_request_frame(Box::new(move || {
-            let _owner_callback = super::realm_dispatch::begin_owner_callback();
+            let _owner_callback = super::owner_dispatch::begin_owner_callback();
             let renderer_frame = Arc::clone(&renderer_frame);
-            let _ = dispatch_platform_realm(
-                realm_dispatch,
-                RealmTask::Pump(Box::new(move |realm| {
-                    let action = realm.enter(|realm| {
+            let _ = dispatch_platform_ui_runtime(
+                owner_dispatch,
+                RuntimeTask::Pump(Box::new(move |ui_runtime| {
+                    let action = ui_runtime.enter(|ui_runtime| {
                         // Owner-inbox drain: commands and worker results commit
                         // HERE, at the frame boundary while the scheduler phase
                         // is Idle — never inside the frame transaction below.
                         // Runs before the dirty gate so a command-driven redraw
                         // request is observed by the very frame its wake
                         // produced.
-                        let inbox_redraw = realm.drain_owner_inbox();
+                        let inbox_redraw = ui_runtime.drain_owner_inbox();
 
-                        let has_pending = realm.has_pending_work();
-                        let dirty = inbox_redraw || realm.needs_redraw() || has_pending;
-                        let scheduler = realm.scheduler();
+                        let has_pending = ui_runtime.has_pending_work();
+                        let dirty = inbox_redraw || ui_runtime.needs_redraw() || has_pending;
+                        let scheduler = ui_runtime.scheduler();
                         wake_action(
                             scheduler.frames_enabled(),
                             dirty,
@@ -203,7 +207,7 @@ where
                             // Frames disabled: pump only the async driver — see
                             // `wake_action`'s doc for why this is the only thing
                             // keeping a spawned future progressing while
-                            // backgrounded, and `UiRealm::pump_background` for
+                            // backgrounded, and `UiRuntime::pump_background` for
                             // the latch-first order it keeps.
                             //
                             // No `NO_PRESENT_FALLBACK_PACE` sleep here, unlike
@@ -219,7 +223,7 @@ where
                             // no real OS threads, and blocking the single JS
                             // thread with `std::thread::sleep` would hang the
                             // page rather than pace it.
-                            realm.pump_background();
+                            ui_runtime.pump_background();
                             return;
                         }
                         WakeAction::Render => {}
@@ -227,7 +231,7 @@ where
 
                     let now = web_time::Instant::now();
                     {
-                        // No frame runs before the renderer exists: the realm
+                        // No frame runs before the renderer exists: the ui_runtime
                         // stays dirty, and the first animation frame after the
                         // renderer arrives renders.
                         let mut slot = renderer_frame.lock();
@@ -235,15 +239,15 @@ where
                             return;
                         };
 
-                        let _ = realm.pump(&mut SampledClock(now), &mut DirectSink::new(r));
+                        let _ = ui_runtime.pump(&mut SampledClock(now), &mut DirectSink::new(r));
 
                         if r.is_device_lost() {
                             drop(slot);
                             let renderer_recover = Arc::clone(&renderer_frame);
                             // A cloned, `'static` wake handle: the spawned
-                            // future outlives this callback's `&UiRealm`
-                            // borrow, so it cannot capture `realm` itself.
-                            let wake = realm.wake_handle();
+                            // future outlives this callback's `&UiRuntime`
+                            // borrow, so it cannot capture `ui_runtime` itself.
+                            let wake = ui_runtime.wake_handle();
                             wasm_bindgen_futures::spawn_local(async move {
                                 // Never hold the renderer mutex across `.await`.
                                 let Some(mut renderer) = renderer_recover.lock().take() else {
@@ -326,33 +330,34 @@ where
         }));
 
         window.on_resize(Box::new(move |size, scale_factor| {
-            let _ = dispatch_platform_realm(
-                realm_dispatch,
-                RealmTask::Event(RealmEvent::Resized { size, scale_factor }),
+            let _ = dispatch_platform_ui_runtime(
+                owner_dispatch,
+                RuntimeTask::Event(RuntimeEvent::Resized { size, scale_factor }),
             );
         }));
 
         // 6. Lifecycle callbacks
         //
-        // Detached is realm-dispatched so interrupted gesture state is drained
+        // Detached is ui_runtime-dispatched so interrupted gesture state is drained
         // before lifecycle observers run.
         owner_platform_installed(|owner| {
             owner.shared().on_quit(Box::new(move || {
                 tracing::info!("Web platform quit");
                 debug_assert_eq!(
                     std::thread::current().id(),
-                    realm_dispatch.owner_thread,
-                    "platform on_quit must fire on the realm's owner thread"
+                    owner_dispatch.owner_thread,
+                    "platform on_quit must fire on the ui_runtime's owner thread"
                 );
-                if let Err(error) =
-                    dispatch_platform_realm(realm_dispatch, RealmTask::Event(RealmEvent::Shutdown))
-                {
-                    // Trace-only: the scheduler died WITH the realm now (each
-                    // realm owns its own), so there is no process-global
+                if let Err(error) = dispatch_platform_ui_runtime(
+                    owner_dispatch,
+                    RuntimeTask::Event(RuntimeEvent::Shutdown),
+                ) {
+                    // Trace-only: the scheduler died WITH the ui_runtime now (each
+                    // ui_runtime owns its own), so there is no process-global
                     // scheduler left to notify as a fallback.
                     tracing::warn!(
                         ?error,
-                        "realm unavailable during Detached lifecycle dispatch"
+                        "ui_runtime unavailable during Detached lifecycle dispatch"
                     );
                 }
             }));
@@ -368,36 +373,36 @@ where
         // `Occluded` is desktop-only) — a DOM `visibilitychange` listener is a
         // future follow-up, not this PR's scope.
         window.on_active_status_change(Box::new(move |focused| {
-            let _ = dispatch_platform_realm(
-                realm_dispatch,
-                RealmTask::Event(RealmEvent::WindowFocus(focused)),
+            let _ = dispatch_platform_ui_runtime(
+                owner_dispatch,
+                RuntimeTask::Event(RuntimeEvent::WindowFocus(focused)),
             );
         }));
         // The web translation already emits hover-status changes for DOM
         // pointerenter/pointerleave; route them like the desktop bootstrap
         // does so a cursor leaving the canvas sweeps hover state.
         window.on_hover_status_change(Box::new(move |is_hovered| {
-            let _ = dispatch_platform_realm(
-                realm_dispatch,
-                RealmTask::Event(RealmEvent::WindowHover(is_hovered)),
+            let _ = dispatch_platform_ui_runtime(
+                owner_dispatch,
+                RuntimeTask::Event(RuntimeEvent::WindowHover(is_hovered)),
             );
         }));
 
         // 7. Store the window in AppRuntime's redraw-poke slot — BEFORE
         // marking the lifecycle Resumed, which can synchronously run the
-        // first frame through `dispatch_platform_realm`; anything resolving
+        // first frame through `dispatch_platform_ui_runtime`; anything resolving
         // the slot during that frame must not see it empty.
         APP_RUNTIME.with(|slot| slot.borrow().set_redraw_window(window));
 
         debug_assert_eq!(
             std::thread::current().id(),
-            realm_dispatch.owner_thread,
-            "web bootstrap must run on the realm's owner thread"
+            owner_dispatch.owner_thread,
+            "web bootstrap must run on the ui_runtime's owner thread"
         );
         // Routed through dispatch -- see `run_desktop`'s matching comment.
-        let _ = dispatch_platform_realm(
-            realm_dispatch,
-            RealmTask::Event(RealmEvent::Lifecycle(AppLifecycleState::Resumed)),
+        let _ = dispatch_platform_ui_runtime(
+            owner_dispatch,
+            RuntimeTask::Event(RuntimeEvent::Lifecycle(AppLifecycleState::Resumed)),
         );
 
         tracing::info!("Web platform initialized with callbacks");
@@ -406,7 +411,7 @@ where
 
     // Run the event loop (takes ownership of the platform). No
     // `OwnerHostClearGuard` here — deliberately: `WebPlatform::run` installs
-    // the RAF callback and returns immediately, and tearing down the realm
+    // the RAF callback and returns immediately, and tearing down the ui_runtime
     // (or the owner host) at that point would destroy it before the first
     // frame. The host stays owner-TLS resident for the page's lifetime
     // (ADR-0039 §6/§7 "wasm posture"). An explicit web detach/quit

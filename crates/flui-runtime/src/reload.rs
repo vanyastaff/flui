@@ -1,8 +1,8 @@
-//! The development reload a realm applies to its presentations.
+//! The development reload a UI runtime applies to its presentations.
 //!
 //! A reload driver is a `flui_view::dev_reload::DevReloadHook` the
 //! application installs (ADR-0094 §1); the host, `flui-app`, polls it and
-//! translates its event into this crate's [`ReloadTier`], which the realm
+//! translates its event into this crate's [`ReloadTier`], which the UI runtime
 //! applies. Nothing here or in the host names a reload tool. The module
 //! exists only with this crate's `hot-reload` feature, which `flui-app`
 //! turns on; it names no reload crate, so it adds nothing to a production
@@ -16,7 +16,7 @@ pub enum ReloadTier {
     Reassemble,
     /// Remount the root widget, disposing its state, in the same process.
     Restart,
-    /// Replace the whole process. The process supervisor does this; a realm
+    /// Replace the whole process. The process supervisor does this; a UI runtime
     /// has nothing to apply.
     ProcessRestart,
 }

@@ -1,7 +1,7 @@
 //! [`MemoryStorage`]: a [`Storage`] in memory that a test can hold, fail and
 //! read back.
 //!
-//! Requests complete when the realm polls them, on the owner thread, inside
+//! Requests complete when the UI runtime polls them, on the owner thread, inside
 //! a pumped frame, so a test decides with [`MemoryStorage::hold_writes`] and
 //! [`MemoryStorage::hold_commits`] when a write lands instead of racing an
 //! IO thread. The double follows [`Storage::publish`]'s acceptance contract

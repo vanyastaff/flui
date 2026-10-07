@@ -7,7 +7,7 @@
 *A `Result<bool>` cannot say "this frame owed the screen something and did not
 get it there". Collapsing that into "nothing was owed" parked the native macOS
 back end on a window that had never drawn. `PresentDisposition` splits the two
-answers, the realm retains the withheld one, and the retention carries its own
+answers, the UI runtime retains the withheld one, and the retention carries its own
 cap because the platform's occlusion gate does not bound it.*
 
 ## Context
@@ -141,7 +141,7 @@ is justified by the mechanism and carries its own tests.
 
 **Residual.** The consumer half is covered; the producer is not. What is
 executed end to end is the consumer half — a backend reporting `NotShown` is
-classified at the lane and retained and bounded by the realm — plus the
+classified at the lane and retained and bounded by the UI runtime — plus the
 engine's own classification table. The wgpu arm that supplies
 `acquired_surface = false` from a real surface-acquisition failure is
 read-reviewed, not executed, for want of a constructible occluded drawable.

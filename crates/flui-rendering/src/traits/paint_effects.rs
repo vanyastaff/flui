@@ -249,7 +249,7 @@ pub enum PaintClip {
 
 /// Resolves a [`PaintClip::PathTarget`] through the active owner lane.
 ///
-/// On any resolution failure — no lane active (`InactiveRealm`), an
+/// On any resolution failure — no lane active (`InactiveRuntime`), an
 /// unregistered target — the clip degrades to the whole box: a rectangle
 /// path of `size` at the origin. That is the same degrade
 /// `RenderClip<Path>` performs for a token it cannot resolve, kept in one

@@ -85,8 +85,8 @@ run_app_with_config(root, config);
 ```
 
 The loop attaches the hook once, before the first window, and detaches it when
-it ends. Every realm polls it at its frame boundary, on the owner thread; a
-reload (or a worker's `request_rebuild`) is applied once to every realm, as a
+it ends. Every UI runtime polls it at its frame boundary, on the owner thread; a
+reload (or a worker's `request_rebuild`) is applied once to every UI runtime, as a
 reassemble that keeps `State`. A hook that panics is dropped and the app keeps
 running without reload. An idle window applies a reload when it next draws.
 The Android `--scene` host installs `flui::hot_reload::ScenePluginHook` the
@@ -231,7 +231,7 @@ WASM has no `dlopen`. `flui run --device browser:<browser>` serves the wasm32 bu
 
 ## iOS
 
-iOS runs the same host/worker path as desktop and Android (`run_app_ios_with_config` → `bootstrap_ios`): it loads the worker, starts the artifact watcher, and reassembles on change. This is usable in the **Simulator** (and a dev-signed build); a production App Store build has no mutable dylib to load, so `AppConfig`'s worker field is `None` and the capability is inert. Verified end-to-end on an iOS-Simulator: a worker edit re-stages the dylib and the realm reassembles with state preserved.
+iOS runs the same host/worker path as desktop and Android (`run_app_ios_with_config` → `bootstrap_ios`): it loads the worker, starts the artifact watcher, and reassembles on change. This is usable in the **Simulator** (and a dev-signed build); a production App Store build has no mutable dylib to load, so `AppConfig`'s worker field is `None` and the capability is inert. Verified end-to-end on an iOS-Simulator: a worker edit re-stages the dylib and the UI runtime reassembles with state preserved.
 
 One iOS-specific requirement is structural rather than a platform limit. A worker `cdylib` statically links its own `flui-painting` while never linking `flui-engine`. iOS exposes no system font to a fontdb scan, so a worker that shaped on host fonts alone would have no face. Every `FontCollection` holds the embedded `Roboto-Regular` with `bundled-fonts`, and the plugin's pipeline shapes on a bundled-only collection (ADR-0092 §10 step 3b), so every image linking the shaper renders text without the engine and without a host scan.
 

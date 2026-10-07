@@ -53,12 +53,12 @@ pub enum InteractionDispatchError {
     /// The capability was used away from its owner thread.
     #[error("interaction capability used from the wrong thread")]
     WrongThread,
-    /// No interaction realm is active on the owner thread.
-    #[error("no interaction realm is active")]
-    InactiveRealm,
-    /// Another realm is active, or the supplied token belongs to another realm.
-    #[error("interaction capability or token belongs to another realm")]
-    WrongRealm,
+    /// No interaction UI runtime is active on the owner thread.
+    #[error("no interaction ui_runtime is active")]
+    InactiveRuntime,
+    /// Another UI runtime is active, or the supplied token belongs to another UI runtime.
+    #[error("interaction capability or token belongs to another ui_runtime")]
+    WrongRuntime,
     /// The lane that minted the capability has been dropped.
     #[error("interaction owner is gone")]
     OwnerGone,
@@ -216,7 +216,7 @@ impl fmt::Debug for LocalPayloadTarget {
 
 /// Opaque key for an owner-local resolved route.
 ///
-/// It carries its minting lane identity, so realm recreation cannot make an old
+/// It carries its minting lane identity, so UI runtime recreation cannot make an old
 /// token address a route in the new owner.
 #[doc(hidden)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -732,7 +732,7 @@ impl fmt::Debug for RoutePanic {
 /// The lane cannot perform a hit test itself: [`HitTestResult`] is defined
 /// here, but the render tree that fills one lives two layers up
 /// (`flui_rendering::PipelineOwner`), and this crate must not depend upward to
-/// reach it. So the capability is *declared* here, where its realm identity and
+/// reach it. So the capability is *declared* here, where its UI runtime identity and
 /// thread affinity already live, and *installed* by whoever owns the tree —
 /// the same division `TextInputHandle` uses.
 pub trait HitTestProbe {
@@ -889,10 +889,10 @@ impl InteractionLane {
 /// `build`, layout, or paint, because a hit test mid-frame reads a tree that
 /// phase is still mutating.
 ///
-/// It pairs two things that belong to different scopes: realm identity, from
-/// the realm-wide dispatch handle, and the tree, from the **presentation** that
-/// minted this handle. A realm may host several presentations, each with its
-/// own `PipelineOwner`, so a probe held once per realm would answer every
+/// It pairs two things that belong to different scopes: UI runtime identity, from
+/// the UI runtime-wide dispatch handle, and the tree, from the **presentation** that
+/// minted this handle. A UI runtime may host several presentations, each with its
+/// own `PipelineOwner`, so a probe held once per UI runtime would answer every
 /// presentation with the first one's tree.
 #[derive(Clone)]
 pub struct HitTestHandle {
@@ -901,7 +901,7 @@ pub struct HitTestHandle {
 }
 
 impl HitTestHandle {
-    /// Pair a realm ticket with the probe for one presentation's tree.
+    /// Pair a UI runtime ticket with the probe for one presentation's tree.
     #[must_use]
     pub fn new(dispatch: InteractionDispatchHandle, probe: Rc<dyn HitTestProbe>) -> Self {
         Self { dispatch, probe }
@@ -921,7 +921,7 @@ impl HitTestHandle {
     ///
     /// # Errors
     ///
-    /// The realm checks [`InteractionDispatchHandle::check_realm`] makes, plus
+    /// The UI runtime checks [`InteractionDispatchHandle::check_ui_runtime`] makes, plus
     /// [`TreeBusy`](InteractionDispatchError::TreeBusy) when a frame phase
     /// holds the render tree and
     /// [`OwnerGone`](InteractionDispatchError::OwnerGone) when the
@@ -930,7 +930,7 @@ impl HitTestHandle {
         &self,
         position: Offset<f64>,
     ) -> Result<HitTestSnapshot, InteractionDispatchError> {
-        self.dispatch.check_realm()?;
+        self.dispatch.check_ui_runtime()?;
 
         let mut result = HitTestResult::new();
         self.probe.probe(position, &mut result)?;
@@ -1274,7 +1274,7 @@ impl InteractionDispatchHandle {
         self.withdraw_owner_inner(lane.as_deref(), mode)
     }
 
-    /// Withdraw through the physical lane during realm destruction.
+    /// Withdraw through the physical lane during UI runtime destruction.
     pub(crate) fn withdraw_owner_in(
         &self,
         lane: &InteractionLane,
@@ -1282,7 +1282,7 @@ impl InteractionDispatchHandle {
     ) -> Option<DispatchCustody> {
         assert!(
             self.ticket == lane.inner.ticket,
-            "BUG: terminal dispatch owner belongs to another realm"
+            "BUG: terminal dispatch owner belongs to another ui_runtime"
         );
         self.withdraw_owner_inner(Some(&lane.inner), mode)
     }
@@ -1358,25 +1358,25 @@ impl InteractionDispatchHandle {
 
         let active = ACTIVE_LANES.with(|active| active.borrow().last().copied());
         match active {
-            None => Err(InteractionDispatchError::InactiveRealm),
-            Some(ticket) if ticket != self.ticket => Err(InteractionDispatchError::WrongRealm),
+            None => Err(InteractionDispatchError::InactiveRuntime),
+            Some(ticket) if ticket != self.ticket => Err(InteractionDispatchError::WrongRuntime),
             Some(_) => Ok(lane),
         }
     }
 
-    /// Confirm this handle may act on the currently active realm.
+    /// Confirm this handle may act on the currently active ui_runtime.
     ///
-    /// The whole of the realm contract in one call — right thread, a realm
-    /// active, that realm is this one, and its lane is still alive — for
+    /// The whole of the UI runtime contract in one call — right thread, a UI runtime
+    /// active, that UI runtime is this one, and its lane is still alive — for
     /// capabilities minted from this handle that do their own work.
     ///
     /// # Errors
     ///
     /// [`WrongThread`](InteractionDispatchError::WrongThread),
-    /// [`InactiveRealm`](InteractionDispatchError::InactiveRealm),
-    /// [`WrongRealm`](InteractionDispatchError::WrongRealm), or
+    /// [`InactiveRuntime`](InteractionDispatchError::InactiveRuntime),
+    /// [`WrongRuntime`](InteractionDispatchError::WrongRuntime), or
     /// [`OwnerGone`](InteractionDispatchError::OwnerGone).
-    pub fn check_realm(&self) -> Result<(), InteractionDispatchError> {
+    pub fn check_ui_runtime(&self) -> Result<(), InteractionDispatchError> {
         self.active_lane().map(|_lane| ())
     }
 
@@ -1384,13 +1384,13 @@ impl InteractionDispatchHandle {
         if lane_id == self.ticket.lane_id {
             Ok(())
         } else {
-            Err(InteractionDispatchError::WrongRealm)
+            Err(InteractionDispatchError::WrongRuntime)
         }
     }
 
-    /// Admit a mutation of `target`: it belongs to this realm and, through a
+    /// Admit a mutation of `target`: it belongs to this UI runtime and, through a
     /// presentation-scoped handle, to the owner that registered it. Another
-    /// presentation sharing the realm cannot replace, remove or detach it.
+    /// presentation sharing the UI runtime cannot replace, remove or detach it.
     fn validate_target(
         &self,
         lane: &LocalLaneInner,
@@ -2336,7 +2336,7 @@ impl fmt::Debug for InteractionDispatchHandle {
 ///
 /// # Errors
 ///
-/// Returns [`InteractionDispatchError::InactiveRealm`] when no lane scope is
+/// Returns [`InteractionDispatchError::InactiveRuntime`] when no lane scope is
 /// active on the current thread.
 pub(crate) fn active_dispatch_handle() -> Result<InteractionDispatchHandle, InteractionDispatchError>
 {
@@ -2346,7 +2346,7 @@ pub(crate) fn active_dispatch_handle() -> Result<InteractionDispatchHandle, Inte
             ticket,
             owner: None,
         })
-        .ok_or(InteractionDispatchError::InactiveRealm)
+        .ok_or(InteractionDispatchError::InactiveRuntime)
 }
 
 /// Resolve a path clipper target through the currently active owner lane.
@@ -2382,8 +2382,8 @@ pub fn resolve_shader_mask_target(
 ///
 /// # Errors
 ///
-/// [`InactiveRealm`](InteractionDispatchError::InactiveRealm) outside any lane
-/// scope, [`WrongRealm`](InteractionDispatchError::WrongRealm) for a ticket another
+/// [`InactiveRuntime`](InteractionDispatchError::InactiveRuntime) outside any lane
+/// scope, [`WrongRuntime`](InteractionDispatchError::WrongRuntime) for a ticket another
 /// lane minted (a dropped lane's included), and
 /// [`TargetGone`](InteractionDispatchError::TargetGone) once it was
 /// unregistered.
@@ -2490,7 +2490,7 @@ mod tests {
         });
     }
 
-    // Owner-local payload tickets: identity, replacement, removal, realm
+    // Owner-local payload tickets: identity, replacement, removal, ui_runtime
     // checks and lane-drop release, each alone.
     #[test]
     fn local_payload_matrix() {
@@ -2508,12 +2508,12 @@ mod tests {
                 an_unregistered_payload_is_target_gone,
             ),
             (
-                "resolving_outside_any_lane_is_inactive_realm",
-                resolving_outside_any_lane_is_inactive_realm,
+                "resolving_outside_any_lane_is_inactive_ui_runtime",
+                resolving_outside_any_lane_is_inactive_ui_runtime,
             ),
             (
-                "another_lanes_ticket_is_wrong_realm",
-                another_lanes_ticket_is_wrong_realm,
+                "another_lanes_ticket_is_wrong_ui_runtime",
+                another_lanes_ticket_is_wrong_ui_runtime,
             ),
             (
                 "dropping_the_lane_releases_its_payloads",
@@ -2575,7 +2575,7 @@ mod tests {
         });
     }
 
-    fn resolving_outside_any_lane_is_inactive_realm() {
+    fn resolving_outside_any_lane_is_inactive_ui_runtime() {
         let lane = InteractionLane::try_new().expect("lane");
         let handle = lane.dispatch_handle();
         let target = lane.enter(|| {
@@ -2585,11 +2585,11 @@ mod tests {
         });
         assert_eq!(
             resolve_local_payload(target).err(),
-            Some(InteractionDispatchError::InactiveRealm)
+            Some(InteractionDispatchError::InactiveRuntime)
         );
     }
 
-    fn another_lanes_ticket_is_wrong_realm() {
+    fn another_lanes_ticket_is_wrong_ui_runtime() {
         let first = InteractionLane::try_new().expect("first lane");
         let second = InteractionLane::try_new().expect("second lane");
         let first_handle = first.dispatch_handle();
@@ -2601,7 +2601,7 @@ mod tests {
         second.enter(|| {
             assert_eq!(
                 resolve_local_payload(target).err(),
-                Some(InteractionDispatchError::WrongRealm)
+                Some(InteractionDispatchError::WrongRuntime)
             );
         });
     }

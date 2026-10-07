@@ -2,7 +2,7 @@
 //!
 //! A [`Document`] is application data with a [`StorageName`], a format
 //! version and its own byte encoding. [`Persisted`] keeps one document for a
-//! widget: it reads it through the realm's [`Storage`] (acquired with
+//! widget: it reads it through the UI runtime's [`Storage`] (acquired with
 //! [`LifecycleContext::storage`](crate::LifecycleContext::storage)), writes
 //! every value [`set`](Persisted::set) on it, and reports where that stands
 //! as a [`SaveStatus`].
@@ -189,7 +189,7 @@ pub enum SaveStatus {
     Failed(PersistError),
     /// The stored file is never written, for the reason given.
     ReadOnly(ReadOnlyReason),
-    /// The realm has no storage (a platform without files, or none
+    /// The UI runtime has no storage (a platform without files, or none
     /// configured): the document lives in memory only.
     Unavailable,
 }

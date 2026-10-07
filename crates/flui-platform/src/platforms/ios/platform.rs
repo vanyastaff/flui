@@ -855,7 +855,7 @@ impl IOSPlatform {
                 if retiring
                     || (window.resource_generation() != resource_generation && !window.is_visible())
                 {
-                    // Keep the acknowledged realm, but do not publish a native
+                    // Keep the acknowledged ui_runtime, but do not publish a native
                     // attachment already superseded by a queued detach intent.
                     installation.origin = None;
                     return;

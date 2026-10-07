@@ -641,7 +641,7 @@ impl HeadlessExitReevaluation {
         };
 
         // Consult OUTSIDE the state lock: the hook re-enters the
-        // embedder's runtime (dropping removed realm state whose
+        // embedder's runtime (dropping removed ui_runtime state whose
         // destructors may call back into this platform).
         let should_quit = hook.as_ref().is_some_and(|hook| hook());
         // Restore only if nothing fresher was installed meanwhile — the
@@ -896,7 +896,7 @@ impl MockWindow {
     /// take/invoke/restore-if-none discipline `WinitPlatform`'s own
     /// window-event-handler lease uses, and for the identical reason: the
     /// hook's body (`flui-app`'s `AppRuntime::should_exit`) drops removed
-    /// realm state, whose destructors may call back into this platform (a
+    /// UI runtime state, whose destructors may call back into this platform (a
     /// dispose hook opening another window, say). Calling either callback
     /// while still holding `platform_state`'s lock would deadlock the
     /// instant such a callback re-entered any lock-guarded method (e.g.
@@ -906,7 +906,7 @@ impl MockWindow {
     /// installed meanwhile.
     ///
     /// Never invoked under the state lock. The handler re-enters the
-    /// embedder's runtime — in `flui-app` it drops the removed realm's state,
+    /// embedder's runtime — in `flui-app` it drops the removed UI runtime's state,
     /// whose destructors can call back into this platform (a dispose hook
     /// opening a window) — so calling it while holding `platform_state` would
     /// deadlock the moment it did. This is the discipline
@@ -1075,7 +1075,7 @@ impl MockWindow {
     /// Simulate a monitor DPI change for testing: the scale factor moves
     /// with NO size change, and — matching the winit backend — the new
     /// scale is delivered through the resize path with the current logical
-    /// size, because that path is the only one the realm learns its
+    /// size, because that path is the only one the UI runtime learns its
     /// device-pixel ratio from.
     pub fn simulate_scale_factor_change(&self, scale_factor: f64) {
         let size = {
@@ -1164,7 +1164,7 @@ impl MockWindow {
 /// while unwinding.
 ///
 /// The handler cannot be invoked under the state lock: on the close path it
-/// re-enters the embedder's runtime, which drops realm state whose destructors
+/// re-enters the embedder's runtime, which drops UI runtime state whose destructors
 /// call back into this platform (ADR-0039). Taking it out is what makes that
 /// safe; restoring it in `Drop` is what keeps a panicking handler from
 /// silently disabling every later event.
@@ -1577,7 +1577,7 @@ impl PlatformTextInput for FakeTextInput {
 ///
 /// Every `perform` call is appended to an in-memory history so a test can
 /// assert exactly which feedback kinds the haptics bridge
-/// (`flui-app`'s `UiRealm::perform_haptic_feedback`, forwarded through
+/// (`flui-app`'s `UiRuntime::perform_haptic_feedback`, forwarded through
 /// `PresentationState`) told the platform to perform, in delivery order,
 /// rather than only that the call didn't panic.
 #[derive(Default)]

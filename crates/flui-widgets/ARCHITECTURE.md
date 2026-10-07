@@ -100,7 +100,7 @@ handlers take `EventCx` too. Their render data must stay `Send + Sync`, so each
 widget registers its owner-local state (the drag target's slot, the node's
 action table, each with its `WriterSource`) in the interaction lane and stores
 only the lane's `LocalPayloadTarget` ticket; the drag session and the semantics
-action handler resolve it inside the realm (ADR-0086 §3, amended 2026-09-30;
+action handler resolve it inside the UI runtime (ADR-0086 §3, amended 2026-09-30;
 mapping decisions 1 and 17). The unmounted `LocalHistoryEntry::on_remove`
 navigation primitive is not migrated: it needs an explicit navigation
 write-context contract rather than an invented ambient writer.
@@ -1284,7 +1284,7 @@ never reach the configuration.
 that rides in the annotation render object, which `RenderView::RenderObject`
 pins `Send + Sync + 'static`. The handler is *not* invoked across a thread —
 resolution is owner-local (`PipelineOwner::resolve_semantics_action`) and the
-realm drains it at a frame boundary, inside its entry. So the widget keeps its
+UI runtime drains it at a frame boundary, inside its entry. So the widget keeps its
 closures and its `WriterSource` in the interaction lane as one table per node,
 stores only the lane's ticket on the render object (`SemanticsActionRoute`),
 and advertises every action through one `Send + Sync` handler that holds the
@@ -1299,10 +1299,10 @@ put it on something the widget owns — reached through ADR-0086's lane payload.
   (`an_action_handler_writes_a_signal_and_rebuilds_its_reader`); a refused
   write is reported, not panicked
   (`a_refused_write_in_an_action_handler_is_reported_not_panicked`).
-- **An action invoked outside its realm is dropped with a warning.** A caller
-  that holds a `SemanticsActionInvocation` and invokes it with no realm entered
+- **An action invoked outside its UI runtime is dropped with a warning.** A caller
+  that holds a `SemanticsActionInvocation` and invokes it with no UI runtime entered
   has no owner to run the closure in
-  (`an_action_invoked_outside_its_realm_is_dropped_with_a_warning`). A node
+  (`an_action_invoked_outside_its_ui_runtime_is_dropped_with_a_warning`). A node
   mounted in a detached render-object context advertises none of these
   actions, so no platform sees a control nothing can run
   (`a_detached_mount_advertises_no_actions`). Unmount releases the node's
@@ -1890,7 +1890,7 @@ The `native_actions` rows in `tests/editable_text.rs`, registered in
 `text_editing`, exercise queued Focus and SetValue through the headless host,
 current controller replacement, Unicode and empty edits, disabled and retired
 targets, deferred grant ordering and same-parent attachment takeover before and
-during delivery. These are producer and realm-routing contracts; native UIA
+during delivery. These are producer and UI runtime-routing contracts; native UIA
 TextPattern, selection, password handling and screen-reader execution require
 separate verification.
 
@@ -1955,7 +1955,7 @@ or a swapped controller wins and the session is dropped. A panicking
 `on_changed` is parked in the presentation's gate, after the observer heard of
 the session, and resumed by the owner's next dispatch or anchor (ADR-0142 items 1–3). A lock asked for inside the frame
 transaction (the whole frame drive, post-frame callbacks included, in the
-harness's `tick` as in `flui-app`'s `UiRealm::drive_frame`) runs after the
+harness's `tick` as in `flui-app`'s `UiRuntime::drive_frame`) runs after the
 frame; a key press first runs those queued grants, so it lands after an IME
 commit. **Tests:** `tests/text_store_kit.rs`
 (`editable_text_conforms_to_kit_v1`,

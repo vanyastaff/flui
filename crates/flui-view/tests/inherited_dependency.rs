@@ -23,7 +23,7 @@
 // (docs/PANIC-POLICY.md); style items here are ship-wave debt.
 // ADR-0027: ElementBuildContext's current test/prod seam still takes
 // Arc<RwLock<ElementTree/BuildOwner>>. The owner graph is !Send; do not restore
-// Send + Sync to satisfy clippy. Future UiRealm/Rc migration should remove this.
+// Send + Sync to satisfy clippy. Future UiRuntime/Rc migration should remove this.
 #![expect(clippy::arc_with_non_send_sync)]
 
 use std::sync::Arc;

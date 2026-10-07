@@ -287,7 +287,7 @@ exports below the PE limit with the default features.
 
 ### 21. dlopen hot-reload worker hazards
 
-Two unrun hypotheses: the old image is unloaded before the realm drops its views
+Two unrun hypotheses: the old image is unloaded before the UI runtime drops its views
 (`crates/flui-hot-reload/src/worker.rs:458`), and each worker reads its own `REQUEST_REBUILD`
 (`crates/flui-hot-reload/src/dispatch.rs:24`).
 

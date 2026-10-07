@@ -13,8 +13,8 @@
 //! other, if anything ever raced the two swaps. It would also advertise
 //! `Send + Sync` on a type this crate's own state model never shares across
 //! threads — every `TabController` is created, read, and mutated from the UI
-//! realm only (`DefaultTabController`'s state, or a caller's own
-//! single-realm code) — so `Send + Sync` would be a claim with no real
+//! UI runtime only (`DefaultTabController`'s state, or a caller's own
+//! single-UI runtime code) — so `Send + Sync` would be a claim with no real
 //! backing, "false Send advertising" that invites a caller to hand a
 //! `TabController` across a thread boundary where nothing here actually
 //! makes that safe.
@@ -23,11 +23,11 @@
 //! usize)>` behind an `Rc` — Copy, so `Cell::set` replaces the whole pair in
 //! one non-interruptible store; there is no window where a reader can
 //! observe one field updated and not the other, because on a single
-//! (`!Send`) realm nothing else can run between the `set` and the `notify`.
+//! (`!Send`) UI runtime nothing else can run between the `set` and the `notify`.
 //! `Rc<Cell<_>>` is `!Send`/`!Sync`, so `TabController` itself does not (and
 //! cannot) implement [`Listenable`](flui_sdk::foundation::Listenable) — that
 //! trait requires `Send + Sync` — which is exactly the point: the compiler
-//! now enforces single-realm use instead of a doc comment promising it.
+//! now enforces single-UI runtime use instead of a doc comment promising it.
 //!
 //! The listener registry follows the same logic: [`TabController::add_listener`]
 //! takes a plain `Rc<dyn Fn()>` (this crate's usual owner-local callback

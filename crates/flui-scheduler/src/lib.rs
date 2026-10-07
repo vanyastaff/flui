@@ -86,7 +86,7 @@
 //!
 //! let scheduler = UpdateScheduler::new();
 //! // The owner thread's frame state: owner-local post-frame callbacks and
-//! // async tasks. A realm owns one; every frame entry point takes it.
+//! // async tasks. A UI runtime owns one; every frame entry point takes it.
 //! let owner = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
 //!
 //! // Schedule a one-time frame callback (animation tick)

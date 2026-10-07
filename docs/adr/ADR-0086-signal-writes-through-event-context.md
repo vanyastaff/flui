@@ -24,7 +24,7 @@
 - **Amends (on acceptance):** [ADR-0074](ADR-0074-realm-scoped-signals.md) — §5.1 (the signatures of `set`,
   `update` and `set_if_changed`), §5.2 (the run-time guard stays authoritative; `Writer` narrows
   it and does not replace it), §5.8 (`UiCommand::SignalWrite` opens its write through the
-  realm's `WriterSource`; pending, see Status); [ADR-0078](ADR-0078-rules-live-in-types-and-lints.md) §1 (one new
+  UI runtime's `WriterSource`; pending, see Status); [ADR-0078](ADR-0078-rules-live-in-types-and-lints.md) §1 (one new
   `LifecycleContext` capability, `writer_source`)
 - **Amends:** [ADR-0023](ADR-0023-actions-shortcuts-seam.md) §2 and §3 (`CallbackShortcuts`
   callbacks and `Action::invoke` receive the key event's `EventCx`; `Actions::maybe_invoke` is
@@ -34,7 +34,7 @@
   be `!Send`), [ADR-0075](ADR-0075-derived-state-and-effects.md) (`WrittenDuringCompute`),
   [ADR-0076](ADR-0076-public-overlay-mutation-api.md) (the drag session is a gesture object and
   is not changed here), [ADR-0085](ADR-0085-reactive-core-placement-and-phase-subscribers.md)
-  (graph placement, realm routing, `ReadScope`)
+  (graph placement, UI runtime routing, `ReadScope`)
 - **Refs:** owner decision 7 in [`design/decisions.md`](../../design/decisions.md); the panel
   record in
   [`report-decisions.ru.md` §7](../research/2026-09-25-architecture-review/report-decisions.ru.md)
@@ -54,9 +54,9 @@ This is the third shape of signals in FLUI, and each step narrowed where a write
 removed `flui-reactivity` crate (added in `a57b41408`, deleted in `38620127f`, #486) had a
 context-free `set(&self, value)` on a process-global `SIGNAL_RUNTIME` backed by a `DashMap`, with
 everything `Send + Sync` and React-style hooks; it was deleted with no consumers, and its commit
-message names the cross-realm bleed a process-global runtime would cause. ADR-0074 replaced it
-with realm-scoped `Copy` handles and a run-time guard. Typed writes are the next step on the same
-line: the realm is already explicit for reads, and this record makes it explicit for writes.
+message names the cross-UI runtime bleed a process-global runtime would cause. ADR-0074 replaced it
+with UI runtime-scoped `Copy` handles and a run-time guard. Typed writes are the next step on the same
+line: the UI runtime is already explicit for reads, and this record makes it explicit for writes.
 
 ### Writes are guarded only at run time
 
@@ -136,8 +136,8 @@ Every framework-dispatched event callback in the table below receives `&mut Even
 - initially exactly a `Writer`. Anything else (spawning, focus, commands) is added only when a
   named setter needs it, by amending this record. It carries no tree position.
 
-*Amended 2026-09-26:* the dispatching realm's id, planned here, is deferred by that same rule:
-`flui-view` has no realm id to carry, and no setter needs one yet.
+*Amended 2026-09-26:* the dispatching UI runtime's id, planned here, is deferred by that same rule:
+`flui-view` has no UI runtime id to carry, and no setter needs one yet.
 
 ### 2. `Writer` is the write parameter
 
@@ -161,13 +161,13 @@ it lets the unconverted `&Reactive` callers compile unchanged during the pilot.
 ### 3. `WriterSource` is the one way to open an `EventCx`
 
 `LifecycleContext::writer_source()` returns a `WriterSource`: owned, `'static`, `!Send`, bound to
-the realm of the element that acquired it. `source.write(|cx| ..)` opens an `EventCx` for the
+the UI runtime of the element that acquired it. `source.write(|cx| ..)` opens an `EventCx` for the
 duration of the closure. It is the single mechanism used by
 
 - catalog widgets, to wrap recognizer callbacks (§4);
 - third-party widgets that expose their own `on_changed`-style callbacks;
 - the framework's own non-dispatch write paths: task continuations and `UiCommand::SignalWrite`,
-  which opens the write on the realm that owns the slot (routing per ADR-0085 §1).
+  which opens the write on the UI runtime that owns the slot (routing per ADR-0085 §1).
 
 There is no second public "write handle" for foreign `Fn()` callbacks and no lint fencing the
 catalog away from `WriterSource`. A handle for a same-thread `!Send` consumer that fits none of
@@ -175,11 +175,11 @@ the above is additive and waits for that consumer. Calling `write` while an elem
 is still refused by the guard.
 
 *Amended 2026-09-26:* a `WriterSource` is bound to the reactive graph of one `BuildOwner` — one
-presentation, not the whole realm. A signal minted by another presentation's graph is refused
-with `ForeignGraph` (logged, not applied), as a `&Reactive` write already was. A realm-wide
-source waits for the realm core in `flui-runtime`.
+presentation, not the whole UI runtime. A signal minted by another presentation's graph is refused
+with `ForeignGraph` (logged, not applied), as a `&Reactive` write already was. A UI runtime-wide
+source waits for the UI runtime core in `flui-runtime`.
 
-`WriterSource` is a core realm capability, not a platform capability, so it is a method on
+`WriterSource` is a core UI runtime capability, not a platform capability, so it is a method on
 `LifecycleContext` as ADR-0078 §1 prescribes; the open capability registry of
 [ADR-0084](ADR-0084-open-capability-seam-and-plugins.md) does not apply to it.
 
@@ -195,14 +195,14 @@ or widen write authority.
 
 *Amended 2026-09-30:* state that must stay owner-local but reaches its dispatcher through
 `Send + Sync` render data — a drag target's slot in hit-test metadata, a semantics node's
-action table behind `SemanticsConfiguration` — is registered in the realm's interaction lane
+action table behind `SemanticsConfiguration` — is registered in the UI runtime's interaction lane
 as an untyped payload (`RenderObjectContext::register_local_payload`). The render data carries
 only the lane's `Copy`, `Send + Sync` `LocalPayloadTarget` ticket, and the dispatcher resolves
-it on the owner thread with `flui_interaction::resolve_local_payload`, inside the realm's
+it on the owner thread with `flui_interaction::resolve_local_payload`, inside the UI runtime's
 entry. The payload holds the `WriterSource` its callbacks open their `EventCx` from; the ticket
 holds neither a closure nor a graph. A semantics action is advertised through one
 `Send + Sync` handler per node that holds the ticket, kept across rebuilds so the
-configuration compares equal; invoked outside any realm, it is dropped with a warning.
+configuration compares equal; invoked outside any UI runtime, it is dropped with a warning.
 `DragTarget` and `Semantics` use it (the §6 rows); it adds no `static`.
 
 ### 4. The gesture arena does not change
@@ -244,7 +244,7 @@ classification, with the command above as its census:
 | widgets `navigator/pop_scope.rs` | `on_pop_invoked` | event | no | not yet audited |
 | widgets `scroll/page_view.rs` | `on_page_changed` | event | no (was yes) | the controller listener records the page; delivered on the local post-frame lane |
 | widgets `scroll/refresh_indicator.rs` | `on_refresh` | event | no | not yet audited |
-| widgets `semantics/mod.rs` | 14: `on_tap`, `on_long_press`, `on_scroll_{left,right,up,down}`, `on_increase`, `on_decrease`, `on_show_on_screen`, `on_focus`, `on_blur`, `on_set_text`, `on_scroll_to_offset`, `on_action` | event | no (was yes) | the realm's semantics-action drain, synchronously, through the node's `WriterSource` |
+| widgets `semantics/mod.rs` | 14: `on_tap`, `on_long_press`, `on_scroll_{left,right,up,down}`, `on_increase`, `on_decrease`, `on_show_on_screen`, `on_focus`, `on_blur`, `on_set_text`, `on_scroll_to_offset`, `on_action` | event | no (was yes) | the UI runtime's semantics-action drain, synchronously, through the node's `WriterSource` |
 | widgets `text/editable_text.rs`, `text/text_field.rs` | `on_submitted` ×2 | event | no | not yet audited |
 | widgets `text/editable_text.rs`, `text/text_field.rs` | `on_changed` ×2 | event | no | the field's key handler, IME commit and clipboard actions, after a user edit |
 | widgets `navigator/local_history.rs` | `on_remove` | event | no | not yet audited |
@@ -297,7 +297,7 @@ the signatures and production dispatch sites decide the event/query classificati
 | PageView | The `Send + Sync` controller listener only records the page and schedules a rebuild; `build` hands each recorded page to the local post-frame lane, one entry per page, and delivery reads the current callback. No lane: dropped with a warning, never run inside `build`. |
 | Actions and CallbackShortcuts | `Focus::on_key_event` hands its `cx` to `CallbackShortcuts` callbacks and to `Action::invoke`. `Actions::maybe_invoke` is removed: its only possible caller was `build`. InkWell's keyboard activation drops its writer bridge. |
 | DragTarget | The slot (entered drags, callbacks, rebuild handle, writer) is an owner-local `Rc` registered in the interaction lane; hit-test metadata carries only its `LocalPayloadTarget`, which the drag session resolves inside pointer dispatch. `on_accept` runs inside `finish_drag`, before the draggable's `on_drag_end`. `on_will_accept` stays a query and loses `Send + Sync`. |
-| Semantics | Each node's action table and writer are one lane payload; the configuration advertises every action through one `Send + Sync` handler holding the ticket, reused across rebuilds so the configuration compares equal. The handler runs in the realm's semantics-action drain; invoked outside a realm, the action is dropped with a warning. A detached mount advertises none. `GestureDetector` keeps its post-frame bridge onto `on_tap`/`on_long_press`. |
+| Semantics | Each node's action table and writer are one lane payload; the configuration advertises every action through one `Send + Sync` handler holding the ticket, reused across rebuilds so the configuration compares equal. The handler runs in the UI runtime's semantics-action drain; invoked outside a UI runtime, the action is dropped with a warning. A detached mount advertises none. `GestureDetector` keeps its post-frame bridge onto `on_tap`/`on_long_press`. |
 
 Callback ownership moved before any `Send` bound was removed: both render objects stay
 `Send + Sync` and carry only tickets. What remains outside this record: `LocalHistoryEntry` is
@@ -348,7 +348,7 @@ compile-time claim of this record is limited to writes into `Signal<T>`.
 
 The changes land one at a time, each with `cargo xtask check-changed` green:
 
-1. ADR-0085 §1 (realm routing of `UiCommand::SignalWrite`), with its failing multi-presentation
+1. ADR-0085 §1 (UI runtime routing of `UiCommand::SignalWrite`), with its failing multi-presentation
    test. It does not depend on anything else here.
 2. `EventCx`, `Writer`, `WriterSource`, and a `callback(|cx| ..)` helper that fixes the
    higher-ranked signature, named in the widget-author documentation.
@@ -370,7 +370,7 @@ The changes land one at a time, each with `cargo xtask check-changed` green:
 **Rollback to guard-only.** If the pilot needs explicit closure type
 annotations at call sites that `callback(..)` does not cover, or the converted call sites are
 materially longer than the probe's, the design switches before 1.0 to the guard-only shape: the
-`Signal` handle resolves its realm itself, writes are allowed anywhere outside `build`, and the
+`Signal` handle resolves its UI runtime itself, writes are allowed anywhere outside `build`, and the
 run-time guard is the only enforcement. The pilot's diff and the decision are recorded by
 amending this record.
 
@@ -465,7 +465,7 @@ ready for the owner to accept.
 - **Ambient write scope (a thread-local "current writer").** Rejected: it needs the same wiring
   as `EventCx`, fails at run time (`NoScope`) instead of at compile time, and adds a thread-local
   against ADR-0097.
-- **Guard only; the handle finds its realm** (the rollback shape). Not chosen now: cheapest to
+- **Guard only; the handle finds its UI runtime** (the rollback shape). Not chosen now: cheapest to
   build, but after 1.0 it cannot be tightened without breaking every callback. It stays the
   recorded fallback.
 - **`EventCx` plus a separate `WriteHandle` for foreign callbacks, fenced out of the catalog by

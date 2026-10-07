@@ -721,11 +721,11 @@ ids! {
         /// generation check; there is no bare-index `get()`.
         pub type RenderId Render;
 
-        /// Realm ID - **generational** key identifying one `UiRealm`
+        /// Runtime ID - **generational** key identifying one `UiRuntime`
         /// incarnation.
         ///
-        /// Generational so a recreated realm never compares equal to its
-        /// predecessor: closing and reopening a realm's window mints a fresh
+        /// Generational so a recreated UI runtime never compares equal to its
+        /// predecessor: closing and reopening a UI runtime's window mints a fresh
         /// generation at the same (or a reused) slot, and any stale id held
         /// by a worker or cache fails the generation check instead of
         /// silently addressing the new incarnation (ABA).
@@ -736,7 +736,7 @@ ids! {
         /// (`flui-platform/src/window.rs`), which remains the
         /// platform-internal native handle key — the two are not
         /// interchangeable and neither converts implicitly to the other.
-        pub type RealmId Realm;
+        pub type UiRuntimeId Runtime;
 
         /// Data-transfer ID - **generational** key identifying one live
         /// transfer offer: a clipboard snapshot or an in-progress system
@@ -945,8 +945,8 @@ impl Marker for PresentationMarker {}
 ///
 /// A presentation owns the window/surface-facing state for one mounted UI:
 /// input routing, frame scheduling, and the render pipeline. Its identity is
-/// deliberately distinct from both [`RealmId`] and a platform-native window
-/// handle. A realm may own multiple presentations, and replacing a native
+/// deliberately distinct from both [`UiRuntimeId`] and a platform-native window
+/// handle. A UI runtime may own multiple presentations, and replacing a native
 /// window does not make those identity domains interchangeable.
 ///
 /// The low 32 bits store a zero-based owner slot and the high 32 bits store a
@@ -955,13 +955,13 @@ impl Marker for PresentationMarker {}
 /// later presentation incarnation by accident.
 ///
 /// `PresentationId` is a nominal newtype, not a type alias or a conversion
-/// layer around [`RealmId`]:
+/// layer around [`UiRuntimeId`]:
 ///
 /// ```compile_fail
-/// use flui_foundation::{PresentationId, RealmId};
+/// use flui_foundation::{PresentationId, UiRuntimeId};
 ///
-/// let realm = RealmId::new(1);
-/// let presentation: PresentationId = realm;
+/// let ui_runtime = UiRuntimeId::new(1);
+/// let presentation: PresentationId = ui_runtime;
 /// ```
 ///
 /// Like [`GenId`] and [`ElementId`], this type intentionally does not
@@ -1067,18 +1067,18 @@ impl TreeId for PresentationId {
 // PresentationAddress — the full routable identity of one presentation
 // =========================================================================
 
-/// The full routable identity of one presentation: which realm incarnation
-/// owns it, and which presentation incarnation within that realm.
+/// The full routable identity of one presentation: which UI runtime incarnation
+/// owns it, and which presentation incarnation within that UI runtime.
 ///
-/// `RealmId` and `PresentationId` are each independently generational, but
-/// neither alone is a safe cross-thread address: two different realm
+/// `UiRuntimeId` and `PresentationId` are each independently generational, but
+/// neither alone is a safe cross-thread address: two different UI runtime
 /// incarnations can mint an identical `PresentationId` (same slot, same
 /// generation) if their presentation counters happen to align, so a
 /// protocol that carries only `PresentationId` cannot distinguish "the
-/// right presentation in realm A" from "a same-numbered presentation in
-/// unrelated realm B." Every protocol that crosses a thread or owner
+/// right presentation in UI runtime A" from "a same-numbered presentation in
+/// unrelated UI runtime B." Every protocol that crosses a thread or owner
 /// boundary and needs to address one exact presentation — the raster
-/// mailbox, the platform-to-realm dispatch table, the single native-window
+/// mailbox, the platform-to-UI runtime dispatch table, the single native-window
 /// map — carries this full pair, never `PresentationId` alone.
 ///
 /// Promoted here (rule of three): `flui-app`, `flui-layer`, and
@@ -1087,9 +1087,9 @@ impl TreeId for PresentationId {
 /// of them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PresentationAddress {
-    /// Which `UiRealm` incarnation owns this presentation.
-    pub realm_id: RealmId,
-    /// Which presentation incarnation, within that realm, this address
+    /// Which `UiRuntime` incarnation owns this presentation.
+    pub ui_runtime_id: UiRuntimeId,
+    /// Which presentation incarnation, within that UI runtime, this address
     /// names.
     pub presentation_id: PresentationId,
 }

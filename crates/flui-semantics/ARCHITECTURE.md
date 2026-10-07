@@ -211,7 +211,7 @@ notifier hooks). Assembly runs in the existing post-paint semantics phase (`run_
 - `accesskit_translation.rs` maps the owner's tree to AccessKit updates with stable
   `AccessibilityNodeId`s; `flui-platform` hosts the AccessKit adapters per backend.
 - `platform.rs` holds `PlatformAccessibility`, the capability those adapters implement and the
-  realm holds per window (ADR-0082 §2). It names only AccessKit types, never a semantics type:
+  UI runtime holds per window (ADR-0082 §2). It names only AccessKit types, never a semantics type:
   what crosses it is already translated.
 
 **Incrementality.** The observable `SemanticsNode` tree is the contract; incrementality is
@@ -354,7 +354,7 @@ the adapter's copy does; that lag matters only for a tap-only expandable node (m
 decision 5, Limit).
 
 **Geometry and dialog roles.** The rectangles are
-surface-relative physical pixels, reported as `surface_rect` with no screen `rect`: the realm
+surface-relative physical pixels, reported as `surface_rect` with no screen `rect`: the UI runtime
 knows no window position, and a client that reads `rect` as screen pixels must find none rather
 than a misplaced one. `AlertDialog` and `Dialog` read as `dialog` (UIA's `Window` with `IsDialog`),
 and a `Keyboard` key or `TabPanel` as `pane`, as the desktop server would report them.

@@ -7,7 +7,7 @@
 //! per-window veto: the winit, Win32 and AppKit backends all consult it
 //! synchronously when the *user* asks a window to close, and a `false`
 //! answer stops the close before anything else in the arm runs — no
-//! `on_close`, no realm teardown, no exit-policy consultation. Until this
+//! `on_close`, no UI runtime teardown, no exit-policy consultation. Until this
 //! module existed every `flui-app` registration hard-coded `true`, so the
 //! mechanism shipped and no application could reach it.
 //!
@@ -88,7 +88,7 @@ use std::sync::{Arc, Weak};
 use std::thread::ThreadId;
 
 use flui_foundation::panic::payload_text;
-use flui_foundation::{PresentationAddress, RealmId};
+use flui_foundation::{PresentationAddress, UiRuntimeId};
 use flui_platform::traits::PlatformWindow;
 pub use flui_view::CloseReason;
 use parking_lot::Mutex;
@@ -110,7 +110,7 @@ pub struct CloseRequest {
 }
 
 impl CloseRequest {
-    /// Which realm incarnation and which presentation within it is being
+    /// Which UI runtime incarnation and which presentation within it is being
     /// asked to close.
     ///
     /// Store this if the answer is [`CloseResponse::KeepOpen`]: it is the
@@ -297,7 +297,7 @@ struct PresentationCloseEntry {
     /// callback must be invoked on the thread that registered it (see the
     /// contract at the top of `PlatformWindow`'s callback section), so a
     /// mismatch means a backend broke that contract — never something to
-    /// answer by reaching into realm state anyway.
+    /// answer by reaching into UI runtime state anyway.
     owner_thread: ThreadId,
 }
 
@@ -307,8 +307,8 @@ struct PresentationCloseEntry {
 /// than inline, so the `on_should_close` closure each window registers can
 /// hold its own clone and answer **without** re-entering the `APP_RUNTIME`
 /// thread-local at all. That matters: a close request can arrive while a
-/// realm is checked out for dispatch, and a router reached through the
-/// realm would then have to fail closed on a bookkeeping detail the
+/// UI runtime is checked out for dispatch, and a router reached through the
+/// UI runtime would then have to fail closed on a bookkeeping detail the
 /// application never asked about.
 ///
 /// Deliberately not a second window authority:
@@ -382,20 +382,20 @@ impl CloseRequestRouter {
         let _prev = std::mem::replace(&mut *self.entries.lock(), entries);
     }
 
-    /// Drop every entry belonging to `realm` — the realm-wide uninstall
+    /// Drop every entry belonging to `ui_runtime` — the UI runtime-wide uninstall
     /// counterpart of [`Self::forget`].
-    pub(crate) fn forget_realm(&self, realm: RealmId) {
+    pub(crate) fn forget_ui_runtime(&self, ui_runtime: UiRuntimeId) {
         let mut entries = std::mem::take(&mut *self.entries.lock());
-        entries.retain(|e| e.address.realm_id != realm);
+        entries.retain(|e| e.address.ui_runtime_id != ui_runtime);
         let _prev = std::mem::replace(&mut *self.entries.lock(), entries);
     }
 
     /// Drop every registration, for full loop-exit teardown.
     ///
-    /// Not reachable by realm-by-realm removal: an explicit platform quit,
+    /// Not reachable by UI runtime-by-UI runtime removal: an explicit platform quit,
     /// or a bootstrap that fails after a window is wired but before its
-    /// realm is installed, both leave this loop with registrations no
-    /// per-realm teardown ever names. Since a second `Platform::run` on the
+    /// UI runtime is installed, both leave this loop with registrations no
+    /// per-UI runtime teardown ever names. Since a second `Platform::run` on the
     /// same thread reuses this `AppRuntime`, those would otherwise be
     /// consulted by the NEXT loop's windows.
     #[cfg_attr(
@@ -537,14 +537,14 @@ impl CloseRequestRouter {
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use flui_foundation::{PresentationId, RealmId};
+    use flui_foundation::{PresentationId, UiRuntimeId};
 
     use super::*;
     use crate::app::window_test_support::TestWindow;
 
-    fn address(realm: usize, presentation: usize) -> PresentationAddress {
+    fn address(ui_runtime: usize, presentation: usize) -> PresentationAddress {
         PresentationAddress {
-            realm_id: RealmId::new(realm),
+            ui_runtime_id: UiRuntimeId::new(ui_runtime),
             presentation_id: PresentationId::new(presentation),
         }
     }
@@ -560,7 +560,7 @@ mod tests {
         let router = CloseRequestRouter::new();
         let keeps_open = address(1, 1);
         let closes = address(1, 2);
-        let other_realm = address(2, 1);
+        let other_ui_runtime = address(2, 1);
 
         let keeps_open_asked = Arc::new(AtomicUsize::new(0));
         let asked = Arc::clone(&keeps_open_asked);
@@ -592,10 +592,10 @@ mod tests {
             CloseResponse::KeepOpen
         );
 
-        // A same-numbered presentation in a different realm is a different
+        // A same-numbered presentation in a different ui_runtime is a different
         // window, not this one -- the reason the address is a pair.
         assert_eq!(
-            router.consult(other_realm, CloseReason::User),
+            router.consult(other_ui_runtime, CloseReason::User),
             CloseResponse::Close
         );
     }

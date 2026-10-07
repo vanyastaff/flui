@@ -35,8 +35,8 @@ use crate::layout::SizedBox;
 ///
 /// **Current limits:**
 /// - `maintainAnimation` controls descendants registered through an ambient
-///   `VsyncScope`, as a production `UiRealm` root provides (it auto-wraps the
-///   attached root view in one — see `flui_app`'s realm attach path). Without
+///   `VsyncScope`, as a production `UiRuntime` root provides (it auto-wraps the
+///   attached root view in one — see `flui_app`'s UI runtime attach path). Without
 ///   an ambient scope, FLUI's `TickerMode` intentionally passes its child
 ///   through so an undriven nested registry cannot swallow wall-clock
 ///   fallback animations.
@@ -102,7 +102,7 @@ impl Visibility {
     /// remount the child, and lose its state.
     ///
     /// Animation muting applies to descendants registered through an ambient
-    /// `VsyncScope`; a production `UiRealm` root provides that scope
+    /// `VsyncScope`; a production `UiRuntime` root provides that scope
     /// automatically (there is no `AppBinding` — that type was retired).
     #[must_use]
     pub fn maintain_animation(mut self, maintain_animation: bool) -> Self {

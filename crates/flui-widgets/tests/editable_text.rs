@@ -11,7 +11,7 @@ use flui_interaction::routing::FocusNode;
 use flui_objects::RenderEditable;
 use flui_widgets::{EditableText, TextEditingController};
 
-/// Platform requests travel through the real realm inbox and the mounted
+/// Platform requests travel through the real UI runtime inbox and the mounted
 /// EditableText producer; no callback or controller setter stands in for them.
 pub(crate) mod native_actions {
     use std::cell::{Cell, RefCell};
@@ -68,7 +68,7 @@ pub(crate) mod native_actions {
     }
 
     struct Fixture {
-        realm: HeadlessHost,
+        ui_runtime: HeadlessHost,
         probe: SignalProbe,
         controller: Rc<RefCell<TextEditingController>>,
         node: Rc<RefCell<Rc<FocusNode>>>,
@@ -116,12 +116,12 @@ pub(crate) mod native_actions {
                     child,
                 }
             });
-            let mut realm = HeadlessHost::new(HeadlessWindow::new(400, 100).with_text_input());
-            realm.attach(&probe.view()).expect("fresh realm");
-            realm.enable_semantics();
-            let _ = realm.pump(Duration::ZERO);
+            let mut ui_runtime = HeadlessHost::new(HeadlessWindow::new(400, 100).with_text_input());
+            ui_runtime.attach(&probe.view()).expect("fresh ui_runtime");
+            ui_runtime.enable_semantics();
+            let _ = ui_runtime.pump(Duration::ZERO);
             Self {
-                realm,
+                ui_runtime,
                 probe,
                 controller,
                 node,
@@ -134,7 +134,7 @@ pub(crate) mod native_actions {
         }
 
         fn pump(&mut self) {
-            let _ = self.realm.pump(Duration::ZERO);
+            let _ = self.ui_runtime.pump(Duration::ZERO);
         }
 
         fn rebuild(&mut self) {
@@ -164,7 +164,7 @@ pub(crate) mod native_actions {
         }
 
         fn request(&self, action: Action, id: NodeId, data: Option<ActionData>) {
-            self.realm
+            self.ui_runtime
                 .accessibility_action_listener()
                 .expect("platform listener")(ActionRequest {
                 action,
@@ -206,7 +206,7 @@ pub(crate) mod native_actions {
         assert!(fixture.node.borrow().has_primary_focus());
         assert_eq!(
             fixture
-                .realm
+                .ui_runtime
                 .window()
                 .ime_allowed_calls()
                 .and_then(|calls| calls.last().copied()),
@@ -218,7 +218,7 @@ pub(crate) mod native_actions {
         );
         // A real IME commit reaches the session attached by semantic focus.
         fixture
-            .realm
+            .ui_runtime
             .dispatch(flui_platform_api::PlatformInput::Ime(
                 flui_platform_api::ImeEvent::Commit("😀".into()),
             ));
@@ -381,7 +381,7 @@ pub(crate) mod native_actions {
         fixture.set_text("remounted");
         assert_eq!(controller.text(), "remounted");
         let listener = fixture
-            .realm
+            .ui_runtime
             .accessibility_action_listener()
             .expect("platform listener");
         drop(fixture);
@@ -725,7 +725,7 @@ pub(crate) fn focus_gain_attaches_an_ime_client_and_routes_preedit_to_the_contro
 // by `install_build_capabilities`) — it does not need `enter_owner_scope`
 // active to succeed, only the lane and its scheduler to still be alive.
 // These tests still wrap focusing/blurring in `harness.
-// enter_owner_scope(...)` for parity with production's `realm.enter`
+// enter_owner_scope(...)` for parity with production's `ui_runtime.enter`
 // shape, but that wrapping is no longer load-bearing for the loop
 // itself; a focus change dispatched outside it starts the loop exactly
 // the same way. A focus change with the harness's binding already
@@ -1677,7 +1677,7 @@ pub(crate) mod text_store {
 
     /// A failure-path matrix for an `on_changed` that panics after an input
     /// method's grant (ADR-0142 item 2): the grant stands, the
-    /// failure reaches the realm's report exactly once, the first of two
+    /// failure reaches the UI runtime's report exactly once, the first of two
     /// stays authoritative, the field keeps working, and the platform hears
     /// of an owner's edit before the next grant runs.
     pub(crate) fn a_panicking_on_changed_is_reported_once_and_the_field_keeps_working() {

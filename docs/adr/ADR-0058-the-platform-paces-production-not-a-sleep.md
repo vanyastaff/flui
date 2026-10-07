@@ -67,12 +67,12 @@ instead of sliding later every frame and beating against vsync.
 never clears an armed deadline still within one period of `now`. winit runs `about_to_wait` on
 the iteration a deadline expires, before the redraw its `ResumeTimeReached` poke queues has
 been dispatched. Clearing a just-passed deadline there made the hook answer `None`, the loop
-parked in `ControlFlow::Wait`, and — because a pending deferral suppresses the realm's own
+parked in `ControlFlow::Wait`, and — because a pending deferral suppresses the UI runtime's own
 redraw echo — nothing ever woke it: a real freeze. A deadline more than one full period late
 is abandoned instead of re-reported; that is the hidden-Wayland-surface case, bounded at about
 one wasted wake, and clearing it lifts the echo suppression.
 
-**4. The dirty predicate ignores the realm's own redraw echo while a deferral is pending, and
+**4. The dirty predicate ignores the UI runtime's own redraw echo while a deferral is pending, and
 admits the due deadline.** Every pump with a running ticker ends by re-requesting a frame,
 which sets `needs_redraw`; while deferring, that echo *is* the deferred wake, so it is not
 dirty. Inbox redraws, pending build/gesture work and an armed device-recovery attempt always

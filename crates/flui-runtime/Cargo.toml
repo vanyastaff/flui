@@ -7,7 +7,7 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
-description = "Frame runtime for FLUI: the UI realm, the per-presentation frame transaction it drives between the widget tree and a host, and the frame sink it submits through (internal)"
+description = "Frame runtime for FLUI: the UI UI runtime, the per-presentation frame transaction it drives between the widget tree and a host, and the frame sink it submits through (internal)"
 documentation = "https://docs.rs/flui-runtime"
 keywords = ["gui", "ui", "runtime", "flui"]
 categories = ["gui"]
@@ -25,7 +25,7 @@ workspace = true
 # `ScriptedSink` doubles, for this crate's own tests and for `flui-app`'s,
 # which enable it on their dev edge. Never on a normal edge.
 test-support = []
-# `reload::ReloadTier`, the development reload the realm applies. Names no
+# `reload::ReloadTier`, the development reload the UI runtime applies. Names no
 # hot-reload crate; `flui-app` always turns it on and translates an installed
 # `DevReloadHook`'s event into it (ADR-0094 §1).
 hot-reload = []
@@ -46,12 +46,12 @@ flui-protocol = { workspace = true }
 # presentation drives; no backend (ADR-0082).
 flui-platform-api = { workspace = true }
 # Window sizes and geometry; `FontCollection`/`TextContext`, the text service
-# each realm owns over the app's font collection (ADR-0092 §3).
+# each UI runtime owns over the app's font collection (ADR-0092 §3).
 flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
-# The realm core (ADR-0083 move 4): the widget tree a presentation hosts
+# The UI runtime core (ADR-0083 move 4): the widget tree a presentation hosts
 # (`WidgetsBinding`, `GlobalKeyScope`; `flui_view::__runtime` is the seam a
-# realm drives it through), its render pipeline, the realm-owned scheduler,
-# the vsync the root's animations tick on, and the root wrappers the realm
+# UI runtime drives it through), its render pipeline, the UI runtime-owned scheduler,
+# the vsync the root's animations tick on, and the root wrappers the UI runtime
 # installs above every root widget (`FocusRoot`, `GestureArenaScope`,
 # `VsyncScope`, `MediaQuery`).
 flui-view = { path = "../flui-view", version = "=0.2.0-dev" }
@@ -59,7 +59,7 @@ flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev" }
 flui-scheduler = { path = "../flui-scheduler", version = "=0.2.0-dev" }
 flui-animation = { path = "../flui-animation", version = "=0.2.0-dev" }
 flui-widgets = { path = "../flui-widgets", version = "=0.2.0-dev" }
-# The realm's bounded owner inbox.
+# The UI runtime's bounded owner inbox.
 crossbeam-channel = { workspace = true }
 parking_lot = { workspace = true }
 # `SpawnError`'s messages.
@@ -89,23 +89,23 @@ flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev", featu
 # sibling test cannot poison the callsites it captures.
 # Checkout-only test edge: versionless, so Cargo drops it from the published manifest.
 flui-testing = { path = "../flui-testing" }
-# The realm tests: the headless platform's windows and capability fakes
+# The UI runtime tests: the headless platform's windows and capability fakes
 # (`headless_platform`, `FakeTextInput`, `FakeHaptics`, `FakeAccessibility`),
 # a dev edge only, so the shipped crate still links no backend; the concrete
 # render objects some tests mount; AccessKit action requests driven the way
-# an adapter would; and `!Send` pins on the realm.
+# an adapter would; and `!Send` pins on the UI runtime.
 flui-platform = { path = "../flui-platform", version = "=0.2.0-dev" }
 flui-objects = { path = "../flui-objects", version = "=0.2.0-dev" }
 static_assertions = { workspace = true }
 # A semantics agent's read round-trips through JSON in its tests.
 flui-protocol = { workspace = true, features = ["serde"] }
 serde_json = { workspace = true }
-# The test-only hooks of the crates the realm drives: `push_pending_child_
+# The test-only hooks of the crates the UI runtime drives: `push_pending_child_
 # request_for_test`, `register_layout_builder_for_test`.
 flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev", features = ["testing"] }
 flui-view = { path = "../flui-view", version = "=0.2.0-dev", features = ["test-utils"] }
 # `testing::font_collection_holders`, which pins who holds the app's font
-# collection and when a realm lets go of it.
+# collection and when a UI runtime lets go of it.
 flui-painting = { path = "../flui-painting", version = "=0.2.0-dev", features = ["testing"] }
 
 # Executing wasm32 unit tests: the execution services' sequential backend is
@@ -121,7 +121,7 @@ wasm-bindgen-test = "=0.3.77"
 all-features = true
 
 # Tier K, order 4: the frame runtime of ADR-0083 §1 sits in the spine tier
-# above `flui-view` (1) and `flui-widgets` (3), because the realm it owns
+# above `flui-view` (1) and `flui-widgets` (3), because the UI runtime it owns
 # drives a widget tree, and below `flui-testing` (6), the headless host that
 # pumps it; `flui-app` (tier H) is its only other normal dependent. Internal: it is not an embedder API (ADR-0027 §9), except
 # the execution host-injection seam and the frame-failure report types that
@@ -137,9 +137,9 @@ order = 4
 # workspace crate reaches their pools. They are `pub` here only so the host can
 # construct them, so the hosts are the crates allowed a normal edge: `flui-app`,
 # and `flui-testing`, the host of the headless test loop, whose driver runs the
-# realm's frame (ADR-0083 §4). Dev edges are not restricted.
+# UI runtime's frame (ADR-0083 §4). Dev edges are not restricted.
 allowed-dependents = ["flui-app", "flui-testing"]
-# Process-unique identity only; realm services and registries remain owned.
+# Process-unique identity only; UI runtime services and registries remain owned.
 globals = [
-    { item = "realm_services::NEXT_INCARNATION", grant = "ADR-0097", class = "counter", reason = "Realm and presentation generations, advanced by try_update with permanent exhaustion" },
+    { item = "runtime_services::NEXT_INCARNATION", grant = "ADR-0097", class = "counter", reason = "Runtime and presentation generations, advanced by try_update with permanent exhaustion" },
 ]

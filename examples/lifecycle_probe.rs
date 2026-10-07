@@ -2,7 +2,7 @@
 //! `docs/BETA.md`'s lifecycle rows on macOS (`cargo xtask device macos-lifecycle`).
 //!
 //! Runs a Material tree through the ordinary `flui::app::Application` path
-//! — the same runner, renderer and realm a generated application gets — and
+//! — the same runner, renderer and UI runtime a generated application gets — and
 //! then drives the window through the transitions a user performs on it,
 //! from a driver thread, through AppKit on the main queue, with no operator
 //! input and no synthetic OS events:

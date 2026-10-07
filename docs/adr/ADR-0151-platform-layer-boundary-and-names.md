@@ -149,7 +149,7 @@ its own default. Fields are private; backends build values through a builder who
 validate (non-finite, negative or inverted values are an `InvalidPreference` error).
 
 - **One producer per host.** `Platform::preferences()` and one `on_preferences_changed`
-  subscription in the core host. `flui-app` seeds every realm with the current value at
+  subscription in the core host. `flui-app` seeds every UI runtime with the current value at
   construction, so it exists before the first window, and forwards each change as one typed
   host operation. Brightness stays a per-window `WindowAppearance` because platforms let a window
   override it.
@@ -157,7 +157,7 @@ validate (non-finite, negative or inverted values are an `InvalidPreference` err
   `GestureSettings` from it; animations build their motion policy from it; `MediaQuery` exposes
   what widgets read. This replaces the planned `GestureSettingsSource` capability and the
   per-window `SystemMotion` methods.
-- **Application policy over the OS value lives in the framework**, in the realm (for example
+- **Application policy over the OS value lives in the framework**, in the UI runtime (for example
   "follow the system / always reduce / never reduce" motion), never in the contract.
 - `AccessibilityFeatures` is deleted.
 

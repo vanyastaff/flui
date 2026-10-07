@@ -24,7 +24,7 @@
 //! One [`AnimationController`] (`with_detached_ticker`, `repeat(true)`) is
 //! registered with the ambient [`VsyncScope`] — the same free-running-probe
 //! pattern `examples/vertical_slice_demo/frame_histogram.rs` uses. Its
-//! listener runs once per real frame the mounted realm draws; it records the
+//! listener runs once per real frame the mounted UI runtime draws; it records the
 //! wall-clock delta since the previous tick, then does that phase's work
 //! (step the scroll offset, or insert one character) before checking whether
 //! the phase's budget (elapsed time for `scroll`, tick count for `type`) is
@@ -318,7 +318,7 @@ impl Probe {
     /// Runs the whole probe: `scroll_seconds` of scrolling, `type_chars`
     /// ticks of typing, then [`IDLE_SECONDS`] of enforced idleness, then
     /// requests application quit. Registered as the tick controller's
-    /// listener, so it runs once per real frame the mounted realm draws.
+    /// listener, so it runs once per real frame the mounted UI runtime draws.
     fn on_tick(&self) {
         let now = Instant::now();
         let mut state = self.tick_state.lock();

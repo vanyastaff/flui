@@ -108,7 +108,7 @@ pub struct AppConfig {
     /// runtime tail-latency/counter telemetry drawn over the app's own content.
     ///
     /// Scope, deliberately narrow: the overlay's three rows are shaped
-    /// through the realm's text context at scene assembly and the renderer
+    /// through the UI runtime's text context at scene assembly and the renderer
     /// only rasterizes them; every row is drawn whatever the option mask
     /// says, so `PerformanceOverlayOption` has no observable effect yet. The sampled
     /// interval is between *composited* frames — an idle frame produces no layer
@@ -117,7 +117,7 @@ pub struct AppConfig {
     /// whether input attribution was truncated by the bounded per-frame buffer.
     ///
     /// The bootstrap runner forwards this
-    /// to `UiRealm::set_performance_overlay`, which is what actually starts
+    /// to `UiRuntime::set_performance_overlay`, which is what actually starts
     /// the rolling frame-time window; the frame path then appends a
     /// `PerformanceOverlayLayer` as the root layer's last child. Off costs a
     /// cheap `None` check per frame; snapshot collection, percentile reduction,
@@ -140,7 +140,7 @@ pub struct AppConfig {
     ///
     /// `None` (the default): nothing reloads, and no reload tool is in the
     /// application's graph. `Some`: the desktop and iOS runners attach the
-    /// hook once per event loop and poll it at every realm's frame boundary;
+    /// hook once per event loop and poll it at every UI runtime's frame boundary;
     /// the Android runner lets its scene plugin own a frame. Every window
     /// opened with a clone of this configuration shares the one hook, so a
     /// secondary window reloads only when opened with the application's
@@ -154,7 +154,7 @@ pub struct AppConfig {
     /// the application's graph. `Some`: the desktop and iOS runners attach
     /// the hook once per event loop and hand it each window that mounts a
     /// root view once the window is installed; a window with no content, and
-    /// a presentation opened into another window's realm, are not handed
+    /// a presentation opened into another window's UI runtime, are not handed
     /// over. Every window opened with a clone of this configuration shares
     /// the one hook, so a secondary window is served only when opened with
     /// the application's configuration. The Android and web runners drive no
@@ -226,7 +226,7 @@ pub struct AppConfig {
     /// alive?) and a graceful-shutdown contract: at loop exit each service
     /// is cancelled cooperatively, given a bounded flush window, and
     /// joined with evidence. Started by the desktop and Android bootstraps
-    /// after the realm install resolves the loop's execution services; a
+    /// after the UI runtime install resolves the loop's execution services; a
     /// start failure fails the bootstrap. On Android the platform installs
     /// no exit-policy hook, so [`ServiceLifetime`](super::lifecycle::ServiceLifetime)
     /// has no observable effect on process lifetime there yet — the
@@ -444,7 +444,7 @@ impl AppConfig {
     /// Widgets reach it through `LifecycleContext::storage`; without this,
     /// or on a platform without files, they get none.
     ///
-    /// Not yet wired: the realm's widgets get no storage either way.
+    /// Not yet wired: the UI runtime's widgets get no storage either way.
     #[cfg(feature = "persist")]
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn with_storage_dir(mut self, name: flui_platform_api::StorageName) -> Self {

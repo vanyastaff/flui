@@ -16,7 +16,7 @@
 //! Resolution happens in this widget's own `build`
 //! (`CupertinoThemeData::resolve_from`),
 //! which registers a `MediaQuery` dependency — a platform-brightness
-//! republish from the realm's root `MediaQuery` rebuilds this element and
+//! republish from the UI runtime's root `MediaQuery` rebuilds this element and
 //! re-resolves the theme.
 //!
 //! ## Deferred (named gaps, not silent ones)

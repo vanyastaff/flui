@@ -336,7 +336,7 @@ pub(crate) fn a_refused_write_in_a_target_callback_is_reported_not_panicked() {
 
 /// Unmounting a target releases its slot from the owner lane, so the state
 /// its callbacks capture is dropped with the target rather than kept until
-/// the realm closes.
+/// the UI runtime closes.
 pub(crate) fn unmounting_a_target_releases_its_slot() {
     let captured = Rc::new(());
     let witness = Rc::downgrade(&captured);

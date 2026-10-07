@@ -1,8 +1,8 @@
 //! The composition-root seam of ADR-0081 §4.
 //!
-//! These items let the crates that own a realm drive a [`WidgetsBinding`]
+//! These items let the crates that own a UI runtime drive a [`WidgetsBinding`]
 //! from outside `flui-view`: activating its `GlobalKey` registry for one
-//! realm entry, stamping the frame phase at the build-to-finalize boundary,
+//! UI runtime entry, stamping the frame phase at the build-to-finalize boundary,
 //! and running the presentation's terminal lifecycle ladder; the host's sides
 //! of a presentation's close guard ([`CloseGuardSource`]) and of the flush
 //! registry ([`FlushHost`]), and the [`OwnerNotify`] channel both signal
@@ -145,11 +145,11 @@ impl<T: Copy> FramePhaseMarker<T> {
     }
 }
 
-/// A realm-level `GlobalKey` registry spanning several [`WidgetsBinding`]s —
-/// one per presentation sharing a realm's `GlobalKeyScope` (ADR-0043 §1).
+/// A UI runtime-level `GlobalKey` registry spanning several [`WidgetsBinding`]s —
+/// one per presentation sharing a UI runtime's `GlobalKeyScope` (ADR-0043 §1).
 ///
 /// Assembled once over the presentations installed at the time
-/// [`Self::assemble`] runs, tried in the given order (a realm's mount
+/// [`Self::assemble`] runs, tried in the given order (a UI runtime's mount
 /// order). `GlobalKeyScope`'s uniqueness invariant guarantees at most one
 /// binding ever answers a given hash, so trying each in turn and returning
 /// the first hit is exact, not a heuristic — see
@@ -212,7 +212,7 @@ pub trait BindingRuntime: sealed::Sealed {
     /// active on the current thread.
     ///
     /// Activation is nested and unwind-safe; after `f` returns or panics the
-    /// previous realm is restored. Raw TLS/registry handles remain private to
+    /// previous UI runtime is restored. Raw TLS/registry handles remain private to
     /// `flui-view`.
     fn with_global_key_registry<R>(&self, f: impl FnOnce() -> R) -> R;
 

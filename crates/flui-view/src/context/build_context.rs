@@ -123,7 +123,7 @@ pub trait BuildContext: sealed::Sealed + flui_foundation::read_scope::ReadScope 
     /// Only valid in debug builds.
     fn is_building(&self) -> bool;
 
-    /// The realm's reactive graph (ADR-0074). Reachable from every lifecycle
+    /// The UI runtime's reactive graph (ADR-0074). Reachable from every lifecycle
     /// hook and callback; the graph is owned by the `BuildOwner`.
     ///
     /// Signal *reads* do not go through this: they take the context itself as
@@ -414,9 +414,9 @@ pub trait LifecycleContext: BuildContext {
     ///
     /// `None` when the tree is not bound to a binding (a bare `ElementTree` in a
     /// unit test), reported honestly rather than by silently spawning into a
-    /// driver nobody polls. Never reach for some OTHER binding's or realm's
+    /// driver nobody polls. Never reach for some OTHER binding's or UI runtime's
     /// `UpdateScheduler` from a widget: `HeadlessBinding` drives its own
-    /// binding-local `UpdateScheduler`, and a production `UiRealm` likewise owns
+    /// binding-local `UpdateScheduler`, and a production `UiRuntime` likewise owns
     /// its own — a task spawned into the wrong one would never run.
     fn async_driver(&self) -> Option<crate::AsyncDriver>;
 
@@ -451,7 +451,7 @@ pub trait LifecycleContext: BuildContext {
     /// installed one.
     ///
     /// The presentation-owned `flui_interaction::TextInputOwner` installs a
-    /// concrete weak `TextInputHandle` into its build owner during realm
+    /// concrete weak `TextInputHandle` into its build owner during UI runtime
     /// construction. `flui-widgets`, where `EditableText` lives, can therefore
     /// attach and detach its client without naming the application layer or
     /// selecting an ambient "current" presentation.
@@ -463,9 +463,9 @@ pub trait LifecycleContext: BuildContext {
 
     /// The presentation's plain-text clipboard.
     ///
-    /// Every realm installs one over its platform's clipboard when it builds
+    /// Every UI runtime installs one over its platform's clipboard when it builds
     /// the presentation, so this is `None` only on a bare owner (an
-    /// `ElementTree` in a unit test), never under a realm. Acquire it in a
+    /// `ElementTree` in a unit test), never under a UI runtime. Acquire it in a
     /// lifecycle hook (`init_state` / `did_change_dependencies`), the same
     /// rule `text_input_handle` follows.
     ///
@@ -473,11 +473,11 @@ pub trait LifecycleContext: BuildContext {
     /// capability registry lands; the handle it returns stays the same.
     fn clipboard_handle(&self) -> Option<flui_interaction::ClipboardHandle>;
 
-    /// The realm's byte storage, which a
+    /// The UI runtime's byte storage, which a
     /// [`Persisted`](crate::persist::Persisted) document reads and writes
     /// through.
     ///
-    /// `None` when the realm has none: a platform without files, an
+    /// `None` when the UI runtime has none: a platform without files, an
     /// application that configured no storage, or a bare owner in a unit
     /// test. Acquire it in a lifecycle hook (`init_state` /
     /// `did_change_dependencies`), the same rule `clipboard_handle` follows.
@@ -513,7 +513,7 @@ pub trait LifecycleContext: BuildContext {
         None
     }
 
-    /// The realm's fresh-hit-test capability, if a binding installed an
+    /// The UI runtime's fresh-hit-test capability, if a binding installed an
     /// interaction lane.
     ///
     /// Answers "what is under this global position **right now**" — which is

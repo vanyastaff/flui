@@ -3,7 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-08-24
 - **Supersedes in part:** ADR-0043 §2 (hash-keyed `GlobalKey` authorities become key-identity-keyed)
-- **Related:** [ADR-0043](ADR-0043-presentation-bundled-trees-and-realm-globalkey-scope.md) (the two `GlobalKey` authorities — this ADR corrects its "key hash → …" wording to "key → …" and adds the per-frame ledgers alongside them); [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (owner-affine realms)
+- **Related:** [ADR-0043](ADR-0043-presentation-bundled-trees-and-realm-globalkey-scope.md) (the two `GlobalKey` authorities — this ADR corrects its "key hash → …" wording to "key → …" and adds the per-frame ledgers alongside them); [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (owner-affine UI runtimes)
 - **Issue:** #531 — verify GlobalKey reservations by identity at frame finalization
 
 *A `GlobalKey` is identified by the key, never by its hash — every registry that answers "which element holds this key?" buckets on `ViewKey::key_hash` and decides with `ViewKey::key_eq`. Resolving a key at attach time stays optimistic (the graft is unchanged), but each declaration is now recorded against its declaring parent for the frame — as is each parent a graft robs without its consent — and the frame boundary verifies those records: one key claimed twice is repaired and reported as a typed `DuplicateGlobalKey`, not silently resolved by whoever asked last.*

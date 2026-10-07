@@ -3,10 +3,10 @@
 //! shell's composition bands, all through mounted trees.
 //!
 //! The live-republish test drives brightness through the same mechanism the
-//! realm's root `MediaQuery` uses in production (`flui-app`'s
+//! UI runtime's root `MediaQuery` uses in production (`flui-app`'s
 //! `media_query_root.rs`): an owner-local shared cell re-published by a
 //! stateful wrapper through the `RebuildHandle` it captured at mount
-//! (ADR-0018). The realm half (platform appearance event → source update)
+//! (ADR-0018). The UI runtime half (platform appearance event → source update)
 //! is pinned in `flui-app`; these tests pin the widget half (ambient
 //! republish → `ThemeMode::System` re-resolution).
 
@@ -85,14 +85,14 @@ fn captured_theme(cell: &Arc<Mutex<Option<ThemeData>>>) -> ThemeData {
 }
 
 // ============================================================================
-// Live brightness republish — the realm-source pattern
+// Live brightness republish — the ui_runtime-source pattern
 // ============================================================================
 
 pub fn two_presentations_resolve_different_themes_simultaneously() {
     // The issue's per-presentation criterion: appearance is scoped to one
     // window's tree (ADR-0027, ADR-0042 §1). Two presentations — two
     // headless bindings in one process, the same isolation boundary two
-    // realm-backed windows have — mount the SAME app configuration under
+    // ui_runtime-backed windows have — mount the SAME app configuration under
     // different ambient brightness and must hold different resolved themes
     // AT THE SAME TIME, with nothing process-global to fight over.
     let app_under = |ambient: Brightness| {

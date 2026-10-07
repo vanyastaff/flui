@@ -1,11 +1,11 @@
-//! The designated rendered window belongs to the loop, not its previous realm.
+//! The designated rendered window belongs to the loop, not its previous ui_runtime.
 use super::{
     desktop::{RenderedMain, install_desktop_window},
     host::{
         APP_RUNTIME, OwnerHostClearGuard, install_exit_policy_hook, install_owner_platform,
         install_platform_quit_hook, runtime_wake_callback, with_owner_platform,
     },
-    realm_dispatch::teardown_platform_realm,
+    owner_dispatch::teardown_platform_ui_runtime,
 };
 use crate::app::{
     AppConfig, AppRunError, Application, StartupWindow,
@@ -412,7 +412,7 @@ impl Drop for ControllerLease {
 pub(super) fn drive_main_window() {
     let leased = APP_RUNTIME.with(|slot| {
         let mut runtime = slot.borrow_mut();
-        if runtime.dispatched_realm_id.is_some() || runtime.iterating_all_realms {
+        if runtime.dispatched_ui_runtime_id.is_some() || runtime.iterating_all_ui_runtimes {
             return None;
         }
         runtime
@@ -463,7 +463,7 @@ pub(super) fn main_window_closing(address: flui_foundation::PresentationAddress)
 pub(super) fn main_window_closed(address: flui_foundation::PresentationAddress) {
     let (removed, ingress) = APP_RUNTIME.with(|slot| {
         let mut runtime = slot.borrow_mut();
-        // Closing while a realm is checked out queues disposal. Keep its close
+        // Closing while a ui_runtime is checked out queues disposal. Keep its close
         // fence until the restored dispatcher has actually removed the address.
         if runtime.registry.contains_address(address) {
             return (None, None);
@@ -501,7 +501,7 @@ pub(super) fn shutdown_main_window() {
     }
 }
 
-/// Retires the loop's main window and realms when dropped: after
+/// Retires the loop's main window and UI runtimes when dropped: after
 /// `Platform::run` returns, or while a panic unwinds out of it. Held inside
 /// the [`OwnerHostClearGuard`], so the windows go before the owner platform
 /// that created them. On unwind each step is contained, so a second panic
@@ -512,10 +512,10 @@ impl Drop for LoopTeardown {
     fn drop(&mut self) {
         if std::thread::panicking() {
             contain(shutdown_main_window);
-            contain(teardown_platform_realm);
+            contain(teardown_platform_ui_runtime);
         } else {
             shutdown_main_window();
-            teardown_platform_realm();
+            teardown_platform_ui_runtime();
         }
     }
 }
@@ -544,7 +544,7 @@ where
     let recorded = Rc::clone(&fatal);
     let _owner_guard = OwnerHostClearGuard::arm();
     // Declared after the owner guard, so it drops first: the main window and
-    // the realms (and the native windows they own) are retired while the
+    // the ui_runtimes (and the native windows they own) are retired while the
     // owner platform still lives, on unwind too.
     let teardown = LoopTeardown;
     let result = platform.run(Box::new(move |owner| {
@@ -777,7 +777,7 @@ mod tests {
     }
 
     /// A panic that unwinds out of `Platform::run` after the loop was set up
-    /// still retires the main window and the realms, before the owner
+    /// still retires the main window and the UI runtimes, before the owner
     /// platform goes: the windows they own must not outlive it.
     ///
     /// The panic is raised by a subscriber on the headless platform's last
@@ -1016,17 +1016,17 @@ mod tests {
         );
     }
 
-    /// A storage directory in the main configuration reaches the realms the
+    /// A storage directory in the main configuration reaches the UI runtimes the
     /// host builds: the run resolves the host's storage once, at start, and
-    /// a realm built afterwards holds it in its build owner, which every
+    /// a UI runtime built afterwards holds it in its build owner, which every
     /// `LifecycleContext::storage` under it reads. Driven through
     /// `run_with_platform` itself, so the host's storage comes from the
-    /// runner; the realm is an `Isolated` window opened from `on_ready`,
-    /// which reaches `host::build_runtime_realm` as every runner site does,
+    /// runner; the UI runtime is an `Isolated` window opened from `on_ready`,
+    /// which reaches `host::build_ui_runtime` as every runner site does,
     /// without a GPU.
     #[cfg(feature = "persist")]
     #[test]
-    #[ignore = "contract: the host gives a configured storage directory to every realm it builds"]
+    #[ignore = "contract: the host gives a configured storage directory to every ui_runtime it builds"]
     fn a_configured_storage_dir_reaches_lifecycle_context() {
         let reached = Rc::new(Cell::new(None));
         let seen = Rc::clone(&reached);
@@ -1046,15 +1046,15 @@ mod tests {
                 AppConfig::default(),
                 crate::app::runtime::WindowPolicy::Isolated,
             )
-            .expect("WindowPolicy::Isolated installs a realm");
+            .expect("WindowPolicy::Isolated installs a ui_runtime");
             seen.set(APP_RUNTIME.with(|slot| {
                 let runtime = slot.borrow();
                 runtime
-                    .realms
+                    .ui_runtimes
                     .iter()
-                    .find_map(|(_, slot)| slot.realm.as_ref())
-                    .map(|realm| {
-                        realm
+                    .find_map(|(_, slot)| slot.ui_runtime.as_ref())
+                    .map(|ui_runtime| {
+                        ui_runtime
                             .widgets()
                             .with_build_owner(|owner| owner.storage().is_some())
                     })
@@ -1065,7 +1065,7 @@ mod tests {
         assert_eq!(
             reached.get(),
             Some(true),
-            "a realm built after the host started with a storage directory holds storage"
+            "a ui_runtime built after the host started with a storage directory holds storage"
         );
     }
 }

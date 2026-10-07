@@ -16,7 +16,7 @@ new frames after resign-active/active, with an unnecessary surface release.
 The platform owns `WindowExecutionState`: Running, Suspended and reversible
 Detached. It is independent of focus, visibility and GPU readiness. The app keeps
 these facts per presentation and derives its existing AppLifecycleState stream;
-it folds those local results into the realm scheduler. Terminal close remains a
+it folds those local results into the UI runtime scheduler. Terminal close remains a
 separate irreversible lifetime fence. No raw platform type is added to the facade:
 normal applications observe the existing presentation lifecycle capability.
 
@@ -53,7 +53,7 @@ while existing general-FIFO Close/Clear ordering remains intact. Callback storag
 is private; callbacks and captures run/drop outside locks. Native observations do
 not themselves close lifecycle subscriptions.
 
-This uses Rust's explicit per-window state and the existing UiRealm topology rather
+This uses Rust's explicit per-window state and the existing UiRuntime topology rather
 than a process-global mobile pause bit. Apple's UIKit inactive/background distinction
 is the behavior being preserved, not an assumed Flutter process lifecycle mapping.
 
@@ -67,7 +67,7 @@ and a nested foreground observer panic are covered. A portable callback test ver
 frame-origin delivery before the caller unwinds, without claiming that native frame
 callbacks may safely unwind across their Objective-C ABI. Headless callback
 and app dispatch tests verify FIFO replacement, close fencing, restrictive host
-precedence, public lifecycle snapshots and shared-realm sibling eligibility.
+precedence, public lifecycle snapshots and shared-UI runtime sibling eligibility.
 
 Verified native SDK: Xcode 26.2. This is the foundation for UIScene migration, not
 scene support. Scene ownership/disconnect/reattach, safe-area geometry, windowless
@@ -94,11 +94,11 @@ The "Verification and limits" list above is unchanged except for safe-area
 geometry, which now has an implementation rather than remaining separate work:
 the content-view inset is reported to the presentation it belongs to, and the
 root `MediaQuery` became presentation-owned on the way in. That second part is
-this ADR's own thesis applied to inherited data — the realm used to hold one
+this ADR's own thesis applied to inherited data — the UI runtime used to hold one
 `MediaQuery` scoped to its PRIMARY presentation, so a secondary window's resize
 or appearance change landed in the primary presentation's tree. Size, device
 pixel ratio, brightness and padding are now written through the addressed
-presentation, so a shared realm with several live presentations no longer
+presentation, so a shared UI runtime with several live presentations no longer
 misroutes them onto the primary.
 
 The addressing stops at the write side: the root `MediaQueryRoot` is installed

@@ -1,4 +1,4 @@
-//! Monotonic generation/version counters for the owner-affine ui-realm
+//! Monotonic generation/version counters for the owner-affine UI runtime
 //! protocol.
 //!
 //! Three distinct newtypes guard three distinct kinds of staleness. They are
@@ -7,7 +7,7 @@
 //! [`ResourceGeneration`]) is a compile error, not a bug waiting to happen:
 //!
 //! - [`FrameEpoch`] — a runtime's per-frame counter. Meaningful only within
-//!   one `UiRealm` lifetime; a worker result declares the epoch it was
+//!   one `UiRuntime` lifetime; a worker result declares the epoch it was
 //!   computed for, and the owner drops it at commit if the epoch is stale.
 //! - [`SurfaceGeneration`] — bumped every time the raster surface is
 //!   (re)configured (resize, device-lost recovery); guards frames in flight
@@ -23,7 +23,7 @@
 //! `is_current()` in one step.
 //!
 //! Channel identity — not epoch arithmetic — is the isolation boundary across
-//! `UiRealm` recreation: these counters are never compared
+//! `UiRuntime` recreation: these counters are never compared
 //! across two different runtimes' lifetimes, only within one.
 //!
 //! # Example
@@ -174,12 +174,12 @@ impl fmt::Display for GpuResourceGeneration {
 }
 
 epoch_counters! {
-    /// A `UiRealm`'s monotonic per-frame counter.
+    /// A `UiRuntime`'s monotonic per-frame counter.
     ///
     /// Minted by the runtime's scheduler; subsumes `Scene::frame_number`
     /// (one fact, one place — `Scene` keeps its field for now but the
-    /// ui-realm protocol threads `FrameEpoch` instead). Meaningful only
-    /// within one `UiRealm` lifetime: recreating a realm creates a new
+    /// UI runtime protocol threads `FrameEpoch` instead). Meaningful only
+    /// within one `UiRuntime` lifetime: recreating a UI runtime creates a new
     /// runtime with a new `FrameEpoch` sequence starting at
     /// [`FrameEpoch::ZERO`] again, and channel identity (not epoch
     /// comparison) is what keeps a stale runtime's results from being

@@ -16,7 +16,7 @@ is already unwinding, and a container that keeps dropping its remaining values
 after one of them panicked turns a contained failure into a second one.
 ADR-0104 already retains callback snapshots and opaque payloads after a caught
 failure; other containers dropped their contents unconditionally, so one
-hostile destructor could abort a realm that frame containment would otherwise
+hostile destructor could abort a UI runtime that frame containment would otherwise
 have kept alive.
 
 ## Decision

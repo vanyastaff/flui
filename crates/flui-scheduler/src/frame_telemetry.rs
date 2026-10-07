@@ -37,10 +37,10 @@ use crate::frame::FrameId;
 ///
 /// This bounds the RAW dispatch stream, not a coalesced one:
 /// [`crate::frame_clock::FrameClock::stamp_input_epoch`] is called from
-/// `UiRealm::handle_input_addressed`, at the TOP of that method, before
+/// `UiRuntime::handle_input_addressed`, at the TOP of that method, before
 /// `GestureBinding::handle_pointer_event`/`flush_pending_moves` run —
 /// coalescing of high-frequency pointer moves happens downstream, once per
-/// frame, in `UiRealm::render_frame_entered`. So between two produces this
+/// frame, in `UiRuntime::render_frame_entered`. So between two produces this
 /// buffer can genuinely see more than [`MAX_COALESCED_INPUT_EPOCHS`] *raw*
 /// events (a 1 kHz mouse against a 60 Hz produce cadence is on the order of
 /// 16 raw moves per frame — routine during any drag, not an edge case).
@@ -218,7 +218,7 @@ pub enum PresentOutcome {
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub struct FrameSnapshot {
-    /// Which presentation produced this frame. A realm can host more than
+    /// Which presentation produced this frame. A UI runtime can host more than
     /// one presentation, each with its own `FrameClock` and therefore its
     /// own `frame_id` sequence — two different presentations' `frame_id`
     /// values collide (both start counting from 1), so a consumer that

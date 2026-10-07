@@ -53,20 +53,20 @@ follow the host OS's execution rules; keeping a desktop process alive does not
 prove mobile background execution.
 
 Verify each transition through a public consumer, including multiple windows
-and realms, repeated notifications, cancellation, and teardown. Explicit quit
-must notify every surviving realm and finish application services. A resident
+and UI runtimes, repeated notifications, cancellation, and teardown. Explicit quit
+must notify every surviving UI runtime and finish application services. A resident
 application must be able to reopen its UI and explicitly quit through public
 capabilities. Native activation/reopen and background-launch behavior need their
 own live checks. The macOS shutdown probes below cover only their named cases.
 
-Desktop quit now has a loop-owned notification walk across surviving realms,
-including when the primary realm was removed. Application seam regressions cover
-shared realms, deferred installs, rejected late secondary completions, reentry,
+Desktop quit now has a loop-owned notification walk across surviving UI runtimes,
+including when the primary UI runtime was removed. Application seam regressions cover
+shared UI runtimes, deferred installs, rejected late secondary completions, reentry,
 and observer/dispatch panic ordering. This closes the primary-only notification
 gap. Presentation-owned focus/visibility now drive local binding notifications,
-input cancellation and resource suspension, while each realm derives its frame
+input cancellation and resource suspension, while each UI runtime derives its frame
 eligibility from its live presentations. Scoped regressions cover separate and
-shared realms, both focus-event orders, pause/resume, restoration redraw, and
+shared UI runtimes, both focus-event orders, pause/resume, restoration redraw, and
 terminal notification before disposal even when an observer panics. Public
 weak lifecycle subscriptions now have mounted app and sole-facade headless
 regressions, including renamed dependencies. Native lifecycle transport across
@@ -567,8 +567,8 @@ check like the other native probes.
 ### Window-independent owner turns
 
 The app's pending native-window completion no longer depends on the first
-realm's frame driver. Headless coverage includes acceptance with no realms and
-worker completion after the originating realm closes. Native macOS probes verify
+UI runtime's frame driver. Headless coverage includes acceptance with no UI runtimes and
+worker completion after the originating UI runtime closes. Native macOS probes verify
 windowless worker delivery and ordinary return; Windows is cross-compiled only.
 The owner callback is fallibly registered, signals are coalesced, and quit fences
 new work immediately. Physical posting failure remains an explicit progress
@@ -1080,7 +1080,7 @@ or its final code-quality review.
 Window execution eligibility is independent of focus, visibility and GPU surface
 availability. Temporary UIKit inactivity preserves the surface and frame delivery;
 true background suspension caps the addressed presentation. Public presentation
-lifecycle subscriptions observe the derived state while a shared realm can retain
+lifecycle subscriptions observe the derived state while a shared UI runtime can retain
 an eligible sibling. See ADR-0072 for precedence, initial snapshots and reentrancy.
 
 The dedicated UIKit protocol probe reproduces resign-active/active without a
@@ -1167,7 +1167,7 @@ single-window application on other backends.
 Second, the iOS-gated modules are invisible to the host-target lint job, so
 `cargo xtask cross-typecheck`'s iOS line is their only compile gate. Clean on this
 revision: `cargo clippy -p flui-platform --locked --all-targets --features a11y
---target aarch64-apple-ios -- -D warnings` (and, for the addressed realm arms,
+--target aarch64-apple-ios -- -D warnings` (and, for the addressed UI runtime arms,
 `cargo clippy -p flui-app -p flui-platform -p flui-widgets -p flui-cli
 --all-targets --locked -- -D warnings`). `cargo xtask device ios-safe-area-check` runs the
 live check above against a booted simulator.

@@ -204,7 +204,7 @@ pub mod rebuild_reason;
 
 // Reactive programming - change notification and observables
 pub mod notifier;
-// The read side of the realm's signal graph (ADR-0085 §2): handles, errors and
+// The read side of the ui_runtime's signal graph (ADR-0085 §2): handles, errors and
 // the `ReadScope` contract. The graph itself lives in `flui-view`. Not
 // re-exported from the root: reached as `flui_foundation::read_scope::…`.
 pub mod read_scope;
@@ -264,19 +264,19 @@ pub use id::{
     ListenerId,
     Marker,
     ObserverId,
-    // The full (RealmId, PresentationId) routable address of one presentation
+    // The full (UiRuntimeId, PresentationId) routable address of one presentation
     PresentationAddress,
     // Presentation identity — one presentation-runtime incarnation
     PresentationId,
     RawId,
-    // Realm identity — one UiRealm incarnation
-    RealmId,
     RenderId,
     SemanticsId,
     TaskId,
     TickerId,
     // Minimal tree-generic bound (does not expose raw index; ElementId satisfies this)
     TreeId,
+    // Runtime identity — one UiRuntime incarnation
+    UiRuntimeId,
     ViewId,
     // Marker types module
     markers,
@@ -336,10 +336,10 @@ pub mod prelude {
         PresentationAddress,
         PresentationId,
         RELEASE_MODE,
-        RealmId,
         RenderId,
         SemanticsId,
         TreeId,
+        UiRuntimeId,
         UniqueKey,
         ValueChanged,
         ValueGetter,

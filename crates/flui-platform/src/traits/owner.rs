@@ -160,7 +160,7 @@ impl OwnerPlatform {
         SharedPlatform::new(Arc::clone(&self.platform))
     }
 
-    /// Mints a cross-thread capability, handed to workers, realms, or
+    /// Mints a cross-thread capability, handed to workers, UI runtimes, or
     /// tasks that need to reach the owner from off-thread.
     #[must_use]
     pub fn proxy(&self) -> PlatformProxy {

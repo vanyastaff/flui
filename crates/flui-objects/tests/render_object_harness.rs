@@ -573,7 +573,7 @@ fn harness_render_error_box_fills_bounded_constraints_and_paints() {
         "the caught message reaches diagnostics in every build"
     );
     assert_eq!(error_box_size(&run), (100.0, 60.0));
-    // The message is shaped at layout, through the realm's text context, and
+    // The message is shaped at layout, through the ui_runtime's text context, and
     // painted in debug builds only.
     let paints = |run: &flui_rendering::testing::FrameRun, message: &str| {
         run.display_commands()

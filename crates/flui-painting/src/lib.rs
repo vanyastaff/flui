@@ -29,7 +29,7 @@
 //! [`TextPainter`] lays out an inline span against a width constraint,
 //! answers caret / hit-test / line queries on the result, and paints it —
 //! the shape a `RenderParagraph` drives. It shapes on Parley through the
-//! realm's [`TextContext`], paints the layout that measured as a
+//! UI runtime's [`TextContext`], paints the layout that measured as a
 //! [`ShapedParagraph`], whose glyphs the engine rasterizes through
 //! [`glyphs::SwashRasterizer`], and answers carets, selection, hit-testing
 //! and line metrics from that same layout. A face registered through
@@ -46,7 +46,7 @@
 //! # Threading
 //!
 //! Every type here is `Send + Sync` value data; a `Canvas` is mutated through
-//! `&mut self` by one owner. Text shaping takes no shared lock: each realm
+//! `&mut self` by one owner. Text shaping takes no shared lock: each UI runtime
 //! shapes through its own [`TextContext`], used through `&mut`, over the
 //! app's [`FontCollection`]. The host's fonts are scanned once per app, as a
 //! [`HostFonts`] value the collection is fed from; no font state is
@@ -86,7 +86,7 @@ pub mod text_layout;
 pub mod text_painter;
 
 // Paragraph shaping on Parley (ADR-0092): the runtime builds the app's
-// `FontCollection`, each realm owns a `TextContext` over it, and
+// `FontCollection`, each ui_runtime owns a `TextContext` over it, and
 // `TextPainter` measures on it and paints the same layout's runs.
 pub mod parley_text;
 

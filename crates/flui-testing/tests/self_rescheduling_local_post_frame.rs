@@ -13,7 +13,7 @@
 //! (`LocalPostFrameHandle::schedule_local` nests and defers correctly against a
 //! bare `UpdateScheduler`). The production question this test answers is different:
 //! does the *binding's* frame-pump entry point (`pump_frame`, which every
-//! runner and this crate's `UiRealm`-analog calls) drain the SAME owner frame the
+//! runner and this crate's `UiRuntime`-analog calls) drain the SAME owner frame the
 //! handle addresses for the *entire* frame, so a callback that reschedules
 //! itself from inside the drain succeeds — not just a hand-rolled
 //! `execute_frame` call a production caller never actually makes.

@@ -1,4 +1,4 @@
-//! The byte storage the host hands every realm it builds.
+//! The byte storage the host hands every UI runtime it builds.
 
 use std::sync::Arc;
 
@@ -7,7 +7,7 @@ use flui_platform_api::Storage;
 use super::AppConfig;
 
 /// The storage `config` asks for. The host resolves it once, when it starts
-/// (`AppRuntime::install_host_storage`), and every realm it builds afterwards
+/// (`AppRuntime::install_host_storage`), and every UI runtime it builds afterwards
 /// hands it to its widgets through `LifecycleContext::storage`: `None` when
 /// the application configured none, or where no file store exists.
 ///

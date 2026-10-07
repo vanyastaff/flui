@@ -19,8 +19,8 @@
 *FLUI contains failures at two nested scales. Three bounded build-side seams
 repair one failed child or removal hook locally and preserve the rest of the
 element tree. A panic or structured pipeline error that escapes those seams is
-contained by the realm's per-presentation frame boundary: that frame is
-dropped, sibling presentations continue in the same pump, other realms are
+contained by the UI runtime's per-presentation frame boundary: that frame is
+dropped, sibling presentations continue in the same pump, other UI runtimes are
 untouched, and the last successfully presented frame stays on screen. This is
 local repair plus frame isolation, not a global tree transaction or rollback;
 the residuals below define the remaining blast radii.*
@@ -43,10 +43,10 @@ Two outer-layer holes require the frame seam:
 
 - **An escaped panic was process-fatal.** Segment phases covered by neither
   inner layer — lifecycle teardown, child mounting outside a substitution
-  window, and overlay attachment — unwound through the realm's per-presentation
+  window, and overlay attachment — unwound through the UI runtime's per-presentation
   loop (aborting every later sibling's segment in the same pump) and then
-  through `dispatch_platform_realm`'s restore-then-`resume_unwind`, killing the
-  process. One window's teardown bug took down every window in every realm.
+  through `dispatch_platform_ui_runtime`'s restore-then-`resume_unwind`, killing the
+  process. One window's teardown bug took down every window in every UI runtime.
 - **A failure was a silent skip.** A pipeline error was logged and dropped;
   nothing typed reached the embedder, no per-presentation failure accounting
   existed, and with more than one presentation mounted the retry logic keyed
@@ -189,7 +189,7 @@ observable recovery floor and narrows several blast radii:
 
 Every recovery described above that has an attributable element, substitute,
 or lazy host enters a frame-scoped `RecoveredPanic` queue, except the explicitly
-unreported count probes. `UiRealm` takes that queue exactly once after the
+unreported count probes. `UiRuntime` takes that queue exactly once after the
 entire presentation attempt and outside its `catch_unwind`. The timing includes
 the layout fixpoint and late post-pipeline lazy service, and still drains
 recoveries if later Tail or Scene work unwinds. Records are delivered in queue
@@ -222,7 +222,7 @@ re-exports the types):
 Disposition is derived privately from `FrameFailureKind`, so an impossible
 kind/disposition pair cannot enter the delivery path. Each report is traced
 before synchronous `FrameFailureHandler` delivery. The handler is cloned out
-before invocation, no realm borrow is held while embedder code runs, and a
+before invocation, no UI runtime borrow is held while embedder code runs, and a
 handler panic is caught at the delivery site. It neither escapes the frame
 boundary nor unregisters the handler, and the same report is not retried.
 
@@ -245,10 +245,10 @@ boundary.
 This guarantee covers FLUI-owned app tracing, not arbitrary custom subscriber
 formatting and not lower-level `flui-view` recovery traces. It is not a global
 sanitizer. Desktop, web, and Android bootstrap apply both handler and detail
-policy to their initial realm. A `WindowPolicy::Isolated` secondary carries its detail
+policy to their initial UI runtime. A `WindowPolicy::Isolated` secondary carries its detail
 policy through both the Ready and Pending completion paths; its handler remains
 unset while secondary windows have no production content/render path. A
-`WindowPolicy::Shared` secondary inherits the existing realm's detail policy and handler;
+`WindowPolicy::Shared` secondary inherits the existing UI runtime's detail policy and handler;
 the supplied secondary config does not override either for existing siblings.
 
 ### Retry and last-good retention
@@ -334,7 +334,7 @@ benchmarks showed no statistically supported regression above 5%.
   submit verdict leaves that primary committed.
 - Addressed pointer input now follows the same commit-state boundary. While
   a presentation is `Uncommitted`, or while an earlier pointer event is already
-  held for that presentation, `UiRealm` queues pointer events before hit
+  held for that presentation, `UiRuntime` queues pointer events before hit
   testing, input-epoch stamping, or gesture dispatch. The queue replays only
   after a `Painted` frame is committed by `Presented` or `NoPresent`, through
   the same dispatch path live pointer input uses. This is the local analogue
@@ -382,7 +382,7 @@ benchmarks showed no statistically supported regression above 5%.
   failed interval; passing event timestamps into `flui-interaction` remains a
   future compatibility improvement if replayed kinetic fidelity becomes a
   user-visible requirement.
-- **The realm-level pre-phase is outside the boundary:** vsync ticker
+- **The UI runtime-level pre-phase is outside the boundary:** vsync ticker
   callbacks (which can run user animation listeners) and gesture-deadline
   ticks run before the per-presentation loop; a panic there still escapes to
   the runner.
@@ -393,17 +393,17 @@ benchmarks showed no statistically supported regression above 5%.
   constraints set, one sink, and only the last produced scene. Secondary
   windows remain contentless until #559 adds per-presentation constraints,
   sinks, and submit routing.
-- **Secondary handler wiring:** a new `WindowPolicy::Isolated` realm receives the
+- **Secondary handler wiring:** a new `WindowPolicy::Isolated` UI runtime receives the
   secondary config's detail policy through Ready and Pending completion but no
   failure handler. That handler decision is blocked on the same #559
   production secondary rendering contract. `WindowPolicy::Shared` already uses the
-  existing realm's handler and intentionally refuses a per-window override.
+  existing UI runtime's handler and intentionally refuses a per-window override.
 
 ## Consequences
 
 - One window's terminal frame bug no longer kills a multi-window process. An
   escape drops and retries only that presentation's frame; sibling
-  presentations continue in the same pump and other realms are untouched.
+  presentations continue in the same pump and other UI runtimes are untouched.
 - A locally recovered lifecycle panic produces a `Contained` report without
   dropping the frame or arming retry. A deterministic recovery can therefore
   produce a report storm even while frames keep presenting; embedders that

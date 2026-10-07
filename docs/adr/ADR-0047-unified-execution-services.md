@@ -26,7 +26,7 @@ The runtime architecture study's target is explicit: *"Work is classified by dea
 
 ### One owner, no ambient reach
 
-`AppRuntime` — the loop-scoped composition root — owns exactly one `ExecutionServices` value (`crates/flui-runtime/src/execution.rs`, `pub` in an internal crate whose only allowed normal dependent is `flui-app`, checked by `cargo xtask workspace`). It is resolved at the same known point as `SharedEngineServices` (realm install, `ensure_execution`), shut down at full loop-exit teardown, and reachable only by injection. There is no global accessor and no thread-local; only a host crate (one of `flui-runtime`'s `allowed-dependents`) constructs `ExecutionServices`, and no other workspace crate reaches the pools. Realms and presentations will receive capability handles from it when #558 defines them; they do not resolve it themselves.
+`AppRuntime` — the loop-scoped composition root — owns exactly one `ExecutionServices` value (`crates/flui-runtime/src/execution.rs`, `pub` in an internal crate whose only allowed normal dependent is `flui-app`, checked by `cargo xtask workspace`). It is resolved at the same known point as `SharedEngineServices` (UI runtime install, `ensure_execution`), shut down at full loop-exit teardown, and reachable only by injection. There is no global accessor and no thread-local; only a host crate (one of `flui-runtime`'s `allowed-dependents`) constructs `ExecutionServices`, and no other workspace crate reaches the pools. Runtimes and presentations will receive capability handles from it when #558 defines them; they do not resolve it themselves.
 
 ### Work classes are lanes, not a priority enum
 
@@ -45,7 +45,7 @@ Both lanes count in-flight work against a cap; a full lane refuses with `SpawnEr
 
 ### Host injection avoids duplicate pools
 
-`AppConfig::with_executors(HostExecutors)` carries two runtime-neutral trait objects (`HostComputePool`, `HostIoPool` — boxed-closure and boxed-future contracts, deliberately not Tokio types, per the adoption guide's "the contract is an injected executor and must remain runtime-neutral"). The bootstrap stashes them into `AppRuntime` *before* realm install resolves the services; with a host present the default pools are **never constructed**. FLUI's admission and cancellation wrappers apply identically on top of host pools, so the observable contract does not depend on who owns the threads.
+`AppConfig::with_executors(HostExecutors)` carries two runtime-neutral trait objects (`HostComputePool`, `HostIoPool` — boxed-closure and boxed-future contracts, deliberately not Tokio types, per the adoption guide's "the contract is an injected executor and must remain runtime-neutral"). The bootstrap stashes them into `AppRuntime` *before* UI runtime install resolves the services; with a host present the default pools are **never constructed**. FLUI's admission and cancellation wrappers apply identically on top of host pools, so the observable contract does not depend on who owns the threads.
 
 ### Determinism and wasm
 
@@ -59,7 +59,7 @@ Both lanes count in-flight work against a cap; a full lane refuses with `SpawnEr
 
 - **One shared runtime for both background classes.** Fewer threads, but a CPU-bound closure occupying an async worker starves IO futures — exactly the class-interference the issue exists to prevent. Two pools with a joint sizing budget keep the isolation and still bound total threads.
 - **`rayon` for the compute pool.** Explicitly deferred by the adoption guide until the serial/parallel job-graph spike (#562) proves crossover thresholds. A Tokio multi-thread runtime used as a plain worker pool costs nothing extra here and avoids a new dependency with no proven consumer.
-- **Per-realm (rather than loop-scoped) pools.** Worker threads are a machine-level resource; N realms with N pools recreates the oversubscription problem one level down. Realms get capability handles (#558), not pools.
+- **Per-UI runtime (rather than loop-scoped) pools.** Worker threads are a machine-level resource; N UI runtimes with N pools recreates the oversubscription problem one level down. Runtimes get capability handles (#558), not pools.
 - **A tokio `Handle` as the injection type.** Simplest, but freezes Tokio into the public embedding contract; the guide forbids it. The trait seam costs one `Box` per spawn on a path that is per-job, not per-frame.
 - **Keeping `Priority` public with implemented semantics.** Rejected by the study: deadline/behavior classes, chosen at the call site, replace user-guessed priorities. `Priority`'s retirement rides the platform-surface removal slice.
 

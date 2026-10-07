@@ -1,5 +1,5 @@
 //! Session ownership shared by UIKit's adapter and host lifecycle tests.
-use super::realm_dispatch::{RealmDispatcher, close_this_window};
+use super::owner_dispatch::{PresentationDispatcher, close_this_window};
 use crate::app::hot_reload::WorkerWatcherGuard;
 use flui_platform::HostWindow;
 use flui_runtime::dev_agent::DevAgentAttachment;
@@ -11,11 +11,12 @@ pub(super) fn contain(body: impl FnOnce()) {
     }
 }
 
-type SessionInstaller = Box<dyn FnMut(Arc<dyn HostWindow>) -> anyhow::Result<RealmDispatcher>>;
+type SessionInstaller =
+    Box<dyn FnMut(Arc<dyn HostWindow>) -> anyhow::Result<PresentationDispatcher>>;
 
 pub(in crate::app) struct SessionController<K: Eq + Hash> {
     installer: Option<SessionInstaller>,
-    sessions: HashMap<K, RealmDispatcher>,
+    sessions: HashMap<K, PresentationDispatcher>,
     watcher: Option<WorkerWatcherGuard>,
     /// The loop's development agent attachment; dropping it detaches the
     /// hook.
@@ -23,7 +24,7 @@ pub(in crate::app) struct SessionController<K: Eq + Hash> {
 }
 impl<K: Eq + Hash> SessionController<K> {
     pub(super) fn new(
-        installer: impl FnMut(Arc<dyn HostWindow>) -> anyhow::Result<RealmDispatcher> + 'static,
+        installer: impl FnMut(Arc<dyn HostWindow>) -> anyhow::Result<PresentationDispatcher> + 'static,
         watcher: Option<WorkerWatcherGuard>,
         agent: Option<DevAgentAttachment>,
     ) -> Self {
@@ -40,16 +41,16 @@ impl<K: Eq + Hash> SessionController<K> {
         key: K,
         window: Arc<dyn HostWindow>,
         reconnect: bool,
-    ) -> anyhow::Result<RealmDispatcher> {
+    ) -> anyhow::Result<PresentationDispatcher> {
         if reconnect {
             return self
                 .sessions
                 .get(&key)
                 .copied()
-                .ok_or_else(|| anyhow::anyhow!("reconnected session has no retained realm"));
+                .ok_or_else(|| anyhow::anyhow!("reconnected session has no retained ui_runtime"));
         }
         if self.sessions.contains_key(&key) {
-            anyhow::bail!("session already has an installed realm");
+            anyhow::bail!("session already has an installed ui_runtime");
         }
         let dispatcher = (self
             .installer
@@ -65,7 +66,7 @@ impl<K: Eq + Hash> SessionController<K> {
         }
     }
 
-    pub(super) fn dispatchers(&self) -> Vec<RealmDispatcher> {
+    pub(super) fn dispatchers(&self) -> Vec<PresentationDispatcher> {
         self.sessions.values().copied().collect()
     }
 }
@@ -84,7 +85,7 @@ impl<K: Eq + Hash> Drop for SessionController<K> {
 mod tests {
     use super::super::{
         host::APP_RUNTIME,
-        realm_dispatch::{install_realm_alongside, teardown_platform_realm},
+        owner_dispatch::{install_ui_runtime_alongside, teardown_platform_ui_runtime},
     };
     use super::*;
     use flui_view::{StatefulView, View, ViewState};
@@ -148,7 +149,7 @@ mod tests {
         struct Cleanup;
         impl Drop for Cleanup {
             fn drop(&mut self) {
-                teardown_platform_realm();
+                teardown_platform_ui_runtime();
             }
         }
         let _cleanup = Cleanup;
@@ -186,15 +187,15 @@ mod tests {
         let root = probe.clone();
         let mut controller = SessionController::new(
             move |window| {
-                let realm = crate::app::ui_realm::UiRealm::for_test();
-                realm
-                    .enter(|realm| realm.attach_root_widget(&root))
+                let ui_runtime = crate::app::ui_runtime::UiRuntime::for_test();
+                ui_runtime
+                    .enter(|ui_runtime| ui_runtime.attach_root_widget(&root))
                     .expect("root mounted");
-                let _ = realm.draw_frame(flui_rendering::constraints::BoxConstraints::tight(
+                let _ = ui_runtime.draw_frame(flui_rendering::constraints::BoxConstraints::tight(
                     flui_foundation::geometry::Size::new(80.0, 80.0),
                 ));
                 let window: Arc<dyn flui_platform::PlatformWindow> = window;
-                Ok(install_realm_alongside(realm, &window)?)
+                Ok(install_ui_runtime_alongside(ui_runtime, &window)?)
             },
             None,
             None,
@@ -237,7 +238,10 @@ mod tests {
         let fresh = controller
             .connect("second", second, false)
             .expect("fresh install");
-        assert_ne!(fresh.address.realm_id, first_dispatcher.address.realm_id);
+        assert_ne!(
+            fresh.address.ui_runtime_id,
+            first_dispatcher.address.ui_runtime_id
+        );
         assert_eq!(probe.states.borrow().len(), 2);
         assert_eq!(probe.states.borrow()[1].get(), 7);
         assert!(
@@ -248,7 +252,7 @@ mod tests {
         controller.discard(&"second");
         assert_eq!(probe.disposed.get(), 2);
         assert!(controller.dispatchers().is_empty());
-        teardown_platform_realm();
+        teardown_platform_ui_runtime();
         assert!(
             cancelled.load(std::sync::atomic::Ordering::SeqCst),
             "process shutdown joins the service"

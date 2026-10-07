@@ -412,7 +412,7 @@ pub struct BuildOwner {
     /// provider on deactivate/unmount without adding a collection to every
     /// [`ElementNode`](crate::tree::ElementNode).
     pub(crate) inherited_dependencies: InheritedDependencies,
-    /// ADR-0074: the realm's reactive graph. Constructed with the owner,
+    /// ADR-0074: the UI runtime's reactive graph. Constructed with the owner,
     /// re-pointed at the external inbox whenever the frame-request callback
     /// changes (`set_on_build_scheduled`).
     reactive: OwnerReactive,
@@ -422,7 +422,7 @@ pub struct BuildOwner {
     /// and cheap to clone into the split-borrow `ElementOwner`.
     pub(crate) keep_alive: super::KeepAliveHolds,
 
-    /// The realm's tree-observer slot (ADR-0040). `None` = observation off
+    /// The UI runtime's tree-observer slot (ADR-0040). `None` = observation off
     /// (one branch per emission site). `pub(crate)` for the
     /// [`ElementOwner`](super::ElementOwner) split-borrow.
     pub(crate) tree_observer: OwnerTreeObserverSlot,
@@ -557,7 +557,7 @@ pub struct BuildOwner {
     ///
     /// This must be the driver the binding's frame step actually polls:
     /// `HeadlessBinding` drives its own binding-local `UpdateScheduler`; production
-    /// drives the realm's own owned `UpdateScheduler` (`UiRealm.scheduler`). Reaching
+    /// drives the UI runtime's own owned `UpdateScheduler` (`UiRuntime.scheduler`). Reaching
     /// for the wrong one from a widget would make headless tests spawn into a
     /// driver that never runs.
     pub(crate) async_driver: Option<flui_scheduler::AsyncDriver>,
@@ -580,23 +580,23 @@ pub struct BuildOwner {
     pub(crate) text_input_handle: Option<flui_interaction::TextInputHandle>,
 
     /// The presentation's plain-text clipboard. `None` only on a bare owner;
-    /// a realm installs one over its platform's clipboard.
+    /// a UI runtime installs one over its platform's clipboard.
     pub(crate) clipboard_handle: Option<flui_interaction::ClipboardHandle>,
 
-    /// The realm's byte storage. `None` on a bare owner and under a realm
+    /// The UI runtime's byte storage. `None` on a bare owner and under a UI runtime
     /// that has none, which `LifecycleContext::storage` reports as such.
     pub(crate) storage: Option<std::sync::Arc<dyn flui_platform_api::Storage>>,
 
     /// The host's flush registry, which `Persisted` publishes into through
     /// the crate-private `LifecycleContext::flush_registry_in_crate`. `None`
-    /// on a bare owner, and under every realm until the host's installer
+    /// on a bare owner, and under every UI runtime until the host's installer
     /// lands with the registry's wiring.
     pub(crate) flush_registry: Option<crate::flush_registry::FlushRegistry>,
 
     /// The binding's owner-local interaction dispatch capability (ADR-0027).
     ///
     /// `None` means the owner was built detached from a runtime interaction lane;
-    /// render-object lifecycle contexts report that as a typed inactive realm.
+    /// render-object lifecycle contexts report that as a typed inactive ui_runtime.
     pub(crate) interaction_dispatch: Option<flui_interaction::InteractionDispatchHandle>,
     pub(crate) hit_test_handle: Option<flui_interaction::HitTestHandle>,
 
@@ -797,7 +797,7 @@ impl BuildOwner {
 
     /// Install the binding's async task driver.
     ///
-    /// Called once, at wiring time, by `HeadlessBinding` and `UiRealm`. Must
+    /// Called once, at wiring time, by `HeadlessBinding` and `UiRuntime`. Must
     /// be the same driver the binding's frame step polls.
     pub fn set_async_driver(&mut self, driver: flui_scheduler::AsyncDriver) {
         self.async_driver = Some(driver);
@@ -812,10 +812,10 @@ impl BuildOwner {
     /// Install the binding's post-frame capability.
     ///
     /// Called once, at wiring time, by `HeadlessBinding` and, in production, by
-    /// `UiRealm`'s own wiring. It must name **that binding's** scheduler — the
+    /// `UiRuntime`'s own wiring. It must name **that binding's** scheduler — the
     /// one whose `drive_frame` drains the queue. Headless owns a binding-local
-    /// `UpdateScheduler`; production drives the realm's own owned `UpdateScheduler`
-    /// (`UiRealm.scheduler`) — there is no process-global scheduler singleton
+    /// `UpdateScheduler`; production drives the UI runtime's own owned `UpdateScheduler`
+    /// (`UiRuntime.scheduler`) — there is no process-global scheduler singleton
     /// any more.
     pub fn set_post_frame_handle(&mut self, handle: flui_scheduler::PostFrameHandle) {
         self.post_frame_handle = Some(handle);
@@ -832,7 +832,7 @@ impl BuildOwner {
 
     /// Install the binding's IME/text-input attach-detach capability.
     ///
-    /// Called during `UiRealm` construction with the weak handle minted by that
+    /// Called during `UiRuntime` construction with the weak handle minted by that
     /// presentation's `TextInputOwner`. `HeadlessBinding` installs none, so
     /// headless-tree tests observe `LifecycleContext::text_input_handle() == None`
     /// honestly rather than accepting attaches nobody delivers events to.
@@ -843,15 +843,15 @@ impl BuildOwner {
     /// Install the presentation's plain-text clipboard.
     ///
     /// Called during presentation construction with a handle over the
-    /// realm's platform clipboard, so `LifecycleContext::clipboard_handle`
-    /// answers `Some` under every realm.
+    /// UI runtime's platform clipboard, so `LifecycleContext::clipboard_handle`
+    /// answers `Some` under every UI runtime.
     pub fn set_clipboard_handle(&mut self, handle: flui_interaction::ClipboardHandle) {
         self.clipboard_handle = Some(handle);
     }
 
-    /// Install the realm's byte storage.
+    /// Install the UI runtime's byte storage.
     ///
-    /// Called during presentation construction when the realm has storage,
+    /// Called during presentation construction when the UI runtime has storage,
     /// so `LifecycleContext::storage` answers `Some` under it.
     pub fn set_storage(&mut self, storage: std::sync::Arc<dyn flui_platform_api::Storage>) {
         self.storage = Some(storage);
@@ -867,7 +867,7 @@ impl BuildOwner {
 
     /// Install this presentation's fresh-hit-test capability.
     ///
-    /// Called during presentation assembly with a handle pairing the realm's
+    /// Called during presentation assembly with a handle pairing the UI runtime's
     /// dispatch ticket with a probe over THIS presentation's pipeline.
     /// `HeadlessBinding` installs none, so headless-tree tests observe
     /// `LifecycleContext::hit_test_handle() == None` honestly rather than reading
@@ -876,7 +876,7 @@ impl BuildOwner {
         self.hit_test_handle = Some(handle);
     }
 
-    /// Install the realm's shared `GlobalKey` uniqueness domain (ADR-0043).
+    /// Install the UI runtime's shared `GlobalKey` uniqueness domain (ADR-0043).
     ///
     /// Called once, at presentation-assembly time, before this owner's tree
     /// is mounted — the same post-construction wiring pattern as
@@ -963,10 +963,10 @@ impl BuildOwner {
 
     /// This owner's fresh-hit-test capability, if a presentation installed one.
     ///
-    /// Stored per owner, not derived from the realm-wide interaction dispatch
-    /// handle: a realm may host several presentations, each with its own
+    /// Stored per owner, not derived from the UI runtime-wide interaction dispatch
+    /// handle: a UI runtime may host several presentations, each with its own
     /// `PipelineOwner`, and a hit test must read the tree of the presentation
-    /// that asked. A realm-scoped probe would answer every one of them with
+    /// that asked. A UI runtime-scoped probe would answer every one of them with
     /// whichever tree was installed first.
     #[must_use]
     pub fn hit_test_handle(&self) -> Option<&flui_interaction::HitTestHandle> {
@@ -986,7 +986,7 @@ impl BuildOwner {
         self.clipboard_handle.as_ref()
     }
 
-    /// The realm's byte storage, if one was installed.
+    /// The UI runtime's byte storage, if one was installed.
     #[must_use]
     pub fn storage(&self) -> Option<&std::sync::Arc<dyn flui_platform_api::Storage>> {
         self.storage.as_ref()
@@ -1010,7 +1010,7 @@ impl BuildOwner {
         self.reactive.set_scheduler(self.external_scheduler());
     }
 
-    /// The realm's reactive graph (ADR-0074): signals and the
+    /// The UI runtime's reactive graph (ADR-0074): signals and the
     /// reader registry that schedules exactly the elements that read a
     /// written signal.
     pub fn reactive(&self) -> &crate::reactive::Reactive {
@@ -1290,11 +1290,11 @@ impl BuildOwner {
         }
     }
 
-    /// Install the realm's tree observer, replacing any previous one
+    /// Install the UI runtime's tree observer, replacing any previous one
     /// (ADR-0040). A replaced observer receives `detached()` first, and the
     /// replacement is logged so competing tools discover each other.
     ///
-    /// Install at realm setup or via
+    /// Install at UI runtime setup or via
     /// `WidgetsBinding::install_tree_observer` — never from a frame phase.
     pub fn set_tree_observer(&mut self, observer: Arc<dyn flui_foundation::observe::TreeObserver>) {
         if let Some(previous) = self.tree_observer.replace(observer) {
@@ -1302,7 +1302,7 @@ impl BuildOwner {
         }
     }
 
-    /// Remove the observer (realm teardown — install/clear symmetry).
+    /// Remove the observer (UI runtime teardown — install/clear symmetry).
     /// Fires `detached()` on the outgoing observer. Idempotent.
     pub fn clear_tree_observer(&mut self) {
         if let Some(previous) = self.tree_observer.take() {
@@ -2244,10 +2244,10 @@ impl BuildOwner {
     /// # Production and headless bindings
     ///
     /// Called by both `HeadlessBinding::pump_frame` (step 6) and
-    /// `UiRealm::draw_frame` (after `run_frame` drops the pipeline write-lock)
+    /// `UiRuntime::draw_frame` (after `run_frame` drops the pipeline write-lock)
     /// — the two frame paths are now converged at this call site. Headless
     /// tests drive it directly via `HeadlessBinding`; a real window drives it via
-    /// `WidgetsBinding::service_child_requests`, which `UiRealm::draw_frame`
+    /// `WidgetsBinding::service_child_requests`, which `UiRuntime::draw_frame`
     /// invokes after each `run_frame`.
     ///
     /// Returns `true` iff a manager built or evicted a child — the sliver was
@@ -2919,7 +2919,7 @@ impl Drop for BuildScopeGuard<'_> {
     }
 }
 
-/// `detached()` runs third-party observer code from realm setup/teardown —
+/// `detached()` runs third-party observer code from UI runtime setup/teardown —
 /// the same containment that guards event emission applies here: a panic is
 /// caught and logged, never unwound through the owner.
 fn notify_detached(observer: Arc<dyn flui_foundation::observe::TreeObserver>) {
@@ -3392,7 +3392,7 @@ mod tests {
     // `ElementTree` pairs sharing one `GlobalKeyScope`, going through the
     // real `mount_root`/`insert`/`remove`/`finalize_tree` production paths —
     // no direct scope manipulation except where a test explicitly says it is
-    // forcing the hazard the realm execution contract rules out. The unit
+    // forcing the hazard the ui_runtime execution contract rules out. The unit
     // tests in `global_key_scope.rs` cover the mechanism (claim/release/
     // reclaim) in isolation; these cover it wired through real mounts.
     // ========================================================================

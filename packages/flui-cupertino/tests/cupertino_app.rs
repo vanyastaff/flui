@@ -4,7 +4,7 @@
 //! mounted trees.
 //!
 //! The live-republish test drives brightness through the same mechanism the
-//! realm's root `MediaQuery` uses in production (`flui-app`'s
+//! UI runtime's root `MediaQuery` uses in production (`flui-app`'s
 //! `media_query_root.rs`): an owner-local shared cell re-published by a
 //! stateful wrapper through the `RebuildHandle` it captured at mount
 //! (ADR-0018).
@@ -92,10 +92,10 @@ pub fn publishes_the_resolved_theme_to_descendants() {
 }
 
 // ============================================================================
-// Live brightness republish — the realm-source pattern
+// Live brightness republish — the ui_runtime-source pattern
 // ============================================================================
 
-/// Test-side replica of the realm's `MediaQuerySource` (`flui-app`'s
+/// Test-side replica of the UI runtime's `MediaQuerySource` (`flui-app`'s
 /// `media_query_root.rs`) — see `flui-material`'s `material_app.rs` tests
 /// for the same pattern on the Material side.
 #[derive(Default)]

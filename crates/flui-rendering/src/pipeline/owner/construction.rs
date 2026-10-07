@@ -30,8 +30,8 @@ impl PipelineOwner<Idle> {
     ///
     /// `text` is lent to every measurement this pipeline makes: layout,
     /// intrinsics, dry layout and dry baselines (ADR-0092 §10 step 3). A
-    /// realm passes the context it built over the app's font collection; a
-    /// pipeline with no realm behind it passes
+    /// UI runtime passes the context it built over the app's font collection; a
+    /// pipeline with no UI runtime behind it passes
     /// [`TextContextHandle::standalone`]. There is no constructor without a
     /// context, so no pipeline measures on one it made up for itself:
     ///
