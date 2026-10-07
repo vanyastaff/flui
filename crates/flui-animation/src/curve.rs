@@ -1743,6 +1743,10 @@ pub struct CatmullRomCurve {
 
 impl CatmullRomCurve {
     /// Creates a new Catmull-Rom curve.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `points` holds fewer than two points.
     #[inline]
     #[must_use]
     pub fn new(points: impl Into<SmallVec<[(f64, f64); 8]>>, tension: f64) -> Self {
@@ -1760,6 +1764,7 @@ impl CatmullRomCurve {
 }
 
 impl Curve for CatmullRomCurve {
+    // Cast policy: `t` is clamped to [0, 1] (NaN casts to 0), so `t_scaled.floor()` is a segment index in [0, segment_count].
     fn transform(&self, t: f64) -> f64 {
         if let Some(settled) = settled(t) {
             return settled;
@@ -1815,6 +1820,10 @@ pub struct CatmullRomSpline {
 
 impl CatmullRomSpline {
     /// Creates a new Catmull-Rom spline.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `points` holds fewer than two points.
     #[inline]
     #[must_use]
     pub fn new(points: impl Into<SmallVec<[Curve2DSample; 8]>>) -> Self {
@@ -1825,6 +1834,7 @@ impl CatmullRomSpline {
 }
 
 impl Curve2D for CatmullRomSpline {
+    // Cast policy: `t` is clamped to [0, 1] (NaN casts to 0), so `t_scaled.floor()` is a segment index in [0, segment_count].
     fn transform(&self, t: f64) -> Curve2DSample {
         let t = t.clamp(0.0, 1.0);
 
@@ -1887,7 +1897,7 @@ impl Curve2D for CatmullRomSpline {
 /// It is the 180° rotation, not the vertical mirror `1.0 - curve.transform(t)`
 /// — a mirror would invert every consumer expecting a rotation (a
 /// `CurvedAnimation` reverse-curve default, most visibly).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FlippedCurve<C: Curve> {
     /// The curve to flip.
@@ -1932,7 +1942,10 @@ impl<C: Curve> Curve for FlippedCurve<C> {
 #[derive(Debug)]
 pub struct Curves;
 
-#[expect(non_upper_case_globals)]
+#[expect(
+    non_upper_case_globals,
+    reason = "curve constants are spelled like the curve types they name"
+)]
 impl Curves {
     /// A linear curve (the identity function).
     pub const Linear: Linear = Linear;
