@@ -30,15 +30,10 @@ use flui_interaction::events::{
 use flui_interaction::routing::PointerDispatch;
 use flui_interaction::sealed::CustomGestureRecognizer;
 use flui_interaction::{
-    DoubleTapGestureRecognizer, DragAxis, DragGestureRecognizer, GestureRecognizer,
-    LongPressGestureRecognizer, ManualClock, MultiTapGestureRecognizer, PointerId,
-    MultiDragAxis, MultiDragEndDetails, MultiDragGestureRecognizer, MultiDragHandle,
-    MultiDragUpdateDetails, ScaleGestureRecognizer, TapAndDragGestureRecognizer, TapGestureRecognizer,
-};
-use flui_interaction::{
     DoubleTapGestureRecognizer, DragAxis, DragGestureRecognizer, GestureEndReason,
-    GestureRecognizer, LongPressGestureRecognizer, ManualClock, MultiTapGestureRecognizer,
-    PointerId, TapGestureRecognizer,
+    GestureRecognizer, LongPressGestureRecognizer, ManualClock, MultiDragAxis, MultiDragEndDetails,
+    MultiDragGestureRecognizer, MultiDragHandle, MultiDragUpdateDetails, MultiTapGestureRecognizer,
+    PointerId, ScaleGestureRecognizer, TapAndDragGestureRecognizer, TapGestureRecognizer,
 };
 use proptest::prelude::*;
 
@@ -880,12 +875,21 @@ fn terminal_velocity_cases(lane: &Lane, velocities: &RefCell<Vec<f64>>, scale: b
             lane.send(&stamped(up(id(3), at(100.0, 0.0), touch), terminal));
         }
         let values = velocities.borrow();
-        assert_eq!(values.len(), usize::try_from(sequence + 1).expect("small sequence"));
+        assert_eq!(
+            values.len(),
+            usize::try_from(sequence + 1).expect("small sequence")
+        );
         let velocity = *values.last().expect("accepted gesture ended");
         if gap_ms == 0 {
-            assert!(velocity.is_finite() && velocity.abs() > 1.0, "healthy/recovery velocity: {velocity}");
+            assert!(
+                velocity.is_finite() && velocity.abs() > 1.0,
+                "healthy/recovery velocity: {velocity}"
+            );
         } else {
-            assert_eq!(velocity, 0.0, "a stationary gap before Up must stop the fling");
+            assert_eq!(
+                velocity, 0.0,
+                "a stationary gap before Up must stop the fling"
+            );
         }
         assert!(lane.arena.is_empty());
     }
@@ -906,7 +910,9 @@ struct VelocityHandle(Rc<RefCell<Vec<f64>>>);
 impl MultiDragHandle for VelocityHandle {
     fn update(&self, _: MultiDragUpdateDetails) {}
     fn end(&self, details: MultiDragEndDetails) {
-        self.0.borrow_mut().push(details.velocity.pixels_per_second.dx);
+        self.0
+            .borrow_mut()
+            .push(details.velocity.pixels_per_second.dx);
     }
     fn cancel(&self) {}
 }
@@ -916,7 +922,9 @@ fn multidrag_release_uses_terminal_event_time() {
     let velocities = Rc::new(RefCell::new(Vec::new()));
     let log = Rc::clone(&velocities);
     let drag = MultiDragGestureRecognizer::new(lane.arena.clone(), MultiDragAxis::Horizontal)
-        .with_on_start(Rc::new(move |_, _| Some(Box::new(VelocityHandle(Rc::clone(&log))))));
+        .with_on_start(Rc::new(move |_, _| {
+            Some(Box::new(VelocityHandle(Rc::clone(&log))))
+        }));
     lane.join(&drag);
     terminal_velocity_cases(&lane, &velocities, false);
 }
@@ -935,8 +943,10 @@ fn tap_and_drag_release_uses_terminal_event_time() {
     let mut lane = Lane::new();
     let velocities = Rc::new(RefCell::new(Vec::new()));
     let log = Rc::clone(&velocities);
-    let drag = TapAndDragGestureRecognizer::new(lane.arena.clone())
-        .with_on_drag_end(move |details| log.borrow_mut().push(details.velocity.pixels_per_second.dx));
+    let drag =
+        TapAndDragGestureRecognizer::new(lane.arena.clone()).with_on_drag_end(move |details| {
+            log.borrow_mut().push(details.velocity.pixels_per_second.dx)
+        });
     lane.join(&drag);
     terminal_velocity_cases(&lane, &velocities, false);
 }
@@ -1040,10 +1050,22 @@ fn gesture_lifecycle_matrix() {
             "fling_velocity_follows_event_timestamps_not_dispatch_time",
             fling_velocity_follows_event_timestamps_not_dispatch_time,
         ),
-        ("drag_release_uses_terminal_event_time", drag_release_uses_terminal_event_time),
-        ("multidrag_release_uses_terminal_event_time", multidrag_release_uses_terminal_event_time),
-        ("scale_release_uses_terminal_event_time", scale_release_uses_terminal_event_time),
-        ("tap_and_drag_release_uses_terminal_event_time", tap_and_drag_release_uses_terminal_event_time),
+        (
+            "drag_release_uses_terminal_event_time",
+            drag_release_uses_terminal_event_time,
+        ),
+        (
+            "multidrag_release_uses_terminal_event_time",
+            multidrag_release_uses_terminal_event_time,
+        ),
+        (
+            "scale_release_uses_terminal_event_time",
+            scale_release_uses_terminal_event_time,
+        ),
+        (
+            "tap_and_drag_release_uses_terminal_event_time",
+            tap_and_drag_release_uses_terminal_event_time,
+        ),
         (
             "verdict_by_pointer_cannot_pick_a_tap_sequence",
             verdict_by_pointer_cannot_pick_a_tap_sequence,

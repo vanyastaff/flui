@@ -1,186 +1,129 @@
-//! TapGestureRecognizer benchmarks
+//! Static tap dispatch and admission, with a fresh live contact per iteration.
 //!
-//! Hot path: `TapGestureRecognizer::handle_event` is called once per
-//! pointer event for every recogniser that has joined the arena for
-//! that pointer. The realistic tap sequence is `Down → Move (within
-//! slop) → Up` — three events. The bench measures per-event dispatch
-//! cost including arena bookkeeping and callback invocation.
-//!
-//! Performance targets:
-//! - `handle_event` with no callbacks wired (pure dispatch path):
-//!   < 1 µs per event. The handler does a `Mutex` lock on `gesture_state`,
-//!   a button-mismatch check, and an arena peek. No allocations in the
-//!   steady state.
-//! - `handle_event` with `on_tap` callback wired: < 1.5 µs per event. The
-//!   callback dispatch is an `Arc::clone` of the callback handle plus
-//!   a `Fn` call — kept off the hot path until `accept_gesture` confirms
-//!   the arena win (the `pending_up` deferral).
-//!
-//! Follows the workspace benchmark template at
-//! `rust-studio/.../templates/benchmark-report.md`.
-//!
-//! Run with `cargo bench -p flui-interaction --bench tap_detector_bench`.
+//! Fixture creation and disposal are outside Criterion's measured interval.
+//! Each sequence is also run once before measurement to check arena settlement
+//! and callback delivery. A permanently disposed recognizer cannot stand in
+//! for the dispatch hot path.
 
-// Bench harness, not public API; `criterion_group!` generates the
-// undocumentable entry fn.
+use std::{cell::Cell, hint::black_box, rc::Rc, sync::Arc};
 
-use std::hint::black_box;
-use std::sync::Arc;
-
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use flui_foundation::geometry::Offset;
-use flui_interaction::GestureRecognizer;
-use flui_interaction::PointerDispatch;
 use flui_interaction::arena::GestureArena;
-use flui_interaction::events::{PointerType, make_down_event, make_move_event, make_up_event};
-use flui_interaction::ids::PointerId;
-use flui_interaction::recognizers::TapGestureRecognizer;
+use flui_interaction::events::{
+    PointerButton, PointerEvent, PointerType, make_down_event_for_id_with_button,
+    make_move_event_for_id, make_up_event_for_id_with_button,
+};
+use flui_interaction::{GestureRecognizer, PointerDispatch, PointerId, TapGestureRecognizer};
 
-/// Build a recogniser with the given callback wiring. The arc clone
-/// is a one-time setup cost; the bench loop only measures
-/// `handle_event`.
-fn make_recognizer(with_callbacks: bool) -> Arc<TapGestureRecognizer> {
-    let arena = GestureArena::new();
-    let recognizer = TapGestureRecognizer::new(arena);
-    if with_callbacks {
-        let r = Arc::clone(&recognizer)
-            .with_on_tap_down(|_d| {})
-            .with_on_tap_up(|_d| {})
-            .with_on_tap(|_d| {});
-        // with_*_X returns the same Arc — ensure the builder chain
-        // is the one we hand to the bench.
-        return r;
+struct TapFixture {
+    recognizer: Arc<TapGestureRecognizer>,
+    arena: GestureArena,
+    callbacks: Rc<Cell<u32>>,
+}
+
+impl TapFixture {
+    fn new(callbacks: bool, button: PointerButton) -> Self {
+        let arena = GestureArena::new();
+        let mut recognizer = TapGestureRecognizer::new(arena.clone());
+        let calls = Rc::new(Cell::new(0));
+        if callbacks {
+            let (down, up, tap) = (Rc::clone(&calls), Rc::clone(&calls), Rc::clone(&calls));
+            recognizer = match button {
+                PointerButton::Secondary => recognizer
+                    .with_on_secondary_tap_down(move |_| down.set(down.get() + 1))
+                    .with_on_secondary_tap_up(move |_| up.set(up.get() + 1))
+                    .with_on_secondary_tap(move |_| tap.set(tap.get() + 1)),
+                _ => recognizer
+                    .with_on_tap_down(move |_| down.set(down.get() + 1))
+                    .with_on_tap_up(move |_| up.set(up.get() + 1))
+                    .with_on_tap(move |_| tap.set(tap.get() + 1)),
+            };
+        }
+        Self {
+            recognizer,
+            arena,
+            callbacks: calls,
+        }
     }
-    recognizer
+
+    fn sequence(&self, events: &[PointerEvent; 3]) {
+        self.recognizer
+            .add_pointer_down(PointerDispatch::at_root(black_box(&events[0])));
+        for event in &events[1..] {
+            self.recognizer
+                .handle_event(PointerDispatch::at_root(black_box(event)));
+        }
+        black_box(self.callbacks.get());
+    }
 }
 
-/// Pointer-down event at the origin (within slop of the down position).
-fn down_event() -> flui_interaction::events::PointerEvent {
-    make_down_event(Offset::new(100.0, 100.0), PointerType::Touch)
+impl Drop for TapFixture {
+    fn drop(&mut self) {
+        self.recognizer.dispose();
+    }
 }
 
-/// Pointer-move event within the default touch slop (18 px) of the
-/// down position — must NOT cancel the in-flight tap.
-fn move_within_slop_event() -> flui_interaction::events::PointerEvent {
-    make_move_event(Offset::new(105.0, 102.0), PointerType::Touch)
-}
-
-/// Pointer-up event at the same position as the down — completes a
-/// valid tap.
-fn up_event() -> flui_interaction::events::PointerEvent {
-    make_up_event(Offset::new(100.0, 100.0), PointerType::Touch)
-}
-
-/// Benchmark the full Down → Move → Up sequence with no callbacks
-/// wired. Measures pure dispatch cost (arena lookup, state-machine
-/// transitions, slop checks).
-fn bench_tap_no_callbacks(c: &mut Criterion) {
-    let recognizer = black_box(make_recognizer(false));
-    let down = down_event();
-    let mv = move_within_slop_event();
-    let up = up_event();
-    let pointer = PointerId::PRIMARY;
-    c.bench_function("TapGestureRecognizer::handle_event (no callbacks)", |b| {
-        b.iter(|| {
-            recognizer.add_pointer(
-                pointer,
-                Offset::new(100.0, 100.0),
-                Offset::new(100.0, 100.0),
-            );
-            recognizer.handle_event(PointerDispatch::at_root(black_box(&down)));
-            recognizer.handle_event(PointerDispatch::at_root(black_box(&mv)));
-            recognizer.handle_event(PointerDispatch::at_root(black_box(&up)));
-            // Re-arm for next iter (Up closes the gesture; reset is
-            // implicit in `add_pointer` overwriting primary_pointer).
-            recognizer.dispose();
-        });
-    });
-}
-
-/// Benchmark the full Down → Move → Up sequence with all three tap
-/// callbacks wired (`on_tap_down`, `on_tap_up`, `on_tap`). The
-/// `pending_up` deferral means the callbacks fire AFTER the arena
-/// resolves — but the recogniser still has to clone the callback
-/// handles, so this bench captures the steady-state allocation
-/// profile of the recogniser.
-fn bench_tap_with_callbacks(c: &mut Criterion) {
-    let recognizer = black_box(make_recognizer(true));
-    let down = down_event();
-    let mv = move_within_slop_event();
-    let up = up_event();
-    let pointer = PointerId::PRIMARY;
-    c.bench_function(
-        "TapGestureRecognizer::handle_event (with on_tap callbacks)",
-        |b| {
-            b.iter(|| {
-                recognizer.add_pointer(
-                    pointer,
-                    Offset::new(100.0, 100.0),
-                    Offset::new(100.0, 100.0),
-                );
-                recognizer.handle_event(PointerDispatch::at_root(black_box(&down)));
-                recognizer.handle_event(PointerDispatch::at_root(black_box(&mv)));
-                recognizer.handle_event(PointerDispatch::at_root(black_box(&up)));
-                recognizer.dispose();
-            });
-        },
-    );
-}
-
-/// `add_pointer` cost — called once per pointer-down when the
-/// recogniser joins the arena. Should be O(1): a `Mutex` lock + state
-/// write + arena `add`.
-fn bench_add_pointer(c: &mut Criterion) {
-    let arena = GestureArena::new();
-    let recognizer = black_box(TapGestureRecognizer::new(arena));
+fn events(button: PointerButton) -> [PointerEvent; 3] {
     let pointer = PointerId::PRIMARY;
     let position = Offset::new(100.0, 100.0);
-    c.bench_function("TapGestureRecognizer::add_pointer", |b| {
-        b.iter(|| {
-            recognizer.add_pointer(black_box(pointer), black_box(position), black_box(position));
-            recognizer.dispose();
+    [
+        make_down_event_for_id_with_button(pointer, position, PointerType::Touch, button),
+        make_move_event_for_id(pointer, Offset::new(101.0, 101.0), PointerType::Touch),
+        make_up_event_for_id_with_button(pointer, position, PointerType::Touch, button),
+    ]
+}
+
+fn bench_tap_sequences(c: &mut Criterion) {
+    for (name, callbacks, button) in [
+        (
+            "handle_event/static/no_callbacks",
+            false,
+            PointerButton::Primary,
+        ),
+        (
+            "handle_event/static/primary_callbacks",
+            true,
+            PointerButton::Primary,
+        ),
+        (
+            "handle_event/static/secondary_callbacks",
+            true,
+            PointerButton::Secondary,
+        ),
+    ] {
+        let events = events(button);
+        let witness = TapFixture::new(callbacks, button);
+        witness.sequence(&events);
+        assert!(
+            witness.arena.is_empty(),
+            "the measured tap settles its arena"
+        );
+        assert_eq!(witness.callbacks.get(), if callbacks { 3 } else { 0 });
+        c.bench_function(name, |b| {
+            b.iter_batched_ref(
+                || TapFixture::new(callbacks, button),
+                |fixture| fixture.sequence(&events),
+                BatchSize::SmallInput,
+            );
         });
+    }
+}
+
+fn bench_admission(c: &mut Criterion) {
+    let [down, _, _] = events(PointerButton::Primary);
+    c.bench_function("add_pointer/static", |b| {
+        b.iter_batched_ref(
+            || TapFixture::new(false, PointerButton::Primary),
+            |fixture| {
+                fixture
+                    .recognizer
+                    .add_pointer_down(PointerDispatch::at_root(black_box(&down)))
+            },
+            BatchSize::SmallInput,
+        );
     });
 }
 
-/// Secondary-button tap — `handle_event` with a
-/// `PointerButton::Secondary` payload must route to the secondary
-/// callback slot rather than the primary one. The recogniser's
-/// per-button dispatch is the hot path here; the bench
-/// regression-guards the constant cost.
-fn bench_secondary_button(c: &mut Criterion) {
-    // We can't easily construct a `PointerButtonEvent` with
-    // `Secondary` in a bench (the `make_*_event` helpers only emit
-    // `Primary`). Instead we measure the primary-button path and
-    // rely on the unit tests in
-    // `src/recognizers/tap.rs::secondary_button_routes_to_*` to cover
-    // the button-mismatch case. The primary-path cost is the same
-    // shape (one extra `down()` callback-table lookup) — if the
-    // primary path is fast, the secondary path is too.
-    let recognizer = black_box(make_recognizer(false));
-    let down = down_event();
-    let pointer = PointerId::PRIMARY;
-    c.bench_function(
-        "TapGestureRecognizer::handle_event (primary, primary path)",
-        |b| {
-            b.iter(|| {
-                recognizer.add_pointer(
-                    pointer,
-                    Offset::new(100.0, 100.0),
-                    Offset::new(100.0, 100.0),
-                );
-                recognizer.handle_event(PointerDispatch::at_root(black_box(&down)));
-                recognizer.dispose();
-            });
-        },
-    );
-}
-
-criterion_group!(
-    tap_benches,
-    bench_tap_no_callbacks,
-    bench_tap_with_callbacks,
-    bench_add_pointer,
-    bench_secondary_button,
-);
+criterion_group!(tap_benches, bench_tap_sequences, bench_admission);
 criterion_main!(tap_benches);
