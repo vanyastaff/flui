@@ -19,10 +19,11 @@ fn legacy_backend_pinch_ticks_reach_the_viewer_as_independent_steps() {
         tight(100.0, 100.0),
     );
     for time in [10, 20] {
-        let mut state = upstream::PointerState::default();
-        state.time = time;
-        state.position.x = 50.0;
-        state.position.y = 50.0;
+        let state = upstream::PointerState {
+            time,
+            position: (50.0, 50.0).into(),
+            ..upstream::PointerState::default()
+        };
         let native_translation = upstream::PointerEvent::Gesture(upstream::PointerGestureEvent {
             pointer: upstream::PointerInfo {
                 pointer_id: upstream::PointerId::new(u64::MAX),
