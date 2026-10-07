@@ -117,6 +117,60 @@ pub(crate) fn viewer_native_session_reports_one_start_and_one_terminal() {
     );
 }
 
+/// A newly enabled descendant cannot steal its ancestor's accepted source.
+pub(crate) fn viewer_native_owner_survives_descendant_enable_during_rebuild() {
+    use flui_widgets::{InteractiveViewer, TransformationController};
+    let outer = TransformationController::new();
+    let inner = TransformationController::new();
+    let outer_ends = Rc::new(RefCell::new(Vec::new()));
+    let inner_ends = Rc::new(RefCell::new(Vec::new()));
+    let tree = |inner_enabled| {
+        let outer_log = outer_ends.clone();
+        let inner_log = inner_ends.clone();
+        InteractiveViewer::new()
+            .controller(outer.clone())
+            .boundary_margin(EdgeInsets::all(1000.0))
+            .on_interaction_end(move |_, details| outer_log.borrow_mut().push(details.reason))
+            .child(
+                InteractiveViewer::new()
+                    .controller(inner.clone())
+                    .scale_enabled(inner_enabled)
+                    .pan_enabled(false)
+                    .boundary_margin(EdgeInsets::all(1000.0))
+                    .on_interaction_end(move |_, details| {
+                        inner_log.borrow_mut().push(details.reason)
+                    })
+                    .child(SizedBox::new(200.0, 200.0)),
+            )
+    };
+    let mut laid = lay_out(tree(false), tight(200.0, 200.0));
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::Start));
+    laid.dispatch_pointer_event(&zoom_update(1.2));
+    assert_scale(scale_of(&outer), 1.2);
+    assert_scale(scale_of(&inner), 1.0);
+    laid.pump_widget(tree(true));
+    laid.pump();
+    laid.dispatch_pointer_event(&zoom_update(1.5));
+    assert_scale(scale_of(&outer), 1.5);
+    assert_scale(scale_of(&inner), 1.0);
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::End));
+    assert_eq!(outer_ends.borrow().len(), 1);
+    assert!(
+        inner_ends.borrow().is_empty(),
+        "unadmitted descendant has no source terminal"
+    );
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::Start));
+    laid.dispatch_pointer_event(&zoom_update(1.1));
+    assert_scale(scale_of(&outer), 1.5);
+    assert_scale(scale_of(&inner), 1.1);
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::Cancelled));
+    assert_eq!(
+        inner_ends.borrow().len(),
+        1,
+        "next source can choose the now-enabled descendant"
+    );
+}
+
 /// A pan that has already won can acquire a second contact without restarting.
 pub(crate) fn viewer_pan_transitions_to_pinch_without_contact_count_jumps() {
     use flui_interaction::events::{
