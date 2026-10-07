@@ -15,7 +15,10 @@
 //! not-yet-covered distance left (so a `reverse()` cannot collapse
 //! synchronously to `Dismissed`) pump a real `Vsync` instead; those say so.
 
+use std::cell::RefCell;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::RecvTimeoutError;
 use std::time::Duration;
 
 use flui_animation::{Animation, AnimationStatus, Vsync};
@@ -214,3 +217,115 @@ pub(crate) fn status_listener_does_not_hold_a_lock_across_the_binding_call() {
 // ============================================================================
 // `pop_paced` — gesture pacing rides the pop command, no stored field
 // ============================================================================
+
+// ============================================================================
+// OWNERSHIP
+// ============================================================================
+
+/// A route left mid-hop and dropped without `dispose` frees its secondary
+/// proxy: the hop's switch callback must not keep the proxy alive through the
+/// switch the proxy itself parents (`proxy -> switch -> callback -> proxy`).
+///
+/// Red-check: capture `Arc<ProxyAnimation>` instead of a `Weak` in the
+/// `on_switched` callback of `TransitionRoute::update_secondary_animation`.
+pub(crate) fn hopping_route_dropped_without_dispose_frees_proxy() {
+    let (bottom, bottom_handle) = transition("bottom");
+    let navigator_handle = NavigatorHandle::new();
+    navigator_handle.seed_initial(bottom);
+    let mut harness = mount(Navigator::new(navigator_handle.clone()));
+
+    let (middle, middle_handle) = transition("middle");
+    navigator_handle.push(middle);
+    harness.tick();
+    let middle_controller = middle_handle
+        .controller()
+        .expect("install created the controller");
+    // Mid-entrance: a moving train at a value the replacement does not share.
+    middle_controller.set_value(0.5);
+
+    let (top, _top_handle) = transition("top");
+    navigator_handle.push_replacement(top);
+    harness.tick();
+    assert!(
+        bottom_handle.secondary_is_hopping(),
+        "the replacement starts at a different value while moving: a hop"
+    );
+
+    let proxy = Arc::downgrade(&bottom_handle.secondary_animation());
+    drop(middle_controller);
+    drop(middle_handle);
+    drop(bottom_handle);
+    drop(harness);
+    drop(navigator_handle);
+    assert!(
+        proxy.upgrade().is_none(),
+        "the secondary proxy outlived every owner of the route"
+    );
+}
+
+std::thread_local! {
+    static REENTRANT_HANDLE: RefCell<Option<TransitionHandle>> = const { RefCell::new(None) };
+}
+
+/// A listener capture whose `Drop` reads the route's controller through the
+/// route's handle (parked in a thread-local: the handle is not `Send`).
+struct ReadsControllerOnDrop(Arc<AtomicBool>);
+
+impl Drop for ReadsControllerOnDrop {
+    fn drop(&mut self) {
+        let handle = REENTRANT_HANDLE.with(|slot| slot.borrow_mut().take());
+        if let Some(handle) = handle {
+            let _ = handle.controller();
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+}
+
+/// Disposing a route retires its controller's status listeners; a listener
+/// capture whose `Drop` reads the controller through the route's handle must
+/// not find the route still holding its controller slot. A held slot is a
+/// self-deadlock, so the scenario runs on its own thread and the row fails
+/// after ten seconds without a completion signal (the stuck thread is leaked).
+///
+/// Red-check: dispose the controller inside
+/// `if let Some(controller) = self.inner.controller.lock().take() && …` in
+/// `TransitionRoute::dispose`.
+pub(crate) fn dispose_releases_the_controller_slot_before_disposing_it() {
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let (navigator_handle, mut harness) = navigator();
+        let (route, animation) = transition("second");
+        navigator_handle.push(route);
+        complete(&animation);
+        harness.tick();
+
+        let reentered = Arc::new(AtomicBool::new(false));
+        let probe = ReadsControllerOnDrop(Arc::clone(&reentered));
+        animation
+            .controller()
+            .expect("install created the controller")
+            .add_status_listener(Arc::new(move |_| {
+                let _ = &probe;
+            }));
+        REENTRANT_HANDLE.with(|slot| *slot.borrow_mut() = Some(animation.clone()));
+
+        navigator_handle.pop();
+        dismiss(&animation);
+        harness.tick();
+        REENTRANT_HANDLE.with(|slot| slot.borrow_mut().take());
+
+        assert_eq!(navigator_handle.route_ids().len(), 1);
+        assert!(
+            reentered.load(Ordering::SeqCst),
+            "disposing the route retired the listener capture"
+        );
+        let _ = done.send(());
+    });
+    match finished.recv_timeout(Duration::from_secs(10)) {
+        Ok(()) => {}
+        Err(RecvTimeoutError::Timeout) => {
+            panic!("deadlock: dispose held the controller slot while dropping a capture")
+        }
+        Err(RecvTimeoutError::Disconnected) => panic!("the dispose scenario panicked"),
+    }
+}

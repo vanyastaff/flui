@@ -28,8 +28,7 @@ use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_ma
 use flui_animation::smoothing::{SmoothDamp, exp_decay_half_life};
 use flui_animation::{
     Animatable, AnimatedValue, Animation, AnimationController, ColorTween, Curve, CurvedAnimation,
-    Curves, FloatTween, FrictionSimulation, OklabColorTween, Simulation, SpringDescription,
-    SpringSimulation, Tween,
+    Curves, FloatTween, FrictionSimulation, Simulation, SpringDescription, SpringSimulation, Tween,
 };
 use flui_foundation::Listenable;
 use flui_foundation::geometry::Offset;
@@ -51,16 +50,11 @@ fn tween_transform(c: &mut Criterion) {
         b.iter(|| black_box(f.transform(black_box(0.37))));
     });
 
-    let col = ColorTween::new(Color::rgba(0, 0, 0, 255), Color::rgba(255, 128, 0, 255));
+    // Premultiplied Oklab: prices the two colour-space conversions (powf/cbrt per
+    // channel) each interior frame pays.
+    let col = ColorTween::new(Color::rgba(0, 0, 255, 255), Color::rgba(255, 255, 0, 128));
     group.bench_function("color", |b| {
         b.iter(|| black_box(col.transform(black_box(0.37))));
-    });
-
-    // Perceptual color path: prices the two Oklab conversions (powf/cbrt per
-    // channel) against the componentwise sRGB lerp above.
-    let oklab = OklabColorTween::new(Color::rgba(0, 0, 255, 255), Color::rgba(255, 255, 0, 255));
-    group.bench_function("color_oklab", |b| {
-        b.iter(|| black_box(oklab.transform(black_box(0.37))));
     });
 
     let off = Tween::new(Offset::new(0.0, 0.0), Offset::new(100.0, 200.0));

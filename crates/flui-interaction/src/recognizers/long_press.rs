@@ -610,6 +610,7 @@ impl LongPressGestureRecognizer {
         if !self.state.assert_not_disposed("add_pointer") {
             return;
         }
+        let generation = self.state.contact_generation();
         match self.state.primary_pointer() {
             Some(tracked) if tracked != pointer => return,
             Some(_) => {
@@ -620,12 +621,7 @@ impl LongPressGestureRecognizer {
         }
         // The cancel callback may have disposed this recognizer or admitted a
         // contact of its own; either way this admission is void.
-        if self.state.is_disposed()
-            || self
-                .state
-                .primary_pointer()
-                .is_some_and(|tracked| tracked != pointer)
-        {
+        if self.state.is_disposed() || self.state.contact_generation() != generation {
             return;
         }
         // Start tracking this exact allocation in both the arena and the

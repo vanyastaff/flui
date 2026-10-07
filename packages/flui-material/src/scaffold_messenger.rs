@@ -569,8 +569,12 @@ impl MessengerCore {
     }
 
     fn cancel_display_timer(&self) {
-        if let Some(registration) = self.duration_vsync_registration.borrow_mut().take()
-            && let Some(vsync) = self.vsync.borrow().as_ref()
+        // Take both out before unregistering: dropping the controller there may
+        // run its retired callbacks, which must not find these cells borrowed.
+        let registration = self.duration_vsync_registration.borrow_mut().take();
+        let vsync = self.vsync.borrow().clone();
+        if let Some(registration) = registration
+            && let Some(vsync) = vsync
         {
             vsync.unregister(&registration);
         }
@@ -723,8 +727,10 @@ impl ScaffoldMessengerHandle {
             entry.complete_silently();
         }
         self.shared.cancel_display_timer();
-        if let Some(registration) = self.shared.entry_vsync_registration.borrow_mut().take()
-            && let Some(vsync) = self.shared.vsync.borrow_mut().take()
+        let registration = self.shared.entry_vsync_registration.borrow_mut().take();
+        let vsync = self.shared.vsync.borrow_mut().take();
+        if let Some(registration) = registration
+            && let Some(vsync) = vsync
         {
             vsync.unregister(&registration);
         }

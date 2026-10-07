@@ -158,13 +158,22 @@ impl ViewState<AnimatedAlign> for AnimatedAlignState {
         self.controller.set_curve(new_view.curve.clone());
         let t = self.controller.value();
 
-        // `|=`, not `||`: every property must be re-anchored at this same
-        // instant even once an earlier one has already reported a change.
-        let mut any_target_changed = false;
-        any_target_changed |= self.alignment.retarget(Some(new_view.alignment), t);
-        any_target_changed |= self.width_factor.retarget(new_view.width_factor, t);
-        any_target_changed |= self.height_factor.retarget(new_view.height_factor, t);
-        if any_target_changed {
+        // A change to any property restarts the shared controller and re-anchors
+        // every property at this same instant.
+        let restart = self.alignment.animates_toward(Some(&new_view.alignment))
+            || self
+                .width_factor
+                .animates_toward(new_view.width_factor.as_ref())
+            || self
+                .height_factor
+                .animates_toward(new_view.height_factor.as_ref());
+        self.alignment
+            .retarget(Some(new_view.alignment), t, restart);
+        self.width_factor
+            .retarget(new_view.width_factor, t, restart);
+        self.height_factor
+            .retarget(new_view.height_factor, t, restart);
+        if restart {
             self.controller.restart_from_zero();
         }
     }

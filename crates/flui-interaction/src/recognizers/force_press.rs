@@ -1,12 +1,17 @@
 //! Force press gesture recognizer
 //!
-//! Recognizes force press (3D Touch / Force Touch) gestures based on pressure.
+//! Recognizes force press (3D Touch / Force Touch / stylus) gestures based on
+//! pressure.
 //!
 //! A force press is defined as:
-//! - Pointer down with pressure sensing support
-//! - Pressure increases past the start threshold (0.4 by default)
-//! - Optional pressure updates as finger presses harder/softer
-//! - Pressure decreases below end threshold or pointer up/cancel
+//! - a contact from hardware that reports real pressure (see
+//!   [`ForcePressGestureRecognizer`] for how a sensor is told apart from the
+//!   sensor-less `0.5`);
+//! - pressure rising past the start threshold (0.4 by default), which claims
+//!   the gesture arena; the press starts once the arena accepts it;
+//! - optional pressure updates as the contact presses harder or softer;
+//! - an end when pressure falls below the start threshold, the contact
+//!   drifts past slop, lifts, or is cancelled.
 
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
@@ -14,13 +19,17 @@ use crate::ForcePressDetails;
 use flui_foundation::geometry::Offset;
 use parking_lot::Mutex;
 
-use super::recognizer::{GestureRecognizer, RecognizerBase};
+use super::{
+    recognizer::{GestureRecognizer, RecognizerBase},
+    recognizer::{finish_containment, invoke_callback, retire_callback},
+};
 use crate::{
-    arena::GestureArenaMember,
+    arena::{GestureArenaEntry, GestureArenaMember, GestureDisposition, SweepModel},
     events::{PointerEvent, PointerType},
     ids::PointerId,
-    routing::PointerDispatch,
+    routing::{PointerDispatch, RoutePanic},
     settings::GestureSettings,
+    traits::PointerEventExtTrait,
 };
 
 /// Default pressure threshold to start force press (40%)
@@ -41,37 +50,41 @@ pub type ForcePressPeakCallback = Rc<dyn Fn(ForcePressDetails)>;
 /// Callback for force press end events
 pub type ForcePressEndCallback = Rc<dyn Fn(ForcePressDetails)>;
 
-/// Recognizes force press gestures based on pressure sensitivity
+/// Recognizes force press gestures based on pressure sensitivity.
 ///
-/// Force press detection requires a device that supports pressure sensing
-/// (touch screens with 3D Touch, Force Touch trackpads, styluses with
-/// pressure support).
+/// # Which devices can force press
+///
+/// `PointerEvent` carries a normalized pressure but no sensor range, and a
+/// sensor-less device reports a constant while pressed: `0.5` on the W3C
+/// convention, `1.0` for an Android touch or mouse. A force press therefore
+/// starts only after the contact has reported two different non-zero
+/// pressures, which only a real sensor produces, and never for a mouse.
+/// Non-finite pressure samples are ignored.
+///
+/// # Arena
+///
+/// Crossing the start threshold claims the gesture arena; `on_start` fires
+/// only once the arena has accepted this recognizer, so a loser never emits
+/// it. A contact that lifts, drifts past slop or falls back before starting
+/// withdraws from the arena, so a competing tap can still win it.
 ///
 /// # Pressure Thresholds
 ///
 /// - **Start threshold** (default 0.4): Pressure level to begin force press
 /// - **Peak threshold** (default 0.85): Pressure level for "peak" callback
 ///
+/// Callbacks run after the recognizer has committed its state, with no
+/// borrow held: a callback may dispose the recognizer. A panicking callback
+/// propagates to the dispatcher and the next press starts clean.
+///
 /// # Example
 ///
 /// ```rust,ignore
 /// use flui_interaction::prelude::*;
 ///
-/// let arena = GestureArena::new();
-/// let recognizer = ForcePressGestureRecognizer::new(arena)
-///     .with_on_start(|details| {
-///         println!("Force press started at {:?}", details.global_position);
-///     })
-///     .with_on_peak(|details| {
-///         println!("Force press peaked! Pressure: {}", details.pressure);
-///     })
-///     .with_on_end(|details| {
-///         println!("Force press ended");
-///     });
-///
-/// // Add to arena and handle events
-/// recognizer.add_pointer(pointer_id, position, position);
-/// recognizer.handle_event(PointerDispatch::at_root(&pointer_event));
+/// let recognizer = ForcePressGestureRecognizer::new(binding.arena().clone())
+///     .with_on_start(|details| println!("Force press at {:?}", details.global_position))
+///     .with_on_peak(|details| println!("Peak pressure {}", details.pressure));
 /// ```
 #[derive(Clone)]
 pub struct ForcePressGestureRecognizer {
@@ -87,11 +100,15 @@ pub struct ForcePressGestureRecognizer {
     /// Gesture settings (device-specific tolerances)
     settings: Arc<Mutex<GestureSettings>>,
 
-    /// Pressure threshold to start force press (0.0 to 1.0)
-    start_pressure: f64,
+    /// Start and peak pressure thresholds, shared by every clone so a
+    /// builder call never forks the recognizer's identity.
+    thresholds: Arc<Mutex<Thresholds>>,
+}
 
-    /// Pressure threshold for peak force press (0.0 to 1.0)
-    peak_pressure: f64,
+#[derive(Debug, Clone, Copy)]
+struct Thresholds {
+    start: f64,
+    peak: f64,
 }
 
 // Field names keep the `on_start`/`on_update`-style callback names.
@@ -104,57 +121,126 @@ struct ForcePressCallbacks {
     on_end: Option<ForcePressEndCallback>,
 }
 
+impl ForcePressCallbacks {
+    fn retire(self, first: &mut Option<RoutePanic>) {
+        retire_callback(self.on_start, first);
+        retire_callback(self.on_update, first);
+        retire_callback(self.on_peak, first);
+        retire_callback(self.on_end, first);
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ForcePressPhase {
-    /// Ready to start
+    /// No contact is tracked.
     Ready,
-    /// Pointer down, waiting for pressure to exceed threshold
+    /// Contact down, below the start threshold or without sensor evidence.
     Possible,
-    /// Force press started (pressure > start threshold)
+    /// Start threshold crossed; the arena claim is pending.
+    Claiming,
+    /// Force press started.
     Started,
-    /// Peak pressure reached
+    /// Peak pressure reached.
     Peaked,
-    /// Force press ended
-    Ended,
 }
 
 #[derive(Debug, Clone)]
 struct ForcePressState {
-    /// Current phase
     phase: ForcePressPhase,
-    /// Current position
-    current_position: Offset<f64>,
-    /// Current pressure (0.0 to 1.0)
-    current_pressure: f64,
-    /// Maximum pressure for the device (always 1.0 for ui-events)
-    max_pressure: f64,
-    /// Whether peak callback has been called
-    peak_triggered: bool,
+    /// The tracked contact and its arena membership.
+    pointer: Option<PointerId>,
+    entry: Option<GestureArenaEntry>,
+    /// The arena accepted this recognizer for the tracked contact.
+    won: bool,
+    /// The contact reported pressures only a real sensor produces.
+    sensor: bool,
+    /// The contact's first non-zero pressure, compared against later ones.
+    first_reading: Option<f64>,
+    position: Offset<f64>,
+    global_position: Offset<f64>,
+    pressure: f64,
 }
 
 impl Default for ForcePressState {
     fn default() -> Self {
         Self {
             phase: ForcePressPhase::Ready,
-            current_position: Offset::new(0.0, 0.0),
-            current_pressure: 0.0,
-            max_pressure: 1.0,
-            peak_triggered: false,
+            pointer: None,
+            entry: None,
+            won: false,
+            sensor: false,
+            first_reading: None,
+            position: Offset::ZERO,
+            global_position: Offset::ZERO,
+            pressure: 0.0,
         }
     }
+}
+
+impl ForcePressState {
+    fn details(&self) -> ForcePressDetails {
+        ForcePressDetails::new(self.global_position, self.position, self.pressure, 1.0)
+    }
+
+    fn is_active(&self) -> bool {
+        matches!(
+            self.phase,
+            ForcePressPhase::Started | ForcePressPhase::Peaked
+        )
+    }
+
+    /// Record one pressure sample. A non-finite sample is ignored and reported
+    /// as not admitted, so the caller makes no transition from it.
+    ///
+    /// A sensor is proven by a non-zero pressure different from the contact's
+    /// first one: platforms give sensor-less contacts a constant (0.5 on the
+    /// W3C convention, 1.0 on Android). A mouse is never a sensor.
+    #[must_use]
+    fn record_pressure(&mut self, pressure: f64, kind: Option<PointerType>) -> bool {
+        if !pressure.is_finite() {
+            return false;
+        }
+        if kind != Some(PointerType::Mouse) && pressure != 0.0 {
+            match self.first_reading {
+                None => self.first_reading = Some(pressure),
+                Some(first) if first != pressure => self.sensor = true,
+                Some(_) => {}
+            }
+        }
+        self.pressure = pressure;
+        true
+    }
+
+    /// Enter `Started`, plus `Peaked` when the pressure is already there.
+    fn start(&mut self, peak: f64, out: &mut Vec<Notice>) {
+        self.phase = ForcePressPhase::Started;
+        out.push(Notice::Start(self.details()));
+        if self.pressure >= peak {
+            self.phase = ForcePressPhase::Peaked;
+            out.push(Notice::Peak(self.details()));
+        }
+    }
+}
+
+/// A user callback to deliver once the state lock is released.
+enum Notice {
+    Start(ForcePressDetails),
+    Update(ForcePressDetails),
+    Peak(ForcePressDetails),
+    End(ForcePressDetails),
+}
+
+/// Arena work to run once the state lock is released, before notices.
+enum ArenaStep {
+    None,
+    Claim(GestureArenaEntry),
+    Withdraw(GestureArenaEntry),
 }
 
 impl ForcePressGestureRecognizer {
     /// Create a new force press recognizer with gesture arena
     pub fn new(arena: crate::arena::GestureArena) -> Arc<Self> {
-        Arc::new(Self {
-            state: RecognizerBase::new(arena),
-            callbacks: Rc::new(RefCell::new(ForcePressCallbacks::default())),
-            gesture_state: Arc::new(Mutex::new(ForcePressState::default())),
-            settings: Arc::new(Mutex::new(GestureSettings::default())),
-            start_pressure: FORCE_PRESS_START_PRESSURE,
-            peak_pressure: FORCE_PRESS_PEAK_PRESSURE,
-        })
+        Self::with_settings(arena, GestureSettings::default())
     }
 
     /// Create a new force press recognizer with custom settings
@@ -167,8 +253,10 @@ impl ForcePressGestureRecognizer {
             callbacks: Rc::new(RefCell::new(ForcePressCallbacks::default())),
             gesture_state: Arc::new(Mutex::new(ForcePressState::default())),
             settings: Arc::new(Mutex::new(settings)),
-            start_pressure: FORCE_PRESS_START_PRESSURE,
-            peak_pressure: FORCE_PRESS_PEAK_PRESSURE,
+            thresholds: Arc::new(Mutex::new(Thresholds {
+                start: FORCE_PRESS_START_PRESSURE,
+                peak: FORCE_PRESS_PEAK_PRESSURE,
+            })),
         })
     }
 
@@ -182,305 +270,257 @@ impl ForcePressGestureRecognizer {
         *self.settings.lock() = settings;
     }
 
-    /// Set the start pressure threshold (0.0 to 1.0)
+    /// Set the start pressure threshold, clamped to `0.0..=1.0`.
     ///
-    /// Default is 0.4 (40% of max pressure).
-    pub fn with_start_pressure(mut self: Arc<Self>, pressure: f64) -> Arc<Self> {
-        // `make_mut` mutates in place when uniquely owned and otherwise clones
-        // first, so this is non-panicking even if the caller holds another
-        // reference (unlike `get_mut().unwrap()`, which panicked in release).
-        Arc::make_mut(&mut self).start_pressure = pressure.clamp(0.0, 1.0);
+    /// Default is 0.4 (40% of max pressure). A non-finite value is ignored.
+    /// The threshold is shared by every handle to this recognizer.
+    pub fn with_start_pressure(self: Arc<Self>, pressure: f64) -> Arc<Self> {
+        if pressure.is_finite() {
+            self.thresholds.lock().start = pressure.clamp(0.0, 1.0);
+        }
         self
     }
 
-    /// Set the peak pressure threshold (0.0 to 1.0)
+    /// Set the peak pressure threshold, clamped to `0.0..=1.0`.
     ///
-    /// Default is 0.85 (85% of max pressure).
-    pub fn with_peak_pressure(mut self: Arc<Self>, pressure: f64) -> Arc<Self> {
-        // `make_mut` mutates in place when uniquely owned and otherwise clones
-        // first, so this is non-panicking even if the caller holds another
-        // reference (unlike `get_mut().unwrap()`, which panicked in release).
-        Arc::make_mut(&mut self).peak_pressure = pressure.clamp(0.0, 1.0);
+    /// Default is 0.85 (85% of max pressure). A non-finite value is ignored.
+    /// A peak at or below the start threshold fires `on_peak` together with
+    /// `on_start`.
+    pub fn with_peak_pressure(self: Arc<Self>, pressure: f64) -> Arc<Self> {
+        if pressure.is_finite() {
+            self.thresholds.lock().peak = pressure.clamp(0.0, 1.0);
+        }
         self
     }
 
     /// Set the force press start callback
     ///
-    /// Called when pressure first exceeds the start threshold.
+    /// Called once the pressure has crossed the start threshold and the arena
+    /// accepted this recognizer.
     pub fn with_on_start(
         self: Arc<Self>,
         callback: impl Fn(ForcePressDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_start = Some(Rc::new(callback));
+        let old = self
+            .callbacks
+            .borrow_mut()
+            .on_start
+            .replace(Rc::new(callback));
+        drop(old);
         self
     }
 
     /// Set the force press update callback
     ///
-    /// Called whenever pressure changes while force press is active.
+    /// Called for each pressure sample while the force press is active.
     pub fn with_on_update(
         self: Arc<Self>,
         callback: impl Fn(ForcePressDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_update = Some(Rc::new(callback));
+        let old = self
+            .callbacks
+            .borrow_mut()
+            .on_update
+            .replace(Rc::new(callback));
+        drop(old);
         self
     }
 
     /// Set the force press peak callback
     ///
-    /// Called once when pressure first exceeds the peak threshold.
+    /// Called once when pressure first reaches the peak threshold.
     pub fn with_on_peak(
         self: Arc<Self>,
         callback: impl Fn(ForcePressDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_peak = Some(Rc::new(callback));
+        let old = self
+            .callbacks
+            .borrow_mut()
+            .on_peak
+            .replace(Rc::new(callback));
+        drop(old);
         self
     }
 
     /// Set the force press end callback
     ///
-    /// Called when pressure drops below start threshold or pointer is released.
+    /// Called when a started press ends: pressure falls below the start
+    /// threshold, the contact drifts past slop, lifts, or is cancelled.
     pub fn with_on_end(
         self: Arc<Self>,
         callback: impl Fn(ForcePressDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_end = Some(Rc::new(callback));
+        let old = self
+            .callbacks
+            .borrow_mut()
+            .on_end
+            .replace(Rc::new(callback));
+        drop(old);
         self
     }
 
     /// Get the current start pressure threshold
     pub fn start_pressure(&self) -> f64 {
-        self.start_pressure
+        self.thresholds.lock().start
     }
 
     /// Get the current peak pressure threshold
     pub fn peak_pressure(&self) -> f64 {
-        self.peak_pressure
+        self.thresholds.lock().peak
     }
 
-    /// Create force press details from current state
-    fn create_details(state: &ForcePressState) -> ForcePressDetails {
-        ForcePressDetails::new(
-            state.current_position,
-            state.current_position, // local_position (updated during hit testing)
-            state.current_pressure,
-            state.max_pressure,
-        )
+    /// Run the arena step, then deliver each notice. The first panic is
+    /// resumed after everything ran; the state was committed beforehand.
+    fn finish(&self, step: ArenaStep, notices: Vec<Notice>) {
+        let self_driven = self.state.arena().sweep_model() == SweepModel::SelfDriven;
+        let mut first = None;
+        match step {
+            ArenaStep::None => {}
+            ArenaStep::Claim(entry) => RoutePanic::preserve_first(
+                &mut first,
+                RoutePanic::capture(|| entry.resolve(GestureDisposition::Accepted)),
+                "force press arena claim",
+            ),
+            ArenaStep::Withdraw(entry) => RoutePanic::preserve_first(
+                &mut first,
+                RoutePanic::capture(|| {
+                    entry.resolve(GestureDisposition::Rejected);
+                    if self_driven {
+                        entry.sweep();
+                    }
+                }),
+                "force press arena withdrawal",
+            ),
+        }
+        // Every notice of a committed transition is delivered: a panic in
+        // `on_start` must not leave the caller with a start and no end. The
+        // first failure stays authoritative and resumes after the rest.
+        for notice in notices {
+            RoutePanic::preserve_first(
+                &mut first,
+                RoutePanic::capture(|| self.deliver(notice)),
+                "force press callback",
+            );
+        }
+        // Entered while the thread is already unwinding, the failure is retained
+        // rather than resumed: a second unwind would abort.
+        finish_containment(first, std::thread::panicking());
     }
 
-    /// Handle pointer down event
-    fn handle_down(&self, position: Offset<f64>, pressure: f64) {
+    fn deliver(&self, notice: Notice) {
+        let callbacks = self.callbacks.borrow();
+        let (callback, details) = match notice {
+            Notice::Start(d) => (callbacks.on_start.clone(), d),
+            Notice::Update(d) => (callbacks.on_update.clone(), d),
+            Notice::Peak(d) => (callbacks.on_peak.clone(), d),
+            Notice::End(d) => (callbacks.on_end.clone(), d),
+        };
+        drop(callbacks);
+        invoke_callback(callback, || {}, |cb| cb(details));
+    }
+
+    /// End the tracked sequence: reset the state, clear the base's tracking
+    /// and return the entry to withdraw plus the end notice owed.
+    fn retire_sequence(&self, state: &mut ForcePressState, out: &mut Vec<Notice>) -> ArenaStep {
+        if state.is_active() {
+            out.push(Notice::End(state.details()));
+        }
+        let entry = state.entry.take();
+        *state = ForcePressState::default();
+        self.state.set_primary_pointer(None);
+        self.state.clear_initial_contact();
+        entry.map_or(ArenaStep::None, ArenaStep::Withdraw)
+    }
+
+    /// One pressure (and position) sample for the tracked contact.
+    fn handle_sample(
+        &self,
+        position: Offset<f64>,
+        global_position: Offset<f64>,
+        pressure: f64,
+        kind: Option<PointerType>,
+    ) {
+        let thresholds = *self.thresholds.lock();
+        let slop = kind.map(|kind| self.settings.lock().hit_slop(kind));
+        let mut notices = Vec::new();
         let mut state = self.gesture_state.lock();
-
-        // Check if device supports pressure (pressure > 0 indicates support)
-        // In ui-events, pressure of 0.0 typically means no pressure support
-        if pressure == 0.0 {
-            // No pressure support - reject immediately
-            state.phase = ForcePressPhase::Ended;
+        if state.phase == ForcePressPhase::Ready {
+            return;
+        }
+        // Drift past slop ends the press (or forfeits a press not started).
+        if let (Some(slop), Some(initial)) = (slop, self.state.initial_position())
+            && position.is_finite()
+            && (position - initial).distance() > slop
+        {
+            let step = self.retire_sequence(&mut state, &mut notices);
             drop(state);
-            self.state.reject();
+            self.finish(step, notices);
+            return;
+        }
+        if position.is_finite() {
+            state.position = position;
+        }
+        if global_position.is_finite() {
+            state.global_position = global_position;
+        }
+        if !state.record_pressure(pressure, kind) {
+            // An ignored sample makes no transition: no update or peak from a
+            // stale pressure paired with the new position.
             return;
         }
 
-        state.phase = ForcePressPhase::Possible;
-        state.current_position = position;
-        state.current_pressure = pressure;
-        state.max_pressure = 1.0; // ui-events uses normalized pressure
-        state.peak_triggered = false;
-
-        // Check if already past start threshold
-        if state.current_pressure >= self.start_pressure {
-            state.phase = ForcePressPhase::Started;
-            let details = Self::create_details(&state);
-            drop(state);
-
-            // Call on_start callback
-            if let Some(callback) = self.callbacks.borrow().on_start.clone() {
-                callback(details);
-            }
-        }
-    }
-
-    /// Handle pointer move event (pressure may change)
-    fn handle_move(&self, position: Offset<f64>, pressure: f64, kind: PointerType) {
-        // Cache settings to avoid nested locks
-        let settings = self.settings.lock().clone();
-        let mut state = self.gesture_state.lock();
-
-        // Check slop - if moved too far, cancel
-        if let Some(initial_pos) = self.state.initial_position() {
-            let delta = position - initial_pos;
-            // Kind-aware: reading `touch_slop()` unconditionally
-            // gave a mouse the touch threshold, which is 18 logical pixels
-            // against the 1 a precise pointer should get -- so a force press
-            // survived eighteen times more drift with a mouse than with a
-            // finger, and no default-profile test could see it.
-            if delta.distance() > settings.hit_slop(kind) {
-                match state.phase {
-                    // Already recognised: end it and report the end.
-                    ForcePressPhase::Started | ForcePressPhase::Peaked => {
-                        state.phase = ForcePressPhase::Ended;
-                        let details = Self::create_details(&state);
-                        drop(state);
-
-                        if let Some(callback) = self.callbacks.borrow().on_end.clone() {
-                            callback(details);
-                        }
-
-                        self.state.stop_tracking();
-                    }
-                    // Not yet recognised, and now it never can be: the
-                    // a `possible` force press resolves as
-                    // *rejected* the moment it crosses hit slop. Returning without doing so
-                    // leaves the recognizer holding its arena entry, so it
-                    // both blocks competitors until the pointer lifts and can
-                    // still start the press if the pointer wanders back inside
-                    // tolerance -- after it has already forfeited.
-                    //
-                    // `handle_cancel` is the right exit: it fires `on_end`
-                    // only for Started/Peaked, so a rejected `Possible`
-                    // correctly reports nothing, matching the reference's
-                    // silent `resolve(rejected)`.
-                    ForcePressPhase::Possible => {
-                        drop(state);
-                        self.handle_cancel();
-                    }
-                    ForcePressPhase::Ready | ForcePressPhase::Ended => {}
-                }
-                return;
-            }
-        }
-
-        state.current_position = position;
-        state.current_pressure = pressure;
-
+        let mut step = ArenaStep::None;
         match state.phase {
-            ForcePressPhase::Possible if state.current_pressure >= self.start_pressure => {
-                // Pressure crossed the start threshold — fire on_start.
-                state.phase = ForcePressPhase::Started;
-                let details = Self::create_details(&state);
-                drop(state);
-
-                if let Some(callback) = self.callbacks.borrow().on_start.clone() {
-                    callback(details);
-                }
+            // A pressure fall before the claim is accepted withdraws it, as a
+            // fall before the start does.
+            ForcePressPhase::Claiming if state.pressure < thresholds.start => {
+                step = self.retire_sequence(&mut state, &mut notices);
             }
-            ForcePressPhase::Started => {
-                let details = Self::create_details(&state);
-
-                // Check for peak
-                if !state.peak_triggered && state.current_pressure >= self.peak_pressure {
-                    state.peak_triggered = true;
-                    state.phase = ForcePressPhase::Peaked;
-                    drop(state);
-
-                    if let Some(callback) = self.callbacks.borrow().on_peak.clone() {
-                        callback(details.clone());
-                    }
+            ForcePressPhase::Possible if state.sensor && state.pressure >= thresholds.start => {
+                if state.won {
+                    state.start(thresholds.peak, &mut notices);
                 } else {
-                    drop(state);
-                }
-
-                // Call update callback
-                if let Some(callback) = self.callbacks.borrow().on_update.clone() {
-                    callback(details);
-                }
-
-                // Check if pressure dropped below start threshold
-                let state = self.gesture_state.lock();
-                if state.current_pressure < self.start_pressure {
-                    drop(state);
-                    self.handle_end();
+                    state.phase = ForcePressPhase::Claiming;
+                    if let Some(entry) = state.entry.clone() {
+                        step = ArenaStep::Claim(entry);
+                    }
                 }
             }
-            ForcePressPhase::Peaked => {
-                let details = Self::create_details(&state);
-                drop(state);
-
-                // Call update callback
-                if let Some(callback) = self.callbacks.borrow().on_update.clone() {
-                    callback(details);
-                }
-
-                // Check if pressure dropped below start threshold
-                let state = self.gesture_state.lock();
-                if state.current_pressure < self.start_pressure {
-                    drop(state);
-                    self.handle_end();
+            ForcePressPhase::Started | ForcePressPhase::Peaked => {
+                if state.pressure < thresholds.start {
+                    step = self.retire_sequence(&mut state, &mut notices);
+                } else {
+                    if state.phase == ForcePressPhase::Started && state.pressure >= thresholds.peak
+                    {
+                        state.phase = ForcePressPhase::Peaked;
+                        notices.push(Notice::Peak(state.details()));
+                    }
+                    notices.push(Notice::Update(state.details()));
                 }
             }
             _ => {}
         }
-    }
-
-    /// Handle pointer up event
-    fn handle_up(&self, position: Offset<f64>) {
-        let mut state = self.gesture_state.lock();
-        state.current_position = position;
-        state.current_pressure = 0.0;
-
-        if state.phase == ForcePressPhase::Started || state.phase == ForcePressPhase::Peaked {
-            state.phase = ForcePressPhase::Ended;
-            let details = Self::create_details(&state);
-            drop(state);
-
-            if let Some(callback) = self.callbacks.borrow().on_end.clone() {
-                callback(details);
-            }
-
-            self.state.stop_tracking();
-        } else {
-            drop(state);
-            self.reset();
-        }
-    }
-
-    /// Handle end of force press
-    fn handle_end(&self) {
-        let mut state = self.gesture_state.lock();
-        state.phase = ForcePressPhase::Ended;
-        let details = Self::create_details(&state);
         drop(state);
-
-        if let Some(callback) = self.callbacks.borrow().on_end.clone() {
-            callback(details);
-        }
-
-        self.state.stop_tracking();
+        self.finish(step, notices);
     }
 
-    /// Handle cancel event
-    fn handle_cancel(&self) {
+    /// The tracked contact lifted or was cancelled.
+    fn handle_release(&self, position: Option<Offset<f64>>, global_position: Option<Offset<f64>>) {
+        let mut notices = Vec::new();
         let mut state = self.gesture_state.lock();
-        let callback =
-            if state.phase == ForcePressPhase::Started || state.phase == ForcePressPhase::Peaked {
-                self.callbacks
-                    .borrow()
-                    .on_end
-                    .clone()
-                    .map(|callback| (callback, Self::create_details(&state)))
-            } else {
-                None
-            };
-        *state = ForcePressState::default();
-        drop(state);
-
-        self.state.reject();
-        if let Some((callback, details)) = callback {
-            callback(details);
+        if state.phase == ForcePressPhase::Ready {
+            return;
         }
-    }
-
-    /// Reset the recognizer state
-    fn reset(&self) {
-        let mut state = self.gesture_state.lock();
-        state.phase = ForcePressPhase::Ready;
-        state.current_position = Offset::new(0.0, 0.0);
-        state.current_pressure = 0.0;
-        state.peak_triggered = false;
+        if let Some(position) = position.filter(|p| p.is_finite()) {
+            state.position = position;
+        }
+        if let Some(global) = global_position.filter(|p| p.is_finite()) {
+            state.global_position = global;
+        }
+        state.pressure = 0.0;
+        let step = self.retire_sequence(&mut state, &mut notices);
         drop(state);
-
-        self.state.stop_tracking();
+        self.finish(step, notices);
     }
 }
 
@@ -489,18 +529,43 @@ impl GestureRecognizer for ForcePressGestureRecognizer {
         self: &Arc<Self>,
         pointer: PointerId,
         position: Offset<f64>,
-        // Force-press DETAILS carry pressure, not a position, so no callback
-        // of this recogniser reports the global one. The base records it
-        // anyway: `initial_position`/`initial_global_position` are one stored
-        // contact, and writing half of it is how the two drift apart.
         global_position: Offset<f64>,
     ) {
-        if !self.state.assert_not_disposed("add_pointer") {
+        if !self.state.assert_not_disposed("add_pointer") || !position.is_finite() {
             return;
         }
-        // Start tracking this pointer
+        // A non-finite global position is never published: the local one
+        // stands in until a finite sample arrives.
+        let global_position = if global_position.is_finite() {
+            global_position
+        } else {
+            position
+        };
+        // One contact at a time: a second contact while one is tracked does
+        // not join. The same pointer going down again means its previous
+        // sequence never saw its end, so that sequence is retired first.
+        let tracked = self.gesture_state.lock().pointer;
+        match tracked {
+            Some(current) if current != pointer => return,
+            Some(_) => self.handle_release(None, None),
+            None => {}
+        }
+        // The retired sequence's `on_end` may have disposed this recognizer or
+        // admitted a contact of its own; either way this admission is void.
+        if self.state.is_disposed() || self.gesture_state.lock().pointer.is_some() {
+            return;
+        }
         self.state
             .start_tracking(pointer, position, global_position, self);
+        let mut state = self.gesture_state.lock();
+        *state = ForcePressState {
+            phase: ForcePressPhase::Possible,
+            pointer: Some(pointer),
+            entry: self.state.tracked_entry(),
+            position,
+            global_position,
+            ..ForcePressState::default()
+        };
     }
 
     fn handle_event(&self, dispatch: PointerDispatch<'_>) {
@@ -508,48 +573,57 @@ impl GestureRecognizer for ForcePressGestureRecognizer {
         if !self.state.assert_not_disposed("handle_event") {
             return;
         }
-        // Only process if we're tracking a pointer
-        if self.state.primary_pointer().is_none() {
+        let tracked = self.gesture_state.lock().pointer;
+        if tracked != Some(event.pointer_id()) {
             return;
         }
-
+        let global_position = dispatch.global.position();
         match event {
             PointerEvent::Down(data) => {
                 let pos = data.state.position;
-                let position = Offset::new(pos.x, pos.y);
-                self.handle_down(position, f64::from(data.state.pressure));
+                self.handle_sample(
+                    Offset::new(pos.x, pos.y),
+                    global_position,
+                    f64::from(data.state.pressure),
+                    Some(data.pointer.pointer_type),
+                );
             }
             PointerEvent::Move(data) => {
                 let pos = data.current.position;
-                let position = Offset::new(pos.x, pos.y);
-                self.handle_move(
-                    position,
+                self.handle_sample(
+                    Offset::new(pos.x, pos.y),
+                    global_position,
                     f64::from(data.current.pressure),
-                    data.pointer.pointer_type,
+                    Some(data.pointer.pointer_type),
                 );
             }
             PointerEvent::Up(data) => {
                 let pos = data.state.position;
-                let position = Offset::new(pos.x, pos.y);
-                self.handle_up(position);
+                self.handle_release(Some(Offset::new(pos.x, pos.y)), Some(global_position));
             }
-            PointerEvent::Cancel(_) => {
-                self.handle_cancel();
-            }
+            PointerEvent::Cancel(_) => self.handle_release(None, None),
             _ => {}
         }
     }
 
     fn dispose(&self) {
+        let incoming_failure = std::thread::panicking();
         self.state.mark_disposed();
-        // Reject arena entries + clear tracked pointer, so a disposed
-        // recognizer never lingers in the arena for a tracked pointer.
-        self.state.reject();
-        let mut callbacks = self.callbacks.borrow_mut();
-        callbacks.on_start = None;
-        callbacks.on_update = None;
-        callbacks.on_peak = None;
-        callbacks.on_end = None;
+        let callbacks = std::mem::take(&mut *self.callbacks.borrow_mut());
+        let entry = {
+            let mut state = self.gesture_state.lock();
+            let entry = state.entry.take();
+            *state = ForcePressState::default();
+            entry
+        };
+        let mut first = RoutePanic::capture(|| {
+            self.state.reject();
+            if let Some(entry) = entry {
+                entry.resolve(GestureDisposition::Rejected);
+            }
+        });
+        callbacks.retire(&mut first);
+        finish_containment(first, incoming_failure);
     }
 
     fn primary_pointer(&self) -> Option<PointerId> {
@@ -565,52 +639,54 @@ impl GestureRecognizer for ForcePressGestureRecognizer {
 
 impl crate::recognizers::OneSequenceGestureRecognizer for ForcePressGestureRecognizer {
     fn tracked_pointers(&self) -> Vec<PointerId> {
-        self.state
-            .primary_pointer()
-            .map(|p| vec![p])
-            .unwrap_or_default()
+        self.gesture_state.lock().pointer.into_iter().collect()
     }
 
-    fn resolve_pointer(&self, _pointer: PointerId, disposition: crate::arena::GestureDisposition) {
-        match disposition {
-            crate::arena::GestureDisposition::Accepted => {
-                // No-op — ForcePress callbacks fire from event handlers
-                // (pressure threshold detection).
-            }
-            crate::arena::GestureDisposition::Rejected => {
-                self.state.reject();
-            }
+    fn resolve_pointer(&self, pointer: PointerId, disposition: GestureDisposition) {
+        let entry = {
+            let state = self.gesture_state.lock();
+            (state.pointer == Some(pointer))
+                .then(|| state.entry.clone())
+                .flatten()
+        };
+        if let Some(entry) = entry {
+            entry.resolve(disposition);
         }
     }
 
-    fn stop_tracking_pointer(&self, _pointer: PointerId) {
-        self.state.stop_tracking();
+    fn stop_tracking_pointer(&self, pointer: PointerId) {
+        if self.gesture_state.lock().pointer == Some(pointer) {
+            self.handle_release(None, None);
+        }
     }
 }
 
 impl GestureArenaMember for ForcePressGestureRecognizer {
-    fn accept_gesture(&self, _pointer: PointerId) {
-        // We won the arena - gesture is accepted
+    fn accept_gesture(&self, pointer: PointerId) {
+        let peak = self.thresholds.lock().peak;
+        let mut notices = Vec::new();
+        let mut state = self.gesture_state.lock();
+        if state.pointer != Some(pointer) {
+            return;
+        }
+        state.won = true;
+        if state.phase == ForcePressPhase::Claiming {
+            state.start(peak, &mut notices);
+        }
+        drop(state);
+        self.finish(ArenaStep::None, notices);
     }
 
-    fn reject_gesture(&self, _pointer: PointerId) {
-        // We lost the arena - cancel the gesture
-        // NOTE: We don't call handle_cancel here because it would call reset()
-        // which calls stop_tracking() which calls arena.sweep() - and we're
-        // already inside arena.resolve() so that would deadlock.
-        // Just reset the state without touching the arena.
+    fn reject_gesture(&self, pointer: PointerId) {
+        let mut notices = Vec::new();
         let mut state = self.gesture_state.lock();
-        if state.phase == ForcePressPhase::Started || state.phase == ForcePressPhase::Peaked {
-            state.phase = ForcePressPhase::Ended;
-            let details = Self::create_details(&state);
-            drop(state);
-
-            if let Some(callback) = self.callbacks.borrow().on_end.clone() {
-                callback(details);
-            }
-        } else {
-            state.phase = ForcePressPhase::Ready;
+        if state.pointer != Some(pointer) {
+            return;
         }
+        // The entry is already resolved; dropping it is all that is left.
+        let _resolved = self.retire_sequence(&mut state, &mut notices);
+        drop(state);
+        self.finish(ArenaStep::None, notices);
     }
 }
 
@@ -620,8 +696,7 @@ impl std::fmt::Debug for ForcePressGestureRecognizer {
             .field("state", &self.state)
             .field("gesture_state", &self.gesture_state.lock())
             .field("settings", &self.settings.lock())
-            .field("start_pressure", &self.start_pressure)
-            .field("peak_pressure", &self.peak_pressure)
+            .field("thresholds", &self.thresholds.lock())
             .finish_non_exhaustive()
     }
 }

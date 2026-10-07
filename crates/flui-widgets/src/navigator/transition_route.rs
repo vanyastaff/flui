@@ -438,12 +438,19 @@ impl<T> TransitionRoute<T> {
             *parent = SecondaryParent::Direct(next_id);
         } else {
             let train = current_train.expect("jump == false implies a current train");
-            let proxy = super::lifecycle::Terminal::new(Arc::clone(&self.inner.secondary));
+            // Weak: the proxy parents this switch, so a strong capture would form
+            // `proxy -> switch -> callback -> proxy` and outlive a route dropped
+            // without `dispose`.
+            let proxy = Arc::downgrade(&self.inner.secondary);
             let target_for_hop = super::lifecycle::Terminal::new(Arc::clone(&next_animation));
             let switch = AnimationSwitch::new(train, Some(Arc::clone(&next_animation)))
                 // On the switch: point the proxy **directly** at the target and
                 // drop the hopper.
-                .on_switched(move || proxy.set_parent(Arc::clone(&target_for_hop)));
+                .on_switched(move || {
+                    if let Some(proxy) = proxy.upgrade() {
+                        proxy.set_parent(Arc::clone(&target_for_hop));
+                    }
+                });
             self.inner
                 .secondary
                 .set_parent(Arc::new(switch.clone()) as Arc<dyn Animation<f64>>);
@@ -770,7 +777,10 @@ impl<T: Send + Clone + 'static> Route for TransitionRoute<T> {
             vsync.unregister(&registration);
         }
 
-        if let Some(controller) = self.inner.controller.lock().take()
+        // Take the controller out before disposing it: disposal retires status
+        // listeners, whose captures may read this route through its handle.
+        let controller = self.inner.controller.lock().take();
+        if let Some(controller) = controller
             && self.inner.will_dispose_controller
         {
             controller.dispose();

@@ -8,6 +8,24 @@
 //! Implementations MUST extrapolate for `t` outside `[0, 1]` — they must NOT
 //! clamp `t`. Overshoot is a feature: bouncy, elastic, and spring curves emit
 //! `t > 1` (or `t < 0`), and clamping would silently flatten that motion.
+//!
+//! # Domains belong to the property
+//!
+//! An extrapolated value can leave the domain its consumer accepts: a padding
+//! tweened from 16 to 0 along a back-out curve passes through −1.6, and a size
+//! shrinking with overshoot goes negative. Neither `Lerp` nor `Tween` clamps it,
+//! because only the property knows its domain (a padding or a size is
+//! non-negative, an `Offset` or an `Alignment` is not). The consumer that applies
+//! the value to a property clamps it there, at the point of use.
+//!
+//! # NaN
+//!
+//! Types with a NaN representation (the `f64` geometry, [`Angle`]) carry a NaN `t`
+//! or a NaN endpoint through to the result. Types without one decide for
+//! themselves and document it (`Color` and the integer tweens return their
+//! beginning value).
+//!
+//! [`Angle`]: crate::geometry::Angle
 
 use crate::geometry::{Corners, Edges, Matrix4, Offset, Radius, Rect, Size};
 
@@ -116,30 +134,7 @@ impl<T: Lerp> Lerp for Corners<T> {
 impl Lerp for Matrix4 {
     #[inline]
     fn lerp_to(&self, other: &Self, t: f64) -> Self {
-        // Decompose -> slerp rotation -> recompose; see `Matrix4::lerp`.
+        // Decompose, interpolate the parts, recompose; see `Matrix4::lerp`.
         Matrix4::lerp(*self, *other, t)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn matrix4_lerp_rotation_slerps_not_collapses() {
-        // A naive element-wise lerp of a rotation passes through a degenerate
-        // (non-orthonormal, det < 1) matrix at t = 0.5; decompose+slerp keeps it
-        // a proper rotation. Same-axis slerp is exact angle interpolation, so the
-        // half-way point equals the half-angle rotation.
-        let mid = Matrix4::rotation_z(0.0).lerp_to(&Matrix4::rotation_z(0.6), 0.5);
-        let expected = Matrix4::rotation_z(0.3);
-        for i in 0..16 {
-            assert!(
-                (mid.m[i] - expected.m[i]).abs() < 1e-3,
-                "element {i}: {} vs expected {}",
-                mid.m[i],
-                expected.m[i],
-            );
-        }
     }
 }

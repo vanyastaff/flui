@@ -210,7 +210,7 @@ IntTween::new(0, 255)      // Rounds to nearest
 StepTween::new(0, 10)      // Floors to integer
 
 // Geometric
-ColorTween::new(Color::RED, Color::BLUE)
+ColorTween::new(Color::RED, Color::BLUE) // Oklab, premultiplied alpha
 SizeTween::new(Size::new(0.0, 0.0), Size::new(100.0, 100.0))
 OffsetTween::new(Offset::ZERO, Offset::new(50.0, 50.0))
 RectTween::new(rect1, rect2)
@@ -564,9 +564,9 @@ Constructors validate parameters and panic on invalid input:
 | `FrictionSimulation::new` | drag ≤ 0, drag = 1.0 |
 | `TweenSequenceItem::new` | weight ≤ 0, weight is infinite |
 | `Interval::new` | begin/end not finite or outside [0,1], end < begin |
-| `Cubic::new` | any argument not finite, x1 or x2 outside [0,1] |
-| `ThreePointCubic::new` | midpoint not strictly inside the unit square, a control x outside its segment, a coordinate not finite |
-| `Elastic{In,Out,InOut}Curve::new` | period not finite or ≤ 0 |
+| `Cubic::new` | any argument not finite, x1 or x2 outside [0,1], y1 or y2 outside [-1e6, 1e6] |
+| `ThreePointCubic::new` | midpoint not strictly inside the unit square, a control x outside its segment, a control y outside [-1e6, 1e6], a coordinate not finite |
+| `Elastic{In,Out,InOut}Curve::new` | period not finite or outside [1e-6, 1e6] |
 | `Split::with_curves` | split not finite or outside [0,1] |
 
 ---
@@ -579,7 +579,7 @@ Each implemented from the canonical published source:
 |---|---|---|
 | Frame-rate-independent smoothing (half-life exponential decay) | Holmér, "lerp smoothing is broken" | `smoothing::exp_decay`, `Smoothed` |
 | Critically damped follower with max-speed clamp | Unity `SmoothDamp` / Game Programming Gems 4 ch. 1.10 | `smoothing::SmoothDamp` |
-| Perceptually uniform color interpolation | Ottosson, Oklab (2020) | `OklabColorTween`, `Color::lerp_oklab` |
+| Perceptually uniform color interpolation, premultiplied | Ottosson, Oklab (2020); CSS Color 4 | `ColorTween`, `Color::lerp` |
 | M3 emphasized easing + full Penner catalog | Material 3 / Penner | `Curves::EaseInOutCubicEmphasized`, `ThreePointCubic`, `Split` |
 | Interruptible springs with velocity-preserving retarget | analytic closed forms | `AnimatedValue`, `#[derive(Animatable)]` |
 

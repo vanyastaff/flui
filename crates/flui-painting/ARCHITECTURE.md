@@ -26,7 +26,7 @@ Design decisions are recorded under [Mapping decisions](#mapping-decisions).
 | Text boundaries | `text_boundaries.rs` | Grapheme and word boundaries over ICU4X, the segmenters Parley clusters with: what hit-testing snaps to and word selection picks from, and what `flui-widgets`' editor steps through (ADR-0092 §6); each query segments from the start of its line |
 | Raster side | `glyphs/{mod,key,registry,swash}.rs` | `GlyphKey` (a face named by font blob), `FontRegistry` (faces and interned variation instances), `SwashRasterizer` (the engine's atlas draws through it), `GlyphRasterizer`, `PlacedGlyph`, `GlyphImage` |
 | Paint values | `paint/{style,path,shader,effects,image,clipping,blend_mode,canvas}.rs` | `Paint`, `Path` (with its shape hint), shaders, filters, images, clip and blend modes: the vocabulary the recorder records |
-| Style values | `styling/*.rs`, `lerp_impls.rs` | `Color` (straight-alpha sRGB, premultiplied `lerp`), borders, radii, decorations, gradients, shadows |
+| Style values | `styling/*.rs`, `lerp_impls.rs` | `Color` (straight-alpha sRGB; `lerp` in premultiplied Oklab), borders, radii, decorations, gradients, shadows |
 | Text values | `typography/*.rs` | `TextStyle`, spans, alignment, decoration, metrics |
 | Layout-facing values | `alignment.rs`, `box_fit.rs`, `text_painter/baseline.rs` | `Alignment` and its directional form, `BoxFit`/`BoxShape`/`FittedSizes`, `TextBaseline` |
 | Decorations | `decoration.rs`, `table_border.rs` | `paint_box_decoration` / `box_decoration_hit_test`, `paint_table_border` |
@@ -496,18 +496,24 @@ default build from Flutter's. Locked by
 `rtl_aligns_lines_right_without_setting_the_base_direction`
 (`src/parley_text/shape.rs`).
 
-### 13. `Color::lerp` interpolates premultiplied
+### 13. `Color::lerp` interpolates in Oklab, premultiplied
 
-Interpolating each straight-alpha channel on its own would darken a colour faded to
-transparent (transparent *black*): red to transparent would pass through
-`(128, 0, 0, 128)`. `Color::lerp` weights each channel by its
-endpoint's alpha and divides by the mixed alpha, as CSS Color 4 does, so the
-same fade stays red: `(255, 0, 0, 128)`. Between two opaque colours the result
-is the plain per-channel lerp. When the mixed alpha is zero there is nothing to weight by and the
-channels interpolate straight, which keeps both endpoints exact. Everything that
-lerps a colour inherits it: border sides, shadows, decorations and gradient
-stops. Locked by `lerp_to_transparent_keeps_the_hue`
-(`tests/color_property.rs`).
+[ADR-0149](../../docs/adr/ADR-0149-interpolation-contracts.md) item 2. Mixing
+gamma-encoded sRGB channels darkens the middle of a transition (black to white
+passes `rgb(128, 128, 128)`, which reads darker than half way); Oklab mixes
+perceived lightness evenly, and black to white is `rgb(99, 99, 99)` half way.
+Mixing each straight-alpha component on its own would also darken a colour faded
+to transparent (transparent *black*). So both endpoints become premultiplied
+Oklab vectors (`to_premultiplied_oklab`: `L`, `a`, `b` times alpha), mix, and are
+divided by the mixed alpha (`from_premultiplied_oklab`), as CSS Color 4 does:
+red to transparent stays red, `(255, 0, 0, 128)`. When the mixed alpha is zero
+there is nothing to weight by and the components mix straight. `t = 0` and
+`t = 1` return the endpoints exactly (the round trip through Oklab and `u8` is
+not exact), out-of-gamut channels clamp, and a NaN `t` returns the beginning.
+`Color::lerp` clamps `t`; `Lerp for Color` is the same path without the clamp.
+Everything that lerps a colour inherits it: `Tween<Color>`, border sides,
+shadows, decorations and gradient stops. Locked by
+`color_lerp_is_premultiplied_oklab` (`tests/main.rs`).
 
 ### 14. `TextPainter` measures through the context it is given
 
