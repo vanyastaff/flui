@@ -1029,6 +1029,19 @@ impl LaidOut {
         })
     }
 
+    /// The paint transform of a [`RenderContainer`] node, painted or not (a
+    /// collapsed matrix pushes no layer). Panics if `id` is not a `RenderContainer`.
+    pub fn container_transform(&self, id: RenderId) -> Option<Matrix4> {
+        self.pipeline_owner.with_mut(|owner| {
+            owner
+                .render_tree_mut()
+                .get_mut(id)
+                .and_then(|node| node.downcast_render_object_mut::<RenderContainer>())
+                .map(|render| render.transform())
+                .expect("render node should be a RenderContainer")
+        })
+    }
+
     /// One intrinsic dimension of a box-protocol render node at `extent`,
     /// queried through the live pipeline — min/max width/height, all four of
     /// which route through the same dispatch.

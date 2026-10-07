@@ -285,9 +285,25 @@ fn color_spring_fades_to_transparent_without_darkening() {
     assert_eq!(v.value().a, 0);
 }
 
+fn transparent_color_keeps_its_identity_at_rest() {
+    let spring = SpringDescription::with_response_and_damping(0.3, 1.0);
+    let clear_red = Color::rgba(255, 0, 0, 0);
+    assert_eq!(AnimatedValue::new(clear_red, spring).value(), clear_red);
+    let clear_blue = Color::rgba(0, 0, 255, 0);
+    let mut v = AnimatedValue::new(Color::rgb(0, 0, 255), spring);
+    v.animate_to(clear_blue);
+    v.advance(5.0);
+    assert!(v.is_settled());
+    assert_eq!(v.value(), clear_blue, "settled at a transparent target");
+}
+
 #[test]
 fn simulation_contract() {
     crate::run_table(&[
+        (
+            "transparent color keeps its identity at rest",
+            transparent_color_keeps_its_identity_at_rest,
+        ),
         (
             "friction drag ge one panics instead of hanging",
             friction_drag_ge_one_panics_instead_of_hanging,

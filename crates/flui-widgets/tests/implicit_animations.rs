@@ -478,6 +478,30 @@ pub(crate) fn animated_container_reanchors_unchanged_properties_on_restart() {
     );
 }
 
+/// A colour change restarts the shared controller; an unchanged collapsed, rotated
+/// transform keeps its exact matrix on every frame instead of dropping its rotation.
+pub(crate) fn animated_container_keeps_an_unchanged_collapsed_transform_on_restart() {
+    let vsync = Vsync::new();
+    let collapsed = Matrix4::rotation_z(1.0) * Matrix4::scaling(0.0, 1.0, 1.0);
+    let color = Arc::new(Mutex::new(Color::BLACK));
+    let probe = TransformProbe {
+        vsync: vsync.clone(),
+        transform: Arc::new(Mutex::new(collapsed)),
+        color: Arc::clone(&color),
+    };
+    let mut laid = lay_out_animated(probe, loose(200.0), vsync);
+    *color.lock() = Color::WHITE;
+    laid.pump();
+    laid.pump_for(FRAME); // detection
+    for frame in 0..3 {
+        laid.pump_for(FRAME);
+        // A collapsed matrix paints no layer, so read the render object.
+        let container = laid.find_by_render_type("RenderContainer");
+        let shown = laid.container_transform(container);
+        assert_eq!(shown.map(|m| m.m), Some(collapsed.m), "frame {frame}");
+    }
+}
+
 // ----------------------------------------------------------------------------
 // AnimatedRotation
 // ----------------------------------------------------------------------------
@@ -515,6 +539,17 @@ impl ViewState<RotationProbe> for RotationProbeState {
     }
 }
 
+/// The Z-rotation in turns of the one transform layer, `atan2(m[1][0], m[0][0])`;
+/// the centring translation does not affect it.
+#[track_caller]
+fn layer_turns(laid: &mut LaidOut) -> f64 {
+    let matrices = laid.transform_layer_matrices();
+    let [matrix] = matrices.as_slice() else {
+        panic!("one transform layer expected, got {matrices:?}");
+    };
+    matrix.get(1, 0).atan2(matrix.get(0, 0)) / std::f64::consts::TAU
+}
+
 /// Rotate 0 → ¾ turn and read the child's rotation, in turns, half way through
 /// the run.
 fn rotation_at_half_way(path: RotationPath) -> f64 {
@@ -530,8 +565,7 @@ fn rotation_at_half_way(path: RotationPath) -> f64 {
     laid.pump();
     laid.pump_for(FRAME); // detection
     laid.pump_for(RUN / 2);
-    let transform = laid.find_by_render_type("RenderTransform");
-    laid.transform_rotation(transform) / std::f64::consts::TAU
+    layer_turns(&mut laid)
 }
 
 /// `Shorter` reaches ¾ turn by turning back: half way it shows −⅛ turn.
@@ -568,8 +602,7 @@ pub(crate) fn animated_rotation_retargets_on_a_path_change() {
     laid.pump();
     laid.pump_for(FRAME); // detection
     laid.pump_for(RUN / 4);
-    let transform = laid.find_by_render_type("RenderTransform");
-    let before = laid.transform_rotation(transform) / std::f64::consts::TAU;
+    let before = layer_turns(&mut laid);
     assert!(
         before > 0.1 && before < 0.3,
         "a quarter of the way: {before} turns"
@@ -580,8 +613,7 @@ pub(crate) fn animated_rotation_retargets_on_a_path_change() {
     // Kept short so both candidate angles stay inside (-½, ½] turn, where the
     // read-back rotation is unambiguous.
     laid.pump_for(RUN / 10);
-    let transform = laid.find_by_render_type("RenderTransform");
-    let after = laid.transform_rotation(transform) / std::f64::consts::TAU;
+    let after = layer_turns(&mut laid);
     assert!(
         after < before,
         "the shorter arc turns back from {before}: now {after} turns"

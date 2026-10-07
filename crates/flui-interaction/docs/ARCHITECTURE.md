@@ -7,9 +7,9 @@ Crate-level design notes for `flui_interaction`: subsystems, ownership, mapping 
 | Subsystem | One-paragraph description |
 |---|---|
 | `arena` | Owner-local conflict resolution between competing recognisers. Tracks per-pointer `SmallVec<[Arc<dyn GestureArenaMember>; 4]>` (inline for ≤ 4 members), exact generational slots, held generations detached across pointer-ID reuse, and a lifecycle (Open → Held → Closed → Resolved). Eager acceptors win when the arena closes; teams enable multi-winner resolution. |
-| `recognizers` | The 11+ recogniser types. Each implements `GestureRecognizer` (the `add_pointer` / `handle_event` / `dispose` lifecycle) and gets `GestureArenaMember` for free via the `CustomGestureRecognizer` blanket impl. State machines are kept inline per file (TapState, LongPressPhase, etc.) — no shared trait-object dispatch. |
-| `processing` | Per-pointer derived data: `VelocityTracker` (LSQ fit on 20-sample circular buffer, 100 ms horizon, 40 ms stationary gate), `PointerEventResampler` (frame-rate adaptation with 100-event cap and 1 ms minimum sample interval), `InputPredictor` (velocity extrapolation with optional acceleration and prediction smoothing), `RawInputHandler` (low-level stream adapter), and the shared `lsq_solver` + `sampling_clock` helpers. |
-| `routing` | Event dispatch infrastructure: `EventRouter`, `PointerRouter`, owner-thread TLS `FocusManager`, `FocusScopeNode` / reading-order Tab traversal, `MouseTracker` (enter/exit/hover), hit testing, and the `TransformGuard` stack-RAII for the transform stack. Off the per-pointer hot path. |
+| `recognizers` | Ten recogniser types (tap, double tap, long press, drag, scale, force press, multi-tap, multi-drag, eager, tap-and-drag) plus the `vertical_drag` / `horizontal_drag` / `pan` constructors in `drag_variants`. Each implements `GestureRecognizer` (the `add_pointer` / `handle_event` / `dispose` lifecycle) and implements the sealed `GestureArenaMember` directly; the `CustomGestureRecognizer` blanket impl is the extension point for recognisers outside the crate. State machines are private per-file enums (`TapState`, `LongPressPhase`, `DragPhase`, …). |
+| `processing` | Per-pointer derived data: `VelocityTracker` (LSQ fit on 20-sample circular buffer, 100 ms horizon, 40 ms stationary gate), `PointerEventResampler` (frame-rate adaptation with 100-event cap and 1 ms minimum sample interval), `InputPredictor` (velocity extrapolation with optional acceleration and prediction smoothing), `RawInputHandler` (low-level stream adapter), the crate-internal `lsq_solver` (used by `VelocityTracker` only) and `sampling_clock`. |
+| `routing` | Event dispatch infrastructure: `EventRouter`, `PointerRouter`, the presentation-owned `FocusManager` (`FocusManager::new` returns an `Rc<Self>`; there is no thread-local focus state), `FocusScopeNode` / reading-order Tab traversal, `MouseTracker` (enter/exit/hover), hit testing, the `InteractionLane` that resolves and invokes pointer routes, and the `TransformGuard` stack-RAII for the transform stack. Route resolution on Down and cached-route invocation on every Move/Up are on the per-pointer hot path (`benches/pointer_route_bench.rs`). |
 | `binding` | `GestureBinding` — owner-local glue that hosts the arena, resolves and retains the Down hit route, coalesces/resamples Moves, and runs route → arena lifecycle ordering. Contact generations prevent frame-delayed samples from crossing a reused platform pointer ID. |
 | `observability` | Observability substrate. `GestureEvent` is a typed `Display` enum of recogniser / arena event names; `SPAN_RECOGNIZER` and `SPAN_ARENA` are span-name constants; `pointer_event_kind` summarises a `PointerEvent` to a short string for span fields. `RecognizerBase::start_tracking` and public arena methods carry spans. Rejection and terminal tracking commit local withdrawal before emitting diagnostics, because subscribers can reenter or panic. |
 
@@ -31,7 +31,7 @@ them. Compile-time assertions in `src/lib.rs` cover only those data types.
 | Recognizer state | small `parking_lot::Mutex` fields | interior mutation behind stable `Arc` identity on the owner lane |
 | Pointer router / interaction lane | `Rc` + `RefCell` | explicitly owner-local executable callbacks |
 | Pointer resampler | `Arc<parking_lot::Mutex<ResamplerInner>>` | bounded data queue; sampling materializes a batch and unlocks before dispatch |
-| Focus manager | transitional owner-thread state | scheduled to move from ambient TLS into presentation ownership |
+| Focus manager | `Rc` + `RefCell` / `Cell`, one per presentation | owner-local focus tree and listeners |
 
 There is no `unsafe impl Send/Sync` in this crate. The sealed extension traits
 preserve lifecycle invariants, while negative compile-time assertions prevent
@@ -44,13 +44,13 @@ Local design choices and why. Each entry names the conflict, the choice, and the
 - **Focus node identities are never reissued.** The allocator admits its final nonzero identity once and then refuses every new `FocusNode` with a panic, permanently, even after that panic is caught. Wrapping would hand a retired identity, and the focus authority it names, to a new node; refusing keeps every attached node's requests and listeners intact.
 - **Recogniser is a `Clone` struct; the lifecycle lives on `RecognizerBase`.** Multiple consumers can hold `Arc<Self>` cheaply. The trade-off: users get a stable struct API but cannot observe field changes without an explicit notifier (deferred; `flui-foundation::Notifier` is the candidate).
 - **Pointer event types are W3C `ui-events`, not a local re-implementation.** Pointer events are `ui_events::pointer::*` (W3C-compliant), with a `DeviceId = i32` shim at the `InputEvent` enum layer. This keeps the crate aligned with the platform layer's event types and follows the workspace preference for a mature crate over a hand-rolled one.
-- **`TapButton` is a typed enum, not integer button constants.** `TapButton` (`src/recognizers/tap.rs:51-59`) maps pointer buttons explicitly through `from_pointer_button`, so the type system enforces the choice. It is `#[non_exhaustive]` so a future fourth button slot can be added without breaking downstream.
+- **`TapButton` is a typed enum, not integer button constants.** `TapButton` (`src/recognizers/tap.rs`) maps pointer buttons explicitly through `from_pointer_button`, so the type system enforces the choice. It is `#[non_exhaustive]` so a future fourth button slot can be added without breaking downstream.
 - **`ArenaEntryData` is a `pub(crate)` struct.** The per-pointer state is a `pub(crate)` `SmallVec<[Arc<dyn GestureArenaMember>; 4]>` to keep the hot path alloc-free for ≤ 4 members (the typical tap + drag + long-press + double-tap case). The inline-4 capacity is justified by the bench: the `add_busy` case in `benches/gesture_arena_bench.rs` measures the heap-fallback cost separately.
 - **Sealed extension traits.** `GestureArenaMember` and `HitTestable` are sealed (supertrait `sealed::Sealed`). The blanket impl via `CustomGestureRecognizer` / `CustomHitTestable` is the only sanctioned extension point. The rationale is the same as the flui-foundation `sealed::Sealed` precedent: API evolution without breaking changes.
 - **`pending_up` deferral for `on_tap_up`.** Before the fix, `handle_tap_up` fired `on_tap_up` and `on_tap` unconditionally on pointer up, even though every arena member receives Up events. The fix stores a `pending_up` until `accept_gesture` confirms arena victory; only the eventual winner fires the user callback. The same pattern was extended to per-button slots.
-- **`try_fire_timer` runs under `gesture_state` lock.** Pre-fix `did_exceed_deadline` resolved Accepted without firing the long-press start callback. The fix calls `try_fire_timer` (which acquires `gesture_state`) before resolving; a second timer fire after `Started` must not refire the callback. **Unasserted:** no test pins this.
+- **A fired long press resolves its own arena.** `LongPressGestureRecognizer::try_fire_timer` is the single deadline path, shared by `check_timer`, `handle_move` and `did_exceed_deadline`. It snapshots and advances `Possible → Started` under the `gesture_state` lock, releases the lock, stops deadline polling, accepts the tracked arena entry, and only then invokes the user callbacks. A second fire after `Started` returns `false` without refiring.
 - **Focus scope identity is explicit.** A `FocusScopeNode` owns an inner `FocusNode`, and that backing node carries a `Weak<FocusScopeNode>` owner link. This keeps enclosing-scope lookup, focused-child history, and `FocusManager::focus_next` / `focus_previous` rooted in the same tree instead of relying on a parallel manager structure. `descendants_are_focusable=false` gates descendant requests; a true-to-false transition evicts focus held by the node or its subtree while leaving the node eligible for a later explicit request. FLUI clears primary focus to `None` rather than selecting a previously focused child.
-- **`processing::lsq_solver` is crate-internal.** Shared by `VelocityTracker` and `PointerEventResampler`; both were duplicating the matrix setup.
+- **`processing::lsq_solver` is crate-internal.** `VelocityTracker` is its only user; the resampler interpolates linearly and does not fit a polynomial.
 - **Observability is crate-public.** `pub mod observability` exports `GestureEvent`, `SPAN_RECOGNIZER`, `SPAN_ARENA`, `pointer_event_kind`. Downstream `flui-app` configures the subscriber and surfaces these to the devtools; the recognisers / arena emit them unconditionally.
 - **Synchronous FIFO reentrant-focus queue vs six different reference shapes, none of them adopted as-is.** Surveyed in [`.rust-studio/specs/1040-ordered-focus-notifications/survey.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/.rust-studio/specs/1040-ordered-focus-notifications/survey.md) (issue #1040). Six engines/frameworks solve "a focus listener changes focus again" six different ways:
   - **Flutter** (`focus_manager.dart`, `FocusManager.applyFocusChangesIfNeeded` / `_markedForFocus` / `_markNextFocus`): defers every `requestFocus`/`unfocus` to a microtask (`_markNeedsUpdate` → `scheduleMicrotask`) and collapses every request made before that microtask runs into one `_markedForFocus` slot — last request wins, and `_markNextFocus` clears the pending mark outright when a request names the already-current node. Chronological by construction and every listener sees a coherent order, at the cost of up to one frame of lag and a reentrant chain that livelocks across microtasks (still yielding frames, so it never hangs the caller). The deferral traces to flutter/flutter#9074 (2017): *"Focus notifications trigger[ed] by tree mutations are now delayed by one frame, which is necessary to handle certain complex tree mutations"* — reentrancy safety is a side effect of that motive, not the reason it was built.
@@ -70,7 +70,7 @@ Local design choices and why. Each entry names the conflict, the choice, and the
 |---|---|
 | `cargo test -p flui-interaction --all-features` | Unit, integration, feature-gated testing helpers, and doctests across arena / recognisers / processing / routing / timer. |
 | `cargo test --doc -p flui-interaction` | Runnable public examples; illustrative `rust,ignore` snippets stay excluded until their surrounding framework fixtures exist. |
-| `cargo bench -p flui-interaction` | 4 Criterion benches. All use `black_box` on inputs and outputs. Hot-path regression guards; baseline numbers to be captured in the next release. |
+| `cargo bench -p flui-interaction` | 5 Criterion benches (see [PERFORMANCE.md](PERFORMANCE.md)). No baseline numbers are recorded. |
 | `cargo clippy -p flui-interaction --lib --tests --benches -- -D warnings` | Lint gate — zero warnings. |
 | `cargo fmt -p flui-interaction --check` | Format gate. |
 
@@ -79,16 +79,14 @@ Local design choices and why. Each entry names the conflict, the choice, and the
 The observability substrate lives at [`crate::observability`](../src/observability.rs) (re-exported at
 the crate root as `flui_interaction::observability::*` and the three
 `GestureEvent` / `SPAN_RECOGNIZER` / `SPAN_ARENA` / `pointer_event_kind`
-items). The hot paths (`RecognizerBase::start_tracking`,
-`RecognizerBase::stop_tracking`, `GestureArena::add` / `close` /
-`resolve` / `sweep`) carry `#[tracing::instrument]` with a typed
-`event = %GestureEvent::*` span field. Configure your subscriber at
+items). `RecognizerBase::start_tracking` and `GestureArena::add` / `close` /
+`resolve` / `sweep` carry `#[tracing::instrument]` spans;
+`start_tracking` also records a typed `event = %GestureEvent::*` field. Configure your subscriber at
 the app boundary; the crate does not install one. Filter via
 `RUST_LOG=flui_interaction::arena=debug,flui_interaction::recognizers=trace`.
 
 ## Friction log
 
-- **`docs/ARCHITECTURE.md` (this file) is the template-driven version;** the pre-template `crates/flui-interaction/docs/ARCHITECTURE.md` body (gesture state-machine diagrams, hit testing walk) lives as a companion. Relocation to crate root is deferred to a doc-tidying pass.
 - **`is_resolved(pointer)` is a state query.** Callback failure is handled at
   resolution boundaries; `parking_lot::Mutex` does not poison. Catching an
   unwind is not a query for poisoned state.
@@ -96,24 +94,21 @@ the app boundary; the crate does not install one. Filter via
 
 ## Outstanding refactors
 
-- **Doc-test sweep: convert the remaining 72 `rust,ignore` to runnable.** The `processing::InputPredictor` and `routing::FocusManager` doc-tests are the next highest-value targets. The `testing` module builders (`ModifiersBuilder`, `KeyEventBuilder`) are the third tier. Land as a follow-up PR.
+- **Doc-test sweep: convert the remaining 50 `rust,ignore` snippets to runnable.** The `processing::InputPredictor` and `routing::FocusManager` doc-tests are the next highest-value targets. The `testing` module builders (`ModifiersBuilder`, `KeyEventBuilder`) are the third tier. Land as a follow-up PR.
 - **Property tests for the gesture arena** (deferred). `proptest` over a sequence of `add` / `close` / `sweep` operations, asserting: every reachable pointer has a state, no arena has two winners, `is_resolved` ⇔ `winner_count >= 1` after `close`. Bench time + property-cost justifies a separate `flui-interaction/tests/proptest_arena.rs` file.
 - **Concurrency models must match ownership.** The executable arena is
   owner-local; a parallel `add` / `resolve` model would test an unsupported
   execution contract. Deferred data-plane synchronization needs its own model.
-- **Bench fidelity pass: realistic workloads.** Current benches use synthetic events; the next pass should replay recorded gesture traces from `flui-app` (TBD where they live). The `testing::recording` module is the substrate.
+- **Bench fidelity pass: realistic workloads.** Current benches use synthetic events; recorded traces would need a recording format, which this crate does not have (`testing` holds only the `input` event builders).
 - **Re-export the `pub mod observability` at `crate::prelude`** once the devtools substrate is stable — currently only the `GestureEvent` / `SPAN_*` items are re-exported at the crate root.
 
 ## Index of in-crate companion documents
 
-These live alongside this templated `ARCHITECTURE.md` and are
-referenced from it. They predate the template and remain as
-subsystem-level deep-dives:
+Subsystem-level companions:
 
 - [`docs/GESTURES.md`](GESTURES.md) — gesture catalogue.
 - [`docs/HIT_TESTING.md`](HIT_TESTING.md) — hit-test walk.
-- [`docs/PERFORMANCE.md`](PERFORMANCE.md) — performance notes
-  (60 fps / 16 ms / 0 alloc on hot path).
+- [`docs/PERFORMANCE.md`](PERFORMANCE.md) — complexity, bounds and the Criterion benches.
 
 
 ## Accepted drag terminal reason
