@@ -1,16 +1,17 @@
 //! Scale gesture recognizer
 //!
-//! Recognizes scale gestures (pinch to zoom and rotate with two or more
-//! contacts).
+//! Recognizes pinch/rotation with two contacts by default. Explicit combined
+//! mode also recognizes one-contact pan and preserves the sequence as contacts
+//! join or leave. Native pan-zoom uses the same callback actor.
 //!
 //! A scale gesture:
 //! - joins the gesture arena for **every** contact it tracks, and claims all
 //!   of them together once the contacts have moved past the scale or pan slop;
-//! - starts when it has won an arena and at least two contacts are down;
+//! - starts after winning an arena with the configured minimum contact count;
 //! - reports scale, per-axis scale, rotation and focal point measured from
 //!   where the contacts were placed, carried continuously across contacts
 //!   being added or lifted;
-//! - ends when fewer than two contacts remain.
+//! - ends below that count; combined mode ends on the final contact.
 
 use std::{
     cell::{Cell, RefCell},
@@ -155,7 +156,8 @@ impl ScaleStartMode {
 
 /// Recognizes scale (pinch/zoom/rotate) gestures.
 ///
-/// Requires at least two contacts. Every contact passed to
+/// The default mode requires at least two contacts; [`ScaleStartMode::PanOrScale`]
+/// explicitly enables one-contact pan. Every contact passed to
 /// [`add_pointer`](GestureRecognizer::add_pointer) joins that contact's
 /// gesture arena. The recognizer claims all of its arenas once the contacts
 /// move past the span or focal-point slop (or the scale ratio slop), and
