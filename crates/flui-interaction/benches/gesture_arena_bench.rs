@@ -22,10 +22,11 @@
 // Bench harness, not public API; `criterion_group!` generates the
 // undocumentable entry fn.
 
+use std::cell::Cell;
 use std::hint::black_box;
 use std::rc::Rc;
 
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use flui_interaction::arena::{GestureArena, GestureArenaEntry, GestureArenaMember};
 use flui_interaction::ids::PointerId;
 
@@ -146,6 +147,80 @@ fn bench_full_lifecycle(c: &mut Criterion) {
     });
 }
 
+#[derive(Default)]
+struct ResolutionMember {
+    accepted: Cell<u32>,
+    rejected: Cell<u32>,
+}
+
+impl GestureArenaMember for ResolutionMember {
+    fn accept_gesture(&self, _: PointerId) {
+        self.accepted.set(self.accepted.get() + 1);
+    }
+
+    fn reject_gesture(&self, _: PointerId) {
+        self.rejected.set(self.rejected.get() + 1);
+    }
+}
+
+struct ResolutionFixture {
+    arena: GestureArena,
+    winner: Rc<ResolutionMember>,
+    loser: Rc<ResolutionMember>,
+    candidate: Rc<dyn GestureArenaMember>,
+}
+
+impl ResolutionFixture {
+    fn new() -> Self {
+        let arena = GestureArena::new();
+        let winner = Rc::new(ResolutionMember::default());
+        let loser = Rc::new(ResolutionMember::default());
+        arena.add(PointerId::PRIMARY, &winner);
+        arena.add(PointerId::PRIMARY, &loser);
+        arena.close(PointerId::PRIMARY);
+        let candidate = winner.clone();
+        Self {
+            arena,
+            winner,
+            loser,
+            candidate,
+        }
+    }
+
+    fn resolve(&self) {
+        self.arena.resolve(
+            black_box(PointerId::PRIMARY),
+            Some(black_box(&self.candidate)),
+        );
+        black_box(self.arena.is_empty());
+    }
+}
+
+/// Resolution alone: setup, owner allocation and retirement are not timed.
+/// The original strong-membership baseline has no isolated resolution row.
+/// Its `add + accept (eager vs competitor)` row includes setup, so only that
+/// unchanged legacy row can compare the whole conflict before and after.
+fn bench_weak_resolution(c: &mut Criterion) {
+    let witness = ResolutionFixture::new();
+    witness.resolve();
+    assert!(witness.arena.is_empty(), "resolution settles its arena");
+    assert_eq!(
+        (witness.winner.accepted.get(), witness.winner.rejected.get()),
+        (1, 0)
+    );
+    assert_eq!(
+        (witness.loser.accepted.get(), witness.loser.rejected.get()),
+        (0, 1)
+    );
+    c.bench_function("resolve/weak", |b| {
+        b.iter_batched_ref(
+            ResolutionFixture::new,
+            |fixture| fixture.resolve(),
+            BatchSize::SmallInput,
+        );
+    });
+}
+
 criterion_group!(
     arena_benches,
     bench_add_empty,
@@ -153,5 +228,6 @@ criterion_group!(
     bench_sweep_empty,
     bench_resolve_conflict,
     bench_full_lifecycle,
+    bench_weak_resolution,
 );
 criterion_main!(arena_benches);

@@ -1,4 +1,4 @@
-//! Static tap dispatch and admission, with a fresh live contact per iteration.
+//! Static and weakly attached tap dispatch, with a fresh contact per iteration.
 //!
 //! Fixture creation and cancellation are outside Criterion's measured interval.
 //! Each sequence is also run once before measurement to check arena settlement
@@ -13,7 +13,9 @@ use flui_interaction::events::{
     PointerButton, PointerEvent, PointerType, make_down_event_for_id_with_button,
     make_move_event_for_id, make_up_event_for_id_with_button,
 };
-use flui_interaction::{GestureRecognizer, PointerDispatch, PointerId, TapGestureRecognizer};
+use flui_interaction::{
+    GestureRecognizer, PointerDispatch, PointerId, RecognizerSet, TapGestureRecognizer,
+};
 
 struct TapFixture {
     recognizer: Rc<TapGestureRecognizer>,
@@ -60,6 +62,28 @@ impl TapFixture {
 impl Drop for TapFixture {
     fn drop(&mut self) {
         self.recognizer.cancel();
+    }
+}
+
+struct AttachedTapFixture {
+    owner: TapFixture,
+    recognizers: RecognizerSet,
+}
+
+impl AttachedTapFixture {
+    fn new(callbacks: bool, button: PointerButton) -> Self {
+        let owner = TapFixture::new(callbacks, button);
+        let mut recognizers = RecognizerSet::default();
+        recognizers.attach(&owner.recognizer);
+        Self { owner, recognizers }
+    }
+
+    fn sequence(&self, events: &[PointerEvent; 3]) {
+        for event in events {
+            self.recognizers
+                .dispatch(PointerDispatch::at_root(black_box(event)));
+        }
+        black_box(self.owner.callbacks.get());
     }
 }
 
@@ -124,5 +148,48 @@ fn bench_admission(c: &mut Criterion) {
     });
 }
 
-criterion_group!(tap_benches, bench_tap_sequences, bench_admission);
+/// These rows have no pre-migration baseline: dyn dispatch did not exist.
+/// Compare each with its matching static row measured in the same run.
+fn bench_attached_tap_sequences(c: &mut Criterion) {
+    for (name, callbacks, button) in [
+        (
+            "handle_event/dyn/no_callbacks",
+            false,
+            PointerButton::Primary,
+        ),
+        (
+            "handle_event/dyn/primary_callbacks",
+            true,
+            PointerButton::Primary,
+        ),
+        (
+            "handle_event/dyn/secondary_callbacks",
+            true,
+            PointerButton::Secondary,
+        ),
+    ] {
+        let events = events(button);
+        let witness = AttachedTapFixture::new(callbacks, button);
+        witness.sequence(&events);
+        assert!(
+            witness.owner.arena.is_empty(),
+            "the attached tap settles its arena"
+        );
+        assert_eq!(witness.owner.callbacks.get(), if callbacks { 3 } else { 0 });
+        c.bench_function(name, |b| {
+            b.iter_batched_ref(
+                || AttachedTapFixture::new(callbacks, button),
+                |fixture| fixture.sequence(&events),
+                BatchSize::SmallInput,
+            );
+        });
+    }
+}
+
+criterion_group!(
+    tap_benches,
+    bench_tap_sequences,
+    bench_admission,
+    bench_attached_tap_sequences
+);
 criterion_main!(tap_benches);
