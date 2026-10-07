@@ -1327,7 +1327,7 @@ mod native_windows {
                 observed
                     .lock()
                     .expect("keys")
-                    .push((keyboard.state, keyboard.key.clone()));
+                    .push((keyboard.state(), keyboard.key.clone()));
             }
             DispatchEventResult::resolved(true, false)
         }));
@@ -1541,7 +1541,7 @@ mod native_windows {
         let typed_observations = Arc::clone(&typed);
         window.on_input(Box::new(move |event| {
             if let Some(keyboard) = event.as_keyboard()
-                && keyboard.state == flui_platform_api::keyboard::KeyState::Down
+                && keyboard.state() == flui_platform_api::keyboard::KeyState::Down
                 && let flui_platform_api::keyboard::Key::Character(text) = &keyboard.key
             {
                 typed_observations
@@ -1680,7 +1680,7 @@ mod native_windows {
         window.on_input(Box::new(move |event| {
             if event
                 .as_keyboard()
-                .is_some_and(|key| key.state == flui_platform_api::keyboard::KeyState::Down)
+                .is_some_and(|key| key.state() == flui_platform_api::keyboard::KeyState::Down)
             {
                 keydown_observations.fetch_add(1, Ordering::SeqCst);
                 if pump {
