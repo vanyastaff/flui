@@ -26,7 +26,10 @@ use super::{
         finish_containment, invoke_callback, retire_callback, withdraw_cancelled,
     },
     contact::{ArenaMembership, ContactId},
-    recognizer::{CancelOutcome, EventTimeline, GestureRecognizer, event_time, is_primary_down},
+    recognizer::{
+        CancelOutcome, EventTimeline, GestureRecognizer, event_time, is_primary_down,
+        motion_history,
+    },
 };
 use crate::{
     arena::{GestureArenaEntry, GestureArenaMember, GestureDisposition, SweepModel},
@@ -757,6 +760,7 @@ impl ScaleGestureRecognizer {
         position: Offset<f64>,
         kind: PointerType,
         stamp: Option<u64>,
+        history: &[(Option<u64>, Offset<f64>)],
     ) {
         if !position.is_finite() {
             return;
@@ -775,6 +779,16 @@ impl ScaleGestureRecognizer {
         };
         if state.contacts[index].id != id {
             return;
+        }
+        for &(stamp, position) in history {
+            let timestamp = state.timeline.instant(stamp, now);
+            state.contacts[index].position = position;
+            if state.sample().is_some() && state.phase == ScalePhase::Started {
+                let scale = state.current.scale;
+                state
+                    .scale_velocity_tracker
+                    .add_position(timestamp, Offset::new(scale, 0.0));
+            }
         }
         let now = state.timeline.instant(stamp, now);
         let baseline = state.baseline;
@@ -976,11 +990,13 @@ impl GestureRecognizer for ScaleGestureRecognizer {
         match event {
             PointerEvent::Move(data) => {
                 let pos = data.current.position;
+                let history = motion_history(event);
                 self.handle_pointer_move(
                     pointer,
                     Offset::new(pos.x, pos.y),
                     data.pointer.pointer_type,
                     event_time(event),
+                    &history,
                 );
             }
             PointerEvent::Up(_) => self.handle_pointer_up(pointer, event_time(event)),

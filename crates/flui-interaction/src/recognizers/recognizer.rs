@@ -4,6 +4,8 @@ use crate::{
     events::{PointerButton, PointerEvent},
     routing::{PointerDispatch, RoutePanic},
 };
+use flui_foundation::geometry::Offset;
+use ui_events::pointer::PointerState;
 use web_time::{Duration, Instant};
 
 /// A recognizer admits Down and receives the remaining pointer stream.
@@ -62,6 +64,54 @@ pub(crate) fn event_time(event: &PointerEvent) -> Option<u64> {
         PointerEvent::Cancel(_) | PointerEvent::Enter(_) | PointerEvent::Leave(_) => 0,
     };
     (nanos != 0).then_some(nanos)
+}
+
+/// Keep complete hardware samples; a fit window belongs to the velocity
+/// tracker, not to delivery. Unknown timestamps retain their arrival order.
+fn normalise_samples(samples: &mut Vec<PointerState>, current: &PointerState) {
+    samples.retain(|sample| sample.position.x.is_finite() && sample.position.y.is_finite());
+    if current.time != 0
+        && samples.iter().all(|sample| sample.time != 0)
+        && samples.windows(2).any(|pair| pair[0].time > pair[1].time)
+    {
+        samples.sort_by_key(|sample| sample.time);
+    }
+    samples.dedup();
+}
+
+pub(crate) fn normalise_motion_history(event: &mut PointerEvent) {
+    if let PointerEvent::Move(movement) = event {
+        normalise_samples(&mut movement.coalesced, &movement.current);
+    }
+}
+
+pub(crate) fn merge_motion_history(previous: &mut PointerEvent, latest: &mut PointerEvent) {
+    if let (PointerEvent::Move(previous), PointerEvent::Move(latest)) = (previous, latest) {
+        let mut samples = std::mem::take(&mut previous.coalesced);
+        samples.push(previous.current.clone());
+        samples.append(&mut latest.coalesced);
+        normalise_samples(&mut samples, &latest.current);
+        latest.coalesced = samples;
+    }
+}
+
+/// Historical local positions only. Geometry and callbacks still publish the
+/// frame's current sample, while the tracker consumes every hardware timestamp.
+pub(crate) fn motion_history(event: &PointerEvent) -> Vec<(Option<u64>, Offset<f64>)> {
+    let PointerEvent::Move(movement) = event else {
+        return Vec::new();
+    };
+    let mut samples = movement.coalesced.clone();
+    normalise_samples(&mut samples, &movement.current);
+    samples
+        .into_iter()
+        .map(|sample| {
+            (
+                (sample.time != 0).then_some(sample.time),
+                Offset::new(sample.position.x, sample.position.y),
+            )
+        })
+        .collect()
 }
 
 /// Places device production timestamps on the arena clock.

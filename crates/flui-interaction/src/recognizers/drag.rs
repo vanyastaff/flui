@@ -4,7 +4,10 @@ use super::{
         finish_containment, invoke_callback, retire_callback, retire_callbacks,
     },
     contact::{ArenaMembership, ContactId, PrimaryContact},
-    recognizer::{CancelOutcome, EventTimeline, GestureRecognizer, event_time, is_primary_down},
+    recognizer::{
+        CancelOutcome, EventTimeline, GestureRecognizer, event_time, is_primary_down,
+        motion_history,
+    },
 };
 use crate::{
     arena::{GestureArena, GestureArenaMember},
@@ -286,6 +289,7 @@ impl DragGestureRecognizer {
             self.cancel();
             return;
         }
+        let history = motion_history(dispatch.local);
         let clock = self.contact.now();
         let (update, claim) = {
             let mut slot = self.drag_state.borrow_mut();
@@ -294,6 +298,10 @@ impl DragGestureRecognizer {
             };
             if state.id != contact.id {
                 return;
+            }
+            for (stamp, position) in history {
+                let timestamp = state.timeline.instant(stamp, clock);
+                state.velocity_tracker.add_position(timestamp, position);
             }
             let now = state.timeline.instant(event_time(dispatch.local), clock);
             let delta = self.project_delta(position - state.last_position);

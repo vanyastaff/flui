@@ -4,7 +4,10 @@ use super::{
         finish_containment, invoke_callback, retire_callback, retire_callbacks, withdraw_cancelled,
     },
     contact::{ArenaMembership, ContactId},
-    recognizer::{CancelOutcome, EventTimeline, GestureRecognizer, event_time, is_primary_down},
+    recognizer::{
+        CancelOutcome, EventTimeline, GestureRecognizer, event_time, is_primary_down,
+        motion_history,
+    },
 };
 use crate::{
     arena::{GestureArena, GestureArenaEntry, GestureArenaMember},
@@ -256,12 +259,17 @@ impl MultiDragGestureRecognizer {
             }
             return;
         }
+        let history = motion_history(dispatch.local);
         let clock = self.membership.now();
         let (client, update, claim) = {
             let mut pointers = self.pointers.borrow_mut();
             let Some(state) = pointers.get_mut(&pointer).filter(|state| state.id == id) else {
                 return;
             };
+            for (stamp, position) in history {
+                let timestamp = state.timeline.instant(stamp, clock);
+                state.velocity_tracker.add_position(timestamp, position);
+            }
             let timestamp = state.timeline.instant(event_time(dispatch.local), clock);
             let delta = (position - state.last_position).to_delta();
             let pending = state.pending_delta + delta;

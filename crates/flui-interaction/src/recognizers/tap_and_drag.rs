@@ -49,7 +49,7 @@ use web_time::Instant;
 use super::{
     ArenaMembership, CancelOutcome, PrimaryContact,
     callback_containment::{finish_containment, invoke_callback, retire_callbacks},
-    recognizer::{EventTimeline, GestureRecognizer, event_time, is_primary_down},
+    recognizer::{EventTimeline, GestureRecognizer, event_time, is_primary_down, motion_history},
 };
 use crate::{
     arena::{GestureArenaEntry, GestureArenaMember, GestureDisposition, SweepModel},
@@ -546,7 +546,13 @@ impl TapAndDragGestureRecognizer {
         }
     }
 
-    fn handle_move(&self, position: Offset<f64>, global_position: Offset<f64>, stamp: Option<u64>) {
+    fn handle_move(
+        &self,
+        position: Offset<f64>,
+        global_position: Offset<f64>,
+        stamp: Option<u64>,
+        history: &[(Option<u64>, Offset<f64>)],
+    ) {
         if !position.is_finite() {
             return;
         }
@@ -567,6 +573,10 @@ impl TapAndDragGestureRecognizer {
         let mut notices = Vec::new();
         let mut step = ArenaStep::None;
         let mut state = self.gesture_state.borrow_mut();
+        for &(stamp, position) in history {
+            let timestamp = state.timeline.instant(stamp, now);
+            state.velocity_tracker.add_position(timestamp, position);
+        }
         let now = state.timeline.instant(stamp, now);
         state.kind = kind;
         state.last = position;
@@ -764,10 +774,12 @@ impl GestureRecognizer for TapAndDragGestureRecognizer {
             }
             PointerEvent::Move(data) => {
                 let pos = data.current.position;
+                let history = motion_history(event);
                 self.handle_move(
                     Offset::new(pos.x, pos.y),
                     global_position,
                     event_time(event),
+                    &history,
                 );
             }
             PointerEvent::Up(data) => {
