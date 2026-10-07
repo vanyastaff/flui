@@ -696,15 +696,21 @@ impl RoutePanic {
         if first.is_none() {
             *first = Some(candidate);
         } else {
-            tracing::error!(
-                phase,
-                "dispatch phase panicked after an earlier phase; only the first panic is resumed"
-            );
             // Panic payloads are arbitrary user values and may themselves
             // panic in Drop. Discarding a secondary payload normally could
             // therefore replace the first panic (or abort during unwind).
             // Only a known inert payload is released.
             candidate.retain();
+            // Diagnostics are user code too. Retire the superseded payload
+            // before reporting it, and contain a failing subscriber without
+            // recursively reporting that diagnostic's own failure.
+            Self::capture(|| {
+                tracing::error!(
+                    phase,
+                    "dispatch phase panicked after an earlier phase; only the first panic is resumed"
+                );
+            })
+            .retain();
         }
     }
 
