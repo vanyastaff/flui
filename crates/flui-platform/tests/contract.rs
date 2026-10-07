@@ -2401,7 +2401,9 @@ mod native_windows {
     fn queued_mouse_samples_keep_native_message_time() {
         use ui_events::pointer::PointerEvent;
         let platform = WindowsPlatform::new().expect("native Windows platform");
-        let window = open(&platform, true);
+        // A hidden native window excludes unrelated physical cursor traffic
+        // while retaining the actual queue and window-procedure producer.
+        let window = open(&platform, false);
         let hwnd = hwnd_of(&window);
         let events = record_pointer(&window);
         // Remove creation traffic before the two queued samples.
