@@ -207,7 +207,7 @@ impl Doctor {
 }
 
 /// Probe the configured compiler's Android target and sysroot, without an object file.
-fn android_compiler_available(compiler: &OsStr) -> bool {
+pub(crate) fn android_compiler_available(compiler: &OsStr) -> bool {
     let Ok(mut child) = Command::new(compiler)
         .args(["-x", "c", "-fsyntax-only", "-"])
         .stdin(Stdio::piped())
@@ -222,6 +222,19 @@ fn android_compiler_available(compiler: &OsStr) -> bool {
     });
     let status = child.wait();
     input_ok && status.is_ok_and(|status| status.success())
+}
+
+/// Select the same target overrides that cc-rs consumes.
+pub(crate) fn android_tool(prefix: &str, fallback: &str) -> std::ffi::OsString {
+    [
+        format!("{prefix}_aarch64-linux-android"),
+        format!("{prefix}_aarch64_linux_android"),
+        format!("TARGET_{prefix}"),
+        prefix.to_owned(),
+    ]
+    .into_iter()
+    .find_map(std::env::var_os)
+    .unwrap_or_else(|| fallback.into())
 }
 
 fn first_line(bytes: &[u8]) -> String {
@@ -341,17 +354,6 @@ pub(crate) fn doctor(args: &DoctorArgs) -> anyhow::Result<ExitCode> {
     );
 
     // `cargo xtask ci-full`
-    let android_tool = |prefix: &str, fallback: &str| {
-        [
-            format!("{prefix}_aarch64-linux-android"),
-            format!("{prefix}_aarch64_linux_android"),
-            format!("TARGET_{prefix}"),
-            prefix.to_owned(),
-        ]
-        .into_iter()
-        .find_map(std::env::var_os)
-        .unwrap_or_else(|| fallback.into())
-    };
     doctor.check_android_ndk(&android_tool("CC", "clang"), &android_tool("AR", "llvm-ar"));
     if os != "windows" {
         doctor.check_cargo_sub(Scope::Full, "xwin", "cargo install --locked cargo-xwin --version 0.23.1 (also needs clang/LLVM and MSVC SDK/CRT provisioning)");

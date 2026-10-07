@@ -206,15 +206,21 @@ fn plan(
     steps
 }
 
-/// Admit a local native command only when its target and cross wrapper exist.
+/// Admit a local native command only when its target and native toolchain exist.
 fn local_native_step(
     target: &str,
     step: Step,
     host: Host,
     targets: &BTreeSet<String>,
     have_tool: impl Fn(&str) -> bool,
+    have_android_ndk: impl Fn() -> bool,
 ) -> Step {
     if targets.contains(target) {
+        if target == super::ANDROID_TARGET && !have_android_ndk() {
+            return Step::Note(format!(
+                "check-changed: skipped native source checks on {target} (install the Android NDK and configure its API-21 compiler with CC_aarch64_linux_android; CI runs it)"
+            ));
+        }
         let wrapper = if target == super::WINDOWS_TARGET && host != Host::Windows {
             Some("cargo-xwin")
         } else if target == super::MACOS_TARGET && host != Host::MacOs {
@@ -286,6 +292,11 @@ pub(super) fn run(runner: Runner, base: &str) -> anyhow::Result<ExitCode> {
             Host::current(),
             &targets,
             |tool| installed(tool, &["--version"]),
+            || {
+                crate::doctor::android_compiler_available(&crate::doctor::android_tool(
+                    "CC", "clang",
+                ))
+            },
         ));
     }
     runner.steps(&plan(
@@ -350,6 +361,7 @@ mod tests {
                         assert_eq!(requested, tool);
                         available
                     },
+                    || panic!("non-Android target must not probe the NDK"),
                 );
                 let text = step.to_string();
                 if available {
@@ -357,6 +369,28 @@ mod tests {
                 } else {
                     assert!(text.contains("skipped") && text.contains(tool), "{text}");
                 }
+            }
+        }
+    }
+
+    fn android_without_an_ndk_leaves_other_native_checks_runnable() {
+        for available in [false, true] {
+            let step = local_native_step(
+                super::super::ANDROID_TARGET,
+                Cmd::cargo(["clippy"]).into(),
+                Host::Linux,
+                &all_targets(),
+                |_| panic!("Android does not need a cross wrapper"),
+                || available,
+            );
+            let text = step.to_string();
+            if available {
+                assert_eq!(text, "$ cargo clippy");
+            } else {
+                assert!(
+                    text.contains("skipped") && text.contains("Android NDK"),
+                    "{text}"
+                );
             }
         }
     }
@@ -515,6 +549,10 @@ mod tests {
         crate::table_test::run_table(
             "check_changed_contract",
             &[
+                (
+                    "android_without_an_ndk_leaves_other_native_checks_runnable",
+                    android_without_an_ndk_leaves_other_native_checks_runnable as fn(),
+                ),
                 (
                     "missing_cross_wrappers_leave_native_steps_runnable",
                     missing_cross_wrappers_leave_native_steps_runnable as fn(),
