@@ -1268,7 +1268,7 @@ impl GestureBinding {
 
                     if matches!(
                         pointer_move.pointer.kind,
-                        PointerKind::Mouse | PointerKind::Pen
+                        PointerKind::Mouse | PointerKind::Pen { .. }
                     ) {
                         let fresh_hit_test = hit_test_fn(position);
                         self.mouse_tracker.update_with_motion(
