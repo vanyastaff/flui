@@ -58,7 +58,10 @@ pub(crate) fn event_time(event: &PointerEvent) -> Option<u64> {
 /// arena clock's reading at dispatch; every later event lands at the anchor
 /// plus its own hardware offset. An event without a timestamp is stamped at
 /// dispatch. Every returned instant is at least the previous one, so a
-/// sequence that mixes stamped and unstamped events never runs backwards.
+/// sequence that mixes stamped and unstamped events never runs backwards;
+/// when a stamped event would land before an unstamped one, the hardware
+/// timeline is re-anchored there, so the stamped events after it keep their
+/// own spacing instead of collapsing onto one instant.
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct EventTimeline {
     anchor: Option<(u64, Instant)>,
@@ -80,7 +83,16 @@ impl EventTimeline {
                 anchor.checked_add(offset).unwrap_or(now)
             }
         };
-        let instant = self.last.map_or(raw, |last| raw.max(last));
+        let instant = match (self.last, event_nanos) {
+            (Some(last), Some(event_nanos)) if raw < last => {
+                // An unstamped event ran ahead of the hardware timeline: carry the
+                // stamped events on from it.
+                self.anchor = Some((event_nanos, last));
+                last
+            }
+            (Some(last), _) => raw.max(last),
+            (None, _) => raw,
+        };
         self.last = Some(instant);
         instant
     }
