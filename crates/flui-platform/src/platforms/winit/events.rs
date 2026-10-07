@@ -1,339 +1,871 @@
-//! Winit event conversion to W3C ui-events
+//! Winit native pointer translation and private keyboard conversion.
 //!
-//! Converts winit 0.30 events through private W3C translations to owned PlatformInput types.
+//! Pointer state belongs to exact native devices and windows. Native phase
+//! changes commit before the platform publishes owned input to user callbacks.
 
-use dpi::{PhysicalPosition, PhysicalSize};
+use flui_foundation::geometry::{Offset, Point};
+use flui_platform_api::{EventTime, pointer as owned};
 use keyboard_types::Modifiers as KeyboardModifiers;
-use ui_events::pointer::{
-    PointerButton, PointerButtonEvent, PointerButtons, PointerEvent, PointerId, PointerInfo,
-    PointerOrientation, PointerState, PointerType, PointerUpdate,
-};
+use std::collections::{HashMap, HashSet};
 use winit::event::{ElementState, MouseButton, MouseScrollDelta};
 
 use crate::{
-    shared::events::{event_timestamp_ns, primary_mouse_info},
-    shared::input_vocabulary::{keyboard_input, pointer_input},
+    shared::events::event_timestamp_ns, shared::input_vocabulary::keyboard_input,
     traits::PlatformInput,
 };
 
-/// Build a `PointerState` from position and scale factor.
-///
-/// `buttons` is the set of buttons HELD at this instant — the W3C
-/// `PointerEvent.buttons` field, and what the gesture layer uses to tell a
-/// drag-move from a hover (`flui-interaction`'s own move constructors stamp
-/// the held set the same way). A move that always reports an empty set is
-/// classified as a hover, so an active pan never receives updates and
-/// drag-scrolling in a live window silently does nothing.
-/// `count` is the W3C click/tap count: `1` on Down/Up transitions, `0` on
-/// motion, hover, scroll and gesture states — the synthetic constructors
-/// stamp the same rule, so a recognizer reading it sees one contract on
-/// both wires.
-fn pointer_state(
-    position: winit::dpi::PhysicalPosition<f64>,
-    scale_factor: f64,
-    pressure: f64,
-    modifiers: KeyboardModifiers,
-    buttons: PointerButtons,
-    count: u8,
-) -> PointerState {
-    let logical_x = position.x / scale_factor;
-    let logical_y = position.y / scale_factor;
-
-    PointerState {
-        time: event_timestamp_ns(),
-        position: PhysicalPosition::new(logical_x, logical_y),
-        buttons,
-        modifiers,
-        count,
-        contact_geometry: PhysicalSize::new(1.0, 1.0),
-        orientation: PointerOrientation::default(),
-        pressure: pressure as f32,
-        tangential_pressure: 0.0,
-        scale_factor,
-    }
+#[derive(Clone, Copy)]
+enum GestureDelta {
+    Pinch(f64),
+    Pan(Offset<f64>),
+    Rotation(f32),
 }
 
-/// Convert winit MouseButton to W3C PointerButton
-pub(crate) fn convert_mouse_button(button: MouseButton) -> PointerButton {
-    match button {
-        MouseButton::Left => PointerButton::Primary,
-        MouseButton::Right => PointerButton::Secondary,
-        MouseButton::Middle => PointerButton::Auxiliary,
-        MouseButton::Back => PointerButton::X1,
-        MouseButton::Forward => PointerButton::X2,
-        MouseButton::Other(id) => vendor_button(id),
-    }
-}
-
-/// Map a vendor-specific button id onto ui-events' exotic-button band.
-///
-/// winit reports mouse buttons beyond left/right/middle/back/forward as
-/// `Other(id)` with a backend-specific id. Such a button must never alias
-/// onto an actuating button — `Primary` in particular makes every tap/click
-/// recognizer treat the press as tap-eligible, so a vendor side-button would
-/// click whatever is under the cursor. ui-events reserves `B7`..`B32` for
-/// exactly these devices; the id is folded onto that band with a modulo, so
-/// the release of a vendor button always carries the same `PointerButton`
-/// as its press. Two ids a multiple of the band width apart share a slot —
-/// acceptable, because nothing in the gesture layer actuates on this band;
-/// determinism per id is the load-bearing property (the raw winit button
-/// set tracked by the platform, not this normalized value, is what decides
-/// which physical buttons are still held).
-fn vendor_button(id: u16) -> PointerButton {
-    const EXOTIC_BAND: [PointerButton; 26] = [
-        PointerButton::B7,
-        PointerButton::B8,
-        PointerButton::B9,
-        PointerButton::B10,
-        PointerButton::B11,
-        PointerButton::B12,
-        PointerButton::B13,
-        PointerButton::B14,
-        PointerButton::B15,
-        PointerButton::B16,
-        PointerButton::B17,
-        PointerButton::B18,
-        PointerButton::B19,
-        PointerButton::B20,
-        PointerButton::B21,
-        PointerButton::B22,
-        PointerButton::B23,
-        PointerButton::B24,
-        PointerButton::B25,
-        PointerButton::B26,
-        PointerButton::B27,
-        PointerButton::B28,
-        PointerButton::B29,
-        PointerButton::B30,
-        PointerButton::B31,
-        PointerButton::B32,
-    ];
-    EXOTIC_BAND[usize::from(id) % EXOTIC_BAND.len()]
-}
-
-/// Convert winit CursorMoved to W3C PointerEvent::Move
-///
-/// `held_buttons` comes from the platform's tracked button state (winit's
-/// `CursorMoved` carries no button information of its own): with a button
-/// held this is a drag-move, without one a hover.
-pub fn cursor_moved_event(
-    position: winit::dpi::PhysicalPosition<f64>,
-    scale_factor: f64,
-    modifiers: KeyboardModifiers,
-    held_buttons: PointerButtons,
-) -> Option<PlatformInput> {
-    let pressure = if held_buttons == PointerButtons::default() {
-        0.0
-    } else {
-        0.5
-    };
-    let state = pointer_state(position, scale_factor, pressure, modifiers, held_buttons, 0);
-
-    let event = PointerEvent::Move(PointerUpdate {
-        pointer: primary_mouse_info(),
-        current: state,
-        coalesced: Vec::new(),
-        predicted: Vec::new(),
-    });
-
-    pointer_input(event, event_timestamp_ns())
-}
-
-/// Convert winit MouseInput to W3C PointerEvent::Down/Up
-/// `held_buttons` is the set held AFTER this transition (press included /
-/// release excluded), per the W3C `buttons` contract for down/up events.
-pub fn mouse_button_event(
-    button: MouseButton,
-    state: ElementState,
-    position: winit::dpi::PhysicalPosition<f64>,
-    scale_factor: f64,
-    modifiers: KeyboardModifiers,
-    held_buttons: PointerButtons,
-) -> Option<PlatformInput> {
-    let is_down = state == ElementState::Pressed;
-    let pointer_button = convert_mouse_button(button);
-    let pressure = if is_down { 0.5 } else { 0.0 };
-    let pointer_state = pointer_state(position, scale_factor, pressure, modifiers, held_buttons, 1);
-
-    let event = if is_down {
-        PointerEvent::Down(PointerButtonEvent {
-            pointer: primary_mouse_info(),
-            state: pointer_state,
-            button: Some(pointer_button),
-        })
-    } else {
-        PointerEvent::Up(PointerButtonEvent {
-            pointer: primary_mouse_info(),
-            state: pointer_state,
-            button: Some(pointer_button),
-        })
-    };
-
-    pointer_input(event, event_timestamp_ns())
-}
-
-/// Convert winit `Touch` to a per-contact W3C pointer event.
-///
-/// Contact identity: `pointer_id` is allocated by the platform from the
-/// `(device, contact)` pair (see `WinitPlatformState::touch_contacts`) —
-/// never `PointerId::PRIMARY` (the mouse), never shared between two live
-/// contacts even across touch devices, and never reused within a session.
-///
-/// Buttons: a touch contact IS the primary "button" for its whole
-/// Started..Ended span — the W3C contract reports `buttons = 1` while any
-/// part of the finger touches. Move events must carry it, or the gesture
-/// layer classifies them as hovers and an active pan never receives
-/// updates (the exact live-drag failure the mouse path once shipped).
-pub fn touch_event(
-    touch: winit::event::Touch,
-    pointer_id: u64,
-    scale_factor: f64,
-    modifiers: KeyboardModifiers,
-) -> Option<PlatformInput> {
-    use winit::event::TouchPhase;
-
-    let info = PointerInfo {
-        pointer_id: PointerId::new(pointer_id),
-        pointer_type: PointerType::Touch,
-        persistent_device_id: None,
-    };
-    // Hardware without force reporting gets the same 0.5 stand-in the mouse
-    // path uses for a held button.
-    let contact_pressure = touch.force.map_or(0.5, |force| force.normalized());
-    let contact_buttons = PointerButtons::from(PointerButton::Primary);
-
-    let event = match touch.phase {
-        TouchPhase::Started => PointerEvent::Down(PointerButtonEvent {
-            pointer: info,
-            state: pointer_state(
-                touch.location,
-                scale_factor,
-                contact_pressure,
-                modifiers,
-                contact_buttons,
-                1,
-            ),
-            button: Some(PointerButton::Primary),
-        }),
-        TouchPhase::Moved => PointerEvent::Move(PointerUpdate {
-            pointer: info,
-            current: pointer_state(
-                touch.location,
-                scale_factor,
-                contact_pressure,
-                modifiers,
-                contact_buttons,
-                0,
-            ),
-            coalesced: Vec::new(),
-            predicted: Vec::new(),
-        }),
-        TouchPhase::Ended => PointerEvent::Up(PointerButtonEvent {
-            pointer: info,
-            state: pointer_state(
-                touch.location,
-                scale_factor,
-                0.0,
-                modifiers,
-                PointerButtons::default(),
-                1,
-            ),
-            button: Some(PointerButton::Primary),
-        }),
-        TouchPhase::Cancelled => PointerEvent::Cancel(info),
-    };
-
-    pointer_input(event, event_timestamp_ns())
-}
-
-/// Convert a winit trackpad pinch or rotation tick into a
-/// `PointerEvent::Gesture` — the producer side the pan-zoom lane never had
-/// (its consumer chain, `from_w3c_event` → `Listener::on_pointer_pan_zoom_update`,
-/// existed with zero producers on any backend).
-///
-/// Delta conventions, each converted AT THIS boundary:
-/// - winit `PinchGesture.delta` is a magnification fraction (positive =
-///   zoom in) — the exact semantics of `PointerGesture::Pinch`, passed
-///   through (NaN, which winit documents as possible, is dropped by the
-///   caller).
-/// - winit `RotationGesture.delta` is COUNTERCLOCKWISE degrees;
-///   `PointerGesture::Rotate` wants CLOCKWISE radians — negate and convert.
-///
-/// winit's `PanGesture` (iOS-only) has no `PointerGesture` counterpart and
-/// macOS trackpad pans already arrive as `MouseWheel` `PixelDelta` ticks;
-/// `DoubleTapGesture` carries no delta to translate. Both stay untranslated
-/// deliberately.
-///
-/// The synthetic gesture pointer: gestures arrive without a pointer id from
-/// winit; the whole tick stream shares one identity distinct from the mouse
-/// and any touch contact, typed `Touch` (a trackpad gesture is a touch-class
-/// input, and the binding's ephemeral no-contact dispatch keys on the id
-/// only).
-pub fn trackpad_gesture_event(
-    gesture: ui_events::pointer::PointerGesture,
-    position: winit::dpi::PhysicalPosition<f64>,
-    scale_factor: f64,
-    modifiers: KeyboardModifiers,
-) -> Option<PlatformInput> {
-    let event = PointerEvent::Gesture(ui_events::pointer::PointerGestureEvent {
-        pointer: PointerInfo {
-            pointer_id: PointerId::new(crate::shared::gestures::GESTURE_POINTER_ID),
-            pointer_type: PointerType::Touch,
-            persistent_device_id: None,
-        },
-        gesture,
-        state: pointer_state(
-            position,
-            scale_factor,
-            0.0,
-            modifiers,
-            PointerButtons::default(),
-            0,
-        ),
-    });
-
-    pointer_input(event, event_timestamp_ns())
-}
-
-/// Convert winit MouseWheel to W3C PointerEvent::Scroll
-pub fn mouse_wheel_event(
-    delta: MouseScrollDelta,
-    position: winit::dpi::PhysicalPosition<f64>,
-    scale_factor: f64,
-    modifiers: KeyboardModifiers,
-) -> Option<PlatformInput> {
-    // Normalized at THIS boundary so every backend hands consumers the
-    // same convention — the oracle's `scrollDelta`: positive = content
-    // scrolls down (the web backend's DOM `deltaY` already arrives that
-    // way). winit's wheel axes are the inverse (positive = away from the
-    // user), and its `PixelDelta` is PHYSICAL pixels while pointer
-    // positions (and the scroll positions consuming this) are logical —
-    // flip the sign and divide by the scale factor here (via the shared
-    // per-backend table in `crate::shared::scroll`), never in a
-    // platform-neutral widget.
-    let scroll_delta = match delta {
-        MouseScrollDelta::LineDelta(x, y) => crate::shared::scroll::from_winit_lines(x, y),
-        MouseScrollDelta::PixelDelta(pos) => {
-            crate::shared::scroll::from_winit_pixels(pos.x, pos.y, scale_factor)
+impl GestureDelta {
+    fn from_native(
+        event: &winit::event::WindowEvent,
+        scale: f64,
+    ) -> Option<(winit::event::DeviceId, Self, winit::event::TouchPhase)> {
+        use winit::event::WindowEvent;
+        let scale = if scale.is_finite() && scale > 0.0 {
+            scale
+        } else {
+            f64::NAN
+        };
+        match event {
+            WindowEvent::PinchGesture {
+                device_id,
+                delta,
+                phase,
+            } => Some((*device_id, Self::Pinch(*delta), *phase)),
+            WindowEvent::RotationGesture {
+                device_id,
+                delta,
+                phase,
+            } => Some((*device_id, Self::Rotation(*delta), *phase)),
+            WindowEvent::PanGesture {
+                device_id,
+                delta,
+                phase,
+            } => Some((
+                *device_id,
+                Self::Pan(Offset::new(
+                    f64::from(delta.x) / scale,
+                    f64::from(delta.y) / scale,
+                )),
+                *phase,
+            )),
+            _ => None,
         }
-    };
+    }
 
-    let state = pointer_state(
-        position,
-        scale_factor,
-        0.0,
-        modifiers,
-        PointerButtons::default(),
-        0,
-    );
+    fn component(self) -> u8 {
+        match self {
+            Self::Pinch(_) => 1,
+            Self::Pan(_) => 2,
+            Self::Rotation(_) => 4,
+        }
+    }
 
-    let event = PointerEvent::Scroll(ui_events::pointer::PointerScrollEvent {
-        pointer: primary_mouse_info(),
-        state,
-        delta: scroll_delta,
-    });
+    fn apply(self, previous: owned::PanZoomTransform) -> Option<owned::PanZoomTransform> {
+        let (pan, scale, rotation) = match self {
+            Self::Pinch(delta) => (
+                previous.pan(),
+                previous.scale() * (1.0 + delta),
+                previous.rotation(),
+            ),
+            Self::Pan(delta) => (
+                previous.pan() + delta,
+                previous.scale(),
+                previous.rotation(),
+            ),
+            Self::Rotation(delta) => (
+                previous.pan(),
+                previous.scale(),
+                previous.rotation() - f64::from(delta).to_radians(),
+            ),
+        };
+        owned::PanZoomTransform::try_new(pan, scale, rotation).ok()
+    }
+}
 
-    pointer_input(event, event_timestamp_ns())
+struct PanZoomContact {
+    pointer: owned::PointerInfo,
+    components: u8,
+    transform: owned::PanZoomTransform,
+    position: owned::PointerPosition,
+}
+
+#[derive(Default)]
+struct PanZoomState {
+    contact: Option<PanZoomContact>,
+}
+
+impl PanZoomState {
+    fn event(
+        &mut self,
+        delta: GestureDelta,
+        phase: winit::event::TouchPhase,
+        pointer: owned::PointerInfo,
+        position: owned::PointerPosition,
+        modifiers: KeyboardModifiers,
+    ) -> Vec<PlatformInput> {
+        use winit::event::TouchPhase;
+        let mut events = Vec::new();
+        let component = delta.component();
+        if phase == TouchPhase::Started {
+            if self
+                .contact
+                .as_ref()
+                .is_some_and(|contact| contact.components & component != 0)
+            {
+                return events;
+            }
+            if let Some(contact) = self.contact.as_mut() {
+                contact.components |= component;
+            } else {
+                self.contact = Some(PanZoomContact {
+                    pointer,
+                    components: component,
+                    transform: owned::PanZoomTransform::IDENTITY,
+                    position,
+                });
+                events.push(pan_zoom_input(
+                    pointer,
+                    position,
+                    owned::PanZoomPhase::Start,
+                    modifiers,
+                ));
+            }
+        }
+        let Some(contact) = self.contact.as_mut() else {
+            return events;
+        };
+        if phase == TouchPhase::Cancelled {
+            let contact = self
+                .contact
+                .take()
+                .expect("BUG: active native gesture was checked");
+            events.push(pan_zoom_input(
+                contact.pointer,
+                position,
+                owned::PanZoomPhase::Cancelled,
+                modifiers,
+            ));
+            return events;
+        }
+        if contact.components & component == 0 {
+            return events;
+        }
+        contact.position = position;
+        if let Some(transform) = delta.apply(contact.transform)
+            && transform != contact.transform
+        {
+            contact.transform = transform;
+            events.push(pan_zoom_input(
+                contact.pointer,
+                position,
+                owned::PanZoomPhase::Update(transform),
+                modifiers,
+            ));
+        }
+        if phase == TouchPhase::Ended {
+            contact.components &= !component;
+            if contact.components == 0 {
+                let contact = self
+                    .contact
+                    .take()
+                    .expect("BUG: active native gesture was checked");
+                events.push(pan_zoom_input(
+                    contact.pointer,
+                    position,
+                    owned::PanZoomPhase::End,
+                    modifiers,
+                ));
+            }
+        }
+        events
+    }
+
+    fn cancel(&mut self, modifiers: KeyboardModifiers) -> Option<PlatformInput> {
+        let contact = self.contact.take()?;
+        Some(pan_zoom_input(
+            contact.pointer,
+            contact.position,
+            owned::PanZoomPhase::Cancelled,
+            modifiers,
+        ))
+    }
+}
+
+fn pan_zoom_input(
+    pointer: owned::PointerInfo,
+    position: owned::PointerPosition,
+    phase: owned::PanZoomPhase,
+    modifiers: KeyboardModifiers,
+) -> PlatformInput {
+    PlatformInput::Pointer(owned::PointerEvent::PanZoom(
+        owned::PanZoomEvent::new(
+            pointer,
+            EventTime::from_nanos(event_timestamp_ns()),
+            position,
+            phase,
+        )
+        .with_modifiers(crate::shared::input_vocabulary::modifiers(modifiers)),
+    ))
+}
+
+struct MouseContact {
+    pointer: owned::PointerInfo,
+    position: Option<owned::PointerPosition>,
+    held: HashSet<MouseButton>,
+    suppressed: HashSet<MouseButton>,
+    scroll_started: bool,
+}
+
+impl MouseContact {
+    fn event(
+        &mut self,
+        event: &winit::event::WindowEvent,
+        scale: f64,
+        mods: flui_platform_api::keyboard::Modifiers,
+    ) -> Vec<PlatformInput> {
+        use winit::event::WindowEvent;
+        let mut inputs = Vec::new();
+        match event {
+            WindowEvent::CursorMoved { position, .. } => {
+                self.position = native_position(*position, scale);
+                if let Some(position) = self.position {
+                    inputs.push(PlatformInput::Pointer(owned::PointerEvent::Move(
+                        owned::PointerMove::new(
+                            self.pointer,
+                            self.buttons(),
+                            native_sample(position),
+                        )
+                        .with_modifiers(mods),
+                    )));
+                }
+            }
+            WindowEvent::TouchpadPressure { pressure, .. } => {
+                if let Some(position) = self.position {
+                    let mut sample = native_sample(position);
+                    sample.pressure = owned::Pressure::try_new(*pressure).ok();
+                    inputs.push(PlatformInput::Pointer(owned::PointerEvent::Move(
+                        owned::PointerMove::new(self.pointer, self.buttons(), sample)
+                            .with_modifiers(mods),
+                    )));
+                }
+            }
+            WindowEvent::CursorEntered { .. } | WindowEvent::CursorLeft { .. } => {
+                let mut signal = owned::PointerSignal::new(
+                    self.pointer,
+                    EventTime::from_nanos(event_timestamp_ns()),
+                );
+                signal.position = self.position;
+                let event = if matches!(event, WindowEvent::CursorEntered { .. }) {
+                    owned::PointerEvent::Enter(signal)
+                } else {
+                    owned::PointerEvent::Leave(signal)
+                };
+                inputs.push(PlatformInput::Pointer(event));
+            }
+            _ => {}
+        }
+        inputs
+    }
+
+    fn buttons(&self) -> owned::PointerButtons {
+        self.held
+            .iter()
+            .fold(owned::PointerButtons::NONE, |held, button| {
+                held.with(native_button(*button))
+            })
+    }
+}
+
+fn native_button(button: MouseButton) -> owned::PointerButton {
+    // Preserve native vendor-button identity within the vocabulary's finite
+    // non-actuating band. Raw held buttons remain distinct before this mapping.
+    match button {
+        MouseButton::Left => owned::PointerButton::PRIMARY,
+        MouseButton::Right => owned::PointerButton::SECONDARY,
+        MouseButton::Middle => owned::PointerButton::AUXILIARY,
+        MouseButton::Back => owned::PointerButton::BACK,
+        MouseButton::Forward => owned::PointerButton::FORWARD,
+        MouseButton::Other(id) => owned::PointerButton::try_from(7 + (id % 26) as u8)
+            .expect("BUG: vendor button maps into the non-actuating 7..=32 band"),
+    }
+}
+
+fn native_position(
+    position: winit::dpi::PhysicalPosition<f64>,
+    scale: f64,
+) -> Option<owned::PointerPosition> {
+    if !scale.is_finite() || scale <= 0.0 {
+        return None;
+    }
+    owned::PointerPosition::try_new(Point::new(position.x / scale, position.y / scale)).ok()
+}
+
+fn native_sample(position: owned::PointerPosition) -> owned::PointerSample {
+    owned::PointerSample::new(EventTime::from_nanos(event_timestamp_ns()), position)
+}
+
+fn native_touch_sample(
+    position: owned::PointerPosition,
+    force: Option<winit::event::Force>,
+) -> owned::PointerSample {
+    let mut sample = native_sample(position);
+    if let Some(force) = force {
+        let normalized = force.normalized();
+        if (0.0..=1.0).contains(&normalized) {
+            // Validate f64 before rounding into the owned f32 sensor representation.
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "validated normalized force fits f32"
+            )]
+            let normalized = normalized as f32;
+            sample.pressure = owned::Pressure::try_new(normalized).ok();
+        }
+        if let winit::event::Force::Calibrated {
+            altitude_angle: Some(altitude),
+            ..
+        } = force
+        {
+            sample.orientation = owned::PenOrientation::try_altitude(altitude).ok();
+        }
+    }
+    sample
+}
+
+fn next_identity(counter: &mut Option<u64>) -> Option<u64> {
+    let value = (*counter)?;
+    *counter = value.checked_add(1);
+    Some(value)
+}
+
+type DeviceWindow = (crate::traits::WindowId, winit::event::DeviceId);
+
+enum NativeKind {
+    Unreported,
+    Reported(owned::PointerKind),
+    Mixed,
+}
+
+impl NativeKind {
+    fn observe(&mut self, kind: owned::PointerKind) {
+        if kind == owned::PointerKind::Unknown {
+            return;
+        }
+        match self {
+            Self::Unreported => *self = Self::Reported(kind),
+            Self::Reported(previous) if *previous != kind => *self = Self::Mixed,
+            _ => {}
+        }
+    }
+
+    fn reported(&self) -> owned::PointerKind {
+        match self {
+            Self::Reported(kind) => *kind,
+            Self::Unreported | Self::Mixed => owned::PointerKind::Unknown,
+        }
+    }
+}
+
+pub(super) struct NativePointerState {
+    devices: HashMap<winit::event::DeviceId, (owned::DeviceId, NativeKind)>,
+    mice: HashMap<DeviceWindow, MouseContact>,
+    contacts: HashMap<(crate::traits::WindowId, winit::event::DeviceId, u64), owned::PointerInfo>,
+    gestures: HashMap<DeviceWindow, PanZoomState>,
+    next_device: Option<u64>,
+    next_pointer: Option<u64>,
+}
+
+impl Default for NativePointerState {
+    fn default() -> Self {
+        Self {
+            devices: HashMap::new(),
+            mice: HashMap::new(),
+            contacts: HashMap::new(),
+            gestures: HashMap::new(),
+            next_device: Some(1),
+            next_pointer: Some(1),
+        }
+    }
+}
+
+impl NativePointerState {
+    fn device(
+        &mut self,
+        native: winit::event::DeviceId,
+        kind: owned::PointerKind,
+    ) -> Option<owned::DeviceId> {
+        if let Some((id, observed)) = self.devices.get_mut(&native) {
+            observed.observe(kind);
+            return Some(*id);
+        }
+        let id = owned::DeviceId::try_from(next_identity(&mut self.next_device)?).ok()?;
+        let mut observed = NativeKind::Unreported;
+        observed.observe(kind);
+        self.devices.insert(native, (id, observed));
+        Some(id)
+    }
+
+    fn pointer(
+        &mut self,
+        native: winit::event::DeviceId,
+        kind: owned::PointerKind,
+        role: owned::PointerRole,
+    ) -> Option<owned::PointerInfo> {
+        let device = self.device(native, kind)?;
+        let id = owned::PointerId::try_from(next_identity(&mut self.next_pointer)?).ok()?;
+        Some(
+            owned::PointerInfo::new(id, kind)
+                .with_device(device)
+                .with_role(role),
+        )
+    }
+
+    fn mouse(&mut self, key: DeviceWindow) -> Option<&mut MouseContact> {
+        if !self.mice.contains_key(&key) {
+            let pointer = self.pointer(
+                key.1,
+                owned::PointerKind::Mouse,
+                owned::PointerRole::Primary,
+            )?;
+            self.mice.insert(
+                key,
+                MouseContact {
+                    pointer,
+                    position: None,
+                    held: HashSet::new(),
+                    suppressed: HashSet::new(),
+                    scroll_started: false,
+                },
+            );
+        }
+        self.mice.get_mut(&key)
+    }
+
+    pub(super) fn window_event(
+        &mut self,
+        window: crate::traits::WindowId,
+        event: &winit::event::WindowEvent,
+        scale: f64,
+        modifiers: KeyboardModifiers,
+    ) -> Option<Vec<PlatformInput>> {
+        use winit::event::WindowEvent;
+        if let Some((device, delta, phase)) = GestureDelta::from_native(event, scale) {
+            return self.gesture((window, device), delta, phase, modifiers);
+        }
+        let mods = crate::shared::input_vocabulary::modifiers(modifiers);
+        match event {
+            WindowEvent::CursorMoved { device_id, .. }
+            | WindowEvent::TouchpadPressure { device_id, .. }
+            | WindowEvent::CursorEntered { device_id }
+            | WindowEvent::CursorLeft { device_id } => {
+                Some(self.mouse((window, *device_id))?.event(event, scale, mods))
+            }
+            WindowEvent::MouseInput {
+                device_id,
+                state,
+                button,
+            } => self.mouse_button(window, device_id, state, button, mods),
+            WindowEvent::Touch(touch) => self.touch(window, touch, scale, mods),
+            WindowEvent::MouseWheel {
+                device_id,
+                delta,
+                phase,
+            } => self.scroll(window, device_id, delta, phase, scale, mods),
+            _ => None,
+        }
+    }
+
+    fn mouse_button(
+        &mut self,
+        window: crate::traits::WindowId,
+        device_id: &winit::event::DeviceId,
+        state: &ElementState,
+        button: &MouseButton,
+        mods: flui_platform_api::keyboard::Modifiers,
+    ) -> Option<Vec<PlatformInput>> {
+        let mut inputs = Vec::new();
+        let mouse = self.mouse((window, *device_id))?;
+        let before = mouse.held.is_empty();
+        match state {
+            ElementState::Pressed if mouse.position.is_none() => {
+                mouse.suppressed.insert(*button);
+                return Some(inputs);
+            }
+            ElementState::Pressed => {
+                if !mouse.held.insert(*button) {
+                    return Some(inputs);
+                }
+            }
+            ElementState::Released => {
+                if mouse.suppressed.remove(button) || !mouse.held.remove(button) {
+                    return Some(inputs);
+                }
+            }
+        }
+        let Some(position) = mouse.position else {
+            mouse.held.clear();
+            inputs.push(PlatformInput::Pointer(owned::PointerEvent::Cancel(
+                owned::PointerCancel::new(
+                    mouse.pointer,
+                    EventTime::from_nanos(event_timestamp_ns()),
+                    owned::CancelReason::InvalidInput,
+                ),
+            )));
+            return Some(inputs);
+        };
+        let button = native_button(*button);
+        let held = mouse.buttons();
+        let sample = native_sample(position);
+        let event = if *state == ElementState::Pressed {
+            let press =
+                owned::PointerPress::new(mouse.pointer, button, held, sample).with_modifiers(mods);
+            if before {
+                owned::PointerEvent::Down(press)
+            } else {
+                owned::PointerEvent::ButtonChange(owned::ButtonChange::Pressed(press))
+            }
+        } else {
+            let release = owned::PointerRelease::new(mouse.pointer, button, held, sample)
+                .with_modifiers(mods);
+            if mouse.held.is_empty() {
+                owned::PointerEvent::Up(release)
+            } else {
+                owned::PointerEvent::ButtonChange(owned::ButtonChange::Released(release))
+            }
+        };
+        inputs.push(PlatformInput::Pointer(event));
+        Some(inputs)
+    }
+
+    fn touch(
+        &mut self,
+        window: crate::traits::WindowId,
+        touch: &winit::event::Touch,
+        scale: f64,
+        mods: flui_platform_api::keyboard::Modifiers,
+    ) -> Option<Vec<PlatformInput>> {
+        use winit::event::TouchPhase;
+        let mut inputs = Vec::new();
+        let key = (window, touch.device_id, touch.id);
+        let position = native_position(touch.location, scale);
+        let pointer = if touch.phase == TouchPhase::Started {
+            if self.contacts.contains_key(&key) || position.is_none() {
+                return Some(inputs);
+            }
+            let role = if self
+                .contacts
+                .keys()
+                .any(|(w, device, _)| *w == window && *device == touch.device_id)
+            {
+                owned::PointerRole::Additional
+            } else {
+                owned::PointerRole::Primary
+            };
+            let pointer = self.pointer(touch.device_id, owned::PointerKind::Touch, role)?;
+            self.contacts.insert(key, pointer);
+            pointer
+        } else {
+            let Some(pointer) = self.contacts.get(&key).copied() else {
+                return Some(inputs);
+            };
+            pointer
+        };
+        if matches!(touch.phase, TouchPhase::Ended | TouchPhase::Cancelled) {
+            self.contacts.remove(&key);
+        }
+        if touch.phase == TouchPhase::Cancelled
+            || (touch.phase == TouchPhase::Ended && position.is_none())
+        {
+            inputs.push(PlatformInput::Pointer(owned::PointerEvent::Cancel(
+                owned::PointerCancel::new(
+                    pointer,
+                    EventTime::from_nanos(event_timestamp_ns()),
+                    if touch.phase == TouchPhase::Cancelled {
+                        owned::CancelReason::Platform
+                    } else {
+                        owned::CancelReason::InvalidInput
+                    },
+                ),
+            )));
+        } else if let Some(position) = position {
+            let sample = native_touch_sample(position, touch.force);
+            let event = match touch.phase {
+                TouchPhase::Started => owned::PointerEvent::Down(
+                    owned::PointerPress::new(
+                        pointer,
+                        owned::PointerButton::PRIMARY,
+                        owned::PointerButtons::only(owned::PointerButton::PRIMARY),
+                        sample,
+                    )
+                    .with_modifiers(mods),
+                ),
+                TouchPhase::Moved => owned::PointerEvent::Move(
+                    owned::PointerMove::new(
+                        pointer,
+                        owned::PointerButtons::only(owned::PointerButton::PRIMARY),
+                        sample,
+                    )
+                    .with_modifiers(mods),
+                ),
+                TouchPhase::Ended => owned::PointerEvent::Up(
+                    owned::PointerRelease::new(
+                        pointer,
+                        owned::PointerButton::PRIMARY,
+                        owned::PointerButtons::NONE,
+                        sample,
+                    )
+                    .with_modifiers(mods),
+                ),
+                TouchPhase::Cancelled => {
+                    unreachable!("BUG: cancellation returned before sampling")
+                }
+            };
+            inputs.push(PlatformInput::Pointer(event));
+        }
+        Some(inputs)
+    }
+
+    fn scroll(
+        &mut self,
+        window: crate::traits::WindowId,
+        device_id: &winit::event::DeviceId,
+        delta: &MouseScrollDelta,
+        phase: &winit::event::TouchPhase,
+        scale: f64,
+        mods: flui_platform_api::keyboard::Modifiers,
+    ) -> Option<Vec<PlatformInput>> {
+        use winit::event::TouchPhase;
+        let mut inputs = Vec::new();
+        let mouse = self.mouse((window, *device_id))?;
+        let Some(position) = mouse.position else {
+            return Some(inputs);
+        };
+        let scale = if scale.is_finite() && scale > 0.0 {
+            scale
+        } else {
+            f64::NAN
+        };
+        let (unit, x, y, precision) = match delta {
+            MouseScrollDelta::LineDelta(x, y) => (
+                owned::ScrollUnit::Lines,
+                -f64::from(*x),
+                -f64::from(*y),
+                owned::ScrollPrecision::Discrete,
+            ),
+            MouseScrollDelta::PixelDelta(delta) => (
+                owned::ScrollUnit::Pixels,
+                -delta.x / scale,
+                -delta.y / scale,
+                owned::ScrollPrecision::Precise,
+            ),
+        };
+        let delta = owned::ScrollDelta::try_new(unit, x, y)
+            .unwrap_or_else(|_| owned::ScrollDelta::zero(unit));
+        let native_phase = match phase {
+            TouchPhase::Started => {
+                mouse.scroll_started = true;
+                Some(owned::ScrollPhase::Began)
+            }
+            TouchPhase::Moved if mouse.scroll_started || unit == owned::ScrollUnit::Pixels => {
+                Some(owned::ScrollPhase::Changed)
+            }
+            TouchPhase::Moved => None,
+            TouchPhase::Ended => {
+                mouse.scroll_started = false;
+                Some(owned::ScrollPhase::Ended)
+            }
+            TouchPhase::Cancelled => {
+                mouse.scroll_started = false;
+                Some(owned::ScrollPhase::Cancelled)
+            }
+        };
+        let mut scroll = owned::ScrollEvent::new(
+            mouse.pointer,
+            EventTime::from_nanos(event_timestamp_ns()),
+            position,
+            delta,
+        )
+        .with_modifiers(mods)
+        .with_precision(precision);
+        scroll.phase = native_phase;
+        inputs.push(PlatformInput::Pointer(owned::PointerEvent::Scroll(scroll)));
+        Some(inputs)
+    }
+
+    fn gesture(
+        &mut self,
+        key: DeviceWindow,
+        delta: GestureDelta,
+        phase: winit::event::TouchPhase,
+        modifiers: KeyboardModifiers,
+    ) -> Option<Vec<PlatformInput>> {
+        let position = self
+            .mice
+            .get(&key)
+            .and_then(|mouse| mouse.position)
+            .or_else(|| {
+                self.gestures
+                    .get(&key)
+                    .and_then(|gesture| gesture.contact.as_ref())
+                    .map(|contact| contact.position)
+            })?;
+        let pointer = if let Some(contact) = self
+            .gestures
+            .get(&key)
+            .and_then(|gesture| gesture.contact.as_ref())
+        {
+            contact.pointer
+        } else {
+            if phase != winit::event::TouchPhase::Started {
+                return Some(Vec::new());
+            }
+            self.pointer(
+                key.1,
+                owned::PointerKind::Trackpad,
+                owned::PointerRole::Primary,
+            )?
+        };
+        Some(
+            self.gestures
+                .entry(key)
+                .or_default()
+                .event(delta, phase, pointer, position, modifiers),
+        )
+    }
+
+    pub(super) fn cancel_window(
+        &mut self,
+        window: crate::traits::WindowId,
+        reason: owned::CancelReason,
+    ) -> Vec<PlatformInput> {
+        let mut events = Vec::new();
+        let time = EventTime::from_nanos(event_timestamp_ns());
+        for (_, pointer) in self.contacts.extract_if(|(w, _, _), _| *w == window) {
+            events.push(PlatformInput::Pointer(owned::PointerEvent::Cancel(
+                owned::PointerCancel::new(pointer, time, reason),
+            )));
+        }
+        for (_, mouse) in self.mice.extract_if(|(w, _), _| *w == window) {
+            if !mouse.held.is_empty() {
+                events.push(PlatformInput::Pointer(owned::PointerEvent::Cancel(
+                    owned::PointerCancel::new(mouse.pointer, time, reason),
+                )));
+            }
+        }
+        for (_, mut gesture) in self.gestures.extract_if(|(w, _), _| *w == window) {
+            events.extend(gesture.cancel(KeyboardModifiers::empty()));
+        }
+        events.sort_by_key(|input| match input {
+            PlatformInput::Pointer(owned::PointerEvent::Cancel(cancel)) => {
+                cancel.pointer.id.get().get()
+            }
+            PlatformInput::Pointer(owned::PointerEvent::PanZoom(gesture)) => {
+                gesture.pointer().id.get().get()
+            }
+            _ => 0,
+        });
+        events
+    }
+
+    pub(super) fn device_event(
+        &mut self,
+        native: winit::event::DeviceId,
+        event: &winit::event::DeviceEvent,
+        windows: &[crate::traits::WindowId],
+    ) -> Vec<(crate::traits::WindowId, PlatformInput)> {
+        use winit::event::DeviceEvent;
+        if !matches!(event, DeviceEvent::Added | DeviceEvent::Removed) {
+            return Vec::new();
+        }
+        let Some(device) = self.device(native, owned::PointerKind::Unknown) else {
+            return Vec::new();
+        };
+        let mut events = Vec::new();
+        let time = EventTime::from_nanos(event_timestamp_ns());
+        let kind = self
+            .devices
+            .get(&native)
+            .map_or(owned::PointerKind::Unknown, |(_, kind)| kind.reported());
+        if matches!(event, DeviceEvent::Removed) {
+            self.devices.remove(&native);
+            for ((window, _, _), pointer) in self
+                .contacts
+                .extract_if(|(_, native_id, _), _| *native_id == native)
+            {
+                events.push((
+                    window,
+                    PlatformInput::Pointer(owned::PointerEvent::Cancel(owned::PointerCancel::new(
+                        pointer,
+                        time,
+                        owned::CancelReason::DeviceRemoved,
+                    ))),
+                ));
+            }
+            for ((window, _), mouse) in self
+                .mice
+                .extract_if(|(_, native_id), _| *native_id == native)
+            {
+                if !mouse.held.is_empty() {
+                    events.push((
+                        window,
+                        PlatformInput::Pointer(owned::PointerEvent::Cancel(
+                            owned::PointerCancel::new(
+                                mouse.pointer,
+                                time,
+                                owned::CancelReason::DeviceRemoved,
+                            ),
+                        )),
+                    ));
+                }
+            }
+            for ((window, _), mut gesture) in self
+                .gestures
+                .extract_if(|(_, native_id), _| *native_id == native)
+            {
+                if let Some(input) = gesture.cancel(KeyboardModifiers::empty()) {
+                    events.push((window, input));
+                }
+            }
+        }
+        events.sort_by_key(|(window, input)| {
+            (
+                window.0,
+                match input {
+                    PlatformInput::Pointer(owned::PointerEvent::Cancel(cancel)) => {
+                        cancel.pointer.id.get().get()
+                    }
+                    PlatformInput::Pointer(owned::PointerEvent::PanZoom(gesture)) => {
+                        gesture.pointer().id.get().get()
+                    }
+                    _ => 0,
+                },
+            )
+        });
+        for window in windows {
+            let change = owned::PointerDeviceChange::new(
+                device,
+                if matches!(event, DeviceEvent::Added) {
+                    owned::PointerKind::Unknown
+                } else {
+                    kind
+                },
+                time,
+            );
+            let event = if matches!(event, DeviceEvent::Added) {
+                owned::PointerEvent::DeviceAdded(change)
+            } else {
+                owned::PointerEvent::DeviceRemoved(change)
+            };
+            events.push((*window, PlatformInput::Pointer(event)));
+        }
+        events
+    }
 }
 
 /// Convert winit's `Ime` event to [`flui_platform_api::ImeEvent`].
@@ -394,6 +926,400 @@ mod pointer_translation_tests {
     use flui_platform_api::pointer::PointerEvent;
 
     #[test]
+    fn native_device_window_contact_and_removal_contract() {
+        native_identity_exhaustion_never_reissues_a_contact();
+        use winit::event::{DeviceEvent, Touch, TouchPhase, WindowEvent};
+        let native = winit::event::DeviceId::dummy();
+        let windows = [crate::traits::WindowId(1), crate::traits::WindowId(2)];
+        let mut state = NativePointerState::default();
+        let added = state.device_event(native, &DeviceEvent::Added, &windows);
+        let PlatformInput::Pointer(PointerEvent::DeviceAdded(first)) = &added[0].1 else {
+            panic!("native Added")
+        };
+        assert_eq!(
+            first.kind,
+            owned::PointerKind::Unknown,
+            "Added does not name a native device kind"
+        );
+        let device = first.device;
+        let mut contact = |window, id, phase| {
+            state
+                .window_event(
+                    window,
+                    &WindowEvent::Touch(Touch {
+                        device_id: native,
+                        id,
+                        phase,
+                        location: winit::dpi::PhysicalPosition::new(20.0, 30.0),
+                        force: None,
+                    }),
+                    2.0,
+                    KeyboardModifiers::empty(),
+                )
+                .expect("native touch handled")
+                .remove(0)
+        };
+        let PlatformInput::Pointer(PointerEvent::Down(primary)) =
+            contact(windows[0], 0, TouchPhase::Started)
+        else {
+            panic!("first contact")
+        };
+        let PlatformInput::Pointer(PointerEvent::Down(additional)) =
+            contact(windows[0], 1, TouchPhase::Started)
+        else {
+            panic!("additional contact")
+        };
+        let PlatformInput::Pointer(PointerEvent::Down(independent)) =
+            contact(windows[1], 0, TouchPhase::Started)
+        else {
+            panic!("other window contact")
+        };
+        assert_eq!(primary.pointer.role, owned::PointerRole::Primary);
+        assert_eq!(additional.pointer.role, owned::PointerRole::Additional);
+        assert_eq!(independent.pointer.role, owned::PointerRole::Primary);
+        assert_eq!(primary.pointer.device, Some(device));
+        assert_ne!(primary.pointer.id, additional.pointer.id);
+        assert_ne!(
+            primary.pointer.id, independent.pointer.id,
+            "same native contact label in a different window does not alias"
+        );
+        let removed = state.device_event(native, &DeviceEvent::Removed, &windows);
+        assert_eq!(removed.len(), 5);
+        let mut canceled: Vec<_> = removed[..3]
+            .iter()
+            .map(|(_, input)| match input {
+                PlatformInput::Pointer(PointerEvent::Cancel(cancel)) => {
+                    assert_eq!(cancel.reason, owned::CancelReason::DeviceRemoved);
+                    cancel.pointer.id
+                }
+                _ => panic!("all active contacts cancel before native removal is published"),
+            })
+            .collect();
+        canceled.sort();
+        let mut expected = vec![
+            primary.pointer.id,
+            additional.pointer.id,
+            independent.pointer.id,
+        ];
+        expected.sort();
+        assert_eq!(canceled, expected);
+        assert!(removed[3..].iter().all(|(_, input)| matches!(input, PlatformInput::Pointer(PointerEvent::DeviceRemoved(change)) if change.device == device && change.kind == owned::PointerKind::Touch)));
+        let next = state
+            .window_event(
+                windows[0],
+                &WindowEvent::Touch(Touch {
+                    device_id: native,
+                    id: 0,
+                    phase: TouchPhase::Started,
+                    location: winit::dpi::PhysicalPosition::new(20.0, 30.0),
+                    force: None,
+                }),
+                2.0,
+                KeyboardModifiers::empty(),
+            )
+            .expect("contact after removal handled")
+            .remove(0);
+        let PlatformInput::Pointer(PointerEvent::Down(next)) = next else {
+            panic!("next contact")
+        };
+        assert_eq!(next.pointer.role, owned::PointerRole::Primary);
+        assert_ne!(next.pointer.device, Some(device));
+        assert!(!expected.contains(&next.pointer.id));
+    }
+
+    fn native_identity_exhaustion_never_reissues_a_contact() {
+        use winit::event::{DeviceEvent, Touch, TouchPhase, WindowEvent};
+        let native = winit::event::DeviceId::dummy();
+        let window = crate::traits::WindowId(1);
+        let mut state = NativePointerState {
+            next_device: Some(u64::MAX),
+            next_pointer: Some(u64::MAX),
+            ..NativePointerState::default()
+        };
+        let touch = |phase, id| {
+            WindowEvent::Touch(Touch {
+                device_id: native,
+                phase,
+                location: winit::dpi::PhysicalPosition::new(1.0, 2.0),
+                force: None,
+                id,
+            })
+        };
+        let accepted = state
+            .window_event(
+                window,
+                &touch(TouchPhase::Started, 0),
+                1.0,
+                KeyboardModifiers::empty(),
+            )
+            .expect("last identity accepted");
+        let PlatformInput::Pointer(PointerEvent::Down(down)) = accepted[0] else {
+            panic!("Down")
+        };
+        assert_eq!(down.pointer.id.get().get(), u64::MAX);
+        assert_eq!(
+            down.pointer.device.expect("actual device").get().get(),
+            u64::MAX
+        );
+        let terminal = state
+            .window_event(
+                window,
+                &touch(TouchPhase::Ended, 0),
+                1.0,
+                KeyboardModifiers::empty(),
+            )
+            .expect("last contact retires");
+        assert!(matches!(
+            terminal.as_slice(),
+            [PlatformInput::Pointer(PointerEvent::Up(_))]
+        ));
+        for id in [1, 2] {
+            assert!(
+                state
+                    .window_event(
+                        window,
+                        &touch(TouchPhase::Started, id),
+                        1.0,
+                        KeyboardModifiers::empty()
+                    )
+                    .unwrap_or_default()
+                    .is_empty()
+            );
+        }
+        let removed = state.device_event(native, &DeviceEvent::Removed, &[window]);
+        assert_eq!(removed.len(), 1);
+        for _ in 0..2 {
+            assert!(
+                state
+                    .device_event(native, &DeviceEvent::Added, &[window])
+                    .is_empty()
+            );
+        }
+    }
+
+    #[test]
+    fn native_scroll_units_precision_and_phases() {
+        use winit::event::{TouchPhase, WindowEvent};
+        let native = winit::event::DeviceId::dummy();
+        let window = crate::traits::WindowId(1);
+        for pixels in [false, true] {
+            let mut state = NativePointerState::default();
+            state.window_event(
+                window,
+                &WindowEvent::CursorMoved {
+                    device_id: native,
+                    position: winit::dpi::PhysicalPosition::new(100.0, 50.0),
+                },
+                2.0,
+                KeyboardModifiers::empty(),
+            );
+            let delta = if pixels {
+                MouseScrollDelta::PixelDelta(winit::dpi::PhysicalPosition::new(10.0, -20.0))
+            } else {
+                MouseScrollDelta::LineDelta(1.0, -2.0)
+            };
+            let phases = [
+                TouchPhase::Moved,
+                TouchPhase::Started,
+                TouchPhase::Moved,
+                TouchPhase::Ended,
+                TouchPhase::Cancelled,
+            ];
+            for (index, phase) in phases.into_iter().enumerate() {
+                let invalid_end = phase == TouchPhase::Ended;
+                let input_delta = if invalid_end {
+                    if pixels {
+                        MouseScrollDelta::PixelDelta(winit::dpi::PhysicalPosition::new(
+                            f64::NAN,
+                            0.0,
+                        ))
+                    } else {
+                        MouseScrollDelta::LineDelta(f32::NAN, 0.0)
+                    }
+                } else {
+                    delta
+                };
+                let input = state
+                    .window_event(
+                        window,
+                        &WindowEvent::MouseWheel {
+                            device_id: native,
+                            delta: input_delta,
+                            phase,
+                        },
+                        2.0,
+                        KeyboardModifiers::SHIFT,
+                    )
+                    .expect("wheel handled")
+                    .remove(0);
+                let PlatformInput::Pointer(PointerEvent::Scroll(scroll)) = input else {
+                    panic!("owned Scroll")
+                };
+                assert_eq!(scroll.position.get(), Point::new(50.0, 25.0));
+                assert_eq!(
+                    scroll.phase,
+                    match phase {
+                        TouchPhase::Started => Some(owned::ScrollPhase::Began),
+                        TouchPhase::Moved if pixels || index > 0 =>
+                            Some(owned::ScrollPhase::Changed),
+                        TouchPhase::Moved => None,
+                        TouchPhase::Ended => Some(owned::ScrollPhase::Ended),
+                        TouchPhase::Cancelled => Some(owned::ScrollPhase::Cancelled),
+                    }
+                );
+                assert_eq!(
+                    scroll.delta.unit(),
+                    if pixels {
+                        owned::ScrollUnit::Pixels
+                    } else {
+                        owned::ScrollUnit::Lines
+                    }
+                );
+                assert_eq!(
+                    scroll.precision,
+                    if pixels {
+                        owned::ScrollPrecision::Precise
+                    } else {
+                        owned::ScrollPrecision::Discrete
+                    }
+                );
+                assert!(
+                    scroll
+                        .modifiers
+                        .contains(flui_platform_api::keyboard::Modifiers::SHIFT)
+                );
+                if invalid_end {
+                    assert_eq!((scroll.delta.x(), scroll.delta.y()), (0.0, 0.0));
+                    assert_eq!(scroll.phase, Some(owned::ScrollPhase::Ended));
+                } else {
+                    assert_eq!(
+                        (scroll.delta.x(), scroll.delta.y()),
+                        if pixels { (-5.0, 10.0) } else { (-1.0, 2.0) }
+                    );
+                }
+            }
+        }
+        let mut state = NativePointerState::default();
+        state.window_event(
+            window,
+            &WindowEvent::CursorMoved {
+                device_id: native,
+                position: winit::dpi::PhysicalPosition::new(1.0, 2.0),
+            },
+            1.0,
+            KeyboardModifiers::empty(),
+        );
+        let input = state
+            .window_event(
+                window,
+                &WindowEvent::MouseWheel {
+                    device_id: native,
+                    delta: MouseScrollDelta::LineDelta(0.0, 1.0),
+                    phase: TouchPhase::Moved,
+                },
+                1.0,
+                KeyboardModifiers::empty(),
+            )
+            .expect("wheel handled")
+            .remove(0);
+        let PlatformInput::Pointer(PointerEvent::Scroll(scroll)) = input else {
+            panic!("owned Scroll")
+        };
+        assert_eq!(
+            scroll.phase, None,
+            "a plain wheel tick does not start a gesture"
+        );
+    }
+
+    fn native_pan_zoom_converter_keeps_terminal_after_invalid_position() {
+        use winit::event::{TouchPhase, WindowEvent};
+        let native = winit::event::DeviceId::dummy();
+        let window = crate::traits::WindowId(1);
+        let mut state = NativePointerState::default();
+        state.window_event(
+            window,
+            &WindowEvent::CursorMoved {
+                device_id: native,
+                position: winit::dpi::PhysicalPosition::new(20.0, 30.0),
+            },
+            2.0,
+            KeyboardModifiers::empty(),
+        );
+        let first = state
+            .window_event(
+                window,
+                &WindowEvent::PinchGesture {
+                    device_id: native,
+                    delta: 0.5,
+                    phase: TouchPhase::Started,
+                },
+                2.0,
+                KeyboardModifiers::empty(),
+            )
+            .expect("native pinch handled");
+        assert_eq!(
+            first.len(),
+            2,
+            "native start and actual initial delta are delivered"
+        );
+        let PlatformInput::Pointer(PointerEvent::PanZoom(start)) = first[0] else {
+            panic!("Start")
+        };
+        let PlatformInput::Pointer(PointerEvent::PanZoom(update)) = first[1] else {
+            panic!("Update")
+        };
+        assert!(matches!(start.phase, owned::PanZoomPhase::Start));
+        assert_eq!(start.pointer().id, update.pointer().id);
+        let owned::PanZoomPhase::Update(transform) = update.phase else {
+            panic!("Update transform")
+        };
+        assert_eq!(transform.scale(), 1.5);
+        state.window_event(
+            window,
+            &WindowEvent::CursorMoved {
+                device_id: native,
+                position: winit::dpi::PhysicalPosition::new(f64::NAN, 30.0),
+            },
+            2.0,
+            KeyboardModifiers::empty(),
+        );
+        let terminal = state
+            .window_event(
+                window,
+                &WindowEvent::PinchGesture {
+                    device_id: native,
+                    delta: f64::NAN,
+                    phase: TouchPhase::Ended,
+                },
+                2.0,
+                KeyboardModifiers::empty(),
+            )
+            .expect("native pinch handled");
+        assert_eq!(terminal.len(), 1);
+        let PlatformInput::Pointer(PointerEvent::PanZoom(end)) = terminal[0] else {
+            panic!("End")
+        };
+        assert!(matches!(end.phase, owned::PanZoomPhase::End));
+        assert_eq!(end.pointer().id, start.pointer().id);
+        assert_eq!(end.position.get(), Point::new(10.0, 15.0));
+        assert!(
+            state
+                .window_event(
+                    window,
+                    &WindowEvent::PinchGesture {
+                        device_id: native,
+                        delta: 0.5,
+                        phase: TouchPhase::Moved,
+                    },
+                    2.0,
+                    KeyboardModifiers::empty()
+                )
+                .unwrap_or_default()
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn native_touch_sensor_presence_is_preserved() {
         for (name, force, expected) in [
             ("absent", None, None),
@@ -417,6 +1343,15 @@ mod pointer_translation_tests {
                 Some(winit::event::Force::Normalized(2.0)),
                 None,
             ),
+            (
+                "calibrated_altitude",
+                Some(winit::event::Force::Calibrated {
+                    force: 0.0,
+                    max_possible_force: 1.0,
+                    altitude_angle: Some(core::f64::consts::FRAC_PI_4),
+                }),
+                Some(0.0),
+            ),
         ] {
             let touch = winit::event::Touch {
                 device_id: winit::event::DeviceId::dummy(),
@@ -425,9 +1360,16 @@ mod pointer_translation_tests {
                 force,
                 id: 0,
             };
-            let Some(PlatformInput::Pointer(PointerEvent::Down(down))) =
-                touch_event(touch, 2, 2.0, KeyboardModifiers::empty())
-            else {
+            let mut state = NativePointerState::default();
+            let mut inputs = state
+                .window_event(
+                    crate::traits::WindowId(1),
+                    &winit::event::WindowEvent::Touch(touch),
+                    2.0,
+                    KeyboardModifiers::empty(),
+                )
+                .expect("native touch handled");
+            let PlatformInput::Pointer(PointerEvent::Down(down)) = inputs.remove(0) else {
                 panic!("{name}: expected native touch Down")
             };
             assert_eq!(
@@ -444,38 +1386,48 @@ mod pointer_translation_tests {
                 down.sample.contact_size, None,
                 "{name}: winit reports no contact size"
             );
+            if name == "calibrated_altitude" {
+                let orientation = down.sample.orientation.expect("native altitude retained");
+                assert_eq!(orientation.altitude(), Some(core::f64::consts::FRAC_PI_4));
+                assert_eq!(orientation.azimuth(), None, "winit provides no azimuth");
+            } else {
+                assert_eq!(down.sample.orientation, None);
+            }
         }
     }
 
     /// The cross-wire field contract (flui-interaction's module doc): time
-    /// in NANOSECONDS, no pressure sensor on a mouse, and click count 1 on
-    /// transitions. Upstream pressure stand-ins do not cross the owned wire.
+    /// in NANOSECONDS, no pressure sensor on a mouse, and no invented click count.
     pub(super) fn translated_events_meet_the_pointer_field_contract() {
         let position = winit::dpi::PhysicalPosition::new(10.0, 10.0);
-        let held = PointerButtons::from(PointerButton::Primary);
+        let mut state = NativePointerState::default();
+        let window = crate::traits::WindowId(1);
+        let device = winit::event::DeviceId::dummy();
+        let moved = winit::event::WindowEvent::CursorMoved {
+            device_id: device,
+            position,
+        };
 
         // time: nanosecond scale — spin ~2ms of real time between two
         // stamps; a millisecond stamp would show a delta of ~2, a
         // nanosecond stamp ~2_000_000. (A bounded spin on Instant, not a
         // pacing sleep: elapsed time IS the measured phenomenon here.)
-        let Some(PlatformInput::Pointer(PointerEvent::Move(first))) = cursor_moved_event(
-            position,
-            1.0,
-            KeyboardModifiers::empty(),
-            PointerButtons::default(),
-        ) else {
+        let PlatformInput::Pointer(PointerEvent::Move(first)) = state
+            .window_event(window, &moved, 1.0, KeyboardModifiers::empty())
+            .expect("native move handled")
+            .remove(0)
+        else {
             panic!("expected Move");
         };
         let spin_start = Instant::now();
         while spin_start.elapsed() < std::time::Duration::from_millis(2) {
             std::hint::spin_loop();
         }
-        let Some(PlatformInput::Pointer(PointerEvent::Move(second))) = cursor_moved_event(
-            position,
-            1.0,
-            KeyboardModifiers::empty(),
-            PointerButtons::default(),
-        ) else {
+        let PlatformInput::Pointer(PointerEvent::Move(second)) = state
+            .window_event(window, &moved, 1.0, KeyboardModifiers::empty())
+            .expect("native move handled")
+            .remove(0)
+        else {
             panic!("expected Move");
         };
         let delta = second.current().time.as_nanos() - first.current().time.as_nanos();
@@ -486,21 +1438,23 @@ mod pointer_translation_tests {
         );
 
         // pressure + count on a Down with a held button.
-        let Some(PlatformInput::Pointer(PointerEvent::Down(down))) = mouse_button_event(
-            MouseButton::Left,
-            ElementState::Pressed,
-            position,
-            1.0,
-            KeyboardModifiers::empty(),
-            held,
-        ) else {
+        let pressed = winit::event::WindowEvent::MouseInput {
+            device_id: device,
+            state: ElementState::Pressed,
+            button: MouseButton::Left,
+        };
+        let PlatformInput::Pointer(PointerEvent::Down(down)) = state
+            .window_event(window, &pressed, 1.0, KeyboardModifiers::empty())
+            .expect("native press handled")
+            .remove(0)
+        else {
             panic!("expected Down");
         };
         assert_eq!(down.sample.pressure, None, "a mouse has no pressure sensor");
         assert_eq!(
             down.click_count.map(core::num::NonZeroU8::get),
-            Some(1),
-            "a Down is a click transition"
+            None,
+            "winit MouseInput reports no click count"
         );
 
         // A hover move carries neither.
