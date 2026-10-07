@@ -12,7 +12,7 @@ use crate::{
         GestureArena, GestureArenaEntry, GestureArenaMember, GestureDeadlineRegistration,
         GestureDisposition,
     },
-    events::{PointerEvent, PointerEventExt, PointerType},
+    events::{PointerEvent, PointerEventExt, PointerKind},
     ids::PointerId,
     routing::{PointerDispatch, RoutePanic},
     settings::GestureSettings,
@@ -37,7 +37,7 @@ pub struct MultiTapDetails {
     /// Center of the admitted positions.
     pub center: Offset<f64>,
     /// Kind of the first admitted contact.
-    pub kind: PointerType,
+    pub kind: PointerKind,
 }
 #[derive(Default)]
 struct MultiTapCallbacks {
@@ -51,14 +51,14 @@ impl Drop for MultiTapCallbacks {
 }
 struct PointerContact {
     initial: Offset<f64>,
-    kind: PointerType,
+    kind: PointerKind,
     down: bool,
     entry: GestureArenaEntry,
 }
 struct MultiTapSequence {
     id: ContactId,
     contacts: BTreeMap<PointerId, PointerContact>,
-    kind: PointerType,
+    kind: PointerKind,
     settings: GestureSettings,
     deadline: Option<Instant>,
     deadline_registration: Option<GestureDeadlineRegistration>,
@@ -218,8 +218,9 @@ impl GestureRecognizer for MultiTapGestureRecognizer {
         let PointerEvent::Down(data) = down.local else {
             return;
         };
-        let local = down.local.position();
-        let global = down.global.position();
+        let (Some(local), Some(global)) = (down.local.position(), down.global.position()) else {
+            return;
+        };
         if !local.dx.is_finite()
             || !local.dy.is_finite()
             || !global.dx.is_finite()
@@ -227,7 +228,7 @@ impl GestureRecognizer for MultiTapGestureRecognizer {
         {
             return;
         }
-        let pointer = down.local.pointer_id();
+        let pointer = data.pointer.id;
         let generation = self.last_id.get();
         let existing = self.sequence.borrow().as_ref().map(|sequence| {
             (
@@ -294,7 +295,7 @@ impl GestureRecognizer for MultiTapGestureRecognizer {
                 *state = Some(MultiTapSequence {
                     id,
                     contacts: BTreeMap::new(),
-                    kind: data.pointer.pointer_type,
+                    kind: data.pointer.kind,
                     settings: self.settings.clone(),
                     deadline: now.checked_add(Duration::from_millis(100)),
                     deadline_registration: registration,
@@ -305,7 +306,7 @@ impl GestureRecognizer for MultiTapGestureRecognizer {
                 pointer,
                 PointerContact {
                     initial: local,
-                    kind: data.pointer.pointer_type,
+                    kind: data.pointer.kind,
                     down: true,
                     entry,
                 },
@@ -320,10 +321,14 @@ impl GestureRecognizer for MultiTapGestureRecognizer {
         drop(outgoing_registration);
     }
     fn handle_event(&self, dispatch: PointerDispatch<'_>) {
-        let pointer = dispatch.local.pointer_id();
+        let Some(pointer) = dispatch.local.pointer_id() else {
+            return;
+        };
         match dispatch.local {
             PointerEvent::Move(_) => {
-                let position = dispatch.local.position();
+                let Some(position) = dispatch.local.position() else {
+                    return;
+                };
                 let exceeded = {
                     let state = self.sequence.borrow();
                     let Some(sequence) = state.as_ref() else {

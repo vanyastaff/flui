@@ -5,9 +5,10 @@ use super::{
     contact::{ArenaMembership, ContactId, PrimaryContact},
     recognizer::{CancelOutcome, GestureRecognizer},
 };
+use crate::events::PointerButton;
 use crate::{
     arena::{GestureArena, GestureArenaEntry, GestureArenaMember},
-    events::{PointerEvent, PointerEventExt, PointerType},
+    events::{PointerEvent, PointerEventExt, PointerKind},
     ids::PointerId,
     routing::{PointerDispatch, RoutePanic},
     settings::GestureSettings,
@@ -18,7 +19,6 @@ use std::{
     cell::{Cell, RefCell},
     rc::{Rc, Weak},
 };
-use ui_events::pointer::PointerButton;
 
 /// The three supported button families.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -35,9 +35,9 @@ impl TryFrom<PointerButton> for TapButton {
     type Error = PointerButton;
     fn try_from(button: PointerButton) -> Result<Self, Self::Error> {
         match button {
-            PointerButton::Primary => Ok(Self::Primary),
-            PointerButton::Secondary => Ok(Self::Secondary),
-            PointerButton::Auxiliary => Ok(Self::Tertiary),
+            PointerButton::PRIMARY => Ok(Self::Primary),
+            PointerButton::SECONDARY => Ok(Self::Secondary),
+            PointerButton::AUXILIARY => Ok(Self::Tertiary),
             other => Err(other),
         }
     }
@@ -58,7 +58,7 @@ pub struct TapDetails {
     /// Position in the recognizer coordinate space.
     pub local_position: Offset<f64>,
     /// Device kind frozen at admission.
-    pub kind: PointerType,
+    pub kind: PointerKind,
 }
 
 #[derive(Default)]
@@ -366,9 +366,8 @@ impl TapGestureRecognizer {
     }
     fn button(event: &PointerEvent) -> Option<TapButton> {
         match event {
-            PointerEvent::Down(data) | PointerEvent::Up(data) => data
-                .button
-                .map_or(Some(TapButton::Primary), TapButton::from_pointer_button),
+            PointerEvent::Down(data) => TapButton::from_pointer_button(data.button()),
+            PointerEvent::Up(data) => TapButton::from_pointer_button(data.button()),
             _ => None,
         }
     }
@@ -381,7 +380,7 @@ impl GestureRecognizer for TapGestureRecognizer {
             pointer = ?pointer,
             event = %crate::observability::GestureEvent::RecognizerAdded,
         );
-        let PointerEvent::Down(data) = dispatch.local else {
+        let PointerEvent::Down(_) = dispatch.local else {
             return;
         };
         let Some(button) = Self::button(dispatch.local) else {
@@ -410,10 +409,13 @@ impl GestureRecognizer for TapGestureRecognizer {
             return;
         }
         *member.entry.borrow_mut() = member.contact.entry();
+        let Some(snapshot) = member.contact.current() else {
+            return;
+        };
         let down = TapDetails {
-            global_position: dispatch.global.position(),
-            local_position: dispatch.local.position(),
-            kind: data.pointer.pointer_type,
+            global_position: snapshot.global,
+            local_position: snapshot.local,
+            kind: snapshot.kind,
         };
         let mut sequences = self.sequences.borrow_mut();
         sequences.current = Some(id);
@@ -439,12 +441,16 @@ impl GestureRecognizer for TapGestureRecognizer {
         let Some(snapshot) = member.contact.current() else {
             return;
         };
-        if !member.contact.tracks(dispatch.local.pointer_id()) {
+        if !dispatch
+            .local
+            .pointer_id()
+            .is_some_and(|pointer| member.contact.tracks(pointer))
+        {
             return;
         }
         let details = TapDetails {
-            local_position: dispatch.local.position(),
-            global_position: dispatch.global.position(),
+            local_position: dispatch.local.position().unwrap_or(snapshot.local),
+            global_position: dispatch.global.position().unwrap_or(snapshot.global),
             kind: snapshot.kind,
         };
         match dispatch.local {

@@ -33,7 +33,7 @@ use super::{
 };
 use crate::{
     arena::{GestureArenaEntry, GestureArenaMember, GestureDisposition, SweepModel},
-    events::{PointerEvent, PointerEventExt, PointerType},
+    events::{PointerEvent, PointerEventExt, PointerKind},
     ids::PointerId,
     processing::VelocityTracker,
     routing::{PointerDispatch, RoutePanic},
@@ -737,7 +737,7 @@ impl ScaleGestureRecognizer {
     ///
     /// The span and focal tiers are per-kind (`computeScaleSlop` /
     /// `computePanSlop`); the ratio tier is dimensionless and so has no kind.
-    fn should_accept(&self, baseline: Measure, current: Measure, kind: PointerType) -> bool {
+    fn should_accept(&self, baseline: Measure, current: Measure, kind: PointerKind) -> bool {
         let settings = &self.settings;
         if (current.span - baseline.span).abs() > settings.span_slop_for(kind) {
             return true;
@@ -758,7 +758,7 @@ impl ScaleGestureRecognizer {
         &self,
         pointer: PointerId,
         position: Offset<f64>,
-        kind: PointerType,
+        kind: PointerKind,
         stamp: Option<u64>,
         history: &[(Option<u64>, Offset<f64>)],
     ) {
@@ -927,10 +927,15 @@ impl GestureRecognizer for ScaleGestureRecognizer {
         if !is_primary_down(down.local) || down.local.pointer_id() != down.global.pointer_id() {
             return;
         }
-        let pointer = down.local.pointer_id();
-        let position = down.local.position();
+        let (Some(pointer), Some(position), Some(global)) = (
+            down.local.pointer_id(),
+            down.local.position(),
+            down.global.position(),
+        ) else {
+            return;
+        };
         if !position.is_finite()
-            || !down.global.position().is_finite()
+            || !global.is_finite()
             || self.gesture_state.borrow().index_of(pointer).is_some()
         {
             return;
@@ -991,15 +996,17 @@ impl GestureRecognizer for ScaleGestureRecognizer {
         let event = dispatch.local;
         // Route by the event's own pointer id: a secondary finger's events
         // belong to that finger's contact.
-        let pointer = crate::events::extract_pointer_id(event);
+        let Some(pointer) = crate::events::extract_pointer_id(event) else {
+            return;
+        };
         match event {
             PointerEvent::Move(data) => {
-                let pos = data.current.position;
+                let pos = data.current().position.get();
                 let history = motion_history(event);
                 self.handle_pointer_move(
                     pointer,
                     Offset::new(pos.x, pos.y),
-                    data.pointer.pointer_type,
+                    data.pointer.kind,
                     event_time(event),
                     &history,
                 );

@@ -11,7 +11,7 @@ use super::{
 };
 use crate::{
     arena::{GestureArena, GestureArenaMember},
-    events::{PointerEvent, PointerEventExt, PointerType},
+    events::{PointerEvent, PointerEventExt, PointerKind},
     ids::PointerId,
     processing::VelocityTracker,
     routing::PointerDispatch,
@@ -40,7 +40,7 @@ pub struct DragDownDetails {
     /// Receiving node's contact position.
     pub local_position: Offset<f64>,
     /// Device kind captured at admission.
-    pub kind: PointerType,
+    pub kind: PointerKind,
 }
 /// Details about an accepted drag.
 #[derive(Debug, Clone)]
@@ -50,7 +50,7 @@ pub struct DragStartDetails {
     /// Receiving node's initial position.
     pub local_position: Offset<f64>,
     /// Admitted device kind.
-    pub kind: PointerType,
+    pub kind: PointerKind,
     /// Event-clock instant at acceptance.
     pub timestamp: Instant,
 }
@@ -66,7 +66,7 @@ pub struct DragUpdateDetails {
     /// Axis component of this update's movement.
     pub primary_delta: f64,
     /// Admitted device kind.
-    pub kind: PointerType,
+    pub kind: PointerKind,
 }
 /// Why an accepted drag ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -265,10 +265,10 @@ impl DragGestureRecognizer {
             DragAxis::Free => delta.dx.hypot(delta.dy),
         }
     }
-    fn slop(&self, kind: PointerType, settings: &GestureSettings) -> f64 {
+    fn slop(&self, kind: PointerKind, settings: &GestureSettings) -> f64 {
         match self.axis {
             DragAxis::Free => settings.pan_slop_for(kind),
-            DragAxis::Vertical | DragAxis::Horizontal if kind == PointerType::Mouse => {
+            DragAxis::Vertical | DragAxis::Horizontal if kind == PointerKind::Mouse => {
                 settings.hit_slop(kind)
             }
             DragAxis::Vertical => settings.pan_slop_vertical(),
@@ -279,8 +279,11 @@ impl DragGestureRecognizer {
         let Some(contact) = self.contact.current() else {
             return;
         };
-        let position = dispatch.local.position();
-        let global = dispatch.global.position();
+        let (Some(position), Some(global)) =
+            (dispatch.local.position(), dispatch.global.position())
+        else {
+            return;
+        };
         if !position.dx.is_finite()
             || !position.dy.is_finite()
             || !global.dx.is_finite()
@@ -412,7 +415,10 @@ impl DragGestureRecognizer {
         let (position, global) = dispatch
             .filter(|d| matches!(d.local, PointerEvent::Up(_)))
             .map_or((state.last_position, state.last_global_position), |d| {
-                (d.local.position(), d.global.position())
+                (
+                    d.local.position().unwrap_or(state.last_position),
+                    d.global.position().unwrap_or(state.last_global_position),
+                )
             });
         if state.accepted {
             let before = || {
@@ -453,7 +459,7 @@ impl GestureRecognizer for DragGestureRecognizer {
             return;
         }
         if let Some(current) = self.contact.current() {
-            if current.pointer != dispatch.local.pointer_id() {
+            if Some(current.pointer) != dispatch.local.pointer_id() {
                 return;
             }
             self.cancel();
@@ -496,7 +502,11 @@ impl GestureRecognizer for DragGestureRecognizer {
         );
     }
     fn handle_event(&self, dispatch: PointerDispatch<'_>) {
-        if !self.contact.tracks(dispatch.local.pointer_id()) {
+        if !dispatch
+            .local
+            .pointer_id()
+            .is_some_and(|pointer| self.contact.tracks(pointer))
+        {
             return;
         }
         match dispatch.local {
