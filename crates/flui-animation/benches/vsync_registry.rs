@@ -1,4 +1,4 @@
-//! Criterion benchmarks for [`Vsync`]'s registry resolution cost (issue #1060).
+//! Criterion benchmarks for [`Vsync`]'s registry resolution cost.
 //!
 //! These measure `tick_all`'s per-controller lookup cost in isolation — not
 //! the animation math `tick_at` itself, which `animation_bench.rs`'s
@@ -9,8 +9,8 @@
 //! `docs/PERFORMANCE.md` are sourced from here, not estimated.
 
 // Target-level lint relaxations — crate-level allows don't reach this
-// target. `unwrap` in test/example code: a panic IS the failure report
-// (docs/PANIC-POLICY.md); style items here are ship-wave debt.
+// target. `unwrap` in bench code: a panic IS the failure report
+// (docs/PANIC-POLICY.md).
 #![expect(clippy::unwrap_used)]
 
 use std::hint::black_box;
@@ -20,9 +20,9 @@ use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_ma
 
 use flui_animation::{AnimationController, Vsync};
 
-/// A registry of `count` stopped, never-started controllers — issue #1060's
-/// own baseline shape, kept verbatim so the before/after tables line up with
-/// the numbers already recorded against `main`.
+/// A registry of `count` stopped, never-started controllers: the walk's
+/// lookup cost with no animation work at all, the shape the tables in
+/// `docs/PERFORMANCE.md` compare against.
 fn stopped_vsync_registry(criterion: &mut Criterion) {
     let mut group = criterion.benchmark_group("stopped_vsync_registry");
     group.sample_size(10);

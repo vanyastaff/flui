@@ -912,3 +912,158 @@ pub(crate) fn numeric_range_admission_and_owner_payload_validation() {
     .expect("exact zero-span value is admitted");
     assert_eq!(count.get(), 1);
 }
+
+// ===========================================================================
+// Published bounds are physical pixels
+// ===========================================================================
+
+/// Where an AccessKit adapter places the labelled node: its bounds under
+/// its own transform and every ancestor's, which AccessKit defines as
+/// physical pixels relative to the window's client area.
+fn effective_bounds(tree: &flui_testing::A11yTree, label: &str) -> flui_testing::a11y::A11yRect {
+    let update = tree.raw();
+    let parent_of = |id| {
+        update
+            .nodes
+            .iter()
+            .find(|(_, node)| node.children().contains(&id))
+            .map(|(key, node)| (*key, node))
+    };
+    let (target, node) = update
+        .nodes
+        .iter()
+        .find(|(_, node)| node.label() == Some(label))
+        .expect("the labelled node is published");
+    let mut rect = node.bounds().expect("the labelled node has bounds");
+    if let Some(transform) = node.transform() {
+        rect = transform.transform_rect_bbox(rect);
+    }
+    let mut current = *target;
+    while let Some((parent, parent_node)) = parent_of(current) {
+        if let Some(transform) = parent_node.transform() {
+            rect = transform.transform_rect_bbox(rect);
+        }
+        current = parent;
+    }
+    rect
+}
+
+fn assert_rect_near(
+    actual: flui_testing::a11y::A11yRect,
+    expected: (f64, f64, f64, f64),
+    what: &str,
+) {
+    let close = |a: f64, b: f64| (a - b).abs() < 1e-9;
+    assert!(
+        close(actual.x0, expected.0)
+            && close(actual.y0, expected.1)
+            && close(actual.x1, expected.2)
+            && close(actual.y1, expected.3),
+        "{what}: published {actual:?}, expected {expected:?}"
+    );
+}
+
+/// A window at 150% publishes physical bounds, and a scale change
+/// republishes them.
+///
+/// The button sits 30 logical pixels down a column inside a scrollable
+/// scrolled by 10, so its logical rect starts at y = 20: the
+/// scroll offset and the parent offset reach the published rect before the
+/// window's scale multiplies it. Assistive technology hit-tests and draws its
+/// highlight from these numbers; at the logical size it lands on two thirds
+/// of the control.
+pub(crate) fn published_bounds_are_physical_and_follow_the_scale_factor() {
+    use flui_view::ViewExt as _;
+    use flui_widgets::{Column, ScrollController, Scrollable};
+    use std::sync::{Arc, Mutex};
+
+    let controller = ScrollController::new();
+    let content = Column::new((
+        SizedBox::new(200.0, 30.0).boxed(),
+        Semantics::new()
+            .container(true)
+            .button(true)
+            .label("Physical")
+            .on_tap(|_cx| {})
+            .child(SizedBox::new(200.0, 40.0))
+            .boxed(),
+        SizedBox::new(200.0, 600.0).boxed(),
+    ));
+    let mut laid = lay_out(
+        Scrollable::new()
+            .controller(controller.clone())
+            .child(content.boxed()),
+        crate::common::tight(200.0, 200.0),
+    );
+
+    let delivered: Arc<Mutex<Option<flui_testing::A11yTree>>> = Arc::new(Mutex::new(None));
+    let sink = Arc::clone(&delivered);
+    laid.pipeline_owner().with_mut(|owner| {
+        owner.set_device_pixel_ratio(1.5);
+        owner.set_semantics_update_callback(Arc::new(move |update| {
+            let mut mirror = sink.lock().expect("publication mirror lock");
+            let Some(current) = mirror.as_ref() else {
+                *mirror = Some(flui_testing::A11yTree::new(update.clone()));
+                return;
+            };
+            let mut merged = current.raw().clone();
+            for (id, node) in &update.nodes {
+                if let Some((_, previous)) = merged.nodes.iter_mut().find(|(key, _)| key == id) {
+                    previous.clone_from(node);
+                } else {
+                    merged.nodes.push((*id, node.clone()));
+                }
+            }
+            *mirror = Some(flui_testing::A11yTree::new(merged));
+        }));
+    });
+    laid.enable_semantics();
+    laid.tick();
+    controller.jump_to(10.0);
+    laid.tick();
+
+    let published = || {
+        delivered
+            .lock()
+            .expect("publication mirror lock")
+            .clone()
+            .expect("the adapter was published to")
+    };
+    let logical = || {
+        published()
+            .find_by_label("Physical")
+            .expect("premise: the button is published")
+            .bounds()
+            .expect("premise: the button has bounds")
+    };
+    // The column offset (30) less the scroll offset (10) reached the rect.
+    let before = logical();
+    assert!(
+        (before.y0 - 20.0).abs() < 1e-9 && (before.height() - 40.0).abs() < 1e-9,
+        "premise: the semantics rect is logical and scrolled, got {before:?}"
+    );
+    let scaled = |rect: flui_testing::a11y::A11yRect, ratio: f64| {
+        (
+            rect.x0 * ratio,
+            rect.y0 * ratio,
+            rect.x1 * ratio,
+            rect.y1 * ratio,
+        )
+    };
+    assert_rect_near(
+        effective_bounds(&published(), "Physical"),
+        scaled(before, 1.5),
+        "at a ratio of 1.5",
+    );
+
+    // Moving the window to a 200% monitor: the adapter must hear the new
+    // scale.
+    laid.pipeline_owner()
+        .with_mut(|owner| owner.set_device_pixel_ratio(2.0));
+    laid.tick();
+    assert_rect_near(
+        effective_bounds(&published(), "Physical"),
+        scaled(logical(), 2.0),
+        "after the ratio changed to 2.0",
+    );
+}

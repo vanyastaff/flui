@@ -37,7 +37,7 @@
 //! | clients replaced or detached, and what their destruction parks; once the client is active, attach parks its failures and returns the token | `TextInputOwner::attach`, `detach` (`flui-interaction` `text_input.rs`) |
 //! | stores retired at an anchor | `TextInputOwner::run_deferred_grants` (`flui-interaction` `text_input.rs`) |
 //! | a pull host's `focus_store` and `complete_composition` from the owner's queue, the completed store, and the host clone; a failure parked before them is taken first on the owner's turn (`complete_composition`, the anchor) and left for that turn by `attach` and `detach` | `TextInputOwner::apply_host_ops` (`flui-interaction` `text_input.rs`), drained by `attach`, `detach`, `complete_composition` and `run_deferred_grants` |
-//! | a push completion committed in place, and its store | `TextInputOwner::complete_composition` (`flui-interaction` `text_input.rs`) |
+//! | a push completion committed in place, and its store; at close, the queued grants of a store whose commit waits behind the frame | `TextInputOwner::complete_composition`, `close_with_mode` (`flui-interaction` `text_input.rs`) |
 //! | diagnostics (`tracing` runs a user-installed subscriber) | `TextInputOwner::attach`, `detach`, `dispatch`; `EditableTextState::dispose`, the blur detach and the cursor-area loop |
 //!
 //! Presentation close (`TextInputOwner::close_with_mode` and its `Drop`)
