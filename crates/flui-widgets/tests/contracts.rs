@@ -234,6 +234,8 @@ fn scroll_physics_and_activity() {
             ("scroll::scrollbar_thumb_stays_inside_short_tracks_and_drag_remains_bounded", crate::scroll::scrollbar_thumb_stays_inside_short_tracks_and_drag_remains_bounded as fn()),
             ("scroll::dragging_a_scrollbar_thumb_interrupts_animation_before_the_next_tick", crate::scroll::dragging_a_scrollbar_thumb_interrupts_animation_before_the_next_tick),
             ("scroll::cancelling_an_in_range_scroll_ends_activity_without_coasting", crate::scroll::cancelling_an_in_range_scroll_ends_activity_without_coasting as fn()),
+            ("scroll::refresh_indicator_drag_scrolls_without_rebuilding", crate::scroll::refresh_indicator_drag_scrolls_without_rebuilding),
+            ("scroll::refresh_indicator_rebuilds_only_on_a_phase_change", crate::scroll::refresh_indicator_rebuilds_only_on_a_phase_change),
             ("scroll::cancelling_bouncing_overscroll_settles_without_release_velocity", crate::scroll::cancelling_bouncing_overscroll_settles_without_release_velocity as fn()),
             ("scroll::cancelling_a_threshold_refresh_pull_does_not_refresh", crate::scroll::cancelling_a_threshold_refresh_pull_does_not_refresh as fn()),
             ("scroll::bouncing_lower_edge_preserves_outward_direction", crate::scroll::bouncing_lower_edge_preserves_outward_direction as fn()),
@@ -411,9 +413,67 @@ fn animation_and_visibility() {
             ("implicit_animations::animated_rotation_takes_the_numeric_arc", crate::implicit_animations::animated_rotation_takes_the_numeric_arc),
             ("implicit_animations::animated_rotation_retargets_on_a_path_change", crate::implicit_animations::animated_rotation_retargets_on_a_path_change),
             ("binding_animation::registered_controller_advances_fade_opacity_frame_to_frame", crate::binding_animation::registered_controller_advances_fade_opacity_frame_to_frame),
-            ("slide_transition::build_wires_transform_hit_tests_false_into_fractional_translation", crate::slide_transition::build_wires_transform_hit_tests_false_into_fractional_translation),
             ("visibility::hidden_without_maintain_state_shows_the_default_replacement", crate::visibility::hidden_without_maintain_state_shows_the_default_replacement),
             ("visibility::maintained_child_mutes_and_resumes_without_remounting_as_visibility_changes", crate::visibility::maintained_child_mutes_and_resumes_without_remounting_as_visibility_changes),
+        ],
+    );
+}
+
+/// Slide, scale and rotation transitions: a tick moves the transform on the
+/// same frame without rebuilding any element.
+#[test]
+fn transitions_tick_without_rebuilding() {
+    run_cases(
+        "transitions_tick_without_rebuilding",
+        &[
+            (
+                "slide",
+                crate::transitions::slide_ticks_without_rebuilding as fn(),
+            ),
+            (
+                "slide_rtl",
+                crate::transitions::slide_rtl_mirrors_dx_without_rebuilding,
+            ),
+            ("scale", crate::transitions::scale_ticks_without_rebuilding),
+            (
+                "rotation",
+                crate::transitions::rotation_ticks_without_rebuilding,
+            ),
+            (
+                "shared_controller",
+                crate::transitions::shared_controller_moves_both_transitions_on_one_tick,
+            ),
+            (
+                "zero_dt_huge_dt_reverse_mid_run",
+                crate::transitions::virtual_time_ticks_follow_the_controller_value,
+            ),
+        ],
+    );
+}
+
+/// Where a transformed child is hit, and how the transition
+/// owns, swaps and releases its animation.
+#[test]
+fn transitions_follow_the_painted_transform() {
+    run_cases(
+        "transitions_follow_the_painted_transform",
+        &[
+            (
+                "transitions_hit_test_follows_the_painted_transform",
+                crate::transitions::hit_test_follows_the_painted_transform as fn(),
+            ),
+            (
+                "transitions_swap_their_animation_in_place",
+                crate::transitions::swapping_the_animation_keeps_the_render_object,
+            ),
+            (
+                "transition_unmounted_during_a_tick_marks_nothing",
+                crate::transitions::unmounted_transition_leaves_its_sibling_ticking,
+            ),
+            (
+                "transitions_release_the_animation_after_unmount",
+                crate::transitions::the_animation_is_released_after_unmount,
+            ),
         ],
     );
 }

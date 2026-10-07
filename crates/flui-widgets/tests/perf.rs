@@ -224,3 +224,61 @@ fn perf_scrolling_a_10k_list_one_screen_lays_out_only_the_band() {
     assert!(report.pipeline.nodes_painted >= 1, "{report:#?}");
     assert!(report.pipeline.frames_produced >= 1, "{report:#?}");
 }
+
+/// Rows under the sliding panel: enough painted content that a subtree
+/// repaint and a layer patch differ visibly in `nodes_painted`.
+const PANEL_ROWS: usize = 30;
+
+/// One tick of a `SlideTransition` over a painted panel: the transition
+/// follows the animation through a transform layer, so the tick rebuilds no
+/// element and does not repaint the panel — only the layer moves.
+#[test]
+fn perf_a_slide_transition_tick_moves_a_layer_without_rebuilding() {
+    use flui_animation::ext::AnimatableExt;
+    use flui_animation::{Animation, AnimationController, Tween};
+    use flui_objects::TranslationFraction;
+    use flui_widgets::{Align, RepaintBoundary, SlideTransition};
+    use std::sync::Arc;
+
+    let controller = AnimationController::without_ticker(Duration::from_millis(300));
+    let position: Arc<dyn Animation<TranslationFraction>> = Arc::new(
+        Tween::new(
+            TranslationFraction::new(-1.0, 0.0),
+            TranslationFraction::ZERO,
+        )
+        .animate(Arc::new(controller.clone()) as Arc<dyn Animation<f64>>),
+    );
+    let panel = Column::new(
+        (0..PANEL_ROWS)
+            .map(|_| {
+                SizedBox::new(WIDTH / 2.0, ROW_HEIGHT)
+                    .child(ColoredBox::new(Color::rgb(40, 80, 120)))
+                    .boxed()
+            })
+            .collect::<Vec<_>>(),
+    );
+    let app = Align::new(flui_painting::Alignment::TOP_LEFT)
+        .child(RepaintBoundary::new().child(SlideTransition::new(position, panel)));
+    let mut binding = HeadlessBinding::new();
+    let root = GestureArenaScope::new(binding.arena().clone(), FocusRoot::new(app));
+    let _ = binding.mount_root(
+        &root,
+        MountOwners::fresh(),
+        MountOptions::tight(WIDTH, HEIGHT),
+    );
+    binding.enable_semantics().expect("tree-bound");
+    controller.set_value(0.25);
+    binding.pump_frame(FRAME);
+
+    controller.set_value(0.5);
+    binding.pump_frame(FRAME);
+    let report = binding.last_frame_report().clone();
+    record("slide_transition_tick", &report);
+
+    assert_eq!(report.build.elements_built, 0, "{report:#?}");
+    assert!(
+        report.pipeline.nodes_painted < PANEL_ROWS as u64,
+        "a tick must not repaint the panel's rows: {report:#?}"
+    );
+    assert_eq!(report.pipeline.nodes_laid_out, 0, "{report:#?}");
+}

@@ -21,6 +21,27 @@ recorded so far.
 
 ## Mapping decisions
 
+### An animated translation keeps its transform layer
+
+**Rule:** `RenderTransform` paints a pure translation as a plain child offset,
+with no layer, so a static `Transform.translate` costs nothing. A translation
+that changes every frame inverts the trade: without a layer each tick repaints
+the moved subtree.
+
+**Choice:** `RenderAnimatedTransform` reports every finite, invertible,
+non-identity matrix — pure translations included — through
+`paint_effects().transform`, so a tick that stays in that class is a
+composited-layer update. At rest on the identity there is no layer; crossing
+identity ↔ layered ↔ degenerate (a scale of 0, or a matrix that overflows)
+marks paint. Paint, hit-testing and coordinate mapping read one cached sample,
+never the animation. Measured with the `slide_transition_tick` perf scenario
+(`crates/flui-widgets/tests/perf.rs`, a slide over a 30-row panel under a
+repaint boundary): one tick rebuilt 64 elements and painted 66 nodes through
+the previous rebuild-per-tick `SlideTransition`, and rebuilds 0 and paints 3
+here.
+
+**Test:** `harness_animated_transform_tick_dirty_marking`.
+
 ### Non-finite scroll-window edges never reach `f32 as usize`
 
 **Rule:** Rust's `f32 as usize` saturates (`+∞ → usize::MAX`, `NaN → 0`), so
