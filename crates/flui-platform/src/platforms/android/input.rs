@@ -166,6 +166,12 @@ impl Default for AndroidInputState {
 }
 
 impl AndroidInputState {
+    fn allocate_device_id(&mut self) -> Option<DeviceId> {
+        let next = self.next_device?;
+        self.next_device = next.checked_add(1);
+        Some(DeviceId::new(next))
+    }
+
     pub(crate) fn cancel_contacts(&mut self, reason: CancelReason) -> Vec<PlatformInput> {
         let Some(time) = self.last_time else {
             return Vec::new();
@@ -205,6 +211,7 @@ impl AndroidInputState {
         };
         let mut output = Vec::new();
         let native_device = event.device_id();
+        let had_device = self.devices.contains_key(&native_device);
         let replacement = match &discovery {
             DeviceReading::Present { replaced, .. } => *replaced,
             DeviceReading::Removed => true,
@@ -234,11 +241,9 @@ impl AndroidInputState {
                     device.cached = cached;
                 } else {
                     // The counter refuses permanently after its final identity.
-                    let Some(next) = self.next_device else {
+                    let Some(id) = self.allocate_device_id() else {
                         return output;
                     };
-                    self.next_device = next.checked_add(1);
-                    let id = DeviceId::new(next);
                     self.devices.insert(native_device, Device { cached, id });
                     output.push(PlatformInput::Pointer(PointerEvent::DeviceAdded(
                         PointerDeviceChange::new(id, PointerKind::Unknown, delivery_time),
@@ -246,7 +251,10 @@ impl AndroidInputState {
                 }
                 Some(capabilities)
             }
-            DeviceReading::Removed => return output,
+            DeviceReading::Removed if had_device => return output,
+            // Android-generated/virtual events can have no InputDevice object.
+            // Preserve their native contact and position, with absent device/sensors.
+            DeviceReading::Removed => None,
             DeviceReading::Unavailable => None,
         };
         let modifiers = owned_modifiers(event.meta_state());
@@ -769,6 +777,14 @@ mod tests {
                 "native device identities stay independent",
                 native_device_identities_stay_independent,
             ),
+            (
+                "terminal device allocation stays refused",
+                terminal_device_allocation_stays_refused,
+            ),
+            (
+                "lifecycle cancellation retires admitted contacts",
+                lifecycle_cancellation_retires_contacts,
+            ),
         ];
         for (name, row) in rows {
             row();
@@ -931,5 +947,65 @@ mod tests {
         assert_ne!(first, virtual_device);
         assert_eq!(first.get().get(), 4_294_967_297);
         assert_eq!(native_pointer_id(1, -1), None);
+    }
+
+    fn terminal_device_allocation_stays_refused() {
+        let mut owner = AndroidInputState::default();
+        owner.next_device = Some(std::num::NonZeroU64::MAX);
+        assert_eq!(
+            owner
+                .allocate_device_id()
+                .expect("last admitted identity")
+                .get(),
+            std::num::NonZeroU64::MAX
+        );
+        assert_eq!(owner.allocate_device_id(), None);
+        owner.devices.clear();
+        assert_eq!(owner.allocate_device_id(), None);
+    }
+
+    fn lifecycle_cancellation_retires_contacts() {
+        let mut owner = AndroidInputState::default();
+        owner.last_time = Some(EventTime::from_nanos(91));
+        let first = PointerInfo::new(
+            PointerId::try_from(1_u64).expect("fixture ID"),
+            PointerKind::Touch,
+        );
+        let second = PointerInfo::new(
+            PointerId::try_from(2_u64).expect("fixture ID"),
+            PointerKind::Pen {
+                tool: PenTool::Eraser,
+            },
+        );
+        for info in [second, first] {
+            owner.contacts.insert(
+                info.id,
+                Contact {
+                    info,
+                    button: PointerButton::PRIMARY,
+                },
+            );
+        }
+        let events = owner.cancel_contacts(CancelReason::FocusLost);
+        let [
+            PlatformInput::Pointer(PointerEvent::Cancel(first_cancel)),
+            PlatformInput::Pointer(PointerEvent::Cancel(second_cancel)),
+        ] = &events[..]
+        else {
+            panic!("two contacts must end in native cancellation");
+        };
+        assert_eq!(first_cancel.pointer, first);
+        assert_eq!(second_cancel.pointer, second);
+        assert_eq!(first_cancel.time, EventTime::from_nanos(91));
+        assert_eq!(second_cancel.reason, CancelReason::FocusLost);
+        assert!(owner.cancel_contacts(CancelReason::FocusLost).is_empty());
+        owner.contacts.insert(
+            first.id,
+            Contact {
+                info: first,
+                button: PointerButton::PRIMARY,
+            },
+        );
+        assert_eq!(owner.cancel_contacts(CancelReason::CaptureLost).len(), 1);
     }
 }
