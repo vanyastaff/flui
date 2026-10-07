@@ -9,9 +9,6 @@
 
 use flui_animation::{Animatable, TwoWayConverter};
 
-#[path = "contracts/curve.rs"]
-mod curve;
-
 #[derive(Clone, Animatable)]
 struct Translation {
     x: f64,
