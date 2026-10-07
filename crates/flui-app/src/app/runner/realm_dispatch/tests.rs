@@ -17,10 +17,14 @@ use flui_platform::traits::{PlatformInput, PlatformWindow};
 use super::super::host::{
     OwnerHostClearGuard, install_exit_policy_hook, install_owner_platform, with_owner_platform,
 };
+#[cfg(not(target_os = "ios"))]
 use super::super::secondary_window::open_secondary_window;
 use super::*;
+#[cfg(not(target_os = "ios"))]
 use crate::app::AppConfig;
-use crate::app::runtime::{ExitPolicy, WindowPolicy};
+use crate::app::runtime::ExitPolicy;
+#[cfg(not(target_os = "ios"))]
+use crate::app::runtime::WindowPolicy;
 
 static_assertions::assert_impl_all!(PlatformToUi: Send);
 
@@ -84,6 +88,7 @@ fn background_owner_pump_drains_before_polling_without_a_frame() {
     teardown_platform_realm();
 }
 
+#[cfg(not(target_os = "ios"))]
 fn explicit_platform_quit_detaches_every_installed_realm() {
     let _clear = OwnerHostClearGuard::arm();
     let platform = flui_platform::HeadlessPlatform::new();
@@ -447,6 +452,7 @@ fn install_realm_a_through_a_real_owner_platform() -> (RealmDispatcher, OwnerHos
 /// routes to the share-nothing path, not just the underlying primitive.
 /// The oracle: a pointer dispatched only to realm A must leave realm B's
 /// gesture arena completely untouched.
+#[cfg(not(target_os = "ios"))]
 fn two_realms_via_isolated_policy_share_nothing() {
     let (dispatcher_a, _clear_guard) = install_realm_a_through_a_real_owner_platform();
 
@@ -520,6 +526,7 @@ fn two_realms_via_isolated_policy_share_nothing() {
 /// fed from the host again would be one), or if the runtime resolves a new one
 /// per call. `the_runtime_launches_one_host_feed_for_every_realm` pins that
 /// the runtime's collection is the one its host feed feeds.
+#[cfg(not(target_os = "ios"))]
 fn isolated_windows_shape_over_the_runtimes_font_collection() {
     let (dispatcher_a, _clear_guard) = install_realm_a_through_a_real_owner_platform();
 
@@ -572,6 +579,7 @@ fn isolated_windows_shape_over_the_runtimes_font_collection() {
 /// routing (a second PRESENTATION of the SAME realm), not a second realm
 /// in disguise: the hosted-realm count must stay at one, while the
 /// realm's own presentation count grows from one to two.
+#[cfg(not(target_os = "ios"))]
 fn one_realm_two_windows_policy_routes_by_presentation() {
     let (dispatcher_a, _clear_guard) = install_realm_a_through_a_real_owner_platform();
 
@@ -620,6 +628,7 @@ fn one_realm_two_windows_policy_routes_by_presentation() {
 /// A `Resized` stamped for a secondary window of a shared realm, delivered
 /// through `dispatch_platform_realm`, rescales that window's pipeline (and so
 /// its semantics bounds) and leaves the primary's at its old ratio.
+#[cfg(not(target_os = "ios"))]
 fn resized_rescales_only_the_addressed_presentation() {
     let (primary, _clear_guard) = install_realm_a_through_a_real_owner_platform();
     let (secondary, _window) = super::super::secondary_window::open_secondary_window_impl(
@@ -683,6 +692,7 @@ fn resized_rescales_only_the_addressed_presentation() {
 /// renderer: the primary's surface keeps its size, so the constraints its
 /// next frame is laid out under (surface / primary ratio) stay put. A
 /// `Resized` for the primary still applies.
+#[cfg(not(target_os = "ios"))]
 fn resizing_a_secondary_leaves_the_primary_surface_alone() {
     use std::{cell::Cell, rc::Rc};
 
@@ -1208,6 +1218,7 @@ fn realm_dispatch_matrix() {
                 "background_owner_pump_drains_before_polling_without_a_frame",
                 background_owner_pump_drains_before_polling_without_a_frame as fn(),
             ),
+            #[cfg(not(target_os = "ios"))]
             (
                 "explicit_platform_quit_detaches_every_installed_realm",
                 explicit_platform_quit_detaches_every_installed_realm as fn(),
@@ -1232,18 +1243,22 @@ fn realm_dispatch_matrix() {
                 "reentrant_owner_turns_preserve_global_fifo_across_realms",
                 reentrant_owner_turns_preserve_global_fifo_across_realms as fn(),
             ),
+            #[cfg(not(target_os = "ios"))]
             (
                 "two_realms_via_isolated_policy_share_nothing",
                 two_realms_via_isolated_policy_share_nothing as fn(),
             ),
+            #[cfg(not(target_os = "ios"))]
             (
                 "one_realm_two_windows_policy_routes_by_presentation",
                 one_realm_two_windows_policy_routes_by_presentation as fn(),
             ),
+            #[cfg(not(target_os = "ios"))]
             (
                 "resized_rescales_only_the_addressed_presentation",
                 resized_rescales_only_the_addressed_presentation as fn(),
             ),
+            #[cfg(not(target_os = "ios"))]
             (
                 "resizing_a_secondary_leaves_the_primary_surface_alone",
                 resizing_a_secondary_leaves_the_primary_surface_alone as fn(),
@@ -1257,6 +1272,7 @@ fn realm_dispatch_matrix() {
                 panicking_visit_restores_the_checked_out_realm_and_clears_iterating_all_realms
                     as fn(),
             ),
+            #[cfg(not(target_os = "ios"))]
             (
                 "isolated_windows_shape_over_the_runtimes_font_collection",
                 isolated_windows_shape_over_the_runtimes_font_collection as fn(),
