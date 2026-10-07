@@ -59,3 +59,15 @@ pub(crate) fn run_table(cases: &[(&str, fn())]) {
 
 #[path = "contracts/controller_sources.rs"]
 mod controller_sources;
+
+#[path = "contracts/status_delivery.rs"]
+mod status_delivery;
+
+#[path = "contracts/controller_robustness.rs"]
+mod controller_robustness;
+
+#[path = "contracts/frame_path.rs"]
+mod frame_path;
+
+#[path = "contracts/ownership.rs"]
+mod ownership;
