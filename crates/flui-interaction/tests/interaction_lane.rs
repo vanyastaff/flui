@@ -56,6 +56,22 @@ fn binding_input_contract_matrix() {
             frame_coalesced_history_reaches_tap_drag_velocity,
         ),
         (
+            "device_removal_preserves_a_reentrant_replacement",
+            device_removal_preserves_a_reentrant_replacement,
+        ),
+        (
+            "device_removal_preserves_replacement_after_competing_failures",
+            device_removal_preserves_replacement_after_competing_failures,
+        ),
+        (
+            "focus_loss_preserves_a_reentrant_replacement",
+            focus_loss_preserves_a_reentrant_replacement,
+        ),
+        (
+            "focus_loss_preserves_replacement_after_competing_failures",
+            focus_loss_preserves_replacement_after_competing_failures,
+        ),
+        (
             "checked_down_refuses_non_finite_position",
             checked_down_refuses_non_finite_position,
         ),
@@ -102,6 +118,162 @@ fn binding_input_contract_matrix() {
         }
     }
     assert!(failures.is_empty(), "failed rows:\n{}", failures.join("\n"));
+}
+
+fn device_removal_preserves_a_reentrant_replacement() {
+    assert_lifecycle_snapshot_preserves_replacement(true, false);
+}
+
+fn device_removal_preserves_replacement_after_competing_failures() {
+    assert_lifecycle_snapshot_preserves_replacement(true, true);
+}
+
+fn focus_loss_preserves_a_reentrant_replacement() {
+    assert_lifecycle_snapshot_preserves_replacement(false, false);
+}
+
+fn focus_loss_preserves_replacement_after_competing_failures() {
+    assert_lifecycle_snapshot_preserves_replacement(false, true);
+}
+
+fn assert_lifecycle_snapshot_preserves_replacement(device_removed: bool, competing: bool) {
+    use flui_foundation::geometry::Offset;
+    use flui_interaction::events::{
+        DeviceId, PointerEvent, PointerKind, make_down_event_for_id, make_up_event_for_id,
+    };
+    use flui_interaction::{GestureBinding, HitTestResult, PointerId};
+    use flui_platform_api::{EventTime, pointer::PointerDeviceChange};
+    use std::{
+        cell::Cell,
+        panic::{AssertUnwindSafe, catch_unwind},
+        rc::Rc,
+    };
+
+    fn contact_event(pointer: PointerId, device: DeviceId, up: bool, time: u64) -> PointerEvent {
+        let mut event = if up {
+            make_up_event_for_id(pointer, Offset::ZERO, PointerKind::Mouse)
+        } else {
+            make_down_event_for_id(pointer, Offset::ZERO, PointerKind::Mouse)
+        }
+        .expect("finite measured contact");
+        match &mut event {
+            PointerEvent::Down(data) => {
+                data.pointer = data.pointer.with_device(device);
+                data.sample.time = EventTime::from_nanos(time);
+            }
+            PointerEvent::Up(data) => {
+                data.pointer = data.pointer.with_device(device);
+                data.sample.time = EventTime::from_nanos(time);
+            }
+            _ => unreachable!(),
+        }
+        event
+    }
+
+    let binding = Rc::new(GestureBinding::new());
+    let first = PointerId::try_from(1_u64).expect("contact");
+    let second = PointerId::try_from(2_u64).expect("contact");
+    let old_device = DeviceId::try_from(1_u64).expect("device");
+    let new_device = DeviceId::try_from(2_u64).expect("device");
+    let replaced = Rc::new(Cell::new(false));
+    let replacement_cancels = Rc::new(Cell::new(0));
+    let replacement_ups = Rc::new(Cell::new(0));
+    let owner = Rc::downgrade(&binding);
+    let did_replace = Rc::clone(&replaced);
+    let cancels = Rc::clone(&replacement_cancels);
+    let ups = Rc::clone(&replacement_ups);
+    binding
+        .pointer_router()
+        .add_global_handler(Rc::new(move |event| match event {
+            PointerEvent::Cancel(data)
+                if data.pointer.id == first && !did_replace.replace(true) =>
+            {
+                let binding = owner.upgrade().expect("live binding");
+                binding.handle_pointer_event(
+                    &contact_event(second, new_device, false, 20_000_000),
+                    |_| HitTestResult::new(),
+                );
+                if competing {
+                    panic!("first lifecycle cancellation failure");
+                }
+            }
+            PointerEvent::Cancel(data) if data.pointer.id == second && did_replace.get() => {
+                cancels.set(cancels.get() + 1);
+                if competing {
+                    panic!("replacement cancellation second failure");
+                }
+            }
+            PointerEvent::Up(data) if data.pointer.id == second && did_replace.get() => {
+                ups.set(ups.get() + 1);
+            }
+            _ => {}
+        }));
+    binding.handle_pointer_event(&contact_event(first, old_device, false, 0), |_| {
+        HitTestResult::new()
+    });
+    binding.handle_pointer_event(
+        &contact_event(second, old_device, false, 10_000_000),
+        |_| HitTestResult::new(),
+    );
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if device_removed {
+            let event = PointerEvent::DeviceRemoved(PointerDeviceChange::new(
+                old_device,
+                PointerKind::Mouse,
+                EventTime::from_nanos(30_000_000),
+            ));
+            binding.handle_pointer_event(&event, |_| panic!("device lifecycle must not hit-test"));
+        } else {
+            binding.cancel_active_pointers();
+        }
+    }));
+    if competing {
+        let payload = result.expect_err("first cancellation failure propagates after cleanup");
+        assert_eq!(
+            flui_foundation::panic::payload_text(&*payload),
+            Some("first lifecycle cancellation failure")
+        );
+    } else {
+        result.expect("healthy lifecycle cleanup");
+    }
+    assert!(
+        replaced.get(),
+        "first contact cancellation re-admitted the competing identity"
+    );
+    assert!(
+        !binding.has_hit_test(first),
+        "original first contact retired"
+    );
+    assert_eq!(
+        replacement_cancels.get(),
+        0,
+        "snapshot cancellation must not reach a newer admitted sequence"
+    );
+    assert!(
+        binding.has_hit_test(second),
+        "replacement retains its terminal delivery obligation"
+    );
+    binding.handle_pointer_event(&contact_event(second, new_device, true, 40_000_000), |_| {
+        panic!("captured Up must not hit-test")
+    });
+    assert_eq!(
+        replacement_ups.get(),
+        1,
+        "replacement delivers its own healthy Up after containment"
+    );
+    assert_eq!(binding.active_pointer_count(), 0);
+    assert!(binding.arena().is_empty());
+    binding.handle_pointer_event(&contact_event(first, new_device, false, 50_000_000), |_| {
+        HitTestResult::new()
+    });
+    binding.handle_pointer_event(&contact_event(first, new_device, true, 60_000_000), |_| {
+        HitTestResult::new()
+    });
+    assert_eq!(
+        binding.active_pointer_count(),
+        0,
+        "later independent contact remains healthy"
+    );
 }
 
 fn checked_down_refuses_non_finite_position() {
