@@ -983,11 +983,11 @@ impl FocusNode {
         }
     }
 
-    /// Iterate depth-first over descendants.
+    /// Iterate depth-first over descendants in sibling attachment order.
     pub fn descendants(&self) -> impl Iterator<Item = Rc<FocusNode>> {
-        DescendantIterator {
-            stack: self.children(),
-        }
+        let mut stack = self.children();
+        stack.reverse();
+        DescendantIterator { stack }
     }
 
     /// Depth in the focus tree.
