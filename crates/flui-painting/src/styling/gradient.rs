@@ -203,7 +203,11 @@ impl LinearGradient {
         }
         let begin = lerp_alignment(a.begin, b.begin, t)?;
         let end = lerp_alignment(a.end, b.end, t)?;
-        if !(end.x - begin.x).is_finite() || !(end.y - begin.y).is_finite() {
+        if !(end.x - begin.x).is_finite()
+            || !(end.y - begin.y).is_finite()
+            || lost_span(a.end.x - a.begin.x, b.end.x - b.begin.x, end.x - begin.x, t)
+            || lost_span(a.end.y - a.begin.y, b.end.y - b.begin.y, end.y - begin.y, t)
+        {
             return None;
         }
         // Preserve the representation of valid equal gradients.
@@ -478,6 +482,12 @@ impl SweepGradient {
         let packed_end = (phase + span) as f32;
         let packed_span = packed_end - phase as f32;
         if !span.is_finite()
+            || lost_span(
+                a.end_angle - a.start_angle,
+                b.end_angle - b.start_angle,
+                span,
+                t,
+            )
             || !packed_end.is_finite()
             || !packed_span.is_finite()
             || (span != 0.0 && packed_span == 0.0)
@@ -506,6 +516,12 @@ impl SweepGradient {
 
 fn valid_alignment(value: Alignment) -> bool {
     value.x.is_finite() && value.y.is_finite()
+}
+
+// Coordinate interpolation can erase a nonzero span under a large common
+// translation. Interpolating endpoint spans separately detects that loss.
+fn lost_span(a: f64, b: f64, mixed: f64, t: f64) -> bool {
+    lerp_finite(a, b, t).is_some_and(|span| span != 0.0 && mixed == 0.0)
 }
 
 fn valid_radius(value: f64) -> bool {

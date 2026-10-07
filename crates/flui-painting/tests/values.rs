@@ -1,11 +1,12 @@
 //! Paint and text value contracts: CSS weight mapping, radial-gradient focal
 //! interpolation and how an arc joins a path.
 
-use flui_foundation::geometry::{Point, RRect, Rect};
+use flui_foundation::geometry::{Offset, Point, RRect, Rect};
 use flui_painting::Alignment;
 use flui_painting::paint::{Path, PathCommand};
 use flui_painting::styling::{
-    BoxDecoration, Color, Gradient, LinearGradient, RadialGradient, SweepGradient, TileMode,
+    Border, BorderRadius, BorderRadiusExt, BorderSide, BorderStyle, BoxDecoration, BoxShadow,
+    Color, Gradient, LinearGradient, RadialGradient, SweepGradient, TileMode,
 };
 use flui_painting::typography::FontWeight;
 
@@ -115,6 +116,37 @@ pub(crate) fn gradient_geometry_preserves_overshoot() {
 
 pub(crate) fn decoration_gradient_geometry_preserves_overshoot() {
     gradient_geometry_extrapolates(true);
+    let populated = BoxDecoration::with_color(Color::RED)
+        .set_border(Some(Border::all(BorderSide::new(
+            Color::BLACK,
+            2.0,
+            BorderStyle::Solid,
+        ))))
+        .set_border_radius(Some(BorderRadius::circular(4.0)))
+        .set_box_shadow(Some(vec![BoxShadow::new(
+            Color::BLACK,
+            Offset::new(1.0, 2.0),
+            3.0,
+            1.0,
+        )]));
+    let linear = Gradient::Linear(LinearGradient::horizontal(vec![Color::RED, Color::BLUE]));
+    let radial = Gradient::Radial(RadialGradient::circular(vec![Color::RED, Color::BLUE]));
+    for (a, b) in [
+        (
+            populated.clone().set_gradient(Some(linear.clone())),
+            BoxDecoration::with_gradient(radial),
+        ),
+        (populated.clone(), BoxDecoration::new()),
+        (populated.set_gradient(Some(linear)), BoxDecoration::new()),
+    ] {
+        for (t, expected) in [(-0.25, &a), (1.25, &b)] {
+            assert_eq!(
+                BoxDecoration::lerp(&a, &b, t),
+                *expected,
+                "exact bounded representation at {t}"
+            );
+        }
+    }
 }
 
 pub(crate) fn gradient_geometry_rejects_invalid_inputs_before_equal_shortcuts() {
@@ -154,6 +186,52 @@ pub(crate) fn gradient_geometry_rejects_invalid_inputs_before_equal_shortcuts() 
 }
 
 pub(crate) fn gradient_geometry_checks_intermediate_and_output_overflow() {
+    let linear_a = LinearGradient::new(
+        Alignment::CENTER,
+        Alignment::CENTER_RIGHT,
+        vec![Color::RED, Color::BLUE],
+        None,
+        TileMode::Clamp,
+    );
+    let mut linear_b = linear_a.clone();
+    linear_b.begin.x = 1.0;
+    linear_b.end.x = 2.0;
+    let sweep_a = SweepGradient::new(
+        Alignment::CENTER,
+        vec![Color::RED, Color::BLUE],
+        None,
+        TileMode::Clamp,
+        0.0,
+        1.0,
+    );
+    let mut sweep_b = sweep_a.clone();
+    sweep_b.start_angle = 1.0;
+    sweep_b.end_angle = 2.0;
+    for (a, b) in [
+        (Gradient::Linear(linear_a), Gradient::Linear(linear_b)),
+        (Gradient::Sweep(sweep_a), Gradient::Sweep(sweep_b)),
+    ] {
+        assert!(
+            Gradient::lerp(&a, &b, 1e16).is_none(),
+            "a unit span lost to translation must be refused: {b:?}"
+        );
+        let mixed = BoxDecoration::<f64>::lerp(
+            &BoxDecoration::with_gradient(a.clone()),
+            &BoxDecoration::with_gradient(b.clone()),
+            1e16,
+        );
+        assert_eq!(mixed.gradient, Some(b.clone()));
+        let mut reversed = b;
+        match &mut reversed {
+            Gradient::Linear(g) => g.end.x = 0.0,
+            Gradient::Sweep(g) => g.end_angle = 0.0,
+            Gradient::Radial(_) => unreachable!(),
+        }
+        assert!(
+            Gradient::lerp(&a, &reversed, 0.5).is_some(),
+            "an intended zero span remains valid"
+        );
+    }
     let mut sweep_from = SweepGradient::centered(vec![Color::RED, Color::BLUE]);
     sweep_from.end_angle = 0.0;
     let mut sweep_to = sweep_from.clone();
@@ -211,7 +289,7 @@ pub(crate) fn gradient_geometry_checks_intermediate_and_output_overflow() {
             &BoxDecoration::with_gradient(b.clone()),
             f64::MAX,
         );
-        assert_eq!(mixed.gradient, Gradient::lerp(&a, &b, 1.0));
+        assert_eq!(mixed.gradient, Some(b.clone()));
         let mut invalid = b;
         match &mut invalid {
             Gradient::Linear(g) => {
@@ -249,14 +327,11 @@ pub(crate) fn gradient_geometry_checks_intermediate_and_output_overflow() {
         .is_none()
     );
     let mixed = BoxDecoration::<f64>::lerp(
-        &BoxDecoration::with_gradient(Gradient::Linear(a.clone())),
+        &BoxDecoration::with_gradient(Gradient::Linear(a)),
         &BoxDecoration::with_gradient(Gradient::Linear(b.clone())),
         2.0,
     );
-    assert_eq!(
-        mixed.gradient,
-        Gradient::lerp(&Gradient::Linear(a), &Gradient::Linear(b), 1.0)
-    );
+    assert_eq!(mixed.gradient, Some(Gradient::Linear(b)));
     let healthy = Gradient::Linear(LinearGradient::horizontal(vec![Color::RED, Color::BLUE]));
     assert!(Gradient::lerp(&healthy, &healthy, 0.5).is_some());
 }
@@ -306,14 +381,11 @@ pub(crate) fn radial_overshoot_refuses_coincident_nonzero_circles() {
     b.focal_radius = Some(1.5);
     assert!(RadialGradient::lerp(&a, &b, 2.0).is_none());
     let mixed = BoxDecoration::<f64>::lerp(
-        &BoxDecoration::with_gradient(Gradient::Radial(a.clone())),
+        &BoxDecoration::with_gradient(Gradient::Radial(a)),
         &BoxDecoration::with_gradient(Gradient::Radial(b.clone())),
         2.0,
     );
-    assert_eq!(
-        mixed.gradient,
-        Gradient::lerp(&Gradient::Radial(a), &Gradient::Radial(b), 1.0)
-    );
+    assert_eq!(mixed.gradient, Some(Gradient::Radial(b)));
 }
 
 fn healthy_gradient_like(gradient: &Gradient) -> Gradient {

@@ -310,6 +310,15 @@ where
         }
         let gradient_t = t;
         let t = t.clamp(0.0, 1.0);
+        if t == 0.0 || t == 1.0 {
+            let mut endpoint = if t == 0.0 { a.clone() } else { b.clone() };
+            if let (Some(a_gradient), Some(b_gradient)) = (&a.gradient, &b.gradient)
+                && let Some(gradient) = Gradient::lerp(a_gradient, b_gradient, gradient_t)
+            {
+                endpoint.gradient = Some(gradient);
+            }
+            return endpoint;
+        }
         let (fade_a, fade_b) = (1.0 - t, t);
 
         let color = match (a.color, b.color) {
