@@ -344,6 +344,8 @@ extern "C" {
     fn altitude_angle(this: &ExtendedPointerEvent) -> Result<f64, JsValue>;
     #[wasm_bindgen(method, getter, catch, js_name = azimuthAngle)]
     fn azimuth_angle(this: &ExtendedPointerEvent) -> Result<f64, JsValue>;
+    #[wasm_bindgen(method, getter, catch, js_name = twist)]
+    fn twist_degrees(this: &ExtendedPointerEvent) -> Result<f64, JsValue>;
     #[wasm_bindgen(method, catch, js_name = getCoalescedEvents)]
     fn coalesced_events(this: &ExtendedPointerEvent) -> Result<js_sys::Array, JsValue>;
     #[wasm_bindgen(method, catch, js_name = getPredictedEvents)]
@@ -515,7 +517,10 @@ fn pointer_sample(pe: &web_sys::PointerEvent) -> Option<PointerSample> {
                     }),
                 (altitude, azimuth) => altitude.or(azimuth),
             };
-            sample.twist = Twist::try_new(f64::from(pe.twist()).to_radians()).ok();
+            sample.twist = extended
+                .twist_degrees()
+                .ok()
+                .and_then(|degrees| Twist::try_new(degrees.to_radians()).ok());
         }
     }
     Some(sample)
