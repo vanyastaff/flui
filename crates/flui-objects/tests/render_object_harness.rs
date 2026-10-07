@@ -850,7 +850,7 @@ fn harness_mouse_region_uses_one_tracker_target_for_hover_enter_and_exit() {
     // genuine hover-shaped move needs buttons cleared explicitly.
     let hover_event = mouse_move(
         inside_position,
-        flui_interaction::events::PointerButtons::EMPTY,
+        flui_interaction::events::PointerButtons::NONE,
     );
 
     lane.enter(|| {
@@ -893,7 +893,7 @@ fn harness_mouse_region_uses_one_tracker_target_for_hover_enter_and_exit() {
     run.pipeline().hit_test(outside_position, &mut outside);
     let outside_event = mouse_move(
         outside_position,
-        flui_interaction::events::PointerButtons::EMPTY,
+        flui_interaction::events::PointerButtons::NONE,
     );
     lane.enter(|| {
         lane.dispatch_handle()
