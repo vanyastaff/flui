@@ -442,7 +442,8 @@ fn scale_ended_from_its_start_publishes_no_update() {
         .on_start(move |_| {
             st.starts.set(st.starts.get() + 1);
             // Lifting one of two contacts from inside the start ends the scale.
-            if let Some(scale) = s.borrow_mut().take() {
+            let ending = s.borrow_mut().take();
+            if let Some(scale) = ending {
                 let up = make_up_event_for_id(id(1), Offset::new(50.0, 200.0), PointerType::Touch);
                 scale.handle_event(PointerDispatch::at_root(&up));
             }
@@ -703,7 +704,8 @@ fn force_press_released_from_its_start_publishes_no_peak() {
     let recognizer = ForcePressGestureRecognizer::builder(rig.binding.arena().clone())
         .on_start(move |_| {
             st.starts.set(st.starts.get() + 1);
-            if let Some(recognizer) = s.borrow_mut().take() {
+            let ending = s.borrow_mut().take();
+            if let Some(recognizer) = ending {
                 let up = make_up_event_for_id(id(1), Offset::new(100.0, 100.0), PointerType::Touch);
                 recognizer.handle_event(PointerDispatch::at_root(&up));
                 let at = Offset::new(100.0, 100.0);
@@ -973,7 +975,8 @@ fn tap_down_admitting_the_next_contact_keeps_the_tap_up() {
         .on_tap_down(move |_| {
             d.events.borrow_mut().push("down".to_owned());
             // The next contact arrives while the completed tap is delivered.
-            if let Some(tad) = s.borrow_mut().take() {
+            let ending = s.borrow_mut().take();
+            if let Some(tad) = ending {
                 let at = Offset::new(300.0, 100.0);
                 let down = make_down_event_for_id(id(2), at, PointerType::Touch);
                 tad.add_pointer(PointerDispatch::at_root(&down));
