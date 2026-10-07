@@ -102,6 +102,7 @@ pub mod controller;
 pub mod curved;
 pub mod error;
 pub mod ext;
+pub mod motion;
 pub mod proxy;
 pub mod reverse;
 pub mod simulation;
@@ -125,6 +126,7 @@ pub use controller::AnimationController;
 pub use curved::CurvedAnimation;
 pub use error::AnimationError;
 pub use ext::{AnimatableExt, AnimationExt};
+pub use motion::{AnimationTime, FrameTick, InvalidPlaybackRate, MotionClock, PlaybackRate};
 pub use proxy::ProxyAnimation;
 pub use reverse::ReverseAnimation;
 pub use simulation::{
