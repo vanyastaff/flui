@@ -101,9 +101,58 @@ impl Drop for ApartmentHold {
             // SAFETY: taken once, here, and never read again.
             drop(unsafe { ManuallyDrop::take(&mut self.apartment) });
         } else {
-            tracing::error!(
-                "COM apartment hold dropped off its thread; the apartment stays entered there"
-            );
+            crate::shared::panic_boundary::contain_owner_callback(|| {
+                tracing::error!(
+                    "COM apartment hold dropped off its thread; the apartment stays entered there"
+                );
+            });
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    struct PanickingDiagnostic;
+    impl tracing::Subscriber for PanickingDiagnostic {
+        fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+        fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+        fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+        fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+        fn event(&self, _: &tracing::Event<'_>) {
+            panic!("diagnostic failure");
+        }
+        fn enter(&self, _: &tracing::span::Id) {}
+        fn exit(&self, _: &tracing::span::Id) {}
+    }
+    #[test]
+    fn off_owner_apartment_retirement_contains_diagnostics() {
+        for unwinding in [false, true] {
+            let hold = ApartmentHold::new(ComApartment::enter().expect("STA"));
+            std::thread::spawn(move || {
+                tracing::subscriber::with_default(PanickingDiagnostic, || {
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        if unwinding {
+                            let _hold = hold;
+                            panic!("first failure");
+                        }
+                        drop(hold);
+                    }));
+                    assert_eq!(result.is_err(), unwinding);
+                    if let Err(failure) = result {
+                        assert_eq!(
+                            flui_foundation::panic::payload_text(failure.as_ref()),
+                            Some("first failure")
+                        );
+                    }
+                });
+            })
+            .join()
+            .expect("retirement thread");
         }
     }
 }

@@ -126,6 +126,30 @@ fn sweep_grows_then_shrinks() {
     assert!(sweeps[6..].windows(2).all(|w| w[0] > w[1]), "{sweeps:?}");
 }
 
+fn registry_migration_preserves_the_painted_phase() {
+    let vsync = Vsync::new();
+    let mut laid = indicator(&vsync);
+    laid.pump_for(ms(1500));
+    let before = only_arc(&laid);
+    let next = Vsync::new();
+    laid.pump_widget(VsyncScope::new(
+        next.clone(),
+        Center::new().child(ActivityIndicator::new()),
+    ));
+    assert!(vsync.is_empty());
+    assert_eq!(only_arc(&laid), before);
+    next.tick_all(50.0);
+    laid.pump_for(Duration::ZERO);
+    assert_eq!(only_arc(&laid), before);
+    next.tick_all(50.3);
+    laid.pump_for(Duration::ZERO);
+    assert_angle(
+        only_arc(&laid).0,
+        expected_rotation(ms(1800)),
+        "after migration",
+    );
+}
+
 fn zero_dt() {
     let vsync = Vsync::new();
     let mut laid = indicator(&vsync);
@@ -166,6 +190,10 @@ fn activity_indicator_arc_follows_keyframes() {
         "activity_indicator_arc_follows_keyframes",
         &[
             ("published times", arc_at_published_times),
+            (
+                "registry migration",
+                registry_migration_preserves_the_painted_phase,
+            ),
             ("sweep", sweep_grows_then_shrinks),
             ("zero_dt", zero_dt),
             ("ten_hours", ten_hours),
@@ -237,6 +265,19 @@ fn indicator_unmount_mid_frame_releases_controller() {
     laid.pump_for(ms(300));
     laid.pump_widget(VsyncScope::new(vsync.clone(), two_indicators(1)));
     assert_eq!(vsync.len(), 1, "the unmounted indicator unregistered");
+    let replacement = Vsync::new();
+    laid.pump_widget(VsyncScope::new(replacement.clone(), two_indicators(1)));
+    assert!(
+        vsync.is_empty(),
+        "the old inherited registry no longer owns the survivor"
+    );
+    assert_eq!(
+        replacement.len(),
+        1,
+        "a retained state joins its new inherited registry"
+    );
+    laid.pump_widget(VsyncScope::new(vsync, two_indicators(1)));
+    assert!(replacement.is_empty());
     laid.pump_for(ms(1500));
     let (start, _) = only_arc(&laid);
     assert_angle(

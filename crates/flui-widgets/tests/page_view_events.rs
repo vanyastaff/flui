@@ -331,3 +331,37 @@ fn a_panicking_page_change_does_not_discard_the_later_pages() {
     assert_eq!(*delivered.borrow(), [2], "the later page still ran");
     assert_eq!(probe.value(), Ok(2));
 }
+
+#[test]
+fn assistive_page_scroll_settles_on_a_page() {
+    use flui_testing::a11y::{Action, ActionRequest};
+    let controller = PageController::new();
+    let mut app = lay_out(page_view(&controller), tight(PAGE, PAGE));
+    app.enable_semantics();
+    app.tick();
+    let tree = app.a11y_tree().expect("semantics");
+    let node = tree
+        .nodes()
+        .find(|node| node.supports_action(Action::ScrollRight))
+        .expect("page scroll action")
+        .id();
+    app.invoke_semantics_action(ActionRequest {
+        action: Action::ScrollRight,
+        target_tree: flui_testing::a11y::TreeId::ROOT,
+        target_node: node,
+        data: None,
+    })
+    .expect("scroll");
+    assert!(
+        controller.scroll_controller().position().is_scrolling(),
+        "assistive motion has an activity"
+    );
+    for _ in 0..100 {
+        app.pump_for(std::time::Duration::from_millis(16));
+    }
+    assert!(
+        (controller.page().expect("page") - 1.0).abs() < 1e-6,
+        "page physics settles the assistive step"
+    );
+    assert!(!controller.scroll_controller().position().is_scrolling());
+}

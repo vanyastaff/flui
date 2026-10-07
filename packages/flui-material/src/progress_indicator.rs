@@ -131,9 +131,8 @@ pub struct LinearProgressIndicatorState {
     bars: Arc<Bars>,
     vsync: Option<Vsync>,
     registration: Option<VsyncRegistration>,
-    /// Whether the view was indeterminate when the state was created; read
-    /// once, in `init_state`, when the ambient vsync is known.
-    indeterminate_at_mount: bool,
+    /// The current configuration, used when the ambient registry changes.
+    indeterminate: bool,
 }
 
 impl std::fmt::Debug for LinearProgressIndicatorState {
@@ -153,7 +152,7 @@ impl StatefulView for LinearProgressIndicator {
             bars: Arc::new(Bars::new()),
             vsync: None,
             registration: None,
-            indeterminate_at_mount: self.value.is_none(),
+            indeterminate: self.value.is_none(),
         }
     }
 }
@@ -162,15 +161,15 @@ impl LinearProgressIndicatorState {
     /// Registers and repeats the controller while `indeterminate`; stops and
     /// unregisters it otherwise.
     fn run(&mut self, indeterminate: bool) {
+        self.indeterminate = indeterminate;
         match (&self.vsync, indeterminate, self.registration.is_some()) {
             (Some(vsync), true, false) => {
                 self.registration = Some(vsync.register(self.controller.clone()));
-                self.controller.set_value(0.0);
                 // An undisposed controller over [0, 1] accepts a repeat; the
-                // future only reports the end of an endless run.
+                // new registry anchors its clock at the current phase.
                 let _ = self.controller.repeat(false);
             }
-            (_, false, true) => {
+            (_, false, true) | (None, _, _) => {
                 let _ = self.controller.stop();
                 if let (Some(vsync), Some(registration)) = (&self.vsync, self.registration.take()) {
                     vsync.unregister(&registration);
@@ -183,8 +182,24 @@ impl LinearProgressIndicatorState {
 
 impl ViewState<LinearProgressIndicator> for LinearProgressIndicatorState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.vsync = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone());
-        self.run(self.indeterminate_at_mount);
+        self.did_change_dependencies(ctx);
+    }
+
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
+        let next = ctx.depend_on::<VsyncScope, _>(|scope| scope.vsync().clone());
+        let unchanged = match (&self.vsync, &next) {
+            (Some(old), Some(new)) => old.is_same(new),
+            (None, None) => true,
+            _ => false,
+        };
+        if unchanged {
+            return;
+        }
+        if let (Some(vsync), Some(token)) = (&self.vsync, self.registration.take()) {
+            vsync.unregister(&token);
+        }
+        self.vsync = next;
+        self.run(self.indeterminate);
     }
 
     fn build(&self, view: &LinearProgressIndicator, ctx: &dyn BuildContext) -> impl IntoView {
@@ -215,7 +230,10 @@ impl ViewState<LinearProgressIndicator> for LinearProgressIndicatorState {
         )
     }
 
-    fn did_update_view(&mut self, _old: &LinearProgressIndicator, new: &LinearProgressIndicator) {
+    fn did_update_view(&mut self, old: &LinearProgressIndicator, new: &LinearProgressIndicator) {
+        if old.value.is_some() && new.value.is_none() {
+            self.controller.set_value(0.0);
+        }
         self.run(new.value.is_none());
     }
 

@@ -192,7 +192,10 @@ impl Matrix4 {
         if t == 0.0 {
             return self;
         }
-        if t == 1.0 || self.m == other.m {
+        if t == 1.0 {
+            return other;
+        }
+        if !t.is_nan() && self.m == other.m {
             // Identical endpoints are a constant; a collapsed rotated matrix would
             // otherwise lose the orientation its decomposition cannot recover.
             return other;

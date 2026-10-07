@@ -486,6 +486,10 @@ fn overflowing_ramp_stays_finite() {
 #[test]
 fn keyframes_never_publish_non_finite() {
     crate::run_table(&[
+        (
+            "large Hermite tangents cancel",
+            large_hermite_tangents_cancel,
+        ),
         ("NaN curve", nan_curve_publishes_segment_start),
         ("infinite curve", infinite_curve_publishes_segment_start),
         ("overflowing cubic", overflowing_cubic_stays_finite),
@@ -495,6 +499,16 @@ fn keyframes_never_publish_non_finite() {
             far_apart_catmull_rom_tangent_survives,
         ),
     ]);
+}
+
+fn large_hermite_tangents_cancel() {
+    let track = Keyframes::builder(-1e308, Duration::from_secs(102))
+        .to(1.0, Duration::from_secs(1), Linear)
+        .cubic(2.0, Duration::from_secs(100))
+        .to(1e308, Duration::from_secs(1), Linear)
+        .build()
+        .expect("finite keyframes");
+    assert_eq!(track.value_at(Duration::from_secs(51)), 1.5);
 }
 
 fn far_apart_catmull_rom_tangent_survives() {

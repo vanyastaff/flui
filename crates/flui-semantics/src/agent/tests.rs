@@ -200,6 +200,7 @@ fn wire_role_matches_the_windows_adapter_for_every_role_flui_publishes() {
         (A::Tab, "TabItem", Role::Tab),
         (A::TabList, "Tab", Role::TabList),
         (A::TabPanel, "Pane", Role::Pane),
+        (A::ScrollView, "Pane", Role::Pane),
         (A::Keyboard, "Pane", Role::Pane),
         (A::Table, "Table", Role::Table),
         (A::Cell, "DataItem, aria cell", Role::Cell),

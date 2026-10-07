@@ -67,7 +67,12 @@ pub fn expand(input: &DeriveInput) -> TokenStream {
                     (
                         quote!(self.#ident),
                         quote!(#ident: v[#i]),
-                        quote!(#ident: self.#ident + (other.#ident - self.#ident) * t),
+                        quote!(#ident: {
+                            let value = self.#ident + (other.#ident - self.#ident) * t;
+                            if value.is_finite() { value } else {
+                                self.#ident * (1.0 - t) + other.#ident * t
+                            }
+                        }),
                     )
                 })
                 .fold(
@@ -88,7 +93,12 @@ pub fn expand(input: &DeriveInput) -> TokenStream {
                     (
                         quote!(self.#index),
                         quote!(v[#i]),
-                        quote!(self.#index + (other.#index - self.#index) * t),
+                        quote!({
+                            let value = self.#index + (other.#index - self.#index) * t;
+                            if value.is_finite() { value } else {
+                                self.#index * (1.0 - t) + other.#index * t
+                            }
+                        }),
                     )
                 })
                 .fold(
@@ -127,6 +137,8 @@ pub fn expand(input: &DeriveInput) -> TokenStream {
         impl #impl_generics #runtime::Lerp for #name #ty_generics #where_clause {
             #[inline]
             fn lerp_to(&self, other: &Self, t: f64) -> Self {
+                if t == 0.0 { return self.clone(); }
+                if t == 1.0 { return other.clone(); }
                 let _ = (other, t);
                 #lerp_body
             }

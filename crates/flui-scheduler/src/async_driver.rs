@@ -1113,7 +1113,7 @@ mod tests {
         }));
         assert_eq!(fresh.poll_ready(), 1);
         assert!(completed.load(Ordering::Acquire));
-        assert_eq!(fresh.pending_task_count(), 0);
+        assert_eq!(fresh.async_driver().pending_task_count(), 0);
     }
 
     /// A future that panics on its very first poll.
@@ -1132,10 +1132,10 @@ mod tests {
     fn async_driver_poll_panic_does_not_leave_a_zombie_slot() {
         let (_scheduler, frame) = owner_frame();
         let driver = frame.async_driver();
-        let before = frame.pending_task_count();
+        let before = frame.async_driver().pending_task_count();
 
         let _token = driver.spawn_local(Box::pin(PanicsOnPoll));
-        assert_eq!(frame.pending_task_count(), before + 1);
+        assert_eq!(frame.async_driver().pending_task_count(), before + 1);
 
         let unwind = catch_unwind(AssertUnwindSafe(|| frame.poll_ready()));
         assert!(
@@ -1144,14 +1144,14 @@ mod tests {
         );
 
         assert_eq!(
-            frame.pending_task_count(),
+            frame.async_driver().pending_task_count(),
             before,
             "the panicking task's slot must be removed, not left as a zombie"
         );
 
         // A later poll must not touch the removed slot.
         assert_eq!(frame.poll_ready(), 0);
-        assert_eq!(frame.pending_task_count(), before);
+        assert_eq!(frame.async_driver().pending_task_count(), before);
     }
 
     fn async_driver_coalesces_repeated_wakes_into_one_frame_request() {
@@ -1311,7 +1311,7 @@ mod tests {
             "the third task must not have been reached in the aborted pump"
         );
         assert_eq!(
-            frame.pending_task_count(),
+            frame.async_driver().pending_task_count(),
             1,
             "the completed first and the panicking second are both gone; only the third remains"
         );
@@ -1328,7 +1328,7 @@ mod tests {
         );
         assert_eq!(third_polls.get(), 1);
         assert_eq!(
-            frame.pending_task_count(),
+            frame.async_driver().pending_task_count(),
             1,
             "third stays pending, never woken again"
         );
@@ -1410,7 +1410,7 @@ mod tests {
 
         let late = driver.spawn_local(Box::pin(async {}));
         assert!(late.is_cancelled(), "a retired store admits nothing");
-        assert_eq!(frame.pending_task_count(), 0);
+        assert_eq!(frame.async_driver().pending_task_count(), 0);
     }
 
     /// A scheduler has one live owner frame, so the owner a frame drive polls
@@ -1441,7 +1441,7 @@ mod tests {
         let _token = second.async_driver().spawn_local(Box::pin(async {}));
         assert!(scheduler.is_frame_scheduled());
         scheduler.execute_frame(&second);
-        assert_eq!(second.pending_task_count(), 0);
+        assert_eq!(second.async_driver().pending_task_count(), 0);
     }
 
     #[test]

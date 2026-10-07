@@ -271,10 +271,14 @@ impl CurveSegment {
             arrival_weight,
             self.curve.slope(tau) - self.start_slope * departure_weight,
         );
-        finite_or(
-            rate(self.span, slope, self.duration) + self.v0 * departure_weight,
-            0.0,
-        )
+        let mut velocity = rate(self.span, slope, self.duration) + self.v0 * departure_weight;
+        if !velocity.is_finite() {
+            let scale = self.span.abs().max(self.v0.abs());
+            velocity = (rate(self.span / scale, slope, self.duration)
+                + (self.v0 / scale) * departure_weight)
+                * scale;
+        }
+        finite_or(velocity, 0.0)
     }
 }
 

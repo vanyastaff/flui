@@ -1,6 +1,7 @@
 # ADR-0023: `Shortcuts` / `Actions`, and bubbling key dispatch
 
 - **Status:** Accepted
+- **Superseded-by:** ADR-0156 (character-only Shift policy in decision 2)
 - **Date:** 2026-07-10
 - **Related:** ADR-0026 (focus widgets and traversal; Tab is an intent built on this)
 - **Superseded in part by:** ADR-0079 (intents resolve at the primary focus)

@@ -707,6 +707,9 @@ fn force_press_released_from_its_start_publishes_no_peak() {
             st.starts.set(st.starts.get() + 1);
             if let Some(recognizer) = s.borrow_mut().take() {
                 recognizer.stop_tracking_pointer(id(1));
+                let at = Offset::new(100.0, 100.0);
+                let down = make_down_event_for_id(id(1), at, PointerType::Pen);
+                recognizer.add_pointer_down(PointerDispatch::at_root(&down));
             }
         })
         .with_on_peak(move |_| p.peaks.set(p.peaks.get() + 1))
@@ -1286,4 +1289,100 @@ fn a_touch_at_constant_full_pressure_never_force_presses() {
     rig.move_with(1, 100.0, 100.0, PointerType::Touch, 1.0);
     rig.up_with(1, 100.0, 100.0, PointerType::Touch);
     assert_eq!(log.starts.get(), 0, "a constant pressure is not a sensor");
+}
+
+struct CancelRival {
+    reject: Box<dyn Fn()>,
+    accepted: Rc<Cell<usize>>,
+}
+impl flui_interaction::sealed::CustomGestureRecognizer for CancelRival {
+    fn on_arena_accept(&self, _: PointerId) {
+        self.accepted.set(self.accepted.get() + 1);
+    }
+    fn on_arena_reject(&self, _: PointerId) {
+        (self.reject)();
+    }
+}
+fn cancellation_reentry<R: GestureRecognizer + OneSequenceGestureRecognizer + 'static>(
+    make: fn(GestureArena) -> Arc<R>,
+) {
+    let arena = GestureArena::new();
+    let recognizer = make(arena.clone());
+    let next = recognizer.clone();
+    let at = Offset::new(100.0, 100.0);
+    #[expect(
+        clippy::arc_with_non_send_sync,
+        reason = "the arena owns owner-local recognizers through its Arc boundary"
+    )]
+    let rival = Arc::new(CancelRival {
+        accepted: Rc::new(Cell::new(0)),
+        reject: Box::new(move || next.add_pointer(id(1), at, at)),
+    });
+    let _rival_entry = arena.add(id(1), rival);
+    recognizer.add_pointer(id(1), at, at);
+    route(
+        &*recognizer,
+        &make_cancel_event_for_id(id(1), PointerType::Touch),
+    );
+    assert!(
+        recognizer.tracked_pointers().contains(&id(1)),
+        "old cancellation must not reject the newly admitted contact"
+    );
+    recognizer.dispose();
+}
+fn cancelled_scale_keeps_other_contacts_competing() {
+    let arena = GestureArena::new();
+    let scale = ScaleGestureRecognizer::new(arena.clone());
+    let accepted = Rc::new(Cell::new(0));
+    let rejected = Rc::new(Cell::new(0));
+    let count = rejected.clone();
+    #[expect(
+        clippy::arc_with_non_send_sync,
+        reason = "the arena owns owner-local recognizers through its Arc boundary"
+    )]
+    let rival = Arc::new(CancelRival {
+        accepted: accepted.clone(),
+        reject: Box::new(move || count.set(count.get() + 1)),
+    });
+    let _rival_entry = arena.add(id(2), rival);
+    let at = Offset::new(100.0, 100.0);
+    scale.add_pointer(id(1), at, at);
+    scale.add_pointer(id(2), at, at);
+    arena.close(id(1));
+    arena.close(id(2));
+    route(
+        &*scale,
+        &make_cancel_event_for_id(id(1), PointerType::Touch),
+    );
+    arena.drain_deferred_resolutions();
+    assert_eq!(
+        rejected.get(),
+        0,
+        "the still-live second contact keeps its competing recognizer"
+    );
+    assert_eq!(accepted.get(), 1);
+}
+#[test]
+fn cancellation_preserves_reentrant_and_independent_contacts() {
+    run_rows(
+        "cancellation",
+        &[
+            ("force reentry", || {
+                cancellation_reentry(ForcePressGestureRecognizer::new);
+            }),
+            ("scale reentry", || {
+                cancellation_reentry(ScaleGestureRecognizer::new);
+            }),
+            ("tap and drag reentry", || {
+                cancellation_reentry(TapAndDragGestureRecognizer::new);
+            }),
+            ("eager reentry", || {
+                cancellation_reentry(EagerGestureRecognizer::new);
+            }),
+            (
+                "other scale contacts",
+                cancelled_scale_keeps_other_contacts_competing,
+            ),
+        ],
+    );
 }

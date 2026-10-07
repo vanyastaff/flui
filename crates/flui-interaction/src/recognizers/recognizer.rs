@@ -193,9 +193,9 @@ pub(crate) fn finish_containment(first: Option<RoutePanic>, incoming_failure: bo
 /// abandons the sequence on the cancel.
 pub(crate) fn withdraw_cancelled(entry: &GestureArenaEntry, arena: &GestureArena) {
     if arena.sweep_model() == crate::arena::SweepModel::SelfDriven {
-        entry.abandon();
+        entry.abandon_without_self();
     } else {
-        entry.resolve(GestureDisposition::Rejected);
+        entry.reject_without_self();
     }
 }
 
@@ -563,6 +563,10 @@ impl RecognizerBase {
             .lock()
             .as_ref()
             .and_then(GestureArenaEntry::member)
+    }
+
+    pub(crate) fn take_tracked_entry(&self) -> Option<GestureArenaEntry> {
+        self.tracked_entry.lock().take()
     }
 
     /// The exact stale-safe entry registered for the tracked pointer.

@@ -591,10 +591,10 @@ pub(crate) mod activator_tests {
     }
 
     /// A character Shift produces (`?` is Shift+/ on a US keyboard) is
-    /// reachable with `ignoring_shift`, while the other modifiers still match
+    /// reachable with `character_ignoring_shift`, while the other modifiers still match
     /// exactly; without it the exact-Shift rule keeps `?` unreachable there.
     pub(crate) fn a_shift_produced_character_matches_when_shift_is_ignored() {
-        let question = SingleActivator::character("?").ignoring_shift();
+        let question = SingleActivator::character_ignoring_shift("?");
         assert!(
             question.matches(&down("?", Modifiers::SHIFT)),
             "US layout: Shift+/"

@@ -305,14 +305,17 @@ fn async_future_poll_panic_closes_the_frame() {
     let owner = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
     let frame_count_before = scheduler.frame_count();
     let (completion_future, completion_counter) = armed_completion_probe(&scheduler);
-    let pending_before = owner.pending_task_count();
+    let pending_before = owner.async_driver().pending_task_count();
 
     let sibling_polls = Arc::new(AtomicUsize::new(0));
     let _panicking_token = owner.async_driver().spawn_local(Box::pin(PanicsOnPoll));
     let _sibling_token = owner
         .async_driver()
         .spawn_local(Box::pin(CountedThenReady(Arc::clone(&sibling_polls))));
-    assert_eq!(owner.pending_task_count(), pending_before + 2);
+    assert_eq!(
+        owner.async_driver().pending_task_count(),
+        pending_before + 2
+    );
 
     let payload = catch_unwind(AssertUnwindSafe(|| {
         scheduler.drive_frame(&owner, Instant::now(), far_deadline(), || {});
@@ -330,7 +333,7 @@ fn async_future_poll_panic_closes_the_frame() {
     // The panicking future's own slot is gone; the well-behaved sibling's
     // is not -- only one of the two tasks the driver held is a zombie.
     assert_eq!(
-        owner.pending_task_count(),
+        owner.async_driver().pending_task_count(),
         pending_before + 1,
         "the panicking future's slot must not be left as a zombie (issue #1057), but the \
          sibling task must still be tracked"
@@ -346,7 +349,10 @@ fn async_future_poll_panic_closes_the_frame() {
     // and it polls the sibling normally -- exactly once, since one poll
     // (of the two `CountedThenReady` needs) happens per frame.
     scheduler.drive_frame(&owner, Instant::now(), far_deadline(), || {});
-    assert_eq!(owner.pending_task_count(), pending_before + 1);
+    assert_eq!(
+        owner.async_driver().pending_task_count(),
+        pending_before + 1
+    );
     assert_eq!(
         sibling_polls.load(Ordering::SeqCst),
         1,

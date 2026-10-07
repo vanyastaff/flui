@@ -24,9 +24,7 @@ use flui_view::{BoxedView, InheritedView, impl_inherited_view};
 /// ownership is stricter and unrelated: gesture widgets require their
 /// presentation's `GestureArenaScope`.
 ///
-/// The provided data — the registry handle — never changes for a given scope,
-/// so [`update_should_notify`](InheritedView::update_should_notify) is always
-/// `false`.
+/// Replacing the registry notifies retained states, which migrate their ticker registrations.
 #[derive(Clone)]
 pub struct VsyncScope {
     /// The shared registry handed to descendants. Cloning the scope clones this
@@ -73,10 +71,8 @@ impl InheritedView for VsyncScope {
         &self.child
     }
 
-    fn update_should_notify(&self, _old: &Self) -> bool {
-        // The registry handle is fixed for a scope's lifetime; descendants read
-        // it once in `init_state` and never depend on it for rebuilds.
-        false
+    fn update_should_notify(&self, old: &Self) -> bool {
+        !self.vsync.is_same(&old.vsync)
     }
 }
 

@@ -635,6 +635,7 @@ fn retargeting_a_curve_to_its_target_keeps_its_schedule() {
 #[test]
 fn retarget_seams() {
     crate::run_table(&[
+        ("overflowing rates cancel", overflowing_rates_cancel),
         (
             "a_large_retarget_keeps_modest_velocity",
             a_large_retarget_keeps_modest_velocity,
@@ -698,6 +699,19 @@ fn retarget_seams() {
             retargeting_a_curve_to_its_target_keeps_its_schedule,
         ),
     ]);
+}
+
+fn overflowing_rates_cancel() {
+    let mut value = AnimatedValue::with_motion(0.0_f64, linear_spec(1000)).expect("finite motion");
+    value.animate_to(-2e307).expect("finite target");
+    value.advance(Duration::from_millis(500));
+    value.animate_to(1.6e308).expect("finite target");
+    value.advance(Duration::from_millis(230));
+    assert!(
+        close(value.velocity()[0], 1.73481e308, 1e-12),
+        "{:?}",
+        value.velocity()
+    );
 }
 
 fn a_large_retarget_keeps_modest_velocity() {

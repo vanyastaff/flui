@@ -97,6 +97,8 @@ vocabulary! {
         ProgressBar = 31 => "progressBar",
         /// A keyboard shortcut indicator.
         HotKey = 32 => "hotKey",
+        /// A viewport whose content can be scrolled.
+        ScrollView = 33 => "scrollView",
     }
 }
 

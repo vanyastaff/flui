@@ -126,6 +126,7 @@ fn text_editing() {
             ("editable_text::text_store::long_input_reveals_the_caret_and_maps_visible_pointer_positions", crate::editable_text::text_store::long_input_reveals_the_caret_and_maps_visible_pointer_positions),
             ("editable_text::text_store::editable_paint_places_long_text_under_the_viewport_clip", crate::editable_text::text_store::editable_paint_places_long_text_under_the_viewport_clip),
             ("editable_text_clipboard::copy_and_cut_on_an_obscured_field_leave_the_clipboard_untouched_and_the_key_unconsumed", crate::editable_text_clipboard::copy_and_cut_on_an_obscured_field_leave_the_clipboard_untouched_and_the_key_unconsumed),
+            ("editable_text_clipboard::paste_rechecks_focus_after_committing_composition", crate::editable_text_clipboard::paste_rechecks_focus_after_committing_composition),
             ("editable_text_clipboard::copy_then_paste_round_trips_text_in_an_editable_text", crate::editable_text_clipboard::copy_then_paste_round_trips_text_in_an_editable_text),
             ("editable_text_clipboard::select_all_replaces_the_complete_unicode_document_without_reporting_selection_as_an_edit", crate::editable_text_clipboard::select_all_replaces_the_complete_unicode_document_without_reporting_selection_as_an_edit),
             ("editable_text_clipboard::select_all_without_a_focused_text_field_leaves_the_key_unconsumed", crate::editable_text_clipboard::select_all_without_a_focused_text_field_leaves_the_key_unconsumed),

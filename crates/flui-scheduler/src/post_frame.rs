@@ -38,6 +38,7 @@ pub(crate) struct LocalPostFrameEntry {
 
 struct LocalLaneInner {
     queue: RefCell<Vec<LocalPostFrameEntry>>,
+    active: RefCell<Vec<LocalPostFrameEntry>>,
     /// Set by retirement: no callback is admitted afterwards.
     closed: Cell<bool>,
 }
@@ -98,6 +99,7 @@ impl OwnerFrame {
             scheduler: scheduler.downgrade(),
             post_frame: Rc::new(LocalLaneInner {
                 queue: RefCell::new(Vec::new()),
+                active: RefCell::new(Vec::new()),
                 closed: Cell::new(false),
             }),
             tasks: Rc::new(tasks),
@@ -146,12 +148,6 @@ impl OwnerFrame {
         self.tasks.poll_ready()
     }
 
-    /// Number of tasks this frame holds.
-    #[must_use]
-    pub fn pending_task_count(&self) -> usize {
-        self.tasks.pending_task_count()
-    }
-
     /// Number of live tasks currently indexed as due a poll. A same-batch
     /// duplicate index entry counts twice until the next poll collapses it.
     #[must_use]
@@ -171,7 +167,11 @@ impl OwnerFrame {
     #[must_use = "the first destructor panic is returned for the owner to raise"]
     pub fn retire(&self) -> Option<RetirePanic> {
         self.post_frame.closed.set(true);
-        let callbacks = self.post_frame.queue.take();
+        let mut callbacks = self.post_frame.queue.take();
+        callbacks.extend(self.post_frame.active.take());
+        // Active entries are removed with swap_remove; neither collection
+        // alone retains registration order after a partial frame dispatch.
+        callbacks.sort_unstable_by_key(|entry| entry.id);
         let tasks = self.tasks.detach_for_retirement();
         let mut first: Option<RetirePanic> = None;
         for entry in callbacks {
@@ -207,7 +207,7 @@ impl OwnerFrame {
     pub(crate) fn take_post_frame_queue_for(
         &self,
         scheduler: &UpdateScheduler,
-    ) -> Result<Vec<LocalPostFrameEntry>, LocalPostFrameScheduleError> {
+    ) -> Result<Vec<CallbackId>, LocalPostFrameScheduleError> {
         let Some(owner) = self.scheduler.upgrade() else {
             tracing::error!(
                 driving_scheduler = scheduler.debug_ptr(),
@@ -225,13 +225,23 @@ impl OwnerFrame {
             );
             return Err(LocalPostFrameScheduleError::WrongScheduler);
         }
-        Ok(self.post_frame.queue.take())
+        let entries = self.post_frame.queue.take();
+        let ids = entries.iter().map(|entry| entry.id).collect();
+        self.post_frame.active.borrow_mut().extend(entries);
+        Ok(ids)
     }
 
     /// Return an uninvoked tail to the already-validated queue. Original IDs
     /// retain FIFO order ahead of newer registrations on the next drain.
-    pub(crate) fn restore_post_frame_queue(&self, entries: Vec<LocalPostFrameEntry>) {
+    pub(crate) fn restore_post_frame_queue(&self) {
+        let entries = self.post_frame.active.take();
         self.post_frame.queue.borrow_mut().extend(entries);
+    }
+
+    pub(crate) fn take_active_post_frame(&self, id: CallbackId) -> Option<LocalPostFrameEntry> {
+        let mut active = self.post_frame.active.borrow_mut();
+        let index = active.iter().position(|entry| entry.id == id)?;
+        Some(active.swap_remove(index))
     }
 }
 

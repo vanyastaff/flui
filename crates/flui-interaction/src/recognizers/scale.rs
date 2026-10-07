@@ -848,7 +848,7 @@ impl ScaleGestureRecognizer {
         let started = state.phase == ScalePhase::Started;
         let entries: Vec<_> = std::mem::take(&mut state.contacts)
             .into_iter()
-            .map(|c| c.entry)
+            .map(|c| (c.pointer, c.entry))
             .collect();
         state.reset();
         drop(state);
@@ -858,12 +858,18 @@ impl ScaleGestureRecognizer {
         } else {
             Outcome::Nothing
         };
-        // A cancelled sequence's arenas end without a winner.
+        // Only the cancelled contact ends without a winner; other contacts retain rivals.
         let mut first = None;
-        for entry in &entries {
+        for (contact, entry) in &entries {
             RoutePanic::preserve_first(
                 &mut first,
-                RoutePanic::capture(|| withdraw_cancelled(entry, self.state.arena())),
+                RoutePanic::capture(|| {
+                    if *contact == pointer {
+                        withdraw_cancelled(entry, self.state.arena());
+                    } else {
+                        entry.reject_without_self();
+                    }
+                }),
                 "scale arena withdrawal",
             );
         }

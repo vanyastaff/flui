@@ -46,6 +46,18 @@ fn mounted_with_transition_route() -> (NavigatorHandle, Harness, RouteId, Animat
 // ---- release matrix: v = -2.0 / +2.0 / 0 at value 0.49 / 0.51 ----
 
 pub(crate) fn release_matrix_fling_and_slow_release() {
+    for (value, velocity) in [(1.0, -2.0), (0.0, 2.0)] {
+        let (navigator, _harness, top, controller) = mounted_with_transition_route();
+        controller.set_value(value);
+        let gesture = BackGestureController::new(navigator.clone(), top, controller.clone());
+        assert!(
+            !gesture.drag_end(velocity),
+            "a reached destination settles synchronously"
+        );
+        assert!(!controller.is_animating());
+        assert!(!navigator.user_gesture_in_progress());
+    }
+
     // Fast negative velocity (screen-widths/s): stay (route animates
     // forward to 1.0 = new page fully covers again) regardless of value.
     {

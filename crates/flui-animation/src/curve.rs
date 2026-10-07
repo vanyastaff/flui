@@ -655,8 +655,9 @@ const MIN_NEWTON_SLOPE: f64 = 1e-7;
 ///
 /// # Accuracy
 ///
-/// The solver (the WebKit `UnitBezier` / Chromium `gfx::CubicBezier`
-/// method: an 11-sample table, up to four Newton steps, then bisection)
+/// The solver follows the Newton/bisection structure of
+/// [WebKit `UnitBezier`](https://github.com/WebKit/WebKit/blob/029da7d3d074a75a24c2413e98b183a8bbfcfb62/Source/WebCore/platform/graphics/UnitBezier.h)
+/// with an 11-sample table, up to four Newton steps, then bisection. FLUI
 /// stops on the **output**: it brackets the bezier parameter until the
 /// bracket's width times the largest `|dy/ds|` is below `1e-7`, so the
 /// result is within `1e-7` of the exact y(x) — including next to a vertical
@@ -866,7 +867,9 @@ impl Cubic {
     fn tangent_slope(&self, x: f64) -> Option<f64> {
         let cubed = self.x.a;
         if cubed <= 0.0 {
-            return None;
+            let s = self.parameter_exact(x);
+            let quotient = self.y.slope(s) / self.x.slope(s);
+            return quotient.is_finite().then_some(quotient);
         }
         // The expansion `a·u³ + x'(c)·u` holds only about a genuine stationary
         // point of `x'`: outside [0, 1] the `u²` term does not vanish.

@@ -327,7 +327,7 @@ fn callback_retirement_closes_task_admission() {
         .expect("queued callback");
     assert!(frame.retire().is_none());
     assert_eq!(polls.get(), 0, "retirement must refuse even inline polling");
-    assert_eq!(frame.pending_task_count(), 0);
+    assert_eq!(frame.async_driver().pending_task_count(), 0);
 }
 
 fn task_retirement_disarms_sibling_wakers() {
@@ -383,7 +383,7 @@ fn eager_poll_cannot_reopen_retired_owner() {
         }))
         .expect("refused task token");
     assert!(token.is_cancelled());
-    assert_eq!(frame.pending_task_count(), 0);
+    assert_eq!(frame.async_driver().pending_task_count(), 0);
     assert_eq!(frame.poll_ready(), 0);
 }
 

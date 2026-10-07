@@ -155,7 +155,9 @@ impl BackGestureController {
         // A fling settles from the finger's speed: the controller spans one
         // screen width, so widths/s are its units/s, and a positive (pop)
         // velocity lowers its value. Anything else takes the flat pacing.
-        let pacing = if flung {
+        let reached_destination =
+            self.controller.value() == if animate_forward { 1.0 } else { 0.0 };
+        let pacing = if flung && !reached_destination {
             PopPacing::Fling {
                 velocity: -velocity,
             }

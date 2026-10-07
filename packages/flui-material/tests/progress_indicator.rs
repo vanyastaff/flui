@@ -66,11 +66,27 @@ fn mount_in(direction: TextDirection, indicator: LinearProgressIndicator) -> Mou
     let mut laid = lay_out_animated(
         VsyncScope::new(
             vsync.clone(),
-            Directionality::new(direction, Theme::new(theme, indicator)),
+            Directionality::new(direction, Theme::new(theme.clone(), indicator.clone())),
         ),
         tight(WIDTH, HEIGHT),
         vsync.clone(),
     );
+    let registrations = vsync.len();
+    let next = Vsync::new();
+    laid.pump_widget(VsyncScope::new(
+        next.clone(),
+        Directionality::new(direction, Theme::new(theme.clone(), indicator.clone())),
+    ));
+    assert!(
+        vsync.is_empty(),
+        "retained progress state leaves its old registry"
+    );
+    assert_eq!(next.len(), registrations);
+    laid.pump_widget(VsyncScope::new(
+        vsync.clone(),
+        Directionality::new(direction, Theme::new(theme, indicator)),
+    ));
+    assert!(next.is_empty());
     // The first tick anchors the repeating run at virtual time zero.
     laid.pump_for(Duration::ZERO);
     Mounted {
@@ -107,6 +123,25 @@ pub fn indeterminate_bars_follow_the_published_timing() {
         assert_bars(&mounted, t % 1750);
     }
     assert_eq!(mounted.vsync.len(), 1);
+
+    let next = Vsync::new();
+    mounted.laid.pump_widget(VsyncScope::new(
+        next.clone(),
+        Directionality::new(
+            TextDirection::Ltr,
+            Theme::new(ThemeData::light(), LinearProgressIndicator::new()),
+        ),
+    ));
+    assert!(mounted.vsync.is_empty());
+    assert_bars(&mounted, 200);
+    // A new registry may have a different clock origin. Its first tick
+    // preserves the painted phase; subsequent ticks advance from there.
+    next.tick_all(50.0);
+    mounted.laid.pump_for(Duration::ZERO);
+    assert_bars(&mounted, 200);
+    next.tick_all(50.25);
+    mounted.laid.pump_for(Duration::ZERO);
+    assert_bars(&mounted, 450);
 }
 
 pub fn switching_to_a_value_stops_the_bars() {
@@ -126,6 +161,14 @@ pub fn switching_to_a_value_stops_the_bars() {
     assert_eq!(painted_bars(&mounted.laid, mounted.primary), [(0.0, 60.0)]);
     mounted.laid.pump_for(ms(500));
     assert_eq!(painted_bars(&mounted.laid, mounted.primary), [(0.0, 60.0)]);
+    mounted.laid.pump_widget(VsyncScope::new(
+        mounted.vsync.clone(),
+        Theme::new(ThemeData::light(), LinearProgressIndicator::new()),
+    ));
+    mounted.laid.pump_for(Duration::ZERO);
+    assert_bars(&mounted, 0);
+    mounted.laid.pump_for(ms(200));
+    assert_bars(&mounted, 200);
 }
 
 pub fn values_outside_the_range_are_clamped() {

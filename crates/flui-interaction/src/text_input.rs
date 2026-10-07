@@ -141,6 +141,9 @@ pub enum DetachOutcome {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum TextInputError {
+    /// A later reentrant attachment superseded this admission.
+    #[error("a newer text-input attachment superseded this client")]
+    Superseded,
     /// The presentation does not expose platform IME support.
     #[error("this presentation does not support platform text input")]
     Unsupported,
@@ -592,6 +595,14 @@ impl TextInputOwner {
                 failure.finish();
                 return Err(error);
             }
+        }
+        if self.next_token.get() != next {
+            retire_client_owners(client, &mut calls, Some(&self.gate));
+            self.apply_host_ops(&mut calls, HostTurn::Behind);
+            if let Some(payload) = calls.into_failure() {
+                self.gate.defer_failure(payload);
+            }
+            return Err(TextInputError::Superseded);
         }
         // Open, so close has not taken the capability.
         let platform = self.push_platform();

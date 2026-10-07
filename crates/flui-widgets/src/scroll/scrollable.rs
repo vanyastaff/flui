@@ -717,8 +717,8 @@ impl ViewState<Scrollable> for ScrollableState {
             // "only express interest in the event if it would actually result
             // in a scroll" — the outer scrollable then takes the tick.
             let ctrl_wheel = scroll_controller;
-            let post_frame_wheel = post_frame;
-            let fling_wheel = fling_controller;
+            let post_frame_wheel = post_frame.clone();
+            let fling_wheel = fling_controller.clone();
             let listener = Listener::new()
                 .on_scroll_claim(move |data: &ScrollEventData| {
                     // Deliberately modifier-agnostic: a ctrl+wheel tick over a
@@ -782,12 +782,16 @@ impl ViewState<Scrollable> for ScrollableState {
                     EventPropagation::Stop
                 })
                 .child(gestures);
-            scroll_semantics(
+            let (viewport_semantics, position_semantics) = scroll_semantics(
                 a11y_controller,
                 scroll_direction,
                 axis_direction.is_reversed(),
-            )
-            .child(listener)
+                physics,
+                fling_controller,
+                post_frame,
+                self.pipeline.clone(),
+            );
+            viewport_semantics.child(position_semantics.child(listener))
         }
     }
 
@@ -851,44 +855,82 @@ impl ViewState<Scrollable> for ScrollableState {
 /// the last line before the step stays on screen after it.
 const A11Y_SCROLL_STEP: f64 = 0.8;
 
-/// The semantics node that lets assistive technology scroll this scrollable.
-///
-/// It advertises the two scroll actions along `axis`; each moves the position by
-/// [`A11Y_SCROLL_STEP`] of the viewport, clamped to the extents, through the
-/// same controller a drag or wheel tick drives. "Down"/"right" reveal the
-/// content below or to the right of the viewport on screen, so on a reversed
-/// axis (a reversed list, or a horizontal list under right-to-left text) they
-/// decrease the position instead of increasing it. The actions are advertised even at an extent,
-/// where they do nothing: the extents are only known after layout and the
-/// offset changes without a rebuild, so build cannot tell which way is open.
-fn scroll_semantics(controller: ScrollController, axis: Axis, reversed: bool) -> Semantics {
-    let semantics = Semantics::new().container(true);
-    let step = move |controller: &ScrollController, towards_end: bool| {
-        let viewport = controller.position().viewport_dimension();
-        let delta = viewport * A11Y_SCROLL_STEP;
-        let delta = if towards_end == reversed {
-            -delta
-        } else {
-            delta
-        };
-        let target = (controller.pixels() + delta).clamp(
-            controller.min_scroll_extent(),
-            controller.max_scroll_extent(),
-        );
-        if target != controller.pixels() {
-            controller.jump_to(target);
+/// Native range adjustment and directional actions share the gesture activity and physics path.
+fn scroll_semantics(
+    controller: ScrollController,
+    axis: Axis,
+    reversed: bool,
+    physics: SharedScrollPhysics,
+    fling: AnimationController,
+    post_frame: Option<PostFrameHandle>,
+    pipeline: Option<WeakPipelineCell>,
+) -> (Semantics, Semantics) {
+    let semantics = Semantics::new()
+        .container(true)
+        .role(crate::SemanticsRole::ScrollView)
+        .scroll_source(controller.position(), axis, reversed);
+    // AccessKit only admits native value writes on adjustable control roles.
+    let adjustment = Semantics::new()
+        .container(true)
+        .explicit_child_nodes(true)
+        .slider(true)
+        .label("Scroll position")
+        .scroll_source(controller.position(), axis, reversed);
+    let movement_controller = controller.clone();
+    let move_to: Rc<dyn Fn(f64)> = Rc::new(move |target| {
+        let position = movement_controller.position();
+        if !target.is_finite() {
+            return;
         }
+        let target = target.clamp(position.min_scroll_extent(), position.max_scroll_extent());
+        let old = movement_controller.pixels();
+        if target == old {
+            return;
+        }
+        let _ = fling.stop();
+        position.set_is_scrolling(true);
+        position.set_user_scroll_direction(if target > old {
+            ScrollDirection::Reverse
+        } else {
+            ScrollDirection::Forward
+        });
+        position.set_pixels(target);
+        let metrics = ScrollMetrics::from(&position)
+            .with_device_pixel_ratio(presentation_device_pixel_ratio(pipeline.as_ref()));
+        if let Some(simulation) = physics.create_ballistic_simulation(&metrics, 0.0) {
+            let _ = fling.animate_with(simulation);
+        } else if let Some(post_frame) = &post_frame {
+            post_frame.schedule(move |_| position.set_is_scrolling(false));
+        } else {
+            position.set_is_scrolling(false);
+        }
+    });
+    let step: Rc<dyn Fn(bool)> = {
+        let move_to = Rc::clone(&move_to);
+        Rc::new(move |increase| {
+            let delta = controller.position().viewport_dimension() * A11Y_SCROLL_STEP;
+            move_to(controller.pixels() + if increase { delta } else { -delta });
+        })
     };
-    let (forward, backward) = (controller.clone(), controller);
-    match axis {
+    let set = move_to;
+    let increase = Rc::clone(&step);
+    let decrease = Rc::clone(&step);
+    let adjustment = adjustment
+        .on_set_numeric_value(move |_cx, value| set(value))
+        .on_increase(move |_cx| increase(true))
+        .on_decrease(move |_cx| decrease(false));
+    let forward = Rc::clone(&step);
+    let semantics = match axis {
         Axis::Vertical => semantics
-            .on_scroll_down(move |_cx| step(&forward, true))
-            .on_scroll_up(move |_cx| step(&backward, false)),
+            .on_scroll_down(move |_cx| forward(!reversed))
+            .on_scroll_up(move |_cx| step(reversed)),
         Axis::Horizontal => semantics
-            .on_scroll_right(move |_cx| step(&forward, true))
-            .on_scroll_left(move |_cx| step(&backward, false)),
-    }
+            .on_scroll_right(move |_cx| forward(!reversed))
+            .on_scroll_left(move |_cx| step(reversed)),
+    };
+    (semantics, adjustment)
 }
+
 /// The part of a wheel tick that moves a scrollable along `axis`.
 ///
 /// A plain mouse wheel only reports vertical ticks. With Shift held, a tick

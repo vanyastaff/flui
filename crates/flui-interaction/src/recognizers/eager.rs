@@ -175,11 +175,12 @@ impl GestureRecognizer for EagerGestureRecognizer {
                 // A cancelled contact's arena has no winner: a self-driven
                 // arena is abandoned here, not swept, so a rival never accepts
                 // the cancelled contact.
-                let entry = self.state.tracked_entry();
+                let entry = self.state.take_tracked_entry();
+                self.state.set_primary_pointer(None);
+                self.state.clear_initial_contact();
                 if let Some(entry) = &entry {
                     withdraw_cancelled(entry, self.state.arena());
                 }
-                self.state.reject();
             }
             _ => {}
         }

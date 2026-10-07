@@ -223,3 +223,31 @@ pub(crate) fn select_all_defers_to_an_active_composition_and_recovers_after_comm
         "select all resumes after commit"
     );
 }
+
+pub(crate) fn paste_rechecks_focus_after_committing_composition() {
+    let controller = TextEditingController::new();
+    let node = FocusNode::new();
+    let retiring = node.clone();
+    let harness = crate::common::harness::mount_with_ime(
+        EditableText::new(controller.clone(), node.clone())
+            .on_changed(move |_cx, _text| retiring.unfocus()),
+    );
+    node.request_focus();
+    harness.clipboard().write_text("paste".into());
+    harness.dispatch_ime(&flui_platform_api::ImeEvent::Preedit {
+        text: "composition".into(),
+        cursor: None,
+    });
+    assert!(
+        node.has_primary_focus(),
+        "preedit does not report a committed edit"
+    );
+    harness
+        .focus_manager()
+        .dispatch_key_event(&chord("v", command()));
+    assert_eq!(
+        controller.text(),
+        "composition",
+        "the composition committed, but an unfocused field cannot paste"
+    );
+}

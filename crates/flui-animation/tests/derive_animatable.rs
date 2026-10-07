@@ -61,8 +61,32 @@ fn derived_type_is_a_keyframe_value() {
 #[test]
 fn two_way_converter_derive_contract() {
     crate::run_table(&[
+        ("finite extreme lerp", derived_extreme_lerp),
         ("vector round trip", named_struct_round_trips_through_vector),
         ("componentwise lerp", derived_lerp_is_componentwise),
         ("keyframe value", derived_type_is_a_keyframe_value),
     ]);
+}
+
+fn derived_extreme_lerp() {
+    use flui_foundation::geometry::MaybeLerp;
+    let a = Translation {
+        x: 1e308,
+        y: -0.0,
+        z: 2.0,
+    };
+    let b = Translation {
+        x: -1e308,
+        y: 0.0,
+        z: 4.0,
+    };
+    let p = Pair(1e308, -0.0);
+    let q = Pair(-1e308, 0.0);
+    for (t, expected) in [(0.0, 1e308), (0.25, 5e307), (0.5, 0.0), (1.0, -1e308)] {
+        assert_eq!(a.lerp_to(&b, t).x, expected);
+        assert_eq!(p.lerp_to(&q, t).0, expected);
+        assert_eq!(Pair::maybe_lerp(&p, &q, t).expect("compatible").0, expected);
+    }
+    assert_eq!(a.lerp_to(&b, 0.0).y.to_bits(), (-0.0_f64).to_bits());
+    assert!(p.lerp_to(&q, f64::NAN).0.is_nan());
 }

@@ -1,7 +1,7 @@
 //! [`SingleActivator`] and [`CallbackShortcuts`] — keyboard shortcuts riding
 //! the leaf→root key dispatch.
 //!
-//! ADR-0023. A shortcut widget is, mechanically, a
+//! ADR-0023 and ADR-0156. A shortcut widget is, mechanically, a
 //! `Focus(canRequestFocus: false, onKeyEvent: …)` wrapper: it sees a key only
 //! when every `Focus` below it — most importantly the focused field —
 //! *ignored* the event and the ADR-0023 walk bubbled it up.
@@ -47,7 +47,7 @@ pub type ShortcutCallback = Rc<dyn Fn(&mut EventCx<'_>)>;
 // SingleActivator
 // ============================================================================
 
-/// A shortcut trigger: one logical key plus an **exact** set of modifiers.
+/// A shortcut trigger: one logical key plus a modifier policy.
 ///
 /// `SingleActivator::character("c").control()` matches Ctrl+C and *only*
 /// Ctrl+C: an event with an extra Shift held does not match, because each
@@ -58,19 +58,10 @@ pub type ShortcutCallback = Rc<dyn Fn(&mut EventCx<'_>)>;
 pub struct SingleActivator {
     trigger: Key,
     control: bool,
-    shift: ShiftRule,
+    shift: Option<bool>,
     alt: bool,
     meta: bool,
     include_repeats: bool,
-}
-
-/// How an activator treats the Shift modifier.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ShiftRule {
-    Released,
-    Held,
-    /// Shift is part of producing the character, not a chord.
-    Either,
 }
 
 impl SingleActivator {
@@ -80,7 +71,7 @@ impl SingleActivator {
         Self {
             trigger,
             control: false,
-            shift: ShiftRule::Released,
+            shift: Some(false),
             alt: false,
             meta: false,
             include_repeats: true,
@@ -91,6 +82,16 @@ impl SingleActivator {
     #[must_use]
     pub fn character(character: impl Into<String>) -> Self {
         Self::new(Key::Character(character.into()))
+    }
+
+    /// A character trigger independent of the Shift key needed to produce it.
+    /// Control, Alt and Meta still match exactly. Named keys always use exact Shift.
+    #[must_use]
+    pub fn character_ignoring_shift(character: impl Into<String>) -> Self {
+        Self {
+            shift: None,
+            ..Self::character(character)
+        }
     }
 
     /// An activator for a named (non-character) key — `NamedKey::Escape`.
@@ -109,20 +110,7 @@ impl SingleActivator {
     /// Require the Shift modifier (`:497`).
     #[must_use]
     pub fn shift(mut self) -> Self {
-        self.shift = ShiftRule::Held;
-        self
-    }
-
-    /// Match the trigger character whether or not Shift is held.
-    ///
-    /// For a character that Shift *produces* on some layouts (`?`, `+`, `!`)
-    /// the exact-Shift rule makes `character("?")` unreachable on a US
-    /// keyboard, where `?` is Shift+/. With this, the shortcut follows the
-    /// character the user typed on any layout; the other modifiers still
-    /// match exactly, so Ctrl+`?` stays a different shortcut.
-    #[must_use]
-    pub fn ignoring_shift(mut self) -> Self {
-        self.shift = ShiftRule::Either;
+        self.shift = Some(true);
         self
     }
 
@@ -161,11 +149,9 @@ impl SingleActivator {
             && (self.include_repeats || !event.repeat)
             && trigger_matches(&self.trigger, &event.key)
             && event.modifiers.ctrl() == self.control
-            && match self.shift {
-                ShiftRule::Released => !event.modifiers.shift(),
-                ShiftRule::Held => event.modifiers.shift(),
-                ShiftRule::Either => true,
-            }
+            && self
+                .shift
+                .is_none_or(|required| event.modifiers.shift() == required)
             && event.modifiers.alt() == self.alt
             && event.modifiers.meta() == self.meta
     }

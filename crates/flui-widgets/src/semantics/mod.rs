@@ -170,6 +170,11 @@ pub struct Semantics {
     configuration: SemanticsConfiguration,
     event_actions: EventActions,
     options: SemanticsOptions,
+    scroll: Option<(
+        flui_rendering::view::ScrollPosition,
+        flui_foundation::geometry::Axis,
+        bool,
+    )>,
     child: Child,
 }
 
@@ -177,6 +182,7 @@ impl std::fmt::Debug for Semantics {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Semantics")
             .field("configuration", &self.configuration)
+            .field("scroll", &self.scroll)
             .field("event_actions", &self.event_actions)
             .field("options", &self.options)
             .field("child", &self.child)
@@ -190,6 +196,7 @@ impl Default for Semantics {
             configuration: SemanticsConfiguration::new(),
             event_actions: EventActions::default(),
             options: SemanticsOptions::default(),
+            scroll: None,
             child: Child::empty(),
         }
     }
@@ -215,6 +222,16 @@ impl Semantics {
             configuration,
             ..Self::default()
         }
+    }
+
+    pub(crate) fn scroll_source(
+        mut self,
+        position: flui_rendering::view::ScrollPosition,
+        axis: flui_foundation::geometry::Axis,
+        reversed: bool,
+    ) -> Self {
+        self.scroll = Some((position, axis, reversed));
+        self
     }
 
     /// Set whether this widget introduces a new semantics node.
@@ -857,6 +874,7 @@ impl RenderView for Semantics {
                 .with_block_user_actions(
                     self.options.contains(SemanticsOptions::BLOCK_USER_ACTIONS),
                 );
+        let _impact = render_object.set_scroll_source(self.scroll.clone());
         let _none = render_object.set_action_route(route);
         render_object
     }
@@ -871,6 +889,7 @@ impl RenderView for Semantics {
         let _previous = render_object.set_action_route(route);
         let mut impact = flui_rendering::RenderUpdateImpact::NONE;
         impact |= render_object.set_configuration(configuration);
+        impact |= render_object.set_scroll_source(self.scroll.clone());
         impact |= render_object.set_container(self.options.contains(SemanticsOptions::CONTAINER));
         impact |= render_object.set_explicit_child_nodes(
             self.options

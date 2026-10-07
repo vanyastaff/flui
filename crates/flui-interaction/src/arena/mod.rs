@@ -395,6 +395,20 @@ impl GestureArenaEntry {
             .resolve_entry(self.pointer, &slot, member, disposition);
     }
 
+    /// Withdraw an already locally retired member without rejecting its later contact.
+    pub(crate) fn reject_without_self(&self) {
+        let (Some(slot), Some(member)) = (self.slot.upgrade(), self.member.upgrade()) else {
+            return;
+        };
+        self.arena.resolve_entry_notifying(
+            self.pointer,
+            &slot,
+            member,
+            GestureDisposition::Rejected,
+            Some(&self.member),
+        );
+    }
+
     /// Hold this exact arena generation against a pointer-up sweep.
     pub fn hold(&self) {
         if self.arena.owner_closed.load(Ordering::Acquire) {
@@ -439,6 +453,23 @@ impl GestureArenaEntry {
         if let Some(slot) = self.slot.upgrade() {
             self.arena.abandon_slot(&slot);
         }
+    }
+
+    /// Cancel the contact after this member has retired its local state.
+    /// Its own stale rejection must not reach a reentrantly admitted contact.
+    pub(crate) fn abandon_without_self(&self) {
+        if self.arena.owner_closed.load(Ordering::Acquire) {
+            return;
+        }
+        let Some(slot) = self.slot.upgrade() else {
+            return;
+        };
+        if !self.arena.remove_exact_slot(slot.pointer, &slot) {
+            return;
+        }
+        let mut pending = slot.data.lock().resolve(None);
+        pending.retain(|(member, _)| !Weak::ptr_eq(&Arc::downgrade(member), &self.member));
+        GestureArena::dispatch_pending(pending, slot.pointer);
     }
 
     /// Get the pointer ID for this entry.
@@ -1210,6 +1241,17 @@ impl GestureArena {
         member: Arc<dyn GestureArenaMember>,
         disposition: GestureDisposition,
     ) {
+        self.resolve_entry_notifying(pointer, slot, member, disposition, None);
+    }
+
+    fn resolve_entry_notifying(
+        &self,
+        pointer: PointerId,
+        slot: &Arc<ArenaSlot>,
+        member: Arc<dyn GestureArenaMember>,
+        disposition: GestureDisposition,
+        excluded: Option<&Weak<dyn GestureArenaMember>>,
+    ) {
         if self.owner_closed.load(Ordering::Acquire) {
             let mut failure = ClosePanic::for_rejection(self.close_mode.mode());
             failure.retire(crate::retain::Owned(member));
@@ -1230,6 +1272,9 @@ impl GestureArena {
             }
         };
         pending.extend(self.collect_follow_up(pointer, slot, follow_up));
+        if let Some(excluded) = excluded {
+            pending.retain(|(member, _)| !Weak::ptr_eq(&Arc::downgrade(member), excluded));
+        }
         let candidate_failure = Self::retire_candidate(candidate);
         Self::dispatch_pending(pending, pointer);
         if let Some(payload) = candidate_failure {

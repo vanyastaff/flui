@@ -1122,6 +1122,8 @@ impl EditableTextState {
             return;
         }
         let action = ClipboardTextAction {
+            attachment: Rc::clone(&self.focus_attachment),
+            enabled: Rc::clone(&self.accepts_semantics_actions),
             controller: Rc::clone(&self.controller),
             focus_node: Rc::clone(&self.observed_focus_node),
             obscure: Rc::clone(&self.obscure),
@@ -1336,6 +1338,8 @@ impl CompositionCommit {
 /// cells at key time, so a swapped controller or node is the one acted on.
 #[derive(Clone)]
 struct ClipboardTextAction {
+    attachment: Rc<RefCell<Option<Rc<FocusAttachment>>>>,
+    enabled: Rc<Cell<bool>>,
     controller: Rc<RefCell<TextEditingController>>,
     /// The field's current node; its `can_request_focus` tracks `enabled`.
     focus_node: Rc<RefCell<Rc<FocusNode>>>,
@@ -1348,6 +1352,14 @@ struct ClipboardTextAction {
 }
 
 impl ClipboardTextAction {
+    fn admits_paste(&self) -> bool {
+        let attachment = self.attachment.borrow().clone();
+        let node = self.focus_node.borrow().clone();
+        self.enabled.get()
+            && attachment.is_some_and(|a| a.is_attached())
+            && node.has_primary_focus()
+            && node.can_request_focus()
+    }
     fn enabled(&self) -> bool {
         self.focus_node.borrow().can_request_focus()
     }
@@ -1400,11 +1412,21 @@ impl Action<PasteTextIntent> for ClipboardTextAction {
         };
         let mut calls = OwnerCalls::new();
         self.commit.run(&mut calls);
+        if !self.admits_paste() {
+            calls.resume();
+            return ActionOutcome::NotPerformed;
+        }
+        let authority = self.clone();
         let controller = self.controller();
         let edits = self.edits.clone();
         // May complete before `read_text` returns: nothing is borrowed here.
         calls.run(|| {
             clipboard.read_text(move |text| {
+                if !authority.admits_paste()
+                    || !authority.controller().is_same_controller(&controller)
+                {
+                    return;
+                }
                 let Some(text) = text else {
                     return;
                 };

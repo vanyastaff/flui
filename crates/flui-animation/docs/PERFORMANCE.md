@@ -63,8 +63,10 @@ idle machine would show.
 
 The cubic-curve solve (`EaseInOut` and every other `Cubic`) inverts the
 bezier x-coordinate to find the parameter, using Newton-Raphson with a
-bisection fallback (the WebKit `UnitBezier` solver), which converges in 2–4
-iterations on the common path. Colour interpolation now uses premultiplied
+bisection fallback, the same broad inversion structure as
+[WebKit UnitBezier](https://github.com/WebKit/WebKit/blob/029da7d3d074a75a24c2413e98b183a8bbfcfb62/Source/WebCore/platform/graphics/UnitBezier.h).
+FLUI terminates using an output-error bound; WebKit uses an x residual.
+The timings above do not measure iteration counts. Colour interpolation now uses premultiplied
 Oklab throughout (ADR-0149). Earlier sRGB and separate Oklab-tween timings
 are omitted because those APIs and the colour-spring representation changed;
 run the current colour cases in `animation_bench` to measure the new paths.

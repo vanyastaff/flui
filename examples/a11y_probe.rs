@@ -48,6 +48,7 @@ struct CounterState {
     count: StateCell<usize>,
     expanded: StateCell<bool>,
     numeric: StateCell<f64>,
+    scroll: flui::widgets::ScrollController,
 }
 
 impl StatefulView for Counter {
@@ -58,6 +59,7 @@ impl StatefulView for Counter {
             count: StateCell::new(0),
             expanded: StateCell::new(false),
             numeric: StateCell::new(0.0),
+            scroll: flui::widgets::ScrollController::new(),
         }
     }
 }
@@ -133,6 +135,15 @@ impl ViewState<Counter> for CounterState {
                             .child(Text::new(range_text))
                     ),
                     Text::new(format!("Published range value: {}", self.numeric.get())),
+                    SizedBox::new(220.0, 80.0).child(
+                        flui::widgets::Scrollable::new()
+                            .controller(self.scroll.clone())
+                            .child(
+                                Semantics::new()
+                                    .label("Scrollable content")
+                                    .child(SizedBox::new(220.0, 1000.0))
+                            )
+                    ),
                 ])
                 .main_axis_alignment(MainAxisAlignment::Center),
             ),
@@ -159,7 +170,7 @@ fn main() {
     .with_config(
         AppConfig::new()
             .with_title("FLUI Accessibility Probe")
-            .with_size(480, 420),
+            .with_size(480, 560),
     )
     .with_startup_window(StartupWindow::Open)
     .run();

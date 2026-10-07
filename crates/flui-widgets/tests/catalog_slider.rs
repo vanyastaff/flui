@@ -312,6 +312,25 @@ pub(crate) fn slider_focus_keys_and_semantic_actions_share_controlled_proposals(
         assert!(key(&laid, named));
     }
     assert_eq!(&*log.borrow(), &[35.0, 15.0, 0.0, 100.0]);
+    for modifiers in [
+        flui_interaction::events::Modifiers::empty(),
+        flui_interaction::events::Modifiers::SHIFT,
+    ] {
+        assert!(laid.focus_manager().dispatch_key_event(&KeyEvent {
+            state: KeyState::Down,
+            key: Key::Character("+".into()),
+            modifiers,
+            ..KeyEvent::default()
+        }));
+        assert_eq!(log.borrow().last(), Some(&35.0));
+    }
+    assert!(!laid.focus_manager().dispatch_key_event(&KeyEvent {
+        state: KeyState::Down,
+        key: Key::Named(NamedKey::ArrowRight),
+        modifiers: flui_interaction::events::Modifiers::SHIFT,
+        ..KeyEvent::default()
+    }));
+    log.borrow_mut().truncate(4);
     let listener = laid
         .accessibility_action_listener()
         .expect("platform action listener");
