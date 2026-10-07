@@ -372,12 +372,14 @@ impl PlatformToUi {
                         );
                     }
                 }
-                realm.set_device_pixel_ratio(scale_factor);
-                // Addressed write: dropped when the presentation this resize
-                // was stamped for is gone by delivery time — see
-                // `UiRealm::media_query_for`. Everything else in this arm
-                // (surface applier, device pixel ratio, redraw) is realm-wide
-                // and runs either way.
+                // Addressed writes: the ratio and the media query belong to
+                // the window that reported them (windows on monitors with
+                // different scales keep their own), and both are dropped when
+                // the presentation this resize was stamped for is gone by
+                // delivery time — see `UiRealm::media_query_for`. The rest of
+                // this arm (surface applier, redraw) is realm-wide and runs
+                // either way.
+                realm.set_device_pixel_ratio_for(presentation_id, scale_factor);
                 if let Some(source) = realm.media_query_for(presentation_id) {
                     source.update(|data| {
                         data.size = size;

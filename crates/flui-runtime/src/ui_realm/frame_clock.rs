@@ -4,6 +4,7 @@ use super::UiRealm;
 use crate::presentation::PresentationState;
 use crate::renderer_binding::RenderingBinding;
 use flui_animation::Vsync;
+use flui_foundation::PresentationId;
 use flui_platform_api::HapticFeedback;
 use flui_rendering::binding::RendererBinding as _;
 use std::sync::Arc;
@@ -418,14 +419,24 @@ impl UiRealm {
             .perform_haptic_feedback(feedback);
     }
 
-    /// Apply a new device pixel ratio to this realm's render pipeline (the
-    /// resize path; construction applies the initial ratio directly).
-    pub fn set_device_pixel_ratio(&self, device_pixel_ratio: f64) {
-        self.presentations
-            .primary()
+    /// Apply a new device pixel ratio to presentation `id`'s render pipeline
+    /// and semantics owner (the resize path; construction applies the
+    /// initial ratio directly).
+    ///
+    /// Each window has its own scale (monitors differ), so the ratio reaches
+    /// only the presentation whose window reported it; its siblings keep
+    /// theirs. Returns `false`, changing nothing, when `id` names no
+    /// presentation this realm hosts — a close for it was delivered first,
+    /// the same interleaving [`Self::media_query_for`] drops.
+    pub fn set_device_pixel_ratio_for(&self, id: PresentationId, device_pixel_ratio: f64) -> bool {
+        let Some(presentation) = self.presentations.get(id) else {
+            return false;
+        };
+        presentation
             .renderer()
             .root_pipeline_owner()
             .with_mut(|owner| owner.set_device_pixel_ratio(device_pixel_ratio));
+        true
     }
 
     /// Check if there is pending work in ANY presentation this realm hosts:
