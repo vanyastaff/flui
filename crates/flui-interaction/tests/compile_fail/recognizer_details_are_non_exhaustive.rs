@@ -2,7 +2,7 @@ use flui_foundation::geometry::Offset;
 use flui_interaction::{
     DragDownDetails, DragEndDetails, DragStartDetails, DragUpdateDetails, GestureEndReason,
     PointerKind, Velocity,
-    recognizers::{ScaleEndDetails, ScaleStartDetails, ScaleUpdateDetails},
+    recognizers::scale::{ScaleEndDetails, ScaleStartDetails, ScaleUpdateDetails},
 };
 
 fn main() {
