@@ -7,7 +7,9 @@ use std::sync::Arc;
 
 use flui_foundation::geometry::Offset;
 use flui_foundation::{ManualClock, PresentationId};
-use flui_interaction::events::{PointerEvent, PointerType, make_down_event, make_move_event};
+use flui_interaction::events::{
+    PointerEvent, PointerType, make_down_event, make_move_event, make_up_event,
+};
 use flui_interaction::{GestureArenaMember, PointerId};
 use flui_platform_api::{PlatformInput, PlatformWindow, WindowExecutionState};
 use flui_rendering::hit_testing::HitTestBehavior;
@@ -168,6 +170,57 @@ pub(crate) fn window_blur_keeps_a_queued_hover() {
 
 pub(crate) fn host_pause_discards_a_hover_held_before_the_first_commit() {
     queued_hover_after_transition(true, true);
+}
+
+pub(crate) fn host_pause_keeps_a_completed_held_tap_for_the_first_commit() {
+    let mut realm = UiRealm::for_test();
+    let primary = realm.presentation_id();
+    let downs = Rc::new(Cell::new(0));
+    let ups = Rc::new(Cell::new(0));
+    let down = downs.clone();
+    let up = ups.clone();
+    realm
+        .attach_root_widget(
+            &Listener::new()
+                .behavior(HitTestBehavior::Opaque)
+                .on_pointer_down(move |_, _| down.set(down.get() + 1))
+                .on_pointer_up(move |_, _| up.set(up.get() + 1))
+                .child(SizedBox::new(40.0, 40.0)),
+        )
+        .expect("root attaches");
+    realm.synchronize_window_snapshot(primary, WindowExecutionState::Running, true, true);
+    realm.defer_first_frame();
+    pump(&mut realm);
+    dispatch(
+        &realm,
+        primary,
+        make_down_event(Offset::new(4.0, 6.0), PointerType::Touch),
+    );
+    dispatch(
+        &realm,
+        primary,
+        make_up_event(Offset::new(4.0, 6.0), PointerType::Touch),
+    );
+    assert_eq!(
+        (downs.get(), ups.get()),
+        (0, 0),
+        "the completed tap waits for commit"
+    );
+    realm.update_host_lifecycle(AppLifecycleState::Paused);
+    realm.update_host_lifecycle(AppLifecycleState::Resumed);
+    realm.allow_first_frame();
+    pump(&mut realm);
+    assert_eq!(
+        (downs.get(), ups.get()),
+        (1, 1),
+        "a completed tap remains accepted work across suspension"
+    );
+    pump(&mut realm);
+    assert_eq!(
+        (downs.get(), ups.get()),
+        (1, 1),
+        "the completed tap replays exactly once"
+    );
 }
 
 fn motion_probe(count: Rc<Cell<usize>>, fail: Rc<Cell<bool>>, message: &'static str) -> Listener {
