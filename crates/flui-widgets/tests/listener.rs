@@ -50,8 +50,8 @@ pub(crate) fn listener_routes_down_and_up_to_their_own_callbacks() {
 }
 
 pub(crate) fn listener_admission_keeps_terminal_delivery_and_weak_ownership() {
-    use std::cell::RefCell;
     use flui_interaction::{CancelOutcome, GestureArenaMember, GestureRecognizer, PointerId};
+    use std::cell::RefCell;
 
     struct ContactObserver(Rc<RefCell<Vec<&'static str>>>);
     impl GestureArenaMember for ContactObserver {
@@ -70,7 +70,9 @@ pub(crate) fn listener_admission_keeps_terminal_delivery_and_weak_ownership() {
                 _ => "other",
             });
         }
-        fn cancel(&self) -> CancelOutcome { CancelOutcome::Idle }
+        fn cancel(&self) -> CancelOutcome {
+            CancelOutcome::Idle
+        }
     }
 
     let events = Rc::new(RefCell::new(Vec::new()));
@@ -95,7 +97,11 @@ pub(crate) fn listener_admission_keeps_terminal_delivery_and_weak_ownership() {
     drop(recognizer);
     laid.dispatch_pointer_down(40.0, 40.0);
     laid.dispatch_pointer_up(40.0, 40.0);
-    assert_eq!(&*events.borrow(), &["raw"], "the cached handler owns no recognizer");
+    assert_eq!(
+        &*events.borrow(),
+        &["raw"],
+        "the cached handler owns no recognizer"
+    );
 }
 
 pub(crate) fn listener_raw_observer_panic_still_delivers_the_recognizer_event() {
@@ -106,9 +112,13 @@ pub(crate) fn listener_raw_observer_panic_still_delivers_the_recognizer_event() 
         fn reject_gesture(&self, _: PointerId) {}
     }
     impl GestureRecognizer for Observer {
-        fn add_pointer(&self, _: PointerDispatch<'_>) { self.0.set(self.0.get() + 1); }
+        fn add_pointer(&self, _: PointerDispatch<'_>) {
+            self.0.set(self.0.get() + 1);
+        }
         fn handle_event(&self, _: PointerDispatch<'_>) {}
-        fn cancel(&self) -> CancelOutcome { CancelOutcome::Idle }
+        fn cancel(&self) -> CancelOutcome {
+            CancelOutcome::Idle
+        }
     }
     let delivered = Rc::new(Cell::new(0));
     let recognizer = Rc::new(Observer(Rc::clone(&delivered)));
@@ -118,7 +128,9 @@ pub(crate) fn listener_raw_observer_panic_still_delivers_the_recognizer_event() 
         Listener::new()
             .behavior(HitTestBehavior::Opaque)
             .on_pointer_down(move |_, _| {
-                if raw.replace(false) { panic!("raw observer first failure"); }
+                if raw.replace(false) {
+                    panic!("raw observer first failure");
+                }
             })
             .recognizer(&recognizer)
             .child(SizedBox::new(80.0, 80.0)),
@@ -126,9 +138,17 @@ pub(crate) fn listener_raw_observer_panic_still_delivers_the_recognizer_event() 
     );
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         laid.dispatch_pointer_down(40.0, 40.0);
-    })).expect_err("the raw callback's first panic leaves dispatch");
-    assert_eq!(failure.downcast_ref::<&str>(), Some(&"raw observer first failure"));
-    assert_eq!(delivered.get(), 1, "accepted dispatch reaches attachments despite the observer failure");
+    }))
+    .expect_err("the raw callback's first panic leaves dispatch");
+    assert_eq!(
+        failure.downcast_ref::<&str>(),
+        Some(&"raw observer first failure")
+    );
+    assert_eq!(
+        delivered.get(),
+        1,
+        "accepted dispatch reaches attachments despite the observer failure"
+    );
     laid.dispatch_pointer_up(40.0, 40.0);
     laid.dispatch_pointer_down(40.0, 40.0);
     laid.dispatch_pointer_up(40.0, 40.0);

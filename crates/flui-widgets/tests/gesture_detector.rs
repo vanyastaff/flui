@@ -11,16 +11,19 @@ use flui_painting::styling::Color;
 use flui_widgets::{ColoredBox, GestureDetector};
 
 pub(crate) fn clearing_pan_callbacks_mid_drag_still_finishes_the_drag() {
-    use std::{cell::Cell, rc::Rc};
     use crate::common::{ProbeSignals, SignalProbe};
     use flui_view::SignalWriteExt;
+    use std::{cell::Cell, rc::Rc};
 
     let enabled = Rc::new(Cell::new(true));
     let starts = Rc::new(Cell::new(0));
     let updates = Rc::new(Cell::new(0));
     let ends = Rc::new(Cell::new(0));
     let (gate, started, updated, ended) = (
-        Rc::clone(&enabled), Rc::clone(&starts), Rc::clone(&updates), Rc::clone(&ends),
+        Rc::clone(&enabled),
+        Rc::clone(&starts),
+        Rc::clone(&updates),
+        Rc::clone(&ends),
     );
     let signal = Rc::new(Cell::new(None));
     let remembered = Rc::clone(&signal);
@@ -28,12 +31,15 @@ pub(crate) fn clearing_pan_callbacks_mid_drag_still_finishes_the_drag() {
         remembered.set(Some(count));
         let detector = GestureDetector::new();
         let detector = if gate.get() {
-            let (started, updated, ended) = (Rc::clone(&started), Rc::clone(&updated), Rc::clone(&ended));
+            let (started, updated, ended) =
+                (Rc::clone(&started), Rc::clone(&updated), Rc::clone(&ended));
             detector
                 .on_pan_start(move |_, _| started.set(started.get() + 1))
                 .on_pan_update(move |_, _| updated.set(updated.get() + 1))
                 .on_pan_end(move |_, _| ended.set(ended.get() + 1))
-        } else { detector };
+        } else {
+            detector
+        };
         detector.child(ColoredBox::new(Color::rgb(10, 20, 30)))
     });
     let mut laid = lay_out(probe.view(), tight(100.0, 100.0));
@@ -41,16 +47,24 @@ pub(crate) fn clearing_pan_callbacks_mid_drag_still_finishes_the_drag() {
     laid.dispatch_pointer_move(50.0, 50.0);
     assert_eq!(starts.get(), 1);
     enabled.set(false);
-    probe.write(|cx| signal.get().expect("mounted probe").set(cx, 1)).expect("write");
+    probe
+        .write(|cx| signal.get().expect("mounted probe").set(cx, 1))
+        .expect("write");
     laid.pump();
     laid.dispatch_pointer_up(50.0, 50.0);
     assert_eq!(ends.get(), 0, "removed callbacks are not invoked");
     enabled.set(true);
-    probe.write(|cx| signal.get().expect("mounted probe").set(cx, 2)).expect("write");
+    probe
+        .write(|cx| signal.get().expect("mounted probe").set(cx, 2))
+        .expect("write");
     laid.pump();
     let before = updates.get();
     laid.dispatch_pointer_move(50.0, 60.0);
-    assert_eq!(updates.get(), before, "the released contact cannot resume when callbacks return");
+    assert_eq!(
+        updates.get(),
+        before,
+        "the released contact cannot resume when callbacks return"
+    );
     laid.dispatch_pointer_down(50.0, 10.0);
     laid.dispatch_pointer_move(50.0, 50.0);
     laid.dispatch_pointer_up(50.0, 50.0);
@@ -59,16 +73,20 @@ pub(crate) fn clearing_pan_callbacks_mid_drag_still_finishes_the_drag() {
 }
 
 pub(crate) fn unmount_mid_drag_cancels_once_and_hands_the_arena_to_the_rival() {
-    use std::{cell::Cell, rc::Rc};
     use crate::common::{ProbeSignals, SignalProbe};
     use flui_view::{IntoView, SignalWriteExt, ViewExt};
+    use std::{cell::Cell, rc::Rc};
 
     let mounted = Rc::new(Cell::new(true));
     let cancelled = Rc::new(Cell::new(0));
     let rival_starts = Rc::new(Cell::new(0));
     let rival_ends = Rc::new(Cell::new(0));
     let signal = Rc::new(Cell::new(None));
-    let (gate, cancels, remembered) = (Rc::clone(&mounted), Rc::clone(&cancelled), Rc::clone(&signal));
+    let (gate, cancels, remembered) = (
+        Rc::clone(&mounted),
+        Rc::clone(&cancelled),
+        Rc::clone(&signal),
+    );
     let probe = SignalProbe::new(move |ProbeSignals { count, .. }| {
         remembered.set(Some(count));
         let child = ColoredBox::new(Color::rgb(10, 20, 30));
@@ -79,8 +97,12 @@ pub(crate) fn unmount_mid_drag_cancels_once_and_hands_the_arena_to_the_rival() {
                     panic!("the retired contender must not start")
                 })
                 .on_horizontal_drag_cancel(move |_| cancels.set(cancels.get() + 1))
-                .child(child).into_view().boxed()
-        } else { child.into_view().boxed() }
+                .child(child)
+                .into_view()
+                .boxed()
+        } else {
+            child.into_view().boxed()
+        }
     });
     let (started, ended) = (Rc::clone(&rival_starts), Rc::clone(&rival_ends));
     let mut laid = lay_out(
@@ -92,14 +114,28 @@ pub(crate) fn unmount_mid_drag_cancels_once_and_hands_the_arena_to_the_rival() {
     );
     laid.dispatch_pointer_down(10.0, 50.0);
     mounted.set(false);
-    probe.write(|cx| signal.get().expect("mounted probe").set(cx, 1)).expect("write");
+    probe
+        .write(|cx| signal.get().expect("mounted probe").set(cx, 1))
+        .expect("write");
     laid.pump();
-    assert_eq!(cancelled.get(), 1, "unmount explicitly cancels the admitted contender");
+    assert_eq!(
+        cancelled.get(),
+        1,
+        "unmount explicitly cancels the admitted contender"
+    );
     laid.dispatch_pointer_move(60.0, 50.0);
     laid.dispatch_pointer_up(60.0, 50.0);
-    assert_eq!(rival_starts.get(), 1, "the remaining live recognizer wins the contact");
+    assert_eq!(
+        rival_starts.get(),
+        1,
+        "the remaining live recognizer wins the contact"
+    );
     assert_eq!(rival_ends.get(), 1);
-    assert_eq!(cancelled.get(), 1, "the cached terminal route cannot cancel the retired owner twice");
+    assert_eq!(
+        cancelled.get(),
+        1,
+        "the cached terminal route cannot cancel the retired owner twice"
+    );
 }
 
 pub(crate) fn gesture_detector_fires_on_tap_for_a_down_up_on_the_child() {

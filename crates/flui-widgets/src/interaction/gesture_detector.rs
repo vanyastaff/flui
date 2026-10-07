@@ -11,7 +11,7 @@ use std::{
 use flui_interaction::{
     DoubleTapDetails, DoubleTapGestureRecognizer, DragAxis, DragDownDetails, DragEndDetails,
     DragGestureRecognizer, DragStartDetails, DragUpdateDetails, GestureRecognizer,
-    LongPressGestureRecognizer, PointerDispatch, TapGestureRecognizer,
+    LongPressGestureRecognizer, TapGestureRecognizer, cancel_all,
 };
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_view::prelude::*;
@@ -72,8 +72,9 @@ type HorizontalDragCancelHandler = Rc<dyn Fn(&mut EventCx<'_>)>;
 ///   note on why the two are mutually exclusive on one detector.
 ///
 /// Only the recognizers whose callback is set participate in the arena for a
-/// contact (a recognizer is constructed only when its callback
-/// is set). They compete in one arena: a quick down→up resolves to the tap
+/// contact. Admission reads the current callbacks on Down; every admitted
+/// contact still receives its terminal event if those callbacks change.
+/// They compete in one arena: a quick down→up resolves to the tap
 /// (the front member), a hold resolves to the long-press, a drag past slop hands
 /// off to whichever drag-family recognizer is configured — so at most one
 /// gesture fires per contact.
@@ -479,7 +480,7 @@ struct Recognizers {
 }
 
 /// Persistent gesture state: the recognizers + their shared arena survive
-/// rebuilds (the pointer stream is stateful), and are disposed on unmount.
+/// rebuilds (the pointer stream is stateful), and are cancelled on unmount.
 ///
 /// `create_state` allocates only the live callback slots; the recognizers are
 /// built in `init_state` (which has the `BuildContext` needed to read the
@@ -719,30 +720,33 @@ impl ViewState<GestureDetector> for GestureDetectorState {
             let secondary_slot = Rc::clone(&self.secondary_tap_slot);
             let primary_writer = writer.clone();
             let secondary_writer = writer.clone();
-            TapGestureRecognizer::new(arena.clone())
-                .with_on_tap(move |_details| {
+            TapGestureRecognizer::builder(arena.clone())
+                .on_tap(move |_details| {
                     let handler = primary_slot.borrow().clone();
                     if let Some(handler) = handler {
                         primary_writer.write(|cx| handler(cx));
                     }
                 })
-                .with_on_secondary_tap(move |_details| {
+                .on_secondary_tap(move |_details| {
                     let handler = secondary_slot.borrow().clone();
                     if let Some(handler) = handler {
                         secondary_writer.write(|cx| handler(cx));
                     }
                 })
+                .build()
         };
 
         let long_press = {
             let slot = Rc::clone(&self.long_press_slot);
             let writer = writer.clone();
-            LongPressGestureRecognizer::new(arena.clone()).with_on_long_press(move || {
-                let handler = slot.borrow().clone();
-                if let Some(handler) = handler {
-                    writer.write(|cx| handler(cx));
-                }
-            })
+            LongPressGestureRecognizer::builder(arena.clone())
+                .on_long_press(move || {
+                    let handler = slot.borrow().clone();
+                    if let Some(handler) = handler {
+                        writer.write(|cx| handler(cx));
+                    }
+                })
+                .build()
         };
 
         let double_tap = {
@@ -750,19 +754,20 @@ impl ViewState<GestureDetector> for GestureDetectorState {
             let down_slot = Rc::clone(&self.double_tap_down_slot);
             let tap_writer = writer.clone();
             let down_writer = writer.clone();
-            DoubleTapGestureRecognizer::new(arena.clone())
-                .with_on_double_tap(move |_details| {
+            DoubleTapGestureRecognizer::builder(arena.clone())
+                .on_double_tap(move |_details| {
                     let handler = slot.borrow().clone();
                     if let Some(handler) = handler {
                         tap_writer.write(|cx| handler(cx));
                     }
                 })
-                .with_on_double_tap_down(move |details| {
+                .on_double_tap_down(move |details| {
                     let handler = down_slot.borrow().clone();
                     if let Some(handler) = handler {
                         down_writer.write(|cx| handler(cx, details));
                     }
                 })
+                .build()
         };
 
         let drag = {
@@ -772,25 +777,26 @@ impl ViewState<GestureDetector> for GestureDetectorState {
             let start_writer = writer.clone();
             let update_writer = writer.clone();
             let end_writer = writer.clone();
-            DragGestureRecognizer::new(arena.clone(), DragAxis::Free)
-                .with_on_start(move |details| {
+            DragGestureRecognizer::builder(arena.clone(), DragAxis::Free)
+                .on_start(move |details| {
                     let callback = start_slot.borrow().start.clone();
                     if let Some(callback) = callback {
                         start_writer.write(|cx| callback(cx, details));
                     }
                 })
-                .with_on_update(move |details| {
+                .on_update(move |details| {
                     let callback = update_slot.borrow().update.clone();
                     if let Some(callback) = callback {
                         update_writer.write(|cx| callback(cx, details));
                     }
                 })
-                .with_on_end(move |details| {
+                .on_end(move |details| {
                     let callback = end_slot.borrow().end.clone();
                     if let Some(callback) = callback {
                         end_writer.write(|cx| callback(cx, details));
                     }
                 })
+                .build()
         };
 
         let horizontal_drag = {
@@ -804,37 +810,38 @@ impl ViewState<GestureDetector> for GestureDetectorState {
             let update_writer = writer.clone();
             let end_writer = writer.clone();
             let cancel_writer = writer;
-            DragGestureRecognizer::new(arena, DragAxis::Horizontal)
-                .with_on_down(move |details| {
+            DragGestureRecognizer::builder(arena, DragAxis::Horizontal)
+                .on_down(move |details| {
                     let callback = down_slot.borrow().down.clone();
                     if let Some(callback) = callback {
                         down_writer.write(|cx| callback(cx, details));
                     }
                 })
-                .with_on_start(move |details| {
+                .on_start(move |details| {
                     let callback = start_slot.borrow().start.clone();
                     if let Some(callback) = callback {
                         start_writer.write(|cx| callback(cx, details));
                     }
                 })
-                .with_on_update(move |details| {
+                .on_update(move |details| {
                     let callback = update_slot.borrow().update.clone();
                     if let Some(callback) = callback {
                         update_writer.write(|cx| callback(cx, details));
                     }
                 })
-                .with_on_end(move |details| {
+                .on_end(move |details| {
                     let callback = end_slot.borrow().end.clone();
                     if let Some(callback) = callback {
                         end_writer.write(|cx| callback(cx, details));
                     }
                 })
-                .with_on_cancel(move || {
+                .on_cancel(move || {
                     let callback = cancel_slot.borrow().cancel.clone();
                     if let Some(callback) = callback {
                         cancel_writer.write(|cx| callback(cx));
                     }
                 })
+                .build()
         };
 
         self.recognizers = Some(Recognizers {
@@ -905,12 +912,14 @@ impl ViewState<GestureDetector> for GestureDetectorState {
         // event. Revoke this group's admission before recognizer retirement can
         // invoke cancellation callbacks or reenter pointer dispatch.
         self.mounted.set(false);
-        if let Some(recognizers) = self.recognizers.as_ref() {
-            recognizers.tap.dispose();
-            recognizers.long_press.dispose();
-            recognizers.double_tap.dispose();
-            recognizers.drag.dispose();
-            recognizers.horizontal_drag.dispose();
+        if let Some(recognizers) = self.recognizers.take() {
+            cancel_all([
+                &*recognizers.tap as &dyn GestureRecognizer,
+                &*recognizers.long_press,
+                &*recognizers.double_tap,
+                &*recognizers.drag,
+                &*recognizers.horizontal_drag,
+            ]);
         }
     }
 }
@@ -947,13 +956,8 @@ impl GestureDetectorState {
     /// with a changed configuration is honored, and a double-tap-only detector
     /// does not let its tap recognizer steal the first up.
     fn make_listener(&self, recognizers: &Recognizers) -> Listener {
-        let group = RecognizerGroup {
+        let gates = Rc::new(RecognizerGates {
             mounted: Rc::clone(&self.mounted),
-            tap: Rc::clone(&recognizers.tap),
-            long_press: Rc::clone(&recognizers.long_press),
-            double_tap: Rc::clone(&recognizers.double_tap),
-            drag: Rc::clone(&recognizers.drag),
-            horizontal_drag: Rc::clone(&recognizers.horizontal_drag),
             tap_slot: Rc::clone(&self.tap_slot),
             secondary_tap_slot: Rc::clone(&self.secondary_tap_slot),
             long_press_slot: Rc::clone(&self.long_press_slot),
@@ -961,12 +965,7 @@ impl GestureDetectorState {
             double_tap_down_slot: Rc::clone(&self.double_tap_down_slot),
             pan_slot: Rc::clone(&self.pan_slot),
             horizontal_drag_slot: Rc::clone(&self.horizontal_drag_slot),
-        };
-
-        let down = group.clone();
-        let on_move = group.clone();
-        let on_up = group.clone();
-        let on_cancel = group;
+        });
 
         // The whole `PointerDispatch` goes through, both spaces. Dispatch
         // rewrites an event into the receiving node's coordinates before a
@@ -975,23 +974,32 @@ impl GestureDetectorState {
         // only the local event has no way to report a global position and can
         // only restate the local one under that name (issue #908).
         Listener::new()
-            .on_pointer_down(move |_cx, dispatch| down.handle_down(dispatch))
-            .on_pointer_move(move |_cx, dispatch| on_move.forward(dispatch))
-            .on_pointer_up(move |_cx, dispatch| on_up.forward(dispatch))
-            .on_pointer_cancel(move |_cx, dispatch| on_cancel.forward(dispatch))
+            .recognizer_when(&recognizers.tap, {
+                let gates = Rc::clone(&gates);
+                move |_| gates.tap_active()
+            })
+            .recognizer_when(&recognizers.long_press, {
+                let gates = Rc::clone(&gates);
+                move |_| gates.long_press_active()
+            })
+            .recognizer_when(&recognizers.double_tap, {
+                let gates = Rc::clone(&gates);
+                move |_| gates.double_tap_active()
+            })
+            .recognizer_when(&recognizers.drag, {
+                let gates = Rc::clone(&gates);
+                move |_| gates.drag_active()
+            })
+            .recognizer_when(&recognizers.horizontal_drag, move |_| {
+                gates.horizontal_drag_active()
+            })
     }
 }
 
-/// The recognizers + the live slots that gate their participation, captured by
-/// the [`Listener`] callbacks. One shared bundle, cloned once per callback.
-#[derive(Clone)]
-struct RecognizerGroup {
+/// Live admission predicates. The Listener holds these slots, while only the
+/// widget state owns the recognizers themselves.
+struct RecognizerGates {
     mounted: Rc<Cell<bool>>,
-    tap: Rc<TapGestureRecognizer>,
-    long_press: Rc<LongPressGestureRecognizer>,
-    double_tap: Rc<DoubleTapGestureRecognizer>,
-    drag: Rc<DragGestureRecognizer>,
-    horizontal_drag: Rc<DragGestureRecognizer>,
     tap_slot: Rc<RefCell<Option<GestureCallback>>>,
     secondary_tap_slot: Rc<RefCell<Option<GestureCallback>>>,
     long_press_slot: Rc<RefCell<Option<GestureCallback>>>,
@@ -1001,7 +1009,7 @@ struct RecognizerGroup {
     horizontal_drag_slot: Rc<RefCell<HorizontalDragCallbacks>>,
 }
 
-impl RecognizerGroup {
+impl RecognizerGates {
     /// The tap recognizer participates iff a primary- OR secondary-tap callback
     /// is currently set.
     fn tap_active(&self) -> bool {
@@ -1044,75 +1052,6 @@ impl RecognizerGroup {
             || horizontal.update.is_some()
             || horizontal.end.is_some()
             || horizontal.cancel.is_some()
-    }
-
-    /// Register every participating recognizer for this contact (tap first so
-    /// it is the arena's front member). The binding closes the arena only after
-    /// Down has reached the entire hit-test path, so overlapping detectors can
-    /// all join before the single close.
-    fn handle_down(&self, dispatch: PointerDispatch<'_>) {
-        if !self.mounted.get() {
-            return;
-        }
-        // Each recognizer is admitted from the Down itself: it reads the
-        // device kind (slop tier) and the button from the event, and stays
-        // out of the arena for a button it does not answer — a right-click
-        // does not start a pan or a long press, and does not register a
-        // double tap.
-        if self.tap_active() {
-            self.tap.add_pointer_down(dispatch);
-        }
-        if self.long_press_active() {
-            self.long_press.add_pointer_down(dispatch);
-        }
-        if self.double_tap_active() {
-            self.double_tap.add_pointer_down(dispatch);
-        }
-        if self.drag_active() {
-            self.drag.add_pointer_down(dispatch);
-        }
-        if self.horizontal_drag_active() {
-            self.horizontal_drag.add_pointer_down(dispatch);
-        }
-    }
-
-    /// Forward a move / up / cancel event to every participating recognizer.
-    fn forward(&self, dispatch: PointerDispatch<'_>) {
-        if !self.mounted.get() {
-            return;
-        }
-        // Each active predicate rechecks admission: an earlier recognizer's
-        // callback may synchronously unmount and dispose this whole group.
-        if self.tap_active() {
-            self.tap.handle_event(dispatch);
-        }
-        if self.long_press_active() {
-            self.long_press.handle_event(dispatch);
-        }
-        // NOT gated on `double_tap_active()`, unlike the others: a
-        // rebuild can flip the slot to empty WHILE `double_tap` is
-        // already mid-gesture for a pointer it registered while still
-        // active (`EditableText::enabled` toggling false between a
-        // first tap's down and up, say). Gating this call the same way
-        // `handle_down`'s registration is gated would then never deliver
-        // that pointer's Up/Cancel, orphaning the recognizer in
-        // `FirstDown`/`SecondDown` forever — nothing else polls it out
-        // of a phase that isn't `WaitingForSecond` (`check_timeout`'s
-        // own guard). Safe to call unconditionally: `handle_event`
-        // no-ops on a pointer id it never registered via `add_pointer`
-        // (`self.state.primary_pointer()` won't match), and the
-        // CALLBACK itself still won't fire while disabled — that is
-        // gated separately, by the live slot the callback closure reads
-        // at call time, not by this participation check.
-        if self.mounted.get() {
-            self.double_tap.handle_event(dispatch);
-        }
-        if self.drag_active() {
-            self.drag.handle_event(dispatch);
-        }
-        if self.horizontal_drag_active() {
-            self.horizontal_drag.handle_event(dispatch);
-        }
     }
 }
 
