@@ -180,14 +180,16 @@ impl PrimaryContact {
         }
         let id = ContactId::next(&self.last_id).ok_or(BeginContactError::Exhausted)?;
         let pointer = down.local.pointer_id();
+        // Complete fallible private allocation before arena admission. The
+        // registration token retires silently when admission is refused.
+        let registration = self
+            .membership
+            .register_deadline(pointer)
+            .ok_or(BeginContactError::ArenaClosed)?;
         let entry = self
             .membership
             .join(pointer)
             .ok_or(BeginContactError::ArenaClosed)?;
-        let Some(registration) = self.membership.register_deadline(pointer) else {
-            entry.withdraw_deferred();
-            return Err(BeginContactError::ArenaClosed);
-        };
         let contact = Contact {
             snapshot: ContactSnapshot {
                 id,
