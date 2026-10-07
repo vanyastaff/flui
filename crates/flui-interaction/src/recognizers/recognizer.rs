@@ -57,26 +57,44 @@ pub(crate) fn event_time(event: &PointerEvent) -> Option<u64> {
 /// The first stamped event of a sequence anchors its hardware time to the
 /// arena clock's reading at dispatch; every later event lands at the anchor
 /// plus its own hardware offset. An event without a timestamp is stamped at
-/// dispatch, and one older than the anchor is clamped to it, so the returned
-/// instants never run backwards from the anchor.
+/// dispatch. Every returned instant is at least the previous one, so a
+/// sequence that mixes stamped and unstamped events never runs backwards;
+/// when a stamped event would land before an unstamped one, the hardware
+/// timeline is re-anchored there, so the stamped events after it keep their
+/// own spacing instead of collapsing onto one instant.
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct EventTimeline {
     anchor: Option<(u64, Instant)>,
+    last: Option<Instant>,
 }
 
 impl EventTimeline {
     /// The arena-clock instant at which an event stamped `event_nanos` happened,
     /// given the arena clock reads `now` at dispatch.
     pub(crate) fn instant(&mut self, event_nanos: Option<u64>, now: Instant) -> Instant {
-        let Some(event_nanos) = event_nanos else {
-            return now;
+        let raw = match (event_nanos, self.anchor) {
+            (None, _) => now,
+            (Some(event_nanos), None) => {
+                self.anchor = Some((event_nanos, now));
+                now
+            }
+            (Some(event_nanos), Some((anchor_nanos, anchor))) => {
+                let offset = Duration::from_nanos(event_nanos.saturating_sub(anchor_nanos));
+                anchor.checked_add(offset).unwrap_or(now)
+            }
         };
-        let Some((anchor_nanos, anchor)) = self.anchor else {
-            self.anchor = Some((event_nanos, now));
-            return now;
+        let instant = match (self.last, event_nanos) {
+            (Some(last), Some(event_nanos)) if raw < last => {
+                // An unstamped event ran ahead of the hardware timeline: carry the
+                // stamped events on from it.
+                self.anchor = Some((event_nanos, last));
+                last
+            }
+            (Some(last), _) => raw.max(last),
+            (None, _) => raw,
         };
-        let offset = Duration::from_nanos(event_nanos.saturating_sub(anchor_nanos));
-        anchor.checked_add(offset).unwrap_or(now)
+        self.last = Some(instant);
+        instant
     }
 }
 
@@ -459,6 +477,13 @@ impl RecognizerBase {
         true
     }
 
+    /// Which contact is tracked: bumped by every [`start_tracking`](Self::start_tracking).
+    /// A caller compares it around user code to tell whether that code admitted
+    /// a contact of its own, even on the same pointer id.
+    pub(crate) fn contact_generation(&self) -> u64 {
+        self.contact.load(Ordering::Acquire)
+    }
+
     /// Start tracking a pointer
     ///
     /// Sets this as the primary pointer and stores initial position.
@@ -670,4 +695,33 @@ pub mod constants {
 
     /// Minimum distance for fling
     pub const MIN_FLING_DISTANCE: f64 = 50.0;
+}
+
+#[cfg(test)]
+mod event_timeline_tests {
+    use super::EventTimeline;
+    use std::time::{Duration, Instant};
+
+    /// A stamped event whose hardware offset lands before an unstamped event
+    /// dispatched in between is clamped to it: the timeline never runs
+    /// backwards, so velocity never sees a reversed gap.
+    #[test]
+    fn mixed_stamped_and_unstamped_events_stay_monotonic() {
+        let start = Instant::now();
+        let mut timeline = EventTimeline::default();
+        assert_eq!(timeline.instant(Some(0), start), start);
+        let unstamped = timeline.instant(None, start + Duration::from_millis(100));
+        let stamped = timeline.instant(Some(10_000_000), start + Duration::from_millis(101));
+        assert!(
+            stamped >= unstamped,
+            "{stamped:?} ran back before {unstamped:?}"
+        );
+        // The stamped events after it keep their own 10 ms spacing.
+        let next = timeline.instant(Some(20_000_000), start + Duration::from_millis(102));
+        assert_eq!(
+            next - stamped,
+            Duration::from_millis(10),
+            "the timeline did not collapse"
+        );
+    }
 }
