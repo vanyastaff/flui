@@ -10,6 +10,54 @@ use crate::common::{lay_out, tight};
 use flui_painting::styling::Color;
 use flui_widgets::{ColoredBox, GestureDetector};
 
+pub(crate) fn clearing_pan_callbacks_mid_drag_still_finishes_the_drag() {
+    use std::{cell::Cell, rc::Rc};
+    use crate::common::{ProbeSignals, SignalProbe};
+    use flui_view::SignalWriteExt;
+
+    let enabled = Rc::new(Cell::new(true));
+    let starts = Rc::new(Cell::new(0));
+    let updates = Rc::new(Cell::new(0));
+    let ends = Rc::new(Cell::new(0));
+    let (gate, started, updated, ended) = (
+        Rc::clone(&enabled), Rc::clone(&starts), Rc::clone(&updates), Rc::clone(&ends),
+    );
+    let signal = Rc::new(Cell::new(None));
+    let remembered = Rc::clone(&signal);
+    let probe = SignalProbe::new(move |ProbeSignals { count, .. }| {
+        remembered.set(Some(count));
+        let detector = GestureDetector::new();
+        let detector = if gate.get() {
+            let (started, updated, ended) = (Rc::clone(&started), Rc::clone(&updated), Rc::clone(&ended));
+            detector
+                .on_pan_start(move |_, _| started.set(started.get() + 1))
+                .on_pan_update(move |_, _| updated.set(updated.get() + 1))
+                .on_pan_end(move |_, _| ended.set(ended.get() + 1))
+        } else { detector };
+        detector.child(ColoredBox::new(Color::rgb(10, 20, 30)))
+    });
+    let mut laid = lay_out(probe.view(), tight(100.0, 100.0));
+    laid.dispatch_pointer_down(50.0, 10.0);
+    laid.dispatch_pointer_move(50.0, 50.0);
+    assert_eq!(starts.get(), 1);
+    enabled.set(false);
+    probe.write(|cx| signal.get().expect("mounted probe").set(cx, 1)).expect("write");
+    laid.pump();
+    laid.dispatch_pointer_up(50.0, 50.0);
+    assert_eq!(ends.get(), 0, "removed callbacks are not invoked");
+    enabled.set(true);
+    probe.write(|cx| signal.get().expect("mounted probe").set(cx, 2)).expect("write");
+    laid.pump();
+    let before = updates.get();
+    laid.dispatch_pointer_move(50.0, 60.0);
+    assert_eq!(updates.get(), before, "the released contact cannot resume when callbacks return");
+    laid.dispatch_pointer_down(50.0, 10.0);
+    laid.dispatch_pointer_move(50.0, 50.0);
+    laid.dispatch_pointer_up(50.0, 50.0);
+    assert_eq!(starts.get(), 2);
+    assert_eq!(ends.get(), 1);
+}
+
 pub(crate) fn gesture_detector_fires_on_tap_for_a_down_up_on_the_child() {
     let taps = Arc::new(AtomicUsize::new(0));
     let in_cb = Arc::clone(&taps);
