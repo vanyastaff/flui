@@ -250,6 +250,10 @@ fn perspective_delivery_refuses_hidden_and_degenerate_planes() {
             0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
         ]), (-2.0, 3.0)),
         (Matrix4::from([
+            1.0, 0.0, 0.0, -0.5, 0.0, 1.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+        ]), (-2.0 + f64::EPSILON, 3.0)),
+        (Matrix4::from([
             0.0, 0.0, -1.0, 0.0, 0.0, 1.0, 0.0, 0.0,
             1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0,
         ]), (2.0, 3.0)),
@@ -258,10 +262,20 @@ fn perspective_delivery_refuses_hidden_and_degenerate_planes() {
     }
 }
 
+fn plane_unprojection_preserves_tiny_affine_delivery() {
+    perspective_delivery(Matrix4::scaling(1e-9, 1e-9, 1.0),
+        [(1e-9, 2e-9), (2e-9, 3e-9), (3e-9, 4e-9)],
+        Some([(1.0, 2.0), (2.0, 3.0), (3.0, 4.0)]));
+}
+
 #[test]
 fn hit_test_transform_admission() {
     let mut failures = Vec::new();
     for (name, case) in [
+        (
+            "tiny affine sample families",
+            plane_unprojection_preserves_tiny_affine_delivery as fn(),
+        ),
         (
             "perspective sample families",
             perspective_delivery_preserves_the_source_and_unprojects_samples as fn(),
