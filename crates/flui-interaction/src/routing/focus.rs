@@ -95,43 +95,24 @@ pub struct FocusManager {
 /// including when the drop runs while unwinding — a listener that panics
 /// mid-notification must not leave `notification_depth` stuck above zero,
 /// or every later `request_focus`/`unfocus` on that manager would queue
-/// forever instead of applying. Unwinding also means the notification this
-/// guard was covering never reached the point where it would drain what it
-/// queued, so any such entries describe a transaction the panic left half
-/// finished; replaying them under a later, healthy call would silently
-/// resurrect it, so the drop clears [`FocusManager::pending_focus_transitions`]
-/// in that case too.
+/// forever instead of applying. Accepted requests remain delivery debt even
+/// after an unexpected unwind: this guard restores only the depth. It never
+/// destroys queued node ownership or invokes diagnostic subscribers in Drop.
+/// Ordinary listener failures are contained until the outer FIFO drain finishes.
 struct NotificationDepthGuard<'a> {
     depth: &'a Cell<u32>,
-    pending: &'a RefCell<VecDeque<Option<Rc<FocusNode>>>>,
 }
 
 impl<'a> NotificationDepthGuard<'a> {
-    fn enter(depth: &'a Cell<u32>, pending: &'a RefCell<VecDeque<Option<Rc<FocusNode>>>>) -> Self {
+    fn enter(depth: &'a Cell<u32>) -> Self {
         depth.set(depth.get() + 1);
-        Self { depth, pending }
+        Self { depth }
     }
 }
 
 impl Drop for NotificationDepthGuard<'_> {
     fn drop(&mut self) {
         self.depth.set(self.depth.get() - 1);
-        if std::thread::panicking() {
-            let mut pending = self.pending.borrow_mut();
-            if !pending.is_empty() {
-                // Unlike the drain-budget drop (which is a caller's own
-                // ping-pong exhausting a documented limit), this discard
-                // erases requests a healthy caller had already had
-                // accepted — silently losing them would be worse than the
-                // panic itself.
-                tracing::warn!(
-                    dropped_requests = pending.len(),
-                    "focus requests queued during a notification were discarded because \
-                     a listener panicked"
-                );
-            }
-            pending.clear();
-        }
     }
 }
 
@@ -280,10 +261,7 @@ impl FocusManager {
             Self::refresh_focus_history(node);
         }
 
-        let _guard = NotificationDepthGuard::enter(
-            &self.notification_depth,
-            &self.pending_focus_transitions,
-        );
+        let _guard = NotificationDepthGuard::enter(&self.notification_depth);
         Self::notify_focus_nodes(previous.as_ref(), node.as_ref(), failure);
         self.notify_listeners(previous, node, failure);
     }
@@ -424,10 +402,7 @@ impl FocusManager {
 
         let mut failure = FocusClosePanic::for_rejection(self.close_mode.mode());
         {
-            let _guard = NotificationDepthGuard::enter(
-                &self.notification_depth,
-                &self.pending_focus_transitions,
-            );
+            let _guard = NotificationDepthGuard::enter(&self.notification_depth);
             Self::notify_focus_path_change(previous_focus_path, current_focus_path, &mut failure);
             if !Self::focus_identity_eq(current.as_ref(), Some(&previous_primary)) {
                 self.notify_listeners(Some(previous_primary), current, &mut failure);
