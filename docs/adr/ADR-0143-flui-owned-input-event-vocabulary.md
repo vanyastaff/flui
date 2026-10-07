@@ -1,6 +1,6 @@
 # ADR-0143: FLUI owns its pointer and keyboard event vocabulary
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-06
 - **Related:** [ADR-0089](ADR-0089-upstream-types-in-stable-signatures.md) §4 (this record is
   its input vocabulary, with the generator and the gate §4 asks for),
