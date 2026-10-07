@@ -77,17 +77,22 @@ pub(crate) fn scoped_estimator_controls_delivered_drag_velocity() {
             for horizontal in [false, true] {
                 let delivered = Rc::new(Cell::new(None));
                 let observed = Rc::clone(&delivered);
-                let callback = move |_, details: flui_interaction::DragEndDetails| {
-                    assert!(
-                        observed
-                            .replace(Some(details.velocity.pixels_per_second.dx))
-                            .is_none()
-                    );
-                };
                 let detector = if horizontal {
-                    GestureDetector::new().on_horizontal_drag_end(callback)
+                    GestureDetector::new().on_horizontal_drag_end(move |_, details| {
+                        assert!(
+                            observed
+                                .replace(Some(details.velocity.pixels_per_second.dx))
+                                .is_none()
+                        );
+                    })
                 } else {
-                    GestureDetector::new().on_pan_end(callback)
+                    GestureDetector::new().on_pan_end(move |_, details| {
+                        assert!(
+                            observed
+                                .replace(Some(details.velocity.pixels_per_second.dx))
+                                .is_none()
+                        );
+                    })
                 }
                 .child(ColoredBox::new(Color::rgb(10, 20, 30)));
                 let laid = lay_out(
