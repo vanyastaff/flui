@@ -733,10 +733,6 @@ fn gesture_lifecycle_matrix() {
             ignored_accept_candidate_drops_outside_the_slot_lock,
         ),
         (
-            "pointer_release_pairs_with_pointer_hold",
-            pointer_release_pairs_with_pointer_hold,
-        ),
-        (
             "panicking_window_end_still_admits_the_far_contact",
             panicking_window_end_still_admits_the_far_contact,
         ),
@@ -1267,51 +1263,33 @@ impl Drop for ClosesOnDrop {
 /// the slot lock is released, so its destructor can use the arena (holding
 /// the lock across it deadlocks).
 fn ignored_accept_candidate_drops_outside_the_slot_lock() {
-    let arena = GestureArena::new();
-    let pointer = id(2);
-    let closed = counter_flag();
-    arena.add(pointer, Arc::new(Verdicts::default()));
-    #[expect(
-        clippy::arc_with_non_send_sync,
-        reason = "the arena takes members as Arc; this one is owner-local by design"
-    )]
-    let candidate = Arc::new(ClosesOnDrop {
-        arena: arena.clone(),
-        pointer,
-        closed: Rc::clone(&closed),
+    // On a worker with a deadline: a regression deadlocks instead of failing,
+    // and must not hang the whole test binary.
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let arena = GestureArena::new();
+        let pointer = id(2);
+        let closed = counter_flag();
+        arena.add(pointer, Arc::new(Verdicts::default()));
+        #[expect(
+            clippy::arc_with_non_send_sync,
+            reason = "the arena takes members as Arc; this one is owner-local by design"
+        )]
+        let candidate = Arc::new(ClosesOnDrop {
+            arena: arena.clone(),
+            pointer,
+            closed: Rc::clone(&closed),
+        });
+        arena.accept(pointer, candidate);
+        assert!(
+            closed.get(),
+            "the destructor ran and its call into the arena returned"
+        );
+        let _ = done.send(());
     });
-    arena.accept(pointer, candidate);
-    assert!(
-        closed.get(),
-        "the destructor ran and its call into the arena returned"
-    );
-}
-
-/// The pointer-level `release` releases the arena the pointer-level `hold`
-/// held: the current contact's, not an older retained arena of the same
-/// pointer.
-fn pointer_release_pairs_with_pointer_hold() {
-    let arena = GestureArena::new();
-    let pointer = PointerId::PRIMARY;
-    let old = Arc::new(Verdicts::default());
-    let old_entry = arena.add(pointer, old.clone());
-    arena.add(pointer, Arc::new(Verdicts::default()));
-    arena.close(pointer);
-    old_entry.hold();
-    run_pointer_lifecycle(&arena, &up(pointer, at(0.0, 0.0), PointerType::Mouse));
-
-    let first = Arc::new(Verdicts::default());
-    let second = Arc::new(Verdicts::default());
-    arena.add(pointer, first.clone());
-    arena.add(pointer, second);
-    arena.close(pointer);
-    arena.hold(pointer);
-    run_pointer_lifecycle(&arena, &up(pointer, at(0.0, 0.0), PointerType::Mouse));
-    arena.release(pointer);
-    arena.drain_deferred_resolutions();
-    assert_eq!(first.get(), (1, 0), "the new contact's held sweep ran");
-    assert_eq!(old.get(), (0, 0), "the older held arena is still held");
-    old_entry.release();
+    finished
+        .recv_timeout(Duration::from_secs(5))
+        .expect("accept returned: the candidate was not dropped under the slot lock");
 }
 
 fn counter_flag() -> Rc<Cell<bool>> {

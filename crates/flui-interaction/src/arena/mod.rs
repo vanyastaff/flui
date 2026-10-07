@@ -1197,17 +1197,35 @@ impl GestureArena {
             failure.finish();
             return;
         }
-        let (mut pending, follow_up) = {
+        let (mut pending, follow_up, candidate) = {
             let mut entry = slot.data.lock();
             match disposition {
                 GestureDisposition::Accepted => {
-                    (PendingNotifications::new(), entry.accept(&member))
+                    let follow_up = entry.accept(&member);
+                    (PendingNotifications::new(), follow_up, Some(member))
                 }
-                GestureDisposition::Rejected => entry.reject(member),
+                GestureDisposition::Rejected => {
+                    let (pending, follow_up) = entry.reject(member);
+                    (pending, follow_up, None)
+                }
             }
         };
         pending.extend(self.collect_follow_up(pointer, slot, follow_up));
+        let candidate_failure = Self::retire_candidate(candidate);
         Self::dispatch_pending(pending, pointer);
+        if let Some(payload) = candidate_failure {
+            std::panic::resume_unwind(payload);
+        }
+    }
+
+    /// Drop the caller's accept candidate after the slot lock is released and
+    /// before any callback runs, so a panicking callback can never leave it as
+    /// the last owner to be destroyed during that unwind. A panic from its own
+    /// destructor is held and resumed once the callbacks were dispatched.
+    fn retire_candidate(
+        candidate: Option<Arc<dyn GestureArenaMember>>,
+    ) -> Option<Box<dyn std::any::Any + Send>> {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(candidate))).err()
     }
 
     /// Accept gesture for a member - the member wants to handle this gesture.
@@ -1229,9 +1247,12 @@ impl GestureArena {
             return;
         };
         let follow_up = slot.data.lock().accept(&member);
-        // `member` is dropped below, after the slot lock is released.
         let pending = self.collect_follow_up(pointer, &slot, follow_up);
+        let candidate_failure = Self::retire_candidate(Some(member));
         Self::dispatch_pending(pending, pointer);
+        if let Some(payload) = candidate_failure {
+            std::panic::resume_unwind(payload);
+        }
     }
 
     /// Reject gesture for a member - the member doesn't want this gesture.
@@ -1249,48 +1270,10 @@ impl GestureArena {
         self.resolve_entry(pointer, &slot, member.clone(), GestureDisposition::Rejected);
     }
 
-    /// Hold the arena open for a pointer (delay resolution).
-    ///
-    /// Used when a recognizer needs more time to decide.
-    pub fn hold(&self, pointer: PointerId) {
-        if let Some(slot) = self.current_slot(pointer) {
-            slot.data.lock().hold();
-        }
-    }
-
     fn hold_slot(slot: &Arc<ArenaSlot>) {
         let mut entry = slot.data.lock();
         if !entry.is_resolved {
             entry.hold();
-        }
-    }
-
-    /// Release the hold on an arena.
-    ///
-    /// If a sweep was attempted while held, the deferred sweep runs now.
-    /// Releasing never closes membership; `close` always does that during
-    /// Down dispatch, independent of the hold state.
-    ///
-    /// Pairs with [`hold`](Self::hold), which holds the pointer's current arena:
-    /// that arena is released if it is still current, otherwise the newest
-    /// retained arena of the pointer (the one most recently swept while held),
-    /// so a hold taken on a new contact is not spent on an older one.
-    pub fn release(&self, pointer: PointerId) {
-        let held_current = self
-            .current_slot(pointer)
-            .filter(|slot| slot.data.lock().is_held);
-        if let Some(slot) = held_current {
-            self.release_slot(&slot);
-            return;
-        }
-        let retained = self
-            .retained
-            .iter()
-            .filter(|entry| entry.value().pointer == pointer)
-            .max_by_key(|entry| entry.key().0)
-            .map(|entry| Arc::clone(entry.value()));
-        if let Some(slot) = retained.or_else(|| self.current_slot(pointer)) {
-            self.release_slot(&slot);
         }
     }
 
