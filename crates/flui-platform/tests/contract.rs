@@ -1458,6 +1458,7 @@ mod native_windows {
             if !unsafe { PeekMessageW(&raw mut message, Some(hwnd), 0, 0, PM_REMOVE) }.as_bool() {
                 return;
             }
+            trace_native_pointer(&message);
             // SAFETY: translate and dispatch the message this thread's queue
             // returned.
             unsafe {
@@ -2567,13 +2568,6 @@ mod native_windows {
             WindowsAndMessaging::{PT_PEN, PT_TOUCH, PEN_MASK_PRESSURE, PEN_MASK_ROTATION, PEN_MASK_TILT_X, PEN_MASK_TILT_Y, TOUCH_MASK_CONTACTAREA, TOUCH_MASK_PRESSURE, WindowFromPoint},
         };
         struct Device(HSYNTHETICPOINTERDEVICE);
-        struct PointerHook(windows::Win32::UI::WindowsAndMessaging::HHOOK);
-        impl Drop for PointerHook {
-            fn drop(&mut self) {
-                // SAFETY: this fixture owns its thread-local hook until here.
-                let _ = unsafe { UnhookWindowsHookEx(self.0) };
-            }
-        }
         impl Drop for Device {
             fn drop(&mut self) {
                 // SAFETY: this fixture uniquely owns the device returned by Create.
@@ -2599,9 +2593,6 @@ mod native_windows {
             return;
         }
         let events = record_pointer(&window);
-        // SAFETY: the hook observes only this thread's native messages and is
-        // removed by its unique owner before the fixture returns or unwinds.
-        let _hook = PointerHook(unsafe { SetWindowsHookExW(WH_CALLWNDPROC, Some(observe_native_pointer), None, GetCurrentThreadId()) }.expect("install native pointer observer"));
         for (native_kind, expected_kind) in [(PT_TOUCH, PointerKind::Touch), (PT_PEN, PointerKind::Pen { tool: PenTool::Tip })] {
             // SAFETY: one ephemeral synthetic device, no borrowed native resources.
             let device = match unsafe { CreateSyntheticPointerDevice(native_kind, 1, POINTER_FEEDBACK_NONE) } {
@@ -2682,19 +2673,15 @@ mod native_windows {
         window.close();
     }
 
-    #[expect(unsafe_code, reason = "read-only native pointer observer in the actual owner-thread dispatch")]
-    unsafe extern "system" fn observe_native_pointer(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    #[expect(unsafe_code, reason = "read-only native pointer queries after actual queue retrieval before owner-thread dispatch")]
+    fn trace_native_pointer(message: &MSG) {
         use windows::Win32::UI::{Input::Pointer::*, WindowsAndMessaging::*};
-        if code >= 0 {
-            // SAFETY: non-negative WH_CALLWNDPROC callbacks carry a valid
-            // CWPSTRUCT for the callback duration.
-            let message = unsafe { &*(lparam.0 as *const CWPSTRUCT) };
-            if matches!(message.message, WM_POINTERDOWN | WM_POINTERUP | WM_POINTERUPDATE | WM_POINTERENTER | WM_POINTERLEAVE | WM_POINTERCAPTURECHANGED) {
+            if matches!(message.message, WM_POINTERDOWN | WM_POINTERUP | WM_POINTERUPDATE | WM_POINTERENTER | WM_POINTERLEAVE | WM_POINTERCAPTURECHANGED | WM_POINTERWHEEL | WM_POINTERHWHEEL) {
                 let raw = (message.wParam.0 & 0xffff) as u32;
                 let mut info = POINTER_INFO::default();
                 // SAFETY: initialized native output, current message's raw ID.
                 let current = unsafe { GetPointerInfo(raw, &mut info) };
-                eprintln!("NATIVE_POINTER message={} raw={} current={:?} info={info:?}", message.message, raw, current);
+                eprintln!("NATIVE_POINTER message={} raw={} queue_tick={} retrieved_tick={} current={:?} info={info:?}", message.message, raw, unsafe { GetMessageTime() }, message.time, current);
                 if current.is_ok() {
                     let mut count = info.historyCount.max(1);
                     if info.pointerType == PT_TOUCH {
@@ -2713,9 +2700,6 @@ mod native_windows {
                     }
                 }
             }
-        }
-        // SAFETY: forward this native hook's arguments unchanged.
-        unsafe { CallNextHookEx(None, code, wparam, lparam) }
     }
 
     /// Delaying dispatch cannot compress the time between generated samples.

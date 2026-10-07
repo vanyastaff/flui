@@ -195,6 +195,7 @@ tokio-util = { version = "0.7", default-features = false }
 # loop and the execution services' sequential IO lane.
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
+keyboard-types = "0.8"
 
 # SYNCHRONIZATION - Used by multiple crates
 parking_lot = "0.12"

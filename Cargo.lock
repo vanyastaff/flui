@@ -7806,6 +7806,7 @@ dependencies = [
  "anyhow",
  "cargo_metadata",
  "clap",
+ "keyboard-types",
  "proc-macro2",
  "pulldown-cmark",
  "regex",
