@@ -302,10 +302,12 @@ impl FocusManager {
             if let Some(target) = &node
                 && !self.is_eligible(target)
             {
-                tracing::trace!(
-                    node = target.id().get(),
-                    "skipping a queued focus transition whose target is no longer eligible"
-                );
+                let _ = failure.invoke(|| {
+                    tracing::trace!(
+                        node = target.id().get(),
+                        "skipping a queued focus transition whose target is no longer eligible"
+                    );
+                });
                 failure.retire(node);
                 continue;
             }
@@ -322,15 +324,17 @@ impl FocusManager {
                 // still queued behind it are both dropped below — count
                 // both, so the warning is the one piece of evidence a
                 // ping-pong author will ever see for this drop.
-                let dropped = 1 + self.pending_focus_transitions.borrow().len();
-                tracing::warn!(
-                    budget = Self::REENTRANT_FOCUS_DRAIN_BUDGET,
-                    last_requested = ?node.as_ref().map(|node| node.id().get()),
-                    dropped_requests = dropped,
-                    "reentrant focus requests exceeded the drain budget; \
-                     dropping the rest of the queue"
-                );
                 let pending = std::mem::take(&mut *self.pending_focus_transitions.borrow_mut());
+                let dropped = 1 + pending.len();
+                let _ = failure.invoke(|| {
+                    tracing::warn!(
+                        budget = Self::REENTRANT_FOCUS_DRAIN_BUDGET,
+                        last_requested = ?node.as_ref().map(|node| node.id().get()),
+                        dropped_requests = dropped,
+                        "reentrant focus requests exceeded the drain budget; \
+                         dropping the rest of the queue"
+                    );
+                });
                 failure.retire(node);
                 for node in pending {
                     failure.retire(node);
