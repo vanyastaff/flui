@@ -33,6 +33,7 @@
 
 use std::{
     rc::Rc,
+    sync::atomic::{AtomicBool, Ordering},
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -44,13 +45,13 @@ use flui_rendering::hit_testing::HitTestBehavior;
 use flui_view::prelude::StatefulView;
 use flui_view::{
     BuildContext, BuildContextExt, Child, EventCx, EventOutcome, IntoView, LifecycleContext,
-    ViewExt, ViewState,
+    RebuildHandle, RebuildReason, ViewExt, ViewState,
 };
 
 use crate::animated::VsyncScope;
 use crate::scroll::single_child_scroll_view::SingleChildScrollView;
 use crate::scroll::{ClampingScrollPhysics, ScrollController, ScrollMetrics, SharedScrollPhysics};
-use crate::{AnimatedBuilder, ColoredBox, GestureDetector, Positioned, Stack};
+use crate::{ColoredBox, GestureDetector, Positioned, Stack};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -201,6 +202,11 @@ impl RefreshController {
             .expect("BUG: RefreshController pull_distance_px mutex is never held across a panic; poisoning means a bug elsewhere already corrupted controller state") =
             distance_px;
         self.inner.notifier.notify_listeners();
+    }
+
+    /// Whether `other` is a clone of this controller (the same shared state).
+    fn shares_state_with(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
     }
 
     pub(super) fn begin_refresh(&self) {
@@ -376,6 +382,14 @@ pub struct RefreshIndicatorState {
     vsync: Option<Vsync>,
     /// Registration returned by `vsync.register(fling_controller)`.
     vsync_registration: Option<VsyncRegistration>,
+    /// Schedules this element's rebuild; acquired in `init_state`.
+    rebuild: Option<RebuildHandle>,
+    /// The refresh controller this state listens to for phase changes, and
+    /// the subscription; replaced when the view hands over another one.
+    phase_subscription: Option<(RefreshController, ListenerId)>,
+    /// The controller from the first configuration, subscribed in
+    /// `init_state` once a rebuild handle exists.
+    initial_controller: Option<RefreshController>,
 }
 
 impl std::fmt::Debug for RefreshIndicatorState {
@@ -405,6 +419,9 @@ impl StatefulView for RefreshIndicator {
             fling_listener_id: None,
             vsync: None,
             vsync_registration: None,
+            rebuild: None,
+            phase_subscription: None,
+            initial_controller: Some(self.controller.clone()),
         }
     }
 }
@@ -420,11 +437,40 @@ impl RefreshIndicatorState {
             scroll.set_pixels(fling.value());
         })));
     }
+
+    /// Listens to `controller` and rebuilds only when its refresh phase
+    /// flips: a pull-distance change alone reaches external listeners of
+    /// [`RefreshController::as_listenable`] but rebuilds nothing here.
+    fn subscribe_phase(&mut self, controller: &RefreshController) {
+        self.unsubscribe_phase();
+        let Some(rebuild) = self.rebuild.clone() else {
+            return;
+        };
+        let watched = controller.clone();
+        let last_phase = AtomicBool::new(controller.is_refreshing());
+        let id = controller.inner.add_listener(Arc::new(move || {
+            let phase = watched.is_refreshing();
+            if last_phase.swap(phase, Ordering::Relaxed) != phase {
+                rebuild.schedule(RebuildReason::StateChange);
+            }
+        }));
+        self.phase_subscription = Some((controller.clone(), id));
+    }
+
+    fn unsubscribe_phase(&mut self) {
+        if let Some((controller, id)) = self.phase_subscription.take() {
+            controller.inner.remove_listener(id);
+        }
+    }
 }
 
 impl ViewState<RefreshIndicator> for RefreshIndicatorState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.install_fling_listener();
+        self.rebuild = Some(ctx.rebuild_handle());
+        if let Some(controller) = self.initial_controller.take() {
+            self.subscribe_phase(&controller);
+        }
 
         // Register with the ambient VsyncScope so the binding ticks the fling
         // controller on each virtual frame deterministically.
@@ -438,143 +484,116 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
     }
 
     fn build(&self, view: &RefreshIndicator, _ctx: &dyn BuildContext) -> impl IntoView {
-        let scroll_controller = self.scroll_controller.clone();
-        let fling_controller = self.fling_controller.clone();
-        let refresh_controller = view.controller.clone();
-        let on_refresh_fn = view.on_refresh.clone();
+        // Built once per refresh phase, not per scroll pixel: the viewport
+        // follows the shared position itself, and every gesture callback reads
+        // the controllers at event time rather than capturing a snapshot.
+        let scroll_view = {
+            let mut scroll_view =
+                SingleChildScrollView::new().position(self.scroll_controller.position());
+            if let Some(content) = view.child.clone().into_inner() {
+                scroll_view = scroll_view.child(content);
+            }
+            scroll_view
+        };
+        let mut stack_children: Vec<_> = vec![scroll_view.boxed()];
+        if view.controller.is_refreshing() {
+            // Overlay the indicator at the very top of the content area.
+            // DEFERRED (v1): replace with a RotationTransition-based spinner.
+            let indicator = Positioned::new(ColoredBox::new(INDICATOR_COLOR))
+                .top(0.0)
+                .left(0.0)
+                .right(0.0)
+                .height(INDICATOR_HEIGHT_PX);
+            stack_children.push(indicator.boxed());
+        }
+
         let threshold_px = view.threshold_px;
-        let physics = view.physics.clone();
-        let child = view.child.clone();
+        let fling_stop = self.fling_controller.clone();
+        let rc_start = view.controller.clone();
+        let sc_update = self.scroll_controller.clone();
+        let rc_update = view.controller.clone();
+        let ph_update = view.physics.clone();
+        let sc_end = self.scroll_controller.clone();
+        let rc_end = view.controller.clone();
+        let ph_end = view.physics.clone();
+        let fc_fling = self.fling_controller.clone();
+        let on_refresh_cb = view.on_refresh.clone();
 
-        // Outer AnimatedBuilder: rebuilds on every scroll-position change.
-        AnimatedBuilder::new(scroll_controller.as_listenable(), move || {
-            let rc_outer = refresh_controller.clone();
-            let sc_inner = scroll_controller.clone();
-            let fc_inner = fling_controller.clone();
-            let ph_inner = physics.clone();
-            let ch_inner = child.clone();
-            let on_refresh_inner = on_refresh_fn.clone();
-
-            // Inner AnimatedBuilder: rebuilds on refresh-phase / pull-distance
-            // changes (fired by RefreshController's own notifier).
-            AnimatedBuilder::new(rc_outer.as_listenable(), move || {
-                let pixels = sc_inner.pixels();
-                let is_refreshing = rc_outer.is_refreshing();
-
-                // Visual indicator: static coloured overlay while refreshing.
-                // DEFERRED (v1): animated rotation spinner via RotationTransition.
-                let show_indicator = is_refreshing;
-
-                // Gesture clones — each closure needs its own Arc-counted handle.
-                let fling_stop = fc_inner.clone();
-                let rc_start = rc_outer.clone();
-                let sc_update = sc_inner.clone();
-                let rc_update = rc_outer.clone();
-                let ph_update = ph_inner.clone();
-                let sc_end = sc_inner.clone();
-                let rc_end = rc_outer.clone();
-                let ph_end = ph_inner.clone();
-                let fc_fling = fc_inner.clone();
-                let on_refresh_cb = on_refresh_inner.clone();
-
-                let scroll_view = {
-                    let mut sv = SingleChildScrollView::new().offset(pixels);
-                    if let Some(content) = ch_inner.clone().into_inner() {
-                        sv = sv.child(content);
-                    }
-                    sv
-                };
-
-                let mut stack_children: Vec<_> = vec![scroll_view.boxed()];
-                if show_indicator {
-                    // Overlay the spinner at the very top of the content area.
-                    // DEFERRED (v1): replace with RotationTransition-based spinner.
-                    let indicator = Positioned::new(ColoredBox::new(INDICATOR_COLOR))
-                        .top(0.0)
-                        .left(0.0)
-                        .right(0.0)
-                        .height(INDICATOR_HEIGHT_PX);
-                    stack_children.push(indicator.boxed());
+        GestureDetector::new()
+            .behavior(HitTestBehavior::Opaque)
+            .on_pan_start(move |_cx, _details| {
+                // Halt any in-flight fling when the user grabs the content.
+                let _ = fling_stop.stop();
+                if !rc_start.is_refreshing() {
+                    rc_start.set_pull_distance_px(0.0);
                 }
-
-                GestureDetector::new()
-                    .behavior(HitTestBehavior::Opaque)
-                    .on_pan_start(move |_cx, _details| {
-                        // Halt any in-flight fling when the user grabs the content.
-                        let _ = fling_stop.stop();
-                        if !rc_start.is_refreshing() {
-                            rc_start.set_pull_distance_px(0.0);
-                        }
-                    })
-                    .on_pan_update(move |_cx, details| {
-                        // Ignore scroll/pull updates while a refresh is in progress
-                        // so the indicator stays stable.
-                        if rc_update.is_refreshing() {
-                            return;
-                        }
-                        // Positive dy (finger moving DOWN) maps to a decrease in
-                        // scroll offset (reveals content above).
-                        let raw_delta_y = details.delta.dy;
-                        // Pull remains outside the clamped scroll position. Consume
-                        // it first when the finger reverses toward ordinary scrolling.
-                        let proposed =
-                            sc_update.pixels() - rc_update.pull_distance_px() - raw_delta_y;
-
-                        if proposed < sc_update.min_scroll_extent() {
-                            // Overscroll at top: track how far past the boundary
-                            // the user has pulled; freeze the scroll at min_extent.
-                            let overscroll_px = sc_update.min_scroll_extent() - proposed;
-                            rc_update.set_pull_distance_px(overscroll_px);
-                            sc_update.set_pixels(sc_update.min_scroll_extent());
-                        } else {
-                            rc_update.set_pull_distance_px(0.0);
-                            let metrics = ScrollMetrics::from(&sc_update.position());
-                            let clamped = ph_update.apply_boundary_conditions(&metrics, proposed);
-                            sc_update.set_pixels(clamped);
-                        }
-                    })
-                    .on_pan_end(move |cx, details| {
-                        if rc_end.is_refreshing() {
-                            return;
-                        }
-                        if details.reason == flui_interaction::GestureEndReason::Cancelled {
-                            rc_end.set_pull_distance_px(0.0);
-                            let metrics = ScrollMetrics::from(&sc_end.position());
-                            if let Some(sim) = ph_end.create_ballistic_simulation(&metrics, 0.0) {
-                                let _ = fc_fling.animate_with(sim);
-                            }
-                            return;
-                        }
-                        let pull = rc_end.pull_distance_px();
-                        if pull >= threshold_px {
-                            // Sufficient overscroll: enter refreshing state and
-                            // fire the caller's callback.
-                            rc_end.begin_refresh();
-                            on_refresh_cb(cx);
-                        } else {
-                            // Under-threshold pull: reset and start a normal fling.
-                            rc_end.set_pull_distance_px(0.0);
-
-                            // Convert pointer velocity to scroll velocity (negate:
-                            // finger DOWN = positive dy → offset increases with negative delta).
-                            let fling_vel_px_per_sec = {
-                                let raw = -details.velocity.pixels_per_second.dy;
-                                let bounded = raw.clamp(-8_000.0, 8_000.0);
-                                // `clamp` propagates NaN (IEEE 754); treat NaN as 0
-                                // so spring-back still works without measurable velocity.
-                                if bounded.is_nan() { 0.0 } else { bounded }
-                            };
-                            let metrics = ScrollMetrics::from(&sc_end.position());
-                            if let Some(sim) =
-                                ph_end.create_ballistic_simulation(&metrics, fling_vel_px_per_sec)
-                            {
-                                let _ = fc_fling.animate_with(sim);
-                            }
-                        }
-                    })
-                    .child(Stack::new(stack_children))
             })
-        })
+            .on_pan_update(move |_cx, details| {
+                // Ignore scroll/pull updates while a refresh is in progress
+                // so the indicator stays stable.
+                if rc_update.is_refreshing() {
+                    return;
+                }
+                // Positive dy (finger moving DOWN) maps to a decrease in
+                // scroll offset (reveals content above).
+                let raw_delta_y = details.delta.dy;
+                // Pull remains outside the clamped scroll position. Consume
+                // it first when the finger reverses toward ordinary scrolling.
+                let proposed = sc_update.pixels() - rc_update.pull_distance_px() - raw_delta_y;
+
+                if proposed < sc_update.min_scroll_extent() {
+                    // Overscroll at top: track how far past the boundary
+                    // the user has pulled; freeze the scroll at min_extent.
+                    let overscroll_px = sc_update.min_scroll_extent() - proposed;
+                    rc_update.set_pull_distance_px(overscroll_px);
+                    sc_update.set_pixels(sc_update.min_scroll_extent());
+                } else {
+                    rc_update.set_pull_distance_px(0.0);
+                    let metrics = ScrollMetrics::from(&sc_update.position());
+                    let clamped = ph_update.apply_boundary_conditions(&metrics, proposed);
+                    sc_update.set_pixels(clamped);
+                }
+            })
+            .on_pan_end(move |cx, details| {
+                if rc_end.is_refreshing() {
+                    return;
+                }
+                if details.reason == flui_interaction::GestureEndReason::Cancelled {
+                    rc_end.set_pull_distance_px(0.0);
+                    let metrics = ScrollMetrics::from(&sc_end.position());
+                    if let Some(sim) = ph_end.create_ballistic_simulation(&metrics, 0.0) {
+                        let _ = fc_fling.animate_with(sim);
+                    }
+                    return;
+                }
+                let pull = rc_end.pull_distance_px();
+                if pull >= threshold_px {
+                    // Sufficient overscroll: enter refreshing state and
+                    // fire the caller's callback.
+                    rc_end.begin_refresh();
+                    on_refresh_cb(cx);
+                } else {
+                    // Under-threshold pull: reset and start a normal fling.
+                    rc_end.set_pull_distance_px(0.0);
+
+                    // Convert pointer velocity to scroll velocity (negate:
+                    // finger DOWN = positive dy → offset increases with negative delta).
+                    let fling_vel_px_per_sec = {
+                        let raw = -details.velocity.pixels_per_second.dy;
+                        let bounded = raw.clamp(-8_000.0, 8_000.0);
+                        // `clamp` propagates NaN (IEEE 754); treat NaN as 0
+                        // so spring-back still works without measurable velocity.
+                        if bounded.is_nan() { 0.0 } else { bounded }
+                    };
+                    let metrics = ScrollMetrics::from(&sc_end.position());
+                    if let Some(sim) =
+                        ph_end.create_ballistic_simulation(&metrics, fling_vel_px_per_sec)
+                    {
+                        let _ = fc_fling.animate_with(sim);
+                    }
+                }
+            })
+            .child(Stack::new(stack_children))
     }
 
     fn did_update_view(&mut self, _old_view: &RefreshIndicator, new_view: &RefreshIndicator) {
@@ -589,9 +608,17 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
             self.scroll_controller = new_view.scroll_controller.clone();
             self.install_fling_listener();
         }
+        if !self
+            .phase_subscription
+            .as_ref()
+            .is_some_and(|(controller, _)| controller.shares_state_with(&new_view.controller))
+        {
+            self.subscribe_phase(&new_view.controller);
+        }
     }
 
     fn dispose(&mut self) {
+        self.unsubscribe_phase();
         if let Some(id) = self.fling_listener_id.take() {
             self.fling_controller.remove_listener(id);
         }
