@@ -21,6 +21,7 @@ use flui_foundation::geometry::{Offset, Rect, Size};
 use flui_painting::paint::{Path, Shader};
 
 use super::hit_test::{EventPropagation, HitTestEntry, HitTestResult, transform_pointer_event};
+use super::pointer_capture::{CaptureRequest, ContactCapture, PointerCapture, PointerCaptureError};
 use crate::events::{PanZoomEvent, PointerEvent, PointerEventExt, PointerInfo, ScrollEvent};
 use crate::retain::Retain;
 
@@ -322,6 +323,7 @@ pub struct PointerDispatch<'a> {
     /// Never re-derived from a transform, so a frame that moves the receiving
     /// target between one event and the next cannot shift it.
     pub global: &'a PointerEvent,
+    capture: Option<CaptureRequest<'a>>,
 }
 
 impl<'a> PointerDispatch<'a> {
@@ -338,7 +340,37 @@ impl<'a> PointerDispatch<'a> {
         Self {
             local: event,
             global: event,
+            capture: None,
         }
+    }
+
+    /// Borrow a local and root-space event without admitted capture authority.
+    #[must_use]
+    pub const fn new(local: &'a PointerEvent, global: &'a PointerEvent) -> Self {
+        Self {
+            local,
+            global,
+            capture: None,
+        }
+    }
+
+    /// Claim exclusive delivery of later contact packets to this Down target.
+    ///
+    /// The original Down still reaches every target in its committed route.
+    /// The first successful claimant wins; retaining the returned token keeps
+    /// the claim until native termination or deferred explicit release.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PointerCaptureError`] for a non-Down event, a synthetic
+    /// dispatch, a prior claim, or a contact whose authority has ended.
+    pub fn capture(self) -> Result<PointerCapture, PointerCaptureError> {
+        let PointerEvent::Down(press) = self.global else {
+            return Err(PointerCaptureError::NotDown);
+        };
+        self.capture
+            .ok_or(PointerCaptureError::Unavailable)?
+            .claim(press.pointer)
     }
 }
 
@@ -541,6 +573,7 @@ impl LocalEventTransform {
 }
 
 struct ResolvedHitEntry {
+    target: PointerTarget,
     owner: Option<std::sync::Arc<DispatchOwner>>,
     handler_cell: Rc<HandlerCell>,
     local_transform: LocalEventTransform,
@@ -595,9 +628,22 @@ impl ResolvedHitRoute {
     /// can perform mandatory cleanup (arena close/sweep, route release) before
     /// resuming it; later panics are traced without replacing the first, so
     /// one target's panic never starves the entries after it.
-    fn invoke(&self, event: &PointerEvent) -> Option<RoutePanic> {
+    fn invoke(
+        &self,
+        event: &PointerEvent,
+        capture: Option<&Rc<ContactCapture>>,
+    ) -> Option<RoutePanic> {
         let mut first_panic = None;
+        // Freeze the admitted selection for this observer round. A callback
+        // may release its token or end the contact reentrantly, but it cannot
+        // change which entries were committed to this packet's delivery.
+        let selected = (!matches!(event, PointerEvent::Down(_)))
+            .then(|| capture.and_then(|capture| capture.target()))
+            .flatten();
         for entry in &self.entries {
+            if selected.is_some_and(|target| target != entry.target) {
+                continue;
+            }
             if entry.owner.as_ref().is_some_and(|owner| owner.is_closed()) {
                 continue;
             }
@@ -614,12 +660,13 @@ impl ResolvedHitRoute {
             let handler = entry.handler_cell.snapshot();
             // No localised event means the entry composed no transform, so its
             // own space IS the root's.
-            let dispatch = match local_event.as_ref() {
-                Some(local) => PointerDispatch {
-                    local,
-                    global: event,
-                },
-                None => PointerDispatch::at_root(event),
+            let dispatch = PointerDispatch {
+                local: local_event.as_ref().unwrap_or(event),
+                global: event,
+                capture: capture.map(|contact| CaptureRequest {
+                    contact,
+                    target: entry.target,
+                }),
             };
             let delivered = RoutePanic::capture(|| {
                 handler(dispatch);
@@ -2047,6 +2094,7 @@ impl InteractionDispatchHandle {
                 };
                 if let Some(cell) = registered.get(&target.target_id) {
                     entries.push(ResolvedHitEntry {
+                        target,
                         owner: lane.target_owners.borrow().get(&target.target_id).cloned(),
                         handler_cell: Rc::clone(cell),
                         local_transform: LocalEventTransform::capture(entry.transform),
@@ -2082,6 +2130,15 @@ impl InteractionDispatchHandle {
         token: ResolvedRouteToken,
         event: &PointerEvent,
     ) -> Result<Option<RoutePanic>, InteractionDispatchError> {
+        self.invoke_pointer_route_with_capture(token, event, None)
+    }
+
+    pub(crate) fn invoke_pointer_route_with_capture(
+        &self,
+        token: ResolvedRouteToken,
+        event: &PointerEvent,
+        capture: Option<&Rc<ContactCapture>>,
+    ) -> Result<Option<RoutePanic>, InteractionDispatchError> {
         let lane = self.active_lane()?;
         self.validate_lane(token.lane_id)?;
         let route = lane
@@ -2090,7 +2147,7 @@ impl InteractionDispatchHandle {
             .get(&token.route_id)
             .cloned()
             .ok_or(InteractionDispatchError::StaleRoute)?;
-        let mut first_panic = route.invoke(event);
+        let mut first_panic = route.invoke(event, capture);
         // A hit callback may release this token re-entrantly, leaving the
         // invocation snapshot as the route's final owner. Keep its entry and
         // HandlerCell destructors in the transaction returned to the binding,
@@ -2270,10 +2327,7 @@ impl InteractionDispatchHandle {
                 {
                     let handler = cell.snapshot();
                     let dispatch = match local_event.as_ref() {
-                        Some(local) => PointerDispatch {
-                            local,
-                            global: event,
-                        },
+                        Some(local) => PointerDispatch::new(local, event),
                         None => PointerDispatch::at_root(event),
                     };
                     let delivered = RoutePanic::capture(|| {
