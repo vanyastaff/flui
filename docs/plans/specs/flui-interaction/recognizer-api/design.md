@@ -274,8 +274,11 @@ pub struct RecognizerSet { /* D9 */ }
 // 10 × XGestureRecognizer::builder(..) -> XGestureRecognizerBuilder; build() -> Rc<X>
 ```
 
-До I11 `ContactSnapshot` не несёт `settings` (тип не `Copy`), а контакт хранит снимок в `RefCell<Option<
-Contact>>`; I11 добавляет поле. `ContactSnapshot` — `#[non_exhaustive]`, так что это не ломка.
+`ContactSnapshot` уже несёт замороженные настройки контакта и выводит `Clone`,
+пока `GestureSettings` не имеет `Copy`. Контакт хранит снимок в `RefCell<Option<Contact>>`;
+`current()` возвращает самостоятельный снимок без сохранённого borrow. I11 может добавить
+`Copy` после изменения настроек. Это устраняет противоречие черновика, не откладывая R8.
+`ContactSnapshot` — `#[non_exhaustive]`.
 
 ## 4. Инварианты
 
@@ -337,7 +340,7 @@ GestureDetectorState ──Rc──▶ TapGestureRecognizer ──▶ TapCallbac
 
 ```rust
 fn handle_event(&self, dispatch: PointerDispatch<'_>) {
-    let Some(contact) = self.contact.current() else { return };   // Copy-снимок; Ref снят на `;`
+    let Some(contact) = self.contact.current() else { return };   // самостоятельный снимок; Ref снят на `;`
     if !self.contact.tracks(pointer_of(dispatch.local)) { return }
     let notices = self.state.borrow_mut().step(contact, dispatch); // RefMut снят на `;`
     for notice in notices {
