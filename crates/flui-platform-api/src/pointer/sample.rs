@@ -40,7 +40,7 @@ pub struct PointerSample {
     pub pressure: Option<Pressure>,
     /// The barrel control's pressure, or `None` without one.
     pub tangential_pressure: Option<TangentialPressure>,
-    /// The pen's angle to the surface, or `None` when the device does not report it.
+    /// The pen's reported altitude and/or azimuth, or `None` when neither is reported.
     pub orientation: Option<PenOrientation>,
     /// The pen's rotation about its own axis, or `None` when the device does not report it.
     pub twist: Option<Twist>,

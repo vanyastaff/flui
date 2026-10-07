@@ -115,7 +115,7 @@ fn an_out_of_range_reading_is_refused_or_saturated() {
 
 fn periodic_angles_are_wrapped() {
     let orientation = PenOrientation::try_new(FRAC_PI_2, -FRAC_PI_2).expect("valid");
-    assert!((orientation.azimuth() - 3.0 * FRAC_PI_2).abs() < 1e-12);
+    assert!((orientation.azimuth().expect("reported azimuth") - 3.0 * FRAC_PI_2).abs() < 1e-12);
     let twist = Twist::try_new(-1e-300).expect("finite").radians();
     assert!((0.0..TAU).contains(&twist), "{twist}");
 }
