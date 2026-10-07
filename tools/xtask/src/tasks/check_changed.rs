@@ -454,7 +454,7 @@ mod tests {
             let mut lane = material();
             for in_scope in [false, true] {
                 lane.platform = in_scope;
-                let commands = lines(&plan(&lane, host, &all_targets(), true));
+                let commands = lines(&plan(&lane, host, &all_targets(), true, &[]));
                 assert_eq!(
                     commands
                         .iter()
