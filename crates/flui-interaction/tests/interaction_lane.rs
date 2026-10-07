@@ -44,6 +44,18 @@ fn binding_input_contract_matrix() {
             frame_coalesced_history_reaches_drag_velocity,
         ),
         (
+            "frame_coalesced_history_reaches_multi_drag_velocity",
+            frame_coalesced_history_reaches_multi_drag_velocity,
+        ),
+        (
+            "frame_coalesced_history_reaches_scale_velocity",
+            frame_coalesced_history_reaches_scale_velocity,
+        ),
+        (
+            "frame_coalesced_history_reaches_tap_drag_velocity",
+            frame_coalesced_history_reaches_tap_drag_velocity,
+        ),
+        (
             "non_finite_down_refuses_its_continuation",
             non_finite_down_refuses_its_continuation,
         ),
@@ -408,11 +420,21 @@ fn frame_coalescing_preserves_hardware_history() {
     }
 }
 
-fn drag_velocity_for_hardware_trace(flush_each: bool) -> f64 {
+#[derive(Clone, Copy)]
+enum HardwareVelocityProducer {
+    Drag,
+    MultiDrag,
+    Scale,
+    TapDrag,
+}
+
+fn velocity_for_hardware_trace(producer: HardwareVelocityProducer, flush_each: bool) -> f64 {
     use flui_foundation::geometry::Offset;
     use flui_interaction::{
         DragAxis, DragGestureRecognizer, GestureBinding, GestureRecognizer, HitTestResult,
-        ManualClock, PointerId,
+        ManualClock, MultiDragAxis, MultiDragEndDetails, MultiDragGestureRecognizer,
+        MultiDragHandle, MultiDragUpdateDetails, PointerId, ScaleGestureRecognizer,
+        TapAndDragGestureRecognizer,
         events::{PointerEvent, PointerType, make_down_event_for_id, make_up_event_for_id},
         routing::PointerDispatch,
     };
@@ -420,9 +442,38 @@ fn drag_velocity_for_hardware_trace(flush_each: bool) -> f64 {
     let binding = GestureBinding::with_clock(Arc::new(ManualClock::new()));
     let velocities = Rc::new(RefCell::new(Vec::new()));
     let log = Rc::clone(&velocities);
-    let drag = DragGestureRecognizer::builder(binding.arena().clone(), DragAxis::Horizontal)
-        .on_end(move |details| log.borrow_mut().push(details.primary_velocity))
-        .build();
+    struct DragClient(Rc<RefCell<Vec<f64>>>);
+    impl MultiDragHandle for DragClient {
+        fn update(&self, _: MultiDragUpdateDetails) {}
+        fn end(&self, details: MultiDragEndDetails) {
+            self.0
+                .borrow_mut()
+                .push(details.velocity.pixels_per_second.dx);
+        }
+        fn cancel(&self) {}
+    }
+    let drag: Rc<dyn GestureRecognizer> = match producer {
+        HardwareVelocityProducer::Drag => {
+            DragGestureRecognizer::builder(binding.arena().clone(), DragAxis::Horizontal)
+                .on_end(move |details| log.borrow_mut().push(details.primary_velocity))
+                .build()
+        }
+        HardwareVelocityProducer::MultiDrag => {
+            MultiDragGestureRecognizer::builder(binding.arena().clone(), MultiDragAxis::Horizontal)
+                .on_start(move |_, _| Some(Rc::new(DragClient(Rc::clone(&log)))))
+                .build()
+        }
+        HardwareVelocityProducer::Scale => ScaleGestureRecognizer::builder(binding.arena().clone())
+            .on_end(move |details| log.borrow_mut().push(details.velocity))
+            .build(),
+        HardwareVelocityProducer::TapDrag => {
+            TapAndDragGestureRecognizer::builder(binding.arena().clone())
+                .on_drag_end(move |details| {
+                    log.borrow_mut().push(details.velocity.pixels_per_second.dx);
+                })
+                .build()
+        }
+    };
     binding
         .pointer_router()
         .add_global_handler(Rc::new(move |event| {
@@ -440,6 +491,16 @@ fn drag_velocity_for_hardware_trace(flush_each: bool) -> f64 {
         ),
         |_| HitTestResult::new(),
     );
+    let second_pointer = PointerId::new(2).expect("nonzero pointer");
+    if matches!(producer, HardwareVelocityProducer::Scale) {
+        binding.handle_pointer_event(
+            &hardware_trace_event(
+                make_down_event_for_id(second_pointer, Offset::new(100.0, 0.0), PointerType::Touch),
+                1_000_000_000,
+            ),
+            |_| HitTestResult::new(),
+        );
+    }
     for event in curved_hardware_moves() {
         binding.handle_pointer_event(&event, |_| HitTestResult::new());
         if flush_each {
@@ -458,6 +519,15 @@ fn drag_velocity_for_hardware_trace(flush_each: bool) -> f64 {
         ),
         |_| HitTestResult::new(),
     );
+    if matches!(producer, HardwareVelocityProducer::Scale) {
+        binding.handle_pointer_event(
+            &hardware_trace_event(
+                make_up_event_for_id(second_pointer, Offset::new(100.0, 0.0), PointerType::Touch),
+                1_050_000_000,
+            ),
+            |_| HitTestResult::new(),
+        );
+    }
     let values = velocities.borrow();
     assert_eq!(values.len(), 1, "one healthy accepted drag ends");
     assert!(
@@ -468,19 +538,36 @@ fn drag_velocity_for_hardware_trace(flush_each: bool) -> f64 {
 }
 
 fn frame_coalesced_history_reaches_drag_velocity() {
-    let ordinary = drag_velocity_for_hardware_trace(true);
+    assert_frame_coalesced_velocity(HardwareVelocityProducer::Drag, 2_000.0);
+}
+
+fn frame_coalesced_history_reaches_multi_drag_velocity() {
+    assert_frame_coalesced_velocity(HardwareVelocityProducer::MultiDrag, 2_000.0);
+}
+
+fn frame_coalesced_history_reaches_scale_velocity() {
+    assert_frame_coalesced_velocity(HardwareVelocityProducer::Scale, -20.0);
+}
+
+fn frame_coalesced_history_reaches_tap_drag_velocity() {
+    assert_frame_coalesced_velocity(HardwareVelocityProducer::TapDrag, 2_000.0);
+}
+
+fn assert_frame_coalesced_velocity(producer: HardwareVelocityProducer, expected: f64) {
+    let ordinary = velocity_for_hardware_trace(producer, true);
+    let tolerance = expected.abs() * 0.01;
     assert!(
-        ordinary.is_finite() && (ordinary - 2_000.0).abs() < 20.0,
+        ordinary.is_finite() && (ordinary - expected).abs() < tolerance,
         "ordinary producer proves the hardware curve: {ordinary}"
     );
-    let batched = drag_velocity_for_hardware_trace(false);
-    let later_ordinary = drag_velocity_for_hardware_trace(true);
+    let batched = velocity_for_hardware_trace(producer, false);
+    let later_ordinary = velocity_for_hardware_trace(producer, true);
     assert!(
         (later_ordinary - ordinary).abs() < 0.01,
         "healthy later dispatch remains reproducible"
     );
     assert!(
-        batched.is_finite() && (batched - ordinary).abs() < 20.0,
+        batched.is_finite() && (batched - ordinary).abs() < tolerance,
         "same hardware samples must yield the same end velocity at frame cadence: ordinary={ordinary}, coalesced={batched}"
     );
 }
