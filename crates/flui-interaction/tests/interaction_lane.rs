@@ -1581,6 +1581,7 @@ fn drag_disposal_commits_tracking_before_rejection_diagnostics() {
     assert!(recognizer.0.withdraw().is_none());
     let next = recognizer.0.begin(flui_interaction::routing::PointerDispatch::at_root(&down), &GestureSettings::default()).expect("withdrawn owner admits next contact");
     assert!(recognizer.0.is_current(next));
+    arena.close(PointerId::PRIMARY);
     assert_eq!(recognizer.0.withdraw().expect("healthy next withdrawal").id, next);
     assert!(recognizer.0.current().is_none());
     assert!(arena.is_empty());
