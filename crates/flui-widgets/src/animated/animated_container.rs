@@ -201,10 +201,10 @@ impl ViewState<AnimatedContainer> for AnimatedContainerState {
                 container = container.color(value);
             }
             if let Some(value) = width.current(t) {
-                container = container.width(value.max(0.0));
+                container = container.width(non_negative(value));
             }
             if let Some(value) = height.current(t) {
-                container = container.height(value.max(0.0));
+                container = container.height(non_negative(value));
             }
             if let Some(value) = margin.current(t) {
                 container = container.margin(value.clamp_non_negative());
@@ -256,4 +256,10 @@ impl ViewState<AnimatedContainer> for AnimatedContainerState {
     fn dispose(&mut self) {
         self.controller.dispose();
     }
+}
+
+/// Clamps a negative overshoot to zero; NaN passes through (ADR-0149), as
+/// `EdgeInsets::clamp_non_negative` does for the insets.
+fn non_negative(value: f64) -> f64 {
+    if value < 0.0 { 0.0 } else { value }
 }

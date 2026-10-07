@@ -403,6 +403,7 @@ fn animation_and_visibility() {
             ("implicit_animations::overshooting_margin_stays_non_negative", crate::implicit_animations::overshooting_margin_stays_non_negative),
             ("implicit_animations::overshooting_size_stays_non_negative", crate::implicit_animations::overshooting_size_stays_non_negative),
             ("implicit_animations::animated_container_animates_its_transform", crate::implicit_animations::animated_container_animates_its_transform),
+            ("implicit_animations::nan_size_passes_through_like_container", crate::implicit_animations::nan_size_passes_through_like_container),
             ("implicit_animations::animated_container_reanchors_unchanged_properties_on_restart", crate::implicit_animations::animated_container_reanchors_unchanged_properties_on_restart),
             ("implicit_animations::animated_rotation_takes_the_shorter_arc", crate::implicit_animations::animated_rotation_takes_the_shorter_arc),
             ("implicit_animations::animated_rotation_takes_the_numeric_arc", crate::implicit_animations::animated_rotation_takes_the_numeric_arc),

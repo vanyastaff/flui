@@ -19,7 +19,8 @@ use flui_painting::styling::Color;
 use flui_view::prelude::{BuildContext, StatefulView};
 use flui_view::{IntoView, ViewState};
 use flui_widgets::{
-    AnimatedContainer, AnimatedOpacity, AnimatedRotation, RotationPath, SizedBox, VsyncScope,
+    AnimatedContainer, AnimatedOpacity, AnimatedRotation, Container, RotationPath, SizedBox,
+    VsyncScope,
 };
 use parking_lot::Mutex;
 
@@ -327,6 +328,36 @@ pub(crate) fn overshooting_size_stays_non_negative() {
                 "negative size {size:?}"
             );
         },
+    );
+}
+
+/// A NaN width or height reaches the container as NaN, the way a plain
+/// `Container` takes it, instead of being replaced by zero (ADR-0149).
+pub(crate) fn nan_size_passes_through_like_container() {
+    let animated = lay_out_animated(
+        VsyncScope::new(
+            Vsync::new(),
+            AnimatedContainer::new(SizedBox::new(10.0, 10.0))
+                .width(f64::NAN)
+                .height(f64::NAN),
+        ),
+        loose(200.0),
+        Vsync::new(),
+    );
+    let plain = lay_out_animated(
+        Container::new()
+            .width(f64::NAN)
+            .height(f64::NAN)
+            .child(SizedBox::new(10.0, 10.0)),
+        loose(200.0),
+        Vsync::new(),
+    );
+    let size = |laid: &LaidOut| laid.try_size(laid.find_by_render_type("RenderContainer"));
+    let (animated, plain) = (size(&animated), size(&plain));
+    assert_eq!(
+        format!("{animated:?}"),
+        format!("{plain:?}"),
+        "AnimatedContainer laid out NaN size as {animated:?}, Container as {plain:?}"
     );
 }
 
