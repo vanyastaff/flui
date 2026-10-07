@@ -184,7 +184,8 @@ fn is_sequence_boundary(event: &PointerEvent) -> bool {
 }
 
 impl ResamplerInner {
-    fn enqueue(&mut self, event: PointerEvent, stamp: Stamp) {
+    /// Queue the event and return the diagnostic owed after unlocking.
+    fn enqueue(&mut self, event: PointerEvent, stamp: Stamp) -> Option<PointerId> {
         match &event {
             PointerEvent::Down(..) => {
                 self.is_down = true;
@@ -199,17 +200,12 @@ impl ResamplerInner {
             _ => {}
         }
 
-        if !is_sequence_boundary(&event)
+        let overflow = !is_sequence_boundary(&event)
             && self.event_queue.len() >= MAX_BUFFERED_EVENTS
             && !self.coalesce_one_move()
-            && !self.drop_oldest_droppable()
-        {
-            tracing::debug!(
-                pointer_id = ?self.pointer_id,
-                "resampler queue full of sequence boundaries; queueing past the cap"
-            );
-        }
+            && !self.drop_oldest_droppable();
         self.event_queue.push_back(BufferedEvent { event, stamp });
+        overflow.then_some(self.pointer_id)
     }
 
     fn timestamp(&self, stamp: Stamp) -> Instant {
@@ -294,6 +290,16 @@ impl ResamplerInner {
     }
 }
 
+/// Diagnostics run subscribers, which may inspect or enqueue on this resampler.
+fn report_boundary_overflow(pointer_id: Option<PointerId>) {
+    if let Some(pointer_id) = pointer_id {
+        tracing::debug!(
+            ?pointer_id,
+            "resampler queue full of sequence boundaries; queueing past the cap"
+        );
+    }
+}
+
 impl PointerEventResampler {
     /// Creates a new resampler for the given pointer ID
     pub fn new(pointer_id: PointerId) -> Self {
@@ -349,7 +355,9 @@ impl PointerEventResampler {
             }
             None => Stamp::Arrival(arrival),
         };
-        inner.enqueue(event, stamp);
+        let overflow = inner.enqueue(event, stamp);
+        drop(inner);
+        report_boundary_overflow(overflow);
     }
 
     /// Adds a pointer event that happened at `timestamp` on the sampling
@@ -360,7 +368,8 @@ impl PointerEventResampler {
     /// clocks). A timestamp earlier than one already queued is raised to it,
     /// so arrival order is kept.
     pub fn add_event_at(&self, event: PointerEvent, timestamp: Instant) {
-        self.inner.lock().enqueue(event, Stamp::Explicit(timestamp));
+        let overflow = self.inner.lock().enqueue(event, Stamp::Explicit(timestamp));
+        report_boundary_overflow(overflow);
     }
 
     /// Samples events at the specified time and invokes callback with resampled

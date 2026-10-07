@@ -592,8 +592,93 @@ fn resampler_interpolates_on_event_time_and_never_drops_terminals() {
                 "interleaved non-moves stay bounded",
                 interleaved_non_moves_stay_bounded,
             ),
+            (
+                "queue diagnostic permits inspection",
+                queue_diagnostic_permits_inspection,
+            ),
         ],
     );
+}
+
+/// The subscriber reads the public handle on a worker with a bounded wait:
+/// a regression fails instead of hanging the test process on its mutex.
+fn queue_diagnostic_permits_inspection() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+        mpsc,
+    };
+
+    struct InspectQueue {
+        resampler: PointerEventResampler,
+        observed: Arc<AtomicUsize>,
+    }
+    impl tracing::Subscriber for InspectQueue {
+        fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+            metadata.target().ends_with("resampler") && *metadata.level() == tracing::Level::DEBUG
+        }
+        fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+        fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+        fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+        fn event(&self, _: &tracing::Event<'_>) {
+            let resampler = self.resampler.clone();
+            let (send, receive) = mpsc::channel();
+            std::thread::spawn(move || {
+                let _ = send.send(resampler.pending_event_count());
+            });
+            let count = receive
+                .recv_timeout(Duration::from_secs(5))
+                .expect("queue diagnostic must release the resampler mutex");
+            self.observed.store(count, Ordering::Relaxed);
+        }
+        fn enter(&self, _: &tracing::span::Id) {}
+        fn exit(&self, _: &tracing::span::Id) {}
+    }
+
+    for explicit in [false, true] {
+        let resampler = PointerEventResampler::new(contact());
+        let t0 = origin();
+        let enqueue = |event| {
+            if explicit {
+                resampler.add_event_at(event, t0);
+            } else {
+                resampler.add_event(event);
+            }
+        };
+        for _ in 0..50 {
+            enqueue(make_down_event_for_id(
+                contact(),
+                Offset::ZERO,
+                PointerType::Touch,
+            ));
+            enqueue(make_up_event_for_id(
+                contact(),
+                Offset::ZERO,
+                PointerType::Touch,
+            ));
+        }
+        enqueue(make_down_event_for_id(
+            contact(),
+            Offset::ZERO,
+            PointerType::Touch,
+        ));
+        let observed = Arc::new(AtomicUsize::new(0));
+        flui_testing::log_capture::disarm_interest_cache();
+        tracing::subscriber::with_default(
+            InspectQueue {
+                resampler: resampler.clone(),
+                observed: Arc::clone(&observed),
+            },
+            || enqueue(move_to(1.0)),
+        );
+        assert_eq!(
+            observed.load(Ordering::Relaxed),
+            102,
+            "the diagnostic can inspect the committed event, explicit={explicit}"
+        );
+    }
 }
 
 #[derive(Debug, Clone)]

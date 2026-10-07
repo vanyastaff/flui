@@ -32,3 +32,5 @@
 - `RawInputHandler` no longer panics when its callback replaces or clears itself.
 - `InputPredictor` output stays finite and bounded: the acceleration term comes from the
   least-squares fit and is capped, and an out-of-range smoothing factor is clamped.
+- The resampler's queue-overflow diagnostic runs after committing the event and releasing its
+  lock, so tracing subscribers can inspect or enqueue through the same resampler.
