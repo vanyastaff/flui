@@ -1,6 +1,7 @@
 //! Addressed input advances at the production realm frame and lifecycle boundaries.
 
 use std::cell::Cell;
+use std::panic::{AssertUnwindSafe, catch_unwind, panic_any};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -113,7 +114,7 @@ pub(crate) fn a_secondary_deferred_arena_verdict_is_delivered_by_the_next_frame(
     assert_eq!(accepted.get(), 1, "the verdict is delivered exactly once");
 }
 
-fn queued_hover_after_transition(paused: bool) {
+fn queued_hover_after_transition(paused: bool, held: bool) {
     let mut realm = UiRealm::for_test();
     let primary = realm.presentation_id();
     let hovers = Rc::new(Cell::new(0));
@@ -127,6 +128,9 @@ fn queued_hover_after_transition(paused: bool) {
         )
         .expect("root attaches");
     realm.synchronize_window_snapshot(primary, WindowExecutionState::Running, true, true);
+    if held {
+        realm.defer_first_frame();
+    }
     pump(&mut realm);
     dispatch(&realm, primary, hover());
     assert_eq!(hovers.get(), 0, "hover waits for frame cadence");
@@ -135,6 +139,9 @@ fn queued_hover_after_transition(paused: bool) {
         realm.update_host_lifecycle(AppLifecycleState::Resumed);
     } else {
         realm.update_window_focus(primary, false);
+    }
+    if held {
+        realm.allow_first_frame();
     }
     pump(&mut realm);
     assert_eq!(
@@ -152,11 +159,111 @@ fn queued_hover_after_transition(paused: bool) {
 }
 
 pub(crate) fn host_pause_discards_a_queued_hover_before_resume() {
-    queued_hover_after_transition(true);
+    queued_hover_after_transition(true, false);
 }
 
 pub(crate) fn window_blur_keeps_a_queued_hover() {
-    queued_hover_after_transition(false);
+    queued_hover_after_transition(false, false);
+}
+
+pub(crate) fn host_pause_discards_a_hover_held_before_the_first_commit() {
+    queued_hover_after_transition(true, true);
+}
+
+fn motion_probe(count: Rc<Cell<usize>>, fail: Rc<Cell<bool>>, message: &'static str) -> Listener {
+    Listener::new()
+        .behavior(HitTestBehavior::Opaque)
+        .on_pointer_move(move |_, _| {
+            count.set(count.get() + 1);
+            if fail.get() {
+                panic_any(message);
+            }
+        })
+        .child(SizedBox::new(40.0, 40.0))
+}
+
+fn failing_frame_motion_still_delivers_the_sibling(secondary_panics: bool) {
+    let mut realm = UiRealm::for_test();
+    let primary = realm.presentation_id();
+    let counts = [Rc::new(Cell::new(0)), Rc::new(Cell::new(0))];
+    let failures = [Rc::new(Cell::new(false)), Rc::new(Cell::new(false))];
+    realm
+        .attach_root_widget(&motion_probe(
+            counts[0].clone(),
+            failures[0].clone(),
+            "primary motion failed",
+        ))
+        .expect("primary root attaches");
+    realm.synchronize_window_snapshot(primary, WindowExecutionState::Running, true, true);
+    pump(&mut realm);
+    let secondary = install_secondary(&mut realm);
+    realm
+        .attach_root_widget_to_for_test(
+            secondary,
+            &motion_probe(
+                counts[1].clone(),
+                failures[1].clone(),
+                "secondary motion failed",
+            ),
+        )
+        .expect("secondary root attaches");
+    realm.synchronize_window_snapshot(secondary, WindowExecutionState::Running, false, true);
+    pump(&mut realm);
+    failures[0].set(true);
+    failures[1].set(secondary_panics);
+    for id in [primary, secondary] {
+        dispatch(
+            &realm,
+            id,
+            make_down_event(Offset::new(4.0, 6.0), PointerType::Touch),
+        );
+        dispatch(
+            &realm,
+            id,
+            make_move_event(Offset::new(8.0, 9.0), PointerType::Touch),
+        );
+    }
+    let failure = catch_unwind(AssertUnwindSafe(|| pump(&mut realm)))
+        .expect_err("the frame propagates its first input failure");
+    assert_eq!(
+        failure.downcast_ref::<&str>(),
+        Some(&"primary motion failed")
+    );
+    assert_eq!(
+        (counts[0].get(), counts[1].get()),
+        (1, 1),
+        "both accepted motions complete before the first failure resumes"
+    );
+    for fail in failures {
+        fail.set(false);
+    }
+    for id in [primary, secondary] {
+        dispatch(
+            &realm,
+            id,
+            make_move_event(Offset::new(12.0, 13.0), PointerType::Touch),
+        );
+    }
+    pump(&mut realm);
+    assert_eq!(
+        (counts[0].get(), counts[1].get()),
+        (2, 2),
+        "both contact routes recover after containment"
+    );
+    pump(&mut realm);
+    assert_eq!(
+        (counts[0].get(), counts[1].get()),
+        (2, 2),
+        "recovery cannot replay old motion"
+    );
+}
+
+pub(crate) fn a_panicking_primary_motion_does_not_erase_the_secondary_motion() {
+    failing_frame_motion_still_delivers_the_sibling(false);
+}
+
+pub(crate) fn competing_frame_motion_failures_preserve_the_first_and_recover() {
+    failing_frame_motion_still_delivers_the_sibling(true);
 }
 
 #[derive(Clone, StatelessView)]
