@@ -1,5 +1,5 @@
 //! Multi-contact events preserve their public pointer identity.
-use std::{cell::RefCell, rc::Rc, sync::Arc};
+use std::{cell::RefCell, rc::Rc};
 
 use flui_foundation::geometry::Offset;
 use flui_interaction::arena::GestureArena;
@@ -13,7 +13,7 @@ fn contact(id: u64) -> PointerId {
     PointerId::new(id).expect("nonzero contact")
 }
 
-fn pair(recognizer: &Arc<MultiTapGestureRecognizer>, a: u64, b: u64) {
+fn pair(recognizer: &Rc<MultiTapGestureRecognizer>, a: u64, b: u64) {
     for (id, position) in [(a, Offset::new(10.0, 10.0)), (b, Offset::new(100.0, 10.0))] {
         recognizer.add_pointer(contact(id), position, position);
     }

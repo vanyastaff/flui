@@ -63,11 +63,11 @@ impl Lane {
 
     /// Route this recognizer the way `GestureDetector` does: admitted from
     /// the `Down`, every other event forwarded.
-    fn join<R: GestureRecognizer + 'static>(&mut self, recognizer: &Arc<R>) {
-        let admit = Arc::clone(recognizer);
+    fn join<R: GestureRecognizer + 'static>(&mut self, recognizer: &Rc<R>) {
+        let admit = Rc::clone(recognizer);
         self.admit
             .push(Box::new(move |dispatch| admit.add_pointer_down(dispatch)));
-        let forward = Arc::clone(recognizer);
+        let forward = Rc::clone(recognizer);
         self.forward
             .push(Box::new(move |dispatch| forward.handle_event(dispatch)));
     }
@@ -312,7 +312,7 @@ fn assert_drag_terminal_callback_admits_the_next_contact_once(started: bool) {
     let starts = Rc::new(RefCell::new(Vec::new()));
     let ends = Rc::new(RefCell::new(Vec::new()));
     let cancels = counter();
-    let slot: Rc<RefCell<std::sync::Weak<DragGestureRecognizer>>> = Rc::default();
+    let slot: Rc<RefCell<std::rc::Weak<DragGestureRecognizer>>> = Rc::default();
     let readmit_slot = Rc::clone(&slot);
     let readmit = Rc::new(move || {
         let recognizer = readmit_slot
@@ -349,7 +349,7 @@ fn assert_drag_terminal_callback_admits_the_next_contact_once(started: bool) {
             c.set(c.get() + 1);
             readmit_cancel();
         });
-    *slot.borrow_mut() = Arc::downgrade(&drag);
+    *slot.borrow_mut() = Rc::downgrade(&drag);
     lane.join(&drag);
     let first_down = down(pointer, at(0.0, 0.0), touch);
     if started {
@@ -446,7 +446,7 @@ fn other_finger_does_not_complete_a_double_tap_contact() {
 
 fn long_press_callback_can_dispose_its_recognizer() {
     let mut lane = Lane::new();
-    let slot: Rc<RefCell<Option<Arc<LongPressGestureRecognizer>>>> = Rc::default();
+    let slot: Rc<RefCell<Option<Rc<LongPressGestureRecognizer>>>> = Rc::default();
     let inner = Rc::clone(&slot);
     let long_press =
         LongPressGestureRecognizer::new(lane.arena.clone()).with_on_long_press(move || {
@@ -455,7 +455,7 @@ fn long_press_callback_can_dispose_its_recognizer() {
                 recognizer.dispose();
             }
         });
-    *slot.borrow_mut() = Some(Arc::clone(&long_press));
+    *slot.borrow_mut() = Some(Rc::clone(&long_press));
     lane.join(&long_press);
     lane.send(&down(id(2), at(10.0, 10.0), PointerType::Touch));
     let pumped = catch_unwind(AssertUnwindSafe(|| lane.frames(600)));
@@ -469,7 +469,7 @@ fn long_press_callback_can_dispose_its_recognizer() {
 
 fn double_tap_callback_can_dispose_its_recognizer() {
     let mut lane = Lane::new();
-    let slot: Rc<RefCell<Option<Arc<DoubleTapGestureRecognizer>>>> = Rc::default();
+    let slot: Rc<RefCell<Option<Rc<DoubleTapGestureRecognizer>>>> = Rc::default();
     let inner = Rc::clone(&slot);
     let double_tap =
         DoubleTapGestureRecognizer::new(lane.arena.clone()).with_on_double_tap(move |_| {
@@ -478,7 +478,7 @@ fn double_tap_callback_can_dispose_its_recognizer() {
                 recognizer.dispose();
             }
         });
-    *slot.borrow_mut() = Some(Arc::clone(&double_tap));
+    *slot.borrow_mut() = Some(Rc::clone(&double_tap));
     lane.join(&double_tap);
     let touch = PointerType::Touch;
     click(&lane, id(2), at(10.0, 10.0), touch);
@@ -496,7 +496,7 @@ fn double_tap_callback_can_dispose_its_recognizer() {
 
 fn tap_move_callback_can_dispose_its_recognizer() {
     let mut lane = Lane::new();
-    let slot: Rc<RefCell<Option<Arc<TapGestureRecognizer>>>> = Rc::default();
+    let slot: Rc<RefCell<Option<Rc<TapGestureRecognizer>>>> = Rc::default();
     let inner = Rc::clone(&slot);
     let tap = TapGestureRecognizer::new(lane.arena.clone()).with_on_tap_move(move |_| {
         let recognizer = inner.borrow().clone();
@@ -504,7 +504,7 @@ fn tap_move_callback_can_dispose_its_recognizer() {
             recognizer.dispose();
         }
     });
-    *slot.borrow_mut() = Some(Arc::clone(&tap));
+    *slot.borrow_mut() = Some(Rc::clone(&tap));
     lane.join(&tap);
     let touch = PointerType::Touch;
     lane.send(&down(id(2), at(10.0, 10.0), touch));
@@ -659,15 +659,15 @@ fn panicking_team_winner_still_rejects_its_teammates() {
     let arena = GestureArena::new();
     let pointer = id(2);
     let team = GestureArenaTeam::new();
-    let winner = Arc::new(Verdicts {
+    let winner = Rc::new(Verdicts {
         panic_on_accept: true,
         ..Verdicts::default()
     });
-    let teammate = Arc::new(Verdicts::default());
+    let teammate = Rc::new(Verdicts::default());
     let _winner_entry = team.add(pointer, winner.clone(), &arena);
     let _teammate_entry = team.add(pointer, teammate.clone(), &arena);
-    let rival = Arc::new(Verdicts::default());
-    let rival_entry = arena.add(pointer, rival);
+    let rival = Rc::new(Verdicts::default());
+    let rival_entry = arena.add(pointer, &rival);
     arena.close(pointer);
     rival_entry.resolve(GestureDisposition::Rejected);
     let drained = catch_unwind(AssertUnwindSafe(|| arena.drain_deferred_resolutions()));
@@ -684,10 +684,10 @@ fn panicking_team_winner_still_rejects_its_teammates() {
 fn accept_from_a_withdrawn_member_cannot_end_the_arena() {
     let arena = GestureArena::new();
     let pointer = id(2);
-    let members: Vec<_> = (0..3).map(|_| Arc::new(Verdicts::default())).collect();
+    let members: Vec<_> = (0..3).map(|_| Rc::new(Verdicts::default())).collect();
     let entries: Vec<_> = members
         .iter()
-        .map(|member| arena.add(pointer, member.clone()))
+        .map(|member| arena.add(pointer, member))
         .collect();
     arena.close(pointer);
     entries[0].resolve(GestureDisposition::Rejected);
@@ -704,15 +704,15 @@ fn accept_from_a_withdrawn_member_cannot_end_the_arena() {
 fn held_arena_swept_on_up_leaves_room_for_the_next_contact() {
     let arena = GestureArena::new();
     let pointer = PointerId::PRIMARY;
-    let first = Arc::new(Verdicts::default());
-    let second = Arc::new(Verdicts::default());
-    let first_entry = arena.add(pointer, first.clone());
-    arena.add(pointer, second.clone());
+    let first = Rc::new(Verdicts::default());
+    let second = Rc::new(Verdicts::default());
+    let first_entry = arena.add(pointer, &first);
+    arena.add(pointer, &second);
     arena.close(pointer);
     first_entry.hold();
     run_pointer_lifecycle(&arena, &up(pointer, at(0.0, 0.0), PointerType::Mouse));
-    let next = Arc::new(Verdicts::default());
-    arena.add(pointer, next.clone());
+    let next = Rc::new(Verdicts::default());
+    arena.add(pointer, &next);
     arena.close(pointer);
     arena.drain_deferred_resolutions();
     assert_eq!(next.get(), (1, 0), "the next contact's lone member wins");
@@ -1210,7 +1210,7 @@ struct Sequence {
 struct Model {
     arena: GestureArena,
     log: Arc<std::sync::Mutex<Vec<(usize, GestureDisposition)>>>,
-    members: Vec<Arc<ModelMember>>,
+    members: Vec<Rc<ModelMember>>,
     entries: Vec<GestureArenaEntry>,
     /// Members withdrawn by their own rejection before any verdict.
     withdrawn: Vec<bool>,
@@ -1256,10 +1256,6 @@ impl Model {
         (!sequence.members.is_empty()).then(|| sequence.members[choice % sequence.members.len()])
     }
 
-    #[expect(
-        clippy::arc_with_non_send_sync,
-        reason = "arena members are owner-local and the arena API takes an Arc"
-    )]
     fn add(&mut self, pointer: u64, kind: MemberKind) {
         let slot = Self::slot(pointer);
         let sequence = *self.current[slot].get_or_insert_with(|| {
@@ -1270,14 +1266,14 @@ impl Model {
             return;
         }
         let index = self.members.len();
-        let member = Arc::new(ModelMember {
+        let member = Rc::new(ModelMember {
             index,
             kind,
             log: Arc::clone(&self.log),
             arena: self.arena.clone(),
             entry: std::sync::Mutex::new(None),
         });
-        let entry = self.arena.add(id(pointer), member.clone());
+        let entry = self.arena.add(id(pointer), &member);
         *member.entry.lock().expect("member entry") = Some(entry.clone());
         self.members.push(member);
         self.entries.push(entry);
@@ -1540,12 +1536,9 @@ fn ignored_accept_candidate_drops_outside_the_slot_lock() {
         let arena = GestureArena::new();
         let pointer = id(2);
         let closed = counter_flag();
-        arena.add(pointer, Arc::new(Verdicts::default()));
-        #[expect(
-            clippy::arc_with_non_send_sync,
-            reason = "the arena takes members as Arc; this one is owner-local by design"
-        )]
-        let candidate = Arc::new(ClosesOnDrop {
+        let member = Rc::new(Verdicts::default());
+        arena.add(pointer, &member);
+        let candidate = Rc::new(ClosesOnDrop {
             arena: arena.clone(),
             pointer,
             closed: Rc::clone(&closed),
@@ -1572,13 +1565,9 @@ fn nonmember_resolution_candidate_retires_after_detachment() {
         let arena = GestureArena::new();
         let pointer = id(2);
         let closed = counter_flag();
-        let member = Arc::new(Verdicts::default());
-        arena.add(pointer, member.clone());
-        #[expect(
-            clippy::arc_with_non_send_sync,
-            reason = "the public arena member API is Arc-backed and owner-local"
-        )]
-        let candidate = Arc::new(ClosesOnDrop {
+        let member = Rc::new(Verdicts::default());
+        arena.add(pointer, &member);
+        let candidate = Rc::new(ClosesOnDrop {
             arena: arena.clone(),
             pointer,
             closed: Rc::clone(&closed),
@@ -1626,23 +1615,15 @@ fn arena_retirement_preserves_the_first_failure_and_recovers() {
         let pointer = id(2);
         let retired = counter();
         let rejected = counter();
-        #[expect(
-            clippy::arc_with_non_send_sync,
-            reason = "the public arena member API is Arc-backed and owner-local"
-        )]
-        let member = Arc::new(RetirementMember {
+        let member = Rc::new(RetirementMember {
             dropped: Rc::clone(&retired),
             rejected: Rc::clone(&rejected),
             panic_on_reject: rejection_panics,
             panic_on_drop: false,
         });
-        arena.add(pointer, member);
+        arena.add(pointer, &member);
         let candidate_retired = counter();
-        #[expect(
-            clippy::arc_with_non_send_sync,
-            reason = "the public arena member API is Arc-backed and owner-local"
-        )]
-        let candidate = Arc::new(RetirementMember {
+        let candidate = Rc::new(RetirementMember {
             dropped: Rc::clone(&candidate_retired),
             rejected: counter(),
             panic_on_reject: false,
@@ -1666,12 +1647,12 @@ fn arena_retirement_preserves_the_first_failure_and_recovers() {
         assert_eq!(
             retired.get(),
             0,
-            "member ownership is retained after failure"
+            "the participant's live owner survives the failed resolution"
         );
         assert!(arena.is_empty(), "failed contest was detached");
 
-        let fresh = Arc::new(Verdicts::default());
-        arena.add(pointer, fresh.clone());
+        let fresh = Rc::new(Verdicts::default());
+        arena.add(pointer, &fresh);
         arena.close(pointer);
         assert_eq!(arena.drain_deferred_resolutions(), 1);
         assert_eq!(fresh.get(), (1, 0));
@@ -1684,6 +1665,7 @@ fn arena_polls_pointer_deadlines_in_identity_order() {
     let arena = GestureArena::binding_driven(Arc::new(clock.clone()));
     let fired = Rc::new(RefCell::new(Vec::new()));
     let mut recognizers = Vec::new();
+    let mut rivals = Vec::new();
     for raw in (1..=8).rev() {
         let pointer = id(raw);
         let log = Rc::clone(&fired);
@@ -1691,9 +1673,11 @@ fn arena_polls_pointer_deadlines_in_identity_order() {
             .with_on_long_press(move || log.borrow_mut().push(raw));
         let event = down(pointer, at(0.0, 0.0), PointerType::Touch);
         recognizer.add_pointer_down(PointerDispatch::at_root(&event));
-        arena.add(pointer, Arc::new(Verdicts::default()));
+        let rival = Rc::new(Verdicts::default());
+        arena.add(pointer, &rival);
         arena.close(pointer);
         recognizers.push(recognizer);
+        rivals.push(rival);
     }
 
     clock.advance(Duration::from_secs(1));
