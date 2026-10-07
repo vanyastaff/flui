@@ -138,7 +138,7 @@ pub(crate) fn pointer_delivery_preserves_source_and_sample_families() {
         },
     )
     .with_device(DeviceId::try_from(13_u64).expect("authored hardware"))
-    .with_role(PointerRole::Secondary);
+    .with_role(PointerRole::Additional);
     let sample = |time, x, pressure| {
         PointerSample::new(EventTime::from_nanos(time), position(x, 30.0))
             .with_pressure(Pressure::try_new(pressure).expect("authored pressure"))
