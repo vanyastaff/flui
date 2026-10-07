@@ -140,7 +140,6 @@ pub mod prelude {
     // `PointerEventKind` was dropped alongside the deletion of the
     // rendering-side `target.rs` module; canonical pointer-event types
     // live in `flui_interaction::events`.
-    pub use crate::hit_testing::MatrixTransformPart;
     // Render hit-test metadata; executable tracking remains owned by the
     // presentation's interaction runtime.
     pub use crate::hit_testing::{CursorIcon, MouseTrackerAnnotation};
