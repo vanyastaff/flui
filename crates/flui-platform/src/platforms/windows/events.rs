@@ -275,7 +275,9 @@ fn native_history(raw: u32) -> Option<Vec<NativeReading>> {
     // obtained from the message; Windows rejects stale or invented IDs.
     unsafe {
         let mut info = POINTER_INFO::default();
-        GetPointerInfo(raw, &mut info).ok()?;
+        let current = GetPointerInfo(raw, &mut info);
+        eprintln!("WIN32_POINTER_QUERY raw={raw} current={current:?} info={info:?}");
+        current.ok()?;
         let count = info.historyCount.max(1);
         match info.pointerType {
             PT_PEN => read_history(count, |count, buffer| GetPointerPenInfoHistory(raw, count, Some(buffer)))
@@ -292,7 +294,9 @@ fn read_history<T: Default + Clone>(mut count: u32, query: impl FnOnce(*mut u32,
     let mut values = Vec::new();
     values.try_reserve_exact(count as usize).ok()?;
     values.resize(count as usize, T::default());
-    query(&mut count, values.as_mut_ptr()).ok()?;
+    let result = query(&mut count, values.as_mut_ptr());
+    eprintln!("WIN32_POINTER_HISTORY result={result:?} count={count}");
+    result.ok()?;
     if count as usize > values.len() { return None; }
     values.truncate(count as usize);
     Some(values)

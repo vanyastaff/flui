@@ -2582,7 +2582,7 @@ mod native_windows {
         let platform = WindowsPlatform::new().expect("native Windows platform");
         let window = open_shown(&platform);
         let hwnd = hwnd_of(&window);
-        pump_translated(hwnd);
+        pump_pointer_thread();
         let mut target = POINT { x: 40, y: 40 };
         // SAFETY: the live shown owner window and initialized point.
         assert!(unsafe { ClientToScreen(hwnd, &mut target) }.as_bool());
@@ -2633,7 +2633,7 @@ mod native_windows {
                 }
                 let limit = Instant::now() + Duration::from_millis(500);
                 while Instant::now() < limit {
-                    pump_translated(hwnd);
+                    pump_pointer_thread();
                     std::thread::sleep(Duration::from_millis(2));
                 }
             }
@@ -2701,6 +2701,21 @@ mod native_windows {
                     }
                 }
             }
+    }
+
+    #[expect(unsafe_code, reason = "drains actual native pointer broker messages on the child window's owner thread")]
+    fn pump_pointer_thread() {
+        for _ in 0..256 {
+            let mut message = MSG::default();
+            // SAFETY: this child owns every window on this thread, including
+            // the platform's message-only broker. No HWND filter excludes it.
+            if !unsafe { PeekMessageW(&mut message, None, 0, 0, PM_REMOVE) }.as_bool() { return; }
+            eprintln!("NATIVE_QUEUE hwnd={:?} message={} tick={}", message.hwnd, message.message, message.time);
+            trace_native_pointer(&message);
+            // SAFETY: dispatch the actual message retrieved by this thread.
+            unsafe { let _ = TranslateMessage(&message); DispatchMessageW(&message); }
+        }
+        panic!("native pointer child queue did not drain");
     }
 
     /// Delaying dispatch cannot compress the time between generated samples.
