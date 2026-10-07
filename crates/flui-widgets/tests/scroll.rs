@@ -76,7 +76,6 @@ pub(crate) fn scrollable_drag_up_increases_scroll_offset() {
 }
 
 pub(crate) fn a_remaining_touch_continues_scroll_without_an_intermediate_fling() {
-    use flui_foundation::geometry::Offset;
     use flui_platform_api::{EventTime, pointer::{PointerButton, PointerButtons, PointerEvent, PointerInfo, PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease, PointerSample}};
     use flui_testing::PointerPhase;
 
@@ -86,7 +85,7 @@ pub(crate) fn a_remaining_touch_continues_scroll_without_an_intermediate_fling()
         .controller(controller.clone())
         .child(SizedBox::new(300.0, 5000.0));
     let mut scoped = fling_scoped(widget, Vsync::new(), tight(300.0, 300.0));
-    let event = |id, millis, y, phase| {
+    let event = |id: u64, millis: u64, y: f64, phase| {
         let info = PointerInfo::new(flui_interaction::PointerId::try_from(id).expect("nonzero touch identity"), PointerKind::Touch);
         let sample = PointerSample::new(EventTime::from_nanos(millis * 1_000_000), PointerPosition::try_new(flui_foundation::geometry::Point::new(150.0, y)).expect("finite touch position"));
         match phase {
