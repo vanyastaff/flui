@@ -309,5 +309,19 @@ mod tests {
         }
         resolver.unregister(pointer, last);
         assert_eq!(resolver.handler_count(pointer), 0);
+
+        let healthy = PointerSignalResolver::new();
+        let dropped = Rc::new(Cell::new(0));
+        let capture = CaptureRetirement(Rc::clone(&dropped));
+        let registration = healthy.register(pointer, SignalPriority::Normal, move |_| {
+            let _keep = &capture;
+        });
+        assert_eq!(dropped.get(), 0);
+        healthy.unregister(pointer, registration);
+        assert_eq!(
+            dropped.get(),
+            1,
+            "healthy callback retirement still destroys its capture"
+        );
     }
 }
