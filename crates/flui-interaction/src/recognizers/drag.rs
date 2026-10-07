@@ -19,7 +19,7 @@ use crate::{
     traits::DragAxis,
 };
 use flui_foundation::geometry::Offset;
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::{Cell, RefCell}, rc::{Rc, Weak}};
 use web_time::Instant;
 
 /// Position used for the initial drag notification.
@@ -31,6 +31,18 @@ pub enum DragStartBehavior {
     /// Report the position at acceptance.
     #[default]
     Start,
+}
+
+/// Which contacts may continue one drag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum DragPointerStrategy {
+    /// The first admitted contact alone produces the drag.
+    #[default]
+    PrimaryOnly,
+    /// Keep the active touch until release, then continue with the earliest
+    /// admitted surviving touch from the same device, without a position jump.
+    ContinueWithRemaining,
 }
 /// Details about a newly admitted drag contact.
 #[derive(Debug, Clone, PartialEq)]
@@ -156,6 +168,7 @@ pub struct DragGestureRecognizerBuilder {
     arena: GestureArena,
     axis: DragAxis,
     start_behavior: DragStartBehavior,
+    pointer_strategy: DragPointerStrategy,
     settings: GestureSettings,
     callbacks: DragCallbacks,
 }
@@ -168,6 +181,12 @@ impl std::fmt::Debug for DragGestureRecognizerBuilder {
     }
 }
 impl DragGestureRecognizerBuilder {
+    /// Configure how another touch may continue the same drag.
+    #[must_use]
+    pub fn pointer_strategy(mut self, strategy: DragPointerStrategy) -> Self {
+        self.pointer_strategy = strategy;
+        self
+    }
     /// Configure admission settings, captured independently for each contact.
     #[must_use]
     pub fn settings(mut self, settings: GestureSettings) -> Self {
@@ -214,18 +233,22 @@ impl DragGestureRecognizerBuilder {
     #[must_use]
     pub fn build(self) -> Rc<DragGestureRecognizer> {
         Rc::<DragGestureRecognizer>::new_cyclic(|this| DragGestureRecognizer {
-            contact: PrimaryContact::new(ArenaMembership::new(self.arena, this.clone())),
+            arena: self.arena,
+            this: this.clone(),
             axis: self.axis,
             start_behavior: self.start_behavior,
+            pointer_strategy: self.pointer_strategy,
             settings: self.settings,
             callbacks: self.callbacks,
-            drag_state: RefCell::new(None),
+            contacts: RefCell::new(Vec::new()),
+            active: Cell::new(None),
+            started: Cell::new(false),
+            last_contact: Cell::new(0),
         })
     }
 }
 
 struct DragState {
-    id: ContactId,
     accepted: bool,
     last_position: Offset<f64>,
     last_global_position: Offset<f64>,
@@ -234,22 +257,51 @@ struct DragState {
     velocity_tracker: VelocityTracker,
 }
 
-/// Recognizes one drag, using immutable callbacks and policy.
-/// An accepted cancellation delivers `on_end(Cancelled)`; an unaccepted
-/// cancellation delivers `on_cancel`. Both leave the recognizer reusable.
-pub struct DragGestureRecognizer {
+// A contact is the arena member, just as Tap's per-sequence participant is.
+// Its exact admission identity prevents old verdicts reaching a reused pointer.
+struct DragContact {
+    owner: Weak<DragGestureRecognizer>,
+    id: ContactId,
+    pointer: PointerId,
+    device: Option<flui_platform_api::pointer::DeviceId>,
     contact: PrimaryContact,
+    state: RefCell<DragState>,
+}
+impl GestureArenaMember for DragContact {
+    fn accept_gesture(&self, pointer: PointerId) {
+        if pointer == self.pointer && let Some(owner) = self.owner.upgrade() {
+            owner.accept_contact(pointer, self.id);
+        }
+    }
+    fn reject_gesture(&self, pointer: PointerId) {
+        if pointer == self.pointer && let Some(owner) = self.owner.upgrade() {
+            owner.reject_contact(pointer, self.id);
+        }
+    }
+}
+
+/// Recognizes one drag, using immutable callbacks and policy.
+/// An accepted cancellation delivers on_end(Cancelled); an unaccepted
+/// cancellation delivers on_cancel. Both leave the recognizer reusable.
+pub struct DragGestureRecognizer {
+    contacts: RefCell<Vec<Rc<DragContact>>>,
+    arena: GestureArena,
+    this: Weak<DragGestureRecognizer>,
+    active: Cell<Option<ContactId>>,
+    started: Cell<bool>,
+    last_contact: Cell<u64>,
     axis: DragAxis,
     start_behavior: DragStartBehavior,
+    pointer_strategy: DragPointerStrategy,
     settings: GestureSettings,
     callbacks: DragCallbacks,
-    drag_state: RefCell<Option<DragState>>,
 }
 impl std::fmt::Debug for DragGestureRecognizer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DragGestureRecognizer")
             .field("axis", &self.axis)
             .field("start_behavior", &self.start_behavior)
+            .field("pointer_strategy", &self.pointer_strategy)
             .finish_non_exhaustive()
     }
 }
@@ -258,22 +310,33 @@ impl DragGestureRecognizer {
     #[must_use]
     pub fn builder(arena: GestureArena, axis: DragAxis) -> DragGestureRecognizerBuilder {
         DragGestureRecognizerBuilder {
-            arena,
-            axis,
+            arena, axis,
             start_behavior: DragStartBehavior::default(),
+            pointer_strategy: DragPointerStrategy::default(),
             settings: GestureSettings::default(),
             callbacks: DragCallbacks::default(),
         }
     }
     /// Configured axis.
     #[must_use]
-    pub fn axis(&self) -> DragAxis {
-        self.axis
-    }
+    pub fn axis(&self) -> DragAxis { self.axis }
     /// Configured initial-position policy.
     #[must_use]
-    pub fn drag_start_behavior(&self) -> DragStartBehavior {
-        self.start_behavior
+    pub fn drag_start_behavior(&self) -> DragStartBehavior { self.start_behavior }
+    fn current(&self, pointer: PointerId) -> Option<Rc<DragContact>> {
+        self.contacts.borrow().iter().find(|contact| contact.pointer == pointer).cloned()
+    }
+    fn active_contact(&self) -> Option<Rc<DragContact>> {
+        let id = self.active.get()?;
+        self.contacts.borrow().iter().find(|contact| contact.id == id).cloned()
+    }
+    fn is_current(&self, contact: &DragContact) -> bool {
+        self.contacts.borrow().iter().any(|current| current.id == contact.id && current.pointer == contact.pointer)
+    }
+    fn remove(&self, pointer: PointerId, id: ContactId) -> Option<Rc<DragContact>> {
+        let mut contacts = self.contacts.borrow_mut();
+        let index = contacts.iter().position(|contact| contact.pointer == pointer && contact.id == id)?;
+        Some(contacts.remove(index))
     }
     fn project_delta(&self, delta: Offset<f64>) -> Offset<f64> {
         match self.axis {
@@ -292,51 +355,33 @@ impl DragGestureRecognizer {
     fn slop(&self, kind: PointerKind, settings: &GestureSettings) -> f64 {
         match self.axis {
             DragAxis::Free => settings.pan_slop_for(kind),
-            DragAxis::Vertical | DragAxis::Horizontal if kind == PointerKind::Mouse => {
-                settings.hit_slop(kind)
-            }
+            DragAxis::Vertical | DragAxis::Horizontal if kind == PointerKind::Mouse => settings.hit_slop(kind),
             DragAxis::Vertical => settings.pan_slop_vertical(),
             DragAxis::Horizontal => settings.pan_slop_horizontal(),
         }
     }
     fn handle_move(&self, dispatch: PointerDispatch<'_>) {
-        let Some(contact) = self.contact.current() else {
-            return;
-        };
-        let (Some(position), Some(global)) =
-            (dispatch.local.position(), dispatch.global.position())
-        else {
-            return;
-        };
-        if !position.dx.is_finite()
-            || !position.dy.is_finite()
-            || !global.dx.is_finite()
-            || !global.dy.is_finite()
-        {
+        let Some(tracked) = dispatch.local.pointer_id().and_then(|pointer| self.current(pointer)) else { return; };
+        let Some(snapshot) = tracked.contact.current() else { return; };
+        let (Some(position), Some(global)) = (dispatch.local.position(), dispatch.global.position()) else { return; };
+        if !position.dx.is_finite() || !position.dy.is_finite() || !global.dx.is_finite() || !global.dy.is_finite() {
             self.cancel();
             return;
         }
         let history = motion_history(dispatch.local);
-        let clock = self.contact.now();
+        let clock = self.arena.now();
+        if !self.is_current(&tracked) { return; }
+        let active = self.active.get() == Some(tracked.id);
         let (update, claim) = {
-            let mut slot = self.drag_state.borrow_mut();
-            let Some(state) = slot.as_mut() else {
-                return;
-            };
-            if state.id != contact.id {
-                return;
-            }
+            let mut state = tracked.state.borrow_mut();
             for (stamp, position) in history {
                 let timestamp = state.timeline.instant(stamp, clock);
                 state.velocity_tracker.add_position(timestamp, position);
             }
             let now = state.timeline.instant(event_time(dispatch.local), clock);
             let delta = self.project_delta(position - state.last_position);
-            if !delta.dx.is_finite()
-                || !delta.dy.is_finite()
-                || !self.primary_delta(delta).is_finite()
-            {
-                drop(slot);
+            if !delta.dx.is_finite() || !delta.dy.is_finite() || !self.primary_delta(delta).is_finite() {
+                drop(state);
                 self.cancel();
                 return;
             }
@@ -344,232 +389,207 @@ impl DragGestureRecognizer {
             state.last_global_position = global;
             state.last_time = now;
             state.velocity_tracker.add_position(now, position);
-            let update = state.accepted.then_some(DragUpdateDetails {
-                global_position: global,
-                local_position: position,
-                delta,
-                primary_delta: self.primary_delta(delta),
-                kind: contact.kind,
+            let update = (active && self.started.get()).then_some(DragUpdateDetails {
+                global_position: global, local_position: position, delta,
+                primary_delta: self.primary_delta(delta), kind: snapshot.kind,
             });
-            let claim = !state.accepted
-                && self.primary_delta(position - contact.local).abs()
-                    > self.slop(contact.kind, &contact.settings);
+            let claim = active && !state.accepted
+                && self.primary_delta(position - snapshot.local).abs() > self.slop(snapshot.kind, &snapshot.settings);
             (update, claim)
         };
         if let Some(details) = update {
-            invoke_callback(
-                self.callbacks.on_update.clone(),
-                || {},
-                |callback| callback(details),
-            );
+            invoke_callback(self.callbacks.on_update.clone(), || {}, |callback| callback(details));
         } else if claim {
-            self.contact.accept();
+            tracked.contact.accept();
         }
     }
-    fn begin_accepted_drag(&self) {
-        let Some(contact) = self.contact.current() else {
-            return;
-        };
+    fn accept_contact(&self, pointer: PointerId, id: ContactId) {
+        let Some(tracked) = self.current(pointer).filter(|contact| contact.id == id) else { return; };
+        tracked.state.borrow_mut().accepted = true;
+        if self.active.get() == Some(id) { self.begin_accepted_drag(&tracked); }
+    }
+    fn begin_accepted_drag(&self, tracked: &Rc<DragContact>) {
+        let Some(snapshot) = tracked.contact.current() else { return; };
+        if !self.is_current(tracked) || self.started.replace(true) { return; }
         let (start, update) = {
-            let mut state = self.drag_state.borrow_mut();
-            let Some(state) = state.as_mut() else {
-                return;
-            };
-            if state.accepted || state.id != contact.id {
-                return;
-            }
-            state.accepted = true;
+            let state = tracked.state.borrow();
             let (local, global) = match self.start_behavior {
-                DragStartBehavior::Down => (contact.local, contact.global),
+                DragStartBehavior::Down => (snapshot.local, snapshot.global),
                 DragStartBehavior::Start => (state.last_position, state.last_global_position),
             };
             let start = DragStartDetails {
-                global_position: global,
-                local_position: local,
-                kind: contact.kind,
-                timestamp: state.last_time,
+                global_position: global, local_position: local,
+                kind: snapshot.kind, timestamp: state.last_time,
             };
-            let delta = self.project_delta(state.last_position - contact.local);
-            let update = (self.start_behavior == DragStartBehavior::Down && delta != Offset::ZERO)
-                .then_some(DragUpdateDetails {
-                    global_position: state.last_global_position,
-                    local_position: contact.local + delta,
-                    delta,
-                    primary_delta: self.primary_delta(delta),
-                    kind: contact.kind,
-                });
+            let delta = self.project_delta(state.last_position - snapshot.local);
+            let update = (self.start_behavior == DragStartBehavior::Down && delta != Offset::ZERO).then_some(DragUpdateDetails {
+                global_position: state.last_global_position, local_position: snapshot.local + delta,
+                delta, primary_delta: self.primary_delta(delta), kind: snapshot.kind,
+            });
             (start, update)
         };
-        invoke_callback(
-            self.callbacks.on_start.clone(),
-            || {},
-            |callback| callback(start),
-        );
-        if self.contact.is_current(contact.id)
-            && let Some(details) = update
-        {
-            invoke_callback(
-                self.callbacks.on_update.clone(),
-                || {},
-                |callback| callback(details),
-            );
+        let mut first = crate::routing::RoutePanic::capture(|| invoke_callback(self.callbacks.on_start.clone(), || {}, |callback| callback(start)));
+        if first.is_none() && self.is_current(tracked) && self.active.get() == Some(tracked.id) && let Some(details) = update {
+            let candidate = crate::routing::RoutePanic::capture(|| invoke_callback(self.callbacks.on_update.clone(), || {}, |callback| callback(details)));
+            crate::routing::RoutePanic::preserve_first(&mut first, candidate, "drag initial update");
+        }
+        // Claim remaining contacts only after the active acceptance callback.
+        // That callback can cancel the entire sequence or admit a replacement.
+        if self.is_current(tracked) {
+            let pending: Vec<_> = self.contacts.borrow().iter()
+                .filter(|contact| contact.id != tracked.id && !contact.state.borrow().accepted)
+                .cloned().collect();
+            for contact in pending {
+                if self.is_current(&contact) {
+                    let candidate = crate::routing::RoutePanic::capture(|| contact.contact.accept());
+                    crate::routing::RoutePanic::preserve_first(&mut first, candidate, "drag remaining contact claim");
+                }
+                retire_callback(Some(contact), &mut first);
+            }
+        }
+        finish_containment(first, std::thread::panicking());
+    }
+    fn release_contact(&self, tracked: Rc<DragContact>) {
+        let was_active = self.active.get() == Some(tracked.id);
+        let outgoing = self.remove(tracked.pointer, tracked.id);
+        let next = was_active.then(|| self.contacts.borrow().iter()
+            .find(|contact| contact.state.borrow().accepted).cloned()).flatten();
+        if was_active {
+            self.active.set(next.as_ref().map(|contact| contact.id));
+        }
+        // The successor's own latest position and tracker already establish the
+        // baseline. No synthetic move or inter-finger velocity sample is added.
+        tracked.contact.finish();
+        drop(outgoing);
+        if let Some(next) = next && !self.started.get() && self.is_current(&next) {
+            self.begin_accepted_drag(&next);
         }
     }
-    fn terminate(
-        &self,
-        reason: GestureEndReason,
-        dispatch: Option<PointerDispatch<'_>>,
-    ) -> CancelOutcome {
-        let Some(contact) = self.contact.current() else {
-            return CancelOutcome::Idle;
-        };
-        let clock = self.contact.now();
-        if !self.contact.is_current(contact.id) {
-            return CancelOutcome::Idle;
+    fn reject_contact(&self, pointer: PointerId, id: ContactId) {
+        let Some(tracked) = self.current(pointer).filter(|contact| contact.id == id) else { return; };
+        if self.active.get() == Some(id) {
+            self.terminate(GestureEndReason::Cancelled, None);
+        } else if let Some(outgoing) = self.remove(pointer, id) {
+            outgoing.contact.withdraw();
         }
-        let state = self.drag_state.borrow_mut().take();
-        let Some(mut state) = state else {
-            self.contact.cancel();
-            return CancelOutcome::Cancelled;
+    }
+    fn terminate(&self, reason: GestureEndReason, dispatch: Option<PointerDispatch<'_>>) -> CancelOutcome {
+        let Some(active) = self.active_contact() else { return CancelOutcome::Idle; };
+        // Detach the complete outgoing sequence before clocks, diagnostics,
+        // arena verdicts or callbacks can admit a replacement.
+        let outgoing = std::mem::take(&mut *self.contacts.borrow_mut());
+        self.active.set(None);
+        let accepted = self.started.replace(false);
+        let (clock, clock_failure) = match crate::routing::RoutePanic::try_run(|| self.arena.now()) {
+            Ok(now) => (now, None),
+            Err(failure) => (active.state.borrow().last_time, Some(failure)),
         };
-        let now = state
-            .timeline
-            .instant(dispatch.and_then(|d| event_time(d.local)), clock);
-        let velocity = state.velocity_tracker.velocity_at(now);
-        let (position, global) = dispatch
-            .filter(|d| matches!(d.local, PointerEvent::Up(_)))
-            .map_or((state.last_position, state.last_global_position), |d| {
-                (
+        let (velocity, position, global) = {
+            let mut state = active.state.borrow_mut();
+            let now = state.timeline.instant(dispatch.and_then(|d| event_time(d.local)), clock);
+            let velocity = state.velocity_tracker.velocity_at(now);
+            let (position, global) = dispatch.filter(|d| matches!(d.local, PointerEvent::Up(_)))
+                .map_or((state.last_position, state.last_global_position), |d| (
                     d.local.position().unwrap_or(state.last_position),
                     d.global.position().unwrap_or(state.last_global_position),
-                )
-            });
-        if state.accepted {
-            let before = || {
-                if reason == GestureEndReason::Completed {
-                    self.contact.finish();
-                } else {
-                    self.contact.cancel();
-                }
-            };
-            invoke_callback(self.callbacks.on_end.clone(), before, |callback| {
-                callback(DragEndDetails {
-                    reason,
-                    velocity,
-                    local_position: position,
-                    global_position: global,
-                    primary_velocity: self.primary_delta(velocity.pixels_per_second),
-                })
-            });
-        } else {
-            invoke_callback(
-                self.callbacks.on_cancel.clone(),
-                || {
-                    if reason == GestureEndReason::Completed {
-                        self.contact.withdraw();
+                ));
+            (velocity, position, global)
+        };
+        let retire = || {
+            let mut first = clock_failure;
+            for contact in outgoing {
+                let candidate = crate::routing::RoutePanic::capture(|| {
+                    if reason == GestureEndReason::Completed && contact.id == active.id {
+                        contact.contact.finish();
+                    } else if accepted {
+                        contact.contact.cancel();
                     } else {
-                        self.contact.cancel();
+                        contact.contact.withdraw();
                     }
-                },
-                |callback| callback(),
-            );
+                });
+                crate::routing::RoutePanic::preserve_first(&mut first, candidate, "drag contact retirement");
+                retire_callback(Some(contact), &mut first);
+            }
+            finish_containment(first, std::thread::panicking());
+        };
+        if accepted {
+            invoke_callback(self.callbacks.on_end.clone(), retire, |callback| callback(DragEndDetails {
+                reason, velocity, local_position: position, global_position: global,
+                primary_velocity: self.primary_delta(velocity.pixels_per_second),
+            }));
+        } else {
+            invoke_callback(self.callbacks.on_cancel.clone(), retire, |callback| callback());
         }
         CancelOutcome::Cancelled
     }
 }
 impl GestureRecognizer for DragGestureRecognizer {
     fn add_pointer(&self, dispatch: PointerDispatch<'_>) {
-        if !is_primary_down(dispatch.local) {
-            return;
-        }
-        if let Some(current) = self.contact.current() {
-            if Some(current.pointer) != dispatch.local.pointer_id() {
-                return;
-            }
+        if !is_primary_down(dispatch.local) { return; }
+        let PointerEvent::Down(down) = dispatch.local else { return; };
+        if let Some(existing) = self.current(down.pointer.id) {
             self.cancel();
-            if self.contact.current().is_some() {
+            if self.active.get().is_some() || self.is_current(&existing) { return; }
+        }
+        if let Some(active) = self.active_contact() {
+            let Some(snapshot) = active.contact.current() else { return; };
+            if self.pointer_strategy == DragPointerStrategy::PrimaryOnly
+                || snapshot.kind != PointerKind::Touch || down.pointer.kind != snapshot.kind
+                || down.pointer.device != active.device {
                 return;
             }
         }
-        let Ok(id) = self.contact.begin(dispatch, &self.settings) else {
-            return;
-        };
-        let Some(contact) = self.contact.current() else {
-            return;
-        };
+        let previous = self.active.get();
+        let Some(id) = ContactId::next(&self.last_contact) else { return; };
+        let clock = self.arena.now();
+        if self.active.get() != previous || self.current(down.pointer.id).is_some() { return; }
         let mut timeline = EventTimeline::default();
-        let now = timeline.instant(event_time(dispatch.local), self.contact.now());
-        if !self.contact.is_current(id) {
-            return;
-        }
-        let mut velocity_tracker =
-            VelocityTracker::with_estimator(contact.kind, contact.settings.velocity_estimator());
-        velocity_tracker.add_position(now, contact.local);
-        *self.drag_state.borrow_mut() = Some(DragState {
-            id,
-            accepted: false,
-            last_position: contact.local,
-            last_global_position: contact.global,
-            last_time: now,
-            timeline,
-            velocity_tracker,
+        let now = timeline.instant(event_time(dispatch.local), clock);
+        let mut velocity_tracker = VelocityTracker::with_estimator(down.pointer.kind, self.settings.velocity_estimator());
+        let Some(position) = dispatch.local.position() else { return; };
+        let Some(global) = dispatch.global.position() else { return; };
+        velocity_tracker.add_position(now, position);
+        let tracked = Rc::<DragContact>::new_cyclic(|this| DragContact {
+            owner: self.this.clone(), id, pointer: down.pointer.id, device: down.pointer.device,
+            contact: PrimaryContact::new(ArenaMembership::new(self.arena.clone(), this.clone())),
+            state: RefCell::new(DragState {
+                accepted: false, last_position: position, last_global_position: global,
+                last_time: now, timeline, velocity_tracker,
+            }),
         });
-        invoke_callback(
-            self.callbacks.on_down.clone(),
-            || {},
-            |callback| {
-                callback(DragDownDetails {
-                    global_position: contact.global,
-                    local_position: contact.local,
-                    kind: contact.kind,
-                })
-            },
-        );
+        if tracked.contact.begin(dispatch, &self.settings).is_err() { return; }
+        if self.active.get() != previous || self.current(down.pointer.id).is_some() { return; }
+        self.contacts.borrow_mut().push(tracked.clone());
+        if previous.is_none() { self.active.set(Some(id)); }
+        invoke_callback(self.callbacks.on_down.clone(), || {}, |callback| callback(DragDownDetails {
+            global_position: global, local_position: position, kind: down.pointer.kind,
+        }));
+        if self.started.get() && self.is_current(&tracked) { tracked.contact.accept(); }
     }
     fn handle_event(&self, dispatch: PointerDispatch<'_>) {
-        if !dispatch
-            .local
-            .pointer_id()
-            .is_some_and(|pointer| self.contact.tracks(pointer))
-        {
-            return;
-        }
+        let Some(tracked) = dispatch.local.pointer_id().and_then(|pointer| self.current(pointer)) else { return; };
+        let active = self.active.get() == Some(tracked.id);
+        let has_remaining = self.contacts.borrow().iter().any(|contact| contact.id != tracked.id && contact.state.borrow().accepted);
         match dispatch.local {
             PointerEvent::Move(_) => self.handle_move(dispatch),
-            PointerEvent::Up(_) => {
+            PointerEvent::Up(_) if active && !has_remaining => {
                 self.terminate(GestureEndReason::Completed, Some(dispatch));
             }
+            PointerEvent::Up(_) => self.release_contact(tracked),
+            PointerEvent::Cancel(_) if active => { self.terminate(GestureEndReason::Cancelled, Some(dispatch)); }
             PointerEvent::Cancel(_) => {
-                self.terminate(GestureEndReason::Cancelled, Some(dispatch));
+                if let Some(outgoing) = self.remove(tracked.pointer, tracked.id) { outgoing.contact.cancel(); }
             }
             _ => {}
         }
     }
-    fn cancel(&self) -> CancelOutcome {
-        self.terminate(GestureEndReason::Cancelled, None)
-    }
+    fn cancel(&self) -> CancelOutcome { self.terminate(GestureEndReason::Cancelled, None) }
 }
 impl GestureArenaMember for DragGestureRecognizer {
     fn accept_gesture(&self, pointer: PointerId) {
-        if self.contact.tracks(pointer) {
-            self.begin_accepted_drag();
-        }
+        if let Some(contact) = self.current(pointer) { self.accept_contact(pointer, contact.id); }
     }
     fn reject_gesture(&self, pointer: PointerId) {
-        if !self.contact.tracks(pointer) {
-            return;
-        }
-        let active = self.drag_state.borrow_mut().take().is_some();
-        if active {
-            invoke_callback(
-                self.callbacks.on_cancel.clone(),
-                || {
-                    self.contact.withdraw();
-                },
-                |callback| callback(),
-            );
-        } else {
-            self.contact.withdraw();
-        }
+        if let Some(contact) = self.current(pointer) { self.reject_contact(pointer, contact.id); }
     }
 }

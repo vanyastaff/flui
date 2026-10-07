@@ -141,6 +141,7 @@ fn cancelling_drag_from_start_drops_the_stale_update_and_recovers() {
 #[test]
 fn drag_lifecycle_contracts() {
     for (name, case) in [
+        ("remaining_touches_continue_in_admission_order_without_a_jump", remaining_touches_continue_in_admission_order_without_a_jump as fn()),
         (
             "up_before_acceptance_rejects_drag_and_preserves_the_competitor",
             up_before_acceptance_rejects_drag_and_preserves_the_competitor as fn(),
@@ -154,5 +155,76 @@ fn drag_lifecycle_contracts() {
             eprintln!("drag contract {name} failed");
             std::panic::resume_unwind(payload);
         }
+    }
+}
+
+fn remaining_touches_continue_in_admission_order_without_a_jump() {
+    use flui_platform_api::{EventTime, pointer::{PointerButton, PointerButtons, PointerInfo, PointerMove, PointerPosition, PointerPress, PointerRelease, PointerSample}};
+    use flui_foundation::geometry::Point;
+    use flui_interaction::recognizers::drag::DragPointerStrategy;
+    for strategy in [DragPointerStrategy::PrimaryOnly, DragPointerStrategy::ContinueWithRemaining] {
+        let arena = GestureArena::binding_driven(std::sync::Arc::new(flui_interaction::ManualClock::new()));
+        let starts = Rc::new(Cell::new(0));
+        let updates = Rc::new(RefCell::new(Vec::new()));
+        let ends = Rc::new(RefCell::new(Vec::new()));
+        let (s, u, e) = (starts.clone(), updates.clone(), ends.clone());
+        let builder = DragGestureRecognizer::builder(arena.clone(), DragAxis::Horizontal)
+            .on_start(move |_| s.set(s.get() + 1))
+            .on_update(move |details| u.borrow_mut().push(details.primary_delta))
+            .on_end(move |details| e.borrow_mut().push(details));
+        // The control exercises the builder's actual default, not an explicit
+        // PrimaryOnly selection that could hide an accidental default change.
+        let drag = match strategy {
+            DragPointerStrategy::PrimaryOnly => builder.build(),
+            DragPointerStrategy::ContinueWithRemaining => builder.pointer_strategy(strategy).build(),
+            _ => unreachable!("listed strategy rows"),
+        };
+        let send = |id: u64, millis: u64, x: f64, phase| {
+            let info = PointerInfo::new(PointerId::try_from(id).expect("nonzero contact"), PointerKind::Touch);
+            let sample = PointerSample::new(EventTime::from_nanos(millis * 1_000_000), PointerPosition::try_new(Point::new(x, 0.0)).expect("finite sample"));
+            let buttons = PointerButtons::NONE.with(PointerButton::PRIMARY);
+            let event = match phase {
+                0 => PointerEvent::Down(PointerPress::new(info, PointerButton::PRIMARY, buttons, sample)),
+                1 => PointerEvent::Move(PointerMove::new(info, buttons, sample)),
+                2 => PointerEvent::Up(PointerRelease::new(info, PointerButton::PRIMARY, PointerButtons::NONE, sample)),
+                _ => unreachable!("scripted phase"),
+            };
+            if matches!(event, PointerEvent::Down(_)) { drag.add_pointer(PointerDispatch::at_root(&event)); }
+            else { drag.handle_event(PointerDispatch::at_root(&event)); }
+            run_pointer_lifecycle(&arena, &event);
+            arena.drain_deferred_resolutions();
+        };
+        send(2, 0, 0.0, 0);
+        send(2, 10, 40.0, 1);
+        send(3, 15, 1000.0, 0);
+        send(3, 20, 1020.0, 1);
+        send(4, 25, 2000.0, 0);
+        send(4, 30, 2020.0, 1);
+        assert_eq!(&*updates.borrow(), &[40.0], "passive contacts do not update: {strategy:?}");
+        send(2, 35, 40.0, 2);
+        assert_eq!(ends.borrow().len(), usize::from(strategy == DragPointerStrategy::PrimaryOnly));
+        send(4, 40, 2030.0, 1);
+        send(3, 45, 1030.0, 1);
+        send(3, 50, 1030.0, 2);
+        send(4, 60, 2040.0, 1);
+        send(4, 65, 2040.0, 2);
+        assert_eq!(starts.get(), 1, "one start across all handoffs");
+        assert_eq!(ends.borrow().len(), 1, "only the final tracked contact ends the gesture");
+        match strategy {
+            DragPointerStrategy::PrimaryOnly => assert_eq!(&*updates.borrow(), &[40.0]),
+            DragPointerStrategy::ContinueWithRemaining => {
+                assert_eq!(&*updates.borrow(), &[40.0, 10.0, 10.0], "earliest remaining contact wins; latest passive position is the handoff baseline");
+                let end = ends.borrow();
+                assert_eq!(end[0].global_position.dx, 2040.0);
+                assert!(end[0].primary_velocity > 0.0 && end[0].primary_velocity < 2000.0, "successor's measured tracker cannot include inter-finger jumps: {:?}", end[0]);
+            }
+            _ => unreachable!("listed strategy rows"),
+        }
+        assert!(arena.is_empty());
+        send(2, 100, 0.0, 0);
+        send(2, 110, 40.0, 1);
+        send(2, 120, 40.0, 2);
+        assert_eq!((starts.get(), ends.borrow().len()), (2, 2), "same pointer identity recovers");
+        assert!(arena.is_empty());
     }
 }
