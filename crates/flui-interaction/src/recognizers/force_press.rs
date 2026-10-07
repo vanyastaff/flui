@@ -164,6 +164,16 @@ pub struct ForcePressGestureRecognizerBuilder {
     callbacks: ForcePressCallbacks,
 }
 
+impl std::fmt::Debug for ForcePressGestureRecognizerBuilder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ForcePressGestureRecognizerBuilder")
+            .field("arena", &self.arena)
+            .field("settings", &self.settings)
+            .field("thresholds", &self.thresholds)
+            .finish_non_exhaustive()
+    }
+}
+
 impl ForcePressGestureRecognizerBuilder {
     /// Freeze the gesture policy used by each admitted contact.
     pub fn settings(mut self, settings: GestureSettings) -> Self {
