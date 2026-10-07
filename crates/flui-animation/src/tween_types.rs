@@ -579,35 +579,3 @@ pub trait CurveExt: Curve + Sized {
 
 // Blanket implementation for all Curve types
 impl<C: Curve> CurveExt for C {}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn test_tween_sequence_weighted() {
-        let items = vec![
-            TweenSequenceItem::new(FloatTween::new(0.0, 50.0), 1.0),
-            TweenSequenceItem::new(FloatTween::new(50.0, 100.0), 3.0),
-        ];
-        let sequence = TweenSequence::new(items);
-
-        assert_eq!(sequence.transform(0.0), 0.0);
-        // 25% through total = end of first item
-        assert_eq!(sequence.transform(0.25), 50.0);
-        // 62.5% through total = 50% through second item
-        assert!((sequence.transform(0.625) - 75.0).abs() < 1e-5);
-        assert_eq!(sequence.transform(1.0), 100.0);
-    }
-
-    // ========================================================================
-    // Tests for new types: CurveTween, ChainedTween, extension traits
-    // ========================================================================
-
-    #[test]
-    fn tween_types_contract() {
-        crate::test_cases::run_cases(&[(
-            "test tween sequence weighted",
-            test_tween_sequence_weighted,
-        )]);
-    }
-}

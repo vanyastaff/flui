@@ -1,4 +1,5 @@
-//! Consumer contracts for integer and weighted animation progress.
+//! Consumer contracts for integer and weighted animation
+//! progress.
 
 use flui_animation::{
     Animatable, FloatTween, IntTween, StepTween, TweenSequence, TweenSequenceItem,
