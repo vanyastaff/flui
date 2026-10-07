@@ -2,7 +2,7 @@
 //! failure path releases its own reference-counted clone, so dropping the owner
 //! later still destroys the captures (ADR-0127).
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::{Rc, Weak};
 
@@ -212,9 +212,161 @@ fn traversal_policy_and_candidates_die_with_their_scope() {
     assert!(candidate.upgrade().is_none(), "the candidate is released");
 }
 
+fn node_listener_failure_publishes_every_committed_edge() {
+    assert_focus_notification_recovery(true, 0);
+}
+
+fn competing_manager_listener_failures_preserve_the_first_edge_failure() {
+    assert_focus_notification_recovery(false, 2);
+}
+
+fn node_and_manager_listener_failures_preserve_the_node_failure() {
+    assert_focus_notification_recovery(true, 1);
+}
+
+fn assert_focus_notification_recovery(node_panics: bool, manager_panics: usize) {
+    let manager = FocusManager::new();
+    let node = FocusNode::with_debug_label("notification destination");
+    let attachment = manager.root_scope().attach_node(&node).expect("attach");
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let fail = Rc::new(Cell::new(true));
+
+    for (label, panics) in [("node first", node_panics), ("node later", false)] {
+        let log = Rc::clone(&log);
+        let fail = Rc::clone(&fail);
+        let node_probe = Rc::downgrade(&node);
+        node.add_listener(Rc::new(move || {
+            let focused = node_probe.upgrade().expect("live node").has_primary_focus();
+            log.borrow_mut().push((label, focused));
+            if panics && fail.get() {
+                std::panic::panic_any("first node failure");
+            }
+        }));
+    }
+    for (index, label) in ["manager first", "manager second", "manager later"]
+        .into_iter()
+        .enumerate()
+    {
+        let log = Rc::clone(&log);
+        let fail = Rc::clone(&fail);
+        manager.add_listener(Rc::new(move |_, new| {
+            log.borrow_mut().push((label, new.is_some()));
+            if index < manager_panics && fail.get() {
+                std::panic::panic_any(if index == 0 {
+                    "first manager failure"
+                } else {
+                    "second manager failure"
+                });
+            }
+        }));
+    }
+
+    let payload = catch_unwind(AssertUnwindSafe(|| node.request_focus()))
+        .expect_err("the first listener failure propagates after the round");
+    assert_eq!(
+        payload.downcast_ref::<&str>(),
+        Some(&if node_panics {
+            "first node failure"
+        } else {
+            "first manager failure"
+        })
+    );
+    assert!(
+        node.has_primary_focus(),
+        "the edge committed before publication"
+    );
+    assert_eq!(
+        *log.borrow(),
+        [
+            ("node first", true),
+            ("node later", true),
+            ("manager first", true),
+            ("manager second", true),
+            ("manager later", true),
+        ],
+        "every registered observer sees the committed transition"
+    );
+
+    fail.set(false);
+    log.borrow_mut().clear();
+    manager.unfocus();
+    assert_eq!(
+        *log.borrow(),
+        [
+            ("node first", false),
+            ("node later", false),
+            ("manager first", false),
+            ("manager second", false),
+            ("manager later", false),
+        ],
+        "the next focus transition publishes normally after containment"
+    );
+    drop(attachment);
+}
+
+fn reentrant_listener_replacement_survives_a_failed_notification() {
+    let manager = FocusManager::new();
+    let node = FocusNode::with_debug_label("reentrant listener");
+    let attachment = manager.root_scope().attach_node(&node).expect("attach");
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let listener_id = Rc::new(Cell::new(None));
+    let node_probe = Rc::downgrade(&node);
+    let callback_log = Rc::clone(&log);
+    let callback_id = Rc::clone(&listener_id);
+    let id = node.add_listener(Rc::new(move || {
+        callback_log.borrow_mut().push("reentrant");
+        let node = node_probe.upgrade().expect("live node");
+        node.remove_listener(callback_id.get().expect("registered listener"));
+        let late_log = Rc::clone(&callback_log);
+        node.add_listener(Rc::new(move || late_log.borrow_mut().push("late")));
+        std::panic::panic_any("reentrant listener failure");
+    }));
+    listener_id.set(Some(id));
+    let stable_log = Rc::clone(&log);
+    node.add_listener(Rc::new(move || stable_log.borrow_mut().push("stable")));
+    let edge_log = Rc::clone(&log);
+    manager.add_listener(Rc::new(move |_, _| edge_log.borrow_mut().push("manager")));
+
+    let payload =
+        catch_unwind(AssertUnwindSafe(|| node.request_focus())).expect_err("listener failed");
+    assert_eq!(
+        payload.downcast_ref::<&str>(),
+        Some(&"reentrant listener failure")
+    );
+    assert_eq!(
+        *log.borrow(),
+        ["reentrant", "stable", "manager"],
+        "replacement waits for the next round and remaining observers receive this edge"
+    );
+    log.borrow_mut().clear();
+    manager.unfocus();
+    assert_eq!(
+        *log.borrow(),
+        ["stable", "late", "manager"],
+        "the replacement listener receives the next healthy transition"
+    );
+    drop(attachment);
+}
+
 #[test]
 fn caught_callback_failures_leave_captures_with_their_owner() {
     let cases: &[(&str, fn())] = &[
+        (
+            "node notification failure",
+            node_listener_failure_publishes_every_committed_edge,
+        ),
+        (
+            "competing manager notification failures",
+            competing_manager_listener_failures_preserve_the_first_edge_failure,
+        ),
+        (
+            "node and manager notification failures",
+            node_and_manager_listener_failures_preserve_the_node_failure,
+        ),
+        (
+            "reentrant listener replacement",
+            reentrant_listener_replacement_survives_a_failed_notification,
+        ),
         (
             "focus listener",
             focus_listener_capture_dies_with_its_manager,
