@@ -2654,6 +2654,7 @@ mod native_windows {
                 assert_eq!(down.pointer.kind, expected_kind);
                 assert!(down.pointer.device.is_some(), "native source handle retained");
                 assert_eq!(down.pointer, up.pointer);
+                assert!(up.sample.time >= down.sample.time, "native terminal sample cannot predate its admitted press: down={:?} up={:?}", down.sample.time, up.sample.time);
                 assert_eq!(down.sample.pressure.map(|value| value.get()), Some(0.5));
                 let point = down.sample.position.get();
                 assert_eq!((point.x, point.y), (40.0 / window.scale_factor(), 40.0 / window.scale_factor()));
