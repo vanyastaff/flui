@@ -226,8 +226,10 @@ document.getElementById('chord').onclick = () => check('chord-check', () => {
   canvas.dispatchEvent(new PointerEvent('pointerdown', { ...common, button: 0, buttons: 1 }));
   // W3C emits pointermove for further mouse-button edges while contact remains.
   canvas.dispatchEvent(new PointerEvent('pointermove', { ...common, button: 2, buttons: 3 }));
+  equal({ sequence: document.getElementById('sequence')?.textContent }, { sequence: 'down,button-press,' });
   equal(JSON.parse(document.getElementById('button-press')?.textContent ?? 'null'), { primary: true, secondary: true });
   canvas.dispatchEvent(new PointerEvent('pointermove', { ...common, button: 2, buttons: 1 }));
+  equal({ sequence: document.getElementById('sequence')?.textContent }, { sequence: 'down,button-press,button-release,' });
   equal(JSON.parse(document.getElementById('button-release')?.textContent ?? 'null'), { primary: true, secondary: false });
   canvas.dispatchEvent(new PointerEvent('pointerup', { ...common, button: 0, buttons: 0 }));
   equal({ sequence: document.getElementById('sequence')?.textContent }, { sequence: 'down,button-press,button-release,up,' });
