@@ -4,9 +4,14 @@ use std::{
     cell::{Cell, RefCell},
     panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
     rc::{Rc, Weak},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 
+use flui_foundation::MonotonicClock;
 use flui_foundation::geometry::Offset;
 use flui_interaction::{
     ArenaMembership, BeginContactError, CancelOutcome, GestureArena, GestureArenaMember,
@@ -19,6 +24,38 @@ use flui_interaction::{
 };
 
 type Log = Rc<RefCell<Vec<&'static str>>>;
+
+thread_local! {
+    // A Send clock can reenter owner-local state on its calling thread.
+    static CLOCK_CONTACT: RefCell<Option<Weak<Extension>>> = const { RefCell::new(None) };
+}
+
+#[derive(Debug)]
+struct ReentrantClock {
+    now: web_time::Instant,
+    replace_contact: AtomicBool,
+}
+
+impl MonotonicClock for ReentrantClock {
+    fn now(&self) -> web_time::Instant {
+        if self.replace_contact.swap(false, Ordering::Relaxed) {
+            let owner = CLOCK_CONTACT.with(|slot| slot.borrow().as_ref().and_then(Weak::upgrade));
+            if let Some(owner) = owner {
+                let old = owner
+                    .contact
+                    .current()
+                    .expect("clock sees committed contact");
+                owner.contact.withdraw();
+                let event = down(old.pointer);
+                owner
+                    .contact
+                    .begin(PointerDispatch::at_root(&event), &old.settings)
+                    .expect("clock reentrant admission");
+            }
+        }
+        self.now
+    }
+}
 
 struct Extension {
     contact: PrimaryContact,
@@ -377,6 +414,35 @@ fn invalid_admission_remains_idle_and_settings_are_frozen() {
     );
 }
 
+fn clock_reentry_cannot_arm_a_replacement_contact() {
+    let clock = Arc::new(ReentrantClock {
+        now: web_time::Instant::now(),
+        replace_contact: AtomicBool::new(false),
+    });
+    let owner = Extension::new(
+        GestureArena::with_clock(clock.clone()),
+        "owner",
+        Log::default(),
+    );
+    let event = down(pointer(81));
+    let old_id = owner
+        .contact
+        .begin(
+            PointerDispatch::at_root(&event),
+            &GestureSettings::default(),
+        )
+        .expect("old admission");
+    CLOCK_CONTACT.with(|slot| *slot.borrow_mut() = Some(Rc::downgrade(&owner)));
+    clock.replace_contact.store(true, Ordering::Relaxed);
+    assert!(owner.contact.arm_deadline(Duration::from_secs(1)).is_none());
+    CLOCK_CONTACT.with(|slot| slot.borrow_mut().take());
+    let current = owner.contact.current().expect("clock replacement survives");
+    assert_ne!(current.id, old_id);
+    assert_eq!(current.pointer, pointer(81));
+    assert!(owner.contact.deadline().is_none());
+    assert!(owner.contact.arm_deadline(Duration::from_secs(1)).is_some());
+}
+
 #[test]
 fn public_recognizer_extension_contracts() {
     let cases: &[(&str, fn())] = &[
@@ -411,6 +477,10 @@ fn public_recognizer_extension_contracts() {
         (
             "invalid_admission_remains_idle_and_settings_are_frozen",
             invalid_admission_remains_idle_and_settings_are_frozen,
+        ),
+        (
+            "clock_reentry_cannot_arm_a_replacement_contact",
+            clock_reentry_cannot_arm_a_replacement_contact,
         ),
     ];
     for &(name, case) in cases {
