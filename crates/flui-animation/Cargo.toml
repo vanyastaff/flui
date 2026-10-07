@@ -48,7 +48,6 @@ serde = { workspace = true, optional = true }
 [dev-dependencies]
 criterion = { workspace = true }
 proptest.workspace = true
-proptest = { workspace = true }
 serde_json = { workspace = true }
 
 [features]
