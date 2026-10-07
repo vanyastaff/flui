@@ -128,6 +128,14 @@ fn layout_protocol_matrix() {
 fn hit_test_matrix() {
     let cases: &[(&str, fn())] = &[
         (
+            "hit_test_pipeline::perspective_transform_unprojects_to_the_child_plane",
+            crate::hit_test_pipeline::perspective_transform_unprojects_to_the_child_plane,
+        ),
+        (
+            "hit_test_pipeline::perspective_transform_refuses_hidden_and_degenerate_planes",
+            crate::hit_test_pipeline::perspective_transform_refuses_hidden_and_degenerate_planes,
+        ),
+        (
             "hit_test_pipeline::nested_tiny_transforms_emit_the_correct_local_hit_point",
             crate::hit_test_pipeline::nested_tiny_transforms_emit_the_correct_local_hit_point,
         ),

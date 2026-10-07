@@ -173,10 +173,103 @@ fn refused_callback_retirement_failure_preserves_the_next_scope() {
     assert_point(local_point(&result, 1, (15.0, 27.0)), (15.0, 27.0));
 }
 
+fn perspective_delivery(
+    transform: Matrix4,
+    positions: [(f64, f64); 3],
+    expected: Option<[(f64, f64); 3]>,
+) {
+    use std::rc::Rc;
+    use flui_foundation::geometry::Point;
+    use flui_interaction::InteractionLane;
+    use flui_platform_api::{EventTime, pointer::{PointerEvent, PointerId, PointerInfo,
+        PointerKind, PointerButtons, PointerMove, PointerPosition, PointerSample, Pressure}};
+
+    let sample = |index: usize| PointerSample::new(EventTime::from_nanos(index as u64 + 1),
+        PointerPosition::try_new(Point::new(positions[index].0, positions[index].1))
+            .expect("finite screen sample"))
+        .with_pressure(Pressure::try_new(0.4).expect("valid pressure"));
+    let pointer = PointerInfo::new(PointerId::try_from(1_u64).expect("nonzero"), PointerKind::Touch);
+    let event = PointerEvent::Move(PointerMove::new(pointer, PointerButtons::NONE, sample(1))
+        .with_coalesced(vec![sample(0)]).with_predicted(vec![sample(2)]));
+    let lane = InteractionLane::try_new().expect("lane");
+    let handle = lane.dispatch_handle();
+    let deliveries = Rc::new(Cell::new(0));
+    lane.enter(|| {
+        let observed = deliveries.clone();
+        let source = event.clone();
+        let target = handle.register_pointer(move |dispatch| {
+            let expected = expected.expect("invalid projection must not deliver");
+            assert_eq!(dispatch.global, &source, "the complete source stays unchanged");
+            let PointerEvent::Move(local) = dispatch.local else { panic!("local Move") };
+            let PointerEvent::Move(global) = dispatch.global else { panic!("global Move") };
+            assert_eq!(local.pointer, global.pointer);
+            assert_eq!(local.buttons, global.buttons);
+            assert_eq!(local.modifiers, global.modifiers);
+            for ((local, global), point) in [
+                (&local.coalesced()[0], &global.coalesced()[0]),
+                (local.current(), global.current()),
+                (&local.predicted()[0], &global.predicted()[0]),
+            ].into_iter().zip(expected) {
+                assert_point((local.position.get().x, local.position.get().y), point);
+                assert_eq!(local.time, global.time);
+                assert_eq!(local.pressure, global.pressure);
+            }
+            observed.set(observed.get() + 1);
+        }).expect("register pointer");
+        let mut result = HitTestResult::new();
+        result.with_paint_transform(transform, |result| {
+            result.add(HitTestEntry::new(RenderId::new(1)).pointer_target(target));
+        }).expect("finite invertible fixture");
+        let route = handle.resolve_pointer_route(result.path()).expect("resolve route").token();
+        let failure = handle.invoke_pointer_route(route, &event).expect("invoke route");
+        if let Some(failure) = failure { failure.resume(); }
+        assert_eq!(deliveries.get(), usize::from(expected.is_some()));
+        handle.release_route(route).expect("release route");
+    });
+}
+
+fn perspective_delivery_preserves_the_source_and_unprojects_samples() {
+    let transform = Matrix4::from([
+        0.6, 0.0, -0.8, -0.08, 0.0, 1.0, 0.0, 0.0,
+        0.8, 0.0, 0.6, 0.06, 0.0, 0.0, 0.0, 1.0,
+    ]);
+    let local = [(1.0, 2.0), (2.0, 3.0), (3.0, 4.0)];
+    // Analytic forward projection of the z=0 plane, independent of the inverse helper.
+    let screen = local.map(|(x, y)| (0.6 * x / (1.0 - 0.08 * x), y / (1.0 - 0.08 * x)));
+    perspective_delivery(transform, screen, Some(local));
+}
+
+fn perspective_delivery_refuses_hidden_and_degenerate_planes() {
+    for (transform, point) in [
+        (Matrix4::from([
+            -1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, -1.0,
+        ]), (2.0, 3.0)),
+        (Matrix4::from([
+            1.0, 0.0, 0.0, -0.5, 0.0, 1.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+        ]), (-2.0, 3.0)),
+        (Matrix4::from([
+            0.0, 0.0, -1.0, 0.0, 0.0, 1.0, 0.0, 0.0,
+            1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+        ]), (2.0, 3.0)),
+    ] {
+        perspective_delivery(transform, [point; 3], None);
+    }
+}
+
 #[test]
 fn hit_test_transform_admission() {
     let mut failures = Vec::new();
     for (name, case) in [
+        (
+            "perspective sample families",
+            perspective_delivery_preserves_the_source_and_unprojects_samples as fn(),
+        ),
+        (
+            "perspective refusal",
+            perspective_delivery_refuses_hidden_and_degenerate_planes as fn(),
+        ),
         (
             "singular",
             singular_paint_transform_skips_the_callback as fn(),
