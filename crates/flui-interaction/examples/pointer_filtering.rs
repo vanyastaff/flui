@@ -80,8 +80,8 @@ fn main() {
         t += Duration::from_millis(10);
     }
 
-    let impulse_v = impulse.get_velocity().pixels_per_second.dx;
-    let lsq_v = lsq.get_velocity().pixels_per_second.dx;
+    let impulse_v = impulse.velocity_at(t).pixels_per_second.dx;
+    let lsq_v = lsq.velocity_at(t).pixels_per_second.dx;
     println!("   impulse:                   {impulse_v:8.1} px/s");
     println!("   least-squares:             {lsq_v:8.1} px/s");
     println!(

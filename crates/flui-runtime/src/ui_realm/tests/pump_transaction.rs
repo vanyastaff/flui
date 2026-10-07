@@ -125,7 +125,7 @@ fn a_realm_on_a_manual_clock_fires_gesture_deadlines_on_that_clock() {
         .on_long_press_start(move |_details| fired_in_callback.store(true, Ordering::SeqCst))
         .build();
     let position = flui_foundation::geometry::Offset::new(10.0, 10.0);
-    let down = flui_interaction::testing::make_down_event_for_id(
+    let down = flui_interaction::events::make_down_event_for_id(
         PointerId::new(std::num::NonZeroU64::MIN),
         position,
         flui_interaction::PointerKind::Touch,

@@ -266,6 +266,63 @@ fn scale_on(rig: &Rig) -> (Rc<ScaleGestureRecognizer>, Rc<ScaleLog>) {
     (recognizer, log)
 }
 
+/// The binding's native stream reaches the same Scale actor without fake Downs.
+pub(crate) fn scale_recognizes_native_pan_zoom_source_lifecycle() {
+    use flui_foundation::geometry::Point;
+    use flui_platform_api::{
+        EventTime,
+        pointer::{
+            DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerInfo, PointerPosition,
+        },
+    };
+    let rig = Rig::new();
+    let (_scale, log) = scale_on(&rig);
+    let source = PointerInfo::new(id(90), PointerKind::Touch)
+        .with_device(DeviceId::try_from(19_u64).expect("nonzero device"));
+    let packet = |millis: u64, phase| {
+        PointerEvent::PanZoom(PanZoomEvent::new(
+            source,
+            EventTime::from_nanos(millis * 1_000_000),
+            PointerPosition::try_new(Point::new(150.0, 120.0)).expect("finite focal point"),
+            phase,
+        ))
+    };
+    rig.send(&packet(0, PanZoomPhase::Start));
+    for (millis, scale, rotation) in [(10, 1.2, 0.2), (20, 1.5, 0.4), (30, 1.5, 0.4)] {
+        rig.send(&packet(
+            millis,
+            PanZoomPhase::Update(
+                PanZoomTransform::try_new(Offset::new(20.0, 10.0), scale, rotation)
+                    .expect("finite native transform"),
+            ),
+        ));
+    }
+    rig.send(&packet(31, PanZoomPhase::End));
+    assert_eq!(
+        log.starts.get(),
+        1,
+        "native source has one recognition start"
+    );
+    assert_eq!(log.updates.borrow().len(), 3);
+    let last = log.last_update();
+    assert_eq!(last.scale, 1.5, "native transform is cumulative");
+    assert_eq!(last.rotation, 0.4);
+    assert_eq!(log.ends.borrow().len(), 1);
+    assert_eq!(log.cancels.get(), 0);
+
+    rig.send(&packet(40, PanZoomPhase::Start));
+    rig.send(&packet(
+        50,
+        PanZoomPhase::Update(
+            PanZoomTransform::try_new(Offset::ZERO, 1.1, 0.0).expect("finite native recovery"),
+        ),
+    ));
+    rig.send(&packet(51, PanZoomPhase::Cancelled));
+    assert_eq!(log.starts.get(), 2, "next source session is admitted");
+    assert_eq!(log.ends.borrow().len(), 1, "cancellation does not complete");
+    assert_eq!(log.cancels.get(), 1);
+}
+
 /// Two contacts 200 px apart on a horizontal line, spread to 300 px.
 fn pinch_out(rig: &Rig, a: u64, b: u64) {
     rig.down(a, 100.0, 200.0);
@@ -541,6 +598,7 @@ fn scale_publishes_finite_continuous_values_and_owns_its_contacts() {
     run_rows(
         "scale",
         &[
+            ("native pan zoom lifecycle", scale_recognizes_native_pan_zoom_source_lifecycle as fn()),
             (
                 "extreme finite contacts",
                 scale_measures_extreme_finite_contacts,

@@ -4,6 +4,7 @@
 
 ### Removed
 - The separate iOS, macOS and impulse tracker wrappers; use `VelocityTracker::with_estimator` and `VelocityEstimator` instead.
+- Wall-clock velocity query aliases and the unused boolean fling gate. Query `estimate_at` or `velocity_at` on the same clock used to admit samples; fling thresholds remain the consumer's policy.
 
 ### Fixed
 - Weighted release estimators exclude intervals before a stationary gap or outside the sample horizon, so resumed motion has the same estimate as an independent fresh history.

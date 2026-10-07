@@ -407,6 +407,10 @@ mod native_windows {
             "native_mouse_wheels_keep_hover_identity_and_signed_units",
             native_mouse_wheels_keep_hover_identity_and_signed_units,
         ),
+        (
+            "fractional_native_wheel_packets_preserve_observed_precision_and_source",
+            fractional_native_wheel_packets_preserve_observed_precision_and_source,
+        ),
     ];
 
     pub(super) fn run_requested_child() -> bool {
@@ -2783,6 +2787,108 @@ mod native_windows {
             assert_eq!(scroll.phase, None, "a wheel tick supplies no gesture phase");
             let point = scroll.position.get();
             assert_eq!((point.x, point.y), (40.0 / window.scale_factor(), 40.0 / window.scale_factor()));
+        }
+        drop(log);
+        window.close();
+    }
+
+    #[expect(
+        unsafe_code,
+        reason = "queued native wheel packets target an actual owned hidden HWND"
+    )]
+    fn fractional_native_wheel_packets_preserve_observed_precision_and_source() {
+        use flui_platform_api::pointer::{PointerEvent, ScrollPrecision, ScrollUnit};
+        use windows::Win32::UI::WindowsAndMessaging::{WM_MOUSEHWHEEL, WM_MOUSEWHEEL};
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let window = open(&platform, false);
+        let hwnd = hwnd_of(&window);
+        let events = record_pointer(&window);
+        pump_translated(hwnd);
+        // SAFETY: this owner-thread HWND stays live until the end of the row;
+        // the queued message contains only by-value mouse coordinates.
+        unsafe { PostMessageW(Some(hwnd), WM_MOUSEMOVE, WPARAM(0), mouse_lparam(40, 40)) }
+            .expect("queue actual hover source");
+        pump_translated(hwnd);
+        let source = events
+            .lock()
+            .expect("pointer log")
+            .iter()
+            .find_map(|event| {
+                if let PointerEvent::Move(movement) = event {
+                    Some(movement.pointer)
+                } else {
+                    None
+                }
+            })
+            .expect("native window procedure supplied hover metadata");
+        events.lock().expect("pointer log").clear();
+        let mut screen = POINT { x: 40, y: 40 };
+        // SAFETY: a writable POINT and this row's live HWND.
+        assert!(unsafe { ClientToScreen(hwnd, &mut screen) }.as_bool());
+        for (message, distance) in [
+            (WM_MOUSEWHEEL, 30_i16),
+            (WM_MOUSEWHEEL, -60),
+            (WM_MOUSEHWHEEL, 30),
+            (WM_MOUSEHWHEEL, -60),
+            (WM_MOUSEWHEEL, 120),
+            (WM_MOUSEHWHEEL, 120),
+            (WM_MOUSEWHEEL, 0),
+        ] {
+            let packet = WPARAM(usize::from(distance.cast_unsigned()) << 16);
+            // SAFETY: exact owned hidden HWND and native by-value wheel data;
+            // no global injection or focus/cursor changes occur.
+            unsafe {
+                PostMessageW(
+                    Some(hwnd),
+                    message,
+                    packet,
+                    mouse_lparam(
+                        i16::try_from(screen.x).expect("screen x fits native wheel coordinates"),
+                        i16::try_from(screen.y).expect("screen y fits native wheel coordinates"),
+                    ),
+                )
+            }
+            .expect("queue native wheel packet");
+            pump_translated(hwnd);
+        }
+        let log = events.lock().expect("pointer log");
+        let scrolls: Vec<_> = log
+            .iter()
+            .filter_map(|event| {
+                if let PointerEvent::Scroll(scroll) = event {
+                    Some(scroll)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(
+            scrolls.len(),
+            7,
+            "each native packet remains deliverable: {log:?}"
+        );
+        for (scroll, (x, y, precision)) in scrolls.iter().zip([
+            (0.0, -0.25, ScrollPrecision::Precise),
+            (0.0, 0.5, ScrollPrecision::Precise),
+            (0.25, 0.0, ScrollPrecision::Precise),
+            (-0.5, 0.0, ScrollPrecision::Precise),
+            (0.0, -1.0, ScrollPrecision::Unknown),
+            (1.0, 0.0, ScrollPrecision::Unknown),
+            (0.0, 0.0, ScrollPrecision::Unknown),
+        ]) {
+            assert_eq!(
+                scroll.pointer, source,
+                "packet classification retains actual source"
+            );
+            assert_eq!(scroll.delta.unit(), ScrollUnit::Lines);
+            assert_eq!((scroll.delta.x(), scroll.delta.y()), (x, y));
+            assert_eq!(
+                scroll.precision, precision,
+                "observed granularity is not hardware identity"
+            );
+            assert_eq!(scroll.phase, None);
+            assert_eq!(scroll.position.get().x, 40.0 / window.scale_factor());
+            assert_eq!(scroll.position.get().y, 40.0 / window.scale_factor());
         }
         drop(log);
         window.close();

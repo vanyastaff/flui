@@ -25,7 +25,7 @@ fn main() {
         tracker.add_position(t, Offset::new(x, 0.0));
     }
 
-    let velocity = tracker.get_velocity();
+    let velocity = tracker.velocity_at(start + Duration::from_millis(90));
     println!(
         "estimated velocity: {:.1} px/s (x), {:.1} px/s (y)",
         velocity.pixels_per_second.dx, velocity.pixels_per_second.dy,

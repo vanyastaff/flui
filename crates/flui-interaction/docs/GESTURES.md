@@ -217,10 +217,10 @@ use flui_foundation::geometry::Offset;
 use flui_interaction::{PointerKind, Velocity, VelocityTracker};
 
 let mut tracker = VelocityTracker::with_kind(PointerKind::Touch);
-tracker.add_position(Instant::now(), Offset::ZERO);
-let v: Velocity = tracker.get_velocity();   // pixels_per_second: Offset<f64>
-let fling = tracker.get_fling_velocity(false);
-let estimate = tracker.get_velocity_estimate(); // Option<VelocityEstimate>
+let now = Instant::now();
+tracker.add_position(now, Offset::ZERO);
+let v: Velocity = tracker.velocity_at(now); // pixels_per_second: Offset<f64>
+let estimate = tracker.estimate_at(now); // Option<VelocityEstimate>
 ```
 
 A quadratic least-squares fit over at most 20 samples within a 100 ms horizon;

@@ -95,7 +95,7 @@ fn bench_estimate_short(c: &mut Criterion) {
 }
 
 /// Benchmark repeated `estimate()` queries on an unchanged buffer — the
-/// pattern on the drag-end / prediction path, where a single frame asks for
+/// pattern on the drag-end path, where a single frame asks for
 /// the velocity and the estimate (and any future code may re-query). With the
 /// estimate memoized, only the first call per unchanged buffer runs the O(N)
 /// QR solve; the rest are cache hits. The fill happens in (untimed) setup, so
@@ -149,6 +149,7 @@ fn bench_add_position(c: &mut Criterion) {
 /// motion.
 fn bench_ios_estimate(c: &mut Criterion) {
     let samples = black_box(linear_swipe(20, 100, 1000.0));
+    let query = samples.last().expect("non-empty swipe").0;
     c.bench_function("VelocityTracker::estimate Ios (20 samples)", |b| {
         b.iter_batched(
             || {
@@ -159,7 +160,7 @@ fn bench_ios_estimate(c: &mut Criterion) {
                 }
                 tracker
             },
-            |mut tracker| black_box(tracker.estimate()),
+            |mut tracker| black_box(tracker.estimate_at(query)),
             criterion::BatchSize::SmallInput,
         );
     });
@@ -169,6 +170,7 @@ fn bench_ios_estimate(c: &mut Criterion) {
 /// the LSQ bench, so the two strategies price against each other directly.
 fn bench_estimate_impulse(c: &mut Criterion) {
     let samples = black_box(linear_swipe(20, 100, 1000.0));
+    let query = samples.last().expect("non-empty swipe").0;
     c.bench_function("VelocityTracker::estimate Impulse (20 samples)", |b| {
         b.iter_batched(
             || {
@@ -179,7 +181,7 @@ fn bench_estimate_impulse(c: &mut Criterion) {
                 }
                 tracker
             },
-            |mut tracker| black_box(tracker.get_velocity_estimate()),
+            |mut tracker| black_box(tracker.estimate_at(query)),
             criterion::BatchSize::SmallInput,
         );
     });
