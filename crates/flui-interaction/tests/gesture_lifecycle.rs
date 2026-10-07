@@ -35,12 +35,6 @@ use flui_interaction::{
     MultiDragGestureRecognizer, MultiDragHandle, MultiDragUpdateDetails, MultiTapGestureRecognizer,
     PointerId, ScaleGestureRecognizer, TapAndDragGestureRecognizer, TapGestureRecognizer,
 };
-use flui_interaction::{
-    DoubleTapGestureRecognizer, DragAxis, DragGestureRecognizer, GestureRecognizer,
-    LongPressGestureRecognizer, ManualClock, MultiDragAxis, MultiDragEndDetails,
-    MultiDragGestureRecognizer, MultiDragHandle, MultiDragUpdateDetails, MultiTapGestureRecognizer,
-    PointerId, ScaleGestureRecognizer, TapAndDragGestureRecognizer, TapGestureRecognizer,
-};
 use proptest::prelude::*;
 
 // ---------------------------------------------------------------------------
@@ -1694,7 +1688,7 @@ fn arena_polls_pointer_deadlines_in_identity_order() {
         let pointer = id(raw);
         let log = Rc::clone(&fired);
         let recognizer = LongPressGestureRecognizer::new(arena.clone())
-            .with_on_long_press(move |_| log.borrow_mut().push(raw));
+            .with_on_long_press(move || log.borrow_mut().push(raw));
         let event = down(pointer, at(0.0, 0.0), PointerType::Touch);
         recognizer.add_pointer_down(PointerDispatch::at_root(&event));
         arena.add(pointer, Arc::new(Verdicts::default()));
