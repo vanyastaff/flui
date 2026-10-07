@@ -165,14 +165,9 @@ impl LinearProgressIndicatorState {
         match (&self.vsync, indeterminate, self.registration.is_some()) {
             (Some(vsync), true, false) => {
                 self.registration = Some(vsync.register(self.controller.clone()));
-                if !self.controller.is_animating() {
-                    self.controller.set_value(0.0);
-                }
                 // An undisposed controller over [0, 1] accepts a repeat; the
-                // future only reports the end of an endless run.
-                if !self.controller.is_animating() {
-                    let _ = self.controller.repeat(false);
-                }
+                // new registry anchors its clock at the current phase.
+                let _ = self.controller.repeat(false);
             }
             (_, false, true) | (None, _, _) => {
                 let _ = self.controller.stop();
@@ -235,7 +230,10 @@ impl ViewState<LinearProgressIndicator> for LinearProgressIndicatorState {
         )
     }
 
-    fn did_update_view(&mut self, _old: &LinearProgressIndicator, new: &LinearProgressIndicator) {
+    fn did_update_view(&mut self, old: &LinearProgressIndicator, new: &LinearProgressIndicator) {
+        if old.value.is_some() && new.value.is_none() {
+            self.controller.set_value(0.0);
+        }
         self.run(new.value.is_none());
     }
 

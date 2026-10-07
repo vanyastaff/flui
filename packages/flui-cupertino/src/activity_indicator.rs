@@ -147,9 +147,8 @@ impl ViewState<CupertinoActivityIndicator> for CupertinoActivityIndicatorState {
         if let Some(vsync) = next {
             let token = vsync.register(self.controller.clone());
             self.registration = Some((vsync, token));
-            if !self.controller.is_animating() {
-                let _ = self.controller.repeat(false);
-            }
+            // Re-anchor the new registry's clock at the current phase.
+            let _ = self.controller.repeat(false);
         } else {
             let _ = self.controller.stop();
         }

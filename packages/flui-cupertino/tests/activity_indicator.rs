@@ -71,6 +71,21 @@ pub fn ticks_step_once_per_eighth_of_a_second() {
             .collect();
         assert_eq!(tick_alphas(&laid), expected, "at {millis} ms");
     }
+    let next = Vsync::new();
+    let before = tick_alphas(&laid);
+    laid.pump_widget(VsyncScope::new(
+        next.clone(),
+        CupertinoActivityIndicator::new(),
+    ));
+    assert!(vsync.is_empty());
+    assert_eq!(tick_alphas(&laid), before);
+    next.tick_all(50.0);
+    laid.pump_for(Duration::ZERO);
+    assert_eq!(tick_alphas(&laid), before);
+    next.tick_all(50.25);
+    laid.pump_for(Duration::ZERO);
+    let expected: Vec<_> = (0..8).map(|index| flutter_alpha(index, 380)).collect();
+    assert_eq!(tick_alphas(&laid), expected);
 }
 
 pub fn announced_as_a_loading_spinner() {
