@@ -29,3 +29,5 @@ mod gesture_lifecycle;
 mod mouse_tracking;
 #[path = "velocity_and_resampling.rs"]
 mod velocity_and_resampling;
+#[path = "multi_pointer_recognizers.rs"]
+mod multi_pointer_recognizers;
