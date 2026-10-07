@@ -352,7 +352,7 @@ where
 
     // 6. Frame callback — the `CADisplayLink` tick lands here.
     let lane_frame = Arc::clone(&lane);
-    let worker_reload_frame = worker_reload.clone();
+    let worker_reload_frame = worker_reload;
     window.on_request_frame(Box::new(move || {
         let lane_frame = Arc::clone(&lane_frame);
         let device_recovery_backoff = Arc::clone(&device_recovery_backoff);
