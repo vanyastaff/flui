@@ -33,12 +33,12 @@ use windows::{
                 PostQuitMessage, QS_ALLINPUT, RegisterClassW, SC_KEYMENU, SW_SHOWNORMAL,
                 SWP_NOACTIVATE, SWP_NOZORDER, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos,
                 TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CAPTURECHANGED, WM_CHAR,
-                WM_CLOSE, WM_CREATE, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_INPUTLANGCHANGE,
-                WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
-                WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_PAINT,
-                WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETTINGCHANGE,
-                WM_SHOWWINDOW, WM_SIZE, WM_SYSCHAR, WM_SYSCOMMAND, WM_SYSKEYDOWN, WM_SYSKEYUP,
-                WNDCLASSW,
+                WM_CLOSE, WM_CREATE, WM_DEADCHAR, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND,
+                WM_INPUTLANGCHANGE, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN,
+                WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
+                WM_MOUSEWHEEL, WM_MOVE, WM_PAINT, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP,
+                WM_SETCURSOR, WM_SETFOCUS, WM_SETTINGCHANGE, WM_SHOWWINDOW, WM_SIZE, WM_SYSCHAR,
+                WM_SYSCOMMAND, WM_SYSDEADCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP, WNDCLASSW,
             },
         },
     },
@@ -1629,6 +1629,15 @@ impl WindowsPlatform {
                         // here. Pairing model and merge rules:
                         // `crate::shared::keys` module doc.
                         let translated = drain_translated_chars(hwnd);
+                        // A dead key queues `WM_DEADCHAR` (`WM_SYSDEADCHAR` under
+                        // Alt) instead of a character, on the layer the held
+                        // modifiers select. Taking it now leaves nothing for a
+                        // nested keydown during the callback to mistake for its own.
+                        let stroke = if translated.is_none() && drain_dead_char(hwnd, msg) {
+                            super::events::Keystroke::Dead
+                        } else {
+                            super::events::Keystroke::Text(translated)
+                        };
                         // The default a system keydown may skip also lives in
                         // the WM_SYSCHAR `TranslateMessage` queued for it:
                         // `DefWindowProcW` turns Alt+Space's into the system
@@ -1645,7 +1654,7 @@ impl WindowsPlatform {
                         use super::events::key_down_event;
                         let event = {
                             let mut held = ctx.held_dead_keys.borrow_mut();
-                            key_down_event(wparam, lparam, translated, &mut held)
+                            key_down_event(wparam, lparam, stroke, &mut held)
                         };
                         let result = ctx.callbacks.dispatch_input(event);
                         // A callback can close this window and create another
@@ -1734,6 +1743,9 @@ impl WindowsPlatform {
                     tracing::debug!("Window Unfocused");
 
                     if let Some(ctx) = ctx {
+                        // A key held across the focus loss releases into another
+                        // window; forget it before user code runs.
+                        ctx.held_dead_keys.borrow_mut().clear();
                         ctx.update_window_state(|state| state.focused = false);
                         // Fire per-window on_active_status_change callback
                         ctx.callbacks.dispatch_active_status_change(false);
@@ -2672,8 +2684,8 @@ impl Drop for WindowsPlatform {
 /// filters exactly `WM_CHAR` for this window: `WM_SYSCHAR` is deliberately
 /// left queued so Alt+mnemonic accelerators still flow to `DefWindowProcW`
 /// (held across the keydown's dispatch: [`take_translated_sys_chars`]),
-/// and `WM_DEADCHAR` is left to expire so dead-key state stays Windows'
-/// business. Returns `None` for keystrokes with no typeable translation
+/// and `WM_DEADCHAR` is taken separately by [`drain_dead_char`] (the dead-key state
+/// itself stays Windows' business). Returns `None` for keystrokes with no typeable translation
 /// (navigation keys, Ctrl chords — see `shared::keys::wm_char_text`).
 fn drain_translated_chars(hwnd: HWND) -> Option<String> {
     let mut units: Vec<u16> = Vec::new();
@@ -2692,6 +2704,28 @@ fn drain_translated_chars(hwnd: HWND) -> Option<String> {
     }
 
     crate::shared::keys::wm_char_text(&units)
+}
+
+/// Remove the dead-character message `TranslateMessage` queued for the keydown
+/// being handled, if any: `WM_SYSDEADCHAR` for a system keydown, else
+/// `WM_DEADCHAR`. Only the notification leaves the queue; the composition
+/// itself lives in the kernel's dead-key state, which this does not touch.
+fn drain_dead_char(hwnd: HWND, keydown: u32) -> bool {
+    let kind = if keydown == WM_SYSKEYDOWN {
+        WM_SYSDEADCHAR
+    } else {
+        WM_DEADCHAR
+    };
+    let mut msg = MSG::default();
+    let mut found = false;
+    // SAFETY: `msg` is a live, writable local; `PM_REMOVE` touches only this
+    // thread's own queue (re-entrancy as in `drain_translated_chars`).
+    unsafe {
+        while PeekMessageW(&raw mut msg, Some(hwnd), kind, kind, PM_REMOVE).as_bool() {
+            found = true;
+        }
+    }
+    found
 }
 
 /// Remove the `WM_SYSCHAR` burst `TranslateMessage` queued for a system

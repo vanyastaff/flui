@@ -196,8 +196,8 @@ mod native_windows {
             MSG, PM_REMOVE, PeekMessageW, PostMessageW, SW_MINIMIZE, SWP_NOACTIVATE, SWP_NOMOVE,
             SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetWindowPos, SetWindowsHookExW, ShowWindow,
             TranslateMessage, UnhookWindowsHookEx, WH_CALLWNDPROC, WM_CHAR, WM_CLOSE,
-            WM_ENTERMENULOOP, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
-            WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP,
+            WM_ENTERMENULOOP, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP,
+            WM_MOUSEMOVE, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP,
         },
     };
 
@@ -289,6 +289,10 @@ mod native_windows {
         (
             "dead_key_release_survives_a_layout_switch",
             dead_key_release_survives_a_layout_switch,
+        ),
+        (
+            "dead_key_forgotten_when_focus_leaves",
+            dead_key_forgotten_when_focus_leaves,
         ),
         (
             "consumed_alt_space_withdraws_its_system_char",
@@ -1234,12 +1238,20 @@ mod native_windows {
         dead_key_reports_dead(DeadKeyCase::LayoutSwitchWhileHeld);
     }
 
+    // Focus leaves while the dead key is held, so its release goes elsewhere;
+    // the same physical key pressed later as a plain key reports the plain
+    // character on both phases.
+    fn dead_key_forgotten_when_focus_leaves() {
+        dead_key_reports_dead(DeadKeyCase::FocusLostWhileHeld);
+    }
+
     #[derive(Clone, Copy)]
     enum DeadKeyCase {
         UsInternationalAcute,
         SystemAcute,
         FrenchAltGrTilde,
         LayoutSwitchWhileHeld,
+        FocusLostWhileHeld,
     }
 
     #[expect(unsafe_code, reason = "owned Win32 keyboard dispatch")]
@@ -1257,7 +1269,19 @@ mod native_windows {
         )>::new()));
         let observed = Arc::clone(&keys);
         window.on_input(Box::new(move |event| {
-            if let Some(keyboard) = event.as_keyboard() {
+            // Only the dead key under test; modifier releases the platform
+            // synthesizes around a layout switch are not part of this contract.
+            if let Some(keyboard) = event.as_keyboard()
+                && !matches!(
+                    keyboard.key,
+                    keyboard_types::Key::Named(
+                        keyboard_types::NamedKey::Control
+                            | keyboard_types::NamedKey::Alt
+                            | keyboard_types::NamedKey::AltGraph
+                            | keyboard_types::NamedKey::Shift
+                    )
+                )
+            {
                 observed
                     .lock()
                     .expect("keys")
@@ -1285,40 +1309,80 @@ mod native_windows {
             DeadKeyCase::SystemAcute => (WM_SYSKEYDOWN, WM_SYSKEYUP, 1 << 29),
             _ => (WM_KEYDOWN, WM_KEYUP, 0),
         };
-        // SAFETY: integer key data for the fixture's own HWND on this thread;
-        // dispatch is synchronous.
-        unsafe {
-            SendMessageW(
-                hwnd,
-                down,
-                Some(WPARAM(vk)),
-                Some(LPARAM(1 | (scan << 16) | context)),
-            );
+        // Input goes through the queue and `TranslateMessage`, as the
+        // platform's message loop delivers it: translation runs first and
+        // updates the kernel's dead-key state before the window procedure
+        // sees the keydown.
+        let key_down = LPARAM(1 | (scan << 16) | context);
+        let key_up = LPARAM(1 | (scan << 16) | context | (1 << 30) | (1 << 31));
+        let deliver = |message: u32, lparam: LPARAM| {
+            // SAFETY: integer key data for the fixture's own HWND on this
+            // thread's queue.
+            unsafe { PostMessageW(Some(hwnd), message, WPARAM(vk), lparam) }
+                .expect("queue key message");
+            pump_translated(hwnd);
+        };
+        deliver(down, key_down);
+        let mut switched = None;
+        match case {
+            DeadKeyCase::LayoutSwitchWhileHeld => {
+                switched = Some(ThreadLayout::activate("00000409"));
+            }
+            DeadKeyCase::FocusLostWhileHeld => {
+                // SAFETY: a focus-loss notification for the fixture's HWND;
+                // no other window is named.
+                unsafe { SendMessageW(hwnd, WM_KILLFOCUS, None, None) };
+                switched = Some(ThreadLayout::activate("00000409"));
+                // The key-up went to the newly focused window; the same
+                // physical key, now plain, goes down and up here.
+                deliver(down, key_down);
+            }
+            _ => {}
         }
-        let switched = matches!(case, DeadKeyCase::LayoutSwitchWhileHeld)
-            .then(|| ThreadLayout::activate("00000409"));
-        // SAFETY: as above. Bits 30 and 31 mark the release of a held key.
-        unsafe {
-            SendMessageW(
-                hwnd,
-                up,
-                Some(WPARAM(vk)),
-                Some(LPARAM(1 | (scan << 16) | context | (1 << 30) | (1 << 31))),
-            );
-        }
+        deliver(up, key_up);
         drop(switched);
         drop(altgr);
         drop(layout);
         let dead = keyboard_types::Key::Named(keyboard_types::NamedKey::Dead);
-        assert_eq!(
-            *keys.lock().expect("keys"),
+        let expected = if matches!(case, DeadKeyCase::FocusLostWhileHeld) {
+            let apostrophe = keyboard_types::Key::Character("'".into());
+            vec![
+                (keyboard_types::KeyState::Down, dead),
+                (keyboard_types::KeyState::Down, apostrophe.clone()),
+                (keyboard_types::KeyState::Up, apostrophe),
+            ]
+        } else {
             vec![
                 (keyboard_types::KeyState::Down, dead.clone()),
                 (keyboard_types::KeyState::Up, dead),
-            ],
-            "a dead key must report Dead on both its press and its release, \
-             not its fallback character"
+            ]
+        };
+        assert_eq!(
+            *keys.lock().expect("keys"),
+            expected,
+            "a dead key reports Dead on its press and on the release that \
+             belongs to that press, and nothing else does"
         );
+    }
+
+    /// Pump this HWND's queue the way the platform loop does: translate, then
+    /// dispatch.
+    #[expect(unsafe_code, reason = "owned Win32 message pumping")]
+    fn pump_translated(hwnd: HWND) {
+        for _ in 0..64 {
+            let mut message = MSG::default();
+            // SAFETY: only the fixture's owner-thread HWND is selected.
+            if !unsafe { PeekMessageW(&raw mut message, Some(hwnd), 0, 0, PM_REMOVE) }.as_bool() {
+                return;
+            }
+            // SAFETY: translate and dispatch the message this thread's queue
+            // returned.
+            unsafe {
+                let _ = TranslateMessage(&raw const message);
+                DispatchMessageW(&raw const message);
+            }
+        }
+        panic!("the fixture's queue did not drain");
     }
 
     /// The calling thread's keyboard layout, switched for the duration of a

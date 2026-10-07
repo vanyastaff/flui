@@ -30,9 +30,8 @@ use windows::Win32::{
     Graphics::Gdi::ScreenToClient,
     UI::{
         Input::KeyboardAndMouse::{
-            GetCapture, GetKeyState, GetKeyboardLayout, GetKeyboardState, ReleaseCapture,
-            SetCapture, ToUnicodeEx, VIRTUAL_KEY, VK_CONTROL, VK_LBUTTON, VK_LWIN, VK_MBUTTON,
-            VK_MENU, VK_RBUTTON, VK_RWIN, VK_SHIFT,
+            GetCapture, GetKeyState, ReleaseCapture, SetCapture, VIRTUAL_KEY, VK_CONTROL,
+            VK_LBUTTON, VK_LWIN, VK_MBUTTON, VK_MENU, VK_RBUTTON, VK_RWIN, VK_SHIFT,
         },
         WindowsAndMessaging::{
             WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_RBUTTONDOWN,
@@ -386,12 +385,15 @@ pub fn mouse_hwheel_event(
 pub fn key_down_event(
     wparam: WPARAM,
     lparam: LPARAM,
-    translated_text: Option<String>,
+    stroke: Keystroke,
     held_dead: &mut HeldDeadKeys,
 ) -> PlatformInput {
     let vk = wparam.0 as u16;
     let (scan_code, extended, is_repeat) = keys::parse_key_lparam(lparam.0);
-    let dead = translated_text.is_none() && is_dead_keystroke(vk, scan_code);
+    let (dead, translated_text) = match stroke {
+        Keystroke::Dead => (true, None),
+        Keystroke::Text(text) => (false, text),
+    };
     if dead {
         held_dead.press(scan_code, extended);
     }
@@ -477,6 +479,17 @@ pub fn stray_char_event(text: String) -> PlatformInput {
     })
 }
 
+/// What `TranslateMessage` produced for one keydown.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Keystroke {
+    /// The drained `WM_CHAR` burst, or `None` for a key with no typeable
+    /// translation (navigation keys, Ctrl chords).
+    Text(Option<String>),
+    /// A dead key: `TranslateMessage` queued `WM_DEADCHAR` (or
+    /// `WM_SYSDEADCHAR`) for it on the layer the held modifiers select.
+    Dead,
+}
+
 /// The physical keys currently held down that were pressed as dead keys, so
 /// each one's release reports `Dead` like its press, even if the keyboard
 /// layout or the modifiers changed while it was held. Owned per window.
@@ -490,38 +503,15 @@ impl HeldDeadKeys {
         }
     }
 
+    /// Forget every held key: their releases go to another window.
+    pub fn clear(&mut self) {
+        self.0.clear();
+    }
+
     /// Whether the released key was pressed as a dead key; forgets it.
     fn release(&mut self, scan_code: u16, extended: bool) -> bool {
         let before = self.0.len();
         self.0.retain(|held| *held != (scan_code, extended));
         self.0.len() != before
-    }
-}
-
-/// Whether this keystroke, with the modifiers held now (AltGr, Shift), is a
-/// dead key in the calling thread's active layout.
-///
-/// `ToUnicodeEx` answers `-1` for a dead key on the layer the current keyboard
-/// state selects, so a dead key that exists only under AltGr or Shift (French
-/// AltGr+2) is found too. Flag `0x4` leaves the kernel's dead-key state
-/// untouched, so the composition `TranslateMessage` already started is not
-/// disturbed. No queued message is consulted.
-fn is_dead_keystroke(vk: u16, scan_code: u16) -> bool {
-    let mut state = [0u8; 256];
-    let mut buffer = [0u16; 8];
-    // SAFETY: `state` and `buffer` are live, writable locals of the sizes the
-    // calls require; the layout handle is the calling thread's own.
-    unsafe {
-        if GetKeyboardState(&mut state).is_err() {
-            return false;
-        }
-        ToUnicodeEx(
-            u32::from(vk),
-            u32::from(scan_code),
-            &state,
-            &mut buffer,
-            0x4,
-            Some(GetKeyboardLayout(0)),
-        ) == -1
     }
 }
