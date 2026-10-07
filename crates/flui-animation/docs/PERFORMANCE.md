@@ -7,11 +7,14 @@ starting with `#` are hidden setup.
 
 ## Measured benchmarks
 
-Every figure in this document comes from a committed Criterion bench
-(`benches/animation_bench.rs`, `benches/vsync_registry.rs`); nothing here is a
-hand estimate. Absolute numbers are machine-relative and both hosts below were
-shared with other builds, so read them as orders of magnitude and as a
-regression baseline, not as a hardware promise. Reproduce with:
+The benchmark tables below record measurements from the committed Criterion
+targets `benches/animation_bench.rs` and `benches/vsync_registry.rs`. The later
+per-controller analysis also records historical scratch measurements and a
+standalone prototype; those experiments are not committed, and the command
+below does not reproduce their attribution percentages or the 15,000–30,000
+controller samples. Absolute numbers are machine-relative and both hosts below
+were shared with other builds, so read them as orders of magnitude and as a
+regression baseline, not as a hardware promise. Run the committed targets with:
 
 ```bash
 cargo bench -p flui-animation --bench animation_bench --bench vsync_registry

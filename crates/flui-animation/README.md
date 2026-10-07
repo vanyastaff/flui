@@ -31,8 +31,8 @@ The separation allows:
 | Variant | Meaning |
 |---------|---------|
 | `Dismissed` | Settled after a reverse run or a reset; the value is the lower bound only if the run finished (a `stop` mid-reverse leaves it between the bounds) |
-| `Forward` | Running toward the end |
-| `Reverse` | Running toward the beginning |
+| `Forward` | Forward directional status; a run may be active or stopped between the bounds |
+| `Reverse` | Reverse directional status; a run may be active or stopped between the bounds |
 | `Completed` | Settled after a forward run; the value is the upper bound only if the run finished (a `stop` mid-forward leaves it between the bounds) |
 
 ```rust
@@ -43,7 +43,12 @@ assert!(AnimationStatus::Completed.is_stopped());
 assert_eq!(AnimationStatus::Forward.flip(), AnimationStatus::Reverse);
 ```
 
-Status indicates direction, not position. A `Completed` animation at value 1.0 that starts reversing becomes `Reverse` immediately, even before the value changes.
+Status indicates direction, not position or whether a run is active. Use
+`Animation::is_animating` to check activity: `AnimationStatus::is_running`
+only identifies the `Forward` and `Reverse` status variants. A `Completed`
+animation at value 1.0 that starts reversing becomes `Reverse` immediately,
+even before the value changes; `set_value` and disposal can leave a directional
+status without an active run.
 
 ---
 
@@ -112,7 +117,7 @@ controller.reset()?;                  // Jump to lower_bound, status = Dismissed
 controller.repeat(false)?; // Loop:   0→1, 0→1, ...
 controller.repeat(true)?;  // Bounce: 0→1→0→1→...
 
-// Bounded: three bounces between 0.2 and 0.8, one period each
+// Bounded: three legs between 0.2 and 0.8, one period each (forward, reverse, forward)
 controller.repeat_with(Some(0.2), Some(0.8), true, None, Some(3))?;
 # controller.dispose();
 # Ok(())
