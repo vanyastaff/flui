@@ -97,6 +97,15 @@ fn non_finite_down_refuses_its_continuation() {
                 "an invalid Down must not reach a recognizer route"
             );
             binding.handle_pointer_event(
+                &make_down_event_for_id(pointer, Offset::ZERO, PointerType::Touch),
+                result,
+            );
+            assert_eq!(
+                hits.get(),
+                0,
+                "another Down cannot erase the refused contact before its terminal event"
+            );
+            binding.handle_pointer_event(
                 &make_move_event_for_id(pointer, Offset::ZERO, PointerType::Touch),
                 result,
             );

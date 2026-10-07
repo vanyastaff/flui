@@ -4,6 +4,13 @@
 //! gesture system. It coordinates hit testing, event routing, arena management,
 //! and pointer move event coalescing.
 //!
+//! A refused Down admits no route. Its Move/Up/Cancel tail stays refused until
+//! that contact terminates. Refusals occupy a fixed array bounded by the same
+//! limit as admitted contacts. If it fills, the binding suppresses every
+//! untracked Move/Up/Cancel until a lifecycle reset, while admitted contacts and
+//! fresh valid Downs continue. This conservative fallback prevents a hostile
+//! stream of distinct refused identities from growing owner state indefinitely.
+//!
 //! # Architecture
 //!
 //! ```text
@@ -257,6 +264,51 @@ impl Drop for AllPointerTeardownGuard<'_> {
 /// this generous cap never rejects a legitimate gesture.
 const MAX_SIMULTANEOUS_POINTERS: usize = 32;
 
+enum RefusedContacts {
+    Tracking([Option<PointerId>; MAX_SIMULTANEOUS_POINTERS]),
+    Saturated,
+}
+
+impl Default for RefusedContacts {
+    fn default() -> Self {
+        Self::Tracking([None; MAX_SIMULTANEOUS_POINTERS])
+    }
+}
+
+impl RefusedContacts {
+    fn contains(&self, pointer: PointerId) -> bool {
+        match self {
+            Self::Tracking(ids) => ids.contains(&Some(pointer)),
+            Self::Saturated => true,
+        }
+    }
+
+    fn refuse(&mut self, pointer: PointerId) {
+        if let Self::Tracking(ids) = self {
+            if ids.contains(&Some(pointer)) {
+                return;
+            }
+            if let Some(slot) = ids.iter_mut().find(|slot| slot.is_none()) {
+                *slot = Some(pointer);
+            } else {
+                *self = Self::Saturated;
+            }
+        }
+    }
+
+    fn finish(&mut self, pointer: PointerId) {
+        if let Self::Tracking(ids) = self
+            && let Some(slot) = ids.iter_mut().find(|slot| **slot == Some(pointer))
+        {
+            *slot = None;
+        }
+    }
+
+    fn refuses_down(&self, pointer: PointerId) -> bool {
+        matches!(self, Self::Tracking(ids) if ids.contains(&Some(pointer)))
+    }
+}
+
 /// Local mirror of the helper in `events.rs` / `pan_zoom.rs` —
 /// duplicated here to keep the binding module's hot path free of
 /// cross-module indirection.
@@ -305,6 +357,9 @@ pub struct GestureBinding {
     /// Pending move events for coalescing.
     /// Only the latest move per pointer is kept.
     pending_moves: DashMap<PointerId, PendingMoveState>,
+
+    /// Refused contacts cannot fall through to hover delivery.
+    refused_contacts: RefCell<RefusedContacts>,
 
     /// Sampling mode captured by each pointer sequence at Down.
     ///
@@ -390,6 +445,7 @@ impl GestureBinding {
             close_mode: crate::__runtime::CloseTombstone::default(),
             hit_tests: DashMap::new(),
             pending_moves: DashMap::new(),
+            refused_contacts: RefCell::new(RefusedContacts::default()),
             resampling_enabled: Cell::new(false),
             sampling_clock: Cell::new(SamplingClock::default()),
             pointer_router: PointerRouter::new(),
@@ -815,6 +871,7 @@ impl GestureBinding {
     pub(crate) fn close_with_mode(&self, mode: crate::__runtime::CloseMode) {
         let mut failure = crate::__runtime::ClosePanic::for_close(mode, self.close_mode.clone());
         self.closed.set(true);
+        *self.refused_contacts.borrow_mut() = RefusedContacts::default();
         let mut pointers: Vec<_> = self.hit_tests.iter().map(|entry| *entry.key()).collect();
         pointers.sort_unstable();
         let routes: Vec<_> = pointers
@@ -888,6 +945,7 @@ impl GestureBinding {
     /// tracker) is untouched: a pointer can keep hovering an unfocused
     /// window.
     pub fn cancel_active_pointers(&self) {
+        *self.refused_contacts.borrow_mut() = RefusedContacts::default();
         let mut pointers: Vec<(PointerId, PointerType)> = self
             .hit_tests
             .iter()
@@ -1034,6 +1092,33 @@ impl GestureBinding {
             return;
         }
 
+        let refused_tail = !self.hit_tests.contains_key(&pointer_id)
+            && self.refused_contacts.borrow().contains(pointer_id);
+        match event {
+            PointerEvent::Down(down) => {
+                if self.refused_contacts.borrow().refuses_down(pointer_id) {
+                    return;
+                }
+                let position = Offset::new(down.state.position.x, down.state.position.y);
+                if !position.is_finite() {
+                    // An invalid extra Down does not revoke an admitted contact.
+                    if !self.hit_tests.contains_key(&pointer_id) {
+                        self.refused_contacts.borrow_mut().refuse(pointer_id);
+                    }
+                    return;
+                }
+            }
+            PointerEvent::Move(_) | PointerEvent::Up(_) | PointerEvent::Cancel(_)
+                if refused_tail =>
+            {
+                if matches!(event, PointerEvent::Up(_) | PointerEvent::Cancel(_)) {
+                    self.refused_contacts.borrow_mut().finish(pointer_id);
+                }
+                return;
+            }
+            _ => {}
+        }
+
         match event {
             PointerEvent::Down(down) => {
                 let mut first_panic = None;
@@ -1055,6 +1140,7 @@ impl GestureBinding {
                 }
 
                 if self.hit_tests.len() >= MAX_SIMULTANEOUS_POINTERS {
+                    self.refused_contacts.borrow_mut().refuse(pointer_id);
                     tracing::warn!(
                         ?pointer_id,
                         active = self.hit_tests.len(),
@@ -1521,6 +1607,7 @@ impl GestureBinding {
 
     /// Detach and clean every interrupted pointer transaction.
     fn clear_all_pointer_state_capturing_panic(&self) -> Option<RoutePanic> {
+        *self.refused_contacts.borrow_mut() = RefusedContacts::default();
         let mut hit_pointers: Vec<PointerId> =
             self.hit_tests.iter().map(|entry| *entry.key()).collect();
         hit_pointers.sort_unstable();
