@@ -29,6 +29,14 @@ pub struct ArenaMembership {
     this: Weak<dyn GestureArenaMember>,
 }
 
+impl std::fmt::Debug for ArenaMembership {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ArenaMembership")
+            .field("owner_alive", &(self.this.strong_count() != 0))
+            .finish_non_exhaustive()
+    }
+}
+
 impl ArenaMembership {
     /// Bind an arena to the exact member allocation created by `Rc::new_cyclic`.
     pub fn new(arena: GestureArena, this: Weak<dyn GestureArenaMember>) -> Self {
@@ -126,6 +134,15 @@ pub struct PrimaryContact {
     membership: ArenaMembership,
     current: RefCell<Option<Contact>>,
     last_id: Cell<u64>,
+}
+
+impl std::fmt::Debug for PrimaryContact {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let current = self.current();
+        f.debug_struct("PrimaryContact")
+            .field("current", &current)
+            .finish_non_exhaustive()
+    }
 }
 
 impl PrimaryContact {

@@ -20,6 +20,14 @@ pub struct RecognizerSet {
     entries: Vec<Attached>,
 }
 
+impl std::fmt::Debug for RecognizerSet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RecognizerSet")
+            .field("attachments", &self.entries.len())
+            .finish_non_exhaustive()
+    }
+}
+
 impl RecognizerSet {
     /// Attach without retaining the recognizer's owning state.
     pub fn attach<R: GestureRecognizer + 'static>(&mut self, recognizer: &Rc<R>) {
