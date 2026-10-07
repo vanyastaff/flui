@@ -289,6 +289,30 @@ fn deadlines_refuse_overflow_and_survive_arena_resolution() {
     assert!(arena.next_deadline().is_none());
 }
 
+fn stale_contact_drop_cannot_withdraw_a_reused_pointer() {
+    let log = Log::default();
+    let arena = GestureArena::new();
+    let owner = Extension::new(arena.clone(), "owner", log.clone());
+    let rival = Extension::new(arena.clone(), "rival", log.clone());
+    let member: Rc<dyn GestureArenaMember> = owner.clone();
+    let contact = PrimaryContact::new(ArenaMembership::new(arena.clone(), Rc::downgrade(&member)));
+    let event = down(pointer(79));
+    contact
+        .begin(
+            PointerDispatch::at_root(&event),
+            &GestureSettings::default(),
+        )
+        .expect("old generation admitted");
+    arena.abandon(pointer(79));
+    let _new_generation = arena.add(pointer(79), &rival);
+    arena.close(pointer(79));
+    log.borrow_mut().clear();
+    drop(contact);
+    assert!(log.borrow().is_empty());
+    arena.drain_deferred_resolutions();
+    assert_eq!(*log.borrow(), ["accepted"]);
+}
+
 #[test]
 fn public_recognizer_extension_contracts() {
     let cases: &[(&str, fn())] = &[
@@ -315,6 +339,10 @@ fn public_recognizer_extension_contracts() {
         (
             "deadlines_refuse_overflow_and_survive_arena_resolution",
             deadlines_refuse_overflow_and_survive_arena_resolution,
+        ),
+        (
+            "stale_contact_drop_cannot_withdraw_a_reused_pointer",
+            stale_contact_drop_cannot_withdraw_a_reused_pointer,
         ),
     ];
     for &(name, case) in cases {
