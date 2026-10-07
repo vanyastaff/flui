@@ -14,6 +14,17 @@ use flui_platform_api::{
 
 #[test]
 fn queued_move_precedes_button_edges_without_restarting_the_contact() {
+    assert_button_contacts(false, false);
+}
+
+#[test]
+fn queued_move_failure_still_delivers_button_edge_and_preserves_first_failure() {
+    for edge_panics in [false, true] {
+        assert_button_contacts(true, edge_panics);
+    }
+}
+
+fn assert_button_contacts(move_panics: bool, edge_panics: bool) {
     let lane = InteractionLane::try_new().expect("owner lane");
     let binding = GestureBinding::new();
     let observed = Rc::new(RefCell::new(Vec::new()));
@@ -59,7 +70,15 @@ fn queued_move_precedes_button_edges_without_restarting_the_contact() {
                     ),
                     _ => return,
                 };
+                let failing_move = move_panics && record.0 == "move" && record.1 == 10_000_000;
+                let failing_edge = edge_panics && record.0 == "press" && record.1 == 20_000_000;
                 log.borrow_mut().push(record);
+                if failing_move {
+                    panic!("older movement failure");
+                }
+                if failing_edge {
+                    panic!("later button failure");
+                }
             })
             .expect("register listener route");
         let route = |_| {
@@ -107,15 +126,27 @@ fn queued_move_precedes_button_edges_without_restarting_the_contact() {
                 1,
                 "the movement awaits frame delivery"
             );
-            binding.handle_pointer_event(
-                &PointerEvent::ButtonChange(ButtonChange::Pressed(PointerPress::new(
-                    pointer,
-                    PointerButton::SECONDARY,
-                    both,
-                    sample(20),
-                ))),
-                route,
-            );
+            let edge = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                binding.handle_pointer_event(
+                    &PointerEvent::ButtonChange(ButtonChange::Pressed(PointerPress::new(
+                        pointer,
+                        PointerButton::SECONDARY,
+                        both,
+                        sample(20),
+                    ))),
+                    route,
+                )
+            }));
+            if move_panics && base == 0 {
+                let payload = edge
+                    .expect_err("the earlier movement failure leaves dispatch after edge delivery");
+                assert_eq!(
+                    payload.downcast_ref::<&str>(),
+                    Some(&"older movement failure")
+                );
+            } else {
+                edge.expect("healthy button edge");
+            }
             assert_eq!(
                 binding.active_pointer_count(),
                 1,
