@@ -40,11 +40,6 @@ struct DoubleTapCallbacks {
     on_double_tap_down: Option<DoubleTapCallback>,
     on_double_tap_cancel: Option<DoubleTapCallback>,
 }
-impl DoubleTapCallbacks {
-    fn retire(self) {
-        drop(self);
-    }
-}
 impl Drop for DoubleTapCallbacks {
     fn drop(&mut self) {
         super::callback_containment::retire_callbacks!(self; on_double_tap, on_double_tap_down, on_double_tap_cancel);
@@ -371,8 +366,6 @@ impl Drop for DoubleTapGestureRecognizer {
             entry.release_deferred();
             entry.withdraw_deferred();
         }
-        // Contact is retired before any callback capture; dropping an entry
-        // never releases its hold by invoking another recognizer from Drop.
-        std::mem::take(&mut self.callbacks).retire();
+        // Fields then drop in declaration order: contact first, callbacks last.
     }
 }

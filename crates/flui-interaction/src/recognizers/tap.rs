@@ -108,9 +108,6 @@ impl TapCallbacks {
             TapButton::Tertiary => self.on_tertiary_tap_cancel.clone(),
         }
     }
-    fn retire(self) {
-        drop(self);
-    }
 }
 impl Drop for TapCallbacks {
     fn drop(&mut self) {
@@ -514,10 +511,4 @@ impl GestureRecognizer for TapGestureRecognizer {
 impl GestureArenaMember for TapGestureRecognizer {
     fn accept_gesture(&self, _: PointerId) {}
     fn reject_gesture(&self, _: PointerId) {}
-}
-impl Drop for TapGestureRecognizer {
-    fn drop(&mut self) {
-        self.sequences.get_mut().live.clear();
-        std::mem::take(&mut self.callbacks).retire();
-    }
 }
