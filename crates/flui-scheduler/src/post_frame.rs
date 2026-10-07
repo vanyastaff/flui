@@ -1,26 +1,33 @@
-//! Binding-scoped post-frame capabilities.
+//! The realm's owner-local frame state, and post-frame capabilities.
 //!
-//! Shared callbacks remain `Send` and live in the scheduler's synchronized queue,
-//! reached through [`PostFrameHandle`]. Owner-local callbacks live in
-//! [`LocalPostFrameLane`]'s `Rc` queue and are reached through
-//! [`LocalPostFrameHandle`], a `!Send` handle holding a `Weak` pointer straight at
-//! its lane's storage.
+//! [`OwnerFrame`] is what a frame needs from its owner thread that the
+//! (still `Send`) [`UpdateScheduler`] cannot hold: the owner-local post-frame
+//! queue and the async task store. A realm (or a headless binding) owns
+//! exactly one and is the only strong owner; every frame entry point takes it
+//! by reference — [`UpdateScheduler::drive_frame`],
+//! [`UpdateScheduler::handle_begin_frame`], [`UpdateScheduler::end_frame`],
+//! [`UpdateScheduler::execute_frame`] — so no frame can poll or drain
+//! "nothing".
+//!
+//! Shared callbacks remain `Send` and live in the scheduler's synchronized
+//! queue, reached through [`PostFrameHandle`]. Owner-local callbacks live in
+//! the owner frame's `Rc` queue and are reached through
+//! [`LocalPostFrameHandle`], a `!Send` handle holding a `Weak` pointer straight
+//! at that queue. The two queues share one registration order.
 //!
 //! There is no thread-local registry and no "currently active lane" concept:
-//! earlier revisions resolved a `Send`-safe ticket against a thread-local map and
-//! an activation stack, because a `Clone + Send + Sync` handle cannot hold an
-//! `Rc` directly. `LocalPostFrameHandle` is `!Send` precisely so it CAN hold that
-//! `Rc` (as a `Weak`) directly — it always addresses the one lane it was minted
-//! from, so nothing needs to look up "the" active lane on the calling thread, and
-//! there is no other lane it could be confused with. The frame drive drains a
-//! lane by receiving it as an explicit parameter
-//! ([`UpdateScheduler::end_frame_with_lane`] and friends), never by reading
-//! ambient state.
+//! a handle always addresses the one owner frame it was minted from, and the
+//! frame drive drains an owner frame by receiving it as an explicit
+//! parameter, never by reading ambient state.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::{Rc, Weak};
 
-use crate::{CallbackId, FrameTiming, PostFrameCallback, UpdateScheduler, WeakUpdateScheduler};
+use crate::async_driver::{RetirePanic, TaskStore};
+use crate::{
+    AsyncDriver, CallbackId, FrameTiming, PostFrameCallback, UpdateScheduler, WeakUpdateScheduler,
+};
 
 pub(crate) type OwnerPostFrameCallback = Box<dyn FnOnce(&FrameTiming) + 'static>;
 
@@ -31,140 +38,282 @@ pub(crate) struct LocalPostFrameEntry {
 
 struct LocalLaneInner {
     queue: RefCell<Vec<LocalPostFrameEntry>>,
+    /// Set by retirement: no callback is admitted afterwards.
+    closed: Cell<bool>,
 }
 
-/// Owner-affine queue for post-frame callbacks that are not required to be `Send`.
+/// The realm's owner-local frame state: its post-frame queue and its async
+/// tasks.
 ///
-/// This runtime-internal type is public only because bindings live in sibling
-/// crates. It is intentionally absent from the prelude and structurally
-/// `!Send + !Sync` through its `Rc` storage. `Clone` shares the same
-/// underlying queue (an `Rc` clone, not a fresh lane) — the same shape
-/// `UpdateScheduler`'s own `Clone` has over its `Arc`.
-#[derive(Clone)]
+/// Runtime-internal: public only because the realm and the headless bindings
+/// live in sibling crates. `!Send + !Sync` through its `Rc` storage, and not
+/// `Clone`: its owner — the realm, or a headless binding — holds the only
+/// strong reference to the tasks and callbacks, so they are created, run and
+/// dropped on the owner thread and never outlive it. Widgets reach it through
+/// `Weak` handles ([`AsyncDriver`], [`LocalPostFrameHandle`]).
+///
+/// Dropping it [retires](Self::retire) whatever is still queued.
 #[doc(hidden)]
-pub struct LocalPostFrameLane {
+pub struct OwnerFrame {
     scheduler: WeakUpdateScheduler,
-    inner: Rc<LocalLaneInner>,
+    post_frame: Rc<LocalLaneInner>,
+    tasks: Rc<TaskStore>,
 }
 
-impl LocalPostFrameLane {
-    pub(crate) fn new(scheduler: &UpdateScheduler) -> Self {
-        Self {
-            scheduler: scheduler.downgrade(),
-            inner: Rc::new(LocalLaneInner {
-                queue: RefCell::new(Vec::new()),
-            }),
-        }
+impl OwnerFrame {
+    /// Owner-local frame state for `scheduler`'s frames. Task wakes request a
+    /// frame through `scheduler`'s [`FrameWaker`](crate::FrameWaker).
+    ///
+    /// A scheduler has at most one live owner frame. A frame drive polls only
+    /// the owner it is handed, and its pump clears the scheduler's shared
+    /// frame demand, so a task admitted to a second owner the host never
+    /// drives would keep its ready flag set with no frame ever owed to it.
+    /// The slot frees when the owner drops.
+    ///
+    /// # Errors
+    ///
+    /// [`OwnerFrameError::AlreadyOwned`] while another `OwnerFrame` for
+    /// `scheduler` lives.
+    pub fn new(scheduler: &UpdateScheduler) -> Result<Self, OwnerFrameError> {
+        Self::with_tasks(scheduler, TaskStore::new())
     }
 
-    /// Create a `!Send` handle addressed directly at this lane's storage.
-    ///
-    /// The returned handle never needs "is this lane active" resolution: it
-    /// holds a `Weak` pointer straight at [`LocalLaneInner`], so scheduling
-    /// through it always reaches the correct queue, regardless of what else is
-    /// happening on the owner thread.
+    /// As [`new`](Self::new), issuing task ids from `first`: a test reaches
+    /// the identity-exhaustion boundary without spawning `u64::MAX` tasks.
+    #[cfg(test)]
+    pub(crate) fn with_first_task_id(
+        scheduler: &UpdateScheduler,
+        first: u64,
+    ) -> Result<Self, OwnerFrameError> {
+        Self::with_tasks(scheduler, TaskStore::with_first_id(first))
+    }
+
+    fn with_tasks(scheduler: &UpdateScheduler, tasks: TaskStore) -> Result<Self, OwnerFrameError> {
+        if !scheduler.claim_owner_frame() {
+            return Err(OwnerFrameError::AlreadyOwned);
+        }
+        let waker = scheduler.frame_waker();
+        tasks.set_request_frame(std::sync::Arc::new(move || waker.request_frame()));
+        Ok(Self {
+            scheduler: scheduler.downgrade(),
+            post_frame: Rc::new(LocalLaneInner {
+                queue: RefCell::new(Vec::new()),
+                closed: Cell::new(false),
+            }),
+            tasks: Rc::new(tasks),
+        })
+    }
+
+    /// A widget's handle to this frame's tasks: `Weak`, so it keeps nothing
+    /// alive past the owner.
     #[must_use]
-    pub fn local_handle(&self) -> LocalPostFrameHandle {
+    pub fn async_driver(&self) -> AsyncDriver {
+        AsyncDriver::new(&self.tasks)
+    }
+
+    /// A `!Send` handle addressed directly at this frame's post-frame queue.
+    #[must_use]
+    pub fn local_post_frame_handle(&self) -> LocalPostFrameHandle {
         LocalPostFrameHandle {
             scheduler: self.scheduler.clone(),
-            lane: Rc::downgrade(&self.inner),
+            lane: Rc::downgrade(&self.post_frame),
         }
     }
 
-    /// Drain this lane's queue, unconditionally. Private: every caller must
-    /// go through [`take_queue_for`](Self::take_queue_for), which verifies
-    /// the lane actually belongs to the scheduler asking to drain it before
-    /// ever reaching this.
-    fn take_queue(&self) -> Vec<LocalPostFrameEntry> {
-        self.inner.queue.take()
-    }
-
-    /// Return an uninvoked tail to the already-validated source lane.
-    /// Original IDs retain FIFO order ahead of newer registrations on the next drain.
-    pub(crate) fn restore_queue(&self, entries: Vec<LocalPostFrameEntry>) {
-        self.inner.queue.borrow_mut().extend(entries);
-    }
-
-    /// Drain this lane's queue for `scheduler`'s frame drive — but only if
-    /// `scheduler` is genuinely the one this lane was minted from.
+    /// Poll every task whose waker fired since the last poll; returns the
+    /// number polled.
     ///
-    /// Called with the lane passed explicitly by [`UpdateScheduler::end_frame_with_lane`]
-    /// (and the `execute_frame_with_lane`/`drive_frame_with_lane` convenience
-    /// wrappers) — drain-by-parameter, never an ambient lookup. The identity
-    /// check restores what the retired thread-local ticket registry's
-    /// `scheduler_identity` filter used to guarantee: a lane minted by
-    /// scheduler B, handed by mistake to scheduler A's drive, must not be
-    /// drained by A. Draining it anyway would hand B's callbacks A's
-    /// `FrameTiming`, remove them before B's own frame ever runs them, and
-    /// interleave B's `CallbackId`s — which mean nothing in A's registration
-    /// sequence — into A's sort, corrupting the one-total-order guarantee
-    /// this slice exists to provide. On mismatch (or a since-dropped owning
-    /// scheduler) this returns `Err` and leaves the lane's queue untouched,
-    /// still there for its own scheduler's next drive.
-    pub(crate) fn take_queue_for(
+    /// The frame's mid-frame slot calls it from
+    /// [`UpdateScheduler::handle_begin_frame`]; a wake that runs no frame
+    /// calls it after [`UpdateScheduler::finish_async_pump`]. Never from
+    /// build, layout or paint. Tasks are polled in ascending id order; a task
+    /// that completes or is cancelled is removed; a task woken during this
+    /// call is polled next time — the driver never spins. Cost scales with
+    /// ready tasks, not resident ones.
+    ///
+    /// # Panics
+    ///
+    /// Propagates a task's poll panic after removing that task and keeping
+    /// every unreached sibling indexed for the next poll.
+    pub fn poll_ready(&self) -> usize {
+        debug_assert!(
+            self.scheduler.upgrade().is_none_or(
+                |scheduler| scheduler.phase() != crate::SchedulerPhase::PersistentCallbacks
+            ),
+            "BUG: owner-local tasks must not be polled during build/layout/paint; the \
+             poll belongs between the transient and persistent callbacks"
+        );
+        self.tasks.poll_ready()
+    }
+
+    /// Number of tasks this frame holds.
+    #[must_use]
+    pub fn pending_task_count(&self) -> usize {
+        self.tasks.pending_task_count()
+    }
+
+    /// Number of live tasks currently indexed as due a poll. A same-batch
+    /// duplicate index entry counts twice until the next poll collapses it.
+    #[must_use]
+    pub fn ready_task_count(&self) -> usize {
+        self.tasks.ready_task_count()
+    }
+
+    /// Drop every queued post-frame callback, then every task, on this (the
+    /// owner) thread, each under its own catch, and admit nothing afterwards.
+    ///
+    /// A realm's teardown calls it in its own order, before it resumes any
+    /// earlier failure, so the captures of both queues are dropped on the
+    /// owner exactly once. Returns the first panic a destructor raised; later
+    /// ones are retained, never dropped. During an existing unwind the values
+    /// are retained without running their destructors. Idempotent; `Drop`
+    /// calls it for an owner that did not.
+    #[must_use = "the first destructor panic is returned for the owner to raise"]
+    pub fn retire(&self) -> Option<RetirePanic> {
+        self.post_frame.closed.set(true);
+        let callbacks = self.post_frame.queue.take();
+        let tasks = self.tasks.detach_for_retirement();
+        let mut first: Option<RetirePanic> = None;
+        for entry in callbacks {
+            if std::thread::panicking() {
+                std::mem::forget(entry);
+                continue;
+            }
+            if let Err(payload) = catch_unwind(AssertUnwindSafe(move || drop(entry))) {
+                keep_first(&mut first, payload);
+            }
+        }
+        if let Some(payload) = tasks.retire() {
+            keep_first(&mut first, payload);
+        }
+        first
+    }
+
+    /// Whether this frame belongs to `scheduler`'s frames.
+    pub(crate) fn belongs_to(&self, scheduler: &UpdateScheduler) -> bool {
+        self.scheduler
+            .upgrade()
+            .is_some_and(|owner| owner.is_same_instance(scheduler))
+    }
+
+    /// Drain the post-frame queue for `scheduler`'s frame drive — but only if
+    /// `scheduler` is genuinely the one this frame was made for.
+    ///
+    /// A queue drained by another scheduler would hand its callbacks a foreign
+    /// frame's `FrameTiming`, remove them before their own frame ever runs
+    /// them, and interleave `CallbackId`s from another id sequence into a sort
+    /// where they carry no meaning. On mismatch (or a since-dropped owning
+    /// scheduler) this returns `Err` and leaves the queue untouched.
+    pub(crate) fn take_post_frame_queue_for(
         &self,
         scheduler: &UpdateScheduler,
     ) -> Result<Vec<LocalPostFrameEntry>, LocalPostFrameScheduleError> {
         let Some(owner) = self.scheduler.upgrade() else {
             tracing::error!(
                 driving_scheduler = scheduler.debug_ptr(),
-                "a LocalPostFrameLane's owning scheduler is already gone; refusing to \
-                 drain it from this (necessarily unrelated) frame drive"
+                "an OwnerFrame's scheduler is already gone; refusing to drain it from this \
+                 (necessarily unrelated) frame drive"
             );
             return Err(LocalPostFrameScheduleError::LaneClosed);
         };
         if !owner.is_same_instance(scheduler) {
             tracing::error!(
-                lane_owner_scheduler = owner.debug_ptr(),
+                owner_frame_scheduler = owner.debug_ptr(),
                 driving_scheduler = scheduler.debug_ptr(),
-                "a LocalPostFrameLane was handed to a frame drive on a scheduler that does \
-                 not own it; refusing to drain it — its own scheduler's next drive still \
-                 delivers it"
+                "an OwnerFrame was handed to a frame drive on a scheduler it does not belong \
+                 to; refusing to drain or poll it — its own scheduler's next drive still does"
             );
             return Err(LocalPostFrameScheduleError::WrongScheduler);
         }
-        Ok(self.take_queue())
+        Ok(self.post_frame.queue.take())
+    }
+
+    /// Return an uninvoked tail to the already-validated queue. Original IDs
+    /// retain FIFO order ahead of newer registrations on the next drain.
+    pub(crate) fn restore_post_frame_queue(&self, entries: Vec<LocalPostFrameEntry>) {
+        self.post_frame.queue.borrow_mut().extend(entries);
     }
 }
 
-impl std::fmt::Debug for LocalPostFrameLane {
+fn keep_first(first: &mut Option<RetirePanic>, payload: RetirePanic) {
+    if first.is_none() {
+        *first = Some(payload);
+    } else {
+        flui_foundation::panic::retain_opaque_payload(payload);
+    }
+}
+
+impl Drop for OwnerFrame {
+    fn drop(&mut self) {
+        let first = self.retire();
+        // Freed only after retirement: a destructor retirement runs cannot
+        // mint a second owner while this one still holds tasks.
+        if let Some(scheduler) = self.scheduler.upgrade() {
+            scheduler.release_owner_frame();
+        }
+        if let Some(payload) = first {
+            if std::thread::panicking() {
+                flui_foundation::panic::retain_opaque_payload(payload);
+            } else {
+                std::panic::resume_unwind(payload);
+            }
+        }
+    }
+}
+
+impl std::fmt::Debug for OwnerFrame {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("LocalPostFrameLane")
-            .field("pending", &self.inner.queue.borrow().len())
+        f.debug_struct("OwnerFrame")
+            .field(
+                "post_frame_callbacks",
+                &self
+                    .post_frame
+                    .queue
+                    .try_borrow()
+                    .map(|queue| queue.len())
+                    .ok(),
+            )
+            .field("tasks", &self.tasks)
             .finish_non_exhaustive()
     }
 }
 
-/// Why an owner-local post-frame callback could not be registered, or a
-/// lane's queue could not be drained.
+/// Why an [`OwnerFrame`] could not be created.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum OwnerFrameError {
+    /// Another `OwnerFrame` for this scheduler is still alive. Frames poll
+    /// only the owner they are handed, so a second owner's tasks would be
+    /// stranded; drop the first owner before making another.
+    #[error("the UpdateScheduler already has a live OwnerFrame")]
+    AlreadyOwned,
+}
+
+/// Why an owner-local post-frame callback could not be registered, or an
+/// owner frame's queue could not be drained.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum LocalPostFrameScheduleError {
-    /// The owning [`LocalPostFrameLane`] (or its backing scheduler) has
-    /// already been dropped — there is no frame left for the callback to
-    /// observe, and it is guaranteed never to run.
+    /// The owning realm (its owner frame or its scheduler) is gone or retired
+    /// — there is no frame left for the callback to observe, and it is
+    /// guaranteed never to run.
     #[error("the handle's owner-local lane is closed")]
     LaneClosed,
-    /// A [`LocalPostFrameLane`] was handed to a frame drive
-    /// (`end_frame_with_lane`/`execute_frame_with_lane`/`drive_frame_with_lane`)
-    /// on a different `UpdateScheduler` than the one it was minted from.
-    /// Draining it anyway would hand its callbacks a foreign frame's
-    /// `FrameTiming`, remove them before their own scheduler's frame ever
-    /// runs, and interleave `CallbackId`s from a different id sequence into
-    /// a sort where they carry no meaning — so the drive refuses to drain it
-    /// at all. The lane's queue is untouched: its own scheduler's next drive
-    /// still delivers it.
+    /// An owner frame was handed to a frame drive on a different
+    /// `UpdateScheduler` than the one it was made for. Draining it anyway
+    /// would hand its callbacks a foreign frame's `FrameTiming`, so the drive
+    /// refuses to drain it at all; its own scheduler's next drive still
+    /// delivers it.
     #[error("the lane belongs to a different UpdateScheduler than the one draining it")]
     WrongScheduler,
 }
 
 /// Schedules owner-local work after a completed frame's layout and paint.
 ///
-/// `!Send`: holds a [`Weak`] pointer directly at its lane's `Rc` storage, so it
-/// can capture non-`Send` state (`Rc`/`RefCell`) in the callbacks it schedules.
-/// Moving one to another thread is a compile error, not a runtime check — see
-/// the module docs for why that structural guarantee replaces the older
-/// thread-local ticket registry outright rather than augmenting it.
+/// `!Send`: holds a [`Weak`] pointer directly at its owner frame's `Rc`
+/// queue, so it can capture non-`Send` state (`Rc`/`RefCell`) in the
+/// callbacks it schedules. Moving one to another thread is a compile error,
+/// not a runtime check.
 #[derive(Clone)]
 pub struct LocalPostFrameHandle {
     scheduler: WeakUpdateScheduler,
@@ -175,8 +324,8 @@ impl LocalPostFrameHandle {
     /// Schedule an owner-local callback after the next completed frame.
     ///
     /// The callback may capture `Rc`/`RefCell` state. On error (the owning
-    /// lane or its scheduler is gone) the callback is dropped without
-    /// running — provably: nothing retains it once this call returns `Err`.
+    /// realm is gone or retired) the callback is dropped without running —
+    /// provably: nothing retains it once this call returns `Err`.
     ///
     /// Runs in the same total order as every [`PostFrameHandle::schedule`]
     /// callback registered for this frame — by registration order, across
@@ -189,6 +338,7 @@ impl LocalPostFrameHandle {
         let lane = self
             .lane
             .upgrade()
+            .filter(|lane| !lane.closed.get())
             .ok_or(LocalPostFrameScheduleError::LaneClosed)?;
         let scheduler = self
             .scheduler
@@ -203,8 +353,8 @@ impl LocalPostFrameHandle {
         Ok(())
     }
 
-    /// The number of owner-local callbacks queued on this handle's lane and
-    /// not yet drained by a completed frame; `0` once the lane is closed.
+    /// The number of owner-local callbacks queued on this handle's owner frame
+    /// and not yet drained by a completed frame; `0` once it is closed.
     ///
     /// A self-rescheduling callback (one that queues its successor from
     /// inside its own run) keeps this at `1` after every frame, so a reading
@@ -212,7 +362,7 @@ impl LocalPostFrameHandle {
     ///
     /// A test probe, not part of the documented API: no production path reads
     /// it. It exists so an owner crate's integration tests can observe the
-    /// lane without a test-only global counter.
+    /// queue without a test-only global counter.
     #[doc(hidden)]
     #[must_use]
     pub fn pending_len(&self) -> usize {
@@ -303,7 +453,7 @@ mod tests {
 
     assert_impl_all!(UpdateScheduler: Send, Sync);
     assert_impl_all!(PostFrameHandle: Send, Sync);
-    assert_not_impl_any!(LocalPostFrameLane: Send, Sync);
+    assert_not_impl_any!(OwnerFrame: Send, Sync);
     assert_not_impl_any!(LocalPostFrameHandle: Send, Sync);
 
     fn assert_batch_depth(
@@ -341,32 +491,33 @@ mod tests {
 
     fn post_frame_panic_restores_idle_and_later_scheduling_works() {
         let scheduler = UpdateScheduler::new();
-        let lane = scheduler.new_local_post_frame_lane();
-        lane.local_handle()
+        let owner = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
+        owner
+            .local_post_frame_handle()
             .schedule_local(|_| panic!("post-frame probe"))
             .expect("lane alive");
-        assert!(
-            catch_unwind(AssertUnwindSafe(|| scheduler.execute_frame_with_lane(&lane))).is_err()
-        );
+        assert!(catch_unwind(AssertUnwindSafe(|| scheduler.execute_frame(&owner))).is_err());
         assert_eq!(scheduler.phase(), SchedulerPhase::Idle);
         let fired = Rc::new(Cell::new(false));
         let callback = Rc::clone(&fired);
-        lane.local_handle()
+        owner
+            .local_post_frame_handle()
             .schedule_local(move |_| callback.set(true))
             .expect("gate remains usable");
-        scheduler.execute_frame_with_lane(&lane);
+        scheduler.execute_frame(&owner);
         assert!(fired.get());
     }
 
     fn post_frame_panic_preserves_uninvoked_mixed_tail_before_reentrant_work() {
         let scheduler = UpdateScheduler::new();
-        let lane = scheduler.new_local_post_frame_lane();
+        let owner = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
         let log = Arc::new(Mutex::new(Vec::new()));
         let panic_calls = Rc::new(Cell::new(0));
         let counted = panic_calls.clone();
-        let reentrant = lane.local_handle();
+        let reentrant = owner.local_post_frame_handle();
         let reentrant_log = log.clone();
-        lane.local_handle()
+        owner
+            .local_post_frame_handle()
             .schedule_local(move |_| {
                 counted.set(counted.get() + 1);
                 reentrant
@@ -382,16 +533,15 @@ mod tests {
             shared_log.lock().expect("log").push(1);
         }));
         let local_log = log.clone();
-        lane.local_handle()
+        owner
+            .local_post_frame_handle()
             .schedule_local(move |_| {
                 local_log.lock().expect("log").push(2);
             })
             .expect("lane alive");
 
         let (panicked, first_batch) = flui_testing::log_capture::capture(|| {
-            catch_unwind(AssertUnwindSafe(|| {
-                scheduler.execute_frame_with_lane(&lane)
-            }))
+            catch_unwind(AssertUnwindSafe(|| scheduler.execute_frame(&owner)))
         });
         assert!(panicked.is_err());
         assert_batch_depth(&first_batch, 1, 2, 3);
@@ -401,7 +551,7 @@ mod tests {
             "the poisoned frame stops delivery"
         );
         let (_retry_frame, retry_batch) =
-            flui_testing::log_capture::capture(|| scheduler.execute_frame_with_lane(&lane));
+            flui_testing::log_capture::capture(|| scheduler.execute_frame(&owner));
         assert_batch_depth(&retry_batch, 1, 2, 3);
         assert_eq!(
             *log.lock().expect("log"),
@@ -413,6 +563,53 @@ mod tests {
             1,
             "the callback that already ran is not retried"
         );
+    }
+
+    /// Retirement drops queued owner-local callbacks once, unrun, keeps the
+    /// first destructor panic, and closes the queue to later registrations.
+    fn retirement_drops_queued_callbacks_and_closes_the_queue() {
+        struct Probe {
+            drops: Rc<Cell<usize>>,
+            panics: bool,
+        }
+        impl Drop for Probe {
+            fn drop(&mut self) {
+                self.drops.set(self.drops.get() + 1);
+                assert!(!self.panics, "callback capture probe");
+            }
+        }
+
+        let scheduler = UpdateScheduler::new();
+        let owner = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
+        let handle = owner.local_post_frame_handle();
+        let drops = Rc::new(Cell::new(0));
+        let ran = Rc::new(Cell::new(false));
+        for panics in [true, false] {
+            let probe = Probe {
+                drops: Rc::clone(&drops),
+                panics,
+            };
+            let ran = Rc::clone(&ran);
+            handle
+                .schedule_local(move |_| {
+                    let _probe = probe;
+                    ran.set(true);
+                })
+                .expect("lane alive");
+        }
+        let first = owner.retire().expect("a capture's destructor panicked");
+        assert_eq!(
+            first.downcast_ref::<&str>().copied(),
+            Some("callback capture probe")
+        );
+        assert_eq!(drops.get(), 2, "both captures dropped once");
+        assert!(!ran.get(), "a retired callback never runs");
+        assert_eq!(
+            handle.schedule_local(|_| {}),
+            Err(LocalPostFrameScheduleError::LaneClosed)
+        );
+        scheduler.execute_frame(&owner);
+        assert!(!ran.get());
     }
 
     #[test]
@@ -427,6 +624,10 @@ mod tests {
                 (
                     "post_frame_panic_preserves_uninvoked_mixed_tail_before_reentrant_work",
                     post_frame_panic_preserves_uninvoked_mixed_tail_before_reentrant_work as fn(),
+                ),
+                (
+                    "retirement_drops_queued_callbacks_and_closes_the_queue",
+                    retirement_drops_queued_callbacks_and_closes_the_queue as fn(),
                 ),
             ],
         );

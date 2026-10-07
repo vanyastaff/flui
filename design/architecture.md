@@ -527,11 +527,11 @@ headless or CPU sink — it needs the product transaction, not the production `O
 ADR-0037 §12: one production consumer plus the test driver).
 
 "One transaction" is defined by type, not by function names: the entry points that drive frame
-phases (`drive_frame_with_lane`, `crates/flui-scheduler/src/scheduler.rs:1874`; the scheduler's
+phases (`UpdateScheduler::drive_frame` in `crates/flui-scheduler/src/scheduler.rs`; the scheduler's
 begin/draw frame handlers; the view binding's frame entry) are unreachable outside `flui-runtime`,
 through `pub(crate)`, a sealed token or a capability type. A syn scan with `--self-test` is the
 fallback if no type works. Banning `pub fn pump_frame` would not be enough: a rename defeats it,
-and `HeadlessBinding::pump_frame` already reaches the scheduler through `drive_frame_with_lane`
+and `HeadlessBinding::pump_frame` already reaches the scheduler through `drive_frame`
 (`crates/flui-testing/src/lib.rs:1017`). Per-presentation failure containment (ADR-0048,
 `draw_frame_entered` at `crates/flui-runtime/src/ui_realm/frame.rs:74`) moved with the transaction.
 

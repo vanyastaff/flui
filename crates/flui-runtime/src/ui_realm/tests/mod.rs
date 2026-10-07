@@ -176,7 +176,8 @@ pub(crate) fn two_realms_two_threads_no_shared_state() {
 
             sender_b.request_redraw();
             let _ = realm_b.drain_commands();
-            realm_b.scheduler().drive_frame_with_lane(
+            realm_b.scheduler().drive_frame(
+                realm_b.owner_frame(),
                 flui_scheduler::Instant::now(),
                 flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
                 || {
@@ -186,21 +187,20 @@ pub(crate) fn two_realms_two_threads_no_shared_state() {
                     rendezvous_or_timeout("realm B");
                     let _ = realm_b.draw_frame(coexistence_constraints());
                 },
-                realm_b.local_post_frame_lane(),
             );
             (wakes_b.load(Ordering::Relaxed), realm_b.realm_id())
         });
 
         sender_a.request_redraw();
         let _ = realm_a.drain_commands();
-        realm_a.scheduler().drive_frame_with_lane(
+        realm_a.scheduler().drive_frame(
+            realm_a.owner_frame(),
             flui_scheduler::Instant::now(),
             flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
             || {
                 rendezvous_or_timeout("realm A");
                 let _ = realm_a.draw_frame(coexistence_constraints());
             },
-            realm_a.local_post_frame_lane(),
         );
 
         handle.join().expect("realm B's thread did not panic")
@@ -392,6 +392,7 @@ fn wake_debt_and_signal_write_matrix() {
             ("signal_write_routing::a_failed_signal_write_rearm_retries_at_the_next_owner_boundary", signal_write_routing::a_failed_signal_write_rearm_retries_at_the_next_owner_boundary as fn()),
             ("signal_write_routing::an_older_overlapping_wake_cannot_clear_newer_failed_delivery_debt", signal_write_routing::an_older_overlapping_wake_cannot_clear_newer_failed_delivery_debt as fn()),
             ("redraw_wake_routing::a_cross_thread_frame_request_reaches_the_realms_platform_wake", redraw_wake_routing::a_cross_thread_frame_request_reaches_the_realms_platform_wake as fn()),
+            ("redraw_wake_routing::frame_waker_wakes_the_realm_from_a_worker", redraw_wake_routing::frame_waker_wakes_the_realm_from_a_worker as fn()),
             ("addressed_input_routing::panicking_keyboard_dispatch_keeps_priority_over_a_panicking_wake", addressed_input_routing::panicking_keyboard_dispatch_keeps_priority_over_a_panicking_wake as fn()),
             #[cfg(feature = "hot-reload")]
             ("hot_reload_recovery::failed_reload_wake_rearms_the_accepted_tail", hot_reload_recovery::failed_reload_wake_rearms_the_accepted_tail as fn()),

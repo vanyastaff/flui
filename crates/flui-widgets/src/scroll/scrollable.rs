@@ -655,24 +655,13 @@ impl ViewState<Scrollable> for ScrollableState {
                     } else {
                         -raw_velocity
                     };
-                    // Cap the fling velocity at 8 000 px/s. The LSQ
-                    // velocity tracker can produce astronomically large velocities
-                    // when pointer samples arrive with sub-millisecond timestamps
-                    // (headless test timing); an unbounded velocity drives
+                    // Cap the fling at the default gesture settings' maximum
+                    // fling velocity, keeping its sign; an unbounded velocity drives
                     // `UnderdampedSolution` to `f64::INFINITY` for any t > 0.
-                    let fling_velocity_px_per_sec =
-                        fling_velocity_px_per_sec.clamp(-8_000.0, 8_000.0);
-                    // `clamp` propagates NaN (IEEE 754); NaN can arrive when all
-                    // pointer events share the same timestamp (degenerate LSQ —
-                    // now guarded in `VelocityTracker::compute_estimate`, but we
-                    // keep this as belt-and-suspenders). Treat NaN as zero so
-                    // physics still springs back when the position is past a
-                    // boundary, even without a measurable fling velocity.
-                    let fling_velocity_px_per_sec = if fling_velocity_px_per_sec.is_nan() {
-                        0.0
-                    } else {
-                        fling_velocity_px_per_sec
-                    };
+                    // NaN becomes zero, so physics still springs back when
+                    // the position is past a boundary.
+                    let fling_velocity_px_per_sec = flui_interaction::GestureSettings::default()
+                        .clamp_fling_velocity(fling_velocity_px_per_sec);
 
                     let metrics = ScrollMetrics::from(&ctrl_fling.position());
                     if let Some(sim) =

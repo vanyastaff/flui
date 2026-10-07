@@ -52,7 +52,7 @@ fn attr_names_test_predicate(attr_text: &str) -> bool {
 /// whole `#[cfg(test)]`-gated modules.
 ///
 /// A unit test may legitimately drive a throwaway `UpdateScheduler` directly
-/// (`scheduler.drive_frame(...)`, `scheduler.drive_async_tasks()`) to prove
+/// (`scheduler.drive_frame(...)`, `owner_frame.poll_ready()`) to prove
 /// a lifecycle transition's effect — that is a test assertion, not a
 /// production "frame site" hand-rolling anything. Excluding `#[cfg(test)]`
 /// regions keeps the scans below scoped to what their own docs claim:
@@ -114,7 +114,7 @@ fn production_lines(source: &str) -> Vec<&str> {
 
 /// The `app/runner/` module reaches a frame only through `UiRealm::pump`.
 ///
-/// Red-check: change any site back to `scheduler.drive_frame_with_lane(...)`
+/// Red-check: change any site back to `scheduler.drive_frame(...)`
 /// around `render_frame`, or to `handle_begin_frame` + `handle_draw_frame`.
 fn every_runner_frame_site_drives_the_realm_pump() {
     let code_lines: Vec<&str> = RUNNER_SOURCES
@@ -127,9 +127,8 @@ fn every_runner_frame_site_drives_the_realm_pump() {
         "handle_draw_frame",
         "end_frame(",
         "drive_frame(",
-        "drive_frame_with_lane(",
         "finish_async_pump(",
-        "drive_async_tasks(",
+        "poll_ready(",
     ] {
         assert!(
             !code_lines.iter().any(|l| l.contains(banned)),

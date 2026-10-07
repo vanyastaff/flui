@@ -82,9 +82,12 @@
 //! ## Example Usage
 //!
 //! ```rust
-//! use flui_scheduler::{FrameBudget, Priority, UpdateScheduler};
+//! use flui_scheduler::{FrameBudget, OwnerFrame, Priority, UpdateScheduler};
 //!
 //! let scheduler = UpdateScheduler::new();
+//! // The owner thread's frame state: owner-local post-frame callbacks and
+//! // async tasks. A realm owns one; every frame entry point takes it.
+//! let owner = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
 //!
 //! // Schedule a one-time frame callback (animation tick)
 //! scheduler.schedule_frame_callback(Box::new(|vsync_time| {
@@ -97,7 +100,7 @@
 //! });
 //!
 //! // Execute frame (called by event loop)
-//! scheduler.execute_frame();
+//! scheduler.execute_frame(&owner);
 //! ```
 //!
 //! ## Feature Flags
@@ -121,9 +124,11 @@
 //! - Native platforms (Windows, macOS, Linux) via `std::time`
 //! - WebAssembly via `performance.now()`
 //!
-//! Cross-thread scheduler capabilities are [`Send`] + [`Sync`]. Bindings may
-//! additionally own a deliberately owner-affine `LocalPostFrameLane` for UI
-//! callbacks that capture `Rc`/`RefCell` state.
+//! Cross-thread scheduler capabilities are [`Send`] + [`Sync`]; the one a
+//! worker uses to ask for a frame is [`FrameWaker`]. What runs on the owner
+//! thread — owner-local post-frame callbacks and async tasks, which may
+//! capture `Rc`/`RefCell` state — lives in the binding's [`OwnerFrame`],
+//! reached through `!Send` handles ([`AsyncDriver`], [`LocalPostFrameHandle`]).
 //!
 //! ## Prelude
 //!
@@ -181,7 +186,7 @@ pub use frame_telemetry::{
     MAX_COALESCED_INPUT_EPOCHS, PresentOutcome,
 };
 pub use post_frame::{
-    LocalPostFrameHandle, LocalPostFrameLane, LocalPostFrameScheduleError, PostFrameHandle,
+    LocalPostFrameHandle, LocalPostFrameScheduleError, OwnerFrame, OwnerFrameError, PostFrameHandle,
 };
 /// The instant type the frame clock is stamped with. `std::time::Instant` on
 /// native, a `performance.now()` shim on wasm32 — re-exported so a binding can
@@ -205,8 +210,8 @@ pub use frame::{
 // Re-exports - ID types (unified with flui-foundation)
 pub use id::{CallbackId, Id, IdGenerator, Marker, markers};
 pub use scheduler::{
-    FrameCompletionFuture, FrameOutcome, IdleDeadline, MAX_BUILD_REENTRY_PASSES, SchedulerBuilder,
-    SchedulerClosed, UpdateScheduler, WeakUpdateScheduler,
+    FrameCompletionFuture, FrameOutcome, FrameWaker, IdleDeadline, MAX_BUILD_REENTRY_PASSES,
+    SchedulerBuilder, SchedulerClosed, UpdateScheduler, WeakUpdateScheduler,
 };
 pub use task::{Priority, PriorityCount, Task, TaskId, TaskQueue};
 pub use ticker::{

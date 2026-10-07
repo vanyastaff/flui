@@ -104,6 +104,10 @@ another at 144 Hz, a background one frozen), and raster scheduling (GPU backpres
 
 ### 2. Thread-affinity model — the compiler states the rules
 
+**Superseded-by:** [ADR-0136 §2](ADR-0136-owner-local-ui-surfaces.md) for async task
+ownership: `OwnerFrame`, `AsyncDriver`, `TaskToken` and their futures are owner-local;
+task wakers and `FrameWaker` alone cross that boundary. The remaining contracts below stand.
+
 | Type | Contract |
 |---|---|
 | `UiRealm`, element and render trees, `PipelineCell`, views, contexts, UI callbacks | `!Send + !Sync` — single writer, structurally |

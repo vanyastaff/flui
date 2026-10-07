@@ -30,9 +30,10 @@
 //! ## Example
 //!
 //! ```rust
-//! use flui_scheduler::{Priority, UpdateScheduler};
+//! use flui_scheduler::{OwnerFrame, Priority, UpdateScheduler};
 //!
 //! let scheduler = UpdateScheduler::new();
+//! let owner = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
 //!
 //! // Schedule animation callback (fires during TransientCallbacks)
 //! scheduler.schedule_frame_callback(Box::new(|vsync_time| {
@@ -46,7 +47,7 @@
 //!
 //! // Execute a frame (typically called by event loop on vsync)
 //! let vsync_time = web_time::Instant::now();
-//! scheduler.handle_begin_frame(vsync_time);
+//! scheduler.handle_begin_frame(vsync_time, &owner);
 //! scheduler.handle_draw_frame();
 //! ```
 
@@ -82,7 +83,9 @@ use crate::{
     ticker::TickerProvider,
 };
 
+mod identity;
 mod post_frame_dispatch;
+mod teardown;
 
 // CallbackId is imported from crate::id (re-exported from flui_foundation::FrameCallbackId)
 
@@ -867,8 +870,8 @@ struct BindingState {
 
 /// Every piece of scheduler state, unified behind one allocation.
 ///
-/// Before this type existed, `UpdateScheduler` held five independent `Arc` blobs
-/// (`frame`/`callbacks`/`binding`/`task_queue`/`async_driver`) — a "handle"
+/// Before this type existed, `UpdateScheduler` held independent `Arc` blobs
+/// (`frame`/`callbacks`/`binding`/`task_queue`, then also the async driver) — a "handle"
 /// in spirit, but a double indirection wherever code wanted a single owning
 /// reference to hand out (`create_ticker` allocated a fresh `Arc<UpdateScheduler>`
 /// over the five already-`Arc` fields just to give the ticker something to
@@ -886,91 +889,10 @@ struct SchedulerInner {
     binding: BindingState,
     /// Task queue (priority-based, already internally synchronized)
     task_queue: TaskQueue,
-    /// Frame-driven async task driver, polled once per frame by
-    /// [`UpdateScheduler::handle_begin_frame`] in the mid-frame slot.
-    /// The bindings no longer call it directly.
-    async_driver: crate::AsyncDriver,
-}
-
-/// Resolves every still-pending [`end_of_frame`](UpdateScheduler::end_of_frame)
-/// waiter with `Err(`[`SchedulerClosed`]`)` when the last strong
-/// [`UpdateScheduler`] handle is dropped, so a caller awaiting one never
-/// hangs forever with no frame left to run and resolve it.
-///
-/// # Why `get_mut`, not `lock()`, is sound with no runtime check
-///
-/// `Drop::drop` hands this `&mut SchedulerInner`, and the reason that is
-/// sound is `Arc`, not the borrow: this runs only once the strong count has
-/// reached zero, and `Arc`'s own release/acquire ordering means this
-/// destructor observes every prior mutation through any dropped clone — no
-/// other thread can be mid-registration or mid-notification against this
-/// same registry at this point. So teardown takes no lock at all.
-///
-/// # Why the `Some(Err(SchedulerClosed))` write below needs no `is_none()` guard
-///
-/// `drain()` performs `mem::take`, removing every entry it returns from the
-/// registry — so every entry this loop reaches is, by construction, one
-/// `notify_frame_completion` never reached first (a delivered completion
-/// already took its entry out of the registry, via that same `drain`, long
-/// before this ran). `completed` is therefore always `None` here; a runtime
-/// check would be dead code testing a fact the type already proves.
-///
-/// # May run on a foreign thread
-///
-/// `Waker::wake()` can itself be the call that drops the async driver's own
-/// `upgrade()`d temporary strong reference — making THIS the final release,
-/// on whichever thread that wake happened to run on. Everything this touches
-/// (`FrameCompletionRegistry`, `FrameCompletionState`, `Waker`) is
-/// `Send + Sync`, so that is sound, but it means this must never assume it
-/// runs on the scheduler's "home" thread.
-///
-/// # Never `resume_unwind`
-///
-/// A panic raised from a destructor while the thread is already unwinding
-/// aborts the process with no diagnostic. Wakers are borrowed for invocation,
-/// retaining their owning envelopes on failure or existing unwind. Ordinary
-/// retirement and telemetry have separate catches; caught opaque payloads
-/// are retained, and this delivery loop never resumes a caught failure.
-///
-/// # What this cannot reach
-///
-/// This runs only once every strong [`UpdateScheduler`] reference is gone —
-/// the ordinary `Arc` rule, nothing special to this type. A task holding its
-/// OWN strong clone (captured into an `async` block passed to
-/// [`UpdateScheduler::spawn_local`](UpdateScheduler::spawn_local), say) defers
-/// this for as long as that task is still pending, and a live strong clone
-/// anywhere else — an embedder holding one, another thread's handle — does
-/// the same. The scheduler's OWN internals never cause that: the async
-/// driver's wake hook captures only a `Weak<SchedulerInner>` (see
-/// [`UpdateScheduler::with_budget_target_and_task_queue`]'s constructor doc),
-/// precisely so a pending task cannot keep the scheduler it belongs to alive
-/// through this destructor. See this crate's `ARCHITECTURE.md` "The teardown lifetime
-/// guarantee remains partial" paragraph in the #1162 mapping entry for the full
-/// argument.
-impl Drop for SchedulerInner {
-    fn drop(&mut self) {
-        let waiters = self.frame.completion_waiters.get_mut().drain();
-        let mut delivery = crate::completion_wake::WakeBatch::new("scheduler teardown", false);
-
-        for notifier in waiters {
-            // A failed upgrade means the future was already dropped
-            // (cancelled) before teardown reached it — an ordinary outcome,
-            // not an error, exactly as in `notify_frame_completion`.
-            let Some(state) = notifier.state.upgrade() else {
-                continue;
-            };
-
-            let waker = {
-                let mut state = state.lock();
-                state.completed = Some(Err(SchedulerClosed));
-                state.waker.take()
-            };
-            let Some(waker) = waker else { continue };
-
-            delivery.wake(waker);
-        }
-        delivery.finish(false);
-    }
+    /// Set while an [OwnerFrame](crate::OwnerFrame) for this scheduler
+    /// lives: a scheduler has at most one, so the owner a frame drive polls is
+    /// the only one tasks can be admitted to.
+    owner_frame_claimed: AtomicBool,
 }
 
 /// Main scheduler for frame and task management
@@ -1069,12 +991,51 @@ impl std::fmt::Debug for UpdateScheduler {
     }
 }
 
-/// Shared body of [`UpdateScheduler::request_frame`] and the async driver's wake hook.
+/// Asks a scheduler for a frame from any thread.
+///
+/// Obtained from [`UpdateScheduler::frame_waker`]. `Clone + Send + Sync`:
+/// the cross-thread half of a realm's scheduling, which a worker keeps while
+/// everything it would wake stays on the owner thread. Holds a `Weak` to its
+/// scheduler, so it wakes only its own realm, keeps nothing alive, and is a
+/// no-op once the realm is gone.
+#[derive(Clone)]
+pub struct FrameWaker {
+    inner: std::sync::Weak<SchedulerInner>,
+}
+
+impl FrameWaker {
+    /// Request a frame.
+    ///
+    /// Sets the scheduler's frame latch; only its `false → true` edge fires
+    /// the platform wake hook, so a burst of requests before the next frame
+    /// is one wake. The latch is cleared at the next begin frame, or by
+    /// [`UpdateScheduler::finish_async_pump`] for a wake that runs no frame;
+    /// a failed hook keeps the demand for the next request or hook
+    /// installation.
+    ///
+    /// # Panics
+    ///
+    /// Propagates a panic from the platform wake hook after recording the
+    /// demand as undelivered.
+    pub fn request_frame(&self) {
+        if let Some(inner) = self.inner.upgrade() {
+            request_frame_impl(&inner.frame, &inner.binding);
+        }
+    }
+}
+
+impl std::fmt::Debug for FrameWaker {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FrameWaker")
+            .field("alive", &(self.inner.strong_count() > 0))
+            .finish()
+    }
+}
+
+/// Shared body of [`UpdateScheduler::request_frame`] and [`FrameWaker::request_frame`].
 ///
 /// Factored out so both callers can hand it plain field references
 /// (`&FrameState`, `&BindingState`) rather than duplicating coalescing logic.
-/// The wake hook captures `Weak<SchedulerInner>` in `UpdateScheduler::new`,
-/// keeping ownership acyclic independently of this function's split parameters.
 fn request_frame_impl(frame: &FrameState, binding: &BindingState) {
     frame.wake_delivery.request(
         || !frame.frame_scheduled.swap(true, Ordering::SeqCst),
@@ -1105,11 +1066,9 @@ impl UpdateScheduler {
     /// doc) — it is not stored anywhere else, and `UpdateScheduler` exposes
     /// no way to read or change it after construction.
     ///
-    /// A post-construction `Arc::get_mut` on `inner` cannot do this instead:
-    /// `get_mut` requires zero weak refs too, and the async-driver wake hook
-    /// this constructor installs always holds one (see below), so it would
-    /// unconditionally return `None`. Taking the queue as a parameter avoids
-    /// needing mutable access to the constructed `Arc` at all.
+    /// Taking the queue as a parameter avoids needing mutable access to the
+    /// constructed `Arc` at all: `Arc::get_mut` fails as soon as any
+    /// [`FrameWaker`] or weak handle exists.
     fn with_budget_target_and_task_queue(
         budget_target: FrameDuration,
         task_queue: TaskQueue,
@@ -1153,26 +1112,26 @@ impl UpdateScheduler {
                 on_frame_scheduled: Mutex::new(None),
             },
             task_queue,
-            async_driver: crate::AsyncDriver::new(),
-        });
-
-        // The driver's wakers request a frame through the scheduler's existing
-        // coalescing path (`frame_scheduled` + `on_frame_scheduled`), so an
-        // async completion wakes an idle event loop exactly like `setState`.
-        // The hook captures a `Weak<SchedulerInner>`, never a strong
-        // `UpdateScheduler`/`Arc<SchedulerInner>`, to keep
-        // `SchedulerInner → AsyncDriver → hook` acyclic — a strong capture
-        // here would leak the entire scheduler for as long as any task is
-        // pending. Upgrade failure (the scheduler's last strong ref is
-        // already gone) is a silent no-op: there is nothing left to wake.
-        let weak_inner = Arc::downgrade(&inner);
-        inner.async_driver.set_request_frame(move || {
-            if let Some(inner) = weak_inner.upgrade() {
-                request_frame_impl(&inner.frame, &inner.binding);
-            }
+            owner_frame_claimed: AtomicBool::new(false),
         });
 
         Self { inner }
+    }
+
+    /// The cross-thread "please run a frame" capability for this scheduler.
+    ///
+    /// The one scheduler capability a worker thread holds: an
+    /// [`OwnerFrame`](crate::OwnerFrame) installs it as its task wakes' frame
+    /// hook, and a worker that needs a frame for any other reason sends a
+    /// clone. It requests a frame exactly as [`request_frame`](Self::request_frame)
+    /// does — one platform wake per `false → true` edge of the frame latch —
+    /// wakes this scheduler's realm and no other, and does nothing once the
+    /// scheduler is gone.
+    #[must_use]
+    pub fn frame_waker(&self) -> FrameWaker {
+        FrameWaker {
+            inner: Arc::downgrade(&self.inner),
+        }
     }
 
     // =========================================================================
@@ -1203,50 +1162,12 @@ impl UpdateScheduler {
             .store(new_phase as u8, Ordering::Release);
     }
 
-    /// Whether `self` and `other` are clones of the **same** scheduler — the same
-    /// callback queues, the same async driver, the same frame.
-    ///
-    /// `UpdateScheduler` is `Arc`-backed, so this is pointer identity on the shared
-    /// inner state. It exists because a capability handed to a widget must be
-    /// provably pointed at the realm's own scheduler, not some other one.
-    #[must_use]
-    pub fn is_same_instance(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.inner, &other.inner)
-    }
-
-    /// A stable, opaque identity for tracing/diagnostics only.
-    ///
-    /// Never used for equality — [`is_same_instance`](Self::is_same_instance)
-    /// owns that comparison. This exists so a scheduler-mismatch trace (e.g.
-    /// draining a [`crate::LocalPostFrameLane`] with the wrong
-    /// `UpdateScheduler`) can name both sides without printing the whole
-    /// internal state the `Debug` impl shows.
-    pub(crate) fn debug_ptr(&self) -> usize {
-        Arc::as_ptr(&self.inner) as usize
-    }
-
     pub(crate) fn with_post_frame_registration<R>(
         &self,
         callback: impl FnOnce(CallbackId) -> R,
     ) -> R {
         let _registration = self.inner.callbacks.post_frame_registration.lock();
         callback(self.inner.callbacks.id_gen.next())
-    }
-
-    /// Create a FRESH owner-affine local post-frame lane for a binding/runtime.
-    ///
-    /// Named `new_*`, not `local_post_frame_lane`, so it cannot be confused
-    /// with `UiRealm::local_post_frame_lane()` — that one is an ACCESSOR
-    /// returning the realm's existing lane; this one is a CONSTRUCTOR that
-    /// mints a brand-new, empty one. Both are in scope at every drive site
-    /// (a `UiRealm` holds both a `scheduler: UpdateScheduler` and a
-    /// `local_post_frame: LocalPostFrameLane` field), so a same-named pair
-    /// would let `scheduler.local_post_frame_lane()` compile at a drive site
-    /// and silently drain a lane nothing ever schedules into, forever.
-    #[doc(hidden)]
-    #[must_use]
-    pub fn new_local_post_frame_lane(&self) -> crate::LocalPostFrameLane {
-        crate::LocalPostFrameLane::new(self)
     }
 
     /// Check if currently in a frame
@@ -1261,9 +1182,18 @@ impl UpdateScheduler {
     /// Handle begin frame - called when vsync signal arrives
     ///
     /// Executes transient callbacks (animation tickers) with the vsync
-    /// timestamp.
-    #[tracing::instrument(skip(self))]
-    pub fn handle_begin_frame(&self, vsync_time: Instant) -> FrameId {
+    /// timestamp, flushes microtasks, then polls `owner`'s ready async tasks
+    /// in the mid-frame slot.
+    ///
+    /// # Panics
+    ///
+    /// Panics before consuming frame demand if `owner` belongs to another scheduler.
+    #[tracing::instrument(skip(self, owner))]
+    pub fn handle_begin_frame(&self, vsync_time: Instant, owner: &crate::OwnerFrame) -> FrameId {
+        assert!(
+            owner.belongs_to(self),
+            "BUG: frame owner belongs to another scheduler"
+        );
         // Store vsync time for all tickers to use
         *self.inner.frame.current_vsync_time.lock() = Some(vsync_time);
 
@@ -1373,11 +1303,10 @@ impl UpdateScheduler {
         // `handle_draw_frame`. A future completing here calls `RebuildHandle::schedule()`,
         // whose id the pipeline's `build_scope` drains — so a completion lands in THIS frame.
         //
-        // This lives in the scheduler, not in bindings. The contract is "exactly one
-        // mid-frame poll on the right `UpdateScheduler` instance". Owning it here enforces
-        // both structurally: `HeadlessBinding` drives its binding-local scheduler and
-        // production drives the singleton, and neither can forget the step or run it twice.
-        self.drive_async_tasks();
+        // The begin frame owns the step and takes the owner frame as a parameter,
+        // so no frame driver can forget it, run it twice, or poll some other
+        // realm's tasks.
+        owner.poll_ready();
 
         frame_id
     }
@@ -1514,11 +1443,13 @@ impl UpdateScheduler {
     ///
     /// Each callback runs **exactly once** — the queue is drained, not iterated.
     ///
-    /// This drains the **shared** post-frame queue only. A caller that also owns
-    /// a [`crate::LocalPostFrameLane`] must use
-    /// [`end_frame_with_lane`](Self::end_frame_with_lane) instead, or that lane's
-    /// callbacks never run — there is no ambient lookup that finds it for you
-    /// (see the `post_frame` module docs for why).
+    /// Drains the shared queue and `owner`'s owner-local queue into **one**
+    /// total order — one `CallbackId` sequence: both queues are combined into
+    /// one snapshot and sorted by registration order before any callback runs,
+    /// so it does not matter which queue a given callback landed in, only when
+    /// it was registered. A widget author reads this on
+    /// [`crate::LocalPostFrameHandle::schedule_local`], not here. An `owner`
+    /// made for another scheduler is not drained (and the mismatch is logged).
     ///
     /// # Panics
     ///
@@ -1526,24 +1457,8 @@ impl UpdateScheduler {
     /// `PersistentCallbacks` (i.e. `handle_draw_frame` ran). To finish a frame
     /// *without* running its post-frame callbacks, use
     /// [`abort_frame`](Self::abort_frame).
-    #[tracing::instrument(skip(self))]
-    pub fn end_frame(&self) {
-        self.end_frame_impl(None);
-    }
-
-    /// [`end_frame`](Self::end_frame), additionally draining `lane`'s owner-local
-    /// queue into the **same** total order as the shared queue — one
-    /// `CallbackId` sequence, interleaving well-defined: both queues are
-    /// combined into one snapshot and sorted by registration order before any
-    /// callback runs, so it does not matter which queue a given callback landed
-    /// in, only when it was registered. A widget author reads this on
-    /// [`crate::LocalPostFrameHandle::schedule_local`], not here.
-    #[tracing::instrument(skip(self, lane))]
-    pub fn end_frame_with_lane(&self, lane: &crate::LocalPostFrameLane) {
-        self.end_frame_impl(Some(lane));
-    }
-
-    fn end_frame_impl(&self, lane: Option<&crate::LocalPostFrameLane>) {
+    #[tracing::instrument(skip(self, owner))]
+    pub fn end_frame(&self, owner: &crate::OwnerFrame) {
         // Phase 4: PostFrameCallbacks
         self.set_scheduler_phase(SchedulerPhase::PostFrameCallbacks);
 
@@ -1569,33 +1484,24 @@ impl UpdateScheduler {
             self.inner.binding.pending_timings.lock().push(timing);
 
             // Drain BEFORE invoking: a post-frame callback that registers another
-            // one must not have it run in this same frame. `lane.take_queue_for(self)`
-            // runs in here, inside the "a frame was actually open" branch, not
-            // unconditionally at the top of this function — taking the lane's
-            // queue on a no-open-frame call (no preceding `handle_begin_frame`/
-            // `handle_draw_frame`, or a second `end_frame_with_lane` call with
-            // nothing new to close) would silently drop every already-queued
-            // local entry: they'd be taken out of the lane here, never folded
-            // into `callbacks` below since that only happens inside this same
-            // `Some(timing)` arm, and then dropped un-run when this function
-            // returns. Keeping the take() and the invoke() in the same branch
-            // means a queue that isn't drained this call is simply left alone,
-            // still in the lane, for whenever a real frame next closes.
+            // one must not have it run in this same frame. The owner frame's
+            // queue is taken in here, inside the "a frame was actually open"
+            // branch, not unconditionally at the top of this function — taking
+            // it on a no-open-frame call (no preceding `handle_begin_frame`/
+            // `handle_draw_frame`, or a second `end_frame` call with nothing
+            // new to close) would silently drop every already-queued local
+            // entry un-run. Keeping the take and the invoke in the same branch
+            // means a queue that isn't drained this call is simply left alone
+            // for whenever a real frame next closes.
             //
-            // `take_queue_for` also verifies the lane actually belongs to
-            // `self` before draining it — restoring the identity check the
-            // retired thread-local ticket registry's `scheduler_identity`
-            // filter used to provide. A lane minted by a DIFFERENT scheduler
-            // (a binding wiring the wrong realm's lane, now that every
-            // `UiRealm` mints its own) must not be drained here: its
+            // The take also verifies the owner frame belongs to `self`. One
+            // made for a DIFFERENT scheduler must not be drained here: its
             // callbacks would get this frame's `FrameTiming`, be removed
             // before their own scheduler's frame ever runs, and its
             // `CallbackId`s — meaningless in this scheduler's sequence —
-            // would corrupt the sort below. On a mismatch `take_queue_for`
-            // itself traces the error and returns `Err`; this treats that
-            // exactly like "no lane was passed" for this call, leaving the
-            // lane's queue untouched.
-            let callback_result = self.dispatch_post_frame_callbacks(lane, &timing);
+            // would corrupt the sort below. On a mismatch the take traces the
+            // error and the owner-local queue is left untouched.
+            let callback_result = self.dispatch_post_frame_callbacks(owner, &timing);
 
             // Notify frame completion futures. Caught here, alongside
             // `callback_result`, rather than left to propagate bare: a
@@ -1810,47 +1716,33 @@ impl UpdateScheduler {
     ///
     /// Under `panic = "abort"` nothing is caught and the process dies with the
     /// frame open, which is moot.
+    ///
+    /// `owner` is the realm's owner-local frame state: its ready tasks are
+    /// polled in the mid-frame slot and its post-frame queue drains with the
+    /// shared one (see [`end_frame`](Self::end_frame) for the ordering).
     pub fn drive_frame<R>(
         &self,
+        owner: &crate::OwnerFrame,
         vsync_time: Instant,
         deadline: IdleDeadline,
         pipeline: impl FnOnce() -> R,
     ) -> R {
-        self.drive_frame_impl(vsync_time, deadline, pipeline, None)
+        self.drive_frame_impl(owner, vsync_time, deadline, pipeline)
             .1
     }
 
-    /// [`drive_frame`](Self::drive_frame), additionally draining `lane`'s
-    /// owner-local queue into the same total order as the shared queue when the
-    /// frame completes. See [`end_frame_with_lane`](Self::end_frame_with_lane)
-    /// for the ordering guarantee.
-    pub fn drive_frame_with_lane<R>(
-        &self,
-        vsync_time: Instant,
-        deadline: IdleDeadline,
-        pipeline: impl FnOnce() -> R,
-        lane: &crate::LocalPostFrameLane,
-    ) -> R {
-        self.drive_frame_impl(vsync_time, deadline, pipeline, Some(lane))
-            .1
-    }
-
-    /// The shared implementation behind [`drive_frame`](Self::drive_frame),
-    /// [`drive_frame_with_lane`](Self::drive_frame_with_lane),
-    /// [`execute_frame`](Self::execute_frame), and
-    /// [`execute_frame_with_lane`](Self::execute_frame_with_lane) — the
-    /// convenience pair routes through here too (with a no-op `pipeline`)
-    /// rather than hand-rolling `handle_begin_frame` + `handle_draw_frame` +
-    /// `end_frame` directly, so every caller gets the identical
-    /// single-`catch_unwind` recovery boundary this method's own doc
-    /// describes; a bare sequential call site here would silently reopen the
-    /// exact gap issue #1057 closed.
+    /// The shared implementation behind [`drive_frame`](Self::drive_frame) and
+    /// [`execute_frame`](Self::execute_frame) — the convenience method routes
+    /// through here too (with a no-op `pipeline`) rather than hand-rolling
+    /// `handle_begin_frame` + `handle_draw_frame` + `end_frame` directly, so
+    /// every caller gets the identical single-`catch_unwind` recovery boundary
+    /// this method's own doc describes; a bare sequential call site here would
+    /// silently reopen the exact gap issue #1057 closed.
     ///
     /// Returns the [`FrameId`] `handle_begin_frame` minted alongside
-    /// `pipeline`'s own result: `drive_frame`/`drive_frame_with_lane` discard
-    /// it to keep their existing `-> R` signature, while
-    /// `execute_frame`/`execute_frame_with_lane` discard `R` (always `()`
-    /// there) and return the id instead.
+    /// `pipeline`'s own result: `drive_frame` discards it to keep its `-> R`
+    /// signature, while `execute_frame` discards `R` (always `()` there) and
+    /// returns the id instead.
     ///
     /// # The `frame` span
     ///
@@ -1864,13 +1756,17 @@ impl UpdateScheduler {
     /// fails, which is the point of the test.
     fn drive_frame_impl<R>(
         &self,
+        owner: &crate::OwnerFrame,
         vsync_time: Instant,
         deadline: IdleDeadline,
         pipeline: impl FnOnce() -> R,
-        lane: Option<&crate::LocalPostFrameLane>,
     ) -> (FrameId, R) {
         use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
+        assert!(
+            owner.belongs_to(self),
+            "BUG: frame owner belongs to another scheduler"
+        );
         *self.inner.frame.idle_deadline.lock() = Some(deadline.0);
 
         // Entered for the whole frame, the panic path included: on a panic
@@ -1895,7 +1791,7 @@ impl UpdateScheduler {
                 slot: &self.inner.frame.idle_deadline,
             };
 
-            let frame_id = self.handle_begin_frame(vsync_time);
+            let frame_id = self.handle_begin_frame(vsync_time, owner);
             frame_span.record("id", tracing::field::debug(&frame_id));
             self.handle_draw_frame();
             // The deadline only ever needs to be visible for this frame's
@@ -1914,10 +1810,7 @@ impl UpdateScheduler {
 
         match attempt {
             Ok((frame_id, result)) => {
-                match lane {
-                    Some(lane) => self.end_frame_with_lane(lane),
-                    None => self.end_frame(),
-                }
+                self.end_frame(owner);
                 (frame_id, result)
             }
             Err(payload) => {
@@ -1959,28 +1852,14 @@ impl UpdateScheduler {
     /// completion bookkeeping via `abort_frame` before the panic resumes,
     /// rather than escaping past a bare sequential call site the way it did
     /// before this method routed through the shared implementation.
-    #[tracing::instrument(skip(self))]
-    pub fn execute_frame(&self) -> FrameId {
+    #[tracing::instrument(skip(self, owner))]
+    pub fn execute_frame(&self, owner: &crate::OwnerFrame) -> FrameId {
         let vsync_time = Instant::now();
         self.drive_frame_impl(
+            owner,
             vsync_time,
             IdleDeadline::far_future(vsync_time),
             || {},
-            None,
-        )
-        .0
-    }
-
-    /// [`execute_frame`](Self::execute_frame), additionally draining `lane`'s
-    /// owner-local queue in the same total order as the shared queue.
-    #[tracing::instrument(skip(self, lane))]
-    pub fn execute_frame_with_lane(&self, lane: &crate::LocalPostFrameLane) -> FrameId {
-        let vsync_time = Instant::now();
-        self.drive_frame_impl(
-            vsync_time,
-            IdleDeadline::far_future(vsync_time),
-            || {},
-            Some(lane),
         )
         .0
     }
@@ -1991,14 +1870,14 @@ impl UpdateScheduler {
     /// - App initialization
     /// - Reducing first-frame jank
     /// - Forcing immediate layout updates
-    #[tracing::instrument(skip(self))]
-    pub fn schedule_warm_up_frame(&self) {
+    #[tracing::instrument(skip(self, owner))]
+    pub fn schedule_warm_up_frame(&self, owner: &crate::OwnerFrame) {
         if self.inner.frame.warm_up_done.load(Ordering::Acquire) {
             return;
         }
 
         // Execute frame immediately without vsync
-        self.execute_frame();
+        self.execute_frame(owner);
         self.inner.frame.warm_up_done.store(true, Ordering::Release);
     }
 
@@ -2101,75 +1980,11 @@ impl UpdateScheduler {
     }
 
     // =========================================================================
-    // Async Task Driver
+    // Background wakes
     // =========================================================================
 
-    /// The frame-driven task driver.
-    ///
-    /// Clone it to spawn tasks from elsewhere; every clone shares one task set.
-    #[must_use]
-    pub fn async_driver(&self) -> &crate::AsyncDriver {
-        &self.inner.async_driver
-    }
-
-    /// Queue `future` for polling on the frame thread, and request a frame.
-    ///
-    /// Thin forwarder to [`AsyncDriver::spawn_local`](crate::AsyncDriver::spawn_local).
-    /// Dropping the returned [`TaskToken`](crate::TaskToken) cancels the task.
-    #[must_use = "dropping the TaskToken immediately cancels the task"]
-    pub fn spawn_local(&self, future: crate::BoxedTask) -> crate::TaskToken {
-        self.inner.async_driver.spawn_local(future)
-    }
-
-    /// Spawn `future`, polling it once inline (so an already-complete future
-    /// completes synchronously). `None` when it completed on that first poll.
-    ///
-    /// Thin forwarder to [`AsyncDriver::spawn_local_eager`](crate::AsyncDriver::spawn_local_eager).
-    #[must_use = "dropping the TaskToken immediately cancels the task"]
-    pub fn spawn_local_eager(&self, future: crate::BoxedTask) -> Option<crate::TaskToken> {
-        self.inner.async_driver.spawn_local_eager(future)
-    }
-
-    /// **The** async-driver step of a frame — the single call site both frame
-    /// drivers use (`HeadlessBinding::pump_frame` and `UiRealm::draw_frame`).
-    ///
-    /// Polls every task whose waker fired, on the calling thread. A future
-    /// completing here calls `RebuildHandle::schedule()`, whose id the *same*
-    /// frame's `build_scope` then drains — so a completion is observed without
-    /// waiting an extra frame.
-    ///
-    /// # Where this sits in a frame
-    ///
-    /// The mid-frame-microtasks slot: after the frame's transient
-    /// callbacks (animation ticks), before its persistent callbacks (build →
-    /// layout → paint). Both bindings call it in exactly that slot, between
-    /// `vsync.tick_all` and `build_scope`.
-    ///
-    /// **Called by [`handle_begin_frame`](Self::handle_begin_frame), once per
-    /// frame**. Previously, each binding called it directly. The real invariant is
-    /// *one mid-frame poll per frame, on the right `UpdateScheduler` instance*. Moving
-    /// the call into the scheduler enforces both structurally and lets the pipeline
-    /// take the persistent slot it always semantically occupied.
-    ///
-    /// Still `pub`: a test may drive one poll directly. It does not mutate the
-    /// phase (the machine is strictly forward-only — `MidFrameMicrotasks -> Idle`
-    /// is not a legal transition). It asserts the invariant that actually
-    /// matters: **never poll while the scheduler is running persistent
-    /// callbacks**, i.e. inside build / layout / paint.
-    ///
-    /// Returns the number of tasks polled.
-    pub fn drive_async_tasks(&self) -> usize {
-        debug_assert_ne!(
-            self.phase(),
-            SchedulerPhase::PersistentCallbacks,
-            "BUG: the async driver must not poll during build/layout/paint; the \
-             driver step belongs between the transient and persistent callbacks"
-        );
-        self.inner.async_driver.poll_ready()
-    }
-
     /// Clears the `frame_scheduled` latch for a wake that will call
-    /// [`drive_async_tasks`](Self::drive_async_tasks) WITHOUT a surrounding
+    /// [`OwnerFrame::poll_ready`](crate::OwnerFrame::poll_ready) WITHOUT a surrounding
     /// [`handle_begin_frame`](Self::handle_begin_frame) — the frames-disabled
     /// `PumpAsync` path (`ADR-0035`'s `wake_action`), which deliberately
     /// never begins/draws a real frame.
@@ -2190,14 +2005,14 @@ impl UpdateScheduler {
     /// never told to wake, and the future silently stops advancing with no
     /// visible error.
     ///
-    /// # Call before, not after, `drive_async_tasks`
+    /// # Call before, not after, the poll
     ///
-    /// Call this immediately **before** `drive_async_tasks`, mirroring
+    /// Call this immediately **before** `OwnerFrame::poll_ready`, mirroring
     /// `handle_begin_frame`'s clear-at-the-top order — not after. A polled
     /// future may legitimately re-arm itself synchronously (call
     /// `Waker::wake_by_ref` from inside its own `poll`, wanting to be polled
     /// again next cycle); that call sets `frame_scheduled` back to `true`
-    /// *during* `drive_async_tasks`. Clearing the latch again *afterward*
+    /// *during* the poll. Clearing the latch again *afterward*
     /// would silently erase that signal — the exact starvation this method
     /// exists to prevent, just for a self-waking task instead of an
     /// externally-woken one.
@@ -2282,20 +2097,15 @@ impl UpdateScheduler {
         }
     }
 
-    /// Number of tasks the async driver holds.
-    #[must_use]
-    pub fn pending_task_count(&self) -> usize {
-        self.inner.async_driver.pending_task_count()
-    }
-
     /// Install the platform wake hook and retry any undelivered demand.
     ///
     /// The hook runs on whichever thread schedules the frame and may run
     /// while callers hold their own locks — it must only touch wake machinery,
     /// never drive a frame inline. Reentrant demand is coalesced without recursion.
     ///
-    /// "Whichever thread" is not a formality: an `AsyncDriver` task waker fires
-    /// this from whatever thread completed the future, which for a job on
+    /// "Whichever thread" is not a formality: a task waker (through the owner
+    /// frame's [`FrameWaker`]) fires this from whatever thread completed the
+    /// future, which for a job on
     /// `ExecutionServices`' IO lane is a pool worker. This doc used to offer
     /// `request_redraw` as the example of acceptable wake machinery, and
     /// `flui-app`'s `FrameWakeHandle` — the hook production installs — calls it
@@ -3532,7 +3342,10 @@ mod tests {
 
         // A frame runs; during it a ticker re-registers (transient
         // callback) — the cleared edge fires the hook again.
-        scheduler.handle_begin_frame(Instant::now());
+        scheduler.handle_begin_frame(
+            Instant::now(),
+            &crate::OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame"),
+        );
         scheduler.schedule_frame_callback(Box::new(|_| {}));
         scheduler.handle_draw_frame();
         assert_eq!(
@@ -3572,7 +3385,11 @@ mod tests {
         }
         requeue(scheduler.clone(), Arc::clone(&runs));
 
-        let (_frame_id, log) = flui_testing::log_capture::capture(|| scheduler.execute_frame());
+        let (_frame_id, log) = flui_testing::log_capture::capture(|| {
+            scheduler.execute_frame(
+                &crate::OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame"),
+            )
+        });
 
         assert_eq!(
             runs.load(Ordering::SeqCst),
@@ -3671,7 +3488,9 @@ mod tests {
         assert!(Pin::new(&mut future_b).poll(&mut cx_b).is_pending());
 
         let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            scheduler.execute_frame();
+            scheduler.execute_frame(
+                &crate::OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame"),
+            );
         }));
         assert!(unwind.is_err(), "the waker's own panic must propagate");
         assert_eq!(
@@ -3761,7 +3580,9 @@ mod tests {
         scheduler.add_post_frame_callback(Box::new(|_timing| panic!("post-frame probe")));
 
         let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            scheduler.execute_frame();
+            scheduler.execute_frame(
+                &crate::OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame"),
+            );
         }));
 
         let payload = unwind.expect_err("the post-frame callback's panic must still propagate");
