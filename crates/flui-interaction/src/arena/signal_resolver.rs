@@ -262,9 +262,20 @@ impl Default for PointerSignalResolver {
 
 #[cfg(test)]
 mod tests {
-    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::{
+        cell::Cell,
+        panic::{AssertUnwindSafe, catch_unwind},
+    };
 
     use super::*;
+
+    struct CaptureRetirement(Rc<Cell<u32>>);
+
+    impl Drop for CaptureRetirement {
+        fn drop(&mut self) {
+            self.0.set(self.0.get() + 1);
+        }
+    }
 
     // The terminal counter needs a private seam; exhausting it through public
     // registration would require more operations than a test can perform.
@@ -277,8 +288,12 @@ mod tests {
         assert_eq!(last.get(), u64::MAX - 1);
 
         for _ in 0..2 {
+            let dropped = Rc::new(Cell::new(0));
+            let capture = CaptureRetirement(Rc::clone(&dropped));
             let failure = catch_unwind(AssertUnwindSafe(|| {
-                resolver.register(pointer, SignalPriority::Normal, |_| {});
+                resolver.register(pointer, SignalPriority::Normal, move |_| {
+                    let _keep = &capture;
+                });
             }))
             .expect_err("terminal registration must refuse instead of wrapping");
             assert_eq!(
@@ -286,6 +301,11 @@ mod tests {
                 Some("BUG: pointer signal handler ID exhausted"),
             );
             assert_eq!(resolver.handler_count(pointer), 1);
+            assert_eq!(
+                dropped.get(),
+                0,
+                "refused callback ownership is retained after failure"
+            );
         }
         resolver.unregister(pointer, last);
         assert_eq!(resolver.handler_count(pointer), 0);
