@@ -99,10 +99,12 @@ fn register_pointer_events(canvas: &web_sys::HtmlCanvasElement, callbacks: &Arc<
         let capture = canvas.clone();
         let closure = Closure::<dyn Fn(web_sys::Event)>::new(move |e: web_sys::Event| {
             let pe: web_sys::PointerEvent = e.unchecked_into();
-            active.borrow_mut().insert(pe.pointer_id(), pe.buttons());
+            let id = pe.pointer_id();
+            let buttons = pe.buttons();
+            active.borrow_mut().insert(id, buttons);
             // Admission precedes application callbacks, which can remove the
             // canvas or synchronously dispatch another terminal event.
-            if let Err(error) = capture.set_pointer_capture(pe.pointer_id()) {
+            if let Err(error) = capture.set_pointer_capture(id) {
                 tracing::debug!(?error, "browser pointer capture was not admitted");
             }
             let input = convert_pointer_down(&pe);
@@ -121,10 +123,12 @@ fn register_pointer_events(canvas: &web_sys::HtmlCanvasElement, callbacks: &Arc<
         let active = Rc::clone(&active);
         let closure = Closure::<dyn Fn(web_sys::Event)>::new(move |e: web_sys::Event| {
             let pe: web_sys::PointerEvent = e.unchecked_into();
+            let id = pe.pointer_id();
+            let buttons = pe.buttons();
             let previous = active
                 .borrow_mut()
-                .get_mut(&pe.pointer_id())
-                .map(|held| std::mem::replace(held, pe.buttons()));
+                .get_mut(&id)
+                .map(|held| std::mem::replace(held, buttons));
             let input = convert_pointer_move(&pe, previous);
             if let Some(input) = input {
                 callbacks.dispatch_input(input);
@@ -142,11 +146,12 @@ fn register_pointer_events(canvas: &web_sys::HtmlCanvasElement, callbacks: &Arc<
         let capture = canvas.clone();
         let closure = Closure::<dyn Fn(web_sys::Event)>::new(move |e: web_sys::Event| {
             let pe: web_sys::PointerEvent = e.unchecked_into();
-            let was_active = active.borrow_mut().remove(&pe.pointer_id()).is_some();
+            let id = pe.pointer_id();
+            let was_active = active.borrow_mut().remove(&id).is_some();
             if !was_active {
                 return;
             }
-            release_pointer_capture(&capture, pe.pointer_id());
+            release_pointer_capture(&capture, id);
             let input = convert_pointer_up(&pe);
             if let Some(input) = input {
                 callbacks.dispatch_input(input);
@@ -165,11 +170,12 @@ fn register_pointer_events(canvas: &web_sys::HtmlCanvasElement, callbacks: &Arc<
         let capture = canvas.clone();
         let closure = Closure::<dyn Fn(web_sys::Event)>::new(move |e: web_sys::Event| {
             let pe: web_sys::PointerEvent = e.unchecked_into();
-            let was_active = active.borrow_mut().remove(&pe.pointer_id()).is_some();
+            let id = pe.pointer_id();
+            let was_active = active.borrow_mut().remove(&id).is_some();
             if !was_active {
                 return;
             }
-            release_pointer_capture(&capture, pe.pointer_id());
+            release_pointer_capture(&capture, id);
             if let Some(input) = convert_pointer_cancel(&pe, CancelReason::Platform) {
                 callbacks.dispatch_input(input);
             }
@@ -183,9 +189,10 @@ fn register_pointer_events(canvas: &web_sys::HtmlCanvasElement, callbacks: &Arc<
         let callbacks = Arc::clone(callbacks);
         let closure = Closure::<dyn Fn(web_sys::Event)>::new(move |e: web_sys::Event| {
             let pe: web_sys::PointerEvent = e.unchecked_into();
+            let id = pe.pointer_id();
             // Up/cancel removes admission before releasing capture. The loss
             // notification following that terminal edge must stay inert.
-            let was_active = active.borrow_mut().remove(&pe.pointer_id()).is_some();
+            let was_active = active.borrow_mut().remove(&id).is_some();
             if was_active {
                 if let Some(input) = convert_pointer_cancel(&pe, CancelReason::CaptureLost) {
                     callbacks.dispatch_input(input);
