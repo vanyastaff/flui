@@ -672,12 +672,17 @@ impl FocusNode {
     /// Current traversal geometry.
     pub fn rect(&self) -> Rect<f64> {
         let provider = self.rect_provider.borrow().clone();
-        if let Some(provider) = provider
-            && let Some(rect) = provider()
-        {
-            return rect;
-        }
-        self.rect.get()
+        let mut failure = FocusClosePanic::for_rejection(self.close_mode());
+        let rect = provider.as_ref().and_then(|provider| {
+            if failure.preserving() {
+                None
+            } else {
+                failure.invoke(|| provider()).flatten()
+            }
+        });
+        failure.retire(provider);
+        failure.finish();
+        rect.unwrap_or_else(|| self.rect.get())
     }
 
     /// Store fallback traversal geometry.
