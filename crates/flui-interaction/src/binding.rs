@@ -947,14 +947,15 @@ impl GestureBinding {
         let mut pointers: Vec<_> = self
             .hit_tests
             .iter()
-            .map(|entry| (*entry.key(), entry.pointer, entry.time))
+            .map(|entry| (*entry.key(), entry.pointer, entry.time, entry.sequence))
             .collect();
-        pointers.sort_unstable_by_key(|(pointer_id, _, _)| *pointer_id);
+        pointers.sort_unstable_by_key(|(pointer_id, _, _, _)| *pointer_id);
         let mut first_panic = None;
-        for (pointer_id, pointer, time) in pointers {
+        for (pointer_id, pointer, time, sequence) in pointers {
             // A handler run by an earlier iteration may have re-entered the
-            // binding and already terminated this sequence.
-            if !self.hit_tests.contains_key(&pointer_id) {
+            // binding and terminated or replaced this sequence. The numeric
+            // pointer identity alone does not identify that admission.
+            if !self.is_current_sequence(pointer_id, sequence) {
                 continue;
             }
             let cancel =
@@ -1095,10 +1096,13 @@ impl GestureBinding {
                     .hit_tests
                     .iter()
                     .filter(|entry| entry.pointer.device == Some(device.device))
-                    .map(|entry| entry.pointer)
+                    .map(|entry| (entry.pointer, entry.sequence))
                     .collect();
-                pointers.sort_unstable_by_key(|pointer| pointer.id);
-                for pointer in pointers {
+                pointers.sort_unstable_by_key(|(pointer, _)| pointer.id);
+                for (pointer, sequence) in pointers {
+                    if !self.is_current_sequence(pointer.id, sequence) {
+                        continue;
+                    }
                     let cancel = PointerEvent::Cancel(PointerCancel::new(
                         pointer,
                         device.time,
