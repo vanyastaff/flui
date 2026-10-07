@@ -128,6 +128,7 @@ pub struct AndroidPlatform {
     background_executor: Arc<SimpleExecutor>,
     clipboard: Arc<MockClipboard>,
     capabilities: MobileCapabilities,
+    input_state: Mutex<input::AndroidInputState>,
 }
 
 // Opaque on purpose, matching `HeadlessPlatform` and `WinitPlatform`. A
@@ -155,6 +156,7 @@ impl AndroidPlatform {
             background_executor: Arc::new(SimpleExecutor),
             clipboard: Arc::new(MockClipboard::new()),
             capabilities: MobileCapabilities::android(),
+            input_state: Mutex::new(input::AndroidInputState::default()),
         }
     }
 
@@ -175,7 +177,7 @@ impl AndroidPlatform {
         static FIRST_MOTION_SEEN: AtomicBool = AtomicBool::new(false);
 
         let window_guard = self.window.lock();
-        let Some(window) = window_guard.as_ref() else {
+        let Some(window) = window_guard.as_ref().cloned() else {
             // No window yet — still drain events to prevent ANR
             drop(window_guard);
             if let Ok(mut iter) = self.app.input_events_iter() {
@@ -183,6 +185,8 @@ impl AndroidPlatform {
             }
             return;
         };
+
+        drop(window_guard);
 
         let scale_factor = window.scale_factor();
         let callbacks = window.callbacks();
@@ -194,7 +198,13 @@ impl AndroidPlatform {
 
                     let handled = match event {
                         InputEvent::MotionEvent(motion) => {
-                            let events = input::convert_motion_event(motion, scale_factor);
+                            let cached = self.input_state.lock().capabilities(motion.device_id());
+                            let device = input::motion_device(&self.app, motion, cached);
+                            let events = self.input_state.lock().convert_motion_event(
+                                motion,
+                                scale_factor,
+                                device,
+                            );
                             // The one place a touch is visible between the
                             // OS and the framework: a tap that changes
                             // nothing on screen is diagnosed from these

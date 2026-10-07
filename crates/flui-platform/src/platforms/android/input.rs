@@ -1,187 +1,563 @@
-//! Android input event conversion
+//! Native Android input translated directly into FLUI's owned vocabulary.
 //!
-//! Converts `android-activity` input events (`MotionEvent`, `KeyEvent`) to
-//! private `ui-events` values, then bridges them to FLUI's owned `PlatformInput`.
-//!
-//! # Touch Event Mapping
-//!
-//! ```text
-//! MotionAction::Down / PointerDown → PointerEvent::Down
-//! MotionAction::Up / PointerUp     → PointerEvent::Up
-//! MotionAction::Move                → PointerEvent::Move
-//! MotionAction::Cancel              → PointerEvent::Cancel
-//! MotionAction::HoverEnter          → PointerEvent::Enter
-//! MotionAction::HoverExit           → PointerEvent::Leave
-//! ```
+//! Coordinates and contact axes are physical pixels on this wire; both are
+//! divided by the window scale once. Sensor presence comes from the device's
+//! motion ranges, not from whether an axis happens to read zero.
 
-use android_activity::input::{KeyAction, MotionAction, ToolType};
-use dpi::PhysicalPosition;
-use keyboard_types::{Key, KeyState, Modifiers, NamedKey};
-use ui_events::{
-    keyboard::KeyboardEvent,
+use std::collections::HashMap;
+
+use android_activity::input::{Axis, Button, ButtonState, KeyAction, MotionAction, ToolType};
+use flui_foundation::geometry::{Point, Size};
+use flui_platform_api::{
+    EventTime,
+    keyboard::Modifiers as OwnedModifiers,
     pointer::{
-        ContactGeometry, PointerButton, PointerButtonEvent, PointerButtons, PointerEvent,
-        PointerId, PointerInfo, PointerOrientation, PointerState, PointerType, PointerUpdate,
+        ButtonChange, CancelReason, ContactSize, DeviceId, PenOrientation, PenTool, PointerButton,
+        PointerButtons, PointerCancel, PointerDeviceChange, PointerEvent, PointerId, PointerInfo,
+        PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease, PointerRole,
+        PointerSample, PointerSignal, Pressure, ScrollDelta, ScrollEvent, ScrollUnit,
     },
 };
+use keyboard_types::{Key, KeyState, Modifiers, NamedKey};
+use ui_events::keyboard::KeyboardEvent;
 
-use crate::{
-    shared::input_vocabulary::{keyboard_input, pointer_input},
-    traits::PlatformInput,
-};
+use crate::{shared::input_vocabulary::keyboard_input, traits::PlatformInput};
 
-/// Convert an Android `MotionEvent` to one or more `PlatformInput` events.
-///
-/// A single `MotionAction::Move` event carries updated positions for ALL active
-/// pointers, so we emit one `PlatformInput` per pointer in that case.
-///
-/// Returns a `Vec` because multi-touch Move events produce multiple outputs.
-pub fn convert_motion_event(
-    event: &android_activity::input::MotionEvent<'_>,
-    scale_factor: f64,
-) -> Vec<PlatformInput> {
-    let action = event.action();
-    let time_ns = event.event_time() as u64;
-    let modifiers = convert_meta_state(event.meta_state());
+#[derive(Clone, Copy)]
+pub(crate) struct DeviceCapabilities {
+    source: u32,
+    axes: u64,
+}
 
-    match action {
-        MotionAction::Down | MotionAction::PointerDown => {
-            let idx = event.pointer_index();
-            let pointer = event.pointer_at_index(idx);
-            let info = make_pointer_info(&pointer);
-            let state = make_pointer_state(
-                &pointer,
-                time_ns,
-                scale_factor,
-                modifiers,
-                contact_buttons(),
-                1,
-            );
-
-            pointer_input(
-                PointerEvent::Down(PointerButtonEvent {
-                    button: Some(PointerButton::Primary),
-                    pointer: info,
-                    state,
-                }),
-                time_ns,
-            )
-            .into_iter()
-            .collect()
-        }
-
-        MotionAction::Up | MotionAction::PointerUp => {
-            let idx = event.pointer_index();
-            let pointer = event.pointer_at_index(idx);
-            let info = make_pointer_info(&pointer);
-            let state = make_pointer_state(
-                &pointer,
-                time_ns,
-                scale_factor,
-                modifiers,
-                PointerButtons::default(),
-                1,
-            );
-
-            pointer_input(
-                PointerEvent::Up(PointerButtonEvent {
-                    button: Some(PointerButton::Primary),
-                    pointer: info,
-                    state,
-                }),
-                time_ns,
-            )
-            .into_iter()
-            .collect()
-        }
-
-        MotionAction::Move => {
-            // Move events carry all pointers — emit one event per pointer
-            event
-                .pointers()
-                .filter_map(|pointer| {
-                    let info = make_pointer_info(&pointer);
-                    let state = make_pointer_state(
-                        &pointer,
-                        time_ns,
-                        scale_factor,
-                        modifiers,
-                        contact_buttons(),
-                        0,
-                    );
-
-                    pointer_input(
-                        PointerEvent::Move(PointerUpdate {
-                            pointer: info,
-                            current: state,
-                            coalesced: Vec::new(),
-                            predicted: Vec::new(),
-                        }),
-                        time_ns,
-                    )
-                })
-                .collect()
-        }
-
-        MotionAction::Cancel => {
-            // Cancel all active pointers
-            event
-                .pointers()
-                .filter_map(|pointer| {
-                    let info = make_pointer_info(&pointer);
-                    pointer_input(PointerEvent::Cancel(info), time_ns)
-                })
-                .collect()
-        }
-
-        MotionAction::HoverEnter => {
-            let idx = event.pointer_index();
-            let pointer = event.pointer_at_index(idx);
-            let info = make_pointer_info(&pointer);
-            pointer_input(PointerEvent::Enter(info), time_ns)
-                .into_iter()
-                .collect()
-        }
-
-        MotionAction::HoverExit => {
-            let idx = event.pointer_index();
-            let pointer = event.pointer_at_index(idx);
-            let info = make_pointer_info(&pointer);
-            pointer_input(PointerEvent::Leave(info), time_ns)
-                .into_iter()
-                .collect()
-        }
-
-        MotionAction::HoverMove => {
-            // Treat hover move as a regular move (stylus hovering, mouse)
-            event
-                .pointers()
-                .filter_map(|pointer| {
-                    let info = make_pointer_info(&pointer);
-                    let state = make_pointer_state(
-                        &pointer,
-                        time_ns,
-                        scale_factor,
-                        modifiers,
-                        PointerButtons::default(),
-                        0,
-                    );
-
-                    pointer_input(
-                        PointerEvent::Move(PointerUpdate {
-                            pointer: info,
-                            current: state,
-                            coalesced: Vec::new(),
-                            predicted: Vec::new(),
-                        }),
-                        time_ns,
-                    )
-                })
-                .collect()
-        }
-
-        _ => Vec::new(),
+impl DeviceCapabilities {
+    fn has(self, axis: Axis) -> bool {
+        let bit = u32::from(axis);
+        bit < 64 && self.axes & (1_u64 << bit) != 0
     }
+}
+
+#[derive(Clone)]
+pub(crate) struct CachedDevice {
+    capabilities: DeviceCapabilities,
+    object: jni::refs::Global<jni::objects::JObject<'static>>,
+}
+
+pub(crate) enum DeviceReading {
+    Present {
+        cached: CachedDevice,
+        replaced: bool,
+    },
+    Removed,
+    Unavailable,
+}
+
+/// Query Java's capability metadata before entering the owner-local state guard.
+/// InputManager replaces its cached Java object when a device is reconfigured.
+/// JNI object identity avoids descriptors (which can be duplicated) and hidden APIs.
+pub(crate) fn motion_device(
+    app: &android_activity::AndroidApp,
+    event: &android_activity::input::MotionEvent<'_>,
+    cached: Option<CachedDevice>,
+) -> DeviceReading {
+    use jni::{JavaVM, jni_sig, jni_str, objects::JValue};
+
+    // SAFETY: AndroidApp owns the running Android VM for its entire lifetime.
+    // JavaVM is a borrowed VM handle; constructing it does not destroy the VM.
+    let vm = unsafe { JavaVM::from_raw(app.vm_as_ptr().cast()) };
+    let result = vm.attach_current_thread(|env| -> jni::errors::Result<_> {
+        let result = (|| {
+            let device = env
+                .call_static_method(
+                    jni_str!("android/view/InputDevice"),
+                    jni_str!("getDevice"),
+                    jni_sig!("(I)Landroid/view/InputDevice;"),
+                    &[JValue::Int(event.device_id())],
+                )?
+                .l()?;
+            if device.is_null() {
+                return Ok(DeviceReading::Removed);
+            }
+            let source = u32::from(event.source());
+            let replaced = match cached.as_ref() {
+                Some(cached) => !env.is_same_object(&device, cached.object.as_ref())?,
+                None => false,
+            };
+            if let Some(cached) = cached.as_ref()
+                && !replaced
+                && cached.capabilities.source == source
+            {
+                return Ok(DeviceReading::Present {
+                    cached: cached.clone(),
+                    replaced,
+                });
+            }
+            let mut axes = 0_u64;
+            for axis in [
+                Axis::Pressure,
+                Axis::TouchMajor,
+                Axis::TouchMinor,
+                Axis::Tilt,
+                Axis::Orientation,
+            ] {
+                let range = env
+                    .call_method(
+                        &device,
+                        jni_str!("getMotionRange"),
+                        jni_sig!("(II)Landroid/view/InputDevice$MotionRange;"),
+                        &[
+                            JValue::Int(
+                                i32::try_from(u32::from(axis))
+                                    .expect("BUG: Android sensor axes fit i32"),
+                            ),
+                            JValue::Int(i32::from_ne_bytes(source.to_ne_bytes())),
+                        ],
+                    )?
+                    .l()?;
+                if !range.is_null() {
+                    axes |= 1_u64 << u32::from(axis);
+                }
+            }
+            Ok(DeviceReading::Present {
+                cached: CachedDevice {
+                    capabilities: DeviceCapabilities { source, axes },
+                    object: env.new_global_ref(&device)?,
+                },
+                replaced,
+            })
+        })();
+        if result.is_err() {
+            // Capability discovery is optional. Do not leave an exception pending
+            // on the event-loop thread or manufacture readings after a failure.
+            env.exception_clear();
+        }
+        result
+    });
+    result.unwrap_or(DeviceReading::Unavailable)
+}
+
+struct Device {
+    cached: CachedDevice,
+    id: DeviceId,
+}
+
+struct Contact {
+    info: PointerInfo,
+    button: PointerButton,
+}
+
+/// Input state for the Android window owner. Java device references are used
+/// only for identity and capability caching; no user callback lives here.
+pub(crate) struct AndroidInputState {
+    devices: HashMap<i32, Device>,
+    contacts: HashMap<PointerId, Contact>,
+    next_device: Option<std::num::NonZeroU64>,
+    last_time: Option<EventTime>,
+}
+
+impl Default for AndroidInputState {
+    fn default() -> Self {
+        Self {
+            devices: HashMap::new(),
+            contacts: HashMap::new(),
+            next_device: Some(std::num::NonZeroU64::MIN),
+            last_time: None,
+        }
+    }
+}
+
+impl AndroidInputState {
+    pub(crate) fn capabilities(&self, id: i32) -> Option<CachedDevice> {
+        self.devices.get(&id).map(|device| device.cached.clone())
+    }
+
+    pub(crate) fn convert_motion_event(
+        &mut self,
+        event: &android_activity::input::MotionEvent<'_>,
+        scale_factor: f64,
+        discovery: DeviceReading,
+    ) -> Vec<PlatformInput> {
+        let time = u64::try_from(event.event_time())
+            .ok()
+            .map(EventTime::from_nanos);
+        if let Some(time) = time {
+            self.last_time = Some(time);
+        }
+        let Some(delivery_time) = time.or(self.last_time) else {
+            return Vec::new();
+        };
+        let mut output = Vec::new();
+        let native_device = event.device_id();
+        let replacement = match &discovery {
+            DeviceReading::Present { replaced, .. } => *replaced,
+            DeviceReading::Removed => true,
+            DeviceReading::Unavailable => false,
+        };
+        if replacement && let Some(old) = self.devices.remove(&native_device) {
+            let retired: Vec<_> = self
+                .contacts
+                .values()
+                .map(|contact| contact.info)
+                .filter(|info| info.device == Some(old.id))
+                .collect();
+            for info in retired {
+                self.contacts.remove(&info.id);
+                output.push(PlatformInput::Pointer(PointerEvent::Cancel(
+                    PointerCancel::new(info, delivery_time, CancelReason::DeviceRemoved),
+                )));
+            }
+            output.push(PlatformInput::Pointer(PointerEvent::DeviceRemoved(
+                PointerDeviceChange::new(old.id, PointerKind::Unknown, delivery_time),
+            )));
+        }
+        let capabilities = match discovery {
+            DeviceReading::Present { cached, .. } => {
+                let capabilities = cached.capabilities;
+                if let Some(device) = self.devices.get_mut(&native_device) {
+                    device.cached = cached;
+                } else {
+                    // The counter refuses permanently after its final identity.
+                    let Some(next) = self.next_device else {
+                        return output;
+                    };
+                    self.next_device = next.checked_add(1);
+                    let id = DeviceId::new(next);
+                    self.devices.insert(native_device, Device { cached, id });
+                    output.push(PlatformInput::Pointer(PointerEvent::DeviceAdded(
+                        PointerDeviceChange::new(id, PointerKind::Unknown, delivery_time),
+                    )));
+                }
+                Some(capabilities)
+            }
+            DeviceReading::Removed => return output,
+            DeviceReading::Unavailable => None,
+        };
+        let modifiers = owned_modifiers(event.meta_state());
+        let action = event.action();
+        if matches!(action, MotionAction::Cancel) {
+            let native = u64::from(u32::from_ne_bytes(native_device.to_ne_bytes()));
+            let retired: Vec<_> = self
+                .contacts
+                .values()
+                .map(|contact| contact.info)
+                .filter(|info| (info.id.get().get() - 1) >> 32 == native)
+                .collect();
+            for info in retired {
+                self.contacts.remove(&info.id);
+                output.push(PlatformInput::Pointer(PointerEvent::Cancel(
+                    PointerCancel::new(info, delivery_time, CancelReason::Platform),
+                )));
+            }
+            return output;
+        }
+        for (index, pointer) in event.pointers().enumerate() {
+            if matches!(
+                action,
+                MotionAction::Down
+                    | MotionAction::PointerDown
+                    | MotionAction::Up
+                    | MotionAction::PointerUp
+            ) && index != event.pointer_index()
+            {
+                continue;
+            }
+            let Some(id) = native_pointer_id(native_device, pointer.pointer_id()) else {
+                continue;
+            };
+            let kind = pointer_kind(pointer.tool_type());
+            let role = self.contacts.get(&id).map_or_else(
+                || {
+                    if self
+                        .contacts
+                        .values()
+                        .any(|contact| same_kind(contact.info.kind, kind))
+                    {
+                        PointerRole::Additional
+                    } else {
+                        PointerRole::Primary
+                    }
+                },
+                |contact| contact.info.role,
+            );
+            let mut info = PointerInfo::new(id, kind).with_role(role);
+            if let Some(device) = self.devices.get(&native_device) {
+                info = info.with_device(device.id);
+            }
+            let in_contact = match action {
+                MotionAction::Down | MotionAction::PointerDown | MotionAction::Move => true,
+                MotionAction::ButtonPress | MotionAction::ButtonRelease => {
+                    self.contacts.contains_key(&id)
+                }
+                _ => false,
+            } && matches!(kind, PointerKind::Touch | PointerKind::Pen { .. });
+            let buttons = native_buttons(event.button_state(), in_contact);
+            let sample = time.and_then(|time| {
+                native_sample(time, kind, scale_factor, capabilities, |axis| {
+                    pointer.axis_value(axis)
+                })
+            });
+            let converted = match action {
+                MotionAction::Down | MotionAction::PointerDown => {
+                    let Some(sample) = sample else { continue };
+                    let button = if matches!(kind, PointerKind::Mouse) {
+                        buttons.iter().next().unwrap_or(PointerButton::PRIMARY)
+                    } else {
+                        PointerButton::PRIMARY
+                    };
+                    self.contacts.insert(id, Contact { info, button });
+                    Some(PointerEvent::Down(
+                        PointerPress::new(info, button, buttons, sample).with_modifiers(modifiers),
+                    ))
+                }
+                MotionAction::Up | MotionAction::PointerUp => {
+                    let button = self
+                        .contacts
+                        .remove(&id)
+                        .map_or(PointerButton::PRIMARY, |contact| contact.button);
+                    Some(match sample {
+                        Some(sample) => PointerEvent::Up(
+                            PointerRelease::new(info, button, buttons, sample)
+                                .with_modifiers(modifiers),
+                        ),
+                        None => PointerEvent::Cancel(PointerCancel::new(
+                            info,
+                            delivery_time,
+                            CancelReason::InvalidInput,
+                        )),
+                    })
+                }
+                MotionAction::Move | MotionAction::HoverMove => {
+                    let Some(sample) = sample else { continue };
+                    if let Some(contact) = self.contacts.get_mut(&id) {
+                        contact.info = info;
+                    }
+                    let history = pointer
+                        .history()
+                        .filter_map(|past| {
+                            let time = u64::try_from(past.event_time())
+                                .ok()
+                                .map(EventTime::from_nanos)?;
+                            native_sample(time, kind, scale_factor, capabilities, |axis| {
+                                past.axis_value(axis)
+                            })
+                        })
+                        .collect();
+                    Some(PointerEvent::Move(
+                        PointerMove::new(info, buttons, sample)
+                            .with_modifiers(modifiers)
+                            .with_coalesced(history),
+                    ))
+                }
+                MotionAction::ButtonPress | MotionAction::ButtonRelease => {
+                    let Some(sample) = sample else { continue };
+                    let Some(button) = native_button(event.action_button()) else {
+                        continue;
+                    };
+                    if matches!(action, MotionAction::ButtonPress) {
+                        Some(PointerEvent::ButtonChange(ButtonChange::Pressed(
+                            PointerPress::new(info, button, buttons, sample)
+                                .with_modifiers(modifiers),
+                        )))
+                    } else {
+                        Some(PointerEvent::ButtonChange(ButtonChange::Released(
+                            PointerRelease::new(info, button, buttons, sample)
+                                .with_modifiers(modifiers),
+                        )))
+                    }
+                }
+                MotionAction::HoverEnter | MotionAction::HoverExit => {
+                    let mut signal = PointerSignal::new(info, delivery_time);
+                    if let Some(sample) = sample {
+                        signal = signal.with_position(sample.position);
+                    }
+                    Some(if matches!(action, MotionAction::HoverEnter) {
+                        PointerEvent::Enter(signal)
+                    } else {
+                        PointerEvent::Leave(signal)
+                    })
+                }
+                MotionAction::Scroll => {
+                    let Some(sample) = sample else { continue };
+                    // Android axes are positive left/up, opposite the owned wheel convention.
+                    // Their unit is wheel detents; no platform precision or phase is reported.
+                    let delta = ScrollDelta::try_new(
+                        ScrollUnit::Lines,
+                        -f64::from(pointer.axis_value(Axis::Hscroll)),
+                        -f64::from(pointer.axis_value(Axis::Vscroll)),
+                    )
+                    .unwrap_or_else(|_| ScrollDelta::zero(ScrollUnit::Lines));
+                    Some(PointerEvent::Scroll(
+                        ScrollEvent::new(info, sample.time, sample.position, delta)
+                            .with_modifiers(modifiers),
+                    ))
+                }
+                _ => None,
+            };
+            if let Some(converted) = converted {
+                output.push(PlatformInput::Pointer(converted));
+            }
+        }
+        output
+    }
+}
+
+fn native_pointer_id(device: i32, pointer: i32) -> Option<PointerId> {
+    // Preserve the signed native device identity injectively; contact IDs are
+    // nonnegative Android IDs. Device and pointer namespaces never collide.
+    let device = u64::from(u32::from_ne_bytes(device.to_ne_bytes()));
+    let pointer = u64::try_from(pointer).ok()?;
+    if pointer > u64::from(u32::MAX) {
+        return None;
+    }
+    PointerId::try_from(((device << 32) | pointer).checked_add(1)?).ok()
+}
+
+fn same_kind(a: PointerKind, b: PointerKind) -> bool {
+    match (a, b) {
+        (PointerKind::Pen { .. }, PointerKind::Pen { .. }) => true,
+        _ => a == b,
+    }
+}
+
+fn pointer_kind(tool: ToolType) -> PointerKind {
+    match tool {
+        ToolType::Finger => PointerKind::Touch,
+        ToolType::Stylus => PointerKind::Pen { tool: PenTool::Tip },
+        ToolType::Eraser => PointerKind::Pen {
+            tool: PenTool::Eraser,
+        },
+        ToolType::Mouse => PointerKind::Mouse,
+        _ => PointerKind::Unknown,
+    }
+}
+
+fn native_button(button: Button) -> Option<PointerButton> {
+    match button {
+        Button::Primary => Some(PointerButton::PRIMARY),
+        Button::Secondary | Button::StylusPrimary => Some(PointerButton::SECONDARY),
+        Button::Tertiary | Button::StylusSecondary => Some(PointerButton::AUXILIARY),
+        Button::Back => Some(PointerButton::BACK),
+        Button::Forward => Some(PointerButton::FORWARD),
+        _ => None,
+    }
+}
+
+fn native_buttons(native: ButtonState, contact: bool) -> PointerButtons {
+    let mut buttons: PointerButtons = [
+        Button::Primary,
+        Button::Secondary,
+        Button::Tertiary,
+        Button::Back,
+        Button::Forward,
+        Button::StylusPrimary,
+        Button::StylusSecondary,
+    ]
+    .into_iter()
+    .filter(|button| native.0 & u32::from(*button) != 0)
+    .filter_map(native_button)
+    .collect();
+    if contact {
+        buttons = buttons.with(PointerButton::PRIMARY);
+    }
+    buttons
+}
+
+fn logical_contact(major: f64, minor: f64, scale: f64) -> Option<ContactSize> {
+    if !scale.is_finite() || scale <= 0.0 {
+        return None;
+    }
+    ContactSize::try_new(Size::new(major / scale, minor / scale)).ok()
+}
+
+fn pen_orientation(tilt: f64, orientation: f64) -> Option<PenOrientation> {
+    // Android measures tilt from the screen normal, orientation clockwise
+    // from upwards. Owned altitude is above the surface, azimuth from rightwards.
+    if !tilt.is_finite() || !(0.0..=f64::from(core::f32::consts::FRAC_PI_2)).contains(&tilt) {
+        return None;
+    }
+    PenOrientation::try_new(
+        core::f64::consts::FRAC_PI_2 - tilt.min(core::f64::consts::FRAC_PI_2),
+        orientation - core::f64::consts::FRAC_PI_2,
+    )
+    .ok()
+}
+
+fn native_sample(
+    time: EventTime,
+    kind: PointerKind,
+    scale: f64,
+    capabilities: Option<DeviceCapabilities>,
+    mut axis: impl FnMut(Axis) -> f32,
+) -> Option<PointerSample> {
+    if !scale.is_finite() || scale <= 0.0 {
+        return None;
+    }
+    let position = PointerPosition::try_new(Point::new(
+        f64::from(axis(Axis::X)) / scale,
+        f64::from(axis(Axis::Y)) / scale,
+    ))
+    .ok()?;
+    let mut sample = PointerSample::new(time, position);
+    let Some(capabilities) = capabilities else {
+        return Some(sample);
+    };
+    if matches!(kind, PointerKind::Touch | PointerKind::Pen { .. }) {
+        if capabilities.has(Axis::Pressure) {
+            sample.pressure = Pressure::saturating(axis(Axis::Pressure)).ok();
+        }
+        if capabilities.has(Axis::TouchMajor) && capabilities.has(Axis::TouchMinor) {
+            sample.contact_size = logical_contact(
+                f64::from(axis(Axis::TouchMajor)),
+                f64::from(axis(Axis::TouchMinor)),
+                scale,
+            );
+        }
+    }
+    if matches!(kind, PointerKind::Pen { .. }) {
+        sample.orientation = match (
+            capabilities.has(Axis::Tilt),
+            capabilities.has(Axis::Orientation),
+        ) {
+            (true, true) => pen_orientation(
+                f64::from(axis(Axis::Tilt)),
+                f64::from(axis(Axis::Orientation)),
+            ),
+            (true, false) => {
+                let tilt = f64::from(axis(Axis::Tilt));
+                if (0.0..=f64::from(core::f32::consts::FRAC_PI_2)).contains(&tilt) {
+                    PenOrientation::try_altitude(
+                        core::f64::consts::FRAC_PI_2 - tilt.min(core::f64::consts::FRAC_PI_2),
+                    )
+                    .ok()
+                } else {
+                    None
+                }
+            }
+            (false, true) => PenOrientation::try_azimuth(
+                f64::from(axis(Axis::Orientation)) - core::f64::consts::FRAC_PI_2,
+            )
+            .ok(),
+            (false, false) => None,
+        };
+    }
+    Some(sample)
+}
+
+fn owned_modifiers(meta: android_activity::input::MetaState) -> OwnedModifiers {
+    let native = convert_meta_state(meta);
+    let mut owned = OwnedModifiers::NONE;
+    for (from, to) in [
+        (Modifiers::SHIFT, OwnedModifiers::SHIFT),
+        (Modifiers::ALT, OwnedModifiers::ALT),
+        (Modifiers::CONTROL, OwnedModifiers::CONTROL),
+        (Modifiers::META, OwnedModifiers::META),
+        (Modifiers::CAPS_LOCK, OwnedModifiers::CAPS_LOCK),
+        (Modifiers::NUM_LOCK, OwnedModifiers::NUM_LOCK),
+    ] {
+        if native.contains(from) {
+            owned |= to;
+        }
+    }
+    owned
 }
 
 /// Convert an Android `KeyEvent` to a `PlatformInput`.
@@ -195,7 +571,7 @@ pub fn convert_key_event(event: &android_activity::input::KeyEvent<'_>) -> Optio
     };
 
     // Keycode implements Into<u32> via num_enum::IntoPrimitive
-    let keycode_i32: i32 = u32::from(event.key_code()) as i32;
+    let keycode_i32 = i32::try_from(u32::from(event.key_code())).ok()?;
     let code = ui_events::keyboard::android::keycode_to_code(keycode_i32);
     let named_key = ui_events::keyboard::android::keycode_to_named_key(keycode_i32);
     let location = ui_events::keyboard::android::keycode_to_location(keycode_i32);
@@ -223,123 +599,8 @@ pub fn convert_key_event(event: &android_activity::input::KeyEvent<'_>) -> Optio
             repeat,
             is_composing: false,
         },
-        crate::shared::events::event_timestamp_ns(),
+        u64::try_from(event.event_time()).ok()?,
     ))
-}
-
-// ============================================================================
-// Helpers
-// ============================================================================
-
-/// The held-button set for a pointer that is in contact with the screen.
-///
-/// Android reports no button mask for touch or stylus contact, but the W3C
-/// contract still requires one: a touch that is down reports the primary
-/// button held, exactly as a pressed mouse does. The framework's
-/// contact-vs-hover discrimination reads this, so reporting an empty set for
-/// an in-contact Move delivers a drag as a hover.
-#[inline]
-fn contact_buttons() -> PointerButtons {
-    let mut buttons = PointerButtons::default();
-    buttons.insert(PointerButton::Primary);
-    buttons
-}
-
-/// Build `PointerInfo` from an Android pointer.
-fn make_pointer_info(pointer: &android_activity::input::Pointer<'_>) -> PointerInfo {
-    // Android pointer IDs start at 0. PointerId::PRIMARY is 1 (NonZeroU64::MIN).
-    // Offset by 1 to avoid collision with PRIMARY reservation.
-    let pid = pointer.pointer_id() as u64 + 1;
-
-    PointerInfo {
-        pointer_id: PointerId::new(pid),
-        persistent_device_id: None,
-        pointer_type: convert_tool_type(pointer.tool_type()),
-    }
-}
-
-/// Build `PointerState` from an Android pointer.
-///
-/// `buttons` is the set held AFTER this event (press included, release
-/// excluded), per the W3C `PointerEvent.buttons` contract — the same rule the
-/// winit backend tracks explicitly. It is a required argument rather than a
-/// defaulted field because the framework's contact-vs-hover discrimination
-/// reads it: a Move that reports an empty set is delivered as a *hover*, so a
-/// touch drag never reaches a recognizer and is silently re-interpreted as a
-/// tap when the finger lifts.
-///
-/// Android does not report a button mask for touch, but its `MotionAction`
-/// already states the answer: the `Down`/`Move` actions are contact, the
-/// `Hover*` actions are not, and `Up` is the release itself.
-/// `count` is the W3C click/tap count — `1` on Down/Up transitions, `0`
-/// on motion and hover (the cross-wire contract in flui-interaction's
-/// module doc).
-fn make_pointer_state(
-    pointer: &android_activity::input::Pointer<'_>,
-    time_ns: u64,
-    scale_factor: f64,
-    modifiers: Modifiers,
-    buttons: PointerButtons,
-    count: u8,
-) -> PointerState {
-    // Android reports coordinates in physical (device) pixels; the
-    // framework reads `PointerState::position` as LOGICAL pixels — the
-    // winit backend divides by the scale factor here, iOS hands over view
-    // points, web hands over CSS pixels — so the division happens on this
-    // wire too. Left physical, a tap at the centre of a 1080-wide 2.625×
-    // screen arrived at (540, 1284) in a 411×914 logical viewport: past
-    // its edge, hit-testing nothing (the first Android emulator run,
-    // 2026-09-22, docs/BETA.md).
-    let (x, y) = logical_position(f64::from(pointer.x()), f64::from(pointer.y()), scale_factor);
-
-    // Pressure: Android returns 0.0-1.0 for touch, 0.0 for no contact
-    let pressure = pointer.pressure();
-
-    // Touch size as contact geometry. Android's `size` is a normalised
-    // 0.0–1.0 value, not pixels; scaled by the touch major axis it would
-    // be a length, but the framework reads only presence today, so it is
-    // carried as-is when reported and as the neutral 1×1 otherwise.
-    let size = pointer.size();
-    let contact = if size > 0.0 {
-        ContactGeometry {
-            width: f64::from(size),
-            height: f64::from(size),
-        }
-    } else {
-        ContactGeometry {
-            width: 1.0,
-            height: 1.0,
-        }
-    };
-
-    PointerState {
-        time: time_ns,
-        position: PhysicalPosition::new(x, y),
-        buttons,
-        modifiers,
-        count,
-        contact_geometry: contact,
-        orientation: PointerOrientation::default(),
-        pressure,
-        tangential_pressure: 0.0,
-        scale_factor,
-    }
-}
-
-/// The framework-facing position for a pointer Android reports at physical
-/// `(x, y)` on a screen of `scale_factor` device pixels per logical pixel.
-fn logical_position(x: f64, y: f64, scale_factor: f64) -> (f64, f64) {
-    (x / scale_factor, y / scale_factor)
-}
-
-/// Convert Android `ToolType` to W3C `PointerType`.
-fn convert_tool_type(tool: ToolType) -> PointerType {
-    match tool {
-        ToolType::Finger => PointerType::Touch,
-        ToolType::Stylus | ToolType::Eraser => PointerType::Pen,
-        ToolType::Mouse => PointerType::Mouse,
-        _ => PointerType::Unknown,
-    }
 }
 
 /// Convert Android `MetaState` to `keyboard_types::Modifiers`.
@@ -458,10 +719,22 @@ mod tests {
     fn android_native_pointer_readings() {
         let rows: &[(&str, fn())] = &[
             ("eraser remains a tool", eraser_remains_a_tool),
-            ("buttons preserve contact and barrel", buttons_preserve_contact_and_barrel),
-            ("fractional physical contact is logical", fractional_contact_is_logical),
-            ("invalid scale refuses geometry", invalid_scale_refuses_geometry),
-            ("native orientation changes coordinate basis", native_orientation_changes_basis),
+            (
+                "buttons preserve contact and barrel",
+                buttons_preserve_contact_and_barrel,
+            ),
+            (
+                "fractional physical contact is logical",
+                fractional_contact_is_logical,
+            ),
+            (
+                "invalid scale refuses geometry",
+                invalid_scale_refuses_geometry,
+            ),
+            (
+                "native orientation changes coordinate basis",
+                native_orientation_changes_basis,
+            ),
         ];
         for (name, row) in rows {
             row();
@@ -470,8 +743,16 @@ mod tests {
     }
 
     fn eraser_remains_a_tool() {
-        assert_eq!(pointer_kind(ToolType::Eraser), PointerKind::Pen { tool: PenTool::Eraser });
-        assert_eq!(pointer_kind(ToolType::Stylus), PointerKind::Pen { tool: PenTool::Tip });
+        assert_eq!(
+            pointer_kind(ToolType::Eraser),
+            PointerKind::Pen {
+                tool: PenTool::Eraser
+            }
+        );
+        assert_eq!(
+            pointer_kind(ToolType::Stylus),
+            PointerKind::Pen { tool: PenTool::Tip }
+        );
         assert_eq!(pointer_kind(ToolType::Unknown), PointerKind::Unknown);
     }
 
@@ -481,13 +762,21 @@ mod tests {
         assert!(held.contains(Button::PRIMARY));
         assert!(held.contains(Button::SECONDARY));
         assert!(held.contains(Button::AUXILIARY));
-        assert_eq!(native_buttons(android_activity::input::ButtonState(0), false), flui_platform_api::pointer::PointerButtons::NONE);
+        assert_eq!(
+            native_buttons(android_activity::input::ButtonState(0), false),
+            flui_platform_api::pointer::PointerButtons::NONE
+        );
     }
 
     fn fractional_contact_is_logical() {
-        let size = logical_contact(18.5, 7.25, 2.0).expect("reported finite axes").get();
+        let size = logical_contact(18.5, 7.25, 2.0)
+            .expect("reported finite axes")
+            .get();
         assert_eq!((size.width, size.height), (9.25, 3.625));
-        assert_eq!(logical_contact(0.0, 0.0, 2.0), None);
+        let zero = logical_contact(0.0, 0.0, 2.0)
+            .expect("reported zero axes")
+            .get();
+        assert_eq!((zero.width, zero.height), (0.0, 0.0));
     }
 
     fn invalid_scale_refuses_geometry() {
