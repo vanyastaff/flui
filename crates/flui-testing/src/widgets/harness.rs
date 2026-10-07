@@ -37,7 +37,7 @@ use flui_view::{ElementNode, View, ViewExt};
 use flui_widgets::Align;
 
 use super::host::WidgetHost;
-use super::{POINTER_SAMPLE_INTERVAL, PointerContacts};
+use super::{POINTER_SAMPLE_INTERVAL, PointerContacts, dispatch_synthetic_pointer};
 use crate::host::HeadlessWindow;
 
 /// The surface every [`Harness`] mounts into.
@@ -164,9 +164,8 @@ impl Harness {
     /// Advance the realm's virtual clock by the shared
     /// [`POINTER_SAMPLE_INTERVAL`] before a synthetic Move that records a new
     /// velocity sample — the same mechanism (and same 8ms rationale) as
-    /// [`super::LaidOut`]. `DragGestureRecognizer` timestamps its velocity
-    /// samples from `RecognizerBase::now()`, which reads the realm's
-    /// clock-bound `GestureArena`, so a spin-wait on the real clock (which
+    /// [`super::LaidOut`]. Synthetic readings carry the realm clock's elapsed
+    /// time as their hardware timestamp, so a spin-wait on the real clock (which
     /// made sample spacing depend on however much wall-clock time the test
     /// process happened to be scheduled between dispatch calls) is neither
     /// necessary nor correct.
@@ -186,7 +185,7 @@ impl Harness {
         let event =
             make_down_event_for_id(self.contacts.begin(), Offset::new(x, y), PointerKind::Mouse)
                 .expect("headless pointer positions must be finite");
-        self.host.dispatch_pointer(&event);
+        dispatch_synthetic_pointer(&self.host, event);
     }
 
     /// Move the in-flight contact to logical `(x, y)`, one sample interval
@@ -199,7 +198,7 @@ impl Harness {
             PointerKind::Mouse,
         )
         .expect("headless pointer positions must be finite");
-        self.host.dispatch_pointer(&event);
+        dispatch_synthetic_pointer(&self.host, event);
     }
 
     /// Lift the in-flight contact at logical `(x, y)`.
@@ -210,7 +209,7 @@ impl Harness {
             PointerKind::Mouse,
         )
         .expect("headless pointer positions must be finite");
-        self.host.dispatch_pointer(&event);
+        dispatch_synthetic_pointer(&self.host, event);
     }
 
     /// Cancel the in-flight contact — the platform withdrawing a gesture
@@ -218,7 +217,7 @@ impl Harness {
     /// position, matching `make_cancel_event_for_id`.
     pub fn dispatch_pointer_cancel(&self) {
         let event = make_cancel_event_for_id(self.current_contact(), PointerKind::Mouse);
-        self.host.dispatch_pointer(&event);
+        dispatch_synthetic_pointer(&self.host, event);
     }
 
     fn current_contact(&self) -> PointerId {
