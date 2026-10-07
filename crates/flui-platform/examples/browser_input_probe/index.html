@@ -109,13 +109,22 @@ document.getElementById('fractional').onclick = () => check('fractional-check', 
   const pointer = new PointerEvent('pointermove', { ...common, pointerId: 1, pointerType: 'mouse' });
   equal({ x: pointer.clientX - rect.left, y: pointer.clientY - rect.top }, { x: 80.25, y: 40.75 });
   canvas.dispatchEvent(pointer);
-  const wheel = new WheelEvent('wheel', { ...common, deltaY: 1 });
-  report('wheel-source', JSON.stringify({ clientX: wheel.clientX, clientY: wheel.clientY, offsetX: wheel.offsetX, offsetY: wheel.offsetY, left: rect.left, top: rect.top }));
-  canvas.dispatchEvent(wheel);
-  for (const kind of ['move', 'scroll']) {
-    const actual = JSON.parse(document.getElementById(kind)?.textContent ?? 'null');
-    if (!actual) throw new Error(`${kind} was not delivered`);
-    equal(actual, { x: 80.25, y: 40.75 });
+  equal(JSON.parse(document.getElementById('move')?.textContent ?? 'null'), { x: 80.25, y: 40.75 });
+  // WheelEvent's legacy constructor coerces fractional client coordinates
+  // to integers. Use an integer source and a fractional canvas origin instead.
+  const originalStyle = canvas.getAttribute('style');
+  try {
+    canvas.style.cssText = 'position:absolute;left:8.25px;top:51.75px;margin:0;border:2px solid transparent;padding:3px;width:200px;height:100px;box-sizing:content-box;transform:none';
+    const wheelRect = canvas.getBoundingClientRect();
+    equal({ left: wheelRect.left, top: wheelRect.top }, { left: 8.25, top: 51.75 });
+    const wheel = new WheelEvent('wheel', { clientX: 100, clientY: 100, bubbles: true, deltaY: 1 });
+    equal({ clientX: wheel.clientX, clientY: wheel.clientY }, { clientX: 100, clientY: 100 });
+    report('wheel-source', JSON.stringify({ clientX: wheel.clientX, clientY: wheel.clientY, left: wheelRect.left, top: wheelRect.top, border: 2, padding: 3 }));
+    canvas.dispatchEvent(wheel);
+    equal(JSON.parse(document.getElementById('scroll')?.textContent ?? 'null'), { x: 89.75, y: 46.25 });
+  } finally {
+    if (originalStyle === null) canvas.removeAttribute('style');
+    else canvas.setAttribute('style', originalStyle);
   }
 });
 document.getElementById('capture-loss').onclick = () => check('capture-loss-check', () => {
