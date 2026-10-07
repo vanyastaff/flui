@@ -14,6 +14,7 @@ pre { position: relative; z-index: 9999; background: white; width: max-content; 
   <button id="fractional">Check fractional positions</button>
   <button id="pen-samples">Check pen samples</button>
   <button id="chord">Check native pointer chord</button>
+  <button id="sensor-validation">Check pen sensor validation</button>
   <button id="capture">Arm trusted capture check</button>
   <button id="display">Check display</button>
   <button id="created">Check created callback</button>
@@ -233,5 +234,53 @@ document.getElementById('chord').onclick = () => check('chord-check', () => {
   equal(JSON.parse(document.getElementById('button-release')?.textContent ?? 'null'), { primary: true, secondary: false });
   canvas.dispatchEvent(new PointerEvent('pointerup', { ...common, button: 0, buttons: 0 }));
   equal({ sequence: document.getElementById('sequence')?.textContent }, { sequence: 'down,button-press,button-release,up,' });
+});
+
+document.getElementById('sensor-validation').onclick = () => check('sensor-validation-check', () => {
+  const canvas = document.querySelector('canvas');
+  if (!canvas) throw new Error('Install input first');
+  const rect = canvas.getBoundingClientRect();
+  const make = (readings = {}) => {
+    const event = new PointerEvent('pointermove', {
+      pointerId: 1, pointerType: 'pen', isPrimary: false, bubbles: true,
+      clientX: rect.left + 60.25, clientY: rect.top + 40.5,
+      button: -1, buttons: 0, pressure: 0, tangentialPressure: 0,
+    });
+    // Deliberately malformed/absent source readings exercise the public DOM
+    // boundary. Verify the source before checking the resulting owned sample.
+    for (const [name, value] of Object.entries(readings)) Object.defineProperty(event, name, { value });
+    return event;
+  };
+  const deliver = event => {
+    canvas.dispatchEvent(event);
+    return JSON.parse(document.getElementById('samples')?.textContent ?? 'null');
+  };
+  const near = (actual, expected) => { if (actual === null || Math.abs(actual - expected) > 1e-12) throw new Error(`angle: expected ${expected}, got ${actual}`); };
+  for (const [altitude, azimuth, expectedAltitude, expectedAzimuth] of [
+    [NaN, Math.PI / 2, null, Math.PI / 2],
+    [Math.PI / 4, undefined, Math.PI / 4, null],
+    [undefined, undefined, null, null],
+  ]) {
+    const event = make({ altitudeAngle: altitude, azimuthAngle: azimuth });
+    if (!Object.is(event.altitudeAngle, altitude) || !Object.is(event.azimuthAngle, azimuth)) throw new Error('source angle precondition');
+    const actual = deliver(event);
+    equal(actual, { role: 'Additional' });
+    equal(actual.current, { pressure: 0, tangential: 0 });
+    if (expectedAltitude === null) equal(actual.current, { altitude: null }); else near(actual.current.altitude, expectedAltitude);
+    if (expectedAzimuth === null) equal(actual.current, { azimuth: null }); else near(actual.current.azimuth, expectedAzimuth);
+  }
+  const malformed = make({ pressure: Infinity, tangentialPressure: NaN, twist: NaN, width: NaN });
+  if (!Number.isNaN(malformed.twist) || malformed.pressure !== Infinity) throw new Error('source nonfinite precondition');
+  equal(deliver(malformed).current, { pressure: null, tangential: null, twist: null, width: null, height: null });
+  const wrapped = make({ twist: 450 });
+  equal(wrapped, { twist: 450 });
+  near(deliver(wrapped).current.twist, Math.PI / 2);
+  const absentMethods = make({ getCoalescedEvents: undefined, getPredictedEvents: () => { throw new Error('source list unavailable'); } });
+  const recovered = deliver(absentMethods);
+  equal({ coalesced: recovered.coalesced.length, predicted: recovered.predicted.length }, { coalesced: 0, predicted: 0 });
+  const eraser = new PointerEvent('pointermove', { pointerId: 19, pointerType: 'pen', isPrimary: true, bubbles: true, button: -1, buttons: 32, pressure: 0, clientX: rect.left + 60.25, clientY: rect.top + 40.5 });
+  equal(eraser, { buttons: 32, isPrimary: true });
+  equal(deliver(eraser), { kind: 'Pen { tool: Eraser }', role: 'Primary' });
+  equal(JSON.parse(document.getElementById('move')?.textContent ?? 'null'), { primary: true, secondary: false });
 });
 </script>
