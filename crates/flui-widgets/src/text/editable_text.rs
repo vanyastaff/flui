@@ -14,7 +14,7 @@ use flui_foundation::geometry::{Bounds, Offset, Point, Rect};
 use flui_foundation::notifier::Listenable;
 use flui_interaction::PointerDispatch;
 use flui_interaction::events::PointerEventExt;
-use flui_interaction::events::{Key, KeyState, Modifiers, NamedKey, PointerId};
+use flui_interaction::events::PointerId;
 use flui_interaction::routing::{
     FocusAttachment, FocusManager, FocusNode, FocusNodeRegistration, KeyEventHandler,
     KeyEventResult, RectProvider,
@@ -26,6 +26,7 @@ use flui_painting::{
     typography::{TextDirection, TextSpan, TextStyle},
 };
 use flui_platform_api::TargetPlatform;
+use flui_platform_api::keyboard::{Key, KeyRepeat, KeyState, Modifiers, NamedKey};
 use flui_platform_api::text_store::OwnerCalls;
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::pipeline::PipelineCell;
@@ -2235,8 +2236,10 @@ fn word_jump_modifier(platform: TargetPlatform) -> Modifiers {
 /// be its own new bug.
 #[inline]
 fn is_word_jump_modifier(modifiers: Modifiers, platform: TargetPlatform) -> bool {
-    let command_mask = Modifiers::CONTROL | Modifiers::ALT | Modifiers::META;
-    (modifiers & command_mask) == word_jump_modifier(platform)
+    let required = word_jump_modifier(platform);
+    [Modifiers::CONTROL, Modifiers::ALT, Modifiers::META]
+        .into_iter()
+        .all(|modifier| modifiers.contains(modifier) == required.contains(modifier))
 }
 
 /// Build the key-event handler closure for `controller`.
@@ -2270,7 +2273,7 @@ fn build_key_handler(
         if !focus_node.can_request_focus() {
             return KeyEventResult::Ignored;
         }
-        if event.state != KeyState::Down {
+        if event.state() != KeyState::Down {
             return KeyEventResult::Ignored;
         }
         match &event.key {
@@ -2417,14 +2420,14 @@ fn build_key_handler(
                 // `Down` events, not one Down followed by held state) must
                 // not resubmit on every tick — the key is still consumed
                 // (`Handled`), just without calling the callback again.
-                if !event.repeat {
+                if event.repeat() == KeyRepeat::First {
                     let text = controller.text();
                     drop(controller);
                     writer.write(|cx| callback(cx, &text));
                 }
                 KeyEventResult::Handled
             }
-            Key::Named(_) => KeyEventResult::Ignored,
+            _ => KeyEventResult::Ignored,
         }
     })
 }

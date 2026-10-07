@@ -11,11 +11,9 @@ use std::{
 };
 
 use flui_foundation::ListenerId;
+use flui_platform_api::keyboard::KeyEvent;
 
-use crate::{
-    events::KeyEvent,
-    routing::focus_scope::{FocusNode, FocusScopeNode, KeyEventResult},
-};
+use crate::routing::focus_scope::{FocusNode, FocusScopeNode, KeyEventResult};
 
 /// Callback invoked after primary focus or its focus-tree ancestry changes.
 pub type FocusChangeCallback = Rc<dyn Fn(Option<Rc<FocusNode>>, Option<Rc<FocusNode>>)>;
@@ -940,10 +938,7 @@ mod tests {
     use flui_foundation::geometry::Rect;
 
     use super::*;
-    use crate::{
-        events::{Key, KeyState, Modifiers},
-        routing::focus_scope::{FocusDetachOutcome, TraversalEdgeBehavior},
-    };
+    use crate::routing::focus_scope::{FocusDetachOutcome, TraversalEdgeBehavior};
 
     fn manager_with_nodes(count: usize) -> (Rc<FocusManager>, Vec<Rc<FocusNode>>) {
         let manager = FocusManager::new();
@@ -958,12 +953,17 @@ mod tests {
     }
 
     fn key_event() -> KeyEvent {
-        KeyEvent {
-            state: KeyState::Down,
-            key: Key::Character("a".into()),
-            modifiers: Modifiers::default(),
-            ..KeyEvent::default()
-        }
+        use flui_platform_api::{
+            EventTime,
+            keyboard::{Code, Key, KeyState},
+        };
+
+        KeyEvent::new(
+            KeyState::Down,
+            Key::character("a"),
+            Code::KeyA,
+            EventTime::from_nanos(0),
+        )
     }
 
     // Focus traversal matrix: key dispatch order, traversal policy, scope memory.

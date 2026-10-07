@@ -38,12 +38,12 @@ use crate::semantics::Semantics;
 use crate::support::value_callback;
 use flui_foundation::ListenerId;
 use flui_foundation::geometry::Rect;
-use flui_interaction::events::KeyEvent;
 use flui_interaction::routing::{
     FocusAttachment, FocusManager, FocusNode, FocusNodeRegistration, FocusScopeNode,
     KeyEventHandler, KeyEventResult, RectProvider,
 };
 use flui_objects::SubtreeAnchor;
+use flui_platform_api::keyboard::KeyEvent;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use flui_view::{RebuildHandle, impl_inherited_view};
