@@ -15,12 +15,12 @@ use web_time::{Duration, Instant};
 use flui_foundation::geometry::Offset;
 use parking_lot::Mutex;
 
-use super::recognizer::{GestureRecognizer, RecognizerBase, is_primary_down};
+use super::recognizer::{CallbackSequence, GestureRecognizer, RecognizerBase, is_primary_down};
 use crate::{
     arena::{GestureArenaEntry, GestureArenaMember, GestureDisposition},
     events::{PointerEvent, PointerEventExt, PointerType},
     ids::PointerId,
-    routing::PointerDispatch,
+    routing::{PointerDispatch, RoutePanic},
     settings::GestureSettings,
 };
 
@@ -82,6 +82,20 @@ struct DoubleTapCallbacks {
     on_double_tap: Option<DoubleTapCallback>,
     on_double_tap_down: Option<DoubleTapCallback>,
     on_double_tap_cancel: Option<DoubleTapCallback>,
+}
+
+impl DoubleTapCallbacks {
+    /// Retire every capture one by one (see [`CallbackSequence::retire`]).
+    fn retire(self, sequence: &mut CallbackSequence) {
+        let Self {
+            on_double_tap,
+            on_double_tap_down,
+            on_double_tap_cancel,
+        } = self;
+        sequence.retire(on_double_tap);
+        sequence.retire(on_double_tap_down);
+        sequence.retire(on_double_tap_cancel);
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -513,6 +527,9 @@ impl DoubleTapGestureRecognizer {
         // Pre-registration checks. They run *before* the new pointer is
         // registered, so `reject`/`release` on the first entry runs while
         // `primary_pointer` still names the first contact.
+        // A panic from a callback the restart runs is held until this contact
+        // is admitted: the contact still becomes the next first tap.
+        let mut failure = None;
         let phase = self.gesture_state.lock().phase;
         match phase {
             DoubleTapPhase::FirstDown | DoubleTapPhase::SecondDown => {
@@ -523,7 +540,7 @@ impl DoubleTapGestureRecognizer {
                     return;
                 }
                 let (local, global) = self.contact_positions();
-                self.handle_cancel(local, global, kind);
+                failure = RoutePanic::capture(|| self.handle_cancel(local, global, kind));
             }
             DoubleTapPhase::WaitingForSecond => {
                 let settings = self.settings.lock().clone();
@@ -544,19 +561,27 @@ impl DoubleTapGestureRecognizer {
                 // now — its single tap fires instead of waiting out the
                 // window — and this contact becomes the next first tap.
                 if window_expired || out_of_slop {
-                    self.give_up_first_tap();
+                    failure = RoutePanic::capture(|| self.give_up_first_tap());
                 }
             }
             DoubleTapPhase::Ready | DoubleTapPhase::Cancelled => {}
         }
-        // A cancel callback above may have disposed this recognizer.
-        if self.state.is_disposed() {
-            return;
+        // A callback above may have disposed this recognizer or admitted a
+        // contact of its own; either way this admission is void.
+        // A contact admitted from inside one of those callbacks leaves a contact
+        // down; the restart itself never does.
+        let reentered = matches!(
+            self.gesture_state.lock().phase,
+            DoubleTapPhase::FirstDown | DoubleTapPhase::SecondDown
+        );
+        if !self.state.is_disposed() && !reentered {
+            self.state
+                .start_tracking(pointer, position, global_position, self);
+            self.handle_down(position, global_position, kind);
         }
-
-        self.state
-            .start_tracking(pointer, position, global_position, self);
-        self.handle_down(position, global_position, kind);
+        if let Some(panic) = failure {
+            panic.resume();
+        }
     }
 }
 
@@ -638,7 +663,9 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
         // Captures are dropped outside the cell, so a capture whose destructor
         // reaches this recognizer finds it unborrowed.
         let callbacks = std::mem::take(&mut *self.callbacks.borrow_mut());
-        drop(callbacks);
+        let mut retirement = CallbackSequence::new();
+        callbacks.retire(&mut retirement);
+        retirement.finish();
     }
 
     fn primary_pointer(&self) -> Option<PointerId> {

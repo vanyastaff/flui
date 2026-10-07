@@ -180,6 +180,40 @@ struct TapCallbacks {
 }
 
 impl TapCallbacks {
+    /// Retire every capture one by one (see [`CallbackSequence::retire`]).
+    fn retire(self, sequence: &mut CallbackSequence) {
+        let Self {
+            on_tap_down,
+            on_tap_move,
+            on_tap_up,
+            on_tap,
+            on_tap_cancel,
+            on_secondary_tap_down,
+            on_secondary_tap_up,
+            on_secondary_tap,
+            on_secondary_tap_cancel,
+            on_tertiary_tap_down,
+            on_tertiary_tap_up,
+            on_tertiary_tap,
+            on_tertiary_tap_cancel,
+        } = self;
+        sequence.retire(on_tap_down);
+        sequence.retire(on_tap_move);
+        sequence.retire(on_tap_up);
+        sequence.retire(on_tap);
+        sequence.retire(on_tap_cancel);
+        sequence.retire(on_secondary_tap_down);
+        sequence.retire(on_secondary_tap_up);
+        sequence.retire(on_secondary_tap);
+        sequence.retire(on_secondary_tap_cancel);
+        sequence.retire(on_tertiary_tap_down);
+        sequence.retire(on_tertiary_tap_up);
+        sequence.retire(on_tertiary_tap);
+        sequence.retire(on_tertiary_tap_cancel);
+    }
+}
+
+impl TapCallbacks {
     /// Per-button down-callback lookup.
     #[inline]
     fn down(&self, button: TapButton) -> Option<&TapCallback> {
@@ -871,7 +905,9 @@ impl GestureRecognizer for TapGestureRecognizer {
         // destructor reaches this recognizer finds it unborrowed.
         let callbacks = std::mem::take(&mut *self.callbacks.borrow_mut());
         drop(live);
-        drop(callbacks);
+        let mut retirement = CallbackSequence::new();
+        callbacks.retire(&mut retirement);
+        retirement.finish();
     }
 
     fn primary_pointer(&self) -> Option<PointerId> {

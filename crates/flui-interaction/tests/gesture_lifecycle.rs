@@ -729,6 +729,14 @@ fn fling_velocity_follows_event_timestamps_not_dispatch_time() {
 fn gesture_lifecycle_matrix() {
     let cases: &[(&str, fn())] = &[
         (
+            "panicking_window_end_still_admits_the_far_contact",
+            panicking_window_end_still_admits_the_far_contact,
+        ),
+        (
+            "dispose_retires_two_panicking_captures_one_at_a_time",
+            dispose_retires_two_panicking_captures_one_at_a_time,
+        ),
+        (
             "far_second_click_delivers_the_held_first_tap",
             far_second_click_delivers_the_held_first_tap,
         ),
@@ -1156,4 +1164,73 @@ proptest! {
         model.check()?;
         model.check_reuse()?;
     }
+}
+
+/// A capture whose destructor panics: a stand-in for user state that fails
+/// while being released.
+struct PanicsOnDrop(&'static str);
+
+impl Drop for PanicsOnDrop {
+    fn drop(&mut self) {
+        panic!("{} capture failed to release", self.0);
+    }
+}
+
+/// Two callback captures that are their last owners and both panic while
+/// dropped: disposal releases them one at a time, so the process survives,
+/// the first failure surfaces, and the second capture is retained instead of
+/// panicking during the first unwind (an abort).
+fn dispose_retires_two_panicking_captures_one_at_a_time() {
+    let lane = Lane::new();
+    let first = PanicsOnDrop("on_tap");
+    let second = PanicsOnDrop("on_tap_up");
+    let tap = TapGestureRecognizer::new(lane.arena)
+        .with_on_tap(move |_| {
+            let _ = &first;
+        })
+        .with_on_tap_up(move |_| {
+            let _ = &second;
+        });
+    let failure = catch_unwind(AssertUnwindSafe(|| tap.dispose()))
+        .expect_err("the first capture's panic surfaces from dispose");
+    let message = failure
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .unwrap_or_default();
+    assert!(
+        message.contains("capture failed to release"),
+        "the first failure is the one reported, got {message:?}"
+    );
+}
+
+/// A far second click ends the first double-tap window; when the cancel
+/// callback that ending runs panics, the far contact is still admitted as
+/// the next first tap, so a click near it completes a double tap.
+fn panicking_window_end_still_admits_the_far_contact() {
+    let mut lane = Lane::new();
+    let doubles = counter();
+    let double_log = Rc::clone(&doubles);
+    let armed = Rc::new(Cell::new(true));
+    let trip = Rc::clone(&armed);
+    let double_tap = DoubleTapGestureRecognizer::new(lane.arena.clone())
+        .with_on_double_tap(move |_| double_log.set(double_log.get() + 1))
+        .with_on_double_tap_cancel(move |_| {
+            assert!(!trip.replace(false), "cancel callback failed");
+        });
+    lane.join(&double_tap);
+    let kind = PointerType::Touch;
+    click(&lane, id(2), at(10.0, 10.0), kind);
+    lane.frames(50);
+    let failure = catch_unwind(AssertUnwindSafe(|| {
+        lane.send(&down(id(3), at(300.0, 10.0), kind));
+    }));
+    assert!(failure.is_err(), "premise: the cancel callback panicked");
+    lane.send(&up(id(3), at(300.0, 10.0), kind));
+    lane.frames(50);
+    click(&lane, id(4), at(302.0, 10.0), kind);
+    assert_eq!(
+        doubles.get(),
+        1,
+        "the far contact became the next first tap despite the panic"
+    );
 }

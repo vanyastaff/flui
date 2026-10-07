@@ -127,6 +127,28 @@ struct LongPressCallbacks {
     on_long_press_cancel: Option<LongPressCallback>,
 }
 
+impl LongPressCallbacks {
+    /// Retire every capture one by one (see [`CallbackSequence::retire`]).
+    fn retire(self, sequence: &mut CallbackSequence) {
+        let Self {
+            on_long_press_down,
+            on_long_press,
+            on_long_press_start,
+            on_long_press_move_update,
+            on_long_press_up,
+            on_long_press_end,
+            on_long_press_cancel,
+        } = self;
+        sequence.retire(on_long_press_down);
+        sequence.retire(on_long_press);
+        sequence.retire(on_long_press_start);
+        sequence.retire(on_long_press_move_update);
+        sequence.retire(on_long_press_up);
+        sequence.retire(on_long_press_end);
+        sequence.retire(on_long_press_cancel);
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum LongPressPhase {
     /// Ready to start
@@ -555,7 +577,9 @@ impl GestureRecognizer for LongPressGestureRecognizer {
         // Captures are dropped outside the cell, so a capture whose destructor
         // reaches this recognizer finds it unborrowed.
         let callbacks = std::mem::take(&mut *self.callbacks.borrow_mut());
-        drop(callbacks);
+        let mut retirement = CallbackSequence::new();
+        callbacks.retire(&mut retirement);
+        retirement.finish();
     }
 
     fn primary_pointer(&self) -> Option<PointerId> {
@@ -594,8 +618,14 @@ impl LongPressGestureRecognizer {
             }
             None => {}
         }
-        // The cancel callback may have disposed this recognizer.
-        if self.state.is_disposed() {
+        // The cancel callback may have disposed this recognizer or admitted a
+        // contact of its own; either way this admission is void.
+        if self.state.is_disposed()
+            || self
+                .state
+                .primary_pointer()
+                .is_some_and(|tracked| tracked != pointer)
+        {
             return;
         }
         // Start tracking this exact allocation in both the arena and the

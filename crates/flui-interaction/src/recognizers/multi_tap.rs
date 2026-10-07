@@ -14,7 +14,7 @@ use web_time::{Duration, Instant};
 use flui_foundation::geometry::Offset;
 use parking_lot::Mutex;
 
-use super::recognizer::{GestureRecognizer, RecognizerBase};
+use super::recognizer::{CallbackSequence, GestureRecognizer, RecognizerBase};
 use crate::{
     arena::GestureArenaMember,
     events::{PointerEvent, PointerType, extract_pointer_id},
@@ -87,6 +87,18 @@ pub struct MultiTapGestureRecognizer {
 struct MultiTapCallbacks {
     on_multi_tap: Option<MultiTapCallback>,
     on_multi_tap_cancel: Option<MultiTapCallback>,
+}
+
+impl MultiTapCallbacks {
+    /// Retire every capture one by one (see [`CallbackSequence::retire`]).
+    fn retire(self, sequence: &mut CallbackSequence) {
+        let Self {
+            on_multi_tap,
+            on_multi_tap_cancel,
+        } = self;
+        sequence.retire(on_multi_tap);
+        sequence.retire(on_multi_tap_cancel);
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -471,7 +483,9 @@ impl GestureRecognizer for MultiTapGestureRecognizer {
         // Captures are dropped outside the cell, so a capture whose destructor
         // reaches this recognizer finds it unborrowed.
         let callbacks = std::mem::take(&mut *self.callbacks.borrow_mut());
-        drop(callbacks);
+        let mut retirement = CallbackSequence::new();
+        callbacks.retire(&mut retirement);
+        retirement.finish();
     }
 
     fn primary_pointer(&self) -> Option<PointerId> {

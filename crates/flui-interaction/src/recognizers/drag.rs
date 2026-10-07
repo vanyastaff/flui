@@ -811,8 +811,14 @@ impl DragGestureRecognizer {
             Some(_) => self.handle_cancel(),
             None => {}
         }
-        // `handle_cancel` runs user code, which may dispose this recognizer.
-        if self.state.is_disposed() {
+        // `handle_cancel` runs user code, which may dispose this recognizer or
+        // admit a contact of its own; either way this admission is void.
+        if self.state.is_disposed()
+            || self
+                .state
+                .primary_pointer()
+                .is_some_and(|tracked| tracked != pointer)
+        {
             return;
         }
         self.state

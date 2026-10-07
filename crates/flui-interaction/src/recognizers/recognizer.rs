@@ -131,6 +131,17 @@ impl CallbackSequence {
         retire_callback(callback, &mut self.first);
     }
 
+    /// Retire one capture without invoking it, preserving the first failure:
+    /// disposal drops each capture on its own, so two panicking destructors
+    /// never unwind at once.
+    pub(crate) fn retire<T: ?Sized>(&mut self, callback: Option<Rc<T>>) {
+        if self.incoming_failure {
+            callback.retain();
+        } else {
+            retire_callback(callback, &mut self.first);
+        }
+    }
+
     /// Resume the first failure, if any.
     pub(crate) fn finish(self) {
         if let Some(panic) = self.first {
