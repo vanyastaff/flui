@@ -908,7 +908,7 @@ fn transform_delta(transform: &Matrix4, delta: Offset<f64>) -> Offset<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::events::PointerType;
+    use crate::events::PointerKind;
 
     #[test]
     fn dispatch_reaches_every_target_leaf_first_without_stopping() {
@@ -936,7 +936,8 @@ mod tests {
             result.add(HitTestEntry::new(RenderId::new(1)).pointer_target(leaf));
             result.add(HitTestEntry::new(RenderId::new(2)).pointer_target(root));
 
-            let event = crate::events::make_down_event(Offset::new(50.0, 50.0), PointerType::Mouse);
+            let event = crate::events::make_down_event(Offset::new(50.0, 50.0), PointerKind::Mouse)
+                .expect("finite input");
             result.dispatch(&event);
         });
         assert_eq!(&*order.borrow(), &["leaf", "root"]);
