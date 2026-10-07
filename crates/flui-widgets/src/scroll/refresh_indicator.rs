@@ -583,12 +583,13 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
         let mut stack_children: Vec<_> = vec![scroll_view.boxed()];
         if view.controller.is_refreshing() {
             // Overlay the indicator at the very top of the content area.
-            let indicator =
-                Positioned::new(Center::new(ActivityIndicator::new().color(INDICATOR_COLOR)))
-                    .top(0.0)
-                    .left(0.0)
-                    .right(0.0)
-                    .height(INDICATOR_HEIGHT_PX);
+            let indicator = Positioned::new(
+                Center::new().child(ActivityIndicator::new().color(INDICATOR_COLOR)),
+            )
+            .top(0.0)
+            .left(0.0)
+            .right(0.0)
+            .height(INDICATOR_HEIGHT_PX);
             stack_children.push(indicator.boxed());
         }
 
