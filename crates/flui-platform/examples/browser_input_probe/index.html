@@ -109,7 +109,9 @@ document.getElementById('fractional').onclick = () => check('fractional-check', 
   const pointer = new PointerEvent('pointermove', { ...common, pointerId: 1, pointerType: 'mouse' });
   equal({ x: pointer.clientX - rect.left, y: pointer.clientY - rect.top }, { x: 80.25, y: 40.75 });
   canvas.dispatchEvent(pointer);
-  canvas.dispatchEvent(new WheelEvent('wheel', { ...common, deltaY: 1 }));
+  const wheel = new WheelEvent('wheel', { ...common, deltaY: 1 });
+  report('wheel-source', JSON.stringify({ clientX: wheel.clientX, clientY: wheel.clientY, offsetX: wheel.offsetX, offsetY: wheel.offsetY, left: rect.left, top: rect.top }));
+  canvas.dispatchEvent(wheel);
   for (const kind of ['move', 'scroll']) {
     const actual = JSON.parse(document.getElementById(kind)?.textContent ?? 'null');
     if (!actual) throw new Error(`${kind} was not delivered`);
