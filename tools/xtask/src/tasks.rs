@@ -315,10 +315,14 @@ fn native_platform_plan(host: Host) -> Vec<Step> {
                     // tests retain their existing macOS ignore annotations.
                     command = command.env("FLUI_HEADLESS", "1");
                 }
-                command.into()
+                command.args(["-E", "not (group(trybuild))"]).into()
             })
             .collect(),
-        Host::Linux => vec![platform_suite_linux().into()],
+        Host::Linux => vec![
+            platform_suite_linux()
+                .args(["-E", "not (group(trybuild))"])
+                .into(),
+        ],
         Host::Other => vec![Step::Note("platform-test: unsupported host".to_owned())],
     }
 }
@@ -1227,15 +1231,21 @@ mod tests {
         assert_eq!(
             lines(&native_platform_plan(Host::Windows)),
             [
-                "$ cargo nextest run -p flui-platform --locked --no-fail-fast",
-                "$ cargo nextest run -p flui-platform --locked --no-fail-fast --all-features",
+                "$ cargo nextest run -p flui-platform --locked --no-fail-fast -E 'not (group(trybuild))'",
+                "$ cargo nextest run -p flui-platform --locked --no-fail-fast --all-features -E 'not (group(trybuild))'",
             ]
         );
         assert_eq!(
             lines(&native_platform_plan(Host::MacOs)),
             [
-                "$ FLUI_HEADLESS=1 cargo nextest run -p flui-platform --locked --no-fail-fast",
-                "$ FLUI_HEADLESS=1 cargo nextest run -p flui-platform --locked --no-fail-fast --all-features",
+                "$ FLUI_HEADLESS=1 cargo nextest run -p flui-platform --locked --no-fail-fast -E 'not (group(trybuild))'",
+                "$ FLUI_HEADLESS=1 cargo nextest run -p flui-platform --locked --no-fail-fast --all-features -E 'not (group(trybuild))'",
+            ]
+        );
+        assert_eq!(
+            lines(&native_platform_plan(Host::Linux)),
+            [
+                "$ FLUI_HEADLESS=1 xvfb-run -a cargo nextest run -p flui-platform --locked --all-features --no-fail-fast -E 'not (group(trybuild))'"
             ]
         );
         assert_eq!(
