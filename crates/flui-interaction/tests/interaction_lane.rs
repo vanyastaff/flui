@@ -3678,7 +3678,13 @@ fn non_pointer_invocation_retains_its_snapshot_across_a_reentrant_close() {
                             .expect("finite position"),
                         PanZoomPhase::Start,
                     );
-                    let _ = owner.invoke_pan_zoom_target(target, &event);
+                    let _ = owner.invoke_pan_zoom_target(
+                        target,
+                        flui_interaction::routing::PanZoomDispatch {
+                            local: &event,
+                            global: &event,
+                        },
+                    );
                 }
                 "path clip" => {
                     let target = owner

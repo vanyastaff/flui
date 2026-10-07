@@ -42,10 +42,10 @@ pub(crate) use interaction_lane::active_dispatch_handle;
 pub use interaction_lane::{
     HitTestHandle, HitTestProbe, HitTestSnapshot, InteractionDispatchError,
     InteractionDispatchHandle, InteractionLane, LocalPayloadTarget, MouseEnterCallback,
-    MouseExitCallback, MouseHoverCallback, MouseRegionCallbacks, MouseRegionTarget, PanZoomTarget,
-    PathClipTarget, PointerDispatch, PointerTarget, ResolvedRouteToken, RoutePanic,
-    RouteResolution, RouteResolutionMiss, ScrollTarget, ShaderMaskTarget, resolve_local_payload,
-    resolve_path_clip_target, resolve_shader_mask_target,
+    MouseExitCallback, MouseHoverCallback, MouseRegionCallbacks, MouseRegionTarget,
+    PanZoomDispatch, PanZoomTarget, PathClipTarget, PointerDispatch, PointerTarget,
+    ResolvedRouteToken, RoutePanic, RouteResolution, RouteResolutionMiss, ScrollTarget,
+    ShaderMaskTarget, resolve_local_payload, resolve_path_clip_target, resolve_shader_mask_target,
 };
 pub use mouse_tracker::{
     CursorChangeCallback, DeviceId, MouseTracker, MouseTrackerAnnotation, PointerMotionKind,

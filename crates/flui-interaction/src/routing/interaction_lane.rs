@@ -376,7 +376,16 @@ impl<'a> PointerDispatch<'a> {
 
 type PointerHandler = Rc<dyn Fn(PointerDispatch<'_>) + 'static>;
 type ScrollHandler = Rc<dyn Fn(&ScrollEvent) -> EventPropagation + 'static>;
-type PanZoomHandler = Rc<dyn Fn(&PanZoomEvent) -> EventPropagation + 'static>;
+/// A native gesture in the receiving target's space and the root's space.
+#[derive(Clone, Copy, Debug)]
+pub struct PanZoomDispatch<'a> {
+    /// The gesture localized to the receiving target.
+    pub local: &'a PanZoomEvent,
+    /// The original gesture delivered by the presentation.
+    pub global: &'a PanZoomEvent,
+}
+
+type PanZoomHandler = Rc<dyn Fn(PanZoomDispatch<'_>) -> EventPropagation + 'static>;
 type PathClipper = Rc<dyn Fn(Size) -> Path + 'static>;
 type ShaderMaskFactory = Rc<dyn Fn(Rect<f64>) -> Shader + 'static>;
 
@@ -1732,7 +1741,7 @@ impl InteractionDispatchHandle {
     /// thread, or when the lane's private identity source is exhausted.
     pub fn register_pan_zoom(
         &self,
-        handler: impl Fn(&PanZoomEvent) -> EventPropagation + 'static,
+        handler: impl Fn(PanZoomDispatch<'_>) -> EventPropagation + 'static,
     ) -> Result<PanZoomTarget, InteractionDispatchError> {
         let handler = self.admit(handler)?;
         let lane = self.active_lane()?;
@@ -1756,7 +1765,7 @@ impl InteractionDispatchHandle {
     pub fn replace_pan_zoom(
         &self,
         target: PanZoomTarget,
-        handler: impl Fn(&PanZoomEvent) -> EventPropagation + 'static,
+        handler: impl Fn(PanZoomDispatch<'_>) -> EventPropagation + 'static,
     ) -> Result<(), InteractionDispatchError> {
         let handler = self.admit(handler)?;
         let lane = self.active_lane()?;
@@ -1803,7 +1812,7 @@ impl InteractionDispatchHandle {
     pub fn invoke_pan_zoom_target(
         &self,
         target: PanZoomTarget,
-        event: &PanZoomEvent,
+        event: PanZoomDispatch<'_>,
     ) -> Result<EventPropagation, InteractionDispatchError> {
         let lane = self.active_lane()?;
         self.validate_lane(target.lane_id)?;

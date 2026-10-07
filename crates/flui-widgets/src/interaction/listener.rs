@@ -8,7 +8,7 @@ use std::{
 };
 
 use flui_interaction::events::ScrollEvent;
-use flui_interaction::routing::{EventPropagation, PanZoomTarget, ScrollTarget};
+use flui_interaction::routing::{EventPropagation, PanZoomDispatch, PanZoomTarget, ScrollTarget};
 use flui_interaction::{
     GestureRecognizer, PanZoomEvent, PanZoomPhase, PointerDispatch, PointerTarget, RecognizerSet,
 };
@@ -47,7 +47,28 @@ type ScrollClaimCallback = Rc<dyn Fn(&ScrollEvent) -> EventPropagation>;
 
 /// An arbitrated trackpad pan-zoom handler: returns
 /// [`EventPropagation::Stop`] to claim the tick, ending the leaf-first walk.
-type PanZoomClaimCallback = Rc<dyn Fn(&PanZoomEvent) -> EventPropagation>;
+type PanZoomClaimCallback = Rc<dyn Fn(PanZoomDispatch<'_>) -> EventPropagation>;
+
+#[derive(Clone, Copy, Default)]
+enum RecognizerInput {
+    #[default]
+    All,
+    Contacts,
+}
+
+impl RecognizerInput {
+    fn admits(self, event: &PointerEvent) -> bool {
+        matches!(self, Self::All)
+            || matches!(
+                event,
+                PointerEvent::Down(_)
+                    | PointerEvent::Move(_)
+                    | PointerEvent::ButtonChange(_)
+                    | PointerEvent::Up(_)
+                    | PointerEvent::Cancel(_)
+            )
+    }
+}
 
 /// Calls callbacks in response to raw pointer events on its child.
 ///
@@ -78,6 +99,7 @@ type PanZoomClaimCallback = Rc<dyn Fn(&PanZoomEvent) -> EventPropagation>;
 #[derive(Clone)]
 pub struct Listener {
     recognizers: RecognizerSet,
+    recognizer_input: RecognizerInput,
     on_pointer_down: Option<PointerCallback>,
     on_pointer_up: Option<PointerCallback>,
     on_pointer_move: Option<PointerCallback>,
@@ -95,6 +117,7 @@ impl Default for Listener {
     fn default() -> Self {
         Self {
             recognizers: RecognizerSet::default(),
+            recognizer_input: RecognizerInput::All,
             on_pointer_down: None,
             on_pointer_up: None,
             on_pointer_move: None,
@@ -139,6 +162,12 @@ impl Listener {
     /// set), defaulting to [`HitTestBehavior::DeferToChild`].
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// GestureDetector arbitrates native gestures through its claim route.
+    pub(crate) fn contact_recognizers(mut self) -> Self {
+        self.recognizer_input = RecognizerInput::Contacts;
+        self
     }
 
     /// Attach a recognizer without extending its owner's lifetime.
@@ -308,7 +337,7 @@ impl Listener {
     #[must_use]
     pub fn on_pointer_pan_zoom_claim(
         mut self,
-        callback: impl Fn(&PanZoomEvent) -> EventPropagation + 'static,
+        callback: impl Fn(PanZoomDispatch<'_>) -> EventPropagation + 'static,
     ) -> Self {
         self.on_pointer_pan_zoom_claim = Some(Rc::new(callback));
         self
@@ -335,6 +364,7 @@ impl Listener {
         let on_signal = self.on_pointer_signal.clone();
         let on_pan_zoom_update = self.on_pointer_pan_zoom_update.clone();
         let recognizers = self.recognizers.clone();
+        let recognizer_input = self.recognizer_input;
         // The event KIND is the same in both spaces, so the routing match
         // reads the local one and each callback receives the whole pair.
         move |dispatch: PointerDispatch<'_>| {
@@ -361,7 +391,11 @@ impl Listener {
                     writer.write(|cx| callback(cx, dispatch));
                 }
             }));
-            let recognized = catch_unwind(AssertUnwindSafe(|| recognizers.dispatch(dispatch)));
+            let recognized = catch_unwind(AssertUnwindSafe(|| {
+                if recognizer_input.admits(dispatch.local) {
+                    recognizers.dispatch(dispatch);
+                }
+            }));
             match (raw, recognized) {
                 (Err(first), Err(later)) => {
                     flui_foundation::panic::retain_opaque_payload(later);

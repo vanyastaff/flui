@@ -20,7 +20,8 @@ use crate::{
     events::{CursorIcon, PointerEvent},
     routing::MouseTrackerAnnotation,
     routing::interaction_lane::{
-        PanZoomTarget, PointerTarget, RoutePanic, ScrollTarget, active_dispatch_handle,
+        PanZoomDispatch, PanZoomTarget, PointerTarget, RoutePanic, ScrollTarget,
+        active_dispatch_handle,
     },
 };
 
@@ -706,12 +707,9 @@ impl HitTestResult {
     /// so a viewer already clamped at its scale extent hands the pinch to the
     /// one above it.
     ///
-    /// Routing trackpad pan-zoom through the SCALE GESTURE ARENA would
-    /// resolve the same contention with full gesture arbitration. This claim
-    /// walk is the interim arbitration FLUI has until a recognizer takes
-    /// pan-zoom input; it is deliberately shaped like
-    /// the pointer-signal claim walk, which is the arbitration primitive this
-    /// codebase already has.
+    /// A native gesture is admitted before its recognizer publishes callbacks.
+    /// The claimant receives the localized gesture alongside its original
+    /// root-space event, so both focal points retain their actual coordinates.
     ///
     /// Returns `true` when a target claimed the event.
     pub fn dispatch_pan_zoom(&self, event: &PanZoomEvent) -> bool {
@@ -746,7 +744,13 @@ impl HitTestResult {
                     *event
                 };
 
-                match handle.invoke_pan_zoom_target(target, &local_event) {
+                match handle.invoke_pan_zoom_target(
+                    target,
+                    PanZoomDispatch {
+                        local: &local_event,
+                        global: event,
+                    },
+                ) {
                     Ok(propagation) if propagation.should_stop() => return true,
                     Ok(_) => {}
                     Err(error) => {

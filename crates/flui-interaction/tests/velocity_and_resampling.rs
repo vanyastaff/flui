@@ -960,7 +960,8 @@ fn pinch_scale_is_finite_and_positive() {
     lane.enter(|| {
         let sink = observed.clone();
         let target = handle
-            .register_pan_zoom(move |event| {
+            .register_pan_zoom(move |dispatch| {
+                let event = dispatch.local;
                 if let PanZoomPhase::Update(transform) = event.phase {
                     sink.borrow_mut()
                         .push((transform.scale(), transform.rotation()));
