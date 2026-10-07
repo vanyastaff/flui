@@ -104,6 +104,70 @@ pub(crate) fn scoped_settings_control_touch_recognition_thresholds() {
     }
 }
 
+pub(crate) fn scoped_settings_control_gesture_deadlines() {
+    use std::{cell::Cell, rc::Rc, time::Duration};
+
+    use flui_foundation::geometry::Offset;
+    use flui_interaction::GestureSettings;
+    use flui_interaction::events::{PointerKind, make_down_event_for_id, make_up_event_for_id};
+
+    for family in ["long press", "double tap"] {
+        for configured in [false, true] {
+            let callbacks = Rc::new(Cell::new(0));
+            let observed = Rc::clone(&callbacks);
+            let detector = if family == "long press" {
+                GestureDetector::new().on_long_press(move |_| observed.set(observed.get() + 1))
+            } else {
+                GestureDetector::new().on_double_tap(move |_| observed.set(observed.get() + 1))
+            }
+            .child(ColoredBox::new(Color::rgb(10, 20, 30)));
+            let settings = if configured {
+                GestureSettings::default()
+                    .with_long_press_timeout(Duration::from_millis(100))
+                    .with_double_tap_timeout(Duration::from_millis(100))
+            } else {
+                GestureSettings::default()
+            };
+            let mut laid = lay_out(
+                ConfiguredGesture { settings, detector },
+                tight(100.0, 100.0),
+            );
+            let contacts = flui_testing::widgets::PointerContacts::new();
+            let position = Offset::new(40.0, 40.0);
+            let first = contacts.begin();
+            laid.dispatch_pointer_event(
+                &make_down_event_for_id(first, position, PointerKind::Touch).expect("finite Down"),
+            );
+            if family == "double tap" {
+                laid.dispatch_pointer_event(
+                    &make_up_event_for_id(first, position, PointerKind::Touch).expect("finite Up"),
+                );
+            }
+            laid.pump_for(Duration::from_millis(200));
+            if family == "double tap" {
+                let second = contacts.begin();
+                laid.dispatch_pointer_event(
+                    &make_down_event_for_id(second, position, PointerKind::Touch)
+                        .expect("finite Down"),
+                );
+                laid.dispatch_pointer_event(
+                    &make_up_event_for_id(second, position, PointerKind::Touch).expect("finite Up"),
+                );
+            }
+            let expected = if family == "long press" {
+                configured
+            } else {
+                !configured
+            };
+            assert_eq!(
+                callbacks.get(),
+                usize::from(expected),
+                "{family}, configured={configured}"
+            );
+        }
+    }
+}
+
 pub(crate) fn clearing_pan_callbacks_mid_drag_still_finishes_the_drag() {
     use crate::common::{ProbeSignals, SignalProbe};
     use flui_foundation::geometry::Offset;
