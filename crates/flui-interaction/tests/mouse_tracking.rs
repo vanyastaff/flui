@@ -584,7 +584,6 @@ fn mouse_tracking_ordering_and_cursor_deferral() {
 }
 
 #[test]
-#[ignore = "contract: a region hovered by two devices delivers an exit to each device"]
 fn shared_region_exit_per_device() {
     run_rows(
         "shared region",
@@ -596,8 +595,6 @@ fn shared_region_exit_per_device() {
 }
 
 #[test]
-#[ignore = "contract: an ambient hover refresh delivers every device's transitions even when \
-            another device's hit test or callback panics, then resumes the first panic"]
 fn ambient_refresh_contains_each_device() {
     run_rows(
         "ambient refresh",
@@ -615,8 +612,6 @@ fn ambient_refresh_contains_each_device() {
 }
 
 #[test]
-#[ignore = "contract: callbacks the tracker releases are destroyed outside its borrow, so a \
-            capture destructor can use the tracker"]
 fn released_region_destructor_reenters_tracker() {
     run_rows(
         "region release",
@@ -628,7 +623,6 @@ fn released_region_destructor_reenters_tracker() {
 }
 
 #[test]
-#[ignore = "contract: an explicit arrow cursor on a child wins over an ancestor's cursor"]
 fn explicit_arrow_cursor_wins() {
     run_rows(
         "explicit arrow",
@@ -643,8 +637,6 @@ fn explicit_arrow_cursor_wins() {
 }
 
 #[test]
-#[ignore = "contract: a transformed hit entry receives coalesced and predicted samples and scroll \
-            deltas in its local space, deltas rotated and scaled but not translated"]
 fn transformed_entry_receives_local_samples_and_deltas() {
     run_rows(
         "localization",

@@ -219,8 +219,6 @@ fn hit_test_transform_admission() {
 }
 
 #[test]
-#[ignore = "contract: a non-finite paint offset refuses its subtree like a non-invertible \
-            paint transform"]
 fn hit_test_offset_admission() {
     let mut failures = Vec::new();
     for (name, case) in [
