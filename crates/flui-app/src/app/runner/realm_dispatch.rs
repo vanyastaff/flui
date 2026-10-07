@@ -110,7 +110,7 @@ const OWNER_TURN_BUDGET: usize = 32;
 // unconstructed there.
 #[cfg_attr(
     all(
-        not(all(test, not(target_os = "android"))),
+        not(all(test, not(any(target_os = "android", target_os = "ios")))),
         // Only android and iOS drop the window-event variants: the web runner
         // constructs `WindowFocus`/`WindowHover` through the browser's
         // visibility/focus signals, so on wasm32 they are live.
@@ -752,10 +752,10 @@ pub(super) fn install_realm_alongside(
 )]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[cfg_attr(
-    all(test, target_os = "android"),
+    all(test, any(target_os = "android", target_os = "ios")),
     expect(
         dead_code,
-        reason = "presentation install tests are excluded on Android"
+        reason = "presentation install tests are excluded on mobile"
     )
 )]
 pub(super) enum InstallPresentationError {
@@ -857,10 +857,10 @@ pub(super) enum InstallPresentationError {
     )
 )]
 #[cfg_attr(
-    all(test, target_os = "android"),
+    all(test, any(target_os = "android", target_os = "ios")),
     expect(
         dead_code,
-        reason = "presentation install tests are excluded on Android"
+        reason = "presentation install tests are excluded on mobile"
     )
 )]
 pub(super) fn install_presentation_alongside(

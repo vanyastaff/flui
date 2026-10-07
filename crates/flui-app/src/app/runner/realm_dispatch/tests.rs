@@ -8,10 +8,9 @@ use std::{
 };
 
 use flui_foundation::geometry::Offset;
-use flui_interaction::{
-    HitTestResult,
-    events::{PointerType, make_down_event},
-};
+#[cfg(not(target_os = "ios"))]
+use flui_interaction::HitTestResult;
+use flui_interaction::events::{PointerType, make_down_event};
 use flui_platform::traits::{PlatformInput, PlatformWindow};
 
 use super::super::host::{

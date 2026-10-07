@@ -360,10 +360,10 @@ pub(super) fn install_platform_quit_hook() {
     )
 )]
 #[cfg_attr(
-    all(test, target_os = "android"),
+    all(test, any(target_os = "android", target_os = "ios")),
     expect(
         dead_code,
-        reason = "desktop wake-deadline tests are excluded on Android"
+        reason = "desktop wake-deadline tests are excluded on mobile"
     )
 )]
 pub(super) fn install_wake_deadline_hook(

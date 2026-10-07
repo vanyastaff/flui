@@ -251,7 +251,7 @@ impl RealmRegistry {
     // neither the mobile runners nor wasm build.
     #[cfg(any(test, not(target_arch = "wasm32")))]
     #[cfg_attr(
-        any(target_os = "android", all(not(test), target_os = "ios")),
+        any(target_os = "android", target_os = "ios"),
         expect(dead_code, reason = "consumed only by the desktop wake-deadline hook")
     )]
     pub(super) fn get(&self, id: &RealmId) -> Option<&RealmSlot> {
@@ -434,7 +434,7 @@ pub enum ExitPolicy {
 // is gated out there (see `lib.rs`), while android and wasm32 keep the
 // re-export and therefore a reachable path.
 #[cfg_attr(
-    all(not(test), target_os = "ios"),
+    target_os = "ios",
     expect(
         dead_code,
         reason = "secondary-window policy; its iOS re-export is gated out"
@@ -1246,10 +1246,10 @@ impl AppRuntime {
     /// same realm frame path that the wake re-enters.
     #[must_use]
     #[cfg_attr(
-        all(test, target_os = "android"),
+        all(test, any(target_os = "android", target_os = "ios")),
         expect(
             dead_code,
-            reason = "desktop wake-deadline tests are excluded on Android"
+            reason = "desktop wake-deadline tests are excluded on mobile"
         )
     )]
     pub(super) fn next_wake(&self) -> Option<web_time::Instant> {
@@ -1808,6 +1808,13 @@ pub(super) fn take_parked_host_feeds() -> Vec<ParkedHostFeed> {
 /// rises then. If no thread can be started the feed runs here, before the
 /// first frame; on wasm32, which has no threads (and where fontdb finds no
 /// host fonts), it always does.
+#[cfg_attr(
+    all(test, target_os = "ios"),
+    expect(
+        dead_code,
+        reason = "iOS tests park the host feed instead of spawning it"
+    )
+)]
 fn spawn_host_feed(feed: HostFontFeed, wake: Arc<dyn Fn() + Send + Sync>) {
     fn feed_then_wake(feed: HostFontFeed, wake: &(dyn Fn() + Send + Sync)) {
         use std::panic::{AssertUnwindSafe, catch_unwind};

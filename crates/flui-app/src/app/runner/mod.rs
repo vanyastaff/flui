@@ -143,10 +143,10 @@ fn text_store_host_of(
     )
 )]
 #[cfg_attr(
-    all(test, target_os = "android"),
+    all(test, any(target_os = "android", target_os = "ios")),
     expect(
         dead_code,
-        reason = "desktop close-request wiring tests are excluded on Android"
+        reason = "desktop close-request wiring tests are excluded on mobile"
     )
 )]
 pub(crate) fn install_close_request_wiring(
