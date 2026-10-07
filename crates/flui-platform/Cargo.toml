@@ -140,6 +140,7 @@ objc2-foundation = { workspace = true, features = [
     "NSDictionary",
     "NSValue",
     "NSThread",
+    "NSProcessInfo",
     "NSGeometry",
     "NSEnumerator",
     "NSRunLoop",
@@ -180,6 +181,7 @@ dispatch = "0.2"
 # Android platform
 [target.'cfg(target_os = "android")'.dependencies]
 android-activity = { version = "0.6", features = ["native-activity"] }
+jni.workspace = true
 
 # Native-only async dependencies (not available on wasm32)
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -262,6 +264,7 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "NSObject",
     "NSString",
     "NSSet",
+    "NSProcessInfo",
     "NSArray",
     "NSDictionary",
     "NSNotification",
@@ -284,6 +287,8 @@ objc2-ui-kit = { version = "0.3.2", default-features = false, features = [
     "UISceneOptions",
     "UIWindowScene",
     "UIEvent",
+    "UIGestureRecognizer",
+    "UIHoverGestureRecognizer",
     "UIGeometry",
     "UIKey",
     "UIResponder",
