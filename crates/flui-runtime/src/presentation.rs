@@ -110,6 +110,30 @@ pub fn test_clipboard() -> Arc<dyn Clipboard> {
     Arc::new(flui_platform_api::InMemoryClipboard::new())
 }
 
+/// Pointer interpolation policy owned by one presentation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum PointerResampling {
+    /// Preserve ordinary frame coalescing without interpolation.
+    #[default]
+    Disabled,
+    /// Interpolate measured samples at the owner's frame time with the
+    /// interaction layer's standard lookback and sampling window.
+    FrameAligned,
+}
+
+/// A presentation's pointer sampling policy could not be changed.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum PointerResamplingError {
+    /// The exact presentation is no longer hosted by this realm.
+    #[error("pointer resampling presentation is unavailable")]
+    PresentationUnavailable,
+    /// A contact retains the policy admitted with its Down.
+    #[error(transparent)]
+    ActiveContact(#[from] flui_interaction::ResamplingModeChangeError),
+}
+
 /// The window a presentation is built on, with the accessibility bridge its
 /// backend fixed when it built the window.
 ///
@@ -130,6 +154,7 @@ pub struct PresentationWindow {
     window: Arc<dyn PlatformWindow>,
     accessibility: Option<Arc<dyn PlatformAccessibility>>,
     text_store_host: Option<Rc<dyn TextStoreHost>>,
+    pointer_resampling: PointerResampling,
 }
 
 impl std::fmt::Debug for PresentationWindow {
@@ -152,7 +177,15 @@ impl PresentationWindow {
             window,
             accessibility,
             text_store_host: None,
+            pointer_resampling: PointerResampling::Disabled,
         }
+    }
+
+    /// Choose this presentation's initial input policy; disabled by default.
+    #[must_use]
+    pub fn with_pointer_resampling(mut self, policy: PointerResampling) -> Self {
+        self.pointer_resampling = policy;
+        self
     }
 
     /// The window's text-store host, when its backend offers one; the
@@ -603,12 +636,16 @@ impl PresentationState {
             window,
             accessibility,
             text_store_host,
+            pointer_resampling,
         } = window.into();
         let pipeline = PipelineCell::new(PipelineOwner::new(capabilities.text));
         if let Some(device_pixel_ratio) = device_pixel_ratio {
             pipeline.with_mut(|owner| owner.set_device_pixel_ratio(device_pixel_ratio));
         }
         let gestures = Self::build_gestures(id, &window, capabilities.clock);
+        gestures
+            .set_resampling_enabled(pointer_resampling == PointerResampling::FrameAligned)
+            .expect("BUG: newly assembled presentation has no active contacts");
         let interaction_dispatch = flui_interaction::__runtime::presentation_dispatch(
             &capabilities.interaction_dispatch_handle,
         );

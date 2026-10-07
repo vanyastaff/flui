@@ -372,6 +372,7 @@ pub struct GestureBinding {
     /// Frame-paced clock that produces `(now, next)` pairs for the
     /// resamplers. Only consulted when `resampling_enabled` is true.
     sampling_clock: Cell<SamplingClock>,
+    clock: std::sync::Arc<dyn MonotonicClock>,
 
     /// Routes pointer events to registered handlers.
     pointer_router: PointerRouter,
@@ -451,6 +452,7 @@ impl GestureBinding {
             refused_contacts: RefCell::new(RefusedContacts::default()),
             resampling_enabled: Cell::new(false),
             sampling_clock: Cell::new(SamplingClock::default()),
+            clock: std::sync::Arc::clone(&clock),
             pointer_router: PointerRouter::new(),
             mouse_tracker: MouseTracker::new(),
             arena: GestureArena::binding_driven(clock),
@@ -530,6 +532,16 @@ impl GestureBinding {
             .values()
             .filter(|cached| cached.resampler.is_tracked())
             .count()
+    }
+
+    /// Whether accepted contact samples still need an owner frame.
+    /// An active contact with an empty queue creates no sampling demand.
+    #[must_use]
+    pub fn has_pending_pointer_samples(&self) -> bool {
+        self.hit_tests
+            .borrow()
+            .values()
+            .any(|cached| cached.resampler.has_pending_events())
     }
 
     // ========================================================================
@@ -1273,7 +1285,7 @@ impl GestureBinding {
                 };
                 if let Some((sequence, resampler)) = cached {
                     if self.is_resampling_enabled() {
-                        resampler.add_event(event.clone());
+                        resampler.add_event_with_arrival(event.clone(), self.clock.now());
                     } else {
                         self.queue_pending_move(
                             pointer_id,

@@ -14,6 +14,26 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 impl UiRealm {
+    /// Set one presentation's input policy, preserving active contact admission.
+    ///
+    /// # Errors
+    /// Returns an unavailable error for a stale presentation, or the binding's
+    /// mode-change error while a contact admitted the previous policy.
+    pub fn set_pointer_resampling(
+        &self,
+        id: PresentationId,
+        policy: crate::presentation::PointerResampling,
+    ) -> Result<(), crate::presentation::PointerResamplingError> {
+        let presentation = self
+            .presentations
+            .get(id)
+            .ok_or(crate::presentation::PointerResamplingError::PresentationUnavailable)?;
+        presentation.gestures().set_resampling_enabled(
+            policy == crate::presentation::PointerResampling::FrameAligned,
+        )?;
+        Ok(())
+    }
+
     /// Current presentation incarnation.
     #[must_use]
     pub fn presentation_id(&self) -> PresentationId {
