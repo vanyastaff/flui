@@ -390,6 +390,12 @@ impl MultiDragGestureRecognizer {
 }
 impl GestureRecognizer for MultiDragGestureRecognizer {
     fn add_pointer(&self, dispatch: PointerDispatch<'_>) {
+        let pointer = dispatch.local.pointer_id();
+        let _span = tracing::info_span!(
+            "multidrag.add_pointer",
+            pointer = ?pointer,
+            event = %crate::observability::GestureEvent::RecognizerAdded,
+        );
         if !is_primary_down(dispatch.local) {
             return;
         }
@@ -451,6 +457,11 @@ impl GestureRecognizer for MultiDragGestureRecognizer {
         );
     }
     fn handle_event(&self, dispatch: PointerDispatch<'_>) {
+        let _span = tracing::info_span!(
+            "multidrag.handle_event",
+            kind = %crate::observability::pointer_event_kind(dispatch.local),
+            event = %crate::observability::GestureEvent::EventReceived,
+        );
         let pointer = dispatch.local.pointer_id();
         match dispatch.local {
             PointerEvent::Move(_) => self.handle_move(dispatch),

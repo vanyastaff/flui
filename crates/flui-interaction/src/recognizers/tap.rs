@@ -376,6 +376,12 @@ impl TapGestureRecognizer {
 }
 impl GestureRecognizer for TapGestureRecognizer {
     fn add_pointer(&self, dispatch: PointerDispatch<'_>) {
+        let pointer = dispatch.local.pointer_id();
+        let _span = tracing::info_span!(
+            "tap.add_pointer",
+            pointer = ?pointer,
+            event = %crate::observability::GestureEvent::RecognizerAdded,
+        );
         let PointerEvent::Down(data) = dispatch.local else {
             return;
         };
@@ -423,6 +429,11 @@ impl GestureRecognizer for TapGestureRecognizer {
         });
     }
     fn handle_event(&self, dispatch: PointerDispatch<'_>) {
+        let _span = tracing::info_span!(
+            "tap.handle_event",
+            kind = %crate::observability::pointer_event_kind(dispatch.local),
+            event = %crate::observability::GestureEvent::EventReceived,
+        );
         let Some(member) = self.current_member() else {
             return;
         };
