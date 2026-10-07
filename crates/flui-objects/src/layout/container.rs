@@ -725,7 +725,9 @@ impl RenderBox for RenderContainer {
                     return false;
                 };
                 let local = ctx.position();
-                let (dx, dy) = inverse.transform_point(local.dx, local.dy);
+                let Some((dx, dy)) = inverse.unproject_to_plane(local.dx, local.dy) else {
+                    return false;
+                };
                 Offset::new(dx, dy)
             }
             None => *ctx.position(),
