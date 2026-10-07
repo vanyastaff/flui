@@ -48,6 +48,7 @@ use windows::{
 
 use super::{
     display::enumerate_displays,
+    text_services::TextServices,
     util::{WINDOW_CLASS_NAME, get_x_lparam, get_y_lparam, hiword, load_cursor_style},
     window::WindowsWindow,
 };
@@ -371,6 +372,12 @@ pub(super) struct WindowContext {
     /// path in `window_proc` uses this; the `WM_KEYDOWN` drain sees a whole
     /// burst at once and never needs cross-message state.
     pub pending_high_surrogate: std::cell::Cell<Option<u16>>,
+    /// The window's TSF connection and text-store host (ADR-0135 §3),
+    /// activated as the window is created, on its owner thread; `None` when
+    /// activation failed, and text input takes the `WM_CHAR` path.
+    /// Deactivated by `WM_DESTROY` after the close callbacks and before the
+    /// context retires ([`TextServices::retire_with_window`]).
+    pub text_services: RefCell<Option<Rc<TextServices>>>,
     /// Physical keys held down that were pressed as dead keys, so their
     /// release reports `Dead` like the press.
     pub held_dead_keys: std::cell::RefCell<super::events::HeldDeadKeys>,
@@ -672,6 +679,11 @@ pub struct WindowsPlatform {
     /// and re-asserted by `run`. Pre-run window creation on that same
     /// thread (the Win32 examples) stays legal.
     affinity: flui_foundation::OwnerAffinity,
+
+    /// The owner thread's COM apartment. Declared last, so it is released
+    /// after everything above; each window's text services hold their own
+    /// clone, so COM outlives the platform while any of them is alive.
+    apartment: super::com_apartment::ApartmentHold,
 }
 
 // SAFETY, per field: `windows` is an `Arc<Mutex<..>>`, `owner_control` holds
@@ -693,7 +705,8 @@ pub struct WindowsPlatform {
 // (see `WindowsWindow`'s `Send`/`Sync` docs); the remaining affine calls here
 // (`quit`'s `PostQuitMessage`, `open_window`'s queue binding) are logic-level
 // rather than memory-safety and stay guarded by `affinity.debug_assert_owner`
-// — see ADR-0039 (event-loop affinity).
+// — see ADR-0039 (event-loop affinity). `apartment` is `Send + Sync` by its
+// own owner-thread gate.
 unsafe impl Send for WindowsPlatform {}
 // SAFETY: as for `Send` — `&WindowsPlatform` grants no more than shared access
 // to already-synchronized members plus a never-dereferenced address.
@@ -762,22 +775,15 @@ impl WindowsPlatform {
     ) -> Result<Self, PlatformError> {
         let owner_identity = WindowIdentity::mint_from(source);
 
-        // SAFETY: `CoInitializeEx` takes no pointer arguments (`None` for
-        // the reserved parameter) and its `HRESULT` is checked before
-        // anything downstream assumes COM is initialized on this thread —
-        // this call establishes the calling thread as an STA, which is also
-        // the thread this platform's `affinity` binds to a few lines below.
-        //
-        // Initialize COM for drag-and-drop, clipboard, etc.
-        unsafe {
-            use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
-            let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-            if hr.is_err() {
-                return Err(PlatformError::Init {
-                    message: format!("Failed to initialize COM: {hr:?}"),
-                });
-            }
-        }
+        // Enter this thread's STA for drag-and-drop, clipboard and TSF. The
+        // apartment is a value: an early return below releases it, and once
+        // built it lives until the platform and every window's text services
+        // are gone (see `com_apartment`). This thread is also the one the
+        // platform's `affinity` binds to below.
+        let apartment =
+            super::com_apartment::ComApartment::enter().map_err(|hr| PlatformError::Init {
+                message: format!("Failed to initialize COM: {hr:?}"),
+            })?;
 
         // SAFETY: `SetProcessDpiAwarenessContext` takes a constant by value,
         // no pointer arguments; failure (already set, or an OS predating
@@ -847,6 +853,7 @@ impl WindowsPlatform {
             background_executor,
             config,
             affinity: flui_foundation::OwnerAffinity::new(),
+            apartment: super::com_apartment::ApartmentHold::new(apartment),
         };
         // The message-only window above was just created on THIS thread, so
         // its message queue already belongs here — the owner is decided at
@@ -1081,7 +1088,33 @@ impl WindowsPlatform {
                         // here, before the swapchain-owning callback's
                         // native window is gone, releases the surface while
                         // it is still valid to destroy.
-                        ctx.callbacks.clear();
+                        //
+                        // The destruction trace rides on the clear: a close
+                        // from inside one of this window's own callbacks
+                        // only queues it behind that callback, and the
+                        // surface is released when the queued clear runs,
+                        // so the trace is ordered after the release however
+                        // the close arrived.
+                        let window_id = ctx.window_id.0;
+                        ctx.callbacks.clear_then(move || {
+                            tracing::debug!(
+                                target: "flui.platform",
+                                event = "native_window_destroyed",
+                                window_id,
+                            );
+                        });
+
+                        // Deactivate TSF for the window while the HWND is
+                        // still valid: after the close callbacks, which
+                        // closed the presentation and so unfocused its
+                        // field, and before the context retires (ADR-0135
+                        // §3). Taken out in a statement of its own: the
+                        // shutdown reaches application code, which must
+                        // find no borrow held.
+                        let services = ctx.text_services.borrow_mut().take();
+                        if let Some(services) = services {
+                            TextServices::retire_with_window(services);
+                        }
 
                         // Retire the context: clear the slot FIRST, so no
                         // new borrow can be minted (`with_window_context`
@@ -2194,6 +2227,7 @@ impl Platform for WindowsPlatform {
             shares.frames,
             shares.exit_policy,
             self.config.clone(),
+            self.apartment.share(),
         )?;
         let hwnd_value = window.hwnd().0 as isize;
 
@@ -2644,27 +2678,8 @@ impl Drop for WindowsPlatform {
             }
         }
 
-        // SAFETY: `CoUninitialize` takes no arguments, so this call itself
-        // cannot be memory-unsafe regardless of which thread runs it.
-        //
-        // NOT established: that this runs on the same thread that called
-        // `CoInitializeEx` in `with_config`. COM's apartment state is
-        // per-thread, and `CoUninitialize` is only the matching call for
-        // the thread that initialized it — but `WindowsPlatform` is `Send`
-        // (see its impl above), so nothing stops this value being moved to
-        // and dropped on a different thread than the one that constructed
-        // it. If that happens, this does not uninitialize the constructing
-        // thread's COM apartment at all; at worst it leaves that thread's
-        // COM reference count unbalanced (permanently initialized) and/or
-        // calls `CoUninitialize` on a thread whose own apartment state this
-        // struct never tracked — an accounting/leak concern, not memory
-        // unsafety, and not fixed by this comment.
-        //
-        // Uninitialize COM
-        unsafe {
-            use windows::Win32::System::Com::CoUninitialize;
-            CoUninitialize();
-        }
+        // COM is left by the `apartment` field, after this body, or later by
+        // the last window's text services if any still live.
     }
 }
 

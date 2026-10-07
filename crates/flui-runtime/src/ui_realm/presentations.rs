@@ -235,6 +235,19 @@ impl UiRealm {
         self.presentations.get(id).map(|p| p.clock().is_hidden())
     }
 
+    /// The device pixel ratio `id`'s render pipeline paints and publishes
+    /// semantics bounds at — for the dispatcher test proving a `Resized`
+    /// event rescales exactly the presentation it was addressed to. `None`
+    /// if `id` is not resident.
+    #[cfg(any(test, feature = "test-support"))]
+    #[must_use]
+    pub fn presentation_device_pixel_ratio_for_test(&self, id: PresentationId) -> Option<f64> {
+        self.presentations.get(id).map(|presentation| {
+            flui_rendering::binding::RendererBinding::root_pipeline_owner(presentation.renderer())
+                .with(flui_rendering::PipelineOwner::device_pixel_ratio)
+        })
+    }
+
     /// Whether `id`'s pipeline holds a semantics tree: something (assistive
     /// technology, or an agent) asked for one and a frame has run since. `None`
     /// if `id` is not resident.

@@ -165,7 +165,11 @@ fn attach_replace_and_detach_move_the_host_focus() {
         .expect("a pull owner accepts the area and has nowhere to send it");
     let _ = handle.detach(token).expect("detach");
     assert!(host.focused.borrow().is_none());
-    assert_eq!(calls(&log), ["focus", "focus", "unfocus"]);
+    assert_eq!(
+        calls(&log),
+        ["focus", "complete", "focus", "unfocus"],
+        "a replacement completes the outgoing composition before the incoming focus"
+    );
 }
 
 fn host_operations_in_a_frame_wait_for_the_anchor_and_run_first() {
@@ -256,7 +260,9 @@ fn a_host_call_reaching_the_owner_is_queued_until_it_returns() {
     }));
     handle.attach(client(&a)).expect("attach");
     assert!(!host.nested.get(), "no host call ran inside another");
-    assert_eq!(calls(&log), ["focus", "complete", "focus"]);
+    // The reentrant completion, then the replacement's own completion of
+    // the outgoing store, then the incoming focus.
+    assert_eq!(calls(&log), ["focus", "complete", "complete", "focus"]);
     assert!(host.focuses(&b));
 }
 
@@ -277,7 +283,8 @@ fn close_completes_queued_compositions_then_unfocuses() {
 
 /// Focus moves from C to A and A's composition is completed, all inside one
 /// frame, and the window closes before the anchor: the close applies the
-/// queued focus first, so the completion reaches A and C keeps its own.
+/// queued operations in order, so C's composition is completed by the
+/// replacement before A's focus, and A's completion reaches A.
 fn close_applies_a_queued_focus_change_before_its_completion() {
     let (owner, host, log) = pull_owner();
     let handle = owner.handle();
@@ -287,10 +294,12 @@ fn close_applies_a_queued_focus_change_before_its_completion() {
     handle.attach(client(&a)).expect("move to A in the frame");
     owner.complete_composition();
     owner.close();
-    assert_eq!(calls(&log), ["focus", "focus", "complete", "unfocus"]);
+    assert_eq!(
+        calls(&log),
+        ["focus", "complete", "focus", "complete", "unfocus"]
+    );
     assert_eq!(host.completed(&a), 1, "A's composition is completed");
-    assert_eq!(host.completed(&c), 0, "C's is not touched");
-    assert!(c.composition().is_some(), "C keeps composing");
+    assert_eq!(host.completed(&c), 1, "C's is completed once, by the move");
 }
 
 #[derive(Default)]
@@ -384,14 +393,13 @@ fn expect_host_panic(expected: &str, run: impl FnOnce()) {
 fn two_panicking_host_operations_in_a_close_still_unfocus() {
     let (owner, host, log) = pull_owner();
     let handle = owner.handle();
-    let (c, a) = (composing_store(), composing_store());
-    handle.attach(client(&c)).expect("attach C");
+    let a = composing_store();
     owner.set_transaction_open(true);
-    handle.attach(client(&a)).expect("move to A in the frame");
+    handle.attach(client(&a)).expect("focus A in the frame");
     owner.complete_composition();
     host.panics.borrow_mut().extend(["focus", "complete"]);
     expect_host_panic("focus", || owner.close());
-    assert_eq!(calls(&log), ["focus", "focus", "unfocus"]);
+    assert_eq!(calls(&log), ["focus", "unfocus"]);
     assert_eq!(host.completed(&a), 0);
     assert!(host.focused.borrow().is_none());
     assert_eq!(

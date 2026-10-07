@@ -311,6 +311,10 @@ pub struct WindowCallbacks {
     lifecycle_closed: AtomicBool,
 }
 
+/// Run by a queued clear once it has retired every callback; see
+/// [`WindowCallbacks::clear_then`].
+type RetirementNotice = Box<dyn FnOnce() + Send>;
+
 enum WindowCallbackEvent {
     Input(PlatformInput),
     RequestFrame,
@@ -328,7 +332,7 @@ enum WindowCallbackEvent {
     /// draining (a `close()` issued from inside one of this window's own
     /// callbacks — see `clear()`'s own doc for why draining it in order
     /// matters).
-    Clear,
+    Clear(Option<RetirementNotice>),
 }
 
 struct DispatchState<E> {
@@ -572,8 +576,25 @@ impl WindowCallbacks {
     /// window that reopens must construct a fresh `WindowCallbacks`, never
     /// reuse one that has already been cleared.
     pub fn clear(&self) {
+        self.clear_with(None);
+    }
+
+    /// [`Self::clear`], then `on_retired` once every slot's callback has
+    /// actually been dropped. When this window's FIFO is draining (a close
+    /// issued from inside one of its own callbacks), that is after the
+    /// running callback returns and the queued clear runs, not when this call
+    /// returns: a backend uses it to order a notice after the release of what
+    /// those callbacks own (a renderer and its surface). If the running
+    /// callback unwinds, its drain discards the queued clear and the notice
+    /// with it, since nothing was retired.
+    pub fn clear_then(&self, on_retired: impl FnOnce() + Send + 'static) {
+        self.clear_with(Some(Box::new(on_retired)));
+    }
+
+    fn clear_with(&self, retired: Option<RetirementNotice>) {
         self.lifecycle_closed.store(true, Ordering::SeqCst);
-        let Some(drain) = DispatchDrain::begin(&self.event_dispatch, WindowCallbackEvent::Clear)
+        let Some(drain) =
+            DispatchDrain::begin(&self.event_dispatch, WindowCallbackEvent::Clear(retired))
         else {
             // Already draining: the running drain's own loop will reach
             // this queued `Clear` in FIFO order and call `clear_now` from
@@ -717,8 +738,11 @@ impl WindowCallbacks {
                         callback(has_surface);
                     }
                 }
-                WindowCallbackEvent::Clear => {
+                WindowCallbackEvent::Clear(retired) => {
                     self.clear_now();
+                    if let Some(retired) = retired {
+                        super::panic_boundary::contain_owner_callback(retired);
+                    }
                 }
             }
         }

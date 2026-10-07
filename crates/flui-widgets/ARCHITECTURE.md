@@ -178,6 +178,19 @@ Disabled fields cannot retain focus. The `text_editing` family pins this with
 `select_all_without_a_focused_text_field_leaves_the_key_unconsumed`, and
 `select_all_defers_to_an_active_composition_and_recovers_after_commit`.
 
+### A field commits its composition before it loses its input
+
+`EditableText` commits an active composition, keeping its text, through
+`TextInputHandle::complete_composition` with its own token (ADR-0142 item 4):
+on blur before the client detaches, on a pointer-down on the field before the
+caret moves, and on a paste before the clipboard's text lands, so paste is
+enabled during a composition while select-all still declines it. The commit
+runs owner code (`on_changed`): the transition's later steps run in the same
+`OwnerCalls` scope and its first failure is resumed after them. Tests:
+`owner_code_is_contained_at_every_point`'s `editable: a blur during preedit …`
+rows (push and pull) and
+`a_pointer_down_and_a_paste_commit_the_composition_first`.
+
 ### Navigation commits precede observer effects
 
 Router mutations commit the navigator history and typed route stack before

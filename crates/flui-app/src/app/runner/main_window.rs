@@ -501,6 +501,25 @@ pub(super) fn shutdown_main_window() {
     }
 }
 
+/// Retires the loop's main window and realms when dropped: after
+/// `Platform::run` returns, or while a panic unwinds out of it. Held inside
+/// the [`OwnerHostClearGuard`], so the windows go before the owner platform
+/// that created them. On unwind each step is contained, so a second panic
+/// cannot abort the first one's unwind; that first panic stays the one raised.
+struct LoopTeardown;
+
+impl Drop for LoopTeardown {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            contain(shutdown_main_window);
+            contain(teardown_platform_realm);
+        } else {
+            shutdown_main_window();
+            teardown_platform_realm();
+        }
+    }
+}
+
 pub(in crate::app) fn run_application<V, F>(
     application: Application<V, F>,
 ) -> Result<(), AppRunError>
@@ -524,6 +543,10 @@ where
     let fatal = Rc::new(RefCell::new(None));
     let recorded = Rc::clone(&fatal);
     let _owner_guard = OwnerHostClearGuard::arm();
+    // Declared after the owner guard, so it drops first: the main window and
+    // the realms (and the native windows they own) are retired while the
+    // owner platform still lives, on unwind too.
+    let teardown = LoopTeardown;
     let result = platform.run(Box::new(move |owner| {
         let Application {
             mut factory,
@@ -635,8 +658,7 @@ where
         with_owner_platform(|owner| owner.shared().request_exit_policy_reevaluation());
         Ok(())
     }));
-    shutdown_main_window();
-    teardown_platform_realm();
+    drop(teardown);
     let failure = fatal.borrow_mut().take();
     if let Some(error) = failure {
         return Err(error);
@@ -687,17 +709,9 @@ mod tests {
         install_platform_quit_hook();
         handle
     }
-    struct Cleanup;
-    impl Drop for Cleanup {
-        fn drop(&mut self) {
-            shutdown_main_window();
-            teardown_platform_realm();
-        }
-    }
-
     fn main_window_pending_coalesces_and_recovers_after_installer_panic() {
         let _owner = OwnerHostClearGuard::arm();
-        let _cleanup = Cleanup;
+        let _cleanup = LoopTeardown;
         let platform = HeadlessPlatform::new();
         let deferred = platform.enable_deferred_window_open();
         let turns = platform.owner_turns();
@@ -762,6 +776,59 @@ mod tests {
         assert!(APP_RUNTIME.with(|slot| slot.borrow().main_ingress.is_none()));
     }
 
+    /// A panic that unwinds out of `Platform::run` after the loop was set up
+    /// still retires the main window and the realms, before the owner
+    /// platform goes: the windows they own must not outlive it.
+    ///
+    /// The panic is raised by a subscriber on the headless platform's last
+    /// log line, after `on_ready` returned, the one point in `run` no
+    /// containment covers.
+    fn main_window_unwinding_out_of_run_retires_the_loop() {
+        struct PanicsWhenReady;
+        struct Message(bool);
+        impl tracing::field::Visit for Message {
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                if field.name() == "message" {
+                    self.0 |= format!("{value:?}") == "Headless platform ready";
+                }
+            }
+        }
+        impl tracing::Subscriber for PanicsWhenReady {
+            fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+                true
+            }
+            fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+                tracing::span::Id::from_u64(1)
+            }
+            fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+            fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+            fn event(&self, event: &tracing::Event<'_>) {
+                let mut message = Message(false);
+                event.record(&mut message);
+                assert!(!message.0, "injected panic out of Platform::run");
+            }
+            fn enter(&self, _: &tracing::span::Id) {}
+            fn exit(&self, _: &tracing::span::Id) {}
+        }
+
+        let app = Application::new(|_| -> flui_widgets::Text { flui_widgets::Text::new("") })
+            .with_startup_window(StartupWindow::None)
+            .with_config(AppConfig::new().with_exit_policy(ExitPolicy::ExplicitQuit));
+        let unwound = tracing::subscriber::with_default(PanicsWhenReady, || {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                run_with_platform(app, Box::new(HeadlessPlatform::new()))
+            }))
+        });
+        assert!(unwound.is_err(), "the injected panic unwinds out of run");
+        APP_RUNTIME.with(|slot| {
+            let runtime = slot.borrow();
+            assert!(
+                runtime.main_controller.is_none() && runtime.main_ingress.is_none(),
+                "the unwind retired the main window"
+            );
+        });
+    }
+
     #[test]
     fn main_window_installer_matrix() {
         crate::table_test::run_table(
@@ -774,6 +841,10 @@ mod tests {
                 (
                     "main_window_factory_panic_is_typed_and_initial_window_is_fatal",
                     main_window_factory_panic_is_typed_and_initial_window_is_fatal as fn(),
+                ),
+                (
+                    "main_window_unwinding_out_of_run_retires_the_loop",
+                    main_window_unwinding_out_of_run_retires_the_loop as fn(),
                 ),
                 (
                     "main_window_reload_hook_stays_attached_across_failed_reopens_and_detaches_with_loop",

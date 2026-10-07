@@ -41,6 +41,12 @@ fn composing_store() -> Rc<InMemoryTextStore> {
     store
 }
 
+/// An entry into this thread's STA (nested in the platform's) for services
+/// activated directly.
+fn apartment() -> Rc<super::super::com_apartment::ComApartment> {
+    super::super::com_apartment::ComApartment::enter().expect("COM apartment")
+}
+
 fn erased(store: &Rc<InMemoryTextStore>) -> Rc<dyn TextStore> {
     store.clone()
 }
@@ -49,7 +55,7 @@ fn erased(store: &Rc<InMemoryTextStore>) -> Rc<dyn TextStore> {
 /// answered `Deferred`; when TSF has shut down by the time the call
 /// returns, the composition is committed in place.
 fn a_queued_completion_commits_in_place_after_a_shutdown(hwnd: HWND) {
-    let services = TextServices::activate(hwnd).expect("TSF activates");
+    let services = TextServices::activate(hwnd, apartment()).expect("TSF activates");
     let store = composing_store();
     services.focus_store(Some(erased(&store)));
     services.enter();
@@ -66,7 +72,7 @@ fn a_queued_completion_commits_in_place_after_a_shutdown(hwnd: HWND) {
 /// The same when the store's document is gone by the time the call
 /// returns (it was poisoned, or reopening it failed).
 fn a_queued_completion_commits_in_place_without_a_document(hwnd: HWND) {
-    let services = TextServices::activate(hwnd).expect("TSF activates");
+    let services = TextServices::activate(hwnd, apartment()).expect("TSF activates");
     let store = composing_store();
     services.focus_store(Some(erased(&store)));
     services.enter();
@@ -81,10 +87,38 @@ fn a_queued_completion_commits_in_place_without_a_document(hwnd: HWND) {
     services.shutdown();
 }
 
+/// A window destroyed from inside a TSF call into a store (application code
+/// closing it from a grant) does not release the document under that call:
+/// the shutdown waits for the call to return, and a completion asked for
+/// meanwhile still commits its store in place.
+fn a_window_destroyed_inside_a_tsf_call_shuts_down_when_it_returns(hwnd: HWND) {
+    let services = TextServices::activate(hwnd, apartment()).expect("TSF activates");
+    let store = composing_store();
+    services.focus_store(Some(erased(&store)));
+    services.enter();
+    TextServices::retire_with_window(Rc::clone(&services));
+    assert!(
+        matches!(*services.serving.borrow(), Serving::Field(_)),
+        "the document outlives the call it is under"
+    );
+    assert_eq!(
+        services.complete_composition(&erased(&store)),
+        Ok(CompositionEnd::Deferred)
+    );
+    services.leave();
+    assert!(services.is_shut_down(), "shut down once the call returned");
+    assert_eq!(
+        store.composition(),
+        None,
+        "the completion committed in place"
+    );
+    assert_eq!(store.text(), "abかな");
+}
+
 /// A store the host does not serve, queued focus changes included, is
 /// refused; so is any store once TSF has shut down.
 fn a_completion_reaches_only_the_focused_store(hwnd: HWND) {
-    let services = TextServices::activate(hwnd).expect("TSF activates");
+    let services = TextServices::activate(hwnd, apartment()).expect("TSF activates");
     let (a, b) = (composing_store(), composing_store());
     services.focus_store(Some(erased(&a)));
     assert_eq!(
@@ -213,7 +247,7 @@ impl tracing::Subscriber for PanicsOnTsfErrors {
 /// teardown's payload is retained rather than destroyed, and TSF is back on
 /// the empty document.
 fn a_queued_unfocus_whose_teardown_and_diagnostic_panic_stays_in_the_com_entry(hwnd: HWND) {
-    let services = TextServices::activate(hwnd).expect("TSF activates");
+    let services = TextServices::activate(hwnd, apartment()).expect("TSF activates");
     let store = FailingStore::new("ab");
     services.focus_store(Some(store.clone()));
     let dropped = Arc::new(AtomicBool::new(false));
@@ -344,7 +378,7 @@ fn start_tsf_composition(services: &TextServices, length: i32) -> ITfComposition
 /// teardown came first, so the owner's containment reports it, not the
 /// recovery's failure.
 fn a_refused_completion_reports_its_teardown_before_its_recovery(hwnd: HWND) {
-    let services = TextServices::activate(hwnd).expect("TSF activates");
+    let services = TextServices::activate(hwnd, apartment()).expect("TSF activates");
     let store = FailingStore::new("ab");
     let gate = CommitGate::new();
     store.set_commit_gate(gate.clone());
@@ -421,7 +455,7 @@ fn tsf_sees_no_hidden_text(context: &ITfContext) -> bool {
 /// `OnStatusChange` carries only dynamic ones. A protection change on the
 /// focused field reaches TSF as a new context, whose status TSF reports.
 fn a_protection_change_reaches_tsf_as_a_new_context(hwnd: HWND) {
-    let services = TextServices::activate(hwnd).expect("TSF activates");
+    let services = TextServices::activate(hwnd, apartment()).expect("TSF activates");
     let store = InMemoryTextStore::new("secret");
     store.set_commit_gate(CommitGate::new());
     services.focus_store(Some(erased(&store)));
@@ -442,7 +476,7 @@ fn a_protection_change_reaches_tsf_as_a_new_context(hwnd: HWND) {
 /// in the document that owns it before the document is replaced, so the
 /// store keeps no composing range that no context owns, and keeps its text.
 fn a_protection_change_ends_the_composition_first(hwnd: HWND) {
-    let services = TextServices::activate(hwnd).expect("TSF activates");
+    let services = TextServices::activate(hwnd, apartment()).expect("TSF activates");
     let store = composing_store();
     services.focus_store(Some(erased(&store)));
     let _composition = start_tsf_composition(&services, 2);
@@ -460,7 +494,7 @@ fn a_protection_change_ends_the_composition_first(hwnd: HWND) {
 /// The same when TSF refuses to end the composition (the store refuses its
 /// synchronous lock): the composition is committed in place instead.
 fn a_protection_change_whose_termination_is_refused_commits_in_place(hwnd: HWND) {
-    let services = TextServices::activate(hwnd).expect("TSF activates");
+    let services = TextServices::activate(hwnd, apartment()).expect("TSF activates");
     let store = FailingStore::new("ab");
     assert_eq!(
         project_ime_event(
@@ -522,7 +556,7 @@ impl tracing::Subscriber for PanicsOnDiagnostic {
 /// diagnostic: the retirement came first, so the host operation raises it,
 /// and TSF is still back on the empty document.
 fn a_teardown_whose_pop_diagnostic_panics_raises_the_first_failure(hwnd: HWND) {
-    let services = TextServices::activate(hwnd).expect("TSF activates");
+    let services = TextServices::activate(hwnd, apartment()).expect("TSF activates");
     let store = FailingStore::new("ab");
     services.focus_store(Some(store.clone()));
     let manager = match &*services.serving.borrow() {
@@ -580,7 +614,7 @@ fn associates_the_empty_document(services: &TextServices) -> bool {
 /// still taken away from TSF, and the host operation raises the failure
 /// once that is done.
 fn an_unfocus_whose_observer_retirement_panics_releases_the_document(hwnd: HWND) {
-    let services = TextServices::activate(hwnd).expect("TSF activates");
+    let services = TextServices::activate(hwnd, apartment()).expect("TSF activates");
     let store = FailingStore::new("ab");
     services.focus_store(Some(store.clone()));
     store.fail_retirement.set(true);
@@ -608,7 +642,7 @@ fn an_unfocus_whose_observer_retirement_panics_releases_the_document(hwnd: HWND)
 /// panics while the poisoned document is dropped as the call returns: no
 /// panic leaves the COM entry, and the document is still released.
 fn a_poisoned_document_whose_observer_retirement_panics_returns_to_tsf(hwnd: HWND) {
-    let services = TextServices::activate(hwnd).expect("TSF activates");
+    let services = TextServices::activate(hwnd, apartment()).expect("TSF activates");
     let store = FailingStore::new("ab");
     services.focus_store(Some(store.clone()));
     let tsf_store = document_store(&services);
@@ -655,6 +689,70 @@ fn the_document_status_follows_the_store_status() {
     }
 }
 
+/// A real window offers its own text services as its host, on its owner
+/// thread (ADR-0135 §3): the host serves a focused store through a TSF
+/// document of the window, and once the window is destroyed its
+/// `WM_DESTROY` has deactivated TSF, so the host the presentation still
+/// holds refuses every request.
+///
+/// Red-checks: have `text_store_host` answer `None` (no host is offered),
+/// or skip the deactivation in `WM_DESTROY` (the host still serves).
+#[test]
+fn a_window_offers_its_text_services_as_its_host() {
+    use crate::traits::{HostWindow as _, OwnerThreadToken};
+
+    let platform = super::super::WindowsPlatform::new().expect("platform");
+    let window = platform
+        .open_window(WindowOptions {
+            title: "flui window host".into(),
+            size: Size::new(200.0, 80.0),
+            visible: false,
+            ..Default::default()
+        })
+        .expect("window");
+    let win32 = window
+        .as_any()
+        .downcast_ref::<super::super::WindowsWindow>()
+        .expect("Win32 window");
+    let hwnd = win32.hwnd();
+    let host = win32
+        .text_store_host(OwnerThreadToken::new())
+        .expect("a real window offers its host");
+    let services = super::super::platform::with_window_context(hwnd, "test", |context| {
+        context.text_services.borrow().clone()
+    })
+    .flatten()
+    .expect("the window holds its text services");
+    assert!(
+        std::ptr::addr_eq(Rc::as_ptr(&host), Rc::as_ptr(&services)),
+        "the host is the window's own TSF connection"
+    );
+
+    let store = composing_store();
+    host.focus_store(Some(erased(&store)));
+    let document = associated_manager(&services);
+    assert!(
+        !same_object(&document, &services.empty),
+        "a focused store gets a TSF document of its own, associated with the window"
+    );
+    assert_eq!(
+        host.complete_composition(&erased(&store)),
+        Ok(CompositionEnd::Committed),
+        "TSF ends the composition it holds in the focused store (none here)"
+    );
+
+    window.close();
+    assert_eq!(
+        host.complete_composition(&erased(&store)),
+        Err(TextStoreHostError::Unavailable),
+        "the destroyed window's text services are shut down"
+    );
+    assert!(
+        matches!(*services.serving.borrow(), Serving::Shutdown),
+        "and its document released"
+    );
+}
+
 /// One row: its name, and the case run against the shared window.
 type Row = (&'static str, fn(HWND));
 
@@ -682,6 +780,10 @@ fn the_text_services_answer_a_completion_for_its_store() {
         (
             "no document",
             a_queued_completion_commits_in_place_without_a_document,
+        ),
+        (
+            "window destroyed inside a TSF call",
+            a_window_destroyed_inside_a_tsf_call_shuts_down_when_it_returns,
         ),
         (
             "focused store only",
@@ -728,4 +830,162 @@ fn the_text_services_answer_a_completion_for_its_store() {
     }
     window.close();
     assert!(failed.is_empty(), "failed cases: {failed:?}");
+}
+
+/// A subscriber that panics on the one event whose message is `.0`.
+struct PanicsOn(&'static str);
+
+impl tracing::Subscriber for PanicsOn {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn event(&self, event: &tracing::Event<'_>) {
+        struct Message(&'static str, bool);
+        impl tracing::field::Visit for Message {
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                self.1 |= field.name() == "message" && format!("{value:?}") == self.0;
+            }
+        }
+        let mut message = Message(self.0, false);
+        event.record(&mut message);
+        assert!(!message.1, "injected subscriber panic");
+    }
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+/// Whether a top-level window titled `title` exists in this process.
+fn window_titled(title: &str) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::FindWindowW;
+    let title = windows_core::HSTRING::from(title);
+    // SAFETY: `title` is a live NUL-terminated string for the call.
+    unsafe { FindWindowW(windows_core::PCWSTR::null(), &title) }.is_ok()
+}
+
+/// A subscriber that panics on the activation's own diagnostic neither
+/// orphans the half-built window nor fails the open: the diagnostic is
+/// contained, and the window comes up with its text services.
+///
+/// Red-check: activate before the wrapper owns the window and log outside
+/// containment (the panic unwinds out of `open_window` and leaves the HWND
+/// behind).
+#[test]
+fn a_panicking_activation_diagnostic_orphans_no_window() {
+    const TITLE: &str = "flui panicking TSF diagnostic";
+    let platform = super::super::WindowsPlatform::new().expect("platform");
+    let opened = tracing::subscriber::with_default(PanicsOn("ITfThreadMgr activated"), || {
+        catch_unwind(AssertUnwindSafe(|| {
+            platform.open_window(WindowOptions {
+                title: TITLE.into(),
+                size: Size::new(200.0, 80.0),
+                visible: false,
+                ..Default::default()
+            })
+        }))
+    });
+    match opened {
+        Ok(Ok(window)) => {
+            let hwnd = window
+                .as_any()
+                .downcast_ref::<super::super::WindowsWindow>()
+                .expect("Win32 window")
+                .hwnd();
+            assert!(
+                super::super::platform::with_window_context(hwnd, "test", |context| {
+                    context.text_services.borrow().is_some()
+                })
+                .unwrap_or(false),
+                "the window's text services are active"
+            );
+            window.close();
+        }
+        Ok(Err(error)) => panic!("the open failed: {error}"),
+        Err(_) => assert!(
+            !window_titled(TITLE),
+            "the panic left an orphaned native window behind"
+        ),
+    }
+    assert!(!window_titled(TITLE), "no native window is left");
+}
+
+/// A window destroyed while its text services activate (by a message the
+/// activation dispatched) fails the open with a typed error instead of
+/// returning a wrapper around the dead handle.
+///
+/// Red-check: return the wrapper whatever the activation left.
+#[test]
+fn a_window_destroyed_during_activation_fails_the_open() {
+    fn destroy(hwnd: HWND) {
+        // SAFETY: the owner thread, on the window being built.
+        let _ = unsafe { windows::Win32::UI::WindowsAndMessaging::DestroyWindow(hwnd) };
+    }
+    let platform = super::super::WindowsPlatform::new().expect("platform");
+    super::super::window::BEFORE_TSF_ACTIVATION.set(Some(destroy));
+    let opened = platform.open_window(WindowOptions {
+        title: "flui destroyed during activation".into(),
+        size: Size::new(200.0, 80.0),
+        visible: false,
+        ..Default::default()
+    });
+    super::super::window::BEFORE_TSF_ACTIVATION.set(None);
+    assert!(
+        matches!(opened, Err(crate::traits::OpenWindowError::Backend { .. })),
+        "the open fails with a typed error, got {:?}",
+        opened.map(|_| "a window")
+    );
+}
+
+/// A window that outlives its platform retires its text services inside the
+/// thread's COM apartment: the services keep the apartment entered, so the
+/// platform's drop does not leave COM under them, and the apartment ends
+/// once the window is gone.
+///
+/// Red-check: have `WindowsPlatform`'s drop leave COM itself (the services
+/// then shut down outside any apartment).
+#[test]
+fn a_window_dropped_after_its_platform_retires_tsf_inside_com() {
+    use super::super::com_apartment::thread_in_apartment;
+    use super::SHUTDOWN_IN_APARTMENT;
+
+    assert!(!thread_in_apartment(), "the test thread starts outside COM");
+    let platform = super::super::WindowsPlatform::new().expect("platform");
+    let window = platform
+        .open_window(WindowOptions {
+            title: "flui outlives its platform".into(),
+            size: Size::new(200.0, 80.0),
+            visible: false,
+            ..Default::default()
+        })
+        .expect("window");
+    let hwnd = window
+        .as_any()
+        .downcast_ref::<super::super::WindowsWindow>()
+        .expect("Win32 window")
+        .hwnd();
+    assert!(
+        super::super::platform::with_window_context(hwnd, "test", |context| {
+            context.text_services.borrow().is_some()
+        })
+        .unwrap_or(false),
+        "the window's text services are active"
+    );
+
+    SHUTDOWN_IN_APARTMENT.set(None);
+    drop(platform);
+    window.close();
+    drop(window);
+    assert_eq!(
+        SHUTDOWN_IN_APARTMENT.get(),
+        Some(true),
+        "the window's text services shut down inside the COM apartment"
+    );
+    assert!(
+        !thread_in_apartment(),
+        "the apartment ends with its last holder"
+    );
 }

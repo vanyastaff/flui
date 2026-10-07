@@ -332,6 +332,14 @@ mod native_windows {
             closed_window_retires_tracking,
         ),
         (
+            "closed_window_traces_its_native_destruction",
+            closed_window_traces_its_native_destruction,
+        ),
+        (
+            "reentrant_close_releases_the_surface_before_tracing_destruction",
+            reentrant_close_releases_the_surface_before_tracing_destruction,
+        ),
+        (
             "close_callback_releases_external_owner",
             close_callback_releases_external_owner,
         ),
@@ -1858,6 +1866,141 @@ mod native_windows {
                 "closed window retained by platform registry"
             );
         }
+    }
+
+    /// Records the `window_id` of every `native_window_destroyed` event on
+    /// the `flui.platform` target.
+    struct DestroyedWindows(Arc<Mutex<Vec<u64>>>);
+
+    impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for DestroyedWindows {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            #[derive(Default)]
+            struct Fields {
+                destroyed: bool,
+                window_id: Option<u64>,
+            }
+            impl tracing::field::Visit for Fields {
+                fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+                    if field.name() == "event" {
+                        self.destroyed = value == "native_window_destroyed";
+                    }
+                }
+                fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
+                    if field.name() == "window_id" {
+                        self.window_id = Some(value);
+                    }
+                }
+                fn record_debug(&mut self, _: &tracing::field::Field, _: &dyn std::fmt::Debug) {}
+            }
+            if event.metadata().target() != "flui.platform" {
+                return;
+            }
+            let mut fields = Fields::default();
+            event.record(&mut fields);
+            if fields.destroyed {
+                self.0
+                    .lock()
+                    .expect("recorder lock")
+                    .push(fields.window_id.expect("the event names its window"));
+            }
+        }
+    }
+
+    // Each case runs in a process of its own and the subscriber is scoped to
+    // this thread, so no other test can observe or feed the recorder.
+    fn closed_window_traces_its_native_destruction() {
+        use tracing_subscriber::layer::SubscriberExt as _;
+
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let window = open(&platform, true);
+        let sibling = open(&platform, true);
+        let destroyed = Arc::new(Mutex::new(Vec::new()));
+        let subscriber =
+            tracing_subscriber::registry().with(DestroyedWindows(Arc::clone(&destroyed)));
+        tracing::subscriber::with_default(subscriber, || window.close());
+        assert_eq!(
+            *destroyed.lock().expect("recorder lock"),
+            [window.id().0],
+            "closing one window traces its destruction, under its own identity, once"
+        );
+        sibling.close();
+    }
+
+    /// Records how many destructions were traced when it is dropped — the
+    /// stand-in for the renderer surface a frame or resize callback owns.
+    struct SurfaceRelease {
+        destroyed: Arc<Mutex<Vec<u64>>>,
+        traced_before_release: Arc<Mutex<Option<usize>>>,
+    }
+
+    impl Drop for SurfaceRelease {
+        fn drop(&mut self) {
+            let traced = self.destroyed.lock().expect("recorder lock").len();
+            *self.traced_before_release.lock().expect("release slot") = Some(traced);
+        }
+    }
+
+    /// A window closed from inside its own callback releases that callback
+    /// (and the surface it owns) before its native destruction is traced,
+    /// even though the release waits for the running callback to return.
+    #[expect(unsafe_code, reason = "actual owned hidden Win32 resize")]
+    fn reentrant_close_releases_the_surface_before_tracing_destruction() {
+        use tracing_subscriber::layer::SubscriberExt as _;
+
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let window = open(&platform, false);
+        let hwnd = window
+            .as_any()
+            .downcast_ref::<WindowsWindow>()
+            .expect("Win32 backend")
+            .hwnd();
+        let destroyed = Arc::new(Mutex::new(Vec::new()));
+        let traced_before_release = Arc::new(Mutex::new(None));
+        let surface = SurfaceRelease {
+            destroyed: Arc::clone(&destroyed),
+            traced_before_release: Arc::clone(&traced_before_release),
+        };
+        let weak = Arc::downgrade(&window);
+        window.on_resize(Box::new(move |_, _| {
+            let _owned = &surface;
+            if let Some(window) = weak.upgrade() {
+                window.close();
+            }
+        }));
+        let id = window.id().0;
+        drop(window);
+        let subscriber =
+            tracing_subscriber::registry().with(DestroyedWindows(Arc::clone(&destroyed)));
+        tracing::subscriber::with_default(subscriber, || {
+            // SAFETY: the platform still tracks this window, so the HWND is
+            // live on its creating thread; the resize carries no caller memory.
+            unsafe {
+                SetWindowPos(
+                    hwnd,
+                    None,
+                    0,
+                    0,
+                    200,
+                    150,
+                    SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
+                )
+            }
+            .expect("native resize");
+        });
+        assert_eq!(
+            *traced_before_release.lock().expect("release slot"),
+            Some(0),
+            "the surface-owning callback is released before destruction is traced"
+        );
+        assert_eq!(
+            *destroyed.lock().expect("recorder lock"),
+            [id],
+            "the reentrant close still traces its destruction once"
+        );
     }
 
     fn close_callback_releases_external_owner() {

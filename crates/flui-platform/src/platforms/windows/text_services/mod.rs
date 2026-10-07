@@ -69,6 +69,15 @@ use windows::Win32::{
 use windows_core::{IUnknown, Interface};
 
 use self::document::{DocumentState, TsfStore};
+use super::com_apartment::ComApartment;
+
+#[cfg(test)]
+thread_local! {
+    /// Whether this thread was inside its COM apartment when text services
+    /// last shut down; `None` before any shutdown. Read by the teardown-order
+    /// tests.
+    pub(super) static SHUTDOWN_IN_APARTMENT: Cell<Option<bool>> = const { Cell::new(None) };
+}
 
 /// A host operation waiting for the COM entry it arrived under to return.
 enum HostOp {
@@ -81,6 +90,8 @@ enum HostOp {
     /// Replace this document with a new one over the same store, so TSF
     /// reads its static status again (a field's protection changed).
     Reopen(Rc<DocumentState>),
+    /// The window is being destroyed: deactivate TSF for it.
+    Shutdown,
 }
 
 /// Commits in place, when dropped, the compositions TSF did not end while a
@@ -146,6 +157,10 @@ pub(super) struct TextServices {
     /// committed in place when it is raised or logged ([`Recovery`]).
     recovery: RefCell<Vec<Rc<dyn TextStore>>>,
     me: Weak<TextServices>,
+    /// Keeps the thread's COM apartment entered until the interfaces above
+    /// are released: declared last, so it drops after them, and it may be
+    /// the apartment's last holder when the platform went first.
+    _apartment: Rc<ComApartment>,
 }
 
 /// Resets `entry_depth` by one when a host operation's frame ends, unwinding
@@ -182,6 +197,24 @@ unsafe fn associate(
     }
 }
 
+/// Log a failure of application code a host operation reached, where it
+/// cannot be raised (a COM entry, the window procedure). The log runs a
+/// user-installed subscriber, so it is contained too: nothing unwinds, and
+/// the payload is retained whatever the subscriber does.
+fn log_failure(payload: Box<dyn Any + Send>) {
+    let mut calls = OwnerCalls::new();
+    calls.run(|| {
+        tracing::error!(
+            target: "flui_platform::tsf",
+            panic = crate::shared::panic_boundary::panic_payload_message(&*payload),
+            "application code a TSF document's teardown reached panicked"
+        );
+    });
+    retain_opaque_payload(payload);
+    // A failure the diagnostic raised is retained with the scope.
+    drop(calls);
+}
+
 /// Whether two COM pointers name the same object.
 fn same_object(a: &impl Interface, b: &impl Interface) -> bool {
     match (a.cast::<IUnknown>(), b.cast::<IUnknown>()) {
@@ -193,13 +226,17 @@ fn same_object(a: &impl Interface, b: &impl Interface) -> bool {
 impl TextServices {
     /// Activate TSF for `hwnd`'s thread and associate the empty document
     /// with the window. The thread must be the window's owner thread, inside
-    /// a single-threaded COM apartment (the platform establishes both).
+    /// the single-threaded COM apartment `apartment` holds, which these
+    /// services keep entered until they are dropped.
     ///
     /// # Errors
     ///
     /// The COM error of the step that failed; the caller falls back to the
     /// `WM_CHAR` path.
-    pub(super) fn activate(hwnd: HWND) -> windows_core::Result<Rc<Self>> {
+    pub(super) fn activate(
+        hwnd: HWND,
+        apartment: Rc<ComApartment>,
+    ) -> windows_core::Result<Rc<Self>> {
         // SAFETY: plain COM calls on this STA thread with no pointer
         // arguments of ours; each result is checked before the next step.
         let (thread_manager, client_id, empty) = unsafe {
@@ -219,8 +256,9 @@ impl TextServices {
             }
             (thread_manager, client_id, empty)
         };
-        tracing::debug!(target: "flui_platform::tsf", client_id, "ITfThreadMgr activated");
-        Ok(Rc::new_cyclic(|me| Self {
+        // Owned before anything runs application code: from here a failure
+        // drops the services, and their drop deactivates TSF.
+        let services = Rc::new_cyclic(|me| Self {
             hwnd,
             thread_manager,
             client_id,
@@ -232,20 +270,32 @@ impl TextServices {
             failure: RefCell::new(None),
             recovery: RefCell::new(Vec::new()),
             me: me.clone(),
-        }))
+            _apartment: apartment,
+        });
+        // The diagnostic runs a user-installed subscriber: contained, so it
+        // cannot unwind through the caller's half-built window.
+        if let Err(payload) = catch_unwind(|| {
+            tracing::debug!(target: "flui_platform::tsf", client_id, "ITfThreadMgr activated");
+        }) {
+            retain_opaque_payload(payload);
+        }
+        Ok(services)
     }
 
-    /// The client id `ITfThreadMgr::Activate` returned.
+    /// The client id `ITfThreadMgr::Activate` returned, for the probe.
+    #[cfg(test)]
     pub(super) fn client_id(&self) -> u32 {
         self.client_id
     }
 
-    /// The thread manager, for the window's own TSF queries.
+    /// The thread manager, for the probe's own TSF queries.
+    #[cfg(test)]
     pub(super) fn thread_manager(&self) -> &ITfThreadMgr {
         &self.thread_manager
     }
 
     /// Whether TSF's focus is on the focused field's document.
+    #[cfg(test)]
     pub(super) fn document_has_focus(&self) -> bool {
         let manager = match &*self.serving.borrow() {
             Serving::Field(document) => document.manager.clone(),
@@ -273,7 +323,10 @@ impl TextServices {
     fn focused_store(&self) -> Option<Rc<dyn TextStore>> {
         let queued = self.pending.borrow().iter().rev().find_map(|op| match op {
             HostOp::Focus(store) => Some(store.clone()),
-            HostOp::CompleteComposition(_) | HostOp::DropPoisoned(_) | HostOp::Reopen(_) => None,
+            HostOp::CompleteComposition(_)
+            | HostOp::DropPoisoned(_)
+            | HostOp::Reopen(_)
+            | HostOp::Shutdown => None,
         });
         queued.unwrap_or_else(|| self.focused_state().map(|state| Rc::clone(&state.store)))
     }
@@ -295,18 +348,32 @@ impl TextServices {
         if self.entry_depth.get() == 0
             && let Some((payload, recovery)) = self.take_failure()
         {
-            let mut calls = OwnerCalls::new();
-            calls.run(|| {
-                tracing::error!(
-                    target: "flui_platform::tsf",
-                    panic = crate::shared::panic_boundary::panic_payload_message(&*payload),
-                    "application code a TSF document's teardown reached panicked"
-                );
-            });
-            retain_opaque_payload(payload);
+            log_failure(payload);
             drop(recovery);
-            // A failure the diagnostic raised is retained with the scope.
-            drop(calls);
+        }
+    }
+
+    /// Deactivate the window's text services as its `WM_DESTROY` runs, after
+    /// the window's close callbacks (the presentation's own close, which
+    /// unfocused its field) and before its context is retired, and release
+    /// the window's hold on them.
+    ///
+    /// Inside a TSF call into a store (application code destroying the window
+    /// from a grant), the shutdown is queued like any host operation: the
+    /// call's own entry keeps the services alive and shuts them down when it
+    /// returns. The window procedure must not unwind, so a failure of the
+    /// application code the teardown reaches is logged, not raised, the log
+    /// contained as [`Self::leave`]'s is; after a failure the services are
+    /// retained, not destroyed (ADR-0127).
+    pub(super) fn retire_with_window(services: Rc<Self>) {
+        let mut calls = OwnerCalls::new();
+        calls.run(|| {
+            services.run_host_op(HostOp::Shutdown);
+            services.raise_failure();
+        });
+        calls.retire(services);
+        if let Some(payload) = calls.into_failure() {
+            log_failure(payload);
         }
     }
 
@@ -464,6 +531,7 @@ impl TextServices {
                     self.shutdown();
                 }
             }
+            HostOp::Shutdown => self.shutdown(),
         }
     }
 
@@ -686,6 +754,8 @@ impl TextServices {
             Serving::Field(document) => self.release_document(document),
             Serving::Nothing => {}
         }
+        #[cfg(test)]
+        SHUTDOWN_IN_APARTMENT.set(Some(super::com_apartment::thread_in_apartment()));
         // SAFETY: plain COM calls on this STA thread.
         let deactivated = unsafe {
             let _ = associate(&self.thread_manager, self.hwnd, None);

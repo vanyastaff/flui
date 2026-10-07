@@ -9,7 +9,8 @@
 //! the process-wide form is a fallback the host has not needed), and the
 //! previous profile is restored. The IME is switched on with the IME-on key
 //! (`VK_IME_ON`) sent to the probe window. Keys are sent only while the probe
-//! window is the foreground window. Throwaway: the window wiring replaces it.
+//! window is the foreground window. The probe types through the host the
+//! window itself offers (ADR-0135 §3), into a store of its own.
 
 use std::cell::Cell;
 use std::io::Write as _;
@@ -56,7 +57,6 @@ use windows_core::{BOOL, GUID, PWSTR};
 use super::TextServices;
 use crate::shared::text_geometry::range_rect_to_screen;
 use crate::traits::{Platform, WindowOptions};
-use flui_platform_api::text_store::TextStoreHost as _;
 
 /// Microsoft IME ja-JP: its TIP class and profile.
 const MS_IME_JA: (GUID, GUID) = (
@@ -439,13 +439,29 @@ fn text_services_probe() {
     late.set_commit_gate(gate.clone());
     pump(300, &probe);
 
-    // (1) activation and focus.
-    let services = TextServices::activate(hwnd).expect("(1) ITfThreadMgr::Activate");
+    // (1) activation and focus: the window activated TSF as it was created
+    // and offers it as its text-store host, as the presentation reads it.
+    let host = {
+        use crate::traits::{HostWindow as _, OwnerThreadToken};
+        window
+            .as_any()
+            .downcast_ref::<super::super::WindowsWindow>()
+            .expect("Win32 window")
+            .text_store_host(OwnerThreadToken::new())
+            .expect("(1) the window offers its text-store host")
+    };
+    let services: Rc<TextServices> =
+        super::super::platform::with_window_context(hwnd, "probe", |context| {
+            context.text_services.borrow().clone()
+        })
+        .flatten()
+        .expect("(1) the window holds its text services");
     println!(
-        "PROBE (1) Activate: S_OK, TfClientId = {:#x}",
+        "PROBE (1) the window's host is its TSF connection: {}; TfClientId = {:#x}",
+        std::ptr::addr_eq(Rc::as_ptr(&host), Rc::as_ptr(&services)),
         services.client_id()
     );
-    services.focus_store(Some(Rc::clone(late) as Rc<dyn TextStore>));
+    host.focus_store(Some(Rc::clone(late) as Rc<dyn TextStore>));
     println!(
         "PROBE (1) after focus_store: ITfThreadMgr::GetFocus is the field document = {}",
         services.document_has_focus()
@@ -555,7 +571,7 @@ fn text_services_probe() {
     println!("PROBE ja-JP profile for this thread: {ja:?}");
     if ja.is_err() {
         println!("PROBE SKIP: Microsoft IME ja-JP is not installed; points (2)-(7) need it");
-        services.shutdown();
+        window.close();
         return;
     }
     let mut active = TF_INPUTPROCESSORPROFILE::default();
@@ -633,13 +649,13 @@ fn text_services_probe() {
     type_keys(hwnd, "toukyou", &probe);
     println!(
         "PROBE (7) open gate: {:?}; store {:?}, composition {:?}",
-        services.complete_composition(&late_store),
+        host.complete_composition(&late_store),
         late.inner.text(),
         late.inner.composition()
     );
     type_keys(hwnd, "kyou", &probe);
     gate.set_open(false);
-    let shut = services.complete_composition(&late_store);
+    let shut = host.complete_composition(&late_store);
     println!(
         "PROBE (7) shut gate: {shut:?}; store {:?}, composition {:?}",
         late.inner.text(),
@@ -709,9 +725,12 @@ fn text_services_probe() {
         previous.hkl,
     );
     println!("PROBE previous profile restored: {restored:?}");
-    services.shutdown();
     window.close();
     pump(100, &probe);
+    println!(
+        "PROBE (8) after the window's WM_DESTROY the host answers {:?}",
+        host.complete_composition(&late_store)
+    );
     println!(
         "PROBE (8) no abort. summary: control {control} (want false), first keystroke {first_key}, after Space {after_space}, shifted {shifted} (want false)"
     );
