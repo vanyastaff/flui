@@ -7,7 +7,7 @@ use std::{
     rc::Rc,
 };
 
-use flui_interaction::events::ScrollEventData;
+use flui_interaction::events::ScrollEvent;
 use flui_interaction::routing::{EventPropagation, PanZoomTarget, ScrollTarget};
 use flui_interaction::{
     GestureRecognizer, PanZoomEvent, PanZoomPhase, PointerDispatch, PointerTarget, RecognizerSet,
