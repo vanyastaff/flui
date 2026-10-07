@@ -268,10 +268,22 @@ fn plane_unprojection_preserves_tiny_affine_delivery() {
         Some([(1.0, 2.0), (2.0, 3.0), (3.0, 4.0)]));
 }
 
+fn plane_unprojection_preserves_admitted_anisotropic_delivery() {
+    let transform = Matrix4::scaling(1e-200, 1.0, 1.0);
+    assert!(transform.try_inverse().is_some(), "the existing inverse contract admits this transform");
+    perspective_delivery(transform,
+        [(1e-200, 2.0), (2e-200, 3.0), (3e-200, 4.0)],
+        Some([(1.0, 2.0), (2.0, 3.0), (3.0, 4.0)]));
+}
+
 #[test]
 fn hit_test_transform_admission() {
     let mut failures = Vec::new();
     for (name, case) in [
+        (
+            "admitted anisotropic sample families",
+            plane_unprojection_preserves_admitted_anisotropic_delivery as fn(),
+        ),
         (
             "tiny affine sample families",
             plane_unprojection_preserves_tiny_affine_delivery as fn(),
