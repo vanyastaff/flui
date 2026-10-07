@@ -25,12 +25,72 @@ fn tap_builder_lifecycle_contract() {
             cancel_during_up_suppresses_tap,
         ),
         ("cancel_reuses_double_tap", cancel_reuses_double_tap),
+        (
+            "replacing_builder_callback_preserves_retirement_failure",
+            replacing_builder_callback_preserves_retirement_failure,
+        ),
     ] {
         if let Err(payload) = std::panic::catch_unwind(row) {
             eprintln!("tap contract `{name}` failed");
             std::panic::resume_unwind(payload);
         }
     }
+}
+
+struct BuilderCapture {
+    dropped: Rc<Cell<u32>>,
+    panic_on_drop: bool,
+}
+impl Drop for BuilderCapture {
+    fn drop(&mut self) {
+        self.dropped.set(self.dropped.get() + 1);
+        assert!(!self.panic_on_drop, "old callback drop");
+    }
+}
+
+fn replacing_builder_callback_preserves_retirement_failure() {
+    let arena = GestureArena::new();
+    let old_drops = Rc::new(Cell::new(0));
+    let incoming_drops = Rc::new(Cell::new(0));
+    let old = BuilderCapture {
+        dropped: old_drops.clone(),
+        panic_on_drop: true,
+    };
+    let incoming = BuilderCapture {
+        dropped: incoming_drops.clone(),
+        panic_on_drop: false,
+    };
+    let builder = TapGestureRecognizer::builder(arena.clone()).on_tap(move |_| {
+        std::hint::black_box(&old);
+    });
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        builder.on_tap(move |_| {
+            std::hint::black_box(&incoming);
+        });
+    }))
+    .expect_err("old capture failure must resume");
+    assert_eq!(failure.downcast_ref::<&str>(), Some(&"old callback drop"));
+    assert_eq!(old_drops.get(), 1);
+    assert_eq!(
+        incoming_drops.get(),
+        0,
+        "incoming capture must be retained after failure"
+    );
+
+    let healthy_drops = Rc::new(Cell::new(0));
+    let healthy = BuilderCapture {
+        dropped: healthy_drops.clone(),
+        panic_on_drop: false,
+    };
+    let fresh = TapGestureRecognizer::builder(arena).on_tap(move |_| {
+        std::hint::black_box(&healthy);
+    });
+    drop(fresh);
+    assert_eq!(
+        healthy_drops.get(),
+        1,
+        "fresh healthy builder retires normally"
+    );
 }
 
 fn panicking_cancel_callback_cannot_strand_tap_tracking() {
