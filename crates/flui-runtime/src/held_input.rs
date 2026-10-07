@@ -206,6 +206,89 @@ impl HeldPointerQueue {
         debug_assert!(self.total_len() <= HELD_POINTER_CAPACITY);
     }
 
+    /// Drop every held contact sequence that is still open: a Down with no
+    /// Up or Cancel after it, together with everything its pointer queued
+    /// since. Complete sequences, hover and other pointers' input stay.
+    ///
+    /// Called when the presentation's pointer sequences are cancelled (focus
+    /// loss, hidden, paused). An open epoch's terminal is no longer coming
+    /// to this window, so replaying its Down at the next commit would open a
+    /// route nothing closes. Its Down never reached a widget, so dropping it
+    /// delivers nothing rather than a Down and Cancel pair for a gesture the
+    /// user already abandoned. During a replay, an epoch the batch began is
+    /// discarded from the batch the same way a superseding Down discards it.
+    pub fn drop_open_sequences(&mut self) {
+        let mut candidates: Vec<PointerId> = Vec::new();
+        let queued_downs = self
+            .events
+            .iter()
+            .filter(|event| matches!(event, PointerEvent::Down(_)))
+            .map(flui_interaction::events::extract_pointer_id);
+        for pointer_id in self
+            .replay_tail_open_pointers
+            .iter()
+            .chain(&self.replay_dispatched_open_pointers)
+            .copied()
+            .chain(queued_downs)
+        {
+            if !candidates.contains(&pointer_id) {
+                candidates.push(pointer_id);
+            }
+        }
+        let mut dropped = 0usize;
+        let mut sequences = 0usize;
+        for pointer_id in candidates {
+            if !self.has_open_epoch(pointer_id) {
+                continue;
+            }
+            let queued_start = self.events.iter().rposition(|event| {
+                matches!(event, PointerEvent::Down(_))
+                    && flui_interaction::events::extract_pointer_id(event) == pointer_id
+            });
+            let start = queued_start.unwrap_or(0);
+            let before = self.events.len();
+            self.events = std::mem::take(&mut self.events)
+                .into_iter()
+                .enumerate()
+                .filter_map(|(index, event)| {
+                    let belongs_to_open_epoch = index >= start
+                        && flui_interaction::events::extract_pointer_id(&event) == pointer_id;
+                    (!belongs_to_open_epoch).then_some(event)
+                })
+                .collect();
+            dropped = dropped.saturating_add(before.saturating_sub(self.events.len()));
+            sequences = sequences.saturating_add(1);
+            // An epoch that began inside the detached batch is discarded
+            // from it before the replay exposes another event.
+            if self.replay_in_flight && queued_start.is_none() {
+                let supersession = if self.replay_tail_open_pointers.contains(&pointer_id) {
+                    ReplaySupersession::FinalUndispatched(pointer_id)
+                } else {
+                    ReplaySupersession::DispatchedOpen(pointer_id)
+                };
+                if !self
+                    .replay_supersessions
+                    .iter()
+                    .any(|queued| queued.pointer_id() == pointer_id)
+                {
+                    self.replay_supersessions.push(supersession);
+                }
+            }
+            // The epoch is closed from here on: contact input arriving for
+            // it before the next Down is refused at admission.
+            self.replay_tail_open_pointers
+                .retain(|open| *open != pointer_id);
+            self.replay_dispatched_open_pointers
+                .retain(|open| *open != pointer_id);
+        }
+        self.retain_recorded_active_route_terminals();
+        self.counters.dropped_events = self.counters.dropped_events.saturating_add(dropped);
+        self.counters.dropped_sequences = self.counters.dropped_sequences.saturating_add(sequences);
+        if sequences != 0 {
+            self.trace_counts("dropped open held pointer sequences", sequences);
+        }
+    }
+
     /// Events held, counting those handed out for an in-flight replay.
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
@@ -1129,6 +1212,35 @@ mod tests {
         assert!(drain(&queue).is_empty());
     }
 
+    fn dropping_open_sequences_mid_replay_keeps_only_complete_epochs() {
+        let queue = queue();
+        let dispatched = pointer(2);
+        let complete = pointer(3);
+        let undispatched = pointer(4);
+        queue.borrow_mut().append(down(dispatched));
+        queue.borrow_mut().append(contact_move(dispatched, 1.0));
+        queue.borrow_mut().append(down(complete));
+        queue.borrow_mut().append(up(complete));
+        queue.borrow_mut().append(down(undispatched));
+
+        let mut replay = HeldPointerReplay::begin(&queue).expect("no replay is already in flight");
+        assert!(matches!(replay.next(), Some(PointerEvent::Down(_))));
+        queue.borrow_mut().drop_open_sequences();
+        // A contact move for the abandoned epoch is refused from here on.
+        queue.borrow_mut().append(contact_move(dispatched, 2.0));
+        let rest: Vec<_> = replay.by_ref().collect();
+        replay.complete();
+
+        let ids: Vec<_> = rest
+            .iter()
+            .map(flui_interaction::events::extract_pointer_id)
+            .collect();
+        assert_eq!(ids, vec![complete, complete]);
+        assert!(matches!(rest[0], PointerEvent::Down(_)));
+        assert!(matches!(rest[1], PointerEvent::Up(_)));
+        assert!(queue.borrow().is_empty());
+    }
+
     #[test]
     fn held_input_reentry_matrix() {
         crate::table_test::run_table(
@@ -1150,6 +1262,10 @@ mod tests {
                 (
                     "clear_during_replay_prevents_drop_from_restoring_the_detached_suffix",
                     clear_during_replay_prevents_drop_from_restoring_the_detached_suffix as fn(),
+                ),
+                (
+                    "dropping_open_sequences_mid_replay_keeps_only_complete_epochs",
+                    dropping_open_sequences_mid_replay_keeps_only_complete_epochs as fn(),
                 ),
             ],
         );

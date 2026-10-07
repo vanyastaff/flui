@@ -32,12 +32,7 @@ use windows::{
                 MsgWaitForMultipleObjectsEx, PM_NOREMOVE, PM_REMOVE, PeekMessageW, PostMessageW,
                 PostQuitMessage, QS_ALLINPUT, RegisterClassW, SC_KEYMENU, SW_SHOWNORMAL,
                 SWP_NOACTIVATE, SWP_NOZORDER, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos,
-                TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CHAR, WM_CLOSE, WM_CREATE,
-                WM_DEADCHAR, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_INPUTLANGCHANGE,
-                WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
-                WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_PAINT,
-                WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETTINGCHANGE,
-                WM_SHOWWINDOW, WM_SIZE, WM_SYSCHAR, WM_SYSCOMMAND, WM_SYSKEYDOWN, WM_SYSKEYUP,
+                TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CHAR, WM_CLOSE, WM_CREATE, WM_DEADCHAR, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_INPUTLANGCHANGE, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_PAINT, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETTINGCHANGE, WM_CAPTURECHANGED, WM_SHOWWINDOW, WM_SIZE, WM_SYSCHAR, WM_SYSCOMMAND, WM_SYSKEYDOWN, WM_SYSKEYUP,
                 WNDCLASSW,
             },
         },
@@ -1536,14 +1531,27 @@ impl WindowsPlatform {
                     DefWindowProcW(hwnd, msg, wparam, lparam)
                 }
 
-                WM_LBUTTONDOWN => {
+                WM_LBUTTONDOWN | WM_LBUTTONUP | WM_RBUTTONDOWN | WM_RBUTTONUP | WM_MBUTTONDOWN
+                | WM_MBUTTONUP => {
+                    use super::events::{
+                        button_message, capture_on_press, mouse_button_event, release_capture_after,
+                    };
+                    let (button, is_down) =
+                        button_message(msg).expect("BUG: the arm matches only button messages");
+                    // The capture follows the native button state even with
+                    // no context to deliver to, and is settled before user
+                    // code runs: a release outside the client area must
+                    // still reach this window, and the sequence's own
+                    // release must not read as a stolen capture.
+                    if is_down {
+                        capture_on_press(hwnd);
+                    } else {
+                        release_capture_after(hwnd, wparam);
+                    }
                     if let Some(ctx) = ctx {
-                        use ui_events::pointer::PointerButton;
-
-                        use super::events::mouse_button_event;
                         let event = mouse_button_event(
-                            PointerButton::Primary,
-                            true,
+                            button,
+                            is_down,
                             wparam,
                             lparam,
                             ctx.scale_factor.get(),
@@ -1553,87 +1561,14 @@ impl WindowsPlatform {
                     LRESULT(0)
                 }
 
-                WM_RBUTTONDOWN => {
-                    if let Some(ctx) = ctx {
-                        use ui_events::pointer::PointerButton;
-
-                        use super::events::mouse_button_event;
-                        let event = mouse_button_event(
-                            PointerButton::Secondary,
-                            true,
-                            wparam,
-                            lparam,
-                            ctx.scale_factor.get(),
-                        );
-                        ctx.callbacks.dispatch_input(event);
-                    }
-                    LRESULT(0)
-                }
-
-                WM_MBUTTONDOWN => {
-                    if let Some(ctx) = ctx {
-                        use ui_events::pointer::PointerButton;
-
-                        use super::events::mouse_button_event;
-                        let event = mouse_button_event(
-                            PointerButton::Auxiliary,
-                            true,
-                            wparam,
-                            lparam,
-                            ctx.scale_factor.get(),
-                        );
-                        ctx.callbacks.dispatch_input(event);
-                    }
-                    LRESULT(0)
-                }
-
-                WM_LBUTTONUP => {
-                    if let Some(ctx) = ctx {
-                        use ui_events::pointer::PointerButton;
-
-                        use super::events::mouse_button_event;
-                        let event = mouse_button_event(
-                            PointerButton::Primary,
-                            false,
-                            wparam,
-                            lparam,
-                            ctx.scale_factor.get(),
-                        );
-                        ctx.callbacks.dispatch_input(event);
-                    }
-                    LRESULT(0)
-                }
-
-                WM_RBUTTONUP => {
-                    if let Some(ctx) = ctx {
-                        use ui_events::pointer::PointerButton;
-
-                        use super::events::mouse_button_event;
-                        let event = mouse_button_event(
-                            PointerButton::Secondary,
-                            false,
-                            wparam,
-                            lparam,
-                            ctx.scale_factor.get(),
-                        );
-                        ctx.callbacks.dispatch_input(event);
-                    }
-                    LRESULT(0)
-                }
-
-                WM_MBUTTONUP => {
-                    if let Some(ctx) = ctx {
-                        use ui_events::pointer::PointerButton;
-
-                        use super::events::mouse_button_event;
-                        let event = mouse_button_event(
-                            PointerButton::Auxiliary,
-                            false,
-                            wparam,
-                            lparam,
-                            ctx.scale_factor.get(),
-                        );
-                        ctx.callbacks.dispatch_input(event);
+                WM_CAPTURECHANGED => {
+                    // Another window, a modal loop or `WM_CANCELMODE` took
+                    // the capture mid-press: this window will never see the
+                    // sequence's release, so end it here.
+                    if let Some(ctx) = ctx
+                        && let Some(cancel) = super::events::capture_changed_event(hwnd, lparam)
+                    {
+                        ctx.callbacks.dispatch_input(cancel);
                     }
                     LRESULT(0)
                 }
@@ -1675,7 +1610,7 @@ impl WindowsPlatform {
                         }
 
                         // Track modifiers (T035)
-                        ctx.modifiers.set(current_modifiers());
+                        ctx.modifiers.set(super::events::message_modifiers());
 
                         // Merge the fully-translated character(s) for this
                         // keystroke into the keydown. The message loop runs
@@ -1729,7 +1664,7 @@ impl WindowsPlatform {
                 WM_KEYUP | WM_SYSKEYUP => {
                     if let Some(ctx) = ctx {
                         // Track modifiers (T035)
-                        ctx.modifiers.set(current_modifiers());
+                        ctx.modifiers.set(super::events::message_modifiers());
 
                         use super::events::key_up_event;
                         let event = key_up_event(wparam, lparam);
@@ -2717,35 +2652,6 @@ impl Drop for WindowsPlatform {
 // PlatformHandlers is imported from crate::shared
 
 // ==================== Helper Functions ====================
-
-/// Read current keyboard modifier state from Win32 (T035)
-fn current_modifiers() -> keyboard_types::Modifiers {
-    use windows::Win32::UI::Input::KeyboardAndMouse::{
-        GetKeyState, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
-    };
-
-    // SAFETY: `GetKeyState` takes a plain `i32` virtual-key code and returns
-    // a plain `i16`/`u16` bit pattern — no pointer arguments, no invariant
-    // beyond the ordinary FFI call.
-    unsafe {
-        let mut mods = keyboard_types::Modifiers::empty();
-        if (GetKeyState(VK_SHIFT.0 as i32) as u16 & 0x8000) != 0 {
-            mods |= keyboard_types::Modifiers::SHIFT;
-        }
-        if (GetKeyState(VK_CONTROL.0 as i32) as u16 & 0x8000) != 0 {
-            mods |= keyboard_types::Modifiers::CONTROL;
-        }
-        if (GetKeyState(VK_MENU.0 as i32) as u16 & 0x8000) != 0 {
-            mods |= keyboard_types::Modifiers::ALT;
-        }
-        if (GetKeyState(VK_LWIN.0 as i32) as u16 & 0x8000) != 0
-            || (GetKeyState(VK_RWIN.0 as i32) as u16 & 0x8000) != 0
-        {
-            mods |= keyboard_types::Modifiers::META;
-        }
-        mods
-    }
-}
 
 /// Drain the `WM_CHAR` burst `TranslateMessage` queued for the keydown
 /// currently being handled, and decode it into typeable text.

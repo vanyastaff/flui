@@ -25,7 +25,9 @@
 //! extraneous events, so that is correct but not free. Incremental diffing is a
 //! later optimisation and needs its own oracle; it is not smuggled in here.
 
-use accesskit::{Node, NodeId, Rect, Role, TextDirection, Toggled, TreeId, TreeInfo, TreeUpdate};
+use accesskit::{
+    Affine, Node, NodeId, Rect, Role, TextDirection, Toggled, TreeId, TreeInfo, TreeUpdate,
+};
 
 use crate::action::SemanticsAction;
 use crate::flags::SemanticsFlag;
@@ -600,9 +602,29 @@ pub(crate) fn to_node(data: &SemanticsNodeData) -> Node {
 /// reader walks, and navigation from the window stopped at its first child —
 /// found through `cargo xtask device windows-input`. The AppKit adapter reads
 /// a `Window` root the same way (`accesskit_macos`, `NodeWrapper::title`).
+///
+/// The root also carries the window's device pixel ratio as a scale
+/// transform. FLUI's tree stays in logical pixels, but every AccessKit
+/// adapter reads the transformed bounds as physical pixels relative to the
+/// window's client area (`accesskit::Node::transform`; the Windows adapter
+/// adds them to the client origin as they are, the AppKit adapter divides
+/// them by `backingScaleFactor`). One transform on the root scales every
+/// descendant, so no rect is scaled twice and a ratio change republishes
+/// only the root.
 #[must_use]
-pub(crate) fn to_published_node(data: &SemanticsNodeData, is_root: bool) -> Node {
+pub(crate) fn to_published_node(
+    data: &SemanticsNodeData,
+    is_root: bool,
+    device_pixel_ratio: f64,
+) -> Node {
     let mut node = to_node(data);
+    #[expect(
+        clippy::float_cmp,
+        reason = "exactly 1.0 is the identity AccessKit asks to leave unset"
+    )]
+    if is_root && device_pixel_ratio != 1.0 {
+        node.set_transform(Affine::scale(device_pixel_ratio));
+    }
     // Only a root no role reached: an explicit role AccessKit can only
     // express as a container (`DragHandle`, `HotKey`) keeps that container.
     if is_root && data.role == SemanticsRole::None && node.role() == Role::GenericContainer {
@@ -677,10 +699,26 @@ fn focused_node(tree: &crate::tree::SemanticsTree) -> Option<flui_foundation::Se
 ///
 /// Returns `None` for a tree whose root is missing or unaddressable, which
 /// cannot produce an applicable update.
+///
+/// # Units
+///
+/// The update is in logical pixels (a device pixel ratio of 1). A platform
+/// adapter needs physical pixels: publish through a
+/// [`SemanticsOwner`](crate::owner::SemanticsOwner) given the window's ratio
+/// ([`SemanticsOwner::set_device_pixel_ratio`](crate::owner::SemanticsOwner::set_device_pixel_ratio)).
 #[must_use]
 pub fn tree_to_update(
     tree: &crate::tree::SemanticsTree,
     focus: Option<flui_foundation::SemanticsId>,
+) -> Option<TreeUpdate> {
+    tree_to_scaled_update(tree, focus, 1.0)
+}
+
+/// [`tree_to_update`] with the root scaled from logical to physical pixels.
+pub(crate) fn tree_to_scaled_update(
+    tree: &crate::tree::SemanticsTree,
+    focus: Option<flui_foundation::SemanticsId>,
+    device_pixel_ratio: f64,
 ) -> Option<TreeUpdate> {
     let stable_id = |id: flui_foundation::SemanticsId| -> Option<NodeId> {
         tree.get(id)
@@ -699,7 +737,10 @@ pub fn tree_to_update(
             // hand — no second arena lookup per node on the publish path.
             let data = tree.node_data_of(node)?;
             let node_id = NodeId(data.id?.as_u64());
-            Some((node_id, to_published_node(&data, node_id == root_node_id)))
+            Some((
+                node_id,
+                to_published_node(&data, node_id == root_node_id, device_pixel_ratio),
+            ))
         })
         .collect();
 
