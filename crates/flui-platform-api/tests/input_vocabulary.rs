@@ -279,7 +279,7 @@ fn coalescing_preserves_the_latest_dispatch_and_real_history() {
         sampled_at(20),
     )
     .with_modifiers(Modifiers::SHIFT)
-    .with_coalesced(vec![old_current, sampled_at(18)])
+        .with_coalesced(vec![old_current, changed_sensor, sampled_at(18)])
     .with_predicted(vec![sampled_at(25)]);
     let accepted_older = older.clone();
     newer.try_coalesce(&older).expect("same pointer metadata");
