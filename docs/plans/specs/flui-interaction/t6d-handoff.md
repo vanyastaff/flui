@@ -43,7 +43,7 @@ A further list of non-test type and shape changes (N1-N9) follows.
   - This is the same shape as `ResolvedHitRoute::invoke` (interaction_lane.rs:599-640).
 - **Coordination:** focus-keyboard T3 also edits these files (tasks.md, "occupied files").
 
-### H2. Queued accepted focus requests are discarded on a listener panic (DECISION)
+### H2. Queued accepted focus requests survive a listener panic
 - **Ignore text:** `contract: a focus request accepted during notification is applied or reported refused after a listener panic`
 - **Code:**
   - focus.rs:120-137: `NotificationDepthGuard::drop` clears `pending_focus_transitions` while panicking.
@@ -53,7 +53,7 @@ A further list of non-test type and shape changes (N1-N9) follows.
   2. `L1` then panics.
   3. After the catch, `primary_focus() != B`.
 - **Conflict:** AGENTS "Accepted work must remain deliverable".
-- **Owner choice:** either drain the queue after containment, or make a request queued during notification return a pending result instead of `true`.
+- **Decision, 2026-10-07:** preserve the existing admission contract. Deliver the committed observer round and drain accepted requests in FIFO order before resuming the first failure. A later callback failure cannot replace the first payload or erase accepted work. Keep the documented drain budget; report refusal when eligibility changes. The owner delegated this choice to the project's established accepted-work rule.
 
 ### H3. Recovery from a panic must not abort on reentry
 - **Ignore text:** `contract: a reentrant drop during focus-panic recovery is retained, not a double panic`
