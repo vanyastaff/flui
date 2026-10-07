@@ -7,7 +7,7 @@ use std::task::{Poll, Waker};
 
 fn retained_waker_lifecycle(eager: bool, complete: bool) {
     let scheduler = UpdateScheduler::new();
-    let frame = OwnerFrame::new(&scheduler);
+    let frame = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
     let driver = frame.async_driver();
     let requests = Arc::new(AtomicUsize::new(0));
     let hook_requests = Arc::clone(&requests);
@@ -110,7 +110,7 @@ fn pending_waker_does_not_retain_driver() {
         }
     }
     let scheduler = UpdateScheduler::new();
-    let frame = OwnerFrame::new(&scheduler);
+    let frame = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
     let driver = frame.async_driver();
     let retired = Arc::new(AtomicBool::new(false));
     let guard = Retired(Arc::clone(&retired));

@@ -187,7 +187,7 @@ impl DataTransferSource for MockSource {
 fn mock_source_drives_all_seven_stages_through_the_async_driver() {
     let source = Arc::new(MockSource::new());
     let scheduler = UpdateScheduler::new();
-    let owner_frame = OwnerFrame::new(&scheduler);
+    let owner_frame = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
     let driver = owner_frame.async_driver();
     let frames = Arc::new(AtomicUsize::new(0));
     let frames_for_hook = Arc::clone(&frames);

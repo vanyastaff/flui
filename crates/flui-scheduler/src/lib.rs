@@ -87,7 +87,7 @@
 //! let scheduler = UpdateScheduler::new();
 //! // The owner thread's frame state: owner-local post-frame callbacks and
 //! // async tasks. A realm owns one; every frame entry point takes it.
-//! let owner = OwnerFrame::new(&scheduler);
+//! let owner = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
 //!
 //! // Schedule a one-time frame callback (animation tick)
 //! scheduler.schedule_frame_callback(Box::new(|vsync_time| {
@@ -186,7 +186,7 @@ pub use frame_telemetry::{
     MAX_COALESCED_INPUT_EPOCHS, PresentOutcome,
 };
 pub use post_frame::{
-    LocalPostFrameHandle, LocalPostFrameScheduleError, OwnerFrame, PostFrameHandle,
+    LocalPostFrameHandle, LocalPostFrameScheduleError, OwnerFrame, OwnerFrameError, PostFrameHandle,
 };
 /// The instant type the frame clock is stamped with. `std::time::Instant` on
 /// native, a `performance.now()` shim on wasm32 — re-exported so a binding can

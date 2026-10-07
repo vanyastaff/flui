@@ -302,7 +302,8 @@ impl HeadlessBinding {
         let clock = ManualClock::new();
         let gestures = GestureBinding::with_clock(Arc::new(clock.clone()));
         let scheduler = UpdateScheduler::new();
-        let owner_frame = OwnerFrame::new(&scheduler);
+        let owner_frame =
+            OwnerFrame::new(&scheduler).expect("BUG: a fresh scheduler has no owner frame");
         let interaction_lane = InteractionLane::try_new()?;
         Ok(Self {
             lifecycle: flui_view::__runtime::LifecycleSource::new(),

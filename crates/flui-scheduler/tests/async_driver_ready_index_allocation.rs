@@ -89,7 +89,7 @@ fn poll_ready_costs_zero_extra_allocations_once_warm() {
     // (a) R=0 at N in {0, 100_000}: dormant tasks must never be scanned.
     for dormant in [0usize, 100_000] {
         let scheduler = UpdateScheduler::new();
-        let frame = OwnerFrame::new(&scheduler);
+        let frame = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
         let driver = frame.async_driver();
         driver.set_request_frame(|| {});
         let mut tokens = Vec::with_capacity(dormant);
@@ -132,7 +132,7 @@ fn poll_ready_costs_zero_extra_allocations_once_warm() {
     const STEADY_PUMPS: usize = 4;
 
     let scheduler = UpdateScheduler::new();
-    let frame = OwnerFrame::new(&scheduler);
+    let frame = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
     let driver = frame.async_driver();
     driver.set_request_frame(|| {});
     let mut tokens = Vec::with_capacity(READY_TASKS);

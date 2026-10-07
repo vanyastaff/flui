@@ -93,7 +93,7 @@ fn assert_next_task(frame: &OwnerFrame) {
 
 fn poll_failure(eager: bool, bombs: usize) {
     let scheduler = UpdateScheduler::new();
-    let frame = OwnerFrame::new(&scheduler);
+    let frame = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
     let driver = frame.async_driver();
     let drops = Arc::new(AtomicUsize::new(0));
     let observed = Arc::new(Mutex::new(None));
@@ -161,7 +161,7 @@ fn eager_poll_two_drops() {
 
 fn token_during_unwind() {
     let scheduler = UpdateScheduler::new();
-    let frame = OwnerFrame::new(&scheduler);
+    let frame = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
     let driver = frame.async_driver();
     let drops = Arc::new(AtomicUsize::new(0));
     let observed = Arc::new(Mutex::new(None));
@@ -179,7 +179,7 @@ fn token_during_unwind() {
 
 fn retirement(cancel: bool, nested: bool) {
     let scheduler = UpdateScheduler::new();
-    let frame = OwnerFrame::new(&scheduler);
+    let frame = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
     let driver = frame.async_driver();
     let drops = Arc::new(AtomicUsize::new(0));
     let nested_drops = Arc::new(AtomicUsize::new(0));
@@ -222,7 +222,7 @@ fn nested_retirement() {
 
 fn spawn_hook_failure(eager: bool) {
     let scheduler = UpdateScheduler::new();
-    let frame = OwnerFrame::new(&scheduler);
+    let frame = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
     let driver = frame.async_driver();
     driver.set_request_frame(|| panic!("spawn hook"));
     let drops = Arc::new(AtomicUsize::new(0));
@@ -255,6 +255,140 @@ fn eager_spawn_hook() {
     spawn_hook_failure(true);
 }
 
+/// Counts its drops without panicking.
+struct Counted(Arc<AtomicUsize>);
+
+impl Drop for Counted {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// The realm's frame hook is user code too: retirement drops its captures
+/// under the same catch as the tasks', keeps the first panic, and refuses a
+/// hook installed afterwards instead of keeping it past the realm.
+fn hook_retirement() {
+    let scheduler = UpdateScheduler::new();
+    let frame = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
+    let driver = frame.async_driver();
+    let drops = Arc::new(AtomicUsize::new(0));
+    let bomb = DropBomb(Arc::clone(&drops));
+    driver.set_request_frame(move || {
+        let _capture = &bomb;
+    });
+    let first = frame.retire().expect("the hook's capture panicked");
+    assert_eq!(
+        flui_foundation::panic::payload_text(&*first),
+        Some("future destructor")
+    );
+    assert_eq!(drops.load(Ordering::Relaxed), 1, "dropped once, by retire");
+
+    let late = Arc::new(AtomicUsize::new(0));
+    let capture = Counted(Arc::clone(&late));
+    driver.set_request_frame(move || {
+        let _capture = &capture;
+    });
+    assert_eq!(
+        late.load(Ordering::Relaxed),
+        1,
+        "a hook offered to a retired store is refused at once"
+    );
+    drop(frame);
+    assert_eq!(drops.load(Ordering::Relaxed), 1);
+}
+
+/// During an existing unwind the hook's captures are retained, not dropped:
+/// a capture panicking in `Drop` then would abort the process.
+fn hook_retirement_during_unwind() {
+    let drops = Arc::new(AtomicUsize::new(0));
+    assert_panic(
+        catch_unwind(AssertUnwindSafe(|| {
+            let scheduler = UpdateScheduler::new();
+            let frame = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
+            let bomb = DropBomb(Arc::clone(&drops));
+            frame.async_driver().set_request_frame(move || {
+                let _capture = &bomb;
+            });
+            let _frame = frame;
+            panic!("outer failure");
+        })),
+        "outer failure",
+    );
+    assert_eq!(drops.load(Ordering::Relaxed), 0);
+}
+
+/// A subscriber whose every event panics.
+struct PanickingSubscriber;
+
+impl tracing::Subscriber for PanickingSubscriber {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn event(&self, _: &tracing::Event<'_>) {
+        panic!("subscriber");
+    }
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+/// Spawns its future through a dead driver from its own `Drop`.
+struct SpawnOnDrop {
+    driver: flui_scheduler::AsyncDriver,
+    future: Option<Pin<Box<ProbeFuture>>>,
+}
+
+impl Drop for SpawnOnDrop {
+    fn drop(&mut self) {
+        let future = self.future.take().expect("spawned once");
+        let token = self.driver.spawn_local(future);
+        assert!(token.is_cancelled());
+    }
+}
+
+/// A spawn refused because the realm is gone makes the rejected future safe
+/// before any diagnostic runs: retained during an unwind, dropped once
+/// otherwise, and a panicking subscriber changes neither.
+fn refused_spawn() {
+    let dead = {
+        let scheduler = UpdateScheduler::new();
+        OwnerFrame::new(&scheduler)
+            .expect("the scheduler has no live owner frame")
+            .async_driver()
+    };
+    let drops = Arc::new(AtomicUsize::new(0));
+    let observed = Arc::new(Mutex::new(None));
+    tracing::subscriber::with_default(PanickingSubscriber, || {
+        assert_panic(
+            catch_unwind(AssertUnwindSafe(|| {
+                let _spawn = SpawnOnDrop {
+                    driver: dead.clone(),
+                    future: Some(probe(Outcome::Pending, 2, &drops, &observed, None)),
+                };
+                panic!("outer failure");
+            })),
+            "outer failure",
+        );
+        assert_eq!(
+            drops.load(Ordering::Relaxed),
+            0,
+            "retained during the unwind"
+        );
+
+        let late = Arc::new(AtomicUsize::new(0));
+        let capture = Counted(Arc::clone(&late));
+        let token = dead.spawn_local(Box::pin(async move {
+            let _capture = capture;
+        }));
+        assert!(token.is_cancelled());
+        assert_eq!(late.load(Ordering::Relaxed), 1, "dropped once, at once");
+    });
+}
+
 #[test]
 fn async_driver_unwind_matrix() {
     let cases: &[(&str, fn())] = &[
@@ -270,6 +404,12 @@ fn async_driver_unwind_matrix() {
         ("nested_retirement", nested_retirement),
         ("lazy_spawn_hook", lazy_spawn_hook),
         ("eager_spawn_hook", eager_spawn_hook),
+        ("hook_retirement", hook_retirement),
+        (
+            "hook_retirement_during_unwind",
+            hook_retirement_during_unwind,
+        ),
+        ("refused_spawn", refused_spawn),
     ];
     if let Ok(selected) = std::env::var("FLUI_ASYNC_UNWIND_CASE") {
         let (_, case) = cases

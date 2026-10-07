@@ -68,6 +68,7 @@ fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
         callbacks,
         binding,
         task_queue,
+        owner_frame_claimed: _,
     } = &*scheduler.inner;
 
     let FrameState {
@@ -210,8 +211,10 @@ fn transient_callback_runs_with_no_scheduler_lock_held() {
         let _prev = std::mem::replace(&mut *observed_for_callback.lock(), probe.current_frame());
     }));
 
-    let frame_id =
-        scheduler.handle_begin_frame(Instant::now(), &crate::OwnerFrame::new(&scheduler));
+    let frame_id = scheduler.handle_begin_frame(
+        Instant::now(),
+        &crate::OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame"),
+    );
 
     assert_eq!(
         observed.lock().map(|timing| timing.id),
@@ -256,7 +259,9 @@ fn completion_waker_runs_with_no_scheduler_lock_held() {
     let mut cx = Context::from_waker(&waker);
     assert!(Pin::new(&mut future).poll(&mut cx).is_pending());
 
-    scheduler.execute_frame(&crate::OwnerFrame::new(&scheduler));
+    scheduler.execute_frame(
+        &crate::OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame"),
+    );
 
     assert!(
         ran.load(Ordering::Acquire),

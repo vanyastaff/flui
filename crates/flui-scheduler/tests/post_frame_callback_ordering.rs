@@ -49,7 +49,8 @@ fn drive_frame_runs_post_frame_callbacks_after_the_pipeline() {
 
     let log_pipe = log.clone();
     scheduler.drive_frame(
-        &flui_scheduler::OwnerFrame::new(&scheduler),
+        &flui_scheduler::OwnerFrame::new(&scheduler)
+            .expect("the scheduler has no live owner frame"),
         Instant::now(),
         far_deadline(),
         || {
@@ -80,7 +81,8 @@ fn a_panicking_pipeline_aborts_the_frame_and_runs_no_post_frame_callbacks() {
 
     let panicked = catch_unwind(AssertUnwindSafe(|| {
         scheduler.drive_frame(
-            &flui_scheduler::OwnerFrame::new(&scheduler),
+            &flui_scheduler::OwnerFrame::new(&scheduler)
+                .expect("the scheduler has no live owner frame"),
             Instant::now(),
             far_deadline(),
             || panic!("pipeline exploded"),
@@ -102,7 +104,8 @@ fn a_panicking_pipeline_aborts_the_frame_and_runs_no_post_frame_callbacks() {
 
     // The recovered scheduler drives a clean frame, and the queued callback runs.
     scheduler.drive_frame(
-        &flui_scheduler::OwnerFrame::new(&scheduler),
+        &flui_scheduler::OwnerFrame::new(&scheduler)
+            .expect("the scheduler has no live owner frame"),
         Instant::now(),
         far_deadline(),
         || {},
@@ -117,7 +120,8 @@ fn a_frame_after_a_panicking_frame_starts_cleanly() {
     let scheduler = UpdateScheduler::new();
     let _ = catch_unwind(AssertUnwindSafe(|| {
         scheduler.drive_frame(
-            &flui_scheduler::OwnerFrame::new(&scheduler),
+            &flui_scheduler::OwnerFrame::new(&scheduler)
+                .expect("the scheduler has no live owner frame"),
             Instant::now(),
             far_deadline(),
             || panic!("boom"),
@@ -132,7 +136,8 @@ fn a_frame_after_a_panicking_frame_starts_cleanly() {
 
     // Would `debug_assert!` on the illegal transition if the frame were still open.
     scheduler.drive_frame(
-        &flui_scheduler::OwnerFrame::new(&scheduler),
+        &flui_scheduler::OwnerFrame::new(&scheduler)
+            .expect("the scheduler has no live owner frame"),
         Instant::now(),
         far_deadline(),
         || {},
@@ -161,7 +166,8 @@ fn persistent_callbacks_run_before_the_pipeline() {
         log_post.push("post_frame");
     }));
     scheduler.drive_frame(
-        &flui_scheduler::OwnerFrame::new(&scheduler),
+        &flui_scheduler::OwnerFrame::new(&scheduler)
+            .expect("the scheduler has no live owner frame"),
         Instant::now(),
         far_deadline(),
         || {

@@ -123,7 +123,7 @@ fn reentrant_fresh_request_is_delivered_without_recursing() {
 
 fn repeated_cloned_task_wake_retries_a_panicking_hook() {
     let scheduler = UpdateScheduler::new();
-    let frame = OwnerFrame::new(&scheduler);
+    let frame = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
     let driver = frame.async_driver();
     let observed = Arc::new(Mutex::new(None::<Waker>));
     let task_observed = Arc::clone(&observed);
@@ -166,7 +166,7 @@ fn repeated_cloned_task_wake_retries_a_panicking_hook() {
 
 fn scheduled_async_wake_retries_both_delivery_layers() {
     let scheduler = UpdateScheduler::new();
-    let frame = OwnerFrame::new(&scheduler);
+    let frame = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
     let driver = frame.async_driver();
     let observed = Arc::new(Mutex::new(None::<Waker>));
     let task_observed = Arc::clone(&observed);
@@ -223,7 +223,7 @@ fn driver_older_success_cannot_erase_newer_failed_wake() {
         (token, waker)
     }
     let scheduler = UpdateScheduler::new();
-    let frame = OwnerFrame::new(&scheduler);
+    let frame = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
     let driver = frame.async_driver();
     let (_first_token, first) = pending(&frame);
     let (_second_token, second) = pending(&frame);
@@ -435,7 +435,7 @@ thread_local! {
 
 fn assert_reentrant_hook_replacement_after_failure(use_driver: bool) {
     let scheduler = UpdateScheduler::new();
-    let frame = OwnerFrame::new(&scheduler);
+    let frame = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
     let driver = frame.async_driver();
     let observed = Arc::new(Mutex::new(None::<Waker>));
     let task_observed = Arc::clone(&observed);

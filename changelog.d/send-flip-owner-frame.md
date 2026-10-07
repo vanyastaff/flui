@@ -13,8 +13,10 @@
     instead of queueing it. `AsyncDriver::new()` → `OwnerFrame::new(&scheduler).async_driver()`;
     `AsyncDriver::{poll_ready, ready_task_count}` → `OwnerFrame::{poll_ready, ready_task_count}`
     (the frame polls; runtimes and tests that drive a scheduler by hand call it).
-  - A realm's teardown drops its remaining tasks and owner-local post-frame callbacks on the owner
-    thread, each under its own catch, before it raises any earlier failure.
+  - A realm's teardown drops its remaining tasks, its frame hook and its owner-local post-frame
+    callbacks on the owner thread, each under its own catch, before it raises any earlier failure.
+  - `AsyncDriver::set_request_frame` → test-only (the `testing` feature): the realm's `OwnerFrame`
+    installs the hook, and a widget can no longer replace it.
   - `UpdateScheduler::{async_driver, spawn_local, spawn_local_eager, drive_async_tasks,
     pending_task_count}` → removed. Spawn through `LifecycleContext::async_driver()` (widgets) or
     `HeadlessBinding::spawn_local` (tests); count with `AsyncDriver::pending_task_count`.
@@ -29,7 +31,9 @@
   drive a scheduler by hand). `LocalPostFrameLane` is replaced by `OwnerFrame`
   (`#[doc(hidden)]`), which also holds the async tasks; the lane-less and `*_with_lane` variants
   are removed:
-  - `UpdateScheduler::new_local_post_frame_lane()` → `OwnerFrame::new(&scheduler)`;
+  - `UpdateScheduler::new_local_post_frame_lane()` → `OwnerFrame::new(&scheduler)?`, which returns
+    `Err(OwnerFrameError::AlreadyOwned)` while another `OwnerFrame` for that scheduler lives: a frame
+    polls only the owner it is handed, so a second owner's tasks would never run;
     `lane.local_handle()` → `owner.local_post_frame_handle()`.
   - `drive_frame(vsync, deadline, pipeline)` / `drive_frame_with_lane(vsync, deadline, pipeline,
     &lane)` → `drive_frame(&owner, vsync, deadline, pipeline)`.

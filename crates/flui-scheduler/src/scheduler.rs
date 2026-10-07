@@ -33,7 +33,7 @@
 //! use flui_scheduler::{OwnerFrame, Priority, UpdateScheduler};
 //!
 //! let scheduler = UpdateScheduler::new();
-//! let owner = OwnerFrame::new(&scheduler);
+//! let owner = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
 //!
 //! // Schedule animation callback (fires during TransientCallbacks)
 //! scheduler.schedule_frame_callback(Box::new(|vsync_time| {
@@ -83,6 +83,7 @@ use crate::{
     ticker::TickerProvider,
 };
 
+mod identity;
 mod post_frame_dispatch;
 
 // CallbackId is imported from crate::id (re-exported from flui_foundation::FrameCallbackId)
@@ -887,6 +888,10 @@ struct SchedulerInner {
     binding: BindingState,
     /// Task queue (priority-based, already internally synchronized)
     task_queue: TaskQueue,
+    /// Set while an [OwnerFrame](crate::OwnerFrame) for this scheduler
+    /// lives: a scheduler has at most one, so the owner a frame drive polls is
+    /// the only one tasks can be admitted to.
+    owner_frame_claimed: AtomicBool,
 }
 
 /// Resolves every still-pending [`end_of_frame`](UpdateScheduler::end_of_frame)
@@ -1186,6 +1191,7 @@ impl UpdateScheduler {
                 on_frame_scheduled: Mutex::new(None),
             },
             task_queue,
+            owner_frame_claimed: AtomicBool::new(false),
         });
 
         Self { inner }
@@ -1233,28 +1239,6 @@ impl UpdateScheduler {
             .frame
             .scheduler_phase
             .store(new_phase as u8, Ordering::Release);
-    }
-
-    /// Whether `self` and `other` are clones of the **same** scheduler — the same
-    /// callback queues, the same frame.
-    ///
-    /// `UpdateScheduler` is `Arc`-backed, so this is pointer identity on the shared
-    /// inner state. It exists because a capability handed to a widget must be
-    /// provably pointed at the realm's own scheduler, not some other one.
-    #[must_use]
-    pub fn is_same_instance(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.inner, &other.inner)
-    }
-
-    /// A stable, opaque identity for tracing/diagnostics only.
-    ///
-    /// Never used for equality — [`is_same_instance`](Self::is_same_instance)
-    /// owns that comparison. This exists so a scheduler-mismatch trace (e.g.
-    /// driving an [`OwnerFrame`](crate::OwnerFrame) with the wrong
-    /// `UpdateScheduler`) can name both sides without printing the whole
-    /// internal state the `Debug` impl shows.
-    pub(crate) fn debug_ptr(&self) -> usize {
-        Arc::as_ptr(&self.inner) as usize
     }
 
     pub(crate) fn with_post_frame_registration<R>(
@@ -3434,7 +3418,10 @@ mod tests {
 
         // A frame runs; during it a ticker re-registers (transient
         // callback) — the cleared edge fires the hook again.
-        scheduler.handle_begin_frame(Instant::now(), &crate::OwnerFrame::new(&scheduler));
+        scheduler.handle_begin_frame(
+            Instant::now(),
+            &crate::OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame"),
+        );
         scheduler.schedule_frame_callback(Box::new(|_| {}));
         scheduler.handle_draw_frame();
         assert_eq!(
@@ -3475,7 +3462,9 @@ mod tests {
         requeue(scheduler.clone(), Arc::clone(&runs));
 
         let (_frame_id, log) = flui_testing::log_capture::capture(|| {
-            scheduler.execute_frame(&crate::OwnerFrame::new(&scheduler))
+            scheduler.execute_frame(
+                &crate::OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame"),
+            )
         });
 
         assert_eq!(
@@ -3575,7 +3564,9 @@ mod tests {
         assert!(Pin::new(&mut future_b).poll(&mut cx_b).is_pending());
 
         let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            scheduler.execute_frame(&crate::OwnerFrame::new(&scheduler));
+            scheduler.execute_frame(
+                &crate::OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame"),
+            );
         }));
         assert!(unwind.is_err(), "the waker's own panic must propagate");
         assert_eq!(
@@ -3665,7 +3656,9 @@ mod tests {
         scheduler.add_post_frame_callback(Box::new(|_timing| panic!("post-frame probe")));
 
         let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            scheduler.execute_frame(&crate::OwnerFrame::new(&scheduler));
+            scheduler.execute_frame(
+                &crate::OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame"),
+            );
         }));
 
         let payload = unwind.expect_err("the post-frame callback's panic must still propagate");

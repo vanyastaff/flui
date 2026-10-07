@@ -1189,7 +1189,8 @@ mod tests {
         .writer_source();
         for change in ["replace", "remove", "dispose"] {
             let scheduler = flui_scheduler::UpdateScheduler::new();
-            let owner_frame = flui_scheduler::OwnerFrame::new(&scheduler);
+            let owner_frame = flui_scheduler::OwnerFrame::new(&scheduler)
+                .expect("the scheduler has no live owner frame");
             let calls = Rc::new(Cell::new(0));
             let old_calls = Rc::clone(&calls);
             let mut state = GestureDetector::new()

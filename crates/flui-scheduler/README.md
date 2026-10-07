@@ -60,7 +60,7 @@ use flui_scheduler::{OwnerFrame, Priority, UpdateScheduler};
 let scheduler = UpdateScheduler::new();
 // The owner thread's frame state (owner-local post-frame callbacks and
 // async tasks); every frame entry point takes it.
-let owner = OwnerFrame::new(&scheduler);
+let owner = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
 
 // Schedule a one-time frame callback (animation tick)
 scheduler.schedule_frame_callback(Box::new(|vsync_time| {
@@ -88,7 +88,7 @@ use std::sync::Arc;
 use flui_scheduler::{OwnerFrame, Ticker, UpdateScheduler};
 
 let scheduler = Arc::new(UpdateScheduler::new());
-let owner = OwnerFrame::new(&scheduler);
+let owner = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
 let mut ticker = Ticker::new_with_scheduler(&scheduler);
 
 ticker.start(|elapsed| {
@@ -280,7 +280,7 @@ impl PipelineOwner {
 use flui_scheduler::{OwnerFrame, Priority, UpdateScheduler};
 
 let scheduler = UpdateScheduler::new();
-let owner = OwnerFrame::new(&scheduler);
+let owner = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
 
 // In your event loop
 match event {

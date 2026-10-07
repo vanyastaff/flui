@@ -92,7 +92,7 @@ fn builder(log: &Arc<Mutex<Vec<(ConnectionState, i32)>>>) -> SnapshotBuilder<Val
 fn run_child(stream: bool, competing_value: bool, competing_wake: bool) {
     let scheduler = UpdateScheduler::new();
     let mut owner = BuildOwner::new();
-    let owner_frame = OwnerFrame::new(&scheduler);
+    let owner_frame = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
     owner.set_async_driver(owner_frame.async_driver());
     let fail_wake = Arc::new(AtomicBool::new(false));
     let wake_failures = Arc::new(AtomicUsize::new(0));
@@ -238,7 +238,7 @@ fn eager_disposal() {
     }
     let scheduler = UpdateScheduler::new();
     let mut owner = BuildOwner::new();
-    let owner_frame = OwnerFrame::new(&scheduler);
+    let owner_frame = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
     owner.set_async_driver(owner_frame.async_driver());
     let old_drops = Arc::new(AtomicUsize::new(0));
     let incoming_drops = Arc::new(AtomicUsize::new(0));

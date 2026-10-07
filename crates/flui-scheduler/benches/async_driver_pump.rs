@@ -43,7 +43,7 @@ fn empty_pump(c: &mut Criterion) {
 
     for dormant in [0usize, 100_000] {
         let scheduler = UpdateScheduler::new();
-        let frame = OwnerFrame::new(&scheduler);
+        let frame = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
         let driver = frame.async_driver();
         let mut tokens = Vec::with_capacity(dormant);
         for _ in 0..dormant {
@@ -76,7 +76,7 @@ fn ready_heavy(c: &mut Criterion) {
 
     for ready in [1_000usize, 10_000] {
         let scheduler = UpdateScheduler::new();
-        let frame = OwnerFrame::new(&scheduler);
+        let frame = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
         let driver = frame.async_driver();
         let mut tokens = Vec::with_capacity(ready);
         for _ in 0..ready {

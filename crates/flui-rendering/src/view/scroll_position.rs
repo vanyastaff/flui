@@ -922,7 +922,9 @@ mod tests {
             "the flush must not fire before the frame completes"
         );
 
-        scheduler.execute_frame(&OwnerFrame::new(&scheduler));
+        scheduler.execute_frame(
+            &OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame"),
+        );
 
         assert_eq!(
             notified.load(Ordering::SeqCst),

@@ -77,7 +77,10 @@ flui-animation = { path = "../flui-animation", version = "=0.2.0-dev" }
 # The frame phases and the binding's `OwnerFrame`. `pump_frame` runs the SAME
 # `UpdateScheduler::drive_frame` a realm's pump runs, whose begin frame polls the
 # owner-local tasks in the same slot — between the vsync tick and `build_scope`.
-flui-scheduler = { path = "../flui-scheduler", version = "=0.2.0-dev" }
+# `testing` exposes the scheduler's test probes (`AsyncDriver::set_request_frame`,
+# `is_unlocked`) to every test that links this crate, the scheduler's own
+# integration tests included.
+flui-scheduler = { path = "../flui-scheduler", version = "=0.2.0-dev", features = ["testing"] }
 # Names the shared `Arc<RwLock<PipelineOwner>>` the element tree and the binding
 # both hold (render-object attachment shares the owner; the binding does not own
 # it exclusively).

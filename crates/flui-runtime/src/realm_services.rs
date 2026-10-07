@@ -131,7 +131,8 @@ impl RealmServices {
         } = host;
         let scheduler = UpdateScheduler::new();
         Self {
-            owner_frame: OwnerFrame::new(&scheduler),
+            owner_frame: OwnerFrame::new(&scheduler)
+                .expect("BUG: a fresh scheduler has no owner frame"),
             scheduler,
             wake,
             needs_redraw,

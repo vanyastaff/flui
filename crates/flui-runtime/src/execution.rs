@@ -964,7 +964,8 @@ mod tests {
 
         // Frame-lane work: an owner-local task polled on THIS thread.
         let scheduler = flui_scheduler::UpdateScheduler::new();
-        let owner_frame = flui_scheduler::OwnerFrame::new(&scheduler);
+        let owner_frame = flui_scheduler::OwnerFrame::new(&scheduler)
+            .expect("the scheduler has no live owner frame");
         let done = Arc::new(AtomicBool::new(false));
         let done_for_task = Arc::clone(&done);
         let _token = owner_frame.async_driver().spawn_local(Box::pin(async move {

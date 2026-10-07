@@ -245,7 +245,16 @@ impl TaskStore {
     /// Install the "request a frame" hook; installation retries undelivered
     /// demand. The displaced hook is dropped only after the lock is released:
     /// its captures are user code that may re-enter the driver.
+    ///
+    /// A retired store refuses the hook: it is released at once, under
+    /// [`release_opaque`]'s policy, rather than kept past the realm.
     pub(crate) fn set_request_frame(&self, hook: RequestFrame) {
+        if self.closed.get() {
+            if let Err(payload) = release_opaque(hook) {
+                resume_unwind(payload);
+            }
+            return;
+        }
         let previous = { self.shared.request_frame.lock().replace(hook) };
         drop(previous);
         self.shared.request_frame(false);
@@ -477,34 +486,38 @@ impl TaskStore {
             .count()
     }
 
-    /// Close the store and drop every remaining task on this (the owner)
-    /// thread, each under its own catch. Returns the first panic a future's
-    /// destructor raised; later ones are retained, not dropped. During an
-    /// existing unwind the futures are retained without running their
-    /// destructors: catching cannot contain an aggregate whose drop glue
-    /// panics twice. Idempotent.
+    /// Close the store and drop every remaining task, then the frame hook, on
+    /// this (the owner) thread, each under its own catch. Returns the first
+    /// panic a destructor raised; later ones are retained, not dropped.
+    /// During an existing unwind the futures and the hook are retained
+    /// without running their destructors: catching cannot contain an
+    /// aggregate whose drop glue panics twice. Idempotent.
     pub(crate) fn retire(&self) -> Option<RetirePanic> {
         self.closed.set(true);
         let tasks = mem::take(&mut *self.tasks.borrow_mut());
         self.shared.ready.lock().clear();
         let mut first: Option<RetirePanic> = None;
-        for (_, mut task) in tasks {
-            task.flags.cancelled.store(true, Ordering::Release);
-            task.flags.retired.store(true, Ordering::Release);
-            let Some(future) = task.future.take() else {
-                continue;
-            };
-            if std::thread::panicking() {
-                mem::forget(future);
-                continue;
-            }
-            if let Err(payload) = catch_unwind(AssertUnwindSafe(move || drop(future))) {
+        let mut keep = |result: Result<(), RetirePanic>| {
+            if let Err(payload) = result {
                 if first.is_none() {
                     first = Some(payload);
                 } else {
                     flui_foundation::panic::retain_opaque_payload(payload);
                 }
             }
+        };
+        for (_, mut task) in tasks {
+            task.flags.cancelled.store(true, Ordering::Release);
+            task.flags.retired.store(true, Ordering::Release);
+            if let Some(future) = task.future.take() {
+                keep(release_opaque(future));
+            }
+        }
+        // The hook is user code too: a waker reaching `shared` after this
+        // finds no hook, and its captures die here, not with the last waker.
+        let hook = self.shared.request_frame.lock().take();
+        if let Some(hook) = hook {
+            keep(release_opaque(hook));
         }
         first
     }
@@ -737,20 +750,32 @@ impl AsyncDriver {
         self.store.upgrade().filter(|store| !store.closed.get())
     }
 
-    /// Replace the "request a frame" hook.
+    /// Replace the "request a frame" hook. A test probe: production installs
+    /// the hook only through [`OwnerFrame::new`](crate::OwnerFrame::new), so a
+    /// widget cannot replace its realm's frame hook.
     ///
-    /// The realm's [`OwnerFrame`](crate::OwnerFrame) installs its scheduler's
-    /// [`FrameWaker`](crate::FrameWaker) here; installation retries undelivered
-    /// demand. A later call replaces the hook, and the displaced `Arc` is
+    /// Installation retries undelivered demand. The displaced `Arc` is
     /// dropped only after the hook lock is released, since its captured state
-    /// is user code that may re-enter the driver. Does nothing once the realm
-    /// is gone.
+    /// is user code that may re-enter the driver. Once the realm is gone or
+    /// retired the hook is refused and dropped at once (retained instead
+    /// during an existing unwind).
+    ///
+    /// # Panics
+    ///
+    /// Propagates a panic from a refused hook's destructor.
+    #[cfg(any(test, feature = "testing"))]
+    #[doc(hidden)]
     pub fn set_request_frame<F>(&self, hook: F)
     where
         F: Fn() + Send + Sync + 'static,
     {
-        if let Some(store) = self.store.upgrade() {
-            store.set_request_frame(Arc::new(hook));
+        match self.store.upgrade() {
+            Some(store) => store.set_request_frame(Arc::new(hook)),
+            None => {
+                if let Err(payload) = release_opaque(hook) {
+                    resume_unwind(payload);
+                }
+            }
         }
     }
 
@@ -842,14 +867,40 @@ impl AsyncDriver {
     }
 }
 
-/// Drop a future a dead driver cannot admit, on the calling (owner) thread,
-/// and hand back a cancelled token.
+/// Release an opaque owned value — a future or a hook, whose drop glue is
+/// user code — under the retention policy shared by cancellation and
+/// retirement: during an existing unwind it is retained (forgotten), since a
+/// destructor panicking then aborts the process; otherwise it is dropped
+/// under a catch and the panic, if any, handed back.
+fn release_opaque<T>(value: T) -> Result<(), RetirePanic> {
+    if std::thread::panicking() {
+        mem::forget(value);
+        return Ok(());
+    }
+    catch_unwind(AssertUnwindSafe(move || drop(value)))
+}
+
+/// Release a future a dead driver cannot admit, on the calling (owner)
+/// thread, and hand back a cancelled token.
+///
+/// Ownership is made safe first ([`release_opaque`]); the diagnostic runs
+/// afterwards under its own catch, so a panicking subscriber can neither
+/// abort an unwind nor replace the destructor's panic. A diagnostic panic is
+/// retained, never raised.
 fn refuse(future: BoxedTask) -> TaskToken {
-    tracing::warn!(
-        "AsyncDriver: the realm that owned this driver is gone; dropping the spawned future"
-    );
     let token = TaskToken::refused();
-    drop(future);
+    let released = release_opaque(future);
+    let diagnostic = catch_unwind(|| {
+        tracing::warn!(
+            "AsyncDriver: the realm that owned this driver is gone; dropping the spawned future"
+        );
+    });
+    if let Err(payload) = diagnostic {
+        flui_foundation::panic::retain_opaque_payload(payload);
+    }
+    if let Err(payload) = released {
+        resume_unwind(payload);
+    }
     token
 }
 
@@ -920,7 +971,7 @@ mod tests {
     /// A fresh scheduler and the owner frame that holds its tasks.
     fn owner_frame() -> (UpdateScheduler, OwnerFrame) {
         let scheduler = UpdateScheduler::new();
-        let frame = OwnerFrame::new(&scheduler);
+        let frame = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
         (scheduler, frame)
     }
 
@@ -944,7 +995,8 @@ mod tests {
 
         for eager_first in [false, true] {
             let scheduler = UpdateScheduler::new();
-            let frame = OwnerFrame::with_first_task_id(&scheduler, u64::MAX - 2);
+            let frame = OwnerFrame::with_first_task_id(&scheduler, u64::MAX - 2)
+                .expect("the scheduler has no live owner frame");
             let driver = frame.async_driver();
             let alias = driver.clone();
             let mut accepted = Vec::new();
@@ -1337,6 +1389,37 @@ mod tests {
         assert_eq!(frame.pending_task_count(), 0);
     }
 
+    /// A scheduler has one live owner frame, so the owner a frame drive polls
+    /// is the only one a task can be admitted to: a second owner would hold
+    /// ready tasks that no frame polls and no demand is left to request.
+    fn a_scheduler_has_one_live_owner_frame() {
+        let (scheduler, first) = owner_frame();
+        assert_eq!(
+            OwnerFrame::new(&scheduler).err(),
+            Some(crate::OwnerFrameError::AlreadyOwned)
+        );
+        let polled = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&polled);
+        let _token = first.async_driver().spawn_local(Box::pin(async move {
+            counter.fetch_add(1, Ordering::Relaxed);
+        }));
+        scheduler.execute_frame(&first);
+        assert_eq!(polled.load(Ordering::Relaxed), 1, "the one owner is polled");
+
+        let _ = first.retire();
+        assert_eq!(
+            OwnerFrame::new(&scheduler).err(),
+            Some(crate::OwnerFrameError::AlreadyOwned),
+            "a retired owner still holds the slot until it drops"
+        );
+        drop(first);
+        let second = OwnerFrame::new(&scheduler).expect("the slot frees when the owner drops");
+        let _token = second.async_driver().spawn_local(Box::pin(async {}));
+        assert!(scheduler.is_frame_scheduled());
+        scheduler.execute_frame(&second);
+        assert_eq!(second.pending_task_count(), 0);
+    }
+
     #[test]
     fn async_driver_failure_and_ordering_matrix() {
         crate::table_test::run_table(
@@ -1377,6 +1460,10 @@ mod tests {
                 (
                     "retirement_drops_every_task_and_keeps_the_first_panic",
                     retirement_drops_every_task_and_keeps_the_first_panic as fn(),
+                ),
+                (
+                    "a_scheduler_has_one_live_owner_frame",
+                    a_scheduler_has_one_live_owner_frame as fn(),
                 ),
             ],
         );

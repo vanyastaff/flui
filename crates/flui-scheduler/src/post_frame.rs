@@ -63,29 +63,45 @@ pub struct OwnerFrame {
 impl OwnerFrame {
     /// Owner-local frame state for `scheduler`'s frames. Task wakes request a
     /// frame through `scheduler`'s [`FrameWaker`](crate::FrameWaker).
-    #[must_use]
-    pub fn new(scheduler: &UpdateScheduler) -> Self {
+    ///
+    /// A scheduler has at most one live owner frame. A frame drive polls only
+    /// the owner it is handed, and its pump clears the scheduler's shared
+    /// frame demand, so a task admitted to a second owner the host never
+    /// drives would keep its ready flag set with no frame ever owed to it.
+    /// The slot frees when the owner drops.
+    ///
+    /// # Errors
+    ///
+    /// [`OwnerFrameError::AlreadyOwned`] while another `OwnerFrame` for
+    /// `scheduler` lives.
+    pub fn new(scheduler: &UpdateScheduler) -> Result<Self, OwnerFrameError> {
         Self::with_tasks(scheduler, TaskStore::new())
     }
 
     /// As [`new`](Self::new), issuing task ids from `first`: a test reaches
     /// the identity-exhaustion boundary without spawning `u64::MAX` tasks.
     #[cfg(test)]
-    pub(crate) fn with_first_task_id(scheduler: &UpdateScheduler, first: u64) -> Self {
+    pub(crate) fn with_first_task_id(
+        scheduler: &UpdateScheduler,
+        first: u64,
+    ) -> Result<Self, OwnerFrameError> {
         Self::with_tasks(scheduler, TaskStore::with_first_id(first))
     }
 
-    fn with_tasks(scheduler: &UpdateScheduler, tasks: TaskStore) -> Self {
+    fn with_tasks(scheduler: &UpdateScheduler, tasks: TaskStore) -> Result<Self, OwnerFrameError> {
+        if !scheduler.claim_owner_frame() {
+            return Err(OwnerFrameError::AlreadyOwned);
+        }
         let waker = scheduler.frame_waker();
         tasks.set_request_frame(std::sync::Arc::new(move || waker.request_frame()));
-        Self {
+        Ok(Self {
             scheduler: scheduler.downgrade(),
             post_frame: Rc::new(LocalLaneInner {
                 queue: RefCell::new(Vec::new()),
                 closed: Cell::new(false),
             }),
             tasks: Rc::new(tasks),
-        }
+        })
     }
 
     /// A widget's handle to this frame's tasks: `Weak`, so it keeps nothing
@@ -228,7 +244,13 @@ fn keep_first(first: &mut Option<RetirePanic>, payload: RetirePanic) {
 
 impl Drop for OwnerFrame {
     fn drop(&mut self) {
-        if let Some(payload) = self.retire() {
+        let first = self.retire();
+        // Freed only after retirement: a destructor retirement runs cannot
+        // mint a second owner while this one still holds tasks.
+        if let Some(scheduler) = self.scheduler.upgrade() {
+            scheduler.release_owner_frame();
+        }
+        if let Some(payload) = first {
             if std::thread::panicking() {
                 flui_foundation::panic::retain_opaque_payload(payload);
             } else {
@@ -253,6 +275,17 @@ impl std::fmt::Debug for OwnerFrame {
             .field("tasks", &self.tasks)
             .finish_non_exhaustive()
     }
+}
+
+/// Why an [`OwnerFrame`] could not be created.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum OwnerFrameError {
+    /// Another `OwnerFrame` for this scheduler is still alive. Frames poll
+    /// only the owner they are handed, so a second owner's tasks would be
+    /// stranded; drop the first owner before making another.
+    #[error("the UpdateScheduler already has a live OwnerFrame")]
+    AlreadyOwned,
 }
 
 /// Why an owner-local post-frame callback could not be registered, or an
@@ -457,7 +490,7 @@ mod tests {
 
     fn post_frame_panic_restores_idle_and_later_scheduling_works() {
         let scheduler = UpdateScheduler::new();
-        let owner = OwnerFrame::new(&scheduler);
+        let owner = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
         owner
             .local_post_frame_handle()
             .schedule_local(|_| panic!("post-frame probe"))
@@ -476,7 +509,7 @@ mod tests {
 
     fn post_frame_panic_preserves_uninvoked_mixed_tail_before_reentrant_work() {
         let scheduler = UpdateScheduler::new();
-        let owner = OwnerFrame::new(&scheduler);
+        let owner = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
         let log = Arc::new(Mutex::new(Vec::new()));
         let panic_calls = Rc::new(Cell::new(0));
         let counted = panic_calls.clone();
@@ -546,7 +579,7 @@ mod tests {
         }
 
         let scheduler = UpdateScheduler::new();
-        let owner = OwnerFrame::new(&scheduler);
+        let owner = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
         let handle = owner.local_post_frame_handle();
         let drops = Rc::new(Cell::new(0));
         let ran = Rc::new(Cell::new(false));
