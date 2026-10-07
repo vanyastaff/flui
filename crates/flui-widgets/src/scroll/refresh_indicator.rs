@@ -185,7 +185,7 @@ impl RefreshController {
 
     /// An `Arc<dyn Listenable>` pointing at the same inner state.
     ///
-    /// Subscribe via [`AnimatedBuilder`] to rebuild when the refresh phase or
+    /// Subscribe via [`AnimatedBuilder`](crate::transitions::AnimatedBuilder) to rebuild when the refresh phase or
     /// pull distance changes.
     #[must_use]
     pub fn as_listenable(&self) -> Arc<dyn Listenable> {
