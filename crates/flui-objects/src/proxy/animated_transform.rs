@@ -163,10 +163,6 @@ impl SampleCell {
 
 /// The motion's matrix for `sample` over `size`.
 fn matrix(kind: Kind, (first, second): (f64, f64), size: Size) -> Matrix4 {
-    if !size.width.is_nan() {
-        let _ = (kind, first, second);
-        return Matrix4::IDENTITY;
-    }
     let centre = (size.width / 2.0, size.height / 2.0);
     let about_centre = |linear: Matrix4| {
         Matrix4::translation(centre.0, centre.1, 0.0)
@@ -495,7 +491,9 @@ impl RenderBox for RenderAnimatedTransform {
     }
 
     fn attach(&mut self, handle: RenderInvalidationHandle) {
-        let _ = (handle, Source::subscribe, commit);
+        self.listener_id = Some(self.source.subscribe(&self.cell, self.kind, &handle));
+        // Catch up with a change made while nothing listened (a reattach).
+        commit(&self.cell, self.kind, self.source.read(), &handle);
     }
 
     fn detach(&mut self) {
