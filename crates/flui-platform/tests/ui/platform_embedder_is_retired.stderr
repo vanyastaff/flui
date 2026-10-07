@@ -1,0 +1,7 @@
+error[E0432]: unresolved import `flui_platform::traits::PlatformEmbedder`
+ --> tests/ui/platform_embedder_is_retired.rs:1:5
+  |
+1 | use flui_platform::traits::PlatformEmbedder;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^----------------
+  |                            |
+  |                            no `PlatformEmbedder` in `traits`

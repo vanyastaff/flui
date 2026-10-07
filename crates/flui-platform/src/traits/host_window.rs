@@ -82,9 +82,10 @@ pub trait HostWindow: PlatformWindow {
     /// Callable only inside this crate, because only
     /// [`OwnerPlatform::text_store_host`](crate::OwnerPlatform::text_store_host)
     /// can build the token. Outside it, the token's type is not exported
-    /// beside this trait:
+    /// beside this trait. `trybuild_ui::ui_tests` pins both the private-import
+    /// and missing-`Default` diagnostics and a valid owner-capability caller:
     ///
-    /// ```compile_fail,E0432
+    /// ```compile_fail,E0603
     /// use flui_platform::traits::OwnerThreadToken;
     /// ```
     ///
