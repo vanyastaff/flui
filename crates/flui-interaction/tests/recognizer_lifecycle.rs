@@ -142,7 +142,7 @@ fn a_verdict_callback_can_drop_a_later_notification_owner() {
         let rejected = Rc::clone(&later.rejected);
         let retired = Rc::clone(&later.retired);
         arena.add(pointer, &first);
-        arena.add(pointer, &later);
+        let later_entry = arena.add(pointer, &later);
         arena.add(pointer, &survivor);
         let owner = Rc::new(RefCell::new(Some(later)));
         let dropped_by_callback = Rc::clone(&owner);
@@ -150,17 +150,14 @@ fn a_verdict_callback_can_drop_a_later_notification_owner() {
             drop(dropped_by_callback.borrow_mut().take());
         }));
         arena.close(pointer);
-        let winner: Rc<dyn GestureArenaMember> = if later_wins {
-            owner
-                .borrow()
-                .as_ref()
-                .expect("later member is still owned")
-                .clone()
+        if later_wins {
+            // The entry upgrades its weak identity internally. No borrowed
+            // caller owner keeps the later recipient alive across delivery.
+            later_entry.resolve(flui_interaction::GestureDisposition::Accepted);
         } else {
-            survivor.clone()
-        };
-
-        arena.resolve(pointer, Some(winner));
+            let winner: Rc<dyn GestureArenaMember> = survivor.clone();
+            arena.resolve(pointer, Some(&winner));
+        }
         assert!(
             owner.borrow().is_none(),
             "first loser removed the later owner"

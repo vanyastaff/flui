@@ -1553,9 +1553,8 @@ impl Drop for ClosesOnDrop {
     }
 }
 
-/// An ignored accept candidate that is its own last owner is dropped after
-/// the slot lock is released, so its destructor can use the arena (holding
-/// the lock across it deadlocks).
+/// Borrowed acceptance leaves the candidate with its caller. Its eventual
+/// destruction can reenter the arena after the operation returns.
 fn ignored_accept_candidate_drops_outside_the_slot_lock() {
     // On a worker with a deadline: a regression deadlocks instead of failing,
     // and must not hang the whole test binary.
@@ -1566,12 +1565,17 @@ fn ignored_accept_candidate_drops_outside_the_slot_lock() {
         let closed = counter_flag();
         let member = Rc::new(Verdicts::default());
         arena.add(pointer, &member);
-        let candidate = Rc::new(ClosesOnDrop {
+        let candidate: Rc<dyn GestureArenaMember> = Rc::new(ClosesOnDrop {
             arena: arena.clone(),
             pointer,
             closed: Rc::clone(&closed),
         });
-        arena.accept(pointer, candidate);
+        arena.accept(pointer, &candidate);
+        assert!(
+            !closed.get(),
+            "borrowed acceptance keeps the caller's owner"
+        );
+        drop(candidate);
         assert!(
             closed.get(),
             "the destructor ran and its call into the arena returned"
@@ -1595,12 +1599,18 @@ fn nonmember_resolution_candidate_retires_after_detachment() {
         let closed = counter_flag();
         let member = Rc::new(Verdicts::default());
         arena.add(pointer, &member);
-        let candidate = Rc::new(ClosesOnDrop {
+        let candidate: Rc<dyn GestureArenaMember> = Rc::new(ClosesOnDrop {
             arena: arena.clone(),
             pointer,
             closed: Rc::clone(&closed),
         });
-        arena.resolve(pointer, Some(candidate));
+        arena.resolve(pointer, Some(&candidate));
+        assert!(
+            !closed.get(),
+            "resolution does not consume the borrowed candidate"
+        );
+        assert!(arena.is_empty(), "detachment precedes caller retirement");
+        drop(candidate);
         assert!(closed.get(), "candidate destructor reentered the arena");
         assert!(arena.is_empty());
         let _ = done.send(());
@@ -1641,11 +1651,11 @@ impl Drop for RetirementMember {
 }
 
 fn arena_retirement_preserves_the_first_failure_and_recovers() {
-    for (candidate_panics, rejection_panics, expected_failure) in [
+    for (retirement_panics, rejection_panics, expected_failure) in [
         (false, false, None),
         (true, false, Some("candidate retirement failed")),
         (false, true, Some("member rejection failed")),
-        (true, true, Some("candidate retirement failed")),
+        (true, true, Some("member rejection failed")),
     ] {
         let arena = GestureArena::new();
         let pointer = id(2);
@@ -1656,35 +1666,28 @@ fn arena_retirement_preserves_the_first_failure_and_recovers() {
             dropped: Rc::clone(&retired),
             rejected: Rc::clone(&rejected),
             panic_on_reject: rejection_panics,
-            panic_on_drop: false,
+            panic_on_drop: retirement_panics,
             owner: Rc::downgrade(&owner),
         });
         arena.add(pointer, &member);
         // Only the external holder owns the participant until its callback
         // releases that owner. Delivery then owns the last upgraded Rc.
         *owner.borrow_mut() = Some(member);
-        let candidate_retired = counter();
-        let candidate = Rc::new(RetirementMember {
-            dropped: Rc::clone(&candidate_retired),
-            rejected: counter(),
-            panic_on_reject: false,
-            panic_on_drop: candidate_panics,
-            owner: std::rc::Weak::new(),
-        });
-
+        // Borrowed candidates remain owned by their caller throughout a
+        // resolve call. Exercise framework retirement instead: rejection
+        // releases the external owner, leaving delivery's last Rc snapshot.
         let result = catch_unwind(AssertUnwindSafe(|| {
-            arena.resolve(pointer, Some(candidate));
+            arena.resolve(pointer, None);
         }));
         if let Some(expected_failure) = expected_failure {
-            let failure = result.expect_err("a failing candidate or rejection must propagate");
+            let failure = result.expect_err("a failing retirement or rejection must propagate");
             assert_eq!(
                 flui_foundation::panic::payload_text(failure.as_ref()),
                 Some(expected_failure),
             );
         } else {
-            result.expect("healthy candidate retirement and rejection complete");
+            result.expect("healthy notification retirement and rejection complete");
         }
-        assert_eq!(candidate_retired.get(), 1);
         assert_eq!(
             rejected.get(),
             1,
@@ -1692,8 +1695,8 @@ fn arena_retirement_preserves_the_first_failure_and_recovers() {
         );
         assert_eq!(
             retired.get(),
-            u32::from(expected_failure.is_none()),
-            "healthy delivery drops its last owner; failed delivery retains it"
+            u32::from(!rejection_panics),
+            "successful callback retires its last owner, even if Drop fails; failed callback retains it"
         );
         assert!(
             owner.borrow().is_none(),
