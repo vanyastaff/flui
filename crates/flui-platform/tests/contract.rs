@@ -403,6 +403,10 @@ mod native_windows {
             "synthetic_touch_and_pen_reach_native_pointer_dispatch",
             synthetic_touch_and_pen_reach_native_pointer_dispatch,
         ),
+        (
+            "native_mouse_wheels_keep_hover_identity_and_signed_units",
+            native_mouse_wheels_keep_hover_identity_and_signed_units,
+        ),
     ];
 
     pub(super) fn run_requested_child() -> bool {
@@ -2725,6 +2729,64 @@ mod native_windows {
             unsafe { let _ = TranslateMessage(&message); DispatchMessageW(&message); }
         }
         panic!("native pointer child queue did not drain");
+    }
+
+    #[expect(unsafe_code, reason = "real native mouse input directed to an ephemeral hit-tested window with cursor restoration")]
+    fn native_mouse_wheels_keep_hover_identity_and_signed_units() {
+        use flui_platform_api::pointer::{PointerEvent, PointerKind, ScrollUnit};
+        use windows::Win32::UI::{Input::KeyboardAndMouse::{INPUT, INPUT_0, INPUT_MOUSE, MOUSEINPUT, MOUSEEVENTF_WHEEL, MOUSEEVENTF_HWHEEL, SendInput}, WindowsAndMessaging::{GetCursorPos, SetCursorPos, WindowFromPoint}};
+        struct Cursor(POINT);
+        impl Drop for Cursor {
+            fn drop(&mut self) {
+                // SAFETY: restore the position captured before this child row.
+                let _ = unsafe { SetCursorPos(self.0.x, self.0.y) };
+            }
+        }
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let window = open_shown(&platform);
+        let hwnd = hwnd_of(&window);
+        let mut target = POINT { x: 40, y: 40 };
+        let mut original = POINT::default();
+        // SAFETY: initialized points and a live owner-thread window.
+        unsafe {
+            assert!(ClientToScreen(hwnd, &mut target).as_bool());
+            GetCursorPos(&mut original).expect("capture cursor for restoration");
+        }
+        let _restore = Cursor(original);
+        if unsafe { WindowFromPoint(target) } != hwnd {
+            eprintln!("CANNOT_VERIFY native wheel: shown target is occluded or desktop unavailable");
+            window.close();
+            return;
+        }
+        let events = record_pointer(&window);
+        // SAFETY: this point was checked against our shown ephemeral target.
+        unsafe { SetCursorPos(target.x, target.y) }.expect("move cursor to owned target");
+        for _ in 0..25 { pump_translated(hwnd); std::thread::sleep(Duration::from_millis(2)); }
+        let hover = events.lock().expect("pointer log").iter().find_map(|event| match event {
+            PointerEvent::Move(movement) if movement.pointer.kind == PointerKind::Mouse => Some(movement.pointer),
+            PointerEvent::Enter(signal) if signal.pointer.kind == PointerKind::Mouse => Some(signal.pointer),
+            _ => None,
+        }).expect("actual native mouse hover identity");
+        events.lock().expect("pointer log").clear();
+        for flags in [MOUSEEVENTF_WHEEL, MOUSEEVENTF_HWHEEL] {
+            let input = INPUT { r#type: INPUT_MOUSE, Anonymous: INPUT_0 { mi: MOUSEINPUT { mouseData: 120, dwFlags: flags, ..Default::default() } } };
+            // SAFETY: initialized mouse union arm; cursor is over owned target.
+            assert_eq!(unsafe { SendInput(&[input], std::mem::size_of::<INPUT>() as i32) }, 1, "native wheel injection accepted");
+            for _ in 0..25 { pump_translated(hwnd); std::thread::sleep(Duration::from_millis(2)); }
+        }
+        let log = events.lock().expect("pointer log");
+        let scrolls: Vec<_> = log.iter().filter_map(|event| if let PointerEvent::Scroll(scroll) = event { Some(scroll) } else { None }).collect();
+        assert_eq!(scrolls.len(), 2, "exactly one dispatch per native wheel: {log:?}");
+        for (scroll, expected) in scrolls.iter().zip([(0.0, -1.0), (1.0, 0.0)]) {
+            assert_eq!(scroll.pointer, hover, "native wheel retains actual hover metadata");
+            assert_eq!(scroll.delta.unit(), ScrollUnit::Lines);
+            assert_eq!((scroll.delta.x(), scroll.delta.y()), expected);
+            assert_eq!(scroll.phase, None, "a wheel tick supplies no gesture phase");
+            let point = scroll.position.get();
+            assert_eq!((point.x, point.y), (40.0 / window.scale_factor(), 40.0 / window.scale_factor()));
+        }
+        drop(log);
+        window.close();
     }
 
     /// Delaying dispatch cannot compress the time between generated samples.
