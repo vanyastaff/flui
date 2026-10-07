@@ -39,6 +39,13 @@ pub(crate) enum Kind {
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     Simulator,
     /// An installed web browser.
+    #[cfg_attr(
+        not(any(target_os = "windows", target_os = "macos", target_os = "linux")),
+        expect(
+            dead_code,
+            reason = "browser probes exist only on desktop hosts; keep the shared JSON schema"
+        )
+    )]
     Browser,
 }
 

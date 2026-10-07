@@ -450,7 +450,7 @@ mod tests {
     #[test]
     fn the_probe_stays_up_past_the_checks_deadline() {
         assert!(PROBE_RUN_FOR > CHECK_DEADLINE);
-        let probe = include_str!("../../../../examples/a11y_probe.rs");
+        let probe = include_str!("../../../../examples/a11y_probe/desktop.rs");
         assert!(
             probe.contains(&format!("{:?}", uia::RUN_FOR_ENV)),
             "examples/a11y_probe.rs must read {} for its lifetime",

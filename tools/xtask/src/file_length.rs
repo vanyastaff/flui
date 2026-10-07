@@ -24,7 +24,7 @@
 //! reports, as a note, how many tracked `.rs` files under a production target's
 //! source directory the walk did not reach.
 
-mod modules;
+pub(crate) mod modules;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Write as _};

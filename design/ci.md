@@ -748,3 +748,16 @@ The label is no longer a lane input and its CLI flag is removed. AGENTS.md
 no longer recommends it. Nightly and manual CI remain Linux-only. Local
 platform/GPU/device commands remain available, while release workflows still
 build their platform artifacts. Earlier native-lane sections are historical.
+
+## Native source compilation
+
+Native type-checking selects packages from source cfg predicates and manifest
+target dependencies, rather than a fixed backend list. Each selected package's
+tests, examples and benches are compiled directly with its required target
+features, followed by an all-features configuration for optional native paths.
+C build scripts still run during clippy and need genuine target headers:
+Linux legs use MSVC cross tools and the bundled Android NDK. Both Apple
+compile-only legs use macOS runners' Xcode SDKs, including
+the logging headers unavailable in generic Darwin libc. This revises the
+Linux-only compilation policy above; runtime and GPU checks remain local.
+The matrix remains one required `cross-typecheck` job in the CI aggregator.
