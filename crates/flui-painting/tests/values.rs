@@ -883,6 +883,50 @@ fn decoration_interior_fallbacks() {
             "{name}: retain representable raw geometry"
         );
     }
+    let radial = |center, focal, focal_radius| {
+        let mut gradient = RadialGradient::circular(vec![Color::RED, Color::BLUE]);
+        gradient.center = Alignment::new(center, center);
+        gradient.focal = Some(Alignment::new(focal, focal));
+        gradient.radius = 1.0;
+        gradient.focal_radius = Some(focal_radius);
+        BoxDecoration::<f64>::with_gradient(Gradient::Radial(gradient))
+    };
+    let terminal = radial(0.5, 1.5, 0.0);
+    let overshot = BoxDecoration::lerp(&radial(1.0, 1.0, 0.0), &terminal, 2.0);
+    let other = radial(2.0, 0.0, 2.0);
+    let expected = radial(1.25, 0.75, 1.0);
+    for (a, b) in [(&overshot, &other), (&other, &overshot)] {
+        let mixed = BoxDecoration::lerp(a, b, 0.5);
+        let flui_painting::paint::Shader::RadialGradient {
+            center,
+            focal,
+            radius,
+            focal_radius,
+            ..
+        } = record(&mixed, 100.0)
+        else {
+            panic!("radial fallback fill");
+        };
+        let flui_painting::paint::Shader::RadialGradient {
+            center: expected_center,
+            focal: expected_focal,
+            radius: expected_radius,
+            focal_radius: expected_focal_radius,
+            ..
+        } = record(&expected, 100.0)
+        else {
+            panic!("expected radial fill");
+        };
+        assert_eq!(
+            (center, focal, radius, focal_radius),
+            (
+                expected_center,
+                expected_focal,
+                expected_radius,
+                expected_focal_radius
+            )
+        );
+    }
 }
 
 pub(crate) fn decoration_endpoint_ramp_preserves_stop_limit() {

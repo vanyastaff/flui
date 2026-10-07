@@ -1032,7 +1032,8 @@ the decoration rectangle, while packing is checked against the dispatched
 silhouette bounds, including the engine's narrowed circle radius.
 Chained extrapolations retain the terminal bounded fallback. Interior lerps
 interpolate terminal fallbacks with the same color mixing and lone-gradient
-alpha fading as their raw gradients, including identical endpoints. The fallback
+alpha fading as their raw gradients, including identical endpoints. If raw
+interpolation refuses, the terminal mix is used directly. The fallback
 travels with cloned and serialized decorations; replacing the
 gradient through its setter clears it, and direct field replacement is checked
 against the original extrapolated gradient before the fallback is used.

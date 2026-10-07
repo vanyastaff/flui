@@ -400,13 +400,17 @@ where
             (None, None) => None,
         };
         let gradient = mix_gradient(a.gradient.as_ref(), b.gradient.as_ref());
-        let gradient_fallback = gradient.as_ref().and_then(|raw| {
-            if a.gradient_fallback.is_none() && b.gradient_fallback.is_none() {
-                return None;
+        let bounded = if a.gradient_fallback.is_some() || b.gradient_fallback.is_some() {
+            mix_gradient(a.terminal_gradient(), b.terminal_gradient())
+        } else {
+            None
+        };
+        let (gradient, gradient_fallback) = match (gradient, bounded) {
+            (Some(raw), Some(bounded)) if raw != bounded => {
+                (Some(raw.clone()), Some(Box::new((raw, bounded))))
             }
-            let bounded = mix_gradient(a.terminal_gradient(), b.terminal_gradient())?;
-            (raw != &bounded).then(|| Box::new((raw.clone(), bounded)))
-        });
+            (raw, bounded) => (raw.or(bounded), None),
+        };
 
         // Images are not crossfaded; they switch at the midpoint.
         let image = if t < 0.5 {
