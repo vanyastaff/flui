@@ -1643,12 +1643,17 @@ impl WindowsPlatform {
                 }
 
                 windows::Win32::UI::WindowsAndMessaging::WM_POINTERDEVICECHANGE => {
-                    if wparam.0 == windows::Win32::UI::WindowsAndMessaging::PDC_REMOVAL as usize
-                        && let Some(ctx) = ctx
+                    if let Some(ctx) = ctx
                         && let Ok(device) = flui_platform_api::pointer::DeviceId::try_from(lparam.0 as usize as u64)
                     {
                         let time = flui_platform_api::EventTime::from_nanos(ctx.message_clock.message_time());
-                        let events = ctx.pointer_registry.borrow_mut().remove_device(device, time);
+                        let events = if wparam.0 == windows::Win32::UI::WindowsAndMessaging::PDC_REMOVAL as usize {
+                            ctx.pointer_registry.borrow_mut().remove_device(device, time)
+                        } else if wparam.0 == windows::Win32::UI::WindowsAndMessaging::PDC_ARRIVAL as usize {
+                            if let Some(kind) = super::events::native_device_kind(windows::Win32::Foundation::HANDLE(lparam.0 as *mut core::ffi::c_void)) {
+                                ctx.pointer_registry.borrow_mut().add_device(device, kind, time)
+                            } else { Vec::new() }
+                        } else { Vec::new() };
                         for event in events { ctx.callbacks.dispatch_input(event); }
                     }
                     LRESULT(0)

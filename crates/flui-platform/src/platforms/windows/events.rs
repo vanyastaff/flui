@@ -471,6 +471,12 @@ impl NativePointerRegistry {
         output
     }
 
+    pub(super) fn add_device(&mut self, device: flui_platform_api::pointer::DeviceId, kind: flui_platform_api::pointer::PointerKind, time: flui_platform_api::EventTime) -> Vec<PlatformInput> {
+        use flui_platform_api::pointer::{PointerDeviceChange, PointerEvent};
+        if self.devices.insert(device, kind).is_some() { return Vec::new(); }
+        vec![PlatformInput::Pointer(PointerEvent::DeviceAdded(PointerDeviceChange::new(device, kind, time)))]
+    }
+
     pub(super) fn delivers(&self, event: &PlatformInput) -> bool {
         use flui_platform_api::pointer::PointerEvent;
         let info = match event {
@@ -485,6 +491,21 @@ impl NativePointerRegistry {
         };
         self.contacts.values().any(|contact| contact.info == info)
     }
+}
+
+pub(super) fn native_device_kind(handle: windows::Win32::Foundation::HANDLE) -> Option<flui_platform_api::pointer::PointerKind> {
+    use flui_platform_api::pointer::{PointerKind, PenTool};
+    use windows::Win32::UI::{Controls::*, Input::Pointer::GetPointerDevice};
+    let mut info = POINTER_DEVICE_INFO::default();
+    // SAFETY: the notification carries the device handle and the initialized
+    // output lives through the query. Stale/removed handles are refused by Windows.
+    unsafe { GetPointerDevice(handle, &mut info).ok()?; }
+    Some(match info.pointerDeviceType {
+        POINTER_DEVICE_TYPE_INTEGRATED_PEN | POINTER_DEVICE_TYPE_EXTERNAL_PEN => PointerKind::Pen { tool: PenTool::Tip },
+        POINTER_DEVICE_TYPE_TOUCH => PointerKind::Touch,
+        POINTER_DEVICE_TYPE_TOUCH_PAD => PointerKind::Trackpad,
+        _ => PointerKind::Unknown,
+    })
 }
 
 #[cfg(test)]
