@@ -5,8 +5,10 @@
 //!
 //! # Pacing
 //!
-//! The release animation is a fixed 350ms / `Curves::FastEaseInToSlowEaseOut`
-//! settle, not a velocity-scaled lerp.
+//! A release at least as fast as `MIN_FLING_VELOCITY` settles with a fling
+//! that starts at the finger's speed, so the page keeps moving as fast as it
+//! was dragged. A slower release, or a cancel, takes a fixed 350ms /
+//! `Curves::FastEaseInToSlowEaseOut` settle.
 //!
 //! # Deferred by design
 //!
@@ -31,7 +33,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use flui_animation::{Animation, AnimationController, Curve, Curves};
+use flui_animation::{Animation, AnimationController, Curves};
 use flui_foundation::Listenable;
 use flui_interaction::recognizers::drag_variants::horizontal_drag;
 use flui_interaction::{
@@ -42,6 +44,7 @@ use flui_rendering::hit_testing::HitTestBehavior;
 use flui_view::prelude::*;
 use flui_view::{AnimatedView, impl_animated_view};
 
+use super::binding::PopPacing;
 use super::navigator::NavigatorHandle;
 use super::route::RouteId;
 use crate::{Directionality, GestureArenaScope, Listener, Positioned, SizedBox, Stack, StackFit};
@@ -135,8 +138,8 @@ impl BackGestureController {
     }
 
     fn finish(&self, velocity: f64, cancelled: bool) -> bool {
-        let curve: Arc<dyn Curve + Send + Sync> = Arc::new(Curves::FastEaseInToSlowEaseOut); // see `PopPacing`'s doc (binding.rs) — same erased easing-curve boundary
         let is_current = self.navigator.current() == Some(self.route);
+        let flung = is_current && !cancelled && velocity.abs() >= MIN_FLING_VELOCITY;
         let animate_forward = if !is_current {
             // A route already navigated away from (but perhaps still in the
             // stack) animates by whether it is still active, never by
@@ -144,42 +147,52 @@ impl BackGestureController {
             self.navigator.route_is_active(self.route)
         } else if cancelled {
             true
-        } else if velocity.abs() >= MIN_FLING_VELOCITY {
+        } else if flung {
             velocity <= 0.0
         } else {
             self.controller.value() > 0.5
         };
+        // A fling settles from the finger's speed: the controller spans one
+        // screen width, so widths/s are its units/s, and a positive (pop)
+        // velocity lowers its value. Anything else takes the flat pacing.
+        let pacing = if flung {
+            PopPacing::Fling {
+                velocity: -velocity,
+            }
+        } else {
+            PopPacing::Curved {
+                duration: DROPPED_SWIPE_DURATION,
+                curve: Arc::new(Curves::FastEaseInToSlowEaseOut), // see `PopPacing`'s doc (binding.rs) — same erased easing-curve boundary
+            }
+        };
 
         if animate_forward {
-            let _ = self.controller.animate_to_curved(
-                1.0,
-                Some(DROPPED_SWIPE_DURATION),
-                Arc::clone(&curve),
-            );
+            let _ = match pacing {
+                PopPacing::Fling { velocity } => self.controller.fling(velocity),
+                PopPacing::Curved { duration, curve } => {
+                    self.controller
+                        .animate_to_curved(1.0, Some(duration), curve)
+                }
+            };
         } else {
             if is_current {
                 // Reuse the navigator's pop, paced to match this gesture. The
                 // pacing rides the pop command itself (`pop_paced`), reaching
-                // `TransitionRoute::did_pop`'s `animate_back_curved` call
-                // atomically — the controller's very first reverse run after
-                // this drag uses the gesture's pacing, never a transient
-                // default one (see `navigator.rs`'s `pop_paced` doc for why
-                // this is not a two-step pop-then-animate-back).
-                let _ = self.navigator.pop_paced(
-                    self.route,
-                    DROPPED_SWIPE_DURATION,
-                    Arc::clone(&curve),
-                );
+                // `TransitionRoute::did_pop` atomically — the controller's
+                // very first reverse run after this drag uses the gesture's
+                // pacing, never a transient default one (see `navigator.rs`'s
+                // `pop_paced` doc for why this is not a two-step
+                // pop-then-animate-back).
+                let _ = self.navigator.pop_paced(self.route, pacing.clone());
             }
             // The pop may have finished inline if already at the target
             // destination — this covers both that case (nothing left to
             // override) and `!is_current` (no pop happened
             // above at all, but this route's own controller may still need
-            // to settle toward 0).
-            if self.controller.is_animating() {
-                let _ =
-                    self.controller
-                        .animate_back_curved(0.0, Some(DROPPED_SWIPE_DURATION), curve);
+            // to settle toward 0). After a fling pop the route's own run is
+            // already that fling, so it is left alone.
+            if self.controller.is_animating() && !flung {
+                let _ = pacing.animate_back(&self.controller);
             }
         }
 

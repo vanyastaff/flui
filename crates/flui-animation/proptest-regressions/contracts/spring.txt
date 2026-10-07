@@ -1,0 +1,9 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 79a7bb1d383392a000f5472057a2a55a12d3887323b762ec601b17b2a84b50dd # shrinks to mass = 3.470920780520021e100, stiffness = 1.0, damping = 3.099195694984456e196, start = 8.018451797036265e236, end = 1.0, velocity = 1.0
+cc 06c35611aa3438b9a89f117ab20f50cb9a68885e1ac973402c229b81712d0ebf # shrinks to omega = 17.780254069237905, zeta = 1.0, x0 = 39.81572346435005, v0 = -872.388273069338, derived = true
+cc fd63af4373645b7c2083d917e98c9666660052bc1d864f47103473923fdddfdc # shrinks to omega = 29.04147715942287, zeta = 1.0006793812038015, x0 = 15.227250075355018, v0 = -685.544888464151, derived = true

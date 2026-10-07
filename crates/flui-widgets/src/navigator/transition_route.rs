@@ -737,9 +737,7 @@ impl<T: Send + Clone + 'static> Route for TransitionRoute<T> {
             .and_then(|binding| binding.take_pop_pacing());
         if let Some(controller) = self.inner.controller.lock().as_ref() {
             let _ = match pacing {
-                Some(pacing) => {
-                    controller.animate_back_curved(0.0, Some(pacing.duration), pacing.curve)
-                }
+                Some(pacing) => pacing.animate_back(controller),
                 None => controller.reverse(),
             };
         }

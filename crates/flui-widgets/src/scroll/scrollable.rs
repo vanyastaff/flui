@@ -62,6 +62,7 @@ use flui_foundation::geometry::Axis;
 use flui_foundation::{Listenable, ListenerId};
 use flui_rendering::constraints::AxisDirection;
 use flui_rendering::hit_testing::HitTestBehavior;
+use flui_rendering::pipeline::{PipelineOwner, WeakPipelineCell};
 use flui_rendering::view::{ScrollDirection, ScrollPosition};
 use flui_view::prelude::StatefulView;
 use flui_view::{
@@ -323,6 +324,20 @@ pub struct ScrollableState {
     vsync: Option<Vsync>,
     /// Registration handle returned by `vsync.register(fling_controller)`.
     vsync_registration: Option<VsyncRegistration>,
+    /// The presentation's pipeline, acquired in `init_state`/
+    /// `did_change_dependencies`; a release reads its device pixel ratio so
+    /// the ballistic run rests within half a device pixel.
+    pipeline: Option<WeakPipelineCell>,
+}
+
+/// The device pixel ratio of the presentation `pipeline` belongs to, read at
+/// the moment of the call so a window moved to another monitor is honoured.
+/// `1.0` once the presentation is gone or while a frame holds the pipeline.
+pub(crate) fn presentation_device_pixel_ratio(pipeline: Option<&WeakPipelineCell>) -> f64 {
+    pipeline
+        .and_then(WeakPipelineCell::upgrade)
+        .and_then(|cell| cell.try_with(PipelineOwner::device_pixel_ratio))
+        .unwrap_or(1.0)
 }
 
 impl std::fmt::Debug for ScrollableState {
@@ -356,6 +371,7 @@ impl StatefulView for Scrollable {
             command_listener: None,
             vsync: None,
             vsync_registration: None,
+            pipeline: None,
         }
     }
 }
@@ -496,6 +512,7 @@ impl ScrollableState {
 impl ViewState<Scrollable> for ScrollableState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.post_frame = ctx.post_frame_handle();
+        self.pipeline = ctx.pipeline_owner().map(|cell| cell.downgrade());
         self.install_flush_handle(ctx);
         self.install_stop_hook();
         self.install_fling_listener();
@@ -517,6 +534,7 @@ impl ViewState<Scrollable> for ScrollableState {
 
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
         self.post_frame = ctx.post_frame_handle();
+        self.pipeline = ctx.pipeline_owner().map(|cell| cell.downgrade());
         self.install_flush_handle(ctx);
     }
 
@@ -556,6 +574,7 @@ impl ViewState<Scrollable> for ScrollableState {
             let fling_start = fling_controller.clone();
             let phys_fling = physics.clone();
             let ctrl_fling = scroll_controller.clone();
+            let pipeline_fling = self.pipeline.clone();
 
             // Position mode, not `.offset(pixels)`: the composed viewport's
             // offset IS this controller's shared `ScrollPosition`, so a
@@ -664,7 +683,10 @@ impl ViewState<Scrollable> for ScrollableState {
                     let fling_velocity_px_per_sec = flui_interaction::GestureSettings::default()
                         .clamp_fling_velocity(fling_velocity_px_per_sec);
 
-                    let metrics = ScrollMetrics::from(&ctrl_fling.position());
+                    let metrics = ScrollMetrics::from(&ctrl_fling.position())
+                        .with_device_pixel_ratio(presentation_device_pixel_ratio(
+                            pipeline_fling.as_ref(),
+                        ));
                     if let Some(sim) =
                         phys_fling.create_ballistic_simulation(&metrics, fling_velocity_px_per_sec)
                     {

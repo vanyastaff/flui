@@ -5,7 +5,7 @@ use flui_animation::{
     Animation, AnimationController, AnimationStatus, AnimationSwitch, ConstantAnimation,
     CurvedAnimation, ProxyAnimation, StatusCallback, Vsync, VsyncRegistration,
     curve::{Curve, Split},
-    simulation::{Simulation, Tolerance},
+    simulation::Simulation,
 };
 use flui_foundation::{Listenable, ListenerCallback, ListenerId};
 use flui_scheduler::{Ticker, UpdateScheduler, ticker::TickerFuture};
@@ -92,9 +92,6 @@ impl Simulation for CustomSimulation {
             self.hook.run();
         }
         time >= 1.0
-    }
-    fn tolerance(&self) -> Tolerance {
-        Tolerance::DEFAULT
     }
 }
 struct CustomCurve(Arc<Hook>);
@@ -240,9 +237,6 @@ impl Simulation for SourceDrop {
     fn is_done(&self, time: f64) -> bool {
         time >= 1.0
     }
-    fn tolerance(&self) -> Tolerance {
-        Tolerance::DEFAULT
-    }
 }
 fn source_retirement(operation: fn(&AnimationController)) {
     let controller = AnimationController::without_ticker(Duration::from_secs(1));
@@ -302,9 +296,6 @@ impl Simulation for HostileSimulation {
     }
     fn is_done(&self, _: f64) -> bool {
         false
-    }
-    fn tolerance(&self) -> Tolerance {
-        Tolerance::DEFAULT
     }
 }
 fn hostile_source_after_sample_failure(initial: bool) {
@@ -479,9 +470,6 @@ impl Simulation for FailingRetirement {
     }
     fn is_done(&self, _: f64) -> bool {
         false
-    }
-    fn tolerance(&self) -> Tolerance {
-        Tolerance::DEFAULT
     }
 }
 fn ordinary_retirement_failure_preserves_new_run() {

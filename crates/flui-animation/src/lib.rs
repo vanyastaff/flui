@@ -17,9 +17,8 @@
 //! - [`Keyframes`] - A value as a pure function of time: segments timed by
 //!   `Duration`, eased, cubic, held or jumping; [`Stagger`] offsets one
 //!   track per index
-//! - [`smoothing`] - Frame-rate-independent followers:
-//!   [`exp_decay`]/[`Smoothed`] (half-life exponential decay) and
-//!   [`SmoothDamp`] (critically damped, max-speed-clamped)
+//! - [`simulation`] - Validated physics: springs, friction and a bouncing
+//!   scroll fling that rest at a precomputed time
 //! - [`AnimatedValue`] - Interruptible spring value with velocity-preserving
 //!   retargeting (`#[derive(TwoWayConverter)]` for custom types)
 //! - [`AnimationError`] - Error type for animation operations
@@ -127,9 +126,9 @@ pub mod ext;
 pub mod keyframes;
 pub mod motion;
 pub mod proxy;
+pub mod retarget;
 pub mod reverse;
 pub mod simulation;
-pub mod smoothing;
 pub mod spring;
 pub mod stagger;
 pub mod switch;
@@ -153,12 +152,13 @@ pub use ext::AnimatableExt;
 pub use keyframes::{Keyframes, KeyframesBuilder, KeyframesError};
 pub use motion::{AnimationTime, FrameTick, InvalidPlaybackRate, MotionClock, PlaybackRate};
 pub use proxy::ProxyAnimation;
+pub use retarget::MotionSpec;
 pub use reverse::ReverseAnimation;
 pub use simulation::{
-    BoundedFrictionSimulation, ClampedSimulation, FrictionSimulation, GravitySimulation,
-    ScrollSpringSimulation, Simulation, SpringDescription, SpringSimulation, SpringType, Tolerance,
+    BouncingScrollSimulation, BoundedFrictionSimulation, FrictionSimulation, Simulation,
+    SimulationBounds, SimulationError, SimulationParameter, SpringDescription, SpringSimulation,
+    SpringType, Tolerance,
 };
-pub use smoothing::{SmoothDamp, Smoothed, exp_decay, exp_decay_half_life};
 pub use spring::{AnimatedValue, TwoWayConverter};
 pub use stagger::{Stagger, StaggerOrigin};
 // `#[derive(TwoWayConverter)]` generates `TwoWayConverter` and `Lerp` impls. It
@@ -210,8 +210,7 @@ pub mod prelude {
     pub use crate::proxy::ProxyAnimation;
     pub use crate::reverse::ReverseAnimation;
     pub use crate::simulation::{
-        FrictionSimulation, GravitySimulation, Simulation, SpringDescription, SpringSimulation,
-        SpringType, Tolerance,
+        FrictionSimulation, Simulation, SpringDescription, SpringSimulation, SpringType, Tolerance,
     };
     pub use crate::status::{AnimationBehavior, AnimationStatus};
     pub use crate::switch::AnimationSwitch;

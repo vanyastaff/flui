@@ -544,111 +544,117 @@ let animated = FloatTween::new(0.0, 100.0).animate(curved);
 
 ## Physics Simulations
 
+Every simulation is an immutable value. Constructors validate their input and
+return `Result<_, SimulationError>`; a simulation that was built publishes a
+finite position and velocity for every `t`. Each one computes at construction
+the time from which it stays within its `Tolerance`: from then on `x` is
+exactly the resting position, `dx` is `0.0` and `is_done` stays `true`, however
+the time is sampled.
+
 ### SpringDescription
 
-Defines spring physics parameters:
+A spring is stored as its natural frequency `ω` and damping ratio `ζ`; the
+fields are private, so an undamped or non-finite spring cannot be written down.
 
 ```rust
-use flui_animation::SpringDescription;
+use flui_animation::simulation::{SimulationError, SpringDescription, SpringType};
+use std::time::Duration;
 
-// Explicit parameters
-let spring = SpringDescription::new(
-    1.0,    // mass
-    500.0,  // stiffness (k)
-    10.0,   // damping (c)
-);
+# fn main() -> Result<(), SimulationError> {
+// Explicit parameters: mass, stiffness (k), damping (c), all finite and > 0.
+let physical = SpringDescription::new(1.0, 500.0, 10.0)?;
 
-// From damping ratio (more intuitive)
-let spring = SpringDescription::with_damping_ratio(
-    1.0,    // mass
-    500.0,  // stiffness
-    1.0,    // ratio: 1.0 = critically damped, <1 = bouncy, >1 = overdamped
-);
+// Perceptual parameters (SwiftUI's `Spring(duration:bounce:)`).
+let perceptual = SpringDescription::with_duration_and_bounce(Duration::from_millis(500), 0.3)?;
+assert_eq!(perceptual.spring_type(), SpringType::Underdamped);
 
-// From animation feel
-let spring = SpringDescription::with_duration_and_bounce(
-    0.5,    // perceptual duration in seconds
-    0.3,    // bounce: 0 = no bounce, higher = more bounce
-);
+// A constant spring from a damping ratio; panics on invalid input.
+let critical = SpringDescription::with_damping_ratio(1.0, 500.0, 1.0);
+assert_eq!(critical.spring_type(), SpringType::CriticallyDamped);
 
-// Query properties
-let ratio = spring.damping_ratio(); // 0.0–∞
-let bounce = spring.bounce();
+assert!(SpringDescription::new(1.0, 500.0, 0.0).is_err()); // never rests
+# let _ = physical;
+# Ok(())
+# }
 ```
 
 ### SpringSimulation
 
 ```rust
-use flui_animation::{Simulation, SpringDescription, SpringSimulation};
-# let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 1.0);
+use flui_animation::simulation::{Simulation, SpringDescription, SpringSimulation, Tolerance};
 
-let sim = SpringSimulation::new(
-    spring,
-    0.0,    // start position
-    1.0,    // end position
-    0.0,    // initial velocity
-);
+# fn main() -> Result<(), flui_animation::simulation::SimulationError> {
+let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 0.7);
+let sim = SpringSimulation::try_new(spring, 0.0, 1.0, 0.0, Tolerance::DEFAULT)?;
 
-let x = sim.x(0.1);         // Position at t=0.1
-let dx = sim.dx(0.1);       // Velocity at t=0.1
-let done = sim.is_done(0.1); // Within tolerance?
+assert_eq!(sim.x(0.0), 0.0);
+assert!(sim.dx(0.05) > 0.0);
+assert!(sim.is_done(5.0));
+assert_eq!(sim.x(5.0), 1.0); // exactly the target once at rest
+# Ok(())
+# }
 ```
 
 ### FrictionSimulation
 
-Friction displacement uses `f64::exp_m1`, and inverse position-to-time uses
-`f64::ln_1p`, so finite drag approaching one retains small motion instead of
-rounding it to zero. The public integration test
-`friction_preserves_small_decay_and_position_time_roundtrips` in the
-[consumer tests](tests/contracts/simulation.rs) checks the constant-velocity
-limit, normal positive and negative flings, position/time round trips, and
-unreachable/non-finite queries.
-
-Deceleration with drag:
+Friction displacement uses `f64::exp_m1` and inverse position-to-time uses
+`f64::ln_1p`, so a drag approaching one keeps small motion instead of rounding
+it to zero. It rests once the remaining glide is within the tolerance. The
+consumer test `friction_preserves_small_decay_and_position_time_roundtrips`
+([tests/contracts/simulation.rs](tests/contracts/simulation.rs)) checks the
+constant-velocity limit, round trips and unreachable queries.
 
 ```rust
-use flui_animation::FrictionSimulation;
+use flui_animation::simulation::{FrictionSimulation, Simulation, Tolerance};
 
-let sim = FrictionSimulation::new(
-    0.05,   // drag coefficient (0 < drag < 1, drag ≠ 1)
-    0.0,    // initial position
-    100.0,  // initial velocity
-);
-
-let rest = sim.final_x();             // Resting position
-let t = sim.time_at_x(rest * 0.5);    // Time to reach half of it
+# fn main() -> Result<(), flui_animation::simulation::SimulationError> {
+// drag in (0, 1): the fraction of velocity kept per second.
+let sim = FrictionSimulation::new(0.135, 0.0, 1000.0, Tolerance::DEFAULT)?;
+let rest = sim.final_x();
+assert!(sim.time_at_x(rest / 2.0) > 0.0);
+assert_eq!(sim.time_at_x(-1.0), f64::INFINITY); // behind the start: never
+# Ok(())
+# }
 ```
 
-### GravitySimulation
+### Bounded and bouncing scroll flings
 
-Constant acceleration:
+`BoundedFrictionSimulation` stops at the bound it travels toward.
+`BouncingScrollSimulation` lets friction carry past an edge, hands over to a
+spring there with the same position and velocity, overshoots and returns to
+rest exactly on the edge.
 
 ```rust
-use flui_animation::GravitySimulation;
+use flui_animation::simulation::{
+    BouncingScrollSimulation, Simulation, SimulationBounds, SpringDescription, Tolerance,
+};
 
-let sim = GravitySimulation::new(
-    9.8,    // acceleration
-    0.0,    // initial position
-    10.0,   // initial velocity
-    100.0,  // end position (simulation ends here)
-);
+# fn main() -> Result<(), flui_animation::simulation::SimulationError> {
+let bounds = SimulationBounds::new(0.0, 100.0)?;
+let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 0.75);
+let sim = BouncingScrollSimulation::new(spring, 0.135, 90.0, 2000.0, bounds, Tolerance::DEFAULT)?;
+assert!(sim.is_done(10.0));
+assert_eq!(sim.x(10.0), 100.0);
+assert!(SimulationBounds::new(1.0, 0.0).is_err());
+# Ok(())
+# }
 ```
 
 ### Tolerance
 
-All simulations use tolerance for `is_done()`:
-
 ```rust
-use flui_animation::{SpringDescription, SpringSimulation, Tolerance};
-# let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 1.0);
+use flui_animation::simulation::Tolerance;
 
-let tolerance = Tolerance::new(
-    0.01,   // distance: position tolerance
-    0.01,   // velocity: velocity tolerance
-    0.001,  // time: time tolerance
-);
-
-let sim = SpringSimulation::with_tolerance(spring, 0.0, 1.0, 0.0, tolerance);
+# fn main() -> Result<(), flui_animation::simulation::SimulationError> {
+// Distance and speed limits, in the simulation's units.
+let precise = Tolerance::new(1e-4, 1e-4)?;
+// Half a device pixel at a ratio of 2, with a velocity limit derived from
+// the motion's own time scale: what scroll physics use.
+let screen = Tolerance::for_device_pixel_ratio(2.0)?;
+assert_eq!(screen, Tolerance::new(0.25, f64::INFINITY)?);
+# let _ = precise;
+# Ok(())
+# }
 ```
 
 ---
@@ -688,13 +694,18 @@ assert!(matches!(err, Err(AnimationError::InvalidBounds(_))));
 
 ## Validation
 
-Constructors validate parameters and panic on invalid input:
+Simulation constructors return `Err(SimulationError)` on invalid input
+(`SpringDescription::new`, `with_duration_and_bounce`,
+`with_response_and_damping`, `SpringSimulation::try_new`,
+`FrictionSimulation::new`, `BoundedFrictionSimulation::new`,
+`BouncingScrollSimulation::new`, `SimulationBounds::new`, `Tolerance::new`,
+`Tolerance::for_device_pixel_ratio`). These constructors, meant for constants,
+panic instead:
 
 | Constructor | Panics if |
 |-------------|-----------|
-| `SpringDescription::new` | mass ≤ 0, stiffness ≤ 0, damping < 0, or any non-finite |
-| `SpringDescription::with_damping_ratio` | mass ≤ 0, stiffness ≤ 0, ratio < 0, or any non-finite |
-| `FrictionSimulation::new` | drag ≤ 0, drag = 1.0 |
+| `SpringDescription::with_damping_ratio` | mass, stiffness or ratio is NaN, infinite or ≤ 0 |
+| `SpringSimulation::new` | start, end or velocity is not finite |
 | `Steps::new` | count = 0, or count = 1 with `JumpAt::None` |
 | `Interval::new` | begin/end not finite or outside [0,1], end < begin |
 | `Cubic::new` | any argument not finite, x1 or x2 outside [0,1], y1 or y2 outside [-1e6, 1e6] |
@@ -710,10 +721,8 @@ Each implemented from the canonical published source:
 
 | Capability | Source | API |
 |---|---|---|
-| Frame-rate-independent smoothing (half-life exponential decay) | Holmér, "lerp smoothing is broken" | `smoothing::exp_decay`, `Smoothed` |
-| Critically damped follower with max-speed clamp | Unity `SmoothDamp` / Game Programming Gems 4 ch. 1.10 | `smoothing::SmoothDamp` |
 | Perceptually uniform color interpolation | Ottosson, Oklab (2020) | `ColorTween`, `Color::lerp` (premultiplied alpha, ADR-0149) |
 | M3 emphasized easing + full Penner catalog | Material 3 / Penner | `Curves::EaseInOutCubicEmphasized`, `ThreePointCubic`, `Split` |
 | Interruptible springs with velocity-preserving retarget | analytic closed forms | `AnimatedValue`, `#[derive(TwoWayConverter)]` |
 
-See `examples/smoothing_follow.rs` and `examples/oklab_gradient.rs`.
+See `examples/oklab_gradient.rs`.

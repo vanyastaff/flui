@@ -46,12 +46,17 @@ mod derive_animatable;
 
 #[path = "contracts/motion_clock.rs"]
 mod motion_clock;
+#[path = "contracts/retarget.rs"]
+mod retarget;
 
 #[path = "contracts/proxy.rs"]
 mod proxy;
 
 #[path = "contracts/simulation.rs"]
 mod simulation;
+
+#[path = "contracts/spring.rs"]
+mod spring;
 
 #[path = "contracts/tween.rs"]
 mod tween;

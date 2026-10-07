@@ -25,10 +25,10 @@ use std::time::Duration;
 
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 
-use flui_animation::smoothing::{SmoothDamp, exp_decay_half_life};
 use flui_animation::{
     Animatable, AnimatedValue, Animation, AnimationController, ColorTween, Curve, CurvedAnimation,
-    Curves, FloatTween, FrictionSimulation, Simulation, SpringDescription, SpringSimulation, Tween,
+    Curves, FloatTween, FrictionSimulation, Simulation, SpringDescription, SpringSimulation,
+    Tolerance, Tween,
 };
 use flui_foundation::Listenable;
 use flui_foundation::geometry::Offset;
@@ -85,46 +85,12 @@ fn curve_eval(c: &mut Criterion) {
     group.finish();
 }
 
-fn smoothing_step(c: &mut Criterion) {
-    let mut group = c.benchmark_group("smoothing");
-
-    group.bench_function("exp_decay_half_life", |b| {
-        b.iter(|| {
-            black_box(exp_decay_half_life(
-                black_box(10.0),
-                black_box(100.0),
-                black_box(0.25),
-                black_box(1.0 / 120.0),
-            ))
-        });
-    });
-
-    // The target flips every step, so the damper is always chasing a target
-    // it is far from — a fixed target converges within a few hundred
-    // iterations and leaves the benchmark pricing the at-rest regime.
-    let mut damp = SmoothDamp::new(0.2);
-    let mut pos = 0.0_f64;
-    let mut target = 100.0_f64;
-    group.bench_function("smooth_damp_step", |b| {
-        b.iter(|| {
-            target = 100.0 - target;
-            pos = damp.step(black_box(pos), black_box(target), black_box(1.0 / 120.0));
-            black_box(pos)
-        });
-    });
-
-    group.finish();
-}
-
 fn spring_step(c: &mut Criterion) {
     let mut group = c.benchmark_group("spring");
 
-    let sim = SpringSimulation::new(
-        SpringDescription::with_response_and_damping(0.3, 0.8),
-        0.0,
-        100.0,
-        0.0,
-    );
+    let spring =
+        SpringDescription::with_response_and_damping(Duration::from_millis(300), 0.8).unwrap();
+    let sim = SpringSimulation::try_new(spring, 0.0, 100.0, 0.0, Tolerance::DEFAULT).unwrap();
     group.bench_function("simulation_x_dx", |b| {
         b.iter(|| {
             let t = black_box(0.1_f64);
@@ -132,20 +98,37 @@ fn spring_step(c: &mut Criterion) {
         });
     });
 
+    // Construction includes the rest-time search.
+    group.bench_function("simulation_new", |b| {
+        b.iter(|| {
+            black_box(
+                SpringSimulation::try_new(
+                    black_box(spring),
+                    black_box(0.0),
+                    black_box(100.0),
+                    black_box(250.0),
+                    Tolerance::DEFAULT,
+                )
+                .unwrap(),
+            )
+        });
+    });
+
     // Per-component color spring: the first frame after a retarget. Each
     // iteration starts from a freshly retargeted value, so the spring is
-    // always in motion — advancing one shared value forever would price a
+    // always in motion; advancing one shared value forever would price a
     // settled spring at an ever-growing elapsed time.
+    let smooth =
+        SpringDescription::with_duration_and_bounce(Duration::from_millis(500), 0.0).unwrap();
     group.bench_function("animated_value_color_frame", |b| {
         b.iter_batched(
             || {
-                let mut value =
-                    AnimatedValue::new(Color::rgba(0, 0, 0, 255), SpringDescription::smooth());
-                value.animate_to(Color::rgba(255, 128, 0, 255));
+                let mut value = AnimatedValue::new(Color::rgba(0, 0, 0, 255), smooth).unwrap();
+                value.animate_to(Color::rgba(255, 128, 0, 255)).unwrap();
                 value
             },
             |mut value| {
-                value.advance(black_box(FRAME));
+                value.advance(black_box(Duration::from_secs_f64(FRAME)));
                 black_box(value.value());
                 value
             },
@@ -226,22 +209,27 @@ fn controller_tick(c: &mut Criterion) {
     }
 
     // Simulation runs: a near-unit drag that takes ~2e10 s to slow below the
-    // default velocity tolerance, and an undamped spring that never settles.
+    // default velocity tolerance, and a barely damped spring that rests only
+    // after millions of seconds.
     let friction = AnimationController::unbounded_without_ticker(NEVER_ENDING);
     friction
-        .animate_with(FrictionSimulation::new(1.0 - 1e-9, 0.0, 1000.0))
+        .animate_with(FrictionSimulation::new(1.0 - 1e-9, 0.0, 1000.0, Tolerance::DEFAULT).unwrap())
         .unwrap();
     bench_live_tick(&mut group, "simulation_friction", &friction);
     friction.dispose();
 
     let spring = AnimationController::unbounded_without_ticker(NEVER_ENDING);
     spring
-        .animate_with(SpringSimulation::new(
-            SpringDescription::new(1.0, 100.0, 0.0),
-            0.0,
-            1000.0,
-            0.0,
-        ))
+        .animate_with(
+            SpringSimulation::try_new(
+                SpringDescription::new(1.0, 100.0, 1e-6).unwrap(),
+                0.0,
+                1000.0,
+                0.0,
+                Tolerance::DEFAULT,
+            )
+            .unwrap(),
+        )
         .unwrap();
     bench_live_tick(&mut group, "simulation_spring", &spring);
     spring.dispose();
@@ -302,7 +290,6 @@ criterion_group!(
     benches,
     tween_transform,
     curve_eval,
-    smoothing_step,
     spring_step,
     controller_tick,
     controller_status

@@ -55,6 +55,13 @@ pub(crate) fn release_matrix_fling_and_slow_release() {
         let still_settling = gesture.drag_end(-2.0);
         assert!(still_settling, "an animated release keeps the run going");
         assert_eq!(c.status(), AnimationStatus::Forward);
+        // The settle starts at the finger's speed (screen-widths/s are
+        // controller units/s), not at a fixed duration's average.
+        assert!(
+            (c.velocity() - 2.0).abs() < 1e-9,
+            "stay settle starts at {} widths/s",
+            c.velocity()
+        );
     }
     // Fast positive velocity: pop (route animates back to 0.0).
     {
@@ -64,6 +71,11 @@ pub(crate) fn release_matrix_fling_and_slow_release() {
         let still_settling = gesture.drag_end(2.0);
         assert!(still_settling);
         assert_eq!(c.status(), AnimationStatus::Reverse);
+        assert!(
+            (c.velocity() + 2.0).abs() < 1e-9,
+            "pop settle starts at {} widths/s",
+            c.velocity()
+        );
     }
     // No meaningful velocity, value > 0.5: stay.
     {
