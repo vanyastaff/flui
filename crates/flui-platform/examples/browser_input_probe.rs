@@ -55,6 +55,17 @@ mod browser {
         )
     }
 
+    fn append_result(name: &str, value: &str) {
+        let previous = web_sys::window()
+            .expect("browser window")
+            .document()
+            .expect("document")
+            .get_element_by_id(name)
+            .and_then(|node| node.text_content())
+            .unwrap_or_default();
+        publish(name, &format!("{previous}{value},"));
+    }
+
     #[wasm_bindgen]
     pub fn input_probe() -> Result<(), JsValue> {
         let platform = WebPlatform::new().map_err(|error| JsValue::from_str(&error.to_string()))?;
@@ -68,6 +79,7 @@ mod browser {
                     flui_platform_api::keyboard::Key::Character(text) => text.as_str(),
                     _ => "unknown",
                 };
+                append_result("keyboard-sequence", key);
                 publish("keyboard", &format!(
                     r#"{{"key":"{}","code":"{}","state":"{:?}","location":"{:?}","repeat":"{:?}","composition":"{:?}","shift":{}}}"#,
                     key, event.code.as_str(), event.state(), event.location,
@@ -77,6 +89,7 @@ mod browser {
             }
             if let PlatformInput::Pointer(event) = input {
                 if let PointerEvent::Scroll(event) = &event {
+                    append_result("wheel-sequence", &event.delta.x().to_string());
                     publish("scroll-data", &format!(
                         r#"{{"unit":"{:?}","x":{},"y":{},"precision":"{:?}","shift":{}}}"#,
                         event.delta.unit(), event.delta.x(), event.delta.y(), event.precision,

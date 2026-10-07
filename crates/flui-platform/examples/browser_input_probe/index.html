@@ -14,6 +14,8 @@ pre { position: relative; z-index: 9999; background: white; width: max-content; 
   <button id="fractional">Check fractional positions</button>
   <button id="owned-wheel">Check wheel units and precision</button>
   <button id="owned-keyboard">Check native key vocabulary</button>
+  <button id="keyboard-getter-reentry">Check keyboard getter reentry (fresh page)</button>
+  <button id="wheel-getter-reentry">Check wheel getter reentry (fresh page)</button>
   <button id="pen-samples">Check pen samples</button>
   <button id="chord">Check native pointer chord</button>
   <button id="sensor-validation">Check pen sensor validation</button>
@@ -143,6 +145,40 @@ document.getElementById('owned-keyboard').onclick = () => check('owned-keyboard-
       repeat: 'First', composition: 'Inactive', shift: false,
     });
   }
+});
+document.getElementById('keyboard-getter-reentry').onclick = () => check('keyboard-getter-reentry-check', () => {
+  if (!document.querySelector('canvas')) throw new Error('Install input first');
+  report('keyboard-sequence', '');
+  const outer = new KeyboardEvent('keydown', { key: 'q', code: 'KeyQ' });
+  let reads = 0;
+  Object.defineProperty(outer, 'key', { get() {
+    reads += 1;
+    if (reads === 1) window.dispatchEvent(new KeyboardEvent('keydown', { key: 'r', code: 'KeyR' }));
+    return 'q';
+  } });
+  window.dispatchEvent(outer);
+  equal({ reads, sequence: document.getElementById('keyboard-sequence').textContent }, { reads: 1, sequence: 'r,q,' });
+  window.dispatchEvent(new KeyboardEvent('keyup', { key: 'q', code: 'KeyQ' }));
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 's', code: 'KeyS' }));
+  equal({ sequence: document.getElementById('keyboard-sequence').textContent }, { sequence: 'r,q,q,s,' });
+});
+document.getElementById('wheel-getter-reentry').onclick = () => check('wheel-getter-reentry-check', () => {
+  const canvas = document.querySelector('canvas');
+  if (!canvas) throw new Error('Install input first');
+  report('wheel-sequence', '');
+  const rect = canvas.getBoundingClientRect();
+  const common = { bubbles: true, clientX: rect.left + 30, clientY: rect.top + 20, deltaMode: 0 };
+  const outer = new WheelEvent('wheel', { ...common, deltaX: 2 });
+  let reads = 0;
+  Object.defineProperty(outer, 'deltaX', { get() {
+    reads += 1;
+    if (reads === 1) canvas.dispatchEvent(new WheelEvent('wheel', { ...common, deltaX: 1 }));
+    return 2;
+  } });
+  canvas.dispatchEvent(outer);
+  equal({ reads, sequence: document.getElementById('wheel-sequence').textContent }, { reads: 1, sequence: '1,2,' });
+  canvas.dispatchEvent(new WheelEvent('wheel', { ...common, deltaX: 3 }));
+  equal({ sequence: document.getElementById('wheel-sequence').textContent }, { sequence: '1,2,3,' });
 });
 document.getElementById('fractional').onclick = () => check('fractional-check', () => {
   const canvas = document.querySelector('canvas');
