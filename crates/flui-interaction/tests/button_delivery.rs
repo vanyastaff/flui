@@ -24,8 +24,8 @@ fn resampled_move_precedes_button_edges_without_restarting_the_contact() {
 
 #[test]
 fn queued_move_failure_still_delivers_button_edge_and_preserves_first_failure() {
-    for edge_panics in [false, true] {
-        assert_button_contacts(true, edge_panics, false);
+    for (resampling, edge_panics) in [(false, false), (false, true), (true, false), (true, true)] {
+        assert_button_contacts(true, edge_panics, resampling);
     }
 }
 
