@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use flui_foundation::geometry::Offset;
 use flui_foundation::{ManualClock, PresentationId};
 use flui_interaction::events::{
-    PointerEvent, PointerType, make_down_event, make_move_event, make_move_event_for_id,
+    PointerEvent, PointerKind, make_down_event, make_move_event, make_move_event_for_id,
     make_up_event,
 };
 use flui_interaction::{GestureArenaMember, PointerId};
@@ -53,9 +53,10 @@ fn install_secondary(realm: &mut UiRealm) -> PresentationId {
 }
 
 fn hover() -> PointerEvent {
-    let mut event = make_move_event(Offset::new(8.0, 9.0), PointerType::Mouse);
+    let mut event =
+        make_move_event(Offset::new(8.0, 9.0), PointerKind::Mouse).expect("finite test position");
     if let PointerEvent::Move(update) = &mut event {
-        update.current.buttons = Default::default();
+        update.buttons = Default::default();
     }
     event
 }
@@ -79,12 +80,12 @@ pub(crate) fn a_secondary_contact_move_is_delivered_by_the_next_frame() {
     dispatch(
         &realm,
         secondary,
-        make_down_event(Offset::new(4.0, 6.0), PointerType::Touch),
+        make_down_event(Offset::new(4.0, 6.0), PointerKind::Touch).expect("finite test position"),
     );
     dispatch(
         &realm,
         secondary,
-        make_move_event(Offset::new(8.0, 9.0), PointerType::Touch),
+        make_move_event(Offset::new(8.0, 9.0), PointerKind::Touch).expect("finite test position"),
     );
     assert_eq!(moves.get(), 0, "motion waits for frame cadence");
     pump(&mut realm);
@@ -113,8 +114,9 @@ pub(crate) fn a_secondary_deferred_arena_verdict_is_delivered_by_the_next_frame(
     let accepted = Rc::new(Cell::new(0));
     let member = Rc::new(AcceptLog(accepted.clone()));
     let arena = realm.presentation_gestures_for_test(secondary).arena();
-    let _entry = arena.add(PointerId::PRIMARY, &member);
-    arena.close(PointerId::PRIMARY);
+    let pointer = PointerId::new(std::num::NonZeroU64::MIN);
+    let _entry = arena.add(pointer, &member);
+    arena.close(pointer);
     assert_eq!(
         accepted.get(),
         0,
@@ -205,12 +207,12 @@ pub(crate) fn host_pause_keeps_a_completed_held_tap_for_the_first_commit() {
     dispatch(
         &realm,
         primary,
-        make_down_event(Offset::new(4.0, 6.0), PointerType::Touch),
+        make_down_event(Offset::new(4.0, 6.0), PointerKind::Touch).expect("finite test position"),
     );
     dispatch(
         &realm,
         primary,
-        make_up_event(Offset::new(4.0, 6.0), PointerType::Touch),
+        make_up_event(Offset::new(4.0, 6.0), PointerKind::Touch).expect("finite test position"),
     );
     assert_eq!(
         (downs.get(), ups.get()),
@@ -278,12 +280,14 @@ fn failing_frame_motion_still_delivers_the_sibling(secondary_panics: bool) {
         dispatch(
             &realm,
             id,
-            make_down_event(Offset::new(4.0, 6.0), PointerType::Touch),
+            make_down_event(Offset::new(4.0, 6.0), PointerKind::Touch)
+                .expect("finite test position"),
         );
         dispatch(
             &realm,
             id,
-            make_move_event(Offset::new(8.0, 9.0), PointerType::Touch),
+            make_move_event(Offset::new(8.0, 9.0), PointerKind::Touch)
+                .expect("finite test position"),
         );
     }
     let failure = catch_unwind(AssertUnwindSafe(|| pump(&mut realm)))
@@ -304,7 +308,8 @@ fn failing_frame_motion_still_delivers_the_sibling(secondary_panics: bool) {
         dispatch(
             &realm,
             id,
-            make_move_event(Offset::new(12.0, 13.0), PointerType::Touch),
+            make_move_event(Offset::new(12.0, 13.0), PointerKind::Touch)
+                .expect("finite test position"),
         );
     }
     pump(&mut realm);
@@ -391,7 +396,7 @@ fn pause_diagnostic_failure_still_drains_motion(cancel_panics: bool) {
     dispatch(
         &realm,
         primary,
-        make_down_event(Offset::new(4.0, 6.0), PointerType::Touch),
+        make_down_event(Offset::new(4.0, 6.0), PointerKind::Touch).expect("finite test position"),
     );
     assert_eq!(
         downs.get(),
@@ -399,12 +404,13 @@ fn pause_diagnostic_failure_still_drains_motion(cancel_panics: bool) {
         "the contact is admitted and reaches its real widget route"
     );
     let mut motion = make_move_event_for_id(
-        PointerId::new(2).expect("nonzero mouse pointer"),
+        PointerId::try_from(2_u64).expect("nonzero mouse pointer"),
         Offset::new(8.0, 9.0),
-        PointerType::Mouse,
-    );
+        PointerKind::Mouse,
+    )
+    .expect("finite test position");
     if let PointerEvent::Move(update) = &mut motion {
-        update.current.buttons = Default::default();
+        update.buttons = Default::default();
     }
     dispatch(&realm, primary, motion.clone());
     assert_eq!(hovers.get(), 0, "the mouse move is still queued");

@@ -37,7 +37,7 @@ use flui_foundation::geometry::Matrix4;
 use flui_foundation::geometry::{Offset, RRect, Rect, Size};
 use flui_interaction::PointerId;
 use flui_interaction::events::{
-    PointerButtons, PointerEvent, PointerType, make_cancel_event_for_id, make_down_event_for_id,
+    PointerButtons, PointerEvent, PointerKind, make_cancel_event_for_id, make_down_event_for_id,
     make_down_event_for_id_with_button, make_move_event_for_id, make_up_event_for_id,
     make_up_event_for_id_with_button,
 };
@@ -146,7 +146,7 @@ impl PointerContacts {
                 .expect("BUG: headless pointer id space exhausted"),
         );
         self.current.set(id);
-        PointerId::new(id).expect("BUG: headless pointer ids start at one")
+        PointerId::try_from(id).expect("BUG: headless pointer ids start at one")
     }
 
     /// Resolve the pointer id of the in-flight contact.
@@ -157,7 +157,7 @@ impl PointerContacts {
     /// a preceding Down is a malformed stream no real platform produces, so
     /// the harness refuses it loudly instead of inventing an identity.
     pub fn current(&self) -> PointerId {
-        PointerId::new(self.current.get())
+        PointerId::try_from(self.current.get())
             .expect("BUG: pointer Down must precede Move, Up, or Cancel")
     }
 
@@ -1535,14 +1535,16 @@ impl LaidOut {
     /// the lane scope alongside dispatch. Spends no virtual clock time — see
     /// `advance_pointer_clock`.
     pub fn dispatch_pointer_down(&self, x: f64, y: f64) {
-        let event = make_down_event_for_id(self.begin_contact(), offset(x, y), PointerType::Mouse);
+        let event = make_down_event_for_id(self.begin_contact(), offset(x, y), PointerKind::Mouse)
+            .expect("headless pointer positions must be finite");
         self.host.dispatch_pointer(&event);
     }
 
     /// As [`dispatch_pointer_down`](Self::dispatch_pointer_down), but a
     /// pointer-up — to assert `on_pointer_up` routing.
     pub fn dispatch_pointer_up(&self, x: f64, y: f64) {
-        let event = make_up_event_for_id(self.current_contact(), offset(x, y), PointerType::Mouse);
+        let event = make_up_event_for_id(self.current_contact(), offset(x, y), PointerKind::Mouse)
+            .expect("headless pointer positions must be finite");
         self.host.dispatch_pointer(&event);
         self.contacts.end();
     }
@@ -1563,39 +1565,44 @@ impl LaidOut {
     pub fn dispatch_pointer_move_after(&self, x: f64, y: f64, dt: Duration) {
         self.advance_pointer_clock(dt);
         let event =
-            make_move_event_for_id(self.current_contact(), offset(x, y), PointerType::Mouse);
+            make_move_event_for_id(self.current_contact(), offset(x, y), PointerKind::Mouse)
+                .expect("headless pointer positions must be finite");
         self.host.dispatch_pointer(&event);
     }
 
     /// A mouse hover move to `(x, y)` with no active contact.
     pub fn dispatch_pointer_hover(&self, x: f64, y: f64) {
-        self.dispatch_pointer_hover_with_kind(x, y, PointerType::Mouse);
+        self.dispatch_pointer_hover_with_kind(x, y, PointerKind::Mouse);
     }
 
     /// As [`dispatch_pointer_hover`](Self::dispatch_pointer_hover), but for a
-    /// caller-chosen device kind (e.g. `PointerType::Pen` for stylus tests) —
+    /// caller-chosen device kind (e.g. `PointerKind::Pen` for stylus tests) —
     /// the same construction, parameterised instead of hardcoded to `Mouse`.
     /// A hover has no tracked contact, so it never reaches
     /// `DragGestureRecognizer::handle_move`'s velocity sampling and spends no
     /// virtual clock time.
-    pub fn dispatch_pointer_hover_with_kind(&self, x: f64, y: f64, kind: PointerType) {
-        let mut event = make_move_event_for_id(PointerId::PRIMARY, offset(x, y), kind);
+    pub fn dispatch_pointer_hover_with_kind(&self, x: f64, y: f64, kind: PointerKind) {
+        let mut event = make_move_event_for_id(
+            PointerId::new(std::num::NonZeroU64::MIN),
+            offset(x, y),
+            kind,
+        )
+        .expect("headless pointer positions must be finite");
         let PointerEvent::Move(update) = &mut event else {
             unreachable!("the test move constructor must produce PointerEvent::Move");
         };
-        update.current.buttons = PointerButtons::new();
-        update.current.pressure = 0.0;
+        update.buttons = PointerButtons::NONE;
         self.dispatch_pointer_event(&event);
     }
 
     /// A mouse-wheel / trackpad pointer-scroll at `(x, y)` with a PIXEL
     /// delta of `(dx, dy)` in the normalized cross-backend convention:
     /// positive `dy` = content scrolls down (the oracle's `scrollDelta`).
-    /// Real backends emit line deltas that `ScrollEventData` converts at
-    /// 53 px/line; this helper takes pixels directly so tests state exact
-    /// offsets. Routed by hit test like every other contactless event.
+    /// This helper authors pixel units directly so tests state exact offsets.
+    /// Routed by hit test like every other contactless event.
     pub fn dispatch_scroll(&self, x: f64, y: f64, dx: f64, dy: f64) {
-        let event = flui_interaction::events::make_scroll_event(offset(x, y), offset(dx, dy));
+        let event = flui_interaction::events::make_scroll_event(offset(x, y), offset(dx, dy))
+            .expect("headless scroll positions and deltas must be finite");
         self.dispatch_pointer_event(&event);
     }
 
@@ -1613,13 +1620,14 @@ impl LaidOut {
             offset(x, y),
             offset(dx, dy),
             modifiers,
-        );
+        )
+        .expect("headless scroll positions and deltas must be finite");
         self.dispatch_pointer_event(&event);
     }
 
     /// Cancel the in-flight contact on its cached Down route.
     pub fn dispatch_pointer_cancel(&self) {
-        let event = make_cancel_event_for_id(self.current_contact(), PointerType::Mouse);
+        let event = make_cancel_event_for_id(self.current_contact(), PointerKind::Mouse);
         self.dispatch_pointer_event(&event);
         self.contacts.end();
     }
@@ -1635,9 +1643,10 @@ impl LaidOut {
         let event = make_down_event_for_id_with_button(
             self.begin_contact(),
             offset(x, y),
-            PointerType::Mouse,
-            PointerButton::Secondary,
-        );
+            PointerKind::Mouse,
+            PointerButton::SECONDARY,
+        )
+        .expect("headless pointer positions must be finite");
         self.host.dispatch_pointer(&event);
     }
 
@@ -1649,9 +1658,10 @@ impl LaidOut {
         let event = make_up_event_for_id_with_button(
             self.current_contact(),
             offset(x, y),
-            PointerType::Mouse,
-            PointerButton::Secondary,
-        );
+            PointerKind::Mouse,
+            PointerButton::SECONDARY,
+        )
+        .expect("headless pointer positions must be finite");
         self.host.dispatch_pointer(&event);
         self.contacts.end();
     }

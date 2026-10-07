@@ -721,8 +721,9 @@ fn run_scoped_routes_child(fail_cursor: bool) {
     };
     let event = flui_interaction::events::make_down_event(
         flui_foundation::geometry::Offset::new(2.0, 2.0),
-        flui_interaction::events::PointerType::Touch,
-    );
+        flui_interaction::events::PointerKind::Touch,
+    )
+    .expect("finite test position");
     let withdrawal_seen = Rc::new(Cell::new(None));
     let probe = WithdrawalProbe {
         focus: realm.focus_manager(),
@@ -1066,7 +1067,7 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
             },
         };
         let entry = arena.add(
-            flui_interaction::PointerId::PRIMARY,
+            flui_interaction::PointerId::new(std::num::NonZeroU64::MIN),
             Arc::new(CloseArenaMember {
                 calls: Rc::clone(&arena_calls),
                 captures,
@@ -1225,7 +1226,7 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
             },
         };
         Some(realm.gestures().arena().add(
-            flui_interaction::PointerId::PRIMARY,
+            flui_interaction::PointerId::new(std::num::NonZeroU64::MIN),
             Arc::new(CloseArenaMember {
                 calls: Rc::clone(&arena_calls),
                 captures,
@@ -1330,7 +1331,7 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
                 },
             };
             let rejected = arena.add(
-                flui_interaction::PointerId::PRIMARY,
+                flui_interaction::PointerId::new(std::num::NonZeroU64::MIN),
                 Arc::new(CloseArenaMember {
                     calls: Rc::clone(&arena_calls),
                     captures,

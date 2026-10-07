@@ -30,12 +30,13 @@ pub(crate) fn interaction_targets_are_isolated_between_headless_bindings() {
 
 pub(crate) fn pointer_route_panic_still_runs_the_down_arena_lifecycle() {
     let binding = HeadlessBinding::new();
-    let pointer = PointerId::PRIMARY;
+    let pointer = PointerId::new(std::num::NonZeroU64::MIN);
     let recognizer = TapGestureRecognizer::new(binding.arena().clone());
     recognizer.add_pointer(pointer, Offset::new(4.0, 7.0), Offset::new(4.0, 7.0));
     assert!(binding.arena().is_open(pointer));
 
-    let event = pointer_down(Offset::new(4.0, 7.0), device_kind_from_button(0));
+    let event = pointer_down(Offset::new(4.0, 7.0), device_kind_from_button(0))
+        .expect("finite test position");
     let unwind = catch_unwind(AssertUnwindSafe(|| {
         binding.dispatch_pointer(&event, |_| panic!("route panic"));
     }));

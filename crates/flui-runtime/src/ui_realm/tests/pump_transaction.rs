@@ -125,7 +125,7 @@ fn a_realm_on_a_manual_clock_fires_gesture_deadlines_on_that_clock() {
     .with_on_long_press_start(move |_details| fired_in_callback.store(true, Ordering::SeqCst));
     let position = flui_foundation::geometry::Offset::new(10.0, 10.0);
     recognizer.add_pointer(
-        PointerId::new(1).expect("pointer ids start at one"),
+        PointerId::new(std::num::NonZeroU64::MIN),
         position,
         position,
     );
