@@ -8,6 +8,7 @@ use flui_foundation::{ManualClock, PresentationId};
 use flui_interaction::events::{
     PointerEvent, PointerType, make_down_event, make_move_event,
 };
+use flui_interaction::{GestureArenaMember, PointerId};
 use flui_platform_api::{PlatformInput, WindowExecutionState};
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_runtime::testing::ScriptedSink;
@@ -55,6 +56,31 @@ pub(crate) fn a_secondary_contact_move_is_delivered_by_the_next_frame() {
     assert_eq!(moves.get(), 1, "the secondary contact receives its queued motion");
     pump(&mut realm);
     assert_eq!(moves.get(), 1, "a later frame cannot duplicate motion");
+}
+
+struct AcceptLog(Rc<Cell<usize>>);
+
+impl GestureArenaMember for AcceptLog {
+    fn accept_gesture(&self, _: PointerId) {
+        self.0.set(self.0.get() + 1);
+    }
+
+    fn reject_gesture(&self, _: PointerId) {}
+}
+
+pub(crate) fn a_secondary_deferred_arena_verdict_is_delivered_by_the_next_frame() {
+    let mut realm = UiRealm::for_test();
+    let secondary = realm.install_second_presentation_for_test();
+    let accepted = Rc::new(Cell::new(0));
+    let member = Rc::new(AcceptLog(accepted.clone()));
+    let arena = realm.presentation_gestures_for_test(secondary).arena();
+    let _entry = arena.add(PointerId::PRIMARY, &member);
+    arena.close(PointerId::PRIMARY);
+    assert_eq!(accepted.get(), 0, "the lone verdict waits for an owner boundary");
+    pump(&mut realm);
+    assert_eq!(accepted.get(), 1, "the frame drains the secondary arena's accepted work");
+    pump(&mut realm);
+    assert_eq!(accepted.get(), 1, "the verdict is delivered exactly once");
 }
 
 fn queued_hover_after_transition(paused: bool) {
