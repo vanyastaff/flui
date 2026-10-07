@@ -24,16 +24,17 @@ use flui_interaction::arena::{
     run_pointer_lifecycle,
 };
 use flui_interaction::events::{
-    PointerButton, PointerEvent, PointerType, make_down_event_for_id_with_button,
-    make_move_event_for_id, make_up_event_for_id, make_up_event_for_id_with_button,
+    PointerButton, PointerEvent, PointerType, make_cancel_event_for_id,
+    make_down_event_for_id_with_button, make_move_event_for_id, make_up_event_for_id,
+    make_up_event_for_id_with_button,
 };
 use flui_interaction::routing::PointerDispatch;
 use flui_interaction::sealed::CustomGestureRecognizer;
 use flui_interaction::{
     DoubleTapGestureRecognizer, DragAxis, DragGestureRecognizer, GestureRecognizer,
-    LongPressGestureRecognizer, ManualClock, MultiTapGestureRecognizer, PointerId,
-    MultiDragAxis, MultiDragEndDetails, MultiDragGestureRecognizer, MultiDragHandle,
-    MultiDragUpdateDetails, ScaleGestureRecognizer, TapAndDragGestureRecognizer, TapGestureRecognizer,
+    LongPressGestureRecognizer, ManualClock, MultiDragAxis, MultiDragEndDetails,
+    MultiDragGestureRecognizer, MultiDragHandle, MultiDragUpdateDetails, MultiTapGestureRecognizer,
+    PointerId, ScaleGestureRecognizer, TapAndDragGestureRecognizer, TapGestureRecognizer,
 };
 use proptest::prelude::*;
 
@@ -729,7 +730,12 @@ fn fling_velocity_follows_event_timestamps_not_dispatch_time() {
 /// Dispatch the terminal event in the same frame as the last move, even
 /// though the device observed a stationary gap before release.
 fn terminal_velocity_cases(lane: &Lane, velocities: &RefCell<Vec<f64>>, scale: bool) {
-    for (sequence, gap_ms) in [(0_u64, 0_u64), (1, 100), (2, 0)] {
+    for (sequence, gap_ms, queued) in [
+        (0_u64, 0_u64, false),
+        (1, 100, false),
+        (2, 0, false),
+        (3, 0, true),
+    ] {
         let base = 1_000_000_000 + sequence * 1_000_000_000;
         let touch = PointerType::Touch;
         lane.send(&stamped(down(id(2), at(0.0, 0.0), touch), base));
@@ -737,7 +743,9 @@ fn terminal_velocity_cases(lane: &Lane, velocities: &RefCell<Vec<f64>>, scale: b
             lane.send(&stamped(down(id(3), at(100.0, 0.0), touch), base));
         }
         for k in 1..=6_u32 {
-            lane.clock.advance(Duration::from_millis(10));
+            if !queued {
+                lane.clock.advance(Duration::from_millis(10));
+            }
             lane.send(&stamped(
                 motion(id(2), at(-f64::from(k) * 20.0, 0.0), touch),
                 base + u64::from(k) * 10_000_000,
@@ -749,12 +757,22 @@ fn terminal_velocity_cases(lane: &Lane, velocities: &RefCell<Vec<f64>>, scale: b
             lane.send(&stamped(up(id(3), at(100.0, 0.0), touch), terminal));
         }
         let values = velocities.borrow();
-        assert_eq!(values.len(), usize::try_from(sequence + 1).expect("small sequence"));
+        assert_eq!(
+            values.len(),
+            usize::try_from(sequence + 1).expect("small sequence")
+        );
         let velocity = *values.last().expect("accepted gesture ended");
         if gap_ms == 0 {
-            assert!(velocity.is_finite() && velocity.abs() > 1.0, "healthy/recovery velocity: {velocity}");
+            let expected = if scale { 20.0_f64 } else { -2000.0_f64 };
+            assert!(
+                (velocity - expected).abs() < expected.abs() * 0.1,
+                "healthy/recovery velocity (queued={queued}): {velocity}, expected {expected}"
+            );
         } else {
-            assert_eq!(velocity, 0.0, "a stationary gap before Up must stop the fling");
+            assert_eq!(
+                velocity, 0.0,
+                "a stationary gap before Up must stop the fling"
+            );
         }
         assert!(lane.arena.is_empty());
     }
@@ -770,12 +788,40 @@ fn drag_release_uses_terminal_event_time() {
     terminal_velocity_cases(&lane, &velocities, false);
 }
 
+fn drag_cancel_uses_the_arena_clock() {
+    let mut lane = Lane::new();
+    let velocity = Rc::new(Cell::new(None));
+    let log = Rc::clone(&velocity);
+    let drag = DragGestureRecognizer::new(lane.arena.clone(), DragAxis::Horizontal)
+        .with_on_end(move |details| log.set(Some(details.velocity.pixels_per_second.dx)));
+    lane.join(&drag);
+    lane.send(&down(id(2), at(0.0, 0.0), PointerType::Touch));
+    for k in 1..=6_u32 {
+        lane.clock.advance(Duration::from_millis(10));
+        lane.send(&motion(
+            id(2),
+            at(f64::from(k) * 20.0, 0.0),
+            PointerType::Touch,
+        ));
+    }
+    lane.clock.advance(Duration::from_millis(100));
+    lane.send(&make_cancel_event_for_id(id(2), PointerType::Touch));
+    assert_eq!(
+        velocity.get(),
+        Some(0.0),
+        "unstamped cancel uses virtual time"
+    );
+    assert!(lane.arena.is_empty());
+}
+
 struct VelocityHandle(Rc<RefCell<Vec<f64>>>);
 
 impl MultiDragHandle for VelocityHandle {
     fn update(&self, _: MultiDragUpdateDetails) {}
     fn end(&self, details: MultiDragEndDetails) {
-        self.0.borrow_mut().push(details.velocity.pixels_per_second.dx);
+        self.0
+            .borrow_mut()
+            .push(details.velocity.pixels_per_second.dx);
     }
     fn cancel(&self) {}
 }
@@ -785,7 +831,9 @@ fn multidrag_release_uses_terminal_event_time() {
     let velocities = Rc::new(RefCell::new(Vec::new()));
     let log = Rc::clone(&velocities);
     let drag = MultiDragGestureRecognizer::new(lane.arena.clone(), MultiDragAxis::Horizontal)
-        .with_on_start(Rc::new(move |_, _| Some(Box::new(VelocityHandle(Rc::clone(&log))))));
+        .with_on_start(Rc::new(move |_, _| {
+            Some(Box::new(VelocityHandle(Rc::clone(&log))))
+        }));
     lane.join(&drag);
     terminal_velocity_cases(&lane, &velocities, false);
 }
@@ -804,8 +852,10 @@ fn tap_and_drag_release_uses_terminal_event_time() {
     let mut lane = Lane::new();
     let velocities = Rc::new(RefCell::new(Vec::new()));
     let log = Rc::clone(&velocities);
-    let drag = TapAndDragGestureRecognizer::new(lane.arena.clone())
-        .with_on_drag_end(move |details| log.borrow_mut().push(details.velocity.pixels_per_second.dx));
+    let drag =
+        TapAndDragGestureRecognizer::new(lane.arena.clone()).with_on_drag_end(move |details| {
+            log.borrow_mut().push(details.velocity.pixels_per_second.dx)
+        });
     lane.join(&drag);
     terminal_velocity_cases(&lane, &velocities, false);
 }
@@ -897,10 +947,26 @@ fn gesture_lifecycle_matrix() {
             "fling_velocity_follows_event_timestamps_not_dispatch_time",
             fling_velocity_follows_event_timestamps_not_dispatch_time,
         ),
-        ("drag_release_uses_terminal_event_time", drag_release_uses_terminal_event_time),
-        ("multidrag_release_uses_terminal_event_time", multidrag_release_uses_terminal_event_time),
-        ("scale_release_uses_terminal_event_time", scale_release_uses_terminal_event_time),
-        ("tap_and_drag_release_uses_terminal_event_time", tap_and_drag_release_uses_terminal_event_time),
+        (
+            "drag_release_uses_terminal_event_time",
+            drag_release_uses_terminal_event_time,
+        ),
+        (
+            "drag_cancel_uses_the_arena_clock",
+            drag_cancel_uses_the_arena_clock,
+        ),
+        (
+            "multidrag_release_uses_terminal_event_time",
+            multidrag_release_uses_terminal_event_time,
+        ),
+        (
+            "scale_release_uses_terminal_event_time",
+            scale_release_uses_terminal_event_time,
+        ),
+        (
+            "tap_and_drag_release_uses_terminal_event_time",
+            tap_and_drag_release_uses_terminal_event_time,
+        ),
         (
             "verdict_by_pointer_cannot_pick_a_tap_sequence",
             verdict_by_pointer_cannot_pick_a_tap_sequence,

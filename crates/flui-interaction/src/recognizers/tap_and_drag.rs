@@ -44,7 +44,7 @@ use parking_lot::Mutex;
 use web_time::Instant;
 
 use super::{
-    recognizer::{GestureRecognizer, RecognizerBase},
+    recognizer::{EventTimeline, GestureRecognizer, RecognizerBase, event_time},
     recognizer::{finish_containment, invoke_callback, retire_callback, withdraw_cancelled},
 };
 use crate::{
@@ -226,6 +226,7 @@ struct TapDragState {
     /// Position of the last published drag update.
     last_reported: Offset<f64>,
     velocity_tracker: VelocityTracker,
+    timeline: EventTimeline,
     pending_up: Option<TapDragUpDetails>,
     up_time: Option<Instant>,
     /// Survives the sequence reset; a drag, cancel or loss clears it.
@@ -250,6 +251,7 @@ impl Default for TapDragState {
             last_global: Offset::ZERO,
             last_reported: Offset::ZERO,
             velocity_tracker: VelocityTracker::new(),
+            timeline: EventTimeline::default(),
             pending_up: None,
             up_time: None,
             last_tap: None,
@@ -577,7 +579,13 @@ impl TapAndDragGestureRecognizer {
         }
     }
 
-    fn handle_move(&self, position: Offset<f64>, global_position: Offset<f64>, kind: PointerType) {
+    fn handle_move(
+        &self,
+        position: Offset<f64>,
+        global_position: Offset<f64>,
+        kind: PointerType,
+        stamp: Option<u64>,
+    ) {
         if !position.is_finite() {
             return;
         }
@@ -587,10 +595,10 @@ impl TapAndDragGestureRecognizer {
             // test and takes the plain tier.
             (settings.pan_slop_for(kind), settings.hit_slop(kind))
         };
-        let now = self.state.now();
         let mut notices = Vec::new();
         let mut step = ArenaStep::None;
         let mut state = self.gesture_state.lock();
+        let now = state.timeline.instant(stamp, self.state.now());
         state.kind = kind;
         state.last = position;
         if global_position.is_finite() {
@@ -632,7 +640,13 @@ impl TapAndDragGestureRecognizer {
         self.finish(step, notices);
     }
 
-    fn handle_up(&self, position: Offset<f64>, global_position: Offset<f64>, kind: PointerType) {
+    fn handle_up(
+        &self,
+        position: Offset<f64>,
+        global_position: Offset<f64>,
+        kind: PointerType,
+        stamp: Option<u64>,
+    ) {
         let now = self.state.now();
         let mut notices = Vec::new();
         let mut state = self.gesture_state.lock();
@@ -671,7 +685,8 @@ impl TapAndDragGestureRecognizer {
                 }
             }
             Phase::Dragging => {
-                let velocity = state.velocity_tracker.get_velocity();
+                let sample_time = state.timeline.instant(stamp, now);
+                let velocity = state.velocity_tracker.velocity_at(sample_time);
                 notices.push(Notice::DragEnd(TapDragEndDetails {
                     velocity,
                     global_position,
@@ -786,10 +801,19 @@ impl GestureRecognizer for TapAndDragGestureRecognizer {
         state.last = position;
         state.last_global = global_position;
         state.last_reported = position;
-        // Read the arena's clock: a headless frame driver binds a
-        // `ManualClock`, so a replayed gesture's own sample spacing decides
-        // the velocity.
+        // Until an event carries a timestamp, samples use the arena clock.
         state.velocity_tracker.add_position(now, position);
+    }
+
+    fn add_pointer_down(self: &Arc<Self>, dispatch: PointerDispatch<'_>) {
+        if matches!(dispatch.local, PointerEvent::Down(_)) {
+            self.add_pointer(
+                dispatch.local.pointer_id(),
+                dispatch.local.position(),
+                dispatch.global.position(),
+            );
+            self.handle_event(dispatch);
+        }
     }
 
     fn handle_event(&self, dispatch: PointerDispatch<'_>) {
@@ -812,7 +836,9 @@ impl GestureRecognizer for TapAndDragGestureRecognizer {
 
         match event {
             PointerEvent::Down(data) => {
-                self.gesture_state.lock().kind = data.pointer.pointer_type;
+                let mut state = self.gesture_state.lock();
+                state.kind = data.pointer.pointer_type;
+                state.timeline.instant(event_time(event), self.state.now());
             }
             PointerEvent::Move(data) => {
                 let pos = data.current.position;
@@ -820,6 +846,7 @@ impl GestureRecognizer for TapAndDragGestureRecognizer {
                     Offset::new(pos.x, pos.y),
                     global_position,
                     data.pointer.pointer_type,
+                    event_time(event),
                 );
             }
             PointerEvent::Up(data) => {
@@ -828,6 +855,7 @@ impl GestureRecognizer for TapAndDragGestureRecognizer {
                     Offset::new(pos.x, pos.y),
                     global_position,
                     data.pointer.pointer_type,
+                    event_time(event),
                 );
             }
             PointerEvent::Cancel(_) => self.handle_cancel(),
