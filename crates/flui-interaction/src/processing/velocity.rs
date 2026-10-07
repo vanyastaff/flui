@@ -45,10 +45,7 @@
 //! time of the query. [`VelocityTracker::estimate_at`] and
 //! [`VelocityTracker::velocity_at`] take that time from the caller — the
 //! same clock that stamped the samples, so virtual clocks, replays and
-//! tests are deterministic. The argument-free queries measure the gap on the
-//! wall clock between the last [`VelocityTracker::add_position`] call and
-//! the query instead, which is only meaningful when samples are stamped as
-//! they arrive.
+//! tests are deterministic.
 //!
 //! # Example
 //!
@@ -70,10 +67,9 @@
 //!
 //! // Velocity is the linear coefficient of the quadratic fit,
 //! // scaled to px/s.
-//! let _estimate = tracker.get_velocity_estimate();
-//! // Fling velocity is the same estimate gated by a min-speed
-//! // threshold (~50 px/s on either axis).
-//! let _fling = tracker.get_fling_velocity(false);
+//! let query = start + Duration::from_millis(90);
+//! let _estimate = tracker.estimate_at(query);
+//! let _velocity = tracker.velocity_at(query);
 //! ```
 
 use web_time::{Duration, Instant};
@@ -163,35 +159,10 @@ fn signed_ms(time: Instant, reference: Instant) -> f64 {
 const STOPPED: VelocityEstimate =
     VelocityEstimate::new(Offset::ZERO, Offset::ZERO, Duration::ZERO, 1.0);
 
-/// Speed below which a release is not a fling, in px/s.
-///
-/// A fling is normally a speed check combined with a slop check on the
-/// up/down offset; this crate applies the speed half on its own, through
-/// [`fling_velocity_or_zero`].
-const MIN_FLING_SPEED_PX_S: f64 = 50.0;
-
-/// Gate `velocity` to [`Velocity::ZERO`] unless it is a fling, or `allow_slow`
-/// waives the gate.
-///
-/// Every tracker exposes this as `get_fling_velocity`; one body keeps the
-/// threshold, and the axes it is measured on, from drifting between them.
-fn fling_velocity_or_zero(velocity: Velocity, allow_slow: bool) -> Velocity {
-    if allow_slow {
-        return velocity;
-    }
-    if velocity.pixels_per_second.dx.abs() < MIN_FLING_SPEED_PX_S
-        && velocity.pixels_per_second.dy.abs() < MIN_FLING_SPEED_PX_S
-    {
-        return Velocity::ZERO;
-    }
-    velocity
-}
-
 /// The velocity an estimate carries, or [`Velocity::ZERO`] when there is no
 /// estimate or it reports no motion.
 ///
-/// Every tracker exposes this as `get_velocity`; one body keeps the
-/// missing-estimate and zero-motion cases answering alike.
+/// Missing-estimate and zero-motion cases answer alike.
 fn velocity_from_estimate(estimate: Option<VelocityEstimate>) -> Velocity {
     match estimate {
         Some(est) if est.pixels_per_second != Offset::ZERO => Velocity::new(est.pixels_per_second),
@@ -239,12 +210,7 @@ pub struct VelocityTracker {
     /// `HISTORY_SIZE`.
     index: usize,
 
-    /// Wall-clock time of the most recent [`Self::add_position`] call. Only
-    /// the argument-free queries read it, to detect "no sample for 40 ms";
-    /// [`Self::estimate_at`] measures that gap on the samples' own clock.
-    since_last_sample: Option<Instant>,
-
-    /// Memoized result of the buffer-pure part of [`Self::get_velocity_estimate`]
+    /// Memoized result of the buffer-pure part of [`Self::estimate_at`]
     /// (the selected estimator). Invalidated whenever
     /// the sample buffer changes ([`Self::add_position`] / [`Self::reset`]).
     ///
@@ -283,7 +249,6 @@ impl VelocityTracker {
             estimator,
             samples: [None; HISTORY_SIZE],
             index: 0,
-            since_last_sample: None,
             cached_fit: None,
         }
     }
@@ -310,9 +275,6 @@ impl VelocityTracker {
         if !position.dx.is_finite() || !position.dy.is_finite() {
             return;
         }
-        // Arrival time for the argument-free queries' wall-clock stop gate.
-        self.since_last_sample = Some(Instant::now());
-
         // The sample buffer is about to change, so any memoized fit is stale.
         self.cached_fit = None;
 
@@ -325,7 +287,6 @@ impl VelocityTracker {
     pub fn reset(&mut self) {
         self.samples = [None; HISTORY_SIZE];
         self.index = 0;
-        self.since_last_sample = None;
         self.cached_fit = None;
     }
 
@@ -343,28 +304,6 @@ impl VelocityTracker {
         self.estimate_sample_count() >= MIN_SAMPLE_SIZE
     }
 
-    /// The most recent velocity estimate, including the polynomial-fit
-    /// confidence and the time/position span it was computed over.
-    ///
-    /// Returns `None` if the tracker has no samples at all.
-    ///
-    /// The stop gate here runs on the wall clock: the estimate is zero once
-    /// 40 ms have passed since the last [`Self::add_position`] *call*. Prefer
-    /// [`Self::estimate_at`], which measures that gap on the samples' own
-    /// clock.
-    ///
-    /// Takes `&mut self` because the buffer-pure part of the result is
-    /// memoized (see the private `compute_estimate`); the cache is reused until
-    /// the next [`Self::add_position`] / [`Self::reset`]. The "stationary for
-    /// 40 ms" gate below is time-dependent and re-checked every call, so a
-    /// cached fit is only ever returned while the pointer is still moving.
-    pub fn get_velocity_estimate(&mut self) -> Option<VelocityEstimate> {
-        let stopped = self
-            .since_last_sample
-            .is_some_and(|last| last.elapsed() >= ASSUME_POINTER_STOPPED);
-        self.estimate_unless_stopped(stopped)
-    }
-
     /// The velocity estimate as of `now`, on the clock that stamped the
     /// samples.
     ///
@@ -375,8 +314,8 @@ impl VelocityTracker {
     /// samples. The result is finite and its speed is at most
     /// [`DEFAULT_MAX_FLING_VELOCITY`].
     ///
-    /// `&mut self` because the fit is memoized like
-    /// [`Self::get_velocity_estimate`]'s.
+    /// Takes `&mut self` to cache the buffer-pure estimate until the next
+    /// sample or reset. The stop gate is checked on every query.
     pub fn estimate_at(&mut self, now: Instant) -> Option<VelocityEstimate> {
         let newest = self.samples[self.index]?;
         let stopped = now
@@ -392,7 +331,7 @@ impl VelocityTracker {
         velocity_from_estimate(self.estimate_at(now))
     }
 
-    /// The stop-gated, memoized estimate shared by both query clocks.
+    /// The stop-gated, memoized estimate on the caller's sample clock.
     fn estimate_unless_stopped(&mut self, stopped: bool) -> Option<VelocityEstimate> {
         // A stopped pointer has exactly zero velocity with perfect confidence.
         // Time-dependent, so never cached.
@@ -462,7 +401,7 @@ impl VelocityTracker {
     ///
     /// This is a pure function of the sample buffer — it does not consult the
     /// time-dependent stationary gate, nor the memo cache — which is exactly
-    /// what makes the cache in [`Self::get_velocity_estimate`] sound. O(N)
+    /// what makes the cache in [`Self::estimate_at`] sound. O(N)
     /// where N ≤ `HISTORY_SIZE` (the buffer is bounded at 20 samples).
     fn compute_estimate(&self) -> Option<VelocityEstimate> {
         let mut xs = [0.0f64; HISTORY_SIZE];
@@ -561,43 +500,6 @@ impl VelocityTracker {
             duration,
             x_fit.confidence * y_fit.confidence,
         ))
-    }
-
-    /// The most recent velocity as a [`Velocity`].
-    ///
-    /// Cheap wrapper over [`Self::get_velocity_estimate`] that returns
-    /// [`Velocity::ZERO`] when the estimate is missing or its velocity is
-    /// zero. This is the canonical call site for "fling this view" in a drag-end
-    /// callback.
-    ///
-    /// `&mut self` for the same memoization reason as
-    /// [`Self::get_velocity_estimate`], which this delegates to.
-    pub fn get_velocity(&mut self) -> Velocity {
-        velocity_from_estimate(self.get_velocity_estimate())
-    }
-
-    /// Velocity for fling detection.
-    ///
-    /// When `allow_slow` is `false` (the typical case), the result is
-    /// [`Velocity::ZERO`] for any motion under ~50 px/s — the usual fling
-    /// threshold (a fling also requires the offset between the up and down
-    /// events to exceed a slop, combined with a non-trivial velocity). When
-    /// `allow_slow` is `true`, the raw estimate is returned even at very
-    /// low speeds — useful for snap-back animations and small-list
-    /// micro-scrolls.
-    ///
-    /// `&mut self` for the same memoization reason as [`Self::get_velocity`].
-    pub fn get_fling_velocity(&mut self, allow_slow: bool) -> Velocity {
-        fling_velocity_or_zero(self.get_velocity(), allow_slow)
-    }
-
-    /// Alias for [`Self::get_velocity_estimate`].
-    ///
-    /// `&mut self` for the same memoization reason as
-    /// [`Self::get_velocity_estimate`], which this delegates to.
-    #[inline]
-    pub fn estimate(&mut self) -> Option<VelocityEstimate> {
-        self.get_velocity_estimate()
     }
 
     /// Construct a touch-kind tracker. Equivalent to [`Self::default`].
