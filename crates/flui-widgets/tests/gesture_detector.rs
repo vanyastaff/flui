@@ -62,12 +62,22 @@ pub(crate) fn scoped_settings_control_touch_recognition_thresholds() {
         for configured in [false, true] {
             let callbacks = Rc::new(Cell::new(0));
             let observed = Rc::clone(&callbacks);
+            let competing_taps = Rc::new(Cell::new(0));
             let detector = match family {
                 "tap" => GestureDetector::new().on_tap(move |_| observed.set(observed.get() + 1)),
                 "pan" => GestureDetector::new()
                     .on_pan_start(move |_, _| observed.set(observed.get() + 1)),
                 _ => GestureDetector::new()
                     .on_horizontal_drag_start(move |_, _| observed.set(observed.get() + 1)),
+            };
+            // A sole arena member is accepted by default before its slop
+            // decision. A competing tap keeps drag admission undecided until
+            // movement distinguishes the configured threshold.
+            let detector = if family == "tap" {
+                detector
+            } else {
+                let taps = Rc::clone(&competing_taps);
+                detector.on_tap(move |_| taps.set(taps.get() + 1))
             }
             .child(ColoredBox::new(Color::rgb(10, 20, 30)));
             let settings = if configured {
@@ -100,6 +110,13 @@ pub(crate) fn scoped_settings_control_touch_recognition_thresholds() {
                 usize::from(configured),
                 "{family}, configured={configured}"
             );
+            if family != "tap" {
+                assert_eq!(
+                    competing_taps.get(),
+                    usize::from(!configured),
+                    "the competing tap wins only below the drag threshold"
+                );
+            }
         }
     }
 }
