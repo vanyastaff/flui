@@ -828,7 +828,11 @@ fn the_pull_owner_keeps_working(owner: &Rc<TextInputOwner>, log: &Log) {
     );
     assert!(store.composition().is_none(), "the next completion commits");
     let _ = owner.handle().detach(token).expect("the next detach");
-    assert_eq!(*log.borrow(), ["focus", "complete", "unfocus"]);
+    // A client a row left attached is replaced, its composition completed
+    // ahead of the next focus.
+    let calls = log.borrow().clone();
+    let own = calls.strip_prefix(&["complete"][..]).unwrap_or(&calls[..]);
+    assert_eq!(own, ["focus", "complete", "unfocus"]);
     assert_eq!(
         raised(|| {
             let _ = owner.run_deferred_grants();
@@ -1677,6 +1681,14 @@ const ROWS: &[(&str, fn())] = &[
     (
         "attach: replacing a client whose platform enable panicked",
         attach_replacing_a_client_whose_platform_enable_panicked,
+    ),
+    (
+        "attach: replacing a composing client whose commit panics (push)",
+        attach_whose_outgoing_commit_panics,
+    ),
+    (
+        "attach: replacing a composing client whose host completion panics (pull)",
+        attach_whose_outgoing_host_completion_panics,
     ),
     (
         "close: a platform disable whose unwind parks a failure",
@@ -2974,6 +2986,81 @@ impl FailsToEnableOnce {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
     }
+}
+
+/// An attach replacing a composing client commits the outgoing composition
+/// first; the commit's owner listener panics. The commit stands, the
+/// incoming client is installed, and the failure reaches the owner's next
+/// turn once.
+fn attach_whose_outgoing_commit_panics() {
+    let owner = owner();
+    let outgoing = composing_store();
+    let _first = owner
+        .handle()
+        .attach(TextInputClient::new(outgoing.clone()))
+        .expect("the composing client");
+    outgoing.set_owner_listener(Some(Rc::new(|| panic!("outgoing commit failure"))));
+    let incoming = InMemoryTextStore::new("");
+    let second = owner
+        .handle()
+        .attach(TextInputClient::new(incoming.clone()))
+        .expect("the incoming client is installed, and the caller has its token");
+    outgoing.set_owner_listener(None);
+    assert!(
+        outgoing.composition().is_none(),
+        "the outgoing composition is committed"
+    );
+    assert_eq!(outgoing.text(), "abかな", "keeping its text");
+    assert_eq!(
+        raised(|| owner.dispatch(&ImeEvent::Commit("x".into()))).as_deref(),
+        Some("outgoing commit failure"),
+        "the failure reaches the owner's next turn"
+    );
+    assert_eq!(
+        incoming.text(),
+        "x",
+        "the incoming client is the active one"
+    );
+    assert_eq!(
+        owner.handle().detach(second),
+        Ok(flui_interaction::DetachOutcome::Detached)
+    );
+    the_owner_keeps_working(&owner);
+}
+
+/// On a pull host the outgoing completion is queued ahead of the incoming
+/// focus; the completion panics, and the focus still reaches the host.
+fn attach_whose_outgoing_host_completion_panics() {
+    let host = Rc::new(Host::default());
+    let log = Rc::clone(&host.log);
+    let owner = pull_owner(Rc::clone(&host));
+    let _first = owner
+        .handle()
+        .attach(TextInputClient::new(composing_store()))
+        .expect("the composing client");
+    host.panics.borrow_mut().push("complete");
+    let second = owner
+        .handle()
+        .attach(TextInputClient::new(InMemoryTextStore::new("")))
+        .expect("the incoming client is installed, and the caller has its token");
+    assert_eq!(
+        *log.borrow(),
+        ["focus", "complete", "focus"],
+        "the outgoing completion, then the incoming focus"
+    );
+    assert_eq!(
+        raised(|| {
+            let _ = owner.run_deferred_grants();
+        })
+        .as_deref(),
+        Some("complete failure"),
+        "the failure reaches the owner's next turn"
+    );
+    assert_eq!(
+        owner.handle().detach(second),
+        Ok(flui_interaction::DetachOutcome::Detached)
+    );
+    the_pull_owner_keeps_working(&owner, &log);
 }
 
 /// The first attach's enable panics; a replacing attach enables the

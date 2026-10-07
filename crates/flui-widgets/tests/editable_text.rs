@@ -921,6 +921,83 @@ pub(crate) fn a_pointer_down_and_a_paste_commit_the_composition_first() {
     );
 }
 
+/// Focus moving from a composing field to another commits the composition,
+/// whichever field mounted first, on a pull and on a push window: the
+/// composing controller keeps its text and no composing range, and typing
+/// into it works once it is focused again (ADR-0142 item 4). The focus
+/// manager tells the fields in mount order, so when the destination mounted
+/// first it attaches before the source hears of its blur, and the source's
+/// own completion then carries a stale token.
+///
+/// Red-check: drop the outgoing commit from `TextInputOwner::attach` — the
+/// earlier-destination rows keep the composing range and the typed
+/// character is refused.
+pub(crate) fn moving_focus_off_a_composing_field_commits_it_in_either_mount_order() {
+    use crate::common::harness::{Harness, mount_with_ime, mount_with_push_ime};
+
+    fn run(pull: bool, compose_in_later: bool) {
+        let controllers = [
+            TextEditingController::with_text("ab"),
+            TextEditingController::with_text("cd"),
+        ];
+        let nodes = [
+            FocusNode::with_debug_label("earlier field"),
+            FocusNode::with_debug_label("later field"),
+        ];
+        let fields = flui_widgets::Column::new(flui_widgets::column![
+            EditableText::new(controllers[0].clone(), Rc::clone(&nodes[0])),
+            EditableText::new(controllers[1].clone(), Rc::clone(&nodes[1])),
+        ]);
+        let mut harness: Harness = if pull {
+            mount_with_ime(fields)
+        } else {
+            mount_with_push_ime(fields)
+        };
+        let (source, destination) = if compose_in_later { (1, 0) } else { (0, 1) };
+        nodes[source].request_focus();
+        harness.tick();
+        harness.dispatch_ime(&flui_platform_api::ImeEvent::Preedit {
+            text: "東京".to_owned(),
+            cursor: Some(("東京".len(), "東京".len())),
+        });
+        let composing = &controllers[source];
+        assert!(composing.is_composing(), "precondition: composing");
+
+        nodes[destination].request_focus();
+        harness.tick();
+        assert!(
+            !composing.is_composing(),
+            "the blurred field's composition is committed"
+        );
+        let committed = format!("{}東京", if source == 0 { "ab" } else { "cd" });
+        assert_eq!(composing.text(), committed, "keeping its text");
+
+        nodes[source].request_focus();
+        harness.tick();
+        assert!(
+            harness
+                .focus_manager()
+                .dispatch_key_event(&character_key_event('x'))
+        );
+        harness.tick();
+        assert_eq!(
+            composing.text(),
+            format!("{committed}x"),
+            "typing into the refocused field works"
+        );
+    }
+
+    crate::common::cases::run_cases(
+        "focus off a composing field",
+        &[
+            ("pull, later to earlier", (|| run(true, true)) as fn()),
+            ("pull, earlier to later", || run(true, false)),
+            ("push, later to earlier", || run(false, true)),
+            ("push, earlier to later", || run(false, false)),
+        ],
+    );
+}
+
 /// A press reentered from the commit it runs (the commit's `on_changed`
 /// dispatching another press) finds the outer press's contact already
 /// recorded: the nested one is refused and moves nothing, and the outer one

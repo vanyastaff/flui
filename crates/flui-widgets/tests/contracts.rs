@@ -106,6 +106,7 @@ fn text_editing() {
             ("editable_text::text_store::rtl_scalar_rect_midpoints_resolve_to_the_source_scalar", crate::editable_text::text_store::rtl_scalar_rect_midpoints_resolve_to_the_source_scalar),
             ("editable_text::a_tap_places_the_caret_where_it_landed", crate::editable_text::a_tap_places_the_caret_where_it_landed),
             ("editable_text::a_pointer_down_and_a_paste_commit_the_composition_first", crate::editable_text::a_pointer_down_and_a_paste_commit_the_composition_first),
+            ("editable_text::moving_focus_off_a_composing_field_commits_it_in_either_mount_order", crate::editable_text::moving_focus_off_a_composing_field_commits_it_in_either_mount_order),
             ("editable_text::a_press_reentered_by_its_commit_is_not_a_second_contact", crate::editable_text::a_press_reentered_by_its_commit_is_not_a_second_contact),
             ("editable_text::an_obscured_field_never_hands_its_real_text_to_the_render_object", crate::editable_text::an_obscured_field_never_hands_its_real_text_to_the_render_object),
             ("editable_text::the_editor_steps_the_graphemes_the_painter_snaps_to", crate::editable_text::the_editor_steps_the_graphemes_the_painter_snaps_to),
