@@ -1449,9 +1449,9 @@ impl GestureBinding {
                 let cached = self
                     .hit_tests
                     .get(&pointer_id)
-                    .map(|cached| (cached.sequence, cached.token));
+                    .map(|cached| (cached.sequence, cached.token, cached.resampler.clone()));
                 let mut first_panic = None;
-                if let Some((sequence, token)) = cached {
+                if let Some((sequence, token, resampler)) = cached {
                     // Take the older accepted packet before any callback. A
                     // callback may enqueue its successor or replace this contact;
                     // neither belongs to the button edge admitted here.
@@ -1472,6 +1472,20 @@ impl GestureBinding {
                             delivered,
                             "button pending Move dispatch",
                         );
+                    }
+                    if self.is_resampling_enabled()
+                        && let Some(time) = crate::events::get_event_time(event)
+                    {
+                        resampler.flush_through(time, |movement| {
+                            if self.is_current_sequence(pointer_id, sequence) {
+                                let delivered = self.dispatch_event(&movement, token);
+                                RoutePanic::preserve_first(
+                                    &mut first_panic,
+                                    delivered,
+                                    "button measured Move dispatch",
+                                );
+                            }
+                        });
                     }
                     // A failed movement still owes the accepted edge, but an
                     // ended or replaced sequence must not receive stale input.

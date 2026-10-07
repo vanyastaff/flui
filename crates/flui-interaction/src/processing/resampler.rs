@@ -508,6 +508,36 @@ impl PointerEventResampler {
         }
     }
 
+    /// Deliver measured packets through a synchronous mid-contact boundary.
+    ///
+    /// A button edge must follow earlier hardware movement without ending the
+    /// contact or resetting its interpolation anchor. New packets admitted by
+    /// callbacks remain queued for the next boundary or sampling window.
+    pub(crate) fn flush_through(
+        &self,
+        boundary: EventTime,
+        mut callback: impl FnMut(PointerEvent),
+    ) {
+        let emitted: SmallVec<[PointerEvent; 4]> = {
+            let mut inner = self.inner.lock();
+            let mut emitted = SmallVec::new();
+            while inner.event_queue.front().is_some_and(|buffered| {
+                event_nanos(&buffered.event).is_some_and(|time| time <= boundary.as_nanos())
+            }) {
+                let buffered = inner
+                    .event_queue
+                    .pop_front()
+                    .expect("BUG: the queued prefix was checked before removal");
+                let at = inner.timestamp(buffered.stamp);
+                inner.emit(buffered.event, at, &mut emitted);
+            }
+            emitted
+        };
+        for event in emitted {
+            callback(event);
+        }
+    }
+
     /// Stops resampling and flushes all remaining events
     ///
     /// Invokes the callback with every buffered event, in order, and resets
