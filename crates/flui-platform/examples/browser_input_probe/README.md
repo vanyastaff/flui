@@ -51,3 +51,9 @@ with those native lists and prints the actual source values. An empty history
 or prediction list proves only the empty-list path on that browser; the fixture
 does not claim hardware predictions were observed. The native chord check pins
 the pointermove button edges between the first press and final release.
+
+The getter reentry check dispatches a second DOM pointerdown synchronously from
+the first event's buttons getter. Run it on a fresh page: a recursive mutable
+JavaScript closure or an active-state borrow held across that getter can abort
+the wasm instance. Both presses and their releases must reach the public input
+callback, with no browser window error.

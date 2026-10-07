@@ -1,7 +1,8 @@
 //! DOM event → PlatformInput mapping
 //!
 //! Registers DOM event listeners on the canvas and converts browser events
-//! through private W3C translations into FLUI's owned PlatformInput types.
+//! into FLUI's owned PlatformInput types. Keyboard and wheel translations
+//! still use private W3C transport helpers.
 
 use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc};
 
