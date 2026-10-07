@@ -1,0 +1,70 @@
+error[E0624]: associated function `new` is private
+ --> tests/compile_fail/handler_identity_cannot_be_minted.rs:7:24
+  |
+7 |     let _ = HandlerId::new(1);
+  |                        ^^^ private associated function
+  |
+ ::: src/ids.rs
+  |
+  |     pub(crate) const fn new(id: NonZeroU64) -> Self {
+  |     ----------------------------------------------- private associated function defined here
+
+error[E0308]: mismatched types
+ --> tests/compile_fail/handler_identity_cannot_be_minted.rs:7:28
+  |
+7 |     let _ = HandlerId::new(1);
+  |             -------------- ^ expected `NonZero<u64>`, found integer
+  |             |
+  |             arguments to this function are incorrect
+  |
+  = note: expected struct `NonZero<u64>`
+               found type `{integer}`
+note: associated function defined here
+ --> src/ids.rs
+  |
+  |     pub(crate) const fn new(id: NonZeroU64) -> Self {
+  |                         ^^^
+help: consider calling `NonZero::new`
+  |
+7 |     let _ = HandlerId::new(NonZero::new(1).unwrap());
+  |                            +++++++++++++ ++++++++++
+
+error[E0599]: no associated function or constant named `try_new` found for struct `HandlerId` in the current scope
+ --> tests/compile_fail/handler_identity_cannot_be_minted.rs:8:24
+  |
+8 |     let _ = HandlerId::try_new(1);
+  |                        ^^^^^^^ associated function or constant not found in `HandlerId`
+
+error[E0308]: mismatched types
+ --> tests/compile_fail/handler_identity_cannot_be_minted.rs:9:29
+  |
+9 |     let _ = HandlerId::from(raw);
+  |             --------------- ^^^ expected `HandlerId`, found `NonZero<u64>`
+  |             |
+  |             arguments to this function are incorrect
+  |
+  = note: expected struct `HandlerId`
+             found struct `NonZero<u64>`
+note: associated function defined here
+ --> $RUST/core/src/convert/mod.rs
+  |
+  |     fn from(value: T) -> Self;
+  |        ^^^^
+
+error[E0277]: the trait bound `HandlerId: From<NonZero<u64>>` is not satisfied
+  --> tests/compile_fail/handler_identity_cannot_be_minted.rs:10:28
+   |
+10 |     let _: HandlerId = raw.into();
+   |                            ^^^^ the trait `From<NonZero<u64>>` is not implemented for `HandlerId`
+   |
+   = note: required for `NonZero<u64>` to implement `Into<HandlerId>`
+
+error[E0277]: the trait bound `HandlerId: TryFrom<NonZero<u64>>` is not satisfied
+  --> tests/compile_fail/handler_identity_cannot_be_minted.rs:11:39
+   |
+11 |     let _: Result<HandlerId, _> = raw.try_into();
+   |                                       ^^^^^^^^ the trait `From<NonZero<u64>>` is not implemented for `HandlerId`
+   |
+   = note: required for `NonZero<u64>` to implement `Into<HandlerId>`
+   = note: required for `HandlerId` to implement `TryFrom<NonZero<u64>>`
+   = note: required for `NonZero<u64>` to implement `TryInto<HandlerId>`
