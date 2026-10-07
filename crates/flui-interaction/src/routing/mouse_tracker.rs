@@ -763,11 +763,19 @@ impl MouseTracker {
         failure.finish();
     }
 
-    /// Gets the current cursor for the primary mouse device (device 0).
+    /// Gets the cursor of the first reported primary mouse source.
+    ///
+    /// Reported hardware precedes fallback contacts; each namespace is ordered
+    /// by its typed identity. Without a primary mouse, returns the default cursor.
     #[inline]
     #[must_use]
     pub fn current_cursor(&self) -> CursorIcon {
-        self.device_cursor(0)
+        self.inner
+            .borrow()
+            .devices
+            .values()
+            .find(|state| state.pointer.kind == PointerKind::Mouse && state.pointer.is_primary())
+            .map_or(CursorIcon::Default, |state| state.current_cursor)
     }
 }
 
