@@ -50,7 +50,7 @@ mod browser {
                 let previous = document.get_element_by_id("sequence").and_then(|node| node.text_content()).unwrap_or_default();
                 publish("sequence", &format!("{previous}{kind},"));
                 if kind == "cancel" {
-                    publish("cancel", "delivered");
+                    publish("cancel-event", "delivered");
                 }
                 if let Some(state) = state {
                     // FLUI's contract is logical even though ui-events names this
