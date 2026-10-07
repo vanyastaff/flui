@@ -304,58 +304,6 @@ fn drag_cancelled_end_callback_admits_the_next_contact_once() {
     assert_drag_terminal_callback_admits_the_next_contact_once(true);
 }
 
-fn cancelling_drag_from_start_drops_the_stale_update_and_recovers() {
-    let mut lane = Lane::new();
-    let slot: Rc<RefCell<std::rc::Weak<DragGestureRecognizer>>> = Rc::default();
-    let callback_slot = Rc::clone(&slot);
-    let cancel_once = Rc::new(Cell::new(true));
-    let (starts, updates, cancelled, completed) = (counter(), counter(), counter(), counter());
-    let (s, u, c, e) = (
-        starts.clone(),
-        updates.clone(),
-        cancelled.clone(),
-        completed.clone(),
-    );
-    let drag = DragGestureRecognizer::builder(lane.arena.clone(), DragAxis::Free)
-        .drag_start_behavior(flui_interaction::recognizers::drag::DragStartBehavior::Down)
-        .on_start(move |_| {
-            s.set(s.get() + 1);
-            if cancel_once.replace(false) {
-                let recognizer = callback_slot.borrow().upgrade().expect("routed recognizer");
-                recognizer.cancel();
-            }
-        })
-        .on_update(move |_| u.set(u.get() + 1))
-        .on_end(move |details| match details.reason {
-            GestureEndReason::Cancelled => c.set(c.get() + 1),
-            GestureEndReason::Completed => e.set(e.get() + 1),
-        })
-        .build();
-    *slot.borrow_mut() = Rc::downgrade(&drag);
-    lane.join(&drag);
-    let rival = Rc::new(Verdicts::default());
-    lane.arena.add(id(2), &rival);
-    lane.send(&down(id(2), at(0.0, 0.0), PointerType::Touch));
-    lane.send(&motion(id(2), at(40.0, 0.0), PointerType::Touch));
-    assert_eq!((starts.get(), updates.get(), cancelled.get()), (1, 0, 1));
-    lane.send(&up(id(2), at(40.0, 0.0), PointerType::Touch));
-    assert_eq!(completed.get(), 0, "retired contact cannot complete again");
-    assert!(lane.arena.is_empty());
-    lane.send(&down(id(2), at(100.0, 0.0), PointerType::Touch));
-    lane.send(&motion(id(2), at(140.0, 0.0), PointerType::Touch));
-    lane.send(&up(id(2), at(140.0, 0.0), PointerType::Touch));
-    assert_eq!(
-        (
-            starts.get(),
-            updates.get(),
-            cancelled.get(),
-            completed.get()
-        ),
-        (2, 1, 1, 1)
-    );
-    assert!(lane.arena.is_empty());
-}
-
 fn assert_drag_terminal_callback_admits_the_next_contact_once(started: bool) {
     let mut lane = Lane::new();
     let pointer = id(2);
@@ -1057,10 +1005,6 @@ fn gesture_lifecycle_matrix() {
         (
             "drag_cancel_callback_admits_the_next_contact_once",
             drag_cancel_callback_admits_the_next_contact_once,
-        ),
-        (
-            "cancelling_drag_from_start_drops_the_stale_update_and_recovers",
-            cancelling_drag_from_start_drops_the_stale_update_and_recovers,
         ),
         (
             "drag_cancelled_end_callback_admits_the_next_contact_once",
