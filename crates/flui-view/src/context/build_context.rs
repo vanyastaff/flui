@@ -343,9 +343,19 @@ pub trait BuildContext: sealed::Sealed + flui_foundation::read_scope::ReadScope 
 /// fire it from a callback:
 ///
 /// ```compile_fail,E0599
-/// use flui_view::BuildContext;
+/// use flui_view::{BuildContext, LifecycleContext};
 ///
 /// fn build_body(ctx: &dyn BuildContext) {
+///     let _ = ctx.rebuild_handle();
+/// }
+/// ```
+///
+/// The same acquisition is available from a lifecycle context:
+///
+/// ```
+/// use flui_view::{BuildContext, LifecycleContext};
+///
+/// fn build_body(ctx: &dyn LifecycleContext) {
 ///     let _ = ctx.rebuild_handle();
 /// }
 /// ```
@@ -384,9 +394,19 @@ pub trait LifecycleContext: BuildContext {
     /// signal write in `build` has no writer to name:
     ///
     /// ```compile_fail,E0599
-    /// use flui_view::BuildContext;
+    /// use flui_view::{BuildContext, LifecycleContext};
     ///
     /// fn build_body(ctx: &dyn BuildContext) {
+    ///     let _ = ctx.writer_source();
+    /// }
+    /// ```
+    ///
+    /// The same acquisition is available from a lifecycle context:
+    ///
+    /// ```
+    /// use flui_view::{BuildContext, LifecycleContext};
+    ///
+    /// fn build_body(ctx: &dyn LifecycleContext) {
     ///     let _ = ctx.writer_source();
     /// }
     /// ```

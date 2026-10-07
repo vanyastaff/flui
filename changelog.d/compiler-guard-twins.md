@@ -10,3 +10,4 @@
 - Render-subtree relocation compiler examples pair forbidden token cloning and frame-phase operations with matching move and idle-owner callers.
 - Rendering context, paint-arity, snapshot-phase and layout-callback thread guards have matching valid callers.
 - Local-state thread bounds and element-depth authority guards pin exact compiler diagnostics alongside valid local callers.
+- Lifecycle capability and reload-hook unsafe-call compiler examples have matching valid callers.

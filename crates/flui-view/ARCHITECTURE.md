@@ -534,8 +534,9 @@ ADR-0075's subject); shrinking `ElementBase` into a capability-typed `Element<V,
 and shared annotations whose code belongs to a plugin image. Its caller must
 retain none of those image-dependent payloads after the callback boundary,
 including an unwinding call. The hook may then unload on the next frame or
-on drop. A `compile_fail,E0133` doctest pins mandatory acknowledgement at the
-public invocation. Ordinary worker polling remains safe and unchanged.
+on drop. The safe-call rejection example and its compiling counterpart differ
+only at the unsafe invocation line, pinning mandatory acknowledgement while
+checking the caller's setup. Ordinary worker polling remains safe and unchanged.
 
 The scene callback also receives a pending font namespace reset and returns a
 rendering verdict. The host uses the dedicated plugin renderer entry point;
