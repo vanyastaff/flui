@@ -668,7 +668,7 @@ mod appkit_ime_probe {
             .iter()
             .filter_map(|input| input.as_keyboard())
             .filter_map(|event| match &event.key {
-                Key::Character(characters) => Some(characters.clone()),
+                Key::Character(characters) => Some(characters.as_str().to_owned()),
                 Key::Named(_) => None,
             })
             .collect()
@@ -686,8 +686,8 @@ mod appkit_ime_probe {
         events
             .iter()
             .filter_map(|input| input.as_keyboard())
-            .filter_map(|event| match (event.state, &event.key) {
-                (KeyState::Up, Key::Character(characters)) => Some(characters.clone()),
+            .filter_map(|event| match (event.state(), &event.key) {
+                (KeyState::Up, Key::Character(characters)) => Some(characters.as_str().to_owned()),
                 _ => None,
             })
             .collect()
