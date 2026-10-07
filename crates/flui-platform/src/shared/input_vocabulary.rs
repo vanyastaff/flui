@@ -11,8 +11,8 @@
 //!   pressure of 0, the default orientation and a 1×1 contact are "not reported". A touch or
 //!   pen pressure is kept as reported, including a backend's 0.5 stand-in for a touch screen
 //!   without force sensing, which only the backend can tell apart. Pressures are saturated
-//!   into their range (devices overshoot by rounding) and the altitude, an `f32` widened to
-//!   `f64`; a reading outside `[0, π/2]` or not finite is dropped, never clamped.
+//!   into their range (devices overshoot by rounding). The altitude, an `f32` widened to
+//!   `f64`, is dropped when it is outside `[0, π/2]` or not finite, never clamped.
 //! - **Eraser.** The W3C eraser button (`PenEraser`) becomes [`PenTool::Eraser`] on a pen, and
 //!   the button it pressed becomes [`PointerButton::PRIMARY`].
 //! - **Identity.** A pointer event without a pointer id is dropped (no backend emits one),
