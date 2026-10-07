@@ -2573,6 +2573,11 @@ mod native_windows {
                 unsafe { DestroySyntheticPointerDevice(self.0) };
             }
         }
+        fn unsupported_host(error: &windows::core::Error) -> bool {
+            // Explicit host capability/permission refusals. Invalid arguments
+            // and sequencing failures are fixture defects, not coverage skips.
+            matches!(error.code().0 as u32, 0x8007_0005 | 0x8007_0032 | 0x8007_0078 | 0x8000_4001)
+        }
         let platform = WindowsPlatform::new().expect("native Windows platform");
         let window = open_shown(&platform);
         let hwnd = hwnd_of(&window);
@@ -2592,6 +2597,7 @@ mod native_windows {
             let device = match unsafe { CreateSyntheticPointerDevice(native_kind, 1, POINTER_FEEDBACK_NONE) } {
                 Ok(device) => Device(device),
                 Err(error) => {
+                    assert!(unsupported_host(&error), "CreateSyntheticPointerDevice failed unexpectedly: {error}");
                     eprintln!("CANNOT_VERIFY synthetic {expected_kind:?}: CreateSyntheticPointerDevice refused: {error}");
                     continue;
                 }
@@ -2619,6 +2625,7 @@ mod native_windows {
                 // SAFETY: initialized union arm matches type and device; the
                 // packet slice remains alive for the synchronous native copy.
                 if let Err(error) = unsafe { InjectSyntheticPointerInput(device.0, &[packet]) } {
+                    assert!(unsupported_host(&error), "InjectSyntheticPointerInput failed unexpectedly: {error}");
                     eprintln!("CANNOT_VERIFY synthetic {expected_kind:?}: InjectSyntheticPointerInput refused: {error}");
                     supported = false;
                     break;
