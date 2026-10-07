@@ -478,6 +478,30 @@ pub(crate) fn animated_container_reanchors_unchanged_properties_on_restart() {
     );
 }
 
+/// A colour change restarts the shared controller; an unchanged collapsed, rotated
+/// transform keeps its exact matrix on every frame instead of dropping its rotation.
+pub(crate) fn animated_container_keeps_an_unchanged_collapsed_transform_on_restart() {
+    let vsync = Vsync::new();
+    let collapsed = Matrix4::rotation_z(1.0) * Matrix4::scaling(0.0, 1.0, 1.0);
+    let color = Arc::new(Mutex::new(Color::BLACK));
+    let probe = TransformProbe {
+        vsync: vsync.clone(),
+        transform: Arc::new(Mutex::new(collapsed)),
+        color: Arc::clone(&color),
+    };
+    let mut laid = lay_out_animated(probe, loose(200.0), vsync);
+    *color.lock() = Color::WHITE;
+    laid.pump();
+    laid.pump_for(FRAME); // detection
+    for frame in 0..3 {
+        laid.pump_for(FRAME);
+        // A collapsed matrix paints no layer, so read the render object.
+        let container = laid.find_by_render_type("RenderContainer");
+        let shown = laid.container_transform(container);
+        assert_eq!(shown.map(|m| m.m), Some(collapsed.m), "frame {frame}");
+    }
+}
+
 // ----------------------------------------------------------------------------
 // AnimatedRotation
 // ----------------------------------------------------------------------------
