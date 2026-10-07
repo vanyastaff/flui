@@ -124,7 +124,7 @@ impl PanGestureRecognizer {
     /// [`DragGestureRecognizer::with_on_start`] but returning the alias
     /// type for fluent chaining.
     pub fn on_start(self: Rc<Self>, cb: DragStartCallback) -> Rc<Self> {
-        // The aliased method already returns Arc<Self>; the closure is
+        // The aliased method already returns Rc<Self>; the closure is
         // forwarded as-is.
         self.with_on_start(move |d| cb(d))
     }

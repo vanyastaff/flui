@@ -114,7 +114,7 @@ pub struct TapDetails {
 /// use flui_interaction::recognizers::TapGestureRecognizer;
 ///
 /// let arena = GestureArena::new();
-/// // The recogniser is shared via `Arc`; clone the inner `Arc` to
+/// // The recogniser is shared via `Rc`; clone the inner `Rc` to
 /// // register callbacks (`on_tap` fires on Primary button up).
 /// let recognizer = TapGestureRecognizer::new(arena)
 ///     .with_on_tap(|details| {

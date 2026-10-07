@@ -246,8 +246,8 @@ pub trait GestureRecognizer: GestureArenaMember {
     /// Called when a pointer goes down. The recognizer should add itself to the
     /// gesture arena if it wants to compete for this pointer.
     ///
-    /// The receiver is the owning [`Arc`] so the exact recognizer identity is
-    /// registered in the arena. Manufacturing an `Arc` from a cloned struct
+    /// The receiver is the owning [`Rc`] so the exact recognizer identity is
+    /// registered in the arena. Manufacturing an `Rc` from a cloned struct
     /// creates a different allocation, makes weak entry handles go stale as
     /// soon as the arena resolves, and cannot support post-resolution timers.
     /// `position` is in the recognizer's own space — the one its slop,
@@ -550,7 +550,7 @@ impl RecognizerBase {
         }
     }
 
-    /// The exact `Arc<dyn GestureArenaMember>` this recognizer registered with
+    /// The exact `Rc<dyn GestureArenaMember>` this recognizer registered with
     /// the arena in [`start_tracking`](Self::start_tracking), upgraded from the
     /// stored entry handle.
     ///

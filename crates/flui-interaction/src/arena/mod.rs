@@ -26,7 +26,7 @@
 //! themselves:
 //!
 //! ```rust,ignore
-//! let entry = arena.add(pointer, my_recognizer.clone());
+//! let entry = arena.add(pointer, &my_recognizer);
 //! // Later, when the recognizer decides:
 //! entry.resolve(GestureDisposition::Accepted);
 //! ```
@@ -104,9 +104,10 @@ impl GestureDisposition {
 ///
 /// # Custom Recognizers
 ///
-/// To create a custom gesture recognizer, implement [`CustomGestureRecognizer`]
-/// instead of this trait directly. The blanket implementation will
-/// automatically provide `GestureArenaMember` for your type.
+/// External members implement this trait directly, including their own deadline
+/// query and polling hook. The arena holds members weakly; their owner keeps them alive.
+/// The existing [`CustomGestureRecognizer`] bridge remains usable for members
+/// that need only acceptance and rejection callbacks.
 ///
 /// ```rust,ignore
 /// use flui_interaction::sealed::CustomGestureRecognizer;
@@ -124,7 +125,8 @@ impl GestureDisposition {
 ///
 /// // MyRecognizer now implements GestureArenaMember automatically!
 /// let arena = GestureArena::new();
-/// let entry = arena.add(pointer, Arc::new(MyRecognizer { /* ... */ }));
+/// let recognizer = std::rc::Rc::new(MyRecognizer { /* ... */ });
+/// let entry = arena.add(pointer, &recognizer);
 /// // Later: entry.resolve(GestureDisposition::Accepted);
 /// ```
 ///
@@ -191,7 +193,7 @@ impl<T: crate::sealed::CustomGestureRecognizer> GestureArenaMember for T {
 /// # Example
 ///
 /// ```rust
-/// use std::sync::Arc;
+/// use std::rc::Rc;
 ///
 /// use flui_interaction::arena::{GestureArena, GestureDisposition};
 /// use flui_interaction::ids::PointerId;
@@ -205,9 +207,9 @@ impl<T: crate::sealed::CustomGestureRecognizer> GestureArenaMember for T {
 ///
 /// let arena = GestureArena::new();
 /// let pointer = PointerId::PRIMARY;
-/// let recognizer: Arc<R> = Arc::new(R);
+/// let recognizer: Rc<R> = Rc::new(R);
 ///
-/// let entry = arena.add(pointer, recognizer);
+/// let entry = arena.add(pointer, &recognizer);
 ///
 /// // Later, when the recogniser decides:
 /// entry.resolve(GestureDisposition::Accepted);
@@ -843,7 +845,7 @@ pub fn run_pointer_lifecycle(arena: &GestureArena, event: &crate::events::Pointe
 ///
 /// ```rust
 /// use std::sync::atomic::{AtomicUsize, Ordering};
-/// use std::sync::Arc;
+/// use std::rc::Rc;
 ///
 /// use flui_interaction::arena::{GestureArena, GestureDisposition};
 /// use flui_interaction::ids::PointerId;
@@ -861,12 +863,12 @@ pub fn run_pointer_lifecycle(arena: &GestureArena, event: &crate::events::Pointe
 ///
 /// let arena = GestureArena::new();
 /// let pointer = PointerId::PRIMARY;
-/// let tap = Arc::new(Counter(AtomicUsize::new(0), AtomicUsize::new(0)));
-/// let drag = Arc::new(Counter(AtomicUsize::new(0), AtomicUsize::new(0)));
+/// let tap = Rc::new(Counter(AtomicUsize::new(0), AtomicUsize::new(0)));
+/// let drag = Rc::new(Counter(AtomicUsize::new(0), AtomicUsize::new(0)));
 ///
 /// // Add recognisers to the arena — returns an entry handle.
-/// let tap_entry = arena.add(pointer, tap.clone());
-/// let drag_entry = arena.add(pointer, drag.clone());
+/// let tap_entry = arena.add(pointer, &tap);
+/// let drag_entry = arena.add(pointer, &drag);
 ///
 /// // Close the arena once pointer-down dispatch finishes.
 /// arena.close(pointer);
@@ -1120,7 +1122,7 @@ impl GestureArena {
     /// # Example
     ///
     /// ```rust
-    /// use std::sync::Arc;
+    /// use std::rc::Rc;
     ///
     /// use flui_interaction::arena::{GestureArena, GestureDisposition};
     /// use flui_interaction::ids::PointerId;
@@ -1134,8 +1136,8 @@ impl GestureArena {
     ///
     /// let arena = GestureArena::new();
     /// let pointer = PointerId::PRIMARY;
-    /// let recognizer: Arc<R> = Arc::new(R);
-    /// let entry = arena.add(pointer, recognizer);
+    /// let recognizer: Rc<R> = Rc::new(R);
+    /// let entry = arena.add(pointer, &recognizer);
     /// // Resolve the gesture via the entry handle.
     /// entry.resolve(GestureDisposition::Accepted);
     /// ```
