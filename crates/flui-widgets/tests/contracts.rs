@@ -105,6 +105,7 @@ fn text_editing() {
             ("editable_text::deleting_a_separator_keeps_the_caret_after_the_joined_flag", crate::editable_text::deleting_a_separator_keeps_the_caret_after_the_joined_flag),
             ("editable_text::text_store::rtl_scalar_rect_midpoints_resolve_to_the_source_scalar", crate::editable_text::text_store::rtl_scalar_rect_midpoints_resolve_to_the_source_scalar),
             ("editable_text::a_tap_places_the_caret_where_it_landed", crate::editable_text::a_tap_places_the_caret_where_it_landed),
+            ("editable_text::a_pointer_down_and_a_paste_commit_the_composition_first", crate::editable_text::a_pointer_down_and_a_paste_commit_the_composition_first),
             ("editable_text::an_obscured_field_never_hands_its_real_text_to_the_render_object", crate::editable_text::an_obscured_field_never_hands_its_real_text_to_the_render_object),
             ("editable_text::the_editor_steps_the_graphemes_the_painter_snaps_to", crate::editable_text::the_editor_steps_the_graphemes_the_painter_snaps_to),
             ("editable_text::focus_gain_attaches_an_ime_client_and_routes_preedit_to_the_controller", crate::editable_text::focus_gain_attaches_an_ime_client_and_routes_preedit_to_the_controller),

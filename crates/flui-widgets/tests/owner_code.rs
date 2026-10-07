@@ -29,7 +29,7 @@ use flui_platform_api::{ImeEvent, PlatformTextInput};
 use flui_widgets::{EditableText, TextEditingController};
 
 use crate::common::child_process;
-use crate::common::harness::{Harness, mount_with_ime};
+use crate::common::harness::{Harness, mount_with_ime, mount_with_push_ime};
 
 /// A captured value whose destruction panics.
 struct PanicsOnDrop(&'static str);
@@ -1337,6 +1337,108 @@ fn owner_dropped_with_two_completing_stores_whose_drops_panic() {
     the_owner_keeps_working(&self::owner());
 }
 
+/// A field whose preedit "かな" follows "ab", focused through `mount`, and
+/// whose `on_changed` panics the first time it hears the committed text.
+fn composing_field(
+    mount: fn(EditableText) -> Harness,
+    preedit: fn(&Harness),
+) -> (
+    Harness,
+    TextEditingController,
+    Rc<FocusNode>,
+    Rc<RefCell<Vec<String>>>,
+) {
+    let controller = TextEditingController::with_text("ab");
+    let node = FocusNode::with_debug_label("blurred mid-preedit");
+    let heard = Rc::new(RefCell::new(Vec::new()));
+    let hear = Rc::clone(&heard);
+    let mut harness = mount(
+        EditableText::new(controller.clone(), Rc::clone(&node)).on_changed(move |_cx, text| {
+            hear.borrow_mut().push(text.to_owned());
+            assert!(hear.borrow().len() != 1, "on_changed failure");
+        }),
+    );
+    node.request_focus();
+    harness.tick();
+    preedit(&harness);
+    assert!(controller.is_composing(), "the preedit is composing");
+    assert_eq!(controller.text(), "abかな");
+    (harness, controller, node, heard)
+}
+
+const PREEDIT: &str = "かな";
+
+/// Blur the field mid-preedit: its composition is committed before its
+/// client detaches (ADR-0142 item 4), the commit's `on_changed` panics, and
+/// the detach still runs; the failure is raised once, after it. Then the
+/// field takes input again.
+fn editable_blur_during_preedit(
+    mount: fn(EditableText) -> Harness,
+    preedit: fn(&Harness),
+    detached: fn(&Harness) -> bool,
+) {
+    let (mut harness, controller, node, heard) = composing_field(mount, preedit);
+    assert_eq!(
+        raised(|| {
+            node.unfocus();
+            harness.tick();
+        })
+        .as_deref(),
+        Some("on_changed failure"),
+        "the commit's failure is raised"
+    );
+    assert!(!controller.is_composing(), "the composition is committed");
+    assert_eq!(controller.text(), "abかな", "keeping its text");
+    assert_eq!(*heard.borrow(), ["abかな"], "the owner heard the commit");
+    assert!(detached(&harness), "the client detached after the failure");
+    assert_eq!(raised(|| harness.tick()), None, "nothing is reported twice");
+
+    node.request_focus();
+    harness.tick();
+    preedit(&harness);
+    node.unfocus();
+    assert_eq!(raised(|| harness.tick()), None, "the next blur");
+    assert_eq!(controller.text(), "abかなかな");
+    assert!(!controller.is_composing(), "the next blur commits too");
+    assert_eq!(*heard.borrow(), ["abかな", "abかなかな"]);
+}
+
+fn editable_blur_during_preedit_pull() {
+    editable_blur_during_preedit(
+        mount_with_ime,
+        |harness| {
+            let applied = project_ime_event(
+                &*field(harness),
+                &ImeEvent::Preedit {
+                    text: PREEDIT.to_owned(),
+                    cursor: Some((0, 0)),
+                },
+            );
+            assert_eq!(applied, Ok(LockOutcome::Granted), "preedit applies");
+        },
+        |harness| {
+            harness.active_text_store().is_none()
+                && harness.store_host_calls().ends_with(&[
+                    flui_testing::StoreHostCall::CompleteComposition,
+                    flui_testing::StoreHostCall::Unfocus,
+                ])
+        },
+    );
+}
+
+fn editable_blur_during_preedit_push() {
+    editable_blur_during_preedit(
+        mount_with_push_ime,
+        |harness| {
+            harness.dispatch_ime(&ImeEvent::Preedit {
+                text: PREEDIT.to_owned(),
+                cursor: Some((0, 0)),
+            });
+        },
+        |harness| harness.ime_allowed_calls().last() == Some(&false),
+    );
+}
+
 // ----------------------------------------------------------------------------
 // The matrix
 // ----------------------------------------------------------------------------
@@ -1635,6 +1737,14 @@ const ROWS: &[(&str, fn())] = &[
     (
         "detach: a stale token whose diagnostic closes the owner and panics",
         stale_detach_whose_diagnostic_closes_the_owner_and_panics,
+    ),
+    (
+        "editable: a blur during preedit whose commit's on_changed panics (pull)",
+        editable_blur_during_preedit_pull,
+    ),
+    (
+        "editable: a blur during preedit whose commit's on_changed panics (push)",
+        editable_blur_during_preedit_push,
     ),
 ];
 

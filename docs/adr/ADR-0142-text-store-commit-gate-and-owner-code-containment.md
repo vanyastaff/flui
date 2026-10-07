@@ -1,10 +1,10 @@
 # ADR-0142: Text store owner notification, commit gate and owner-code containment
 
-- **Status:** Accepted (2026-10-06). Items 1–3 and 8 are implemented; items 4–7 land with the
-  Win32 text-services host, the widget's composition handling and the runtime's anchor debt. Of
-  those, the host contract, the owner's `complete_composition` with the `Abandoned` path, and the
-  removal of `active_store` are in the code
-  ([ADR-0135](ADR-0135-win32-text-services-hold-the-text-store-on-the-owner-thread.md)).
+- **Status:** Accepted (2026-10-06). Items 1–3, 7 and 8 are implemented; items 4–6 land with
+  the widget's composition handling and the runtime's anchor debt. Of those, the host contract,
+  the owner's `complete_composition` with the `Abandoned` path, the removal of `active_store`
+  ([ADR-0135](ADR-0135-win32-text-services-hold-the-text-store-on-the-owner-thread.md)), and
+  the field's commit on blur, on a pointer-down on it and on a paste are in the code.
 - **Date:** 2026-10-06
 - **Supersedes:** [ADR-0090](ADR-0090-ime-pull-text-store-contract.md), in part: §1's rule that
   a read-write session is one change notification to the widget (the owner now hears only of a
@@ -203,11 +203,16 @@ In place:
   told before the next grant) and `a_text_form_field_validates_and_saves_the_committed_text`.
 - Item 8: `flui-widgets` `owner_code_is_contained_at_every_point`, one row per point and failure
   shape, each in a child process, each followed by the next operation on the same owner.
+- Item 7: `flui-platform` `text_services::tests::a_window_offers_its_text_services_as_its_host`
+  (ADR-0135 §3).
+- Item 4, the field's part: `flui-widgets` `owner_code_is_contained_at_every_point`'s
+  `editable: a blur during preedit …` rows (push and pull: the commit precedes the detach, and
+  its failing `on_changed` is raised after it) and
+  `a_pointer_down_and_a_paste_commit_the_composition_first`.
 
 Outstanding:
 
-- Items 4–7, with their tests: the Win32 window offering its text-services host (item 7; the
-  host contract and the removal of `active_store` are ADR-0135's), the widget's committing of a
-  composition on blur, paste, undo and unmount (item 4), the runtime's pointer-down and close
+- Items 4–6, with their tests: undo (the field has none yet) and unmount committing a
+  composition (item 4), the runtime's pointer-down and close
   hooks, anchor debt and the gate's realm rule (items 4–6), and a failure the gate holds being
   reported through the anchor debt when no dispatch or anchor follows (items 2 and 5).
