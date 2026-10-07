@@ -201,6 +201,13 @@ pub(super) fn plans(
             continue;
         }
         let cross_macos = target == super::MACOS_TARGET && host != Host::MacOs;
+        if cross_macos && feature_set == FeatureSet::All {
+            steps.insert(target, Step::Note(
+                "Skipping all-features macOS type-check: native logging requires a genuine Apple SDK; CI runs it on an Apple host."
+                    .to_owned(),
+            ));
+            continue;
+        }
         let mut cmd = if target == super::WINDOWS_TARGET && host != Host::Windows {
             // stacker's Windows C shim needs SDK headers, even without linking.
             Cmd::cargo(["xwin", "clippy"])
@@ -381,6 +388,17 @@ mod tests {
                 .is_empty()
         );
         for host in [Host::Linux, Host::Windows, Host::MacOs] {
+            let optional = plans(dir.path(), "native-fixture", host, FeatureSet::All)
+                .expect("optional native fixture plan");
+            let macos = optional[super::super::MACOS_TARGET].to_string();
+            if host == Host::MacOs {
+                assert!(macos.starts_with("$ cargo clippy"), "{macos}");
+            } else {
+                assert!(
+                    macos.contains("Skipping") && macos.contains("Apple SDK"),
+                    "{macos}"
+                );
+            }
             let planned = plans(
                 dir.path(),
                 "native-fixture",

@@ -6,7 +6,9 @@
 //! configuration. The toolchain itself is not a row: `rust-toolchain.toml`
 //! pins it, and rustup has already resolved it by the time xtask runs.
 
-use std::process::{Command, ExitCode};
+use std::ffi::OsStr;
+use std::io::Write as _;
+use std::process::{Command, ExitCode, Stdio};
 
 use crate::docs_links;
 use crate::fonts::find_python;
@@ -72,6 +74,29 @@ struct Doctor {
 }
 
 impl Doctor {
+    fn check_android_ndk(&mut self, compiler: &OsStr, archiver: &OsStr) {
+        let compiler_ok = android_compiler_available(compiler);
+        let archiver_ok = Command::new(archiver)
+            .arg("--version")
+            .output()
+            .is_ok_and(|out| out.status.success());
+        let hint = "install the Android NDK; set CC_aarch64_linux_android to its API-21 clang wrapper and AR_aarch64_linux_android to its llvm-ar";
+        self.row(
+            Scope::Full,
+            "Android NDK compiler",
+            compiler_ok,
+            &compiler.to_string_lossy(),
+            hint,
+        );
+        self.row(
+            Scope::Full,
+            "Android NDK archiver",
+            archiver_ok,
+            &archiver.to_string_lossy(),
+            hint,
+        );
+    }
+
     fn row(&mut self, scope: Scope, name: &str, ok: bool, detail: &str, install: &str) {
         let status = if ok { "ok" } else { "MISSING" };
         println!("  {:<5} {name:<34} {status:<8} {detail}", scope.label());
@@ -164,6 +189,24 @@ impl Doctor {
             );
         }
     }
+}
+
+/// Probe the configured compiler's Android target and sysroot, without an object file.
+fn android_compiler_available(compiler: &OsStr) -> bool {
+    let Ok(mut child) = Command::new(compiler)
+        .args(["-x", "c", "-fsyntax-only", "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return false;
+    };
+    let input_ok = child.stdin.take().is_some_and(|mut input| {
+        input.write_all(b"#include <android/api-level.h>\n#if !defined(__ANDROID__) || !defined(__ANDROID_API__) || __ANDROID_API__ < 21\n#error Android API 21 or later required\n#endif\n").is_ok()
+    });
+    let status = child.wait();
+    input_ok && status.is_ok_and(|status| status.success())
 }
 
 fn first_line(bytes: &[u8]) -> String {
@@ -283,6 +326,18 @@ pub(crate) fn doctor(args: &DoctorArgs) -> anyhow::Result<ExitCode> {
     );
 
     // `cargo xtask ci-full`
+    let android_tool = |prefix: &str, fallback: &str| {
+        [
+            format!("{prefix}_aarch64-linux-android"),
+            format!("{prefix}_aarch64_linux_android"),
+            format!("TARGET_{prefix}"),
+            prefix.to_owned(),
+        ]
+        .into_iter()
+        .find_map(std::env::var_os)
+        .unwrap_or_else(|| fallback.into())
+    };
+    doctor.check_android_ndk(&android_tool("CC", "clang"), &android_tool("AR", "llvm-ar"));
     if os != "windows" {
         doctor.check_cargo_sub(Scope::Full, "xwin", "cargo install --locked cargo-xwin --version 0.23.1 (also needs clang/LLVM and MSVC SDK/CRT provisioning)");
     }
@@ -443,11 +498,24 @@ mod tests {
         );
     }
 
+    fn a_version_only_compiler_does_not_supply_android_headers() {
+        let mut full = doctor(Mode::Full);
+        full.check_android_ndk(OsStr::new("cargo"), OsStr::new("cargo"));
+        assert!(
+            full.summary()
+                .contains("1 missing for `cargo xtask ci-full`")
+        );
+    }
+
     #[test]
     fn doctor_contract() {
         crate::table_test::run_table(
             "doctor_contract",
             &[
+                (
+                    "a_version_only_compiler_does_not_supply_android_headers",
+                    a_version_only_compiler_does_not_supply_android_headers as fn(),
+                ),
                 (
                     "a_failing_binary_probe_is_not_an_available_tool",
                     a_failing_binary_probe_is_not_an_available_tool as fn(),

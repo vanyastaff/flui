@@ -1127,10 +1127,14 @@ logging dependencies. Android needs the NDK's target compiler and archiver,
 for example `CC_aarch64_linux_android` set to its API-21 clang wrapper and
 `AR_aarch64_linux_android` to `llvm-ar`. CI uses its bundled NDK. Explicit
 target, `TARGET_CC`/`TARGET_AR`, and global compiler settings are preserved.
+`doctor full` checks that the selected Android compiler can parse the NDK's
+API-level header for Android API 21 or later and that the archiver runs. A
+host compiler's successful version output alone does not establish NDK support.
 
 The macOS `flui-log/apple-unified-logging` configuration also needs genuine
 Apple SDK logging headers. All-features Apple checks therefore use Xcode SDK
 hosts in CI; generic Zig libc headers do not validate this configuration.
+Local all-features macOS checks are explicitly skipped on non-macOS hosts.
 
 `check-changed` runs the required-target configuration for installed native
 targets. Optional native coverage requires the explicit `--all-features`
