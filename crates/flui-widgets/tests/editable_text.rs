@@ -6,9 +6,12 @@
 
 use std::rc::Rc;
 
-use flui_interaction::events::{Key, KeyState};
 use flui_interaction::routing::FocusNode;
 use flui_objects::RenderEditable;
+use flui_platform_api::{
+    EventTime,
+    keyboard::{Code, Key, KeyEvent, KeyState, Modifiers},
+};
 use flui_widgets::{EditableText, TextEditingController};
 
 /// Platform requests travel through the real realm inbox and the mounted
@@ -679,13 +682,13 @@ fn dispatch_ime(harness: &crate::common::harness::Harness, event: &flui_platform
     harness.dispatch_ime(event);
 }
 
-fn character_key_event(ch: char) -> flui_interaction::events::KeyEvent {
-    use flui_interaction::events::Code;
-    use flui_interaction::testing::input::KeyEventBuilder;
-    KeyEventBuilder::new(Code::KeyA)
-        .with_key(Key::Character(ch.to_string()))
-        .with_state(KeyState::Down)
-        .build()
+fn character_key_event(ch: char) -> KeyEvent {
+    KeyEvent::new(
+        KeyState::Down,
+        Key::character(ch.to_string()),
+        Code::KeyA,
+        EventTime::from_nanos(0),
+    )
 }
 
 /// A normal post-mount focus edge attaches one IME client and routes
@@ -895,17 +898,17 @@ pub(crate) fn a_pointer_down_and_a_paste_commit_the_composition_first() {
     harness.clipboard().write_text("!".to_owned());
     assert!(
         harness.focus_manager().dispatch_key_event(
-            &flui_interaction::testing::input::KeyEventBuilder::new(
-                flui_interaction::events::Code::KeyV
+            &KeyEvent::new(
+                KeyState::Down,
+                Key::character("v"),
+                Code::KeyV,
+                EventTime::from_nanos(0)
             )
-            .with_key(Key::Character("v".to_owned()))
-            .with_state(KeyState::Down)
             .with_modifiers(if cfg!(any(target_os = "macos", target_os = "ios")) {
-                flui_interaction::events::Modifiers::META
+                Modifiers::META
             } else {
-                flui_interaction::events::Modifiers::CONTROL
+                Modifiers::CONTROL
             })
-            .build()
         ),
         "paste: the chord is consumed while composing"
     );
@@ -1841,8 +1844,10 @@ pub(crate) mod text_store {
     /// field reports, which follows the visible caret, not its position in
     /// the whole text.
     fn long_input_reports_the_visible_candidate_area() {
-        use flui_interaction::events::{Code, Key, KeyState, Modifiers, NamedKey};
-        use flui_interaction::testing::input::KeyEventBuilder;
+        use flui_platform_api::{
+            EventTime,
+            keyboard::{Code, Key, KeyEvent, KeyState, NamedKey},
+        };
         use flui_widgets::SizedBox;
 
         let controller = TextEditingController::new();
@@ -1872,11 +1877,12 @@ pub(crate) mod text_store {
         }
         assert_visible(&harness);
         for key in [NamedKey::Home, NamedKey::End] {
-            let event = KeyEventBuilder::new(Code::Home)
-                .with_key(Key::Named(key))
-                .with_state(KeyState::Down)
-                .with_modifiers(Modifiers::empty())
-                .build();
+            let event = KeyEvent::new(
+                KeyState::Down,
+                Key::Named(key),
+                Code::Home,
+                EventTime::from_nanos(0),
+            );
             assert!(harness.focus_manager().dispatch_key_event(&event));
             harness.tick();
             assert_visible(&harness);
@@ -1897,9 +1903,11 @@ pub(crate) mod text_store {
 
     fn long_input(text: &'static str, obscured: bool) {
         use flui_foundation::geometry::Point;
-        use flui_interaction::events::{Code, Key, KeyState, Modifiers, NamedKey};
-        use flui_interaction::testing::input::KeyEventBuilder;
         use flui_platform_api::text_store::{PointMode, TextStoreError, Utf16Range};
+        use flui_platform_api::{
+            EventTime,
+            keyboard::{Code, Key, KeyEvent, KeyState, Modifiers, NamedKey},
+        };
         use flui_widgets::SizedBox;
 
         let controller = TextEditingController::new();
@@ -1968,21 +1976,24 @@ pub(crate) mod text_store {
         });
         assert!(full.clipped, "long document exceeds the visible field");
         for key in [NamedKey::Home, NamedKey::End, NamedKey::Home, NamedKey::End] {
-            let event = KeyEventBuilder::new(Code::Home)
-                .with_key(Key::Named(key))
-                .with_state(KeyState::Down)
-                .with_modifiers(Modifiers::empty())
-                .build();
+            let event = KeyEvent::new(
+                KeyState::Down,
+                Key::Named(key),
+                Code::Home,
+                EventTime::from_nanos(0),
+            );
             assert!(harness.focus_manager().dispatch_key_event(&event));
             harness.tick();
             assert_visible(&harness);
         }
 
-        let select = KeyEventBuilder::new(Code::ArrowLeft)
-            .with_key(Key::Named(NamedKey::ArrowLeft))
-            .with_state(KeyState::Down)
-            .with_modifiers(Modifiers::SHIFT)
-            .build();
+        let select = KeyEvent::new(
+            KeyState::Down,
+            Key::Named(NamedKey::ArrowLeft),
+            Code::ArrowLeft,
+            EventTime::from_nanos(0),
+        )
+        .with_modifiers(Modifiers::SHIFT);
         assert!(harness.focus_manager().dispatch_key_event(&select));
         harness.tick();
         let selected = read(&field, |session| {
@@ -1994,10 +2005,12 @@ pub(crate) mod text_store {
             !selected.clipped,
             "the selected adjacent grapheme uses viewport coordinates"
         );
-        let end = KeyEventBuilder::new(Code::End)
-            .with_key(Key::Named(NamedKey::End))
-            .with_state(KeyState::Down)
-            .build();
+        let end = KeyEvent::new(
+            KeyState::Down,
+            Key::Named(NamedKey::End),
+            Code::End,
+            EventTime::from_nanos(0),
+        );
         assert!(harness.focus_manager().dispatch_key_event(&end));
         harness.tick();
 

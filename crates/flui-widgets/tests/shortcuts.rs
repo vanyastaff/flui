@@ -8,8 +8,11 @@ pub(crate) mod intent_tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use flui_interaction::events::{Key, KeyEvent, KeyState, Modifiers};
     use flui_interaction::routing::FocusNode;
+    use flui_platform_api::{
+        EventTime,
+        keyboard::{Code, Key, KeyEvent, KeyState, Modifiers},
+    };
     use flui_widgets::SizedBox;
     use flui_widgets::interaction::{
         Actions, CallbackAction, Focus, Intent, Shortcuts, SingleActivator,
@@ -21,12 +24,13 @@ pub(crate) mod intent_tests {
     impl Intent for SaveIntent {}
 
     fn ctrl_s() -> KeyEvent {
-        KeyEvent {
-            state: KeyState::Down,
-            key: Key::Character("s".into()),
-            modifiers: Modifiers::CONTROL,
-            ..KeyEvent::default()
-        }
+        KeyEvent::new(
+            KeyState::Down,
+            Key::character("s"),
+            Code::KeyS,
+            EventTime::from_nanos(0),
+        )
+        .with_modifiers(Modifiers::CONTROL)
     }
 
     /// `Shortcuts` end to end (ADR-0023): Ctrl+S bubbles from the focused field,
@@ -56,10 +60,7 @@ pub(crate) mod intent_tests {
         assert_eq!(saves.load(Ordering::SeqCst), 1, "the action ran");
 
         // Bare "s" does not match the activator: unhandled, nothing runs.
-        assert!(!manager.dispatch_key_event(&KeyEvent {
-            modifiers: Modifiers::empty(),
-            ..ctrl_s()
-        }));
+        assert!(!manager.dispatch_key_event(&ctrl_s().with_modifiers(Modifiers::NONE)));
         assert_eq!(saves.load(Ordering::SeqCst), 1);
     }
 }
@@ -68,12 +69,15 @@ pub(crate) mod tab_tests {
     use std::cell::Cell;
     use std::rc::{Rc, Weak};
 
-    use flui_interaction::events::{Key, KeyEvent, KeyState, Modifiers, NamedKey};
     use flui_interaction::routing::{
         FocusAttachment, FocusDetachOutcome, FocusNode, FocusScopeNode, FocusTraversalPolicy,
         ReadingOrderPolicy,
     };
     use flui_painting::typography::TextDirection;
+    use flui_platform_api::{
+        EventTime,
+        keyboard::{Code, Key, KeyEvent, KeyState, Modifiers, NamedKey},
+    };
     use flui_view::ViewExt;
     use flui_view::prelude::*;
     use flui_widgets::interaction::{Focus, FocusScope};
@@ -82,16 +86,17 @@ pub(crate) mod tab_tests {
     use crate::common::harness::mount;
 
     fn tab(shift: bool) -> KeyEvent {
-        KeyEvent {
-            state: KeyState::Down,
-            key: Key::Named(NamedKey::Tab),
-            modifiers: if shift {
-                Modifiers::SHIFT
-            } else {
-                Modifiers::empty()
-            },
-            ..KeyEvent::default()
-        }
+        KeyEvent::new(
+            KeyState::Down,
+            Key::Named(NamedKey::Tab),
+            Code::Tab,
+            EventTime::from_nanos(0),
+        )
+        .with_modifiers(if shift {
+            Modifiers::SHIFT
+        } else {
+            Modifiers::NONE
+        })
     }
 
     #[derive(Debug)]
@@ -383,20 +388,23 @@ pub(crate) mod activation_tests {
     use std::cell::Cell;
     use std::rc::Rc;
 
-    use flui_interaction::events::{Key, KeyEvent, KeyState, Modifiers, NamedKey};
     use flui_interaction::routing::FocusNode;
+    use flui_platform_api::{
+        EventTime,
+        keyboard::{Code, Key, KeyEvent, KeyState, NamedKey},
+    };
     use flui_widgets::SizedBox;
     use flui_widgets::interaction::{Actions, ActivateIntent, CallbackAction, Focus};
 
     use crate::common::harness::mount;
 
     fn key_down(key: Key) -> KeyEvent {
-        KeyEvent {
-            state: KeyState::Down,
+        KeyEvent::new(
+            KeyState::Down,
             key,
-            modifiers: Modifiers::empty(),
-            ..KeyEvent::default()
-        }
+            Code::Unidentified,
+            EventTime::from_nanos(0),
+        )
     }
 
     /// Enter, Space and Select activate the focused control through the
@@ -420,7 +428,7 @@ pub(crate) mod activation_tests {
 
         for key in [
             Key::Named(NamedKey::Enter),
-            Key::Character(" ".into()),
+            Key::character(" "),
             Key::Named(NamedKey::Select),
         ] {
             assert!(
@@ -438,8 +446,11 @@ pub(crate) mod activation_tests {
 pub(crate) mod event_cx_tests {
     use std::rc::Rc;
 
-    use flui_interaction::events::{Key, KeyEvent, KeyState, Modifiers};
     use flui_interaction::routing::FocusNode;
+    use flui_platform_api::{
+        EventTime,
+        keyboard::{Code, Key, KeyEvent, KeyState, Modifiers},
+    };
     use flui_view::prelude::*;
     use flui_widgets::SizedBox;
     use flui_widgets::interaction::{
@@ -453,12 +464,13 @@ pub(crate) mod event_cx_tests {
     impl Intent for SaveIntent {}
 
     fn ctrl_s() -> KeyEvent {
-        KeyEvent {
-            state: KeyState::Down,
-            key: Key::Character("s".into()),
-            modifiers: Modifiers::CONTROL,
-            ..KeyEvent::default()
-        }
+        KeyEvent::new(
+            KeyState::Down,
+            Key::character("s"),
+            Code::KeyS,
+            EventTime::from_nanos(0),
+        )
+        .with_modifiers(Modifiers::CONTROL)
     }
 
     fn field(node: &Rc<FocusNode>) -> Focus {
@@ -578,16 +590,20 @@ pub(crate) mod event_cx_tests {
 }
 
 pub(crate) mod activator_tests {
-    use flui_interaction::events::{Key, KeyEvent, KeyState, Modifiers};
+    use flui_platform_api::{
+        EventTime,
+        keyboard::{Code, Key, KeyEvent, KeyState, Modifiers},
+    };
     use flui_widgets::interaction::SingleActivator;
 
     fn down(character: &str, modifiers: Modifiers) -> KeyEvent {
-        KeyEvent {
-            state: KeyState::Down,
-            key: Key::Character(character.into()),
-            modifiers,
-            ..KeyEvent::default()
-        }
+        KeyEvent::new(
+            KeyState::Down,
+            Key::character(character),
+            Code::Unidentified,
+            EventTime::from_nanos(0),
+        )
+        .with_modifiers(modifiers)
     }
 
     /// A character Shift produces (`?` is Shift+/ on a US keyboard) is
@@ -600,7 +616,7 @@ pub(crate) mod activator_tests {
             "US layout: Shift+/"
         );
         assert!(
-            question.matches(&down("?", Modifiers::empty())),
+            question.matches(&down("?", Modifiers::NONE)),
             "a layout with a ? key"
         );
         assert!(
