@@ -530,8 +530,19 @@ fn rotation_at_half_way(path: RotationPath) -> f64 {
     laid.pump();
     laid.pump_for(FRAME); // detection
     laid.pump_for(RUN / 2);
-    let transform = laid.find_by_render_type("RenderTransform");
-    laid.transform_rotation(transform) / std::f64::consts::TAU
+    shown_turns(&laid)
+}
+
+/// The rotation, in turns, that `AnimatedRotation`'s animated transform applies
+/// to its child, recovered from the matrix as `atan2(m[1][0], m[0][0])`.
+fn shown_turns(laid: &LaidOut) -> f64 {
+    let node = laid.find_by_render_type("RenderAnimatedTransform");
+    let child = laid.only_child(node);
+    let matrix = laid
+        .pipeline_owner()
+        .with(|owner| owner.transform_to(child, node))
+        .expect("child below the rotation is laid out");
+    matrix.get(1, 0).atan2(matrix.get(0, 0)) / std::f64::consts::TAU
 }
 
 /// `Shorter` reaches ¾ turn by turning back: half way it shows −⅛ turn.
@@ -568,8 +579,7 @@ pub(crate) fn animated_rotation_retargets_on_a_path_change() {
     laid.pump();
     laid.pump_for(FRAME); // detection
     laid.pump_for(RUN / 4);
-    let transform = laid.find_by_render_type("RenderTransform");
-    let before = laid.transform_rotation(transform) / std::f64::consts::TAU;
+    let before = shown_turns(&laid);
     assert!(
         before > 0.1 && before < 0.3,
         "a quarter of the way: {before} turns"
@@ -580,8 +590,7 @@ pub(crate) fn animated_rotation_retargets_on_a_path_change() {
     // Kept short so both candidate angles stay inside (-½, ½] turn, where the
     // read-back rotation is unambiguous.
     laid.pump_for(RUN / 10);
-    let transform = laid.find_by_render_type("RenderTransform");
-    let after = laid.transform_rotation(transform) / std::f64::consts::TAU;
+    let after = shown_turns(&laid);
     assert!(
         after < before,
         "the shorter arc turns back from {before}: now {after} turns"
