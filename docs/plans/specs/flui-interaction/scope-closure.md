@@ -5,7 +5,12 @@
 - **ID строк:** с префиксом раздела (`M1-14`, `M2-F1`, `M3-F1`), потому что `A*`, `D*`, `F*`, `R*` повторяются в M2 и M3.
 - **Сертификация (release/requirements.md):** нативно сертифицируется только Windows; Linux — через CI; macOS, Web, Android, iOS — `experimental`. Задачи P3 для них остаются в спеке pointer-vocabulary, но проверяются только `cross-typecheck`/`wasm-check`.
 
-## Итог
+## Исходная разметка
+
+Числа ниже относятся к разметке 2026-10-06, а не к текущему числу открытых строк.
+Состояние реализации повторно сверено 2026-10-07; текущие зависимости основной
+работы записаны в [tasks.md](tasks.md), а завершённые NEW-пункты отмечены ниже.
+Сверка исходников и merged-PR не заменяет повторного прогона тестов.
 
 | Способ закрытия | Строк |
 |---|---|
@@ -107,7 +112,7 @@ PR #1467 (held Down на blur), #1476 (контрактные тесты hover/h
 | M3-H8 | Explicit pointer capture/release API | absent | NEW: pointer-capture-token (same task; the OS side is PR #1471) |
 | M1-27 | High-precision vs notched wheel | partial | NEW: smooth-wheel-scrolling — Win32 classifies precise vs notched deltas, `Scrollable` animates notched input only |
 | M1-28 | Smooth notched-wheel scrolling | absent | NEW: smooth-wheel-scrolling (same task) |
-| M1-34 | Shift+wheel → horizontal scroll | absent | NEW: wheel-axis-remap — platform-neutral remap when `dx == 0` and Shift is held |
+| M1-34 | Shift+wheel → horizontal scroll | implemented | PR #1487 merged: `wheel_axis_delta`, `shift_wheel_scrolls_the_horizontal_axis` |
 | M1-35 | Scroll latching | absent | NEW: scroll-latching — latch a wheel/gesture to the first scroller, release on phase end or timeout |
 | M2-A6 | Competing-recognizer composition | absent | NEW: recognizer-composition — typed exclusive / require-to-fail combinators resolved in the arena (after recognizer-api) |
 | M2-D5 | Multi-pointer drag strategy | partial | NEW: drag-multi-pointer-strategy — strategy enum so a second finger continues a drag when the first lifts |
@@ -119,9 +124,9 @@ PR #1467 (held Down на blur), #1476 (контрактные тесты hover/h
 | M3-F3 | Explicit traversal order and groups | partial | NEW: focus-traversal-groups — `FocusTraversalGroup` widget with typed next/previous overrides and scope edge behaviour |
 | M3-F5 | Scope edge behaviour | partial | NEW: focus-traversal-groups (same task) |
 | M3-F4 | Directional navigation | absent | NEW: directional-focus — geometric search over focus rects, scoped by groups; arrow intents |
-| M3-K5 | Dead keys | partial | NEW: dead-key-events — Win32 emits `Key::Dead` on keydown so shortcuts don't fire |
-| M3-K9 | Character shortcuts independent of Shift | absent | NEW: character-activator — `CharacterActivator` that ignores Shift |
-| M3-A5 | Scroll actions and ShowOnScreen on scrollables | absent | NEW: scrollable-a11y-actions — `Scrollable` publishes ScrollUp/Down/Left/Right and handles ShowOnScreen |
+| M3-K5 | Dead keys | implemented | PR #1489 merged: Win32 emits `Key::Dead`; production conversion contract rows |
+| M3-K9 | Character shortcuts independent of Shift | implemented | PR #1490 merged: `SingleActivator::character(...).ignoring_shift()` and shortcut contracts; a separate duplicate type is unnecessary |
+| M3-A5 | Scroll actions and ShowOnScreen on scrollables | partial | PR #1488 merged the four axis-specific scroll actions and `assistive_scroll_actions_move_a_scrollable`; ShowOnScreen remains NEW: scrollable-a11y-actions |
 
 ## OUT
 
