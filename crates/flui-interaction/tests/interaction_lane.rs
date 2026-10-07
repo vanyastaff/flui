@@ -173,15 +173,18 @@ fn assert_lifecycle_snapshot_preserves_replacement(device_removed: bool, competi
     let binding = Rc::new(GestureBinding::new());
     let first = PointerId::try_from(1_u64).expect("contact");
     let second = PointerId::try_from(2_u64).expect("contact");
+    let third = PointerId::try_from(3_u64).expect("contact");
     let old_device = DeviceId::try_from(1_u64).expect("device");
     let new_device = DeviceId::try_from(2_u64).expect("device");
     let replaced = Rc::new(Cell::new(false));
     let replacement_cancels = Rc::new(Cell::new(0));
     let replacement_ups = Rc::new(Cell::new(0));
+    let later_cancels = Rc::new(Cell::new(0));
     let owner = Rc::downgrade(&binding);
     let did_replace = Rc::clone(&replaced);
     let cancels = Rc::clone(&replacement_cancels);
     let ups = Rc::clone(&replacement_ups);
+    let later = Rc::clone(&later_cancels);
     binding
         .pointer_router()
         .add_global_handler(Rc::new(move |event| match event {
@@ -199,8 +202,11 @@ fn assert_lifecycle_snapshot_preserves_replacement(device_removed: bool, competi
             }
             PointerEvent::Cancel(data) if data.pointer.id == second && did_replace.get() => {
                 cancels.set(cancels.get() + 1);
+            }
+            PointerEvent::Cancel(data) if data.pointer.id == third => {
+                later.set(later.get() + 1);
                 if competing {
-                    panic!("replacement cancellation second failure");
+                    panic!("later lifecycle cancellation second failure");
                 }
             }
             PointerEvent::Up(data) if data.pointer.id == second && did_replace.get() => {
@@ -215,6 +221,9 @@ fn assert_lifecycle_snapshot_preserves_replacement(device_removed: bool, competi
         &contact_event(second, old_device, false, 10_000_000),
         |_| HitTestResult::new(),
     );
+    binding.handle_pointer_event(&contact_event(third, old_device, false, 15_000_000), |_| {
+        HitTestResult::new()
+    });
     let result = catch_unwind(AssertUnwindSafe(|| {
         if device_removed {
             let event = PointerEvent::DeviceRemoved(PointerDeviceChange::new(
@@ -243,6 +252,15 @@ fn assert_lifecycle_snapshot_preserves_replacement(device_removed: bool, competi
     assert!(
         !binding.has_hit_test(first),
         "original first contact retired"
+    );
+    assert_eq!(
+        later_cancels.get(),
+        1,
+        "later accepted cancellation remains deliverable after first failure"
+    );
+    assert!(
+        !binding.has_hit_test(third),
+        "later original contact retired"
     );
     assert_eq!(
         replacement_cancels.get(),
