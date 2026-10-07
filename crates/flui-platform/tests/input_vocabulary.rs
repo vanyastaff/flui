@@ -14,8 +14,8 @@ use flui_platform_api::keyboard::{
     Code, ImeComposition, Key, KeyRepeat, KeyState, Location, Modifiers, NamedKey,
 };
 use flui_platform_api::pointer::{
-    CancelReason, ContactSize, PanZoomPhase, PenTool, PointerButton, PointerButtons, PointerEvent,
-    PointerKind, Pressure, ScrollDelta, ScrollUnit,
+    ButtonChange, CancelReason, ContactSize, PanZoomPhase, PenTool, PointerButton, PointerButtons,
+    PointerEvent, PointerKind, Pressure, ScrollDelta, ScrollUnit,
 };
 use ui_events::ScrollDelta as UpScrollDelta;
 use ui_events::keyboard as up_key;
@@ -77,19 +77,48 @@ fn a_mouse_press_has_no_pressure_sensor() {
 }
 
 fn a_release_leaves_the_released_button_out_of_the_set() {
-    let Some(PointerEvent::Up(up)) = convert(&up::PointerEvent::Up(up::PointerButtonEvent {
-        button: Some(up::PointerButton::Secondary),
-        pointer: info(1, up::PointerType::Mouse),
-        state: state(
-            0.0,
-            0.0,
-            &[up::PointerButton::Primary, up::PointerButton::Secondary],
-        ),
-    })) else {
-        panic!("a release is an Up");
+    // Primary stays held: the release is a change within the contact, not its end.
+    let Some(PointerEvent::ButtonChange(ButtonChange::Released(up))) =
+        convert(&up::PointerEvent::Up(up::PointerButtonEvent {
+            button: Some(up::PointerButton::Secondary),
+            pointer: info(1, up::PointerType::Mouse),
+            state: state(
+                0.0,
+                0.0,
+                &[up::PointerButton::Primary, up::PointerButton::Secondary],
+            ),
+        }))
+    else {
+        panic!("a release with another button held is a ButtonChange");
     };
     assert_eq!(up.button(), PointerButton::SECONDARY);
     assert_eq!(up.buttons(), PointerButtons::only(PointerButton::PRIMARY));
+
+    // A second button pressed during a primary drag is a ButtonChange, not a new Down.
+    let Some(PointerEvent::ButtonChange(ButtonChange::Pressed(press))) =
+        convert(&up::PointerEvent::Down(up::PointerButtonEvent {
+            button: Some(up::PointerButton::Secondary),
+            pointer: info(1, up::PointerType::Mouse),
+            state: state(
+                0.0,
+                0.0,
+                &[up::PointerButton::Primary, up::PointerButton::Secondary],
+            ),
+        }))
+    else {
+        panic!("a press with another button held is a ButtonChange");
+    };
+    assert_eq!(press.button(), PointerButton::SECONDARY);
+
+    // The last button up ends the contact.
+    assert!(matches!(
+        convert(&up::PointerEvent::Up(up::PointerButtonEvent {
+            button: Some(up::PointerButton::Primary),
+            pointer: info(1, up::PointerType::Mouse),
+            state: state(0.0, 0.0, &[]),
+        })),
+        Some(PointerEvent::Up(_))
+    ));
 }
 
 fn side_and_extra_buttons_keep_their_numbers() {
@@ -136,13 +165,13 @@ fn a_touch_move_keeps_pressure_contact_and_history() {
     };
     assert_eq!(moved.pointer.kind, PointerKind::Touch);
     assert!(!moved.pointer.is_primary());
-    assert_eq!(moved.current.pressure.map(Pressure::get), Some(0.75));
+    assert_eq!(moved.current().pressure.map(Pressure::get), Some(0.75));
     assert_eq!(
-        moved.current.contact_size.map(ContactSize::get),
+        moved.current().contact_size.map(ContactSize::get),
         Some(Size::new(12.0, 8.0))
     );
     let history: Vec<_> = moved
-        .coalesced
+        .coalesced()
         .iter()
         .map(|sample| sample.position.get())
         .collect();
@@ -220,6 +249,22 @@ fn a_release_at_a_non_finite_position_cancels_the_sequence() {
     };
     assert_eq!(cancel.reason, CancelReason::InvalidInput);
     assert_eq!(cancel.time, EventTime::from_nanos(1_000));
+
+    // An eraser's unusable release cancels as the eraser, not as the tip.
+    let eraser = up::PointerEvent::Up(up::PointerButtonEvent {
+        button: Some(up::PointerButton::PenEraser),
+        pointer: info(3, up::PointerType::Pen),
+        state: state(0.0, f64::INFINITY, &[]),
+    });
+    let Some(PointerEvent::Cancel(cancel)) = convert(&eraser) else {
+        panic!("an unusable eraser release still ends the sequence");
+    };
+    assert_eq!(
+        cancel.pointer.kind,
+        PointerKind::Pen {
+            tool: PenTool::Eraser
+        }
+    );
 }
 
 fn a_platform_cancel_and_crossings_take_the_observed_time() {
@@ -366,12 +411,12 @@ fn a_key_event_keeps_every_field() {
         is_composing: true,
     };
     let event = key_event(&upstream, OBSERVED);
-    assert_eq!(event.state, KeyState::Down);
+    assert_eq!(event.state(), KeyState::Down);
     assert_eq!(event.key, Key::character("q"));
     assert_eq!(event.code, Code::KeyQ);
     assert_eq!(event.location, Location::Left);
     assert_eq!(event.modifiers, Modifiers::ALT);
-    assert_eq!(event.repeat, KeyRepeat::AutoRepeat);
+    assert_eq!(event.repeat(), KeyRepeat::AutoRepeat);
     assert_eq!(event.composition, ImeComposition::Active);
     assert_eq!(event.time, OBSERVED);
 }

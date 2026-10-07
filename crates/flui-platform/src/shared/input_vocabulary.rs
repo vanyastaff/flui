@@ -41,10 +41,10 @@ use flui_platform_api::keyboard::{
     Code, ImeComposition, Key, KeyEvent, KeyRepeat, KeyState, Location, Modifiers, NamedKey,
 };
 use flui_platform_api::pointer::{
-    ButtonDirection, CancelReason, ContactSize, PanZoomEvent, PanZoomPhase, PanZoomTransform,
-    PenOrientation, PenTool, PointerButton, PointerButtonEvent, PointerButtons, PointerCancel,
-    PointerEvent, PointerId, PointerInfo, PointerKind, PointerMove, PointerPosition, PointerRole,
-    PointerSample, PointerSignal, Pressure, ScrollDelta, ScrollEvent, ScrollUnit,
+    ButtonChange, ButtonDirection, CancelReason, ContactSize, PanZoomEvent, PanZoomPhase,
+    PanZoomTransform, PenOrientation, PenTool, PointerButton, PointerButtonEvent, PointerButtons,
+    PointerCancel, PointerEvent, PointerId, PointerInfo, PointerKind, PointerMove, PointerPosition,
+    PointerRole, PointerSample, PointerSignal, Pressure, ScrollDelta, ScrollEvent, ScrollUnit,
     TangentialPressure,
 };
 use ui_events::keyboard as upstream_keyboard;
@@ -178,13 +178,7 @@ fn sample(state: &upstream::PointerState, kind: PointerKind) -> Option<PointerSa
 fn button_event<D: ButtonDirection>(
     event: &upstream::PointerButtonEvent,
 ) -> Option<PointerButtonEvent<D>> {
-    // The tool is the one that changed as well as the ones still held: an
-    // eraser release reports a held set without the eraser.
-    let mut tool_buttons = event.state.buttons;
-    if let Some(changed) = event.button {
-        tool_buttons.insert(changed);
-    }
-    let kind = kind(&event.pointer, Some(tool_buttons));
+    let kind = kind(&event.pointer, Some(tool_buttons(event)));
     let pointer = info(&event.pointer, kind)?;
     let sample = sample(&event.state, kind)?;
     // A touch or pen contact without a button, and the eraser, press the primary button.
@@ -206,14 +200,27 @@ fn button_event<D: ButtonDirection>(
 #[must_use]
 pub fn pointer_event(event: &upstream::PointerEvent, observed: EventTime) -> Option<PointerEvent> {
     match event {
-        upstream::PointerEvent::Down(event) => button_event(event).map(PointerEvent::Down),
+        // Backends report every button edge as a Down or an Up. A press while
+        // another button is held, or a release that leaves one held, does not start
+        // or end the contact: it is a `ButtonChange` (W3C chorded buttons, ADR-0143).
+        upstream::PointerEvent::Down(event) => button_event(event).map(|press| {
+            if others_held(event) {
+                PointerEvent::ButtonChange(ButtonChange::Pressed(press))
+            } else {
+                PointerEvent::Down(press)
+            }
+        }),
         upstream::PointerEvent::Up(event) => {
             if let Some(up) = button_event(event) {
-                return Some(PointerEvent::Up(up));
+                return Some(if others_held(event) {
+                    PointerEvent::ButtonChange(ButtonChange::Released(up))
+                } else {
+                    PointerEvent::Up(up)
+                });
             }
             let pointer = info(
                 &event.pointer,
-                kind(&event.pointer, Some(event.state.buttons)),
+                kind(&event.pointer, Some(tool_buttons(event))),
             )?;
             Some(PointerEvent::Cancel(PointerCancel::new(
                 pointer,
@@ -353,4 +360,24 @@ pub fn key_event(event: &upstream_keyboard::KeyboardEvent, observed: EventTime) 
         .with_modifiers(modifiers(event.modifiers))
         .with_repeat(repeat)
         .with_composition(composition)
+}
+
+/// The buttons that identify a button event's tool: the ones still held plus the one that
+/// changed, since an eraser release reports a held set without the eraser.
+fn tool_buttons(event: &upstream::PointerButtonEvent) -> upstream::PointerButtons {
+    let mut held = event.state.buttons;
+    if let Some(changed) = event.button {
+        held.insert(changed);
+    }
+    held
+}
+
+/// Whether a button other than the one that changed is held, before a press or after a
+/// release: the edge is then a change within a continuing contact.
+fn others_held(event: &upstream::PointerButtonEvent) -> bool {
+    let mut others = event.state.buttons;
+    if let Some(changed) = event.button {
+        others.remove(changed);
+    }
+    !others.is_empty()
 }

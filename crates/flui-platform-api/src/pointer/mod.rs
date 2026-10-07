@@ -449,15 +449,32 @@ pub struct PointerMove {
     pub buttons: PointerButtons,
     /// The modifiers held.
     pub modifiers: Modifiers,
-    /// The latest reading.
-    pub current: PointerSample,
-    /// Earlier readings folded into this event, oldest first.
-    pub coalesced: Vec<PointerSample>,
-    /// Readings the platform predicts after `current`, oldest first.
-    pub predicted: Vec<PointerSample>,
+    current: PointerSample,
+    coalesced: Vec<PointerSample>,
+    predicted: Vec<PointerSample>,
 }
 
 impl PointerMove {
+    /// The latest reading.
+    #[must_use]
+    pub const fn current(&self) -> &PointerSample {
+        &self.current
+    }
+
+    /// Earlier readings folded into this event, oldest first and not later than
+    /// [`current`](Self::current). Read-only, so the ordering cannot be broken after
+    /// [`with_coalesced`](Self::with_coalesced) established it.
+    #[must_use]
+    pub fn coalesced(&self) -> &[PointerSample] {
+        &self.coalesced
+    }
+
+    /// Readings the platform predicts after [`current`](Self::current), oldest first.
+    #[must_use]
+    pub fn predicted(&self) -> &[PointerSample] {
+        &self.predicted
+    }
+
     /// A move to `current` with no coalesced or predicted readings and no modifiers.
     #[must_use]
     pub const fn new(
@@ -496,11 +513,11 @@ impl PointerMove {
     }
 
     /// This move with the predicted readings `samples`: sorted oldest first, keeping only
-    /// those not earlier than `current`.
+    /// those not earlier than `current` and dropping an exact copy of `current`.
     #[must_use]
     pub fn with_predicted(self, mut samples: Vec<PointerSample>) -> Self {
-        let current = self.current.time;
-        samples.retain(|sample| sample.time >= current);
+        let current = self.current;
+        samples.retain(|sample| sample.time >= current.time && *sample != current);
         samples.sort_by_key(|sample| sample.time);
         Self {
             predicted: samples,

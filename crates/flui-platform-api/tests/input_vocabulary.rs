@@ -162,8 +162,8 @@ fn coalesced_and_predicted_readings_are_ordered_around_the_current_one() {
             .map(|sample| sample.time.as_nanos())
             .collect::<Vec<_>>()
     };
-    assert_eq!(times(&moved.coalesced), [10, 40]);
-    assert_eq!(times(&moved.predicted), [55, 70]);
+    assert_eq!(times(moved.coalesced()), [10, 40]);
+    assert_eq!(times(moved.predicted()), [55, 70]);
 
     // An exact copy of `current` in the history is dropped; a distinct reading at the same
     // time is kept.
@@ -171,7 +171,7 @@ fn coalesced_and_predicted_readings_are_ordered_around_the_current_one() {
     let elsewhere = PointerSample::new(EventTime::from_nanos(50), position(9.0, 9.0));
     let moved = PointerMove::new(mouse(), PointerButtons::NONE, current)
         .with_coalesced(vec![current, elsewhere]);
-    assert_eq!(moved.coalesced, [elsewhere]);
+    assert_eq!(moved.coalesced(), [elsewhere].as_slice());
 }
 
 fn a_scroll_keeps_its_unit() {
@@ -237,10 +237,10 @@ fn a_pan_zoom_transform_is_finite_with_a_positive_scale() {
 fn a_key_event_is_a_repeat_only_while_down() {
     let up = KeyEvent::new(KeyState::Up, Key::Named(NamedKey::Enter), Code::Enter, T0)
         .with_repeat(KeyRepeat::AutoRepeat);
-    assert_eq!(up.repeat, KeyRepeat::First);
+    assert_eq!(up.repeat(), KeyRepeat::First);
     let down = KeyEvent::new(KeyState::Down, Key::character("a"), Code::KeyA, T0)
         .with_repeat(KeyRepeat::AutoRepeat);
-    assert_eq!(down.repeat, KeyRepeat::AutoRepeat);
+    assert_eq!(down.repeat(), KeyRepeat::AutoRepeat);
 }
 
 fn an_empty_character_is_an_unidentified_key() {

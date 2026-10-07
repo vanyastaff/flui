@@ -141,19 +141,18 @@ pub enum ImeComposition {
 ///     .with_location(Location::Numpad)
 ///     .with_modifiers(Modifiers::CONTROL)
 ///     .with_repeat(KeyRepeat::AutoRepeat);
-/// assert_eq!(enter.repeat, KeyRepeat::AutoRepeat);
+/// assert_eq!(enter.repeat(), KeyRepeat::AutoRepeat);
 /// assert_eq!(enter.composition, ImeComposition::Inactive);
 ///
 /// // A release is never a repeat.
 /// let release = KeyEvent::new(KeyState::Up, Key::character("a"), Code::KeyA, EventTime::from_nanos(8))
 ///     .with_repeat(KeyRepeat::AutoRepeat);
-/// assert_eq!(release.repeat, KeyRepeat::First);
+/// assert_eq!(release.repeat(), KeyRepeat::First);
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct KeyEvent {
-    /// Pressed or released.
-    pub state: KeyState,
+    state: KeyState,
     /// What the key means under the active layout.
     pub key: Key,
     /// The physical key.
@@ -162,8 +161,7 @@ pub struct KeyEvent {
     pub location: Location,
     /// The modifiers held when the key changed, including a modifier key's own change.
     pub modifiers: Modifiers,
-    /// Whether this is an auto-repeat of a held key; always [`KeyRepeat::First`] on a release.
-    pub repeat: KeyRepeat,
+    repeat: KeyRepeat,
     /// Whether an input method was composing when the key changed.
     pub composition: ImeComposition,
     /// When the platform observed the change.
@@ -171,6 +169,19 @@ pub struct KeyEvent {
 }
 
 impl KeyEvent {
+    /// Pressed or released.
+    #[must_use]
+    pub const fn state(&self) -> KeyState {
+        self.state
+    }
+
+    /// Whether this is an auto-repeat of a held key; always [`KeyRepeat::First`] on a
+    /// release. Private with [`state`](Self::state), so the two cannot be set apart.
+    #[must_use]
+    pub const fn repeat(&self) -> KeyRepeat {
+        self.repeat
+    }
+
     /// A first press or a release with no modifiers, at the standard location, outside any
     /// composition.
     #[must_use]
