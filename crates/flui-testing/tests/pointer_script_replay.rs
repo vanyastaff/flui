@@ -12,6 +12,7 @@
 //! event sequence on both sides.
 
 use std::sync::Arc;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
@@ -30,7 +31,7 @@ fn at(x: f64, y: f64) -> Offset {
 fn long_press_probe(
     binding: &HeadlessBinding,
     timeout: Duration,
-) -> (Arc<LongPressGestureRecognizer>, Arc<AtomicBool>) {
+) -> (Rc<LongPressGestureRecognizer>, Arc<AtomicBool>) {
     let fired = Arc::new(AtomicBool::new(false));
     let in_callback = Arc::clone(&fired);
     let recognizer = LongPressGestureRecognizer::with_settings(
@@ -51,10 +52,10 @@ fn long_press_probe(
 /// contact's events follow the captured route.
 fn replay_against(
     binding: &mut HeadlessBinding,
-    recognizer: &Arc<LongPressGestureRecognizer>,
+    recognizer: &Rc<LongPressGestureRecognizer>,
     script: &PointerScript,
 ) {
-    let recognizer = Arc::clone(recognizer);
+    let recognizer = Rc::clone(recognizer);
     binding.replay_with(script, move |_, position| {
         recognizer.add_pointer(PointerId::PRIMARY, position, position);
         flui_interaction::HitTestResult::new()
