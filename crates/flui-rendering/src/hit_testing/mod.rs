@@ -60,7 +60,7 @@ pub use flui_interaction::routing::{CursorRequest, HitTestBehavior};
 // every target (ADR-0027 — executable callbacks never live in render storage).
 // `EventPropagation` is carried only by the two arbitrated claim walks, scroll
 // signals and trackpad pan-zoom.
-pub use flui_interaction::events::{CursorIcon, InputEvent, PointerEvent, PointerEventExt};
+pub use flui_interaction::events::{CursorIcon, PointerEvent, PointerEventExt};
 pub use flui_interaction::routing::{
     DeviceId, EventPropagation, LocalPayloadTarget, MouseEnterCallback, MouseExitCallback,
     MouseHoverCallback, MouseRegionCallbacks, MouseRegionTarget, MouseTrackerAnnotation,
