@@ -14,16 +14,10 @@
 //! ```
 
 pub use flui_interaction::arena::{
-    GestureArena, GestureArenaEntry, GestureArenaMember, GestureArenaTeam, GestureDisposition,
-    PointerSignalResolver, SignalPriority, SweepModel, TeamEntry,
+    GestureArena, GestureArenaEntry, GestureArenaMember, GestureDisposition, SweepModel,
 };
 pub use flui_interaction::events::{
     CursorIcon, PointerButtons, PointerEvent, PointerEventExt, PointerKind,
-};
-pub use flui_platform_api::pointer::{
-    ButtonChange, CancelReason, DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenTool,
-    PointerButton, PointerInfo, PointerMove, PointerPosition, PointerPress, PointerRelease,
-    PointerRole, PointerSample, ScrollDelta, ScrollEvent, ScrollPhase, ScrollPrecision, ScrollUnit,
 };
 pub use flui_interaction::recognizers::double_tap::DoubleTapDetails;
 pub use flui_interaction::recognizers::long_press::{
@@ -33,27 +27,32 @@ pub use flui_interaction::recognizers::multi_tap::MultiTapDetails;
 pub use flui_interaction::recognizers::scale::{
     ScaleEndDetails, ScaleStartDetails, ScaleUpdateDetails,
 };
-pub use flui_interaction::recognizers::{ArenaMembership, BeginContactError, CancelOutcome, ContactId, ContactSnapshot, GestureRecognizerState, PrimaryContact, RecognizerSet, cancel_all};
-pub use flui_interaction::{
-    DoubleTapGestureRecognizer, DragAxis, DragDownDetails, DragEndDetails,
-    DragGestureRecognizer, DragStartDetails, DragUpdateDetails, EagerGestureRecognizer,
-    ForcePressGestureRecognizer, GestureEndReason, GestureRecognizer,
-    GestureSettings, GestureSettingsError, HorizontalDragGestureRecognizer,
-    LongPressGestureRecognizer, MultiDragAxis, MultiDragEndDetails, MultiDragGestureRecognizer,
-    MultiDragHandle, MultiDragUpdateDetails, MultiTapGestureRecognizer, PanGestureRecognizer,
-    PointerId, ScaleGestureRecognizer, TapAndDragGestureRecognizer,
-    TapDragDownDetails, TapDragEndDetails, TapDragStartDetails, TapDragUpDetails,
-    TapDragUpdateDetails, TapGestureRecognizer, VerticalDragGestureRecognizer,
+pub use flui_interaction::recognizers::{
+    ArenaMembership, BeginContactError, CancelOutcome, ContactId, ContactSnapshot,
+    GestureRecognizerState, PrimaryContact, RecognizerSet, cancel_all,
 };
 pub use flui_interaction::{
-    ForcePressDetails, LongPressEndDetails, LongPressMoveUpdateDetails,
-    TapDownDetails, TapUpDetails, Velocity, VelocityEstimate,
+    DoubleTapGestureRecognizer, DragAxis, DragDownDetails, DragEndDetails, DragGestureRecognizer,
+    DragStartDetails, DragUpdateDetails, EagerGestureRecognizer, ForcePressGestureRecognizer,
+    GestureEndReason, GestureRecognizer, GestureSettings, GestureSettingsError,
+    HorizontalDragGestureRecognizer, LongPressGestureRecognizer, MultiDragAxis,
+    MultiDragEndDetails, MultiDragGestureRecognizer, MultiDragHandle, MultiDragUpdateDetails,
+    MultiTapGestureRecognizer, PanGestureRecognizer, PointerId, ScaleGestureRecognizer,
+    TapAndDragGestureRecognizer, TapDragDownDetails, TapDragEndDetails, TapDragStartDetails,
+    TapDragUpDetails, TapDragUpdateDetails, TapGestureRecognizer, VerticalDragGestureRecognizer,
+};
+pub use flui_interaction::{
+    ForcePressDetails, LongPressEndDetails, LongPressMoveUpdateDetails, TapDownDetails,
+    TapUpDetails, Velocity, VelocityEstimate,
+};
+pub use flui_platform_api::pointer::{
+    ButtonChange, CancelReason, DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenTool,
+    PointerButton, PointerInfo, PointerMove, PointerPosition, PointerPress, PointerRelease,
+    PointerRole, PointerSample, ScrollDelta, ScrollEvent, ScrollPhase, ScrollPrecision, ScrollUnit,
 };
 
 pub use flui_interaction::events::KeyEvent;
-pub use flui_interaction::events::keyboard::{
-    Code, Key, KeyState, Location, Modifiers, NamedKey,
-};
+pub use flui_interaction::events::keyboard::{Code, Key, KeyState, Location, Modifiers, NamedKey};
 pub use flui_interaction::routing::{
     FocusAttachment, FocusChangeCallback, FocusDetachOutcome, FocusManager, FocusNode,
     FocusNodeChangeCallback, FocusNodeId, FocusNodeRegistration, FocusRequestOutcome,

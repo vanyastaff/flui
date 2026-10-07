@@ -41,14 +41,6 @@
 //! - **Exact generations**: stale entry handles cannot resolve a reused pointer
 //! - **Owner affinity**: executable callbacks never acquire a cross-thread API
 
-// Submodules — these are part of the crate's public surface (they're
-// referenced from recognizer code) so they're `pub` rather than `pub(crate)`.
-pub mod signal_resolver;
-pub mod team;
-
-pub use signal_resolver::{PointerSignalResolver, SignalPriority};
-pub use team::{GestureArenaTeam, TeamEntry};
-
 use std::{
     any::Any,
     cell::{Cell, RefCell},
@@ -780,35 +772,6 @@ impl ArenaEntryData {
         losers
     }
 
-    /// Resolve the arena with multiple winners (team resolution).
-    #[must_use]
-    fn resolve_team(&mut self, winners: &[Rc<dyn GestureArenaMember>]) -> PendingNotifications {
-        if self.is_resolved {
-            return PendingNotifications::new();
-        }
-
-        self.is_resolved = true;
-        let members = std::mem::take(&mut self.members);
-        self.eager_winner = None;
-        let mut losers = PendingNotifications::new();
-        let mut accepted = PendingNotifications::new();
-
-        // Reject all losers before accepting any team member.
-        for member in members {
-            let is_winner = winners
-                .iter()
-                .any(|winner| Weak::ptr_eq(&member, &Rc::downgrade(winner)));
-            if is_winner {
-                accepted.push((member, GestureDisposition::Accepted));
-            } else {
-                losers.push((member, GestureDisposition::Rejected));
-            }
-        }
-
-        losers.extend(accepted);
-        losers
-    }
-
     /// Sweep ordering is intentionally different from an explicit
     /// resolution: the front member is accepted first, then later members are
     /// rejected in registration order.
@@ -1500,27 +1463,6 @@ impl GestureArena {
             return;
         };
         self.resolve_entry(pointer, &slot, member.clone(), GestureDisposition::Rejected);
-    }
-
-    /// Resolve the arena with multiple winners.
-    ///
-    /// All specified winners receive `accept_gesture()`.
-    /// This is useful when multiple gestures should be recognized
-    /// simultaneously.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// // Both tap and double-tap can be recognized
-    /// arena.resolve_team(pointer, &[tap_recognizer, double_tap_recognizer]);
-    /// ```
-    pub fn resolve_team(&self, pointer: PointerId, winners: &[Rc<dyn GestureArenaMember>]) {
-        let Some(slot) = self.current_slot(pointer) else {
-            return;
-        };
-        let pending = slot.data.borrow_mut().resolve_team(winners);
-        self.remove_exact_slot(pointer, &slot);
-        Self::dispatch_pending(pending, pointer);
     }
 
     /// Sweep - remove resolved arenas for a pointer.

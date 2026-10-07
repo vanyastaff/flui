@@ -7,8 +7,8 @@
 //!
 //! # Local IDs
 //!
-//! [`FocusNodeId`] and [`HandlerId`] are issued by focus-node and signal-handler
-//! allocators. Callers retain these identities rather than constructing them.
+//! [`FocusNodeId`] is issued by the focus-node allocator.
+//! Callers retain these identities rather than constructing them.
 //!
 //! # Example
 //!
@@ -85,49 +85,6 @@ impl fmt::Display for FocusNodeId {
 impl From<FocusNodeId> for NonZeroU64 {
     #[inline]
     fn from(id: FocusNodeId) -> Self {
-        id.0
-    }
-}
-
-// ============================================================================
-// HandlerId - Identifier for registered handlers
-// ============================================================================
-
-/// Unique identifier for a registered event handler.
-///
-/// Issued by [`crate::arena::PointerSignalResolver::register`].
-#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-#[repr(transparent)]
-pub struct HandlerId(NonZeroU64);
-
-impl HandlerId {
-    #[inline]
-    pub(crate) const fn new(id: NonZeroU64) -> Self {
-        Self(id)
-    }
-
-    /// Returns the raw ID value.
-    #[inline]
-    pub const fn get(self) -> u64 {
-        self.0.get()
-    }
-}
-
-impl fmt::Debug for HandlerId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "HandlerId({})", self.0)
-    }
-}
-
-impl fmt::Display for HandlerId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "handler:{}", self.0)
-    }
-}
-
-impl From<HandlerId> for NonZeroU64 {
-    #[inline]
-    fn from(id: HandlerId) -> Self {
         id.0
     }
 }

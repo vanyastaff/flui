@@ -15,8 +15,8 @@ Microbenchmark timings describe the measured fixtures, not a frame-time guarante
 3. Up / Cancel: delivered along the cached route; Up sweeps the arena, then the
    route is released.
 
-`InputPredictor` is not part of this path: the binding never calls it. It is a
-standalone helper for callers that want extrapolated positions.
+Hardware-predicted samples travel with the owned pointer event. The binding
+does not synthesize future samples through a separate extrapolator.
 
 The measured cached-route Move fixture without sample history performs no heap
 allocation after setup; the
@@ -32,7 +32,6 @@ history-bearing events.
 |---|---|---|
 | `VelocityTracker` | 20-slot ring buffer (`lsq_solver::MAX_SAMPLES`), 100 ms horizon, at least 3 samples (`MIN_SAMPLE_SIZE`) for a fit, zero after 40 ms without movement; quadratic least-squares fit, O(n) for n ≤ 20; the fit is memoized until the next `add_position` / `reset` | `processing/velocity.rs` |
 | `PointerEventResampler` | soft cap of 100 queued events (`MAX_BUFFERED_EVENTS`): adjacent moves fold, then the oldest non-boundary event is dropped; Down, Up, Cancel, Enter and Leave are preserved, so an all-boundary queue may exceed the cap; 1 ms minimum sample interval, 38 ms default lookback; positions are interpolated linearly between queued events | `processing/resampler.rs` |
-| `InputPredictor` | prediction capped at 25 ms (default 16 ms), at least 3 samples; linear `pos + v·dt`, optional `+ ½·a·dt²`, optional exponential smoothing | `processing/prediction.rs` |
 | Arena entry | weak members in `SmallVec<[Weak<dyn GestureArenaMember>; 4]>`, inline up to four; verdicts upgrade each live participant at invocation | `arena/mod.rs` (`ArenaEntryData`) |
 | Arena storage | owner-local `Rc<RefCell<BTreeMap<PointerId, Rc<ArenaSlot>>>>`, retained generation map and deferred-resolution queue; slot state is `RefCell` | `arena/mod.rs` |
 

@@ -20,8 +20,7 @@ use std::{
 
 use flui_foundation::geometry::Offset;
 use flui_interaction::arena::{
-    GestureArena, GestureArenaEntry, GestureArenaMember, GestureArenaTeam, GestureDisposition,
-    run_pointer_lifecycle,
+    GestureArena, GestureArenaEntry, GestureArenaMember, GestureDisposition, run_pointer_lifecycle,
 };
 use flui_interaction::events::{
     PointerButton, PointerEvent, PointerKind, make_down_event_for_id_with_button,
@@ -696,13 +695,11 @@ fn panicking_multi_tap_callback_leaves_the_next_pair_working() {
 struct Verdicts {
     accepted: AtomicU32,
     rejected: AtomicU32,
-    panic_on_accept: bool,
 }
 
 impl GestureArenaMember for Verdicts {
     fn accept_gesture(&self, _pointer: PointerId) {
         self.accepted.fetch_add(1, Ordering::SeqCst);
-        assert!(!self.panic_on_accept, "member accept panics");
     }
 
     fn reject_gesture(&self, _pointer: PointerId) {
@@ -717,28 +714,6 @@ impl Verdicts {
             self.rejected.load(Ordering::SeqCst),
         )
     }
-}
-
-fn panicking_team_winner_still_rejects_its_teammates() {
-    let arena = GestureArena::new();
-    let pointer = id(2);
-    let team = GestureArenaTeam::new();
-    let winner = Rc::new(Verdicts {
-        panic_on_accept: true,
-        ..Verdicts::default()
-    });
-    let teammate = Rc::new(Verdicts::default());
-    let _winner_entry = team.add(pointer, winner.clone(), &arena);
-    let _teammate_entry = team.add(pointer, teammate.clone(), &arena);
-    let rival = Rc::new(Verdicts::default());
-    let rival_entry = arena.add(pointer, &rival);
-    arena.close(pointer);
-    rival_entry.resolve(GestureDisposition::Rejected);
-    let drained = catch_unwind(AssertUnwindSafe(|| arena.drain_deferred_resolutions()));
-    assert!(drained.is_err(), "the winner's panic resumes");
-    assert_eq!(winner.get(), (1, 0));
-    assert_eq!(teammate.get(), (0, 1), "the teammate is still rejected");
-    assert!(arena.is_empty());
 }
 
 // ---------------------------------------------------------------------------
@@ -1150,10 +1125,6 @@ fn gesture_lifecycle_matrix() {
         (
             "panicking_multi_tap_callback_leaves_the_next_pair_working",
             panicking_multi_tap_callback_leaves_the_next_pair_working,
-        ),
-        (
-            "panicking_team_winner_still_rejects_its_teammates",
-            panicking_team_winner_still_rejects_its_teammates,
         ),
         (
             "accept_from_a_withdrawn_member_cannot_end_the_arena",

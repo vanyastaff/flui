@@ -35,5 +35,4 @@ single aggregate whose fields double-panic before reaching the boundary.
 The public `gesture_lifecycle_matrix` covers candidate destructor reentry,
 competing retirement failures and recovery, and deadline order.
 `arena_settles_every_member_exactly_once` covers held generations, deferred
-resolution, stale entries and pointer reuse. The private terminal-counter
-seam is `signal_handler_exhaustion_refuses_permanently_without_losing_registration`.
+resolution, stale entries and pointer reuse.
