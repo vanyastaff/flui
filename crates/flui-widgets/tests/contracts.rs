@@ -173,6 +173,7 @@ fn pointer_and_gesture_recognition() {
             ("gesture_detector::clearing_pan_callbacks_mid_drag_still_finishes_the_drag", crate::gesture_detector::clearing_pan_callbacks_mid_drag_still_finishes_the_drag as fn()),
             ("gesture_detector::scoped_settings_control_touch_recognition_thresholds", crate::gesture_detector::scoped_settings_control_touch_recognition_thresholds),
             ("gesture_detector::scoped_settings_control_gesture_deadlines", crate::gesture_detector::scoped_settings_control_gesture_deadlines),
+            ("gesture_detector::scoped_estimator_controls_delivered_drag_velocity", crate::gesture_detector::scoped_estimator_controls_delivered_drag_velocity),
             ("gesture_detector::unmount_mid_drag_cancels_once_and_hands_the_arena_to_the_rival", crate::gesture_detector::unmount_mid_drag_cancels_once_and_hands_the_arena_to_the_rival as fn()),
             ("gesture_detector::viewer_reports_cancelled_then_completed_interactions", crate::gesture_detector::viewer_reports_cancelled_then_completed_interactions as fn()),
             ("gesture_detector::gesture_detector_fires_on_tap_for_a_down_up_on_the_child", crate::gesture_detector::gesture_detector_fires_on_tap_for_a_down_up_on_the_child as fn()),

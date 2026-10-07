@@ -49,6 +49,91 @@ impl flui_view::ViewState<ConfiguredGesture> for ConfiguredGestureState {
     }
 }
 
+pub(crate) fn scoped_estimator_controls_delivered_drag_velocity() {
+    use std::{cell::Cell, rc::Rc};
+
+    use flui_foundation::geometry::Point;
+    use flui_interaction::{GestureSettings, processing::VelocityEstimator};
+    use flui_platform_api::{
+        EventTime,
+        pointer::{
+            PointerButton, PointerButtons, PointerEvent, PointerId, PointerInfo, PointerKind,
+            PointerMove, PointerPosition, PointerPress, PointerRelease, PointerSample,
+        },
+    };
+
+    // Four samples 10 ms apart at x = 10, 40, 60, 70 distinguish all four
+    // algorithms: an exactly quadratic deceleration has terminal LSQ slope
+    // 500 px/s; the weighted recent intervals give 2550/1950 px/s, and the
+    // impulse integration gives 1589.9257985831982 px/s. A constant-speed
+    // trace would pass even if the configured strategy were ignored.
+    for (estimator, expected) in [
+        (VelocityEstimator::LeastSquares, 500.0),
+        (VelocityEstimator::Impulse, 1589.9257985831982),
+        (VelocityEstimator::Ios, 2550.0),
+        (VelocityEstimator::Macos, 1950.0),
+    ] {
+        for kind in [PointerKind::Touch, PointerKind::Mouse] {
+            for horizontal in [false, true] {
+                let delivered = Rc::new(Cell::new(None));
+                let observed = Rc::clone(&delivered);
+                let callback = move |_, details: flui_interaction::DragEndDetails| {
+                    assert!(
+                        observed
+                            .replace(Some(details.velocity.pixels_per_second.dx))
+                            .is_none()
+                    );
+                };
+                let detector = if horizontal {
+                    GestureDetector::new().on_horizontal_drag_end(callback)
+                } else {
+                    GestureDetector::new().on_pan_end(callback)
+                }
+                .child(ColoredBox::new(Color::rgb(10, 20, 30)));
+                let laid = lay_out(
+                    ConfiguredGesture {
+                        settings: GestureSettings::default().with_velocity_estimator(estimator),
+                        detector,
+                    },
+                    tight(150.0, 100.0),
+                );
+                let info =
+                    PointerInfo::new(PointerId::try_from(1_u64).expect("authored contact"), kind);
+                let sample = |millis, x| {
+                    PointerSample::new(
+                        EventTime::from_nanos(millis * 1_000_000),
+                        PointerPosition::try_new(Point::new(x, 40.0)).expect("finite position"),
+                    )
+                };
+                let held = PointerButtons::NONE.with(PointerButton::PRIMARY);
+                laid.dispatch_pointer_event(&PointerEvent::Down(PointerPress::new(
+                    info,
+                    PointerButton::PRIMARY,
+                    PointerButtons::NONE,
+                    sample(0, 10.0),
+                )));
+                laid.dispatch_pointer_event(&PointerEvent::Move(
+                    PointerMove::new(info, held, sample(30, 70.0))
+                        .with_coalesced(vec![sample(10, 40.0), sample(20, 60.0)]),
+                ));
+                laid.dispatch_pointer_event(&PointerEvent::Up(PointerRelease::new(
+                    info,
+                    PointerButton::PRIMARY,
+                    held,
+                    sample(30, 70.0),
+                )));
+                let actual = delivered
+                    .get()
+                    .expect("completed drag delivers an end callback");
+                assert!(
+                    (actual - expected).abs() < 1e-6,
+                    "{estimator:?}, {kind:?}, horizontal={horizontal}: got {actual}, expected {expected}"
+                );
+            }
+        }
+    }
+}
+
 pub(crate) fn scoped_settings_control_touch_recognition_thresholds() {
     use std::{cell::Cell, rc::Rc};
 
