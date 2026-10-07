@@ -213,13 +213,16 @@ fn local_native_step(
     host: Host,
     targets: &BTreeSet<String>,
     have_tool: impl Fn(&str) -> bool,
-    have_android_ndk: impl Fn() -> bool,
+    have_android_ndk: impl Fn() -> (bool, bool),
 ) -> Step {
     if targets.contains(target) {
-        if target == super::ANDROID_TARGET && !have_android_ndk() {
-            return Step::Note(format!(
-                "check-changed: skipped native source checks on {target} (install the Android NDK and configure its API-21 compiler with CC_aarch64_linux_android; CI runs it)"
-            ));
+        if target == super::ANDROID_TARGET {
+            let (compiler, archiver) = have_android_ndk();
+            if !compiler || !archiver {
+                return Step::Note(format!(
+                    "check-changed: skipped native source checks on {target} (install the Android NDK and configure CC_aarch64_linux_android and AR_aarch64_linux_android; CI runs it)"
+                ));
+            }
         }
         let wrapper = if target == super::WINDOWS_TARGET && host != Host::Windows {
             Some("cargo-xwin")
@@ -293,9 +296,14 @@ pub(super) fn run(runner: Runner, base: &str) -> anyhow::Result<ExitCode> {
             &targets,
             |tool| installed(tool, &["--version"]),
             || {
-                crate::doctor::android_compiler_available(&crate::doctor::android_tool(
-                    "CC", "clang",
-                ))
+                (
+                    crate::doctor::android_compiler_available(&crate::doctor::android_tool(
+                        "CC", "clang",
+                    )),
+                    crate::doctor::android_archiver_available(&crate::doctor::android_tool(
+                        "AR", "llvm-ar",
+                    )),
+                )
             },
         ));
     }
@@ -374,17 +382,28 @@ mod tests {
     }
 
     fn android_without_an_ndk_leaves_other_native_checks_runnable() {
-        for available in [false, true] {
+        let dir = tempfile::tempdir().expect("temporary missing-tool directory");
+        let missing_archiver = dir.path().join("missing-android-archiver");
+        for (compiler, archiver) in [(false, false), (true, false), (false, true), (true, true)] {
             let step = local_native_step(
                 super::super::ANDROID_TARGET,
                 Cmd::cargo(["clippy"]).into(),
                 Host::Linux,
                 &all_targets(),
                 |_| panic!("Android does not need a cross wrapper"),
-                || available,
+                || {
+                    (
+                        compiler,
+                        crate::doctor::android_archiver_available(if archiver {
+                            std::ffi::OsStr::new("cargo")
+                        } else {
+                            missing_archiver.as_os_str()
+                        }),
+                    )
+                },
             );
             let text = step.to_string();
-            if available {
+            if compiler && archiver {
                 assert_eq!(text, "$ cargo clippy");
             } else {
                 assert!(

@@ -76,10 +76,7 @@ struct Doctor {
 impl Doctor {
     fn check_android_ndk(&mut self, compiler: &OsStr, archiver: &OsStr) {
         let compiler_ok = android_compiler_available(compiler);
-        let archiver_ok = Command::new(archiver)
-            .arg("--version")
-            .output()
-            .is_ok_and(|out| out.status.success());
+        let archiver_ok = android_archiver_available(archiver);
         let hint = "install the Android NDK; set CC_aarch64_linux_android to its API-21 clang wrapper and AR_aarch64_linux_android to its llvm-ar";
         self.row(
             Scope::Full,
@@ -222,6 +219,14 @@ pub(crate) fn android_compiler_available(compiler: &OsStr) -> bool {
     });
     let status = child.wait();
     input_ok && status.is_ok_and(|status| status.success())
+}
+
+/// Probe whether the selected Android archiver executes successfully.
+pub(crate) fn android_archiver_available(archiver: &OsStr) -> bool {
+    Command::new(archiver)
+        .arg("--version")
+        .output()
+        .is_ok_and(|out| out.status.success())
 }
 
 /// Select the same target overrides that cc-rs consumes.
