@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::rc::Rc;
 
 use flui_foundation::geometry::Offset;
 use flui_interaction::{
@@ -16,7 +16,7 @@ impl CustomGestureRecognizer for ExternalRecognizer {
 
 impl GestureRecognizer for ExternalRecognizer {
     fn add_pointer(
-        self: &Arc<Self>,
+        self: &Rc<Self>,
         _pointer: PointerId,
         _position: Offset<f64>,
         _global_position: Offset<f64>,
