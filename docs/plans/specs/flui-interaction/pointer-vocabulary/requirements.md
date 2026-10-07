@@ -1,10 +1,10 @@
 # pointer-vocabulary — свой словарь событий ввода (требования)
 
-- **Статус:** черновик (P1 реализуется в ветке `interaction/pointer-vocabulary-types`)
+- **Статус:** в работе; P1 merged (PR #1478), конвейер P2 и производители P3 ещё не реализованы
 - **Дата:** 2026-10-06
 - **База:** `main` @ `d56188c14`
 - **Контракты:** [ADR-0143](../../../../adr/ADR-0143-flui-owned-input-event-vocabulary.md)
-  (Proposed), [ADR-0089](../../../../adr/ADR-0089-upstream-types-in-stable-signatures.md) §4,
+  (Accepted), [ADR-0089](../../../../adr/ADR-0089-upstream-types-in-stable-signatures.md) §4,
   [ADR-0098](../../../../adr/ADR-0098-owned-f64-geometry-values.md),
   [ADR-0082](../../../../adr/ADR-0082-platform-api-contract-crate.md)
 - **Источник:** матрица рыночного эталона `flui-interaction` (`matrix.md` этой фичи), строки

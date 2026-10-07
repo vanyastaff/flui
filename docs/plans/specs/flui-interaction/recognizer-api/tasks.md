@@ -1,12 +1,17 @@
 # Распознаватели жестов: API — задачи
 
-- **Статус:** черновик
+- **Статус:** дизайн утверждён; реализация RA0–RA6 не начата
 - **Дата:** 2026-10-06
 - **Design:** [design.md](design.md); требования — [requirements.md](requirements.md); волна —
   [../tasks.md](../tasks.md) «Спека `recognizer-api/`»
 - **Старт:** после слияния I1 (`interaction/arena-recognizer-lifecycle`) и I2
   (`interaction/multi-pointer-recognizers`) в `main`, включая поправки C1/C2 (`recognizers/callback_containment.rs`).
   RA1 — после I10. I11 — после RA (меняет поле настроек на `Cell`).
+- **Сверка 2026-10-07:** I1/I2 и C1/C2 уже merged (PR #1474, #1472,
+  #1494, #1500). RA0 готова к выполнению; I10 остаётся блокером RA1.
+  Перед baseline RA0 исправляет повторное использование permanently-disposed
+  распознавателя в `tap_detector_bench`: иначе после первой итерации измеряется
+  отказ допуска вместо жеста.
 - **Итог:** 11 задач (RA3 — пять `[P]`), ≈ 15 инженеро-дней; критический путь RA0 → RA1 → RA2 → RA3 (самая
   длинная, 1,5) → RA4 → RA5 → RA6 ≈ 10 рабочих дней.
 

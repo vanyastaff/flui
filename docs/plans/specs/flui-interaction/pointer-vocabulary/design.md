@@ -1,9 +1,9 @@
 # pointer-vocabulary — дизайн
 
-- **Статус:** черновик; P1 — в ветке `interaction/pointer-vocabulary-types`
+- **Статус:** P1 merged (PR #1478); P2/P3 ожидают реализации по этому дизайну
 - **Дата:** 2026-10-06, база `main` @ `d56188c14`
 - **Требования:** [requirements.md](requirements.md); задачи — [tasks.md](tasks.md)
-- **ADR:** [ADR-0143](../../../../adr/ADR-0143-flui-owned-input-event-vocabulary.md) (Proposed)
+- **ADR:** [ADR-0143](../../../../adr/ADR-0143-flui-owned-input-event-vocabulary.md) (Accepted)
 
 ## Текущий код
 

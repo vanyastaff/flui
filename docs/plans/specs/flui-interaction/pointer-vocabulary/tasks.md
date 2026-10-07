@@ -1,6 +1,6 @@
 # pointer-vocabulary — задачи
 
-- **Статус:** P1 — draft-PR; P2, P3 — не начаты
+- **Статус:** P1 завершена (PR #1478 merged); P2, P3 — не начаты
 - **Дата:** 2026-10-06
 - **Дизайн:** [design.md](design.md); требования — [requirements.md](requirements.md)
 - **Правила:** задача = ветка `interaction/<slug>` = worktree = draft-PR; `[P]` — можно
