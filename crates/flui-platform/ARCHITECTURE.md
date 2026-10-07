@@ -45,6 +45,23 @@ trait depends on `flui-platform-api` instead.
 
 ## Mapping decisions
 
+### Win32 mouse samples preserve their queued generation times
+
+Each window rebases `GetMessageTime` onto the shared process epoch using
+`GetTickCount64`. The 32-bit message tick is extended by a wrapping subtraction
+from current uptime, so an uptime rollover cannot compress a queued gesture.
+Messages older than an entire 32-bit wrap cannot be distinguished by Win32's
+timestamp. Sent messages inheriting an older retrieved timestamp cannot move
+the window's clock backwards. The sample timestamp is committed before hover
+callbacks or native capture changes can dispatch another message.
+
+`queued_mouse_samples_keep_native_message_time` drives the public native window
+with delayed queued mouse samples. The private arithmetic row
+`message_clock_preserves_wrapping_samples_and_window_epochs` covers rollover,
+older sent timestamps, epoch rebasing and saturation: there is no public API
+that advances the OS uptime by 49.7 days. These checks do not establish physical
+mouse delivery, pen/touch translation, or other backend clocks.
+
 ### Native Win32 delivers admitted idle deadlines through live window paints
 
 The owner loop keeps admitted deadline delivery separate from the next hook

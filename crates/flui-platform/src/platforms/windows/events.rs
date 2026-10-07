@@ -100,6 +100,75 @@ impl MessageClock {
     }
 }
 
+// Native queue clocks cannot be advanced through a consumer API. These rows
+// pin the wrapping/rebasing arithmetic used by the actual Win32 producer;
+// queued dispatch itself is covered through a live public window contract.
+#[cfg(test)]
+mod message_clock_contract {
+    use super::MessageClock;
+
+    #[test]
+    fn message_clock_preserves_wrapping_samples_and_window_epochs() {
+        let wrap = u64::from(u32::MAX) + 1;
+        for (name, anchor_tick, anchor_ns, now, samples, expected) in [
+            (
+                "ordinary queued gap",
+                100,
+                1_000_000,
+                200,
+                [120, 160],
+                [21_000_000, 61_000_000],
+            ),
+            (
+                "32-bit uptime wrap",
+                wrap - 10,
+                1_000_000,
+                wrap + 30,
+                [u32::MAX - 4, 7],
+                [6_000_000, 18_000_000],
+            ),
+            (
+                "older sent timestamp",
+                100,
+                1_000_000,
+                200,
+                [150, 120],
+                [51_000_000, 51_000_000],
+            ),
+            (
+                "pre-epoch queued sample",
+                100,
+                20_000_000,
+                200,
+                [90, 110],
+                [10_000_000, 30_000_000],
+            ),
+            (
+                "nanosecond exhaustion",
+                100,
+                u64::MAX - 1,
+                200,
+                [101, 102],
+                [u64::MAX, u64::MAX],
+            ),
+        ] {
+            let clock = MessageClock::anchored(anchor_tick, anchor_ns);
+            assert_eq!(
+                samples.map(|tick| clock.stamp_at(tick, now)),
+                expected,
+                "{name}"
+            );
+        }
+        let first = MessageClock::anchored(100, 1_000_000);
+        let second = MessageClock::anchored(120, 21_000_000);
+        assert_eq!(
+            first.stamp_at(150, 200),
+            second.stamp_at(150, 200),
+            "independent windows share the process epoch"
+        );
+    }
+}
+
 use super::util::{get_x_lparam, get_y_lparam};
 use crate::{
     shared::events::{event_timestamp_ns, primary_mouse_info},

@@ -46,8 +46,14 @@ mod browser {
                     PointerEvent::Cancel(_) => ("cancel", None),
                     _ => ("other", None),
                 };
-                let document = web_sys::window().expect("browser window").document().expect("document");
-                let previous = document.get_element_by_id("sequence").and_then(|node| node.text_content()).unwrap_or_default();
+                let document = web_sys::window()
+                    .expect("browser window")
+                    .document()
+                    .expect("document");
+                let previous = document
+                    .get_element_by_id("sequence")
+                    .and_then(|node| node.text_content())
+                    .unwrap_or_default();
                 publish("sequence", &format!("{previous}{kind},"));
                 if kind == "cancel" {
                     publish("cancel-event", "delivered");

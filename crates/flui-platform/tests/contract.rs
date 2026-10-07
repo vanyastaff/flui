@@ -2394,7 +2394,10 @@ mod native_windows {
     }
 
     /// Delaying dispatch cannot compress the time between generated samples.
-    #[expect(unsafe_code, reason = "queues and dispatches mouse messages for an owned window")]
+    #[expect(
+        unsafe_code,
+        reason = "queues and dispatches mouse messages for an owned window"
+    )]
     fn queued_mouse_samples_keep_native_message_time() {
         use ui_events::pointer::PointerEvent;
         let platform = WindowsPlatform::new().expect("native Windows platform");
@@ -2416,7 +2419,17 @@ mod native_windows {
         for _ in 0..32 {
             let mut message = MSG::default();
             // SAFETY: writable MSG and a live window on this owner thread.
-            if !unsafe { PeekMessageW(&raw mut message, Some(hwnd), WM_MOUSEMOVE, WM_MOUSEMOVE, PM_REMOVE) }.as_bool() {
+            if !unsafe {
+                PeekMessageW(
+                    &raw mut message,
+                    Some(hwnd),
+                    WM_MOUSEMOVE,
+                    WM_MOUSEMOVE,
+                    PM_REMOVE,
+                )
+            }
+            .as_bool()
+            {
                 break;
             }
             ticks.push(message.time);
@@ -2425,15 +2438,24 @@ mod native_windows {
         }
         assert_eq!(ticks.len(), 2, "two queued native samples");
         let native_gap = ticks[1].wrapping_sub(ticks[0]);
-        assert!(native_gap >= 20, "samples were generated apart before dispatch");
+        assert!(
+            native_gap >= 20,
+            "samples were generated apart before dispatch"
+        );
         let log = events.lock().expect("pointer log");
-        let times: Vec<_> = log.iter().filter_map(|event| match event {
-            PointerEvent::Move(update) => Some(update.current.time),
-            _ => None,
-        }).collect();
+        let times: Vec<_> = log
+            .iter()
+            .filter_map(|event| match event {
+                PointerEvent::Move(update) => Some(update.current.time),
+                _ => None,
+            })
+            .collect();
         assert_eq!(times.len(), 2, "both samples delivered");
-        assert_eq!(times[1] - times[0], u64::from(native_gap) * 1_000_000,
-            "event timestamps preserve queue generation time rather than dispatch time");
+        assert_eq!(
+            times[1] - times[0],
+            u64::from(native_gap) * 1_000_000,
+            "event timestamps preserve queue generation time rather than dispatch time"
+        );
         drop(log);
         window.close();
     }
