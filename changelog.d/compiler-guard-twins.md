@@ -9,3 +9,4 @@
 - Pipeline constructor and phase compiler guards pin exact diagnostics, including a mutable idle caller that cannot mask an exposed paint method.
 - Render-subtree relocation compiler examples pair forbidden token cloning and frame-phase operations with matching move and idle-owner callers.
 - Rendering context, paint-arity, snapshot-phase and layout-callback thread guards have matching valid callers.
+- Local-state thread bounds and element-depth authority guards pin exact compiler diagnostics alongside valid local callers.

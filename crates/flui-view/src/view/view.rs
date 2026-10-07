@@ -18,6 +18,8 @@ use flui_rendering::parent_data::SliverSlot;
 /// implementable anywhere but callable only by the tree: an element's
 /// [`ElementBase::depth`] cannot drift from its node's
 /// [`ElementNode::depth`](crate::tree::ElementNode::depth).
+/// `trybuild_ui::ui_tests` pins private minting and raw-integer stamping
+/// diagnostics alongside a caller that forwards an existing opaque depth.
 ///
 /// ```compile_fail
 /// use flui_view::{ElementBase, ElementDepth};

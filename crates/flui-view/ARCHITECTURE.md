@@ -10,6 +10,15 @@ behaviour taxonomy and remains a sibling appendix.
 
 ## Mapping decisions
 
+### Local-state and element-depth authority
+
+`StateCell` and `StateHandle` keep their state and rebuild trigger owner-local;
+neither implements `Send` or `Sync`. `ElementDepth` can be minted only by this
+crate, while element implementations receive the opaque depth when the tree
+stamps it. `trybuild_ui::ui_tests` pins E0277 for both local-state types' thread
+bounds, E0624 for depth minting and E0308 for raw-integer stamping, alongside
+valid local-state constructors and an opaque-depth forwarding caller.
+
 ### Owner and key envelopes retire after authority is withdrawn
 
 **Rule:** the build owner's reactive graph, tree observer and scheduled-build

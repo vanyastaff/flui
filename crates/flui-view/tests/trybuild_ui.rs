@@ -1,31 +1,20 @@
-//! trybuild driver for the `tests/ui/` compile-fail corpus.
+//! Diagnostic snapshots for view compiler contracts.
 //!
-//! Locks the FR-034 friendly diagnostic at
-//! `column!` arity > 16. trybuild compares each `compile_fail`
-//! entry's captured rustc output against the sibling `.stderr`
-//! file. The comparison is **whole-output**, not a `contains`
-//! substring search; trybuild normalizes a handful of fields
-//! (line numbers, file paths, hashes) and supports `...` wildcards
-//! inside the `.stderr` snapshot for variance-tolerant matches.
-//! The contract is therefore: rustc emits an error block
-//! whose first line carries the FR-034 message verbatim, and the
-//! `.stderr` snapshot captures the surrounding framing.
-//!
-//! Adding a new ui-test: drop a `.rs` + matching `.stderr` under
-//! `tests/ui/` and add a `t.compile_fail(…)` call below. If the
-//! captured rustc framing is brittle across rustc versions or
-//! local file paths, replace the variant lines in `.stderr` with
-//! the trybuild `...` wildcard so the assertion stays focused on
-//! the FR-034 substring.
-//!
-//! Regenerating `.stderr` after an intentional diagnostic change:
-//! set the `TRYBUILD=overwrite` environment variable before running
-//! this test (`TRYBUILD=overwrite cargo test -p flui-view --test
-//! trybuild_ui`).
+//! Each negative fixture compares rustc output with its sibling `.stderr`.
+//! Inspect the diagnostic before accepting a snapshot change: a missing import
+//! or unrelated error is not evidence for the contract the fixture guards.
+//! Passing callers under `tests/ui_pass/` exercise valid public paths.
 
 #[test]
 fn ui_tests() {
     let t = trybuild::TestCases::new();
+    t.pass("tests/ui_pass/state_and_depth.rs");
+    t.compile_fail("tests/ui/state_cell_is_not_send.rs");
+    t.compile_fail("tests/ui/state_cell_is_not_sync.rs");
+    t.compile_fail("tests/ui/state_handle_is_not_send.rs");
+    t.compile_fail("tests/ui/state_handle_is_not_sync.rs");
+    t.compile_fail("tests/ui/element_depth_minting_is_private.rs");
+    t.compile_fail("tests/ui/element_depth_rejects_raw_stamping.rs");
     t.compile_fail("tests/ui/column_17_compile_error.rs");
     // `#[diagnostic::on_unimplemented]` on the view traits: the message a
     // framework user sees must name the derive/impl they are missing, not
