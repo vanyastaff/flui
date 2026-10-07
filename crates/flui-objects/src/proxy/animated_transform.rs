@@ -29,12 +29,17 @@
 //!
 //! # Failure keeps the cache
 //!
-//! Marks are fallible sends ([`RenderInvalidationHandle`]). The sample is
-//! committed only after every mark it owes was sent, so a failed send leaves
-//! the old sample in place and the next tick re-derives the same change and
-//! retries — the rule [`RenderAnimatedOpacity`](crate::RenderAnimatedOpacity)
-//! follows. A non-finite animation value is ignored (the last finite sample
-//! stays); a finite sample whose matrix overflows is degenerate.
+//! Marks are fallible sends ([`RenderInvalidationHandle`]) that may wake a
+//! frame on another thread before they return, so a tick publishes the new
+//! sample *before* marking: the frame a mark wakes always reads it. Delivery
+//! is tracked apart from the sample: the cache also keeps the last sample
+//! whose marks were all sent, and the next tick classifies against that one,
+//! so a failed send leaves the debt in place and is retried even when the
+//! next value equals the published one. A non-finite animation value is
+//! ignored (the last finite sample stays); a finite sample whose matrix
+//! overflows is degenerate: nothing is painted or hit, and coordinate
+//! conversion falls back to the untransformed position rather than
+//! publishing non-finite geometry.
 //!
 //! # Ownership
 //!
@@ -45,7 +50,7 @@
 //! a proxy → listener → proxy cycle that outlives the tree.
 
 use std::f64::consts::TAU;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering, fence};
 use std::sync::{Arc, Weak};
 
 use flui_animation::{Animation, ProxyAnimation};
@@ -114,17 +119,23 @@ enum Class {
     Degenerate,
 }
 
-/// The cached sample and the size it is mapped against.
+/// The published sample, the last delivered sample and the size they are
+/// mapped against.
 ///
 /// Atomics because the render tree is `Send` today and the tick listener
-/// must be `Send + Sync`; each field is written only by the node's owner
-/// thread (layout writes the size, the listener the sample), so `Relaxed`
-/// suffices — the dirty-channel send, not the atomic, orders the write
-/// before the paint that reads it (see `RenderAnimatedOpacity`).
+/// must be `Send + Sync`. The published sample is a two-word value a frame on
+/// another thread may read while the listener writes it, so it sits behind a
+/// sequence counter (one writer, the listener; a reader retries a torn read)
+/// and is published with `Release` before any mark can wake that frame. The
+/// delivered sample and the size are each read only by their own writer's
+/// side of the pipeline, so `Relaxed` suffices for them.
 #[derive(Debug, Default)]
 struct SampleCell {
+    sequence: AtomicU64,
     first: AtomicU64,
     second: AtomicU64,
+    delivered_first: AtomicU64,
+    delivered_second: AtomicU64,
     width: AtomicU64,
     height: AtomicU64,
 }
@@ -133,19 +144,50 @@ impl SampleCell {
     fn new(sample: (f64, f64)) -> Self {
         let cell = Self::default();
         cell.store_sample(sample);
+        cell.store_delivered(sample);
         cell
     }
 
+    /// The published sample, never a mix of two writes.
     fn sample(&self) -> (f64, f64) {
-        (
-            f64::from_bits(self.first.load(Ordering::Relaxed)),
-            f64::from_bits(self.second.load(Ordering::Relaxed)),
-        )
+        loop {
+            let start = self.sequence.load(Ordering::Acquire);
+            if start.is_multiple_of(2) {
+                let first = self.first.load(Ordering::Relaxed);
+                let second = self.second.load(Ordering::Relaxed);
+                fence(Ordering::Acquire);
+                if self.sequence.load(Ordering::Relaxed) == start {
+                    return (f64::from_bits(first), f64::from_bits(second));
+                }
+            }
+            std::hint::spin_loop();
+        }
     }
 
     fn store_sample(&self, (first, second): (f64, f64)) {
+        let start = self.sequence.load(Ordering::Relaxed);
+        self.sequence
+            .store(start.wrapping_add(1), Ordering::Relaxed);
+        fence(Ordering::Release);
         self.first.store(first.to_bits(), Ordering::Relaxed);
         self.second.store(second.to_bits(), Ordering::Relaxed);
+        self.sequence
+            .store(start.wrapping_add(2), Ordering::Release);
+    }
+
+    /// The last sample whose marks were all sent.
+    fn delivered(&self) -> (f64, f64) {
+        (
+            f64::from_bits(self.delivered_first.load(Ordering::Relaxed)),
+            f64::from_bits(self.delivered_second.load(Ordering::Relaxed)),
+        )
+    }
+
+    fn store_delivered(&self, (first, second): (f64, f64)) {
+        self.delivered_first
+            .store(first.to_bits(), Ordering::Relaxed);
+        self.delivered_second
+            .store(second.to_bits(), Ordering::Relaxed);
     }
 
     fn size(&self) -> Size {
@@ -180,6 +222,13 @@ fn matrix(kind: Kind, (first, second): (f64, f64), size: Size) -> Matrix4 {
         Kind::Scale => about_centre(Matrix4::scaling(first, first, 1.0)),
         Kind::Rotation => about_centre(Matrix4::rotation_z(first * TAU)),
     }
+}
+
+/// Whether every entry of `m` is finite. A degenerate matrix that passes is
+/// singular (a scale of 0 maps the child to a point); one that fails
+/// overflowed and must not be composed into coordinate conversion.
+fn is_finite(m: &Matrix4) -> bool {
+    m.m.iter().all(|entry| entry.is_finite())
 }
 
 /// Classifies `sample`'s matrix over `size`. Every motion is a 2D affine map,
@@ -270,9 +319,9 @@ impl Source {
     }
 }
 
-/// Applies a fresh animation reading: marks what the change owes and commits
-/// it to the cache only once every mark was sent. Returns whether a change
-/// was committed.
+/// Applies a fresh animation reading: publishes it, then sends the marks the
+/// change from the last *delivered* sample owes, and records it as delivered
+/// only once every mark was sent. Returns whether the change was delivered.
 fn commit(
     cell: &SampleCell,
     kind: Kind,
@@ -282,7 +331,9 @@ fn commit(
     let Some(value) = finite(value) else {
         return false;
     };
-    let old = cell.sample();
+    // Published first: a mark may run (or wake) the frame that reads it.
+    cell.store_sample(value);
+    let old = cell.delivered();
     if old.0.to_bits() == value.0.to_bits() && old.1.to_bits() == value.1.to_bits() {
         return false;
     }
@@ -299,12 +350,12 @@ fn commit(
     if let Err(error) = layer_mark.and_then(|()| handle.mark_needs_semantics()) {
         tracing::warn!(
             %error,
-            "RenderAnimatedTransform: mark send failed; the cached sample stays so the next \
-             tick retries"
+            "RenderAnimatedTransform: mark send failed; delivery stays owed so the next tick \
+             retries"
         );
         return false;
     }
-    cell.store_sample(value);
+    cell.store_delivered(value);
     true
 }
 
@@ -434,10 +485,14 @@ impl RenderBox for RenderAnimatedTransform {
         if !self.has_child {
             return false;
         }
+        // The flag comes first: an untransformed hit does not depend on the
+        // matrix, degenerate or not.
+        if !self.transform_hit_tests {
+            return ctx.hit_test_child(0, *ctx.position());
+        }
         let size = ctx.own_size();
         match self.current_class(size) {
             Class::Degenerate => false,
-            _ if !self.transform_hit_tests => ctx.hit_test_child(0, *ctx.position()),
             Class::Identity => ctx.hit_test_child(0, *ctx.position()),
             Class::Layered => {
                 let Some(inverse) = self.current_matrix(size).try_inverse() else {
@@ -476,8 +531,14 @@ impl RenderBox for RenderAnimatedTransform {
         size: Size,
         transform: &mut Matrix4,
     ) {
+        // A singular matrix composes (the child maps to a point); an
+        // overflowed one is left out, so coordinate conversion falls back to
+        // the untransformed position instead of publishing NaN or infinity.
         if self.current_class(size) != Class::Identity {
-            *transform *= self.current_matrix(size);
+            let matrix = self.current_matrix(size);
+            if is_finite(&matrix) {
+                *transform *= matrix;
+            }
         }
         *transform *= Matrix4::translation(child_offset.dx, child_offset.dy, 0.0);
     }
@@ -511,15 +572,16 @@ mod tests {
     use flui_rendering::protocol::BoxProtocol;
     use std::time::Duration;
 
-    // A failure path the public surface cannot reach: the mark send fails
-    // (the pipeline owner is gone), and the cache must not advance, so the
-    // next tick re-derives the same change and retries the mark.
-    #[test]
-    fn failed_mark_retries() {
+    /// An owner with one scale node, the handle bound to it, and the owner's
+    /// visual-update wake set to `wake` (it fires inside every mark send).
+    fn owner_with_handle(
+        wake: impl Fn() + Send + Sync + 'static,
+    ) -> (PipelineOwner, RenderInvalidationHandle) {
         let controller = AnimationController::without_ticker(Duration::from_millis(100));
         controller.set_value(1.0);
         let proxy = ProxyAnimation::new(Arc::new(controller) as Arc<dyn Animation<f64>>);
         let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
+        owner.set_on_need_visual_update(wake);
         let anchor = owner.insert(
             Box::new(RenderAnimatedTransform::new(TransformMotion::Scale {
                 scale: proxy,
@@ -528,18 +590,53 @@ mod tests {
         let handle = owner
             .render_invalidation_handle(anchor)
             .expect("just-inserted id must be live");
-        drop(owner);
+        (owner, handle)
+    }
 
+    fn scale_cell() -> SampleCell {
         let cell = SampleCell::new((1.0, 0.0));
         cell.store_size(Size::new(40.0, 40.0));
+        cell
+    }
+
+    // A failure path the public surface cannot reach: the mark send fails
+    // (the pipeline owner is gone). The delivery debt must survive it, so the
+    // next tick re-sends the marks even when it carries the same value.
+    #[test]
+    fn failed_mark_retries() {
+        let (owner, dead) = owner_with_handle(|| {});
+        drop(owner);
+        let cell = scale_cell();
         assert!(
-            !commit(&cell, Kind::Scale, (0.5, 0.0), &handle),
-            "a failed send must report no committed change"
+            !commit(&cell, Kind::Scale, (0.5, 0.0), &dead),
+            "a failed send must report the change undelivered"
         );
-        assert_eq!(
-            cell.sample(),
-            (1.0, 0.0),
-            "the cache must keep the old sample so the next tick retries the mark"
+        let (_owner, live) = owner_with_handle(|| {});
+        assert!(
+            commit(&cell, Kind::Scale, (0.5, 0.0), &live),
+            "the next tick with the same value must retry the owed marks"
+        );
+    }
+
+    // A mark wakes the frame, which may run on another thread before the
+    // send returns. Modelled by a wake that reads the cache synchronously,
+    // as that frame would: it must observe the new sample.
+    #[test]
+    fn frame_woken_by_a_mark_reads_the_new_sample() {
+        let cell = Arc::new(scale_cell());
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (_owner, handle) = owner_with_handle({
+            let cell = Arc::clone(&cell);
+            let seen = Arc::clone(&seen);
+            move || seen.lock().expect("unpoisoned").push(cell.sample())
+        });
+        seen.lock().expect("unpoisoned").clear();
+        assert!(commit(&cell, Kind::Scale, (0.5, 0.0), &handle));
+        let seen = seen.lock().expect("unpoisoned");
+        assert!(!seen.is_empty(), "the mark must have woken a frame");
+        assert!(
+            seen.iter().all(|&sample| sample == (0.5, 0.0)),
+            "every woken frame must read the new sample: {seen:?}"
         );
     }
 }

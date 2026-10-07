@@ -2374,6 +2374,18 @@ fn harness_animated_transform_singular_paints_and_hits_nothing() {
         !run.hit(20.0, 20.0).contains(&run.id("child")),
         "a child scaled to zero is not hit"
     );
+    let mut run = run;
+    run.update::<RenderAnimatedTransform>(run.id("transform"), |node| {
+        assert_eq!(
+            node.set_transform_hit_tests(false),
+            flui_rendering::RenderUpdateImpact::NONE
+        );
+    });
+    assert!(
+        run.hit(20.0, 20.0).contains(&run.id("child")),
+        "with transformed hit-testing off, a singular matrix still hits the child where it \
+         was laid out"
+    );
 
     let controller = ticking_controller(100, 0.5);
     let run = animated_scale(&controller);
@@ -2484,6 +2496,34 @@ fn harness_animated_transform_non_finite_sample_keeps_the_last_matrix() {
     assert!(
         run.structure().contains(&"Transform"),
         "the next finite value resumes"
+    );
+
+    // A finite slide fraction whose product with the size overflows: the
+    // coordinate conversion falls back to the untransformed position instead
+    // of publishing infinities.
+    let slide = ticking_controller(100, 1.0);
+    let offset = ProxyAnimation::new(Arc::new(flui_animation::ext::AnimatableExt::animate(
+        flui_animation::Tween::new(
+            TranslationFraction::ZERO,
+            TranslationFraction::new(f64::MAX, 0.0),
+        ),
+        Arc::new(slide) as Arc<dyn Animation<f64>>,
+    )) as Arc<dyn Animation<TranslationFraction>>);
+    let run = RenderTester::mount(
+        box_node(RenderAnimatedTransform::new(TransformMotion::Slide {
+            offset,
+            text_direction: TextDirection::Ltr,
+        }))
+        .label("transform")
+        .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+    assert_eq!(
+        run.pipeline()
+            .transform_to(run.id("child"), run.id("transform")),
+        Some(Matrix4::IDENTITY),
+        "an overflowed matrix is not composed into coordinate conversion"
     );
 }
 
