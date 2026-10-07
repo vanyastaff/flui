@@ -146,17 +146,19 @@ pub(crate) fn perspective_transform_refuses_hidden_and_degenerate_planes() {
 
 pub(crate) fn plane_unprojection_preserves_admitted_anisotropic_transforms() {
     use flui_foundation::geometry::{Matrix4, Point};
-    let transform = Matrix4::scaling(1e-200, 1.0, 1.0);
-    assert!(transform.try_inverse().is_some(), "existing checked inversion admits the transform");
-    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
-    let parent = owner.insert(Box::new(RenderTransform::new(transform)) as BoxedRenderObject);
-    let child = owner.insert_child_render_object(parent,
-        Box::new(RenderColoredBox::red(10.0, 10.0))).expect("child insert");
-    let owner = laid_out(owner, parent);
-    let local = owner.global_to_local(child, Point::new(2e-200, 3.0), Some(parent))
-        .expect("finite local quotient must remain deliverable");
-    assert!((local.x - 2.0).abs() < 1e-10 && (local.y - 3.0).abs() < 1e-10);
-    assert_eq!(hits(&owner, 2e-200, 3.0).first().copied(), Some(child));
+    for z_scale in [1.0, 1e200] {
+        let transform = Matrix4::scaling(1e-200, 1.0, z_scale);
+        assert!(transform.try_inverse().is_some(), "checked inversion admits z_scale={z_scale}");
+        let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
+        let parent = owner.insert(Box::new(RenderTransform::new(transform)) as BoxedRenderObject);
+        let child = owner.insert_child_render_object(parent,
+            Box::new(RenderColoredBox::red(10.0, 10.0))).expect("child insert");
+        let owner = laid_out(owner, parent);
+        let local = owner.global_to_local(child, Point::new(2e-200, 3.0), Some(parent))
+            .expect("finite local quotient must remain deliverable");
+        assert!((local.x - 2.0).abs() < 1e-10 && (local.y - 3.0).abs() < 1e-10);
+        assert_eq!(hits(&owner, 2e-200, 3.0).first().copied(), Some(child));
+    }
 }
 
 fn tilted_plane_transform() -> flui_foundation::geometry::Matrix4 {
