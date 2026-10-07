@@ -14,6 +14,12 @@ designed for Rust everywhere else. Five trees — `View` (immutable config) → 
 `Semantics` alongside for accessibility — then `flui-engine` → `wgpu`. Pre-1.0: breaking changes
 are cheap now and expensive once consumers exist, so fix a bad shape instead of working around it.
 
+## Tooling rules
+- NEVER use python, perl, powershell or ad-hoc scripts to edit files. Use Edit/MultiEdit/Write tools only.
+- For search use `rg`; for bulk replace use `sd` or `ast-grep`.
+- For JSON use `jq`. For Rust metadata use `cargo` subcommands.
+- Do not create .py/.pl/.ps1 files.
+
 ## Design stance
 
 - **FLUI is not a Flutter port.** What it took from Flutter: widgets composed as declarative
