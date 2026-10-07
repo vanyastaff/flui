@@ -39,7 +39,7 @@ use objc2::{ClassType, msg_send};
 use objc2_app_kit::{NSResponder, NSView as NSViewClass};
 use objc2_foundation::{NSRect, NSRectEdge};
 
-use super::events::convert_ns_event;
+use super::events::MacInputState;
 use super::text_input::{TextInputState, add_text_input_methods};
 use crate::shared::WindowCallbacks;
 
@@ -72,6 +72,7 @@ pub fn create_content_view(
             scale_factor,
             callbacks,
             text_input: RefCell::new(TextInputState::default()),
+            input: RefCell::new(MacInputState::default()),
         }))
         .cast::<std::ffi::c_void>();
 
@@ -98,6 +99,7 @@ pub(super) struct ViewContext {
     /// through a shared `&ViewContext`, and every one of them either runs on the
     /// main thread (AppKit's delivery contract) or under the owner-lane guard.
     pub(super) text_input: RefCell<TextInputState>,
+    input: RefCell<MacInputState>,
 }
 
 // ============================================================================
@@ -122,11 +124,11 @@ pub(super) extern "C-unwind" fn handle_input_event(
     unsafe {
         if let Some(ctx) = get_context(this) {
             let bounds: NSRect = msg_send![this, bounds];
-            if let Some(input) = convert_ns_event(
-                event.cast::<std::ffi::c_void>(),
-                ctx.scale_factor,
-                bounds.size.height,
-            ) {
+            let inputs = ctx
+                .input
+                .borrow_mut()
+                .convert(event.cast::<std::ffi::c_void>(), bounds.size.height);
+            for input in inputs {
                 dispatch_input_event(ctx, input);
             }
         }
@@ -452,6 +454,18 @@ fn get_or_create_view_class() -> &'static AnyClass {
             // Scroll
             builder.add_method(
                 objc2::sel!(scrollWheel:),
+                handle_input_event as extern "C-unwind" fn(_, _, *mut AnyObject),
+            );
+            builder.add_method(
+                objc2::sel!(magnifyWithEvent:),
+                handle_input_event as extern "C-unwind" fn(_, _, *mut AnyObject),
+            );
+            builder.add_method(
+                objc2::sel!(rotateWithEvent:),
+                handle_input_event as extern "C-unwind" fn(_, _, *mut AnyObject),
+            );
+            builder.add_method(
+                objc2::sel!(pressureChangeWithEvent:),
                 handle_input_event as extern "C-unwind" fn(_, _, *mut AnyObject),
             );
 
