@@ -1,0 +1,7 @@
+error[E0599]: no method named `run_paint` found for struct `PipelineOwner<flui_rendering::pipeline::Layout>` in the current scope
+ --> tests/compile_fail/paint_from_layout.rs:6:11
+  |
+6 |     owner.run_paint();
+  |           ^^^^^^^^^ method not found in `PipelineOwner<flui_rendering::pipeline::Layout>`
+  |
+  = note: the method was found for `PipelineOwner<PaintPhase>`
