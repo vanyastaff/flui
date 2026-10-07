@@ -128,6 +128,18 @@ fn layout_protocol_matrix() {
 fn hit_test_matrix() {
     let cases: &[(&str, fn())] = &[
         (
+            "hit_test_pipeline::plane_unprojection_preserves_admitted_anisotropic_transforms",
+            crate::hit_test_pipeline::plane_unprojection_preserves_admitted_anisotropic_transforms,
+        ),
+        (
+            "hit_test_pipeline::perspective_container_hits_its_actual_child_plane",
+            crate::hit_test_pipeline::perspective_container_hits_its_actual_child_plane,
+        ),
+        (
+            "hit_test_pipeline::perspective_flow_hits_its_actual_child_plane",
+            crate::hit_test_pipeline::perspective_flow_hits_its_actual_child_plane,
+        ),
+        (
             "hit_test_pipeline::perspective_transform_unprojects_to_the_child_plane",
             crate::hit_test_pipeline::perspective_transform_unprojects_to_the_child_plane,
         ),
