@@ -832,6 +832,114 @@ fn the_text_services_answer_a_completion_for_its_store() {
     assert!(failed.is_empty(), "failed cases: {failed:?}");
 }
 
+/// A subscriber that panics on the one event whose message is `.0`.
+struct PanicsOn(&'static str);
+
+impl tracing::Subscriber for PanicsOn {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn event(&self, event: &tracing::Event<'_>) {
+        struct Message(&'static str, bool);
+        impl tracing::field::Visit for Message {
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                self.1 |= field.name() == "message" && format!("{value:?}") == self.0;
+            }
+        }
+        let mut message = Message(self.0, false);
+        event.record(&mut message);
+        assert!(!message.1, "injected subscriber panic");
+    }
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+/// Whether a top-level window titled `title` exists in this process.
+fn window_titled(title: &str) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::FindWindowW;
+    let title = windows_core::HSTRING::from(title);
+    // SAFETY: `title` is a live NUL-terminated string for the call.
+    unsafe { FindWindowW(windows_core::PCWSTR::null(), &title) }.is_ok()
+}
+
+/// A subscriber that panics on the activation's own diagnostic neither
+/// orphans the half-built window nor fails the open: the diagnostic is
+/// contained, and the window comes up with its text services.
+///
+/// Red-check: activate before the wrapper owns the window and log outside
+/// containment (the panic unwinds out of `open_window` and leaves the HWND
+/// behind).
+#[test]
+fn a_panicking_activation_diagnostic_orphans_no_window() {
+    const TITLE: &str = "flui panicking TSF diagnostic";
+    let platform = super::super::WindowsPlatform::new().expect("platform");
+    let opened = tracing::subscriber::with_default(PanicsOn("ITfThreadMgr activated"), || {
+        catch_unwind(AssertUnwindSafe(|| {
+            platform.open_window(WindowOptions {
+                title: TITLE.into(),
+                size: Size::new(200.0, 80.0),
+                visible: false,
+                ..Default::default()
+            })
+        }))
+    });
+    match opened {
+        Ok(Ok(window)) => {
+            let hwnd = window
+                .as_any()
+                .downcast_ref::<super::super::WindowsWindow>()
+                .expect("Win32 window")
+                .hwnd();
+            assert!(
+                super::super::platform::with_window_context(hwnd, "test", |context| {
+                    context.text_services.borrow().is_some()
+                })
+                .unwrap_or(false),
+                "the window's text services are active"
+            );
+            window.close();
+        }
+        Ok(Err(error)) => panic!("the open failed: {error}"),
+        Err(_) => assert!(
+            !window_titled(TITLE),
+            "the panic left an orphaned native window behind"
+        ),
+    }
+    assert!(!window_titled(TITLE), "no native window is left");
+}
+
+/// A window destroyed while its text services activate (by a message the
+/// activation dispatched) fails the open with a typed error instead of
+/// returning a wrapper around the dead handle.
+///
+/// Red-check: return the wrapper whatever the activation left.
+#[test]
+fn a_window_destroyed_during_activation_fails_the_open() {
+    fn destroy(hwnd: HWND) {
+        // SAFETY: the owner thread, on the window being built.
+        let _ = unsafe { windows::Win32::UI::WindowsAndMessaging::DestroyWindow(hwnd) };
+    }
+    let platform = super::super::WindowsPlatform::new().expect("platform");
+    super::super::window::BEFORE_TSF_ACTIVATION.set(Some(destroy));
+    let opened = platform.open_window(WindowOptions {
+        title: "flui destroyed during activation".into(),
+        size: Size::new(200.0, 80.0),
+        visible: false,
+        ..Default::default()
+    });
+    super::super::window::BEFORE_TSF_ACTIVATION.set(None);
+    assert!(
+        matches!(opened, Err(crate::traits::OpenWindowError::Backend { .. })),
+        "the open fails with a typed error, got {:?}",
+        opened.map(|_| "a window")
+    );
+}
+
 /// A window that outlives its platform retires its text services inside the
 /// thread's COM apartment: the services keep the apartment entered, so the
 /// platform's drop does not leave COM under them, and the apartment ends

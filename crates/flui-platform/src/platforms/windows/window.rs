@@ -176,7 +176,7 @@ impl WindowsWindow {
             || Self::create_native(&options),
         );
         let (hwnd, requested, scale_factor) = created?;
-        Ok(Self::install_native(
+        Self::install_native(
             options,
             windows_map,
             handlers,
@@ -188,7 +188,7 @@ impl WindowsWindow {
             requested,
             scale_factor,
             apartment,
-        ))
+        )
     }
 
     /// Create the native window: the resource an admitted identity owns.
@@ -271,7 +271,7 @@ impl WindowsWindow {
         requested: Size<i32>,
         scale_factor: f64,
         apartment: Option<Rc<super::com_apartment::ComApartment>>,
-    ) -> Arc<Self> {
+    ) -> Result<Arc<Self>, OpenWindowError> {
         let (width, height) = (requested.width, requested.height);
         // SAFETY: `hwnd` is the valid handle `create_native` just returned
         // on this thread. `SetClassLongPtrW` and `apply_windows_features`
@@ -373,7 +373,6 @@ impl WindowsWindow {
             });
             let context_ptr = Box::into_raw(context);
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, context_ptr as isize);
-            Self::activate_text_services(hwnd, apartment);
 
             let window = Arc::new(Self {
                 hwnd,
@@ -386,6 +385,14 @@ impl WindowsWindow {
                 #[cfg(feature = "a11y")]
                 accessibility: Arc::new(super::accessibility::WindowsAccessibility::new(hwnd)),
             });
+            // The wrapper owns the window from here: a panic out of the
+            // activation (or anything after it) drops it, which destroys the
+            // window and retires its context.
+            if !Self::activate_text_services(hwnd, apartment) {
+                return Err(OpenWindowError::Backend {
+                    message: "the window was destroyed while its text services activated".into(),
+                });
+            }
 
             // Show window if requested
             if options.visible {
@@ -403,7 +410,7 @@ impl WindowsWindow {
                 window.state.lock().visible = true;
             }
 
-            window
+            Ok(window)
         }
     }
 
@@ -414,17 +421,24 @@ impl WindowsWindow {
     /// window without a host, and text input takes the `WM_CHAR` path, as
     /// it does with no `apartment` (the platform's is reachable on its owner
     /// thread only, where windows are opened).
+    ///
+    /// Returns whether the window is still alive: a message the activation
+    /// dispatched may have destroyed it, and the open then fails.
     fn activate_text_services(
         hwnd: HWND,
         apartment: Option<Rc<super::com_apartment::ComApartment>>,
-    ) {
+    ) -> bool {
         let Some(apartment) = apartment else {
             tracing::warn!(
                 ?hwnd,
                 "no COM apartment for TSF; text input falls back to WM_CHAR"
             );
-            return;
+            return true;
         };
+        #[cfg(test)]
+        if let Some(hook) = BEFORE_TSF_ACTIVATION.get() {
+            hook(hwnd);
+        }
         match super::text_services::TextServices::activate(hwnd, apartment) {
             Ok(services) => {
                 let installed = super::platform::with_window_context(hwnd, "text_services", |c| {
@@ -444,6 +458,7 @@ impl WindowsWindow {
                 );
             }
         }
+        super::platform::with_window_context(hwnd, "text_services", |_| ()).is_some()
     }
 
     /// Apply Windows 11 features automatically
@@ -2306,4 +2321,12 @@ impl Drop for WindowsWindow {
             };
         }
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Runs as a window's text services are about to activate: lets a test
+    /// stand in for a message the activation dispatches.
+    pub(super) static BEFORE_TSF_ACTIVATION: std::cell::Cell<Option<fn(HWND)>> =
+        const { std::cell::Cell::new(None) };
 }

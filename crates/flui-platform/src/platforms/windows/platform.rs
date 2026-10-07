@@ -382,12 +382,12 @@ pub(super) struct WindowContext {
     /// release reports `Dead` like the press.
     pub held_dead_keys: std::cell::RefCell<super::events::HeldDeadKeys>,
     /// Borrow ledger deferring this context's free past every live borrow
-/// on the owner thread — see [`ContextLedger`] for the reentrancy
-/// hazard (a framework callback closing the window from inside a
-/// dispatch) this exists to survive, and [`ContextGuard`] for the RAII
-/// half. `RefCell`, not a lock: only the owning thread ever touches it
-/// (the affinity gates enforce that), and every borrow is a short
-/// non-reentrant method call.
+    /// on the owner thread — see [`ContextLedger`] for the reentrancy
+    /// hazard (a framework callback closing the window from inside a
+    /// dispatch) this exists to survive, and [`ContextGuard`] for the RAII
+    /// half. `RefCell`, not a lock: only the owning thread ever touches it
+    /// (the affinity gates enforce that), and every borrow is a short
+    /// non-reentrant method call.
     pub ledger: std::cell::RefCell<ContextLedger>,
 }
 

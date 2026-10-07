@@ -256,8 +256,9 @@ impl TextServices {
             }
             (thread_manager, client_id, empty)
         };
-        tracing::debug!(target: "flui_platform::tsf", client_id, "ITfThreadMgr activated");
-        Ok(Rc::new_cyclic(|me| Self {
+        // Owned before anything runs application code: from here a failure
+        // drops the services, and their drop deactivates TSF.
+        let services = Rc::new_cyclic(|me| Self {
             hwnd,
             thread_manager,
             client_id,
@@ -270,7 +271,15 @@ impl TextServices {
             recovery: RefCell::new(Vec::new()),
             me: me.clone(),
             _apartment: apartment,
-        }))
+        });
+        // The diagnostic runs a user-installed subscriber: contained, so it
+        // cannot unwind through the caller's half-built window.
+        if let Err(payload) = catch_unwind(|| {
+            tracing::debug!(target: "flui_platform::tsf", client_id, "ITfThreadMgr activated");
+        }) {
+            retain_opaque_payload(payload);
+        }
+        Ok(services)
     }
 
     /// The client id `ITfThreadMgr::Activate` returned, for the probe.
