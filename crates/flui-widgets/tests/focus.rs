@@ -9,7 +9,7 @@ use flui_view::ViewExt;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use flui_widgets::interaction::{Focus, FocusChangeHandler, FocusScope};
-use flui_widgets::{Positioned, SizedBox, Stack};
+use flui_widgets::{Directionality, Positioned, SizedBox, Stack};
 
 use crate::common::harness::mount;
 
@@ -174,6 +174,146 @@ pub(crate) fn tab_traversal_follows_geometry_not_attach_order() {
     assert!(a.has_primary_focus(), "then the middle again");
 
     manager.unfocus();
+}
+
+fn reading_order_tree(
+    direction: flui_painting::typography::TextDirection,
+    scope: &Rc<FocusScopeNode>,
+    nodes: &[Rc<FocusNode>],
+    geometry: &[(f64, f64, f64, f64)],
+) -> Directionality {
+    assert_eq!(
+        nodes.len(),
+        geometry.len(),
+        "each focus stop has real positioned geometry"
+    );
+    let fields = nodes
+        .iter()
+        .zip(geometry)
+        .map(|(node, &(left, top, width, height))| {
+            Positioned::new(Focus::new(SizedBox::new(width, height)).focus_node(node.clone()))
+                .left(left)
+                .top(top)
+                .width(width)
+                .height(height)
+                .boxed()
+        })
+        .collect();
+    Directionality::new(
+        direction,
+        FocusScope::with_external_node(scope.clone(), Stack::new(fields)),
+    )
+}
+
+fn tab_event(backward: bool) -> flui_interaction::events::KeyEvent {
+    use flui_interaction::events::{Key, KeyEvent, KeyState, Modifiers, NamedKey};
+    KeyEvent {
+        state: KeyState::Down,
+        key: Key::Named(NamedKey::Tab),
+        modifiers: if backward {
+            Modifiers::SHIFT
+        } else {
+            Modifiers::empty()
+        },
+        ..KeyEvent::default()
+    }
+}
+
+fn assert_widget_reading_order(
+    direction: flui_painting::typography::TextDirection,
+    geometry: &[(f64, f64, f64, f64)],
+    expected: &[usize],
+) {
+    let scope = FocusScopeNode::with_debug_label("spatial-tab-scope");
+    let nodes: Vec<_> = (0..geometry.len())
+        .map(|index| FocusNode::with_debug_label(format!("spatial-stop-{index}")))
+        .collect();
+    let harness = mount(reading_order_tree(direction, &scope, &nodes, geometry));
+    let manager = harness.focus_manager();
+    harness.enter_owner_scope(|| nodes[expected[0]].request_focus());
+    for &next in expected.iter().skip(1).chain(expected.iter().take(1)) {
+        assert!(
+            harness.enter_owner_scope(|| manager.dispatch_key_event(&tab_event(false))),
+            "Tab is consumed by the mounted action chain"
+        );
+        assert!(
+            nodes[next].has_primary_focus(),
+            "Tab lands on spatial stop {next}"
+        );
+    }
+    for &previous in expected.iter().rev() {
+        assert!(
+            harness.enter_owner_scope(|| manager.dispatch_key_event(&tab_event(true))),
+            "Shift+Tab is consumed by the mounted action chain"
+        );
+        assert!(
+            nodes[previous].has_primary_focus(),
+            "Shift+Tab reverses the same order at spatial stop {previous}"
+        );
+    }
+}
+
+pub(crate) fn tab_groups_vertically_overlapping_widgets_into_one_reading_row() {
+    assert_widget_reading_order(
+        flui_painting::typography::TextDirection::Ltr,
+        &[
+            (0.0, 1.0, 10.0, 10.0),
+            (30.0, 0.0, 10.0, 10.0),
+            (0.0, 30.0, 10.0, 10.0),
+        ],
+        &[0, 1, 2],
+    );
+}
+
+pub(crate) fn tab_reads_an_rtl_scope_from_its_inherited_directionality() {
+    assert_widget_reading_order(
+        flui_painting::typography::TextDirection::Rtl,
+        &[
+            (0.0, 0.0, 10.0, 10.0),
+            (30.0, 0.0, 10.0, 10.0),
+            (0.0, 30.0, 10.0, 10.0),
+        ],
+        &[1, 0, 2],
+    );
+}
+
+pub(crate) fn a_tall_widget_cannot_bridge_disjoint_reading_rows() {
+    assert_widget_reading_order(
+        flui_painting::typography::TextDirection::Ltr,
+        &[
+            (30.0, 0.0, 10.0, 30.0),
+            (0.0, 1.0, 10.0, 9.0),
+            (10.0, 20.0, 10.0, 10.0),
+        ],
+        &[1, 0, 2],
+    );
+}
+
+pub(crate) fn a_directionality_update_changes_tab_order_without_replacing_focus_nodes() {
+    use flui_painting::typography::TextDirection::{Ltr, Rtl};
+    let scope = FocusScopeNode::with_debug_label("changing-direction-tab-scope");
+    let nodes = [
+        FocusNode::with_debug_label("left"),
+        FocusNode::with_debug_label("right"),
+    ];
+    let geometry = [(0.0, 0.0, 10.0, 10.0), (30.0, 0.0, 10.0, 10.0)];
+    let mut harness = mount(reading_order_tree(Ltr, &scope, &nodes, &geometry));
+    let manager = harness.focus_manager();
+    harness.enter_owner_scope(|| nodes[0].request_focus());
+    assert!(harness.enter_owner_scope(|| manager.dispatch_key_event(&tab_event(false))));
+    assert!(nodes[1].has_primary_focus());
+    harness.swap_root(reading_order_tree(Rtl, &scope, &nodes, &geometry));
+    assert!(
+        nodes[1].has_primary_focus(),
+        "the focused external node survives the inherited update"
+    );
+    assert!(harness.enter_owner_scope(|| manager.dispatch_key_event(&tab_event(false))));
+    assert!(
+        nodes[0].has_primary_focus(),
+        "the existing scope consumes the new RTL direction"
+    );
+    assert!(harness.enter_owner_scope(|| manager.dispatch_key_event(&tab_event(true))));
+    assert!(nodes[1].has_primary_focus());
 }
 
 /// Event context (ADR-0086): the focus edge and the key handler run inside a
