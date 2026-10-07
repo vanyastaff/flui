@@ -383,6 +383,10 @@ mod native_windows {
             "pointer_modifiers_are_the_message_state",
             pointer_modifiers_are_the_message_state,
         ),
+        (
+            "queued_mouse_samples_keep_native_message_time",
+            queued_mouse_samples_keep_native_message_time,
+        ),
     ];
 
     pub(super) fn run_requested_child() -> bool {
@@ -2386,6 +2390,51 @@ mod native_windows {
         assert!(captured().is_invalid(), "the release lets go");
         assert_eq!(kinds(&events), ["down", "cancel", "down", "up"]);
         thief.close();
+        window.close();
+    }
+
+    /// Delaying dispatch cannot compress the time between generated samples.
+    #[expect(unsafe_code, reason = "queues and dispatches mouse messages for an owned window")]
+    fn queued_mouse_samples_keep_native_message_time() {
+        use ui_events::pointer::PointerEvent;
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let window = open(&platform, true);
+        let hwnd = hwnd_of(&window);
+        let events = record_pointer(&window);
+        // Remove creation traffic before the two queued samples.
+        pump_window(hwnd);
+        events.lock().expect("pointer log").clear();
+        // SAFETY: an owned live HWND, with only integer mouse coordinates.
+        unsafe { PostMessageW(Some(hwnd), WM_MOUSEMOVE, WPARAM(0), mouse_lparam(5, 5)) }
+            .expect("queue first sample");
+        std::thread::sleep(Duration::from_millis(40));
+        // SAFETY: same owned window and by-value message data.
+        unsafe { PostMessageW(Some(hwnd), WM_MOUSEMOVE, WPARAM(0), mouse_lparam(6, 6)) }
+            .expect("queue second sample");
+        std::thread::sleep(Duration::from_millis(40));
+        let mut ticks = Vec::new();
+        for _ in 0..32 {
+            let mut message = MSG::default();
+            // SAFETY: writable MSG and a live window on this owner thread.
+            if !unsafe { PeekMessageW(&raw mut message, Some(hwnd), WM_MOUSEMOVE, WM_MOUSEMOVE, PM_REMOVE) }.as_bool() {
+                break;
+            }
+            ticks.push(message.time);
+            // SAFETY: dispatch the message just retrieved from this queue.
+            unsafe { DispatchMessageW(&raw const message) };
+        }
+        assert_eq!(ticks.len(), 2, "two queued native samples");
+        let native_gap = ticks[1].wrapping_sub(ticks[0]);
+        assert!(native_gap >= 20, "samples were generated apart before dispatch");
+        let log = events.lock().expect("pointer log");
+        let times: Vec<_> = log.iter().filter_map(|event| match event {
+            PointerEvent::Move(update) => Some(update.current.time),
+            _ => None,
+        }).collect();
+        assert_eq!(times.len(), 2, "both samples delivered");
+        assert_eq!(times[1] - times[0], u64::from(native_gap) * 1_000_000,
+            "event timestamps preserve queue generation time rather than dispatch time");
+        drop(log);
         window.close();
     }
 
