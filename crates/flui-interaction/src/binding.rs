@@ -94,6 +94,10 @@ use crate::{
     settings::GestureSettings,
 };
 
+fn terminal_hit_test(_: Offset<f64>) -> HitTestResult {
+    unreachable!("BUG: terminal Cancel never hit-tests")
+}
+
 /// Per-pointer state cached at Down: the data-only hit path plus the
 /// owner-local resolved route token that Move reuses and Up/Cancel releases.
 ///
@@ -1101,9 +1105,7 @@ impl GestureBinding {
                         CancelReason::DeviceRemoved,
                     ));
                     let delivered = RoutePanic::capture(|| {
-                        self.handle_pointer_event_kernel(&cancel, |_| {
-                            unreachable!("BUG: terminal Cancel never hit-tests")
-                        })
+                        self.handle_pointer_event_kernel(&cancel, terminal_hit_test)
                     });
                     RoutePanic::preserve_first(
                         &mut first_panic,
