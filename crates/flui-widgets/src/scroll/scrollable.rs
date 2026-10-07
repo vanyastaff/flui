@@ -628,6 +628,7 @@ impl ViewState<Scrollable> for ScrollableState {
             let position_update = ctrl_update.position();
             let position_end = ctrl_update.position();
             let gestures = GestureDetector::new()
+                .drag_pointer_strategy(flui_interaction::DragPointerStrategy::ContinueWithRemaining)
                 .behavior(HitTestBehavior::Opaque)
                 .on_pan_start(move |_cx, _details| {
                     wheel_drag.borrow_mut().take();

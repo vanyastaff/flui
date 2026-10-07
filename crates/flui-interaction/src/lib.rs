@@ -239,7 +239,7 @@ pub use processing::{PointerEventResampler, Velocity, VelocityEstimate, Velocity
 pub use recognizers::{
     ArenaMembership, BeginContactError, CancelOutcome, ContactId, ContactSnapshot,
     DoubleTapDetails, DoubleTapGestureRecognizer, DragCancelCallback, DragDownCallback,
-    DragDownDetails, DragEndCallback, DragEndDetails, DragGestureRecognizer, DragStartCallback,
+    DragDownDetails, DragEndCallback, DragEndDetails, DragGestureRecognizer, DragPointerStrategy, DragStartCallback,
     DragStartDetails, DragUpdateCallback, DragUpdateDetails, EagerGestureRecognizer,
     ForcePressGestureRecognizer, GestureEndReason, GestureRecognizer, LongPressGestureRecognizer,
     MultiDragAxis, MultiDragEndDetails, MultiDragGestureRecognizer, MultiDragHandle,
