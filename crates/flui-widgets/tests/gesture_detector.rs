@@ -104,7 +104,7 @@ pub(crate) fn scoped_estimator_controls_delivered_drag_velocity() {
                 );
                 let info =
                     PointerInfo::new(PointerId::try_from(1_u64).expect("authored contact"), kind);
-                let sample = |millis, x| {
+                let sample = |millis: u64, x| {
                     PointerSample::new(
                         EventTime::from_nanos(millis * 1_000_000),
                         PointerPosition::try_new(Point::new(x, 40.0)).expect("finite position"),
