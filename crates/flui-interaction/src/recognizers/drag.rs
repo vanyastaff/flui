@@ -806,6 +806,7 @@ impl DragGestureRecognizer {
         if !self.state.assert_not_disposed("add_pointer") {
             return;
         }
+        let generation = self.state.contact_generation();
         match self.state.primary_pointer() {
             Some(tracked) if tracked != pointer => return,
             Some(_) => self.handle_cancel(),
@@ -813,12 +814,7 @@ impl DragGestureRecognizer {
         }
         // `handle_cancel` runs user code, which may dispose this recognizer or
         // admit a contact of its own; either way this admission is void.
-        if self.state.is_disposed()
-            || self
-                .state
-                .primary_pointer()
-                .is_some_and(|tracked| tracked != pointer)
-        {
+        if self.state.is_disposed() || self.state.contact_generation() != generation {
             return;
         }
         self.state

@@ -541,20 +541,24 @@ impl ArenaEntryData {
     /// withdrew (or never joined) is ignored, since resolving in its favour
     /// would reject every remaining member and accept no one.
     #[must_use]
-    fn accept(&mut self, member: Arc<dyn GestureArenaMember>) -> ArenaFollowUp {
-        if self.is_resolved || !self.members.iter().any(|entry| Arc::ptr_eq(entry, &member)) {
+    ///
+    /// The candidate is borrowed: the caller still owns it, so an ignored
+    /// candidate that is its own last owner is dropped after the slot lock is
+    /// released, never inside it.
+    fn accept(&mut self, member: &Arc<dyn GestureArenaMember>) -> ArenaFollowUp {
+        if self.is_resolved || !self.members.iter().any(|entry| Arc::ptr_eq(entry, member)) {
             return ArenaFollowUp::None;
         }
 
         if self.is_open {
             // Store as eager winner - will win when arena closes
             if self.eager_winner.is_none() {
-                self.eager_winner = Some(member);
+                self.eager_winner = Some(Arc::clone(member));
             }
             // If already have eager winner, ignore subsequent accepts
             ArenaFollowUp::None
         } else {
-            ArenaFollowUp::ResolveInFavorOf(member)
+            ArenaFollowUp::ResolveInFavorOf(Arc::clone(member))
         }
     }
 
@@ -1196,7 +1200,9 @@ impl GestureArena {
         let (mut pending, follow_up) = {
             let mut entry = slot.data.lock();
             match disposition {
-                GestureDisposition::Accepted => (PendingNotifications::new(), entry.accept(member)),
+                GestureDisposition::Accepted => {
+                    (PendingNotifications::new(), entry.accept(&member))
+                }
                 GestureDisposition::Rejected => entry.reject(member),
             }
         };
@@ -1222,7 +1228,8 @@ impl GestureArena {
         let Some(slot) = self.current_slot(pointer) else {
             return;
         };
-        let follow_up = slot.data.lock().accept(member);
+        let follow_up = slot.data.lock().accept(&member);
+        // `member` is dropped below, after the slot lock is released.
         let pending = self.collect_follow_up(pointer, &slot, follow_up);
         Self::dispatch_pending(pending, pointer);
     }
@@ -1263,12 +1270,24 @@ impl GestureArena {
     /// If a sweep was attempted while held, the deferred sweep runs now.
     /// Releasing never closes membership; `close` always does that during
     /// Down dispatch, independent of the hold state.
+    ///
+    /// Pairs with [`hold`](Self::hold), which holds the pointer's current arena:
+    /// that arena is released if it is still current, otherwise the newest
+    /// retained arena of the pointer (the one most recently swept while held),
+    /// so a hold taken on a new contact is not spent on an older one.
     pub fn release(&self, pointer: PointerId) {
+        let held_current = self
+            .current_slot(pointer)
+            .filter(|slot| slot.data.lock().is_held);
+        if let Some(slot) = held_current {
+            self.release_slot(&slot);
+            return;
+        }
         let retained = self
             .retained
             .iter()
             .filter(|entry| entry.value().pointer == pointer)
-            .min_by_key(|entry| entry.key().0)
+            .max_by_key(|entry| entry.key().0)
             .map(|entry| Arc::clone(entry.value()));
         if let Some(slot) = retained.or_else(|| self.current_slot(pointer)) {
             self.release_slot(&slot);
