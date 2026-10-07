@@ -2612,6 +2612,13 @@ mod native_windows {
                 (POINTER_FLAG_DOWN | POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT, 512),
                 (POINTER_FLAG_UP, 0),
             ] {
+                let mut current_origin = POINT { x: 40, y: 40 };
+                // SAFETY: diagnostic queries for this live ephemeral window;
+                // they do not redirect or fabricate the native injected target.
+                unsafe {
+                    assert!(ClientToScreen(hwnd, &mut current_origin).as_bool());
+                    eprintln!("NATIVE_TARGET before injection owned={hwnd:?} requested={target:?} current_client40={current_origin:?} hit={:?} foreground={:?} flags={flags:?}", WindowFromPoint(target), windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow());
+                }
                 let info = POINTER_INFO { pointerType: native_kind, pointerId: 1, pointerFlags: flags, ptPixelLocation: target, ptPixelLocationRaw: target, ..Default::default() };
                 let packet = if native_kind == PT_TOUCH {
                     let contact = RECT { left: target.x - 10, top: target.y - 15, right: target.x + 10, bottom: target.y + 15 };
@@ -2636,6 +2643,8 @@ mod native_windows {
                     pump_pointer_thread();
                     std::thread::sleep(Duration::from_millis(2));
                 }
+                // SAFETY: read the actual hit target after native queue pumping.
+                eprintln!("NATIVE_TARGET after pump owned={hwnd:?} hit={:?} foreground={:?}", unsafe { WindowFromPoint(target) }, unsafe { windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() });
             }
             if !supported { continue; }
             let log = events.lock().expect("pointer log");
