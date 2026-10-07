@@ -23,7 +23,7 @@ use crate::common::{LaidOut, SignalProbe, lay_out, tight};
 
 fn character(ch: char) -> KeyEvent {
     KeyEventBuilder::new(Code::KeyA)
-        .with_key(Key::Character(ch.to_string()))
+        .with_key(Key::character(ch.to_string()))
         .with_state(KeyState::Down)
         .build()
 }
@@ -115,7 +115,7 @@ pub(crate) fn reset_restores_initial_values_and_clears_errors_and_interaction() 
         )
         .handle(form.clone()),
     );
-    let backspace = named(NamedKey::Backspace, Modifiers::empty());
+    let backspace = named(NamedKey::Backspace, Modifiers::NONE);
     node.request_focus();
     for _ in 0..4 {
         laid.focus_manager().dispatch_key_event(&backspace);

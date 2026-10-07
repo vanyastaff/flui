@@ -2221,7 +2221,9 @@ pub(crate) fn deleting_a_separator_keeps_the_caret_after_the_joined_flag() {
 }
 
 fn selection_contact(id: u64) -> flui_interaction::PointerId {
-    flui_interaction::PointerId::new(id).expect("nonzero fixture contact")
+    flui_interaction::PointerId::new(
+        std::num::NonZeroU64::new(id).expect("nonzero fixture contact"),
+    )
 }
 
 fn selection_field() -> (crate::common::LaidOut, TextEditingController, Rc<FocusNode>) {
@@ -2239,105 +2241,96 @@ fn selection_field() -> (crate::common::LaidOut, TextEditingController, Rc<Focus
 pub(crate) fn selection_drag_survives_a_same_controller_rebuild() {
     use flui_foundation::geometry::Offset;
     use flui_interaction::events::{
-        PointerType, make_cancel_event_for_id, make_down_event_for_id, make_move_event_for_id,
+        PointerKind, make_cancel_event_for_id, make_down_event_for_id, make_move_event_for_id,
     };
     let (mut tree, controller, focus) = selection_field();
     let contact = selection_contact(41);
-    tree.dispatch_pointer_event(&make_down_event_for_id(
-        contact,
-        Offset::new(1.0, 5.0),
-        PointerType::Touch,
-    ));
+    tree.dispatch_pointer_event(
+        &make_down_event_for_id(contact, Offset::new(1.0, 5.0), PointerKind::Touch)
+            .expect("finite selection fixture"),
+    );
     let anchor = controller.caret_byte_offset();
     assert_eq!(anchor, 0);
     tree.pump_widget(EditableText::new(controller.clone(), Rc::clone(&focus)).caret_height(19.0));
-    tree.dispatch_pointer_event(&make_move_event_for_id(
-        contact,
-        Offset::new(400.0, 5.0),
-        PointerType::Touch,
-    ));
+    tree.dispatch_pointer_event(
+        &make_move_event_for_id(contact, Offset::new(400.0, 5.0), PointerKind::Touch)
+            .expect("finite selection fixture"),
+    );
     assert_eq!(controller.selection().start, anchor);
     assert!(controller.selection().end > anchor);
-    tree.dispatch_pointer_event(&make_cancel_event_for_id(contact, PointerType::Touch));
+    tree.dispatch_pointer_event(&make_cancel_event_for_id(contact, PointerKind::Touch));
     let next = selection_contact(42);
-    tree.dispatch_pointer_event(&make_down_event_for_id(
-        next,
-        Offset::new(400.0, 5.0),
-        PointerType::Touch,
-    ));
+    tree.dispatch_pointer_event(
+        &make_down_event_for_id(next, Offset::new(400.0, 5.0), PointerKind::Touch)
+            .expect("finite selection fixture"),
+    );
     let next_anchor = controller.caret_byte_offset();
-    tree.dispatch_pointer_event(&make_move_event_for_id(
-        next,
-        Offset::new(1.0, 5.0),
-        PointerType::Touch,
-    ));
+    tree.dispatch_pointer_event(
+        &make_move_event_for_id(next, Offset::new(1.0, 5.0), PointerKind::Touch)
+            .expect("finite selection fixture"),
+    );
     assert!(controller.caret_byte_offset() < next_anchor);
 }
 
 fn foreign_selection_terminal(cancel: bool) {
     use flui_foundation::geometry::Offset;
     use flui_interaction::events::{
-        PointerType, make_cancel_event_for_id, make_down_event_for_id, make_move_event_for_id,
+        PointerKind, make_cancel_event_for_id, make_down_event_for_id, make_move_event_for_id,
         make_up_event_for_id,
     };
     let (tree, controller, _focus) = selection_field();
     let own = selection_contact(51);
     let foreign = selection_contact(52);
-    tree.dispatch_pointer_event(&make_down_event_for_id(
-        own,
-        Offset::new(1.0, 5.0),
-        PointerType::Touch,
-    ));
+    tree.dispatch_pointer_event(
+        &make_down_event_for_id(own, Offset::new(1.0, 5.0), PointerKind::Touch)
+            .expect("finite selection fixture"),
+    );
     let anchor = controller.caret_byte_offset();
-    tree.dispatch_pointer_event(&make_down_event_for_id(
-        foreign,
-        Offset::new(150.0, 5.0),
-        PointerType::Touch,
-    ));
+    tree.dispatch_pointer_event(
+        &make_down_event_for_id(foreign, Offset::new(150.0, 5.0), PointerKind::Touch)
+            .expect("finite selection fixture"),
+    );
     assert_eq!(
         controller.caret_byte_offset(),
         anchor,
         "first contact owns selection"
     );
-    tree.dispatch_pointer_event(&make_move_event_for_id(
-        foreign,
-        Offset::new(400.0, 5.0),
-        PointerType::Touch,
-    ));
+    tree.dispatch_pointer_event(
+        &make_move_event_for_id(foreign, Offset::new(400.0, 5.0), PointerKind::Touch)
+            .expect("finite selection fixture"),
+    );
     assert_eq!(
         controller.caret_byte_offset(),
         anchor,
         "foreign move cannot select"
     );
     let terminal = if cancel {
-        make_cancel_event_for_id(foreign, PointerType::Touch)
+        make_cancel_event_for_id(foreign, PointerKind::Touch)
     } else {
-        make_up_event_for_id(foreign, Offset::new(400.0, 5.0), PointerType::Touch)
+        make_up_event_for_id(foreign, Offset::new(400.0, 5.0), PointerKind::Touch)
+            .expect("finite selection fixture")
     };
     tree.dispatch_pointer_event(&terminal);
-    tree.dispatch_pointer_event(&make_move_event_for_id(
-        own,
-        Offset::new(400.0, 5.0),
-        PointerType::Touch,
-    ));
+    tree.dispatch_pointer_event(
+        &make_move_event_for_id(own, Offset::new(400.0, 5.0), PointerKind::Touch)
+            .expect("finite selection fixture"),
+    );
     assert_eq!(controller.selection().start, anchor);
     assert!(
         controller.selection().end > anchor,
         "foreign terminal preserves own drag"
     );
-    tree.dispatch_pointer_event(&make_cancel_event_for_id(own, PointerType::Touch));
+    tree.dispatch_pointer_event(&make_cancel_event_for_id(own, PointerKind::Touch));
     let next = selection_contact(53);
-    tree.dispatch_pointer_event(&make_down_event_for_id(
-        next,
-        Offset::new(400.0, 5.0),
-        PointerType::Touch,
-    ));
+    tree.dispatch_pointer_event(
+        &make_down_event_for_id(next, Offset::new(400.0, 5.0), PointerKind::Touch)
+            .expect("finite selection fixture"),
+    );
     let next_anchor = controller.caret_byte_offset();
-    tree.dispatch_pointer_event(&make_move_event_for_id(
-        next,
-        Offset::new(1.0, 5.0),
-        PointerType::Touch,
-    ));
+    tree.dispatch_pointer_event(
+        &make_move_event_for_id(next, Offset::new(1.0, 5.0), PointerKind::Touch)
+            .expect("finite selection fixture"),
+    );
     assert!(controller.caret_byte_offset() < next_anchor);
 }
 
@@ -2351,15 +2344,14 @@ pub(crate) fn foreign_cancel_preserves_the_selection_contact() {
 fn selection_retarget(replace: bool) {
     use flui_foundation::geometry::Offset;
     use flui_interaction::events::{
-        PointerType, make_cancel_event_for_id, make_down_event_for_id, make_move_event_for_id,
+        PointerKind, make_cancel_event_for_id, make_down_event_for_id, make_move_event_for_id,
     };
     let (mut tree, old, focus) = selection_field();
     let own = selection_contact(61);
-    tree.dispatch_pointer_event(&make_down_event_for_id(
-        own,
-        Offset::new(1.0, 5.0),
-        PointerType::Touch,
-    ));
+    tree.dispatch_pointer_event(
+        &make_down_event_for_id(own, Offset::new(1.0, 5.0), PointerKind::Touch)
+            .expect("finite selection fixture"),
+    );
     let current = if replace {
         TextEditingController::with_text("replacement")
     } else {
@@ -2370,29 +2362,30 @@ fn selection_retarget(replace: bool) {
         tree.pump_widget(EditableText::new(current.clone(), Rc::clone(&focus)));
     }
     let before = current.caret_byte_offset();
-    tree.dispatch_pointer_event(&make_move_event_for_id(
-        own,
-        Offset::new(if replace { 1.0 } else { 400.0 }, 5.0),
-        PointerType::Touch,
-    ));
+    tree.dispatch_pointer_event(
+        &make_move_event_for_id(
+            own,
+            Offset::new(if replace { 1.0 } else { 400.0 }, 5.0),
+            PointerKind::Touch,
+        )
+        .expect("finite selection fixture"),
+    );
     assert_eq!(
         current.caret_byte_offset(),
         before,
         "retired contact cannot edit the current document"
     );
-    tree.dispatch_pointer_event(&make_cancel_event_for_id(own, PointerType::Touch));
+    tree.dispatch_pointer_event(&make_cancel_event_for_id(own, PointerKind::Touch));
     let next = selection_contact(62);
-    tree.dispatch_pointer_event(&make_down_event_for_id(
-        next,
-        Offset::new(400.0, 5.0),
-        PointerType::Touch,
-    ));
+    tree.dispatch_pointer_event(
+        &make_down_event_for_id(next, Offset::new(400.0, 5.0), PointerKind::Touch)
+            .expect("finite selection fixture"),
+    );
     let anchor = current.caret_byte_offset();
-    tree.dispatch_pointer_event(&make_move_event_for_id(
-        next,
-        Offset::new(1.0, 5.0),
-        PointerType::Touch,
-    ));
+    tree.dispatch_pointer_event(
+        &make_move_event_for_id(next, Offset::new(1.0, 5.0), PointerKind::Touch)
+            .expect("finite selection fixture"),
+    );
     assert!(
         current.caret_byte_offset() < anchor,
         "new contact edits after retirement"

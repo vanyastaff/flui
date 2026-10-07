@@ -21,8 +21,7 @@ use flui_foundation::geometry::{Offset, Rect, Size};
 use flui_painting::paint::{Path, Shader};
 
 use super::hit_test::{EventPropagation, HitTestEntry, HitTestResult, transform_pointer_event};
-use crate::events::{DeviceId, PointerEvent, PointerEventExt, ScrollEventData};
-use crate::pan_zoom::PointerPanZoomEvent;
+use crate::events::{PanZoomEvent, PointerEvent, PointerEventExt, PointerInfo, ScrollEvent};
 use crate::retain::Retain;
 
 static NEXT_LANE_ID: AtomicU64 = AtomicU64::new(1);
@@ -305,15 +304,14 @@ fn try_mint_lane_id(source: &AtomicU64) -> Result<LaneId, InteractionDispatchErr
 /// One pointer event as delivered to one hit-test target, in both of the
 /// coordinate spaces a handler can legitimately need.
 ///
-/// FLUI's pointer events are [`ui_events`] types with room for exactly one
-/// position, and dispatch rewrites that one into the receiving entry's space,
-/// so the root-space and target-space events are carried side by side.
+/// Dispatch localises the owned event's measured and predicted positions into
+/// the receiving entry's space. The original root-space event travels beside
+/// it, including events whose platform supplied no position.
 ///
 /// Both fields borrow values the dispatch already owns, so building one costs
 /// no clone and no matrix work beyond the localisation dispatch performs
 /// anyway.
 ///
-/// [`ui_events`]: https://docs.rs/ui-events
 #[derive(Clone, Copy, Debug)]
 pub struct PointerDispatch<'a> {
     /// The event rewritten into the receiving target's own space — the value
@@ -345,19 +343,19 @@ impl<'a> PointerDispatch<'a> {
 }
 
 type PointerHandler = Rc<dyn Fn(PointerDispatch<'_>) + 'static>;
-type ScrollHandler = Rc<dyn Fn(&ScrollEventData) -> EventPropagation + 'static>;
-type PanZoomHandler = Rc<dyn Fn(&PointerPanZoomEvent) -> EventPropagation + 'static>;
+type ScrollHandler = Rc<dyn Fn(&ScrollEvent) -> EventPropagation + 'static>;
+type PanZoomHandler = Rc<dyn Fn(&PanZoomEvent) -> EventPropagation + 'static>;
 type PathClipper = Rc<dyn Fn(Size) -> Path + 'static>;
 type ShaderMaskFactory = Rc<dyn Fn(Rect<f64>) -> Shader + 'static>;
 
 /// Callback for mouse enter events.
-pub type MouseEnterCallback = Rc<dyn Fn(DeviceId, Offset<f64>) + 'static>;
+pub type MouseEnterCallback = Rc<dyn Fn(PointerInfo, Offset<f64>) + 'static>;
 
 /// Callback for mouse exit events.
-pub type MouseExitCallback = Rc<dyn Fn(DeviceId, Offset<f64>) + 'static>;
+pub type MouseExitCallback = Rc<dyn Fn(PointerInfo, Offset<f64>) + 'static>;
 
 /// Callback for mouse hover events.
-pub type MouseHoverCallback = Rc<dyn Fn(DeviceId, Offset<f64>) + 'static>;
+pub type MouseHoverCallback = Rc<dyn Fn(PointerInfo, Offset<f64>) + 'static>;
 
 /// Owner-local callback set for one mouse region target.
 #[doc(hidden)]
@@ -605,7 +603,12 @@ impl ResolvedHitRoute {
             }
             let local_event = match &entry.local_transform {
                 LocalEventTransform::Global => None,
-                LocalEventTransform::Local(local) => Some(transform_pointer_event(event, local)),
+                LocalEventTransform::Local(local) => {
+                    let Some(event) = transform_pointer_event(event, local) else {
+                        continue;
+                    };
+                    Some(event)
+                }
                 LocalEventTransform::NonInvertible => continue,
             };
             let handler = entry.handler_cell.snapshot();
@@ -1603,7 +1606,7 @@ impl InteractionDispatchHandle {
     /// Register a scroll/pointer-signal handler in the active owner lane.
     pub fn register_scroll(
         &self,
-        handler: impl Fn(&ScrollEventData) -> EventPropagation + 'static,
+        handler: impl Fn(&ScrollEvent) -> EventPropagation + 'static,
     ) -> Result<ScrollTarget, InteractionDispatchError> {
         let handler = self.admit(handler)?;
         let lane = self.active_lane()?;
@@ -1622,7 +1625,7 @@ impl InteractionDispatchHandle {
     pub fn replace_scroll(
         &self,
         target: ScrollTarget,
-        handler: impl Fn(&ScrollEventData) -> EventPropagation + 'static,
+        handler: impl Fn(&ScrollEvent) -> EventPropagation + 'static,
     ) -> Result<(), InteractionDispatchError> {
         let handler = self.admit(handler)?;
         let lane = self.active_lane()?;
@@ -1656,7 +1659,7 @@ impl InteractionDispatchHandle {
     pub fn invoke_scroll_target(
         &self,
         target: ScrollTarget,
-        event: &ScrollEventData,
+        event: &ScrollEvent,
     ) -> Result<EventPropagation, InteractionDispatchError> {
         let lane = self.active_lane()?;
         self.validate_lane(target.lane_id)?;
@@ -1682,7 +1685,7 @@ impl InteractionDispatchHandle {
     /// thread, or when the lane's private identity source is exhausted.
     pub fn register_pan_zoom(
         &self,
-        handler: impl Fn(&PointerPanZoomEvent) -> EventPropagation + 'static,
+        handler: impl Fn(&PanZoomEvent) -> EventPropagation + 'static,
     ) -> Result<PanZoomTarget, InteractionDispatchError> {
         let handler = self.admit(handler)?;
         let lane = self.active_lane()?;
@@ -1706,7 +1709,7 @@ impl InteractionDispatchHandle {
     pub fn replace_pan_zoom(
         &self,
         target: PanZoomTarget,
-        handler: impl Fn(&PointerPanZoomEvent) -> EventPropagation + 'static,
+        handler: impl Fn(&PanZoomEvent) -> EventPropagation + 'static,
     ) -> Result<(), InteractionDispatchError> {
         let handler = self.admit(handler)?;
         let lane = self.active_lane()?;
@@ -1753,7 +1756,7 @@ impl InteractionDispatchHandle {
     pub fn invoke_pan_zoom_target(
         &self,
         target: PanZoomTarget,
-        event: &PointerPanZoomEvent,
+        event: &PanZoomEvent,
     ) -> Result<EventPropagation, InteractionDispatchError> {
         let lane = self.active_lane()?;
         self.validate_lane(target.lane_id)?;
@@ -2207,7 +2210,7 @@ impl InteractionDispatchHandle {
         // all.
         let hover_qualifies = matches!(
             event,
-            PointerEvent::Move(update) if update.current.buttons.is_empty()
+            PointerEvent::Move(update) if update.buttons.is_empty()
         );
 
         let resolved: Vec<ResolvedHoverInterleavedEntry> = {
@@ -2250,19 +2253,21 @@ impl InteractionDispatchHandle {
                 .collect()
         };
 
-        let device_id = event.device_id();
+        let pointer = crate::events::get_pointer_info(event).copied();
         let position = event.position();
         let mut first_panic = None;
         for entry in resolved {
             if let Some((cell, transform, latch)) = entry.pointer {
                 let local_event = match &transform {
-                    LocalEventTransform::Local(local) => {
-                        Some(transform_pointer_event(event, local))
-                    }
+                    LocalEventTransform::Local(local) => transform_pointer_event(event, local),
                     LocalEventTransform::Global | LocalEventTransform::NonInvertible => None,
                 };
                 // An earlier callback may have closed this entry's owner.
-                if !latch.is_closed() && !matches!(transform, LocalEventTransform::NonInvertible) {
+                if !latch.is_closed()
+                    && !matches!(transform, LocalEventTransform::NonInvertible)
+                    && (!matches!(transform, LocalEventTransform::Local(_))
+                        || local_event.is_some())
+                {
                     let handler = cell.snapshot();
                     let dispatch = match local_event.as_ref() {
                         Some(local) => PointerDispatch {
@@ -2298,8 +2303,10 @@ impl InteractionDispatchHandle {
                 );
             }
             if let Some((callback, latch)) = entry.hover_callback {
-                if !latch.is_closed() {
-                    let delivered = RoutePanic::capture(|| callback(device_id, position));
+                if !latch.is_closed()
+                    && let (Some(pointer), Some(position)) = (pointer, position)
+                {
+                    let delivered = RoutePanic::capture(|| callback(pointer, position));
                     RoutePanic::preserve_first(
                         &mut first_panic,
                         delivered,
@@ -2408,7 +2415,7 @@ mod tests {
     use static_assertions::assert_not_impl_any;
 
     use super::*;
-    use crate::events::{PointerType, make_down_event};
+    use crate::events::{PointerKind, make_down_event};
     use flui_foundation::geometry::Offset;
 
     assert_not_impl_any!(HandlerCell: Send, Sync);
@@ -2419,7 +2426,7 @@ mod tests {
     assert_not_impl_any!(ResolvedHitRoute: Send, Sync);
 
     fn event() -> PointerEvent {
-        make_down_event(Offset::ZERO, PointerType::Touch)
+        make_down_event(Offset::ZERO, PointerKind::Touch).expect("finite input")
     }
 
     /// A transform-less hit entry addressing `target`, for resolver tests.

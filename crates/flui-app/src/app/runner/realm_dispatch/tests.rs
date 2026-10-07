@@ -10,7 +10,7 @@ use std::{
 use flui_foundation::geometry::Offset;
 use flui_interaction::{
     HitTestResult,
-    events::{PointerType, make_down_event},
+    events::{PointerKind, make_down_event},
 };
 use flui_platform::traits::{PlatformInput, PlatformWindow};
 
@@ -25,10 +25,10 @@ use crate::app::runtime::{ExitPolicy, WindowPolicy};
 static_assertions::assert_impl_all!(PlatformToUi: Send);
 
 fn down_input(offset: f64) -> PlatformInput {
-    PlatformInput::Pointer(make_down_event(
-        Offset::new(offset, offset),
-        PointerType::Mouse,
-    ))
+    PlatformInput::Pointer(
+        make_down_event(Offset::new(offset, offset), PointerKind::Mouse)
+            .expect("finite mouse down position"),
+    )
 }
 
 fn test_window() -> std::sync::Arc<dyn flui_platform::traits::PlatformWindow> {
@@ -248,7 +248,7 @@ fn system_key_default_follows_the_realms_decision() {
         dispatcher,
         RealmTask::Frame(Box::new(move |realm| {
             realm.focus_manager().add_global_key_handler(Rc::new(
-                move |_: &flui_interaction::events::KeyboardEvent| {
+                move |_: &flui_interaction::events::KeyEvent| {
                     delivered_in_handler.set(delivered_in_handler.get() + 1);
                     false
                 },
@@ -279,7 +279,7 @@ fn system_key_default_follows_the_realms_decision() {
         dispatcher,
         RealmTask::Frame(Box::new(|realm| {
             realm.focus_manager().add_global_key_handler(Rc::new(
-                |event: &flui_interaction::events::KeyboardEvent| event.code == Code::F4,
+                |event: &flui_interaction::events::KeyEvent| event.code == Code::F4,
             ));
         })),
     )

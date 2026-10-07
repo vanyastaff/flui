@@ -760,7 +760,7 @@ impl ScaleGestureRecognizer {
         position: Offset<f64>,
         kind: PointerKind,
         stamp: Option<u64>,
-        history: &[(Option<u64>, Offset<f64>)],
+        history: impl Iterator<Item = (Option<u64>, Offset<f64>)>,
     ) {
         if !position.is_finite() {
             return;
@@ -780,7 +780,7 @@ impl ScaleGestureRecognizer {
         if state.contacts[index].id != id {
             return;
         }
-        for &(stamp, position) in history {
+        for (stamp, position) in history {
             let timestamp = state.timeline.instant(stamp, now);
             state.contacts[index].position = position;
             if state.sample().is_some() && state.contacts.len() >= 2 {
@@ -1008,7 +1008,7 @@ impl GestureRecognizer for ScaleGestureRecognizer {
                     Offset::new(pos.x, pos.y),
                     data.pointer.kind,
                     event_time(event),
-                    &history,
+                    history,
                 );
             }
             PointerEvent::Up(_) => self.handle_pointer_up(pointer, event_time(event)),

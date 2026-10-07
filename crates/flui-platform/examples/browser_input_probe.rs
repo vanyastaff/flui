@@ -9,7 +9,7 @@ mod browser {
     use flui_platform::platforms::web::WebPlatform;
     use flui_platform::{DispatchEventResult, Platform, WindowOptions};
     use flui_platform_api::PlatformInput;
-    use flui_platform_api::pointer::{PointerButton, PointerButtons, PointerEvent};
+    use flui_platform_api::pointer::{PointerButton, PointerButtons, PointerEvent, PointerSample};
     use wasm_bindgen::prelude::*;
 
     fn publish(name: &str, value: &str) {
@@ -30,6 +30,29 @@ mod browser {
         element.set_text_content(Some(value));
     }
 
+    fn sample_json(sample: &PointerSample) -> String {
+        let number =
+            |value: Option<f64>| value.map_or_else(|| "null".to_owned(), |value| value.to_string());
+        let point = sample.position.get();
+        format!(
+            r#"{{"time":{},"x":{},"y":{},"pressure":{},"tangential":{},"altitude":{},"azimuth":{},"twist":{},"width":{},"height":{}}}"#,
+            sample.time.as_nanos(),
+            point.x,
+            point.y,
+            number(sample.pressure.map(|value| f64::from(value.get()))),
+            number(
+                sample
+                    .tangential_pressure
+                    .map(|value| f64::from(value.get()))
+            ),
+            number(sample.orientation.map(|value| value.altitude())),
+            number(sample.orientation.map(|value| value.azimuth())),
+            number(sample.twist.map(|value| value.radians())),
+            number(sample.contact_size.map(|value| value.get().width)),
+            number(sample.contact_size.map(|value| value.get().height)),
+        )
+    }
+
     #[wasm_bindgen]
     pub fn input_probe() -> Result<(), JsValue> {
         let platform = WebPlatform::new().map_err(|error| JsValue::from_str(&error.to_string()))?;
@@ -38,6 +61,17 @@ mod browser {
             .map_err(|error| JsValue::from_str(&error.to_string()))?;
         window.on_input(Box::new(|input| {
             if let PlatformInput::Pointer(event) = input {
+                if let PointerEvent::Move(event) = &event {
+                    let readings = |samples: &[PointerSample]| samples.iter().map(sample_json).collect::<Vec<_>>().join(",");
+                    publish("samples", &format!(
+                        r#"{{"kind":"{:?}","role":"{:?}","current":{},"coalesced":[{}],"predicted":[{}]}}"#,
+                        event.pointer.kind, event.pointer.role, sample_json(event.current()),
+                        readings(event.coalesced()), readings(event.predicted()),
+                    ));
+                }
+                if let PointerEvent::Cancel(event) = &event {
+                    publish("cancel-reason", &format!("{:?}", event.reason));
+                }
                 let (kind, position, buttons) = match &event {
                     PointerEvent::Down(event) => {
                         ("down", Some(event.sample.position), event.buttons())

@@ -9,13 +9,14 @@ use flui_foundation::RenderId;
 use flui_foundation::geometry::{Matrix4, Offset};
 use flui_interaction::events::{
     Modifiers, PointerButtons, PointerEvent, PointerInfo, PointerKind, PointerPosition,
-    ScrollDelta, ScrollEvent, ScrollEventData, make_move_event_for_id, pointer::ScrollUnit,
+    ScrollDelta, ScrollEvent, make_move_event_for_id, pointer::ScrollUnit,
 };
 use flui_interaction::routing::{
     DeviceId, InteractionDispatchHandle, InteractionLane, MouseRegionCallbacks, MouseRegionTarget,
     MouseTracker, MouseTrackerAnnotation, PointerMotionKind,
 };
 use flui_interaction::{CursorIcon, EventPropagation, HitTestEntry, HitTestResult, PointerId};
+use flui_platform_api::pointer::PenTool;
 
 const MOUSE: u64 = 2;
 const PEN: u64 = 3;
@@ -68,14 +69,24 @@ fn logging_region(
     handle
         .register_mouse_region(MouseRegionCallbacks {
             on_enter: Some(Rc::new(move |device, _| {
-                entered
-                    .borrow_mut()
-                    .push(format!("enter {name} {}", device.get().get()));
+                entered.borrow_mut().push(format!(
+                    "enter {name} {}",
+                    device
+                        .device
+                        .expect("fixture reports hardware identity")
+                        .get()
+                        .get()
+                ));
             })),
             on_exit: Some(Rc::new(move |device, _| {
-                exited
-                    .borrow_mut()
-                    .push(format!("exit {name} {}", device.get().get()));
+                exited.borrow_mut().push(format!(
+                    "exit {name} {}",
+                    device
+                        .device
+                        .expect("fixture reports hardware identity")
+                        .get()
+                        .get()
+                ));
             })),
             ..MouseRegionCallbacks::default()
         })
@@ -103,12 +114,12 @@ fn shared_region_exits_once_per_device() {
             &over,
         );
         tracker.update_with_motion(
-            &hover(PEN, PointerKind::Pen, at, 2),
+            &hover(PEN, PointerKind::Pen { tool: PenTool::Tip }, at, 2),
             PointerMotionKind::Hover,
             &over,
         );
         tracker.update_with_motion(
-            &hover(PEN, PointerKind::Pen, at, 3),
+            &hover(PEN, PointerKind::Pen { tool: PenTool::Tip }, at, 3),
             PointerMotionKind::Hover,
             &away,
         );
@@ -225,7 +236,7 @@ fn refresh_callback_panic_reaches_every_device() {
             &regions_at(mouse_at),
         );
         tracker.update_with_motion(
-            &hover(PEN, PointerKind::Pen, pen_at, 2),
+            &hover(PEN, PointerKind::Pen { tool: PenTool::Tip }, pen_at, 2),
             PointerMotionKind::Hover,
             &regions_at(pen_at),
         );
@@ -268,7 +279,7 @@ fn refresh_hit_test_panic_keeps_the_device_for_the_next_refresh() {
             &path(&[(1, mouse_region)]),
         );
         tracker.update_with_motion(
-            &hover(PEN, PointerKind::Pen, pen_at, 2),
+            &hover(PEN, PointerKind::Pen { tool: PenTool::Tip }, pen_at, 2),
             PointerMotionKind::Hover,
             &path(&[(2, pen_region)]),
         );
@@ -315,7 +326,7 @@ fn refresh_hit_test_failure_precedes_a_competing_callback_failure() {
             &path(&[(1, mouse_region)]),
         );
         tracker.update_with_motion(
-            &hover(PEN, PointerKind::Pen, pen_at, 2),
+            &hover(PEN, PointerKind::Pen { tool: PenTool::Tip }, pen_at, 2),
             PointerMotionKind::Hover,
             &HitTestResult::new(),
         );
@@ -755,11 +766,17 @@ fn scroll_target_delta_is_localized_as_a_vector() {
             })
             .expect("register scroll");
         let result = transformed_entry(HitTestEntry::new(RenderId::new(1)).scroll_target(target));
-        let event = ScrollEventData::new(
-            Offset::new(80.0, 70.0),
-            Offset::new(12.0, 0.0),
-            Modifiers::empty(),
-        );
+        let event = ScrollEvent::new(
+            PointerInfo::new(
+                PointerId::new(std::num::NonZeroU64::MIN),
+                PointerKind::Mouse,
+            ),
+            flui_platform_api::EventTime::from_nanos(1_000),
+            PointerPosition::try_new(flui_foundation::geometry::Point::new(80.0, 70.0))
+                .expect("finite scroll position"),
+            ScrollDelta::try_new(ScrollUnit::Pixels, 12.0, 0.0).expect("finite scroll delta"),
+        )
+        .with_modifiers(Modifiers::NONE);
         result.dispatch_scroll(&event);
     });
     let seen = seen.take();
@@ -767,15 +784,19 @@ fn scroll_target_delta_is_localized_as_a_vector() {
         panic!("one localized scroll: {seen:?}");
     };
     assert_close(
-        (local.position.dx, local.position.dy),
+        (local.position.get().x, local.position.get().y),
         expected_local((80.0, 70.0)),
         "position",
     );
     assert_close(
-        (local.delta.dx, local.delta.dy),
+        (local.delta.x(), local.delta.y()),
         expected_local_delta((12.0, 0.0)),
         "delta",
     );
+    assert_eq!(local.delta.unit(), ScrollUnit::Pixels);
+    assert_eq!(local.time, flui_platform_api::EventTime::from_nanos(1_000));
+    assert_eq!(local.modifiers, Modifiers::NONE);
+    assert_eq!(local.pointer.kind, PointerKind::Mouse);
 }
 
 /// Runs every row, then fails naming the rows that failed.

@@ -879,10 +879,9 @@ pub enum SweepModel {
 /// (`binding.rs`). Kept public for standalone arena users and tests.
 pub fn run_pointer_lifecycle(arena: &GestureArena, event: &crate::events::PointerEvent) {
     use crate::events::PointerEvent;
-    let pointer = crate::events::extract_pointer_id(event);
     match event {
-        PointerEvent::Down(_) => arena.close(pointer),
-        PointerEvent::Up(_) => arena.sweep(pointer),
+        PointerEvent::Down(data) => arena.close(data.pointer.id),
+        PointerEvent::Up(data) => arena.sweep(data.pointer.id),
         _ => {}
     }
 }

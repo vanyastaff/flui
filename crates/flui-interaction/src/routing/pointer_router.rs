@@ -291,11 +291,13 @@ impl PointerRouter {
         // Snapshot per-pointer handlers (clone the `Rc`s) so the borrow is
         // released before dispatch — a handler may re-enter the router. A
         // `SmallVec` keeps the common ≤4-handler case off the heap.
-        let pointer_handlers: SmallVec<[PointerRouteHandler; 4]> = self
-            .routes
-            .borrow()
-            .get(&pointer)
-            .map(|h| h.iter().cloned().collect())
+        let pointer_handlers: SmallVec<[PointerRouteHandler; 4]> = pointer
+            .and_then(|pointer| {
+                self.routes
+                    .borrow()
+                    .get(&pointer)
+                    .map(|h| h.iter().cloned().collect())
+            })
             .unwrap_or_default();
 
         // Snapshot global handlers before the first callback for the same
@@ -307,7 +309,7 @@ impl PointerRouter {
 
         // Per-pointer handlers first.
         for handler in pointer_handlers {
-            if self.contains_route(pointer, &handler) {
+            if pointer.is_some_and(|pointer| self.contains_route(pointer, &handler)) {
                 let delivered = RoutePanic::capture(|| handler(event));
                 RoutePanic::preserve_first(
                     &mut first_panic,
@@ -433,7 +435,7 @@ impl PointerRouter {
 
 /// Helper to extract pointer ID from event.
 #[inline]
-fn get_pointer_id(event: &PointerEvent) -> PointerId {
+fn get_pointer_id(event: &PointerEvent) -> Option<PointerId> {
     crate::events::extract_pointer_id(event)
 }
 
@@ -444,20 +446,17 @@ mod tests {
     use flui_foundation::geometry::Offset;
 
     use super::*;
-    use crate::events::{PointerType, make_move_event};
+    use crate::events::{PointerKind, make_move_event};
 
-    fn make_event(device: i32, position: Offset<f64>) -> PointerEvent {
-        // For testing, use make_move_event with the position
-        // The device ID will be PRIMARY (0) by default
-        let _ = device; // device ID is not directly settable in ui-events
-        make_move_event(position, PointerType::Touch)
+    fn make_event(position: Offset<f64>) -> PointerEvent {
+        make_move_event(position, PointerKind::Touch).expect("finite input")
     }
 
     #[test]
     fn test_reentrancy_remove_self() {
         // Test that a handler can remove itself during dispatch
         let router = Rc::new(PointerRouter::new());
-        let pointer = PointerId::PRIMARY;
+        let pointer = PointerId::new(core::num::NonZeroU64::MIN);
 
         let call_count = Rc::new(Cell::new(0));
         let count_clone = call_count.clone();
@@ -468,12 +467,12 @@ mod tests {
             // Remove self during dispatch - this should work without deadlock
             // Note: We can't easily remove self here because we don't have the handler Rc
             // But we can remove all routes which exercises the same code path
-            router_clone.remove_all_routes(PointerId::PRIMARY);
+            router_clone.remove_all_routes(PointerId::new(core::num::NonZeroU64::MIN));
         });
 
         router.add_route(pointer, handler);
 
-        let event = make_event(0, Offset::new(50.0, 50.0));
+        let event = make_event(Offset::new(50.0, 50.0));
         router.route(&event); // Should not deadlock
 
         assert_eq!(call_count.get(), 1);

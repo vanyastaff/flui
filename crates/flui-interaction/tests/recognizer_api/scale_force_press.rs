@@ -29,19 +29,19 @@ fn pressure(mut event: PointerEvent, reading: f32) -> PointerEvent {
     match &mut event {
         PointerEvent::Down(data) => {
             data.sample.pressure = Some(
-                flui_platform_api::pointer::Pressure::try_new(f64::from(reading))
+                flui_platform_api::pointer::Pressure::try_new(reading)
                     .expect("valid pressure fixture"),
             )
         }
         PointerEvent::Up(data) => {
             data.sample.pressure = Some(
-                flui_platform_api::pointer::Pressure::try_new(f64::from(reading))
+                flui_platform_api::pointer::Pressure::try_new(reading)
                     .expect("valid pressure fixture"),
             )
         }
         PointerEvent::Move(data) => {
             let sample = data.current().with_pressure(
-                flui_platform_api::pointer::Pressure::try_new(f64::from(reading))
+                flui_platform_api::pointer::Pressure::try_new(reading)
                     .expect("valid pressure fixture"),
             );
             *data = flui_interaction::events::PointerMove::new(data.pointer, data.buttons, sample)

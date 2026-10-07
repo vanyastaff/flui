@@ -763,12 +763,6 @@ impl MouseTracker {
         failure.finish();
     }
 
-    /// Gets the current cursor for the primary mouse device (device 0).
-    #[inline]
-    #[must_use]
-    pub fn current_cursor(&self) -> CursorIcon {
-        self.device_cursor(0)
-    }
 }
 
 impl Default for MouseTracker {

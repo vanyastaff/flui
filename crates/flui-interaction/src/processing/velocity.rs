@@ -56,9 +56,9 @@
 //!
 //! use flui_interaction::processing::VelocityTracker;
 //! use flui_foundation::geometry::Offset;
-//! use flui_interaction::PointerDeviceKind;
+//! use flui_interaction::PointerKind;
 //!
-//! let mut tracker = VelocityTracker::with_kind(PointerDeviceKind::Touch);
+//! let mut tracker = VelocityTracker::with_kind(PointerKind::Touch);
 //! let start = Instant::now();
 //! for i in 0..10 {
 //!     tracker.add_position(
@@ -77,7 +77,7 @@
 
 use web_time::{Duration, Instant};
 
-pub use crate::device_kind::PointerDeviceKind;
+use crate::events::PointerKind;
 use crate::settings::DEFAULT_MAX_FLING_VELOCITY;
 pub use crate::velocity::{Velocity, VelocityEstimate};
 use flui_foundation::geometry::Offset;
@@ -226,7 +226,7 @@ struct PointAtTime {
 pub struct VelocityTracker {
     /// Pointer device kind. Recorded even though the algorithm is currently
     /// device-independent.
-    kind: PointerDeviceKind,
+    kind: PointerKind,
 
     /// Circular buffer of samples. Empty slots are `None` so we can
     /// distinguish "slot not yet written" from a sample at `Instant::EPOCH`.
@@ -256,7 +256,7 @@ pub struct VelocityTracker {
 
 impl Default for VelocityTracker {
     fn default() -> Self {
-        Self::with_kind(PointerDeviceKind::Touch)
+        Self::with_kind(PointerKind::Touch)
     }
 }
 
@@ -267,7 +267,7 @@ impl VelocityTracker {
     /// it, so the field is in place for future device-specific tuning (mouse
     /// vs touch vs stylus).
     #[must_use]
-    pub fn with_kind(kind: PointerDeviceKind) -> Self {
+    pub fn with_kind(kind: PointerKind) -> Self {
         Self {
             kind,
             samples: [None; HISTORY_SIZE],
@@ -279,7 +279,7 @@ impl VelocityTracker {
 
     /// The kind of pointer this tracker is for.
     #[inline]
-    pub fn kind(&self) -> PointerDeviceKind {
+    pub fn kind(&self) -> PointerKind {
         self.kind
     }
 
@@ -653,14 +653,14 @@ pub struct IosFlingVelocityTracker {
 
 impl Default for IosFlingVelocityTracker {
     fn default() -> Self {
-        Self::with_kind(PointerDeviceKind::Touch)
+        Self::with_kind(PointerKind::Touch)
     }
 }
 
 impl IosFlingVelocityTracker {
     /// Construct an iOS-flavour tracker for the given pointer kind.
     #[must_use]
-    pub fn with_kind(kind: PointerDeviceKind) -> Self {
+    pub fn with_kind(kind: PointerKind) -> Self {
         Self {
             inner: VelocityTracker::with_kind(kind),
             weights: [0.6, 0.35, 0.05],
@@ -679,7 +679,7 @@ impl IosFlingVelocityTracker {
 
     /// The pointer kind this tracker is configured for.
     #[inline]
-    pub fn kind(&self) -> PointerDeviceKind {
+    pub fn kind(&self) -> PointerKind {
         self.inner.kind()
     }
 
@@ -789,14 +789,14 @@ pub struct MacosFlingVelocityTracker {
 
 impl Default for MacosFlingVelocityTracker {
     fn default() -> Self {
-        Self::with_kind(PointerDeviceKind::Touch)
+        Self::with_kind(PointerKind::Touch)
     }
 }
 
 impl MacosFlingVelocityTracker {
     /// Construct a macOS-flavour tracker for the given pointer kind.
     #[must_use]
-    pub fn with_kind(kind: PointerDeviceKind) -> Self {
+    pub fn with_kind(kind: PointerKind) -> Self {
         let mut inner = IosFlingVelocityTracker::with_kind(kind);
         inner.weights = [0.15, 0.65, 0.2];
         Self { inner }
@@ -814,7 +814,7 @@ impl MacosFlingVelocityTracker {
 
     /// The pointer kind this tracker is configured for.
     #[inline]
-    pub fn kind(&self) -> PointerDeviceKind {
+    pub fn kind(&self) -> PointerKind {
         self.inner.kind()
     }
 
@@ -867,14 +867,14 @@ pub struct ImpulseVelocityTracker {
 
 impl Default for ImpulseVelocityTracker {
     fn default() -> Self {
-        Self::with_kind(PointerDeviceKind::Touch)
+        Self::with_kind(PointerKind::Touch)
     }
 }
 
 impl ImpulseVelocityTracker {
     /// Construct an impulse tracker for the given pointer kind.
     #[must_use]
-    pub fn with_kind(kind: PointerDeviceKind) -> Self {
+    pub fn with_kind(kind: PointerKind) -> Self {
         Self {
             inner: VelocityTracker::with_kind(kind),
         }
@@ -892,7 +892,7 @@ impl ImpulseVelocityTracker {
 
     /// The pointer kind this tracker is configured for.
     #[inline]
-    pub fn kind(&self) -> PointerDeviceKind {
+    pub fn kind(&self) -> PointerKind {
         self.inner.kind()
     }
 
@@ -1060,7 +1060,7 @@ mod tests {
         // For uniform motion the impulse model is exact: the first interval
         // contributes w = ½v², every later interval contributes zero, and
         // v = √(2w) returns the original speed.
-        let mut tracker = ImpulseVelocityTracker::with_kind(PointerDeviceKind::Touch);
+        let mut tracker = ImpulseVelocityTracker::with_kind(PointerKind::Touch);
         for (t, p) in linear_swipe_x(90, 10, 1000.0) {
             tracker.add_position(t, p);
         }

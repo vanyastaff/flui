@@ -124,9 +124,10 @@ fn closing_gestures_leave_shared_callbacks_with_their_caller() {
         let _ = &cursor_capture;
     });
     let binding = GestureBinding::new();
-    binding
-        .pointer_router()
-        .add_route(PointerId::PRIMARY, Rc::clone(&route));
+    binding.pointer_router().add_route(
+        PointerId::new(core::num::NonZeroU64::MIN),
+        Rc::clone(&route),
+    );
     binding
         .pointer_router()
         .add_global_handler(Rc::clone(&global));

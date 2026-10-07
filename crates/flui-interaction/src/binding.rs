@@ -75,15 +75,16 @@ use std::{
     collections::HashSet,
 };
 
+use crate::events::{
+    CancelReason, PointerCancel, PointerEvent, PointerEventExt, PointerInfo, PointerKind,
+};
 use dashmap::DashMap;
 use flui_foundation::MonotonicClock;
 use flui_foundation::geometry::Offset;
 use smallvec::SmallVec;
-use ui_events::pointer::{PointerEvent, PointerType};
 
 use crate::{
     arena::{DetachedArenaBatch, GestureArena},
-    events::ScrollEventData,
     ids::PointerId,
     processing::{PointerEventResampler, SamplingClock},
     routing::{
@@ -92,6 +93,10 @@ use crate::{
     },
     settings::GestureSettings,
 };
+
+fn terminal_hit_test(_: Offset<f64>) -> HitTestResult {
+    unreachable!("BUG: terminal Cancel never hit-tests")
+}
 
 /// Per-pointer state cached at Down: the data-only hit path plus the
 /// owner-local resolved route token that Move reuses and Up/Cancel releases.
@@ -111,7 +116,10 @@ struct CachedPointerRoute {
     /// Device kind stamped on the sequence's Down, so a synthesized
     /// terminal event (cancel-on-defocus) carries the same kind the
     /// sequence's recognizers have been observing.
-    pointer_type: PointerType,
+    pointer: PointerInfo,
+    /// Last accepted measured contact timestamp, retained for lifecycle
+    /// cancellation that has no new platform timestamp of its own.
+    time: flui_platform_api::EventTime,
 }
 
 struct DetachedPointerSequence {
@@ -307,16 +315,6 @@ impl RefusedContacts {
     fn refuses_down(&self, pointer: PointerId) -> bool {
         matches!(self, Self::Tracking(ids) if ids.contains(&Some(pointer)))
     }
-}
-
-/// Local mirror of the helper in `events.rs` / `pan_zoom.rs` —
-/// duplicated here to keep the binding module's hot path free of
-/// cross-module indirection.
-#[inline]
-const fn px_f32(v: f64) -> f64 {
-    // f64 → f64 is intentionally lossy at extreme values; for
-    // pointer coordinates the dynamic range fits in `f64` exactly.
-    v
 }
 
 /// Central coordinator for gesture event handling.
@@ -568,7 +566,7 @@ impl GestureBinding {
     }
 
     /// Get settings for a specific device type.
-    pub fn settings_for_device(&self, device_type: PointerType) -> GestureSettings {
+    pub fn settings_for_device(&self, device_type: PointerKind) -> GestureSettings {
         GestureSettings::for_device(device_type)
     }
 
@@ -946,24 +944,22 @@ impl GestureBinding {
     /// window.
     pub fn cancel_active_pointers(&self) {
         *self.refused_contacts.borrow_mut() = RefusedContacts::default();
-        let mut pointers: Vec<(PointerId, PointerType)> = self
+        let mut pointers: Vec<_> = self
             .hit_tests
             .iter()
-            .map(|entry| (*entry.key(), entry.pointer_type))
+            .map(|entry| (*entry.key(), entry.pointer, entry.time, entry.sequence))
             .collect();
-        pointers.sort_unstable_by_key(|(pointer_id, _)| *pointer_id);
+        pointers.sort_unstable_by_key(|(pointer_id, _, _, _)| *pointer_id);
         let mut first_panic = None;
-        for (pointer_id, pointer_type) in pointers {
+        for (pointer_id, pointer, time, sequence) in pointers {
             // A handler run by an earlier iteration may have re-entered the
-            // binding and already terminated this sequence.
-            if !self.hit_tests.contains_key(&pointer_id) {
+            // binding and terminated or replaced this sequence. The numeric
+            // pointer identity alone does not identify that admission.
+            if !self.is_current_sequence(pointer_id, sequence) {
                 continue;
             }
-            let cancel = PointerEvent::Cancel(ui_events::pointer::PointerInfo {
-                pointer_id: Some(pointer_id),
-                pointer_type,
-                persistent_device_id: None,
-            });
+            let cancel =
+                PointerEvent::Cancel(PointerCancel::new(pointer, time, CancelReason::FocusLost));
             // The terminal arm never invokes the hit-test callback: Cancel
             // resolves over the route cached at Down. A panicking handler
             // must not exempt the remaining contacts from cancellation —
@@ -1088,7 +1084,54 @@ impl GestureBinding {
     where
         F: FnOnce(Offset<f64>) -> HitTestResult,
     {
-        let pointer_id = Self::extract_pointer_id(event);
+        if self.tearing_down_all_pointers.get() {
+            return;
+        }
+        let Some(pointer_id) = crate::events::extract_pointer_id(event) else {
+            // Device lifecycle has no contact identity. It still reaches
+            // global observers without fabricating a per-pointer route.
+            let mut first_panic = None;
+            if let PointerEvent::DeviceRemoved(device) = event {
+                let mut pointers: Vec<_> = self
+                    .hit_tests
+                    .iter()
+                    .filter(|entry| entry.pointer.device == Some(device.device))
+                    .map(|entry| (entry.pointer, entry.sequence))
+                    .collect();
+                pointers.sort_unstable_by_key(|(pointer, _)| pointer.id);
+                for (pointer, sequence) in pointers {
+                    if !self.is_current_sequence(pointer.id, sequence) {
+                        continue;
+                    }
+                    let cancel = PointerEvent::Cancel(PointerCancel::new(
+                        pointer,
+                        device.time,
+                        CancelReason::DeviceRemoved,
+                    ));
+                    let delivered = RoutePanic::capture(|| {
+                        self.handle_pointer_event_kernel(&cancel, terminal_hit_test)
+                    });
+                    RoutePanic::preserve_first(
+                        &mut first_panic,
+                        delivered,
+                        "removed-device contact cancellation",
+                    );
+                }
+                let removed =
+                    RoutePanic::capture(|| self.mouse_tracker.remove_device(device.device));
+                RoutePanic::preserve_first(
+                    &mut first_panic,
+                    removed,
+                    "removed-device hover cleanup",
+                );
+            }
+            let delivered = self.dispatch_ephemeral(event, &HitTestResult::new());
+            RoutePanic::preserve_first(&mut first_panic, delivered, "device lifecycle dispatch");
+            if let Some(panic) = first_panic {
+                panic.resume();
+            }
+            return;
+        };
         if self.tearing_down_all_pointers.get()
             || self.tearing_down_pointers.borrow().contains(&pointer_id)
         {
@@ -1099,31 +1142,11 @@ impl GestureBinding {
             return;
         }
 
-        let position = match event {
-            PointerEvent::Move(data) => Some(data.current.position),
-            PointerEvent::Scroll(data) => Some(data.state.position),
-            PointerEvent::Gesture(data) => Some(data.state.position),
-            _ => None,
-        };
-        if position.is_some_and(|position| !position.x.is_finite() || !position.y.is_finite()) {
-            // Refusing an invalid nonterminal sample preserves the admitted
-            // contact's route and its later Up/Cancel delivery obligation.
-            return;
-        }
-
         let refused_tail = !self.hit_tests.contains_key(&pointer_id)
             && self.refused_contacts.borrow().contains(pointer_id);
         match event {
-            PointerEvent::Down(down) => {
+            PointerEvent::Down(_) => {
                 if self.refused_contacts.borrow().refuses_down(pointer_id) {
-                    return;
-                }
-                let position = Offset::new(down.state.position.x, down.state.position.y);
-                if !position.is_finite() {
-                    // An invalid extra Down does not revoke an admitted contact.
-                    if !self.hit_tests.contains_key(&pointer_id) {
-                        self.refused_contacts.borrow_mut().refuse(pointer_id);
-                    }
                     return;
                 }
             }
@@ -1171,8 +1194,9 @@ impl GestureBinding {
                     return;
                 }
 
-                let position =
-                    Offset::new(px_f32(down.state.position.x), px_f32(down.state.position.y));
+                let position = event
+                    .position()
+                    .expect("BUG: Down carries a checked position");
                 let result = match RoutePanic::try_run(|| hit_test_fn(position)) {
                     Ok(result) => result,
                     Err(panic) => {
@@ -1206,7 +1230,8 @@ impl GestureBinding {
                         token,
                         sequence,
                         resampler,
-                        pointer_type: down.pointer.pointer_type,
+                        pointer: down.pointer,
+                        time: down.sample.time,
                     },
                 );
 
@@ -1219,14 +1244,21 @@ impl GestureBinding {
                 }
             }
             PointerEvent::Move(pointer_move) => {
-                let position = Offset::new(
-                    px_f32(pointer_move.current.position.x),
-                    px_f32(pointer_move.current.position.y),
-                );
-                if let Some((sequence, resampler)) = self
+                if self
                     .hit_tests
                     .get(&pointer_id)
-                    .map(|cached| (cached.sequence, cached.resampler.clone()))
+                    .is_some_and(|cached| cached.pointer != pointer_move.pointer)
+                {
+                    return;
+                }
+                let position = event
+                    .position()
+                    .expect("BUG: Move carries a checked position");
+                if let Some((sequence, resampler)) =
+                    self.hit_tests.get_mut(&pointer_id).map(|mut cached| {
+                        cached.time = pointer_move.current().time;
+                        (cached.sequence, cached.resampler.clone())
+                    })
                 {
                     if self.is_resampling_enabled() {
                         resampler.add_event(event.clone());
@@ -1241,8 +1273,8 @@ impl GestureBinding {
                     }
 
                     if matches!(
-                        pointer_move.pointer.pointer_type,
-                        PointerType::Mouse | PointerType::Pen
+                        pointer_move.pointer.kind,
+                        PointerKind::Mouse | PointerKind::Pen { .. }
                     ) {
                         let fresh_hit_test = hit_test_fn(position);
                         self.mouse_tracker.update_with_motion(
@@ -1297,7 +1329,10 @@ impl GestureBinding {
                     // still reaches the pointer router (an added/removed-class
                     // event dispatches with no hit path, router only).
                     use crate::events::PointerEventExt as _;
-                    let result = match self.mouse_tracker.device_position(event.device_id()) {
+                    let result = match event.position().or_else(|| {
+                        crate::events::get_pointer_info(event)
+                            .and_then(|info| self.mouse_tracker.source_position(info))
+                    }) {
                         Some(position) => hit_test_fn(position),
                         None => HitTestResult::new(),
                     };
@@ -1307,7 +1342,7 @@ impl GestureBinding {
                     panic.resume();
                 }
             }
-            PointerEvent::Gesture(gesture) => {
+            PointerEvent::PanZoom(gesture) => {
                 // Two channels, the same observe-then-arbitrate shape the
                 // Scroll arm below uses: every pointer target on the path
                 // observes the raw tick, then the leaf-first claim walk over
@@ -1334,24 +1369,16 @@ impl GestureBinding {
                     let delivered = self.dispatch_on_cached_route(pointer_id, event);
                     (cached, delivered)
                 } else {
-                    // `ui_events::PointerEvent::Gesture` is a complete
-                    // high-level gesture tick, not an explicit
-                    // PanZoomStart/Update/End stream. Without an active
-                    // contact route it therefore resolves one fresh,
-                    // ephemeral path at its own focal position.
-                    let position = Offset::new(
-                        px_f32(gesture.state.position.x),
-                        px_f32(gesture.state.position.y),
-                    );
+                    let position = event
+                        .position()
+                        .expect("BUG: PanZoom carries a checked position");
                     let result = hit_test_fn(position);
                     let delivered = self.dispatch_ephemeral(event, &result);
                     (Some(result), delivered)
                 };
-                if let Some(path) = path
-                    && let Some(pan_zoom) = crate::pan_zoom::from_w3c_event(event)
-                {
+                if let Some(path) = path {
                     let claim = RoutePanic::capture(|| {
-                        let claimed = path.dispatch_pan_zoom(&pan_zoom);
+                        let claimed = path.dispatch_pan_zoom(gesture);
                         tracing::trace!(
                             claimed,
                             pan_zoom_targets = path.entries_with_pan_zoom_targets().count(),
@@ -1375,19 +1402,17 @@ impl GestureBinding {
                 // path observes the raw event, then the leaf-first claim walk
                 // over the path's scroll targets stops at the first handler
                 // that consumes the tick.
-                let position = Offset::new(
-                    px_f32(scroll.state.position.x),
-                    px_f32(scroll.state.position.y),
-                );
+                let position = event
+                    .position()
+                    .expect("BUG: Scroll carries a checked position");
                 // BOTH channels use a FRESH hit test at the event position:
                 // a signal has no down-capture — it is hit-tested where it
                 // happens, even mid-contact — so a wheel tick during a drag reaches the widgets under
                 // the cursor, not the route captured at Down.
                 let fresh_result = hit_test_fn(position);
                 let mut first_panic = self.dispatch_ephemeral(event, &fresh_result);
-                let scroll_data = ScrollEventData::from(scroll);
                 let claim = RoutePanic::capture(|| {
-                    let claimed = fresh_result.dispatch_scroll(&scroll_data);
+                    let claimed = fresh_result.dispatch_scroll(scroll);
                     tracing::trace!(
                         claimed,
                         scroll_targets = fresh_result.entries_with_scroll_targets().count(),
@@ -1403,6 +1428,68 @@ impl GestureBinding {
                     panic.resume();
                 }
             }
+            PointerEvent::ButtonChange(_) => {
+                let cached = self
+                    .hit_tests
+                    .get(&pointer_id)
+                    .map(|cached| (cached.sequence, cached.token));
+                let mut first_panic = None;
+                if let Some((sequence, token)) = cached {
+                    // Take the older accepted packet before any callback. A
+                    // callback may enqueue its successor or replace this contact;
+                    // neither belongs to the button edge admitted here.
+                    let pending = self
+                        .pending_moves
+                        .remove(&pointer_id)
+                        .map(|(_, state)| state);
+                    if let Some(PendingMove::Contact {
+                        event: movement,
+                        sequence: admitted,
+                    }) = pending.as_ref().and_then(|state| state.pending.as_ref())
+                        && *admitted == sequence
+                        && self.is_current_sequence(pointer_id, sequence)
+                    {
+                        let delivered = self.dispatch_event(movement, token);
+                        RoutePanic::preserve_first(
+                            &mut first_panic,
+                            delivered,
+                            "button pending Move dispatch",
+                        );
+                    }
+                    // A failed movement still owes the accepted edge, but an
+                    // ended or replaced sequence must not receive stale input.
+                    if self.is_current_sequence(pointer_id, sequence) {
+                        let delivered = self.dispatch_event(event, token);
+                        RoutePanic::preserve_first(
+                            &mut first_panic,
+                            delivered,
+                            "pointer button edge dispatch",
+                        );
+                    }
+                } else {
+                    let result = event
+                        .position()
+                        .map_or_else(HitTestResult::new, hit_test_fn);
+                    first_panic = self.dispatch_ephemeral(event, &result);
+                }
+                if let Some(panic) = first_panic {
+                    panic.resume();
+                }
+            }
+            PointerEvent::ScrollInertiaCancel(_) => {
+                let panic = if self.hit_tests.contains_key(&pointer_id) {
+                    self.dispatch_on_cached_route(pointer_id, event)
+                } else {
+                    let result = event
+                        .position()
+                        .map_or_else(HitTestResult::new, hit_test_fn);
+                    self.dispatch_ephemeral(event, &result)
+                };
+                if let Some(panic) = panic {
+                    panic.resume();
+                }
+            }
+            _ => {}
         }
     }
 
@@ -1443,7 +1530,7 @@ impl GestureBinding {
             .pending_moves
             .remove(&pointer_id)
             .map(|(_, state)| state);
-        match (&mut previous, &mut pending) {
+        let mismatch = match (&mut previous, &mut pending) {
             (
                 Some(PendingMoveState {
                     pending:
@@ -1457,9 +1544,12 @@ impl GestureBinding {
                     event: latest,
                     sequence: new,
                 },
-            ) if old == new => {
-                crate::recognizers::recognizer::merge_motion_history(previous, latest);
-            }
+            ) if old == new => match (previous, latest) {
+                (PointerEvent::Move(older), PointerEvent::Move(newer)) => {
+                    newer.try_coalesce(older).is_err()
+                }
+                _ => false,
+            },
             (
                 Some(PendingMoveState {
                     pending:
@@ -1469,12 +1559,22 @@ impl GestureBinding {
                     ..
                 }),
                 PendingMove::Hover { event: latest, .. },
-            ) => {
-                crate::recognizers::recognizer::merge_motion_history(previous, latest);
-            }
-            (_, PendingMove::Contact { event, .. } | PendingMove::Hover { event, .. }) => {
-                crate::recognizers::recognizer::normalise_motion_history(event);
-            }
+            ) => match (previous, latest) {
+                (PointerEvent::Move(older), PointerEvent::Move(newer)) => {
+                    newer.try_coalesce(older).is_err()
+                }
+                _ => false,
+            },
+            _ => false,
+        };
+        if mismatch {
+            let prior = previous
+                .take()
+                .expect("BUG: a coalescing refusal has an older dispatch");
+            let replaced = self.pending_moves.insert(pointer_id, prior);
+            drop(pending);
+            drop(replaced);
+            return;
         }
         let replaced = self
             .pending_moves
@@ -1611,10 +1711,6 @@ impl GestureBinding {
 
     /// Extract pointer ID from event.
     #[inline]
-    fn extract_pointer_id(event: &PointerEvent) -> PointerId {
-        crate::events::extract_pointer_id(event)
-    }
-
     /// Resolve a hit path into an owner-local route before the arena closes.
     ///
     /// Returns `None` when the path carries no pointer targets, or when the
@@ -1897,6 +1993,16 @@ mod tests {
     }
 
     fn contact_move_uses_down_route_and_fresh_mouse_tracking_route() {
+        let device = crate::events::DeviceId::try_from(1_u64).expect("known mouse device");
+        let from_device = |mut event: PointerEvent| {
+            match &mut event {
+                PointerEvent::Down(data) => data.pointer = data.pointer.with_device(device),
+                PointerEvent::Move(data) => data.pointer = data.pointer.with_device(device),
+                PointerEvent::Up(data) => data.pointer = data.pointer.with_device(device),
+                _ => unreachable!("fixture contains only measured contact events"),
+            }
+            event
+        };
         let lane = InteractionLane::try_new().expect("lane");
         let handle = lane.dispatch_handle();
         let binding = GestureBinding::new();
@@ -1933,9 +2039,10 @@ mod tests {
             let mut down_result = HitTestResult::new();
             down_result.add(HitTestEntry::new(down_target_id).pointer_target(pointer_target));
             let position = Offset::new(10.0, 10.0);
-            binding.handle_pointer_event(&make_down_event(position, PointerType::Mouse), |_| {
-                down_result
-            });
+            binding.handle_pointer_event(
+                &from_device(make_down_event(position, PointerKind::Mouse).expect("finite input")),
+                |_| down_result,
+            );
 
             let mouse_target_id = RenderId::new(2);
             let mut fresh_result = HitTestResult::new();
@@ -1945,7 +2052,7 @@ mod tests {
             );
             let callback_fresh_hit_tests = Rc::clone(&fresh_hit_tests);
             binding.handle_pointer_event(
-                &make_move_event(position, PointerType::Mouse),
+                &from_device(make_move_event(position, PointerKind::Mouse).expect("finite input")),
                 move |_| {
                     callback_fresh_hit_tests.set(callback_fresh_hit_tests.get() + 1);
                     fresh_result
@@ -1969,13 +2076,14 @@ mod tests {
             assert!(
                 binding
                     .mouse_tracker()
-                    .device_active_regions(0)
+                    .device_active_regions(device)
                     .contains(&mouse_target_id)
             );
 
-            binding.handle_pointer_event(&make_up_event(position, PointerType::Mouse), |_| {
-                HitTestResult::new()
-            });
+            binding.handle_pointer_event(
+                &from_device(make_up_event(position, PointerKind::Mouse).expect("finite input")),
+                |_| HitTestResult::new(),
+            );
             handle
                 .unregister_pointer(pointer_target)
                 .expect("release pointer target");
@@ -1999,23 +2107,26 @@ mod tests {
                 _ => "other",
             });
         });
-        binding
-            .pointer_router()
-            .add_route(PointerId::PRIMARY, Rc::clone(&handler));
+        binding.pointer_router().add_route(
+            PointerId::new(core::num::NonZeroU64::MIN),
+            Rc::clone(&handler),
+        );
 
-        let down = make_down_event(Offset::new(1.0, 2.0), PointerType::Touch);
+        let down =
+            make_down_event(Offset::new(1.0, 2.0), PointerKind::Touch).expect("finite input");
         binding.handle_pointer_event(&down, |_| HitTestResult::new());
-        let move_event = make_move_event(Offset::new(3.0, 4.0), PointerType::Touch);
+        let move_event =
+            make_move_event(Offset::new(3.0, 4.0), PointerKind::Touch).expect("finite input");
         binding.handle_pointer_event(&move_event, |_| HitTestResult::new());
         assert_eq!(events.borrow().as_slice(), ["down"]);
 
-        let up = make_up_event(Offset::new(5.0, 6.0), PointerType::Touch);
+        let up = make_up_event(Offset::new(5.0, 6.0), PointerKind::Touch).expect("finite input");
         binding.handle_pointer_event(&up, |_| HitTestResult::new());
 
         assert_eq!(events.borrow().as_slice(), ["down", "move", "up"]);
         binding
             .pointer_router()
-            .remove_route(PointerId::PRIMARY, &handler);
+            .remove_route(PointerId::new(core::num::NonZeroU64::MIN), &handler);
     }
 
     fn superseding_down_abandons_old_arena_and_pending_move_before_hit_test() {
@@ -2023,12 +2134,16 @@ mod tests {
 
         let binding = GestureBinding::new();
         let old_member = Rc::new(CountingArenaMember::default());
-        let down = make_down_event(Offset::new(1.0, 2.0), PointerType::Touch);
+        let down =
+            make_down_event(Offset::new(1.0, 2.0), PointerKind::Touch).expect("finite input");
         binding.handle_pointer_event(&down, |_| {
-            binding.arena().add(PointerId::PRIMARY, &old_member);
+            binding
+                .arena()
+                .add(PointerId::new(core::num::NonZeroU64::MIN), &old_member);
             HitTestResult::new()
         });
-        let move_event = make_move_event(Offset::new(3.0, 4.0), PointerType::Touch);
+        let move_event =
+            make_move_event(Offset::new(3.0, 4.0), PointerKind::Touch).expect("finite input");
         binding.handle_pointer_event(&move_event, |_| HitTestResult::new());
         assert_eq!(binding.pending_move_count(), 1);
 
@@ -2038,7 +2153,9 @@ mod tests {
                 old_member.rejects.load(Ordering::Relaxed) == 1
                     && binding.pending_move_count() == 0
                     && binding.active_resampler_count() == 0
-                    && !binding.arena().has_active(PointerId::PRIMARY),
+                    && !binding
+                        .arena()
+                        .has_active(PointerId::new(core::num::NonZeroU64::MIN)),
             );
             HitTestResult::new()
         });
@@ -2087,11 +2204,14 @@ mod tests {
                 if binding_from_route.active_pointer_count() == 0
                     && binding_from_route.pending_move_count() == 0
                     && binding_from_route.active_resampler_count() == 0
-                    && !binding_from_route.arena().has_active(PointerId::PRIMARY)
+                    && !binding_from_route
+                        .arena()
+                        .has_active(PointerId::new(core::num::NonZeroU64::MIN))
                 {
                     observations.set(observations.get() + 1);
                 }
-                let down = make_down_event(Offset::new(9.0, 9.0), PointerType::Touch);
+                let down = make_down_event(Offset::new(9.0, 9.0), PointerKind::Touch)
+                    .expect("finite input");
                 let reentrant_calls = Rc::clone(&reentrant_calls);
                 binding_from_route.handle_pointer_event(&down, move |_| {
                     reentrant_calls.set(reentrant_calls.get() + 1);
@@ -2099,15 +2219,18 @@ mod tests {
                 });
             }
         });
-        binding
-            .pointer_router()
-            .add_route(PointerId::PRIMARY, Rc::clone(&handler));
+        binding.pointer_router().add_route(
+            PointerId::new(core::num::NonZeroU64::MIN),
+            Rc::clone(&handler),
+        );
 
-        let down = make_down_event(Offset::new(1.0, 2.0), PointerType::Touch);
+        let down =
+            make_down_event(Offset::new(1.0, 2.0), PointerKind::Touch).expect("finite input");
         binding.handle_pointer_event(&down, |_| HitTestResult::new());
-        let move_event = make_move_event(Offset::new(3.0, 4.0), PointerType::Touch);
+        let move_event =
+            make_move_event(Offset::new(3.0, 4.0), PointerKind::Touch).expect("finite input");
         binding.handle_pointer_event(&move_event, |_| HitTestResult::new());
-        let up = make_up_event(Offset::new(5.0, 6.0), PointerType::Touch);
+        let up = make_up_event(Offset::new(5.0, 6.0), PointerKind::Touch).expect("finite input");
         binding.handle_pointer_event(&up, |_| HitTestResult::new());
 
         assert_eq!(detached_observations.get(), 2);
@@ -2115,7 +2238,7 @@ mod tests {
         assert_eq!(binding.active_pointer_count(), 0);
         binding
             .pointer_router()
-            .remove_route(PointerId::PRIMARY, &handler);
+            .remove_route(PointerId::new(core::num::NonZeroU64::MIN), &handler);
     }
 
     fn resampling_never_crosses_a_reused_pointer_sequence() {
@@ -2139,28 +2262,34 @@ mod tests {
 
             callback_moves
                 .borrow_mut()
-                .push(pointer_move.current.position.x);
+                .push(pointer_move.current().position.get().x);
             if callback_replaced_sequence.replace(true) {
                 return;
             }
 
-            let up = make_up_event(Offset::new(10.0, 10.0), PointerType::Touch);
+            let up =
+                make_up_event(Offset::new(10.0, 10.0), PointerKind::Touch).expect("finite input");
             callback_binding.handle_pointer_event(&up, |_| HitTestResult::new());
 
-            let down = make_down_event(Offset::new(90.0, 90.0), PointerType::Touch);
+            let down =
+                make_down_event(Offset::new(90.0, 90.0), PointerKind::Touch).expect("finite input");
             callback_binding.handle_pointer_event(&down, |_| HitTestResult::new());
-            let next_move = make_move_event(Offset::new(99.0, 99.0), PointerType::Touch);
+            let next_move =
+                make_move_event(Offset::new(99.0, 99.0), PointerKind::Touch).expect("finite input");
             callback_binding.handle_pointer_event(&next_move, |_| HitTestResult::new());
         });
-        binding
-            .pointer_router()
-            .add_route(PointerId::PRIMARY, Rc::clone(&handler));
+        binding.pointer_router().add_route(
+            PointerId::new(core::num::NonZeroU64::MIN),
+            Rc::clone(&handler),
+        );
 
-        let down = make_down_event(Offset::new(0.0, 0.0), PointerType::Touch);
+        let down =
+            make_down_event(Offset::new(0.0, 0.0), PointerKind::Touch).expect("finite input");
         binding.handle_pointer_event(&down, |_| HitTestResult::new());
         for coordinate in [10.0, 20.0] {
             let pointer_move =
-                make_move_event(Offset::new(coordinate, coordinate), PointerType::Touch);
+                make_move_event(Offset::new(coordinate, coordinate), PointerKind::Touch)
+                    .expect("finite input");
             binding.handle_pointer_event(&pointer_move, |_| HitTestResult::new());
         }
 
@@ -2178,7 +2307,7 @@ mod tests {
 
         binding
             .pointer_router()
-            .remove_route(PointerId::PRIMARY, &handler);
+            .remove_route(PointerId::new(core::num::NonZeroU64::MIN), &handler);
     }
 
     // ========================================================================
@@ -2226,7 +2355,8 @@ mod tests {
     impl Drop for ReenterDownOnDrop {
         fn drop(&mut self) {
             let down =
-                make_down_event_for_id(self.pointer, Offset::new(12.0, 12.0), PointerType::Touch);
+                make_down_event_for_id(self.pointer, Offset::new(12.0, 12.0), PointerKind::Touch)
+                    .expect("finite input");
             self.binding
                 .handle_pointer_event(&down, |_| HitTestResult::new());
         }
@@ -2259,15 +2389,18 @@ mod tests {
                 .expect("register");
             let result = hit_result(target);
 
-            let down = make_down_event(Offset::new(5.0, 5.0), PointerType::Touch);
+            let down =
+                make_down_event(Offset::new(5.0, 5.0), PointerKind::Touch).expect("finite input");
             let binding_for_down = Rc::clone(&binding);
             let member = arena_member.clone();
             binding.handle_pointer_event(&down, move |_| {
-                binding_for_down.arena().add(PointerId::PRIMARY, &member);
+                binding_for_down
+                    .arena()
+                    .add(PointerId::new(core::num::NonZeroU64::MIN), &member);
                 result
             });
             assert_eq!(&*log.borrow(), &["down"]);
-            assert!(binding.has_hit_test(PointerId::PRIMARY));
+            assert!(binding.has_hit_test(PointerId::new(core::num::NonZeroU64::MIN)));
 
             binding.cancel_active_pointers();
 
@@ -2281,13 +2414,14 @@ mod tests {
                 1,
                 "the arena must reject its members, never silently keep them"
             );
-            assert!(!binding.has_hit_test(PointerId::PRIMARY));
+            assert!(!binding.has_hit_test(PointerId::new(core::num::NonZeroU64::MIN)));
             assert!(binding.arena().is_empty());
 
             // The pointer keeps moving after defocus: with the sequence
             // gone this is a hover (fresh hit test, ephemeral dispatch) —
             // the dead sequence's route must not receive it as a drag.
-            let mv = make_move_event(Offset::new(9.0, 9.0), PointerType::Touch);
+            let mv =
+                make_move_event(Offset::new(9.0, 9.0), PointerKind::Touch).expect("finite input");
             binding.handle_pointer_event(&mv, |_| HitTestResult::new());
             binding.flush_pending_moves();
             assert_eq!(
@@ -2359,14 +2493,16 @@ mod tests {
             result.add(HitTestEntry::new(RenderId::new(1)).pointer_target(panicking));
             result.add(HitTestEntry::new(RenderId::new(2)).pointer_target(later));
 
-            let down = make_down_event(Offset::new(5.0, 5.0), PointerType::Mouse);
+            let down =
+                make_down_event(Offset::new(5.0, 5.0), PointerKind::Mouse).expect("finite input");
             binding.handle_pointer_event(&down, |_| result.clone());
             assert_eq!(later_deliveries.get(), 1);
             handle
                 .unregister_pointer(panicking)
                 .expect("route owns the panicking cell now");
 
-            let up = make_up_event(Offset::new(5.0, 5.0), PointerType::Mouse);
+            let up =
+                make_up_event(Offset::new(5.0, 5.0), PointerKind::Mouse).expect("finite input");
             let unwind = catch_unwind(AssertUnwindSafe(|| {
                 binding.handle_pointer_event(&up, |_| HitTestResult::new());
             }));
@@ -2375,7 +2511,7 @@ mod tests {
             // Later targets still received the Up, and the mandatory cleanup
             // (cache removal + route release) ran before the resumed unwind.
             assert_eq!(later_deliveries.get(), 2);
-            assert!(!binding.has_hit_test(PointerId::PRIMARY));
+            assert!(!binding.has_hit_test(PointerId::new(core::num::NonZeroU64::MIN)));
             assert!(
                 handler_dropped.get(),
                 "Up must sweep and release the route before resuming the panic"
@@ -2400,13 +2536,15 @@ mod tests {
                 })
                 .expect("register target");
             let result = hit_result(target);
-            let down = make_down_event(Offset::new(5.0, 5.0), PointerType::Mouse);
+            let down =
+                make_down_event(Offset::new(5.0, 5.0), PointerKind::Mouse).expect("finite input");
             binding.handle_pointer_event(&down, |_| result);
             handle
                 .unregister_pointer(target)
                 .expect("cached route owns the target");
 
-            let up = make_up_event(Offset::new(5.0, 5.0), PointerType::Mouse);
+            let up =
+                make_up_event(Offset::new(5.0, 5.0), PointerKind::Mouse).expect("finite input");
             let unwind = catch_unwind(AssertUnwindSafe(|| {
                 binding.handle_pointer_event(&up, |_| HitTestResult::new());
             }));
@@ -2438,8 +2576,8 @@ mod tests {
         let lane = InteractionLane::try_new().expect("lane");
         let handle = lane.dispatch_handle();
         let binding = GestureBinding::new();
-        let first_pointer = PointerId::new(21).expect("nonzero pointer id");
-        let later_pointer = PointerId::new(22).expect("nonzero pointer id");
+        let first_pointer = PointerId::try_from(21).expect("nonzero pointer id");
+        let later_pointer = PointerId::try_from(22).expect("nonzero pointer id");
         let later_handler_dropped = Rc::new(Cell::new(false));
 
         lane.enter(|| {
@@ -2466,10 +2604,12 @@ mod tests {
             }
 
             let first_down =
-                make_down_event_for_id(first_pointer, Offset::new(1.0, 1.0), PointerType::Touch);
+                make_down_event_for_id(first_pointer, Offset::new(1.0, 1.0), PointerKind::Touch)
+                    .expect("finite input");
             binding.handle_pointer_event(&first_down, |_| hit_result(first_target));
             let later_down =
-                make_down_event_for_id(later_pointer, Offset::new(2.0, 2.0), PointerType::Touch);
+                make_down_event_for_id(later_pointer, Offset::new(2.0, 2.0), PointerKind::Touch)
+                    .expect("finite input");
             binding.handle_pointer_event(&later_down, |_| hit_result(later_target));
 
             let first_token = binding
@@ -2493,8 +2633,9 @@ mod tests {
                 let move_event = make_move_event_for_id(
                     pointer,
                     Offset::new(coordinate, coordinate),
-                    PointerType::Touch,
-                );
+                    PointerKind::Touch,
+                )
+                .expect("finite input");
                 binding.handle_pointer_event(&move_event, |_| HitTestResult::new());
             }
 
@@ -2528,7 +2669,7 @@ mod tests {
         let lane = InteractionLane::try_new().expect("lane");
         let handle = lane.dispatch_handle();
         let binding = Rc::new(GestureBinding::new());
-        let reentrant_pointer = PointerId::new(31).expect("nonzero pointer id");
+        let reentrant_pointer = PointerId::try_from(31).expect("nonzero pointer id");
 
         lane.enter(|| {
             let owner = ReenterDownOnDrop {
@@ -2540,7 +2681,8 @@ mod tests {
                     let _keep_owner_alive = &owner;
                 })
                 .expect("register target");
-            let down = make_down_event(Offset::new(2.0, 2.0), PointerType::Touch);
+            let down =
+                make_down_event(Offset::new(2.0, 2.0), PointerKind::Touch).expect("finite input");
             binding.handle_pointer_event(&down, |_| hit_result(target));
             handle
                 .unregister_pointer(target)
@@ -2597,19 +2739,27 @@ mod tests {
                 Rc::new(CountingArenaMember::default()),
             ];
             for member in &members {
-                binding.arena().add(PointerId::PRIMARY, member);
+                binding
+                    .arena()
+                    .add(PointerId::new(core::num::NonZeroU64::MIN), member);
             }
 
-            let down = make_down_event(Offset::new(6.0, 6.0), PointerType::Touch);
+            let down =
+                make_down_event(Offset::new(6.0, 6.0), PointerKind::Touch).expect("finite input");
             binding.handle_pointer_event(&down, |_| result);
             assert!(did_unregister.get());
             assert_eq!(later_deliveries.get(), 1);
-            assert!(!binding.arena().is_open(PointerId::PRIMARY));
+            assert!(
+                !binding
+                    .arena()
+                    .is_open(PointerId::new(core::num::NonZeroU64::MIN))
+            );
 
             handle
                 .unregister_pointer(later_target)
                 .expect("unregister later target");
-            let up = make_up_event(Offset::new(6.0, 6.0), PointerType::Touch);
+            let up =
+                make_up_event(Offset::new(6.0, 6.0), PointerKind::Touch).expect("finite input");
             let unwind = catch_unwind(AssertUnwindSafe(|| {
                 binding.handle_pointer_event(&up, |_| HitTestResult::new());
             }));
@@ -2638,21 +2788,29 @@ mod tests {
                     let event = dispatch.local;
                     let _keep_probe_alive = &probe;
                     if matches!(event, PointerEvent::Down(_)) {
-                        arena.add(PointerId::PRIMARY, &accepting_member);
-                        arena.add(PointerId::PRIMARY, &competing_member);
+                        arena.add(
+                            PointerId::new(core::num::NonZeroU64::MIN),
+                            &accepting_member,
+                        );
+                        arena.add(
+                            PointerId::new(core::num::NonZeroU64::MIN),
+                            &competing_member,
+                        );
                     }
                 })
                 .expect("register hit target");
             let result = hit_result(target);
 
-            let down = make_down_event(Offset::new(5.0, 5.0), PointerType::Touch);
+            let down =
+                make_down_event(Offset::new(5.0, 5.0), PointerKind::Touch).expect("finite input");
             entry_point.dispatch(&binding, &down, &result);
             handle
                 .unregister_pointer(target)
                 .expect("cached route owns the target");
             assert!(!handler_dropped.get());
 
-            let up = make_up_event(Offset::new(5.0, 5.0), PointerType::Touch);
+            let up =
+                make_up_event(Offset::new(5.0, 5.0), PointerKind::Touch).expect("finite input");
             let unwind = catch_unwind(AssertUnwindSafe(|| {
                 entry_point.dispatch(&binding, &up, &HitTestResult::new());
             }));

@@ -24,7 +24,7 @@ fn command() -> Modifiers {
 
 fn chord(character: &str, modifiers: Modifiers) -> KeyEvent {
     KeyEventBuilder::new(Code::KeyC)
-        .with_key(Key::Character(character.to_owned()))
+        .with_key(Key::character(character))
         .with_state(KeyState::Down)
         .with_modifiers(modifiers)
         .build()
@@ -123,7 +123,7 @@ fn select_all_replacement(obscured: bool) {
         assert!(
             harness
                 .focus_manager()
-                .dispatch_key_event(&chord(&scalar.to_string(), Modifiers::empty()))
+                .dispatch_key_event(&chord(&scalar.to_string(), Modifiers::NONE))
         );
     }
     let edits = changes.get();
@@ -158,7 +158,7 @@ fn select_all_replacement(obscured: bool) {
     assert!(
         harness
             .focus_manager()
-            .dispatch_key_event(&chord("文", Modifiers::empty()))
+            .dispatch_key_event(&chord("文", Modifiers::NONE))
     );
     assert_eq!(
         controller.text(),

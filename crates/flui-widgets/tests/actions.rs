@@ -9,8 +9,9 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use flui_interaction::events::{Key, KeyEvent, KeyState, Modifiers};
+use flui_interaction::events::{Code, Key, KeyEvent, KeyState, Modifiers};
 use flui_interaction::routing::FocusNode;
+use flui_interaction::testing::input::KeyEventBuilder;
 use flui_view::prelude::*;
 use flui_widgets::SizedBox;
 use flui_widgets::interaction::{
@@ -25,12 +26,11 @@ impl Intent for AddToCounter {}
 
 /// Ctrl+A, the key every test here binds to `AddToCounter`.
 fn ctrl_a() -> KeyEvent {
-    KeyEvent {
-        state: KeyState::Down,
-        key: Key::Character("a".into()),
-        modifiers: Modifiers::CONTROL,
-        ..KeyEvent::default()
-    }
+    KeyEventBuilder::new(Code::Unidentified)
+        .with_state(KeyState::Down)
+        .with_key(Key::character("a"))
+        .with_modifiers(Modifiers::CONTROL)
+        .build()
 }
 
 /// A focusable leaf under a `Shortcuts` that maps Ctrl+A to

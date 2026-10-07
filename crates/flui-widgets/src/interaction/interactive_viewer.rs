@@ -754,8 +754,10 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
             // would do this instead, which V1 scopes out; see this module's
             // own docs.)
             //
-            // The owned pan-zoom stream is cumulative. Convert each update
-            // to its factor since the previous update, with the identical
+            // A started pan-zoom stream is cumulative. Convert each update
+            // to its factor since the previous update. The current platform
+            // bridge also delivers isolated relative ticks without Start;
+            // those do not establish cumulative history. Both use identical
             // clamp-and-keep-the-focal-point-fixed steps the wheel branch
             // uses. Ticks that change nothing (pure rotation, scale 1.0)
             // fire the interaction callbacks and leave the transform alone.
@@ -775,14 +777,18 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
                         return EventPropagation::Continue;
                     }
                     PanZoomPhase::Update(transform) => {
-                        let previous = pinch_gesture
-                            .pan_zoom_scale
-                            .replace(Some((pointer, transform.scale())))
-                            .filter(|(previous_pointer, _)| *previous_pointer == pointer)
-                            .map_or(1.0, |(_, scale)| scale);
-                        // Two checked finite scales can have an unrepresentable
-                        // ratio. Saturate the step before publishing callbacks.
-                        (transform.scale() / previous).clamp(f64::from_bits(1), f64::MAX)
+                        if let Some((active, previous)) = pinch_gesture.pan_zoom_scale.get()
+                            && active == pointer
+                        {
+                            pinch_gesture
+                                .pan_zoom_scale
+                                .set(Some((pointer, transform.scale())));
+                            // An extreme ratio can overflow or underflow; the
+                            // scale bounds clamp the requested result below.
+                            transform.scale() / previous
+                        } else {
+                            transform.scale()
+                        }
                     }
                     PanZoomPhase::End | PanZoomPhase::Cancelled => {
                         if pinch_gesture
@@ -846,7 +852,8 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
                             InteractionUpdateDetails {
                                 focal_point: position,
                                 local_focal_point: position,
-                                scale: scale_change,
+                                scale: uniform_scale(&controller_pinch.value())
+                                    / uniform_scale(&value_before_zoom),
                                 focal_point_delta: Offset::ZERO,
                             },
                         );

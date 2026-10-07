@@ -761,15 +761,15 @@ proptest! {
             let (event, at) = match *op {
                 Op::Down(t) => {
                     let (ns, at) = stamp(t);
-                    (with_time(make_down_event_for_id(contact(), Offset::new(0.0, tag), PointerKind::Touch), ns), at)
+                    (with_time(make_down_event_for_id(contact(), Offset::new(0.0, tag), PointerKind::Touch).expect("finite fixture"), ns), at)
                 }
                 Op::Move(t, x) => {
                     let (ns, at) = stamp(t);
-                    (with_time(make_move_event_for_id(contact(), Offset::new(x, 0.0), PointerKind::Touch), ns), at)
+                    (with_time(make_move_event_for_id(contact(), Offset::new(x, 0.0), PointerKind::Touch).expect("finite fixture"), ns), at)
                 }
                 Op::Up(t) => {
                     let (ns, at) = stamp(t);
-                    (with_time(make_up_event_for_id(contact(), Offset::new(0.0, tag), PointerKind::Touch), ns), at)
+                    (with_time(make_up_event_for_id(contact(), Offset::new(0.0, tag), PointerKind::Touch).expect("finite fixture"), ns), at)
                 }
                 Op::Cancel => (make_cancel_event_for_id(contact(), PointerKind::Touch), t0),
                 Op::Sample(step) => {

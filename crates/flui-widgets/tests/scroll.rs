@@ -1200,7 +1200,7 @@ impl RefreshHarness {
     fn pointer(&self, phase: flui_testing::PointerPhase, y: f64) {
         let event = flui_testing::ScriptedPointer::new(
             Duration::ZERO,
-            flui_interaction::PointerId::PRIMARY,
+            flui_interaction::PointerId::try_from(1).expect("nonzero fixture contact"),
             phase,
             flui_foundation::geometry::Offset::new(150.0, y),
         )

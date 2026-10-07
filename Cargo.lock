@@ -1871,6 +1871,7 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio-util",
  "tracing",
+ "ui-events",
  "wasm-bindgen-futures",
  "web-time",
 ]
@@ -2253,7 +2254,6 @@ dependencies = [
  "static_assertions",
  "thiserror 2.0.20",
  "tracing",
- "ui-events",
 ]
 
 [[package]]
@@ -2451,7 +2451,7 @@ dependencies = [
  "console_error_panic_hook",
  "flui-foundation",
  "flui-platform",
- "ui-events",
+ "flui-platform-api",
  "wasm-bindgen",
  "web-sys",
 ]
