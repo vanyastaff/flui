@@ -361,7 +361,7 @@ fn a_gesture_tick_is_a_trackpad_pan_zoom_update() {
     let Some(PointerEvent::PanZoom(pinch)) = gesture(up::PointerGesture::Pinch(0.25)) else {
         panic!("a pinch is a pan/zoom event");
     };
-    assert_eq!(pinch.pointer.kind, PointerKind::Trackpad);
+    assert_eq!(pinch.pointer().kind, PointerKind::Trackpad);
     let PanZoomPhase::Update(transform) = pinch.phase else {
         panic!("a tick is an Update");
     };

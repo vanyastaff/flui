@@ -50,8 +50,12 @@ cannot, which the interaction audit's market matrix lists against the code:
 The modules keep their path because the root names are still the `ui-events` re-exports;
 the root switches when `PlatformInput` does (§6). Every enum that can grow and every event
 struct is `#[non_exhaustive]`; event structs are built through a constructor and by-value
-`#[must_use]` `with_*` methods and are readable through public fields whose types carry the
-invariants (§3), so no field can hold an unchecked number.
+`#[must_use]` `with_*` methods. A field whose value stands alone is public and its type carries
+the invariant (§3), so no field can hold an unchecked number. Fields that must agree with each
+other are private and read through accessors, so they cannot be set apart: a button event's
+changed button and held set, a move's current reading and its coalesced and predicted
+history, a key event's state and repeat, and a pan/zoom event's pointer, whose kind is always
+`Trackpad`.
 
 ### 2. Semantics fixed by the types
 

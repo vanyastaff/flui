@@ -314,6 +314,10 @@ fn input_vocabulary_contract() {
                 a_pan_zoom_transform_is_finite_with_a_positive_scale,
             ),
             (
+                "a_pan_zoom_event_is_always_a_trackpad_gesture",
+                a_pan_zoom_event_is_always_a_trackpad_gesture,
+            ),
+            (
                 "a_key_event_is_a_repeat_only_while_down",
                 a_key_event_is_a_repeat_only_while_down,
             ),
@@ -331,4 +335,11 @@ fn input_vocabulary_contract() {
             ),
         ],
     );
+}
+
+/// A pan/zoom event is a trackpad's, whatever pointer info it was built from.
+fn a_pan_zoom_event_is_always_a_trackpad_gesture() {
+    use flui_platform_api::pointer::{PanZoomEvent, PanZoomPhase};
+    let event = PanZoomEvent::new(mouse(), T0, position(1.0, 1.0), PanZoomPhase::Start);
+    assert_eq!(event.pointer().kind, PointerKind::Trackpad);
 }

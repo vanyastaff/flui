@@ -129,6 +129,10 @@ fn kind(info: &upstream::PointerInfo, held: Option<upstream::PointerButtons>) ->
     }
 }
 
+/// The upstream role is copied as is. `ui-events` marks a contact primary by a reserved id, which
+/// not every backend uses for touches (winit numbers them from 2), and the bridge keeps no
+/// per-kind state to tell the first active contact; a backend producing the vocabulary directly
+/// assigns the role itself (pointer-vocabulary P3).
 fn info(info: &upstream::PointerInfo, kind: PointerKind) -> Option<PointerInfo> {
     let id = PointerId::new(info.pointer_id?.get_inner());
     let role = if info.is_primary_pointer() {

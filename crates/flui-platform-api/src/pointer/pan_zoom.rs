@@ -113,8 +113,7 @@ pub enum PanZoomPhase {
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub struct PanZoomEvent {
-    /// The gesture's pointer; its kind is [`PointerKind::Trackpad`](super::PointerKind::Trackpad).
-    pub pointer: PointerInfo,
+    pointer: PointerInfo,
     /// When the platform observed the event.
     pub time: EventTime,
     /// The cursor's position: the focal point a zoom scales about.
@@ -126,7 +125,9 @@ pub struct PanZoomEvent {
 }
 
 impl PanZoomEvent {
-    /// A gesture event at `position` with no modifiers.
+    /// A gesture event at `position` with no modifiers. The pointer's kind is set to
+    /// [`PointerKind::Trackpad`](super::PointerKind::Trackpad) whatever `pointer` carried, so
+    /// the event cannot classify itself two ways.
     #[must_use]
     pub const fn new(
         pointer: PointerInfo,
@@ -134,6 +135,8 @@ impl PanZoomEvent {
         position: PointerPosition,
         phase: PanZoomPhase,
     ) -> Self {
+        let mut pointer = pointer;
+        pointer.kind = super::PointerKind::Trackpad;
         Self {
             pointer,
             time,
@@ -147,5 +150,12 @@ impl PanZoomEvent {
     #[must_use]
     pub const fn with_modifiers(self, modifiers: Modifiers) -> Self {
         Self { modifiers, ..self }
+    }
+
+    /// The gesture's pointer; its kind is always
+    /// [`PointerKind::Trackpad`](super::PointerKind::Trackpad).
+    #[must_use]
+    pub const fn pointer(&self) -> &PointerInfo {
+        &self.pointer
     }
 }
