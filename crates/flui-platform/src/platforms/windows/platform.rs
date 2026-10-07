@@ -29,16 +29,17 @@ use windows::{
                 DispatchMessageW, GWLP_USERDATA, GetClassNameW, GetClientRect, GetForegroundWindow,
                 GetMessageW, GetWindowLongPtrW, GetWindowThreadProcessId, HICON, HTCLIENT,
                 HWND_MESSAGE, IDC_ARROW, IsWindowVisible, MSG, MWMO_INPUTAVAILABLE,
-                MsgWaitForMultipleObjectsEx, PM_REMOVE, PeekMessageW, PostMessageW,
-                PostQuitMessage, QS_ALLINPUT, RegisterClassW, SC_KEYMENU, SW_SHOWNORMAL,
-                SWP_NOACTIVATE, SWP_NOZORDER, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos,
-                TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CAPTURECHANGED, WM_CHAR,
-                WM_CLOSE, WM_CREATE, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_INPUTLANGCHANGE,
+                MsgWaitForMultipleObjectsEx, PEEK_MESSAGE_REMOVE_TYPE, PM_QS_POSTMESSAGE,
+                PM_REMOVE, PeekMessageW, PostMessageW, PostQuitMessage, QS_ALLINPUT,
+                RegisterClassW, SC_KEYMENU, SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOZORDER,
+                SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, TranslateMessage,
+                WINDOW_EX_STYLE, WINDOW_STYLE, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_CREATE,
+                WM_DEADCHAR, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_INPUTLANGCHANGE,
                 WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
                 WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_PAINT,
                 WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETTINGCHANGE,
-                WM_SHOWWINDOW, WM_SIZE, WM_SYSCHAR, WM_SYSCOMMAND, WM_SYSKEYDOWN, WM_SYSKEYUP,
-                WNDCLASSW,
+                WM_SHOWWINDOW, WM_SIZE, WM_SYSCHAR, WM_SYSCOMMAND, WM_SYSDEADCHAR, WM_SYSKEYDOWN,
+                WM_SYSKEYUP, WNDCLASSW,
             },
         },
     },
@@ -377,13 +378,16 @@ pub(super) struct WindowContext {
     /// Deactivated by `WM_DESTROY` after the close callbacks and before the
     /// context retires ([`TextServices::retire_with_window`]).
     pub text_services: RefCell<Option<Rc<TextServices>>>,
+    /// Physical keys held down that were pressed as dead keys, so their
+    /// release reports `Dead` like the press.
+    pub held_dead_keys: std::cell::RefCell<super::events::HeldDeadKeys>,
     /// Borrow ledger deferring this context's free past every live borrow
-    /// on the owner thread — see [`ContextLedger`] for the reentrancy
-    /// hazard (a framework callback closing the window from inside a
-    /// dispatch) this exists to survive, and [`ContextGuard`] for the RAII
-    /// half. `RefCell`, not a lock: only the owning thread ever touches it
-    /// (the affinity gates enforce that), and every borrow is a short
-    /// non-reentrant method call.
+/// on the owner thread — see [`ContextLedger`] for the reentrancy
+/// hazard (a framework callback closing the window from inside a
+/// dispatch) this exists to survive, and [`ContextGuard`] for the RAII
+/// half. `RefCell`, not a lock: only the owning thread ever touches it
+/// (the affinity gates enforce that), and every borrow is a short
+/// non-reentrant method call.
     pub ledger: std::cell::RefCell<ContextLedger>,
 }
 
@@ -1645,6 +1649,15 @@ impl WindowsPlatform {
                         // here. Pairing model and merge rules:
                         // `crate::shared::keys` module doc.
                         let translated = drain_translated_chars(hwnd);
+                        // A dead key queues `WM_DEADCHAR` (`WM_SYSDEADCHAR` under
+                        // Alt) instead of a character, on the layer the held
+                        // modifiers select. Taking it now leaves nothing for a
+                        // nested keydown during the callback to mistake for its own.
+                        let stroke = if translated.is_none() && drain_dead_char(hwnd, msg) {
+                            super::events::Keystroke::Dead
+                        } else {
+                            super::events::Keystroke::Text(translated)
+                        };
                         // The default a system keydown may skip also lives in
                         // the WM_SYSCHAR `TranslateMessage` queued for it:
                         // `DefWindowProcW` turns Alt+Space's into the system
@@ -1659,7 +1672,10 @@ impl WindowsPlatform {
 
                         // Dispatch keyboard event via per-window callback
                         use super::events::key_down_event;
-                        let event = key_down_event(wparam, lparam, translated);
+                        let event = {
+                            let mut held = ctx.held_dead_keys.borrow_mut();
+                            key_down_event(wparam, lparam, stroke, &mut held)
+                        };
                         let result = ctx.callbacks.dispatch_input(event);
                         // A callback can close this window and create another
                         // with a recycled HWND. The entry guard pins the old
@@ -1686,7 +1702,10 @@ impl WindowsPlatform {
                         ctx.modifiers.set(super::events::message_modifiers());
 
                         use super::events::key_up_event;
-                        let event = key_up_event(wparam, lparam);
+                        let event = {
+                            let mut held = ctx.held_dead_keys.borrow_mut();
+                            key_up_event(wparam, lparam, &mut held)
+                        };
                         let result = ctx.callbacks.dispatch_input(event);
                         if result.default_prevented
                             || GetWindowLongPtrW(hwnd, GWLP_USERDATA) != ctx_ptr as isize
@@ -2664,26 +2683,54 @@ impl Drop for WindowsPlatform {
 /// filters exactly `WM_CHAR` for this window: `WM_SYSCHAR` is deliberately
 /// left queued so Alt+mnemonic accelerators still flow to `DefWindowProcW`
 /// (held across the keydown's dispatch: [`take_translated_sys_chars`]),
-/// and `WM_DEADCHAR` is left to expire so dead-key state stays Windows'
-/// business. Returns `None` for keystrokes with no typeable translation
+/// and `WM_DEADCHAR` is taken separately by [`drain_dead_char`] (the dead-key state
+/// itself stays Windows' business). Returns `None` for keystrokes with no typeable translation
 /// (navigation keys, Ctrl chords — see `shared::keys::wm_char_text`).
 fn drain_translated_chars(hwnd: HWND) -> Option<String> {
     let mut units: Vec<u16> = Vec::new();
     let mut msg = MSG::default();
 
+    // Posted messages only (`PM_QS_POSTMESSAGE`): a pending cross-thread sent
+    // message is not dispatched from inside this keystroke's classification,
+    // so a nested keydown cannot take this keystroke's characters or its
+    // `WM_DEADCHAR` (see [`drain_dead_char`]).
+    let flags = PEEK_MESSAGE_REMOVE_TYPE(PM_REMOVE.0 | PM_QS_POSTMESSAGE.0);
     // SAFETY: `msg` is a live, writable local and `PeekMessageW` writes
-    // nothing else. `PM_REMOVE` only ever removes messages from this
-    // thread's own queue (the wndproc runs on the queue's owning thread).
-    // Note `PeekMessageW` may deliver pending nonqueued (sent) messages,
-    // re-entering `window_proc` — the same re-entrancy any modal Win32 API
-    // call permits, and `window_proc` holds no lock across this call.
+    // nothing else; the peek removes only from this thread's own queue (the
+    // wndproc runs on the queue's owning thread) and dispatches nothing.
     unsafe {
-        while PeekMessageW(&raw mut msg, Some(hwnd), WM_CHAR, WM_CHAR, PM_REMOVE).as_bool() {
+        while PeekMessageW(&raw mut msg, Some(hwnd), WM_CHAR, WM_CHAR, flags).as_bool() {
             units.push(msg.wParam.0 as u16);
         }
     }
 
     crate::shared::keys::wm_char_text(&units)
+}
+
+/// Remove the dead-character message `TranslateMessage` queued for the keydown
+/// being handled, if any: `WM_SYSDEADCHAR` for a system keydown, else
+/// `WM_DEADCHAR`. Only the notification leaves the queue; the composition
+/// itself lives in the kernel's dead-key state, which this does not touch.
+fn drain_dead_char(hwnd: HWND, keydown: u32) -> bool {
+    let kind = if keydown == WM_SYSKEYDOWN {
+        WM_SYSDEADCHAR
+    } else {
+        WM_DEADCHAR
+    };
+    let mut msg = MSG::default();
+    let mut found = false;
+    // `PM_QS_POSTMESSAGE` restricts the peek to posted messages, so a pending
+    // cross-thread sent message (another keydown) is not dispatched from here
+    // and cannot take this keystroke's notification first.
+    let flags = PEEK_MESSAGE_REMOVE_TYPE(PM_REMOVE.0 | PM_QS_POSTMESSAGE.0);
+    // SAFETY: `msg` is a live, writable local; the peek removes only from
+    // this thread's own queue and dispatches nothing.
+    unsafe {
+        while PeekMessageW(&raw mut msg, Some(hwnd), kind, kind, flags).as_bool() {
+            found = true;
+        }
+    }
+    found
 }
 
 /// Remove the `WM_SYSCHAR` burst `TranslateMessage` queued for a system
@@ -2696,10 +2743,13 @@ fn drain_translated_chars(hwnd: HWND) -> Option<String> {
 fn take_translated_sys_chars(hwnd: HWND) -> Vec<(WPARAM, LPARAM)> {
     let mut held = Vec::new();
     let mut msg = MSG::default();
+    // Posted messages only, as in `drain_translated_chars`: no pending sent
+    // message is dispatched before this keystroke's dead-key state is recorded.
+    let flags = PEEK_MESSAGE_REMOVE_TYPE(PM_REMOVE.0 | PM_QS_POSTMESSAGE.0);
     // SAFETY: as in `drain_translated_chars`: a live writable local, and
     // `PM_REMOVE` touches only this thread's own queue.
     unsafe {
-        while PeekMessageW(&raw mut msg, Some(hwnd), WM_SYSCHAR, WM_SYSCHAR, PM_REMOVE).as_bool() {
+        while PeekMessageW(&raw mut msg, Some(hwnd), WM_SYSCHAR, WM_SYSCHAR, flags).as_bool() {
             held.push((msg.wParam, msg.lParam));
         }
     }

@@ -39,9 +39,22 @@ pub(crate) fn run_rows(test: &str, cases: &[&str]) {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
+/// Runs one row as the only case of `test`, in a child process: the child runs
+/// `row` and reports it passed; the parent fails if the child aborted, failed
+/// or ran past the time limit.
+pub(crate) fn run_single(test: &str, row: fn()) {
+    if selected_case().is_some() {
+        row();
+        pass();
+    }
+    run_rows(test, &["row"]);
+}
+
 fn run_child(test: &str, case: &str) -> (ExitStatus, String) {
     let mut child = Command::new(std::env::current_exe().expect("test executable"))
-        .args(["--exact", test, "--nocapture"])
+        // `--include-ignored` lets an ignored contract row run its child too,
+        // so `--run-ignored` reports the row's own failure, not "no test ran".
+        .args(["--exact", test, "--include-ignored", "--nocapture"])
         .env(CASE, case)
         .env("RUST_BACKTRACE", "0")
         .stdout(Stdio::null())
@@ -56,13 +69,22 @@ fn run_child(test: &str, case: &str) -> (ExitStatus, String) {
         text
     });
     let started = Instant::now();
+    let mut stalled = false;
     while child.try_wait().expect("child status").is_none() {
         if started.elapsed() > LIMIT {
             child.kill().expect("kill stalled child");
+            stalled = true;
             break;
         }
         std::thread::sleep(Duration::from_millis(10));
     }
     let status = child.wait().expect("child exit");
-    (status, reader.join().expect("stderr reader"))
+    let output = reader.join().expect("stderr reader");
+    if stalled {
+        return (
+            status,
+            format!("{output}killed: still running after {LIMIT:?} (deadlock)\n"),
+        );
+    }
+    (status, output)
 }

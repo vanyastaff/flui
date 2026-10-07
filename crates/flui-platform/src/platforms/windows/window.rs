@@ -368,6 +368,7 @@ impl WindowsWindow {
                 ),
                 pending_high_surrogate: std::cell::Cell::new(None),
                 text_services: std::cell::RefCell::new(None),
+                held_dead_keys: std::cell::RefCell::default(),
                 ledger: std::cell::RefCell::new(crate::shared::hwnd_affinity::ContextLedger::new()),
             });
             let context_ptr = Box::into_raw(context);
