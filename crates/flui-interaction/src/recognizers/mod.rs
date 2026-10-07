@@ -18,10 +18,8 @@
 //!                 └── ...
 //! ```
 //!
-//! Note: The layered trait hierarchy
-//! `GestureRecognizer ← OneSequenceGestureRecognizer ← PrimaryPointerGestureRecognizer`
-//! is expressed as proper traits; the zero-consumer scaffolds previously
-//! living here were deleted.
+//! Arena membership and contact tracking are composed values. Both extension
+//! traits use `&self` receivers and support heterogeneous trait objects.
 //!
 //! # Available Recognizers
 //!
@@ -46,6 +44,8 @@
 //! ```
 
 // Concrete recognizers
+pub(crate) mod callback_containment;
+pub mod contact;
 pub mod double_tap;
 pub mod drag;
 pub mod drag_variants;
@@ -54,14 +54,14 @@ pub mod force_press;
 pub mod long_press;
 pub mod multi_tap;
 pub mod multidrag;
-pub mod one_sequence;
-pub mod primary_pointer;
 pub mod recognizer;
 pub mod scale;
+pub mod set;
 pub mod tap;
 pub mod tap_and_drag;
 
 // Re-export concrete recognizers
+pub use contact::{ArenaMembership, BeginContactError, ContactId, ContactSnapshot, PrimaryContact};
 pub use double_tap::{DoubleTapDetails, DoubleTapGestureRecognizer};
 pub use drag::{
     DragCancelCallback, DragDownCallback, DragDownDetails, DragEndCallback, DragEndDetails,
@@ -76,10 +76,11 @@ pub use multidrag::{
     MultiDragAxis, MultiDragEndDetails, MultiDragGestureRecognizer, MultiDragHandle,
     MultiDragStartCallback, MultiDragUpdateDetails,
 };
-pub use one_sequence::OneSequenceGestureRecognizer;
-pub use primary_pointer::PrimaryPointerGestureRecognizer;
-pub use recognizer::{GestureRecognizer, GestureRecognizerState, RecognizerBase, constants};
+pub use recognizer::{
+    CancelOutcome, GestureRecognizer, GestureRecognizerState, cancel_all, constants,
+};
 pub use scale::ScaleGestureRecognizer;
+pub use set::RecognizerSet;
 pub use tap::TapGestureRecognizer;
 pub use tap_and_drag::{
     TapAndDragGestureRecognizer, TapDragDownCallback, TapDragDownDetails, TapDragEndCallback,
