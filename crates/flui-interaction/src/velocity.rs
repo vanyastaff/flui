@@ -285,7 +285,10 @@ impl Velocity {
         if clamped == magnitude {
             return *self;
         }
-        Self::from_components(ux * clamped, uy * clamped)
+        // An infinite bound (`min = ∞`) scales a zero axis by infinity; that
+        // axis stays zero instead of becoming NaN.
+        let scale = |u: f64| if u == 0.0 { 0.0 } else { u * clamped };
+        Self::from_components(scale(ux), scale(uy))
     }
 
     /// Negates the velocity (reverses direction)

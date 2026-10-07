@@ -169,6 +169,33 @@ fn raise_time(event: &mut PointerEvent, floor: u64) -> u64 {
 }
 
 impl ResamplerInner {
+    fn enqueue(&mut self, event: PointerEvent, stamp: Stamp) {
+        match &event {
+            PointerEvent::Down(..) => {
+                self.is_down = true;
+                self.is_tracked = true;
+            }
+            PointerEvent::Up(..) | PointerEvent::Cancel(..) => {
+                self.is_down = false;
+            }
+            PointerEvent::Leave(..) => {
+                self.is_tracked = false;
+            }
+            _ => {}
+        }
+
+        if matches!(event, PointerEvent::Move(_))
+            && self.event_queue.len() >= MAX_BUFFERED_EVENTS
+            && !self.coalesce_one_move()
+        {
+            tracing::debug!(
+                pointer_id = ?self.pointer_id,
+                "resampler queue full of non-move events; queueing the move past the cap"
+            );
+        }
+        self.event_queue.push_back(BufferedEvent { event, stamp });
+    }
+
     fn timestamp(&self, stamp: Stamp) -> Instant {
         let raw = match stamp {
             Stamp::Explicit(at) | Stamp::Arrival(at) => at,
@@ -276,22 +303,23 @@ impl PointerEventResampler {
     /// dropped; a full queue coalesces moves instead.
     pub fn add_event(&self, event: PointerEvent) {
         let arrival = Instant::now();
-        let stamp = {
-            let mut inner = self.inner.lock();
-            match event_nanos(&event)
-                .and_then(|nanos| Some((nanos, arrival.checked_sub(Duration::from_nanos(nanos))?)))
-            {
-                Some((nanos, candidate)) => {
-                    let base = inner
-                        .event_clock_base
-                        .map_or(candidate, |base| base.min(candidate));
-                    inner.event_clock_base = Some(base);
-                    Stamp::EventTime(nanos)
-                }
-                None => Stamp::Arrival(arrival),
+        // Derive the stamp, install the clock base and enqueue under one lock:
+        // a `stop` from another handle in between would clear the base an
+        // `EventTime` stamp relies on.
+        let mut inner = self.inner.lock();
+        let stamp = match event_nanos(&event)
+            .and_then(|nanos| Some((nanos, arrival.checked_sub(Duration::from_nanos(nanos))?)))
+        {
+            Some((nanos, candidate)) => {
+                let base = inner
+                    .event_clock_base
+                    .map_or(candidate, |base| base.min(candidate));
+                inner.event_clock_base = Some(base);
+                Stamp::EventTime(nanos)
             }
+            None => Stamp::Arrival(arrival),
         };
-        self.push(event, stamp);
+        inner.enqueue(event, stamp);
     }
 
     /// Adds a pointer event that happened at `timestamp` on the sampling
@@ -302,37 +330,7 @@ impl PointerEventResampler {
     /// clocks). A timestamp earlier than one already queued is raised to it,
     /// so arrival order is kept.
     pub fn add_event_at(&self, event: PointerEvent, timestamp: Instant) {
-        self.push(event, Stamp::Explicit(timestamp));
-    }
-
-    fn push(&self, event: PointerEvent, stamp: Stamp) {
-        let mut inner = self.inner.lock();
-
-        // Update tracking state
-        match &event {
-            PointerEvent::Down(..) => {
-                inner.is_down = true;
-                inner.is_tracked = true;
-            }
-            PointerEvent::Up(..) | PointerEvent::Cancel(..) => {
-                inner.is_down = false;
-            }
-            PointerEvent::Leave(..) => {
-                inner.is_tracked = false;
-            }
-            _ => {}
-        }
-
-        if matches!(event, PointerEvent::Move(_))
-            && inner.event_queue.len() >= MAX_BUFFERED_EVENTS
-            && !inner.coalesce_one_move()
-        {
-            tracing::debug!(
-                pointer_id = ?inner.pointer_id,
-                "resampler queue full of non-move events; queueing the move past the cap"
-            );
-        }
-        inner.event_queue.push_back(BufferedEvent { event, stamp });
+        self.inner.lock().enqueue(event, Stamp::Explicit(timestamp));
     }
 
     /// Samples events at the specified time and invokes callback with resampled

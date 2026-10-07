@@ -27,12 +27,12 @@ pub use flui_interaction::{
     CustomGestureRecognizer, DoubleTapGestureRecognizer, DragAxis, DragDownDetails, DragEndDetails,
     DragGestureRecognizer, DragStartDetails, DragUpdateDetails, EagerGestureRecognizer,
     ForcePressGestureRecognizer, GestureEndReason, GestureRecognizer, GestureRecognizerExt,
-    GestureSettings, HorizontalDragGestureRecognizer, LongPressGestureRecognizer, MultiDragAxis,
-    MultiDragEndDetails, MultiDragGestureRecognizer, MultiDragHandle, MultiDragUpdateDetails,
-    MultiTapGestureRecognizer, PanGestureRecognizer, PointerId, PointerPanZoomEvent,
-    ScaleGestureRecognizer, TapAndDragGestureRecognizer, TapDragDownDetails, TapDragEndDetails,
-    TapDragStartDetails, TapDragUpDetails, TapDragUpdateDetails, TapGestureRecognizer,
-    VerticalDragGestureRecognizer,
+    GestureSettings, GestureSettingsError, HorizontalDragGestureRecognizer,
+    LongPressGestureRecognizer, MultiDragAxis, MultiDragEndDetails, MultiDragGestureRecognizer,
+    MultiDragHandle, MultiDragUpdateDetails, MultiTapGestureRecognizer, PanGestureRecognizer,
+    PointerId, PointerPanZoomEvent, ScaleGestureRecognizer, TapAndDragGestureRecognizer,
+    TapDragDownDetails, TapDragEndDetails, TapDragStartDetails, TapDragUpDetails,
+    TapDragUpdateDetails, TapGestureRecognizer, VerticalDragGestureRecognizer,
 };
 pub use flui_interaction::{
     ForcePressDetails, LongPressEndDetails, LongPressMoveUpdateDetails, PointerDeviceKind,

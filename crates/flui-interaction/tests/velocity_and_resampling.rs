@@ -16,9 +16,9 @@ use flui_interaction::processing::{
     PointerEventResampler, PredictionConfig, RawInputHandler, SamplingClock, VelocityTracker,
 };
 use flui_interaction::{
-    DEFAULT_MAX_FLING_VELOCITY, GestureBinding, GestureSettings, HitTestResult, PointerId,
-    PointerPanZoomEvent, PointerRouteHandler, Velocity, VelocityEstimate, from_w3c_event,
-    settings::GestureSettingsError,
+    DEFAULT_MAX_FLING_VELOCITY, GestureBinding, GestureSettings, GestureSettingsError,
+    HitTestResult, PointerId, PointerPanZoomEvent, PointerRouteHandler, Velocity, VelocityEstimate,
+    from_w3c_event,
 };
 use proptest::prelude::*;
 use web_time::Instant;
@@ -334,6 +334,12 @@ fn inverted_fling_range_is_rejected() {
     assert_eq!(nan_bounds.magnitude(), 5.0, "NaN bounds are absent bounds");
     let nan_velocity = Velocity::from_components(f64::NAN, 1.0).clamp_magnitude(0.0, 10.0);
     assert_eq!(nan_velocity, Velocity::ZERO);
+    let infinite_min = Velocity::from_components(1.0, 0.0).clamp_magnitude(f64::INFINITY, 10.0);
+    assert_eq!(
+        infinite_min.pixels_per_second.dy, 0.0,
+        "an infinite minimum leaves the zero axis zero, not NaN"
+    );
+    assert!(infinite_min.pixels_per_second.dx > 0.0);
 }
 
 fn invalid_settings_are_rejected() {
