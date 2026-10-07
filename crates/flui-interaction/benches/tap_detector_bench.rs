@@ -5,7 +5,7 @@
 //! and callback delivery. A permanently disposed recognizer cannot stand in
 //! for the dispatch hot path.
 
-use std::{cell::Cell, hint::black_box, rc::Rc, sync::Arc};
+use std::{cell::Cell, hint::black_box, rc::Rc};
 
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use flui_foundation::geometry::Offset;
@@ -17,7 +17,7 @@ use flui_interaction::events::{
 use flui_interaction::{GestureRecognizer, PointerDispatch, PointerId, TapGestureRecognizer};
 
 struct TapFixture {
-    recognizer: Arc<TapGestureRecognizer>,
+    recognizer: Rc<TapGestureRecognizer>,
     arena: GestureArena,
     callbacks: Rc<Cell<u32>>,
 }
