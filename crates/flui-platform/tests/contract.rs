@@ -186,14 +186,17 @@ mod native_windows {
         Graphics::Gdi::{ClientToScreen, UpdateWindow},
         System::Threading::GetCurrentThreadId,
         UI::Input::KeyboardAndMouse::{
-            GetKeyState, GetKeyboardState, SetKeyboardState, VK_LMENU, VK_MENU,
+            GetCapture, GetKeyState, GetKeyboardState, ReleaseCapture, SetCapture,
+            SetKeyboardState, VIRTUAL_KEY, VK_LBUTTON, VK_LMENU, VK_LSHIFT, VK_MBUTTON, VK_MENU,
+            VK_RBUTTON, VK_SHIFT,
         },
         UI::WindowsAndMessaging::{
             CWPSTRUCT, CallNextHookEx, DispatchMessageW, GetClientRect, IsIconic, IsWindowVisible,
             MSG, PM_REMOVE, PeekMessageW, PostMessageW, SW_MINIMIZE, SWP_NOACTIVATE, SWP_NOMOVE,
             SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetWindowPos, SetWindowsHookExW, ShowWindow,
             TranslateMessage, UnhookWindowsHookEx, WH_CALLWNDPROC, WM_CHAR, WM_CLOSE,
-            WM_ENTERMENULOOP, WM_KEYDOWN, WM_SYSCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP,
+            WM_ENTERMENULOOP, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+            WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP,
         },
     };
 
@@ -332,6 +335,18 @@ mod native_windows {
         (
             "panicking_exit_policy_vetoes_and_stays_installed",
             panicking_exit_policy_vetoes_and_stays_installed,
+        ),
+        (
+            "press_captures_the_mouse_until_the_last_release",
+            press_captures_the_mouse_until_the_last_release,
+        ),
+        (
+            "capture_taken_mid_press_cancels_the_sequence",
+            capture_taken_mid_press_cancels_the_sequence,
+        ),
+        (
+            "pointer_modifiers_are_the_message_state",
+            pointer_modifiers_are_the_message_state,
         ),
     ];
 
@@ -963,6 +978,14 @@ mod native_windows {
     #[expect(unsafe_code, reason = "owner-thread keyboard-state fixture custody")]
     impl ThreadKeyboardState {
         fn with_alt_pressed() -> Self {
+            Self::with_keys(&[(VK_MENU, true), (VK_LMENU, true)])
+        }
+
+        /// Sets each key down (`true`) or up in this thread's
+        /// queue-synchronized state only; the physical (`GetAsyncKeyState`)
+        /// state is untouched. Explicit ups keep a case independent of
+        /// whatever the snapshot inherited from real input.
+        fn with_keys(keys: &[(VIRTUAL_KEY, bool)]) -> Self {
             let mut original = [0; 256];
             // SAFETY: a complete writable snapshot on the current owner thread.
             unsafe { GetKeyboardState(&mut original) }.expect("snapshot thread keyboard state");
@@ -971,13 +994,17 @@ mod native_windows {
                 armed: true,
                 owner_thread: PhantomData,
             };
-            let mut pressed = original;
-            pressed[usize::from(VK_MENU.0)] |= 0x80;
-            pressed[usize::from(VK_LMENU.0)] |= 0x80;
+            let mut state = original;
+            for &(key, down) in keys {
+                let slot = &mut state[usize::from(key.0)];
+                *slot = if down { *slot | 0x80 } else { *slot & !0x80 };
+            }
             // SAFETY: the guard already owns restoration for the current thread.
-            unsafe { SetKeyboardState(&pressed) }.expect("set synthetic thread Alt state");
-            // SAFETY: reads only the current thread's logical key state.
-            assert!(unsafe { GetKeyState(i32::from(VK_MENU.0)) } < 0);
+            unsafe { SetKeyboardState(&state) }.expect("set synthetic thread key state");
+            for &(key, down) in keys {
+                // SAFETY: reads only the current thread's logical key state.
+                assert_eq!(unsafe { GetKeyState(i32::from(key.0)) } < 0, down);
+            }
             guard
         }
 
@@ -1726,6 +1753,187 @@ mod native_windows {
         // SAFETY: the live wrapper owns this HWND, queried on its creating thread.
         assert!(!unsafe { IsWindowVisible(native.hwnd()) }.as_bool());
         assert!(!window.is_visible());
+        window.close();
+    }
+
+    const MK_LBUTTON: usize = 0x0001;
+    const MK_RBUTTON: usize = 0x0002;
+    const MK_SHIFT: usize = 0x0004;
+
+    fn hwnd_of(window: &Arc<dyn HostWindow>) -> HWND {
+        window
+            .as_any()
+            .downcast_ref::<WindowsWindow>()
+            .expect("Win32 backend")
+            .hwnd()
+    }
+
+    /// Every pointer event `window` delivers, in order.
+    fn record_pointer(
+        window: &Arc<dyn HostWindow>,
+    ) -> Arc<Mutex<Vec<ui_events::pointer::PointerEvent>>> {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let recorded = Arc::clone(&events);
+        window.on_input(Box::new(move |input| {
+            if let Some(event) = input.as_pointer() {
+                recorded.lock().expect("pointer log").push(event.clone());
+            }
+            DispatchEventResult::default()
+        }));
+        events
+    }
+
+    fn kinds(events: &Mutex<Vec<ui_events::pointer::PointerEvent>>) -> Vec<&'static str> {
+        use ui_events::pointer::PointerEvent;
+        events
+            .lock()
+            .expect("pointer log")
+            .iter()
+            .map(|event| match event {
+                PointerEvent::Down(_) => "down",
+                PointerEvent::Up(_) => "up",
+                PointerEvent::Move(_) => "move",
+                PointerEvent::Cancel(_) => "cancel",
+                _ => "other",
+            })
+            .collect()
+    }
+
+    /// A mouse message's client-coordinate `lParam`, negative values included.
+    fn mouse_lparam(x: i16, y: i16) -> LPARAM {
+        LPARAM(((y as u16 as isize) << 16) | x as u16 as isize)
+    }
+
+    /// The thread's queue-synchronized state for the keys a mouse message's
+    /// `MK_*` mask reports, as retrieving that message from the queue would
+    /// leave it.
+    fn queue_state_for(mask: usize) -> ThreadKeyboardState {
+        ThreadKeyboardState::with_keys(&[
+            (VK_LBUTTON, mask & MK_LBUTTON != 0),
+            (VK_RBUTTON, mask & MK_RBUTTON != 0),
+            (VK_MBUTTON, false),
+            (VK_SHIFT, mask & MK_SHIFT != 0),
+            (VK_LSHIFT, mask & MK_SHIFT != 0),
+        ])
+    }
+
+    /// Dispatches a mouse message synchronously, with the queue-synchronized
+    /// key state its mask reports in place for the dispatch.
+    #[expect(unsafe_code, reason = "synchronous mouse dispatch to an owned window")]
+    fn send_mouse(hwnd: HWND, msg: u32, mask: usize, lparam: LPARAM) {
+        let mut state = queue_state_for(mask);
+        // SAFETY: the fixture's live window, on its creating thread; mouse
+        // messages carry only integers and dereference no caller memory.
+        unsafe { SendMessageW(hwnd, msg, Some(WPARAM(mask)), Some(lparam)) };
+        state.restore();
+    }
+
+    #[expect(unsafe_code, reason = "reads the calling thread's mouse capture")]
+    fn captured() -> HWND {
+        // SAFETY: argument-free query of this thread's capture window.
+        unsafe { GetCapture() }
+    }
+
+    /// A press captures the mouse and the last release lets go, so a drag
+    /// released outside the client area still reaches the window — at the
+    /// sign-extended client coordinates of that outside point.
+    fn press_captures_the_mouse_until_the_last_release() {
+        use ui_events::pointer::PointerEvent;
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let window = open(&platform, true);
+        let hwnd = hwnd_of(&window);
+        let events = record_pointer(&window);
+
+        send_mouse(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, mouse_lparam(10, 10));
+        assert_eq!(captured(), hwnd, "a press captures the mouse");
+        send_mouse(
+            hwnd,
+            WM_RBUTTONDOWN,
+            MK_LBUTTON | MK_RBUTTON,
+            mouse_lparam(10, 10),
+        );
+        send_mouse(hwnd, WM_LBUTTONUP, MK_RBUTTON, mouse_lparam(10, 10));
+        assert_eq!(
+            captured(),
+            hwnd,
+            "a release with another button held keeps the capture"
+        );
+        send_mouse(hwnd, WM_RBUTTONUP, 0, mouse_lparam(-40, -30));
+        assert!(captured().is_invalid(), "the last release lets go");
+
+        assert_eq!(kinds(&events), ["down", "down", "up", "up"]);
+        let scale = window.scale_factor();
+        let log = events.lock().expect("pointer log");
+        let PointerEvent::Up(last) = log.last().expect("last release") else {
+            unreachable!("kinds checked above");
+        };
+        assert_eq!(
+            (last.state.position.x, last.state.position.y),
+            (-40.0 / scale, -30.0 / scale),
+            "an outside release keeps its negative client coordinates"
+        );
+        drop(log);
+        window.close();
+    }
+
+    /// Another window taking the capture mid-press ends the sequence with a
+    /// cancel; the sequence after it captures again and ends on its own,
+    /// without a second cancel.
+    #[expect(unsafe_code, reason = "moves the thread's mouse capture")]
+    fn capture_taken_mid_press_cancels_the_sequence() {
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let window = open(&platform, true);
+        let thief = open(&platform, true);
+        let hwnd = hwnd_of(&window);
+        let events = record_pointer(&window);
+
+        send_mouse(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, mouse_lparam(10, 10));
+        assert_eq!(captured(), hwnd, "a press captures the mouse");
+        // The button is still down when the capture moves.
+        let mut held = queue_state_for(MK_LBUTTON);
+        // SAFETY: the fixture's other live window, on its creating thread.
+        unsafe { SetCapture(hwnd_of(&thief)) };
+        held.restore();
+        assert_eq!(kinds(&events), ["down", "cancel"]);
+
+        // SAFETY: releases this thread's capture; takes no arguments.
+        unsafe { ReleaseCapture() }.expect("release the thief's capture");
+        send_mouse(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, mouse_lparam(10, 10));
+        assert_eq!(captured(), hwnd, "the next press captures again");
+        send_mouse(hwnd, WM_LBUTTONUP, 0, mouse_lparam(10, 10));
+        assert!(captured().is_invalid(), "the release lets go");
+        assert_eq!(kinds(&events), ["down", "cancel", "down", "up"]);
+        thief.close();
+        window.close();
+    }
+
+    /// A pointer event carries the modifiers of its message — the
+    /// queue-synchronized state — not the keyboard at processing time.
+    fn pointer_modifiers_are_the_message_state() {
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let window = open(&platform, true);
+        let hwnd = hwnd_of(&window);
+        let events = record_pointer(&window);
+
+        send_mouse(hwnd, WM_MOUSEMOVE, MK_SHIFT, mouse_lparam(5, 5));
+        send_mouse(hwnd, WM_MOUSEMOVE, 0, mouse_lparam(6, 6));
+
+        let log = events.lock().expect("pointer log");
+        let modifiers: Vec<keyboard_types::Modifiers> = log
+            .iter()
+            .map(|event| match event {
+                ui_events::pointer::PointerEvent::Move(update) => update.current.modifiers,
+                _ => unreachable!("only moves were sent"),
+            })
+            .collect();
+        assert_eq!(
+            modifiers,
+            [
+                keyboard_types::Modifiers::SHIFT,
+                keyboard_types::Modifiers::empty()
+            ]
+        );
+        drop(log);
         window.close();
     }
 

@@ -18,6 +18,24 @@
 //! A queued completion keeps the store it was asked for, and commits that
 //! store's composition in place whenever TSF cannot end it.
 //!
+//! **Application code under a host operation is contained.** Retiring a
+//! store's observer, dropping a store, committing in place and logging a
+//! diagnostic (a user-installed `tracing` subscriber) run the application's
+//! code; a panic there is caught, the operation's native
+//! cleanup (association, focus, `Pop`) still runs and the queue behind it
+//! still drains. The outermost host operation then raises the first such
+//! failure; under a COM entry, which never unwinds into TSF, it is logged,
+//! and the log (a user-installed subscriber) is contained too. A composition
+//! TSF did not end while such a failure was held is committed in place as
+//! the failure is raised, so the commit's own failures come after it.
+//!
+//! **A field's protection is static status for TSF** (`TS_SS_NOHIDDENTEXT`,
+//! read when a document is pushed; `OnStatusChange` carries dynamic status
+//! only), so a protection change replaces the field's document with a new
+//! one, as a host operation. TSF's composition in the old document is ended
+//! first (committed in place if TSF refuses), so the store keeps no
+//! composing range that no context owns.
+//!
 //! Owner-thread only: nothing here is `Send` or `Sync`.
 
 mod document;
@@ -26,12 +44,16 @@ mod probe;
 #[cfg(test)]
 mod tests;
 
+use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::rc::{Rc, Weak};
 
+use flui_foundation::panic::retain_opaque_payload;
 use flui_platform_api::text_store::{
-    CompositionEnd, TextStore, TextStoreHost, TextStoreHostError, commit_composition_in_place,
+    CompositionEnd, OwnerCalls, TextStore, TextStoreHost, TextStoreHostError,
+    commit_composition_in_place,
 };
 use windows::Win32::{
     Foundation::HWND,
@@ -56,6 +78,32 @@ enum HostOp {
     CompleteComposition(Rc<dyn TextStore>),
     /// Replace a poisoned document with the empty one.
     DropPoisoned(Rc<DocumentState>),
+    /// Replace this document with a new one over the same store, so TSF
+    /// reads its static status again (a field's protection changed).
+    Reopen(Rc<DocumentState>),
+}
+
+/// Commits in place, when dropped, the compositions TSF did not end while a
+/// failure caught earlier in the host operation was held.
+///
+/// Raising that failure drops it during the failure's unwind, so a failure
+/// the commit's owner code parks in the store's gate is marked as parked
+/// while unwinding, and the owner's containment orders it behind the one
+/// raised (ADR-0142 item 8): the earlier failure stays authoritative.
+/// Outside an unwind (a COM entry, which only logs the failure) it commits
+/// as any completion does. A commit that panics is retained.
+struct Recovery(Vec<Rc<dyn TextStore>>);
+
+impl Drop for Recovery {
+    fn drop(&mut self) {
+        let mut calls = OwnerCalls::new();
+        for store in self.0.drain(..) {
+            calls.run(|| {
+                let _ = commit_composition_in_place(&*store);
+            });
+            calls.retire(store);
+        }
+    }
 }
 
 /// The focused field's TSF document.
@@ -64,7 +112,7 @@ struct Document {
     context: ITfContext,
     state: Rc<DocumentState>,
     /// TSF holds the store through the context; this keeps our own handle.
-    _store: ITextStoreACP,
+    tsf_store: ITextStoreACP,
 }
 
 /// What a window's text services offer TSF.
@@ -88,6 +136,15 @@ pub(super) struct TextServices {
     entry_depth: Cell<u32>,
     pending: RefCell<VecDeque<HostOp>>,
     poisonings: Cell<u8>,
+    /// The first panic application code raised under a host operation (a
+    /// store's observer retirement or destruction, a commit in place),
+    /// caught so the operation's native cleanup still ran. The outermost
+    /// host operation raises it once it is done; a COM entry, which must
+    /// not unwind into TSF, logs it instead.
+    failure: RefCell<Option<Box<dyn Any + Send>>>,
+    /// Stores whose composition TSF did not end while `failure` was held:
+    /// committed in place when it is raised or logged ([`Recovery`]).
+    recovery: RefCell<Vec<Rc<dyn TextStore>>>,
     me: Weak<TextServices>,
 }
 
@@ -172,6 +229,8 @@ impl TextServices {
             entry_depth: Cell::new(0),
             pending: RefCell::new(VecDeque::new()),
             poisonings: Cell::new(0),
+            failure: RefCell::new(None),
+            recovery: RefCell::new(Vec::new()),
             me: me.clone(),
         }))
     }
@@ -214,7 +273,7 @@ impl TextServices {
     fn focused_store(&self) -> Option<Rc<dyn TextStore>> {
         let queued = self.pending.borrow().iter().rev().find_map(|op| match op {
             HostOp::Focus(store) => Some(store.clone()),
-            HostOp::CompleteComposition(_) | HostOp::DropPoisoned(_) => None,
+            HostOp::CompleteComposition(_) | HostOp::DropPoisoned(_) | HostOp::Reopen(_) => None,
         });
         queued.unwrap_or_else(|| self.focused_state().map(|state| Rc::clone(&state.store)))
     }
@@ -225,10 +284,86 @@ impl TextServices {
     }
 
     /// A COM entry ended; the outermost one runs what was queued under it.
+    /// A failure those operations caught cannot be handed back through TSF:
+    /// it is logged, not raised. The log runs a user-installed subscriber,
+    /// so it is contained too: nothing unwinds into TSF, and the failure's
+    /// payload is retained whatever the subscriber does.
     fn leave(&self) {
         self.entry_depth
             .set(self.entry_depth.get().saturating_sub(1));
         self.drain_pending();
+        if self.entry_depth.get() == 0
+            && let Some((payload, recovery)) = self.take_failure()
+        {
+            let mut calls = OwnerCalls::new();
+            calls.run(|| {
+                tracing::error!(
+                    target: "flui_platform::tsf",
+                    panic = crate::shared::panic_boundary::panic_payload_message(&*payload),
+                    "application code a TSF document's teardown reached panicked"
+                );
+            });
+            retain_opaque_payload(payload);
+            drop(recovery);
+            // A failure the diagnostic raised is retained with the scope.
+            drop(calls);
+        }
+    }
+
+    /// Log a host operation's diagnostic. The log runs a user-installed
+    /// subscriber, so it is contained like the application code around it:
+    /// a panic there is kept for the outermost host operation, behind a
+    /// failure already held ([`Self::keep_failure`]), and the operation (its
+    /// native cleanup included) goes on.
+    fn diagnose(&self, log: impl FnOnce()) {
+        if let Err(payload) = catch_unwind(AssertUnwindSafe(log)) {
+            self.keep_failure(payload);
+        }
+    }
+
+    /// Keep `payload` for the outermost host operation; a later failure is
+    /// retained behind the first.
+    fn keep_failure(&self, payload: Box<dyn Any + Send>) {
+        let mut failure = self.failure.borrow_mut();
+        if failure.is_none() {
+            *failure = Some(payload);
+        } else {
+            drop(failure);
+            retain_opaque_payload(payload);
+        }
+    }
+
+    /// Commit `store`'s composition in place, which TSF did not end: now,
+    /// or, while a failure caught earlier in this host operation is held,
+    /// when that failure is raised ([`Recovery`]), so the recovery's own
+    /// failures are ordered after it.
+    fn commit_in_place(&self, store: Rc<dyn TextStore>) {
+        if self.failure.borrow().is_some() {
+            self.recovery.borrow_mut().push(store);
+        } else {
+            // A commit queued behind the owner's shut gate runs at its anchor,
+            // with the stores the owner focused during the frame.
+            let _ = commit_composition_in_place(&*store);
+        }
+    }
+
+    /// The failure held for the outermost host operation, with the commits
+    /// held back behind it.
+    fn take_failure(&self) -> Option<(Box<dyn Any + Send>, Recovery)> {
+        let payload = self.failure.borrow_mut().take()?;
+        Some((payload, Recovery(self.recovery.take())))
+    }
+
+    /// Raise a failure the host operation that is returning caught, once no
+    /// other operation or COM entry is still running under it; the commits
+    /// held back behind it run during its unwind.
+    fn raise_failure(&self) {
+        if self.entry_depth.get() == 0
+            && let Some((payload, recovery)) = self.take_failure()
+        {
+            let _recovery = recovery;
+            resume_unwind(payload);
+        }
     }
 
     /// A call into `state`'s document panicked: switch to the empty
@@ -239,6 +374,21 @@ impl TextServices {
         self.pending
             .borrow_mut()
             .push_back(HostOp::DropPoisoned(Rc::clone(state)));
+    }
+
+    /// `state`'s store changed its protection. TSF reads a document's static
+    /// status (`TS_SS_NOHIDDENTEXT`) once, when it is pushed, and
+    /// `OnStatusChange` reports dynamic status only, so the document is
+    /// replaced by a new one over the same store. A host operation, queued
+    /// under a TSF call like any other.
+    ///
+    /// # Panics
+    ///
+    /// Resumes the first panic of application code the replacement reached
+    /// (the store's observer retirement), once TSF serves the new document.
+    fn reopen(&self, state: &Rc<DocumentState>) {
+        self.run_host_op(HostOp::Reopen(Rc::clone(state)));
+        self.raise_failure();
     }
 
     fn enter_host_op(&self) -> Depth<'_> {
@@ -252,7 +402,7 @@ impl TextServices {
             return;
         }
         let depth = self.enter_host_op();
-        self.apply(op);
+        self.apply_contained(op);
         drop(depth);
         self.drain_pending();
     }
@@ -263,8 +413,16 @@ impl TextServices {
                 return;
             };
             let depth = self.enter_host_op();
-            self.apply(op);
+            self.apply_contained(op);
             drop(depth);
+        }
+    }
+
+    /// Apply `op`, keeping a panic of the application code it reaches for
+    /// the outermost host operation, so the queue behind it still runs.
+    fn apply_contained(&self, op: HostOp) {
+        if let Err(payload) = catch_unwind(AssertUnwindSafe(|| self.apply(op))) {
+            self.keep_failure(payload);
         }
     }
 
@@ -273,7 +431,7 @@ impl TextServices {
             // A queued completion was answered `Deferred`: with TSF gone,
             // the composition is still committed, in place.
             if let HostOp::CompleteComposition(store) = op {
-                commit_composition_in_place(&*store);
+                self.commit_in_place(store);
             }
             return;
         }
@@ -284,25 +442,66 @@ impl TextServices {
                 // commit (no document for the store, or a refused lock) is
                 // committed in place here, keeping the text.
                 if self.terminate_composition(&store) != Some(CompositionEnd::Committed) {
-                    commit_composition_in_place(&*store);
+                    self.commit_in_place(store);
+                }
+            }
+            HostOp::Reopen(state) => {
+                if self.serves(&state) {
+                    self.reopen_document(&state);
                 }
             }
             HostOp::DropPoisoned(state) => {
-                let poisoned_is_focused = matches!(
-                    &*self.serving.borrow(),
-                    Serving::Field(document) if Rc::ptr_eq(&document.state, &state)
-                );
-                if poisoned_is_focused {
+                if self.serves(&state) {
                     self.close_document();
                 }
                 if self.poisonings.get() >= 3 {
-                    tracing::warn!(
-                        target: "flui_platform::tsf",
-                        "three TSF documents poisoned in this window; text input falls back to WM_CHAR"
-                    );
+                    self.diagnose(|| {
+                        tracing::warn!(
+                            target: "flui_platform::tsf",
+                            "three TSF documents poisoned in this window; text input falls back to WM_CHAR"
+                        );
+                    });
                     self.shutdown();
                 }
             }
+        }
+    }
+
+    /// Whether `state`'s document is the one TSF is served.
+    fn serves(&self, state: &Rc<DocumentState>) -> bool {
+        matches!(
+            &*self.serving.borrow(),
+            Serving::Field(document) if Rc::ptr_eq(&document.state, state)
+        )
+    }
+
+    /// Replace `state`'s open document with a new one over the same store.
+    ///
+    /// TSF's composition there is ended first, while the document still
+    /// hears `OnEndComposition`: closing marks the document closed before it
+    /// is popped, so a composition TSF ended then would leave the store a
+    /// composing range no context owns. A termination TSF refuses already
+    /// replaced the document ([`Self::terminate_composition`]); the
+    /// composition is then committed in place, behind a failure the
+    /// replacement's teardown raised ([`Self::commit_in_place`]).
+    fn reopen_document(&self, state: &Rc<DocumentState>) {
+        let store = Rc::clone(&state.store);
+        match self.terminate_composition(&store) {
+            Some(CompositionEnd::Committed) => {
+                // Host operations the commit's application code asked for
+                // are queued behind this one, so the document is still
+                // served; checked all the same before it is replaced.
+                if self.serves(state) {
+                    self.close_document();
+                    if let Err(error) = self.open_document(store) {
+                        self.diagnose(|| {
+                            tracing::warn!(target: "flui_platform::tsf", ?error, "could not reopen the TSF document");
+                        });
+                    }
+                }
+            }
+            Some(_) => self.commit_in_place(store),
+            None => {}
         }
     }
 
@@ -319,7 +518,9 @@ impl TextServices {
         if let Some(store) = store
             && let Err(error) = self.open_document(store)
         {
-            tracing::warn!(target: "flui_platform::tsf", ?error, "could not open a TSF document");
+            self.diagnose(|| {
+                tracing::warn!(target: "flui_platform::tsf", ?error, "could not open a TSF document");
+            });
         }
     }
 
@@ -353,18 +554,24 @@ impl TextServices {
             // SAFETY: a plain COM call on this STA thread.
             unsafe { self.thread_manager.SetFocus(&manager) }?;
         }
-        tracing::debug!(
-            target: "flui_platform::tsf",
-            associated_moved_focus = associated,
-            window_focused,
-            focused_after = self.focus_is(&manager),
-            "TSF document opened"
-        );
+        // Served before the diagnostic: TSF is associated with `manager`
+        // now, so a subscriber that panics must not leave it unserved, and
+        // never popped.
+        let focused_after = self.focus_is(&manager);
         *self.serving.borrow_mut() = Serving::Field(Document {
             manager,
             context,
             state,
-            _store: tsf_store,
+            tsf_store,
+        });
+        self.diagnose(|| {
+            tracing::debug!(
+                target: "flui_platform::tsf",
+                associated_moved_focus = associated,
+                window_focused,
+                focused_after,
+                "TSF document opened"
+            );
         });
         Ok(())
     }
@@ -390,19 +597,40 @@ impl TextServices {
 
     /// TSF focus back to the empty manager, then pop and release
     /// everything of `document`.
+    ///
+    /// Retiring the store's observer, logging a failed `Pop` (a
+    /// user-installed subscriber) and dropping the document's hold on the
+    /// store run application code: each runs inside one containment, in that
+    /// order, so the first panic is the one kept for the outermost host
+    /// operation ([`Self::keep_failure`]) and the native cleanup still runs,
+    /// so TSF is never left associated with a document the window no longer
+    /// serves. After a failure the store is retained, not destroyed
+    /// (ADR-0127).
     fn release_document(&self, document: Document) {
-        document.state.close();
+        let Document {
+            manager,
+            context,
+            state,
+            tsf_store,
+        } = document;
+        let mut calls = OwnerCalls::new();
+        calls.run(|| state.close());
         // SAFETY: plain COM calls on this STA thread.
-        unsafe {
+        let popped = unsafe {
             let _ = associate(&self.thread_manager, self.hwnd, Some(&self.empty));
             if GetFocus() == self.hwnd {
                 let _ = self.thread_manager.SetFocus(&self.empty);
             }
-            if let Err(error) = document.manager.Pop(TF_POPF_ALL) {
-                tracing::debug!(target: "flui_platform::tsf", ?error, "Pop failed");
-            }
+            manager.Pop(TF_POPF_ALL)
+        };
+        if let Err(error) = popped {
+            calls.run(|| tracing::debug!(target: "flui_platform::tsf", ?error, "Pop failed"));
         }
-        drop(document);
+        drop((context, tsf_store, manager));
+        calls.retire(state);
+        if let Some(payload) = calls.into_failure() {
+            self.keep_failure(payload);
+        }
     }
 
     /// End TSF's composition in `store`'s document; `None` when `store` has
@@ -421,20 +649,29 @@ impl TextServices {
             services
                 .TerminateComposition(None::<&windows::Win32::UI::TextServices::ITfCompositionView>)
         });
+        // The diagnostics are contained ([`Self::diagnose`]): a panicking
+        // subscriber must not skip the replacement, or the answer that
+        // makes the caller commit the abandoned composition in place.
         match terminated {
             Ok(()) => {
-                tracing::debug!(target: "flui_platform::tsf", "TerminateComposition committed");
+                self.diagnose(|| {
+                    tracing::debug!(target: "flui_platform::tsf", "TerminateComposition committed");
+                });
                 Some(CompositionEnd::Committed)
             }
             Err(error) => {
-                tracing::debug!(
-                    target: "flui_platform::tsf",
-                    ?error,
-                    "TerminateComposition refused; the document is replaced"
-                );
+                self.diagnose(|| {
+                    tracing::debug!(
+                        target: "flui_platform::tsf",
+                        ?error,
+                        "TerminateComposition refused; the document is replaced"
+                    );
+                });
                 self.close_document();
                 if let Err(error) = self.open_document(Rc::clone(store)) {
-                    tracing::warn!(target: "flui_platform::tsf", ?error, "could not reopen the TSF document");
+                    self.diagnose(|| {
+                        tracing::warn!(target: "flui_platform::tsf", ?error, "could not reopen the TSF document");
+                    });
                 }
                 Some(CompositionEnd::Abandoned)
             }
@@ -450,19 +687,29 @@ impl TextServices {
             Serving::Nothing => {}
         }
         // SAFETY: plain COM calls on this STA thread.
-        unsafe {
+        let deactivated = unsafe {
             let _ = associate(&self.thread_manager, self.hwnd, None);
-            if let Err(error) = self.thread_manager.Deactivate() {
+            self.thread_manager.Deactivate()
+        };
+        if let Err(error) = deactivated {
+            self.diagnose(|| {
                 tracing::debug!(target: "flui_platform::tsf", ?error, "Deactivate failed");
-            }
+            });
         }
     }
 }
 
 impl TextStoreHost for TextServices {
     /// Queued when called under a TSF call into a store.
+    ///
+    /// # Panics
+    ///
+    /// Resumes the first panic of application code the change reached (the
+    /// previous store's observer retirement), once TSF serves the new
+    /// document or the empty one.
     fn focus_store(&self, store: Option<Rc<dyn TextStore>>) {
         self.run_host_op(HostOp::Focus(store));
+        self.raise_failure();
     }
 
     /// `Deferred` when the request is queued behind a TSF call in progress:
@@ -488,9 +735,21 @@ impl TextStoreHost for TextServices {
             return Ok(CompositionEnd::Deferred);
         }
         let depth = self.enter_host_op();
-        let end = self.terminate_composition(store);
+        let end = catch_unwind(AssertUnwindSafe(|| self.terminate_composition(store)))
+            .unwrap_or_else(|payload| {
+                self.keep_failure(payload);
+                None
+            });
         drop(depth);
         self.drain_pending();
+        if self.entry_depth.get() == 0 && self.failure.borrow().is_some() {
+            // The answer does not reach the caller: what TSF did not commit
+            // is committed in place as the failure is raised, behind it.
+            if end != Some(CompositionEnd::Committed) {
+                self.commit_in_place(Rc::clone(store));
+            }
+            self.raise_failure();
+        }
         // Focused but without a document: opening it failed, so TSF holds
         // no composition there.
         end.ok_or(TextStoreHostError::NotFocused)
@@ -500,5 +759,14 @@ impl TextStoreHost for TextServices {
 impl Drop for TextServices {
     fn drop(&mut self) {
         self.shutdown();
+        if let Some((payload, recovery)) = self.take_failure() {
+            if std::thread::panicking() {
+                drop(recovery);
+                retain_opaque_payload(payload);
+            } else {
+                let _recovery = recovery;
+                resume_unwind(payload);
+            }
+        }
     }
 }

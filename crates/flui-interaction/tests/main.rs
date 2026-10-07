@@ -25,3 +25,5 @@ mod text_store_host;
 
 #[path = "multi_pointer_recognizers.rs"]
 mod multi_pointer_recognizers;
+#[path = "mouse_tracking.rs"]
+mod mouse_tracking;
