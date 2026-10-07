@@ -564,11 +564,6 @@ impl GestureBinding {
         &self.default_settings
     }
 
-    /// Get settings for a specific device type.
-    pub fn settings_for_device(&self, device_type: PointerKind) -> GestureSettings {
-        GestureSettings::for_device(device_type)
-    }
-
     // ========================================================================
     // Event Handling
     // ========================================================================

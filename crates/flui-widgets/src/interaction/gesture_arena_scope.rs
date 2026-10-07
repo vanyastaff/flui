@@ -13,7 +13,8 @@ use flui_view::{BoxedView, InheritedView, impl_inherited_view};
 /// Provides a shared [`GestureArena`] to its descendant gesture detectors.
 ///
 /// A binding (or a test harness) wraps the application subtree in
-/// `GestureArenaScope::new(binding.arena().clone(), child)`. Every
+/// `GestureArenaScope::new(binding.arena().clone(), child)` configured with
+/// `.settings(binding.default_settings().clone())`. Every
 /// gesture consumer below reads this arena ambiently in `init_state` through
 /// [`GestureArenaScope::of`] and builds all of its recognizers
 /// against it. Two consequences follow:
@@ -22,11 +23,14 @@ use flui_view::{BoxedView, InheritedView, impl_inherited_view};
 ///    their recognizers to the *same* arena entry for one contact, so the
 ///    standard disambiguation (front-member-wins, reject-on-loss) plays
 ///    out across detectors, not just within one.
-/// 2. **Deadline polling** — because [`GestureArena`] is `Arc`-backed, the clone
+/// 2. **Deadline polling** — because [`GestureArena`] is a shared handle, the clone
 ///    the scope hands down and the one the binding holds are the same arena and
 ///    the same clock. The binding's `pump_frame` polls that arena's deadlines,
 ///    so clock-driven gestures (long-press hold, double-tap give-up) resolve on
 ///    the virtual timeline.
+/// 3. **Authored settings** — `GestureDetector` captures the scope's settings
+///    when mounting its recognizers. Scope configuration does not change an
+///    already mounted recognizer's policy.
 ///
 /// Gesture consumers require this scope. Missing presentation ownership is an
 /// invariant violation during `init_state`; consumers never create a private
@@ -39,7 +43,7 @@ use flui_view::{BoxedView, InheritedView, impl_inherited_view};
 #[derive(Clone)]
 pub struct GestureArenaScope {
     /// The shared arena handed to descendants. Cloning the scope clones this
-    /// `Arc`-backed handle, so all clones observe the same arena state + clock.
+    /// handle, so all clones observe the same arena state + clock.
     arena: GestureArena,
     /// Authored settings captured when descendant recognizers are mounted.
     settings: GestureSettings,
