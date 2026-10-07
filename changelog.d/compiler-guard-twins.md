@@ -17,3 +17,4 @@
 - Platform owner-thread and hidden-token compiler guards pin exact diagnostics; each retired platform name is checked independently.
 - Diagnostic derive shape and field-attribute compiler examples have matching valid companions.
 - The app's shared-platform window-opening compiler example has a matching valid owner-capability callback.
+- Navigation compiler examples share identical setup for typed route outputs and lifecycle context admission.
