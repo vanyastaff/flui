@@ -271,24 +271,11 @@ pub use routing::{
     FocusTreeError, GlobalPointerHandler, HitTestBehavior, HitTestEntry, HitTestHandle,
     HitTestProbe, HitTestResult, HitTestSnapshot, InteractionDispatchError,
     InteractionDispatchHandle, InteractionLane, KeyEventHandler, KeyEventResult,
-    LocalPayloadTarget, NodeContext, PathClipTarget, PointerDispatch, PointerRouteHandler,
+    LocalPayloadTarget, NodeContext, PathClipTarget, PointerCapture, PointerCaptureError, PointerDispatch, PointerRouteHandler,
     PointerRouter, PointerTarget, ReadingOrderPolicy, RectProvider, RenderId, ResolvedRouteToken,
     ResolvedStep, RoutePanic, RouteResolution, RouteResolutionMiss, ScrollTarget, ShaderMaskTarget,
     TransformGuard, TraversalDirection, TraversalEdgeBehavior, resolve_local_payload,
     resolve_path_clip_target, resolve_shader_mask_target,
-};
-pub use routing::{
-    EventPropagation, FocusAttachment, FocusChangeCallback, FocusDetachOutcome, FocusManager,
-    FocusNode, FocusNodeChangeCallback, FocusNodeRegistration, FocusRequestOutcome, FocusScopeNode,
-    FocusSubscription, FocusTraversalPolicy, FocusTreeError, GlobalPointerHandler, HitTestBehavior,
-    HitTestEntry, HitTestHandle, HitTestProbe, HitTestResult, HitTestSnapshot,
-    InteractionDispatchError, InteractionDispatchHandle, InteractionLane, KeyEventHandler,
-    KeyEventResult, LocalPayloadTarget, NodeContext, PathClipTarget, PointerCapture,
-    PointerCaptureError, PointerDispatch, PointerRouteHandler, PointerRouter, PointerTarget,
-    ReadingOrderPolicy, RectProvider, RenderId, ResolvedRouteToken, ResolvedStep, RoutePanic,
-    RouteResolution, RouteResolutionMiss, ScrollTarget, ShaderMaskTarget, TransformGuard,
-    TraversalDirection, TraversalEdgeBehavior, resolve_local_payload, resolve_path_clip_target,
-    resolve_shader_mask_target,
 };
 pub use settings::{
     DEFAULT_DOUBLE_TAP_SLOP, DEFAULT_DOUBLE_TAP_TIMEOUT, DEFAULT_LONG_PRESS_TIMEOUT,
