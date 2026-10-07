@@ -1208,6 +1208,10 @@ fn gesture_lifecycle_matrix() {
             preferred_acceptance_rejects_a_pending_fallback,
         ),
         (
+            "composition_preserves_first_callback_failure_and_recovers",
+            composition_preserves_first_callback_failure_and_recovers,
+        ),
+        (
             "arena_polls_pointer_deadlines_in_identity_order",
             arena_polls_pointer_deadlines_in_identity_order,
         ),
@@ -1653,6 +1657,85 @@ fn preferred_acceptance_rejects_a_pending_fallback() {
             ("fallback", GestureDisposition::Rejected),
             ("preferred", GestureDisposition::Accepted)
         ]
+    );
+}
+
+struct FailingCompositionMember {
+    member: CompositionMember,
+    failure: &'static str,
+}
+
+impl GestureArenaMember for FailingCompositionMember {
+    fn accept_gesture(&self, pointer: PointerId) {
+        self.member.accept_gesture(pointer);
+    }
+    fn reject_gesture(&self, pointer: PointerId) {
+        self.member.reject_gesture(pointer);
+        panic!("{}", self.failure);
+    }
+}
+
+fn composition_preserves_first_callback_failure_and_recovers() {
+    let arena = GestureArena::new();
+    let (first, second) = arena
+        .compose(GestureCompetition::RequireFirstFailure)
+        .expect("root composition")
+        .into_branches();
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let pointer = id(2);
+    let preferred = Rc::new(FailingCompositionMember {
+        member: CompositionMember {
+            name: "preferred",
+            log: Rc::clone(&log),
+        },
+        failure: "preferred rejection failure",
+    });
+    let other = Rc::new(FailingCompositionMember {
+        member: CompositionMember {
+            name: "other",
+            log: Rc::clone(&log),
+        },
+        failure: "competing rejection failure",
+    });
+    let fallback = Rc::new(CompositionMember {
+        name: "fallback",
+        log: Rc::clone(&log),
+    });
+    let preferred_entry = first.add(pointer, &preferred);
+    arena.add(pointer, &other);
+    let fallback_entry = second.add(pointer, &fallback);
+    arena.close(pointer);
+    fallback_entry.resolve(GestureDisposition::Accepted);
+    let failure = catch_unwind(AssertUnwindSafe(|| {
+        preferred_entry.resolve(GestureDisposition::Rejected)
+    }))
+    .expect_err("preferred callback fails");
+    assert_eq!(
+        failure.downcast_ref::<String>().map(String::as_str),
+        Some("preferred rejection failure")
+    );
+    assert_eq!(
+        log.borrow().as_slice(),
+        [
+            ("preferred", GestureDisposition::Rejected),
+            ("other", GestureDisposition::Rejected),
+            ("fallback", GestureDisposition::Accepted),
+        ]
+    );
+    assert!(arena.is_empty());
+    let fresh = Rc::new(CompositionMember {
+        name: "fresh",
+        log: Rc::clone(&log),
+    });
+    let fresh_entry = second.add(pointer, &fresh);
+    arena.close(pointer);
+    preferred_entry.resolve(GestureDisposition::Accepted);
+    fallback_entry.resolve(GestureDisposition::Accepted);
+    arena.drain_deferred_resolutions();
+    fresh_entry.resolve(GestureDisposition::Accepted);
+    assert_eq!(
+        log.borrow().last(),
+        Some(&("fresh", GestureDisposition::Accepted))
     );
 }
 
