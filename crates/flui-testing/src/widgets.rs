@@ -45,7 +45,6 @@ use flui_objects::{
     RenderAnimatedOpacity, RenderClipOval, RenderClipPath, RenderClipRRect, RenderClipRect,
     RenderConstraintsTransformBox, RenderContainer, RenderFittedBox, RenderImage, RenderOpacity,
     RenderParagraph, RenderPhysicalModel, RenderPhysicalShape, RenderSliverOpacity,
-    RenderTransform,
 };
 use flui_painting::Alignment;
 use flui_painting::paint::Clip;
@@ -1030,33 +1029,16 @@ impl LaidOut {
         })
     }
 
-    /// The x-scale (matrix `[0][0]`) of a [`RenderTransform`] node — the factor a
-    /// `ScaleTransition` writes. Panics if `id` is not a `RenderTransform`.
-    pub fn transform_scale(&self, id: RenderId) -> f64 {
+    /// The paint transform of a [`RenderContainer`] node, painted or not (a
+    /// collapsed matrix pushes no layer). Panics if `id` is not a `RenderContainer`.
+    pub fn container_transform(&self, id: RenderId) -> Option<Matrix4> {
         self.pipeline_owner.with_mut(|owner| {
             owner
                 .render_tree_mut()
                 .get_mut(id)
-                .and_then(|node| node.downcast_render_object_mut::<RenderTransform>())
-                .map(|render| render.transform().get(0, 0))
-                .expect("render node should be a RenderTransform")
-        })
-    }
-
-    /// The Z-rotation (radians) of a [`RenderTransform`] node — what a
-    /// `RotationTransition` writes — recovered from the matrix as
-    /// `atan2(m[1][0], m[0][0])`. Panics if `id` is not a `RenderTransform`.
-    pub fn transform_rotation(&self, id: RenderId) -> f64 {
-        self.pipeline_owner.with_mut(|owner| {
-            owner
-                .render_tree_mut()
-                .get_mut(id)
-                .and_then(|node| node.downcast_render_object_mut::<RenderTransform>())
-                .map(|render| {
-                    let matrix = render.transform();
-                    matrix.get(1, 0).atan2(matrix.get(0, 0))
-                })
-                .expect("render node should be a RenderTransform")
+                .and_then(|node| node.downcast_render_object_mut::<RenderContainer>())
+                .map(|render| render.transform())
+                .expect("render node should be a RenderContainer")
         })
     }
 

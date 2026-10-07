@@ -20,7 +20,7 @@ use flui_platform::data_transfer::{
     RepresentationDescriptor, RepresentationIndex, TransferActions, TransferCompleter,
     TransferError, TransferFormat, TransferLimits, TransferPayload, TransferRequest,
 };
-use flui_scheduler::AsyncDriver;
+use flui_scheduler::{OwnerFrame, UpdateScheduler};
 use parking_lot::Mutex;
 
 // ============================================================================
@@ -186,7 +186,9 @@ impl DataTransferSource for MockSource {
 #[test]
 fn mock_source_drives_all_seven_stages_through_the_async_driver() {
     let source = Arc::new(MockSource::new());
-    let driver = AsyncDriver::new();
+    let scheduler = UpdateScheduler::new();
+    let owner_frame = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
+    let driver = owner_frame.async_driver();
     let frames = Arc::new(AtomicUsize::new(0));
     let frames_for_hook = Arc::clone(&frames);
     driver.set_request_frame(move || {
@@ -226,11 +228,11 @@ fn mock_source_drives_all_seven_stages_through_the_async_driver() {
     let token = driver.spawn_local(Box::pin(async move {
         *outcome_for_task.lock() = Some(request.await);
     }));
-    assert_eq!(driver.poll_ready(), 1);
+    assert_eq!(owner_frame.poll_ready(), 1);
     assert!(outcome.lock().is_none(), "no delivery before the producer");
 
     source.deliver_all();
-    assert_eq!(driver.poll_ready(), 1, "completion woke the task");
+    assert_eq!(owner_frame.poll_ready(), 1, "completion woke the task");
 
     // Stage 5 — decoding: the payload arrives typed.
     let delivered = outcome.lock().take().expect("delivery observed");

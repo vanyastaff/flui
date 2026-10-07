@@ -11,7 +11,7 @@ use std::rc::Rc;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Weak};
 
-use flui_animation::Vsync;
+use flui_animation::{FrameTick, MotionClock, Vsync};
 use flui_foundation::PresentationId;
 use flui_interaction::{
     FocusManager, GestureBinding, InteractionDispatchHandle, TextInputBackend, TextInputHandle,
@@ -61,12 +61,12 @@ fn format_millis(duration: Duration) -> String {
 pub(crate) struct RealmCapabilities<'a> {
     /// The realm's cross-tree `GlobalKey` uniqueness domain (ADR-0043).
     pub(crate) global_key_scope: GlobalKeyScope,
-    /// The realm's shared async-task driver (`build_owner.rs:296` is
-    /// realm-level; see the presentation-teardown contract for the
-    /// consequence of that when this presentation closes).
+    /// A `Weak` handle to the realm's shared async tasks (realm-level; see
+    /// the presentation-teardown contract for the consequence of that when
+    /// this presentation closes).
     pub(crate) async_driver: AsyncDriver,
     /// The realm's owner-local post-frame callback capability — addresses
-    /// the realm's [`flui_scheduler::LocalPostFrameLane`] directly, so it can
+    /// the realm's [`flui_scheduler::OwnerFrame`] directly, so it can
     /// capture `Rc`/`RefCell` widget state.
     pub(crate) local_post_frame_handle: LocalPostFrameHandle,
     /// The realm's interaction dispatch lane.
@@ -370,6 +370,10 @@ pub struct PresentationState {
     /// handle (sharing the inner `Arc<Mutex<VsyncInner>>`), so this cell is
     /// only ever borrowed for the length of a clone or a swap.
     vsync: RefCell<Vsync>,
+    /// This presentation's animation clock: maps the realm's raw frame time
+    /// to the monotonic animation time [`Self::vsync`] is ticked with.
+    /// Borrowed only inside [`Self::motion_tick`], never across user code.
+    motion_clock: RefCell<MotionClock>,
     /// This presentation's own physical-time produce-gate state machine
     /// (issue #556) — the per-presentation half of the `UpdateScheduler`/
     /// `FrameClock`/raster three-owner split. `UiRealm::draw_frame_entered`'s
@@ -737,6 +741,7 @@ impl PresentationState {
             performance_overlay: RefCell::new(None),
             redraw_pending: Cell::new(false),
             vsync: RefCell::new(Vsync::new()),
+            motion_clock: RefCell::new(MotionClock::new()),
             clock: frame_clock,
             last_segment_span: Cell::new(None),
             tree_revision: Cell::new(TreeRevision::ZERO),
@@ -820,6 +825,7 @@ impl PresentationState {
             performance_overlay: RefCell::new(None),
             redraw_pending: Cell::new(false),
             vsync: RefCell::new(Vsync::new()),
+            motion_clock: RefCell::new(MotionClock::new()),
             clock: FrameClock::new(),
             last_segment_span: Cell::new(None),
             tree_revision: Cell::new(TreeRevision::ZERO),
@@ -894,6 +900,21 @@ impl PresentationState {
     #[must_use]
     pub(crate) fn vsync(&self) -> Vsync {
         self.vsync.borrow().clone()
+    }
+
+    /// This frame's animation tick for the realm's raw frame time `raw`
+    /// (measured from the realm's start): monotonic and finite, so a stale
+    /// or repeated `raw` repeats the previous tick.
+    ///
+    /// The clock's borrow ends inside this call, before the caller hands the
+    /// tick to [`Vsync::tick_all`], which runs controller and listener code.
+    ///
+    /// The clock runs at its default rate while
+    /// [`AnimationController`](flui_animation::AnimationController) still
+    /// applies the scheduler's process-wide time dilation, so slow motion has
+    /// exactly one source.
+    pub(crate) fn motion_tick(&self, raw: Duration) -> FrameTick {
+        self.motion_clock.borrow_mut().frame(raw)
     }
 
     /// Replace this presentation's registry with a pre-existing shared

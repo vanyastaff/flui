@@ -28,7 +28,9 @@ src/
 │
 ├── animation.rs      # Animation<T> trait, AnimationDirection
 ├── controller.rs     # AnimationController (main driver)
+├── controller_tests.rs # controller failure-path matrix (cfg(test))
 ├── builder.rs        # AnimationControllerBuilder
+├── vsync.rs          # Vsync registry: drives many controllers per frame
 │
 ├── curved.rs         # CurvedAnimation (applies curve)
 ├── tween.rs          # TweenAnimation<T> (maps to type T)
@@ -42,11 +44,14 @@ src/
 ├── tween_types.rs    # Animatable, Tween, all tween types
 ├── status.rs         # AnimationStatus, AnimationBehavior
 ├── simulation.rs     # Simulation trait, Spring, Friction, Gravity
+├── spring.rs         # AnimatedValue, TwoWayConverter (interruptible springs)
+├── smoothing.rs      # exp_decay, Smoothed, SmoothDamp followers
 │
 ├── keyframes.rs      # Keyframes, KeyframesBuilder, KeyframesError
 ├── stagger.rs        # Stagger, StaggerOrigin
 ├── ext.rs            # AnimatableExt (`animate`)
-└── error.rs          # AnimationError
+├── error.rs          # AnimationError
+└── test_cases.rs     # table-test runner (cfg(test))
 ```
 
 ## Core Abstractions
@@ -237,33 +242,19 @@ struct RepeatRun {
 
 ### Tick Cycle
 
-Each frame (via the scheduler-driven `Ticker`):
+Each frame calls `tick_at(raw_elapsed_secs: f64)` with the absolute time
+since the active run started (`tick()` reads it from the controller's own
+ticker; production widgets are advanced through `Vsync::tick_all`):
 
-1. Lock `inner`
-2. Calculate elapsed time
-3. Update `value` based on duration/simulation
-4. Check for completion, update `status`
-5. Unlock `inner`
-6. Notify value listeners (via ChangeNotifier)
-7. Notify status listeners (if status changed)
+1. Lock `inner`, read the active run and its generation, unlock
+2. Sample the run's source (curve or simulation) outside the lock
+3. Lock `inner` again; if the run is still the same generation, commit the
+   new `value`, detect completion and update `status`; unlock
+4. Notify value listeners (via `ChangeNotifier`)
+5. Notify status listeners (if status changed)
 
-```rust
-fn tick(&self, delta: Duration) {
-    let (new_status, should_notify_status) = {
-        let mut inner = self.inner.lock();
-        // Update value and status
-        // ...
-        (inner.status, status_changed)
-    };
-    // Lock released
-    
-    self.notifier.notify_listeners();
-    
-    if should_notify_status {
-        self.notify_status_listeners(new_status);
-    }
-}
-```
+User code (curves, simulations, listeners) never runs under the state lock,
+so a frame takes the lock up to three times rather than once.
 
 ## Mapping decisions
 
@@ -794,15 +785,14 @@ primitive is not a measured throughput claim.
 ## Error Handling
 
 ```rust
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum AnimationError {
-    InvalidBounds,      // lower >= upper
-    InvalidValue,       // value outside bounds
-    InvalidDuration,    // duration <= 0
-    AlreadyDisposed,    // operation on disposed controller
-    AlreadyAnimating,   // conflicting animation command
-    TickerError,        // scheduler/ticker failure
+    Disposed,                // operation on a disposed controller
+    InvalidBounds(String),   // lower >= upper, non-finite bound/span, bad repeat range
+    TickerNotAvailable,      // declared; no current operation returns it
+    InvalidSpring(String),   // oscillating spring passed to fling
+    NonFiniteTarget(String), // non-finite target, `from`, velocity or simulation start
 }
 ```
 
@@ -816,9 +806,12 @@ Design:
 ### Arc Sharing
 
 ```rust
-let controller = Arc::new(AnimationController::new(...));
-let curved = Arc::new(CurvedAnimation::new(controller.clone(), curve));
-let tweened = TweenAnimation::new(tween, curved.clone());
+// `AnimationController` is itself a handle over `Arc`-shared state:
+// `clone()` shares the controller.
+let controller = AnimationController::new(duration, &scheduler);
+let curved: Arc<dyn Animation<f64>> =
+    Arc::new(CurvedAnimation::new(Arc::new(controller.clone()), curve));
+let tweened = TweenAnimation::new(tween, Arc::clone(&curved));
 ```
 
 Benefits:
@@ -834,15 +827,34 @@ Controllers require explicit disposal:
 controller.dispose();
 ```
 
-After disposal:
-- All operations return `Err(AnimationError::AlreadyDisposed)`
-- Ticker stopped and dropped
-- Listeners cleared
+After disposal, driving operations (`forward`, `reverse`, `animate_*`,
+`fling*`, `repeat*`, `stop`, `reset`) return `Err(AnimationError::Disposed)`
+and the ticker is stopped.
 
 Why not just Drop?
-- `Drop` can't return errors
-- `Drop` takes `&mut self`, not compatible with `Arc<Self>`
+- Clones of an `AnimationController` share one controller, so dropping one
+  handle cannot mean the animation is finished; `dispose` is the explicit end
+  of life for every handle at once
 - Explicit disposal can be called safely multiple times
+
+### Known gaps in the current controller
+
+These are defects, recorded here so the document matches the code until the
+controller rework lands; each has an ignored `contract:` test row that pins
+the intended behaviour (`cargo nextest run -p flui-animation --run-ignored only`):
+`tests/contracts/controller_robustness.rs` (disposed controller, curved-run
+finiteness and bounds), `tests/contracts/status_delivery.rs` (listener and
+`Vsync` walk panics, switch reentry) and `tests/contracts/ownership.rs`.
+
+- After `dispose`, `set_value` still changes the value, listener registration
+  is still accepted, and value listeners stay attached.
+- A status listener that panics stops the listeners after it from seeing that
+  transition, and a panicking curve or simulation ends the whole
+  `Vsync::tick_all` walk for that frame.
+- A curved run publishes the curve's output without a finiteness check or a
+  clamp to the bounds: a curve returning NaN or overshooting is published as is.
+- `AnimationSwitch` reads its parents' `value()` and `status()` while holding its
+  own lock, so a parent that reads the switch back deadlocks.
 
 ### Proxy queries release the parent guard before user code
 
@@ -867,45 +879,22 @@ Existing rounding, flooring and progress clamping remain deliberate.
 The public consumer family `integer_tweens_interpolate_across_the_full_range`
 checks both directions across the full range and ordinary rounding.
 
-### Keyframe tracks are pure functions of `Duration`
+### Weighted progress uses relative weights and exact endpoints
 
-A `Keyframes<T>` track stores its start value, its `total` and segments placed
-once by `build` (`checked_add` of each segment's `Duration`), so order is
-structural and the only placement errors are `Overrun`, `DurationOverflow` and
-`ZeroTotal`; non-finite keyframes are `NonFiniteValue`. Evaluation is a binary
-search for the first segment still running and one sample, with no state and
-no allocation beyond cloning `T`.
+`TweenSequence` revalidates each item's finite positive weight after caller edits
+to the public item fields. Evaluation scales weights by the largest weight, so
+finite inputs whose raw sum overflows still describe usable relative durations.
+The `total_weight` accessor retains the original sum and may return infinity;
+it does not drive interpolation. Exact progress endpoints return the first and
+last tween's endpoints. Interior progress divides by the actual relative weight,
+without an arbitrary epsilon that discards short segments. A relative interval
+that underflows to zero cannot be selected by representable interior progress,
+but its endpoint remains reachable.
 
-- **Right-continuous.** At a segment boundary the track returns the keyframe
-  value as a clone; at a zero-length `jump` it returns the value after the jump.
-  `keyframes_boundaries_are_exact`,
-  `keyframes_boundaries_are_exact_for_any_durations`.
-- **The curve belongs to the arriving segment.** `to(value, over, curve)` eases
-  into `value`; Compose's `using` on a key shapes the *following* interval
-  instead, which this API makes unrepresentable.
-  `keyframes_curve_belongs_to_arriving_segment`.
-- **Cubic segments are solved by time.** Consecutive `cubic` segments are a
-  cubic Hermite spline with Catmull-Rom tangents `(p₊ − p₋)/(t₊ − t₋)` over the
-  keyframe *times*; next to a `to` segment the tangent is that curve's
-  `Curve::slope` at the join, and next to a `hold`, a `jump` or a track end it
-  is zero, so the track is C¹ at every cubic join. There is no parameter-to-x
-  inversion to get wrong: the knots are times. `cubic_keyframes_pass_through_keys`,
-  `cubic_keyframes_are_c1_at_joins`.
-- **No non-finite sample is published.** A curve that returns NaN or infinity,
-  or a lerp or Hermite sum that overflows, publishes the segment's start value.
-  `keyframes_never_publish_non_finite`.
-- **Clamped and looped reads.** `value_at` clamps to `total`;
-  `value_at_looped` reduces `elapsed` modulo `total` in `u128` nanoseconds, so
-  `Duration::MAX` does not panic. As an `Animatable`, progress is clamped into
-  `[0, 1]` and NaN reads as 0. `keyframes_clamp_and_loop`,
-  `keyframes_progress_maps_to_time`,
-  `keyframes_extreme_durations_keep_relative_progress`.
-- **A panicking curve leaves the track intact**: there is no state to repair.
-  `keyframes_survive_panicking_curve`.
-
-`Stagger::delay` computes `step · |origin − i|` in half-step nanoseconds, so a
-centre between two indices is exact, and saturates at `Duration::MAX`.
-`stagger_delays_follow_origin`.
+Public consumer families `weighted_sequences_preserve_endpoints_and_relative_progress`
+and `weighted_sequences_reject_invalid_edited_configuration` cover overflowing
+finite weights, small first and final intervals, ordinary weighted progress,
+edited invalid configuration and a subsequent valid sequence.
 
 ### Controller sources execute outside the state lock
 

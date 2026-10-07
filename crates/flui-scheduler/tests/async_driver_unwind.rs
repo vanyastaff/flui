@@ -1,10 +1,12 @@
 //! Opaque future destructors must not replace an already authoritative failure.
 //! Abort-capable cases run in child processes so every table row still executes.
 
-use flui_scheduler::{AsyncDriver, TaskToken};
+use flui_scheduler::{OwnerFrame, TaskToken, UpdateScheduler};
+use std::cell::RefCell;
 use std::future::Future;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::pin::Pin;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
@@ -21,7 +23,7 @@ impl Drop for DropBomb {
 enum Outcome {
     Panic,
     Ready,
-    Cancel(Arc<Mutex<Option<TaskToken>>>),
+    Cancel(Rc<RefCell<Option<TaskToken>>>),
     Pending,
 }
 
@@ -46,7 +48,7 @@ impl Future for ProbeFuture {
             }
             Outcome::Ready => Poll::Ready(()),
             Outcome::Cancel(token) => {
-                let token = token.lock().expect("cancellation token").take();
+                let token = token.borrow_mut().take();
                 token.expect("live token").cancel();
                 Poll::Pending
             }
@@ -81,15 +83,18 @@ fn assert_panic(result: std::thread::Result<()>, message: &str) {
     );
 }
 
-fn assert_next_task(driver: &AsyncDriver) {
+fn assert_next_task(frame: &OwnerFrame) {
+    let driver = frame.async_driver();
     let token = driver.spawn_local(Box::pin(async {}));
-    assert_eq!(driver.poll_ready(), 1);
+    assert_eq!(frame.poll_ready(), 1);
     assert_eq!(driver.pending_task_count(), 0);
     drop(token);
 }
 
 fn poll_failure(eager: bool, bombs: usize) {
-    let driver = AsyncDriver::new();
+    let scheduler = UpdateScheduler::new();
+    let frame = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
+    let driver = frame.async_driver();
     let drops = Arc::new(AtomicUsize::new(0));
     let observed = Arc::new(Mutex::new(None));
     let future = probe(Outcome::Panic, bombs, &drops, &observed, None);
@@ -109,13 +114,13 @@ fn poll_failure(eager: bool, bombs: usize) {
         }));
         assert_panic(
             catch_unwind(AssertUnwindSafe(|| {
-                driver.poll_ready();
+                frame.poll_ready();
             })),
             "poll failure",
         );
         assert_eq!(driver.pending_task_count(), 1);
-        assert_eq!(driver.ready_task_count(), 1);
-        assert_eq!(driver.poll_ready(), 1);
+        assert_eq!(frame.ready_task_count(), 1);
+        assert_eq!(frame.poll_ready(), 1);
         assert_eq!(sibling_ran.load(Ordering::Relaxed), 1);
         drop((token, sibling));
     }
@@ -130,9 +135,9 @@ fn poll_failure(eager: bool, bombs: usize) {
         .take()
         .expect("poll waker");
     stale.wake_by_ref();
-    assert_eq!(driver.ready_task_count(), 0);
-    assert_eq!(driver.poll_ready(), 0);
-    assert_next_task(&driver);
+    assert_eq!(frame.ready_task_count(), 0);
+    assert_eq!(frame.poll_ready(), 0);
+    assert_next_task(&frame);
 }
 
 fn lazy_poll() {
@@ -155,7 +160,9 @@ fn eager_poll_two_drops() {
 }
 
 fn token_during_unwind() {
-    let driver = AsyncDriver::new();
+    let scheduler = UpdateScheduler::new();
+    let frame = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
+    let driver = frame.async_driver();
     let drops = Arc::new(AtomicUsize::new(0));
     let observed = Arc::new(Mutex::new(None));
     assert_panic(
@@ -167,38 +174,40 @@ fn token_during_unwind() {
     );
     assert_eq!(drops.load(Ordering::Relaxed), 0);
     assert_eq!(driver.pending_task_count(), 0);
-    assert_next_task(&driver);
+    assert_next_task(&frame);
 }
 
 fn retirement(cancel: bool, nested: bool) {
-    let driver = AsyncDriver::new();
+    let scheduler = UpdateScheduler::new();
+    let frame = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
+    let driver = frame.async_driver();
     let drops = Arc::new(AtomicUsize::new(0));
     let nested_drops = Arc::new(AtomicUsize::new(0));
     let observed = Arc::new(Mutex::new(None));
-    let cancellation = Arc::new(Mutex::new(None));
+    let cancellation = Rc::new(RefCell::new(None));
     let nested = nested
         .then(|| driver.spawn_local(probe(Outcome::Pending, 2, &nested_drops, &observed, None)));
     let outcome = if cancel {
-        Outcome::Cancel(Arc::clone(&cancellation))
+        Outcome::Cancel(Rc::clone(&cancellation))
     } else {
         Outcome::Ready
     };
     let token = driver.spawn_local(probe(outcome, 1, &drops, &observed, nested));
-    *cancellation.lock().expect("cancellation token") = Some(token);
+    *cancellation.borrow_mut() = Some(token);
     let sibling = driver.spawn_local(Box::pin(async {}));
     assert_panic(
         catch_unwind(AssertUnwindSafe(|| {
-            driver.poll_ready();
+            frame.poll_ready();
         })),
         "future destructor",
     );
     assert_eq!(drops.load(Ordering::Relaxed), 1);
     assert_eq!(nested_drops.load(Ordering::Relaxed), 0);
     assert_eq!(driver.pending_task_count(), 1);
-    assert_eq!(driver.ready_task_count(), 1);
-    assert_eq!(driver.poll_ready(), 1);
+    assert_eq!(frame.ready_task_count(), 1);
+    assert_eq!(frame.poll_ready(), 1);
     drop(sibling);
-    assert_next_task(&driver);
+    assert_next_task(&frame);
 }
 
 fn ready_retirement() {
@@ -212,7 +221,9 @@ fn nested_retirement() {
 }
 
 fn spawn_hook_failure(eager: bool) {
-    let driver = AsyncDriver::new();
+    let scheduler = UpdateScheduler::new();
+    let frame = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
+    let driver = frame.async_driver();
     driver.set_request_frame(|| panic!("spawn hook"));
     let drops = Arc::new(AtomicUsize::new(0));
     let observed = Arc::new(Mutex::new(None));
@@ -234,7 +245,7 @@ fn spawn_hook_failure(eager: bool) {
     );
     assert_eq!(drops.load(Ordering::Relaxed), 0);
     driver.set_request_frame(|| {});
-    assert_next_task(&driver);
+    assert_next_task(&frame);
 }
 
 fn lazy_spawn_hook() {
@@ -242,6 +253,265 @@ fn lazy_spawn_hook() {
 }
 fn eager_spawn_hook() {
     spawn_hook_failure(true);
+}
+
+/// Counts its drops without panicking.
+struct Counted(Arc<AtomicUsize>);
+
+impl Drop for Counted {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// The realm's frame hook is user code too: retirement drops its captures
+/// under the same catch as the tasks', keeps the first panic, and refuses a
+/// hook installed afterwards instead of keeping it past the realm.
+fn hook_retirement() {
+    let scheduler = UpdateScheduler::new();
+    let frame = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
+    let driver = frame.async_driver();
+    let drops = Arc::new(AtomicUsize::new(0));
+    let bomb = DropBomb(Arc::clone(&drops));
+    driver.set_request_frame(move || {
+        let _capture = &bomb;
+    });
+    let first = frame.retire().expect("the hook's capture panicked");
+    assert_eq!(
+        flui_foundation::panic::payload_text(&*first),
+        Some("future destructor")
+    );
+    assert_eq!(drops.load(Ordering::Relaxed), 1, "dropped once, by retire");
+
+    let late = Arc::new(AtomicUsize::new(0));
+    let capture = Counted(Arc::clone(&late));
+    driver.set_request_frame(move || {
+        let _capture = &capture;
+    });
+    assert_eq!(
+        late.load(Ordering::Relaxed),
+        1,
+        "a hook offered to a retired store is refused at once"
+    );
+    drop(frame);
+    assert_eq!(drops.load(Ordering::Relaxed), 1);
+}
+
+struct ReenterOnDrop(Option<Box<dyn FnOnce()>>);
+
+impl Drop for ReenterOnDrop {
+    fn drop(&mut self) {
+        if let Some(callback) = self.0.take() {
+            callback();
+        }
+    }
+}
+
+fn callback_retirement_closes_task_admission() {
+    let scheduler = UpdateScheduler::new();
+    let frame = OwnerFrame::new(&scheduler).expect("owner frame");
+    let driver = frame.async_driver();
+    let polls = Rc::new(std::cell::Cell::new(0));
+    let observed = Rc::clone(&polls);
+    let capture = ReenterOnDrop(Some(Box::new(move || {
+        let token = driver.spawn_local_eager(Box::pin(async move {
+            observed.set(observed.get() + 1);
+        }));
+        assert!(token.expect("refused task token").is_cancelled());
+    })));
+    frame
+        .local_post_frame_handle()
+        .schedule_local(move |_| {
+            drop(capture);
+        })
+        .expect("queued callback");
+    assert!(frame.retire().is_none());
+    assert_eq!(polls.get(), 0, "retirement must refuse even inline polling");
+    assert_eq!(frame.pending_task_count(), 0);
+}
+
+fn task_retirement_disarms_sibling_wakers() {
+    let scheduler = UpdateScheduler::new();
+    let frame = OwnerFrame::new(&scheduler).expect("owner frame");
+    let driver = frame.async_driver();
+    let observed = Arc::new(Mutex::new(None::<Waker>));
+    let sibling_waker = Arc::clone(&observed);
+    let capture = ReenterOnDrop(Some(Box::new(move || {
+        sibling_waker
+            .lock()
+            .expect("sibling waker")
+            .as_ref()
+            .expect("polled sibling")
+            .wake_by_ref();
+    })));
+    let first = driver.spawn_local(Box::pin(async move {
+        let _capture = capture;
+        std::future::pending::<()>().await;
+    }));
+    let second = driver
+        .spawn_local_eager(Box::pin(std::future::poll_fn(move |cx| {
+            *observed.lock().expect("observed waker") = Some(cx.waker().clone());
+            Poll::Pending
+        })))
+        .expect("pending sibling");
+    frame.poll_ready();
+    let wakes = Arc::new(AtomicUsize::new(0));
+    let count = Arc::clone(&wakes);
+    driver.set_request_frame(move || {
+        count.fetch_add(1, Ordering::Relaxed);
+    });
+    let before = wakes.load(Ordering::Relaxed);
+    assert!(frame.retire().is_none());
+    assert_eq!(
+        wakes.load(Ordering::Relaxed),
+        before,
+        "no sibling can request a frame during retirement"
+    );
+    assert!(first.is_cancelled());
+    assert!(second.is_cancelled());
+}
+
+fn eager_poll_cannot_reopen_retired_owner() {
+    let scheduler = UpdateScheduler::new();
+    let frame = Rc::new(OwnerFrame::new(&scheduler).expect("owner frame"));
+    let driver = frame.async_driver();
+    let owner = Rc::clone(&frame);
+    let token = driver
+        .spawn_local_eager(Box::pin(async move {
+            assert!(owner.retire().is_none());
+            std::future::pending::<()>().await;
+        }))
+        .expect("refused task token");
+    assert!(token.is_cancelled());
+    assert_eq!(frame.pending_task_count(), 0);
+    assert_eq!(frame.poll_ready(), 0);
+}
+
+fn foreign_frame_preserves_pending_demand() {
+    for direct in [false, true] {
+        let scheduler = UpdateScheduler::new();
+        let owner = OwnerFrame::new(&scheduler).expect("owner frame");
+        let foreign_scheduler = UpdateScheduler::new();
+        let foreign = OwnerFrame::new(&foreign_scheduler).expect("foreign owner frame");
+        let driver = owner.async_driver();
+        let ran = Rc::new(std::cell::Cell::new(false));
+        let observed = Rc::clone(&ran);
+        let token = driver.spawn_local(Box::pin(async move {
+            observed.set(true);
+        }));
+        assert!(scheduler.has_scheduled_frame());
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| {
+                if direct {
+                    scheduler.handle_begin_frame(std::time::Instant::now(), &foreign);
+                } else {
+                    scheduler.execute_frame(&foreign);
+                }
+            }))
+            .is_err()
+        );
+        assert!(
+            scheduler.has_scheduled_frame(),
+            "rejected owner must not consume demand"
+        );
+        assert!(!ran.get());
+        assert_eq!(scheduler.frame_count(), 0);
+        scheduler.execute_frame(&owner);
+        assert!(ran.get());
+        assert!(!token.is_cancelled());
+    }
+}
+
+/// During an existing unwind the hook's captures are retained, not dropped:
+/// a capture panicking in `Drop` then would abort the process.
+fn hook_retirement_during_unwind() {
+    let drops = Arc::new(AtomicUsize::new(0));
+    assert_panic(
+        catch_unwind(AssertUnwindSafe(|| {
+            let scheduler = UpdateScheduler::new();
+            let frame = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
+            let bomb = DropBomb(Arc::clone(&drops));
+            frame.async_driver().set_request_frame(move || {
+                let _capture = &bomb;
+            });
+            let _frame = frame;
+            panic!("outer failure");
+        })),
+        "outer failure",
+    );
+    assert_eq!(drops.load(Ordering::Relaxed), 0);
+}
+
+/// A subscriber whose every event panics.
+struct PanickingSubscriber;
+
+impl tracing::Subscriber for PanickingSubscriber {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn event(&self, _: &tracing::Event<'_>) {
+        panic!("subscriber");
+    }
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+/// Spawns its future through a dead driver from its own `Drop`.
+struct SpawnOnDrop {
+    driver: flui_scheduler::AsyncDriver,
+    future: Option<Pin<Box<ProbeFuture>>>,
+}
+
+impl Drop for SpawnOnDrop {
+    fn drop(&mut self) {
+        let future = self.future.take().expect("spawned once");
+        let token = self.driver.spawn_local(future);
+        assert!(token.is_cancelled());
+    }
+}
+
+/// A spawn refused because the realm is gone makes the rejected future safe
+/// before any diagnostic runs: retained during an unwind, dropped once
+/// otherwise, and a panicking subscriber changes neither.
+fn refused_spawn() {
+    let dead = {
+        let scheduler = UpdateScheduler::new();
+        OwnerFrame::new(&scheduler)
+            .expect("the scheduler has no live owner frame")
+            .async_driver()
+    };
+    let drops = Arc::new(AtomicUsize::new(0));
+    let observed = Arc::new(Mutex::new(None));
+    tracing::subscriber::with_default(PanickingSubscriber, || {
+        assert_panic(
+            catch_unwind(AssertUnwindSafe(|| {
+                let _spawn = SpawnOnDrop {
+                    driver: dead.clone(),
+                    future: Some(probe(Outcome::Pending, 2, &drops, &observed, None)),
+                };
+                panic!("outer failure");
+            })),
+            "outer failure",
+        );
+        assert_eq!(
+            drops.load(Ordering::Relaxed),
+            0,
+            "retained during the unwind"
+        );
+
+        let late = Arc::new(AtomicUsize::new(0));
+        let capture = Counted(Arc::clone(&late));
+        let token = dead.spawn_local(Box::pin(async move {
+            let _capture = capture;
+        }));
+        assert!(token.is_cancelled());
+        assert_eq!(late.load(Ordering::Relaxed), 1, "dropped once, at once");
+    });
 }
 
 #[test]
@@ -259,6 +529,28 @@ fn async_driver_unwind_matrix() {
         ("nested_retirement", nested_retirement),
         ("lazy_spawn_hook", lazy_spawn_hook),
         ("eager_spawn_hook", eager_spawn_hook),
+        ("hook_retirement", hook_retirement),
+        (
+            "foreign_frame_preserves_pending_demand",
+            foreign_frame_preserves_pending_demand,
+        ),
+        (
+            "callback_retirement_closes_task_admission",
+            callback_retirement_closes_task_admission,
+        ),
+        (
+            "task_retirement_disarms_sibling_wakers",
+            task_retirement_disarms_sibling_wakers,
+        ),
+        (
+            "eager_poll_cannot_reopen_retired_owner",
+            eager_poll_cannot_reopen_retired_owner,
+        ),
+        (
+            "hook_retirement_during_unwind",
+            hook_retirement_during_unwind,
+        ),
+        ("refused_spawn", refused_spawn),
     ];
     if let Ok(selected) = std::env::var("FLUI_ASYNC_UNWIND_CASE") {
         let (_, case) = cases

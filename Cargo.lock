@@ -1819,6 +1819,7 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+ "trybuild",
  "wgpu",
  "winit",
 ]
@@ -2023,6 +2024,7 @@ dependencies = [
  "criterion",
  "glam",
  "parking_lot",
+ "proptest",
  "serde",
  "serde_json",
  "smallvec",

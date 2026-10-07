@@ -176,7 +176,8 @@ pub(crate) fn two_realms_two_threads_no_shared_state() {
 
             sender_b.request_redraw();
             let _ = realm_b.drain_commands();
-            realm_b.scheduler().drive_frame_with_lane(
+            realm_b.scheduler().drive_frame(
+                realm_b.owner_frame(),
                 flui_scheduler::Instant::now(),
                 flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
                 || {
@@ -186,21 +187,20 @@ pub(crate) fn two_realms_two_threads_no_shared_state() {
                     rendezvous_or_timeout("realm B");
                     let _ = realm_b.draw_frame(coexistence_constraints());
                 },
-                realm_b.local_post_frame_lane(),
             );
             (wakes_b.load(Ordering::Relaxed), realm_b.realm_id())
         });
 
         sender_a.request_redraw();
         let _ = realm_a.drain_commands();
-        realm_a.scheduler().drive_frame_with_lane(
+        realm_a.scheduler().drive_frame(
+            realm_a.owner_frame(),
             flui_scheduler::Instant::now(),
             flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
             || {
                 rendezvous_or_timeout("realm A");
                 let _ = realm_a.draw_frame(coexistence_constraints());
             },
-            realm_a.local_post_frame_lane(),
         );
 
         handle.join().expect("realm B's thread did not panic")
@@ -392,6 +392,7 @@ fn wake_debt_and_signal_write_matrix() {
             ("signal_write_routing::a_failed_signal_write_rearm_retries_at_the_next_owner_boundary", signal_write_routing::a_failed_signal_write_rearm_retries_at_the_next_owner_boundary as fn()),
             ("signal_write_routing::an_older_overlapping_wake_cannot_clear_newer_failed_delivery_debt", signal_write_routing::an_older_overlapping_wake_cannot_clear_newer_failed_delivery_debt as fn()),
             ("redraw_wake_routing::a_cross_thread_frame_request_reaches_the_realms_platform_wake", redraw_wake_routing::a_cross_thread_frame_request_reaches_the_realms_platform_wake as fn()),
+            ("redraw_wake_routing::frame_waker_wakes_the_realm_from_a_worker", redraw_wake_routing::frame_waker_wakes_the_realm_from_a_worker as fn()),
             ("addressed_input_routing::panicking_keyboard_dispatch_keeps_priority_over_a_panicking_wake", addressed_input_routing::panicking_keyboard_dispatch_keeps_priority_over_a_panicking_wake as fn()),
             #[cfg(feature = "hot-reload")]
             ("hot_reload_recovery::failed_reload_wake_rearms_the_accepted_tail", hot_reload_recovery::failed_reload_wake_rearms_the_accepted_tail as fn()),
@@ -443,6 +444,7 @@ fn frame_pacing_and_pump_matrix() {
             ("frame_clock_segment_gate::surface_lost_retry_preserves_the_original_input_epoch_for_the_presented_frame", frame_clock_segment_gate::surface_lost_retry_preserves_the_original_input_epoch_for_the_presented_frame as fn()),
             ("frame_pipeline_and_vsync::attach_root_widget_bootstraps_shared_render_tree", frame_pipeline_and_vsync::attach_root_widget_bootstraps_shared_render_tree as fn()),
             ("frame_pipeline_and_vsync::the_production_frame_polls_the_realms_async_driver_once_before_the_pipeline", frame_pipeline_and_vsync::the_production_frame_polls_the_realms_async_driver_once_before_the_pipeline as fn()),
+            ("frame_pipeline_and_vsync::an_invalid_or_backwards_frame_time_holds_the_animation", frame_pipeline_and_vsync::an_invalid_or_backwards_frame_time_holds_the_animation as fn()),
             ("frame_pipeline_and_vsync::surface_lost_keeps_needs_redraw_armed_for_a_retry", frame_pipeline_and_vsync::surface_lost_keeps_needs_redraw_armed_for_a_retry as fn()),
             ("pump_transaction::pump_post_frame_callback_observes_this_frames_committed_layout", pump_transaction::pump_post_frame_callback_observes_this_frames_committed_layout as fn()),
             ("presentation_text_input::a_text_store_lock_requested_during_a_frame_is_granted_after_the_drive_returns", presentation_text_input::a_text_store_lock_requested_during_a_frame_is_granted_after_the_drive_returns as fn()),

@@ -7,7 +7,8 @@
 //! which the design systems' paint tests read, `view::dev_reload`, the
 //! hook `flui-hot-reload`'s host drivers implement (ADR-0094 §1), and
 //! `view::dev_agent`, the hook `flui-devtools`' agent server implements
-//! (ADR-0095 §3).
+//! (ADR-0095 §3), and `view::FrameWaker`, the one scheduler capability a
+//! package hands a worker thread (ADR-0136 §2).
 //! ARCHITECTURE.md records how it was measured.
 
 /// Every measured item through its SDK path: removing or moving one fails to
@@ -60,8 +61,8 @@ mod measured {
     use flui_sdk::view::prelude::{BuildContext as _, InheritedData as _, StatelessView as _};
     use flui_sdk::view::{
         AnimatedView as _, BoxedView as _, BuildContext as _, BuildContextExt as _, Child as _,
-        FieldMask as _, GlobalKey as _, InheritedData as _, InheritedView as _, IntoView as _,
-        LocalPostFrameHandle as _, RebuildHandle as _, RebuildReason as _,
+        FieldMask as _, FrameWaker as _, GlobalKey as _, InheritedData as _, InheritedView as _,
+        IntoView as _, LocalPostFrameHandle as _, RebuildHandle as _, RebuildReason as _,
         RenderObjectContext as _, RenderView as _, StatefulView as _, View as _, ViewExt as _,
         ViewState as _, impl_animated_view as _, impl_inherited_view as _, impl_render_view as _,
         single_child_view_children as _,

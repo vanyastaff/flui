@@ -27,6 +27,7 @@
 //! | `RenderOpacity` | `harness_opacity_*` | yes | — | yes | yes | queries |
 //! | `RenderVisibility` | `harness_visibility_*` | yes | — | yes | yes | queries |
 //! | `RenderAnimatedOpacity` | `harness_animated_opacity_*` | yes | yes | yes | yes | tick dirty-marking |
+//! | `RenderAnimatedTransform` | `harness_animated_transform_*` | yes | yes | yes | yes | tick dirty-marking, cached sample |
 //! | `RenderTransform` | `harness_transform_*` | yes | — | yes | yes | paint transform |
 //! | `RenderFittedBox` | `harness_fitted_box_*` | yes | — | — | yes | paint transform |
 //! | `RenderFractionallySizedBox` | `harness_fractionally_sized_box_*` | yes | — | — | yes | — |
@@ -139,7 +140,7 @@ use flui_rendering::{
     },
     semantics::SemanticsProperties,
     testing::{
-        BoxQueryRun, DrawKind, ParentDataSeed, Probe, RenderTester, TreeNode,
+        BoxQueryRun, DrawKind, FrameRun, ParentDataSeed, Probe, RenderTester, TreeNode,
         assert_descendant_properties, assert_has_committed_geometry, assert_has_committed_size,
         box_node, sliver_node,
     },
@@ -171,6 +172,7 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderOpacity",
     "RenderVisibility",
     "RenderAnimatedOpacity",
+    "RenderAnimatedTransform",
     "RenderTransform",
     "RenderFittedBox",
     "RenderFractionallySizedBox",
@@ -2248,6 +2250,385 @@ fn harness_animated_opacity_paint_alpha_tracks_controller_value_at_0_partial_255
             run.structure(),
         );
     }
+}
+
+// ── RenderAnimatedTransform ──────────────────────────────────────────────
+
+/// A scale transition node over a 40×40 red child, centred in nothing: the
+/// node takes the child's size under loose constraints.
+fn animated_scale(controller: &AnimationController) -> FrameRun {
+    // A boundary below the root: its retained capture is what a layer update
+    // patches.
+    RenderTester::mount(
+        box_node(RenderFlex::row()).child(
+            box_node(RenderRepaintBoundary::new()).child(
+                box_node(RenderAnimatedTransform::new(TransformMotion::Scale {
+                    scale: animation_from(controller),
+                }))
+                .label("transform")
+                .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+            ),
+        ),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame()
+}
+
+/// Sets `value`, pumps one frame and returns `(nodes painted, structure)`.
+fn tick_to(
+    run: &mut FrameRun,
+    controller: &AnimationController,
+    value: f64,
+) -> (u64, Vec<&'static str>) {
+    let before = run.owner().counters().nodes_painted;
+    controller.set_value(value);
+    run.pump();
+    let painted = run.owner().counters().nodes_painted - before;
+    (painted, run.structure())
+}
+
+/// Nodes a composited-layer update repaints in the [`animated_scale`] shape:
+/// the root row, which re-records around the boundary's patched capture. A
+/// repaint of the boundary's subtree paints at least the boundary, the
+/// transform and the child on top of it. `RenderAnimatedOpacity` measures the
+/// same in this shape.
+const PATCH_REPAINTS: u64 = 1;
+
+fn harness_animated_transform_tick_dirty_marking() {
+    let controller = ticking_controller(100, 1.0);
+    let mut run = animated_scale(&controller);
+    assert!(
+        !run.structure().contains(&"Transform"),
+        "at rest on the identity there is no transform layer: {:?}",
+        run.structure()
+    );
+
+    let (crossing, structure) = tick_to(&mut run, &controller, 0.5);
+    assert!(
+        structure.contains(&"Transform"),
+        "a layered matrix pushes a layer: {structure:?}"
+    );
+    assert!(
+        crossing > PATCH_REPAINTS,
+        "identity -> layered adds the layer, so the boundary's subtree repaints"
+    );
+
+    let (patched, structure) = tick_to(&mut run, &controller, 0.75);
+    assert!(structure.contains(&"Transform"), "{structure:?}");
+    assert!(
+        patched <= PATCH_REPAINTS,
+        "a tick that stays layered patches the layer instead of repainting the subtree: \
+         {patched} painted, {crossing} on the crossing"
+    );
+
+    for _ in 0..4 {
+        let (painted, _) = tick_to(&mut run, &controller, 0.75);
+        assert_eq!(painted, 0, "repeated unchanged values mark nothing");
+    }
+
+    let (painted, structure) = tick_to(&mut run, &controller, 0.0);
+    assert!(
+        painted > 0,
+        "layered -> degenerate removes the layer, so it repaints"
+    );
+    assert!(!structure.contains(&"Transform"), "{structure:?}");
+
+    // The same rule for a pure translation: it is layered too.
+    let slide = ticking_controller(100, 0.0);
+    let offset = ProxyAnimation::new(Arc::new(flui_animation::ext::AnimatableExt::animate(
+        flui_animation::Tween::new(
+            TranslationFraction::ZERO,
+            TranslationFraction::new(1.0, 0.0),
+        ),
+        Arc::new(slide.clone()) as Arc<dyn Animation<f64>>,
+    )) as Arc<dyn Animation<TranslationFraction>>);
+    let mut run = RenderTester::mount(
+        box_node(RenderFlex::row()).child(
+            box_node(RenderRepaintBoundary::new()).child(
+                box_node(RenderAnimatedTransform::new(TransformMotion::Slide {
+                    offset,
+                    text_direction: TextDirection::Ltr,
+                }))
+                .child(box_node(RenderColoredBox::red(40.0, 40.0))),
+            ),
+        ),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+    let (crossing, structure) = tick_to(&mut run, &slide, 0.25);
+    assert!(structure.contains(&"Transform"), "{structure:?}");
+    let (patched, _) = tick_to(&mut run, &slide, 0.5);
+    assert!(
+        patched <= PATCH_REPAINTS && patched < crossing,
+        "a moving translation patches its layer: {patched} painted, {crossing} on the crossing"
+    );
+}
+
+fn harness_animated_transform_singular_paints_and_hits_nothing() {
+    let controller = ticking_controller(100, 0.0);
+    let run = animated_scale(&controller);
+    assert!(
+        !run.structure().contains(&"Picture"),
+        "a child scaled to zero paints nothing: {:?}",
+        run.structure()
+    );
+    assert!(
+        !run.hit(20.0, 20.0).contains(&run.id("child")),
+        "a child scaled to zero is not hit"
+    );
+    let mut run = run;
+    run.update::<RenderAnimatedTransform>(run.id("transform"), |node| {
+        assert_eq!(
+            node.set_transform_hit_tests(false),
+            flui_rendering::RenderUpdateImpact::NONE
+        );
+    });
+    assert!(
+        run.hit(20.0, 20.0).contains(&run.id("child")),
+        "with transformed hit-testing off, a singular matrix still hits the child where it \
+         was laid out"
+    );
+
+    let controller = ticking_controller(100, 0.5);
+    let run = animated_scale(&controller);
+    assert!(
+        run.hit(15.0, 15.0).contains(&run.id("child")),
+        "inside the painted square"
+    );
+    assert!(
+        !run.hit(2.0, 2.0).contains(&run.id("child")),
+        "outside the painted square"
+    );
+}
+
+/// An animation whose value the test scripts directly (a controller clamps
+/// to its bounds, so it cannot produce NaN or 1e300); `controller` supplies
+/// the listener channel, and [`ScriptedAnimation::set`] fires it.
+#[derive(Debug, Clone)]
+struct ScriptedAnimation {
+    controller: AnimationController,
+    value: Arc<std::sync::Mutex<f64>>,
+}
+
+impl ScriptedAnimation {
+    fn new(value: f64) -> Self {
+        Self {
+            controller: ticking_controller(100, 0.0),
+            value: Arc::new(std::sync::Mutex::new(value)),
+        }
+    }
+
+    fn set(&self, value: f64) {
+        *self.value.lock().expect("unpoisoned") = value;
+        let poke = if self.controller.value() == 0.0 {
+            1.0
+        } else {
+            0.0
+        };
+        self.controller.set_value(poke);
+    }
+}
+
+impl flui_foundation::Listenable for ScriptedAnimation {
+    fn add_listener(
+        &self,
+        callback: flui_foundation::ListenerCallback,
+    ) -> flui_foundation::ListenerId {
+        self.controller.add_listener(callback)
+    }
+    fn remove_listener(&self, id: flui_foundation::ListenerId) {
+        self.controller.remove_listener(id);
+    }
+    fn remove_all_listeners(&self) {
+        self.controller.remove_all_listeners();
+    }
+}
+
+impl Animation<f64> for ScriptedAnimation {
+    fn value(&self) -> f64 {
+        *self.value.lock().expect("unpoisoned")
+    }
+    fn status(&self) -> flui_animation::AnimationStatus {
+        self.controller.status()
+    }
+    fn add_status_listener(
+        &self,
+        callback: flui_animation::StatusCallback,
+    ) -> flui_foundation::ListenerId {
+        self.controller.add_status_listener(callback)
+    }
+    fn remove_status_listener(&self, id: flui_foundation::ListenerId) {
+        self.controller.remove_status_listener(id);
+    }
+}
+
+fn harness_animated_transform_non_finite_sample_keeps_the_last_matrix() {
+    let controller = ScriptedAnimation::new(0.5);
+    let mut run = RenderTester::mount(
+        box_node(RenderRepaintBoundary::new()).child(
+            box_node(RenderAnimatedTransform::new(TransformMotion::Scale {
+                scale: ProxyAnimation::new(Arc::new(controller.clone()) as Arc<dyn Animation<f64>>),
+            }))
+            .label("transform")
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+        ),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+    let at_half = run
+        .pipeline()
+        .transform_to(run.id("child"), run.id("transform"));
+    controller.set(f64::NAN);
+    run.pump();
+    assert_eq!(
+        run.pipeline()
+            .transform_to(run.id("child"), run.id("transform")),
+        at_half,
+        "a NaN sample keeps the last finite matrix"
+    );
+    controller.set(1e300);
+    run.pump();
+    assert!(
+        !run.structure().contains(&"Transform") && !run.structure().contains(&"Picture"),
+        "a finite scale whose matrix overflows is degenerate: {:?}",
+        run.structure()
+    );
+    controller.set(0.25);
+    run.pump();
+    assert!(
+        run.structure().contains(&"Transform"),
+        "the next finite value resumes"
+    );
+
+    // A finite slide fraction whose product with the size overflows: the
+    // coordinate conversion falls back to the untransformed position instead
+    // of publishing infinities.
+    let slide = ticking_controller(100, 1.0);
+    let offset = ProxyAnimation::new(Arc::new(flui_animation::ext::AnimatableExt::animate(
+        flui_animation::Tween::new(
+            TranslationFraction::ZERO,
+            TranslationFraction::new(f64::MAX, 0.0),
+        ),
+        Arc::new(slide) as Arc<dyn Animation<f64>>,
+    )) as Arc<dyn Animation<TranslationFraction>>);
+    let run = RenderTester::mount(
+        box_node(RenderAnimatedTransform::new(TransformMotion::Slide {
+            offset,
+            text_direction: TextDirection::Ltr,
+        }))
+        .label("transform")
+        .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+    assert_eq!(
+        run.pipeline()
+            .transform_to(run.id("child"), run.id("transform")),
+        Some(Matrix4::IDENTITY),
+        "an overflowed matrix is not composed into coordinate conversion"
+    );
+}
+
+/// An animation whose `value()` calls are counted.
+#[derive(Debug, Clone)]
+struct CountingAnimation {
+    controller: AnimationController,
+    reads: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl flui_foundation::Listenable for CountingAnimation {
+    fn add_listener(
+        &self,
+        callback: flui_foundation::ListenerCallback,
+    ) -> flui_foundation::ListenerId {
+        self.controller.add_listener(callback)
+    }
+    fn remove_listener(&self, id: flui_foundation::ListenerId) {
+        self.controller.remove_listener(id);
+    }
+    fn remove_all_listeners(&self) {
+        self.controller.remove_all_listeners();
+    }
+}
+
+impl Animation<f64> for CountingAnimation {
+    fn value(&self) -> f64 {
+        self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.controller.value()
+    }
+    fn status(&self) -> flui_animation::AnimationStatus {
+        self.controller.status()
+    }
+    fn add_status_listener(
+        &self,
+        callback: flui_animation::StatusCallback,
+    ) -> flui_foundation::ListenerId {
+        self.controller.add_status_listener(callback)
+    }
+    fn remove_status_listener(&self, id: flui_foundation::ListenerId) {
+        self.controller.remove_status_listener(id);
+    }
+}
+
+fn harness_animated_transform_reads_only_its_cached_sample() {
+    let controller = ticking_controller(100, 0.5);
+    let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counting = CountingAnimation {
+        controller: controller.clone(),
+        reads: Arc::clone(&reads),
+    };
+    let mut run = RenderTester::mount(
+        box_node(RenderAnimatedTransform::new(TransformMotion::Rotation {
+            turns: ProxyAnimation::new(Arc::new(counting) as Arc<dyn Animation<f64>>),
+        }))
+        .label("transform")
+        .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+
+    let after_mount = reads.load(std::sync::atomic::Ordering::SeqCst);
+    let _ = run.hit(20.0, 20.0);
+    let _ = run
+        .pipeline()
+        .transform_to(run.id("child"), run.id("transform"));
+    run.mark_needs_paint(run.id("transform"));
+    run.pump();
+    assert_eq!(
+        reads.load(std::sync::atomic::Ordering::SeqCst),
+        after_mount,
+        "paint, hit-testing and coordinate mapping must read the cached sample, not the animation"
+    );
+    controller.set_value(0.25);
+    assert_eq!(
+        reads.load(std::sync::atomic::Ordering::SeqCst),
+        after_mount + 1,
+        "a tick reads the animation exactly once, in the listener"
+    );
+}
+
+fn harness_animated_transform_releases_proxy_after_tree_drop() {
+    let controller = ticking_controller(100, 0.5);
+    let parent: Arc<dyn Animation<f64>> = Arc::new(controller);
+    let weak = Arc::downgrade(&parent);
+    let run = RenderTester::mount(
+        box_node(RenderAnimatedTransform::new(TransformMotion::Scale {
+            scale: ProxyAnimation::new(parent),
+        }))
+        .child(box_node(RenderColoredBox::red(40.0, 40.0))),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+    assert!(
+        weak.upgrade().is_some(),
+        "the mounted node keeps its animation"
+    );
+    drop(run);
+    assert!(
+        weak.upgrade().is_none(),
+        "dropping the tree without a detach must release the animation: the tick listener \
+         holds the proxy weakly"
+    );
 }
 
 fn harness_semantics_annotations_builds_semantics_node_and_passes_layout() {
@@ -5920,6 +6301,26 @@ fn family_clips_and_effects() {
             (
                 "animated_opacity_paint_alpha_tracks_controller_value_at_0_partial_255",
                 harness_animated_opacity_paint_alpha_tracks_controller_value_at_0_partial_255,
+            ),
+            (
+                "animated_transform_tick_dirty_marking",
+                harness_animated_transform_tick_dirty_marking,
+            ),
+            (
+                "animated_transform_singular_paints_and_hits_nothing",
+                harness_animated_transform_singular_paints_and_hits_nothing,
+            ),
+            (
+                "animated_transform_non_finite_sample_keeps_the_last_matrix",
+                harness_animated_transform_non_finite_sample_keeps_the_last_matrix,
+            ),
+            (
+                "animated_transform_reads_only_its_cached_sample",
+                harness_animated_transform_reads_only_its_cached_sample,
+            ),
+            (
+                "animated_transform_releases_proxy_after_tree_drop",
+                harness_animated_transform_releases_proxy_after_tree_drop,
             ),
             (
                 "transform_paints_with_transform_layer",

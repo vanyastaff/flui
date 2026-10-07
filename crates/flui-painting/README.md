@@ -35,7 +35,7 @@ The crate owns the paint, style and text values:
 
 - `paint` — `Paint`, `Path` (a kurbo `BezPath` inside, with exact winding and
   tight bounds), `Shader`, `BlendMode`, `Clip`, images and effects;
-- `styling` — `Color` (`Color::lerp` interpolates premultiplied), borders,
+- `styling` — `Color` (`Color::lerp` interpolates in premultiplied Oklab), borders,
   `BorderRadius`, `BoxDecoration`, gradients and shadows;
 - `typography` — `TextStyle`, `FontWeight`, spans, alignment and metrics;
 - at the root, `Alignment`, `BoxFit`, `BoxShape` and `TextBaseline`.

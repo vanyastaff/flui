@@ -11,7 +11,7 @@ use flui_foundation::{PresentationId, RealmId};
 use flui_painting::{FontCollection, TextContext};
 use flui_platform_api::{Clipboard, Storage};
 use flui_rendering::TextContextHandle;
-use flui_scheduler::{AsyncDriver, ClockSource, LocalPostFrameLane, UpdateScheduler};
+use flui_scheduler::{ClockSource, OwnerFrame, UpdateScheduler};
 
 /// What a host hands a [`UiRealm`](crate::ui_realm::UiRealm) it builds: the
 /// services the host owns and every realm shares, as opposed to the
@@ -84,12 +84,12 @@ impl<'a> RealmHostServices<'a> {
 
 /// What [`UiRealm`](crate::ui_realm::UiRealm)'s constructors need to wire it
 /// up: the host's services, plus a fresh, realm-owned [`UpdateScheduler`] —
-/// the strong root — and the `local_post_frame_lane()` and `async_driver()`
-/// handles derived from that SAME scheduler. Resolved once, here, so the
-/// realm's own source reaches no process-global scheduler.
+/// the strong root — and the [`OwnerFrame`] made for that SAME scheduler, the
+/// only strong owner of the realm's owner-local post-frame callbacks and async
+/// tasks (ADR-0136 §2). Resolved once, here, so the realm's own source reaches
+/// no process-global scheduler.
 pub(crate) struct RealmServices {
-    pub(crate) local_post_frame: LocalPostFrameLane,
-    pub(crate) async_driver: AsyncDriver,
+    pub(crate) owner_frame: OwnerFrame,
     pub(crate) scheduler: UpdateScheduler,
     /// The platform wake the realm's scheduler, presentations and command
     /// sender fire.
@@ -131,8 +131,8 @@ impl RealmServices {
         } = host;
         let scheduler = UpdateScheduler::new();
         Self {
-            local_post_frame: scheduler.new_local_post_frame_lane(),
-            async_driver: scheduler.async_driver().clone(),
+            owner_frame: OwnerFrame::new(&scheduler)
+                .expect("BUG: a fresh scheduler has no owner frame"),
             scheduler,
             wake,
             needs_redraw,

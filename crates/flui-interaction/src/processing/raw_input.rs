@@ -290,7 +290,10 @@ impl RawInputHandler {
 
     /// Handle a pointer event, converting to raw event and invoking callback.
     ///
-    /// Returns the generated `RawPointerEvent` if one was created.
+    /// Returns the generated `RawPointerEvent` if one was created. The
+    /// callback runs with no borrow held, so it may call
+    /// [`Self::set_callback`] or [`Self::clear_callback`]; the change applies
+    /// from the next event.
     pub fn handle_event(&self, event: &PointerEvent) -> Option<RawPointerEvent> {
         if !self.enabled.get() {
             return None;
@@ -298,9 +301,10 @@ impl RawInputHandler {
 
         let raw_event = self.convert_event(event);
 
-        if let Some(ref raw) = raw_event
-            && let Some(callback) = self.callback.borrow().clone()
-        {
+        // Clone the callback out and release the borrow before calling it:
+        // the callback may replace or clear itself through this handler.
+        let callback = self.callback.borrow().clone();
+        if let (Some(raw), Some(callback)) = (&raw_event, callback) {
             callback(raw.clone());
         }
 
