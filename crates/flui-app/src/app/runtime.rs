@@ -201,6 +201,12 @@ pub(super) struct RealmSlot {
     /// `Resized` event — never shared with a sibling realm's applier, so a
     /// resize addressed to one window can never resize another's surface.
     pub(super) surface_applier: Option<SurfaceApplier>,
+    /// The presentation whose window owns the surface `surface_applier`
+    /// resizes: the realm's primary when the applier was installed. A
+    /// `Resized` for any other presentation of this realm (a
+    /// `WindowPolicy::Shared` secondary) must not reach that surface until
+    /// sinks are per-presentation (#559).
+    pub(super) surface_owner: Option<PresentationId>,
 }
 
 /// The [`RealmId`]-keyed, insertion-ordered realm registry `AppRuntime` hosts
