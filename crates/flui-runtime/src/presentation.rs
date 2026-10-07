@@ -579,6 +579,7 @@ impl PresentationState {
         // The arena's deadlines read the realm's clock: a recognizer's
         // timeout and the frame that polls it share one timeline.
         let gestures = GestureBinding::with_clock(Arc::new(clock.clone()));
+        flui_interaction::__runtime::set_pointer_capture_wake(&gestures, Arc::downgrade(window));
         let cursor_window = Arc::downgrade(window);
         gestures
             .mouse_tracker()

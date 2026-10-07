@@ -47,6 +47,7 @@ pub(crate) struct ContactCapture {
     pointer: PointerInfo,
     sequence: u64,
     status: Cell<CaptureStatus>,
+    deliveries: Cell<usize>,
     wake: Option<SharedWeak<dyn PlatformWindow>>,
 }
 
@@ -60,6 +61,7 @@ impl ContactCapture {
             pointer,
             sequence,
             status: Cell::new(CaptureStatus::Unclaimed),
+            deliveries: Cell::new(0),
             wake,
         })
     }
@@ -74,6 +76,20 @@ impl ContactCapture {
 
     pub(crate) fn release_requested(&self) -> bool {
         matches!(self.status.get(), CaptureStatus::Released(_))
+    }
+
+    pub(crate) fn is_delivering(&self) -> bool {
+        self.deliveries.get() != 0
+    }
+
+    pub(crate) fn begin_delivery(&self) -> CaptureDelivery<'_> {
+        let deliveries = self
+            .deliveries
+            .get()
+            .checked_add(1)
+            .expect("BUG: pointer capture delivery depth exhausted");
+        self.deliveries.set(deliveries);
+        CaptureDelivery(self)
     }
 
     pub(crate) fn end(&self) {
@@ -127,6 +143,14 @@ impl ContactCapture {
         failure.invoke(|| window.request_redraw());
         failure.retire(window);
         failure.finish();
+    }
+}
+
+pub(crate) struct CaptureDelivery<'a>(&'a ContactCapture);
+
+impl Drop for CaptureDelivery<'_> {
+    fn drop(&mut self) {
+        self.0.deliveries.set(self.0.deliveries.get() - 1);
     }
 }
 

@@ -204,7 +204,7 @@ fn assert_capture_wake_failure(active_unwind: bool) {
     let binding = GestureBinding::new();
     let window = Arc::new(CaptureWakeWindow(AtomicUsize::new(0)));
     let capability: Arc<dyn flui_platform_api::PlatformWindow> = window.clone();
-    binding.set_pointer_capture_wake(Arc::downgrade(&capability));
+    flui_interaction::__runtime::set_pointer_capture_wake(&binding, Arc::downgrade(&capability));
     let held = Rc::new(RefCell::new(None::<PointerCapture>));
     let store = held.clone();
     let lost = Rc::new(Cell::new(0));
