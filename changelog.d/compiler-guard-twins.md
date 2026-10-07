@@ -18,3 +18,4 @@
 - Diagnostic derive shape and field-attribute compiler examples have matching valid companions.
 - The app's shared-platform window-opening compiler example has a matching valid owner-capability callback.
 - Navigation compiler examples share identical setup for typed route outputs and lifecycle context admission.
+- Renderer thread-trait compiler examples share a valid public-type assertion setup.
