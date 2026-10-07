@@ -1,12 +1,20 @@
-//! Windows event conversion to W3C ui-events (0.3 API)
+//! Win32 message conversion to W3C ui-events (0.3 API).
 //!
-//! Converts Win32 messages to W3C-compliant PointerEvent using ui-events 0.3.
+//! `window_proc` unpacks every mouse and keyboard message through these
+//! functions:
 //!
-//! These functions are ready for use but not yet wired into `window_proc`
-//! (Phase 2: event dispatch integration).
-
-// All items in this module are prepared for Phase 2 integration.
-#![cfg_attr(not(target_os = "windows"), expect(dead_code))]
+//! - **Modifiers** are the queue-synchronized key state (`GetKeyState`), which
+//!   Win32 advances as each input message is retrieved — the state that held
+//!   when this message was generated. `GetAsyncKeyState` would report the
+//!   keyboard at processing time instead, so a queued Shift+click whose Shift
+//!   was released before the click was processed would lose its Shift.
+//! - **Capture** belongs to a press sequence: [`capture_on_press`] captures
+//!   the mouse on a button press and [`release_capture_after`] releases it
+//!   once no button stays held, so a drag released outside the client area
+//!   still delivers its release (at client coordinates outside the client
+//!   rectangle, sign-extended by `get_x_lparam`). A capture taken away while
+//!   a button is held ends the sequence with a cancel
+//!   ([`capture_changed_event`]).
 
 use dpi::{PhysicalPosition, PhysicalSize};
 use keyboard_types::Modifiers as KeyboardModifiers;
@@ -20,10 +28,19 @@ use ui_events::{
 use windows::Win32::{
     Foundation::{HWND, LPARAM, POINT, WPARAM},
     Graphics::Gdi::ScreenToClient,
-    UI::Input::KeyboardAndMouse::{VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT},
+    UI::{
+        Input::KeyboardAndMouse::{
+            GetCapture, GetKeyState, ReleaseCapture, SetCapture, VIRTUAL_KEY, VK_CONTROL,
+            VK_LBUTTON, VK_LWIN, VK_MBUTTON, VK_MENU, VK_RBUTTON, VK_RWIN, VK_SHIFT,
+        },
+        WindowsAndMessaging::{
+            WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_RBUTTONDOWN,
+            WM_RBUTTONUP,
+        },
+    },
 };
 
-use super::util::{get_x_lparam, get_y_lparam, is_key_pressed};
+use super::util::{get_x_lparam, get_y_lparam};
 use crate::{
     shared::events::{event_timestamp_ns, primary_mouse_info},
     shared::keys,
@@ -31,43 +48,38 @@ use crate::{
 };
 
 // ============================================================================
-// Keyboard Event Conversion
+// Message-time modifiers
 // ============================================================================
 //
-// The translation decisions themselves (vk -> Key fallback, scancode -> Code,
+// The translation decisions for keys (vk -> Key fallback, scancode -> Code,
 // the WM_CHAR merge) are pure functions in `crate::shared::keys`, where their
 // tests execute on every host; this file only unpacks the Win32 message
 // parameters and feeds them through. The WM_CHAR pairing model is documented
 // on that module.
 
-/// Get current modifiers state
-///
-/// # Safety
-///
-/// None, in the memory-safety sense — this only calls `is_key_pressed`
-/// (see its own `# Safety` section in `util.rs`) with the fixed, in-range
-/// virtual-key constants below. `unsafe fn` purely because it calls an
-/// `unsafe fn`, not because this function itself has a precondition.
-unsafe fn get_modifiers() -> KeyboardModifiers {
-    // SAFETY: see the `# Safety` section above.
-    unsafe {
-        let mut mods = KeyboardModifiers::empty();
+/// Whether `key` was down when the message being processed was generated.
+fn key_down_in_queue(key: VIRTUAL_KEY) -> bool {
+    // SAFETY: `GetKeyState` takes a plain virtual-key code and reads only the
+    // calling thread's queue-synchronized key state; no pointers are involved.
+    unsafe { GetKeyState(i32::from(key.0)) < 0 }
+}
 
-        if is_key_pressed(VK_SHIFT.0 as i32) {
-            mods |= KeyboardModifiers::SHIFT;
+/// The keyboard modifiers held when the message being processed was
+/// generated (see the module doc for why this is not `GetAsyncKeyState`).
+pub(super) fn message_modifiers() -> KeyboardModifiers {
+    let mut mods = KeyboardModifiers::empty();
+    for (key, modifier) in [
+        (VK_SHIFT, KeyboardModifiers::SHIFT),
+        (VK_CONTROL, KeyboardModifiers::CONTROL),
+        (VK_MENU, KeyboardModifiers::ALT),
+        (VK_LWIN, KeyboardModifiers::META),
+        (VK_RWIN, KeyboardModifiers::META),
+    ] {
+        if key_down_in_queue(key) {
+            mods |= modifier;
         }
-        if is_key_pressed(VK_CONTROL.0 as i32) {
-            mods |= KeyboardModifiers::CONTROL;
-        }
-        if is_key_pressed(VK_MENU.0 as i32) {
-            mods |= KeyboardModifiers::ALT;
-        }
-        if is_key_pressed(VK_LWIN.0 as i32) || is_key_pressed(VK_RWIN.0 as i32) {
-            mods |= KeyboardModifiers::META;
-        }
-
-        mods
     }
+    mods
 }
 
 // ============================================================================
@@ -110,6 +122,72 @@ fn held_buttons(wparam: WPARAM) -> PointerButtons {
     buttons
 }
 
+/// The button a button message reports and whether it is a press, or `None`
+/// for any other message.
+pub(super) fn button_message(msg: u32) -> Option<(PointerButton, bool)> {
+    match msg {
+        WM_LBUTTONDOWN => Some((PointerButton::Primary, true)),
+        WM_LBUTTONUP => Some((PointerButton::Primary, false)),
+        WM_RBUTTONDOWN => Some((PointerButton::Secondary, true)),
+        WM_RBUTTONUP => Some((PointerButton::Secondary, false)),
+        WM_MBUTTONDOWN => Some((PointerButton::Auxiliary, true)),
+        WM_MBUTTONUP => Some((PointerButton::Auxiliary, false)),
+        _ => None,
+    }
+}
+
+/// Captures the mouse for `hwnd` on a button press, so the rest of the press
+/// sequence — its moves and its release — reaches this window even when the
+/// cursor leaves the client area. A press while the window already holds the
+/// capture (a second button) keeps it.
+pub(super) fn capture_on_press(hwnd: HWND) {
+    // SAFETY: plain handle calls on the window's owner thread, where
+    // `window_proc` runs; `SetCapture` captures for this thread's own window.
+    unsafe {
+        if GetCapture() != hwnd {
+            SetCapture(hwnd);
+        }
+    }
+}
+
+/// Releases `hwnd`'s mouse capture after a button release that leaves no
+/// button held (`wparam` is the release's `MK_*` mask, which no longer has
+/// the released button). The release itself sends `WM_CAPTURECHANGED`, which
+/// [`capture_changed_event`] recognizes as the sequence's own end.
+pub(super) fn release_capture_after(hwnd: HWND, wparam: WPARAM) {
+    if held_buttons(wparam) != PointerButtons::default() {
+        return;
+    }
+    // SAFETY: plain calls on the window's owner thread; the capture is only
+    // released while this window holds it, never another window's.
+    unsafe {
+        if GetCapture() == hwnd
+            && let Err(error) = ReleaseCapture()
+        {
+            tracing::warn!(%error, "ReleaseCapture failed after the last button release");
+        }
+    }
+}
+
+/// The pointer cancel for a `WM_CAPTURECHANGED` that took the capture from a
+/// press sequence still in progress, or `None` when the sequence ended on its
+/// own.
+///
+/// `lparam` is the window gaining the capture. The sequence is in progress
+/// while a button is still down in the queue-synchronized key state. After
+/// the last release — the one that makes [`release_capture_after`] let go —
+/// every button there is up. Another window, a modal loop or `WM_CANCELMODE`
+/// taking the capture mid-drag leaves a button down, and without the cancel
+/// this window would never see that sequence's release.
+pub(super) fn capture_changed_event(hwnd: HWND, lparam: LPARAM) -> Option<PlatformInput> {
+    let gaining = HWND(lparam.0 as *mut core::ffi::c_void);
+    let held = [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON]
+        .into_iter()
+        .any(key_down_in_queue);
+    (gaining != hwnd && held)
+        .then(|| PlatformInput::Pointer(PointerEvent::Cancel(primary_mouse_info())))
+}
+
 /// Build a `PointerState` from LPARAM coordinates and scale factor.
 ///
 /// `buttons` is the held set from [`held_buttons`]; it is a required argument
@@ -122,7 +200,7 @@ fn pointer_state(
     pressure: f64,
     buttons: PointerButtons,
     count: u8,
-) -> (PointerState, KeyboardModifiers) {
+) -> PointerState {
     pointer_state_at(
         get_x_lparam(lparam),
         get_y_lparam(lparam),
@@ -136,9 +214,10 @@ fn pointer_state(
 /// [`pointer_state`] with the CLIENT-space device coordinates already in
 /// hand — for the wheel messages, whose `lParam` needs a screen-to-client
 /// conversion first (see [`wheel_pointer_state`]).
-#[inline]
+///
 /// `count` is the W3C click count — `1` on Down/Up transitions, `0`
 /// elsewhere (the cross-wire contract in flui-interaction's module doc).
+#[inline]
 fn pointer_state_at(
     x: i32,
     y: i32,
@@ -146,29 +225,26 @@ fn pointer_state_at(
     pressure: f64,
     buttons: PointerButtons,
     count: u8,
-) -> (PointerState, KeyboardModifiers) {
-    // SAFETY: see `get_modifiers`'s own `# Safety` section — no
-    // precondition to discharge here.
-    let modifiers = unsafe { get_modifiers() };
+) -> PointerState {
     let logical_x = device_to_logical(x as f64, scale_factor);
     let logical_y = device_to_logical(y as f64, scale_factor);
 
-    let state = PointerState {
+    PointerState {
         time: event_timestamp_ns(),
         position: PhysicalPosition::new(logical_x as f64, logical_y as f64),
         buttons,
-        modifiers,
+        modifiers: message_modifiers(),
         count,
         contact_geometry: PhysicalSize::new(1.0, 1.0),
         orientation: PointerOrientation::default(),
         pressure: pressure as f32,
         tangential_pressure: 0.0,
         scale_factor,
-    };
-    (state, modifiers)
+    }
 }
 
-/// Convert WM_LBUTTONDOWN/UP to W3C PointerEvent
+/// Convert a `WM_[LRM]BUTTONDOWN`/`UP` (see [`button_message`]) to a W3C
+/// pointer Down/Up.
 pub fn mouse_button_event(
     button: PointerButton,
     is_down: bool,
@@ -176,34 +252,26 @@ pub fn mouse_button_event(
     lparam: LPARAM,
     scale_factor: f64,
 ) -> PlatformInput {
-    let (state, modifiers) = pointer_state(
+    let state = pointer_state(
         lparam,
         scale_factor,
         if is_down { 0.5 } else { 0.0 },
         held_buttons(wparam),
         1,
     );
-
-    let _ = modifiers;
-
-    let event = if is_down {
-        PointerEvent::Down(PointerButtonEvent {
-            pointer: primary_mouse_info(),
-            state,
-            button: Some(button),
-        })
-    } else {
-        PointerEvent::Up(PointerButtonEvent {
-            pointer: primary_mouse_info(),
-            state,
-            button: Some(button),
-        })
+    let event = PointerButtonEvent {
+        pointer: primary_mouse_info(),
+        state,
+        button: Some(button),
     };
-
-    PlatformInput::Pointer(event)
+    PlatformInput::Pointer(if is_down {
+        PointerEvent::Down(event)
+    } else {
+        PointerEvent::Up(event)
+    })
 }
 
-/// Convert WM_MOUSEMOVE to W3C PointerEvent
+/// Convert WM_MOUSEMOVE to a W3C pointer Move.
 pub fn mouse_move_event(wparam: WPARAM, lparam: LPARAM, scale_factor: f64) -> PlatformInput {
     let held = held_buttons(wparam);
     // Sensor-less pressure rule: 0.5 while any button is held (a drag),
@@ -213,17 +281,12 @@ pub fn mouse_move_event(wparam: WPARAM, lparam: LPARAM, scale_factor: f64) -> Pl
     } else {
         0.5
     };
-    let (state, modifiers) = pointer_state(lparam, scale_factor, pressure, held, 0);
-    let _ = modifiers;
-
-    let event = PointerEvent::Move(PointerUpdate {
+    PlatformInput::Pointer(PointerEvent::Move(PointerUpdate {
         pointer: primary_mouse_info(),
-        current: state,
+        current: pointer_state(lparam, scale_factor, pressure, held, 0),
         coalesced: Vec::new(),
         predicted: Vec::new(),
-    });
-
-    PlatformInput::Pointer(event)
+    }))
 }
 
 /// The signed scroll distance both wheel messages carry in the high word of
@@ -247,7 +310,7 @@ fn wheel_pointer_state(
     wparam: WPARAM,
     lparam: LPARAM,
     scale_factor: f64,
-) -> (PointerState, KeyboardModifiers) {
+) -> PointerState {
     let mut point = POINT {
         x: get_x_lparam(lparam),
         y: get_y_lparam(lparam),
@@ -264,7 +327,7 @@ fn wheel_pointer_state(
     pointer_state_at(point.x, point.y, scale_factor, 0.0, held_buttons(wparam), 0)
 }
 
-/// Convert WM_MOUSEWHEEL to W3C PointerEvent with Scroll
+/// Convert WM_MOUSEWHEEL to a W3C pointer Scroll.
 ///
 /// Win32's vertical sign (positive = wheel rotated away from the user) is the
 /// inverse of the cross-backend convention — positive = content scrolls down —
@@ -277,19 +340,16 @@ pub fn mouse_wheel_event(
     lparam: LPARAM,
     scale_factor: f64,
 ) -> PlatformInput {
-    let (state, modifiers) = wheel_pointer_state(hwnd, wparam, lparam, scale_factor);
-    let _ = modifiers;
-
-    let event = PointerEvent::Scroll(ui_events::pointer::PointerScrollEvent {
-        pointer: primary_mouse_info(),
-        state,
-        delta: crate::shared::scroll::from_win32_wheel(wheel_distance(wparam)),
-    });
-
-    PlatformInput::Pointer(event)
+    PlatformInput::Pointer(PointerEvent::Scroll(
+        ui_events::pointer::PointerScrollEvent {
+            pointer: primary_mouse_info(),
+            state: wheel_pointer_state(hwnd, wparam, lparam, scale_factor),
+            delta: crate::shared::scroll::from_win32_wheel(wheel_distance(wparam)),
+        },
+    ))
 }
 
-/// Convert WM_MOUSEHWHEEL to W3C PointerEvent with Scroll
+/// Convert WM_MOUSEHWHEEL to a W3C pointer Scroll.
 ///
 /// Win32's horizontal sign (positive = wheel tilted right) already matches
 /// the cross-backend convention — positive = content scrolls right — so only
@@ -302,16 +362,13 @@ pub fn mouse_hwheel_event(
     lparam: LPARAM,
     scale_factor: f64,
 ) -> PlatformInput {
-    let (state, modifiers) = wheel_pointer_state(hwnd, wparam, lparam, scale_factor);
-    let _ = modifiers;
-
-    let event = PointerEvent::Scroll(ui_events::pointer::PointerScrollEvent {
-        pointer: primary_mouse_info(),
-        state,
-        delta: crate::shared::scroll::from_win32_hwheel(wheel_distance(wparam)),
-    });
-
-    PlatformInput::Pointer(event)
+    PlatformInput::Pointer(PointerEvent::Scroll(
+        ui_events::pointer::PointerScrollEvent {
+            pointer: primary_mouse_info(),
+            state: wheel_pointer_state(hwnd, wparam, lparam, scale_factor),
+            delta: crate::shared::scroll::from_win32_hwheel(wheel_distance(wparam)),
+        },
+    ))
 }
 
 // ============================================================================
@@ -333,8 +390,7 @@ pub fn key_down_event(
     let vk = wparam.0 as u16;
     let (scan_code, extended, is_repeat) = keys::parse_key_lparam(lparam.0);
 
-    // SAFETY: see `pointer_state` above — same call, no precondition.
-    let modifiers = unsafe { get_modifiers() };
+    let modifiers = message_modifiers();
     let fallback = keys::vk_to_key(vk, modifiers.contains(KeyboardModifiers::SHIFT));
     let code = keys::scancode_to_code(scan_code, extended);
     let key = keys::key_for_keydown(
@@ -366,8 +422,7 @@ pub fn key_up_event(wparam: WPARAM, lparam: LPARAM) -> PlatformInput {
     let vk = wparam.0 as u16;
     let (scan_code, extended, _) = keys::parse_key_lparam(lparam.0);
 
-    // SAFETY: see `pointer_state` above — same call, no precondition.
-    let modifiers = unsafe { get_modifiers() };
+    let modifiers = message_modifiers();
     let key = keys::vk_to_key(vk, modifiers.contains(KeyboardModifiers::SHIFT));
     let code = keys::scancode_to_code(scan_code, extended);
 
@@ -388,8 +443,7 @@ pub fn key_up_event(wparam: WPARAM, lparam: LPARAM) -> PlatformInput {
 /// key, so it is dispatched as a key-down with `Code::Unidentified` and no
 /// paired key-up; the text lane consumes `Key::Character` on key-down only.
 pub fn stray_char_event(text: String) -> PlatformInput {
-    // SAFETY: see `pointer_state` above — same call, no precondition.
-    let modifiers = unsafe { get_modifiers() };
+    let modifiers = message_modifiers();
 
     PlatformInput::Keyboard(KeyboardEvent {
         state: KeyState::Down,

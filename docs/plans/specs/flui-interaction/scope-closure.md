@@ -1,0 +1,135 @@
+# flui-interaction — закрытие строк матрицы
+
+- **Дата:** 2026-10-06. Источник строк — [matrix.md](matrix.md); решения — [orchestration.md](orchestration.md) («Scope-решения»).
+- **Правило:** каждая строка не в статусе present закрывается одним способом: draft-PR этой работы, задача утверждённой спеки, новая задача (NEW) или исключение (OUT).
+- **ID строк:** с префиксом раздела (`M1-14`, `M2-F1`, `M3-F1`), потому что `A*`, `D*`, `F*`, `R*` повторяются в M2 и M3.
+- **Сертификация (release/requirements.md):** нативно сертифицируется только Windows; Linux — через CI; macOS, Web, Android, iOS — `experimental`. Задачи P3 для них остаются в спеке pointer-vocabulary, но проверяются только `cross-typecheck`/`wasm-check`.
+
+## Итог
+
+| Способ закрытия | Строк |
+|---|---|
+| PR (draft этой работы) | 16 |
+| Спека (утверждённая задача) | 53 |
+| NEW (15 предложенных задач) | 20 |
+| OUT | 6 |
+| **Всего не-present** | **95** |
+
+Разбивка по спекам: pointer-vocabulary 23, flui-interaction (I10/I11/S2/S3/S5) 14, send-flip T6d 8, focus-keyboard 6, text-ime 1, platform-layer 1.
+
+PR #1467 (held Down на blur), #1476 (контрактные тесты hover/hit-test), #1478 (типы словаря) и #1482 (docs) сами строк не закрывают: #1467 — runtime-шов I7 (строка M1-15 уже present), #1476 — тесты для T6d (C5, H13–H16), #1478 — P1, на котором стоят задачи P2/P3, #1482 — документация (часть S3).
+
+## PR
+
+| Row | Requirement | Status | Closure |
+|---|---|---|---|
+| M1-14 | OS-level capture (drag leaves the window) | broken (Win32, web) | PR #1471 (Win32 `SetCapture`/`WM_CAPTURECHANGED`; web — pointer-vocabulary V14) |
+| M2-T3 | Button filtering for non-tap recognizers | broken | PR #1474 |
+| M2-T4 | Double tap: timeout, slop between taps, debounce | partial | PR #1474 (per-kind slop; the 40 ms debounce is not mentioned in the PR — verify) |
+| M2-L1 | Long press timeout and movement tolerance | partial | PR #1474 |
+| M2-X3 | Per-device-kind settings | partial | PR #1474 (`touch_slop()` crate-private — S1) |
+| M2-V3 | Velocity samples use the event timestamp | broken | PR #1474 |
+| M2-T5 | N-tap / consecutive-tap count | absent | PR #1472 (TapAndDrag consecutive clicks) |
+| M2-S2 | Rebaseline on pointer add/remove during scale | broken | PR #1472 |
+| M2-S3 | Degenerate span safety | broken | PR #1472 |
+| M2-S4 | Rotation unwrap across ±π, stable ordering | broken | PR #1472 |
+| M2-S5 | Scale callbacks contained; arena per pointer | partial | PR #1472 |
+| M2-F1 | Force press (sensor-less 0.5 on web) | partial | PR #1472 |
+| M2-V5 | Stop detection on the samples' clock | broken | PR #1479 (`estimate_at`; wiring in recognizers — C5) |
+| M2-V6 | Min/max fling clamp from settings | partial | PR #1479 |
+| M2-V7 | NaN / non-finite safety in velocity | partial | PR #1479 |
+| M2-R1 | Resampling to vsync (event time, no lost Up) | partial | PR #1479 |
+
+## Спека
+
+| Row | Requirement | Status | Closure |
+|---|---|---|---|
+| M1-1 | Device kinds mouse/touch/pen | partial | spec pointer-vocabulary P3-Win32 (V9); unified enum — P2 V6 |
+| M1-2 | Eraser / inverted stylus | absent | spec pointer-vocabulary P3-Win32 (V9) |
+| M1-3 | Pressure (real sensor) | partial | spec pointer-vocabulary P3-Win32 (V9) |
+| M1-5 | Tilt / altitude-azimuth | broken (iOS) / absent | spec pointer-vocabulary P3-Win32 (V9); iOS — V12 |
+| M1-6 | Twist (barrel rotation) | absent | spec pointer-vocabulary P3-Win32 (V9) |
+| M1-7 | Contact width/height | broken (Android) / partial | spec pointer-vocabulary P3-Android (V13); typed `ContactSize` — PR #1478 |
+| M1-8 | Pen hover | partial | spec pointer-vocabulary P3-Win32 (V9) |
+| M1-16 | pointercancel: system gesture / OS takeover | partial | spec pointer-vocabulary P3-web (V14) |
+| M1-17 | pointercancel: device removed | absent | spec pointer-vocabulary P3-Win32 (V9) |
+| M1-18 | Multi-touch | partial | spec pointer-vocabulary P3-Win32 (V9) |
+| M1-19 | Primary pointer | partial | spec pointer-vocabulary P2 (V6) |
+| M1-21 | Chorded buttons / button change | broken | spec pointer-vocabulary P2 (V6) (`ButtonChange`); Win32 producer V9 |
+| M1-22 | Device id (persistent) | absent | spec pointer-vocabulary P2 (V6) |
+| M1-23 | Timestamps: monotonic, platform-provided | partial | spec pointer-vocabulary P3-Win32 (V9) (`GetMessageTime`, deferred from #1471) |
+| M1-26 | Wheel delta modes line/pixel/page | partial | spec pointer-vocabulary P2 (V7) (resolution in `Scrollable`, step from LY8 `wheel()`) |
+| M1-29 | Scroll / gesture phases | absent | spec pointer-vocabulary P3-macOS (V11) / winit V10 |
+| M1-30 | Momentum phase + inertia cancel | absent | spec pointer-vocabulary P3-macOS (V11) |
+| M1-31 | Trackpad pinch / rotate as distinct events | partial | spec pointer-vocabulary P3-winit (V10) |
+| M1-32 | Trackpad two-finger pan as pan-zoom | absent | spec pointer-vocabulary P3-macOS (V11) |
+| M1-36 | High-DPI: logical vs device px types | partial | spec pointer-vocabulary P2 (V6); web float coords — V14 |
+| M1-39 | Android mouse wheel (`ACTION_SCROLL`) | absent | spec pointer-vocabulary P3-Android (V13) |
+| M1-40 | Win32 pen and touch (`WM_POINTER`) | absent | spec pointer-vocabulary P3-Win32 (V9) |
+| M3-D1 | Logical vs device px at input ingress | broken (type hazard) | spec pointer-vocabulary P2 (V6) |
+| M1-20 | Buttons bitmask incl. X1/X2 | partial | spec focus-keyboard T5 |
+| M3-F7 | Focus restore after focused node removed | absent | spec focus-keyboard T7 (R15) |
+| M3-F10 | Focus visible (input modality) | absent | spec focus-keyboard T3 (R17) |
+| M3-F11 | Focused element scrolls into view | absent | spec focus-keyboard T11 (R6; list only) |
+| M3-K4 | Pressed-key set sync on window focus change | absent | spec focus-keyboard T6 |
+| M3-K8 | Full default intent set | partial | spec focus-keyboard T8 (arrows after M3-F4) |
+| M3-K6 | IME composition flag on key events | partial | spec text-ime T5 |
+| M1-9 | Coalesced events kept | broken | spec send-flip T6d (binding, I5 handoff) |
+| M2-V4 | No sample loss to the velocity tracker | broken | spec send-flip T6d (binding, I5 handoff) |
+| M3-H3 | Non-finite positions rejected at the edge | absent | spec send-flip T6d (handoff H17) |
+| M3-H10 | Dead or legacy surface | broken (unwired) | spec send-flip T6d (handoff N6) |
+| M3-C5 | Cursor defer vs explicit arrow | broken | spec send-flip T6d (contract test in PR #1476) |
+| M3-F2 | Reading order with row bands, RTL-aware | broken | spec send-flip T6d (I6 handoff) |
+| M3-F6 | Modal focus trap | partial / broken | spec send-flip T6d (N6: wire or delete `traps_focus`) |
+| M3-R1 | RTL in focus traversal | absent | spec send-flip T6d (I6 handoff, with M3-F2) |
+| M2-X1 | System timings from the OS | absent | spec platform-layer LY8 |
+| M1-10 | Predicted events | absent (unwired) | spec flui-interaction S2 |
+| M1-24 | Click count / interval from the OS | partial | spec flui-interaction I11 |
+| M2-A5 | Arena teams | partial (unwired) | spec flui-interaction S2 |
+| M2-A7 | Pointer-signal arbitration | partial (unwired) | spec flui-interaction S2 |
+| M2-T6 | Multi-finger tap semantics | partial | spec flui-interaction S3 (record as a mapping decision) |
+| M2-D2 | Pan slop value | partial | spec flui-interaction I11 |
+| M2-D6 | Mouse drag threshold from the OS | absent | spec flui-interaction I11 (after LY8) |
+| M2-V2 | Estimator choice per platform reaches production | partial (unwired) | spec flui-interaction S2 |
+| M2-R2 | Prediction | partial | spec flui-interaction S2 |
+| M2-X2 | Settings profile reaches recognizers | broken | spec flui-interaction I11 |
+| M2-X5 | Cheapest sound ownership on the gesture path | partial | spec flui-interaction I10 (settings `Cell` — I11) |
+| M3-C1 | Re-hit-test after layout per presentation | partial | spec flui-interaction S5 |
+| M3-D2 | DPI change per presentation | partial | spec flui-interaction S5 |
+| M3-M1 | Per-window input state | partial | spec flui-interaction S5 |
+
+## NEW
+
+| Row | Requirement | Status | Closure |
+|---|---|---|---|
+| M1-11 | Resampling to the vsync (enable policy) | partial (unwired) | NEW: resampling-policy — runtime/app opt-in per presentation that turns the fixed resampler on |
+| M1-13 | Explicit pointer capture + lost capture | absent | NEW: pointer-capture-token — typed `PointerCapture` from the down route, release on drop, `CaptureLost` delivered |
+| M3-H8 | Explicit pointer capture/release API | absent | NEW: pointer-capture-token (same task; the OS side is PR #1471) |
+| M1-27 | High-precision vs notched wheel | partial | NEW: smooth-wheel-scrolling — Win32 classifies precise vs notched deltas, `Scrollable` animates notched input only |
+| M1-28 | Smooth notched-wheel scrolling | absent | NEW: smooth-wheel-scrolling (same task) |
+| M1-34 | Shift+wheel → horizontal scroll | absent | NEW: wheel-axis-remap — platform-neutral remap when `dx == 0` and Shift is held |
+| M1-35 | Scroll latching | absent | NEW: scroll-latching — latch a wheel/gesture to the first scroller, release on phase end or timeout |
+| M2-A6 | Competing-recognizer composition | absent | NEW: recognizer-composition — typed exclusive / require-to-fail combinators resolved in the arena (after recognizer-api) |
+| M2-D5 | Multi-pointer drag strategy | partial | NEW: drag-multi-pointer-strategy — strategy enum so a second finger continues a drag when the first lifts |
+| M2-S1 | Scale + rotate consumed by a widget | partial | NEW: interactive-viewer-pinch — `InteractiveViewer` uses `ScaleGestureRecognizer` for pinch/rotate, with focal fling and trackpad pan-zoom |
+| M2-S6 | Scale end velocity | partial | NEW: interactive-viewer-pinch (same task) |
+| M2-S7 | Trackpad pan/zoom fed to recognizers | partial | NEW: interactive-viewer-pinch (same task) |
+| M2-X4 | Nested scroll fling handoff | partial | NEW: nested-scroll-handoff — an inner scrollable at its edge hands remaining velocity to the outer one |
+| M3-H2 | Perspective transforms unproject the ray | partial | NEW: hit-test-perspective — unproject the pointer ray onto z=0 for perspective matrices |
+| M3-F3 | Explicit traversal order and groups | partial | NEW: focus-traversal-groups — `FocusTraversalGroup` widget with typed next/previous overrides and scope edge behaviour |
+| M3-F5 | Scope edge behaviour | partial | NEW: focus-traversal-groups (same task) |
+| M3-F4 | Directional navigation | absent | NEW: directional-focus — geometric search over focus rects, scoped by groups; arrow intents |
+| M3-K5 | Dead keys | partial | NEW: dead-key-events — Win32 emits `Key::Dead` on keydown so shortcuts don't fire |
+| M3-K9 | Character shortcuts independent of Shift | absent | NEW: character-activator — `CharacterActivator` that ignores Shift |
+| M3-A5 | Scroll actions and ShowOnScreen on scrollables | absent | NEW: scrollable-a11y-actions — `Scrollable` publishes ScrollUp/Down/Left/Right and handles ShowOnScreen |
+
+## OUT
+
+| Row | Requirement | Status | Closure |
+|---|---|---|---|
+| M1-4 | Tangential pressure | partial | OUT: the field exists; Win32 has no barrel wheel, web is experimental |
+| M2-A11 | `cancelsTouchesInView` equivalent | absent | OUT: low priority, only needed for platform-view embedding, which 0.2 doesn't ship |
+| M2-L2 | Post-accept slop for long press | partial | OUT: optional, no consumer; the default is no post-accept cancel |
+| M2-V8 | 1D velocity tracker | absent | OUT: the projected 2D tracker is acceptable |
+| M2-R3 | Smoothing (1€ filter) | partial | OUT: fine as a standalone utility, kept off the gesture path |
+| M3-M3 | Drag-and-drop input routed | absent | OUT: system DnD is unimplemented per ADR-0038 and not in the 0.2 release scope |
