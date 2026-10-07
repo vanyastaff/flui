@@ -334,6 +334,7 @@ pub(super) struct WindowContext {
     /// `&mut WindowContext` from the raw `GWLP_USERDATA` pointer while the
     /// shared one is still live.
     pub scale_factor: std::cell::Cell<f64>,
+    pub message_clock: super::events::MessageClock,
     /// Current window mode (replaces display_state + saved bounds)
     pub mode: std::cell::Cell<WindowMode>,
     /// Last known size (before minimization) for restore detection
@@ -1533,6 +1534,7 @@ impl WindowsPlatform {
 
                 WM_MOUSEMOVE => {
                     if let Some(ctx) = ctx {
+                        let time = ctx.message_clock.message_time();
                         // Request WM_MOUSELEAVE notification for hover tracking
                         let mut tme = TRACKMOUSEEVENT {
                             cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
@@ -1549,7 +1551,7 @@ impl WindowsPlatform {
                         ctx.callbacks.dispatch_hover_status_change(true);
 
                         use super::events::mouse_move_event;
-                        let event = mouse_move_event(wparam, lparam, ctx.scale_factor.get());
+                        let event = mouse_move_event(wparam, lparam, ctx.scale_factor.get(), time);
                         ctx.callbacks.dispatch_input(event);
                     }
                     LRESULT(0)
@@ -1580,6 +1582,7 @@ impl WindowsPlatform {
                     };
                     let (button, is_down) =
                         button_message(msg).expect("BUG: the arm matches only button messages");
+                    let timed_context = ctx.map(|ctx| (ctx, ctx.message_clock.message_time()));
                     // The capture follows the native button state even with
                     // no context to deliver to, and is settled before user
                     // code runs: a release outside the client area must
@@ -1590,13 +1593,14 @@ impl WindowsPlatform {
                     } else {
                         release_capture_after(hwnd, wparam);
                     }
-                    if let Some(ctx) = ctx {
+                    if let Some((ctx, time)) = timed_context {
                         let event = mouse_button_event(
                             button,
                             is_down,
                             wparam,
                             lparam,
                             ctx.scale_factor.get(),
+                            time,
                         );
                         ctx.callbacks.dispatch_input(event);
                     }
@@ -1618,7 +1622,9 @@ impl WindowsPlatform {
                 WM_MOUSEWHEEL => {
                     if let Some(ctx) = ctx {
                         use super::events::mouse_wheel_event;
-                        let event = mouse_wheel_event(hwnd, wparam, lparam, ctx.scale_factor.get());
+                        let time = ctx.message_clock.message_time();
+                        let event =
+                            mouse_wheel_event(hwnd, wparam, lparam, ctx.scale_factor.get(), time);
                         ctx.callbacks.dispatch_input(event);
                     }
                     LRESULT(0)
@@ -1627,8 +1633,9 @@ impl WindowsPlatform {
                 WM_MOUSEHWHEEL => {
                     if let Some(ctx) = ctx {
                         use super::events::mouse_hwheel_event;
+                        let time = ctx.message_clock.message_time();
                         let event =
-                            mouse_hwheel_event(hwnd, wparam, lparam, ctx.scale_factor.get());
+                            mouse_hwheel_event(hwnd, wparam, lparam, ctx.scale_factor.get(), time);
                         ctx.callbacks.dispatch_input(event);
                     }
                     LRESULT(0)

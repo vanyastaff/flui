@@ -15,6 +15,8 @@
 //!   rectangle, sign-extended by `get_x_lparam`). A capture taken away while
 //!   a button is held ends the sequence with a cancel
 //!   ([`capture_changed_event`]).
+//! - Mouse samples retain the retrieved message's generation time, rebased
+//!   onto the shared monotonic epoch before any reentrant callbacks run.
 
 use dpi::{PhysicalPosition, PhysicalSize};
 use keyboard_types::{Modifiers as KeyboardModifiers, NamedKey};
@@ -28,17 +30,75 @@ use ui_events::{
 use windows::Win32::{
     Foundation::{HWND, LPARAM, POINT, WPARAM},
     Graphics::Gdi::ScreenToClient,
+    System::SystemInformation::GetTickCount64,
     UI::{
         Input::KeyboardAndMouse::{
             GetCapture, GetKeyState, ReleaseCapture, SetCapture, VIRTUAL_KEY, VK_CONTROL,
             VK_LBUTTON, VK_LWIN, VK_MBUTTON, VK_MENU, VK_RBUTTON, VK_RWIN, VK_SHIFT,
         },
         WindowsAndMessaging::{
-            WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_RBUTTONDOWN,
-            WM_RBUTTONUP,
+            GetMessageTime, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP,
+            WM_RBUTTONDOWN, WM_RBUTTONUP,
         },
     },
 };
+
+/// Rebases the queue's wrapping millisecond timestamp onto the shared epoch.
+/// The owner snapshots a sample before callback-capable native or user calls.
+pub(super) struct MessageClock {
+    uptime_ms: u64,
+    epoch_ns: u64,
+    last_ns: std::cell::Cell<u64>,
+}
+
+impl MessageClock {
+    pub(super) fn new() -> Self {
+        // SAFETY: argument-free monotonic system uptime query.
+        let uptime_ms = unsafe { GetTickCount64() };
+        Self::anchored(uptime_ms, event_timestamp_ns())
+    }
+
+    fn anchored(uptime_ms: u64, epoch_ns: u64) -> Self {
+        Self {
+            uptime_ms,
+            epoch_ns,
+            last_ns: std::cell::Cell::new(0),
+        }
+    }
+
+    pub(super) fn message_time(&self) -> u64 {
+        // SAFETY: argument-free queries of the owner thread's retrieved
+        // message and system uptime. No callback can run between them.
+        let (tick, now) = unsafe { (GetMessageTime() as u32, GetTickCount64()) };
+        self.stamp_at(tick, now)
+    }
+
+    fn stamp_at(&self, tick: u32, now_ms: u64) -> u64 {
+        // GetMessageTime carries the low 32 bits of uptime. Subtract in
+        // that domain before extending, including across its 49.7-day wrap.
+        // A message older than one complete wrap cannot be distinguished.
+        let age_ms = (now_ms as u32).wrapping_sub(tick);
+        let sample_ms = now_ms.saturating_sub(u64::from(age_ms));
+        let stamp = if sample_ms >= self.uptime_ms {
+            self.epoch_ns.saturating_add(
+                sample_ms
+                    .saturating_sub(self.uptime_ms)
+                    .saturating_mul(1_000_000),
+            )
+        } else {
+            self.epoch_ns.saturating_sub(
+                self.uptime_ms
+                    .saturating_sub(sample_ms)
+                    .saturating_mul(1_000_000),
+            )
+        };
+        // Sent messages can inherit an older retrieved-message timestamp;
+        // nested dispatch must not move this window's clock backwards.
+        let stamp = stamp.max(self.last_ns.get());
+        self.last_ns.set(stamp);
+        stamp
+    }
+}
 
 use super::util::{get_x_lparam, get_y_lparam};
 use crate::{
@@ -200,6 +260,7 @@ fn pointer_state(
     pressure: f64,
     buttons: PointerButtons,
     count: u8,
+    time: u64,
 ) -> PointerState {
     pointer_state_at(
         get_x_lparam(lparam),
@@ -208,6 +269,7 @@ fn pointer_state(
         pressure,
         buttons,
         count,
+        time,
     )
 }
 
@@ -225,12 +287,13 @@ fn pointer_state_at(
     pressure: f64,
     buttons: PointerButtons,
     count: u8,
+    time: u64,
 ) -> PointerState {
     let logical_x = device_to_logical(x as f64, scale_factor);
     let logical_y = device_to_logical(y as f64, scale_factor);
 
     PointerState {
-        time: event_timestamp_ns(),
+        time,
         position: PhysicalPosition::new(logical_x as f64, logical_y as f64),
         buttons,
         modifiers: message_modifiers(),
@@ -251,6 +314,7 @@ pub fn mouse_button_event(
     wparam: WPARAM,
     lparam: LPARAM,
     scale_factor: f64,
+    time: u64,
 ) -> PlatformInput {
     let state = pointer_state(
         lparam,
@@ -258,6 +322,7 @@ pub fn mouse_button_event(
         if is_down { 0.5 } else { 0.0 },
         held_buttons(wparam),
         1,
+        time,
     );
     let event = PointerButtonEvent {
         pointer: primary_mouse_info(),
@@ -272,7 +337,12 @@ pub fn mouse_button_event(
 }
 
 /// Convert WM_MOUSEMOVE to a W3C pointer Move.
-pub fn mouse_move_event(wparam: WPARAM, lparam: LPARAM, scale_factor: f64) -> PlatformInput {
+pub fn mouse_move_event(
+    wparam: WPARAM,
+    lparam: LPARAM,
+    scale_factor: f64,
+    time: u64,
+) -> PlatformInput {
     let held = held_buttons(wparam);
     // Sensor-less pressure rule: 0.5 while any button is held (a drag),
     // 0.0 on a hover.
@@ -283,7 +353,7 @@ pub fn mouse_move_event(wparam: WPARAM, lparam: LPARAM, scale_factor: f64) -> Pl
     };
     PlatformInput::Pointer(PointerEvent::Move(PointerUpdate {
         pointer: primary_mouse_info(),
-        current: pointer_state(lparam, scale_factor, pressure, held, 0),
+        current: pointer_state(lparam, scale_factor, pressure, held, 0, time),
         coalesced: Vec::new(),
         predicted: Vec::new(),
     }))
@@ -310,6 +380,7 @@ fn wheel_pointer_state(
     wparam: WPARAM,
     lparam: LPARAM,
     scale_factor: f64,
+    time: u64,
 ) -> PointerState {
     let mut point = POINT {
         x: get_x_lparam(lparam),
@@ -324,7 +395,15 @@ fn wheel_pointer_state(
             "ScreenToClient failed for a wheel message; scroll position stays in screen space"
         );
     }
-    pointer_state_at(point.x, point.y, scale_factor, 0.0, held_buttons(wparam), 0)
+    pointer_state_at(
+        point.x,
+        point.y,
+        scale_factor,
+        0.0,
+        held_buttons(wparam),
+        0,
+        time,
+    )
 }
 
 /// Convert WM_MOUSEWHEEL to a W3C pointer Scroll.
@@ -339,11 +418,12 @@ pub fn mouse_wheel_event(
     wparam: WPARAM,
     lparam: LPARAM,
     scale_factor: f64,
+    time: u64,
 ) -> PlatformInput {
     PlatformInput::Pointer(PointerEvent::Scroll(
         ui_events::pointer::PointerScrollEvent {
             pointer: primary_mouse_info(),
-            state: wheel_pointer_state(hwnd, wparam, lparam, scale_factor),
+            state: wheel_pointer_state(hwnd, wparam, lparam, scale_factor, time),
             delta: crate::shared::scroll::from_win32_wheel(wheel_distance(wparam)),
         },
     ))
@@ -361,11 +441,12 @@ pub fn mouse_hwheel_event(
     wparam: WPARAM,
     lparam: LPARAM,
     scale_factor: f64,
+    time: u64,
 ) -> PlatformInput {
     PlatformInput::Pointer(PointerEvent::Scroll(
         ui_events::pointer::PointerScrollEvent {
             pointer: primary_mouse_info(),
-            state: wheel_pointer_state(hwnd, wparam, lparam, scale_factor),
+            state: wheel_pointer_state(hwnd, wparam, lparam, scale_factor, time),
             delta: crate::shared::scroll::from_win32_hwheel(wheel_distance(wparam)),
         },
     ))
