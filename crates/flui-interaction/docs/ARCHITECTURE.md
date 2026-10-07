@@ -125,10 +125,51 @@ Local design choices and why. Each entry names the conflict, the choice, and the
 | Command | Purpose |
 |---|---|
 | `cargo test -p flui-interaction --all-features` | Unit, integration, feature-gated testing helpers, and doctests across arena / recognisers / processing / routing / timer. |
-| `cargo test --doc -p flui-interaction` | Public source-documentation examples; standalone Markdown snippets also need inclusion in a rustdoc test target to run. |
+| `cargo test --doc -p flui-interaction` | Public source-documentation examples. Standalone Markdown is tested directly with the command below. |
 | `cargo bench -p flui-interaction` | Criterion workloads and saved-baseline comparisons (see [PERFORMANCE.md](PERFORMANCE.md)). |
 | `cargo clippy -p flui-interaction --lib --tests --benches -- -D warnings` | Lint gate — zero warnings. |
 | `cargo fmt -p flui-interaction --check` | Format gate. |
+
+### Standalone Markdown examples
+
+Run from the workspace root in Bash with `jq` installed. Cargo's JSON output identifies
+the exact libraries built for this checkout and feature selection; do not reuse saved
+library paths or select arbitrary files from `target/debug/deps`. The direct rustdoc
+invocations run the Markdown examples without adding documentation-only source modules.
+
+```bash
+set -euo pipefail
+artifacts=$(mktemp)
+trap 'rm -f "$artifacts"' EXIT
+cargo build --locked -p flui-interaction --lib --features testing \
+    --message-format=json > "$artifacts"
+
+externs=()
+for crate in flui_interaction flui_foundation flui_platform_api web_time; do
+    library=$(jq -ser --arg name "$crate" '
+        [ .[] | select(.reason == "compiler-artifact" and .target.name == $name)
+          | .filenames[] | select(endswith(".rlib")) ] | unique
+        | if length == 1 then .[0] | gsub("\\\\"; "/")
+          else error("expected one current library artifact") end
+    ' "$artifacts")
+    externs+=(--extern "$crate=$library")
+    if [[ "$crate" == flui_interaction ]]; then
+        dependency_dir=$(dirname "$library")
+    fi
+done
+
+for document in crates/flui-interaction/README.md \
+    crates/flui-interaction/docs/{GESTURES,ARCHITECTURE,PERFORMANCE,HIT_TESTING}.md; do
+    rustdoc --test "$document" --edition=2024 \
+        -L "dependency=$dependency_dir" "${externs[@]}"
+done
+```
+
+`cargo test --doc` and these direct Markdown runs cover different inputs. This command
+does not install a new gate; retain the document-by-document results with the checked
+revision. Inspect source inclusions with `rg 'include_str!' crates/flui-interaction/src`.
+The classifier treats crate READMEs and nested crate documentation as source-impacting
+paths, so this guide needs no `DOCS_ONLY` exemption.
 
 ## Observability
 
@@ -151,7 +192,8 @@ the app boundary; the crate does not install one. Filter via
 - **Documentation validation includes source and Markdown.** Find remaining
   excluded Rust examples with `rg 'rust,ignore' crates/flui-interaction/src`;
   counts depend on the checked revision. An example is executable only when
-  its containing document is included by a rustdoc target.
+  its source is tested by `cargo test --doc` or its Markdown document is passed
+  directly to `rustdoc --test` as shown above.
 - **Concurrency models must match ownership.** The executable arena is
   owner-local; a parallel `add` / `resolve` model would test an unsupported
   execution contract. Deferred data-plane synchronization needs its own model.
