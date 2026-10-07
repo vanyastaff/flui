@@ -500,13 +500,3 @@ impl Diagnosticable for RenderView {
         }
     }
 }
-
-// `impl HitTestTarget for RenderView` used to live here, but was deleted.
-// Its body was a no-op (`let _ = (event, entry);`) -- the view only
-// implemented the trait to satisfy the trait-dispatch shape that the
-// old rendering-side `crate::hit_testing::HitTestResult` type
-// required. Hit testing now produces the data-typed
-// `flui_interaction::routing::HitTestResult`, whose entries carry handler
-// closures directly, so no trait impl is needed on RenderView. The
-// `HitTestTarget` trait itself has since been removed entirely, since it
-// no longer had a production implementor.

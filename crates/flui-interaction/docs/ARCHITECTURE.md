@@ -41,6 +41,12 @@ implementations cannot change arena ordering or bypass exact membership checks.
 
 Local design choices and why. Each entry names the conflict, the choice, and the reference (a strategy clause, a design rule, or a precedent plan).
 
+- **Render hit paths contain identities, not executable target objects.**
+  Rendering protocols produce `RenderId` paths and data-only owner-lane targets;
+  `InteractionLane` resolves them and `GestureBinding` retains pointer routes.
+  A second target trait or generic dispatcher would duplicate this ownership
+  boundary without providing a producer. `transformed_entry_receives_local_samples_and_deltas`
+  pins dispatch through the actual lane, including local geometry.
 - **An arrow request differs from deferring a cursor (ADR-0158).** `CursorRequest::Defer`
   leaves the choice to the next hit target; `Icon(CursorIcon::Default)` selects
   the arrow even when an ancestor asks for another icon. Render objects without
