@@ -858,6 +858,20 @@ impl EditableTextState {
                 if !enabled || drag_anchor.get().is_some() {
                     return;
                 }
+                // Admit the contact before any owner code runs (the commit's
+                // `on_changed`, focus observers): a press they dispatch finds
+                // this one recorded and is refused, and a reentrant
+                // disablement, controller replacement or cancel retires it,
+                // which the identity check below sees. The anchor is resolved
+                // again once the commit has laid the text out as committed.
+                let Some(provisional) = resolve(dispatch.global.position()) else {
+                    return;
+                };
+                let admitted = SelectionDrag {
+                    contact: flui_interaction::events::extract_pointer_id(dispatch.global),
+                    source_anchor: provisional,
+                };
+                drag_anchor.set(Some(admitted));
                 // A composition in this field is committed before the caret
                 // moves (ADR-0142 item 4); the press is still handled when
                 // the commit's owner code fails, and that failure is resumed
@@ -865,16 +879,16 @@ impl EditableTextState {
                 let mut calls = OwnerCalls::new();
                 commit.run(&mut calls);
                 calls.run(|| {
-                    // Admit the contact before focus observers run.
-                    // Reentrant disablement or controller replacement can
-                    // retire it before the caret is written to the current
-                    // document.
+                    if drag_anchor.get() != Some(admitted) {
+                        return;
+                    }
                     let Some(offset) = resolve(dispatch.global.position()) else {
+                        drag_anchor.set(None);
                         return;
                     };
                     let drag = SelectionDrag {
-                        contact: flui_interaction::events::extract_pointer_id(dispatch.global),
                         source_anchor: offset,
+                        ..admitted
                     };
                     drag_anchor.set(Some(drag));
                     focus_node.request_focus();

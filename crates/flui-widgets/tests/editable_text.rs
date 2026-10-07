@@ -921,6 +921,54 @@ pub(crate) fn a_pointer_down_and_a_paste_commit_the_composition_first() {
     );
 }
 
+/// A press reentered from the commit it runs (the commit's `on_changed`
+/// dispatching another press) finds the outer press's contact already
+/// recorded: the nested one is refused and moves nothing, and the outer one
+/// places the caret.
+///
+/// Red-check: record the contact after the commit (the nested press is
+/// admitted as a second contact and moves the caret to where it landed).
+pub(crate) fn a_press_reentered_by_its_commit_is_not_a_second_contact() {
+    use std::cell::{Cell, RefCell};
+    type Slot = Rc<RefCell<Option<&'static crate::common::harness::Harness>>>;
+    let controller = TextEditingController::with_text("ab");
+    let node = FocusNode::with_debug_label("reentered press");
+    let slot: Slot = Rc::default();
+    let seen = Rc::new(Cell::new(None));
+    let (nested, observed, read) = (Rc::clone(&slot), Rc::clone(&seen), controller.clone());
+    let mut harness = crate::common::harness::mount_with_ime(
+        EditableText::new(controller.clone(), Rc::clone(&node)).on_changed(move |_cx, _text| {
+            let harness = nested.borrow_mut().take();
+            if let Some(harness) = harness {
+                harness.dispatch_pointer_down(400.0, 5.0);
+                observed.set(Some(read.caret_byte_offset()));
+            }
+        }),
+    );
+    node.request_focus();
+    harness.tick();
+    harness.dispatch_ime(&flui_platform_api::ImeEvent::Preedit {
+        text: "東京".to_owned(),
+        cursor: Some(("東京".len(), "東京".len())),
+    });
+    assert!(controller.is_composing(), "precondition: composing");
+    let harness: &'static _ = Box::leak(Box::new(harness));
+    slot.replace(Some(harness));
+
+    harness.dispatch_pointer_down(1.0, 5.0);
+    let committed = "ab東京".len();
+    assert_eq!(
+        seen.get(),
+        Some(committed),
+        "the nested press moved nothing (the commit left the caret after the text)"
+    );
+    assert_eq!(
+        controller.caret_byte_offset(),
+        0,
+        "the outer press placed the caret where it landed"
+    );
+}
+
 /// A drag selects from where it started to where the pointer is, and the
 /// caret follows the pointer rather than the lower end.
 ///
