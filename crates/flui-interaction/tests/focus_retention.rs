@@ -199,13 +199,8 @@ fn weak_traversal_links_revalidate_groups_and_registration_generations() {
         TraversalEdgeBehavior::ClosedLoop,
     );
     let nodes = [FocusNode::new(), FocusNode::new(), FocusNode::new()];
-    for (index, node) in nodes.iter().enumerate() {
-        node.set_rect(Rect::new(
-            index as f64 * 20.0,
-            0.0,
-            index as f64 * 20.0 + 10.0,
-            10.0,
-        ));
+    for (left, node) in [0.0, 20.0, 40.0].into_iter().zip(&nodes) {
+        node.set_rect(Rect::new(left, 0.0, left + 10.0, 10.0));
     }
     let _attachments = [
         manager.root_scope().attach_node(&group).expect("group"),
@@ -322,6 +317,92 @@ fn directional_provider_failure_preserves_first_failure_and_recovery() {
             nodes[1].has_primary_focus(),
             "the cleared provider leaves the healthy fallback geometry usable"
         );
+    }
+}
+
+fn group_policy_replacement_preserves_failure_and_future_traversal() {
+    use flui_foundation::geometry::Rect;
+    use flui_interaction::{FocusNodeRegistration, ReadingOrderPolicy, TraversalEdgeBehavior};
+    use flui_painting::typography::TextDirection;
+    #[derive(Debug)]
+    struct ReplacingPolicy {
+        group: Weak<FocusNode>,
+        replacement: Rc<RefCell<Option<FocusNodeRegistration>>>,
+        drops: Rc<Cell<usize>>,
+        sorting_fails: bool,
+        retirement_fails: bool,
+    }
+    impl FocusTraversalPolicy for ReplacingPolicy {
+        fn order(&self, nodes: &mut [Rc<FocusNode>], direction: TextDirection) {
+            let group = self.group.upgrade().expect("live group");
+            *self.replacement.borrow_mut() = Some(group.register_traversal_group(
+                Rc::new(ReadingOrderPolicy),
+                direction,
+                TraversalEdgeBehavior::Stop,
+            ));
+            assert!(!self.sorting_fails, "first group sorting failure");
+            ReadingOrderPolicy.order(nodes, direction);
+        }
+    }
+    impl Drop for ReplacingPolicy {
+        fn drop(&mut self) {
+            self.drops.set(self.drops.get() + 1);
+            if let Some(group) = self.group.upgrade() {
+                assert!(
+                    group.is_attached(),
+                    "policy retirement occurs outside the group borrow"
+                );
+            }
+            assert!(!self.retirement_fails, "competing group retirement failure");
+        }
+    }
+    for (sorting_fails, retirement_fails) in [(true, false), (true, true), (false, true)] {
+        let manager = FocusManager::new();
+        let group = FocusNode::new();
+        group.set_can_request_focus(false);
+        group.set_skip_traversal(true);
+        let nodes = [FocusNode::new(), FocusNode::new()];
+        nodes[0].set_rect(Rect::new(0.0, 0.0, 10.0, 10.0));
+        nodes[1].set_rect(Rect::new(20.0, 0.0, 30.0, 10.0));
+        let _attachments = [
+            manager.root_scope().attach_node(&group).expect("group"),
+            group.attach_node(&nodes[0]).expect("first"),
+            group.attach_node(&nodes[1]).expect("second"),
+        ];
+        let replacement = Rc::new(RefCell::new(None));
+        let drops = Rc::new(Cell::new(0));
+        let _registration = group.register_traversal_group(
+            Rc::new(ReplacingPolicy {
+                group: Rc::downgrade(&group),
+                replacement: Rc::clone(&replacement),
+                drops: Rc::clone(&drops),
+                sorting_fails,
+                retirement_fails,
+            }),
+            TextDirection::Ltr,
+            TraversalEdgeBehavior::Stop,
+        );
+        let _ = nodes[0].request_focus();
+        let payload = catch_unwind(AssertUnwindSafe(|| manager.focus_next()))
+            .expect_err("group failure propagates");
+        assert_eq!(
+            flui_foundation::panic::payload_text(payload.as_ref()),
+            Some(if sorting_fails {
+                "first group sorting failure"
+            } else {
+                "competing group retirement failure"
+            })
+        );
+        flui_foundation::panic::retain_opaque_payload(payload);
+        assert_eq!(drops.get(), usize::from(!sorting_fails));
+        assert!(nodes[0].has_primary_focus());
+        assert!(manager.focus_next());
+        assert!(
+            nodes[1].has_primary_focus(),
+            "the replacement policy serves the next healthy traversal"
+        );
+        let registration = replacement.borrow_mut().take();
+        drop(registration);
     }
 }
 
@@ -1204,6 +1285,10 @@ fn assert_queued_focus_recovery(from_node: bool, competing: bool) {
 #[test]
 fn caught_callback_failures_leave_captures_with_their_owner() {
     let cases: &[(&str, fn())] = &[
+        (
+            "group policy replacement and failure recovery",
+            group_policy_replacement_preserves_failure_and_future_traversal,
+        ),
         (
             "weak traversal ownership and generations",
             weak_traversal_links_revalidate_groups_and_registration_generations,
