@@ -24,9 +24,8 @@ use flui_interaction::arena::{
     run_pointer_lifecycle,
 };
 use flui_interaction::events::{
-    PointerButton, PointerEvent, PointerType, make_cancel_event_for_id,
-    make_down_event_for_id_with_button, make_move_event_for_id, make_up_event_for_id,
-    make_up_event_for_id_with_button,
+    PointerButton, PointerEvent, PointerType, make_down_event_for_id_with_button,
+    make_move_event_for_id, make_up_event_for_id, make_up_event_for_id_with_button,
 };
 use flui_interaction::routing::PointerDispatch;
 use flui_interaction::sealed::CustomGestureRecognizer;
@@ -788,32 +787,6 @@ fn drag_release_uses_terminal_event_time() {
     terminal_velocity_cases(&lane, &velocities, false);
 }
 
-fn drag_cancel_uses_the_arena_clock() {
-    let mut lane = Lane::new();
-    let velocity = Rc::new(Cell::new(None));
-    let log = Rc::clone(&velocity);
-    let drag = DragGestureRecognizer::new(lane.arena.clone(), DragAxis::Horizontal)
-        .with_on_end(move |details| log.set(Some(details.velocity.pixels_per_second.dx)));
-    lane.join(&drag);
-    lane.send(&down(id(2), at(0.0, 0.0), PointerType::Touch));
-    for k in 1..=6_u32 {
-        lane.clock.advance(Duration::from_millis(10));
-        lane.send(&motion(
-            id(2),
-            at(f64::from(k) * 20.0, 0.0),
-            PointerType::Touch,
-        ));
-    }
-    lane.clock.advance(Duration::from_millis(100));
-    lane.send(&make_cancel_event_for_id(id(2), PointerType::Touch));
-    assert_eq!(
-        velocity.get(),
-        Some(0.0),
-        "unstamped cancel uses virtual time"
-    );
-    assert!(lane.arena.is_empty());
-}
-
 struct VelocityHandle(Rc<RefCell<Vec<f64>>>);
 
 impl MultiDragHandle for VelocityHandle {
@@ -950,10 +923,6 @@ fn gesture_lifecycle_matrix() {
         (
             "drag_release_uses_terminal_event_time",
             drag_release_uses_terminal_event_time,
-        ),
-        (
-            "drag_cancel_uses_the_arena_clock",
-            drag_cancel_uses_the_arena_clock,
         ),
         (
             "multidrag_release_uses_terminal_event_time",

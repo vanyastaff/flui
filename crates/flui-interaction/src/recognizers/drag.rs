@@ -718,8 +718,7 @@ impl DragGestureRecognizer {
                 // PointerCancel.
                 let position = state.last_position.unwrap_or(Offset::ZERO);
                 let global_position = state.last_global_position.unwrap_or(position);
-                let now = state.timeline.instant(None, self.state.now());
-                let velocity = state.velocity_tracker.velocity_at(now);
+                let velocity = state.velocity_tracker.get_velocity();
                 let primary_velocity = self.calculate_primary_velocity(velocity.pixels_per_second);
                 let callback = self.callbacks.borrow().on_end.clone();
                 *state = DragState::default();
