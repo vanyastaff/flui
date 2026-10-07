@@ -421,7 +421,14 @@ impl NativePointerRegistry {
         };
         let pressed = matches!(native.ButtonChangeType.0, 1 | 3 | 5 | 7 | 9) || message == WM_POINTERDOWN;
         let released = matches!(native.ButtonChangeType.0, 2 | 4 | 6 | 8 | 10) || message == WM_POINTERUP;
-        let event = if pressed {
+        // ENTER can follow DOWN while both notifications refer to the same
+        // native packet. Its cached ButtonChangeType is not a second press.
+        let event = if message == WM_POINTERENTER {
+            PointerEvent::Enter(PointerSignal::new(info, time).with_position(decoded.sample.position))
+        } else if message == WM_POINTERLEAVE {
+            self.contacts.remove(&native.pointerId);
+            PointerEvent::Leave(PointerSignal::new(info, time).with_position(decoded.sample.position))
+        } else if pressed {
             let press = PointerPress::new(info, changed, buttons, decoded.sample);
             contact.buttons = press.buttons();
             if before.is_empty() { PointerEvent::Down(press) } else { PointerEvent::ButtonChange(ButtonChange::Pressed(press)) }
@@ -433,14 +440,7 @@ impl NativePointerRegistry {
                 PointerEvent::Up(release)
             } else { PointerEvent::ButtonChange(ButtonChange::Released(release)) }
         } else {
-            match message {
-                WM_POINTERENTER => PointerEvent::Enter(PointerSignal::new(info, time).with_position(decoded.sample.position)),
-                WM_POINTERLEAVE => {
-                    self.contacts.remove(&native.pointerId);
-                    PointerEvent::Leave(PointerSignal::new(info, time).with_position(decoded.sample.position))
-                }
-                _ => PointerEvent::Move(PointerMove::new(info, buttons, decoded.sample)),
-            }
+            PointerEvent::Move(PointerMove::new(info, buttons, decoded.sample))
         };
         output.push(PlatformInput::Pointer(event));
         output
