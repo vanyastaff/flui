@@ -2842,7 +2842,10 @@ mod native_windows {
                     Some(hwnd),
                     message,
                     packet,
-                    mouse_lparam(screen.x, screen.y),
+                    mouse_lparam(
+                        i16::try_from(screen.x).expect("screen x fits native wheel coordinates"),
+                        i16::try_from(screen.y).expect("screen y fits native wheel coordinates"),
+                    ),
                 )
             }
             .expect("queue native wheel packet");
