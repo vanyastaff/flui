@@ -291,7 +291,15 @@ document.getElementById('native-samples').onclick = () => {
   report('native-samples-check', 'Move the real pointer over the canvas');
   canvas.addEventListener('pointermove', event => check('native-samples-check', () => {
     if (!event.isTrusted || event.pointerType !== 'mouse') throw new Error('trusted mouse source required');
-    const reading = source => ({ time: Math.trunc(source.timeStamp * 1000000), x: source.offsetX, y: source.offsetY });
+    const rect = canvas.getBoundingClientRect();
+    const style = getComputedStyle(canvas);
+    if (style.transform !== 'none') throw new Error('trusted source fixture requires an untransformed canvas');
+    const reading = source => {
+      const expectedX = source.clientX - rect.left - parseFloat(style.borderLeftWidth);
+      const expectedY = source.clientY - rect.top - parseFloat(style.borderTopWidth);
+      if (Math.abs(source.offsetX - expectedX) > 1e-9 || Math.abs(source.offsetY - expectedY) > 1e-9) throw new Error('native sample must retain canvas-local source coordinates');
+      return { time: Math.trunc(source.timeStamp * 1000000), x: expectedX, y: expectedY };
+    };
     const current = reading(event);
     const coalesced = event.getCoalescedEvents?.() ?? [];
     const predicted = event.getPredictedEvents?.() ?? [];
