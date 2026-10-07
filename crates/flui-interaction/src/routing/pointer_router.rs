@@ -11,23 +11,36 @@
 //!
 //! # Example
 //!
-//! ```rust,ignore
-//! use flui_interaction::{PointerRouter, PointerId};
-//! use std::rc::Rc;
+//! ```rust
+//! use flui_interaction::{PointerRouter, PointerId, PointerRouteHandler};
+//! use flui_platform_api::{EventTime, pointer::{CancelReason, PointerCancel,
+//!     PointerEvent, PointerInfo, PointerKind}};
+//! use std::{cell::Cell, rc::Rc};
 //!
 //! let router = PointerRouter::new();
+//! let pointer_id = PointerId::try_from(1_u64)?;
+//! let pointer = PointerInfo::new(pointer_id, PointerKind::Touch);
+//! let pointer_event = PointerEvent::Cancel(PointerCancel::new(pointer,
+//!     EventTime::from_nanos(10), CancelReason::Platform));
+//! let delivered = Rc::new(Cell::new(0));
+//! let observed = delivered.clone();
 //!
 //! // Register a handler for a specific pointer
-//! let handler = Rc::new(|event: &PointerEvent| {
-//!     tracing::trace!(?event, "pointer event");
+//! let handler: PointerRouteHandler = Rc::new(move |event| {
+//!     assert!(matches!(event, PointerEvent::Cancel(_)));
+//!     observed.set(observed.get() + 1);
 //! });
-//! router.add_route(pointer_id, handler);
+//! router.add_route(pointer_id, handler.clone());
 //!
 //! // Route an event - all registered handlers receive it
 //! router.route(&pointer_event);
+//! assert_eq!(delivered.get(), 1);
 //!
 //! // Remove when done
-//! router.remove_route(pointer_id, handler);
+//! assert!(router.remove_route(pointer_id, &handler));
+//! router.route(&pointer_event);
+//! assert_eq!(delivered.get(), 1);
+//! # Ok::<(), std::num::TryFromIntError>(())
 //! ```
 
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
@@ -59,20 +72,8 @@ pub type GlobalPointerHandler = Rc<dyn Fn(&PointerEvent)>;
 /// storage; render hit-test data stays on the separate `Send + Sync` data
 /// plane.
 ///
-/// # Example
-///
-/// ```rust,ignore
-/// let router = PointerRouter::new();
-///
-/// // Gesture recognizer registers for pointer events
-/// let recognizer_handler = Rc::new(|event| {
-///     // Handle drag updates even when pointer leaves original target
-/// });
-/// router.add_route(pointer_id, recognizer_handler);
-///
-/// // Later, platform layer routes events
-/// router.route(&pointer_event);
-/// ```
+/// The module example demonstrates delivery and
+/// removal through the same public router.
 pub struct PointerRouter {
     closed: std::cell::Cell<bool>,
     close_mode: crate::__runtime::CloseTombstone,
@@ -127,14 +128,8 @@ impl PointerRouter {
     /// The handler will receive all events for this pointer until removed.
     /// Multiple handlers can be registered for the same pointer.
     ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let handler = Rc::new(|event: &PointerEvent| {
-    ///     tracing::trace!(?event, "received pointer event");
-    /// });
-    /// router.add_route(pointer_id, handler);
-    /// ```
+    /// Keep another [`Rc`] if the handler must later be removed by identity with
+    /// [`Self::remove_route`].
     pub fn add_route(&self, pointer: PointerId, handler: PointerRouteHandler) {
         if self.closed.get() {
             let mut failure = crate::__runtime::ClosePanic::for_rejection(self.close_mode.mode());

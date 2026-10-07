@@ -7,11 +7,13 @@
 //!
 //! # Example
 //!
-//! ```rust,ignore
-//! use flui_interaction::processing::VelocityTracker;
+//! ```rust
+//! use flui_interaction::{PointerKind, processing::VelocityTracker};
+//! use flui_foundation::geometry::Offset;
+//! use web_time::Instant;
 //!
-//! let mut tracker = VelocityTracker::new();
-//! tracker.add_position(now, position);
+//! let mut tracker = VelocityTracker::with_kind(PointerKind::Touch);
+//! tracker.add_position(Instant::now(), Offset::ZERO);
 //! let velocity = tracker.get_velocity();
 //!
 //! ```

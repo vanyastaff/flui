@@ -150,9 +150,11 @@ pub struct ScaleEndDetails {
 ///
 /// # Example
 ///
-/// ```rust,ignore
+/// ```rust
 /// use flui_interaction::prelude::*;
+/// use flui_interaction::GestureBinding;
 ///
+/// let binding = GestureBinding::new();
 /// let recognizer = ScaleGestureRecognizer::builder(binding.arena().clone())
 ///     .on_update(|details| println!("Scale: {:.2}x", details.scale)).build();
 /// ```

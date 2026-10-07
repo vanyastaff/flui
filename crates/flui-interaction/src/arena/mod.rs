@@ -25,10 +25,16 @@
 //! handle. This handle is the preferred way for recognizers to resolve
 //! themselves:
 //!
-//! ```rust,ignore
+//! ```rust
+//! use flui_interaction::{GestureArena, GestureDisposition, PointerId, TapGestureRecognizer};
+//! let arena = GestureArena::new();
+//! let pointer = PointerId::try_from(1_u64)?;
+//! let my_recognizer = TapGestureRecognizer::builder(arena.clone()).build();
 //! let entry = arena.add(pointer, &my_recognizer);
 //! // Later, when the recognizer decides:
 //! entry.resolve(GestureDisposition::Accepted);
+//! arena.close(pointer);
+//! # Ok::<(), std::num::TryFromIntError>(())
 //! ```
 //!
 //! This pattern allows recognizers to resolve themselves without needing
@@ -99,11 +105,11 @@ impl GestureDisposition {
 /// External members implement this trait directly, including their own deadline
 /// query and polling hook. The arena holds members weakly; their owner keeps them alive.
 ///
-/// ```rust,ignore
-/// use flui_interaction::arena::{GestureArena, GestureArenaMember};
+/// ```rust
+/// use flui_interaction::arena::{GestureArena, GestureArenaMember, GestureDisposition};
 /// use flui_interaction::PointerId;
 ///
-/// struct MyRecognizer { /* ... */ }
+/// struct MyRecognizer;
 ///
 /// impl GestureArenaMember for MyRecognizer {
 ///     fn accept_gesture(&self, pointer: PointerId) {
@@ -116,9 +122,10 @@ impl GestureDisposition {
 ///
 /// let arena = GestureArena::new();
 /// let pointer = PointerId::new(core::num::NonZeroU64::MIN);
-/// let recognizer = std::rc::Rc::new(MyRecognizer { /* ... */ });
+/// let recognizer = std::rc::Rc::new(MyRecognizer);
 /// let entry = arena.add(pointer, &recognizer);
-/// // Later: entry.resolve(GestureDisposition::Accepted);
+/// entry.resolve(GestureDisposition::Accepted);
+/// arena.close(pointer);
 /// ```
 ///
 pub trait GestureArenaMember {

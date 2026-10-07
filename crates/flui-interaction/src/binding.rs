@@ -54,20 +54,27 @@
 //!
 //! # Example
 //!
-//! ```rust,ignore
-//! use flui_interaction::GestureBinding;
-//! use flui_interaction::events::PointerEvent;
+//! ```rust
+//! use flui_interaction::{GestureBinding, HitTestResult};
+//! use flui_foundation::geometry::Point;
+//! use flui_platform_api::{EventTime, pointer::{PointerButton, PointerButtons,
+//!     PointerEvent, PointerId, PointerInfo, PointerKind, PointerPosition,
+//!     PointerPress, PointerSample}};
 //!
-//! // Create or use the owner runtime's binding.
 //! let binding = GestureBinding::new();
+//! let pointer = PointerInfo::new(PointerId::try_from(1_u64)?, PointerKind::Touch);
+//! let sample = PointerSample::new(EventTime::from_nanos(1),
+//!     PointerPosition::try_new(Point::new(12.0, 24.0))?);
+//! let event = PointerEvent::Down(PointerPress::new(pointer, PointerButton::PRIMARY,
+//!     PointerButtons::NONE, sample));
 //!
-//! // Handle platform events
-//! fn handle_event(event: &PointerEvent) {
-//!     binding.handle_pointer_event(event, |hit_test_position| {
-//!         // Perform hit testing on your render tree
-//!         my_render_tree.hit_test(hit_test_position)
-//!     });
-//! }
+//! binding.handle_pointer_event(&event, |position| {
+//!     assert_eq!(position.x, 12.0);
+//!     assert_eq!(position.y, 24.0);
+//!     // An embedding's render tree supplies entries here.
+//!     HitTestResult::new()
+//! });
+//! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
 use std::{
@@ -580,13 +587,8 @@ impl GestureBinding {
     /// * `hit_test_fn` - Function to perform hit testing (called on pointer
     ///   down)
     ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// binding.handle_pointer_event(&event, |position| {
-    ///     render_tree.hit_test(position)
-    /// });
-    /// ```
+    /// See the [`crate::binding`] module example for constructing a checked Down and supplying
+    /// the hit-test callback.
     pub fn handle_pointer_event<F>(&self, event: &PointerEvent, hit_test_fn: F)
     where
         F: FnOnce(Offset<f64>) -> HitTestResult,
@@ -618,14 +620,11 @@ impl GestureBinding {
     ///
     /// # Example
     ///
-    /// ```rust,ignore
-    /// // In your frame loop:
-    /// fn on_frame(&mut self) {
-    ///     // Process coalesced move events
-    ///     self.binding.flush_pending_moves();
-    ///
-    ///     // Then do layout, paint, etc.
-    /// }
+    /// ```rust
+    /// use flui_interaction::GestureBinding;
+    /// let binding = GestureBinding::new();
+    /// // The presentation calls this before layout and paint each frame.
+    /// assert_eq!(binding.flush_pending_moves(), 0); // no input queued yet
     /// ```
     pub fn flush_pending_moves(&self) -> usize {
         if self.closed.get() {

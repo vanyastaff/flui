@@ -1,8 +1,7 @@
 //! Least-Squares polynomial regression
 //!
 //! Reusable solver for fitting a polynomial to a weighted dataset. Used by
-//! the velocity tracker (gesture fling estimation) and the input predictor
-//! (position extrapolation). It uses a
+//! the velocity tracker (gesture fling estimation). It uses a
 //! static-allocating design for the 20-sample hot path.
 //!
 //! # Algorithm
@@ -15,24 +14,7 @@
 //!
 //! It is numerically stable for the small sample sizes (≤ 20) typical of pointer tracking.
 //!
-//! # Example
-//!
-//! ```rust,ignore
-//! use crate::processing::lsq_solver::{PolynomialFit, solve_two};
-//!
-//! // Fit a quadratic (degree=2) to (t, x) and (t, y) with weights w.
-//! let t = vec![-100.0, -50.0, 0.0];       // time in ms
-//! let x = vec![0.0, 50.0, 100.0];         // position in px
-//! let y = vec![0.0, 10.0, 20.0];
-//! let w = vec![0.6, 0.8, 1.0];            // weights (recent = higher)
-//!
-//! let (fit, _): (Option<PolynomialFit>, _) = solve_two(&t, &w, &x, &y, 2);
-//! if let Some(fit) = fit {
-//!     // Coefficients are [a₀, a₁, a₂] for y = a₀ + a₁·t + a₂·t².
-//!     // Velocity at t=0 is a₁.
-//!     let velocity = fit.coefficients[1];
-//! }
-//! ```
+//! Consumers use [`super::VelocityTracker`]; the solver remains private numerical machinery.
 
 // ============================================================================
 // Constants
