@@ -3,7 +3,7 @@
 //! `flui_platform_api::keyboard::{NamedKey, Code}` are FLUI's own enums, so no `keyboard-types`
 //! type reaches a Stable signature, but their variants are the W3C `key` and `code` value lists,
 //! which `keyboard-types` already transcribes from the specifications. This command reads the
-//! `keyboard-types` sources that `ui-events` resolves to (`named_key.rs` and `code.rs`) and writes
+//! `keyboard-types` sources pinned by xtask (`named_key.rs` and `code.rs`) and writes
 //! both enums with their documentation, an `ALL` table and the W3C spelling of every variant.
 //!
 //! Without arguments it checks that the checked-in files are what the pinned `keyboard-types`
@@ -112,7 +112,7 @@ fn read(path: &Path) -> anyhow::Result<String> {
     std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))
 }
 
-/// The package root and version of the `keyboard-types` that `ui-events` resolves to.
+/// The package root and version of xtask's direct `keyboard-types` dependency.
 fn keyboard_types_root(root: &Path) -> anyhow::Result<(PathBuf, String)> {
     let metadata = cargo_metadata::MetadataCommand::new()
         .current_dir(root)
@@ -123,27 +123,27 @@ fn keyboard_types_root(root: &Path) -> anyhow::Result<(PathBuf, String)> {
         .resolve
         .as_ref()
         .context("`cargo metadata` returned no dependency graph")?;
-    let ui_events: Vec<_> = metadata
+    let xtask: Vec<_> = metadata
         .packages
         .iter()
-        .filter(|package| package.name.as_str() == "ui-events")
+        .filter(|package| package.name.as_str() == "xtask")
         .collect();
-    let [ui_events] = ui_events.as_slice() else {
+    let [xtask] = xtask.as_slice() else {
         bail!(
-            "expected one ui-events package in the lock file, found {}",
-            ui_events.len()
+            "expected one xtask package in the dependency graph, found {}",
+            xtask.len()
         );
     };
     let node = resolve
         .nodes
         .iter()
-        .find(|node| node.id == ui_events.id)
-        .context("ui-events is not in the dependency graph")?;
+        .find(|node| node.id == xtask.id)
+        .context("xtask is not in the dependency graph")?;
     let dependency = node
         .deps
         .iter()
         .find(|dep| dep.name == "keyboard_types")
-        .context("ui-events does not depend on keyboard-types")?;
+        .context("xtask does not have its keyboard-types generator dependency")?;
     let package = &metadata[&dependency.pkg];
     let manifest_dir = package
         .manifest_path
