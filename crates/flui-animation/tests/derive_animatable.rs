@@ -9,9 +9,6 @@
 
 use flui_animation::{Animatable, TwoWayConverter};
 
-#[path = "contracts/retarget.rs"]
-mod retarget;
-
 #[derive(Clone, Animatable)]
 struct Translation {
     x: f64,
