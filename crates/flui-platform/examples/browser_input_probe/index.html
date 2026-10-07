@@ -12,6 +12,8 @@ pre { position: relative; z-index: 9999; background: white; width: max-content; 
   <button id="cancel">Check browser cancellation</button>
   <button id="capture-loss">Check capture loss</button>
   <button id="fractional">Check fractional positions</button>
+  <button id="owned-wheel">Check wheel units and precision</button>
+  <button id="owned-keyboard">Check native key vocabulary</button>
   <button id="pen-samples">Check pen samples</button>
   <button id="chord">Check native pointer chord</button>
   <button id="sensor-validation">Check pen sensor validation</button>
@@ -107,6 +109,40 @@ document.getElementById('cancel').onclick = () => check('cancel-check', () => {
   canvas.dispatchEvent(new PointerEvent('pointerdown', { ...common, button: 0, buttons: 1 }));
   canvas.dispatchEvent(new PointerEvent('pointerup', { ...common, button: 0, buttons: 0 }));
   equal({ sequence: document.getElementById('sequence')?.textContent }, { sequence: 'down,cancel,down,up,' });
+});
+document.getElementById('owned-wheel').onclick = () => check('owned-wheel-check', () => {
+  const canvas = document.querySelector('canvas');
+  if (!canvas) throw new Error('Install input first');
+  for (const [deltaMode, unit] of [[0, 'Pixels'], [1, 'Lines'], [2, 'Pages']]) {
+    canvas.dispatchEvent(new WheelEvent('wheel', {
+      bubbles: true, clientX: 80, clientY: 40, deltaMode,
+      deltaX: 1.000000000123, deltaY: -2.000000000456, shiftKey: true,
+    }));
+    equal(JSON.parse(document.getElementById('scroll-data').textContent), {
+      unit, x: 1.000000000123, y: -2.000000000456, precision: 'Unknown', shift: true,
+    });
+  }
+});
+document.getElementById('owned-keyboard').onclick = () => check('owned-keyboard-check', () => {
+  for (const [key, code, location, expectedLocation] of [
+    ['Dead', 'Quote', 0, 'Standard'],
+    ['AudioVolumeUp', 'AudioVolumeUp', 0, 'Standard'],
+    ['Enter', 'NumpadEnter', 3, 'Numpad'],
+    ['ж', 'KeyA', 0, 'Standard'],
+  ]) {
+    window.dispatchEvent(new KeyboardEvent('keydown', {
+      key, code, location, repeat: true, isComposing: true, shiftKey: true,
+    }));
+    equal(JSON.parse(document.getElementById('keyboard').textContent), {
+      key, code, state: 'Down', location: expectedLocation,
+      repeat: 'AutoRepeat', composition: 'Active', shift: true,
+    });
+    window.dispatchEvent(new KeyboardEvent('keyup', { key, code, location }));
+    equal(JSON.parse(document.getElementById('keyboard').textContent), {
+      key, code, state: 'Up', location: expectedLocation,
+      repeat: 'First', composition: 'Inactive', shift: false,
+    });
+  }
 });
 document.getElementById('fractional').onclick = () => check('fractional-check', () => {
   const canvas = document.querySelector('canvas');
