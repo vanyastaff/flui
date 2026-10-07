@@ -58,6 +58,7 @@ dpi = "0.1.2"
 # Checkout-only test edge: versionless, so Cargo drops it from the published manifest.
 flui-testing = { path = "../flui-testing" }
 static_assertions = { workspace = true }
+trybuild = { workspace = true }
 # Property tests of the gesture arena and of the velocity and resampling numerics.
 proptest = { workspace = true }
 # Criterion — hot-path regression guards. Benches cover VelocityTracker
@@ -74,6 +75,11 @@ flui-interaction = { path = ".", features = ["testing"] }
 [[test]]
 name = "interaction_it"
 path = "tests/main.rs"
+
+# Compiler contracts invoke Cargo in a separate test process.
+[[test]]
+name = "compile_fail"
+path = "tests/compile_fail.rs"
 
 # Own target: installs a counting `#[global_allocator]`, which is process-wide.
 [[test]]
