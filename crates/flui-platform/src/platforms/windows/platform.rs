@@ -1744,9 +1744,6 @@ impl WindowsPlatform {
                     tracing::debug!("Window Unfocused");
 
                     if let Some(ctx) = ctx {
-                        // A key held across the focus loss releases into another
-                        // window; forget it before user code runs.
-                        ctx.held_dead_keys.borrow_mut().clear();
                         ctx.update_window_state(|state| state.focused = false);
                         // Fire per-window on_active_status_change callback
                         ctx.callbacks.dispatch_active_status_change(false);

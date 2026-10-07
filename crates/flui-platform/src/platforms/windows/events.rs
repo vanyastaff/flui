@@ -394,8 +394,14 @@ pub fn key_down_event(
         Keystroke::Dead => (true, None),
         Keystroke::Text(text) => (false, text),
     };
+    // A press is also proof the key was released before: a dead press held
+    // across a focus change whose release went to another window is forgotten
+    // here, when the same physical key goes down again. A key that stays held
+    // across a transient focus loss keeps its identity for its release.
     if dead {
         held_dead.press(scan_code, extended);
+    } else if !is_repeat {
+        held_dead.release(scan_code, extended);
     }
 
     let modifiers = message_modifiers();
@@ -501,11 +507,6 @@ impl HeldDeadKeys {
         if !self.0.contains(&(scan_code, extended)) {
             self.0.push((scan_code, extended));
         }
-    }
-
-    /// Forget every held key: their releases go to another window.
-    pub fn clear(&mut self) {
-        self.0.clear();
     }
 
     /// Whether the released key was pressed as a dead key; forgets it.

@@ -295,6 +295,10 @@ mod native_windows {
             dead_key_forgotten_when_focus_leaves,
         ),
         (
+            "dead_key_survives_a_transient_focus_loss",
+            dead_key_survives_a_transient_focus_loss,
+        ),
+        (
             "consumed_alt_space_withdraws_its_system_char",
             consumed_alt_space_withdraws_its_system_char,
         ),
@@ -1245,6 +1249,12 @@ mod native_windows {
         dead_key_reports_dead(DeadKeyCase::FocusLostWhileHeld);
     }
 
+    // Focus leaves and comes back while the dead key is held: its release
+    // arrives here and still reports Dead.
+    fn dead_key_survives_a_transient_focus_loss() {
+        dead_key_reports_dead(DeadKeyCase::FocusReturnsWhileHeld);
+    }
+
     #[derive(Clone, Copy)]
     enum DeadKeyCase {
         UsInternationalAcute,
@@ -1252,6 +1262,7 @@ mod native_windows {
         FrenchAltGrTilde,
         LayoutSwitchWhileHeld,
         FocusLostWhileHeld,
+        FocusReturnsWhileHeld,
     }
 
     #[expect(unsafe_code, reason = "owned Win32 keyboard dispatch")]
@@ -1327,6 +1338,10 @@ mod native_windows {
         match case {
             DeadKeyCase::LayoutSwitchWhileHeld => {
                 switched = Some(ThreadLayout::activate("00000409"));
+            }
+            DeadKeyCase::FocusReturnsWhileHeld => {
+                // SAFETY: a focus-loss notification for the fixture's HWND.
+                unsafe { SendMessageW(hwnd, WM_KILLFOCUS, None, None) };
             }
             DeadKeyCase::FocusLostWhileHeld => {
                 // SAFETY: a focus-loss notification for the fixture's HWND;
