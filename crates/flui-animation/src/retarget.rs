@@ -161,7 +161,7 @@ impl Segment {
                 // A reversal shortens, but never below the floor: the seam's
                 // value and velocity are kept however early it reverses.
                 let duration = (full * scale).max(MIN_CURVE_SECONDS);
-                let excess = v0 - span * curve.slope(0.0) / duration;
+                let excess = v0 - rate(span, curve.slope(0.0), duration);
                 let arrival = span * curve.slope(1.0);
                 if !(excess.is_finite() && arrival.is_finite()) {
                     return Self::Rest(target);
@@ -250,15 +250,31 @@ impl CurveSegment {
             return 0.0;
         }
         let tau = t / self.duration;
-        let curve = self.span * self.curve.slope(tau) / self.duration;
+        let curve = rate(self.span, self.curve.slope(tau), self.duration);
         let departure = self.excess * (1.0 - tau) * (1.0 - 3.0 * tau);
-        let arrival = self.arrival / self.duration * (tau * (2.0 - 3.0 * tau));
+        let arrival = rate(self.arrival, tau * (2.0 - 3.0 * tau), self.duration);
         finite_or(curve + departure + arrival, 0.0)
     }
 }
 
 /// `value` if finite, else `fallback`: a sample of finite admitted state
 /// whose exact value is not representable never publishes inf or NaN.
+/// `a · b / d` without an overflow the result does not need: tries the
+/// grouping that keeps the intermediate in range for a small `b`, then the one
+/// for a large `b`, then dividing `b` first. Non-finite only when the rate
+/// itself is not representable.
+fn rate(a: f64, b: f64, d: f64) -> f64 {
+    let small_b = a * b / d;
+    if small_b.is_finite() {
+        return small_b;
+    }
+    let large_b = a / d * b;
+    if large_b.is_finite() {
+        return large_b;
+    }
+    a * (b / d)
+}
+
 fn finite_or(value: f64, fallback: f64) -> f64 {
     if value.is_finite() { value } else { fallback }
 }

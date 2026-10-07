@@ -516,6 +516,26 @@ fn time_steps_that_overflow_publish_the_limit() {
     }
 }
 
+/// A span near the f64 limit over a curve that starts steeper than linear:
+/// `span · slope` alone overflows although the rate `span · slope / duration`
+/// is representable, so the seam is kept instead of snapping.
+fn a_large_span_with_a_steep_start_keeps_its_seam() {
+    let mut value = AnimatedValue::with_motion(
+        0.0_f64,
+        MotionSpec::Curve {
+            duration: Duration::from_secs(2),
+            curve: ArcCurve::new(Cubic::new(0.5, 1.0, 0.75, 1.0)),
+        },
+    );
+    value.animate_to(1e308);
+    assert!(!value.is_settled(), "snapped to the target at the seam");
+    value.advance(0.5);
+    let (x, v) = (value.value(), value.velocity()[0]);
+    assert!(x.is_finite() && v.is_finite(), "x {x}, v {v}");
+    assert!(x > 0.0 && x < 1e308, "x {x} is not between the ends");
+    assert!(v > 0.0, "velocity {v} vanished mid-segment");
+}
+
 /// A span near the f64 limit over a short curve: the endpoint rate
 /// `span · slope / duration` is finite although `span / duration` alone is
 /// not, so the run keeps its seam instead of snapping to the target.
@@ -638,6 +658,10 @@ fn retarget_seams() {
         (
             "a_large_span_over_a_short_curve_keeps_its_seam",
             a_large_span_over_a_short_curve_keeps_its_seam,
+        ),
+        (
+            "a_large_span_with_a_steep_start_keeps_its_seam",
+            a_large_span_with_a_steep_start_keeps_its_seam,
         ),
         (
             "a_large_finite_curve_correction_stays_finite",
