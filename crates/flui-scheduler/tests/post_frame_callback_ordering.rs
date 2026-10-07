@@ -218,11 +218,81 @@ fn retiring_owner_cancels_the_active_local_tail() {
     }
 }
 
+fn retiring_owner_preserves_registration_order_across_the_active_tail() {
+    struct Capture {
+        name: &'static str,
+        log: Log,
+        fail: bool,
+    }
+    impl Drop for Capture {
+        fn drop(&mut self) {
+            self.log.push(self.name);
+            if self.fail {
+                std::panic::panic_any(self.name);
+            }
+        }
+    }
+
+    for failures in [[false, false], [true, false], [false, true], [true, true]] {
+        let scheduler = UpdateScheduler::new();
+        let owner = std::rc::Rc::new(flui_scheduler::OwnerFrame::new(&scheduler).expect("owner"));
+        let lane = owner.local_post_frame_handle();
+        let log = Log::default();
+        let head = owner.clone();
+        let later_lane = lane.clone();
+        let later_log = log.clone();
+        lane.schedule_local(move |_| {
+            let newer = Capture {
+                name: "newer",
+                log: later_log,
+                fail: failures[1],
+            };
+            later_lane
+                .schedule_local(move |_| drop(newer))
+                .expect("newer callback");
+            let failure = head.retire();
+            let expected = if failures[0] {
+                Some("older")
+            } else if failures[1] {
+                Some("newer")
+            } else {
+                None
+            };
+            assert_eq!(
+                failure
+                    .as_ref()
+                    .and_then(|payload| flui_foundation::panic::payload_text(payload.as_ref())),
+                expected
+            );
+        })
+        .expect("head");
+        for (name, fail) in [("older", failures[0]), ("middle", false)] {
+            let capture = Capture {
+                name,
+                log: log.clone(),
+                fail,
+            };
+            lane.schedule_local(move |_| drop(capture))
+                .expect("active tail");
+        }
+        scheduler.drive_frame(&owner, Instant::now(), far_deadline(), || {});
+        assert_eq!(log.get(), ["older", "middle", "newer"]);
+        assert!(owner.retire().is_none());
+        assert!(lane.schedule_local(|_| {}).is_err());
+        scheduler.drive_frame(&owner, Instant::now(), far_deadline(), || {});
+        assert_eq!(log.get(), ["older", "middle", "newer"]);
+    }
+}
+
 #[test]
 fn post_frame_ordering_matrix() {
     crate::run_table(
         "post_frame_ordering_matrix",
         &[
+            (
+                "retiring_owner_preserves_registration_order_across_the_active_tail",
+                retiring_owner_preserves_registration_order_across_the_active_tail as fn(),
+            ),
             (
                 "retiring_owner_cancels_the_active_local_tail",
                 retiring_owner_cancels_the_active_local_tail as fn(),

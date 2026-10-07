@@ -169,6 +169,9 @@ impl OwnerFrame {
         self.post_frame.closed.set(true);
         let mut callbacks = self.post_frame.queue.take();
         callbacks.extend(self.post_frame.active.take());
+        // Active entries are removed with swap_remove; neither collection
+        // alone retains registration order after a partial frame dispatch.
+        callbacks.sort_unstable_by_key(|entry| entry.id);
         let tasks = self.tasks.detach_for_retirement();
         let mut first: Option<RetirePanic> = None;
         for entry in callbacks {
