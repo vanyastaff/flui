@@ -339,7 +339,7 @@ an orthonormal rotation (a quaternion, slerped along the shorter arc); the
 bottom row gives perspective. A column whose residual is within `1e-12` of the
 longest column is a collapsed axis: that endpoint keeps its scales, translation
 and perspective and takes the other endpoint's rotation and skew, so a
-scale-in grows in place. This rule is FLUI's own; CSS has no such case. `m33 = 0`
+scale-in grows in place. This rule is FLUI's own; CSS has no such case. `m33 = 0`, an `m33` whose division overflows,
 or a perspective row over a singular block switch at `t = 0.5`. Locked by
 `matrix4_lerp_decomposes_like_css_transforms` and the property test
 `matrix4_lerp_endpoints_and_finiteness`.

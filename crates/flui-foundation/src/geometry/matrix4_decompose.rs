@@ -41,7 +41,8 @@ pub(super) enum Decomposed {
     /// An affine matrix with a collapsed axis: perspective, translation and scale are its
     /// own; rotation and skew are identity placeholders for the caller to replace.
     Collapsed(Parts),
-    /// Not decomposable (`m33 = 0`, or a perspective row over a singular linear block).
+    /// Not decomposable (`m33 = 0`, normalising by `m33` overflows, or a perspective row
+    /// over a singular linear block).
     Singular,
 }
 
@@ -161,6 +162,11 @@ pub(super) fn decompose(matrix: &Matrix4) -> Decomposed {
         return Decomposed::Singular;
     }
     let m = matrix.m.map(|v| v / m33);
+    // A tiny m33 can push finite elements past f64::MAX; such a matrix has no
+    // finite decomposition, so it takes the discrete path.
+    if !m.iter().all(|v| v.is_finite()) {
+        return Decomposed::Singular;
+    }
     let columns = [0, 1, 2].map(|col| [at(&m, 0, col), at(&m, 1, col), at(&m, 2, col)]);
     let translation = [at(&m, 0, 3), at(&m, 1, 3), at(&m, 2, 3)];
     let bottom = [at(&m, 3, 0), at(&m, 3, 1), at(&m, 3, 2)];

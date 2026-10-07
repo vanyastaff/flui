@@ -97,6 +97,16 @@ fn perspective_over_a_collapsed_axis_switches_at_the_midpoint() {
     );
 }
 
+fn normalisation_overflow_switches_at_the_midpoint() {
+    // Dividing by a subnormal m33 turns the finite translation into infinity.
+    let mut tiny = Matrix4::translation(1.0, 0.0, 0.0);
+    *tiny.get_mut(3, 3) = f64::from_bits(1);
+    let quarter = tiny.lerp(Matrix4::IDENTITY, 0.25);
+    assert_eq!(quarter.m, tiny.m, "before the midpoint: {quarter:?}");
+    let half = tiny.lerp(Matrix4::IDENTITY, 0.5);
+    assert_eq!(half.m, Matrix4::IDENTITY.m, "from the midpoint: {half:?}");
+}
+
 #[test]
 fn matrix4_lerp_decomposes_like_css_transforms() {
     crate::run_table(&[
@@ -131,6 +141,10 @@ fn matrix4_lerp_decomposes_like_css_transforms() {
         (
             "perspective over a collapsed axis switches at the midpoint",
             perspective_over_a_collapsed_axis_switches_at_the_midpoint,
+        ),
+        (
+            "normalisation overflow switches at the midpoint",
+            normalisation_overflow_switches_at_the_midpoint,
         ),
     ]);
 }

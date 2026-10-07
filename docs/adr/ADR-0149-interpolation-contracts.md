@@ -47,7 +47,7 @@ contract that was written down nowhere, and it had drifted:
    and the quaternion by spherical interpolation along the shorter arc, and recomposes. An
    endpoint whose linear part collapses an axis (zero scale) has no orientation of its own and
    takes the other endpoint's rotation and skew; this rule is FLUI's own (CSS has no such
-   case). A matrix that cannot be decomposed (`m33 = 0`, or a perspective row over a singular
+   case). A matrix that cannot be decomposed (`m33 = 0`, an `m33` so small that normalising overflows, or a perspective row over a singular
    linear part) switches discretely at `t = 0.5`. Endpoints are returned exactly, and finite
    endpoints give finite output.
 4. **Angles are `Angle`** (radians in `f64`, whole turns kept). Interpolation is numeric, so a

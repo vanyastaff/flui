@@ -170,7 +170,7 @@ impl Matrix4 {
     ///   of its own and takes the other endpoint's rotation and skew, so a scale-in from
     ///   zero grows in place instead of spinning. Two collapsed endpoints interpolate
     ///   without rotation or skew.
-    /// - A matrix that cannot be decomposed (`m33 == 0`, or a perspective row over a
+    /// - A matrix that cannot be decomposed (`m33 == 0`, an `m33` so small that normalising by it overflows, or a perspective row over a
     ///   singular linear part) switches discretely: `self` for `t < 0.5`, `other` from
     ///   `t >= 0.5`.
     /// - Finite endpoints give a finite result for any finite `t` short of overflowing the
