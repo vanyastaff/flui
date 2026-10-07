@@ -308,6 +308,9 @@ their `WriterSource` through `LifecycleContext::writer_source`; render views acq
 `RenderObjectContext::writer_source` while registering owner-local interaction handlers.
 Neither capability is exposed by `build`'s `&dyn BuildContext`. A detached render context
 returns `None`, rather than manufacturing a graph unrelated to a presentation.
+`trybuild_ui::ui_tests` pins E0624 for `WriterSource::new` called from a build
+context, alongside a compiling lifecycle acquisition, so public graph access
+does not silently become writer-minting authority.
 The contexts hand out a source over the graph their element reads through
 (`ElementReads::graph`), so a source writes into its own presentation's graph and refuses another
 graph's handles with `ForeignGraph`. The run-time guard is unchanged and stays authoritative: a

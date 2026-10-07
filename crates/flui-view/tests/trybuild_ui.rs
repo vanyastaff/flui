@@ -9,6 +9,7 @@
 fn ui_tests() {
     let t = trybuild::TestCases::new();
     t.pass("tests/ui_pass/state_and_depth.rs");
+    t.compile_fail("tests/ui/writer_source_minting_is_private.rs");
     t.compile_fail("tests/ui/state_cell_is_not_send.rs");
     t.compile_fail("tests/ui/state_cell_is_not_sync.rs");
     t.compile_fail("tests/ui/state_handle_is_not_send.rs");

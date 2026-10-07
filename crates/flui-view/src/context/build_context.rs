@@ -412,6 +412,8 @@ pub trait LifecycleContext: BuildContext {
     /// ```
     ///
     /// Nor can one be made from the graph a context exposes:
+    /// `trybuild_ui::ui_tests` pins the private-constructor diagnostic alongside
+    /// a valid lifecycle-context caller.
     ///
     /// ```compile_fail,E0624
     /// use flui_view::{BuildContext, WriterSource};

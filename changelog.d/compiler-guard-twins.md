@@ -11,3 +11,4 @@
 - Rendering context, paint-arity, snapshot-phase and layout-callback thread guards have matching valid callers.
 - Local-state thread bounds and element-depth authority guards pin exact compiler diagnostics alongside valid local callers.
 - Lifecycle capability and reload-hook unsafe-call compiler examples have matching valid callers.
+- Private writer minting and the facade's composition-root module pin exact diagnostics; the facade guard checks module visibility independently of its contents.
