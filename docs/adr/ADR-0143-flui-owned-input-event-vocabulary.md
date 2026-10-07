@@ -66,6 +66,11 @@ history, a key event's state and repeat, and a pan/zoom event's pointer, whose k
   contact size are `Option`s; a mouse's pressure is `None`, not the W3C's 0.5. A consumer
   that wants the W3C default chooses it. Angles are radians: altitude in `[0, π/2]`, azimuth
   and twist in `[0, 2π)`, clockwise on screen.
+  Altitude and azimuth are independently optional inside `PenOrientation`: `try_new`
+  validates both reported angles, while `try_altitude` and `try_azimuth` preserve a single
+  reported angle. An orientation always contains at least one reading. A backend validates
+  readings independently and omits an invalid angle without discarding the other valid
+  reading; it never fabricates zero for a missing angle.
 - **A sequence ends explicitly.** A contact is `Down`, `Move`s and `ButtonChange`s, then `Up`
   or `Cancel`. A second button on a held pointer is a `ButtonChange`, not a new `Down`
   (W3C chorded buttons). The direction is in the type: `Down` takes a `PointerPress`, `Up` a `PointerRelease`, so a

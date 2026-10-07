@@ -250,6 +250,8 @@ impl TangentialPressure {
 /// The altitude is between the surface (0) and perpendicular to it (π/2); the azimuth is the
 /// direction the pen leans, clockwise from the window's positive x axis (x right, y down), in
 /// `[0, 2π)`.
+/// Each angle is optional because platforms can report altitude without azimuth or vice versa.
+/// An orientation always contains at least one reported angle; an absent angle remains `None`.
 ///
 /// # Examples
 ///
@@ -258,15 +260,18 @@ impl TangentialPressure {
 /// use flui_platform_api::pointer::PenOrientation;
 ///
 /// let leaning = PenOrientation::try_new(FRAC_PI_4, -FRAC_PI_2)?;
-/// assert_eq!(leaning.altitude(), FRAC_PI_4);
-/// assert_eq!(leaning.azimuth(), 3.0 * FRAC_PI_2); // wrapped into [0, 2π)
+/// assert_eq!(leaning.altitude(), Some(FRAC_PI_4));
+/// assert_eq!(leaning.azimuth(), Some(3.0 * FRAC_PI_2)); // wrapped into [0, 2π)
+/// let altitude_only = PenOrientation::try_altitude(0.0)?;
+/// assert_eq!(altitude_only.altitude(), Some(0.0)); // a reported zero
+/// assert_eq!(altitude_only.azimuth(), None); // no reading
 /// assert!(PenOrientation::try_new(2.0, 0.0).is_err()); // past perpendicular
 /// # Ok::<(), flui_platform_api::pointer::InputValueError>(())
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PenOrientation {
-    altitude: f64,
-    azimuth: f64,
+    altitude: Option<f64>,
+    azimuth: Option<f64>,
 }
 
 impl PenOrientation {
@@ -279,18 +284,49 @@ impl PenOrientation {
     pub fn try_new(altitude: f64, azimuth: f64) -> Result<Self, InputValueError> {
         let altitude = within(Quantity::Altitude, altitude, 0.0, FRAC_PI_2)?;
         let azimuth = wrap_turn(finite(Quantity::Azimuth, azimuth)?);
-        Ok(Self { altitude, azimuth })
+        Ok(Self {
+            altitude: Some(altitude),
+            azimuth: Some(azimuth),
+        })
     }
 
-    /// The angle from the surface, in `[0, π/2]` radians.
+    /// An altitude reading without an azimuth reading.
+    ///
+    /// # Errors
+    ///
+    /// [`InputValueError::NonFinite`] when the angle is NaN or infinite, and
+    /// [`InputValueError::OutOfRange`] for an altitude outside `[0, π/2]`.
+    pub fn try_altitude(altitude: f64) -> Result<Self, InputValueError> {
+        let altitude = within(Quantity::Altitude, altitude, 0.0, FRAC_PI_2)?;
+        Ok(Self {
+            altitude: Some(altitude),
+            azimuth: None,
+        })
+    }
+
+    /// An azimuth reading without an altitude reading, wrapped into `[0, 2π)`.
+    ///
+    /// # Errors
+    ///
+    /// [`InputValueError::NonFinite`] when the angle is NaN or infinite.
+    pub fn try_azimuth(azimuth: f64) -> Result<Self, InputValueError> {
+        let azimuth = wrap_turn(finite(Quantity::Azimuth, azimuth)?);
+        Ok(Self {
+            altitude: None,
+            azimuth: Some(azimuth),
+        })
+    }
+
+    /// The angle from the surface, in `[0, π/2]` radians, or `None` without a reading.
     #[must_use]
-    pub const fn altitude(self) -> f64 {
+    pub const fn altitude(self) -> Option<f64> {
         self.altitude
     }
 
-    /// The direction the pen leans, in `[0, 2π)` radians clockwise from the x axis.
+    /// The direction the pen leans, in `[0, 2π)` radians clockwise from the x axis,
+    /// or `None` without a reading.
     #[must_use]
-    pub const fn azimuth(self) -> f64 {
+    pub const fn azimuth(self) -> Option<f64> {
         self.azimuth
     }
 }
