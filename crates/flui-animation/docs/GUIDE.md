@@ -235,7 +235,7 @@ let value = Curves::ElasticOut.transform(t);
 ### Custom Curves
 
 ```rust
-use flui_animation::{Cubic, Curves, ElasticOutCurve, Interval, Threshold};
+use flui_animation::{Cubic, Curves, ElasticOutCurve, Interval};
 
 // Cubic bezier (CSS-style control points)
 let curve = Cubic::new(0.25, 0.1, 0.25, 1.0);
@@ -246,8 +246,6 @@ let elastic = ElasticOutCurve::new(0.3);
 // Active only in [0.2, 0.8]
 let interval = Interval::new(0.2, 0.8, Curves::EaseIn);
 
-// Step at threshold
-let step = Threshold::new(0.5);
 ```
 
 ### Splines

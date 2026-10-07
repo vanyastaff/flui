@@ -228,7 +228,7 @@ for curve in curves {
 ### Custom Curves
 
 ```rust
-use flui_animation::{CatmullRomCurve, Cubic, Curves, ElasticOutCurve, Interval, Threshold};
+use flui_animation::{CatmullRomCurve, Cubic, Curves, ElasticOutCurve, Interval};
 
 // Cubic bezier (CSS-style)
 let curve = Cubic::new(0.25, 0.1, 0.25, 1.0);
@@ -238,9 +238,6 @@ let elastic = ElasticOutCurve::new(0.3);
 
 // Interval: active only in [0.2, 0.8]
 let interval = Interval::new(0.2, 0.8, Curves::EaseIn);
-
-// Threshold: step function at t=0.5
-let step = Threshold::new(0.5);
 
 // Catmull-Rom spline through points
 let spline = CatmullRomCurve::with_points(vec![
@@ -743,7 +740,6 @@ Constructors validate parameters and panic on invalid input:
 | `FrictionSimulation::new` | drag ≤ 0, drag = 1.0 |
 | `TweenSequenceItem::new` | weight ≤ 0, weight is infinite |
 | `Interval::new` | begin/end outside [0,1], end < begin |
-| `Threshold::new` | threshold outside [0,1] |
 | `Split::with_curves` | split outside [0,1] |
 | `CatmullRomCurve::new`, `CatmullRomSpline::new` | fewer than two points |
 
