@@ -3,8 +3,8 @@
 //! reference values, and parameter validation however a curve is made.
 
 use flui_animation::{
-    ArcCurve, BounceInCurve, Cubic, Curve, CurveError, Curves, ElasticInCurve, ElasticInOutCurve,
-    ElasticOutCurve, Interval, Linear, Split, ThreePointCubic,
+    ArcCurve, BounceInCurve, CatmullRomCurve, Cubic, Curve, CurveError, Curves, ElasticInCurve,
+    ElasticInOutCurve, ElasticOutCurve, Interval, Linear, Split, ThreePointCubic,
 };
 use proptest::prelude::*;
 
@@ -175,6 +175,11 @@ fn catalog() -> Vec<(&'static str, ArcCurve, Shape)> {
             Monotone,
         ),
         ("BounceInCurve", ArcCurve::new(BounceInCurve), Overshoots),
+        (
+            "CatmullRomCurve([2, 3])",
+            ArcCurve::new(CatmullRomCurve::with_points(vec![(0.0, 2.0), (1.0, 3.0)])),
+            Overshoots,
+        ),
     ]
 }
 
@@ -757,6 +762,36 @@ fn slope_input_policy() {
     });
 }
 
+/// A small but nonzero `x'(0)` is not a degenerate start: the slope is
+/// `y'(0) / x'(0)`, here exactly 1, not the curvature ratio (about 2).
+fn small_nonzero_endpoint_derivative_is_the_ratio() {
+    let curve = Cubic::new(1e-10, 1e-10, 0.5, 1.0);
+    assert_close("cubic slope at 0", curve.slope(0.0), 1.0, 1e-6);
+}
+
+/// A slope of `1e307` is finite, but rescaled into a `1e-5`-wide interval
+/// the chain rule overflows; the interval still reports a finite slope.
+#[derive(Clone, Copy)]
+struct Steep;
+
+impl Curve for Steep {
+    fn transform(&self, t: f64) -> f64 {
+        t.clamp(0.0, 1.0)
+    }
+
+    fn slope(&self, _t: f64) -> f64 {
+        1e307
+    }
+}
+
+fn narrow_interval_of_a_steep_curve_has_a_finite_slope() {
+    let interval = Interval::new(0.5, 0.5 + 1e-5, Steep);
+    for t in [0.5, 0.5 + 5e-6, 0.5 + 1e-5] {
+        let slope = interval.slope(t);
+        assert!(slope.is_finite() && slope > 0.0, "slope at {t}: {slope}");
+    }
+}
+
 fn vertical_tangent_slope_is_finite_and_steep() {
     let slope = Curves::EaseInOutExpo.slope(0.5);
     assert!(
@@ -792,6 +827,14 @@ fn curve_slope_is_the_derivative_of_transform() {
         (
             "vertical tangent slope is finite and steep",
             vertical_tangent_slope_is_finite_and_steep,
+        ),
+        (
+            "small nonzero endpoint derivative is the ratio",
+            small_nonzero_endpoint_derivative_is_the_ratio,
+        ),
+        (
+            "narrow interval of a steep curve has a finite slope",
+            narrow_interval_of_a_steep_curve_has_a_finite_slope,
         ),
     ]);
 }
@@ -837,6 +880,53 @@ fn cubic_non_finite_control_point() {
 
 fn cubic_overshooting_y_is_admitted() {
     assert!(Cubic::try_new(0.68, -0.55, 0.265, 1.55).is_ok());
+}
+
+/// Every sample of `curve` over `[0, 1]`, value and slope, is finite.
+fn finite_everywhere(what: &str, curve: &dyn Curve) {
+    for t in grid() {
+        let (value, slope) = (curve.transform(t), curve.slope(t));
+        assert!(
+            value.is_finite() && slope.is_finite(),
+            "{what} at {t}: value {value}, slope {slope}"
+        );
+    }
+}
+
+/// Past `1e6` the solver's coefficients overflow: `f64::MAX` evaluated to
+/// NaN. The admitted extremes evaluate finitely.
+fn cubic_y_beyond_the_admitted_range() {
+    out_of_range(Cubic::try_new(0.25, f64::MAX, 0.75, f64::MAX), "y1");
+    out_of_range(Cubic::try_new(0.25, 0.0, 0.75, -1.5e6), "y2");
+    assert_panics("Cubic y1", || Cubic::new(0.25, f64::MAX, 0.75, 1.0));
+    finite_everywhere("Cubic(y = ±1e6)", &Cubic::new(0.25, 1e6, 0.75, -1e6));
+}
+
+/// A huge period overflowed the phase product and a tiny one its quotient,
+/// both to NaN. The admitted extremes evaluate finitely.
+fn elastic_period_beyond_the_admitted_range() {
+    out_of_range(ElasticOutCurve::try_new(f64::MAX), "period");
+    out_of_range(ElasticInCurve::try_new(1e-300), "period");
+    for period in [1e-6, 1e6] {
+        finite_everywhere("ElasticOut", &ElasticOutCurve::new(period));
+        finite_everywhere("ElasticInOut", &ElasticInOutCurve::new(period));
+    }
+}
+
+/// A control y past the admitted range is blamed on itself, not on a central
+/// midpoint; the extreme admitted y rescales and evaluates finitely.
+fn three_point_control_y_beyond_the_admitted_range() {
+    let huge = ThreePointCubic::try_new(
+        (0.1, f64::MAX),
+        (0.2, 0.5),
+        (0.5, 0.5),
+        (0.6, 1.0),
+        (0.7, 1.0),
+    );
+    out_of_range(huge, "a1.y");
+    let extreme =
+        ThreePointCubic::new((0.1, 1e6), (0.2, -1e6), (0.5, 0.5), (0.6, 1e6), (0.7, -1e6));
+    finite_everywhere("ThreePointCubic(y = ±1e6)", &extreme);
 }
 
 fn three_point_midpoint_on_the_boundary() {
@@ -937,6 +1027,18 @@ fn curve_parameters_reject_invalid_input() {
             three_point_control_outside_its_segment,
         ),
         ("interval bounds", interval_bounds),
+        (
+            "cubic y beyond the admitted range",
+            cubic_y_beyond_the_admitted_range,
+        ),
+        (
+            "elastic period beyond the admitted range",
+            elastic_period_beyond_the_admitted_range,
+        ),
+        (
+            "three-point control y beyond the admitted range",
+            three_point_control_y_beyond_the_admitted_range,
+        ),
         ("elastic period", elastic_period),
         (
             "error messages name the parameter",
