@@ -4,11 +4,13 @@ use std::cell::Cell;
 use std::panic::{AssertUnwindSafe, catch_unwind, panic_any};
 use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_foundation::geometry::Offset;
 use flui_foundation::{ManualClock, PresentationId};
 use flui_interaction::events::{
-    PointerEvent, PointerType, make_down_event, make_move_event, make_up_event,
+    PointerEvent, PointerType, make_down_event, make_move_event, make_move_event_for_id,
+    make_up_event,
 };
 use flui_interaction::{GestureArenaMember, PointerId};
 use flui_platform_api::{PlatformInput, PlatformWindow, WindowExecutionState};
@@ -317,6 +319,120 @@ pub(crate) fn a_panicking_primary_motion_does_not_erase_the_secondary_motion() {
 
 pub(crate) fn competing_frame_motion_failures_preserve_the_first_and_recover() {
     failing_frame_motion_still_delivers_the_sibling(true);
+}
+
+struct PauseDiagnosticPanic(Arc<AtomicUsize>);
+
+impl tracing::Subscriber for PauseDiagnosticPanic {
+    fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+        metadata.target().ends_with("::binding") && *metadata.level() == tracing::Level::DEBUG
+    }
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
+    fn event(&self, event: &tracing::Event<'_>) {
+        struct Message(bool);
+        impl tracing::field::Visit for Message {
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                if field.name() == "message" {
+                    self.0 = format!("{value:?}").contains(
+                        "GestureBinding draining interrupted pointer state on lifecycle pause",
+                    );
+                }
+            }
+        }
+        let mut message = Message(false);
+        event.record(&mut message);
+        if message.0 {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            panic_any("pause drain diagnostic failed");
+        }
+    }
+}
+
+fn pause_diagnostic_failure_still_drains_motion(cancel_panics: bool) {
+    let mut realm = UiRealm::for_test();
+    let primary = realm.presentation_id();
+    let hovers = Rc::new(Cell::new(0));
+    let cancels = Rc::new(Cell::new(0));
+    let seen_hover = hovers.clone();
+    let seen_cancel = cancels.clone();
+    realm
+        .attach_root_widget(
+            &Listener::new()
+                .behavior(HitTestBehavior::Opaque)
+                .on_pointer_hover(move |_, _| seen_hover.set(seen_hover.get() + 1))
+                .on_pointer_cancel(move |_, _| {
+                    seen_cancel.set(seen_cancel.get() + 1);
+                    if cancel_panics {
+                        panic_any("pointer cancel failed");
+                    }
+                })
+                .child(SizedBox::new(40.0, 40.0)),
+        )
+        .expect("root attaches");
+    realm.synchronize_window_snapshot(primary, WindowExecutionState::Running, true, true);
+    pump(&mut realm);
+    dispatch(
+        &realm,
+        primary,
+        make_down_event(Offset::new(4.0, 6.0), PointerType::Touch),
+    );
+    let mut motion =
+        make_move_event_for_id(PointerId::new(2), Offset::new(8.0, 9.0), PointerType::Mouse);
+    if let PointerEvent::Move(update) = &mut motion {
+        update.current.buttons = Default::default();
+    }
+    dispatch(&realm, primary, motion.clone());
+    assert_eq!(hovers.get(), 0, "the mouse move is still queued");
+    let diagnostics = Arc::new(AtomicUsize::new(0));
+    let failed = catch_unwind(AssertUnwindSafe(|| {
+        tracing::subscriber::with_default(PauseDiagnosticPanic(diagnostics.clone()), || {
+            realm.update_host_lifecycle(AppLifecycleState::Paused);
+        });
+    }))
+    .expect_err("pause retains its first callback or diagnostic failure");
+    let first = if cancel_panics {
+        "pointer cancel failed"
+    } else {
+        "pause drain diagnostic failed"
+    };
+    assert_eq!(failed.downcast_ref::<&str>(), Some(&first));
+    assert!(
+        diagnostics.load(Ordering::SeqCst) > 0,
+        "the real pause diagnostic reached the subscriber"
+    );
+    assert_eq!(
+        cancels.get(),
+        1,
+        "the accepted contact receives its terminal callback"
+    );
+    realm.update_host_lifecycle(AppLifecycleState::Resumed);
+    pump(&mut realm);
+    assert_eq!(
+        hovers.get(),
+        0,
+        "a failed diagnostic cannot preserve stale motion across pause"
+    );
+    dispatch(&realm, primary, motion);
+    pump(&mut realm);
+    assert_eq!(
+        hovers.get(),
+        1,
+        "new input remains deliverable after containment"
+    );
+}
+
+pub(crate) fn a_panicking_pause_diagnostic_cannot_skip_motion_drain() {
+    pause_diagnostic_failure_still_drains_motion(false);
+}
+
+pub(crate) fn a_cancel_failure_precedes_a_pause_diagnostic_failure_and_recovers() {
+    pause_diagnostic_failure_still_drains_motion(true);
 }
 
 #[derive(Clone, StatelessView)]
