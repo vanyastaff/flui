@@ -1582,11 +1582,14 @@ fn nonmember_resolution_candidate_retires_after_detachment() {
     );
 }
 
+type RetirementOwner = RefCell<Option<Rc<RetirementMember>>>;
+
 struct RetirementMember {
     dropped: Rc<Cell<u32>>,
     rejected: Rc<Cell<u32>>,
     panic_on_reject: bool,
     panic_on_drop: bool,
+    owner: std::rc::Weak<RetirementOwner>,
 }
 
 impl CustomGestureRecognizer for RetirementMember {
@@ -1594,6 +1597,10 @@ impl CustomGestureRecognizer for RetirementMember {
 
     fn on_arena_reject(&self, _: PointerId) {
         self.rejected.set(self.rejected.get() + 1);
+        if let Some(owner) = self.owner.upgrade() {
+            let retired = owner.borrow_mut().take();
+            drop(retired);
+        }
         assert!(!self.panic_on_reject, "member rejection failed");
     }
 }
@@ -1607,37 +1614,48 @@ impl Drop for RetirementMember {
 
 fn arena_retirement_preserves_the_first_failure_and_recovers() {
     for (candidate_panics, rejection_panics, expected_failure) in [
-        (true, false, "candidate retirement failed"),
-        (false, true, "member rejection failed"),
-        (true, true, "candidate retirement failed"),
+        (false, false, None),
+        (true, false, Some("candidate retirement failed")),
+        (false, true, Some("member rejection failed")),
+        (true, true, Some("candidate retirement failed")),
     ] {
         let arena = GestureArena::new();
         let pointer = id(2);
         let retired = counter();
         let rejected = counter();
+        let owner: Rc<RetirementOwner> = Rc::default();
         let member = Rc::new(RetirementMember {
             dropped: Rc::clone(&retired),
             rejected: Rc::clone(&rejected),
             panic_on_reject: rejection_panics,
             panic_on_drop: false,
+            owner: Rc::downgrade(&owner),
         });
         arena.add(pointer, &member);
+        // Only the external holder owns the participant until its callback
+        // releases that owner. Delivery then owns the last upgraded Rc.
+        *owner.borrow_mut() = Some(member);
         let candidate_retired = counter();
         let candidate = Rc::new(RetirementMember {
             dropped: Rc::clone(&candidate_retired),
             rejected: counter(),
             panic_on_reject: false,
             panic_on_drop: candidate_panics,
+            owner: std::rc::Weak::new(),
         });
 
-        let failure = catch_unwind(AssertUnwindSafe(|| {
+        let result = catch_unwind(AssertUnwindSafe(|| {
             arena.resolve(pointer, Some(candidate));
-        }))
-        .expect_err("a failing candidate or rejection must propagate");
-        assert_eq!(
-            flui_foundation::panic::payload_text(failure.as_ref()),
-            Some(expected_failure),
-        );
+        }));
+        if let Some(expected_failure) = expected_failure {
+            let failure = result.expect_err("a failing candidate or rejection must propagate");
+            assert_eq!(
+                flui_foundation::panic::payload_text(failure.as_ref()),
+                Some(expected_failure),
+            );
+        } else {
+            result.expect("healthy candidate retirement and rejection complete");
+        }
         assert_eq!(candidate_retired.get(), 1);
         assert_eq!(
             rejected.get(),
@@ -1646,8 +1664,12 @@ fn arena_retirement_preserves_the_first_failure_and_recovers() {
         );
         assert_eq!(
             retired.get(),
-            0,
-            "the participant's live owner survives the failed resolution"
+            u32::from(expected_failure.is_none()),
+            "healthy delivery drops its last owner; failed delivery retains it"
+        );
+        assert!(
+            owner.borrow().is_none(),
+            "the callback released its external owner"
         );
         assert!(arena.is_empty(), "failed contest was detached");
 
