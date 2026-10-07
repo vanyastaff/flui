@@ -166,10 +166,44 @@ fn incomplete_multi_tap_times_out_on_the_owner_frame() {
     assert_eq!(cancellations.get(), 1);
 }
 
+fn multi_tap_center_stays_finite_at_admitted_coordinate_extremes() {
+    for coordinates in [[f64::MAX, f64::MAX], [f64::MAX, -f64::MAX]] {
+        let details = Rc::new(RefCell::new(None));
+        let captured = Rc::clone(&details);
+        let recognizer = MultiTapGestureRecognizer::builder(GestureArena::new(), 2)
+            .on_multi_tap(move |tap| *captured.borrow_mut() = Some(tap))
+            .build();
+        for (raw, x) in [(61, coordinates[0]), (62, coordinates[1])] {
+            let event = make_down_event_for_id_with_button(
+                pointer(raw),
+                Offset::new(x, x),
+                PointerType::Touch,
+                PointerButton::Primary,
+            );
+            recognizer.add_pointer(PointerDispatch::at_root(&event));
+        }
+        up(recognizer.as_ref(), 61);
+        up(recognizer.as_ref(), 62);
+        let details = details.borrow();
+        let center = details.as_ref().expect("completed pair").center;
+        let expected = if coordinates[0] == coordinates[1] {
+            f64::MAX
+        } else {
+            0.0
+        };
+        assert_eq!(center, Offset::new(expected, expected));
+        assert!(center.dx.is_finite() && center.dy.is_finite());
+    }
+}
+
 #[test]
 fn held_press_and_multi_tap_owner_contracts() {
     let cases: &[(&str, fn())] = &[
         ("huge timeout", huge_timeout_arms_no_deadline),
+        (
+            "finite center at extreme positions",
+            multi_tap_center_stays_finite_at_admitted_coordinate_extremes,
+        ),
         (
             "cancel during start",
             cancelling_from_start_suppresses_the_stale_start_notice,

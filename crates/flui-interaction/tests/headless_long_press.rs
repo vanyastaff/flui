@@ -9,8 +9,7 @@
 //! Red→green guard: before the clock-on-arena change the recognizer read
 //! `Instant::now()` directly, so the virtual clock had no effect — sleep-free,
 //! the deadline never fired and this test failed. After the change it fires
-//! deterministically. (The existing wall-clock `long_press.rs` unit tests keep
-//! exercising the production `SystemClock` path with real `thread::sleep`.)
+//! deterministically.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -18,6 +17,8 @@ use std::time::Duration;
 
 use flui_foundation::geometry::Offset;
 use flui_interaction::arena::GestureArena;
+use flui_interaction::events::{PointerType, make_down_event_for_id};
+use flui_interaction::routing::PointerDispatch;
 use flui_interaction::settings::GestureSettings;
 use flui_interaction::{GestureRecognizer, LongPressGestureRecognizer, ManualClock, PointerId};
 
@@ -28,15 +29,17 @@ fn long_press_fires_on_pumped_virtual_frames_without_sleeping() {
 
     let fired = Arc::new(AtomicBool::new(false));
     let in_cb = Arc::clone(&fired);
-    let recognizer = LongPressGestureRecognizer::with_settings(
-        arena.clone(),
-        GestureSettings::touch_defaults().with_long_press_timeout(Duration::from_millis(500)),
-    )
-    .with_on_long_press_start(move |_details| in_cb.store(true, Ordering::SeqCst));
+    let recognizer = LongPressGestureRecognizer::builder(arena.clone())
+        .settings(
+            GestureSettings::touch_defaults().with_long_press_timeout(Duration::from_millis(500)),
+        )
+        .on_long_press_start(move |_details| in_cb.store(true, Ordering::SeqCst))
+        .build();
 
     // Pointer down captures `down_time` from the VIRTUAL clock (now = base + 0).
     let pointer = PointerId::new(2).expect("nonzero pointer id");
-    recognizer.add_pointer(pointer, Offset::new(10.0, 10.0), Offset::new(10.0, 10.0));
+    let event = make_down_event_for_id(pointer, Offset::new(10.0, 10.0), PointerType::Touch);
+    recognizer.add_pointer(PointerDispatch::at_root(&event));
 
     // Hold still; pump virtual frames totalling < 500ms — must NOT fire.
     for _ in 0..3 {
