@@ -300,8 +300,9 @@ pub(crate) fn a_tall_widget_cannot_bridge_disjoint_reading_rows() {
 
 pub(crate) fn spatial_tab_preserves_geometric_ties_and_row_boundaries() {
     use flui_painting::typography::TextDirection::{Ltr, Rtl};
-    for (direction, geometry, expected) in [
+    for (case, direction, geometry, expected) in [
         (
+            "fractional vertical intersection",
             Ltr,
             &[
                 (30.0, 0.25, 10.0, 0.5),
@@ -311,6 +312,7 @@ pub(crate) fn spatial_tab_preserves_geometric_ties_and_row_boundaries() {
             &[1, 0, 2][..],
         ),
         (
+            "touching row boundaries",
             Ltr,
             &[
                 (30.0, 0.0, 10.0, 10.0),
@@ -320,6 +322,7 @@ pub(crate) fn spatial_tab_preserves_geometric_ties_and_row_boundaries() {
             &[0, 2, 1][..],
         ),
         (
+            "rtl leading right edge",
             Rtl,
             &[
                 (0.0, 0.0, 80.0, 10.0),
@@ -329,6 +332,7 @@ pub(crate) fn spatial_tab_preserves_geometric_ties_and_row_boundaries() {
             &[0, 1, 2][..],
         ),
         (
+            "equal leading edge at different tops",
             Ltr,
             &[
                 (30.0, 1.0, 10.0, 10.0),
@@ -338,6 +342,7 @@ pub(crate) fn spatial_tab_preserves_geometric_ties_and_row_boundaries() {
             &[0, 1, 2][..],
         ),
         (
+            "zero-sized fallback",
             Ltr,
             &[
                 (0.0, -10.0, 0.0, 10.0),
@@ -348,6 +353,7 @@ pub(crate) fn spatial_tab_preserves_geometric_ties_and_row_boundaries() {
             &[2, 1, 3, 0][..],
         ),
         (
+            "signed-zero geometric tie",
             Ltr,
             &[
                 (0.0, 0.0, 10.0, 10.0),
@@ -357,7 +363,10 @@ pub(crate) fn spatial_tab_preserves_geometric_ties_and_row_boundaries() {
             &[0, 1, 2][..],
         ),
     ] {
-        assert_widget_reading_order(direction, geometry, expected);
+        let result = std::panic::catch_unwind(|| {
+            assert_widget_reading_order(direction, geometry, expected);
+        });
+        assert!(result.is_ok(), "spatial geometry case failed: {case}");
     }
 }
 
