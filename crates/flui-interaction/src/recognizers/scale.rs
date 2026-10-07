@@ -783,7 +783,7 @@ impl ScaleGestureRecognizer {
         for &(stamp, position) in history {
             let timestamp = state.timeline.instant(stamp, now);
             state.contacts[index].position = position;
-            if state.sample().is_some() && state.phase == ScalePhase::Started {
+            if state.sample().is_some() && state.contacts.len() >= 2 {
                 let scale = state.current.scale;
                 state
                     .scale_velocity_tracker
@@ -796,6 +796,15 @@ impl ScaleGestureRecognizer {
         let Some(measure) = state.sample() else {
             return;
         };
+        // A frame can cross the acceptance threshold only at its current
+        // sample. Retain the measured approach to that threshold as well, so
+        // accepting the gesture does not erase its hardware velocity history.
+        if state.contacts.len() >= 2 {
+            let scale = state.current.scale;
+            state
+                .scale_velocity_tracker
+                .add_position(now, Offset::new(scale, 0.0));
+        }
         match state.phase {
             ScalePhase::Possible => {
                 // Crossing a tier is a request to win, not permission to
@@ -811,10 +820,6 @@ impl ScaleGestureRecognizer {
                 }
             }
             ScalePhase::Started => {
-                let scale = state.current.scale;
-                state
-                    .scale_velocity_tracker
-                    .add_position(now, Offset::new(scale, 0.0));
                 let details = state.update_details();
                 drop(state);
                 self.deliver(Outcome::Update(details));
