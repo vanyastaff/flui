@@ -62,7 +62,7 @@ pub(crate) fn copy_then_paste_round_trips_text_in_an_editable_text() {
     assert_eq!(controller.selection(), 0..3, "copy keeps the selection");
 
     controller.set_caret_byte_offset(3);
-    harness
+    let _ = harness
         .focus_manager()
         .dispatch_key_event(&chord("v", command()))
         .is_handled();
@@ -252,7 +252,7 @@ pub(crate) fn paste_rechecks_focus_after_committing_composition() {
         node.has_primary_focus(),
         "preedit does not report a committed edit"
     );
-    harness
+    let _ = harness
         .focus_manager()
         .dispatch_key_event(&chord("v", command()))
         .is_handled();

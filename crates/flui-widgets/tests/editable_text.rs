@@ -2121,7 +2121,7 @@ pub(crate) mod text_store {
         );
         let _ = focus.request_focus();
         for ch in "abcdefghijklmnopqrstuvwxyz".chars() {
-            laid.focus_manager()
+            let _ = laid.focus_manager()
                 .dispatch_key_event(&super::character_key_event(ch))
                 .is_handled();
         }
