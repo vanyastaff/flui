@@ -448,7 +448,13 @@ impl SweepGradient {
 
     /// Linearly interpolate between two sweep gradients. Colours and stops
     /// combine as in [`LinearGradient::lerp`]; finite signed angles extrapolate.
+    /// Returns `None` when the phase-reduced angle span cannot be represented
+    /// by the renderer's `f32` angles, including a nonzero span lost to rounding.
     #[inline]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "narrowing checks the renderer's angle representation before publication"
+    )]
     pub fn lerp(a: &Self, b: &Self, t: f64) -> Option<Self> {
         if !t.is_finite()
             || !valid_alignment(a.center)
@@ -465,7 +471,17 @@ impl SweepGradient {
         let center = lerp_alignment(a.center, b.center, t)?;
         let start_angle = lerp_finite(a.start_angle, b.start_angle, t)?;
         let end_angle = lerp_finite(a.end_angle, b.end_angle, t)?;
-        if !(end_angle - start_angle).is_finite() {
+        // The renderer reduces the phase before narrowing; absolute angles
+        // can exceed f32 while their signed span remains representable.
+        let span = end_angle - start_angle;
+        let phase = start_angle.rem_euclid(std::f64::consts::TAU);
+        let packed_end = (phase + span) as f32;
+        let packed_span = packed_end - phase as f32;
+        if !span.is_finite()
+            || !packed_end.is_finite()
+            || !packed_span.is_finite()
+            || (span != 0.0 && packed_span == 0.0)
+        {
             return None;
         }
         // Preserve the representation of valid equal gradients.

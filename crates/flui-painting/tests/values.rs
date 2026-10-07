@@ -154,6 +154,38 @@ pub(crate) fn gradient_geometry_rejects_invalid_inputs_before_equal_shortcuts() 
 }
 
 pub(crate) fn gradient_geometry_checks_intermediate_and_output_overflow() {
+    let mut sweep_from = SweepGradient::centered(vec![Color::RED, Color::BLUE]);
+    sweep_from.end_angle = 0.0;
+    let mut sweep_to = sweep_from.clone();
+    sweep_to.end_angle = 1.0;
+    for t in [1e100, -1e100] {
+        assert!(SweepGradient::lerp(&sweep_from, &sweep_to, t).is_none());
+        let from = Gradient::Sweep(sweep_from.clone());
+        let to = Gradient::Sweep(sweep_to.clone());
+        assert!(Gradient::lerp(&from, &to, t).is_none());
+        let mixed = BoxDecoration::<f64>::lerp(
+            &BoxDecoration::with_gradient(from),
+            &BoxDecoration::with_gradient(to),
+            t,
+        );
+        let Some(Gradient::Sweep(bounded)) = mixed.gradient else {
+            panic!("an unrepresentable sweep must retain its bounded gradient");
+        };
+        assert_eq!(bounded.start_angle, 0.0);
+        assert_eq!(bounded.end_angle, if t > 0.0 { 1.0 } else { 0.0 });
+    }
+    for span in [f64::from(f32::MAX), -f64::from(f32::MAX)] {
+        assert!(SweepGradient::lerp(&sweep_from, &sweep_to, span).is_some());
+    }
+    let mut large_phase = sweep_from.clone();
+    large_phase.start_angle = 1e100;
+    large_phase.end_angle = 1e100;
+    assert!(SweepGradient::lerp(&large_phase, &large_phase, 0.5).is_some());
+    for span in [1e100, -1e100, 1e-100] {
+        let mut invalid = sweep_from.clone();
+        invalid.end_angle = span;
+        assert!(SweepGradient::lerp(&invalid, &invalid, 0.5).is_none());
+    }
     let mut linear_a = LinearGradient::horizontal(vec![Color::RED, Color::BLUE]);
     linear_a.begin = Alignment::CENTER;
     linear_a.end = Alignment::CENTER;
