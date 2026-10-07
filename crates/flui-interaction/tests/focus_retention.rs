@@ -406,6 +406,49 @@ fn group_policy_replacement_preserves_failure_and_future_traversal() {
     }
 }
 
+fn directional_geometry_snapshots_run_once_and_respect_reentrant_focus() {
+    use flui_foundation::geometry::Rect;
+    use flui_interaction::{FocusDirection, TraversalEdgeBehavior};
+    let manager = FocusManager::new();
+    manager
+        .root_scope()
+        .set_traversal_edge_behavior(TraversalEdgeBehavior::ClosedLoop);
+    let nodes = [FocusNode::new(), FocusNode::new()];
+    let reads = [Rc::new(Cell::new(0)), Rc::new(Cell::new(0))];
+    let _attachments = [
+        manager.root_scope().attach_node(&nodes[0]).expect("left"),
+        manager.root_scope().attach_node(&nodes[1]).expect("right"),
+    ];
+    for ((node, reads), left) in nodes.iter().zip(&reads).zip([0.0, 20.0]) {
+        let reads = Rc::clone(reads);
+        node.set_rect_provider(Rc::new(move || {
+            reads.set(reads.get() + 1);
+            Some(Rect::new(left, 0.0, left + 10.0, 10.0))
+        }));
+    }
+    let _ = nodes[1].request_focus();
+    assert!(manager.focus_in_direction(FocusDirection::Right));
+    assert!(nodes[0].has_primary_focus());
+    assert_eq!(
+        [reads[0].get(), reads[1].get()],
+        [1, 1],
+        "wrap reuses each provider snapshot from the same directional step"
+    );
+    let chosen = Rc::downgrade(&nodes[1]);
+    nodes[0].set_rect_provider(Rc::new(move || {
+        let _ = chosen
+            .upgrade()
+            .expect("live reentrant target")
+            .request_focus();
+        Some(Rect::new(0.0, 0.0, 10.0, 10.0))
+    }));
+    assert!(
+        !manager.focus_in_direction(FocusDirection::Right),
+        "the outdated step does not replace focus chosen reentrantly by its provider"
+    );
+    assert!(nodes[1].has_primary_focus());
+}
+
 fn subscription_withdrawal_preserves_independent_listeners() {
     let manager = FocusManager::new();
     let node = FocusNode::new();
@@ -1285,6 +1328,10 @@ fn assert_queued_focus_recovery(from_node: bool, competing: bool) {
 #[test]
 fn caught_callback_failures_leave_captures_with_their_owner() {
     let cases: &[(&str, fn())] = &[
+        (
+            "directional geometry snapshots and reentrant focus",
+            directional_geometry_snapshots_run_once_and_respect_reentrant_focus,
+        ),
         (
             "group policy replacement and failure recovery",
             group_policy_replacement_preserves_failure_and_future_traversal,
