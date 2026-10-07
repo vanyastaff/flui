@@ -43,7 +43,7 @@ where
 
 /// An arbitrated scroll-signal handler: returns
 /// [`EventPropagation::Stop`] to claim the tick, ending the leaf-first walk.
-type ScrollClaimCallback = Rc<dyn Fn(&ScrollEventData) -> EventPropagation>;
+type ScrollClaimCallback = Rc<dyn Fn(&ScrollEvent) -> EventPropagation>;
 
 /// An arbitrated trackpad pan-zoom handler: returns
 /// [`EventPropagation::Stop`] to claim the tick, ending the leaf-first walk.
@@ -264,7 +264,7 @@ impl Listener {
     #[must_use]
     pub fn on_scroll_claim(
         mut self,
-        callback: impl Fn(&ScrollEventData) -> EventPropagation + 'static,
+        callback: impl Fn(&ScrollEvent) -> EventPropagation + 'static,
     ) -> Self {
         self.on_scroll_claim = Some(Rc::new(callback));
         self
