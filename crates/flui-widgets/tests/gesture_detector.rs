@@ -13,9 +13,8 @@ use flui_widgets::{ColoredBox, GestureDetector};
 pub(crate) fn clearing_pan_callbacks_mid_drag_still_finishes_the_drag() {
     use crate::common::{ProbeSignals, SignalProbe};
     use flui_foundation::geometry::Offset;
-    use flui_interaction::PointerType;
     use flui_interaction::events::{
-        make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
+        PointerType, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
     };
     use flui_view::SignalWriteExt;
     use std::{cell::Cell, rc::Rc};
