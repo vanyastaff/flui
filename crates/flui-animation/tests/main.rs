@@ -39,6 +39,9 @@ mod curved;
 #[path = "contracts/curves.rs"]
 mod curves;
 
+#[path = "contracts/keyframes.rs"]
+mod keyframes;
+
 mod derive_animatable;
 
 #[path = "contracts/motion_clock.rs"]

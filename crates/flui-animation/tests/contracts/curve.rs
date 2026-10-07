@@ -3,8 +3,8 @@
 //! reference values, and parameter validation however a curve is made.
 
 use flui_animation::{
-    ArcCurve, BounceInCurve, CatmullRomCurve, Cubic, Curve, CurveError, Curves, ElasticInCurve,
-    ElasticInOutCurve, ElasticOutCurve, Interval, Linear, Split, ThreePointCubic,
+    ArcCurve, BounceInCurve, Cubic, Curve, CurveError, Curves, ElasticInCurve, ElasticInOutCurve,
+    ElasticOutCurve, Interval, JumpAt, Linear, Split, Steps, ThreePointCubic,
 };
 use proptest::prelude::*;
 
@@ -175,11 +175,6 @@ fn catalog() -> Vec<(&'static str, ArcCurve, Shape)> {
             Monotone,
         ),
         ("BounceInCurve", ArcCurve::new(BounceInCurve), Overshoots),
-        (
-            "CatmullRomCurve([2, 3])",
-            ArcCurve::new(CatmullRomCurve::with_points(vec![(0.0, 2.0), (1.0, 3.0)])),
-            Overshoots,
-        ),
     ]
 }
 
@@ -583,6 +578,40 @@ impl Curve for Quadratic {
     }
 }
 
+fn equal_steps_compare_by_value() {
+    let steps = || ArcCurve::new(Steps::new(4, JumpAt::End));
+    assert_eq!(steps(), steps());
+    assert_ne!(steps(), ArcCurve::new(Steps::new(4, JumpAt::Start)));
+}
+
+/// A step has no finite derivative at a jump: its slope is 0, also once
+/// erased, never a difference across the jump.
+fn steps_slope_is_zero_through_erasure() {
+    let steps = Steps::new(4, JumpAt::End);
+    for t in [0.0, 0.25, 0.3, 1.0] {
+        assert_eq!(steps.slope(t), 0.0, "Steps at {t}");
+        assert_eq!(ArcCurve::new(steps).slope(t), 0.0, "erased Steps at {t}");
+    }
+    assert!(steps.slope(f64::NAN).is_nan());
+}
+
+/// Linear in value but declaring slope 2: erasure keeps the declaration.
+struct DeclaredSlope;
+
+impl Curve for DeclaredSlope {
+    fn transform(&self, t: f64) -> f64 {
+        t.clamp(0.0, 1.0)
+    }
+
+    fn slope(&self, _t: f64) -> f64 {
+        2.0
+    }
+}
+
+fn erased_custom_curve_keeps_its_slope() {
+    assert_eq!(ArcCurve::new(DeclaredSlope).slope(0.5), 2.0);
+}
+
 fn custom_curves_compare_by_identity() {
     let custom = ArcCurve::new(Quadratic);
     assert_eq!(custom, custom.clone());
@@ -637,6 +666,15 @@ fn arc_curve_compares_builtins_by_value_and_custom_curves_by_identity() {
         (
             "erased curves evaluate like the curve",
             erased_curves_evaluate_like_the_curve,
+        ),
+        ("equal steps compare by value", equal_steps_compare_by_value),
+        (
+            "steps slope is zero through erasure",
+            steps_slope_is_zero_through_erasure,
+        ),
+        (
+            "erased custom curve keeps its slope",
+            erased_custom_curve_keeps_its_slope,
         ),
     ]);
 }
@@ -1159,6 +1197,22 @@ fn elastic_wire() {
 }
 
 #[cfg(feature = "serde")]
+fn steps_wire() {
+    round_trips(
+        &Steps::new(4, JumpAt::Start),
+        r#"{"count":4,"jump":"Start"}"#,
+    );
+    rejects::<Steps>(
+        r#"{"count":1,"jump":"None"}"#,
+        &Steps::try_new(1, JumpAt::None).expect_err("too few"),
+    );
+    rejects::<Steps>(
+        r#"{"count":0,"jump":"End"}"#,
+        &Steps::try_new(0, JumpAt::End).expect_err("zero"),
+    );
+}
+
+#[cfg(feature = "serde")]
 #[test]
 fn curve_serde_round_trip_keeps_the_wire_format() {
     crate::run_table(&[
@@ -1166,5 +1220,66 @@ fn curve_serde_round_trip_keeps_the_wire_format() {
         ("three-point cubic", three_point_wire),
         ("interval", interval_wire),
         ("elastic", elastic_wire),
+        ("steps", steps_wire),
+    ]);
+}
+
+// ---- steps ------------------------------------------------------------------
+
+/// CSS Easing 1 §2.3.1 `steps()` values, before flag unset, computed by hand.
+fn css_steps_values() {
+    let rows: [(Steps, f64, f64); 14] = [
+        (Steps::new(4, JumpAt::End), 0.24, 0.0),
+        (Steps::new(4, JumpAt::End), 0.25, 0.25),
+        (Steps::new(4, JumpAt::End), 0.99, 0.75),
+        (Steps::new(4, JumpAt::Start), 0.1, 0.25),
+        (Steps::new(4, JumpAt::Start), 0.75, 1.0),
+        (Steps::new(5, JumpAt::None), 0.1, 0.0),
+        (Steps::new(5, JumpAt::None), 0.2, 0.25),
+        (Steps::new(5, JumpAt::None), 0.85, 1.0),
+        (Steps::new(3, JumpAt::Both), 0.1, 0.25),
+        (Steps::new(3, JumpAt::Both), 0.4, 0.5),
+        (Steps::new(3, JumpAt::Both), 0.99, 0.75),
+        (Steps::new(1, JumpAt::Start), 0.001, 1.0),
+        (Steps::new(1, JumpAt::End), 0.999, 0.0),
+        (Steps::new(8, JumpAt::End), 0.375, 0.375),
+    ];
+    for (steps, t, expected) in rows {
+        assert_eq!(steps.transform(t), expected, "{steps:?} at {t}");
+    }
+}
+
+fn steps_keep_the_curve_contract() {
+    for jump in [JumpAt::Start, JumpAt::End, JumpAt::None, JumpAt::Both] {
+        let steps = Steps::new(3, jump);
+        assert_eq!(steps.transform(0.0), 0.0, "{jump:?} start");
+        assert_eq!(steps.transform(1.0), 1.0, "{jump:?} end");
+        assert_eq!(steps.transform(-1.0), 0.0, "{jump:?} below");
+        assert_eq!(steps.transform(2.0), 1.0, "{jump:?} above");
+        assert!(steps.transform(f64::NAN).is_nan(), "{jump:?} NaN");
+    }
+}
+
+fn steps_reject_invalid_counts() {
+    assert!(matches!(
+        Steps::try_new(0, JumpAt::End),
+        Err(CurveError::OutOfRange {
+            parameter: "count",
+            ..
+        })
+    ));
+    assert_eq!(
+        Steps::try_new(1, JumpAt::None),
+        Err(CurveError::TooFewSteps)
+    );
+    assert!(Steps::try_new(2, JumpAt::None).is_ok());
+}
+
+#[test]
+fn steps_follow_css_easing() {
+    crate::run_table(&[
+        ("CSS values", css_steps_values),
+        ("curve contract", steps_keep_the_curve_contract),
+        ("invalid counts", steps_reject_invalid_counts),
     ]);
 }

@@ -228,7 +228,7 @@ for curve in curves {
 ### Custom Curves
 
 ```rust
-use flui_animation::{CatmullRomCurve, Cubic, Curves, ElasticOutCurve, Interval};
+use flui_animation::{Cubic, Curves, ElasticOutCurve, Interval};
 
 // Cubic bezier (CSS-style)
 let curve = Cubic::new(0.25, 0.1, 0.25, 1.0);
@@ -239,14 +239,22 @@ let elastic = ElasticOutCurve::new(0.3);
 // Interval: active only in [0.2, 0.8]
 let interval = Interval::new(0.2, 0.8, Curves::EaseIn);
 
-// Catmull-Rom spline through points
-let spline = CatmullRomCurve::with_points(vec![
-    (0.0, 0.0),
-    (0.3, 0.8),
-    (0.7, 0.2),
-    (1.0, 1.0),
-]);
 ```
+
+### Steps
+
+`Steps` is CSS `steps(n, <jump>)`: `n` equal intervals, each holding one
+value, with the jumps placed by `JumpAt`.
+
+```rust
+use flui_animation::{Curve, JumpAt, Steps};
+
+let ticks = Steps::new(8, JumpAt::End);
+assert_eq!(ticks.transform(0.124), 0.0);
+assert_eq!(ticks.transform(0.125), 0.125);
+```
+
+---
 
 ### Curve Modifiers
 
@@ -312,39 +320,46 @@ let position = tween.transform(controller.value());
 # controller.dispose();
 ```
 
-### Tween Sequences
+### Keyframes
 
-Chain tweens with weights:
+A `Keyframes<T>` track is a value as a pure function of time. Segments are
+timed by `Duration` and laid end to end; each `to` segment carries the curve
+that eases *into* its value, `cubic` segments form a Catmull-Rom spline
+through the keyframe times, `hold` pauses and `jump` changes the value
+instantly. At a boundary the track returns the keyframe exactly (the value
+after a jump), and a non-finite sample is never published.
 
 ```rust
-use flui_animation::{Animatable, FloatTween, TweenSequence, TweenSequenceItem};
+use std::time::Duration;
+use flui_animation::{Animatable, Curves, Keyframes, Linear};
 
-let sequence = TweenSequence::new(vec![
-    TweenSequenceItem::new(FloatTween::new(0.0, 100.0), 1.0),   // 0.0–0.25
-    TweenSequenceItem::new(FloatTween::new(100.0, 100.0), 2.0), // 0.25–0.75 (hold)
-    TweenSequenceItem::new(FloatTween::new(100.0, 0.0), 1.0),   // 0.75–1.0
-]);
+let ms = Duration::from_millis;
+let pulse = Keyframes::builder(0.0, ms(1000))
+    .to(100.0, ms(250), Curves::EaseOut) // 0–250 ms
+    .hold(ms(500))                       // 250–750 ms
+    .to(0.0, ms(250), Linear)            // 750–1000 ms
+    .build()
+    .expect("the segments fit in 1 s");
 
-// Weights: 1 + 2 + 1 = 4
-assert_eq!(sequence.total_weight(), 4.0);
-assert!((sequence.transform(0.5) - 100.0).abs() < 1e-9);
+assert_eq!(pulse.value_at(ms(500)), 100.0);
+assert_eq!(pulse.transform(0.875), 50.0); // progress of a 1 s controller
+assert_eq!(pulse.value_at_looped(ms(1250)), 100.0);
 ```
+
+A delay is a leading `hold`; tracks that share one `total` read one
+controller as a group. `Stagger` gives per-index delays (`step · |origin − i|`)
+so one controller drives many elements.
 
 ### Tween Composition
 
 ```rust
-use flui_animation::{AnimatableExt, Curves, FloatTween};
-
+use flui_animation::{ChainedTween, CurveTween, Curves, FloatTween, ReverseTween};
 let tween = FloatTween::new(0.0, 100.0);
-
-// Chain: the first animatable's output is the second one's `t`
-let chained = FloatTween::new(0.0, 1.0).chain(tween);
-
-// Apply a curve to `t` before the tween
-let curved = tween.with_curve(Curves::EaseIn);
+// Chain: a curve, then a value tween
+let curved = ChainedTween::new(CurveTween::new(Curves::EaseIn), tween);
 
 // Reverse direction
-let reversed = tween.reversed();
+let reversed = ReverseTween::new(tween);
 ```
 
 ### CurveTween
@@ -507,80 +522,22 @@ let switch = AnimationSwitch::new(Arc::new(anim1.clone()), Some(Arc::new(anim2.c
 
 ---
 
-## Extension Traits
+## Driving a tween
 
-### AnimationExt
-
-`AnimationExt` is implemented for every sized, `'static` `Animation<f64>`; its methods
-take `self: Arc<Self>` and return the composed animation by value.
+`AnimatableExt::animate` wraps a tween and a parent animation in a
+`TweenAnimation`; a curve over an animation is `CurvedAnimation::new`.
 
 ```rust
 # use std::sync::Arc;
 # use std::time::Duration;
-# use flui_animation::{Animation, AnimationController, ConstantAnimation};
+# use flui_animation::{AnimationController, CurvedAnimation, Curves, FloatTween};
 # use flui_scheduler::UpdateScheduler;
-use flui_animation::{AnimationExt, AnimationOperator, Curves};
+use flui_animation::AnimatableExt;
 # let scheduler = UpdateScheduler::new();
 # let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
-# let other: Arc<dyn Animation<f64>> = Arc::new(ConstantAnimation::new(0.5));
-
-let anim = Arc::new(controller.clone());
-
-// Apply curve
-let curved = anim.clone().curved(Curves::EaseIn);
-
-// Reverse
-let reversed = anim.clone().reversed();
-
-// Combine with operator
-let combined = anim.clone().combine(other.clone(), AnimationOperator::Add);
-
-// Shorthand operators
-let sum = anim.clone().add(other.clone());
-let diff = anim.clone().subtract(other.clone());
-let prod = anim.clone().multiply(other.clone());
-let quot = anim.clone().divide(other);
+let curved = Arc::new(CurvedAnimation::new(Arc::new(controller.clone()), Curves::EaseOut));
+let animated = FloatTween::new(0.0, 100.0).animate(curved);
 # controller.dispose();
-```
-
-### AnimatableExt (for tweens)
-
-```rust
-# use std::sync::Arc;
-# use std::time::Duration;
-# use flui_animation::AnimationController;
-# use flui_scheduler::UpdateScheduler;
-use flui_animation::{AnimatableExt, Curves, FloatTween};
-# let scheduler = UpdateScheduler::new();
-# let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
-
-let tween = FloatTween::new(0.0, 100.0);
-
-// Animate with a controller
-let animated = tween.animate(Arc::new(controller.clone()));
-
-// Chain: feed a 0..1 animatable into the tween
-let chained = FloatTween::new(0.0, 1.0).chain(tween);
-
-// Apply curve
-let eased = tween.with_curve(Curves::EaseOut);
-
-// Reverse
-let reversed = tween.reversed();
-# controller.dispose();
-```
-
-### CurveExt
-
-```rust
-use flui_animation::{Animatable, CurveExt, Curves, FloatTween};
-
-// Convert curve to CurveTween
-let tween = Curves::EaseIn.into_tween();
-
-// Feed the curve's output into an animatable
-let eased_pixels = Curves::EaseIn.then(FloatTween::new(0.0, 100.0));
-assert!(eased_pixels.transform(0.5) < 50.0);
 ```
 
 ---
@@ -749,13 +706,12 @@ panic instead:
 |-------------|-----------|
 | `SpringDescription::with_damping_ratio` | mass, stiffness or ratio is NaN, infinite or ≤ 0 |
 | `SpringSimulation::new` | start, end or velocity is not finite |
-| `TweenSequenceItem::new` | weight ≤ 0, weight is infinite |
+| `Steps::new` | count = 0, or count = 1 with `JumpAt::None` |
 | `Interval::new` | begin/end not finite or outside [0,1], end < begin |
 | `Cubic::new` | any argument not finite, x1 or x2 outside [0,1], y1 or y2 outside [-1e6, 1e6] |
 | `ThreePointCubic::new` | midpoint not strictly inside the unit square, a control x outside its segment, a control y outside [-1e6, 1e6], a coordinate not finite |
 | `Elastic{In,Out,InOut}Curve::new` | period not finite or outside [1e-6, 1e6] |
 | `Split::with_curves` | split not finite or outside [0,1] |
-| `CatmullRomCurve::new`, `CatmullRomSpline::new` | fewer than two points |
 
 ---
 
@@ -767,6 +723,6 @@ Each implemented from the canonical published source:
 |---|---|---|
 | Perceptually uniform color interpolation | Ottosson, Oklab (2020) | `ColorTween`, `Color::lerp` (premultiplied alpha, ADR-0149) |
 | M3 emphasized easing + full Penner catalog | Material 3 / Penner | `Curves::EaseInOutCubicEmphasized`, `ThreePointCubic`, `Split` |
-| Interruptible springs with velocity-preserving retarget | analytic closed forms | `AnimatedValue`, `#[derive(Animatable)]` |
+| Interruptible springs with velocity-preserving retarget | analytic closed forms | `AnimatedValue`, `#[derive(TwoWayConverter)]` |
 
 See `examples/oklab_gradient.rs`.

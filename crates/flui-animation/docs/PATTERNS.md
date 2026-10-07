@@ -112,48 +112,29 @@ Benefits:
 
 ---
 
-## Extension Trait Pattern
+## Keyframe Track Pattern
 
 ### Problem
 
-Adding convenience methods to core types bloats their API.
+A looping indicator moves several properties on one timeline, some delayed,
+some offset per element. One controller per property or per element means
+one vsync registration, listener and dispose path each.
 
 ### Solution
 
-Extension traits for fluent composition:
+One repeating controller; each property is a `Keyframes` track with the same
+`total`, sampled in `paint` at the controller's progress. A delay is a
+leading `hold`; a per-element offset is `Stagger::delay`, read with
+`value_at_looped(elapsed + total − delay)`. The tracks are immutable values,
+so a paint that panics leaves nothing to repair.
 
-```rust
-pub trait AnimationExt: Animation<f64> + Sized + 'static {
-    fn curved<C>(self: Arc<Self>, curve: C) -> CurvedAnimation<C>
-    where
-        C: Curve + Clone + Send + Sync + fmt::Debug + 'static,
-    {
-        CurvedAnimation::new(self as Arc<dyn Animation<f64>>, curve)
-    }
-
-    fn reversed(self: Arc<Self>) -> ReverseAnimation {
-        ReverseAnimation::new(self as Arc<dyn Animation<f64>>)
-    }
+```rust,ignore
+let elapsed = rotation.total().mul_f64(controller.value());
+for i in 0..count {
+    let shifted = elapsed + track.total() - stagger.delay(i, count);
+    draw_tick(i, track.value_at_looped(shifted));
 }
-
-impl<A: Animation<f64> + 'static> AnimationExt for A {}
 ```
-
-### Usage
-
-```rust
-use flui_animation::AnimationExt;
-
-// Each method takes `Arc<Self>` and returns the composed animation by value.
-let curved = Arc::new(controller.clone()).curved(Curves::EaseInOut);
-let animation = Arc::new(curved).reversed();
-```
-
-### Benefits
-
-- Core types stay focused
-- Optional import
-- Easy to extend
 
 ---
 

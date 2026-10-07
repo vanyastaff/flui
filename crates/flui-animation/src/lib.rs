@@ -14,10 +14,13 @@
 //!   (full Penner catalog, M3 [`ThreePointCubic`] emphasized set, [`Split`])
 //! - [`Tween`] - Maps animation values to any type T; [`ColorTween`]
 //!   interpolates colors in Oklab with premultiplied alpha
+//! - [`Keyframes`] - A value as a pure function of time: segments timed by
+//!   `Duration`, eased, cubic, held or jumping; [`Stagger`] offsets one
+//!   track per index
 //! - [`simulation`] - Validated physics: springs, friction and a bouncing
 //!   scroll fling that rest at a precomputed time
 //! - [`AnimatedValue`] - Interruptible spring value with velocity-preserving
-//!   retargeting (`#[derive(Animatable)]` for custom types)
+//!   retargeting (`#[derive(TwoWayConverter)]` for custom types)
 //! - [`AnimationError`] - Error type for animation operations
 //!
 //! ## Persistent Object Pattern
@@ -120,12 +123,14 @@ pub mod controller;
 pub mod curved;
 pub mod error;
 pub mod ext;
+pub mod keyframes;
 pub mod motion;
 pub mod proxy;
 pub mod retarget;
 pub mod reverse;
 pub mod simulation;
 pub mod spring;
+pub mod stagger;
 pub mod switch;
 pub mod tween;
 pub mod vsync;
@@ -143,7 +148,8 @@ pub use constant::{ALWAYS_COMPLETE, ALWAYS_DISMISSED, ConstantAnimation};
 pub use controller::AnimationController;
 pub use curved::CurvedAnimation;
 pub use error::AnimationError;
-pub use ext::{AnimatableExt, AnimationExt};
+pub use ext::AnimatableExt;
+pub use keyframes::{Keyframes, KeyframesBuilder, KeyframesError};
 pub use motion::{AnimationTime, FrameTick, InvalidPlaybackRate, MotionClock, PlaybackRate};
 pub use proxy::ProxyAnimation;
 pub use retarget::MotionSpec;
@@ -154,27 +160,28 @@ pub use simulation::{
     SpringType, Tolerance,
 };
 pub use spring::{AnimatedValue, TwoWayConverter};
-// `#[derive(Animatable)]` generates a `TwoWayConverter` impl. It shares the name
-// `Animatable` with the trait above but lives in the macro namespace (the serde
-// `Serialize` trait+derive pattern), so a single `use flui_animation::Animatable`
+pub use stagger::{Stagger, StaggerOrigin};
+// `#[derive(TwoWayConverter)]` generates `TwoWayConverter` and `Lerp` impls. It
+// shares the trait's name but lives in the macro namespace (the serde
+// `Serialize` trait+derive pattern), so one `use flui_animation::TwoWayConverter`
 // brings in both.
-pub use flui_macros::Animatable;
+pub use flui_foundation::geometry::Lerp;
+pub use flui_macros::TwoWayConverter;
 pub use switch::AnimationSwitch;
 pub use tween::{TweenAnimation, animate};
 pub use vsync::{Vsync, VsyncRegistration, VsyncRegistrationError};
 
 // Re-exports from data type modules
 pub use curve::{
-    ArcCurve, BounceInCurve, BounceInOutCurve, BounceOutCurve, CatmullRomCurve, CatmullRomSpline,
-    Cubic, Curve, Curve2D, Curve2DSample, CurveError, Curves, DecelerateCurve, ElasticInCurve,
-    ElasticInOutCurve, ElasticOutCurve, FlippedCurve, Interval, Linear, ParametricCurve, Split,
-    ThreePointCubic,
+    ArcCurve, BounceInCurve, BounceInOutCurve, BounceOutCurve, Cubic, Curve, CurveError, Curves,
+    DecelerateCurve, ElasticInCurve, ElasticInOutCurve, ElasticOutCurve, FlippedCurve, Interval,
+    JumpAt, Linear, Split, Steps, ThreePointCubic,
 };
 pub use status::{AnimationBehavior, AnimationStatus};
 pub use tween_types::{
     AlignmentTween, Animatable, BorderRadiusTween, ChainedTween, ColorTween, ConstantTween,
-    CurveExt, CurveTween, EdgeInsetsTween, FloatTween, IntTween, Matrix4Tween, OffsetTween,
-    RectTween, ReverseTween, SizeTween, StepTween, Tween, TweenSequence, TweenSequenceItem,
+    CurveTween, EdgeInsetsTween, FloatTween, IntTween, Matrix4Tween, OffsetTween, RectTween,
+    ReverseTween, SizeTween, StepTween, Tween,
 };
 
 // Re-export scheduler types for convenience.
@@ -199,7 +206,7 @@ pub mod prelude {
     pub use crate::curve::{Curve, Curves};
     pub use crate::curved::CurvedAnimation;
     pub use crate::error::AnimationError;
-    pub use crate::ext::{AnimatableExt, AnimationExt};
+    pub use crate::ext::AnimatableExt;
     pub use crate::proxy::ProxyAnimation;
     pub use crate::reverse::ReverseAnimation;
     pub use crate::simulation::{
@@ -208,7 +215,7 @@ pub mod prelude {
     pub use crate::status::{AnimationBehavior, AnimationStatus};
     pub use crate::switch::AnimationSwitch;
     pub use crate::tween::TweenAnimation;
-    pub use crate::tween_types::{Animatable, CurveExt, Tween, TweenSequence};
+    pub use crate::tween_types::{Animatable, Tween};
 
     // Re-export scheduler types
     pub use crate::{

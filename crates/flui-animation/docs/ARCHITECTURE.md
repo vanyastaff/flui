@@ -47,7 +47,9 @@ src/
 ├── spring.rs         # AnimatedValue, TwoWayConverter
 ├── retarget.rs       # Interruptible scalar motion segments
 │
-├── ext.rs            # AnimatableExt, AnimationExt (CurveExt lives in tween_types.rs)
+├── keyframes.rs      # Keyframes, KeyframesBuilder, KeyframesError
+├── stagger.rs        # Stagger, StaggerOrigin
+├── ext.rs            # AnimatableExt (`animate`)
 ├── error.rs          # AnimationError
 └── test_cases.rs     # table-test runner (cfg(test))
 ```
@@ -877,45 +879,6 @@ finiteness and bounds), `tests/contracts/status_delivery.rs` (listener and
   clamp to the bounds: a curve returning NaN or overshooting is published as is.
 - `AnimationSwitch` reads its parents' `value()` and `status()` while holding its
   own lock, so a parent that reads the switch back deadlocks.
-
-## Extension Traits
-
-Add fluent APIs without cluttering core types:
-
-### AnimationExt
-
-```rust
-pub trait AnimationExt: Animation<f64> + Sized + 'static {
-    fn curved<C>(self: Arc<Self>, curve: C) -> CurvedAnimation<C>
-    where
-        C: Curve + Clone + Send + Sync + fmt::Debug + 'static;
-    fn reversed(self: Arc<Self>) -> ReverseAnimation;
-    fn add(self: Arc<Self>, other: Arc<dyn Animation<f64>>) -> CompoundAnimation;
-    // ...
-}
-
-impl<A: Animation<f64> + 'static> AnimationExt for A {}
-```
-
-### AnimatableExt
-
-```rust
-pub trait AnimatableExt<T>: Animatable<T> + Sized {
-    fn animate(self, parent: Arc<dyn Animation<f64>>) -> TweenAnimation<T, Self>;
-    fn chain<B>(self, other: B) -> ChainedTween<Self, B>;
-    fn with_curve<C: Curve>(self, curve: C) -> ChainedTween<CurveTween<C>, Self>;
-    fn reversed(self) -> ReverseTween<T, Self>;
-}
-```
-
-### CurveExt
-
-```rust
-pub trait CurveExt: Curve + Sized {
-    fn into_tween(self) -> CurveTween<Self>;
-    fn then<T, A: Animatable<T>>(self, animatable: A) -> ChainedTween<CurveTween<Self>, A>;
-}
-```
 
 ### Proxy queries release the parent guard before user code
 

@@ -169,7 +169,10 @@ pub use async_builders::{
     SnapshotBuilder, Stream, StreamBuilder, StreamFactory,
 };
 pub use container::Container;
-pub use controls::{Disclosure, DisclosureState, ExpansionState, Slider, SliderState};
+pub use controls::{
+    ActivityIndicator, ActivityIndicatorState, Disclosure, DisclosureState, ExpansionState, Slider,
+    SliderState,
+};
 pub use flex::{Column, Expanded, Flex, Flexible, Row, Spacer};
 pub use flui_objects::{ImageAlignment, ImageFit};
 pub use icon::{Icon, IconData, IconTheme, IconThemeData};

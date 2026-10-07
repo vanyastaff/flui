@@ -200,7 +200,8 @@ them. What matters for cost is what each type holds:
 | `CompoundAnimation` | two parent `Arc<dyn Animation<f64>>`s, a notifier and two parent subscriptions |
 | `ConstantAnimation<T>` | the value and a status; no notifier, since it never changes |
 | `Cubic`, `ElasticOutCurve`, `Interval<C>` | plain `f64` parameters (plus the inner curve) |
-| `CatmullRomCurve` | a `SmallVec` of points, eight inline |
+| `Steps` | step count and jump placement |
+| `Keyframes<T>` | starting value, total duration and an immutable boxed segment slice |
 
 ---
 

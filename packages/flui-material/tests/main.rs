@@ -62,6 +62,9 @@ mod material_app;
 #[path = "navigation_bar.rs"]
 mod navigation_bar;
 
+#[path = "progress_indicator.rs"]
+mod progress_indicator;
+
 #[path = "radio.rs"]
 mod radio;
 
@@ -390,6 +393,45 @@ fn theme_and_app_contracts() {
         (
             "rebuild_exactness::swapping theme data rebuilds exactly the dependents",
             rebuild_exactness::swapping_theme_data_rebuilds_exactly_the_dependents,
+        ),
+    ]);
+}
+
+/// `LinearProgressIndicator`: indeterminate bars on virtual time and its
+/// semantics.
+#[test]
+fn linear_progress_indeterminate_keyframes() {
+    common::run_cases(&[
+        (
+            "progress_indicator::indeterminate bars follow the published timing",
+            progress_indicator::indeterminate_bars_follow_the_published_timing,
+        ),
+        (
+            "progress_indicator::announced as progress",
+            progress_indicator::announced_as_progress,
+        ),
+    ]);
+}
+
+/// `LinearProgressIndicator`: the switch to a determinate value.
+#[test]
+fn linear_progress_switches_to_determinate() {
+    common::run_cases(&[
+        (
+            "progress_indicator::switching to a value stops the bars",
+            progress_indicator::switching_to_a_value_stops_the_bars,
+        ),
+        (
+            "progress_indicator::values outside the range are clamped",
+            progress_indicator::values_outside_the_range_are_clamped,
+        ),
+        (
+            "progress_indicator::right-to-left progress starts at the right",
+            progress_indicator::right_to_left_progress_starts_at_the_right,
+        ),
+        (
+            "progress_indicator::negative zero announces zero percent",
+            progress_indicator::negative_zero_announces_zero_percent,
         ),
     ]);
 }

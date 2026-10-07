@@ -2,7 +2,6 @@
 
 use crate::animation::{Retirement, Terminal};
 
-use smallvec::SmallVec;
 use std::fmt;
 use std::sync::Arc;
 
@@ -80,6 +79,9 @@ pub trait Curve {
     /// [`Linear`], [`Cubic`], [`Interval`], [`FlippedCurve`] and
     /// [`ArcCurve`] override it exactly.
     ///
+    /// Keyframe tracks read it to match a cubic segment's velocity to a
+    /// neighbouring curved segment.
+    ///
     /// # Examples
     ///
     /// ```
@@ -142,7 +144,7 @@ fn settled_slope(t: f64) -> Option<f64> {
 /// The closed set of curves [`ArcCurve`] compares by value.
 mod builtin {
     use super::{
-        Cubic, Curve, ElasticInCurve, ElasticInOutCurve, ElasticOutCurve, ThreePointCubic,
+        Cubic, Curve, ElasticInCurve, ElasticInOutCurve, ElasticOutCurve, Steps, ThreePointCubic,
         interval_slope, interval_transform,
     };
     use std::sync::Arc;
@@ -171,6 +173,7 @@ mod builtin {
                 Builtin::ElasticIn(curve) => curve.transform(t),
                 Builtin::ElasticOut(curve) => curve.transform(t),
                 Builtin::ElasticInOut(curve) => curve.transform(t),
+                Builtin::Steps(curve) => curve.transform(t),
                 Builtin::Interval { begin, end, curve } => {
                     interval_transform(*begin, *end, t, |local| curve.transform(local))
                 }
@@ -190,6 +193,7 @@ mod builtin {
                 Builtin::ElasticIn(curve) => curve.slope(t),
                 Builtin::ElasticOut(curve) => curve.slope(t),
                 Builtin::ElasticInOut(curve) => curve.slope(t),
+                Builtin::Steps(curve) => curve.slope(t),
                 Builtin::Interval { begin, end, curve } => interval_slope(
                     *begin,
                     *end,
@@ -220,6 +224,7 @@ mod builtin {
         ElasticIn(ElasticInCurve),
         ElasticOut(ElasticOutCurve),
         ElasticInOut(ElasticInOutCurve),
+        Steps(Steps),
         Interval {
             begin: f64,
             end: f64,
@@ -280,6 +285,10 @@ pub enum CurveError {
         /// The rejected end of the interval.
         end: f64,
     },
+    /// [`Steps`] with [`JumpAt::None`] and fewer than two steps: the curve
+    /// would have no jump between its start and end values.
+    #[error("steps with `JumpAt::None` need at least two steps")]
+    TooFewSteps,
 }
 
 /// Propagates a validation error out of a `const fn` (`?` is not const).
@@ -345,37 +354,6 @@ fn settled(t: f64) -> Option<f64> {
         Some(1.0)
     } else {
         None
-    }
-}
-
-/// A parametric curve in 2D space.
-pub trait ParametricCurve<T> {
-    /// Returns the value of the curve at point `t`.
-    fn transform(&self, t: f64) -> T;
-}
-
-/// A curve that maps a value in the unit interval to a 2D point.
-pub trait Curve2D {
-    /// Returns the point on the curve at parameter `t`.
-    fn transform(&self, t: f64) -> Curve2DSample;
-}
-
-/// A sample point on a 2D curve.
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct Curve2DSample {
-    /// The value of the curve at this point.
-    pub value: f64,
-    /// The derivative (slope) of the curve at this point.
-    pub derivative: f64,
-}
-
-impl Curve2DSample {
-    /// Creates a new 2D curve sample.
-    #[inline]
-    #[must_use]
-    pub const fn new(value: f64, derivative: f64) -> Self {
-        Self { value, derivative }
     }
 }
 
@@ -1720,169 +1698,171 @@ impl Curve for DecelerateCurve {
 }
 
 // ============================================================================
-// Catmull-Rom Curves
+// Step Curves
 // ============================================================================
 
-/// A Catmull-Rom curve passing through a set of points.
-///
-/// Uses stack allocation for up to 8 points to avoid heap allocations in common cases.
-///
-/// The points' x coordinates are ignored: the points are spaced evenly in
-/// progress. Like every [`Curve`], it returns exactly 0 at `t = 0` and 1 at
-/// `t = 1`; strictly between, it interpolates the points' y values, so
-/// points whose first and last y are not 0 and 1 make it jump at the ends.
-#[derive(Debug, Clone, PartialEq)]
+/// Where a [`Steps`] curve places its jumps (CSS Easing 1 §2.3.1
+/// `<step-position>`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct CatmullRomCurve {
-    /// The control points of the curve.
-    /// Stack-allocated for up to 8 points, heap-allocated for more.
-    pub points: SmallVec<[(f64, f64); 8]>,
-    /// The tension parameter (0.0 = no tension, 0.5 = Catmull-Rom, 1.0 = tight).
-    pub tension: f64,
+#[non_exhaustive]
+pub enum JumpAt {
+    /// The first jump happens as the curve starts (`jump-start`).
+    Start,
+    /// The last jump happens as the curve ends (`jump-end`, the CSS default).
+    #[default]
+    End,
+    /// No jump at either end (`jump-none`): the first and last steps each
+    /// hold for one interval.
+    None,
+    /// Jumps at both ends (`jump-both`).
+    Both,
 }
 
-impl CatmullRomCurve {
-    /// Creates a new Catmull-Rom curve.
+/// A staircase curve: `count` equal intervals, each holding one value
+/// (CSS Easing 1 §2.3.1 `steps()`).
+///
+/// For `t` strictly inside `(0, 1)` the output is `step / jumps`, where
+/// `step = ⌊t · count⌋` (plus one for [`JumpAt::Start`] and
+/// [`JumpAt::Both`]) capped at `jumps`, and `jumps` is `count` for
+/// [`JumpAt::Start`]/[`JumpAt::End`], `count − 1` for [`JumpAt::None`] and
+/// `count + 1` for [`JumpAt::Both`]. Each interval is closed on the left:
+/// the jump belongs to the later step.
+///
+/// The ends follow the [`Curve`] contract — `0 → 0`, `1 → 1` — which is the
+/// CSS value with the before flag set at 0. FLUI has no before/after phases,
+/// so the before flag is not modelled. Monotone (non-decreasing).
+///
+/// # Serde
+///
+/// Serializes as `{ "count": n, "jump": "End" }`; decoding rejects what
+/// [`Steps::try_new`] rejects.
+///
+/// # Examples
+///
+/// ```
+/// use flui_animation::{Curve, JumpAt, Steps};
+///
+/// const FOUR: Steps = Steps::new(4, JumpAt::End);
+/// assert_eq!(FOUR.transform(0.24), 0.0);
+/// assert_eq!(FOUR.transform(0.25), 0.25);
+/// assert_eq!(Steps::new(4, JumpAt::Start).transform(0.1), 0.25);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(try_from = "StepsWire", into = "StepsWire"))]
+pub struct Steps {
+    count: u32,
+    jump: JumpAt,
+}
+
+impl Steps {
+    /// Admits `count ≥ 1`, and `count ≥ 2` for [`JumpAt::None`].
+    const fn validate(count: u32, jump: JumpAt) -> Result<Self, CurveError> {
+        if count == 0 {
+            return Err(CurveError::OutOfRange {
+                parameter: "count",
+                value: 0.0,
+                allowed: "[1, 4294967295]",
+            });
+        }
+        if count < 2 && matches!(jump, JumpAt::None) {
+            return Err(CurveError::TooFewSteps);
+        }
+        Ok(Self { count, jump })
+    }
+
+    /// Creates a `steps(count, jump)` curve.
     ///
     /// # Panics
     ///
-    /// Panics if `points` holds fewer than two points.
-    #[inline]
+    /// Panics when [`Steps::try_new`] would return an error. In a `const`
+    /// item the panic is a compile error.
     #[must_use]
-    pub fn new(points: impl Into<SmallVec<[(f64, f64); 8]>>, tension: f64) -> Self {
-        let points = points.into();
-        assert!(points.len() >= 2, "Must have at least 2 points");
-        Self { points, tension }
+    pub const fn new(count: u32, jump: JumpAt) -> Self {
+        match Self::validate(count, jump) {
+            Ok(steps) => steps,
+            Err(_) => panic!(
+                "Steps::new: count must be at least 1, and at least 2 for JumpAt::None \
+                 (Steps::try_new reports which)"
+            ),
+        }
     }
 
-    /// Creates a Catmull-Rom curve with default tension (0.0).
-    #[inline]
-    #[must_use]
-    pub fn with_points(points: impl Into<SmallVec<[(f64, f64); 8]>>) -> Self {
-        Self::new(points, 0.0)
+    /// Creates a `steps(count, jump)` curve, rejecting an invalid count.
+    ///
+    /// # Errors
+    ///
+    /// - [`CurveError::OutOfRange`] when `count` is 0;
+    /// - [`CurveError::TooFewSteps`] when `jump` is [`JumpAt::None`] and
+    ///   `count` is 1.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_animation::{CurveError, JumpAt, Steps};
+    ///
+    /// assert!(Steps::try_new(3, JumpAt::Both).is_ok());
+    /// assert_eq!(Steps::try_new(1, JumpAt::None), Err(CurveError::TooFewSteps));
+    /// ```
+    pub fn try_new(count: u32, jump: JumpAt) -> Result<Self, CurveError> {
+        Self::validate(count, jump)
     }
 }
 
-impl Curve for CatmullRomCurve {
-    // Cast policy: `t` is clamped to [0, 1] (NaN casts to 0), so `t_scaled.floor()` is a segment index in [0, segment_count].
+/// The serialized form of [`Steps`].
+#[cfg(feature = "serde")]
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename = "Steps")]
+struct StepsWire {
+    count: u32,
+    jump: JumpAt,
+}
+
+#[cfg(feature = "serde")]
+impl From<Steps> for StepsWire {
+    fn from(steps: Steps) -> Self {
+        Self {
+            count: steps.count,
+            jump: steps.jump,
+        }
+    }
+}
+
+#[cfg(feature = "serde")]
+impl TryFrom<StepsWire> for Steps {
+    type Error = CurveError;
+
+    fn try_from(wire: StepsWire) -> Result<Self, CurveError> {
+        Self::try_new(wire.count, wire.jump)
+    }
+}
+
+impl Curve for Steps {
+    builtin_value!(Steps(self));
+
+    /// 0 wherever it is defined: the curve is flat between jumps, and a jump
+    /// has no finite derivative, so a neighbouring keyframe segment inherits
+    /// no velocity from it. NaN gives NaN, as for every curve.
+    fn slope(&self, t: f64) -> f64 {
+        settled_slope(t).unwrap_or(0.0)
+    }
+
     fn transform(&self, t: f64) -> f64 {
-        if let Some(settled) = settled(t) {
-            return settled;
+        if let Some(end) = settled(t) {
+            return end;
         }
-        if self.points.len() == 1 {
-            return self.points[0].1;
+        let count = f64::from(self.count);
+        let jumps = match self.jump {
+            JumpAt::Start | JumpAt::End => count,
+            JumpAt::None => count - 1.0,
+            JumpAt::Both => count + 1.0,
+        };
+        let mut step = (t * count).floor();
+        if matches!(self.jump, JumpAt::Start | JumpAt::Both) {
+            step += 1.0;
         }
-
-        // Find the segment
-        let segment_count = self.points.len() - 1;
-        let t_scaled = t * segment_count as f64;
-        let segment = (t_scaled.floor() as usize).min(segment_count - 1);
-        let local_t = t_scaled - segment as f64;
-
-        // Get the 4 control points for this segment
-        let p0 = if segment > 0 {
-            self.points[segment - 1]
-        } else {
-            self.points[0]
-        };
-        let p1 = self.points[segment];
-        let p2 = self.points[segment + 1];
-        let p3 = if segment + 2 < self.points.len() {
-            self.points[segment + 2]
-        } else {
-            self.points[segment + 1]
-        };
-
-        // Catmull-Rom interpolation
-        let t2 = local_t * local_t;
-        let t3 = t2 * local_t;
-
-        let v0 = (p2.1 - p0.1) * (1.0 - self.tension) * 0.5;
-        let v1 = (p3.1 - p1.1) * (1.0 - self.tension) * 0.5;
-
-        (2.0 * p1.1 - 2.0 * p2.1 + v0 + v1) * t3
-            + (-3.0 * p1.1 + 3.0 * p2.1 - 2.0 * v0 - v1) * t2
-            + v0 * local_t
-            + p1.1
-    }
-}
-
-/// A Catmull-Rom spline.
-///
-/// Uses stack allocation for up to 8 points to avoid heap allocations in common cases.
-#[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct CatmullRomSpline {
-    /// The control points of the spline.
-    /// Stack-allocated for up to 8 points, heap-allocated for more.
-    pub points: SmallVec<[Curve2DSample; 8]>,
-}
-
-impl CatmullRomSpline {
-    /// Creates a new Catmull-Rom spline.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `points` holds fewer than two points.
-    #[inline]
-    #[must_use]
-    pub fn new(points: impl Into<SmallVec<[Curve2DSample; 8]>>) -> Self {
-        let points = points.into();
-        assert!(points.len() >= 2, "Must have at least 2 points");
-        Self { points }
-    }
-}
-
-impl Curve2D for CatmullRomSpline {
-    // Cast policy: `t` is clamped to [0, 1] (NaN casts to 0), so `t_scaled.floor()` is a segment index in [0, segment_count].
-    fn transform(&self, t: f64) -> Curve2DSample {
-        let t = t.clamp(0.0, 1.0);
-
-        if self.points.len() == 1 {
-            return self.points[0];
-        }
-
-        // Find the segment
-        let segment_count = self.points.len() - 1;
-        let t_scaled = t * segment_count as f64;
-        let segment = (t_scaled.floor() as usize).min(segment_count - 1);
-        let local_t = t_scaled - segment as f64;
-
-        // Get the 4 control points for this segment
-        let p0 = if segment > 0 {
-            self.points[segment - 1]
-        } else {
-            self.points[0]
-        };
-        let p1 = self.points[segment];
-        let p2 = self.points[segment + 1];
-        let p3 = if segment + 2 < self.points.len() {
-            self.points[segment + 2]
-        } else {
-            self.points[segment + 1]
-        };
-
-        // Catmull-Rom interpolation for both value and derivative
-        let t2 = local_t * local_t;
-        let t3 = t2 * local_t;
-
-        let v0_val = (p2.value - p0.value) * 0.5;
-        let v1_val = (p3.value - p1.value) * 0.5;
-
-        let value = (2.0 * p1.value - 2.0 * p2.value + v0_val + v1_val) * t3
-            + (-3.0 * p1.value + 3.0 * p2.value - 2.0 * v0_val - v1_val) * t2
-            + v0_val * local_t
-            + p1.value;
-
-        let v0_der = (p2.derivative - p0.derivative) * 0.5;
-        let v1_der = (p3.derivative - p1.derivative) * 0.5;
-
-        let derivative = (2.0 * p1.derivative - 2.0 * p2.derivative + v0_der + v1_der) * t3
-            + (-3.0 * p1.derivative + 3.0 * p2.derivative - 2.0 * v0_der - v1_der) * t2
-            + v0_der * local_t
-            + p1.derivative;
-
-        Curve2DSample::new(value, derivative)
+        step.min(jumps) / jumps
     }
 }
 

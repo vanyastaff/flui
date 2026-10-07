@@ -1289,6 +1289,22 @@ impl LaidOut {
         self.host.realm().sink().layer_tree()
     }
 
+    /// Every draw operation in the last submitted scene's picture layers, in
+    /// layer order, each with its recorded transform: what a paint test
+    /// samples at a virtual time.
+    pub fn draw_ops(&self) -> Vec<flui_painting::display_list::DrawCommand> {
+        let Some(tree) = self.layer_tree() else {
+            return Vec::new();
+        };
+        let mut ops = Vec::new();
+        for (_, node) in tree.iter() {
+            if let flui_rendering::layer::Layer::Picture(picture) = node.layer() {
+                ops.extend(picture.picture().iter().cloned());
+            }
+        }
+        ops
+    }
+
     /// Whether the immediately preceding harness frame repainted.
     pub fn did_paint_last_frame(&self) -> bool {
         self.host.did_paint_last_frame()

@@ -52,7 +52,7 @@ use crate::animated::VsyncScope;
 use crate::scroll::scrollable::presentation_device_pixel_ratio;
 use crate::scroll::single_child_scroll_view::SingleChildScrollView;
 use crate::scroll::{ClampingScrollPhysics, ScrollController, ScrollMetrics, SharedScrollPhysics};
-use crate::{ColoredBox, GestureDetector, Positioned, Stack};
+use crate::{ActivityIndicator, Center, GestureDetector, Positioned, Stack};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -594,12 +594,13 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
         let mut stack_children: Vec<_> = vec![scroll_view.boxed()];
         if view.controller.is_refreshing() {
             // Overlay the indicator at the very top of the content area.
-            // DEFERRED (v1): replace with a RotationTransition-based spinner.
-            let indicator = Positioned::new(ColoredBox::new(INDICATOR_COLOR))
-                .top(0.0)
-                .left(0.0)
-                .right(0.0)
-                .height(INDICATOR_HEIGHT_PX);
+            let indicator = Positioned::new(
+                Center::new().child(ActivityIndicator::new().color(INDICATOR_COLOR)),
+            )
+            .top(0.0)
+            .left(0.0)
+            .right(0.0)
+            .height(INDICATOR_HEIGHT_PX);
             stack_children.push(indicator.boxed());
         }
 

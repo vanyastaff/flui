@@ -2,27 +2,18 @@
 //!
 //! This module provides types for animating values between a beginning and ending state.
 //! The core abstraction is the [`Animatable`] trait, which maps a progress value (0.0 to 1.0)
-//! to an output value of any type.
-//!
-//! # Extension Traits
-//!
-//! This module provides [`CurveExt`] for converting curves into animatables.
-//! The fluent composition methods on animatables themselves (`.reversed()`,
-//! `.chain()`, `.with_curve()`, `.animate()`) live on
-//! [`AnimatableExt`](crate::ext::AnimatableExt).
+//! to an output value of any type. A value that moves through several states
+//! over time is a [`Keyframes`](crate::Keyframes) track.
 //!
 //! # Examples
 //!
 //! ```
-//! use flui_animation::{FloatTween, Animatable, AnimatableExt};
+//! use flui_animation::{FloatTween, Animatable, ReverseTween};
 //!
 //! let tween = FloatTween::new(0.0, 100.0);
-//!
-//! // Use the tween directly
 //! assert_eq!(tween.transform(0.5), 50.0);
 //!
-//! // Or reverse it using the extension trait
-//! let reversed = tween.reversed();
+//! let reversed = ReverseTween::new(tween);
 //! assert_eq!(reversed.transform(0.0), 100.0);
 //! ```
 
@@ -247,199 +238,6 @@ pub type BorderRadiusTween = Tween<BorderRadius>;
 pub type Matrix4Tween = Tween<Matrix4>;
 
 // ============================================================================
-// Complex Tweens
-// ============================================================================
-
-/// A tween that chains together multiple tweens in sequence.
-///
-/// Each item in the sequence has a weight that determines what portion of the
-/// animation duration it occupies.
-///
-/// # Type Parameters
-///
-/// - `T`: The output type of the animation.
-/// - `A`: The animatable type that produces `T` values.
-///
-/// # Examples
-///
-/// ```
-/// use flui_animation::{TweenSequence, TweenSequenceItem, FloatTween, Animatable};
-///
-/// let items = vec![
-///     TweenSequenceItem::new(FloatTween::new(0.0, 50.0), 1.0),
-///     TweenSequenceItem::new(FloatTween::new(50.0, 100.0), 1.0),
-/// ];
-/// let sequence = TweenSequence::new(items);
-///
-/// assert_eq!(sequence.transform(0.0), 0.0);
-/// assert_eq!(sequence.transform(0.5), 50.0);
-/// assert_eq!(sequence.transform(1.0), 100.0);
-/// ```
-///
-/// # Example with Colors
-///
-/// ```
-/// use flui_animation::{TweenSequence, TweenSequenceItem, Animatable, ColorTween};
-/// use flui_painting::styling::Color;
-///
-/// let items = vec![
-///     TweenSequenceItem::new(ColorTween::new(Color::RED, Color::GREEN), 1.0),
-///     TweenSequenceItem::new(ColorTween::new(Color::GREEN, Color::BLUE), 1.0),
-/// ];
-/// let sequence = TweenSequence::new(items);
-///
-/// // At t=0, we get RED
-/// let start = sequence.transform(0.0);
-/// assert_eq!(start, Color::RED);
-///
-/// // At t=0.5, we get GREEN (transition point)
-/// let mid = sequence.transform(0.5);
-/// assert_eq!(mid, Color::GREEN);
-/// ```
-#[derive(Debug, Clone, PartialEq)]
-pub struct TweenSequence<T, A: Animatable<T>> {
-    /// The items in the sequence.
-    items: Vec<TweenSequenceItem<T, A>>,
-    /// Sum in the caller's original units; it can overflow for finite weights.
-    total_weight: f64,
-    /// Evaluation uses scaled weights so their sum cannot overflow.
-    weight_scale: f64,
-    normalized_total: f64,
-}
-
-impl<T, A: Animatable<T>> TweenSequence<T, A> {
-    /// Creates a new tween sequence.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `items` is empty or an item's weight is not finite and positive.
-    #[must_use]
-    pub fn new(items: Vec<TweenSequenceItem<T, A>>) -> Self {
-        assert!(
-            !items.is_empty(),
-            "TweenSequence must have at least one item"
-        );
-
-        // Item fields are public, so validate again after any caller edits.
-        let mut weight_scale = 0.0_f64;
-        for item in &items {
-            assert!(
-                item.weight.is_finite() && item.weight > 0.0,
-                "TweenSequence item weights must be finite and positive"
-            );
-            weight_scale = weight_scale.max(item.weight);
-        }
-        let total_weight = items.iter().map(|item| item.weight).sum();
-        let normalized_total = items.iter().map(|item| item.weight / weight_scale).sum();
-
-        Self {
-            items,
-            total_weight,
-            weight_scale,
-            normalized_total,
-        }
-    }
-
-    /// Returns the items in the sequence.
-    #[inline]
-    #[must_use]
-    pub fn items(&self) -> &[TweenSequenceItem<T, A>] {
-        &self.items
-    }
-
-    /// Returns the sum of the original item weights.
-    ///
-    /// This sum can be infinite when finite weights overflow. Evaluation uses
-    /// normalized weights and remains defined in that case.
-    #[inline]
-    #[must_use]
-    pub fn total_weight(&self) -> f64 {
-        self.total_weight
-    }
-}
-
-impl<T, A: Animatable<T>> Animatable<T> for TweenSequence<T, A> {
-    /// Unlike a plain [`Tween`], a sequence **clamps** `t` to `[0, 1]`:
-    /// overshoot (elastic/spring `t` outside the unit range) saturates at the
-    /// first/last item's endpoint rather than extrapolating, because there is
-    /// no meaningful item to attribute out-of-range progress to.
-    fn transform(&self, t: f64) -> T {
-        let t = t.clamp(0.0, 1.0);
-
-        // Exact endpoints remain reachable even if an item's relative weight
-        // is too small to represent as a distinct progress interval in f64.
-        if t == 0.0 {
-            return self.items[0].tween.transform(0.0);
-        }
-        if t == 1.0 {
-            return self.items[self.items.len() - 1].tween.transform(1.0);
-        }
-
-        let progress = t * self.normalized_total;
-        let mut accumulated_weight = 0.0;
-        for (i, item) in self.items.iter().enumerate() {
-            let weight = item.weight / self.weight_scale;
-            let item_end = accumulated_weight + weight;
-            if progress <= item_end || i == self.items.len() - 1 {
-                let local_t = if weight == 0.0 {
-                    0.0
-                } else {
-                    ((progress - accumulated_weight) / weight).clamp(0.0, 1.0)
-                };
-                return item.tween.transform(local_t);
-            }
-            accumulated_weight = item_end;
-        }
-
-        // Unreachable: `new()` (the only constructor) asserts `items` is
-        // non-empty, and the loop's `i == len - 1` arm returns on the final
-        // iteration. Kept as a typed fallthrough for the compiler.
-        self.items
-            .last()
-            .expect("BUG: TweenSequence items are non-empty (asserted in new), so the loop above returns on its final iteration")
-            .tween
-            .transform(1.0)
-    }
-}
-
-/// An item in a [`TweenSequence`].
-///
-/// # Type Parameters
-///
-/// - `T`: The output type of the animation.
-/// - `A`: The animatable type that produces `T` values.
-#[derive(Debug, Clone, PartialEq)]
-pub struct TweenSequenceItem<T, A: Animatable<T>> {
-    /// The tween to use for this item.
-    pub tween: A,
-
-    /// The weight of this item in the sequence.
-    ///
-    /// The time spent in this item is proportional to its weight.
-    pub weight: f64,
-
-    _phantom: std::marker::PhantomData<T>,
-}
-
-impl<T, A: Animatable<T>> TweenSequenceItem<T, A> {
-    /// Creates a new tween sequence item.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `weight` is not positive (must be > 0).
-    #[must_use]
-    pub fn new(tween: A, weight: f64) -> Self {
-        assert!(weight > 0.0, "Weight must be positive");
-        assert!(weight.is_finite(), "Weight must be finite");
-        Self {
-            tween,
-            weight,
-            _phantom: std::marker::PhantomData,
-        }
-    }
-}
-
-// ============================================================================
 // Curve-based Tweens
 // ============================================================================
 
@@ -537,45 +335,3 @@ where
         self.second.transform(curved_t)
     }
 }
-
-// ============================================================================
-// Extension Traits
-// ============================================================================
-
-/// Extension trait for [`Curve`] types.
-///
-/// Provides fluent methods for converting curves to animatables.
-///
-/// # Examples
-///
-/// ```
-/// use flui_animation::{Curves, CurveExt, FloatTween, Animatable};
-///
-/// // Convert curve to tween
-/// let tween = Curves::EaseIn.into_tween();
-/// assert!(tween.transform(0.5) < 0.5);
-///
-/// // Chain curve with value tween
-/// let value_tween = Curves::EaseIn.then(FloatTween::new(0.0, 100.0));
-/// assert!(value_tween.transform(0.5) < 50.0);
-/// ```
-pub trait CurveExt: Curve + Sized {
-    /// Converts this curve into a [`CurveTween`].
-    #[inline]
-    #[must_use]
-    fn into_tween(self) -> CurveTween<Self> {
-        CurveTween::new(self)
-    }
-
-    /// Chains this curve with an animatable.
-    ///
-    /// The curve is applied first, then its output is passed to the animatable.
-    #[inline]
-    #[must_use]
-    fn then<T, A: Animatable<T>>(self, animatable: A) -> ChainedTween<CurveTween<Self>, A> {
-        ChainedTween::new(CurveTween::new(self), animatable)
-    }
-}
-
-// Blanket implementation for all Curve types
-impl<C: Curve> CurveExt for C {}

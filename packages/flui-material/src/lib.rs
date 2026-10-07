@@ -82,6 +82,7 @@ pub mod list_tile;
 pub mod material;
 pub mod navigation_bar;
 pub mod outlined_button;
+pub mod progress_indicator;
 pub mod radio;
 pub mod scaffold;
 pub mod scaffold_messenger;
@@ -124,6 +125,7 @@ pub use list_tile::ListTile;
 pub use material::Material;
 pub use navigation_bar::{NavigationBar, NavigationDestination};
 pub use outlined_button::OutlinedButton;
+pub use progress_indicator::{LinearProgressIndicator, LinearProgressIndicatorState};
 pub use radio::{Radio, RadioState};
 pub use scaffold::{Scaffold, ScaffoldScope, ScaffoldState};
 pub use scaffold_messenger::{

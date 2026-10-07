@@ -10,7 +10,7 @@ starting with `#` are hidden setup (a scheduler, a controller, a
 
 ```rust
 use flui_animation::{
-    AnimationController, Animation, AnimationExt,
+    AnimationController, Animation,
     Curves, FloatTween, Animatable,
 };
 use flui_scheduler::UpdateScheduler;
@@ -248,18 +248,20 @@ let interval = Interval::new(0.2, 0.8, Curves::EaseIn);
 
 ```
 
-### Splines
+### Steps
+
+`Steps` is CSS `steps(n, <jump>)` (CSS Easing 1 §2.3.1); `JumpAt` places the
+jumps. The ends keep the curve contract: `0 → 0`, `1 → 1`.
 
 ```rust
-use flui_animation::CatmullRomCurve;
+use flui_animation::{Curve, JumpAt, Steps};
 
-let spline = CatmullRomCurve::with_points(vec![
-    (0.0, 0.0),
-    (0.3, 0.8),
-    (0.7, 0.2),
-    (1.0, 1.0),
-]);
+assert_eq!(Steps::new(4, JumpAt::End).transform(0.6), 0.5);
+assert_eq!(Steps::new(4, JumpAt::Start).transform(0.6), 0.75);
 ```
+
+A spline through points at given times is a `Keyframes` track of `cubic`
+segments (see [Keyframes](#keyframes)).
 
 ### Modifiers
 
@@ -319,40 +321,63 @@ let _ = BorderRadiusTween::new(BorderRadius::ZERO, BorderRadius::circular(8.0));
 let _ = ConstantTween::new(42.0);
 ```
 
-### Tween Sequences
+### Keyframes
+
+A `Keyframes<T>` track (`T: Lerp + TwoWayConverter`) is a value as a pure
+function of elapsed time. Segments are timed by `Duration` and placed end to
+end from zero:
+
+| Segment | Moves | Velocity at a join with `cubic` |
+|---|---|---|
+| `to(value, over, curve)` | eases into `value`; the curve belongs to this segment | the curve's slope at that end |
+| `cubic(value, over)` | Catmull-Rom spline through the keyframe *times* | the chord of the neighbouring keys |
+| `hold(over)` | keeps the value | zero |
+| `jump(value)` | changes the value instantly | zero |
+
+At a boundary the track returns the keyframe value exactly; at a jump, the
+value after it. A curve that returns NaN or infinity, or interpolation that
+overflows, publishes the segment's start value. `build` reports a zero
+total, a segment past the total, a `Duration` overflow or a non-finite
+keyframe as a `KeyframesError`.
 
 ```rust
-use flui_animation::{Animatable, FloatTween, TweenSequence, TweenSequenceItem};
+use std::time::Duration;
+use flui_animation::{Animatable, Curves, Keyframes};
 
-let sequence = TweenSequence::new(vec![
-    TweenSequenceItem::new(FloatTween::new(0.0, 100.0), 1.0),
-    TweenSequenceItem::new(FloatTween::new(100.0, 100.0), 2.0), // hold
-    TweenSequenceItem::new(FloatTween::new(100.0, 0.0), 1.0),
-]);
+let ms = Duration::from_millis;
+// Keys 0, 1, 0 at 0, 1, 2 s on a spline: half way up at 0.5 s.
+let arc = Keyframes::builder(0.0, ms(2000))
+    .cubic(1.0, ms(1000))
+    .cubic(0.0, ms(1000))
+    .build()
+    .expect("fits");
+assert!((arc.value_at(ms(500)) - 0.5).abs() < 1e-12);
+assert_eq!(arc.value_at(ms(1000)), 1.0);
 
-// Weights: 1 + 2 + 1 = 4
-// t ∈ [0.00, 0.25] → first tween
-// t ∈ [0.25, 0.75] → second tween (hold at 100)
-// t ∈ [0.75, 1.00] → third tween
-assert!((sequence.transform(0.5) - 100.0).abs() < 1e-9);
+// One controller's progress reads every track of a group at one time.
+let fade = Keyframes::builder(1.0, ms(2000))
+    .hold(ms(1000)) // a delay is a leading hold
+    .to(0.0, ms(1000), Curves::EaseIn)
+    .build()
+    .expect("fits");
+assert_eq!(fade.transform(0.5), 1.0);
 ```
+
+Repeat with a repeating controller (or `value_at_looped`). `Stagger` gives
+element `i` of `n` the delay `step · |origin − i|` (`First`, `Last`,
+`Center`, `Index`), so one controller drives every element:
+`track.value_at_looped(elapsed + track.total() - stagger.delay(i, n))`.
 
 ### Chaining and Composition
 
 ```rust
-use flui_animation::{AnimatableExt, Curves, FloatTween};
-# let tween = FloatTween::new(0.0, 100.0);
-# let tween1 = FloatTween::new(0.0, 1.0);
-# let tween2 = FloatTween::new(0.0, 100.0);
-
-// Apply curve
-let eased = tween.with_curve(Curves::EaseIn);
-
-// Chain tweens: tween1's output is tween2's `t`
-let chained = tween1.chain(tween2);
+use flui_animation::{ChainedTween, CurveTween, Curves, FloatTween, ReverseTween};
+let tween = FloatTween::new(0.0, 100.0);
+// A curve, then a value tween
+let eased = ChainedTween::new(CurveTween::new(Curves::EaseIn), tween);
 
 // Reverse
-let reversed = tween.reversed();
+let reversed = ReverseTween::new(tween);
 ```
 
 ---
@@ -370,7 +395,7 @@ Apply curve to animation output:
 ```rust
 # use std::sync::Arc;
 # use std::time::Duration;
-# use flui_animation::{AnimationController, AnimationExt, Curves};
+# use flui_animation::{AnimationController, Curves};
 # use flui_scheduler::UpdateScheduler;
 use flui_animation::CurvedAnimation;
 # let scheduler = UpdateScheduler::new();
@@ -381,8 +406,6 @@ let curved = CurvedAnimation::new(
     Curves::EaseInOut,
 );
 
-// Or with extension
-let curved = Arc::new(controller.clone()).curved(Curves::EaseInOut);
 # controller.dispose();
 ```
 
@@ -413,7 +436,7 @@ let pixels = animated.value(); // 0.0 to 300.0
 ```rust
 # use std::sync::Arc;
 # use std::time::Duration;
-# use flui_animation::{AnimationController, AnimationExt};
+# use flui_animation::{AnimationController};
 # use flui_scheduler::UpdateScheduler;
 use flui_animation::ReverseAnimation;
 # let scheduler = UpdateScheduler::new();
@@ -423,8 +446,6 @@ let reversed = ReverseAnimation::new(Arc::new(controller.clone()));
 // value = 1.0 - parent.value()
 // Forward ↔ Reverse, Completed ↔ Dismissed
 
-// Or with extension
-let reversed = Arc::new(controller.clone()).reversed();
 # controller.dispose();
 ```
 
@@ -432,7 +453,7 @@ let reversed = Arc::new(controller.clone()).reversed();
 
 ```rust
 # use std::sync::Arc;
-# use flui_animation::{Animation, AnimationExt, ConstantAnimation};
+# use flui_animation::{Animation, ConstantAnimation};
 use flui_animation::{AnimationOperator, CompoundAnimation};
 # let a = ConstantAnimation::new(0.25);
 # let b = ConstantAnimation::new(0.75);
@@ -443,9 +464,6 @@ let sum = CompoundAnimation::new(a_dyn.clone(), b_dyn.clone(), AnimationOperator
 let min = CompoundAnimation::new(a_dyn.clone(), b_dyn.clone(), AnimationOperator::Min);
 let mean = CompoundAnimation::mean(a_dyn, b_dyn);
 
-// With extensions
-let sum = Arc::new(a.clone()).add(Arc::new(b.clone()));
-let diff = Arc::new(a).subtract(Arc::new(b));
 ```
 
 ### ProxyAnimation
@@ -627,24 +645,6 @@ controller, it does not copy it.
 let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
 let curved1 = CurvedAnimation::new(Arc::new(controller.clone()), Curves::EaseIn);
 let curved2 = CurvedAnimation::new(Arc::new(controller.clone()), Curves::EaseOut);
-# controller.dispose();
-```
-
-### Prefer Extension Traits
-
-```rust
-# use std::sync::Arc;
-# use std::time::Duration;
-# use flui_animation::{AnimationController, AnimationExt, CurvedAnimation, Curves};
-# use flui_scheduler::UpdateScheduler;
-# let scheduler = UpdateScheduler::new();
-# let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
-# let curve = Curves::EaseIn;
-// Verbose
-let curved = CurvedAnimation::new(Arc::new(controller.clone()), curve);
-
-// Fluent
-let curved = Arc::new(controller.clone()).curved(curve);
 # controller.dispose();
 ```
 
