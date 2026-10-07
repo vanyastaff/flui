@@ -1,4 +1,4 @@
-//! Owner-local drag recognition with one admitted contact.
+//! Owner-local drag recognition with explicit touch continuation policy.
 use super::{
     callback_containment::{
         finish_containment, invoke_callback, retire_callback, retire_callbacks,
