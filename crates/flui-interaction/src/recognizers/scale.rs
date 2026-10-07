@@ -482,6 +482,9 @@ impl ScaleState {
     fn sample(&mut self) -> Option<Measure> {
         let measure = Measure::of(&self.contacts)?;
         let global = Measure::of_positions(&self.contacts, |contact| contact.global_position)?;
+        if !(measure.focal - self.previous_focal).is_finite() {
+            return None;
+        }
         let mut baseline = self.baseline.unwrap_or(measure);
         // A degenerate baseline axis is re-measured from the first usable
         // span, so the factor holds there instead of dividing by zero.
