@@ -14,7 +14,7 @@ shared with other builds, so read them as orders of magnitude and as a
 regression baseline, not as a hardware promise. Reproduce with:
 
 ```bash
-cargo bench -p flui-animation --bench animation_bench
+cargo bench -p flui-animation --bench animation_bench --bench vsync_registry
 ```
 
 ### Controller frame path
@@ -195,8 +195,8 @@ them. What matters for cost is what each type holds:
 | Type | Holds |
 |------|-------|
 | `AnimationController` | two `Arc`s (state behind one `parking_lot::Mutex`, and the value notifier); `clone()` shares the controller |
-| `CurvedAnimation<C>` | the parent `Arc<dyn Animation<f64>>`, the curve(s) and its parent subscription |
-| `TweenAnimation<T, A>` | the parent `Arc<dyn Animation<f64>>` and the animatable |
+| `CurvedAnimation<C>` | the curve(s) and one `Arc` of links: the parent `Arc<dyn Animation<f64>>`, a notifier, a curve-direction `Mutex` and two parent subscriptions (value and status) |
+| `TweenAnimation<T, A>` | the parent `Arc<dyn Animation<f64>>`, the animatable, a notifier and a parent subscription |
 | `ReverseAnimation` | the parent `Arc<dyn Animation<f64>>`, a notifier and a parent subscription |
 | `CompoundAnimation` | two parent `Arc<dyn Animation<f64>>`s, a notifier and two parent subscriptions |
 | `ConstantAnimation<T>` | the value and a status; no notifier, since it never changes |
@@ -262,9 +262,10 @@ let value = animation.value(); // dynamic dispatch into the curved layer
 
 ## Listener overhead
 
-Value and status listeners are `Arc<dyn Fn ...>` callbacks. Registering one
-allocates the `Arc` once; reusing one callback across several animations
-shares that allocation:
+Value and status listeners are `Arc<dyn Fn ...>` callbacks. Reusing one
+callback across several animations shares its `Arc` and captures, but
+`add_listener` still wraps each registration in a fresh `Arc` (plus any map
+growth), so every registration costs at least one allocation:
 
 ```rust
 # use std::sync::Arc;
@@ -276,7 +277,7 @@ use flui_foundation::{Listenable, ListenerCallback};
 # let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
 # let other = AnimationController::new(Duration::from_millis(300), &scheduler);
 
-// One allocation, two registrations
+// The captures are shared; each registration still allocates its own wrapper
 let callback: ListenerCallback = Arc::new(|| println!("changed"));
 controller.add_listener(Arc::clone(&callback));
 other.add_listener(callback);

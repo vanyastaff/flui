@@ -840,7 +840,10 @@ Why not just Drop?
 
 These are defects, recorded here so the document matches the code until the
 controller rework lands; each has an ignored `contract:` test row that pins
-the intended behaviour.
+the intended behaviour (`cargo nextest run -p flui-animation --run-ignored only`):
+`tests/contracts/controller_robustness.rs` (disposed controller, curved-run
+finiteness and bounds), `tests/contracts/status_delivery.rs` (listener and
+`Vsync` walk panics, switch reentry) and `tests/contracts/ownership.rs`.
 
 - After `dispose`, `set_value` still changes the value, listener registration
   is still accepted, and value listeners stay attached.

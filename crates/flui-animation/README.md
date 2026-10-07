@@ -30,10 +30,10 @@ The separation allows:
 
 | Variant | Meaning |
 |---------|---------|
-| `Dismissed` | Stopped at the beginning (value = lower bound) |
+| `Dismissed` | Settled after a reverse run or a reset; the value is the lower bound only if the run finished (a `stop` mid-reverse leaves it between the bounds) |
 | `Forward` | Running toward the end |
 | `Reverse` | Running toward the beginning |
-| `Completed` | Stopped at the end (value = upper bound) |
+| `Completed` | Settled after a forward run; the value is the upper bound only if the run finished (a `stop` mid-forward leaves it between the bounds) |
 
 ```rust
 use flui_animation::AnimationStatus;
@@ -76,8 +76,10 @@ let controller = AnimationController::builder(duration, &scheduler)
 
 ### Driving Animations
 
-Every driving method returns a `TickerFuture` that resolves when the run
-ends; dropping it does not cancel the run.
+Every run-starting method (`forward`, `reverse`, `*_from`, `animate_to`,
+`repeat*`, `fling*`, `animate_with`) returns a `TickerFuture` that resolves
+when the run ends; dropping it does not cancel the run. `stop` and `reset`
+return `Result<(), AnimationError>` and give no future.
 
 ```rust
 # use std::time::Duration;
@@ -509,7 +511,7 @@ let switch = AnimationSwitch::new(Arc::new(anim1.clone()), Some(Arc::new(anim2.c
 
 ### AnimationExt
 
-`AnimationExt` is implemented for every sized `Animation<f64>`; its methods
+`AnimationExt` is implemented for every sized, `'static` `Animation<f64>`; its methods
 take `self: Arc<Self>` and return the composed animation by value.
 
 ```rust
@@ -704,7 +706,7 @@ Fallible operations return `Result<_, AnimationError>`:
 | `InvalidBounds(String)` | `lower >= upper`, a non-finite bound or span, or a bad `repeat_with` range |
 | `TickerNotAvailable` | Declared for a missing ticker; no current operation returns it |
 | `InvalidSpring(String)` | An underdamped (oscillating) spring passed to `fling_with`; use `animate_with` for those |
-| `NonFiniteTarget(String)` | A non-finite target, `from`, fling velocity or simulation start |
+| `NonFiniteTarget(String)` | A `NaN` target or `from` (always), an infinite one when the bound it would clamp to is itself infinite (on a bounded controller infinities clamp to the bound), or a non-finite fling velocity or simulation start |
 
 ```rust
 # use std::time::Duration;
