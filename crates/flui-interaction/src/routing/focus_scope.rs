@@ -336,7 +336,8 @@ enum FocusNodeRegistrationKind {
 ///
 /// A registration is returned by
 /// [`FocusNode::register_on_key_event`],
-/// [`FocusNode::register_rect_provider`] or [`FocusNode::register_context`].
+/// [`FocusNode::register_rect_provider`], [`FocusNode::register_context`],
+/// [`FocusNode::register_traversal_group`] or [`FocusNode::register_traversal_overrides`].
 /// Dropping it clears the installed
 /// value only when no later writer has replaced that property. This lets a
 /// widget clean up the callback it installed without erasing newer
