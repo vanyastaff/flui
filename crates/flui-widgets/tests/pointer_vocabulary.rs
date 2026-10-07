@@ -15,7 +15,7 @@ use flui_platform_api::{
         ScrollPhase, ScrollPrecision, ScrollUnit,
     },
 };
-use flui_view::IntoView;
+use flui_view::{IntoView, ViewExt};
 use flui_widgets::{Listener, ScrollController, Scrollable, SingleChildScrollView, SizedBox};
 
 fn viewer(
