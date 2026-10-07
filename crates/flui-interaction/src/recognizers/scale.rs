@@ -552,7 +552,6 @@ pub struct ScaleGestureRecognizerBuilder {
 impl std::fmt::Debug for ScaleGestureRecognizerBuilder {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ScaleGestureRecognizerBuilder")
-            .field("arena", &self.arena)
             .field("settings", &self.settings)
             .finish_non_exhaustive()
     }
