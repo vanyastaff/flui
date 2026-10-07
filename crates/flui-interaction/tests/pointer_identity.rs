@@ -1,6 +1,9 @@
 //! Cached contact routing distinguishes identity from changing pointer metadata.
 
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
 use flui_foundation::{RenderId, geometry::Point};
 use flui_interaction::{GestureBinding, HitTestEntry, HitTestResult, InteractionLane};
@@ -203,10 +206,140 @@ fn role_change_keeps_the_same_contact() {
     );
 }
 
+fn metadata_boundary_failure_preserves_the_newer_delivery_debt() {
+    let lane = InteractionLane::try_new().expect("interaction lane");
+    let handle = lane.dispatch_handle();
+    let binding = GestureBinding::new();
+    let own = source(11, PointerKind::Pen { tool: PenTool::Tip });
+    let changed = source(
+        11,
+        PointerKind::Pen {
+            tool: PenTool::Eraser,
+        },
+    );
+    let fail = Rc::new(Cell::new(true));
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    lane.enter(|| {
+        let should_fail = fail.clone();
+        let log = seen.clone();
+        let target = handle.register_pointer(move |dispatch| {
+            log.borrow_mut().push(dispatch.local.clone());
+            if matches!(dispatch.local, PointerEvent::Move(movement) if movement.pointer.kind == PointerKind::Pen { tool: PenTool::Tip })
+                && should_fail.replace(false)
+            {
+                panic!("older metadata packet first failure");
+            }
+        }).expect("pointer target");
+        let mut path = HitTestResult::new();
+        path.add(HitTestEntry::new(RenderId::new(1)).pointer_target(target));
+        let started = down(own, 10);
+        let older = PointerEvent::Move(PointerMove::new(own, PointerButtons::only(PointerButton::PRIMARY), sample(20, 20.0)));
+        let newer = PointerEvent::Move(PointerMove::new(changed, PointerButtons::only(PointerButton::PRIMARY), sample(30, 30.0)));
+        binding.handle_pointer_event_with_result(&started, &path);
+        binding.handle_pointer_event_with_result(&older, &HitTestResult::new());
+        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            binding.handle_pointer_event_with_result(&newer, &HitTestResult::new());
+        })).expect_err("crossing metadata delivers the earlier packet");
+        assert_eq!(failure.downcast_ref::<&str>(), Some(&"older metadata packet first failure"));
+        assert!(binding.has_pending_moves(), "newer accepted packet survives first callback failure");
+        binding.flush_pending_moves();
+        let finished = up(changed, 40);
+        binding.handle_pointer_event_with_result(&finished, &HitTestResult::new());
+        assert_eq!(*seen.borrow(), [started, older, newer, finished]);
+        assert_eq!(binding.active_pointer_count(), 0);
+    });
+}
+
+fn metadata_boundary_reentry_does_not_restore_a_stale_newer_packet() {
+    let lane = InteractionLane::try_new().expect("interaction lane");
+    let handle = lane.dispatch_handle();
+    let binding = Rc::new(GestureBinding::new());
+    let own = source(11, PointerKind::Pen { tool: PenTool::Tip });
+    let changed = source(
+        11,
+        PointerKind::Pen {
+            tool: PenTool::Eraser,
+        },
+    );
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    lane.enter(|| {
+        let log = seen.clone();
+        let replacement = handle
+            .register_pointer(move |dispatch| {
+                log.borrow_mut()
+                    .push(("replacement", dispatch.local.clone()))
+            })
+            .expect("replacement target");
+        let mut replacement_path = HitTestResult::new();
+        replacement_path.add(HitTestEntry::new(RenderId::new(2)).pointer_target(replacement));
+        let restarted = down(own, 60);
+        let reentrant_down = restarted.clone();
+        let nested = binding.clone();
+        let log = seen.clone();
+        let target = handle
+            .register_pointer(move |dispatch| {
+                log.borrow_mut().push(("original", dispatch.local.clone()));
+                if matches!(dispatch.local, PointerEvent::Move(_)) {
+                    nested.handle_pointer_event_with_result(&reentrant_down, &replacement_path);
+                }
+            })
+            .expect("pointer target");
+        let mut path = HitTestResult::new();
+        path.add(HitTestEntry::new(RenderId::new(1)).pointer_target(target));
+        let started = down(own, 10);
+        let older = PointerEvent::Move(PointerMove::new(
+            own,
+            PointerButtons::only(PointerButton::PRIMARY),
+            sample(20, 20.0),
+        ));
+        let newer = PointerEvent::Move(PointerMove::new(
+            changed,
+            PointerButtons::only(PointerButton::PRIMARY),
+            sample(30, 30.0),
+        ));
+        binding.handle_pointer_event_with_result(&started, &path);
+        binding.handle_pointer_event_with_result(&older, &HitTestResult::new());
+        binding.handle_pointer_event_with_result(&newer, &HitTestResult::new());
+        assert_eq!(
+            seen.borrow().as_slice(),
+            &[
+                ("original", started.clone()),
+                ("original", older.clone()),
+                ("replacement", restarted.clone())
+            ]
+        );
+        assert_eq!(
+            binding.flush_pending_moves(),
+            0,
+            "replacement must not receive the stale original metadata packet"
+        );
+        let finished = up(own, 70);
+        binding.handle_pointer_event_with_result(&finished, &HitTestResult::new());
+        assert_eq!(
+            *seen.borrow(),
+            [
+                ("original", started),
+                ("original", older),
+                ("replacement", restarted),
+                ("replacement", finished)
+            ]
+        );
+        assert_eq!(binding.active_pointer_count(), 0);
+    });
+}
+
 #[test]
 fn pointer_identity_contracts() {
     let mut failures = Vec::new();
     for (name, row) in [
+        (
+            "metadata_boundary_failure_preserves_the_newer_delivery_debt",
+            metadata_boundary_failure_preserves_the_newer_delivery_debt as fn(),
+        ),
+        (
+            "metadata_boundary_reentry_does_not_restore_a_stale_newer_packet",
+            metadata_boundary_reentry_does_not_restore_a_stale_newer_packet,
+        ),
         (
             "foreign_move_preserves_contact",
             foreign_move_preserves_contact as fn(),
