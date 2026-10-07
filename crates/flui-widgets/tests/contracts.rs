@@ -405,6 +405,7 @@ fn animation_and_visibility() {
             ("implicit_animations::animated_container_animates_its_transform", crate::implicit_animations::animated_container_animates_its_transform),
             ("implicit_animations::animated_rotation_takes_the_shorter_arc", crate::implicit_animations::animated_rotation_takes_the_shorter_arc),
             ("implicit_animations::animated_rotation_takes_the_numeric_arc", crate::implicit_animations::animated_rotation_takes_the_numeric_arc),
+            ("implicit_animations::animated_rotation_retargets_on_a_path_change", crate::implicit_animations::animated_rotation_retargets_on_a_path_change),
             ("binding_animation::registered_controller_advances_fade_opacity_frame_to_frame", crate::binding_animation::registered_controller_advances_fade_opacity_frame_to_frame),
             ("slide_transition::build_wires_transform_hit_tests_false_into_fractional_translation", crate::slide_transition::build_wires_transform_hit_tests_false_into_fractional_translation),
             ("visibility::hidden_without_maintain_state_shows_the_default_replacement", crate::visibility::hidden_without_maintain_state_shows_the_default_replacement),

@@ -411,7 +411,7 @@ pub(crate) fn animated_container_animates_its_transform() {
 struct RotationProbe {
     vsync: Vsync,
     angle: Arc<Mutex<Angle>>,
-    path: RotationPath,
+    path: Arc<Mutex<RotationPath>>,
 }
 
 struct RotationProbeState {
@@ -433,7 +433,7 @@ impl ViewState<RotationProbe> for RotationProbeState {
         VsyncScope::new(
             self.probe.vsync.clone(),
             AnimatedRotation::new(*self.probe.angle.lock(), SizedBox::new(10.0, 10.0))
-                .path(self.probe.path)
+                .path(*self.probe.path.lock())
                 .duration(RUN)
                 .curve(Curves::Linear),
         )
@@ -448,7 +448,7 @@ fn rotation_at_half_way(path: RotationPath) -> f64 {
     let probe = RotationProbe {
         vsync: vsync.clone(),
         angle: Arc::clone(&angle),
-        path,
+        path: Arc::new(Mutex::new(path)),
     };
     let mut laid = lay_out_animated(probe, loose(200.0), vsync);
     *angle.lock() = Angle::from_turns(0.75);
@@ -475,4 +475,41 @@ pub(crate) fn animated_rotation_takes_the_numeric_arc() {
         (turns - 0.375).abs() < 1e-9,
         "numeric half way: {turns} turns"
     );
+}
+
+/// Changing only the path mid-run re-anchors from the angle shown now: a
+/// `Numeric` 0 → ¾ turn switched to `Shorter` a quarter of the way turns back.
+pub(crate) fn animated_rotation_retargets_on_a_path_change() {
+    let vsync = Vsync::new();
+    let angle = Arc::new(Mutex::new(Angle::ZERO));
+    let path = Arc::new(Mutex::new(RotationPath::Numeric));
+    let probe = RotationProbe {
+        vsync: vsync.clone(),
+        angle: Arc::clone(&angle),
+        path: Arc::clone(&path),
+    };
+    let mut laid = lay_out_animated(probe, loose(200.0), vsync);
+    *angle.lock() = Angle::from_turns(0.75);
+    laid.pump();
+    laid.pump_for(FRAME); // detection
+    laid.pump_for(RUN / 4);
+    let transform = laid.find_by_render_type("RenderTransform");
+    let before = laid.transform_rotation(transform) / std::f64::consts::TAU;
+    assert!(
+        before > 0.1 && before < 0.3,
+        "a quarter of the way: {before} turns"
+    );
+    *path.lock() = RotationPath::Shorter;
+    laid.pump();
+    laid.pump_for(FRAME); // detection
+    // Kept short so both candidate angles stay inside (-½, ½] turn, where the
+    // read-back rotation is unambiguous.
+    laid.pump_for(RUN / 10);
+    let transform = laid.find_by_render_type("RenderTransform");
+    let after = laid.transform_rotation(transform) / std::f64::consts::TAU;
+    assert!(
+        after < before,
+        "the shorter arc turns back from {before}: now {after} turns"
+    );
+    assert!(after > 0.0, "still short of the target: {after} turns");
 }

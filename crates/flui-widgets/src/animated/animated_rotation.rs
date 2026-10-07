@@ -120,6 +120,8 @@ pub struct AnimatedRotationState {
     /// The last configured angle, compared to detect a new target. With
     /// [`RotationPath::Shorter`] the tween's end is an equivalent of it, not it.
     target: Angle,
+    /// The path the running tween was laid out for; a change re-anchors it.
+    path: RotationPath,
     tween: Tween<Angle>,
     proxy: ProxyAnimation<f64>,
     child: BoxedView,
@@ -145,6 +147,7 @@ impl StatefulView for AnimatedRotation {
         AnimatedRotationState {
             controller,
             target: self.angle,
+            path: self.path,
             tween,
             proxy,
             child: self.child.clone(),
@@ -168,7 +171,7 @@ impl ViewState<AnimatedRotation> for AnimatedRotationState {
         self.controller.set_duration(new_view.duration);
         // The curve swaps first, so the angle shown now is read on the new curve.
         let curve_changed = self.controller.set_curve(new_view.curve.clone());
-        let target_changed = new_view.angle != self.target;
+        let target_changed = new_view.angle != self.target || new_view.path != self.path;
         if target_changed {
             let from = self.tween.transform(self.controller.value());
             let to = match new_view.path {
@@ -178,6 +181,7 @@ impl ViewState<AnimatedRotation> for AnimatedRotationState {
                 RotationPath::Shorter => new_view.angle.nearest_equivalent(from),
             };
             self.target = new_view.angle;
+            self.path = new_view.path;
             self.tween = Tween::new(from, to);
             self.controller.restart_from_zero();
         }
