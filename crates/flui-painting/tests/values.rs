@@ -794,6 +794,7 @@ pub(crate) fn decoration_gradient_centers_fall_back_after_bounds_scaling() {
 }
 
 pub(crate) fn decoration_silhouette_and_terminal_fallback() {
+    decoration_interior_fallbacks();
     let a = BoxDecoration::<f64>::with_gradient(Gradient::Sweep(SweepGradient::centered(vec![
         Color::RED,
         Color::BLUE,
@@ -830,6 +831,57 @@ pub(crate) fn decoration_silhouette_and_terminal_fallback() {
             panic!("sweep fill");
         };
         assert_eq!(center.dy, 0.0, "circle={circle}, chained={chained}");
+    }
+}
+
+fn decoration_interior_fallbacks() {
+    let start =
+        BoxDecoration::<f64>::with_gradient(Gradient::Sweep(SweepGradient::centered(vec![
+            Color::RED,
+            Color::BLUE,
+        ])));
+    let mut end = start.clone();
+    let Some(Gradient::Sweep(sweep)) = &mut end.gradient else {
+        panic!("sweep endpoint");
+    };
+    sweep.center.y = -1.0;
+    let overshot = BoxDecoration::lerp(&start, &end, 10.0);
+    let empty = BoxDecoration::new();
+    let mut replaced = overshot.clone();
+    replaced.gradient.clone_from(&start.gradient);
+    let record = |decoration: &BoxDecoration<f64>, height| {
+        let mut canvas = flui_painting::Canvas::new();
+        flui_painting::paint_box_decoration(
+            &mut canvas,
+            Rect::from_xywh(0.0, 0.0, 100.0, height),
+            decoration,
+            flui_painting::DecorationPaintOptions::default(),
+        );
+        let list = canvas.finish();
+        let flui_painting::DrawOp::Rect { paint, .. } =
+            &list.iter().next().expect("gradient fill").op
+        else {
+            panic!("rect fill");
+        };
+        paint.shader.clone().expect("gradient shader")
+    };
+    for (name, a, b, bounded_a, bounded_b) in [
+        ("equal", &overshot, &overshot, &end, &end),
+        ("left", &overshot, &start, &end, &start),
+        ("right", &start, &overshot, &start, &end),
+        ("fade out", &overshot, &empty, &end, &empty),
+        ("fade in", &empty, &overshot, &empty, &end),
+        ("replaced", &replaced, &overshot, &start, &end),
+    ] {
+        let mixed = BoxDecoration::lerp(a, b, 0.5);
+        let bounded = BoxDecoration::lerp(bounded_a, bounded_b, 0.5);
+        assert_eq!(record(&mixed, 2e38), record(&bounded, 2e38), "{name}");
+        let raw = BoxDecoration::with_gradient(mixed.gradient.clone().expect("raw gradient"));
+        assert_eq!(
+            record(&mixed, 100.0),
+            record(&raw, 100.0),
+            "{name}: retain representable raw geometry"
+        );
     }
 }
 

@@ -351,11 +351,7 @@ where
                         _ => {}
                     }
                     if &gradient != bounded {
-                        let terminal = endpoint
-                            .gradient_fallback
-                            .as_deref()
-                            .filter(|(raw, _)| raw == bounded)
-                            .map_or(bounded, |(_, fallback)| fallback);
+                        let terminal = endpoint.terminal_gradient().unwrap_or(bounded);
                         endpoint.gradient_fallback =
                             Some(Box::new((gradient.clone(), terminal.clone())));
                     }
@@ -396,13 +392,21 @@ where
             (None, Some(shadows)) => Some(scale_shadows(shadows, fade_b)),
             (None, None) => None,
         };
-        let gradient = match (&a.gradient, &b.gradient) {
+        let mix_gradient = |a: Option<&Gradient>, b: Option<&Gradient>| match (a, b) {
             (Some(a_grad), Some(b_grad)) => Gradient::lerp(a_grad, b_grad, gradient_t)
                 .or_else(|| Gradient::lerp(a_grad, b_grad, t)),
             (Some(gradient), None) => Some(scale_gradient(gradient, fade_a)),
             (None, Some(gradient)) => Some(scale_gradient(gradient, fade_b)),
             (None, None) => None,
         };
+        let gradient = mix_gradient(a.gradient.as_ref(), b.gradient.as_ref());
+        let gradient_fallback = gradient.as_ref().and_then(|raw| {
+            if a.gradient_fallback.is_none() && b.gradient_fallback.is_none() {
+                return None;
+            }
+            let bounded = mix_gradient(a.terminal_gradient(), b.terminal_gradient())?;
+            (raw != &bounded).then(|| Box::new((raw.clone(), bounded)))
+        });
 
         // Images are not crossfaded; they switch at the midpoint.
         let image = if t < 0.5 {
@@ -421,9 +425,19 @@ where
             border_radius,
             box_shadow,
             gradient,
-            gradient_fallback: None,
+            gradient_fallback,
             shape,
         }
+    }
+
+    /// Ignore retained state after direct replacement of the public gradient.
+    fn terminal_gradient(&self) -> Option<&Gradient> {
+        self.gradient.as_ref().map(|gradient| {
+            self.gradient_fallback
+                .as_deref()
+                .filter(|(raw, _)| raw == gradient)
+                .map_or(gradient, |(_, bounded)| bounded)
+        })
     }
 }
 
