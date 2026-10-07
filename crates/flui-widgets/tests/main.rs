@@ -115,8 +115,6 @@ mod shortcuts;
 mod signals;
 #[path = "signals_legal_shapes.rs"]
 mod signals_legal_shapes;
-#[path = "slide_transition.rs"]
-mod slide_transition;
 #[path = "sliver_persistent_header.rs"]
 mod sliver_persistent_header;
 #[path = "stack_positioned.rs"]
@@ -135,6 +133,8 @@ mod text_field_widget;
 mod text_store_kit;
 #[path = "transition_route.rs"]
 mod transition_route;
+#[path = "transitions.rs"]
+mod transitions;
 #[path = "visibility.rs"]
 mod visibility;
 #[path = "widgets_app.rs"]

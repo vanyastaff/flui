@@ -156,28 +156,67 @@ impl Matrix4 {
         self.m.map(|v| v as f32)
     }
 
-    /// Interpolates toward `other` by decomposing both matrices into
-    /// scale / rotation / translation, lerping the scale and translation and
-    /// **slerping** the rotation, then recomposing.
+    /// Interpolates toward `other` by decomposition, the way CSS Transforms 2 interpolates
+    /// 3D matrices ("Decomposing a 3D matrix").
     ///
-    /// This is the correct way to interpolate an affine transform: a naive
-    /// component-wise lerp of the 16 elements shears and distorts rotation
-    /// (a 90° rotation lerped element-wise collapses through a degenerate
-    /// matrix at `t = 0.5`). `t` is not clamped, so it extrapolates.
+    /// Each matrix is split into perspective, translation, scale, skew and a rotation
+    /// quaternion. The parts interpolate linearly, except the rotation, which is slerped
+    /// along the shorter arc; the result is recomposed. An element-wise lerp would instead
+    /// shear a rotation (a 90° turn passes through a degenerate matrix half way).
     ///
-    /// Decomposition assumes an SRT-composable matrix (the common UI case:
-    /// translate/rotate/scale); skew and perspective components are not
-    /// preserved.
-    #[inline]
+    /// - `t == 0.0` returns `self` and `t == 1.0` returns `other`, bit for bit; other values,
+    ///   including those outside `[0, 1]`, extrapolate.
+    /// - An endpoint whose linear part collapses an axis (a zero scale) has no orientation
+    ///   of its own and takes the other endpoint's rotation and skew, so a scale-in from
+    ///   zero grows in place instead of spinning. Two collapsed endpoints interpolate
+    ///   without rotation or skew.
+    /// - A matrix that cannot be decomposed (`m33 == 0`, an `m33` so small that normalising by it overflows, or a perspective row over a
+    ///   singular linear part) switches discretely: `self` for `t < 0.5`, `other` from
+    ///   `t >= 0.5`.
+    /// - Finite endpoints give a finite result for any finite `t` short of overflowing the
+    ///   extrapolated parts. A non-finite element in either endpoint, or a NaN `t`, falls
+    ///   back to element-wise interpolation, so the non-finite value carries through.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_foundation::geometry::Matrix4;
+    ///
+    /// let mid = Matrix4::scaling(0.0, 0.0, 1.0).lerp(Matrix4::IDENTITY, 0.5);
+    /// assert!(mid.approx_eq(&Matrix4::scaling(0.5, 0.5, 1.0)));
+    /// ```
     #[must_use]
     pub fn lerp(self, other: Self, t: f64) -> Self {
-        let (scale_a, rot_a, trans_a) = self.to_glam().to_scale_rotation_translation();
-        let (scale_b, rot_b, trans_b) = other.to_glam().to_scale_rotation_translation();
-        Self::from_glam(DMat4::from_scale_rotation_translation(
-            scale_a.lerp(scale_b, t),
-            rot_a.slerp(rot_b, t),
-            trans_a.lerp(trans_b, t),
-        ))
+        use super::matrix4_decompose::{Decomposed, decompose};
+
+        if t == 0.0 {
+            return self;
+        }
+        if t == 1.0 || self.m == other.m {
+            // Identical endpoints are a constant; a collapsed rotated matrix would
+            // otherwise lose the orientation its decomposition cannot recover.
+            return other;
+        }
+        let finite = |m: &Self| m.m.iter().all(|v| v.is_finite());
+        if t.is_nan() || !finite(&self) || !finite(&other) {
+            return Self {
+                m: std::array::from_fn(|i| self.m[i] + (other.m[i] - self.m[i]) * t),
+            };
+        }
+        let (from, to) = match (decompose(&self), decompose(&other)) {
+            (Decomposed::Singular, _) | (_, Decomposed::Singular) => {
+                return if t < 0.5 { self } else { other };
+            }
+            (Decomposed::Full(from), Decomposed::Full(to))
+            | (Decomposed::Collapsed(from), Decomposed::Collapsed(to)) => (from, to),
+            (Decomposed::Full(from), Decomposed::Collapsed(to)) => {
+                (from, to.with_orientation_of(&from))
+            }
+            (Decomposed::Collapsed(from), Decomposed::Full(to)) => {
+                (from.with_orientation_of(&to), to)
+            }
+        };
+        from.interpolate(&to, t).recompose()
     }
 
     /// Identity matrix constant (no transformation).

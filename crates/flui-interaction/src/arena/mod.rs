@@ -779,6 +779,9 @@ pub enum SweepModel {
 /// first-up `hold` run before the sweep, so the sweep observes the hold
 /// and defers). A held arena leaves the pointer's active slot on that sweep,
 /// so the pointer's next Down opens a fresh arena.
+///
+/// No workspace code calls it: `GestureBinding` runs the same sequence inline
+/// (`binding.rs`). Kept public for standalone arena users and tests.
 pub fn run_pointer_lifecycle(arena: &GestureArena, event: &crate::events::PointerEvent) {
     use crate::events::PointerEvent;
     let pointer = crate::events::extract_pointer_id(event);
