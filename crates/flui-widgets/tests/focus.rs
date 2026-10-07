@@ -187,7 +187,7 @@ fn reading_order_tree(
         geometry.len(),
         "each focus stop has real positioned geometry"
     );
-    let fields = nodes
+    let fields: Vec<_> = nodes
         .iter()
         .zip(geometry)
         .map(|(node, &(left, top, width, height))| {

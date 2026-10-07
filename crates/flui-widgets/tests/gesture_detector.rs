@@ -75,7 +75,9 @@ pub(crate) fn unmount_mid_drag_cancels_once_and_hands_the_arena_to_the_rival() {
         if gate.get() {
             let cancels = Rc::clone(&cancels);
             GestureDetector::new()
-                .on_horizontal_drag_start(|_, _| panic!("the retired contender must not start"))
+                .on_horizontal_drag_start(|_, _| -> () {
+                    panic!("the retired contender must not start")
+                })
                 .on_horizontal_drag_cancel(move |_| cancels.set(cancels.get() + 1))
                 .child(child).into_view().boxed()
         } else { child.into_view().boxed() }
