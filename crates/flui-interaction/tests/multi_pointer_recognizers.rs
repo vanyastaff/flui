@@ -14,7 +14,7 @@ use std::{
 use flui_foundation::geometry::Offset;
 use flui_interaction::arena::GestureArena;
 use flui_interaction::events::{
-    PointerEvent, PointerType, make_cancel_event_for_id, make_down_event_for_id,
+    PointerEvent, PointerKind, make_cancel_event_for_id, make_down_event_for_id,
     make_move_event_for_id, make_up_event_for_id,
 };
 use flui_interaction::recognizers::scale::{ScaleEndDetails, ScaleUpdateDetails};
@@ -41,17 +41,18 @@ struct Rig {
 }
 
 fn id(raw: u64) -> PointerId {
-    PointerId::new(raw).expect("nonzero pointer id")
+    PointerId::new(std::num::NonZeroU64::new(raw).expect("nonzero pointer id"))
 }
 
 fn pointer_of(event: &PointerEvent) -> Option<u64> {
     let info = match event {
-        PointerEvent::Down(data) | PointerEvent::Up(data) => &data.pointer,
+        PointerEvent::Down(data) => &data.pointer,
+        PointerEvent::Up(data) => &data.pointer,
         PointerEvent::Move(data) => &data.pointer,
-        PointerEvent::Cancel(info) => info,
+        PointerEvent::Cancel(info) => &info.pointer,
         _ => return None,
     };
-    info.pointer_id.map(|p| p.get_inner().get())
+    Some(info.id.get().get())
 }
 
 impl Rig {
@@ -125,41 +126,59 @@ impl Rig {
             .handle_pointer_event(event, |_| HitTestResult::new());
     }
 
-    fn down_with(&self, pointer: u64, x: f64, y: f64, kind: PointerType, pressure: f32) {
-        let mut event = make_down_event_for_id(id(pointer), Offset::new(x, y), kind);
+    fn down_with(&self, pointer: u64, x: f64, y: f64, kind: PointerKind, pressure: f32) {
+        let mut event = make_down_event_for_id(id(pointer), Offset::new(x, y), kind)
+            .expect("valid fixture sample");
         if let PointerEvent::Down(data) = &mut event {
-            data.state.pressure = pressure;
+            data.sample.pressure = Some(
+                flui_platform_api::pointer::Pressure::try_new(f64::from(pressure))
+                    .expect("valid pressure fixture"),
+            );
         }
         self.send(&event);
     }
 
     fn down(&self, pointer: u64, x: f64, y: f64) {
-        self.down_with(pointer, x, y, PointerType::Touch, 0.5);
+        self.down_with(pointer, x, y, PointerKind::Touch, 0.5);
     }
 
-    fn move_with(&self, pointer: u64, x: f64, y: f64, kind: PointerType, pressure: f32) {
-        let mut event = make_move_event_for_id(id(pointer), Offset::new(x, y), kind);
+    fn move_with(&self, pointer: u64, x: f64, y: f64, kind: PointerKind, pressure: f32) {
+        let mut event = make_move_event_for_id(id(pointer), Offset::new(x, y), kind)
+            .expect("valid fixture sample");
         if let PointerEvent::Move(data) = &mut event {
-            data.current.pressure = pressure;
+            {
+                let sample = data.current().with_pressure(
+                    flui_platform_api::pointer::Pressure::try_new(f64::from(pressure))
+                        .expect("valid pressure fixture"),
+                );
+                *data =
+                    flui_interaction::events::PointerMove::new(data.pointer, data.buttons, sample)
+                        .with_modifiers(data.modifiers)
+                        .with_coalesced(data.coalesced().to_vec())
+                        .with_predicted(data.predicted().to_vec());
+            };
         }
         self.send(&event);
         self.frame();
     }
 
     fn move_to(&self, pointer: u64, x: f64, y: f64) {
-        self.move_with(pointer, x, y, PointerType::Touch, 0.5);
+        self.move_with(pointer, x, y, PointerKind::Touch, 0.5);
     }
 
-    fn up_with(&self, pointer: u64, x: f64, y: f64, kind: PointerType) {
-        self.send(&make_up_event_for_id(id(pointer), Offset::new(x, y), kind));
+    fn up_with(&self, pointer: u64, x: f64, y: f64, kind: PointerKind) {
+        self.send(
+            &make_up_event_for_id(id(pointer), Offset::new(x, y), kind)
+                .expect("valid fixture sample"),
+        );
     }
 
     fn up(&self, pointer: u64, x: f64, y: f64) {
-        self.up_with(pointer, x, y, PointerType::Touch);
+        self.up_with(pointer, x, y, PointerKind::Touch);
     }
 
     fn cancel(&self, pointer: u64) {
-        self.send(&make_cancel_event_for_id(id(pointer), PointerType::Touch));
+        self.send(&make_cancel_event_for_id(id(pointer), PointerKind::Touch));
     }
 
     /// End of input/frame: flush coalesced moves, drain lone-member wins.
@@ -444,7 +463,8 @@ fn scale_ended_from_its_start_publishes_no_update() {
             // Lifting one of two contacts from inside the start ends the scale.
             let ending = s.borrow_mut().take();
             if let Some(scale) = ending {
-                let up = make_up_event_for_id(id(1), Offset::new(50.0, 200.0), PointerType::Touch);
+                let up = make_up_event_for_id(id(1), Offset::new(50.0, 200.0), PointerKind::Touch)
+                    .expect("valid fixture sample");
                 scale.handle_event(PointerDispatch::at_root(&up));
             }
         })
@@ -606,27 +626,34 @@ fn press_on(rig: &Rig) -> (Rc<ForcePressGestureRecognizer>, Rc<PressLog>) {
 
 /// A pen with a real sensor pressing at `pressures`, in place.
 fn press(rig: &Rig, pointer: u64, pressures: &[f32]) {
-    rig.down_with(pointer, 100.0, 100.0, PointerType::Pen, 0.2);
+    rig.down_with(pointer, 100.0, 100.0, PointerKind::Pen, 0.2);
     rig.frame();
     for &pressure in pressures {
-        rig.move_with(pointer, 100.0, 100.0, PointerType::Pen, pressure);
+        rig.move_with(pointer, 100.0, 100.0, PointerKind::Pen, pressure);
     }
-    rig.up_with(pointer, 100.0, 100.0, PointerType::Pen);
+    rig.up_with(pointer, 100.0, 100.0, PointerKind::Pen);
 }
 
 fn sensorless_contacts_never_force_press() {
-    for kind in [PointerType::Mouse, PointerType::Touch] {
+    for kind in [PointerKind::Mouse, PointerKind::Touch] {
         let rig = Rig::new();
         let (press, log) = press_on(&rig);
         rig.attach(&press, None);
-        rig.down_with(1, 100.0, 100.0, kind, 0.5);
+        rig.send(
+            &make_down_event_for_id(id(1), Offset::new(100.0, 100.0), kind)
+                .expect("finite sensorless Down"),
+        );
         rig.frame();
-        rig.move_with(1, 100.0, 100.0, kind, 0.5);
+        rig.send(
+            &make_move_event_for_id(id(1), Offset::new(100.0, 100.0), kind)
+                .expect("finite sensorless Move"),
+        );
+        rig.frame();
         rig.up_with(1, 100.0, 100.0, kind);
         assert_eq!(
             log.starts.get(),
             0,
-            "{kind:?} at the W3C 0.5 is not a sensor"
+            "{kind:?} without a declared sensor must not force press"
         );
     }
 }
@@ -654,12 +681,12 @@ fn force_press_start_panic_then_next_press() {
     let (press_rec, log) = press_on(&rig);
     rig.attach(&press_rec, None);
     log.panic_start.set(true);
-    rig.down_with(1, 100.0, 100.0, PointerType::Pen, 0.2);
+    rig.down_with(1, 100.0, 100.0, PointerKind::Pen, 0.2);
     rig.frame();
     expect_panic("on_start", || {
-        rig.move_with(1, 100.0, 100.0, PointerType::Pen, 0.7);
+        rig.move_with(1, 100.0, 100.0, PointerKind::Pen, 0.7);
     });
-    rig.up_with(1, 100.0, 100.0, PointerType::Pen);
+    rig.up_with(1, 100.0, 100.0, PointerKind::Pen);
     press(&rig, 2, &[0.7]);
     assert_eq!(log.starts.get(), 2);
     assert_eq!(log.ends.get(), 2);
@@ -670,13 +697,13 @@ fn force_press_start_panic_still_delivers_peak_and_end() {
     let (press_rec, log) = press_on(&rig);
     rig.attach(&press_rec, None);
     log.panic_start.set(true);
-    rig.down_with(1, 100.0, 100.0, PointerType::Pen, 0.2);
+    rig.down_with(1, 100.0, 100.0, PointerKind::Pen, 0.2);
     rig.frame(); // the lone member wins by default
     // Start and peak are one transition; the start's panic must not drop the peak.
     expect_panic("on_start", || {
-        rig.move_with(1, 100.0, 100.0, PointerType::Pen, 0.9);
+        rig.move_with(1, 100.0, 100.0, PointerKind::Pen, 0.9);
     });
-    rig.up_with(1, 100.0, 100.0, PointerType::Pen);
+    rig.up_with(1, 100.0, 100.0, PointerKind::Pen);
     assert_eq!(
         (log.starts.get(), log.peaks.get(), log.ends.get()),
         (1, 1, 1)
@@ -687,9 +714,9 @@ fn force_press_cancel_ends_once() {
     let rig = Rig::new();
     let (press_rec, log) = press_on(&rig);
     rig.attach(&press_rec, None);
-    rig.down_with(1, 100.0, 100.0, PointerType::Pen, 0.2);
+    rig.down_with(1, 100.0, 100.0, PointerKind::Pen, 0.2);
     rig.frame();
-    rig.move_with(1, 100.0, 100.0, PointerType::Pen, 0.7);
+    rig.move_with(1, 100.0, 100.0, PointerKind::Pen, 0.7);
     rig.cancel(1);
     assert_eq!((log.starts.get(), log.ends.get()), (1, 1));
     press(&rig, 2, &[0.7]);
@@ -706,10 +733,12 @@ fn force_press_released_from_its_start_publishes_no_peak() {
             st.starts.set(st.starts.get() + 1);
             let ending = s.borrow_mut().take();
             if let Some(recognizer) = ending {
-                let up = make_up_event_for_id(id(1), Offset::new(100.0, 100.0), PointerType::Touch);
+                let up = make_up_event_for_id(id(1), Offset::new(100.0, 100.0), PointerKind::Touch)
+                    .expect("valid fixture sample");
                 recognizer.handle_event(PointerDispatch::at_root(&up));
                 let at = Offset::new(100.0, 100.0);
-                let down = make_down_event_for_id(id(1), at, PointerType::Pen);
+                let down = make_down_event_for_id(id(1), at, PointerKind::Pen)
+                    .expect("valid fixture sample");
                 recognizer.add_pointer(PointerDispatch::at_root(&down));
             }
         })
@@ -718,10 +747,10 @@ fn force_press_released_from_its_start_publishes_no_peak() {
         .build();
     rig.attach(&recognizer, None);
     *slot.borrow_mut() = Some(Rc::clone(&recognizer));
-    rig.down_with(1, 100.0, 100.0, PointerType::Pen, 0.2);
+    rig.down_with(1, 100.0, 100.0, PointerKind::Pen, 0.2);
     rig.frame(); // the lone member wins by default
     // Start and peak in one sample; the start retires the press.
-    rig.move_with(1, 100.0, 100.0, PointerType::Pen, 0.9);
+    rig.move_with(1, 100.0, 100.0, PointerKind::Pen, 0.9);
     assert_eq!(
         (log.starts.get(), log.peaks.get(), log.ends.get()),
         (1, 0, 1),
@@ -757,6 +786,10 @@ fn force_press_needs_a_sensor_and_the_arena() {
         "force press",
         &[
             ("sensor-less 0.5", sensorless_contacts_never_force_press),
+            (
+                "declared constant sensor",
+                declared_constant_pressure_sensor_force_presses,
+            ),
             (
                 "claims the arena",
                 force_press_claims_the_arena_before_starting,
@@ -840,9 +873,9 @@ fn tap_drag_on(rig: &Rig) -> (Rc<TapAndDragGestureRecognizer>, Rc<TapDragLog>) {
 }
 
 fn click(rig: &Rig, x: f64, y: f64) {
-    rig.down_with(1, x, y, PointerType::Mouse, 0.5);
+    rig.down_with(1, x, y, PointerKind::Mouse, 0.5);
     rig.frame();
-    rig.up_with(1, x, y, PointerType::Mouse);
+    rig.up_with(1, x, y, PointerKind::Mouse);
     rig.frame();
 }
 
@@ -978,7 +1011,8 @@ fn tap_down_admitting_the_next_contact_keeps_the_tap_up() {
             let ending = s.borrow_mut().take();
             if let Some(tad) = ending {
                 let at = Offset::new(300.0, 100.0);
-                let down = make_down_event_for_id(id(2), at, PointerType::Touch);
+                let down = make_down_event_for_id(id(2), at, PointerKind::Touch)
+                    .expect("valid fixture sample");
                 tad.add_pointer(PointerDispatch::at_root(&down));
             }
         })
@@ -1000,14 +1034,26 @@ fn tap_down_admitting_the_next_contact_keeps_the_tap_up() {
     assert_eq!(*log.counts.borrow(), [1]);
 }
 
-/// The same event with its position replaced by NaN, for every event after
-/// the down.
+/// The checked wire refuses nonfinite global samples before dispatch; a valid
+/// sample remains deliverable after that refusal.
 fn nan_after_down(event: &PointerEvent) -> PointerEvent {
     let pointer = id(pointer_of(event).expect("event carries an id"));
     let nan = Offset::new(f64::NAN, f64::NAN);
     match event {
-        PointerEvent::Move(_) => make_move_event_for_id(pointer, nan, PointerType::Touch),
-        PointerEvent::Up(_) => make_up_event_for_id(pointer, nan, PointerType::Touch),
+        PointerEvent::Move(_) => {
+            assert!(
+                make_move_event_for_id(pointer, nan, PointerKind::Touch).is_err(),
+                "checked wire refuses NaN Move"
+            );
+            event.clone()
+        }
+        PointerEvent::Up(_) => {
+            assert!(
+                make_up_event_for_id(pointer, nan, PointerKind::Touch).is_err(),
+                "checked wire refuses NaN Up"
+            );
+            event.clone()
+        }
         _ => event.clone(),
     }
 }
@@ -1240,8 +1286,8 @@ fn eager_cancel_in_a_self_driven_arena_awards_no_rival() {
         .on_start(move |_| counted.set(counted.get() + 1))
         .build();
     let at = Offset::new(100.0, 100.0);
-    let down = make_down_event_for_id(id(1), at, PointerType::Touch);
-    let cancel = make_cancel_event_for_id(id(1), PointerType::Touch);
+    let down = make_down_event_for_id(id(1), at, PointerKind::Touch).expect("valid fixture sample");
+    let cancel = make_cancel_event_for_id(id(1), PointerKind::Touch);
     eager.add_pointer(PointerDispatch::at_root(&down));
     rival.add_pointer(PointerDispatch::at_root(&down));
     // The eager member hears the cancel first, then the rival.
@@ -1251,14 +1297,23 @@ fn eager_cancel_in_a_self_driven_arena_awards_no_rival() {
     assert!(!arena.contains(id(1)), "the cancelled arena is gone");
 }
 
-/// A non-finite pressure sample during an active press makes no transition: no
-/// update (or peak) from the stale pressure paired with the new position.
+/// The checked pressure boundary refuses a nonfinite reading before it can
+/// publish an update or peak from a stale pressure paired with a new position.
 fn force_press_ignores_a_non_finite_pressure_sample() {
+    assert!(
+        flui_platform_api::pointer::Pressure::try_new(f64::NAN).is_err(),
+        "the checked sensor boundary refuses NaN before dispatch"
+    );
     let updates_after = |pressures: &[f32]| {
         let rig = Rig::new();
         let (press_rec, log) = press_on(&rig);
         rig.attach(&press_rec, None);
-        press(&rig, 1, pressures);
+        let admitted: Vec<_> = pressures
+            .iter()
+            .copied()
+            .filter(|pressure| pressure.is_finite())
+            .collect();
+        press(&rig, 1, &admitted);
         log.updates.get()
     };
     assert_eq!(
@@ -1339,31 +1394,67 @@ fn scale_measures_contacts_spanning_the_whole_range() {
     );
 }
 
-/// A mouse reports a constant pressure while pressed (1.0 on Android); it is
-/// never a sensor, so a mouse click does not force press.
+/// A platform's synthetic full mouse pressure is represented by no sensor.
 fn a_mouse_at_full_pressure_never_force_presses() {
     let rig = Rig::new();
     let (press_rec, log) = press_on(&rig);
     rig.attach(&press_rec, None);
-    rig.down_with(1, 100.0, 100.0, PointerType::Mouse, 1.0);
+    rig.send(
+        &make_down_event_for_id(id(1), Offset::new(100.0, 100.0), PointerKind::Mouse)
+            .expect("finite sensorless mouse Down"),
+    );
     rig.frame();
-    rig.move_with(1, 100.0, 100.0, PointerType::Mouse, 1.0);
-    rig.up_with(1, 100.0, 100.0, PointerType::Mouse);
+    rig.send(
+        &make_move_event_for_id(id(1), Offset::new(100.0, 100.0), PointerKind::Mouse)
+            .expect("finite sensorless mouse Move"),
+    );
+    rig.frame();
+    rig.up_with(1, 100.0, 100.0, PointerKind::Mouse);
     assert_eq!(log.starts.get(), 0, "a mouse is not a pressure sensor");
 }
 
-/// An Android touch reports a constant 1.0 while pressed; a constant is not a
-/// sensor, so a plain touch does not force press.
+/// A platform's synthetic full touch pressure is represented by no sensor.
 fn a_touch_at_constant_full_pressure_never_force_presses() {
     let rig = Rig::new();
     let (press_rec, log) = press_on(&rig);
     rig.attach(&press_rec, None);
-    rig.down_with(1, 100.0, 100.0, PointerType::Touch, 1.0);
+    rig.send(
+        &make_down_event_for_id(id(1), Offset::new(100.0, 100.0), PointerKind::Touch)
+            .expect("finite sensorless touch Down"),
+    );
     rig.frame();
-    rig.move_with(1, 100.0, 100.0, PointerType::Touch, 1.0);
-    rig.move_with(1, 100.0, 100.0, PointerType::Touch, 1.0);
-    rig.up_with(1, 100.0, 100.0, PointerType::Touch);
+    for _ in 0..2 {
+        rig.send(
+            &make_move_event_for_id(id(1), Offset::new(100.0, 100.0), PointerKind::Touch)
+                .expect("finite sensorless touch Move"),
+        );
+        rig.frame();
+    }
+    rig.up_with(1, 100.0, 100.0, PointerKind::Touch);
     assert_eq!(log.starts.get(), 0, "a constant pressure is not a sensor");
+}
+
+fn declared_constant_pressure_sensor_force_presses() {
+    for kind in [PointerKind::Mouse, PointerKind::Touch, PointerKind::Pen] {
+        let rig = Rig::new();
+        let (recognizer, log) = press_on(&rig);
+        rig.attach(&recognizer, None);
+        rig.down_with(1, 100.0, 100.0, kind, 1.0);
+        rig.frame();
+        rig.move_with(1, 100.0, 100.0, kind, 1.0);
+        rig.up_with(1, 100.0, 100.0, kind);
+        assert_eq!(
+            log.starts.get(),
+            1,
+            "{kind:?} declares a real full-pressure sensor"
+        );
+        assert_eq!(
+            log.peaks.get(),
+            1,
+            "constant pressure does not erase the declared sensor"
+        );
+        assert_eq!(log.ends.get(), 1, "the sensor's contact completes");
+    }
 }
 
 struct CancelRival {
@@ -1386,16 +1477,17 @@ fn cancellation_reentry<R: GestureRecognizer + 'static>(make: fn(GestureArena) -
     let rival = Rc::new(CancelRival {
         accepted: Rc::new(Cell::new(0)),
         reject: Box::new(move || {
-            let down = make_down_event_for_id(id(1), at, PointerType::Touch);
+            let down = make_down_event_for_id(id(1), at, PointerKind::Touch)
+                .expect("valid fixture sample");
             next.add_pointer(PointerDispatch::at_root(&down));
         }),
     });
     let _rival_entry = arena.add(id(1), &rival);
-    let down = make_down_event_for_id(id(1), at, PointerType::Touch);
+    let down = make_down_event_for_id(id(1), at, PointerKind::Touch).expect("valid fixture sample");
     recognizer.add_pointer(PointerDispatch::at_root(&down));
     route(
         &*recognizer,
-        &make_cancel_event_for_id(id(1), PointerType::Touch),
+        &make_cancel_event_for_id(id(1), PointerKind::Touch),
     );
     assert!(
         arena.contains(id(1)),
@@ -1415,15 +1507,17 @@ fn cancelled_scale_keeps_other_contacts_competing() {
     });
     let _rival_entry = arena.add(id(2), &rival);
     let at = Offset::new(100.0, 100.0);
-    let first = make_down_event_for_id(id(1), at, PointerType::Touch);
-    let second = make_down_event_for_id(id(2), at, PointerType::Touch);
+    let first =
+        make_down_event_for_id(id(1), at, PointerKind::Touch).expect("valid fixture sample");
+    let second =
+        make_down_event_for_id(id(2), at, PointerKind::Touch).expect("valid fixture sample");
     scale.add_pointer(PointerDispatch::at_root(&first));
     scale.add_pointer(PointerDispatch::at_root(&second));
     arena.close(id(1));
     arena.close(id(2));
     route(
         &*scale,
-        &make_cancel_event_for_id(id(1), PointerType::Touch),
+        &make_cancel_event_for_id(id(1), PointerKind::Touch),
     );
     arena.drain_deferred_resolutions();
     assert_eq!(

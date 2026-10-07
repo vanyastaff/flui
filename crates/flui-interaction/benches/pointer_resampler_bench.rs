@@ -31,7 +31,7 @@ use std::time::{Duration, Instant};
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use flui_foundation::geometry::Offset;
-use flui_interaction::events::{PointerType, make_move_event};
+use flui_interaction::events::{PointerKind, make_move_event};
 use flui_interaction::ids::PointerId;
 use flui_interaction::processing::PointerEventResampler;
 
@@ -44,7 +44,10 @@ fn make_move_events(
     _duration_ms: u64,
 ) -> Vec<flui_interaction::events::PointerEvent> {
     (0..count)
-        .map(|i| make_move_event(Offset::new(100.0 + i as f64, 100.0), PointerType::Touch))
+        .map(|i| {
+            make_move_event(Offset::new(100.0 + i as f64, 100.0), PointerKind::Touch)
+                .expect("valid fixture sample")
+        })
         .collect()
 }
 
@@ -55,7 +58,7 @@ fn bench_add_event_60hz(c: &mut Criterion) {
     let events = black_box(make_move_events(100, 100)); // 100 events / 100 ms ≈ 1 kHz; rate is the test, not the gate
     c.bench_function("PointerEventResampler::add_event (60 Hz workload)", |b| {
         b.iter(|| {
-            let resampler = PointerEventResampler::new(PointerId::PRIMARY);
+            let resampler = PointerEventResampler::new(PointerId::new(std::num::NonZeroU64::MIN));
             for event in &events {
                 resampler.add_event(black_box(event.clone()));
             }
@@ -72,7 +75,7 @@ fn bench_add_event_240hz(c: &mut Criterion) {
     let events = black_box(make_move_events(240, 1000));
     c.bench_function("PointerEventResampler::add_event (240 Hz workload)", |b| {
         b.iter(|| {
-            let resampler = PointerEventResampler::new(PointerId::PRIMARY);
+            let resampler = PointerEventResampler::new(PointerId::new(std::num::NonZeroU64::MIN));
             for event in &events {
                 resampler.add_event(black_box(event.clone()));
             }
@@ -94,7 +97,7 @@ fn bench_sample_flush(c: &mut Criterion) {
     let sample_time = start + Duration::from_millis(15);
     let next = sample_time + Duration::from_millis(16);
     let setup = || {
-        let resampler = PointerEventResampler::new(PointerId::PRIMARY);
+        let resampler = PointerEventResampler::new(PointerId::new(std::num::NonZeroU64::MIN));
         resampler.start_tracking();
         for (i, event) in events.iter().enumerate() {
             let at = start + Duration::from_micros(250 * i as u64);
@@ -129,15 +132,15 @@ fn bench_sample_flush(c: &mut Criterion) {
 /// one's samples join the newer one's `coalesced` history) before
 /// queueing — the overflow path that replaced dropping the newest event.
 fn bench_push_at_capacity(c: &mut Criterion) {
-    let resampler = PointerEventResampler::new(PointerId::PRIMARY);
+    let resampler = PointerEventResampler::new(PointerId::new(std::num::NonZeroU64::MIN));
     // Pre-fill to capacity.
     for event in make_move_events(100, 100) {
         resampler.add_event(event);
     }
-    let event = black_box(make_move_event(
-        Offset::new(200.0, 100.0),
-        PointerType::Touch,
-    ));
+    let event = black_box(
+        make_move_event(Offset::new(200.0, 100.0), PointerKind::Touch)
+            .expect("valid fixture sample"),
+    );
     c.bench_function(
         "PointerEventResampler::add_event (queue at cap, overflow path)",
         |b| {

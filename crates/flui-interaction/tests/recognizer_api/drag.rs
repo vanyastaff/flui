@@ -2,7 +2,7 @@
 use flui_foundation::geometry::Offset;
 use flui_interaction::arena::{GestureArena, GestureArenaMember, run_pointer_lifecycle};
 use flui_interaction::events::{
-    PointerEvent, PointerType, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
+    PointerEvent, PointerKind, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
 };
 use flui_interaction::routing::PointerDispatch;
 use flui_interaction::{
@@ -21,7 +21,7 @@ impl GestureArenaMember for Rival {
 
 fn up_before_acceptance_rejects_drag_and_preserves_the_competitor() {
     let arena = GestureArena::new();
-    let pointer = PointerId::new(2).expect("nonzero pointer");
+    let pointer = PointerId::new(std::num::NonZeroU64::new(2).expect("nonzero pointer"));
     let started = Rc::new(Cell::new(0));
     let cancelled = Rc::new(Cell::new(0));
     let won = Rc::new(Cell::new(0));
@@ -38,11 +38,13 @@ fn up_before_acceptance_rejects_drag_and_preserves_the_competitor() {
         fn reject_gesture(&self, _: PointerId) {}
     }
     let rival = Rc::new(Competitor(won.clone()));
-    let down = make_down_event_for_id(pointer, Offset::ZERO, PointerType::Touch);
+    let down = make_down_event_for_id(pointer, Offset::ZERO, PointerKind::Touch)
+        .expect("valid fixture sample");
     drag.add_pointer(PointerDispatch::at_root(&down));
     arena.add(pointer, &rival);
     arena.close(pointer);
-    let up = make_up_event_for_id(pointer, Offset::ZERO, PointerType::Touch);
+    let up = make_up_event_for_id(pointer, Offset::ZERO, PointerKind::Touch)
+        .expect("valid fixture sample");
     drag.handle_event(PointerDispatch::at_root(&up));
     run_pointer_lifecycle(&arena, &up);
     arena.drain_deferred_resolutions();
@@ -53,7 +55,7 @@ fn up_before_acceptance_rejects_drag_and_preserves_the_competitor() {
 fn cancelling_drag_from_start_drops_the_stale_update_and_recovers() {
     let arena =
         GestureArena::binding_driven(std::sync::Arc::new(flui_interaction::ManualClock::new()));
-    let pointer = PointerId::new(2).expect("nonzero pointer");
+    let pointer = PointerId::new(std::num::NonZeroU64::new(2).expect("nonzero pointer"));
     let slot: Rc<RefCell<std::rc::Weak<DragGestureRecognizer>>> = Rc::default();
     let callback_slot = Rc::clone(&slot);
     let cancel_once = Cell::new(true);
@@ -97,39 +99,33 @@ fn cancelling_drag_from_start_drops_the_stale_update_and_recovers() {
     };
     let rival = Rc::new(Rival);
     arena.add(pointer, &rival);
-    send(make_down_event_for_id(
-        pointer,
-        Offset::ZERO,
-        PointerType::Touch,
-    ));
-    send(make_move_event_for_id(
-        pointer,
-        Offset::new(40.0, 0.0),
-        PointerType::Touch,
-    ));
+    send(
+        make_down_event_for_id(pointer, Offset::ZERO, PointerKind::Touch)
+            .expect("valid fixture sample"),
+    );
+    send(
+        make_move_event_for_id(pointer, Offset::new(40.0, 0.0), PointerKind::Touch)
+            .expect("valid fixture sample"),
+    );
     assert_eq!((starts.get(), updates.get(), cancelled.get()), (1, 0, 1));
-    send(make_up_event_for_id(
-        pointer,
-        Offset::new(40.0, 0.0),
-        PointerType::Touch,
-    ));
+    send(
+        make_up_event_for_id(pointer, Offset::new(40.0, 0.0), PointerKind::Touch)
+            .expect("valid fixture sample"),
+    );
     assert_eq!(completed.get(), 0, "retired contact cannot complete again");
     assert!(arena.is_empty());
-    send(make_down_event_for_id(
-        pointer,
-        Offset::new(100.0, 0.0),
-        PointerType::Touch,
-    ));
-    send(make_move_event_for_id(
-        pointer,
-        Offset::new(140.0, 0.0),
-        PointerType::Touch,
-    ));
-    send(make_up_event_for_id(
-        pointer,
-        Offset::new(140.0, 0.0),
-        PointerType::Touch,
-    ));
+    send(
+        make_down_event_for_id(pointer, Offset::new(100.0, 0.0), PointerKind::Touch)
+            .expect("valid fixture sample"),
+    );
+    send(
+        make_move_event_for_id(pointer, Offset::new(140.0, 0.0), PointerKind::Touch)
+            .expect("valid fixture sample"),
+    );
+    send(
+        make_up_event_for_id(pointer, Offset::new(140.0, 0.0), PointerKind::Touch)
+            .expect("valid fixture sample"),
+    );
     assert_eq!(
         (
             starts.get(),

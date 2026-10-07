@@ -24,7 +24,7 @@ use flui_interaction::arena::{
     run_pointer_lifecycle,
 };
 use flui_interaction::events::{
-    PointerButton, PointerEvent, PointerType, make_down_event_for_id_with_button,
+    PointerButton, PointerEvent, PointerKind, make_down_event_for_id_with_button,
     make_move_event_for_id, make_up_event_for_id, make_up_event_for_id_with_button,
 };
 use flui_interaction::routing::PointerDispatch;
@@ -108,36 +108,50 @@ impl Lane {
 }
 
 fn id(raw: u64) -> PointerId {
-    PointerId::new(raw).expect("nonzero pointer id")
+    PointerId::new(std::num::NonZeroU64::new(raw).expect("nonzero pointer id"))
 }
 
 fn at(x: f64, y: f64) -> Offset<f64> {
     Offset::new(x, y)
 }
 
-fn down(pointer: PointerId, position: Offset<f64>, kind: PointerType) -> PointerEvent {
-    make_down_event_for_id_with_button(pointer, position, kind, PointerButton::Primary)
+fn down(pointer: PointerId, position: Offset<f64>, kind: PointerKind) -> PointerEvent {
+    make_down_event_for_id_with_button(pointer, position, kind, PointerButton::PRIMARY)
+        .expect("valid fixture sample")
 }
 
-fn up(pointer: PointerId, position: Offset<f64>, kind: PointerType) -> PointerEvent {
-    make_up_event_for_id_with_button(pointer, position, kind, PointerButton::Primary)
+fn up(pointer: PointerId, position: Offset<f64>, kind: PointerKind) -> PointerEvent {
+    make_up_event_for_id_with_button(pointer, position, kind, PointerButton::PRIMARY)
+        .expect("valid fixture sample")
 }
 
-fn motion(pointer: PointerId, position: Offset<f64>, kind: PointerType) -> PointerEvent {
-    make_move_event_for_id(pointer, position, kind)
+fn motion(pointer: PointerId, position: Offset<f64>, kind: PointerKind) -> PointerEvent {
+    make_move_event_for_id(pointer, position, kind).expect("valid fixture sample")
 }
 
 /// Stamp an event with its hardware time, as a platform does.
 fn stamped(mut event: PointerEvent, nanos: u64) -> PointerEvent {
     match &mut event {
-        PointerEvent::Down(data) | PointerEvent::Up(data) => data.state.time = nanos,
-        PointerEvent::Move(data) => data.current.time = nanos,
+        PointerEvent::Down(data) => {
+            data.sample.time = flui_platform_api::EventTime::from_nanos(nanos)
+        }
+        PointerEvent::Up(data) => {
+            data.sample.time = flui_platform_api::EventTime::from_nanos(nanos)
+        }
+        PointerEvent::Move(data) => {
+            let mut sample = *data.current();
+            sample.time = flui_platform_api::EventTime::from_nanos(nanos);
+            *data = flui_interaction::events::PointerMove::new(data.pointer, data.buttons, sample)
+                .with_modifiers(data.modifiers)
+                .with_coalesced(data.coalesced().to_vec())
+                .with_predicted(data.predicted().to_vec());
+        }
         _ => {}
     }
     event
 }
 
-fn click(lane: &Lane, pointer: PointerId, position: Offset<f64>, kind: PointerType) {
+fn click(lane: &Lane, pointer: PointerId, position: Offset<f64>, kind: PointerKind) {
     lane.send(&down(pointer, position, kind));
     lane.send(&up(pointer, position, kind));
 }
@@ -171,8 +185,12 @@ fn tap_and_double_tap(lane: &mut Lane) -> (TapLog, Rc<Cell<u32>>) {
 
 fn far_second_click_delivers_the_held_first_tap() {
     for (kind, first, second) in [
-        (PointerType::Mouse, PointerId::PRIMARY, PointerId::PRIMARY),
-        (PointerType::Touch, id(2), id(3)),
+        (
+            PointerKind::Mouse,
+            PointerId::new(std::num::NonZeroU64::MIN),
+            PointerId::new(std::num::NonZeroU64::MIN),
+        ),
+        (PointerKind::Touch, id(2), id(3)),
     ] {
         let mut lane = Lane::new();
         let (taps, doubles) = tap_and_double_tap(&mut lane);
@@ -199,17 +217,30 @@ fn far_second_click_delivers_the_held_first_tap() {
 fn late_first_tap_verdict_lands_on_its_own_click() {
     let mut lane = Lane::new();
     let (taps, doubles) = tap_and_double_tap(&mut lane);
-    let mouse = PointerType::Mouse;
-    click(&lane, PointerId::PRIMARY, at(10.0, 10.0), mouse);
+    let mouse = PointerKind::Mouse;
+    click(
+        &lane,
+        PointerId::new(std::num::NonZeroU64::MIN),
+        at(10.0, 10.0),
+        mouse,
+    );
     // The window runs out with no frame to notice it; the next click does.
     lane.clock.advance(Duration::from_millis(400));
-    lane.send(&down(PointerId::PRIMARY, at(12.0, 10.0), mouse));
+    lane.send(&down(
+        PointerId::new(std::num::NonZeroU64::MIN),
+        at(12.0, 10.0),
+        mouse,
+    ));
     assert_eq!(
         *taps.borrow(),
         [at(10.0, 10.0)],
         "the expired first tap fires"
     );
-    lane.send(&up(PointerId::PRIMARY, at(12.0, 10.0), mouse));
+    lane.send(&up(
+        PointerId::new(std::num::NonZeroU64::MIN),
+        at(12.0, 10.0),
+        mouse,
+    ));
     assert_eq!(
         *taps.borrow(),
         [at(10.0, 10.0)],
@@ -222,15 +253,20 @@ fn late_first_tap_verdict_lands_on_its_own_click() {
 }
 
 fn near_second_click_is_a_double_tap() {
-    for kind in [PointerType::Mouse, PointerType::Touch] {
+    for kind in [PointerKind::Mouse, PointerKind::Touch] {
         let mut lane = Lane::new();
         let (taps, doubles) = tap_and_double_tap(&mut lane);
-        let second = if kind == PointerType::Mouse {
-            PointerId::PRIMARY
+        let second = if kind == PointerKind::Mouse {
+            PointerId::new(std::num::NonZeroU64::MIN)
         } else {
             id(3)
         };
-        click(&lane, PointerId::PRIMARY, at(10.0, 10.0), kind);
+        click(
+            &lane,
+            PointerId::new(std::num::NonZeroU64::MIN),
+            at(10.0, 10.0),
+            kind,
+        );
         lane.frames(50);
         click(&lane, second, at(14.0, 10.0), kind);
         lane.frames(400);
@@ -257,7 +293,7 @@ fn second_finger_leaves_a_running_drag_alone() {
         .on_cancel(move || c.set(c.get() + 1))
         .build();
     lane.join(&drag);
-    let touch = PointerType::Touch;
+    let touch = PointerKind::Touch;
     lane.send(&down(id(2), at(0.0, 0.0), touch));
     lane.send(&motion(id(2), at(40.0, 0.0), touch));
     let before = updates.get();
@@ -285,7 +321,7 @@ fn second_finger_leaves_a_long_press_alone() {
         .on_long_press_cancel(move |_| c.set(c.get() + 1))
         .build();
     lane.join(&long_press);
-    let touch = PointerType::Touch;
+    let touch = PointerKind::Touch;
     lane.send(&down(id(2), at(10.0, 10.0), touch));
     lane.frames(600);
     assert_eq!(starts.get(), 1);
@@ -310,7 +346,7 @@ fn drag_cancelled_end_callback_admits_the_next_contact_once() {
 fn assert_drag_terminal_callback_admits_the_next_contact_once(started: bool) {
     let mut lane = Lane::new();
     let pointer = id(2);
-    let touch = PointerType::Touch;
+    let touch = PointerKind::Touch;
     let downs = Rc::new(RefCell::new(Vec::new()));
     let starts = Rc::new(RefCell::new(Vec::new()));
     let ends = Rc::new(RefCell::new(Vec::new()));
@@ -434,7 +470,7 @@ fn other_finger_does_not_complete_a_double_tap_contact() {
         .on_double_tap(move |_| d.set(d.get() + 1))
         .build();
     lane.join(&double_tap);
-    let touch = PointerType::Touch;
+    let touch = PointerKind::Touch;
     lane.send(&down(id(2), at(10.0, 10.0), touch));
     click(&lane, id(3), at(300.0, 300.0), touch);
     lane.send(&up(id(2), at(10.0, 10.0), touch));
@@ -463,7 +499,7 @@ fn long_press_callback_can_dispose_its_recognizer() {
         .build();
     *slot.borrow_mut() = Some(Rc::clone(&long_press));
     lane.join(&long_press);
-    lane.send(&down(id(2), at(10.0, 10.0), PointerType::Touch));
+    lane.send(&down(id(2), at(10.0, 10.0), PointerKind::Touch));
     let pumped = catch_unwind(AssertUnwindSafe(|| lane.frames(600)));
     assert!(
         pumped.is_ok(),
@@ -487,7 +523,7 @@ fn double_tap_callback_can_dispose_its_recognizer() {
         .build();
     *slot.borrow_mut() = Some(Rc::clone(&double_tap));
     lane.join(&double_tap);
-    let touch = PointerType::Touch;
+    let touch = PointerKind::Touch;
     click(&lane, id(2), at(10.0, 10.0), touch);
     lane.frames(50);
     lane.send(&down(id(3), at(12.0, 10.0), touch));
@@ -515,7 +551,7 @@ fn tap_move_callback_can_dispose_its_recognizer() {
         .build();
     *slot.borrow_mut() = Some(Rc::clone(&tap));
     lane.join(&tap);
-    let touch = PointerType::Touch;
+    let touch = PointerKind::Touch;
     lane.send(&down(id(2), at(10.0, 10.0), touch));
     let moved = catch_unwind(AssertUnwindSafe(|| {
         lane.send(&motion(id(2), at(11.0, 10.0), touch));
@@ -536,7 +572,7 @@ fn panicking_double_tap_callback_leaves_the_next_double_tap_working() {
         })
         .build();
     lane.join(&double_tap);
-    let touch = PointerType::Touch;
+    let touch = PointerKind::Touch;
     for (first, second, expect_panic) in [(2, 3, true), (4, 5, false)] {
         click(&lane, id(first), at(10.0, 10.0), touch);
         lane.frames(50);
@@ -570,12 +606,25 @@ fn verdict_by_pointer_cannot_pick_a_tap_sequence() {
         .build();
     lane.join(&tap);
     lane.join(&double_tap);
-    let mouse = PointerType::Mouse;
-    click(&lane, PointerId::PRIMARY, at(10.0, 10.0), mouse);
+    let mouse = PointerKind::Mouse;
+    click(
+        &lane,
+        PointerId::new(std::num::NonZeroU64::MIN),
+        at(10.0, 10.0),
+        mouse,
+    );
     lane.frames(50);
-    lane.send(&down(PointerId::PRIMARY, at(14.0, 10.0), mouse));
-    tap.accept_gesture(PointerId::PRIMARY);
-    lane.send(&up(PointerId::PRIMARY, at(14.0, 10.0), mouse));
+    lane.send(&down(
+        PointerId::new(std::num::NonZeroU64::MIN),
+        at(14.0, 10.0),
+        mouse,
+    ));
+    tap.accept_gesture(PointerId::new(std::num::NonZeroU64::MIN));
+    lane.send(&up(
+        PointerId::new(std::num::NonZeroU64::MIN),
+        at(14.0, 10.0),
+        mouse,
+    ));
     lane.frames(400);
     assert_eq!(doubles.get(), 1, "the arena's own verdicts stand");
     assert_eq!(taps.get(), 0, "a pointer-keyed verdict fired a single tap");
@@ -592,7 +641,7 @@ fn panicking_first_callback_still_runs_the_rest() {
         .on_long_press_start(move |_| s.set(s.get() + 1))
         .build();
     lane.join(&long_press);
-    lane.send(&down(id(2), at(10.0, 10.0), PointerType::Touch));
+    lane.send(&down(id(2), at(10.0, 10.0), PointerKind::Touch));
     let pumped = catch_unwind(AssertUnwindSafe(|| lane.frames(600)));
     assert!(pumped.is_err(), "the first panic resumes");
     assert_eq!(starts.get(), 1, "on_long_press_start still fires");
@@ -607,7 +656,7 @@ fn panicking_first_callback_still_runs_the_rest() {
         .build();
     lane.join(&tap);
     let released = catch_unwind(AssertUnwindSafe(|| {
-        click(&lane, id(2), at(10.0, 10.0), PointerType::Touch);
+        click(&lane, id(2), at(10.0, 10.0), PointerKind::Touch);
     }));
     assert!(released.is_err(), "the first panic resumes");
     assert_eq!(taps.get(), 1, "on_tap still fires");
@@ -624,21 +673,19 @@ fn panicking_multi_tap_callback_leaves_the_next_pair_working() {
         })
         .build();
     for (a, b, expect_panic) in [(2, 3, true), (4, 5, false)] {
-        let first = down(id(a), at(10.0, 10.0), PointerType::Touch);
-        let second = down(id(b), at(90.0, 10.0), PointerType::Touch);
+        let first = down(id(a), at(10.0, 10.0), PointerKind::Touch);
+        let second = down(id(b), at(90.0, 10.0), PointerKind::Touch);
         recognizer.add_pointer(PointerDispatch::at_root(&first));
         recognizer.add_pointer(PointerDispatch::at_root(&second));
-        recognizer.handle_event(PointerDispatch::at_root(&make_up_event_for_id(
-            id(a),
-            at(10.0, 10.0),
-            PointerType::Touch,
-        )));
+        recognizer.handle_event(PointerDispatch::at_root(
+            &make_up_event_for_id(id(a), at(10.0, 10.0), PointerKind::Touch)
+                .expect("valid fixture sample"),
+        ));
         let completed = catch_unwind(AssertUnwindSafe(|| {
-            recognizer.handle_event(PointerDispatch::at_root(&make_up_event_for_id(
-                id(b),
-                at(90.0, 10.0),
-                PointerType::Touch,
-            )));
+            recognizer.handle_event(PointerDispatch::at_root(
+                &make_up_event_for_id(id(b), at(90.0, 10.0), PointerKind::Touch)
+                    .expect("valid fixture sample"),
+            ));
         }));
         assert_eq!(completed.is_err(), expect_panic);
     }
@@ -720,14 +767,14 @@ fn accept_from_a_withdrawn_member_cannot_end_the_arena() {
 
 fn held_arena_swept_on_up_leaves_room_for_the_next_contact() {
     let arena = GestureArena::new();
-    let pointer = PointerId::PRIMARY;
+    let pointer = PointerId::new(std::num::NonZeroU64::MIN);
     let first = Rc::new(Verdicts::default());
     let second = Rc::new(Verdicts::default());
     let first_entry = arena.add(pointer, &first);
     arena.add(pointer, &second);
     arena.close(pointer);
     first_entry.hold();
-    run_pointer_lifecycle(&arena, &up(pointer, at(0.0, 0.0), PointerType::Mouse));
+    run_pointer_lifecycle(&arena, &up(pointer, at(0.0, 0.0), PointerKind::Mouse));
     let next = Rc::new(Verdicts::default());
     arena.add(pointer, &next);
     arena.close(pointer);
@@ -749,7 +796,7 @@ fn held_arena_swept_on_up_leaves_room_for_the_next_contact() {
 
 fn mouse_drift_beyond_the_precise_slop_cancels_taps_and_presses() {
     // 5 px is far past a mouse's slop and well inside a finger's.
-    let mouse = PointerType::Mouse;
+    let mouse = PointerKind::Mouse;
     let start = at(10.0, 10.0);
     let drifted = at(15.0, 10.0);
 
@@ -761,9 +808,21 @@ fn mouse_drift_beyond_the_precise_slop_cancels_taps_and_presses() {
         .on_tap_cancel(move |_| c.set(c.get() + 1))
         .build();
     lane.join(&tap);
-    lane.send(&down(PointerId::PRIMARY, start, mouse));
-    lane.send(&motion(PointerId::PRIMARY, drifted, mouse));
-    lane.send(&up(PointerId::PRIMARY, drifted, mouse));
+    lane.send(&down(
+        PointerId::new(std::num::NonZeroU64::MIN),
+        start,
+        mouse,
+    ));
+    lane.send(&motion(
+        PointerId::new(std::num::NonZeroU64::MIN),
+        drifted,
+        mouse,
+    ));
+    lane.send(&up(
+        PointerId::new(std::num::NonZeroU64::MIN),
+        drifted,
+        mouse,
+    ));
     assert_eq!((taps.get(), cancels.get()), (0, 1), "tap");
 
     let mut lane = Lane::new();
@@ -774,8 +833,16 @@ fn mouse_drift_beyond_the_precise_slop_cancels_taps_and_presses() {
         .on_long_press_cancel(move |_| c.set(c.get() + 1))
         .build();
     lane.join(&long_press);
-    lane.send(&down(PointerId::PRIMARY, start, mouse));
-    lane.send(&motion(PointerId::PRIMARY, drifted, mouse));
+    lane.send(&down(
+        PointerId::new(std::num::NonZeroU64::MIN),
+        start,
+        mouse,
+    ));
+    lane.send(&motion(
+        PointerId::new(std::num::NonZeroU64::MIN),
+        drifted,
+        mouse,
+    ));
     lane.frames(600);
     assert_eq!((starts.get(), cancels.get()), (0, 1), "long press");
 
@@ -786,20 +853,29 @@ fn mouse_drift_beyond_the_precise_slop_cancels_taps_and_presses() {
         .on_double_tap_cancel(move |_| c.set(c.get() + 1))
         .build();
     lane.join(&double_tap);
-    lane.send(&down(PointerId::PRIMARY, start, mouse));
-    lane.send(&motion(PointerId::PRIMARY, drifted, mouse));
+    lane.send(&down(
+        PointerId::new(std::num::NonZeroU64::MIN),
+        start,
+        mouse,
+    ));
+    lane.send(&motion(
+        PointerId::new(std::num::NonZeroU64::MIN),
+        drifted,
+        mouse,
+    ));
     assert_eq!(cancels.get(), 1, "double tap");
 }
 
 fn secondary_button_starts_no_drag_and_no_long_press() {
-    let mouse = PointerType::Mouse;
+    let mouse = PointerKind::Mouse;
     let right = |position| {
         make_down_event_for_id_with_button(
-            PointerId::PRIMARY,
+            PointerId::new(std::num::NonZeroU64::MIN),
             position,
             mouse,
-            PointerButton::Secondary,
+            PointerButton::SECONDARY,
         )
+        .expect("valid fixture sample")
     };
 
     let mut lane = Lane::new();
@@ -810,13 +886,20 @@ fn secondary_button_starts_no_drag_and_no_long_press() {
         .build();
     lane.join(&drag);
     lane.send(&right(at(0.0, 0.0)));
-    lane.send(&motion(PointerId::PRIMARY, at(60.0, 0.0), mouse));
-    lane.send(&make_up_event_for_id_with_button(
-        PointerId::PRIMARY,
+    lane.send(&motion(
+        PointerId::new(std::num::NonZeroU64::MIN),
         at(60.0, 0.0),
         mouse,
-        PointerButton::Secondary,
     ));
+    lane.send(
+        &make_up_event_for_id_with_button(
+            PointerId::new(std::num::NonZeroU64::MIN),
+            at(60.0, 0.0),
+            mouse,
+            PointerButton::SECONDARY,
+        )
+        .expect("valid fixture sample"),
+    );
     assert_eq!(starts.get(), 0, "a right-button drag does not pan");
 
     let mut lane = Lane::new();
@@ -839,8 +922,12 @@ fn drag_reports_the_device_kind_from_its_down() {
         .on_down(move |details| k.borrow_mut().push(details.kind))
         .build();
     lane.join(&drag);
-    lane.send(&down(PointerId::PRIMARY, at(0.0, 0.0), PointerType::Mouse));
-    assert_eq!(*kinds.borrow(), [PointerType::Mouse]);
+    lane.send(&down(
+        PointerId::new(std::num::NonZeroU64::MIN),
+        at(0.0, 0.0),
+        PointerKind::Mouse,
+    ));
+    assert_eq!(*kinds.borrow(), [PointerKind::Mouse]);
 }
 
 // ---------------------------------------------------------------------------
@@ -855,7 +942,7 @@ fn fling_velocity_follows_event_timestamps_not_dispatch_time() {
         .on_end(move |details| v.set(Some(details.velocity.pixels_per_second.dx)))
         .build();
     lane.join(&drag);
-    let touch = PointerType::Touch;
+    let touch = PointerKind::Touch;
     // Every event of the stroke is dispatched in one frame (the arena clock
     // never moves), but the device stamped them 10 ms apart: 10 px per 10 ms.
     let base = 1_000_000_000_u64;
@@ -886,7 +973,7 @@ fn terminal_velocity_cases(lane: &Lane, velocities: &RefCell<Vec<f64>>, scale: b
         (3, 0, true),
     ] {
         let base = 1_000_000_000 + sequence * 1_000_000_000;
-        let touch = PointerType::Touch;
+        let touch = PointerKind::Touch;
         lane.send(&stamped(down(id(2), at(0.0, 0.0), touch), base));
         if scale {
             lane.send(&stamped(down(id(3), at(100.0, 0.0), touch), base));
@@ -1341,7 +1428,7 @@ impl Model {
             }
             Op::Sweep(pointer) => {
                 if self.current[Self::slot(pointer)].take().is_some() {
-                    let event = up(id(pointer), at(0.0, 0.0), PointerType::Touch);
+                    let event = up(id(pointer), at(0.0, 0.0), PointerKind::Touch);
                     quietly(|| run_pointer_lifecycle(&self.arena, &event));
                 }
             }
@@ -1516,7 +1603,7 @@ fn panicking_window_end_still_admits_the_far_contact() {
         })
         .build();
     lane.join(&double_tap);
-    let kind = PointerType::Touch;
+    let kind = PointerKind::Touch;
     click(&lane, id(2), at(10.0, 10.0), kind);
     lane.frames(50);
     let failure = catch_unwind(AssertUnwindSafe(|| {
@@ -1725,7 +1812,7 @@ fn arena_polls_pointer_deadlines_in_identity_order() {
         let recognizer = LongPressGestureRecognizer::builder(arena.clone())
             .on_long_press(move || log.borrow_mut().push(raw))
             .build();
-        let event = down(pointer, at(0.0, 0.0), PointerType::Touch);
+        let event = down(pointer, at(0.0, 0.0), PointerKind::Touch);
         recognizer.add_pointer(PointerDispatch::at_root(&event));
         let rival = Rc::new(Verdicts::default());
         arena.add(pointer, &rival);
@@ -1744,7 +1831,7 @@ fn arena_polls_pointer_deadlines_in_identity_order() {
     arena.poll_deadlines();
     assert_eq!(fired.borrow().len(), 8, "each deadline fires once");
     for (raw, recognizer) in (1..=8).rev().zip(recognizers) {
-        let event = up(id(raw), at(0.0, 0.0), PointerType::Touch);
+        let event = up(id(raw), at(0.0, 0.0), PointerKind::Touch);
         recognizer.handle_event(PointerDispatch::at_root(&event));
     }
     assert!(arena.is_empty());

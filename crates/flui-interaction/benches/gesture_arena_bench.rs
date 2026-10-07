@@ -61,7 +61,7 @@ fn make_members(count: usize) -> Vec<Rc<BenchMember>> {
 fn bench_add_empty(c: &mut Criterion) {
     let arena = GestureArena::new();
     let members = black_box(make_members(1));
-    let pointer = PointerId::PRIMARY;
+    let pointer = PointerId::new(std::num::NonZeroU64::MIN);
     c.bench_function("GestureArena::add (empty, 1 member)", |b| {
         b.iter(|| {
             arena.sweep(pointer);
@@ -78,7 +78,7 @@ fn bench_add_empty(c: &mut Criterion) {
 fn bench_add_busy(c: &mut Criterion) {
     let arena = GestureArena::new();
     let members = black_box(make_members(5));
-    let pointer = PointerId::PRIMARY;
+    let pointer = PointerId::new(std::num::NonZeroU64::MIN);
     // Pre-load 4 members so each `add` is into a 4-member arena.
     let _entries: Vec<GestureArenaEntry> =
         (0..4).map(|i| arena.add(pointer, &members[i])).collect();
@@ -101,7 +101,7 @@ fn bench_add_busy(c: &mut Criterion) {
 fn bench_sweep_empty(c: &mut Criterion) {
     let arena = GestureArena::new();
     let members = black_box(make_members(1));
-    let pointer = PointerId::PRIMARY;
+    let pointer = PointerId::new(std::num::NonZeroU64::MIN);
     c.bench_function("GestureArena::sweep (1-member arena)", |b| {
         b.iter(|| {
             let _entry = arena.add(pointer, &members[0]);
@@ -116,7 +116,7 @@ fn bench_sweep_empty(c: &mut Criterion) {
 /// tap-vs-eager-platform-view race on Android (`AndroidView`).
 fn bench_resolve_conflict(c: &mut Criterion) {
     let members = black_box(make_members(2));
-    let pointer = PointerId::PRIMARY;
+    let pointer = PointerId::new(std::num::NonZeroU64::MIN);
     c.bench_function("GestureArena::add + accept (eager vs competitor)", |b| {
         b.iter(|| {
             let arena = GestureArena::new();
@@ -135,7 +135,7 @@ fn bench_resolve_conflict(c: &mut Criterion) {
 /// measurement that downstream `GestureBinding` sees per pointer event.
 fn bench_full_lifecycle(c: &mut Criterion) {
     let members = black_box(make_members(1));
-    let pointer = PointerId::PRIMARY;
+    let pointer = PointerId::new(std::num::NonZeroU64::MIN);
     c.bench_function("GestureArena::add+close+sweep (full lifecycle)", |b| {
         b.iter(|| {
             let arena = GestureArena::new();
@@ -175,9 +175,9 @@ impl ResolutionFixture {
         let arena = GestureArena::new();
         let winner = Rc::new(ResolutionMember::default());
         let loser = Rc::new(ResolutionMember::default());
-        arena.add(PointerId::PRIMARY, &winner);
-        arena.add(PointerId::PRIMARY, &loser);
-        arena.close(PointerId::PRIMARY);
+        arena.add(PointerId::new(std::num::NonZeroU64::MIN), &winner);
+        arena.add(PointerId::new(std::num::NonZeroU64::MIN), &loser);
+        arena.close(PointerId::new(std::num::NonZeroU64::MIN));
         let candidate = winner.clone();
         Self {
             arena,
@@ -189,7 +189,7 @@ impl ResolutionFixture {
 
     fn resolve(&self) {
         self.arena.resolve(
-            black_box(PointerId::PRIMARY),
+            black_box(PointerId::new(std::num::NonZeroU64::MIN)),
             Some(black_box(&self.candidate)),
         );
         black_box(self.arena.is_empty());
