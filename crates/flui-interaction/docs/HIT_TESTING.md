@@ -21,7 +21,7 @@ costs no clone.
 - `pointer_target: Option<PointerTarget>`
 - `scroll_target: Option<ScrollTarget>` and `pan_zoom_target: Option<PanZoomTarget>`
 - `metadata: Option<Arc<dyn Any + Send + Sync>>`
-- `cursor: CursorIcon` and `mouse_annotation: Option<MouseTrackerAnnotation>`
+- `cursor: CursorRequest` and `mouse_annotation: Option<MouseTrackerAnnotation>`
 
 Executable pointer callbacks do not live in render storage or hit-test entries.
 Widgets register owner-local handlers through `RenderObjectContext`, render
@@ -65,7 +65,9 @@ path. It delivers all exits first, in hit-test (leaf-first) order, then all
 enters in reverse hit-test order (outermost region first), then the cursor
 change callback (`DeviceWork::invoke`, `routing/mouse_tracker.rs`). The cursor
 is `HitTestResult::resolve_cursor`: the first entry along the leaf-first path
-whose cursor is not `CursorIcon::Default`, or `Default` when there is none.
+whose request is `CursorRequest::Icon`, including an explicit `CursorIcon::Default`
+arrow. `CursorRequest::Defer` leaves the choice to the next entry; an entirely
+deferring path resolves to the arrow (ADR-0158).
 
 ## Transform support
 

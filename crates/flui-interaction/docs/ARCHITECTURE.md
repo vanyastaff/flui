@@ -41,7 +41,7 @@ the executable gesture graph from accidentally becoming cross-thread.
 
 Local design choices and why. Each entry names the conflict, the choice, and the reference (a strategy clause, a design rule, or a precedent plan).
 
-- **An arrow request differs from deferring a cursor.** `CursorRequest::Defer`
+- **An arrow request differs from deferring a cursor (ADR-0158).** `CursorRequest::Defer`
   leaves the choice to the next hit target; `Icon(CursorIcon::Default)` selects
   the arrow even when an ancestor asks for another icon. Render objects without
   a cursor contribution and unconfigured `MouseRegion` widgets defer.

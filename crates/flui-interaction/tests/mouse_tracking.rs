@@ -223,9 +223,10 @@ fn refresh_callback_panic_reaches_every_device() {
     }));
     let payload = failure.expect_err("an exit panic resumes after the refresh");
     let message = payload.downcast_ref::<&str>().copied();
-    assert!(
-        matches!(message, Some("first region exit" | "second region exit")),
-        "the resumed panic is an exit callback's: {message:?}"
+    assert_eq!(
+        message,
+        Some("first region exit"),
+        "the lower device identity's failure remains authoritative"
     );
     assert_eq!(exits.get(), 2, "the other device's exit still runs");
 
@@ -283,6 +284,57 @@ fn refresh_hit_test_panic_keeps_the_device_for_the_next_refresh() {
     );
 }
 
+fn refresh_hit_test_failure_precedes_a_competing_callback_failure() {
+    let lane = InteractionLane::try_new().expect("lane");
+    let handle = lane.dispatch_handle();
+    let tracker = MouseTracker::new();
+    let exits = Rc::new(Cell::new(0));
+    let enters = Rc::new(Cell::new(0));
+    let mouse_region =
+        lane.enter(|| panicking_exit(&handle, &exits, &enters, "callback failure after probe"));
+    let mouse_at = Offset::new(10.0, 10.0);
+    let pen_at = Offset::new(20.0, 20.0);
+    lane.enter(|| {
+        tracker.update_with_motion(
+            &hover(MOUSE, PointerType::Mouse, mouse_at, 1),
+            PointerMotionKind::Hover,
+            &path(&[(1, mouse_region)]),
+        );
+        tracker.update_with_motion(
+            &hover(PEN, PointerType::Pen, pen_at, 2),
+            PointerMotionKind::Hover,
+            &HitTestResult::new(),
+        );
+    });
+
+    let payload = catch_unwind(AssertUnwindSafe(|| {
+        lane.enter(|| {
+            tracker.update_all_devices(|position| {
+                assert!(position != pen_at, "probe failure first");
+                HitTestResult::new()
+            });
+        })
+    }))
+    .expect_err("the probe failure resumes after delivering the committed exit");
+    assert_eq!(payload.downcast_ref::<&str>(), Some(&"probe failure first"));
+    assert_eq!(exits.get(), 1, "the competing exit callback still runs");
+
+    lane.enter(|| {
+        tracker.update_all_devices(|position| {
+            if position == mouse_at {
+                path(&[(1, mouse_region)])
+            } else {
+                HitTestResult::new()
+            }
+        })
+    });
+    assert_eq!(
+        enters.get(),
+        2,
+        "the next refresh can enter the region again"
+    );
+}
+
 /// Reenters the tracker from a region callback's destructor.
 struct ReentersTracker {
     tracker: MouseTracker,
@@ -334,6 +386,147 @@ fn region_destructor_may_reenter_the_tracker() {
         );
     });
     assert!(reentered.get(), "the released callbacks were destroyed");
+}
+
+fn region_retirement_preserves_first_failure_and_recovers() {
+    const SELECTED: &str = "FLUI_MOUSE_REGION_RETIREMENT_CASE";
+    if let Ok(selected) = std::env::var(SELECTED) {
+        assert_region_retirement_recovery(selected == "competing");
+        return;
+    }
+
+    for selected in ["single", "competing"] {
+        let mut child =
+            std::process::Command::new(std::env::current_exe().expect("test executable"))
+                .args([
+                    "--exact",
+                    "mouse_tracking::released_region_destructor_reenters_tracker",
+                    "--nocapture",
+                ])
+                .env(SELECTED, selected)
+                .env("RUST_BACKTRACE", "0")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .expect("mouse retirement child");
+        let start = std::time::Instant::now();
+        while child.try_wait().expect("child status").is_none() {
+            if start.elapsed() > std::time::Duration::from_secs(10) {
+                child.kill().expect("kill stalled mouse retirement child");
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(
+            child.wait().expect("child exit").success(),
+            "mouse retirement {selected} failed"
+        );
+    }
+}
+
+fn assert_region_retirement_recovery(competing: bool) {
+    struct Capture {
+        tracker: MouseTracker,
+        drops: Rc<Cell<usize>>,
+        panic_message: Option<&'static str>,
+    }
+    impl Drop for Capture {
+        fn drop(&mut self) {
+            let _ = self.tracker.device_cursor(device(MOUSE));
+            self.drops.set(self.drops.get() + 1);
+            if let Some(message) = self.panic_message {
+                std::panic::panic_any(message);
+            }
+        }
+    }
+
+    let lane = InteractionLane::try_new().expect("lane");
+    let handle = lane.dispatch_handle();
+    let tracker = MouseTracker::new();
+    let first_drops = Rc::new(Cell::new(0));
+    let second_drops = Rc::new(Cell::new(0));
+    let healthy_drops = Rc::new(Cell::new(0));
+    let regions = lane.enter(|| {
+        let mut regions = Vec::new();
+        for (index, (drops, message)) in [
+            (&first_drops, Some("first capture failure")),
+            (&second_drops, competing.then_some("second capture failure")),
+            (&healthy_drops, None),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let capture = Capture {
+                tracker: tracker.clone(),
+                drops: Rc::clone(drops),
+                panic_message: message,
+            };
+            let target = handle
+                .register_mouse_region(MouseRegionCallbacks {
+                    on_enter: Some(Rc::new(move |_, _| {
+                        let _ = &capture;
+                    })),
+                    ..MouseRegionCallbacks::default()
+                })
+                .expect("register captured region");
+            regions.push((index + 1, target));
+        }
+        regions
+    });
+    let at = Offset::new(10.0, 10.0);
+    lane.enter(|| {
+        tracker.update_with_motion(
+            &hover(MOUSE, PointerType::Mouse, at, 1),
+            PointerMotionKind::Hover,
+            &path(&regions),
+        );
+        for &(_, target) in &regions {
+            handle
+                .unregister_mouse_region(target)
+                .expect("unregister captured region");
+        }
+    });
+    let payload = catch_unwind(AssertUnwindSafe(|| {
+        lane.enter(|| {
+            tracker.update_with_motion(
+                &hover(MOUSE, PointerType::Mouse, at, 2),
+                PointerMotionKind::Hover,
+                &HitTestResult::new(),
+            );
+        })
+    }))
+    .expect_err("first capture failure resumes");
+    assert_eq!(
+        payload.downcast_ref::<&str>(),
+        Some(&"first capture failure")
+    );
+    assert_eq!(first_drops.get(), 1);
+    assert_eq!(
+        second_drops.get(),
+        0,
+        "the retired tail is retained after the first failure"
+    );
+    assert_eq!(
+        healthy_drops.get(),
+        0,
+        "healthy opaque captures obey the same retention policy"
+    );
+
+    let log = Log::default();
+    lane.enter(|| {
+        let target = logging_region(&handle, "healthy", &log);
+        tracker.update_with_motion(
+            &hover(MOUSE, PointerType::Mouse, at, 3),
+            PointerMotionKind::Hover,
+            &path(&[(4, target)]),
+        );
+        tracker.update_with_motion(
+            &hover(MOUSE, PointerType::Mouse, at, 4),
+            PointerMotionKind::Hover,
+            &HitTestResult::new(),
+        );
+    });
+    assert_eq!(take(&log), ["enter healthy 2", "exit healthy 2"]);
 }
 
 fn cursor_path(cursors: &[Option<CursorIcon>]) -> HitTestResult {
@@ -607,6 +800,10 @@ fn ambient_refresh_contains_each_device() {
                 "refresh hit-test panic",
                 refresh_hit_test_panic_keeps_the_device_for_the_next_refresh,
             ),
+            (
+                "probe and callback compete",
+                refresh_hit_test_failure_precedes_a_competing_callback_failure,
+            ),
         ],
     );
 }
@@ -615,10 +812,16 @@ fn ambient_refresh_contains_each_device() {
 fn released_region_destructor_reenters_tracker() {
     run_rows(
         "region release",
-        &[(
-            "region destructor reenters",
-            region_destructor_may_reenter_the_tracker,
-        )],
+        &[
+            (
+                "region destructor reenters",
+                region_destructor_may_reenter_the_tracker,
+            ),
+            (
+                "capture failure and recovery",
+                region_retirement_preserves_first_failure_and_recovers,
+            ),
+        ],
     );
 }
 
