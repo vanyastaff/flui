@@ -17,7 +17,6 @@ pub(crate) mod clipboard_lock;
 // `pub` for the same off-target-consumed reason as `hwnd_affinity` below
 // (consumers: the winit, Win32, and AppKit event-conversion backends).
 pub mod events;
-pub mod gestures;
 mod handlers;
 pub(crate) mod owner_signal;
 // `pub`, not `pub(crate)`, for the same reason `keys`/`keys_macos` are:
