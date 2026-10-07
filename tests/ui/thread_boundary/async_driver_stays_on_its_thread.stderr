@@ -1,29 +1,19 @@
 error[E0277]: `std::rc::Weak<flui_scheduler::async_driver::TaskStore>` cannot be sent between threads safely
- --> tests/ui/thread_boundary/async_driver_stays_on_its_thread.rs:7:24
-  |
-7 |     std::thread::spawn(move || drop(driver));
-  |     ------------------ -------^^^^^^^^^^^^^
-  |     |                  |
-  |     |                  `std::rc::Weak<flui_scheduler::async_driver::TaskStore>` cannot be sent between threads safely
-  |     |                  within this `{closure@$DIR/tests/ui/thread_boundary/async_driver_stays_on_its_thread.rs:7:24: 7:31}`
-  |     required by a bound introduced by this call
-  |
-  = help: within `{closure@$DIR/tests/ui/thread_boundary/async_driver_stays_on_its_thread.rs:7:24: 7:31}`, the trait `Send` is not implemented for `std::rc::Weak<flui_scheduler::async_driver::TaskStore>`
+  --> tests/ui/thread_boundary/async_driver_stays_on_its_thread.rs:13:30
+   |
+13 |     require_thread_spawnable(driver);
+   |     ------------------------ ^^^^^^ `std::rc::Weak<flui_scheduler::async_driver::TaskStore>` cannot be sent between threads safely
+   |     |
+   |     required by a bound introduced by this call
+   |
+   = help: within `AsyncDriver`, the trait `Send` is not implemented for `std::rc::Weak<flui_scheduler::async_driver::TaskStore>`
 note: required because it appears within the type `AsyncDriver`
- --> crates/flui-scheduler/src/async_driver.rs
-  |
-  | pub struct AsyncDriver {
-  |            ^^^^^^^^^^^
-note: required because it's used within this closure
- --> tests/ui/thread_boundary/async_driver_stays_on_its_thread.rs:7:24
-  |
-7 |     std::thread::spawn(move || drop(driver));
-  |                        ^^^^^^^
-note: required by a bound in `spawn`
- --> $RUST/std/src/thread/functions.rs
-  |
-  | pub fn spawn<F, T>(f: F) -> JoinHandle<T>
-  |        ----- required by a bound in this function
-...
-  |     F: Send + 'static,
-  |        ^^^^ required by this bound in `spawn`
+  --> crates/flui-scheduler/src/async_driver.rs
+   |
+   | pub struct AsyncDriver {
+   |            ^^^^^^^^^^^
+note: required by a bound in `require_thread_spawnable`
+  --> tests/ui/thread_boundary/async_driver_stays_on_its_thread.rs:10:32
+   |
+10 | fn require_thread_spawnable<T: Send + 'static>(_: T) {}
+   |                                ^^^^ required by this bound in `require_thread_spawnable`
