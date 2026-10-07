@@ -103,7 +103,12 @@ framework does not control is contained.
    `Abandoned`; the field then clears the composing range itself, keeping the text. Unmount
    commits in place and calls no `on_changed`; only an input-method edit not yet applied when the
    store detaches is lost. This supersedes ADR-0030 §6's "blur detaches the IME client but does
-   not end the composition". Until this item lands, a form reset during a composition leaves the
+   not end the composition". An attach that replaces the active client commits the outgoing
+   client's composition through the same path, before the incoming client is installed (on a
+   pull host, a completion queued ahead of the incoming focus): which field the focus manager
+   tells first does not matter, and the blurred field's own later completion and detach carry a
+   stale token and do nothing. A failure in that commit is kept and the attach goes on. Until
+   this item lands, a form reset during a composition leaves the
    preedit in the field (the reset writes only the committed text it compares against).
 5. **A commit anchor skipped by an unwound frame is a debt of the realm**, paid at its next owner
    turn (a drained inbox, a background pump or a pump), not at the next frame, and a failed wake
@@ -207,8 +212,9 @@ In place:
   (ADR-0135 §3).
 - Item 4, the field's part: `flui-widgets` `owner_code_is_contained_at_every_point`'s
   `editable: a blur during preedit …` rows (push and pull: the commit precedes the detach, and
-  its failing `on_changed` is raised after it) and
-  `a_pointer_down_and_a_paste_commit_the_composition_first`.
+  its failing `on_changed` is raised after it) and its `attach: replacing a composing client …`
+  rows, `a_pointer_down_and_a_paste_commit_the_composition_first` and
+  `moving_focus_off_a_composing_field_commits_it_in_either_mount_order`.
 
 Outstanding:
 

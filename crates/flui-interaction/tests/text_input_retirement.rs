@@ -447,8 +447,11 @@ fn active_store_that_reopens_the_frame_runs_once_per_anchor() {
 fn closing_during_a_grant_cancels_the_tail_and_preserves_the_first_failure() {
     let (owner, _) = owner();
     let handle = owner.handle();
+    // Each client is detached rather than replaced: a replacement commits
+    // the outgoing composition, a commit the close owes its store, which
+    // would run that store's queue.
     let first = InMemoryTextStore::new("");
-    handle
+    let first_token = handle
         .attach(TextInputClient::new(first.clone()))
         .expect("first attach");
     owner.set_transaction_open(true);
@@ -462,10 +465,11 @@ fn closing_during_a_grant_cancels_the_tail_and_preserves_the_first_failure() {
             LockTiming::Async,
         )
         .expect("queued close");
+    let _ = handle.detach(first_token).expect("retire first store");
     let delivered = Rc::new(Cell::new(false));
     for label in ["second store", "third store"] {
         let inner = InMemoryTextStore::new("");
-        handle
+        let token = handle
             .attach(TextInputClient::new(Rc::new(DroppingStore {
                 inner: inner.clone(),
                 _probe: OnDrop(Box::new(move || panic!("{label}"))),
@@ -478,8 +482,8 @@ fn closing_during_a_grant_cancels_the_tail_and_preserves_the_first_failure() {
                 LockTiming::Async,
             )
             .expect("queued tail");
+        let _ = handle.detach(token).expect("retire tail store");
     }
-    handle.attach(client()).expect("retire third store");
     owner.set_transaction_open(false);
     let failure =
         catch_unwind(AssertUnwindSafe(|| owner.run_deferred_grants())).expect_err("grant failure");
