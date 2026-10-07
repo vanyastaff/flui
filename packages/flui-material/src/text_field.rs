@@ -92,7 +92,8 @@
 //! because `InputDecorator`'s own inner `MouseRegion` defaults to
 //! [`flui_sdk::widgets::HitTestBehavior::Opaque`] and spans the full decorated
 //! rect, so every point within it already resolves a hit for the outer
-//! detector to defer to.
+//! detector to defer to. The helper/error line below the container is
+//! outside that rect and ignores pointers, so it is not a tap target.
 //!
 //! # DEFERRED (v1)
 //!

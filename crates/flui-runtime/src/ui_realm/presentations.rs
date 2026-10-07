@@ -379,7 +379,8 @@ impl UiRealm {
     }
 
     /// Cancel in-flight pointer sequences on the ADDRESSED presentation's
-    /// own gesture binding.
+    /// own gesture binding, and drop the open sequences its held pointer
+    /// queue still waits to replay (`HeldPointerQueue::drop_open_sequences`).
     ///
     /// Pointer input routes per presentation
     /// ([`Self::handle_input_addressed`] dispatches to
@@ -399,6 +400,14 @@ impl UiRealm {
             );
             return;
         };
+        // Held input first: an open sequence still waiting for a commit
+        // would otherwise replay its Down after this cancel and open a route
+        // whose Up went to another window. No user code runs while the queue
+        // is borrowed.
+        presentation
+            .held_pointer_input()
+            .borrow_mut()
+            .drop_open_sequences();
         presentation.gestures().cancel_active_pointers();
     }
 

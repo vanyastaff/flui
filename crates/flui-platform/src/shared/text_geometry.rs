@@ -1,5 +1,6 @@
 //! A text range's logical rect as the physical screen rect an input method
-//! places its windows against (TSF `ITextStoreACP::GetTextExt`).
+//! places its windows against (TSF `ITextStoreACP::GetTextExt`), and a
+//! screen point as the logical point it asks about (`GetACPFromPoint`).
 //!
 //! Cfg-free so its table runs on every host; the Win32 text services are its
 //! one consumer. The store answers in window-root logical pixels
@@ -18,7 +19,7 @@
 //!   that pixel, so float noise from the multiplication (`0.1 × 3.0`) does
 //!   not grow the rect by one.
 
-use flui_foundation::geometry::{Bounds, DevicePixelRatio, DevicePoint};
+use flui_foundation::geometry::{Bounds, DevicePixelRatio, DevicePoint, Point};
 
 /// How far, in device pixels, an edge may sit from a whole pixel and still be
 /// taken as that pixel.
@@ -87,6 +88,31 @@ pub fn range_rect_to_screen(
         right: whole_i32(right)?,
         bottom: whole_i32(bottom)?,
     })
+}
+
+/// The window-root logical point at `screen` (physical screen pixels) in a
+/// window whose client area starts at `client_origin` and whose scale is
+/// `ratio`: the inverse of [`range_rect_to_screen`]'s offset and scale, for
+/// the point an input method asks about (TSF `GetACPFromPoint`).
+///
+/// The difference of the two `i32` coordinates is taken in `f64`, where it
+/// is exact, since it need not fit an `i32`. Dividing it by the ratio can
+/// still overflow: a ratio below one grows it, and [`DevicePixelRatio`]
+/// admits any finite positive ratio. A point whose logical coordinates are
+/// not finite has no position in the document, nearest or exact, so the
+/// answer is `None`, which the caller reports as a point outside it (TSF
+/// `TS_E_INVALIDPOINT`).
+#[must_use]
+pub fn screen_point_to_client(
+    screen: DevicePoint,
+    client_origin: DevicePoint,
+    ratio: DevicePixelRatio,
+) -> Option<Point<f64>> {
+    let point = Point::new(
+        ratio.to_logical(f64::from(screen.x) - f64::from(client_origin.x)),
+        ratio.to_logical(f64::from(screen.y) - f64::from(client_origin.y)),
+    );
+    (point.x.is_finite() && point.y.is_finite()).then_some(point)
 }
 
 /// `device` rounded outwards by `round`, unless it is within
