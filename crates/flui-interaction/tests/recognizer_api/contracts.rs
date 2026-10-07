@@ -313,6 +313,70 @@ fn stale_contact_drop_cannot_withdraw_a_reused_pointer() {
     assert_eq!(*log.borrow(), ["accepted"]);
 }
 
+fn invalid_admission_remains_idle_and_settings_are_frozen() {
+    let owner = Extension::new(GestureArena::new(), "owner", Log::default());
+    let up = make_up_event_for_id(pointer(80), Offset::ZERO, PointerType::Mouse);
+    assert!(matches!(
+        owner
+            .contact
+            .begin(PointerDispatch::at_root(&up), &GestureSettings::default()),
+        Err(BeginContactError::NotDown)
+    ));
+    for position in [Offset::new(f64::NAN, 0.0), Offset::new(0.0, f64::INFINITY)] {
+        let event = make_down_event_for_id_with_button(
+            pointer(80),
+            position,
+            PointerType::Mouse,
+            PointerButton::Primary,
+        );
+        assert!(matches!(
+            owner.contact.begin(
+                PointerDispatch::at_root(&event),
+                &GestureSettings::default()
+            ),
+            Err(BeginContactError::NonFinite)
+        ));
+        assert!(owner.contact.current().is_none());
+    }
+    let event = down(pointer(80));
+    let settings = GestureSettings::default()
+        .try_with_touch_slop(11.0)
+        .expect("finite settings");
+    owner
+        .contact
+        .begin(PointerDispatch::at_root(&event), &settings)
+        .expect("valid admission after refusal");
+    let settings = settings
+        .try_with_touch_slop(25.0)
+        .expect("replacement settings");
+    assert_eq!(
+        owner
+            .contact
+            .current()
+            .expect("active contact")
+            .settings
+            .touch_slop(),
+        11.0
+    );
+    assert!(!owner.contact.moved_beyond(Offset::new(14.0, 4.0), 11.0));
+    assert!(owner.contact.moved_beyond(Offset::new(14.5, 4.0), 11.0));
+    assert!(owner.contact.moved_beyond(Offset::new(f64::NAN, 4.0), 11.0));
+    owner.contact.withdraw();
+    owner
+        .contact
+        .begin(PointerDispatch::at_root(&event), &settings)
+        .expect("new settings on next sequence");
+    assert_eq!(
+        owner
+            .contact
+            .current()
+            .expect("new contact")
+            .settings
+            .touch_slop(),
+        25.0
+    );
+}
+
 #[test]
 fn public_recognizer_extension_contracts() {
     let cases: &[(&str, fn())] = &[
@@ -343,6 +407,10 @@ fn public_recognizer_extension_contracts() {
         (
             "stale_contact_drop_cannot_withdraw_a_reused_pointer",
             stale_contact_drop_cannot_withdraw_a_reused_pointer,
+        ),
+        (
+            "invalid_admission_remains_idle_and_settings_are_frozen",
+            invalid_admission_remains_idle_and_settings_are_frozen,
         ),
     ];
     for &(name, case) in cases {
