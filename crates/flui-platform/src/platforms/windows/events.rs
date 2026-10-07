@@ -1259,7 +1259,7 @@ pub fn stray_char_event(text: String) -> PlatformInput {
     let modifiers = message_modifiers();
 
     PlatformInput::Keyboard(KeyEvent::new(KeyState::Down,
-        Key::character(text).expect("BUG: assembled WM_CHAR text is nonempty"),
+        Key::character(text),
         Code::Unidentified, EventTime::from_nanos(event_timestamp_ns()))
         .with_location(Location::Standard).with_modifiers(modifiers))
 }
