@@ -2567,7 +2567,7 @@ fn harness_animated_transform_reads_only_its_cached_sample() {
 
 fn harness_animated_transform_releases_proxy_after_tree_drop() {
     let controller = ticking_controller(100, 0.5);
-    let parent: Arc<dyn Animation<f64>> = Arc::new(controller.clone());
+    let parent: Arc<dyn Animation<f64>> = Arc::new(controller);
     let weak = Arc::downgrade(&parent);
     let run = RenderTester::mount(
         box_node(RenderAnimatedTransform::new(TransformMotion::Scale {

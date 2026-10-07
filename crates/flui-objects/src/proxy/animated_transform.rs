@@ -518,7 +518,7 @@ mod tests {
     fn failed_mark_retries() {
         let controller = AnimationController::without_ticker(Duration::from_millis(100));
         controller.set_value(1.0);
-        let proxy = ProxyAnimation::new(Arc::new(controller.clone()) as Arc<dyn Animation<f64>>);
+        let proxy = ProxyAnimation::new(Arc::new(controller) as Arc<dyn Animation<f64>>);
         let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
         let anchor = owner.insert(
             Box::new(RenderAnimatedTransform::new(TransformMotion::Scale {
