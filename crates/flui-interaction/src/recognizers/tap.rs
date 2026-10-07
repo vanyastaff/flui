@@ -127,6 +127,14 @@ pub struct TapGestureRecognizerBuilder {
     settings: GestureSettings,
     callbacks: TapCallbacks,
 }
+impl std::fmt::Debug for TapGestureRecognizerBuilder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TapGestureRecognizerBuilder")
+            .field("arena", &self.arena)
+            .field("settings", &self.settings)
+            .finish_non_exhaustive()
+    }
+}
 impl TapGestureRecognizerBuilder {
     /// Freeze gesture settings for all contacts admitted by this recognizer.
     pub fn settings(mut self, settings: GestureSettings) -> Self {
