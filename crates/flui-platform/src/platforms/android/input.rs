@@ -166,6 +166,24 @@ impl Default for AndroidInputState {
 }
 
 impl AndroidInputState {
+    pub(crate) fn cancel_contacts(&mut self, reason: CancelReason) -> Vec<PlatformInput> {
+        let Some(time) = self.last_time else {
+            return Vec::new();
+        };
+        let mut contacts: Vec<_> = self
+            .contacts
+            .drain()
+            .map(|(_, contact)| contact.info)
+            .collect();
+        contacts.sort_by_key(|info| info.id);
+        contacts
+            .into_iter()
+            .map(|info| {
+                PlatformInput::Pointer(PointerEvent::Cancel(PointerCancel::new(info, time, reason)))
+            })
+            .collect()
+    }
+
     pub(crate) fn capabilities(&self, id: i32) -> Option<CachedDevice> {
         self.devices.get(&id).map(|device| device.cached.clone())
     }
