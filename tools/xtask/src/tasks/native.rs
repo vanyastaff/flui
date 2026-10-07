@@ -193,6 +193,13 @@ pub(super) fn plans(
     let selected = discover(&metadata, scope)?;
     let mut steps = BTreeMap::new();
     for (target, names) in selected {
+        if target == super::IOS_TARGET && host != Host::MacOs {
+            steps.insert(target, Step::Note(
+                "Skipping iOS type-check: it requires a genuine Apple SDK on macOS; CI runs it on an Apple host."
+                    .to_owned(),
+            ));
+            continue;
+        }
         let cross_macos = target == super::MACOS_TARGET && host != Host::MacOs;
         let mut cmd = if target == super::WINDOWS_TARGET && host != Host::Windows {
             // stacker's Windows C shim needs SDK headers, even without linking.
@@ -373,6 +380,24 @@ mod tests {
                 .expect("narrow scope")
                 .is_empty()
         );
+        for host in [Host::Linux, Host::Windows, Host::MacOs] {
+            let planned = plans(
+                dir.path(),
+                "native-fixture",
+                host,
+                FeatureSet::RequiredTargets,
+            )
+            .expect("native fixture plan");
+            let ios = planned[super::super::IOS_TARGET].to_string();
+            if host == Host::MacOs {
+                assert!(ios.starts_with("$ cargo clippy"), "{ios}");
+            } else {
+                assert!(
+                    ios.contains("Skipping") && ios.contains("Apple SDK"),
+                    "{ios}"
+                );
+            }
+        }
         std::fs::write(dir.path().join("src/test_only.rs"), "fn broken(")
             .expect("invalid test module fixture");
         assert!(

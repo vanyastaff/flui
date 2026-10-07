@@ -203,6 +203,37 @@ fn plan(
     steps
 }
 
+/// Admit a local native command only when its target and cross wrapper exist.
+fn local_native_step(
+    target: &str,
+    step: Step,
+    host: Host,
+    targets: &BTreeSet<String>,
+    have_tool: impl Fn(&str) -> bool,
+) -> Step {
+    if targets.contains(target) {
+        let wrapper = if target == super::WINDOWS_TARGET && host != Host::Windows {
+            Some("cargo-xwin")
+        } else if target == super::MACOS_TARGET && host != Host::MacOs {
+            Some("cargo-zigbuild")
+        } else {
+            None
+        };
+        if let Some(tool) = wrapper
+            && !have_tool(tool)
+        {
+            return Step::Note(format!(
+                "check-changed: skipped native source checks on {target} (cargo install --locked {tool}; CI runs it)"
+            ));
+        }
+        step
+    } else {
+        Step::Note(format!(
+            "check-changed: skipped native source checks on {target} (rustup target add {target}; CI runs it)"
+        ))
+    }
+}
+
 /// `cargo xtask check-changed`.
 pub(super) fn run(runner: Runner, base: &str) -> anyhow::Result<ExitCode> {
     // Every task's cargo runs from the repository root, so a relative
@@ -246,13 +277,13 @@ pub(super) fn run(runner: Runner, base: &str) -> anyhow::Result<ExitCode> {
         Host::current(),
         native::FeatureSet::RequiredTargets,
     )? {
-        if targets.contains(target) {
-            native_steps.push(step);
-        } else {
-            native_steps.push(Step::Note(format!(
-                "check-changed: skipped native source checks on {target} (rustup target add {target}; CI runs it)"
-            )));
-        }
+        native_steps.push(local_native_step(
+            target,
+            step,
+            Host::current(),
+            &targets,
+            |tool| installed(tool, &["--version"]),
+        ));
     }
     runner.steps(&plan(
         &lane,
@@ -299,6 +330,32 @@ mod tests {
             .chain([WASM_TARGET])
             .map(str::to_owned)
             .collect()
+    }
+
+    fn missing_cross_wrappers_leave_native_steps_runnable() {
+        for (target, tool) in [
+            (super::super::WINDOWS_TARGET, "cargo-xwin"),
+            (super::super::MACOS_TARGET, "cargo-zigbuild"),
+        ] {
+            for available in [false, true] {
+                let step = local_native_step(
+                    target,
+                    Cmd::cargo(["clippy"]).into(),
+                    Host::Linux,
+                    &all_targets(),
+                    |requested| {
+                        assert_eq!(requested, tool);
+                        available
+                    },
+                );
+                let text = step.to_string();
+                if available {
+                    assert_eq!(text, "$ cargo clippy");
+                } else {
+                    assert!(text.contains("skipped") && text.contains(tool), "{text}");
+                }
+            }
+        }
     }
 
     fn a_package_change_runs_the_scoped_commands() {
@@ -430,6 +487,10 @@ mod tests {
         crate::table_test::run_table(
             "check_changed_contract",
             &[
+                (
+                    "missing_cross_wrappers_leave_native_steps_runnable",
+                    missing_cross_wrappers_leave_native_steps_runnable as fn(),
+                ),
                 (
                     "a_package_change_runs_the_scoped_commands",
                     a_package_change_runs_the_scoped_commands as fn(),
