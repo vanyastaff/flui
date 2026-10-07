@@ -200,7 +200,7 @@ impl MacInputState {
             // first-stage reading; summing stages would invent a pressure range.
             if event_type == NSEventType::Pressure
                 && event.stage() == 1
-                && let Ok(pressure) = Pressure::try_new(f64::from(event.pressure()))
+                && let Ok(pressure) = Pressure::try_new(event.pressure())
             {
                 sample = sample.with_pressure(pressure);
             }
