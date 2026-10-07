@@ -381,9 +381,15 @@ fn assert_queued_focus_recovery(from_node: bool, competing: bool) {
             return;
         }
         let manager = manager_probe.upgrade().expect("live manager");
-        assert!(second_probe.upgrade().expect("live second").request_focus());
+        assert_eq!(
+            second_probe.upgrade().expect("live second").request_focus(),
+            flui_interaction::FocusRequestOutcome::Focused
+        );
         manager.unfocus();
-        assert!(last_probe.upgrade().expect("live last").request_focus());
+        assert_eq!(
+            last_probe.upgrade().expect("live last").request_focus(),
+            flui_interaction::FocusRequestOutcome::Focused
+        );
         std::panic::panic_any("first queued focus failure");
     });
     let first_id = nodes[0].id();
