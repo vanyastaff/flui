@@ -88,7 +88,7 @@ pub(crate) fn a_remaining_touch_continues_scroll_without_an_intermediate_fling()
     let mut scoped = fling_scoped(widget, Vsync::new(), tight(300.0, 300.0));
     let event = |id, millis, y, phase| {
         let info = PointerInfo::new(flui_interaction::PointerId::try_from(id).expect("nonzero touch identity"), PointerKind::Touch);
-        let sample = PointerSample::new(EventTime::from_nanos(millis * 1_000_000), PointerPosition::try_new(Offset::new(150.0, y)).expect("finite touch position"));
+        let sample = PointerSample::new(EventTime::from_nanos(millis * 1_000_000), PointerPosition::try_new(flui_foundation::geometry::Point::new(150.0, y)).expect("finite touch position"));
         match phase {
             PointerPhase::Down => PointerEvent::Down(PointerPress::new(info, PointerButton::PRIMARY, PointerButtons::NONE.with(PointerButton::PRIMARY), sample)),
             PointerPhase::Move => PointerEvent::Move(PointerMove::new(info, PointerButtons::NONE.with(PointerButton::PRIMARY), sample)),
