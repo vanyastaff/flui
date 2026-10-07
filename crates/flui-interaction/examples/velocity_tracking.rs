@@ -11,11 +11,11 @@
 use std::time::{Duration, Instant};
 
 use flui_foundation::geometry::Offset;
-use flui_interaction::PointerDeviceKind;
+use flui_interaction::PointerKind;
 use flui_interaction::processing::VelocityTracker;
 
 fn main() {
-    let mut tracker = VelocityTracker::with_kind(PointerDeviceKind::Touch);
+    let mut tracker = VelocityTracker::with_kind(PointerKind::Touch);
     let start = Instant::now();
 
     // Horizontal swipe: 10 px every 10 ms == 1000 px/s.

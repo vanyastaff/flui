@@ -25,7 +25,7 @@ use std::time::{Duration, Instant};
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use flui_foundation::geometry::Offset;
-use flui_interaction::PointerDeviceKind;
+use flui_interaction::PointerKind;
 use flui_interaction::processing::{
     ImpulseVelocityTracker, IosFlingVelocityTracker, OneEuroFilter2D, VelocityTracker,
 };
@@ -61,7 +61,7 @@ fn bench_estimate_lsq(c: &mut Criterion) {
     c.bench_function("VelocityTracker::estimate (LSQ, 20 samples)", |b| {
         b.iter_batched(
             || {
-                let mut tracker = VelocityTracker::with_kind(PointerDeviceKind::Touch);
+                let mut tracker = VelocityTracker::with_kind(PointerKind::Touch);
                 for (t, p) in &samples {
                     tracker.add_position(*t, *p);
                 }
@@ -84,7 +84,7 @@ fn bench_estimate_short(c: &mut Criterion) {
     c.bench_function("VelocityTracker::estimate (LSQ, 3 samples)", |b| {
         b.iter_batched(
             || {
-                let mut tracker = VelocityTracker::with_kind(PointerDeviceKind::Touch);
+                let mut tracker = VelocityTracker::with_kind(PointerKind::Touch);
                 for (t, p) in &samples {
                     tracker.add_position(*t, *p);
                 }
@@ -111,7 +111,7 @@ fn bench_estimate_repeated(c: &mut Criterion) {
     c.bench_function("VelocityTracker::estimate (LSQ, 4 repeated queries)", |b| {
         b.iter_batched(
             || {
-                let mut tracker = VelocityTracker::with_kind(PointerDeviceKind::Touch);
+                let mut tracker = VelocityTracker::with_kind(PointerKind::Touch);
                 for (t, p) in &samples {
                     tracker.add_position(*t, *p);
                 }
@@ -135,7 +135,7 @@ fn bench_add_position(c: &mut Criterion) {
     let samples = black_box(linear_swipe(20, 100, 1000.0));
     c.bench_function("VelocityTracker::add_position (push)", |b| {
         b.iter(|| {
-            let mut tracker = VelocityTracker::with_kind(PointerDeviceKind::Touch);
+            let mut tracker = VelocityTracker::with_kind(PointerKind::Touch);
             for (t, p) in &samples {
                 tracker.add_position(*t, *p);
             }
@@ -154,7 +154,7 @@ fn bench_ios_estimate(c: &mut Criterion) {
     c.bench_function("IosFlingVelocityTracker::estimate (20 samples)", |b| {
         b.iter_batched(
             || {
-                let mut tracker = IosFlingVelocityTracker::with_kind(PointerDeviceKind::Touch);
+                let mut tracker = IosFlingVelocityTracker::with_kind(PointerKind::Touch);
                 for (t, p) in &samples {
                     tracker.add_position(*t, *p);
                 }
@@ -173,7 +173,7 @@ fn bench_estimate_impulse(c: &mut Criterion) {
     c.bench_function("ImpulseVelocityTracker::estimate (20 samples)", |b| {
         b.iter_batched(
             || {
-                let mut tracker = ImpulseVelocityTracker::with_kind(PointerDeviceKind::Touch);
+                let mut tracker = ImpulseVelocityTracker::with_kind(PointerKind::Touch);
                 for (t, p) in &samples {
                     tracker.add_position(*t, *p);
                 }
