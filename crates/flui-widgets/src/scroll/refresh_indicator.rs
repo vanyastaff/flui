@@ -472,6 +472,50 @@ impl StatefulView for RefreshIndicator {
     }
 }
 
+/// Calls `on_flip` whenever `controller`'s refresh flag flips relative to
+/// `snapshot`, the phase the caller last built against. After registering it
+/// catches up with a change made between the snapshot and the registration,
+/// which no notification would report.
+fn listen_for_phase_flips(
+    controller: &RefreshController,
+    snapshot: Phase,
+    on_flip: impl Fn() + Send + Sync + 'static,
+) -> ListenerId {
+    let tracker = Arc::new(PhaseTracker(Mutex::new(snapshot)));
+    let on_flip = Arc::new(on_flip);
+    let id = controller.inner.add_listener(Arc::new({
+        let watched = controller.clone();
+        let tracker = Arc::clone(&tracker);
+        let on_flip = Arc::clone(&on_flip);
+        move || {
+            // Ordered by the mutation's epoch, not by which notification
+            // finishes first.
+            if tracker.advance(watched.phase()) {
+                on_flip();
+            }
+        }
+    }));
+    let catch_up = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if tracker.advance(controller.phase()) {
+            on_flip();
+        }
+    }));
+    if let Err(payload) = catch_up {
+        // The caller has not received the subscription ID yet. Withdraw it
+        // while our local callback ownership prevents opaque destruction.
+        if let Err(secondary) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            controller.inner.remove_listener(id);
+        })) {
+            flui_foundation::panic::retain_opaque_payload(secondary);
+        }
+        // A callback's capture destructor must not replace its failure as
+        // the original panic resumes (ADR-0127).
+        std::mem::forget(on_flip);
+        std::panic::resume_unwind(payload);
+    }
+    id
+}
+
 impl RefreshIndicatorState {
     fn install_fling_listener(&mut self) {
         if let Some(id) = self.fling_listener_id.take() {
@@ -492,15 +536,9 @@ impl RefreshIndicatorState {
         let Some(rebuild) = self.rebuild.clone() else {
             return;
         };
-        let watched = controller.clone();
-        let last_phase = PhaseTracker(Mutex::new(controller.phase()));
-        let id = controller.inner.add_listener(Arc::new(move || {
-            // Ordered by the mutation's epoch, not by which notification
-            // finishes first.
-            if last_phase.advance(watched.phase()) {
-                rebuild.schedule(RebuildReason::StateChange);
-            }
-        }));
+        let id = listen_for_phase_flips(controller, controller.phase(), move || {
+            rebuild.schedule(RebuildReason::StateChange);
+        });
         self.phase_subscription = Some((controller.clone(), id));
     }
 
@@ -709,6 +747,65 @@ mod tests {
         assert!(
             tracker.advance(restarted),
             "the next refresh must still schedule a rebuild"
+        );
+    }
+
+    // `finish` ran between the subscriber's phase snapshot (refreshing) and
+    // its registration, so no notification reports it. The catch-up read
+    // after registration must, or the next refresh flips nothing and its
+    // indicator never shows. A private seam: the public surface cannot run a
+    // mutation inside the subscription.
+    #[test]
+    fn phase_change_before_registration_is_caught_up() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let controller = RefreshController::new();
+        controller.begin_refresh();
+        let stale = controller.phase();
+        controller.finish();
+        let flips = Arc::new(AtomicUsize::new(0));
+        let id = listen_for_phase_flips(&controller, stale, {
+            let flips = Arc::clone(&flips);
+            move || {
+                flips.fetch_add(1, Ordering::SeqCst);
+            }
+        });
+        assert_eq!(
+            flips.load(Ordering::SeqCst),
+            1,
+            "the missed finish must flip"
+        );
+        controller.begin_refresh();
+        assert_eq!(
+            flips.load(Ordering::SeqCst),
+            2,
+            "the next refresh must flip"
+        );
+        controller.inner.remove_listener(id);
+
+        let stale = controller.phase();
+        controller.finish();
+        let failures = Arc::new(AtomicUsize::new(0));
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            listen_for_phase_flips(&controller, stale, {
+                let failures = Arc::clone(&failures);
+                move || {
+                    failures.fetch_add(1, Ordering::SeqCst);
+                    panic!("catch-up scheduling failure");
+                }
+            })
+        }));
+        let payload = result.expect_err("catch-up failure propagates");
+        assert_eq!(
+            flui_foundation::panic::payload_text(&*payload),
+            Some("catch-up scheduling failure")
+        );
+        assert_eq!(failures.load(Ordering::SeqCst), 1);
+        controller.begin_refresh();
+        controller.finish();
+        assert_eq!(
+            failures.load(Ordering::SeqCst),
+            1,
+            "the failed registration must no longer observe phase changes"
         );
     }
 }
