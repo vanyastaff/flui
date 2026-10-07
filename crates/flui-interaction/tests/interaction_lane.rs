@@ -1174,10 +1174,10 @@ fn fresh_drag_completes_after_retirement() {
 fn drag_dispose_capture_reentry() {
     use flui_interaction::arena::GestureArena;
     use flui_interaction::{DragAxis, DragGestureRecognizer, GestureRecognizer};
-    use std::{cell::Cell, rc::Rc, sync::Arc};
+    use std::{cell::Cell, rc::Rc};
 
     let recognizer = DragGestureRecognizer::new(GestureArena::new(), DragAxis::Horizontal);
-    let weak = Arc::downgrade(&recognizer);
+    let weak = Rc::downgrade(&recognizer);
     let retired = Rc::new(Cell::new(false));
     let observed = retired.clone();
     let probe = DragRetirementProbe(Box::new(move || {
@@ -1198,11 +1198,11 @@ fn drag_dispose_capture_reentry() {
 fn drag_callback_replacements_commit_before_retirement() {
     use flui_interaction::arena::GestureArena;
     use flui_interaction::{DragAxis, DragGestureRecognizer, GestureRecognizer};
-    use std::{cell::Cell, rc::Rc, sync::Arc};
+    use std::{cell::Cell, rc::Rc};
 
     for slot in 0..5 {
         let recognizer = DragGestureRecognizer::new(GestureArena::new(), DragAxis::Horizontal);
-        let weak = Arc::downgrade(&recognizer);
+        let weak = Rc::downgrade(&recognizer);
         let retired = Rc::new(Cell::new(false));
         let observed = retired.clone();
         let probe = DragRetirementProbe(Box::new(move || {
@@ -1291,15 +1291,11 @@ fn drag_final_callback_owner_during_active_unwind() {
     drag_independent_capture_failures(true, true);
 }
 
-#[expect(
-    clippy::arc_with_non_send_sync,
-    reason = "the owner-local recognizer API requires Arc aliases to exercise shared callback ownership"
-)]
 fn drag_independent_capture_failures(final_owner: bool, active_unwind: bool) {
     use flui_interaction::arena::GestureArena;
     use flui_interaction::{DragAxis, DragGestureRecognizer, GestureRecognizer};
     use std::panic::{AssertUnwindSafe, catch_unwind};
-    use std::{cell::Cell, rc::Rc, sync::Arc};
+    use std::{cell::Cell, rc::Rc};
 
     let first_drops = Rc::new(Cell::new(0));
     let second_drops = Rc::new(Cell::new(0));
@@ -1321,10 +1317,10 @@ fn drag_independent_capture_failures(final_owner: bool, active_unwind: bool) {
             let _capture = &start;
         });
     // A separate recognizer value shares the physical Rc callback owner.
-    let alias = Arc::new((*recognizer).clone());
+    let alias = Rc::new((*recognizer).clone());
     drop(recognizer);
     assert_eq!((first_drops.get(), second_drops.get()), (0, 0));
-    struct DisposeOnDrop(Arc<DragGestureRecognizer>);
+    struct DisposeOnDrop(Rc<DragGestureRecognizer>);
     impl Drop for DisposeOnDrop {
         fn drop(&mut self) {
             self.0.dispose();
@@ -1388,14 +1384,10 @@ fn drag_caller_keeps_previously_caught_failure() {
     fresh_drag_completes_after_retirement();
 }
 
-#[expect(
-    clippy::arc_with_non_send_sync,
-    reason = "the owner-local recognizer API requires Arc aliases to exercise final shared callback ownership"
-)]
 fn drag_callbacks_live_until_the_final_shared_owner() {
     use flui_interaction::arena::GestureArena;
     use flui_interaction::{DragAxis, DragGestureRecognizer};
-    use std::{cell::Cell, rc::Rc, sync::Arc};
+    use std::{cell::Cell, rc::Rc};
     let dropped = Rc::new(Cell::new(0));
     let mut recognizer = DragGestureRecognizer::new(GestureArena::new(), DragAxis::Horizontal);
     for slot in 0..5 {
@@ -1419,7 +1411,7 @@ fn drag_callbacks_live_until_the_final_shared_owner() {
             }),
         };
     }
-    let alias = Arc::new((*recognizer).clone());
+    let alias = Rc::new((*recognizer).clone());
     drop(recognizer);
     assert_eq!(dropped.get(), 0, "a recognizer alias still owns callbacks");
     drop(alias);
@@ -1442,10 +1434,10 @@ fn drag_self_dispose_from_callback(body_failure: bool) {
     use flui_interaction::arena::GestureArena;
     use flui_interaction::{DragAxis, DragGestureRecognizer, GestureRecognizer, Offset, PointerId};
     use std::panic::{AssertUnwindSafe, catch_unwind};
-    use std::{cell::Cell, rc::Rc, sync::Arc};
+    use std::{cell::Cell, rc::Rc};
 
     let recognizer = DragGestureRecognizer::new(GestureArena::new(), DragAxis::Horizontal);
-    let weak = Arc::downgrade(&recognizer);
+    let weak = Rc::downgrade(&recognizer);
     let drops = Rc::new(Cell::new(0));
     let observed = drops.clone();
     let probe = DragRetirementProbe(Box::new(move || {
@@ -1477,10 +1469,6 @@ fn drag_self_dispose_from_callback(body_failure: bool) {
     fresh_drag_completes_after_retirement();
 }
 
-#[expect(
-    clippy::arc_with_non_send_sync,
-    reason = "the owner-local arena accepts custom members through Arc identity"
-)]
 fn drag_disposal_commits_tracking_before_rejection_diagnostics() {
     use std::cell::Cell;
     use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -1526,10 +1514,8 @@ fn drag_disposal_commits_tracking_before_rejection_diagnostics() {
     let recognizer = DragGestureRecognizer::new(arena.clone(), DragAxis::Horizontal);
     recognizer.add_pointer(PointerId::PRIMARY, Offset::ZERO, Offset::ZERO);
     let sibling_accepts = Rc::new(Cell::new(0));
-    arena.add(
-        PointerId::PRIMARY,
-        Arc::new(Sibling(sibling_accepts.clone())),
-    );
+    let sibling = Rc::new(Sibling(sibling_accepts.clone()));
+    arena.add(PointerId::PRIMARY, &sibling);
     arena.close(PointerId::PRIMARY);
     assert_eq!(arena.member_count(PointerId::PRIMARY), 2);
 
@@ -1661,7 +1647,6 @@ fn stop_tracking_pointer_sweep_starts_the_unresolved_drag() {
     use flui_interaction::{DragAxis, DragGestureRecognizer, GestureRecognizer, Offset, PointerId};
     use std::cell::Cell;
     use std::rc::Rc;
-    use std::sync::Arc;
 
     struct Rival(Rc<Cell<usize>>);
     impl CustomGestureRecognizer for Rival {
@@ -1680,12 +1665,8 @@ fn stop_tracking_pointer_sweep_starts_the_unresolved_drag() {
         .with_on_start(move |_| observed.set(observed.get() + 1));
     recognizer.add_pointer(PointerId::PRIMARY, Offset::ZERO, Offset::ZERO);
     let rejections = Rc::new(Cell::new(0));
-    #[expect(
-        clippy::arc_with_non_send_sync,
-        reason = "the owner-local arena takes its members through Arc identity"
-    )]
-    let rival = Arc::new(Rival(rejections.clone()));
-    arena.add(PointerId::PRIMARY, rival);
+    let rival = Rc::new(Rival(rejections.clone()));
+    arena.add(PointerId::PRIMARY, &rival);
     arena.close(PointerId::PRIMARY);
     assert_eq!(starts.get(), 0, "the competition is still open");
 
@@ -1709,19 +1690,14 @@ fn stop_tracking_preserves_reentrant_contact_after_sweep_failure() {
     assert_stop_tracking_preserves_reentrant_contact(true);
 }
 
-#[expect(
-    clippy::arc_with_non_send_sync,
-    reason = "the owner-local arena accepts the reentrant sweep member through Arc identity"
-)]
 fn assert_stop_tracking_preserves_reentrant_contact(fail_after_admission: bool) {
     use flui_interaction::arena::GestureArena;
     use flui_interaction::recognizers::RecognizerBase;
     use flui_interaction::sealed::CustomGestureRecognizer;
     use flui_interaction::{Offset, PointerId};
-    use std::cell::Cell;
+    use std::cell::{Cell, RefCell};
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::rc::Rc;
-    use std::sync::Arc;
 
     #[derive(Clone)]
     struct NextContact(Rc<Cell<usize>>);
@@ -1737,20 +1713,18 @@ fn assert_stop_tracking_preserves_reentrant_contact(fail_after_admission: bool) 
     struct ReentrantSweep {
         base: RecognizerBase,
         next_accepts: Rc<Cell<usize>>,
+        next_owner: Rc<RefCell<Option<Rc<NextContact>>>>,
         fail_after_admission: bool,
     }
     impl CustomGestureRecognizer for ReentrantSweep {
-        #[expect(
-            clippy::arc_with_non_send_sync,
-            reason = "reentrant admission uses the owner-local arena API's required Arc member identity"
-        )]
         fn on_arena_accept(&self, pointer: PointerId) {
             assert_eq!(
                 self.base.primary_pointer(),
                 Some(pointer),
                 "the retiring contact stays visible to its sweep resolution"
             );
-            let next = Arc::new(NextContact(self.next_accepts.clone()));
+            let next = Rc::new(NextContact(self.next_accepts.clone()));
+            self.next_owner.replace(Some(Rc::clone(&next)));
             // Reuse the platform pointer ID while the old exact-generation
             // sweep is delivering. The new arena slot belongs to this contact.
             self.base
@@ -1767,9 +1741,10 @@ fn assert_stop_tracking_preserves_reentrant_contact(fail_after_admission: bool) 
     let arena = GestureArena::new();
     let base = RecognizerBase::new(arena.clone());
     let next_accepts = Rc::new(Cell::new(0));
-    let member = Arc::new(ReentrantSweep {
+    let member = Rc::new(ReentrantSweep {
         base: base.clone(),
         next_accepts: next_accepts.clone(),
+        next_owner: Rc::new(RefCell::new(None)),
         fail_after_admission,
     });
     base.start_tracking(PointerId::PRIMARY, Offset::ZERO, Offset::ZERO, &member);
