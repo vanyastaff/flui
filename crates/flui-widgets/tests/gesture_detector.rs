@@ -12,6 +12,11 @@ use flui_widgets::{ColoredBox, GestureDetector};
 
 pub(crate) fn clearing_pan_callbacks_mid_drag_still_finishes_the_drag() {
     use crate::common::{ProbeSignals, SignalProbe};
+    use flui_foundation::geometry::Offset;
+    use flui_interaction::PointerType;
+    use flui_interaction::events::{
+        make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
+    };
     use flui_view::SignalWriteExt;
     use std::{cell::Cell, rc::Rc};
 
@@ -43,15 +48,29 @@ pub(crate) fn clearing_pan_callbacks_mid_drag_still_finishes_the_drag() {
         detector.child(ColoredBox::new(Color::rgb(10, 20, 30)))
     });
     let mut laid = lay_out(probe.view(), tight(100.0, 100.0));
-    laid.dispatch_pointer_down(50.0, 10.0);
-    laid.dispatch_pointer_move(50.0, 50.0);
+    let contacts = flui_testing::widgets::PointerContacts::new();
+    let pointer = contacts.begin();
+    laid.dispatch_pointer_event(&make_down_event_for_id(
+        pointer,
+        Offset::new(50.0, 10.0),
+        PointerType::Mouse,
+    ));
+    laid.dispatch_pointer_event(&make_move_event_for_id(
+        pointer,
+        Offset::new(50.0, 50.0),
+        PointerType::Mouse,
+    ));
     assert_eq!(starts.get(), 1);
     enabled.set(false);
     probe
         .write(|cx| signal.get().expect("mounted probe").set(cx, 1))
         .expect("write");
     laid.pump();
-    laid.dispatch_pointer_up(50.0, 50.0);
+    laid.dispatch_pointer_event(&make_up_event_for_id(
+        pointer,
+        Offset::new(50.0, 50.0),
+        PointerType::Mouse,
+    ));
     assert_eq!(ends.get(), 0, "removed callbacks are not invoked");
     enabled.set(true);
     probe
@@ -59,15 +78,34 @@ pub(crate) fn clearing_pan_callbacks_mid_drag_still_finishes_the_drag() {
         .expect("write");
     laid.pump();
     let before = updates.get();
-    laid.dispatch_pointer_move(50.0, 60.0);
+    // Deliberately replay a stale sample for the released identity through the
+    // public host boundary; the convenience Move helper requires a live Down.
+    laid.dispatch_pointer_event(&make_move_event_for_id(
+        pointer,
+        Offset::new(50.0, 60.0),
+        PointerType::Mouse,
+    ));
     assert_eq!(
         updates.get(),
         before,
         "the released contact cannot resume when callbacks return"
     );
-    laid.dispatch_pointer_down(50.0, 10.0);
-    laid.dispatch_pointer_move(50.0, 50.0);
-    laid.dispatch_pointer_up(50.0, 50.0);
+    let fresh = contacts.begin();
+    laid.dispatch_pointer_event(&make_down_event_for_id(
+        fresh,
+        Offset::new(50.0, 10.0),
+        PointerType::Mouse,
+    ));
+    laid.dispatch_pointer_event(&make_move_event_for_id(
+        fresh,
+        Offset::new(50.0, 50.0),
+        PointerType::Mouse,
+    ));
+    laid.dispatch_pointer_event(&make_up_event_for_id(
+        fresh,
+        Offset::new(50.0, 50.0),
+        PointerType::Mouse,
+    ));
     assert_eq!(starts.get(), 2);
     assert_eq!(ends.get(), 1);
 }
