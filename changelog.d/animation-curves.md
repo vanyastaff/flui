@@ -20,6 +20,12 @@
   curve no longer counts as a curve change, so `AnimatedSize` no longer relayouts and implicit
   animations no longer rebuild their curved animation on every such rebuild.
 
+### Added
+
+- **`flui-animation`**: `Curve::slope(t)`, the derivative of `transform`: exact for `Linear`, `Cubic`
+  (`y'(s)/x'(s)`, a finite secant at a vertical tangent), `Interval`, `FlippedCurve` and `ArcCurve`; a
+  second-order finite difference (step `1e-4`) otherwise. NaN gives NaN, outside `[0, 1]` gives 0.
+
 ### Removed
 
 - **`flui-animation`**: `ReverseCurve` and `Curve::reversed` (they mapped 0 to 1, breaking the

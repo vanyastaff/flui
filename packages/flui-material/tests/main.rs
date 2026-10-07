@@ -218,6 +218,10 @@ fn text_input_contracts() {
             text_field::tapping_the_decorated_area_focuses_the_field_and_reaches_the_decorator,
         ),
         (
+            "text_field::error line sits below the indicator outside the tap target",
+            text_field::error_line_sits_below_the_indicator_outside_the_tap_target,
+        ),
+        (
             "text_form_field::validator error reaches the input decorator error line",
             text_form_field::validator_error_reaches_the_input_decorator_error_line,
         ),

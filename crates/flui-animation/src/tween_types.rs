@@ -375,21 +375,3 @@ where
         self.second.transform(curved_t)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn test_color_tween() {
-        let tween = ColorTween::new(Color::RED, Color::BLUE);
-        let mid = tween.transform(0.5);
-        // 255 * 0.5 = 127.5 -> rounds to 128 (the old code truncated to 127).
-        assert_eq!(mid.r, 128);
-        assert_eq!(mid.b, 128);
-    }
-
-    #[test]
-    fn tween_types_contract() {
-        crate::test_cases::run_cases(&[("test color tween", test_color_tween)]);
-    }
-}

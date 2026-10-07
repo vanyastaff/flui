@@ -637,6 +637,166 @@ fn arc_curve_compares_builtins_by_value_and_custom_curves_by_identity() {
 }
 
 // ---------------------------------------------------------------------------
+// Slope
+// ---------------------------------------------------------------------------
+
+/// `cubic-bezier(1/3, 0, 2/3, 1/3)` has x(s) = s and y(s) = s², so its
+/// output is exactly x² with derivative 2x.
+fn square() -> Cubic {
+    Cubic::new(1.0 / 3.0, 0.0, 2.0 / 3.0, 1.0 / 3.0)
+}
+
+/// `cubic-bezier(1/3, 0, 2/3, 0)`: y = x³, derivative 3x².
+fn cube() -> Cubic {
+    Cubic::new(1.0 / 3.0, 0.0, 2.0 / 3.0, 0.0)
+}
+
+fn assert_close(what: &str, got: f64, want: f64, tolerance: f64) {
+    assert!(
+        (got - want).abs() <= tolerance,
+        "{what}: slope {got}, expected {want}"
+    );
+}
+
+fn cubic_slope_matches_polynomial_derivatives() {
+    for t in [0.0, 0.1, 0.25, 0.5, 0.75, 0.9, 1.0] {
+        assert_close(&format!("x^2 at {t}"), square().slope(t), 2.0 * t, 1e-6);
+        assert_close(&format!("x^3 at {t}"), cube().slope(t), 3.0 * t * t, 1e-6);
+    }
+}
+
+/// Central differences of the independent bisection reference.
+fn cubic_slope_matches_differences_of_the_css_reference() {
+    let h = 1e-5;
+    for (x1, y1, x2, y2) in [
+        (0.25, 0.1, 0.25, 1.0),
+        (0.42, 0.0, 1.0, 1.0),
+        (0.0, 0.0, 0.58, 1.0),
+        (0.42, 0.0, 0.58, 1.0),
+        (0.05, 0.7, 0.1, 1.0),
+    ] {
+        let curve = Cubic::new(x1, y1, x2, y2);
+        for x in CSS_XS {
+            let want = (reference_y(x1, y1, x2, y2, x + h) - reference_y(x1, y1, x2, y2, x - h))
+                / (2.0 * h);
+            assert_close(
+                &format!("cubic-bezier({x1}, {y1}, {x2}, {y2}) at {x}"),
+                curve.slope(x),
+                want,
+                1e-4,
+            );
+        }
+    }
+}
+
+/// Next to `EaseInOutExpo`'s vertical tangent a `1e-4`-step difference
+/// straddles the tangent and is off by a large factor; the exact cubic
+/// derivative is not. Analytic: s = 0.5 + cbrt((x − 0.5)/4),
+/// dy/dx = y'(s)/x'(s) = 6s(1 − s) / (12 (s − 0.5)²).
+fn cubic_slope_is_exact_where_a_difference_is_not() {
+    for dx in [1e-6_f64, -1e-6, 1e-5] {
+        let x = 0.5 + dx;
+        let s = 0.5 + ((x - 0.5) / 4.0).cbrt();
+        let want = 6.0 * s * (1.0 - s) / (12.0 * (s - 0.5) * (s - 0.5));
+        assert_close(
+            &format!("next to the vertical tangent at {x}"),
+            Curves::EaseInOutExpo.slope(x),
+            want,
+            1e-3 * want,
+        );
+    }
+}
+
+fn default_difference_is_second_order() {
+    // Exact for a quadratic, including the one-sided ends.
+    for t in [0.0, 1e-5, 0.3, 1.0 - 1e-5, 1.0] {
+        assert_close(
+            &format!("quadratic at {t}"),
+            Quadratic.slope(t),
+            2.0 * t,
+            1e-8,
+        );
+    }
+}
+
+fn linear_interval_and_flipped_use_the_chain_rule() {
+    for t in [0.0, 0.5, 1.0] {
+        assert_close("linear", Curves::Linear.slope(t), 1.0, 0.0);
+    }
+    let interval = Interval::new(0.2, 0.6, square());
+    assert_close(
+        "interval inside",
+        interval.slope(0.4),
+        2.0 * 0.5 / 0.4,
+        1e-6,
+    );
+    assert_close("interval before", interval.slope(0.1), 0.0, 0.0);
+    assert_close("interval after", interval.slope(0.8), 0.0, 0.0);
+    let flipped = square().flipped();
+    assert_close("flipped", flipped.slope(0.3), 2.0 * 0.7, 1e-6);
+    assert_close("erased", ArcCurve::new(square()).slope(0.3), 0.6, 1e-6);
+    assert_close(
+        "erased custom",
+        ArcCurve::new(Quadratic).slope(0.3),
+        0.6,
+        1e-8,
+    );
+}
+
+fn slope_input_policy() {
+    assert_catalog("slope(NaN) is not NaN", |curve, _| {
+        !curve.slope(f64::NAN).is_nan()
+    });
+    assert_catalog("slope outside [0, 1] is not 0", |curve, _| {
+        [-0.5, 1.5, f64::INFINITY, f64::NEG_INFINITY]
+            .into_iter()
+            .any(|t| curve.slope(t).to_bits() != 0.0_f64.to_bits())
+    });
+    assert_catalog("non-finite slope inside [0, 1]", |curve, _| {
+        grid().any(|t| !curve.slope(t).is_finite())
+    });
+}
+
+fn vertical_tangent_slope_is_finite_and_steep() {
+    let slope = Curves::EaseInOutExpo.slope(0.5);
+    assert!(
+        slope.is_finite() && slope > 10.0,
+        "slope at the vertical tangent: {slope}"
+    );
+}
+
+#[test]
+fn curve_slope_is_the_derivative_of_transform() {
+    crate::run_table(&[
+        (
+            "cubic slope matches polynomial derivatives",
+            cubic_slope_matches_polynomial_derivatives,
+        ),
+        (
+            "cubic slope matches differences of the css reference",
+            cubic_slope_matches_differences_of_the_css_reference,
+        ),
+        (
+            "cubic slope is exact where a difference is not",
+            cubic_slope_is_exact_where_a_difference_is_not,
+        ),
+        (
+            "default difference is second order",
+            default_difference_is_second_order,
+        ),
+        (
+            "linear, interval and flipped use the chain rule",
+            linear_interval_and_flipped_use_the_chain_rule,
+        ),
+        ("slope input policy", slope_input_policy),
+        (
+            "vertical tangent slope is finite and steep",
+            vertical_tangent_slope_is_finite_and_steep,
+        ),
+    ]);
+}
+
+// ---------------------------------------------------------------------------
 // Parameter validation
 // ---------------------------------------------------------------------------
 

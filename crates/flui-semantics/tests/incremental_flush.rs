@@ -105,6 +105,80 @@ fn a_rebuild_publishes_only_what_changed() {
     );
 }
 
+/// The published tree is in physical pixels, and a ratio change on an
+/// otherwise idle tree republishes it.
+///
+/// AccessKit reads a node's bounds under its ancestors' transforms as
+/// physical pixels relative to the window. The tree keeps logical rects, the
+/// root carries the scale, and a changed ratio resends the root alone: the
+/// descendants inherit the new transform without being re-serialized.
+#[test]
+fn the_published_root_scales_logical_bounds_to_physical_pixels() {
+    use flui_foundation::geometry::Rect as LogicalRect;
+
+    let (mut owner, received) = recording_owner();
+    owner.set_device_pixel_ratio(1.5);
+    owner.clear();
+    let root = owner.insert(node(0, "root"));
+    let mut button = node(1, "button");
+    button.set_rect(LogicalRect::from_ltrb(10.0, 20.0, 78.0, 36.0));
+    let button = owner.insert(button);
+    owner.add_child(root, button);
+    owner.set_root(Some(root));
+    owner.flush();
+
+    let effective = |update: &TreeUpdate, root_update: &TreeUpdate| {
+        let root_id = root_update.tree.as_ref().expect("a full update").root;
+        let root_transform = update
+            .nodes
+            .iter()
+            .chain(&root_update.nodes)
+            .find(|(id, _)| *id == root_id)
+            .and_then(|(_, node)| node.transform().copied())
+            .unwrap_or(accesskit::Affine::IDENTITY);
+        let (_, button) = root_update
+            .nodes
+            .iter()
+            .find(|(_, node)| node.label() == Some("button"))
+            .expect("the button is published");
+        root_transform.transform_rect_bbox(button.bounds().expect("the button has bounds"))
+    };
+
+    let first = received.lock()[0].clone();
+    let button_bounds = first
+        .nodes
+        .iter()
+        .find(|(_, node)| node.label() == Some("button"))
+        .and_then(|(_, node)| node.bounds())
+        .expect("the button is published with bounds");
+    assert_eq!(
+        button_bounds,
+        accesskit::Rect::new(10.0, 20.0, 78.0, 36.0),
+        "node bounds stay logical; the scale lives on the root"
+    );
+    assert_eq!(
+        effective(&first, &first),
+        accesskit::Rect::new(15.0, 30.0, 117.0, 54.0),
+        "at 150% a 68x16 control is 102x24 physical pixels"
+    );
+
+    owner.set_device_pixel_ratio(2.0);
+    owner.flush();
+    let updates = received.lock();
+    assert_eq!(updates.len(), 2, "a ratio change must be delivered");
+    let change = &updates[1];
+    assert_eq!(
+        change.nodes.len(),
+        1,
+        "only the root carries the scale, so only the root is resent"
+    );
+    assert_eq!(
+        effective(change, &first),
+        accesskit::Rect::new(20.0, 40.0, 156.0, 72.0),
+        "after the ratio changed to 2.0"
+    );
+}
+
 #[test]
 fn detaching_checks_the_actual_parent_and_preserves_reparenting() {
     let (mut owner, received) = recording_owner();

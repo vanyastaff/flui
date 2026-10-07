@@ -1,6 +1,6 @@
-//! Consumer integration tests for animation derives and simulations.
+//! `#[derive(Animatable)]` as a downstream crate uses it.
 //!
-//! These live in `tests/` (a separate crate that depends on flui-animation) so
+//! This lives in `tests/` (a separate crate that depends on flui-animation) so
 //! the derive's `::flui_animation::TwoWayConverter` path resolves the same way
 //! it does for a real downstream user.
 
@@ -8,21 +8,6 @@
 // representable in f64, so exact-equality round-trip assertions are correct.
 
 use flui_animation::{Keyframes, Lerp, Linear, TwoWayConverter};
-
-#[path = "support/child_process.rs"]
-mod child_process;
-
-#[path = "contracts/simulation.rs"]
-mod simulation;
-
-#[path = "contracts/proxy.rs"]
-mod proxy;
-
-#[path = "contracts/curve.rs"]
-mod curve;
-
-#[path = "contracts/tween.rs"]
-mod tween;
 
 #[path = "contracts/keyframes.rs"]
 mod keyframes;
@@ -84,22 +69,3 @@ fn two_way_converter_derive_contract() {
         ("keyframe value", derived_type_is_a_keyframe_value),
     ]);
 }
-
-/// Execute every named scenario before reporting failures. Keep opaque panic
-/// payloads alive until all rows complete, without invoking arbitrary Drop.
-pub(crate) fn run_table(cases: &[(&str, fn())]) {
-    let mut failures = Vec::new();
-    for &(name, case) in cases {
-        if let Err(payload) = std::panic::catch_unwind(case) {
-            failures.push((name, payload));
-        }
-    }
-    if !failures.is_empty() {
-        let names: Vec<_> = failures.iter().map(|(name, _)| *name).collect();
-        std::mem::forget(failures);
-        panic!("failed numerical cases: {names:?}");
-    }
-}
-
-#[path = "contracts/controller_sources.rs"]
-mod controller_sources;

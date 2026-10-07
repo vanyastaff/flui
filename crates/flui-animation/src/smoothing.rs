@@ -209,27 +209,3 @@ impl SmoothDamp {
         output
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn smooth_damp_converges_without_overshoot() {
-        let mut damp = SmoothDamp::new(0.2);
-        let mut pos = 0.0_f64;
-        let mut max_seen = 0.0_f64;
-        for _ in 0..240 {
-            pos = damp.step(pos, 100.0, 1.0 / 120.0);
-            max_seen = max_seen.max(pos);
-        }
-        assert!(
-            (pos - 100.0).abs() < 0.5,
-            "must converge near the target, got {pos}"
-        );
-        assert!(
-            max_seen <= 100.0 + 1e-3,
-            "critically damped follower must not overshoot, peaked at {max_seen}"
-        );
-    }
-}

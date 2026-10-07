@@ -84,7 +84,7 @@
 //! [`Listenable`]: flui_foundation::Listenable
 //! [`Arc`]: std::sync::Arc
 
-// Ship bar (wave 3): every public item is documented; keep it that way.
+// Every public item is documented; keep it that way.
 #![deny(missing_docs)]
 
 // Core animation modules

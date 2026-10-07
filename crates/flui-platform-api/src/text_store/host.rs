@@ -2,7 +2,7 @@
 
 use std::rc::Rc;
 
-use super::lock::{LockGrant, LockTiming};
+use super::lock::{LockGrant, LockOutcome, LockTiming, TextStoreError};
 use super::store::TextStore;
 
 /// A pull-model platform's side of one window's text input: the object a
@@ -89,9 +89,20 @@ pub enum TextStoreHostError {
 /// instead of asking a host.
 ///
 /// The lock is asynchronous, so inside a frame transaction the edit waits for
-/// the commit anchor like any other grant. A refusal is logged with
-/// `tracing::warn!`: no caller is left to act on it.
-pub fn commit_composition_in_place(store: &dyn TextStore) {
+/// the commit anchor like any other grant, and so does one requested while a
+/// grant on the store is running (from inside that grant's code).
+///
+/// Returns what the store did with the request. [`LockOutcome::Deferred`]
+/// means the commit is queued in the store: whoever accepted the completion
+/// owes it a later [`TextStore::run_deferred_grants`], whether or not its
+/// frame transaction was open when it asked, since the grant ahead of it may
+/// fail and leave it queued. A refusal is also logged with `tracing::warn!`.
+///
+/// # Errors
+///
+/// The store's refusal of the lock ([`TextStore::request_lock`]); the
+/// composition is then left as it was.
+pub fn commit_composition_in_place(store: &dyn TextStore) -> Result<LockOutcome, TextStoreError> {
     let grant = LockGrant::read_write(|session| {
         if session.composition().is_some()
             && let Err(error) = session.set_composition(None)
@@ -99,7 +110,9 @@ pub fn commit_composition_in_place(store: &dyn TextStore) {
             tracing::warn!(?error, "a composition could not be committed in place");
         }
     });
-    if let Err(error) = store.request_lock(grant, LockTiming::Async) {
-        tracing::warn!(?error, "a composition could not be committed in place");
-    }
+    store
+        .request_lock(grant, LockTiming::Async)
+        .inspect_err(|error| {
+            tracing::warn!(?error, "a composition could not be committed in place");
+        })
 }

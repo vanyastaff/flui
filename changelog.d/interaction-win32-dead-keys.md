@@ -1,0 +1,3 @@
+### Fixed
+
+- Win32: a dead key (an accent on an international layout) is reported as `NamedKey::Dead` on both press and release, instead of its unshifted character, so shortcuts bound to that character no longer fire while composing an accented letter.
