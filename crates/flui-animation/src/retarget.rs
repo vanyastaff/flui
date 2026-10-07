@@ -8,7 +8,11 @@
 //! value and velocity (C⁰ and C¹) however often it is interrupted.
 //!
 //! - A **spring** segment is the damped spring from `(x0, v0)` toward the
-//!   target; its velocity is analytic.
+//!   target; its value and velocity are analytic for every `t`. It never
+//!   snaps: *settled* means within the spring's distance tolerance of the
+//!   target, and the value keeps converging continuously from there, with no
+//!   final jump. As `t → ∞` the value reaches the target and the velocity
+//!   zero, and both stay finite for every `t`.
 //! - A **curve** segment follows `x0 + Δ·c(τ)` over the duration, `τ = t / D`,
 //!   bent by a Hermite term `r·D·τ(1 − τ)²` with
 //!   `r = v0 − Δ·c'(0) / D`. The term is zero at both ends and its derivative
@@ -75,10 +79,10 @@ pub(crate) enum Segment {
     Rest(f64),
     /// A spring from the seam's value and velocity.
     ///
-    /// The simulation snaps to its target once within tolerance, which a
-    /// small retarget from rest already is at the seam; the seam itself
-    /// reads `x0` and `v0` and is never done, so the snap lands on the next
-    /// sample like any spring's arrival instead of breaking C⁰ at the seam.
+    /// The simulation does not snap to its target: being within tolerance
+    /// only makes [`is_done`](Self::is_done) true, and the published value
+    /// and velocity stay the analytic spring's. The seam reads `x0` and `v0`
+    /// exactly, and is never done.
     Spring {
         simulation: SpringSimulation,
         x0: f64,
@@ -130,7 +134,7 @@ impl Segment {
         }
         match motion {
             MotionSpec::Spring(spring) => Self::Spring {
-                simulation: SpringSimulation::new(*spring, x0, target, v0).with_snap_to_end(true),
+                simulation: SpringSimulation::new(*spring, x0, target, v0),
                 x0,
                 v0,
             },
@@ -182,7 +186,9 @@ impl Segment {
         }
     }
 
-    /// Whether the segment has come to rest at its target by `t`.
+    /// Whether the segment has settled by `t`: a curve has arrived, a spring
+    /// is within its distance tolerance of the target. Settling never changes
+    /// [`x`](Self::x) or [`dx`](Self::dx); a spring keeps converging.
     pub(crate) fn is_done(&self, t: f64) -> bool {
         let t = seam_time(t);
         match self {

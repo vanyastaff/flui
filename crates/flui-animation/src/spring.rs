@@ -265,7 +265,14 @@ impl<T: TwoWayConverter> AnimatedValue<T> {
         &self.target
     }
 
-    /// Whether every component has come to rest at its target.
+    /// Whether every component has settled: a curve segment has arrived, a
+    /// spring is within its distance tolerance of the target.
+    ///
+    /// Settled means within tolerance; the value keeps converging
+    /// continuously, with no final jump. A settled spring's
+    /// [`value`](Self::value) may still differ from the target by up to the
+    /// tolerance and keeps approaching it, so stop driving frames on
+    /// `is_settled`, not on `value() == target`.
     #[must_use]
     pub fn is_settled(&self) -> bool {
         self.components

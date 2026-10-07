@@ -97,13 +97,9 @@ fn seam<T: flui_animation::TwoWayConverter>(
 ) {
     let before = value.value().to_vector();
     let velocity_before = value.velocity();
-    let goal = target.to_vector();
     value.animate_to(target);
     let after = value.value().to_vector();
     let velocity_after = value.velocity();
-    let mut probe = value.clone();
-    probe.advance(2e-5);
-    let probed = probe.value().to_vector();
     for component in 0..before.as_ref().len() {
         let (x0, x1) = (before.as_ref()[component], after.as_ref()[component]);
         let (v0, v1) = (
@@ -116,17 +112,7 @@ fn seam<T: flui_animation::TwoWayConverter>(
         );
         assert!(close(x1, x0, 1e-12), "C0 broken: {x0} -> {x1}");
         assert!(close(v1, v0, 1e-9), "C1 broken: {v0} -> {v1}");
-        // A spring that starts within its tolerance of the target snaps onto
-        // it on the first sample after the seam: the spring's arrival, a jump
-        // of at most the 1e-3 distance tolerance, which no finite difference
-        // across it can match.
-        let goal = goal.as_ref()[component];
-        let arrives = matches!(mode, Mode::Spring { .. })
-            && probed.as_ref()[component] == goal
-            && (goal - x1).abs() <= 1e-3;
-        if !arrives {
-            assert_velocity_is_the_derivative(value, component, mode, range);
-        }
+        assert_velocity_is_the_derivative(value, component, mode, range);
     }
 }
 
@@ -309,8 +295,8 @@ fn seam_at_zero() {
 }
 
 /// A spring retargeted by less than its distance tolerance, from rest, starts
-/// where it is and reaches the target on the next frame instead of jumping
-/// there at the seam.
+/// where it is instead of jumping to the target at the seam, is settled on the
+/// next frame, and is still moving continuously toward the target there.
 fn a_retarget_within_the_spring_tolerance_starts_at_the_seam() {
     let mode = Mode::Spring {
         omega: 1.0,
@@ -323,7 +309,53 @@ fn a_retarget_within_the_spring_tolerance_starts_at_the_seam() {
     assert!(!value.is_settled(), "settled away from its target");
     value.advance(1.0 / 60.0);
     assert!(value.is_settled());
-    assert_eq!(value.value(), target);
+    let y = value.value().dy;
+    assert!(y < 0.0 && y > target.dy, "not converging continuously: {y}");
+    assert_velocity_is_the_derivative(&value, 1, &mode, 1e-3);
+}
+
+/// A spring whose rest boundary falls between two frames: the frame before is
+/// not settled, the frame after is, and the finite difference across the
+/// boundary matches the reported velocity there. A spring that snapped onto
+/// its target at the boundary would jump by up to its tolerance instead.
+fn the_spring_rest_boundary_is_c1() {
+    let mode = Mode::Spring {
+        omega: 10.0,
+        zeta: 1.0,
+    };
+    let mut value = AnimatedValue::with_motion(0.0_f64, mode.spec());
+    value.animate_to(1.0);
+    let frame = 1.0 / 60.0;
+    let mut frames = 0;
+    while !value.is_settled() {
+        value.advance(frame);
+        frames += 1;
+        assert!(frames < 600, "never settled");
+    }
+    // Step back to the last unsettled frame and straddle the boundary with a
+    // central difference.
+    let mut before = AnimatedValue::with_motion(0.0_f64, mode.spec());
+    before.animate_to(1.0);
+    before.advance(frame * f64::from(frames - 1));
+    assert!(!before.is_settled());
+    let mut after = before.clone();
+    after.advance(frame);
+    assert!(after.is_settled());
+    let mut middle = before.clone();
+    middle.advance(frame / 2.0);
+    let difference = (after.value() - before.value()) / frame;
+    let v = middle.velocity()[0];
+    // Central-difference truncation for this spring is |x'''|·h²/24, far
+    // below 1e-4 here; a snap would add up to 1e-3/h = 6e-2.
+    assert!(
+        (difference - v).abs() <= 1e-4,
+        "finite difference {difference} across the rest boundary is not the velocity {v}"
+    );
+    assert!(
+        after.value() < 1.0,
+        "jumped onto the target: {}",
+        after.value()
+    );
 }
 
 fn seam_on_the_completing_frame() {
@@ -450,6 +482,10 @@ fn retarget_seams() {
         (
             "a_retarget_within_the_spring_tolerance_starts_at_the_seam",
             a_retarget_within_the_spring_tolerance_starts_at_the_seam,
+        ),
+        (
+            "the_spring_rest_boundary_is_c1",
+            the_spring_rest_boundary_is_c1,
         ),
         ("seam_on_the_completing_frame", seam_on_the_completing_frame),
         (
