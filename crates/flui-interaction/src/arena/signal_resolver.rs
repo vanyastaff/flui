@@ -148,10 +148,13 @@ impl PointerSignalResolver {
     {
         let mut inner = self.inner.borrow_mut();
 
-        let next_handler_id = inner
-            .next_handler_id
-            .checked_add(1)
-            .expect("BUG: pointer signal handler ID exhausted");
+        let Some(next_handler_id) = inner.next_handler_id.checked_add(1) else {
+            drop(inner);
+            // The invariant failure is authoritative: dropping a rejected
+            // callback capture while it unwinds could cause a second panic.
+            std::mem::forget(callback);
+            panic!("BUG: pointer signal handler ID exhausted");
+        };
         let handler_id = HandlerId::new(inner.next_handler_id);
         inner.next_handler_id = next_handler_id;
 
