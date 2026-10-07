@@ -190,6 +190,39 @@ host.
 
 ## Mapping decisions
 
+### Frame input and ambient hover belong to each presentation
+
+The frame drains deferred arena decisions and queued pointer motion in
+presentation insertion order. Each phase has its own containment boundary:
+a failing callback does not suppress the remaining motion or a sibling's
+accepted work, and the first failure resumes after the input pass completes.
+Ambient hover refresh uses each presentation's own hit-test tree only when
+that tree's terminal revision has been acknowledged. A failed or uncommitted
+sibling supplies neither another window's tree nor a reason to skip a
+committed window's refresh.
+
+The public `flui-testing` rows
+`a_secondary_contact_move_is_delivered_by_the_next_frame`,
+`a_secondary_deferred_arena_verdict_is_delivered_by_the_next_frame` and
+`a_secondary_layout_refreshes_its_stationary_hover` pin the frame producers.
+`a_panicking_primary_motion_does_not_erase_the_secondary_motion` and
+`competing_frame_motion_failures_preserve_the_first_and_recover` pin accepted
+sibling delivery, exact first-failure authority and the next healthy frame.
+
+### Suspension drains queued motion while focus loss preserves hover
+
+Pointer cancellation first delivers terminal Cancel to active widget routes.
+Hidden, paused and detached execution additionally invokes the binding's
+lifecycle drain, including when a Cancel callback fails; ordinary window
+focus loss keeps its queued hover. A completed contact held for the first
+tree acknowledgement remains accepted input across a reversible pause.
+
+`host_pause_discards_a_queued_hover_before_resume`,
+`window_blur_keeps_a_queued_hover` and
+`host_pause_keeps_a_completed_held_tap_for_the_first_commit` exercise these
+contracts through addressed platform input and the real realm pump in
+`flui-testing`'s `containment_and_isolation_matrix`.
+
 ### The frame runtime is a crate below the hosts
 
 The frame runtime is per realm and per presentation (ADR-0027, no process-wide
