@@ -1166,6 +1166,22 @@ fn elastic_wire() {
 }
 
 #[cfg(feature = "serde")]
+fn steps_wire() {
+    round_trips(
+        &Steps::new(4, JumpAt::Start),
+        r#"{"count":4,"jump":"Start"}"#,
+    );
+    rejects::<Steps>(
+        r#"{"count":1,"jump":"None"}"#,
+        &Steps::try_new(1, JumpAt::None).expect_err("too few"),
+    );
+    rejects::<Steps>(
+        r#"{"count":0,"jump":"End"}"#,
+        &Steps::try_new(0, JumpAt::End).expect_err("zero"),
+    );
+}
+
+#[cfg(feature = "serde")]
 #[test]
 fn curve_serde_round_trip_keeps_the_wire_format() {
     crate::run_table(&[
@@ -1173,6 +1189,7 @@ fn curve_serde_round_trip_keeps_the_wire_format() {
         ("three-point cubic", three_point_wire),
         ("interval", interval_wire),
         ("elastic", elastic_wire),
+        ("steps", steps_wire),
     ]);
 }
 

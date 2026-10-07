@@ -425,5 +425,13 @@ fn linear_progress_switches_to_determinate() {
             "progress_indicator::values outside the range are clamped",
             progress_indicator::values_outside_the_range_are_clamped,
         ),
+        (
+            "progress_indicator::right-to-left progress starts at the right",
+            progress_indicator::right_to_left_progress_starts_at_the_right,
+        ),
+        (
+            "progress_indicator::negative zero announces zero percent",
+            progress_indicator::negative_zero_announces_zero_percent,
+        ),
     ]);
 }

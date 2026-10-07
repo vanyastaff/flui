@@ -293,10 +293,17 @@ impl<T: Lerp + TwoWayConverter> Segment<T> {
 }
 
 /// `(a − b) · scale` per component, with non-finite components as 0.
+///
+/// The difference of two finite components can overflow before a shrinking
+/// `scale` brings it back into range, so an overflowing difference is
+/// recomputed as `a · scale − b · scale`.
 fn difference<V: AsRef<[f64]> + AsMut<[f64]> + Copy>(a: V, b: V, scale: f64) -> V {
     let mut out = a;
     for (component, &b) in out.as_mut().iter_mut().zip(b.as_ref()) {
-        let value = (*component - b) * scale;
+        let mut value = (*component - b) * scale;
+        if !value.is_finite() {
+            value = *component * scale - b * scale;
+        }
         *component = if value.is_finite() { value } else { 0.0 };
     }
     out
@@ -374,10 +381,22 @@ impl<T: Lerp + TwoWayConverter> KeyframesBuilder<T> {
             segments: pending,
         } = self;
         if total.is_zero() {
-            return Err(KeyframesError::ZeroTotal);
+            return Err(reject(
+                KeyframesError::ZeroTotal,
+                vec![start],
+                None,
+                Vec::new(),
+                pending,
+            ));
         }
         if !is_finite_vector(&start.to_vector()) {
-            return Err(KeyframesError::NonFiniteValue { index: 0 });
+            return Err(reject(
+                KeyframesError::NonFiniteValue { index: 0 },
+                vec![start],
+                None,
+                Vec::new(),
+                pending,
+            ));
         }
         let mut zero = start.to_vector();
         zero.as_mut().fill(0.0);
@@ -385,7 +404,8 @@ impl<T: Lerp + TwoWayConverter> KeyframesBuilder<T> {
         let mut segments = Vec::with_capacity(pending.len());
         let mut cursor = Duration::ZERO;
         let mut current = start.clone();
-        for (index, pending) in pending.into_iter().enumerate() {
+        let mut rest = pending.into_iter().enumerate();
+        while let Some((index, pending)) = rest.next() {
             let (value, over, motion) = match pending {
                 Pending::Eased { value, over, curve } => (value, over, Motion::Eased(curve)),
                 Pending::Cubic { value, over } => (
@@ -399,15 +419,27 @@ impl<T: Lerp + TwoWayConverter> KeyframesBuilder<T> {
                 Pending::Hold { over } => (current.clone(), over, Motion::Hold),
                 Pending::Jump { value } => (value, Duration::ZERO, Motion::Jump),
             };
-            if !is_finite_vector(&value.to_vector()) {
-                return Err(KeyframesError::NonFiniteValue { index: index + 1 });
-            }
-            let end = cursor
-                .checked_add(over)
-                .ok_or(KeyframesError::DurationOverflow { index })?;
-            if end > total {
-                return Err(KeyframesError::Overrun { index, end, total });
-            }
+            let end = if is_finite_vector(&value.to_vector()) {
+                match cursor.checked_add(over) {
+                    Some(end) if end > total => Err(KeyframesError::Overrun { index, end, total }),
+                    Some(end) => Ok(end),
+                    None => Err(KeyframesError::DurationOverflow { index }),
+                }
+            } else {
+                Err(KeyframesError::NonFiniteValue { index: index + 1 })
+            };
+            let end = match end {
+                Ok(end) => end,
+                Err(error) => {
+                    return Err(reject(
+                        error,
+                        vec![start, current, value],
+                        Some(motion),
+                        segments,
+                        rest.map(|(_, pending)| pending),
+                    ));
+                }
+            };
             segments.push(Segment {
                 start: cursor,
                 end,
@@ -471,6 +503,50 @@ fn catmull_rom<V: AsRef<[f64]> + AsMut<[f64]> + Copy>(
 ) -> V {
     let span = at_after.saturating_sub(at_before).as_secs_f64();
     difference(after, before, 1.0 / span)
+}
+
+/// Releases everything a rejected build owns and returns `error`.
+///
+/// Keyframe values and curves are user types whose destructors may panic.
+/// Each is dropped on its own under containment, so a panicking destructor
+/// neither replaces the validation error nor meets a second one mid-unwind.
+fn reject<T: TwoWayConverter>(
+    error: KeyframesError,
+    values: Vec<T>,
+    motion: Option<Motion<T::Vector>>,
+    segments: Vec<Segment<T>>,
+    rest: impl IntoIterator<Item = Pending<T>>,
+) -> KeyframesError {
+    for value in values {
+        discard(value);
+    }
+    discard(motion);
+    for Segment {
+        from, to, motion, ..
+    } in segments
+    {
+        discard(from);
+        discard(to);
+        discard(motion);
+    }
+    for pending in rest {
+        match pending {
+            Pending::Eased { value, curve, .. } => {
+                discard(value);
+                discard(curve);
+            }
+            Pending::Cubic { value, .. } | Pending::Jump { value } => discard(value),
+            Pending::Hold { .. } => {}
+        }
+    }
+    error
+}
+
+/// Drops `value`, retaining the payload if its destructor panics.
+fn discard<V>(value: V) {
+    if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(value))) {
+        flui_foundation::panic::retain_opaque_payload(payload);
+    }
 }
 
 impl<T: Lerp + TwoWayConverter> Animatable<T> for Keyframes<T> {

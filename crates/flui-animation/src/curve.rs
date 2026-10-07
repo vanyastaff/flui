@@ -1684,6 +1684,11 @@ pub enum JumpAt {
 /// CSS value with the before flag set at 0. FLUI has no before/after phases,
 /// so the before flag is not modelled. Monotone (non-decreasing).
 ///
+/// # Serde
+///
+/// Serializes as `{ "count": n, "jump": "End" }`; decoding rejects what
+/// [`Steps::try_new`] rejects.
+///
 /// # Examples
 ///
 /// ```
@@ -1695,6 +1700,8 @@ pub enum JumpAt {
 /// assert_eq!(Steps::new(4, JumpAt::Start).transform(0.1), 0.25);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(try_from = "StepsWire", into = "StepsWire"))]
 pub struct Steps {
     count: u32,
     jump: JumpAt,
@@ -1751,6 +1758,34 @@ impl Steps {
     /// ```
     pub fn try_new(count: u32, jump: JumpAt) -> Result<Self, CurveError> {
         Self::validate(count, jump)
+    }
+}
+
+/// The serialized form of [`Steps`].
+#[cfg(feature = "serde")]
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename = "Steps")]
+struct StepsWire {
+    count: u32,
+    jump: JumpAt,
+}
+
+#[cfg(feature = "serde")]
+impl From<Steps> for StepsWire {
+    fn from(steps: Steps) -> Self {
+        Self {
+            count: steps.count,
+            jump: steps.jump,
+        }
+    }
+}
+
+#[cfg(feature = "serde")]
+impl TryFrom<StepsWire> for Steps {
+    type Error = CurveError;
+
+    fn try_from(wire: StepsWire) -> Result<Self, CurveError> {
+        Self::try_new(wire.count, wire.jump)
     }
 }
 

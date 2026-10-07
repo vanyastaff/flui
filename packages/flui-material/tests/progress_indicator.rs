@@ -6,7 +6,8 @@
 use std::time::Duration;
 
 use flui_sdk::animation::{Cubic, Curve, Vsync};
-use flui_sdk::painting::{Color, DrawOp};
+use flui_sdk::painting::{Color, DrawOp, TextDirection};
+use flui_sdk::widgets::Directionality;
 use flui_sdk::widgets::animated::VsyncScope;
 use flui_testing::a11y::Role;
 
@@ -55,11 +56,18 @@ struct Mounted {
 }
 
 fn mount(indicator: LinearProgressIndicator) -> Mounted {
+    mount_in(TextDirection::Ltr, indicator)
+}
+
+fn mount_in(direction: TextDirection, indicator: LinearProgressIndicator) -> Mounted {
     let theme = ThemeData::light();
     let primary = theme.color_scheme.primary;
     let vsync = Vsync::new();
     let mut laid = lay_out_animated(
-        VsyncScope::new(vsync.clone(), Theme::new(theme, indicator)),
+        VsyncScope::new(
+            vsync.clone(),
+            Directionality::new(direction, Theme::new(theme, indicator)),
+        ),
         tight(WIDTH, HEIGHT),
         vsync.clone(),
     );
@@ -128,6 +136,43 @@ pub fn values_outside_the_range_are_clamped() {
         assert_eq!(painted_right, right, "{value:?}");
         assert_eq!(mounted.vsync.len(), 0, "a value runs no controller");
     }
+}
+
+pub fn right_to_left_progress_starts_at_the_right() {
+    let mounted = mount_in(
+        TextDirection::Rtl,
+        LinearProgressIndicator::new().value(Some(0.25)),
+    );
+    assert_eq!(
+        painted_bars(&mounted.laid, mounted.primary),
+        [(180.0, 240.0)]
+    );
+
+    let mut mounted = mount_in(TextDirection::Rtl, LinearProgressIndicator::new());
+    mounted.laid.pump_for(ms(1100));
+    let painted = painted_bars(&mounted.laid, mounted.primary);
+    // Both bars are on the track at 1100 ms; each is its LTR span mirrored
+    // about the centre.
+    let expected: Vec<(f64, f64)> = expected_bars(1100.0)
+        .into_iter()
+        .map(|(tail, head)| (WIDTH - head * WIDTH, WIDTH - tail * WIDTH))
+        .collect();
+    assert_eq!(painted.len(), 2, "{painted:?}");
+    for (bar, want) in painted.iter().zip(&expected) {
+        assert!(
+            (bar.0 - want.0).abs() < 1e-6 && (bar.1 - want.1).abs() < 1e-6,
+            "painted {bar:?}, expected {want:?}"
+        );
+    }
+}
+
+pub fn negative_zero_announces_zero_percent() {
+    let mut mounted = mount(LinearProgressIndicator::new().value(Some(-0.0)));
+    mounted.laid.enable_semantics();
+    mounted.laid.tick();
+    let tree = mounted.laid.a11y_tree().expect("semantics enabled");
+    let node = tree.find_by_label("Loading").expect("the default label");
+    assert_eq!(node.value(), Some("0%"));
 }
 
 pub fn announced_as_progress() {

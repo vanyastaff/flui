@@ -206,9 +206,6 @@ assert_eq!(ticks.transform(0.124), 0.0);
 assert_eq!(ticks.transform(0.125), 0.125);
 ```
 
-To run a curve backwards in time, reverse the animation that drives it
-(`ReverseAnimation`, `AnimationExt::reversed`), not the curve.
-
 ---
 
 ## Tweens

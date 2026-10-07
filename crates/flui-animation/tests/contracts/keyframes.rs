@@ -11,8 +11,8 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::time::Duration;
 
 use flui_animation::{
-    Animatable, Curve, Curves, JumpAt, Keyframes, KeyframesError, Linear, Stagger, StaggerOrigin,
-    Steps,
+    Animatable, Curve, Curves, JumpAt, Keyframes, KeyframesError, Lerp, Linear, Stagger,
+    StaggerOrigin, Steps, TwoWayConverter,
 };
 use proptest::prelude::*;
 
@@ -362,7 +362,77 @@ fn keyframes_build_rejects_invalid_tracks() {
         ("non-finite start", non_finite_start),
         ("non-finite keyframe", non_finite_keyframe),
         ("non-finite jump", non_finite_jump),
+        ("panicking drops", panicking_drops_keep_the_validation_error),
     ]);
+}
+
+/// A keyframe value whose destructor panics.
+#[derive(Clone, Debug)]
+struct Volatile(f64);
+
+impl Drop for Volatile {
+    fn drop(&mut self) {
+        panic!("volatile keyframe dropped");
+    }
+}
+
+impl Lerp for Volatile {
+    fn lerp_to(&self, other: &Self, t: f64) -> Self {
+        Self(self.0 + (other.0 - self.0) * t)
+    }
+}
+
+impl TwoWayConverter for Volatile {
+    type Vector = [f64; 1];
+    fn to_vector(&self) -> [f64; 1] {
+        [self.0]
+    }
+    fn from_vector(v: [f64; 1]) -> Self {
+        Self(v[0])
+    }
+}
+
+type VolatileBuild = fn() -> Result<Keyframes<Volatile>, KeyframesError>;
+
+fn panicking_drops_keep_the_validation_error() {
+    let cases: [(VolatileBuild, KeyframesError); 3] = [
+        (
+            || {
+                Keyframes::builder(Volatile(0.0), Duration::ZERO)
+                    .to(Volatile(1.0), ms(10), Linear)
+                    .build()
+            },
+            KeyframesError::ZeroTotal,
+        ),
+        (
+            || {
+                Keyframes::builder(Volatile(0.0), ms(100))
+                    .to(Volatile(1.0), ms(60), Linear)
+                    .cubic(Volatile(2.0), ms(60))
+                    .jump(Volatile(3.0))
+                    .build()
+            },
+            KeyframesError::Overrun {
+                index: 1,
+                end: ms(120),
+                total: ms(100),
+            },
+        ),
+        (
+            || {
+                Keyframes::builder(Volatile(0.0), ms(100))
+                    .to(Volatile(f64::NAN), ms(10), Linear)
+                    .build()
+            },
+            KeyframesError::NonFiniteValue { index: 1 },
+        ),
+    ];
+    for (build, expected) in cases {
+        let error = catch_unwind(AssertUnwindSafe(build))
+            .expect("a panicking keyframe destructor must not escape build")
+            .expect_err("the track is invalid");
+        assert_eq!(error, expected);
+    }
 }
 
 // ---- non-finite samples -----------------------------------------------------
@@ -420,7 +490,24 @@ fn keyframes_never_publish_non_finite() {
         ("infinite curve", infinite_curve_publishes_segment_start),
         ("overflowing cubic", overflowing_cubic_stays_finite),
         ("overflowing ramp", overflowing_ramp_stays_finite),
+        (
+            "far-apart Catmull-Rom tangent",
+            far_apart_catmull_rom_tangent_survives,
+        ),
     ]);
+}
+
+fn far_apart_catmull_rom_tangent_survives() {
+    let track = Keyframes::builder(1e308, Duration::from_secs(2))
+        .cubic(0.0, Duration::from_secs(1))
+        .cubic(-1e308, Duration::from_secs(1))
+        .build()
+        .expect("finite keyframes");
+    // Hermite at s = 1/2 with p0 = 1e308, m0 = 0 (track start), p1 = 0 and
+    // m1 = (−1e308 − 1e308) / 2 s = −1e308 per second over a 1 s segment:
+    // h00 · p0 + h11 · m1 = 0.5 · 1e308 + (−0.125) · (−1e308) = 6.25e307.
+    let mid = track.value_at(ms(500));
+    assert!((mid - 6.25e307).abs() <= 1e293, "midpoint: {mid}");
 }
 
 // ---- cubic segments ---------------------------------------------------------

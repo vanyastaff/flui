@@ -18,10 +18,10 @@ use flui_sdk::animation::{
 };
 use flui_sdk::foundation::Listenable;
 use flui_sdk::geometry::{Rect, Size};
-use flui_sdk::painting::{Canvas, Color, Paint};
+use flui_sdk::painting::{Canvas, Color, Paint, TextDirection};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::animated::VsyncScope;
-use flui_sdk::widgets::{CustomPaint, CustomPainter, Semantics, SemanticsRole};
+use flui_sdk::widgets::{CustomPaint, CustomPainter, Directionality, Semantics, SemanticsRole};
 
 use crate::theme::Theme;
 
@@ -43,6 +43,10 @@ const BAR_ENDS: [(u64, u64); 4] = [(0, 1000), (250, 1000), (650, 850), (900, 850
 /// without one it is indeterminate and animates while a [`VsyncScope`] ticks
 /// it (without one, or under a disabled `TickerMode`, it paints the cycle's
 /// first frame). Needs a [`Theme`] ancestor for its colors.
+///
+/// Under a right-to-left [`Directionality`] progress starts at the right
+/// edge: the fill grows leftward and the indeterminate bars travel right to
+/// left.
 ///
 /// Assistive technology sees a progress bar with the percentage as its
 /// value, or a loading spinner while indeterminate, labelled with
@@ -80,10 +84,11 @@ impl LinearProgressIndicator {
     #[must_use]
     pub fn value(mut self, value: Option<f64>) -> Self {
         self.value = value.map(|fraction| {
-            if fraction.is_nan() {
+            // NaN and both zeros store +0, so semantics never reads "-0%".
+            if fraction.is_nan() || fraction <= 0.0 {
                 0.0
             } else {
-                fraction.clamp(0.0, 1.0)
+                fraction.min(1.0)
             }
         });
         self
@@ -194,6 +199,7 @@ impl ViewState<LinearProgressIndicator> for LinearProgressIndicatorState {
             },
             track: colors.secondary_container,
             bar: colors.primary,
+            rtl: Directionality::maybe_of(ctx) == Some(TextDirection::Rtl),
         };
         let semantics = Semantics::new().label(view.label.clone());
         let semantics = match view.value {
@@ -236,6 +242,9 @@ struct BarPainter {
     progress: Progress,
     track: Color,
     bar: Color,
+    /// Progress runs from the right edge: the fill grows leftward and the
+    /// indeterminate bars travel right to left.
+    rtl: bool,
 }
 
 impl CustomPainter for BarPainter {
@@ -249,9 +258,10 @@ impl CustomPainter for BarPainter {
         );
         let bar = |canvas: &mut Canvas, from: f64, to: f64| {
             if to > from {
+                let left = if self.rtl { 1.0 - to } else { from };
                 canvas.draw_rect(
                     Rect::from_ltwh(
-                        from * size.width,
+                        left * size.width,
                         0.0,
                         (to - from) * size.width,
                         size.height,
@@ -277,6 +287,7 @@ impl CustomPainter for BarPainter {
             return true;
         };
         old.track != self.track
+            || old.rtl != self.rtl
             || old.bar != self.bar
             || match (&old.progress, &self.progress) {
                 (Progress::Done(a), Progress::Done(b)) => a != b,

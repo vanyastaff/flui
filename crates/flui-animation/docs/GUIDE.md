@@ -375,9 +375,6 @@ use flui_animation::ReverseAnimation;
 let reversed = ReverseAnimation::new(controller.clone());
 // value = 1.0 - parent.value()
 // Forward ↔ Reverse, Completed ↔ Dismissed
-
-// Or with extension
-let reversed = Arc::new(controller).reversed();
 ```
 
 ### CompoundAnimation
