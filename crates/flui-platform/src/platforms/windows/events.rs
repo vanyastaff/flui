@@ -179,6 +179,217 @@ use crate::{
     traits::{PlatformInput, device_to_logical},
 };
 
+/// Snapshot the OS query before committing state or calling presentation code.
+#[derive(Clone, Copy)]
+enum NativeReading {
+    Pointer(windows::Win32::UI::Input::Pointer::POINTER_INFO),
+    Pen(windows::Win32::UI::Input::Pointer::POINTER_PEN_INFO),
+    Touch(windows::Win32::UI::Input::Pointer::POINTER_TOUCH_INFO),
+}
+
+struct DecodedPointer {
+    kind: flui_platform_api::pointer::PointerKind,
+    role: flui_platform_api::pointer::PointerRole,
+    device: Option<flui_platform_api::pointer::DeviceId>,
+    sample: flui_platform_api::pointer::PointerSample,
+}
+
+fn decode_native_reading(
+    _reading: NativeReading,
+    _client_offset: POINT,
+    _scale: f64,
+    _time: flui_platform_api::EventTime,
+) -> Option<DecodedPointer> {
+    None
+}
+
+#[cfg(test)]
+mod native_pointer_contracts {
+    use super::*;
+    use flui_platform_api::{
+        EventTime,
+        pointer::{PenTool, PointerKind, PointerRole},
+    };
+    use windows::Win32::{
+        Foundation::HANDLE,
+        UI::{
+            Input::Pointer::{
+                POINTER_FLAG_PRIMARY, POINTER_INFO, POINTER_PEN_INFO, POINTER_TOUCH_INFO,
+            },
+            WindowsAndMessaging::{
+                PEN_FLAG_ERASER, PEN_MASK_PRESSURE, PEN_MASK_ROTATION, PEN_MASK_TILT_X,
+                PEN_MASK_TILT_Y, PT_PEN, PT_TOUCH, TOUCH_MASK_CONTACTAREA, TOUCH_MASK_PRESSURE,
+            },
+        },
+    };
+
+    fn info() -> POINTER_INFO {
+        POINTER_INFO {
+            pointerId: 7,
+            sourceDevice: HANDLE(0x3450_usize as *mut core::ffi::c_void),
+            pointerFlags: POINTER_FLAG_PRIMARY,
+            ptPixelLocationRaw: POINT { x: 120, y: 220 },
+            ptPixelLocation: POINT { x: 900, y: 800 },
+            ..POINTER_INFO::default()
+        }
+    }
+    fn decoded(reading: NativeReading) -> DecodedPointer {
+        decode_native_reading(
+            reading,
+            POINT { x: -100, y: -200 },
+            2.0,
+            EventTime::from_nanos(0),
+        )
+        .expect("valid native reading must be delivered")
+    }
+    fn native_raw_position_and_identity_survive() {
+        let packet = decoded(NativeReading::Pointer(info()));
+        assert_eq!(
+            packet.sample.position.get(),
+            flui_foundation::geometry::Point::new(10.0, 10.0)
+        );
+        assert_eq!(packet.sample.time.as_nanos(), 0);
+        assert_eq!(packet.device.map(|device| device.get().get()), Some(0x3450));
+        assert_eq!(packet.role, PointerRole::Primary);
+        assert_eq!(packet.sample.pressure, None);
+        let mut secondary = info();
+        secondary.pointerFlags = Default::default();
+        secondary.sourceDevice = HANDLE::default();
+        let packet = decoded(NativeReading::Pointer(secondary));
+        assert_eq!(packet.role, PointerRole::Additional);
+        assert_eq!(
+            packet.device, None,
+            "missing hardware identity stays absent"
+        );
+    }
+    fn native_pen_masks_preserve_sensor_presence() {
+        let pen = POINTER_PEN_INFO {
+            pointerInfo: POINTER_INFO {
+                pointerType: PT_PEN,
+                ..info()
+            },
+            pressure: 1024,
+            rotation: 180,
+            tiltX: 45,
+            tiltY: 0,
+            ..Default::default()
+        };
+        let missing = decoded(NativeReading::Pen(pen));
+        assert_eq!(missing.kind, PointerKind::Pen { tool: PenTool::Tip });
+        assert_eq!(missing.sample.pressure, None);
+        assert_eq!(missing.sample.orientation, None);
+        assert_eq!(missing.sample.twist, None);
+        let present = decoded(NativeReading::Pen(POINTER_PEN_INFO {
+            penFlags: PEN_FLAG_ERASER,
+            penMask: PEN_MASK_PRESSURE | PEN_MASK_ROTATION | PEN_MASK_TILT_X | PEN_MASK_TILT_Y,
+            ..pen
+        }));
+        assert_eq!(
+            present.kind,
+            PointerKind::Pen {
+                tool: PenTool::Eraser
+            }
+        );
+        assert_eq!(
+            present.sample.pressure.map(|pressure| pressure.get()),
+            Some(1.0)
+        );
+        let orientation = present.sample.orientation.expect("both native tilt axes");
+        assert!(
+            (orientation.altitude().expect("altitude") - std::f64::consts::FRAC_PI_4).abs() < 1e-12
+        );
+        assert_eq!(orientation.azimuth(), Some(0.0));
+        assert!(
+            (present.sample.twist.expect("reported rotation").radians() - std::f64::consts::PI)
+                .abs()
+                < 1e-12
+        );
+        let partial = decoded(NativeReading::Pen(POINTER_PEN_INFO {
+            penMask: PEN_MASK_TILT_X,
+            ..pen
+        }));
+        assert_eq!(
+            partial.sample.orientation, None,
+            "one tilt axis does not determine a pen orientation"
+        );
+    }
+    fn native_touch_contact_and_pressure_are_measured() {
+        let touch = POINTER_TOUCH_INFO {
+            pointerInfo: POINTER_INFO {
+                pointerType: PT_TOUCH,
+                ..info()
+            },
+            touchMask: TOUCH_MASK_CONTACTAREA | TOUCH_MASK_PRESSURE,
+            rcContact: windows::Win32::Foundation::RECT {
+                left: 100,
+                top: 200,
+                right: 140,
+                bottom: 260,
+            },
+            pressure: 512,
+            ..Default::default()
+        };
+        let packet = decoded(NativeReading::Touch(touch));
+        assert_eq!(packet.kind, PointerKind::Touch);
+        assert_eq!(
+            packet.sample.pressure.map(|pressure| pressure.get()),
+            Some(0.5)
+        );
+        assert_eq!(
+            packet.sample.contact_size.expect("reported contact").get(),
+            flui_foundation::geometry::Size::new(20.0, 30.0)
+        );
+        let absent = decoded(NativeReading::Touch(POINTER_TOUCH_INFO {
+            touchMask: 0,
+            ..touch
+        }));
+        assert_eq!(absent.sample.pressure, None);
+        assert_eq!(absent.sample.contact_size, None);
+    }
+    fn invalid_native_sensor_and_scale_are_refused() {
+        for (pressure, scale) in [(1025, 1.0), (0, 0.0), (0, f64::NAN)] {
+            let pen = NativeReading::Pen(POINTER_PEN_INFO {
+                pointerInfo: POINTER_INFO {
+                    pointerType: PT_PEN,
+                    ..info()
+                },
+                penMask: PEN_MASK_PRESSURE,
+                pressure,
+                ..Default::default()
+            });
+            assert!(
+                decode_native_reading(pen, POINT::default(), scale, EventTime::from_nanos(1))
+                    .is_none()
+            );
+        }
+        let packet = decoded(NativeReading::Pen(POINTER_PEN_INFO {
+            pointerInfo: POINTER_INFO {
+                pointerType: PT_PEN,
+                ..info()
+            },
+            penMask: PEN_MASK_PRESSURE,
+            pressure: 0,
+            ..Default::default()
+        }));
+        assert_eq!(
+            packet.sample.pressure.map(|pressure| pressure.get()),
+            Some(0.0),
+            "reported zero is a sensor reading"
+        );
+    }
+    #[test]
+    fn native_pointer_decoding_contracts() {
+        for case in [
+            native_raw_position_and_identity_survive as fn(),
+            native_pen_masks_preserve_sensor_presence,
+            native_touch_contact_and_pressure_are_measured,
+            invalid_native_sensor_and_scale_are_refused,
+        ] {
+            case();
+        }
+    }
+}
+
 // ============================================================================
 // Message-time modifiers
 // ============================================================================
