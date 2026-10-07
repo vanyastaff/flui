@@ -20,18 +20,22 @@ baseline, not as a hardware promise.
 | `Tween<Offset>::transform` | ~0.66 ns |
 | `Tween<Color>::transform` | ~5.9 ns |
 | `Curves::Linear` | ~0.42 ns |
-| `Curves::ElasticOut` | ~7.4 ns |
-| `Curves::EaseInOut` (Cubic, Newton-Raphson solve) | ~11 ns |
+| `Curves::ElasticOut` | ~9–13 ns |
+| `Curves::EaseInOut` (Cubic, table + Newton, output-bounded) | ~15 ns |
+| `Curves::EaseInOutCubicEmphasized` (two precomputed `Cubic` segments) | ~25 ns |
 | `SpringSimulation` x + dx | ~19 ns |
 | `AnimatedValue<Color>` advance + value (4 component springs) | ~97 ns |
 | `AnimationController::tick_at` (frame advance) | ~8.8 ns |
 | `CurvedAnimation::value` (1 `Arc<dyn>` hop + cubic) | ~59 ns |
 
 The cubic-curve solve (`EaseInOut` and friends) inverts the bezier x-coordinate
-to find the parameter. It uses Newton-Raphson with a bisection fallback (the
-WebKit `UnitBezier` solver), which converges in 2-4 iterations — ~5× faster than
-the previous fixed 8-step bisection (~54 ns → ~11 ns) and more accurate (1e-6 vs
-the old ~5e-3 residual). All curves are comfortably within a 60fps frame budget.
+to find the parameter (the WebKit `UnitBezier` / Chromium `gfx::CubicBezier`
+method): an 11-sample x table built in `Cubic::new` brackets the root and seeds
+up to four Newton steps, two probes then prove the root lies within
+`1e-7 / max|dy/ds|` of the estimate, and bisection takes over when they do
+not. It stops on the output, so the result is within `1e-7` of the exact
+y(x) even next to a vertical tangent. All curves are comfortably within a
+60fps frame budget.
 
 > The tables below this point are illustrative structure/complexity notes, not
 > measured timings. Earlier hand-estimated nanosecond figures have been removed
@@ -178,8 +182,9 @@ table).
 | Curve | Size | Notes |
 |-------|------|-------|
 | `Linear` | 0 bytes | Unit struct |
-| `Cubic` | 16 bytes | 4 × f32 |
-| `ElasticInCurve` | 4 bytes | period: f32 |
+| `Cubic` | 176 bytes | 4 control values, 6 polynomial coefficients, slope bound, 11-sample x table (all `f64`) |
+| `ThreePointCubic` | 432 bytes | 5 points + two precomputed `Cubic` segments |
+| `ElasticInCurve` | 8 bytes | period: f64 |
 | `Interval<C>` | 8 + sizeof(C) | begin, end + curve |
 | `CatmullRomCurve` | 32 bytes | SmallVec (8 points inline) |
 
@@ -317,15 +322,15 @@ table above):
 | Curve | Operations | Relative cost |
 |-------|------------|---------------|
 | `Linear` | 1 clamp | trivial |
-| `EaseIn/Out` (`Cubic`) | Newton-Raphson bézier x-inversion (+ bisection fallback) | moderate |
+| `EaseIn/Out` (`Cubic`) | table lookup + Newton bézier x-inversion, two proof probes (+ bisection fallback) | moderate |
 | `EaseInOutSine` | 1 trig | low |
 | `ElasticIn/Out` | pow + sin | low-moderate |
 | `BounceOut` | 3-4 branches + muls | low |
 | `CatmullRomCurve` | spline interpolation | moderate |
 
 All curves are comfortably within a 60fps (~16ms) frame budget. The `Cubic`
-solve is the heaviest curve; it uses a Newton-Raphson bezier inversion with a
-bisection fallback (~11 ns), 2-4 iterations on the common path.
+solve is the heaviest single curve (~15 ns): a table lookup, a few Newton
+steps and two probes on the common path.
 
 ---
 
@@ -454,14 +459,18 @@ let ctrl2 = AnimationController::new(d, &scheduler);
 # ctrl2.dispose();
 ```
 
-### 5. Prefer Built-in Curves
+### 5. Build Custom Curves Once
 
-```rust,ignore
-// Good: optimized implementations
-Curves::EaseInOut
+`Cubic::new` precomputes the solver's coefficients and x table, so a custom
+cubic evaluates exactly as fast as a `Curves` constant. Make it a `const`
+(validated at compile time) rather than rebuilding it every frame:
 
-// Slower: custom cubic requires binary search
-Cubic::new(0.42, 0.0, 0.58, 1.0)
+```rust
+use flui_animation::{Cubic, Curve, Curves};
+
+const MY_EASE: Cubic = Cubic::new(0.42, 0.0, 0.58, 1.0);
+assert_eq!(MY_EASE, Curves::EaseInOut);
+assert_eq!(MY_EASE.transform(0.5), Curves::EaseInOut.transform(0.5));
 ```
 
 ---
