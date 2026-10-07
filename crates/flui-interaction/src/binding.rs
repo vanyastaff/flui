@@ -113,9 +113,8 @@ struct CachedPointerRoute {
     token: Option<ResolvedRouteToken>,
     sequence: PointerSequence,
     resampler: PointerEventResampler,
-    /// Device kind stamped on the sequence's Down, so a synthesized
-    /// terminal event (cancel-on-defocus) carries the same kind the
-    /// sequence's recognizers have been observing.
+    /// Latest admitted source metadata, so lifecycle cancellation preserves
+    /// the tool and role most recently observed on this contact.
     pointer: PointerInfo,
     /// Last accepted measured contact timestamp, retained for lifecycle
     /// cancellation that has no new platform timestamp of its own.
@@ -1144,6 +1143,25 @@ impl GestureBinding {
 
         let refused_tail = !self.hit_tests.contains_key(&pointer_id)
             && self.refused_contacts.borrow().contains(pointer_id);
+        if matches!(
+            event,
+            PointerEvent::Move(_)
+                | PointerEvent::Up(_)
+                | PointerEvent::Cancel(_)
+                | PointerEvent::ButtonChange(_)
+        ) && let Some(pointer) = crate::events::get_pointer_info(event)
+            && let Some(mut cached) = self.hit_tests.get_mut(&pointer_id)
+        {
+            // The map key already matches PointerId. Device identity completes
+            // the source; kind/tool and primary role may change during contact.
+            if cached.pointer.device != pointer.device {
+                return;
+            }
+            cached.pointer = *pointer;
+            if let Some(time) = crate::events::get_event_time(event) {
+                cached.time = time;
+            }
+        }
         match event {
             PointerEvent::Down(_) => {
                 if self.refused_contacts.borrow().refuses_down(pointer_id) {
@@ -1244,13 +1262,6 @@ impl GestureBinding {
                 }
             }
             PointerEvent::Move(pointer_move) => {
-                if self
-                    .hit_tests
-                    .get(&pointer_id)
-                    .is_some_and(|cached| cached.pointer != pointer_move.pointer)
-                {
-                    return;
-                }
                 let position = event
                     .position()
                     .expect("BUG: Move carries a checked position");
@@ -1270,6 +1281,12 @@ impl GestureBinding {
                                 sequence,
                             },
                         );
+                    }
+
+                    // A metadata boundary may synchronously deliver an older
+                    // packet whose callback replaces this contact's route.
+                    if !self.is_current_sequence(pointer_id, sequence) {
+                        return;
                     }
 
                     if matches!(
@@ -1432,9 +1449,9 @@ impl GestureBinding {
                 let cached = self
                     .hit_tests
                     .get(&pointer_id)
-                    .map(|cached| (cached.sequence, cached.token));
+                    .map(|cached| (cached.sequence, cached.token, cached.resampler.clone()));
                 let mut first_panic = None;
-                if let Some((sequence, token)) = cached {
+                if let Some((sequence, token, resampler)) = cached {
                     // Take the older accepted packet before any callback. A
                     // callback may enqueue its successor or replace this contact;
                     // neither belongs to the button edge admitted here.
@@ -1455,6 +1472,20 @@ impl GestureBinding {
                             delivered,
                             "button pending Move dispatch",
                         );
+                    }
+                    if self.is_resampling_enabled()
+                        && let Some(time) = crate::events::get_event_time(event)
+                    {
+                        resampler.flush_through(time, |movement| {
+                            if self.is_current_sequence(pointer_id, sequence) {
+                                let delivered = self.dispatch_event(&movement, token);
+                                RoutePanic::preserve_first(
+                                    &mut first_panic,
+                                    delivered,
+                                    "button measured Move dispatch",
+                                );
+                            }
+                        });
                     }
                     // A failed movement still owes the accepted edge, but an
                     // ended or replaced sequence must not receive stale input.
@@ -1571,9 +1602,45 @@ impl GestureBinding {
             let prior = previous
                 .take()
                 .expect("BUG: a coalescing refusal has an older dispatch");
-            let replaced = self.pending_moves.insert(pointer_id, prior);
-            drop(pending);
-            drop(replaced);
+            // Both packets are accepted. Publish the newer delivery debt before
+            // running the older packet's callbacks; reentry may replace or
+            // cancel it, and no later insertion may resurrect that old debt.
+            let replaced = self
+                .pending_moves
+                .insert(pointer_id, PendingMoveState::queued(generation, pending));
+            let mut first_panic = match RoutePanic::try_run(|| match prior.pending.as_ref() {
+                Some(PendingMove::Contact { event, sequence })
+                    if self.is_current_sequence(pointer_id, *sequence) =>
+                {
+                    self.dispatch_on_cached_route(pointer_id, event)
+                }
+                Some(PendingMove::Hover { event, hit_test }) => {
+                    self.dispatch_ephemeral(event, hit_test)
+                }
+                _ => None,
+            }) {
+                Ok(failure) => failure,
+                Err(failure) => Some(failure),
+            };
+            if first_panic.is_some() {
+                crate::retain::Retain::retain(crate::retain::Owned(prior));
+                crate::retain::Retain::retain(crate::retain::Owned(replaced));
+            } else {
+                let retired = RoutePanic::capture(|| drop(prior));
+                RoutePanic::preserve_first(
+                    &mut first_panic,
+                    retired,
+                    "older metadata packet retirement",
+                );
+                if first_panic.is_some() {
+                    crate::retain::Retain::retain(crate::retain::Owned(replaced));
+                } else {
+                    first_panic = RoutePanic::capture(|| drop(replaced));
+                }
+            }
+            if let Some(failure) = first_panic {
+                failure.resume();
+            }
             return;
         }
         let replaced = self

@@ -8,6 +8,7 @@
 use std::{
     cell::{Cell, RefCell},
     collections::VecDeque,
+    num::NonZeroU64,
     rc::{Rc, Weak},
     sync::atomic::{AtomicU64, Ordering as AtomicOrdering},
 };
@@ -34,7 +35,7 @@ fn allocate_focus_node_id(counter: &AtomicU64) -> FocusNodeId {
             |current| (current != 0).then(|| current.checked_add(1).unwrap_or(0)),
         )
         .expect("BUG: focus node identity capacity exhausted");
-    FocusNodeId::new(raw)
+    FocusNodeId::new(NonZeroU64::new(raw).expect("BUG: allocated focus identity is nonzero"))
 }
 
 /// Owner-local callback for handling key events.

@@ -6,6 +6,12 @@
 //! also retain the focus, hit-test, and text-input handles provided by
 //! [`crate::view::LifecycleContext`], using the callback and result types below.
 //! Owners and backend adapter construction remain internal to the runtime.
+//!
+//! The owning layer's internal runtime bridge is not part of this facade:
+//!
+//! ```compile_fail,E0432
+//! use flui::interaction::__runtime::CloseMode;
+//! ```
 
 pub use flui_interaction::arena::{
     GestureArena, GestureArenaEntry, GestureArenaMember, GestureArenaTeam, GestureDisposition,

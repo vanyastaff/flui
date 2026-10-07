@@ -38,7 +38,7 @@
 //! resolver.resolve(pointer_id, signal_event);
 //! ```
 
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, num::NonZeroU64, rc::Rc};
 
 use crate::{
     events::PointerEvent,
@@ -155,7 +155,10 @@ impl PointerSignalResolver {
             std::mem::forget(callback);
             panic!("BUG: pointer signal handler ID exhausted");
         };
-        let handler_id = HandlerId::new(inner.next_handler_id);
+        let handler_id = HandlerId::new(
+            NonZeroU64::new(inner.next_handler_id)
+                .expect("BUG: allocated signal handler identity is nonzero"),
+        );
         inner.next_handler_id = next_handler_id;
 
         let handler = SignalHandler {

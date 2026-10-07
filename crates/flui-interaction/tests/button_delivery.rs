@@ -24,8 +24,8 @@ fn resampled_move_precedes_button_edges_without_restarting_the_contact() {
 
 #[test]
 fn queued_move_failure_still_delivers_button_edge_and_preserves_first_failure() {
-    for edge_panics in [false, true] {
-        assert_button_contacts(true, edge_panics, false);
+    for (resampling, edge_panics) in [(false, false), (false, true), (true, false), (true, true)] {
+        assert_button_contacts(true, edge_panics, resampling);
     }
 }
 
@@ -189,6 +189,12 @@ fn assert_button_contacts(move_panics: bool, edge_panics: bool, resampling: bool
             );
             assert_eq!(binding.active_pointer_count(), 1);
             binding.handle_pointer_event(
+                &PointerEvent::Move(
+                    PointerMove::new(pointer, primary, sample(28)).with_coalesced(vec![sample(26)]),
+                ),
+                route,
+            );
+            binding.handle_pointer_event(
                 &PointerEvent::Up(PointerRelease::new(
                     pointer,
                     PointerButton::PRIMARY,
@@ -208,6 +214,12 @@ fn assert_button_contacts(move_panics: bool, edge_panics: bool, resampling: bool
                 &observed.borrow()[3..],
                 &[
                     ("release", (base + 25) * 1_000_000, primary, vec![]),
+                    (
+                        "move",
+                        (base + 28) * 1_000_000,
+                        primary,
+                        vec![(base + 26) * 1_000_000]
+                    ),
                     ("up", (base + 30) * 1_000_000, PointerButtons::NONE, vec![]),
                 ],
                 "the terminal event leaves no queued movement debt"

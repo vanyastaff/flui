@@ -393,6 +393,60 @@ mod pointer_translation_tests {
     use super::*;
     use flui_platform_api::pointer::PointerEvent;
 
+    #[test]
+    fn native_touch_sensor_presence_is_preserved() {
+        for (name, force, expected) in [
+            ("absent", None, None),
+            (
+                "zero",
+                Some(winit::event::Force::Normalized(0.0)),
+                Some(0.0),
+            ),
+            (
+                "normalized",
+                Some(winit::event::Force::Normalized(0.75)),
+                Some(0.75),
+            ),
+            (
+                "invalid",
+                Some(winit::event::Force::Normalized(f64::NAN)),
+                None,
+            ),
+            (
+                "out_of_range",
+                Some(winit::event::Force::Normalized(2.0)),
+                None,
+            ),
+        ] {
+            let touch = winit::event::Touch {
+                device_id: winit::event::DeviceId::dummy(),
+                phase: winit::event::TouchPhase::Started,
+                location: winit::dpi::PhysicalPosition::new(20.0, 30.0),
+                force,
+                id: 0,
+            };
+            let Some(PlatformInput::Pointer(PointerEvent::Down(down))) =
+                touch_event(touch, 2, 2.0, KeyboardModifiers::empty())
+            else {
+                panic!("{name}: expected native touch Down")
+            };
+            assert_eq!(
+                down.sample.pressure.map(|pressure| pressure.get()),
+                expected,
+                "{name}"
+            );
+            assert_eq!(
+                down.sample.position.get(),
+                flui_foundation::geometry::Point::new(10.0, 15.0),
+                "{name}"
+            );
+            assert_eq!(
+                down.sample.contact_size, None,
+                "{name}: winit reports no contact size"
+            );
+        }
+    }
+
     /// The cross-wire field contract (flui-interaction's module doc): time
     /// in NANOSECONDS, no pressure sensor on a mouse, and click count 1 on
     /// transitions. Upstream pressure stand-ins do not cross the owned wire.

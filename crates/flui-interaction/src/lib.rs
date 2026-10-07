@@ -91,9 +91,9 @@
 //! # Example: Type-Safe IDs
 //!
 //! ```compile_fail
-//! use flui_interaction::{PointerId, FocusNodeId};
+//! use flui_interaction::{PointerId, FocusNode};
 //! fn process_pointer(id: PointerId) {}
-//! process_pointer(FocusNodeId::new(42)); // A focus identity cannot name a pointer.
+//! process_pointer(FocusNode::new().id()); // A focus identity cannot name a pointer.
 //! ```
 //!
 //! # Modules

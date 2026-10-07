@@ -9,7 +9,9 @@ mod browser {
     use flui_platform::platforms::web::WebPlatform;
     use flui_platform::{DispatchEventResult, Platform, WindowOptions};
     use flui_platform_api::PlatformInput;
-    use flui_platform_api::pointer::{PointerButton, PointerButtons, PointerEvent, PointerSample};
+    use flui_platform_api::pointer::{
+        ButtonChange, PointerButton, PointerButtons, PointerEvent, PointerSample,
+    };
     use wasm_bindgen::prelude::*;
 
     fn publish(name: &str, value: &str) {
@@ -45,8 +47,8 @@ mod browser {
                     .tangential_pressure
                     .map(|value| f64::from(value.get()))
             ),
-            number(sample.orientation.map(|value| value.altitude())),
-            number(sample.orientation.map(|value| value.azimuth())),
+            number(sample.orientation.and_then(|value| value.altitude())),
+            number(sample.orientation.and_then(|value| value.azimuth())),
             number(sample.twist.map(|value| value.radians())),
             number(sample.contact_size.map(|value| value.get().width)),
             number(sample.contact_size.map(|value| value.get().height)),
@@ -77,6 +79,8 @@ mod browser {
                         ("down", Some(event.sample.position), event.buttons())
                     }
                     PointerEvent::Up(event) => ("up", Some(event.sample.position), event.buttons()),
+                    PointerEvent::ButtonChange(ButtonChange::Pressed(event)) => ("button-press", Some(event.sample.position), event.buttons()),
+                    PointerEvent::ButtonChange(ButtonChange::Released(event)) => ("button-release", Some(event.sample.position), event.buttons()),
                     PointerEvent::Move(event) => {
                         ("move", Some(event.current().position), event.buttons)
                     }
@@ -103,11 +107,13 @@ mod browser {
                     publish(
                         kind,
                         &format!(
-                            r#"{{"x":{},"y":{},"x1":{},"x2":{}}}"#,
+                            r#"{{"x":{},"y":{},"x1":{},"x2":{},"primary":{},"secondary":{}}}"#,
                             point.x,
                             point.y,
                             buttons.contains(PointerButton::BACK),
                             buttons.contains(PointerButton::FORWARD),
+                            buttons.contains(PointerButton::PRIMARY),
+                            buttons.contains(PointerButton::SECONDARY),
                         ),
                     );
                 }
