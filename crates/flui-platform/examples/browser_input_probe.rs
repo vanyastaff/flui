@@ -47,8 +47,8 @@ mod browser {
                     .tangential_pressure
                     .map(|value| f64::from(value.get()))
             ),
-            number(sample.orientation.map(|value| value.altitude())),
-            number(sample.orientation.map(|value| value.azimuth())),
+            number(sample.orientation.and_then(|value| value.altitude())),
+            number(sample.orientation.and_then(|value| value.azimuth())),
             number(sample.twist.map(|value| value.radians())),
             number(sample.contact_size.map(|value| value.get().width)),
             number(sample.contact_size.map(|value| value.get().height)),
