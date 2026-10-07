@@ -328,10 +328,54 @@ fn metadata_boundary_reentry_does_not_restore_a_stale_newer_packet() {
     });
 }
 
+fn lifecycle_cancel_preserves_the_latest_tool_role_and_time() {
+    let lane = InteractionLane::try_new().expect("interaction lane");
+    let handle = lane.dispatch_handle();
+    let binding = GestureBinding::new();
+    let own = source(11, PointerKind::Pen { tool: PenTool::Tip });
+    let changed = source(
+        11,
+        PointerKind::Pen {
+            tool: PenTool::Eraser,
+        },
+    )
+    .with_role(PointerRole::Additional);
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    lane.enter(|| {
+        let log = seen.clone();
+        let target = handle
+            .register_pointer(move |dispatch| log.borrow_mut().push(dispatch.local.clone()))
+            .expect("pointer target");
+        let mut path = HitTestResult::new();
+        path.add(HitTestEntry::new(RenderId::new(1)).pointer_target(target));
+        let started = down(own, 10);
+        let latest = PointerEvent::Move(PointerMove::new(
+            changed,
+            PointerButtons::only(PointerButton::PRIMARY),
+            sample(40, 40.0),
+        ));
+        binding.handle_pointer_event_with_result(&started, &path);
+        binding.handle_pointer_event_with_result(&latest, &HitTestResult::new());
+        binding.cancel_active_pointers();
+        let cancelled = PointerEvent::Cancel(PointerCancel::new(
+            changed,
+            EventTime::from_nanos(40),
+            CancelReason::FocusLost,
+        ));
+        assert_eq!(*seen.borrow(), [started, latest, cancelled]);
+        assert_eq!(binding.active_pointer_count(), 0);
+        assert!(!binding.has_pending_moves());
+    });
+}
+
 #[test]
 fn pointer_identity_contracts() {
     let mut failures = Vec::new();
     for (name, row) in [
+        (
+            "lifecycle_cancel_preserves_the_latest_tool_role_and_time",
+            lifecycle_cancel_preserves_the_latest_tool_role_and_time as fn(),
+        ),
         (
             "metadata_boundary_failure_preserves_the_newer_delivery_debt",
             metadata_boundary_failure_preserves_the_newer_delivery_debt as fn(),
