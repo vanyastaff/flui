@@ -28,7 +28,7 @@ counting-allocator test `resolved_route_move_invocation_allocates_no_heap_after_
 | Component | Bound | Source |
 |---|---|---|
 | `VelocityTracker` | 20-slot ring buffer (`lsq_solver::MAX_SAMPLES`), 100 ms horizon, at least 3 samples (`MIN_SAMPLE_SIZE`) for a fit, zero after 40 ms without movement; quadratic least-squares fit, O(n) for n ≤ 20; the fit is memoized until the next `add_position` / `reset` | `processing/velocity.rs` |
-| `PointerEventResampler` | at most 100 queued events (`MAX_BUFFERED_EVENTS`), 1 ms minimum sample interval, 38 ms default lookback; positions are interpolated linearly between queued events | `processing/resampler.rs` |
+| `PointerEventResampler` | soft cap of 100 queued events (`MAX_BUFFERED_EVENTS`): adjacent moves fold, then the oldest non-boundary event is dropped; Down, Up, Cancel, Enter and Leave are preserved, so an all-boundary queue may exceed the cap; 1 ms minimum sample interval, 38 ms default lookback; positions are interpolated linearly between queued events | `processing/resampler.rs` |
 | `InputPredictor` | prediction capped at 25 ms (default 16 ms), at least 3 samples; linear `pos + v·dt`, optional `+ ½·a·dt²`, optional exponential smoothing | `processing/prediction.rs` |
 | Arena entry | members in `SmallVec<[Arc<dyn GestureArenaMember>; 4]>`, inline up to four | `arena/mod.rs` (`ArenaEntryData`) |
 | Arena storage | `DashMap<PointerId, Arc<ArenaSlot>>` plus a per-slot `parking_lot::Mutex`; the arena is still `!Send + !Sync` | `arena/mod.rs` |

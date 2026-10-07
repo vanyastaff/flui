@@ -13,7 +13,7 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use flui_interaction::prediction::InputPredictor;
+//! use flui_interaction::processing::InputPredictor;
 //!
 //! let mut predictor = InputPredictor::new();
 //!
@@ -28,8 +28,8 @@
 //!
 //! Prediction accuracy decreases with prediction distance. Recommended limits:
 //! - High accuracy: 8-16ms (half to one frame)
-//! - Medium accuracy: 16-32ms (one to two frames)
-//! - Low accuracy: 32-50ms (use with caution)
+//! - Medium accuracy: 16-25ms (one to one and a half frames)
+//! - Beyond 25 ms: not offered (the look-ahead is capped there)
 
 use web_time::{Duration, Instant};
 
@@ -60,15 +60,36 @@ const MIN_PREDICTION_SAMPLES: usize = 3;
 // ============================================================================
 
 /// Configuration for input prediction.
+///
+/// The fields are plain data; [`InputPredictor::with_config`] sanitizes
+/// them: `max_prediction_time` is capped at 25 ms, and a `smoothing` outside
+/// `[0, MAX_SMOOTHING]` (or NaN) is clamped into it (NaN means no smoothing).
 #[derive(Debug, Clone)]
 pub struct PredictionConfig {
-    /// Maximum prediction time allowed.
+    /// Maximum prediction time allowed. Capped at 25 ms.
     pub max_prediction_time: Duration,
     /// Whether to use acceleration in prediction (quadratic extrapolation).
     pub use_acceleration: bool,
-    /// Smoothing factor for predictions (0.0 = no smoothing, 1.0 = max
-    /// smoothing).
+    /// Smoothing factor for the prediction rate (0.0 = no smoothing; values
+    /// near 1.0 react slowly). Clamped to `[0, 0.9]`.
     pub smoothing: f64,
+}
+
+/// Largest admitted smoothing factor: 1.0 would freeze the prediction and
+/// anything above diverges.
+const MAX_SMOOTHING: f64 = 0.9;
+
+impl PredictionConfig {
+    /// This config with every field inside its admitted range.
+    fn sanitized(mut self) -> Self {
+        self.max_prediction_time = self.max_prediction_time.min(MAX_PREDICTION_TIME);
+        self.smoothing = if self.smoothing.is_nan() {
+            0.0
+        } else {
+            self.smoothing.clamp(0.0, MAX_SMOOTHING)
+        };
+        self
+    }
 }
 
 impl Default for PredictionConfig {
@@ -178,14 +199,11 @@ pub struct InputPredictor {
     config: PredictionConfig,
     /// Last known position.
     last_position: Option<Offset<f64>>,
-    /// Last sample time.
-    last_time: Option<Instant>,
-    /// Previous velocity (for acceleration calculation).
-    prev_velocity: Option<Velocity>,
-    /// Previous velocity time.
-    prev_velocity_time: Option<Instant>,
-    /// Smoothed prediction (for reducing jitter).
-    smoothed_prediction: Option<Offset<f64>>,
+    /// Smoothed prediction rate, px/s: the predicted displacement divided by
+    /// the time it was predicted over. Smoothing the rate rather than the
+    /// absolute position keeps the prediction anchored to the newest sample
+    /// and comparable across different look-ahead times.
+    smoothed_rate: Option<Offset<f64>>,
 }
 
 impl Default for InputPredictor {
@@ -200,16 +218,14 @@ impl InputPredictor {
         Self::with_config(PredictionConfig::default())
     }
 
-    /// Create a predictor with custom configuration.
+    /// Create a predictor with custom configuration, sanitized as described
+    /// on [`PredictionConfig`].
     pub fn with_config(config: PredictionConfig) -> Self {
         Self {
             velocity_tracker: VelocityTracker::new(),
-            config,
+            config: config.sanitized(),
             last_position: None,
-            last_time: None,
-            prev_velocity: None,
-            prev_velocity_time: None,
-            smoothed_prediction: None,
+            smoothed_rate: None,
         }
     }
 
@@ -224,16 +240,14 @@ impl InputPredictor {
     }
 
     /// Add a position sample.
+    ///
+    /// A non-finite position is ignored.
     pub fn add_sample(&mut self, time: Instant, position: Offset<f64>) {
-        // Store previous velocity for acceleration
-        if self.velocity_tracker.has_sufficient_data() {
-            self.prev_velocity = Some(self.velocity_tracker.get_velocity());
-            self.prev_velocity_time = self.last_time;
+        if !position.dx.is_finite() || !position.dy.is_finite() {
+            return;
         }
-
         self.velocity_tracker.add_position(time, position);
         self.last_position = Some(position);
-        self.last_time = Some(time);
     }
 
     /// Predict position at a future time.
@@ -290,42 +304,37 @@ impl InputPredictor {
 
         let dt = time_ahead.as_secs_f64();
 
-        // Basic linear prediction: pos + velocity * time
-        let mut predicted = Offset::new(
-            last_pos.dx + (velocity.pixels_per_second.dx * dt),
-            last_pos.dy + (velocity.pixels_per_second.dy * dt),
-        );
+        // Linear prediction: velocity × time. The tracker bounds the velocity,
+        // so this term is at most the fling bound × 25 ms.
+        let linear = velocity.pixels_per_second * dt;
 
-        // Add acceleration term if enabled
-        if self.config.use_acceleration
-            && let (Some(prev_vel), Some(prev_time), Some(last_time)) =
-                (self.prev_velocity, self.prev_velocity_time, self.last_time)
-        {
-            let vel_dt = last_time.duration_since(prev_time).as_secs_f64();
-            if vel_dt > 0.001 {
-                // Acceleration = (v2 - v1) / dt
-                let accel_x =
-                    (velocity.pixels_per_second.dx - prev_vel.pixels_per_second.dx) / vel_dt;
-                let accel_y =
-                    (velocity.pixels_per_second.dy - prev_vel.pixels_per_second.dy) / vel_dt;
-
-                // Add 0.5 * a * t^2 term
-                predicted.dx += 0.5 * accel_x * dt * dt;
-                predicted.dy += 0.5 * accel_y * dt * dt;
-            }
+        // Quadratic term from the least-squares fit's own curvature, which
+        // is fitted over the whole sample window rather than differenced over
+        // one interval (that amplifies jitter). Capped at the linear term's
+        // length: the curve may bend the prediction, never overtake it.
+        let mut quadratic = if self.config.use_acceleration {
+            self.velocity_tracker.acceleration() * (0.5 * dt * dt)
+        } else {
+            Offset::ZERO
+        };
+        let (linear_len, quadratic_len) = (linear.distance(), quadratic.distance());
+        if quadratic_len > linear_len {
+            quadratic *= linear_len / quadratic_len;
         }
 
-        // Apply smoothing to reduce jitter
+        // Smooth the prediction *rate*: an exponential average over
+        // successive predictions, each normalized by its own look-ahead. The
+        // weight is at most `MAX_SMOOTHING`, so the average is a convex
+        // combination and stays within the bound of its inputs.
+        let mut rate = (linear + quadratic) / dt;
         if self.config.smoothing > 0.0 {
-            if let Some(prev_predicted) = self.smoothed_prediction {
-                let alpha = 1.0 - self.config.smoothing;
-                predicted = Offset::new(
-                    predicted.dx * alpha + prev_predicted.dx * self.config.smoothing,
-                    predicted.dy * alpha + prev_predicted.dy * self.config.smoothing,
-                );
+            if let Some(previous) = self.smoothed_rate {
+                let keep = self.config.smoothing;
+                rate = rate * (1.0 - keep) + previous * keep;
             }
-            self.smoothed_prediction = Some(predicted);
+            self.smoothed_rate = Some(rate);
         }
+        let predicted = last_pos + rate * dt;
 
         // Calculate confidence based on velocity consistency and sample count
         // (estimate() returns Option — a missing estimate is a confidence 0 signal).
@@ -376,10 +385,7 @@ impl InputPredictor {
     pub fn reset(&mut self) {
         self.velocity_tracker.reset();
         self.last_position = None;
-        self.last_time = None;
-        self.prev_velocity = None;
-        self.prev_velocity_time = None;
-        self.smoothed_prediction = None;
+        self.smoothed_rate = None;
     }
 
     /// Returns true if there's enough data for prediction.
