@@ -126,22 +126,24 @@ document.getElementById('owned-wheel').onclick = () => check('owned-wheel-check'
   }
 });
 document.getElementById('owned-keyboard').onclick = () => check('owned-keyboard-check', () => {
-  for (const [key, code, location, expectedLocation] of [
-    ['Dead', 'Quote', 0, 'Standard'],
-    ['AudioVolumeUp', 'AudioVolumeUp', 0, 'Standard'],
-    ['Enter', 'NumpadEnter', 3, 'Numpad'],
-    ['ж', 'KeyA', 0, 'Standard'],
+  for (const [key, expectedKey, code, location, expectedLocation] of [
+    ['Dead', 'Dead', 'Quote', 0, 'Standard'],
+    ['AudioVolumeUp', 'AudioVolumeUp', 'AudioVolumeUp', 0, 'Standard'],
+    ['Enter', 'Enter', 'NumpadEnter', 3, 'Numpad'],
+    ['ж', 'ж', 'KeyA', 0, 'Standard'],
+    ['Hyper', 'Meta', 'MetaLeft', 1, 'Left'],
+    ['Super', 'Meta', 'MetaRight', 2, 'Right'],
   ]) {
     window.dispatchEvent(new KeyboardEvent('keydown', {
       key, code, location, repeat: true, isComposing: true, shiftKey: true,
     }));
     equal(JSON.parse(document.getElementById('keyboard').textContent), {
-      key, code, state: 'Down', location: expectedLocation,
+      key: expectedKey, code, state: 'Down', location: expectedLocation,
       repeat: 'AutoRepeat', composition: 'Active', shift: true,
     });
     window.dispatchEvent(new KeyboardEvent('keyup', { key, code, location }));
     equal(JSON.parse(document.getElementById('keyboard').textContent), {
-      key, code, state: 'Up', location: expectedLocation,
+      key: expectedKey, code, state: 'Up', location: expectedLocation,
       repeat: 'First', composition: 'Inactive', shift: false,
     });
   }
