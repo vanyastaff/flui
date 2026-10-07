@@ -73,6 +73,10 @@ fn explicit_pointer_capture_contract() {
             "wake_during_unwind",
             capture_wake_during_unwind_preserves_the_earlier_failure,
         ),
+        (
+            "committed_frame_release",
+            capture_release_keeps_another_pointers_committed_frame_motion,
+        ),
     ];
     for &(name, row) in rows {
         if let Err(payload) = std::panic::catch_unwind(row) {
@@ -141,6 +145,72 @@ fn capture_release_delivers_accepted_motion_before_loss() {
 }
 fn capture_released_tail_waits_for_a_fresh_down() {
     assert_capture_route(CaptureCase::ReleasedTail);
+}
+
+fn capture_release_keeps_another_pointers_committed_frame_motion() {
+    use flui_foundation::geometry::Offset;
+    use flui_interaction::events::{
+        PointerEvent, PointerKind, make_down_event_for_id, make_move_event_for_id,
+        make_up_event_for_id,
+    };
+    use flui_interaction::{GestureBinding, HitTestResult, PointerCapture, PointerId};
+    use std::{cell::RefCell, rc::Rc};
+
+    let lane = InteractionLane::try_new().expect("lane");
+    let binding = Rc::new(GestureBinding::new());
+    let first = PointerId::try_from(11_u64).expect("first");
+    let second = PointerId::try_from(12_u64).expect("second");
+    let held = Rc::new(RefCell::new(std::collections::HashMap::<
+        PointerId,
+        PointerCapture,
+    >::new()));
+    let tokens = held.clone();
+    let owner = Rc::downgrade(&binding);
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let observed = log.clone();
+    lane.enter(|| {
+        let target = lane.dispatch_handle().register_pointer(move |dispatch| match dispatch.global {
+            PointerEvent::Down(press) => {
+                let capture = dispatch.capture().expect("real Down");
+                tokens.borrow_mut().insert(press.pointer.id, capture);
+            }
+            PointerEvent::Move(motion) => {
+                observed.borrow_mut().push((motion.pointer.id, "move", motion.current().position.get().x));
+                if motion.pointer.id == first {
+                    let token = tokens.borrow_mut().remove(&second).expect("other pointer capture");
+                    drop(token);
+                    let newer = make_move_event_for_id(second, Offset::new(300.0, 0.0), PointerKind::Touch).expect("post-release motion");
+                    owner.upgrade().expect("live owner").handle_pointer_event(&newer, |_| panic!("released contact cannot become hover"));
+                }
+            }
+            PointerEvent::Cancel(cancel) => {
+                assert_eq!(cancel.reason, flui_platform_api::pointer::CancelReason::CaptureLost);
+                observed.borrow_mut().push((cancel.pointer.id, "lost", 0.0));
+            }
+            _ => {}
+        }).expect("target");
+        for pointer in [first, second] {
+            let down = make_down_event_for_id(pointer, Offset::ZERO, PointerKind::Touch).expect("down");
+            binding.handle_pointer_event(&down, |_| {
+                let mut path = HitTestResult::new();
+                path.add(hit_entry(target));
+                path
+            });
+        }
+        for (pointer, x) in [(first, 10.0), (second, 20.0)] {
+            let movement = make_move_event_for_id(pointer, Offset::new(x, 0.0), PointerKind::Touch).expect("accepted motion");
+            binding.handle_pointer_event(&movement, |_| panic!("contact retains route"));
+        }
+        binding.flush_pending_moves();
+        assert_eq!(&*log.borrow(), &[(first, "move", 10.0), (second, "move", 20.0), (second, "lost", 0.0)], "committed frame motion survives release from an earlier callback; new motion is refused");
+        binding.flush_pending_moves();
+        assert_eq!(log.borrow().len(), 3, "no duplicate loss or post-release frame tail");
+        let up = make_up_event_for_id(first, Offset::ZERO, PointerKind::Touch).expect("up");
+        binding.handle_pointer_event(&up, |_| panic!("captured terminal"));
+        let token = held.borrow_mut().remove(&first).expect("remaining token");
+        drop(token);
+        assert_eq!(binding.active_pointer_count(), 0);
+    });
 }
 
 struct CaptureWakeWindow(std::sync::atomic::AtomicUsize);
