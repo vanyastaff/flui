@@ -185,10 +185,9 @@ pub(super) struct RealmSlot {
     /// window produced a given `RealmTask::Event` cannot be recovered from
     /// the queue's OWN dispatch call alone once more than one presentation's
     /// window can enqueue into it — the stamp travels with the task itself
-    /// instead. `RealmTask::Frame`/`ClosePresentation` ignore their stamp
-    /// (frame pump is realm-wide; `ClosePresentation` already carries its
-    /// own target id as its payload) — only `RealmTask::Event` reads it, in
-    /// `PlatformToUi::run` (`runner.rs`).
+    /// instead. Pump tasks are realm-wide; `ClosePresentation` already
+    /// carries its target id. Only `RealmTask::Event` reads the stamp in
+    /// `RealmEvent::run`.
     pub(super) queue: VecDeque<(PresentationId, RealmTask)>,
     /// Set while a queued task for THIS realm is running, so a reentrant
     /// same-realm dispatch enqueues instead of recursing into `realm.take()`.

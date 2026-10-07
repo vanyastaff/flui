@@ -10,7 +10,7 @@ use super::host::{
     with_owner_platform,
 };
 use super::realm_dispatch::{
-    PlatformToUi, RealmTask, dispatch_platform_realm, install_input_wiring, install_platform_realm,
+    RealmEvent, RealmTask, dispatch_platform_realm, install_input_wiring, install_platform_realm,
     install_surface_applier, teardown_platform_realm,
 };
 use super::surface_lifecycle::{
@@ -455,7 +455,7 @@ where
         window.on_resize(Box::new(move |size, scale_factor| {
             let _ = dispatch_platform_realm(
                 realm_dispatch,
-                RealmTask::Event(PlatformToUi::Resized { size, scale_factor }),
+                RealmTask::Event(RealmEvent::Resized { size, scale_factor }),
             );
         }));
 
@@ -473,10 +473,9 @@ where
                     realm_dispatch.owner_thread,
                     "platform on_quit must fire on the realm's owner thread"
                 );
-                if let Err(error) = dispatch_platform_realm(
-                    realm_dispatch,
-                    RealmTask::Event(PlatformToUi::Shutdown),
-                ) {
+                if let Err(error) =
+                    dispatch_platform_realm(realm_dispatch, RealmTask::Event(RealmEvent::Shutdown))
+                {
                     // Trace-only: the scheduler died WITH the realm now (each
                     // realm owns its own), so there is no process-global
                     // scheduler left to notify as a fallback.
@@ -513,7 +512,7 @@ where
             };
             let _ = dispatch_platform_realm(
                 realm_dispatch,
-                RealmTask::Event(PlatformToUi::Lifecycle(target)),
+                RealmTask::Event(RealmEvent::Lifecycle(target)),
             );
         }));
 
@@ -558,7 +557,7 @@ where
         //
         // The off-thread invariant is not the only hazard here, and it does not
         // cover the same-thread one: `dispatch_platform_realm` drains the realm
-        // queue inline, so it can run a `RealmTask::Frame` right here, on this
+        // queue inline, so it can reach another owner operation right here, on this
         // thread, where the frame path takes this same lane with `try_lock` and
         // self-skips. Holding the guard across that costs a dropped frame
         // rather than a deadlock, but it is a frame dropped for no reason,
@@ -611,9 +610,7 @@ where
                 // dispatcher may queue it when it is mid-phase.
                 let _ = dispatch_platform_realm(
                     realm_dispatch,
-                    RealmTask::Frame(Box::new(|realm| {
-                        realm.mark_primary_needs_full_repaint();
-                    })),
+                    RealmTask::Event(RealmEvent::PrimarySurfaceRestored),
                 );
             }
             // A release logs nothing here (the engine logs
@@ -642,7 +639,7 @@ where
         );
         let _ = dispatch_platform_realm(
             realm_dispatch,
-            RealmTask::Event(PlatformToUi::Lifecycle(AppLifecycleState::Resumed)),
+            RealmTask::Event(RealmEvent::Lifecycle(AppLifecycleState::Resumed)),
         );
 
         // 10. Request initial redraw, now that the window is stored.

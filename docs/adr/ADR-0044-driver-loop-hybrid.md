@@ -10,6 +10,11 @@
 
 ## Context
 
+The native-event vocabulary named `PlatformToUi` in this record is now
+`RealmEvent`; it also carries host font and surface-restoration observations.
+Frame production still follows the host's `on_request_frame` callback, not an
+event variant containing executable UI work.
+
 Before this record, one component (`Scheduler`, since renamed `UpdateScheduler`) combined logical phase/callback/task scheduling, a fixed 60fps assumption, and the frame-drive loop's own dirty predicate. Splitting this into owners that "know" different things — logical time, physical per-surface time, and raster capacity — needed each piece decided before wiring it into the runner, per the ownership rule:
 
 | Owner | Owns | Answers | Never knows |

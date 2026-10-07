@@ -94,12 +94,10 @@ pub(super) enum RealmDispatchError {
 /// operation is cooperative and is never preempted internally.
 const OWNER_TURN_BUDGET: usize = 32;
 
-/// Typed, closed cross-thread payload (ADR-0037 §3): every routable
-/// platform-to-UI event. Compile-time evidence that this is a real `Send`
-/// boundary: `static_assertions::assert_impl_all!` is checked in this
-/// module's own tests. If `PlatformInput` ever
-/// stopped being `Send`, that must be fixed in `flui-platform` itself,
-/// never worked around here.
+/// Typed observations applied on a realm's owner turn: native input and
+/// lifecycle, host font changes, and surface restoration. The payload is
+/// `Send` (ADR-0037 §3); execution still goes through exact-address admission
+/// on the owner thread, never through an arbitrary cross-thread callback.
 // `pub(in crate::app)` because `RealmTask::Event` (also `pub(in crate::app)`, for
 // `AppRuntime`'s sake) carries this type in a field the compiler considers
 // reachable at that same visibility.
@@ -121,7 +119,7 @@ const OWNER_TURN_BUDGET: usize = 32;
         reason = "window-event variants are produced only by the desktop runner"
     )
 )]
-pub(in crate::app) enum PlatformToUi {
+pub(in crate::app) enum RealmEvent {
     /// Platform input for the stamped presentation. `consumed`, present only
     /// for keyboard input, receives whether a handler took it once it runs;
     /// see [`dispatch_platform_input`].
@@ -215,42 +213,18 @@ pub(in crate::app) enum PlatformToUi {
     /// Drive a lifecycle target that requires owner-local realm cleanup (most
     /// notably Detached during platform shutdown).
     Lifecycle(AppLifecycleState),
+    /// The host's shared font collection changed; invalidate every presentation.
+    FontsChanged,
+    /// A recreated native surface has no previous scene to display. Surface
+    /// recovery still belongs to the primary presentation, not every sibling.
+    #[cfg(any(test, target_os = "android", target_os = "ios"))]
+    PrimarySurfaceRestored,
 }
 
-/// One queued unit of owner-thread work: a typed cross-thread
-/// [`PlatformToUi`] event, the co-located frame pump, or a request to close
-/// one presentation out of this realm's forest. `Frame` and
-/// `ClosePresentation` are both deliberately KEPT OUT of the cross-thread
-/// [`PlatformToUi`] vocabulary above, but for two different reasons — and
-/// this enum, `RealmTask` itself, never crosses a thread either way: it is
-/// owner-thread-only end to end (`AppRuntime`'s per-realm queue lives in
-/// owner-thread-only `RealmSlot` storage, drained only from
-/// [`dispatch_platform_realm`] on that same thread), the same as it was
-/// before `ClosePresentation` existed — `Frame`'s `Box<dyn FnOnce(&UiRealm)>`
-/// alone already makes the enum `!Send` in the general case, so nothing
-/// about adding `ClosePresentation` changes that.
-///
-/// `Frame` carries an owner-local closure, which a cross-thread payload must
-/// never do (ADR-0037 §3 forbids `Box<dyn FnOnce()>` on that boundary) — its
-/// exclusion is load-bearing today. `ClosePresentation`'s payload alone
-/// (`PresentationId`, a plain `Copy` id) happens to satisfy `Send` in
-/// isolation, same as [`PlatformToUi`]'s own fields do — but that is a
-/// property of the ID type, not a claim about this enum or this variant:
-/// `ClosePresentation` is excluded from `PlatformToUi` because
-/// [`dispatch_platform_realm`]'s own drain loop must special-case it (see
-/// below), not because its payload could not cross a thread if some later
-/// slice needed that.
-///
-/// `ClosePresentation` is handled specially by [`dispatch_platform_realm`]'s
-/// own drain loop, never by [`RealmTask::run`]: closing a presentation needs
-/// `&mut UiRealm` (removing it from the forest), which only exists for the
-/// brief window the realm sits checked out of `APP_RUNTIME` as an owned
-/// local — exactly the window the drain loop already has open, and the
-/// reason this variant exists instead of giving `PresentationForest`
-/// interior mutability to reach the same `&mut` from behind `run`'s shared
-/// `&UiRealm` receiver.
-// `pub(in crate::app)` (rather than private) so `AppRuntime`'s `queue` field, defined
-// in the sibling `runtime` module, can name this type.
+/// One queued unit of owner-thread work. Shared-realm notifications use
+/// typed operations; arbitrary shared-realm callbacks are test-only.
+/// Events carry observations; pumps own the host's frame execution protocol.
+/// This enum never crosses a thread (ADR-0037 §3).
 ///
 /// `Pump` is a runner's frame wake. Like `ClosePresentation` it needs
 /// `&mut UiRealm` — [`UiRealm::pump`](crate::app::ui_realm::UiRealm::pump)
@@ -258,8 +232,9 @@ pub(in crate::app) enum PlatformToUi {
 /// it on the checked-out realm without entering it first; the closure enters
 /// the realm explicitly for whatever runner work precedes the pump.
 pub(in crate::app) enum RealmTask {
-    Event(PlatformToUi),
-    Frame(Box<dyn FnOnce(&crate::app::ui_realm::UiRealm)>),
+    Event(RealmEvent),
+    #[cfg(test)]
+    TestCallback(Box<dyn FnOnce(&crate::app::ui_realm::UiRealm)>),
     Pump(Box<dyn FnOnce(&mut crate::app::ui_realm::UiRealm)>),
     /// Commit the owner inbox, then poll async work without running a frame.
     #[cfg(any(test, target_os = "ios"))]
@@ -268,15 +243,15 @@ pub(in crate::app) enum RealmTask {
 }
 
 impl RealmTask {
-    /// Runs an `Event`/`Frame` task against the realm's shared capabilities.
+    /// Applies a typed notification against the realm's shared capabilities.
     ///
     /// `presentation_id` is the [`flui_foundation::PresentationId`] the
     /// enqueueing [`RealmDispatcher`] was addressed to — stamped onto this
     /// task's queue entry at enqueue time (`dispatch_platform_realm`), since
-    /// a realm's queue is shared across every presentation it hosts (issue
-    /// #555 the addressed-routing slice). `Self::Frame`'s closure ignores it (the
-    /// frame pump is realm-wide, not presentation-addressed); only
-    /// `Self::Event` threads it through to [`PlatformToUi::run`].
+    /// a realm's queue is shared across every presentation it hosts. Font
+    /// notifications invalidate the whole realm; surface recovery still
+    /// repaints its primary. Only `Self::Event` threads the address through
+    /// to [`RealmEvent::run`].
     ///
     /// # Panics
     /// Panics if called with `Self::ClosePresentation` — that variant never
@@ -291,7 +266,8 @@ impl RealmTask {
     ) {
         match self {
             Self::Event(event) => event.run(realm, presentation_id),
-            Self::Frame(run) => run(realm),
+            #[cfg(test)]
+            Self::TestCallback(run) => run(realm),
             #[cfg(any(test, target_os = "ios"))]
             Self::BackgroundPump => unreachable!(
                 "BUG: background pumps require exclusive realm access in the dispatcher"
@@ -311,24 +287,22 @@ impl RealmTask {
     }
 }
 
-impl PlatformToUi {
+impl RealmEvent {
     /// `presentation_id` is the exact presentation this event was stamped
-    /// for at enqueue time (see [`RealmTask::run`]'s doc). `Input` delivers
-    /// to it through [`crate::app::ui_realm::UiRealm::handle_input_addressed`];
-    /// every other variant (`Resized`/`WindowFocus`/`WindowVisibility`/
-    /// `Lifecycle`) is still realm-wide, not yet per-presentation-addressed
-    /// — a stated, named gap (not silent): resize/lifecycle addressing
-    /// across a genuine N>1 forest is future work, out of this hop-2 slice's
-    /// bounded scope (input/IME/semantics/keyboard/redraw), except
-    /// `WindowFocus(true)`, which DOES use `presentation_id` to update
-    /// [`crate::app::ui_realm::UiRealm::notify_presentation_focus_gained`] — see
-    /// that arm below.
+    /// for at enqueue time (see [`RealmTask::run`]'s doc). Native input,
+    /// metrics and window observations use that presentation. Font changes
+    /// invalidate every presentation; surface restoration still invalidates
+    /// only the primary, which owns the realm's current sink. Dispatch checks
+    /// the stamped address before applying any of these observations.
     fn run(
         self,
         realm: &crate::app::ui_realm::UiRealm,
         presentation_id: flui_foundation::PresentationId,
     ) {
         match self {
+            Self::FontsChanged => realm.fonts_changed(),
+            #[cfg(any(test, target_os = "android", target_os = "ios"))]
+            Self::PrimarySurfaceRestored => realm.mark_primary_needs_full_repaint(),
             Self::Input { input, consumed } => {
                 let handled = realm.handle_input_addressed(presentation_id, input);
                 if let Some(consumed) = consumed {
@@ -1026,7 +1000,7 @@ fn dispatch_platform_input(
         .then(|| std::sync::Arc::new(std::sync::OnceLock::new()));
     let _ = dispatch_platform_realm(
         dispatcher,
-        RealmTask::Event(PlatformToUi::Input {
+        RealmTask::Event(RealmEvent::Input {
             input,
             consumed: consumed.clone(),
         }),
@@ -1512,9 +1486,9 @@ fn dispatch_platform_realm_now(
                         // closing because the whole process quit, and
                         // `on_quit`'s own dispatch now frequently finds this
                         // realm already gone (a harmless, traced no-op --
-                        // see that callback's doc). Uses `PlatformToUi::
+                        // see that callback's doc). Uses `RealmEvent::
                         // Lifecycle(..).run` directly (the same private
-                        // helper an ordinary `RealmTask::Event(PlatformToUi::
+                        // helper an ordinary `RealmTask::Event(RealmEvent::
                         // Lifecycle(..))` dispatches through below) rather
                         // than re-queuing another task, since `realm` is
                         // already the exact owned local that method needs.

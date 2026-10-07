@@ -11,7 +11,7 @@
 use flui_painting::RegisterFontError;
 
 use super::host::APP_RUNTIME;
-use super::realm_dispatch::{RealmDispatcher, RealmTask, dispatch_platform_realm};
+use super::realm_dispatch::{RealmDispatcher, RealmEvent, RealmTask, dispatch_platform_realm};
 
 /// Why [`register_font`] refused a font.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -111,10 +111,9 @@ pub(super) fn announce_font_change() {
         // Outside the runtime borrow: a realm that is idle runs the notice
         // now, one that is checked out (the caller's own) gets it queued
         // behind the running turn.
-        if let Err(error) = dispatch_platform_realm(
-            dispatcher,
-            RealmTask::Frame(Box::new(crate::app::ui_realm::UiRealm::fonts_changed)),
-        ) {
+        if let Err(error) =
+            dispatch_platform_realm(dispatcher, RealmTask::Event(RealmEvent::FontsChanged))
+        {
             // A realm closing or gone needs no layout.
             tracing::debug!(?dispatcher, ?error, "font change notice not delivered");
         }

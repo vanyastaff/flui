@@ -29,6 +29,18 @@ the dispatch layer moves there too.
   flags. No runner drives scheduler phases itself (pinned by
   `runner_frame_ordering`'s source scan over every runner file, `ios.rs`
   included).
+- **Owner events describe observations, not executable callbacks.**
+  `RealmTask::Event(RealmEvent)` carries native input/lifecycle/metrics and
+  host font or surface-restoration notifications through the same addressed
+  FIFO. `FontsChanged` invalidates all presentations; `PrimarySurfaceRestored`
+  requests a full repaint of the primary, which owns the current realm sink.
+  Native surface callbacks release their raster-lane guard before dispatch.
+  `TestCallback` exists only under `cfg(test)` for private failure injection.
+  The runner's `Pump` still carries its backend frame protocol; closing that
+  vocabulary and extracting the owner host remain ADR-0083's migration work.
+  `realm_dispatch_matrix` pins font registration fan-out/reentry and
+  `recovered_surface_notification_resubmits_the_scene` pins a real scene
+  submission after an idle frame, rather than a dirty-flag change.
 - **Device recovery brackets the pump.** On desktop, Android and iOS,
   `pump_with_device_recovery` runs its pre-frame recovery attempt before the
   pump's begin frame and its post-frame attempt after the post-frame

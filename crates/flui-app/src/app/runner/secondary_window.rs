@@ -24,7 +24,7 @@ use super::host::{APP_RUNTIME, runtime_wake_callback, with_owner_platform};
     not(target_arch = "wasm32")
 ))]
 use super::realm_dispatch::{
-    PlatformToUi, RealmDispatcher, RealmTask, close_this_window, dispatch_platform_realm,
+    RealmDispatcher, RealmEvent, RealmTask, close_this_window, dispatch_platform_realm,
     install_input_wiring, install_presentation_alongside, install_realm_alongside,
 };
 #[cfg(all(
@@ -1006,7 +1006,7 @@ fn finish_open_secondary_window(
     window.on_resize(Box::new(move |size, scale_factor| {
         let _ = dispatch_platform_realm(
             realm_dispatch,
-            RealmTask::Event(PlatformToUi::Resized { size, scale_factor }),
+            RealmTask::Event(RealmEvent::Resized { size, scale_factor }),
         );
     }));
 
@@ -1035,19 +1035,19 @@ fn finish_open_secondary_window(
     window.on_active_status_change(Box::new(move |focused| {
         let _ = dispatch_platform_realm(
             realm_dispatch,
-            RealmTask::Event(PlatformToUi::WindowFocus(focused)),
+            RealmTask::Event(RealmEvent::WindowFocus(focused)),
         );
     }));
     window.on_execution_state_change(Box::new(move |state| {
         let _ = dispatch_platform_realm(
             realm_dispatch,
-            RealmTask::Event(PlatformToUi::WindowExecution(state)),
+            RealmTask::Event(RealmEvent::WindowExecution(state)),
         );
     }));
     window.on_visibility_status_change(Box::new(move |visible| {
         let _ = dispatch_platform_realm(
             realm_dispatch,
-            RealmTask::Event(PlatformToUi::WindowVisibility(visible)),
+            RealmTask::Event(RealmEvent::WindowVisibility(visible)),
         );
     }));
     let execution = window.execution_state();
@@ -1055,7 +1055,7 @@ fn finish_open_secondary_window(
     let visible = window.is_visible();
     let _ = dispatch_platform_realm(
         realm_dispatch,
-        RealmTask::Event(PlatformToUi::WindowSnapshot {
+        RealmTask::Event(RealmEvent::WindowSnapshot {
             execution,
             focused,
             visible,
@@ -1064,7 +1064,7 @@ fn finish_open_secondary_window(
 
     let _ = dispatch_platform_realm(
         realm_dispatch,
-        RealmTask::Event(PlatformToUi::SynchronizeLifecycle),
+        RealmTask::Event(RealmEvent::SynchronizeLifecycle),
     );
 
     uninstalled.0 = None;

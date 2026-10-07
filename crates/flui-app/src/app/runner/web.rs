@@ -6,7 +6,7 @@ use super::host::{
     APP_RUNTIME, install_owner_platform, runtime_wake_callback, with_owner_platform,
 };
 use super::realm_dispatch::{
-    PlatformToUi, RealmTask, dispatch_platform_realm, install_input_wiring, install_platform_realm,
+    RealmEvent, RealmTask, dispatch_platform_realm, install_input_wiring, install_platform_realm,
     install_surface_applier,
 };
 use crate::app::AppConfig;
@@ -328,7 +328,7 @@ where
         window.on_resize(Box::new(move |size, scale_factor| {
             let _ = dispatch_platform_realm(
                 realm_dispatch,
-                RealmTask::Event(PlatformToUi::Resized { size, scale_factor }),
+                RealmTask::Event(RealmEvent::Resized { size, scale_factor }),
             );
         }));
 
@@ -344,10 +344,9 @@ where
                     realm_dispatch.owner_thread,
                     "platform on_quit must fire on the realm's owner thread"
                 );
-                if let Err(error) = dispatch_platform_realm(
-                    realm_dispatch,
-                    RealmTask::Event(PlatformToUi::Shutdown),
-                ) {
+                if let Err(error) =
+                    dispatch_platform_realm(realm_dispatch, RealmTask::Event(RealmEvent::Shutdown))
+                {
                     // Trace-only: the scheduler died WITH the realm now (each
                     // realm owns its own), so there is no process-global
                     // scheduler left to notify as a fallback.
@@ -371,7 +370,7 @@ where
         window.on_active_status_change(Box::new(move |focused| {
             let _ = dispatch_platform_realm(
                 realm_dispatch,
-                RealmTask::Event(PlatformToUi::WindowFocus(focused)),
+                RealmTask::Event(RealmEvent::WindowFocus(focused)),
             );
         }));
         // The web translation already emits hover-status changes for DOM
@@ -380,7 +379,7 @@ where
         window.on_hover_status_change(Box::new(move |is_hovered| {
             let _ = dispatch_platform_realm(
                 realm_dispatch,
-                RealmTask::Event(PlatformToUi::WindowHover(is_hovered)),
+                RealmTask::Event(RealmEvent::WindowHover(is_hovered)),
             );
         }));
 
@@ -398,7 +397,7 @@ where
         // Routed through dispatch -- see `run_desktop`'s matching comment.
         let _ = dispatch_platform_realm(
             realm_dispatch,
-            RealmTask::Event(PlatformToUi::Lifecycle(AppLifecycleState::Resumed)),
+            RealmTask::Event(RealmEvent::Lifecycle(AppLifecycleState::Resumed)),
         );
 
         tracing::info!("Web platform initialized with callbacks");

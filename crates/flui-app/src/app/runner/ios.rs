@@ -40,7 +40,7 @@ use super::host::{
     with_owner_platform,
 };
 use super::realm_dispatch::{
-    PlatformToUi, RealmDispatcher, RealmTask, close_this_window, dispatch_platform_realm,
+    RealmDispatcher, RealmEvent, RealmTask, close_this_window, dispatch_platform_realm,
     install_input_wiring, install_realm_alongside, install_surface_applier,
     teardown_platform_realm,
 };
@@ -455,7 +455,7 @@ where
     window.on_resize(Box::new(move |size, scale_factor| {
         let _ = dispatch_platform_realm(
             realm_dispatch,
-            RealmTask::Event(PlatformToUi::Resized { size, scale_factor }),
+            RealmTask::Event(RealmEvent::Resized { size, scale_factor }),
         );
     }));
 
@@ -464,7 +464,7 @@ where
     window.on_safe_area_change(Box::new(move |insets| {
         let _ = dispatch_platform_realm(
             realm_dispatch,
-            RealmTask::Event(PlatformToUi::SafeAreaChanged(insets)),
+            RealmTask::Event(RealmEvent::SafeAreaChanged(insets)),
         );
     }));
 
@@ -488,9 +488,7 @@ where
             // dispatch rather than running inline.
             let _ = dispatch_platform_realm(
                 realm_dispatch,
-                RealmTask::Frame(Box::new(|realm| {
-                    realm.mark_primary_needs_full_repaint();
-                })),
+                RealmTask::Event(RealmEvent::PrimarySurfaceRestored),
             );
         }
         report_surface_settlement("iOS", &outcome);
@@ -499,19 +497,19 @@ where
     window.on_active_status_change(Box::new(move |focused| {
         let _ = dispatch_platform_realm(
             realm_dispatch,
-            RealmTask::Event(PlatformToUi::WindowFocus(focused)),
+            RealmTask::Event(RealmEvent::WindowFocus(focused)),
         );
     }));
     window.on_visibility_status_change(Box::new(move |visible| {
         let _ = dispatch_platform_realm(
             realm_dispatch,
-            RealmTask::Event(PlatformToUi::WindowVisibility(visible)),
+            RealmTask::Event(RealmEvent::WindowVisibility(visible)),
         );
     }));
     window.on_execution_state_change(Box::new(move |state| {
         let _ = dispatch_platform_realm(
             realm_dispatch,
-            RealmTask::Event(PlatformToUi::WindowExecution(state)),
+            RealmTask::Event(RealmEvent::WindowExecution(state)),
         );
     }));
     // Register before sampling, so native facts changed during renderer bootstrap
@@ -521,7 +519,7 @@ where
     let visible = window.is_visible();
     let _ = dispatch_platform_realm(
         realm_dispatch,
-        RealmTask::Event(PlatformToUi::WindowSnapshot {
+        RealmTask::Event(RealmEvent::WindowSnapshot {
             execution,
             focused,
             visible,

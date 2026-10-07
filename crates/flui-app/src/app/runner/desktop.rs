@@ -19,7 +19,7 @@ use super::host::{
     runtime_wake_callback,
 };
 use super::realm_dispatch::{
-    PlatformToUi, RealmDispatcher, RealmTask, close_this_window, dispatch_platform_realm,
+    RealmDispatcher, RealmEvent, RealmTask, close_this_window, dispatch_platform_realm,
     install_input_wiring, install_realm_alongside, install_surface_applier,
 };
 use crate::app::AppConfig;
@@ -321,7 +321,7 @@ where
     // Install the registration-lifetime surface applier alongside the
     // realm (cleared together at teardown): a `Resized` event takes it
     // out of the TLS slot, calls it, and restores it (see
-    // `PlatformToUi::run`'s `Resized` arm) rather than capturing the
+    // `RealmEvent::run`'s `Resized` arm) rather than capturing the
     // lane inside the event payload itself. The hook mints the frame
     // stamp's next `SurfaceGeneration` and records the platform's new
     // size as layout's authority; the backend surface itself is
@@ -560,7 +560,7 @@ where
         }
         let _ = dispatch_platform_realm(
             realm_dispatch,
-            RealmTask::Event(PlatformToUi::Resized { size, scale_factor }),
+            RealmTask::Event(RealmEvent::Resized { size, scale_factor }),
         );
     }));
 
@@ -636,19 +636,19 @@ where
     window.on_active_status_change(Box::new(move |focused| {
         let _ = dispatch_platform_realm(
             realm_dispatch,
-            RealmTask::Event(PlatformToUi::WindowFocus(focused)),
+            RealmTask::Event(RealmEvent::WindowFocus(focused)),
         );
     }));
     window.on_execution_state_change(Box::new(move |state| {
         let _ = dispatch_platform_realm(
             realm_dispatch,
-            RealmTask::Event(PlatformToUi::WindowExecution(state)),
+            RealmTask::Event(RealmEvent::WindowExecution(state)),
         );
     }));
     window.on_visibility_status_change(Box::new(move |visible| {
         let _ = dispatch_platform_realm(
             realm_dispatch,
-            RealmTask::Event(PlatformToUi::WindowVisibility(visible)),
+            RealmTask::Event(RealmEvent::WindowVisibility(visible)),
         );
     }));
     let execution = window.execution_state();
@@ -656,7 +656,7 @@ where
     let visible = window.is_visible();
     let _ = dispatch_platform_realm(
         realm_dispatch,
-        RealmTask::Event(PlatformToUi::WindowSnapshot {
+        RealmTask::Event(RealmEvent::WindowSnapshot {
             execution,
             focused,
             visible,
@@ -666,7 +666,7 @@ where
     window.on_hover_status_change(Box::new(move |is_hovered| {
         let _ = dispatch_platform_realm(
             realm_dispatch,
-            RealmTask::Event(PlatformToUi::WindowHover(is_hovered)),
+            RealmTask::Event(RealmEvent::WindowHover(is_hovered)),
         );
     }));
     // The platform callback carries no payload; query the window's
@@ -678,7 +678,7 @@ where
         if let Some(win) = appearance_window.upgrade() {
             let _ = dispatch_platform_realm(
                 realm_dispatch,
-                RealmTask::Event(PlatformToUi::AppearanceChanged(win.appearance())),
+                RealmTask::Event(RealmEvent::AppearanceChanged(win.appearance())),
             );
         }
     }));
@@ -686,7 +686,7 @@ where
     // start light until the first live theme flip.
     let _ = dispatch_platform_realm(
         realm_dispatch,
-        RealmTask::Event(PlatformToUi::AppearanceChanged(window.appearance())),
+        RealmTask::Event(RealmEvent::AppearanceChanged(window.appearance())),
     );
     // Seed the initial size and device-pixel ratio the same way: the
     // source must not sit on defaults until the first live resize —
@@ -694,7 +694,7 @@ where
     // would be permanent there.
     let _ = dispatch_platform_realm(
         realm_dispatch,
-        RealmTask::Event(PlatformToUi::Resized {
+        RealmTask::Event(RealmEvent::Resized {
             size: window.logical_size(),
             scale_factor: window.scale_factor(),
         }),
@@ -719,7 +719,7 @@ where
     );
     let _ = dispatch_platform_realm(
         realm_dispatch,
-        RealmTask::Event(PlatformToUi::Lifecycle(host_lifecycle)),
+        RealmTask::Event(RealmEvent::Lifecycle(host_lifecycle)),
     );
 
     // 10. Request initial redraw, now that the window is stored.

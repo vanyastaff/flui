@@ -41,7 +41,7 @@ are leapfrog zones under ADR-0027; the three-tree semantics stay Flutter's.
 ```text
 event-loop lane     AppRuntime ── WindowRegistry: WindowId → PresentationAddress
                     backend-owned PlatformWindow (native window, event delivery)
-                         │ closed, addressed events (PlatformToUi)
+                         │ closed, addressed events (RealmEvent)
                          ▼
 realm owner lane    UiRealm (!Send + !Sync)
                     └─ PresentationState: element root, pipeline, frame clock,
@@ -84,7 +84,7 @@ returns `OwnerGone`.
 
 Owners on different threads exchange owned `Send` data through bounded
 channels or dedicated one-shot completions — never UI closures or a generic
-"run this on the UI thread" job. `PlatformToUi` (platform → realm) and
+"run this on the UI thread" job. `RealmEvent` (native/host observations → realm) and
 `RasterAck` (raster → UI) are the shipped instances. The rules:
 
 - every routable message carries, or is structurally bound to, its exact

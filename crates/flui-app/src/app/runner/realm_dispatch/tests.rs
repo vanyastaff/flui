@@ -22,7 +22,7 @@ use super::*;
 use crate::app::AppConfig;
 use crate::app::runtime::{ExitPolicy, WindowPolicy};
 
-static_assertions::assert_impl_all!(PlatformToUi: Send);
+static_assertions::assert_impl_all!(RealmEvent: Send);
 
 fn down_input(offset: f64) -> PlatformInput {
     PlatformInput::Pointer(make_down_event(
@@ -51,7 +51,7 @@ fn background_owner_pump_drains_before_polling_without_a_frame() {
     dispatch_platform_realm(dispatcher, RealmTask::BackgroundPump).expect("background turn");
     dispatch_platform_realm(
         dispatcher,
-        RealmTask::Frame(Box::new(|realm| {
+        RealmTask::TestCallback(Box::new(|realm| {
             assert!(!realm.take_redraw_request(), "the owner inbox was drained");
         })),
     )
@@ -73,7 +73,7 @@ fn background_owner_pump_drains_before_polling_without_a_frame() {
     );
     dispatch_platform_realm(
         dispatcher,
-        RealmTask::Frame(Box::new(|realm| {
+        RealmTask::TestCallback(Box::new(|realm| {
             assert!(
                 realm.take_redraw_request(),
                 "poll-generated work survives until the next turn"
@@ -100,7 +100,7 @@ fn explicit_platform_quit_detaches_every_installed_realm() {
             for dispatcher in [primary, secondary] {
                 dispatch_platform_realm(
                     dispatcher,
-                    RealmTask::Event(PlatformToUi::Lifecycle(AppLifecycleState::Resumed)),
+                    RealmTask::Event(RealmEvent::Lifecycle(AppLifecycleState::Resumed)),
                 )
                 .expect("resume realm");
             }
@@ -246,7 +246,7 @@ fn system_key_default_follows_the_realms_decision() {
     let turn_window = std::sync::Arc::clone(&window);
     dispatch_platform_realm(
         dispatcher,
-        RealmTask::Frame(Box::new(move |realm| {
+        RealmTask::TestCallback(Box::new(move |realm| {
             realm.focus_manager().add_global_key_handler(Rc::new(
                 move |_: &flui_interaction::events::KeyboardEvent| {
                     delivered_in_handler.set(delivered_in_handler.get() + 1);
@@ -277,7 +277,7 @@ fn system_key_default_follows_the_realms_decision() {
 
     dispatch_platform_realm(
         dispatcher,
-        RealmTask::Frame(Box::new(|realm| {
+        RealmTask::TestCallback(Box::new(|realm| {
             realm.focus_manager().add_global_key_handler(Rc::new(
                 |event: &flui_interaction::events::KeyboardEvent| event.code == Code::F4,
             ));
@@ -296,16 +296,16 @@ fn late_event_never_crosses_realm_incarnations() {
     let removed = APP_RUNTIME.with(|slot| slot.borrow_mut().realms.remove(&stale.address.realm_id));
     drop(removed);
     assert_eq!(
-        dispatch_platform_realm(stale, RealmTask::Frame(Box::new(|_| {}))),
+        dispatch_platform_realm(stale, RealmTask::TestCallback(Box::new(|_| {}))),
         Err(RealmDispatchError::RealmUnavailable)
     );
 
     let current = install_test_realm();
     assert_eq!(
-        dispatch_platform_realm(stale, RealmTask::Frame(Box::new(|_| {}))),
+        dispatch_platform_realm(stale, RealmTask::TestCallback(Box::new(|_| {}))),
         Err(RealmDispatchError::StaleRealm)
     );
-    dispatch_platform_realm(current, RealmTask::Frame(Box::new(|_| {})))
+    dispatch_platform_realm(current, RealmTask::TestCallback(Box::new(|_| {})))
         .expect("current incarnation dispatches");
 }
 
@@ -314,7 +314,7 @@ fn panic_restores_dispatch_host_for_next_event() {
     let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _ = dispatch_platform_realm(
             dispatcher,
-            RealmTask::Frame(Box::new(|_| panic!("test panic"))),
+            RealmTask::TestCallback(Box::new(|_| panic!("test panic"))),
         );
     }));
     assert!(panic.is_err());
@@ -323,7 +323,7 @@ fn panic_restores_dispatch_host_for_next_event() {
     let ran_in_event = Rc::clone(&ran);
     dispatch_platform_realm(
         dispatcher,
-        RealmTask::Frame(Box::new(move |_| {
+        RealmTask::TestCallback(Box::new(move |_| {
             *ran_in_event.borrow_mut() = true;
         })),
     )
@@ -379,18 +379,18 @@ fn reentrant_owner_turns_preserve_global_fifo_across_realms() {
 
     dispatch_platform_realm(
         dispatcher_a,
-        RealmTask::Frame(Box::new(move |_realm| {
+        RealmTask::TestCallback(Box::new(move |_realm| {
             order_in_outer_a.borrow_mut().push("a:outer:start");
             dispatch_platform_realm(
                 dispatcher_b,
-                RealmTask::Frame(Box::new(move |_| {
+                RealmTask::TestCallback(Box::new(move |_| {
                     order_in_b.borrow_mut().push("b");
                 })),
             )
             .expect("realm B turn is admitted");
             dispatch_platform_realm(
                 dispatcher_a,
-                RealmTask::Frame(Box::new(move |_| {
+                RealmTask::TestCallback(Box::new(move |_| {
                     order_in_queued_a.borrow_mut().push("a:queued");
                 })),
             )
@@ -477,7 +477,7 @@ fn two_realms_via_isolated_policy_share_nothing() {
 
     dispatch_platform_realm(
         dispatcher_a,
-        RealmTask::Frame(Box::new(|realm| {
+        RealmTask::TestCallback(Box::new(|realm| {
             let down = down_input(4.0);
             if let PlatformInput::Pointer(event) = down {
                 realm
@@ -495,7 +495,7 @@ fn two_realms_via_isolated_policy_share_nothing() {
 
     dispatch_platform_realm(
         dispatcher_b,
-        RealmTask::Frame(Box::new(|realm| {
+        RealmTask::TestCallback(Box::new(|realm| {
             assert_eq!(
                 realm.gestures().active_pointer_count(),
                 0,
@@ -552,7 +552,7 @@ fn isolated_windows_shape_over_the_runtimes_font_collection() {
         let app_fonts = app_fonts.clone();
         dispatch_platform_realm(
             dispatcher,
-            RealmTask::Frame(Box::new(move |realm| {
+            RealmTask::TestCallback(Box::new(move |realm| {
                 assert!(
                     realm.text_context_for_test().with(|text| {
                         flui_painting::FontCollection::ptr_eq(text.fonts(), &app_fonts)
@@ -658,7 +658,7 @@ fn resized_rescales_only_the_addressed_presentation() {
 
     dispatch_platform_realm(
         secondary,
-        RealmTask::Event(PlatformToUi::Resized {
+        RealmTask::Event(RealmEvent::Resized {
             size: flui_foundation::geometry::Size::new(640.0, 480.0),
             scale_factor: rescaled,
         }),
@@ -722,7 +722,7 @@ fn resizing_a_secondary_leaves_the_primary_surface_alone() {
 
     dispatch_platform_realm(
         secondary,
-        RealmTask::Event(PlatformToUi::Resized {
+        RealmTask::Event(RealmEvent::Resized {
             size: flui_foundation::geometry::Size::new(320.0, 200.0),
             scale_factor: 2.5,
         }),
@@ -741,7 +741,7 @@ fn resizing_a_secondary_leaves_the_primary_surface_alone() {
 
     dispatch_platform_realm(
         primary,
-        RealmTask::Event(PlatformToUi::Resized {
+        RealmTask::Event(RealmEvent::Resized {
             size: flui_foundation::geometry::Size::new(500.0, 400.0),
             scale_factor: 2.0,
         }),
@@ -860,7 +860,7 @@ fn closing_the_last_window_reentrantly_from_inside_a_dispatch_still_exits() {
 
     dispatch_platform_realm(
         dispatcher,
-        RealmTask::Frame(Box::new(move |_realm| {
+        RealmTask::TestCallback(Box::new(move |_realm| {
             // Reentrant: this window's own `on_close` (wired by the
             // helper above, mirroring `run_desktop`) calls
             // `close_this_window(dispatcher)` -> `close_presentation` ->
@@ -941,7 +941,7 @@ fn panicking_visit_restores_the_checked_out_realm_and_clears_iterating_all_realm
     let ran_in_task = Rc::clone(&ran);
     dispatch_platform_realm(
         dispatcher,
-        RealmTask::Frame(Box::new(move |_| {
+        RealmTask::TestCallback(Box::new(move |_| {
             ran_in_task.set(true);
         })),
     )
@@ -975,7 +975,7 @@ const DECOY: &[u8] =
 fn clear_redraw(dispatcher: RealmDispatcher) {
     dispatch_platform_realm(
         dispatcher,
-        RealmTask::Frame(Box::new(crate::app::ui_realm::UiRealm::mark_rendered)),
+        RealmTask::TestCallback(Box::new(crate::app::ui_realm::UiRealm::mark_rendered)),
     )
     .expect("the realm dispatches");
 }
@@ -986,12 +986,55 @@ fn redraw_requested(dispatcher: RealmDispatcher) -> bool {
     let requested_in_task = Rc::clone(&requested);
     dispatch_platform_realm(
         dispatcher,
-        RealmTask::Frame(Box::new(move |realm| {
+        RealmTask::TestCallback(Box::new(move |realm| {
             requested_in_task.set(realm.needs_redraw());
         })),
     )
     .expect("the realm dispatches");
     requested.get()
+}
+
+/// A recovered surface needs another scene even when the widget tree did not
+/// change. Drive the same addressed operation as the mobile surface callbacks,
+/// then the product pump: a redraw flag alone cannot satisfy this contract.
+fn recovered_surface_notification_resubmits_the_scene() {
+    let _clear = OwnerHostClearGuard::arm();
+    let realm = crate::app::ui_realm::UiRealm::for_test();
+    realm
+        .attach_root_widget(&flui_widgets::SizedBox::new(10.0, 10.0))
+        .expect("root mounts");
+    let dispatcher = install_platform_realm(realm, &test_window());
+    let sink = Rc::new(RefCell::new(
+        flui_runtime::testing::ScriptedSink::always_presents(),
+    ));
+    let clock = flui_foundation::ManualClock::default();
+    let pump = || {
+        clock.advance(std::time::Duration::from_millis(20));
+        let mut clock = clock.clone();
+        let sink = Rc::clone(&sink);
+        dispatch_platform_realm(
+            dispatcher,
+            RealmTask::Pump(Box::new(move |realm| {
+                let _ = realm.pump(&mut clock, &mut *sink.borrow_mut());
+            })),
+        )
+        .expect("frame dispatches");
+    };
+    pump();
+    assert_eq!(sink.borrow().submit_calls, 1, "initial scene submitted");
+    pump();
+    assert_eq!(sink.borrow().submit_calls, 1, "idle pump submits nothing");
+    dispatch_platform_realm(
+        dispatcher,
+        RealmTask::Event(RealmEvent::PrimarySurfaceRestored),
+    )
+    .expect("surface notification accepted");
+    pump();
+    assert_eq!(
+        sink.borrow().submit_calls,
+        2,
+        "recovered surface gets a scene"
+    );
 }
 
 /// A face registered while two realm windows run tells both: each draws its
@@ -1059,7 +1102,7 @@ fn a_landed_host_feed_wakes_every_realm_window() {
         "the feed landed on the app's collection"
     );
     // The owner turn the wake brings; the notices queue behind its event.
-    dispatch_platform_realm(dispatcher_a, RealmTask::Frame(Box::new(|_| {})))
+    dispatch_platform_realm(dispatcher_a, RealmTask::TestCallback(Box::new(|_| {})))
         .expect("the realm dispatches");
 
     for dispatcher in [dispatcher_a, dispatcher_b] {
@@ -1128,7 +1171,7 @@ fn a_registration_from_inside_a_realm_task_reaches_that_realm_after_it_returns()
 
     dispatch_platform_realm(
         dispatcher_a,
-        RealmTask::Frame(Box::new(|realm| {
+        RealmTask::TestCallback(Box::new(|realm| {
             super::super::register_font(PROBE_SANS).expect("the probe face registers");
             assert!(
                 !realm.needs_redraw(),
@@ -1204,6 +1247,10 @@ fn realm_dispatch_matrix() {
     crate::table_test::run_table(
         "realm_dispatch_matrix",
         &[
+            (
+                "recovered_surface_notification_resubmits_the_scene",
+                recovered_surface_notification_resubmits_the_scene as fn(),
+            ),
             (
                 "background_owner_pump_drains_before_polling_without_a_frame",
                 background_owner_pump_drains_before_polling_without_a_frame as fn(),
