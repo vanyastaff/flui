@@ -2692,14 +2692,16 @@ fn drain_translated_chars(hwnd: HWND) -> Option<String> {
     let mut units: Vec<u16> = Vec::new();
     let mut msg = MSG::default();
 
+    // Posted messages only (`PM_QS_POSTMESSAGE`): a pending cross-thread sent
+    // message is not dispatched from inside this keystroke's classification,
+    // so a nested keydown cannot take this keystroke's characters or its
+    // `WM_DEADCHAR` (see [`drain_dead_char`]).
+    let flags = PEEK_MESSAGE_REMOVE_TYPE(PM_REMOVE.0 | PM_QS_POSTMESSAGE.0);
     // SAFETY: `msg` is a live, writable local and `PeekMessageW` writes
-    // nothing else. `PM_REMOVE` only ever removes messages from this
-    // thread's own queue (the wndproc runs on the queue's owning thread).
-    // Note `PeekMessageW` may deliver pending nonqueued (sent) messages,
-    // re-entering `window_proc` — the same re-entrancy any modal Win32 API
-    // call permits, and `window_proc` holds no lock across this call.
+    // nothing else; the peek removes only from this thread's own queue (the
+    // wndproc runs on the queue's owning thread) and dispatches nothing.
     unsafe {
-        while PeekMessageW(&raw mut msg, Some(hwnd), WM_CHAR, WM_CHAR, PM_REMOVE).as_bool() {
+        while PeekMessageW(&raw mut msg, Some(hwnd), WM_CHAR, WM_CHAR, flags).as_bool() {
             units.push(msg.wParam.0 as u16);
         }
     }
