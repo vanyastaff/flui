@@ -7,7 +7,7 @@
 //! ```text
 //! GestureArenaMember (trait)
 //!     │
-//!     └── GestureRecognizer (trait) - base with add_pointer, handle_event
+//!     └── GestureRecognizer (trait) - add_pointer, handle_event, cancel
 //!             │
 //!             └── Concrete Recognizers
 //!                 ├── TapGestureRecognizer
@@ -37,10 +37,9 @@
 //! use flui_interaction::prelude::*;
 //!
 //! let arena = GestureArena::new();
-//! let recognizer = TapGestureRecognizer::new(arena)
-//!     .with_on_tap(|details| {
-//!         println!("Tapped at {:?}", details.global_position);
-//!     });
+//! let recognizer = TapGestureRecognizer::builder(arena)
+//!     .on_tap(|| println!("Tapped"))
+//!     .build();
 //! ```
 
 // Concrete recognizers
