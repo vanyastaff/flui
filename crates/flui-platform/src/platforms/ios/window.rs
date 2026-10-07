@@ -25,13 +25,18 @@ use cursor_icon::CursorIcon;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
-use objc2_foundation::{NSDefaultRunLoopMode, NSObjectProtocol, NSRunLoop, NSSet};
+use objc2_foundation::{
+    NSArray, NSDefaultRunLoopMode, NSNumber, NSObjectProtocol, NSRunLoop, NSSet,
+};
 use objc2_quartz_core::CADisplayLink;
-use objc2_ui_kit::{UITouch, UIView, UIViewController, UIWindow, UIWindowScene};
+use objc2_ui_kit::{
+    UIHoverGestureRecognizer, UITouch, UITouchType, UIView, UIViewController, UIWindow,
+    UIWindowScene,
+};
 
 use flui_foundation::geometry::{EdgeInsets, Size};
 
-use super::events::touch_to_pointer_events;
+use super::events::TouchInputState;
 use super::native_owner::NativeOwner;
 use crate::shared::WindowCallbacks;
 use crate::traits::{CursorError, PlatformWindow, WindowExecutionState, WindowId};
@@ -52,6 +57,7 @@ enum SamplingAdmission {
 
 pub struct FluiViewIvars {
     callbacks: Arc<WindowCallbacks>,
+    input: RefCell<TouchInputState>,
     /// Where this view stands in the attach/detach lifecycle: whether it may
     /// report metrics at all, and which window a report belongs to, so a
     /// callback arriving after a detach is dropped instead of announcing the
@@ -81,6 +87,17 @@ define_class!(
     struct FluiView;
 
     impl FluiView {
+        #[unsafe(method(onPencilHover:))]
+        fn on_pencil_hover(&self, recognizer: &UIHoverGestureRecognizer) {
+            self.pin_for_native_callback();
+            if self.window().is_none() { return; }
+            let events = self.ivars().input.borrow_mut().hover(recognizer, self);
+            for event in events {
+                if self.window().is_none() { break; }
+                self.callbacks().dispatch_input(event);
+            }
+        }
+
         #[unsafe(method(touchesBegan:withEvent:))]
         fn touches_began(&self, touches: &NSSet<UITouch>, _event: Option<&AnyObject>) {
             self.pin_for_native_callback();
@@ -165,6 +182,7 @@ impl FluiView {
         let this = mtm.alloc::<Self>();
         let this = this.set_ivars(FluiViewIvars {
             callbacks,
+            input: RefCell::new(TouchInputState::default()),
             sampling: std::cell::Cell::new(SamplingAdmission::Detached),
             sampling_active: std::cell::Cell::new(false),
             sampling_pending: std::cell::Cell::new(false),
@@ -178,6 +196,20 @@ impl FluiView {
         // Multi-touch is what a gesture layer needs; without it UIKit reports
         // only the first finger of a chord.
         this.setMultipleTouchEnabled(true);
+        // SAFETY: the live view declares onPencilHover: above. UIKit retains
+        // the recognizer when installed; its target does not retain the view.
+        let hover = unsafe {
+            UIHoverGestureRecognizer::initWithTarget_action(
+                mtm.alloc(),
+                Some(&this),
+                Some(sel!(onPencilHover:)),
+            )
+        };
+        hover.setAllowedTouchTypes(&NSArray::from_retained_slice(&[NSNumber::new_isize(
+            UITouchType::Stylus.0,
+        )]));
+        hover.setCancelsTouchesInView(false);
+        this.addGestureRecognizer(&hover);
         // A GPU-rendered surface is opaque, so tell UIKit not to composite
         // anything behind it.
         this.setOpaque(true);
@@ -243,7 +275,6 @@ impl FluiView {
     /// frame — the same "input dirties the presentation" step Android's
     /// motion-event path takes.
     fn dispatch_touches(&self, touches: &NSSet<UITouch>, phase: TouchPhase) {
-        let scale = self.contentScaleFactor();
         let mut any = false;
         for touch in touches {
             let Some(current_window) = self.window() else {
@@ -254,7 +285,12 @@ impl FluiView {
             }) {
                 continue;
             }
-            for event in touch_to_pointer_events(&touch, phase.as_pointer_phase(), scale) {
+            let events = self
+                .ivars()
+                .input
+                .borrow_mut()
+                .convert(&touch, phase.as_pointer_phase());
+            for event in events {
                 let result = self.callbacks().dispatch_input(event);
                 any |= result.default_prevented;
             }
