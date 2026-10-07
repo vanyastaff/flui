@@ -12,6 +12,122 @@ use flui_view::EventCx;
 use flui_widgets::prelude::HitTestBehavior;
 use flui_widgets::{Listener, SizedBox};
 
+/// The hosted frame's manual time, not wall time, selects the measured
+/// intermediate point; the default policy retains its immediate harness path.
+pub(crate) fn presentation_resampling_uses_the_owner_frame_clock() {
+    use flui_platform_api::pointer::{
+        PointerButton, PointerButtons, PointerEvent, PointerId, PointerInfo, PointerKind,
+        PointerMove, PointerPosition, PointerPress, PointerRelease, PointerSample,
+    };
+    use flui_platform_api::{EventTime, PlatformInput};
+    use flui_testing::{HeadlessHost, HeadlessWindow, PointerResampling};
+    use std::cell::RefCell;
+    use std::time::Duration;
+    for enabled in [false, true] {
+        let observed = Rc::new(RefCell::new(Vec::new()));
+        let seen = Rc::clone(&observed);
+        let terminal = Rc::new(Cell::new(0));
+        let ends = Rc::clone(&terminal);
+        let view = Listener::new(SizedBox::square(200.0))
+            .behavior(HitTestBehavior::Opaque)
+            .on_pointer_move(move |_, event| {
+                let PointerEvent::Move(event) = event.global else {
+                    panic!("Move")
+                };
+                seen.borrow_mut().push((
+                    event.current().position.get().x,
+                    event.current().time.as_nanos(),
+                ));
+            })
+            .on_pointer_up(move |_, _| ends.set(ends.get() + 1));
+        let mut host = HeadlessHost::new(HeadlessWindow::new(200, 200));
+        if enabled {
+            host.set_pointer_resampling(host.primary_window(), PointerResampling::FrameAligned)
+                .expect("idle presentation admits opt-in");
+        }
+        host.attach(&view).expect("mount Listener");
+        host.pump(Duration::from_millis(16));
+        let pointer = PointerInfo::new(
+            PointerId::try_from(1_u64).expect("nonzero contact"),
+            PointerKind::Touch,
+        );
+        let sample = |x, ms| {
+            PointerSample::new(
+                EventTime::from_nanos(ms * 1_000_000),
+                PointerPosition::try_new(flui_foundation::geometry::Point::new(x, 10.0))
+                    .expect("finite measured position"),
+            )
+        };
+        host.dispatch(PlatformInput::Pointer(PointerEvent::Down(
+            PointerPress::new(
+                pointer,
+                PointerButton::PRIMARY,
+                PointerButtons::only(PointerButton::PRIMARY),
+                sample(10.0, 0),
+            ),
+        )));
+        if enabled {
+            assert!(
+                host.set_pointer_resampling(host.primary_window(), PointerResampling::Disabled)
+                    .is_err(),
+                "an active sequence keeps its admitted policy"
+            );
+            host.set_pointer_resampling(host.primary_window(), PointerResampling::FrameAligned)
+                .expect("idempotent policy is allowed");
+        }
+        host.dispatch(PlatformInput::Pointer(PointerEvent::Move(
+            PointerMove::new(
+                pointer,
+                PointerButtons::only(PointerButton::PRIMARY),
+                sample(10.0, 0),
+            ),
+        )));
+        host.clock().advance(Duration::from_millis(100));
+        host.dispatch(PlatformInput::Pointer(PointerEvent::Move(
+            PointerMove::new(
+                pointer,
+                PointerButtons::only(PointerButton::PRIMARY),
+                sample(110.0, 100),
+            ),
+        )));
+        if enabled {
+            assert!(
+                observed.borrow().is_empty(),
+                "resampling waits for the owner's frame"
+            );
+            host.pump(Duration::ZERO);
+            let emitted = observed.borrow();
+            assert_eq!(emitted.len(), 2);
+            assert_eq!(emitted[0], (10.0, 0));
+            assert!(
+                (emitted[1].0 - 72.0).abs() < 1e-9,
+                "38 ms lookback samples 62 percent of the measured segment: {emitted:?}"
+            );
+            assert_eq!(emitted[1].1, 62_000_000);
+            drop(emitted);
+            host.pump(Duration::from_millis(38));
+            assert_eq!(
+                observed.borrow().last(),
+                Some(&(110.0, 100_000_000)),
+                "accepted sample debt survives to the next owner frame"
+            );
+        } else {
+            assert_eq!(&*observed.borrow(), &[(10.0, 0), (110.0, 100_000_000)]);
+        }
+        host.dispatch(PlatformInput::Pointer(PointerEvent::Up(
+            PointerRelease::new(
+                pointer,
+                PointerButton::PRIMARY,
+                PointerButtons::NONE,
+                sample(110.0, 101),
+            ),
+        )));
+        assert_eq!(terminal.get(), 1, "Up remains synchronous");
+        host.set_pointer_resampling(host.primary_window(), PointerResampling::Disabled)
+            .expect("terminal releases policy admission");
+    }
+}
+
 /// A counter callback + a readable handle.
 fn counter() -> (
     Rc<Cell<usize>>,
