@@ -867,12 +867,52 @@ impl Cubic {
     /// solved from the small offset `x − x(c)` to full relative precision and
     /// `x'(s) = p + 3a·u²` follows from it, rather than from an `s` rounding
     /// has moved onto the tangent. `None` when x has no such point (`a ≤ 0`).
+    /// The parameter of `x` found by bisection to the last representable bit;
+    /// slower than [`Self::solve`] (which bounds the output, not the
+    /// parameter) and used only where a derivative needs the exact point.
+    fn parameter_exact(&self, x: f64) -> f64 {
+        let (mut lo, mut hi) = (0.0_f64, 1.0_f64);
+        loop {
+            let mid = f64::midpoint(lo, hi);
+            if mid <= lo || mid >= hi {
+                return mid;
+            }
+            if self.x.at(mid) < x {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+    }
+
     fn tangent_slope(&self, x: f64) -> Option<f64> {
         let cubed = self.x.a;
         if cubed <= 0.0 {
             return None;
         }
-        let centre = (-self.x.b / (3.0 * cubed)).clamp(0.0, 1.0);
+        // The expansion `a·u³ + x'(c)·u` holds only about a genuine stationary
+        // point of `x'`: outside [0, 1] the `u²` term does not vanish.
+        let centre = -self.x.b / (3.0 * cubed);
+        if !(0.0..=1.0).contains(&centre) {
+            // No stationary point inside: `x` is strictly monotone with a
+            // nonzero quadratic part, so re-solve the parameter to full
+            // precision and take the exact quotient there.
+            let (mut lo, mut hi) = (0.0_f64, 1.0_f64);
+            loop {
+                let mid = f64::midpoint(lo, hi);
+                if mid <= lo || mid >= hi {
+                    break;
+                }
+                if self.x.at(mid) < x {
+                    lo = mid;
+                } else {
+                    hi = mid;
+                }
+            }
+            let s = f64::midpoint(lo, hi);
+            let quotient = self.y.slope(s) / self.x.slope(s);
+            return quotient.is_finite().then_some(quotient);
+        }
         let rate = self.x.slope(centre).max(0.0);
         let offset = x - self.x.at(centre);
         // `a·u³ + p·u` increases in `u`: bisect it over the parameter range.
@@ -902,7 +942,7 @@ impl Curve for Cubic {
     /// within the solver's reach `r`, which moves `x'` by up to
     /// `|x''|·r + 3|a|·r²`; an `x'(s)` below that is rounding, not slope, and
     /// the slope comes from the parameter re-solved about the stationary
-    /// point of `x'` instead ([`Cubic::tangent_slope`]). Where `x'(s) = 0`
+    /// point of `x'` instead (`Cubic::tangent_slope`). Where `x'(s) = 0`
     /// exactly and `y'(s) = 0` too (a flat start such as
     /// `cubic-bezier(0, 0, …)`), the limit `y''(s) / x''(s)`; at a vertical
     /// tangent, or where the quotient overflows, the finite secant of the
@@ -919,11 +959,20 @@ impl Curve for Cubic {
         } else {
             self.solve(t)
         };
-        let dx = self.x.slope(s);
-        let dy = self.y.slope(s);
         let reach = OUTPUT_TOLERANCE / self.y_slope_bound;
         let x_error = self.x.curvature(s).abs() * reach + 3.0 * self.x.a.abs() * reach * reach;
-        let ratio = if interior && dx.abs() <= x_error {
+        let near_tangent = interior && self.x.slope(s).abs() <= x_error;
+        // Away from a stationary point of `x'` the quotient needs the exact
+        // parameter: the solver bounds the output, not `s`, and near an end a
+        // small genuine `x'` is sensitive to it.
+        let s = if interior && !near_tangent {
+            self.parameter_exact(t)
+        } else {
+            s
+        };
+        let dx = self.x.slope(s);
+        let dy = self.y.slope(s);
+        let ratio = if near_tangent {
             self.tangent_slope(t).unwrap_or(f64::NAN)
         } else if dx != 0.0 {
             dy / dx

@@ -720,6 +720,33 @@ fn cubic_slope_is_exact_where_a_difference_is_not() {
     }
 }
 
+/// Near an endpoint whose `x'` has no stationary point inside [0, 1] the
+/// quadratic term of `x` dominates and must not be dropped:
+/// `Cubic(0, 1/3, 0.1, 2/3)` has x(s) = 0.7s³ + 0.3s², y(s) = s, so
+/// dy/dx = 1 / (2.1s² + 0.6s) at the parameter solved by bisection.
+fn cubic_slope_near_an_end_keeps_the_quadratic_term() {
+    let curve = Cubic::new(0.0, 1.0 / 3.0, 0.1, 2.0 / 3.0);
+    for x in [1e-16_f64, 1e-12, 1e-9] {
+        let (mut lo, mut hi) = (0.0_f64, 1.0_f64);
+        for _ in 0..200 {
+            let mid = f64::midpoint(lo, hi);
+            if bezier(mid, 0.0, 0.1) < x {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        let s = f64::midpoint(lo, hi);
+        let want = 1.0 / (2.1 * s * s + 0.6 * s);
+        assert_close(
+            &format!("near the start at {x}"),
+            curve.slope(x),
+            want,
+            1e-3 * want,
+        );
+    }
+}
+
 fn default_difference_is_second_order() {
     // Exact for a quadratic, including the one-sided ends.
     for t in [0.0, 1e-5, 0.3, 1.0 - 1e-5, 1.0] {
@@ -822,6 +849,10 @@ fn curve_slope_is_the_derivative_of_transform() {
         (
             "cubic slope is exact where a difference is not",
             cubic_slope_is_exact_where_a_difference_is_not,
+        ),
+        (
+            "cubic slope near an end keeps the quadratic term",
+            cubic_slope_near_an_end_keeps_the_quadratic_term,
         ),
         (
             "default difference is second order",

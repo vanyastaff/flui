@@ -33,5 +33,6 @@
   curve contract): reverse the driving animation (`ReverseAnimation`, `AnimationExt::reversed`)
   or use `.flipped()` to turn an ease-in into an ease-out. `Threshold`: use
   `Interval::linear(t, t)` for a step at `t`. `SawTooth` has no direct replacement (its repeated
-  ramps jumped from 1 back to 0, breaking the same contract): for `count` ramps over `duration`, run
-  the controller with `repeat(false)` and a duration of `duration / count`.
+  ramps jumped from 1 back to 0, breaking the same contract): for `count` ramps over `duration`, use
+  `repeat_with(None, None, false, Some(duration / count), Some(count))`, which stops after `count`
+  ramps (`repeat(false)` would repeat forever).
