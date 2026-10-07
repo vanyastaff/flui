@@ -1400,11 +1400,13 @@ impl GestureArena {
     ///
     /// If arena is open, stores as eager winner (wins when arena closes).
     /// If arena is closed, resolves immediately in favor of this member.
+    /// The caller keeps ownership; the arena retains only weak membership.
     ///
     /// # Note
     ///
     /// Prefer using [`GestureArenaEntry::resolve`] instead of this method.
-    pub fn accept(&self, pointer: PointerId, member: Rc<dyn GestureArenaMember>) {
+    pub fn accept(&self, pointer: PointerId, member: &Rc<dyn GestureArenaMember>) {
+        let member = Rc::clone(member);
         if self.owner_closed.get() {
             let mut failure = ClosePanic::for_rejection(self.close_mode.mode());
             failure.retire(member);
@@ -1456,6 +1458,7 @@ impl GestureArena {
     ///
     /// Winner receives `accept_gesture()`, all others receive
     /// `reject_gesture()`.
+    /// The winner is borrowed; its caller remains an owner during delivery.
     ///
     /// # Note
     ///
@@ -1470,7 +1473,8 @@ impl GestureArena {
             event = %crate::observability::GestureEvent::ArenaResolved,
         )
     )]
-    pub fn resolve(&self, pointer: PointerId, winner: Option<Rc<dyn GestureArenaMember>>) {
+    pub fn resolve(&self, pointer: PointerId, winner: Option<&Rc<dyn GestureArenaMember>>) {
+        let winner = winner.cloned();
         if self.owner_closed.get() {
             let mut failure = ClosePanic::for_rejection(self.close_mode.mode());
             failure.retire(winner);
@@ -2145,7 +2149,8 @@ mod tests {
             arena.close(pointer);
             // Resolve for `winner`; `reentrant` is rejected and its callback
             // re-enters the arena. Must complete without hanging.
-            arena.resolve(pointer, Some(winner.clone()));
+            let candidate: Rc<dyn GestureArenaMember> = winner.clone();
+            arena.resolve(pointer, Some(&candidate));
             let _ = tx.send((*reentrant.rejected.lock(), winner.was_accepted()));
         });
 
@@ -2210,7 +2215,8 @@ mod tests {
         arena.close(pointer);
 
         let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            arena.resolve(pointer, Some(winner.clone()));
+            let candidate: Rc<dyn GestureArenaMember> = winner.clone();
+            arena.resolve(pointer, Some(&candidate));
         }));
 
         assert!(unwind.is_err(), "the earliest callback panic must resume");
