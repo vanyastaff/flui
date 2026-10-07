@@ -14,19 +14,31 @@ use flui_platform_api::{
 
 #[test]
 fn queued_move_precedes_button_edges_without_restarting_the_contact() {
-    assert_button_contacts(false, false);
+    assert_button_contacts(false, false, false);
+}
+
+#[test]
+fn resampled_move_precedes_button_edges_without_restarting_the_contact() {
+    assert_button_contacts(false, false, true);
 }
 
 #[test]
 fn queued_move_failure_still_delivers_button_edge_and_preserves_first_failure() {
     for edge_panics in [false, true] {
-        assert_button_contacts(true, edge_panics);
+        assert_button_contacts(true, edge_panics, false);
     }
 }
 
-fn assert_button_contacts(move_panics: bool, edge_panics: bool) {
+fn assert_button_contacts(move_panics: bool, edge_panics: bool, resampling: bool) {
     let lane = InteractionLane::try_new().expect("owner lane");
-    let binding = GestureBinding::new();
+    let clock = std::sync::Arc::new(flui_foundation::ManualClock::new());
+    let binding = GestureBinding::with_clock(clock.clone());
+    binding
+        .set_resampling_enabled(resampling)
+        .expect("no active contact");
+    binding.set_sampling_clock(flui_interaction::SamplingClock::Manual {
+        period: std::time::Duration::from_millis(16),
+    });
     let observed = Rc::new(RefCell::new(Vec::new()));
     let log = Rc::clone(&observed);
     lane.enter(|| {
@@ -185,7 +197,12 @@ fn assert_button_contacts(move_panics: bool, edge_panics: bool) {
                 )),
                 route,
             );
-            binding.flush_pending_moves();
+            use flui_foundation::MonotonicClock as _;
+            clock.advance(std::time::Duration::from_millis(40));
+            let now = clock.now();
+            binding
+                .flush_pending_moves_at(now, now + std::time::Duration::from_millis(16))
+                .expect("advancing manual sample window");
             assert_eq!(binding.active_pointer_count(), 0);
             assert_eq!(
                 &observed.borrow()[3..],
