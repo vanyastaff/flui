@@ -27,6 +27,10 @@ pub(crate) mod owner_signal;
 // module warning-free everywhere. (`accessibility_bridge` can afford
 // `pub(crate)` only because Linux production code consumes it too.)
 pub mod hwnd_affinity;
+// `pub` for the same reason: the backends that still build `ui-events`
+// values convert through it, each on its own target, and its tests run on
+// any host.
+pub mod input_vocabulary;
 pub mod keys;
 pub mod keys_macos;
 pub mod panic_boundary;

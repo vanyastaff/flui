@@ -17,7 +17,7 @@
 //!   ([`capture_changed_event`]).
 
 use dpi::{PhysicalPosition, PhysicalSize};
-use keyboard_types::Modifiers as KeyboardModifiers;
+use keyboard_types::{Modifiers as KeyboardModifiers, NamedKey};
 use ui_events::{
     keyboard::{Code, KeyState, KeyboardEvent, Location},
     pointer::{
@@ -385,21 +385,43 @@ pub fn mouse_hwheel_event(
 pub fn key_down_event(
     wparam: WPARAM,
     lparam: LPARAM,
-    translated_text: Option<String>,
+    stroke: Keystroke,
+    held_dead: &mut HeldDeadKeys,
 ) -> PlatformInput {
     let vk = wparam.0 as u16;
     let (scan_code, extended, is_repeat) = keys::parse_key_lparam(lparam.0);
+    let (dead, translated_text) = match stroke {
+        Keystroke::Dead => (true, None),
+        Keystroke::Text(text) => (false, text),
+    };
+    // A press is also proof the key was released before: a dead press held
+    // across a focus change whose release went to another window is forgotten
+    // here, when the same physical key goes down again. A key that stays held
+    // across a transient focus loss keeps its identity for its release.
+    if dead {
+        held_dead.press(scan_code, extended);
+    } else if !is_repeat {
+        held_dead.release(scan_code, extended);
+    }
 
     let modifiers = message_modifiers();
     let fallback = keys::vk_to_key(vk, modifiers.contains(KeyboardModifiers::SHIFT));
     let code = keys::scancode_to_code(scan_code, extended);
-    let key = keys::key_for_keydown(
-        fallback,
-        translated_text,
-        modifiers.contains(KeyboardModifiers::ALT),
-        modifiers.contains(KeyboardModifiers::CONTROL),
-        code,
-    );
+    // A dead key with nothing typed yet is reported as one, not as its
+    // unshifted fallback character: otherwise a shortcut bound to that
+    // character fires while the user composes an accented letter. Its second
+    // press (or a space after it) types the accent itself and arrives as text.
+    let key = if dead {
+        Key::Named(NamedKey::Dead)
+    } else {
+        keys::key_for_keydown(
+            fallback,
+            translated_text,
+            modifiers.contains(KeyboardModifiers::ALT),
+            modifiers.contains(KeyboardModifiers::CONTROL),
+            code,
+        )
+    };
 
     PlatformInput::Keyboard(KeyboardEvent {
         state: KeyState::Down,
@@ -418,12 +440,19 @@ pub fn key_down_event(
 /// fallback — for a letter that is its shift-respecting character, for OEM
 /// punctuation the US-layout position. Consumers that type text act on
 /// `KeyState::Down` only, so this asymmetry never reaches a text field.
-pub fn key_up_event(wparam: WPARAM, lparam: LPARAM) -> PlatformInput {
+pub fn key_up_event(wparam: WPARAM, lparam: LPARAM, held_dead: &mut HeldDeadKeys) -> PlatformInput {
     let vk = wparam.0 as u16;
     let (scan_code, extended, _) = keys::parse_key_lparam(lparam.0);
 
     let modifiers = message_modifiers();
-    let key = keys::vk_to_key(vk, modifiers.contains(KeyboardModifiers::SHIFT));
+    // The release of a dead key is `Dead` too (W3C UI Events dead-key
+    // sequence), so a pressed-key set sees the same identity go down and up.
+    // The press decided it; the layout may have changed while the key was held.
+    let key = if held_dead.release(scan_code, extended) {
+        Key::Named(NamedKey::Dead)
+    } else {
+        keys::vk_to_key(vk, modifiers.contains(KeyboardModifiers::SHIFT))
+    };
     let code = keys::scancode_to_code(scan_code, extended);
 
     PlatformInput::Keyboard(KeyboardEvent {
@@ -454,4 +483,36 @@ pub fn stray_char_event(text: String) -> PlatformInput {
         repeat: false,
         is_composing: false,
     })
+}
+
+/// What `TranslateMessage` produced for one keydown.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Keystroke {
+    /// The drained `WM_CHAR` burst, or `None` for a key with no typeable
+    /// translation (navigation keys, Ctrl chords).
+    Text(Option<String>),
+    /// A dead key: `TranslateMessage` queued `WM_DEADCHAR` (or
+    /// `WM_SYSDEADCHAR`) for it on the layer the held modifiers select.
+    Dead,
+}
+
+/// The physical keys currently held down that were pressed as dead keys, so
+/// each one's release reports `Dead` like its press, even if the keyboard
+/// layout or the modifiers changed while it was held. Owned per window.
+#[derive(Debug, Default)]
+pub struct HeldDeadKeys(Vec<(u16, bool)>);
+
+impl HeldDeadKeys {
+    fn press(&mut self, scan_code: u16, extended: bool) {
+        if !self.0.contains(&(scan_code, extended)) {
+            self.0.push((scan_code, extended));
+        }
+    }
+
+    /// Whether the released key was pressed as a dead key; forgets it.
+    fn release(&mut self, scan_code: u16, extended: bool) -> bool {
+        let before = self.0.len();
+        self.0.retain(|held| *held != (scan_code, extended));
+        self.0.len() != before
+    }
 }

@@ -94,7 +94,6 @@ design.md §7; в таблице стоит рекомендуемый вари�
 | SE1 | `SemanticsEventData::get_string`, `get_int`, `get_float`, `get_bool` | `str`, `int`, `float`, `bool` | C-GETTER; ср. `serde_json::Value::as_str` | — | 1 каждый | Н |
 | SE2 | `SemanticsActionHandler` (`action.rs:52`) | `SemanticsActionCallback` | N6 | — | 27 | Н |
 | A1 | `Curves` с `pub const EaseIn: Cubic` и ещё 19 используемыми константами | модуль `curves`: `EASE_IN`, `LINEAR`, `FAST_OUT_SLOW_IN`, … | «Статический класс» Dart, `#[expect(non_upper_case_globals)]`; прецедент `f64::consts::PI` | на модуле `Curves`, на константах `easeIn`, … | 171 | С |
-| A2 | `SawTooth` | `Sawtooth` | Одно слово | `SawTooth` | 4 | Н |
 | A3 | `Curve2D`, `Curve2DSample` | `Curve2d`, `Curve2dSample` | C-CASE | — | 3 | Н |
 | A4 | `ext::{AnimatableExt, AnimationExt}`, `tween_types::*`, `CurveExt` в `tween_types.rs` | `animatable::AnimatableExt`, `animation::AnimationExt`, `tween::*`, `curve::CurveExt` | `ext`, `_types` — мешки (N1, N7) | — | 6–7 | Н |
 | L1 | `ClipRRectLayer`; `clip_rrect()` | `ClipRoundedRectLayer`; `rounded_rect()` | Следует за F1 | `ClipRRectLayer` | 23 | Н |
