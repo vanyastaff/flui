@@ -15,6 +15,7 @@ pre { position: relative; z-index: 9999; background: white; width: max-content; 
   <button id="pen-samples">Check pen samples</button>
   <button id="chord">Check native pointer chord</button>
   <button id="sensor-validation">Check pen sensor validation</button>
+  <button id="native-samples">Arm trusted mouse samples</button>
   <button id="capture">Arm trusted capture check</button>
   <button id="display">Check display</button>
   <button id="created">Check created callback</button>
@@ -283,4 +284,28 @@ document.getElementById('sensor-validation').onclick = () => check('sensor-valid
   equal(deliver(eraser), { kind: 'Pen { tool: Eraser }', role: 'Primary' });
   equal(JSON.parse(document.getElementById('move')?.textContent ?? 'null'), { primary: true, secondary: false });
 });
+
+document.getElementById('native-samples').onclick = () => {
+  const canvas = document.querySelector('canvas');
+  if (!canvas) return report('native-samples-check', 'FAIL: Install input first');
+  report('native-samples-check', 'Move the real pointer over the canvas');
+  canvas.addEventListener('pointermove', event => check('native-samples-check', () => {
+    if (!event.isTrusted || event.pointerType !== 'mouse') throw new Error('trusted mouse source required');
+    const reading = source => ({ time: Math.trunc(source.timeStamp * 1000000), x: source.offsetX, y: source.offsetY });
+    const current = reading(event);
+    const coalesced = event.getCoalescedEvents?.() ?? [];
+    const predicted = event.getPredictedEvents?.() ?? [];
+    report('native-sample-source', JSON.stringify({ trusted: event.isTrusted, coalescedAPI: typeof event.getCoalescedEvents, predictedAPI: typeof event.getPredictedEvents, current, coalesced: coalesced.map(reading), predicted: predicted.map(reading) }));
+    const expected = (sources, before) => sources.map(reading).filter(sample =>
+      (before ? sample.time <= current.time : sample.time >= current.time) &&
+      !(sample.time === current.time && sample.x === current.x && sample.y === current.y)
+    ).sort((a, b) => a.time - b.time);
+    const actual = JSON.parse(document.getElementById('samples')?.textContent ?? 'null');
+    equal(actual.current, { ...current, pressure: null });
+    const positions = samples => samples.map(({ time, x, y }) => ({ time, x, y }));
+    for (const [family, sources, before] of [['coalesced', coalesced, true], ['predicted', predicted, false]]) {
+      if (JSON.stringify(positions(actual[family])) !== JSON.stringify(expected(sources, before))) throw new Error(`${family} differs from trusted native source`);
+    }
+  }), { once: true });
+};
 </script>

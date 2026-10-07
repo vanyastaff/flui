@@ -36,3 +36,18 @@ fractional canvas origin with explicit borders and padding. Its transformed
 case checks that native local coordinates remain authoritative; browser rounding
 on transformed wheel coordinates is not repaired by guessing an inverse from
 an axis-aligned bounding rectangle.
+
+The pen sample check supplies coalesced and predicted lists of actual DOM
+PointerEvent objects through explicitly overridden methods; the DOM constructor
+has no arguments for those lists. Each source object's target, fractional
+coordinates, readings and timestamp are checked before the platform receives
+the parent. This exercises the public producer's ordering and sensor conversion,
+and does not establish physical pen hardware delivery. The sensor validation
+check separately supplies invalid or absent readings and optional methods.
+
+The trusted mouse sample check reads the browser's own source methods during
+real pointer movement, without source overrides. It compares the public samples
+with those native lists and prints the actual source values. An empty history
+or prediction list proves only the empty-list path on that browser; the fixture
+does not claim hardware predictions were observed. The native chord check pins
+the pointermove button edges between the first press and final release.
