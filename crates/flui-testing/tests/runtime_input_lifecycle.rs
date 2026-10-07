@@ -152,10 +152,10 @@ fn queued_hover_after_transition(paused: bool, held: bool) {
     dispatch(&realm, primary, hover());
     assert_eq!(hovers.get(), 0, "hover waits for frame cadence");
     if paused {
-        realm.update_host_lifecycle(AppLifecycleState::Paused);
-        realm.update_host_lifecycle(AppLifecycleState::Resumed);
+        realm.enter(|realm| realm.update_host_lifecycle(AppLifecycleState::Paused));
+        realm.enter(|realm| realm.update_host_lifecycle(AppLifecycleState::Resumed));
     } else {
-        realm.update_window_focus(primary, false);
+        realm.enter(|realm| realm.update_window_focus(primary, false));
     }
     pump(&mut realm);
     assert_eq!(
@@ -217,8 +217,8 @@ pub(crate) fn host_pause_keeps_a_completed_held_tap_for_the_first_commit() {
         (0, 0),
         "the completed tap waits for commit"
     );
-    realm.update_host_lifecycle(AppLifecycleState::Paused);
-    realm.update_host_lifecycle(AppLifecycleState::Resumed);
+    realm.enter(|realm| realm.update_host_lifecycle(AppLifecycleState::Paused));
+    realm.enter(|realm| realm.update_host_lifecycle(AppLifecycleState::Resumed));
     pump(&mut realm);
     assert_eq!(
         (downs.get(), ups.get()),
@@ -367,12 +367,15 @@ fn pause_diagnostic_failure_still_drains_motion(cancel_panics: bool) {
     let primary = realm.presentation_id();
     let hovers = Rc::new(Cell::new(0));
     let cancels = Rc::new(Cell::new(0));
+    let downs = Rc::new(Cell::new(0));
+    let seen_down = downs.clone();
     let seen_hover = hovers.clone();
     let seen_cancel = cancels.clone();
     realm
         .attach_root_widget(
             &Listener::new()
                 .behavior(HitTestBehavior::Opaque)
+                .on_pointer_down(move |_, _| seen_down.set(seen_down.get() + 1))
                 .on_pointer_hover(move |_, _| seen_hover.set(seen_hover.get() + 1))
                 .on_pointer_cancel(move |_, _| {
                     seen_cancel.set(seen_cancel.get() + 1);
@@ -390,6 +393,11 @@ fn pause_diagnostic_failure_still_drains_motion(cancel_panics: bool) {
         primary,
         make_down_event(Offset::new(4.0, 6.0), PointerType::Touch),
     );
+    assert_eq!(
+        downs.get(),
+        1,
+        "the contact is admitted and reaches its real widget route"
+    );
     let mut motion = make_move_event_for_id(
         PointerId::new(2).expect("nonzero mouse pointer"),
         Offset::new(8.0, 9.0),
@@ -403,7 +411,7 @@ fn pause_diagnostic_failure_still_drains_motion(cancel_panics: bool) {
     let diagnostics = Arc::new(AtomicUsize::new(0));
     let failed = catch_unwind(AssertUnwindSafe(|| {
         tracing::subscriber::with_default(PauseDiagnosticPanic(diagnostics.clone()), || {
-            realm.update_host_lifecycle(AppLifecycleState::Paused);
+            realm.enter(|realm| realm.update_host_lifecycle(AppLifecycleState::Paused));
         });
     }))
     .expect_err("pause retains its first callback or diagnostic failure");
@@ -422,7 +430,7 @@ fn pause_diagnostic_failure_still_drains_motion(cancel_panics: bool) {
         1,
         "the accepted contact receives its terminal callback"
     );
-    realm.update_host_lifecycle(AppLifecycleState::Resumed);
+    realm.enter(|realm| realm.update_host_lifecycle(AppLifecycleState::Resumed));
     pump(&mut realm);
     assert_eq!(
         hovers.get(),
