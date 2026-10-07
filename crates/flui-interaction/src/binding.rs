@@ -85,7 +85,6 @@ use smallvec::SmallVec;
 
 use crate::{
     arena::{DetachedArenaBatch, GestureArena},
-    events::ScrollEvent,
     ids::PointerId,
     processing::{PointerEventResampler, SamplingClock},
     routing::{

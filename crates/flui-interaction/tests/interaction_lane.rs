@@ -2529,7 +2529,7 @@ fn non_pointer_invocation_retains_its_snapshot_across_a_reentrant_close() {
     use flui_interaction::__runtime::{CloseMode, close_dispatch, presentation_dispatch};
     use flui_interaction::PointerId;
     use flui_interaction::events::{
-        PanZoomEvent, PanZoomPhase, PointerInfo, PointerKind, PointerPosition, ScrollEvent,
+        PanZoomEvent, PanZoomPhase, PointerInfo, PointerKind, PointerPosition,
     };
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::rc::Rc;
