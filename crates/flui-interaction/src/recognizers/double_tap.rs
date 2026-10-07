@@ -189,10 +189,6 @@ impl DoubleTapGestureRecognizer {
             false
         }
     }
-    /// Poll the inter-tap window using the owner clock.
-    pub fn check_timeout(&self) -> bool {
-        self.expire(self.contact.now())
-    }
     fn complete(&self, details: DoubleTapDetails) {
         let Some(snapshot) = self.contact.current() else {
             return;

@@ -6,7 +6,7 @@ use super::{
     recognizer::{CancelOutcome, GestureRecognizer},
 };
 use crate::{
-    arena::{GestureArena, GestureArenaMember},
+    arena::{GestureArena, GestureArenaEntry, GestureArenaMember},
     events::{PointerEvent, PointerType},
     ids::PointerId,
     routing::{PointerDispatch, RoutePanic},
@@ -261,6 +261,7 @@ impl TapSequences {
 }
 struct TapArenaMember {
     contact: PrimaryContact,
+    entry: RefCell<Option<GestureArenaEntry>>,
     recognizer: Weak<TapGestureRecognizer>,
     sequence: ContactId,
 }
@@ -273,6 +274,15 @@ impl GestureArenaMember for TapArenaMember {
     fn reject_gesture(&self, _: PointerId) {
         if let Some(recognizer) = self.recognizer.upgrade() {
             recognizer.reject_sequence(self.sequence);
+        }
+    }
+}
+impl Drop for TapArenaMember {
+    fn drop(&mut self) {
+        // A lifted sequence can still await a held verdict after its contact
+        // finished; its independently retained weak token must withdraw too.
+        if let Some(entry) = self.entry.get_mut().take() {
+            entry.withdraw_deferred();
         }
     }
 }
@@ -382,6 +392,7 @@ impl GestureRecognizer for TapGestureRecognizer {
             let member: Weak<dyn GestureArenaMember> = this.clone();
             TapArenaMember {
                 contact: PrimaryContact::new(ArenaMembership::new(self.arena.clone(), member)),
+                entry: RefCell::new(None),
                 recognizer: self.this.clone(),
                 sequence: id,
             }
@@ -389,6 +400,7 @@ impl GestureRecognizer for TapGestureRecognizer {
         if member.contact.begin(dispatch, &self.settings).is_err() {
             return;
         }
+        *member.entry.borrow_mut() = member.contact.entry();
         let down = TapDetails {
             global_position: dispatch.global.position(),
             local_position: dispatch.local.position(),
