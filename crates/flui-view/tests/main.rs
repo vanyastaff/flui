@@ -361,6 +361,10 @@ fn signal_read_and_write_matrix() {
                 signal_reads::a_read_in_build_subscribes_through_the_production_context as fn(),
             ),
             (
+                "signal_reads::changing_read_sets_preserves_peer_rebuild_order",
+                signal_reads::changing_read_sets_preserves_peer_rebuild_order as fn(),
+            ),
+            (
                 "signal_reads::a_partially_committed_panicking_update_rebuilds_its_mounted_reader",
                 signal_reads::a_partially_committed_panicking_update_rebuilds_its_mounted_reader
                     as fn(),
