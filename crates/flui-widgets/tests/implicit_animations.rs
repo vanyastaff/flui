@@ -539,6 +539,17 @@ impl ViewState<RotationProbe> for RotationProbeState {
     }
 }
 
+/// The Z-rotation in turns of the one transform layer, `atan2(m[1][0], m[0][0])`;
+/// the centring translation does not affect it.
+#[track_caller]
+fn layer_turns(laid: &mut LaidOut) -> f64 {
+    let matrices = laid.transform_layer_matrices();
+    let [matrix] = matrices.as_slice() else {
+        panic!("one transform layer expected, got {matrices:?}");
+    };
+    matrix.get(1, 0).atan2(matrix.get(0, 0)) / std::f64::consts::TAU
+}
+
 /// Rotate 0 → ¾ turn and read the child's rotation, in turns, half way through
 /// the run.
 fn rotation_at_half_way(path: RotationPath) -> f64 {
@@ -554,8 +565,7 @@ fn rotation_at_half_way(path: RotationPath) -> f64 {
     laid.pump();
     laid.pump_for(FRAME); // detection
     laid.pump_for(RUN / 2);
-    let transform = laid.find_by_render_type("RenderTransform");
-    laid.transform_rotation(transform) / std::f64::consts::TAU
+    layer_turns(&mut laid)
 }
 
 /// `Shorter` reaches ¾ turn by turning back: half way it shows −⅛ turn.
@@ -592,8 +602,7 @@ pub(crate) fn animated_rotation_retargets_on_a_path_change() {
     laid.pump();
     laid.pump_for(FRAME); // detection
     laid.pump_for(RUN / 4);
-    let transform = laid.find_by_render_type("RenderTransform");
-    let before = laid.transform_rotation(transform) / std::f64::consts::TAU;
+    let before = layer_turns(&mut laid);
     assert!(
         before > 0.1 && before < 0.3,
         "a quarter of the way: {before} turns"
@@ -604,8 +613,7 @@ pub(crate) fn animated_rotation_retargets_on_a_path_change() {
     // Kept short so both candidate angles stay inside (-½, ½] turn, where the
     // read-back rotation is unambiguous.
     laid.pump_for(RUN / 10);
-    let transform = laid.find_by_render_type("RenderTransform");
-    let after = laid.transform_rotation(transform) / std::f64::consts::TAU;
+    let after = layer_turns(&mut laid);
     assert!(
         after < before,
         "the shorter arc turns back from {before}: now {after} turns"
