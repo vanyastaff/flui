@@ -1231,6 +1231,146 @@ mod pointer_translation_tests {
         );
     }
 
+    #[test]
+    fn native_pan_zoom_phase_and_recovery_matrix() {
+        native_pan_zoom_converter_keeps_terminal_after_invalid_position();
+        use flui_foundation::geometry::Point;
+        use flui_platform_api::pointer::{
+            PanZoomPhase, PointerId, PointerInfo, PointerKind, PointerPosition,
+        };
+        use winit::event::TouchPhase;
+
+        let info = |id| {
+            PointerInfo::new(
+                PointerId::try_from(id).expect("nonzero test id"),
+                PointerKind::Trackpad,
+            )
+        };
+        let at = PointerPosition::try_new(Point::new(10.0, 15.0)).expect("finite position");
+        for competing in [false, true] {
+            let mut stream = PanZoomState::default();
+            let mut events = Vec::new();
+            let mut push = |stream: &mut PanZoomState, delta, phase, id| {
+                events.extend(stream.event(delta, phase, info(id), at, KeyboardModifiers::empty()));
+            };
+            push(
+                &mut stream,
+                GestureDelta::Pinch(0.0),
+                TouchPhase::Moved,
+                3_u64,
+            );
+            push(
+                &mut stream,
+                GestureDelta::Pinch(0.0),
+                TouchPhase::Started,
+                3,
+            );
+            push(
+                &mut stream,
+                GestureDelta::Pinch(0.0),
+                TouchPhase::Started,
+                99,
+            );
+            push(&mut stream, GestureDelta::Pinch(0.5), TouchPhase::Moved, 99);
+            if competing {
+                push(
+                    &mut stream,
+                    GestureDelta::Rotation(0.0),
+                    TouchPhase::Started,
+                    99,
+                );
+                push(
+                    &mut stream,
+                    GestureDelta::Rotation(90.0),
+                    TouchPhase::Moved,
+                    99,
+                );
+            }
+            push(
+                &mut stream,
+                GestureDelta::Pinch(f64::NAN),
+                TouchPhase::Moved,
+                99,
+            );
+            push(&mut stream, GestureDelta::Pinch(0.0), TouchPhase::Ended, 99);
+            if competing {
+                push(
+                    &mut stream,
+                    GestureDelta::Rotation(0.0),
+                    TouchPhase::Cancelled,
+                    99,
+                );
+            }
+            push(
+                &mut stream,
+                GestureDelta::Pan(Offset::new(0.0, 0.0)),
+                TouchPhase::Started,
+                4,
+            );
+            push(
+                &mut stream,
+                GestureDelta::Pan(Offset::new(4.0, -2.0)),
+                TouchPhase::Moved,
+                4,
+            );
+            push(
+                &mut stream,
+                GestureDelta::Pan(Offset::new(f64::NAN, 0.0)),
+                TouchPhase::Ended,
+                4,
+            );
+            let events: Vec<_> = events
+                .into_iter()
+                .map(|event| match event {
+                    PlatformInput::Pointer(PointerEvent::PanZoom(event)) => event,
+                    _ => panic!("only PanZoom expected"),
+                })
+                .collect();
+            assert_eq!(
+                events.len(),
+                if competing { 7 } else { 6 },
+                "duplicate/orphan/invalid phases produce no extra messages"
+            );
+            assert!(matches!(events[0].phase, PanZoomPhase::Start));
+            assert_eq!(events[0].pointer().id, info(3_u64).id);
+            let PanZoomPhase::Update(zoom) = events[1].phase else {
+                panic!("pinch update")
+            };
+            assert_eq!(zoom.scale(), 1.5);
+            let terminal = if competing { 3 } else { 2 };
+            if competing {
+                let PanZoomPhase::Update(rotation) = events[2].phase else {
+                    panic!("rotation update")
+                };
+                assert_eq!(rotation.scale(), 1.5);
+                assert_eq!(rotation.rotation(), -core::f64::consts::FRAC_PI_2);
+                assert!(matches!(events[terminal].phase, PanZoomPhase::Cancelled));
+            } else {
+                assert!(matches!(events[terminal].phase, PanZoomPhase::End));
+            }
+            assert!(
+                events[..=terminal]
+                    .iter()
+                    .all(|event| event.pointer().id == info(3_u64).id)
+            );
+            assert!(matches!(events[terminal + 1].phase, PanZoomPhase::Start));
+            let PanZoomPhase::Update(pan) = events[terminal + 2].phase else {
+                panic!("pan update")
+            };
+            assert_eq!(pan.pan(), flui_foundation::geometry::Offset::new(4.0, -2.0));
+            assert_eq!(pan.scale(), 1.0, "new stream resets cumulative zoom");
+            assert!(
+                matches!(events[terminal + 3].phase, PanZoomPhase::End),
+                "invalid final delta preserves native End"
+            );
+            assert!(
+                events[terminal + 1..]
+                    .iter()
+                    .all(|event| event.pointer().id == info(4_u64).id)
+            );
+        }
+    }
+
     fn native_pan_zoom_converter_keeps_terminal_after_invalid_position() {
         use winit::event::{TouchPhase, WindowEvent};
         let native = winit::event::DeviceId::dummy();
