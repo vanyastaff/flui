@@ -181,9 +181,9 @@ Sharing one directory would save the duplicated dependency builds, but it is uns
 `docs/testing.md:244-257` records: the same unit built from two worktrees' sources gets the same
 fingerprint, and a worktree can link another worktree's code (reproduced 2026-09-22).
 `cargo xtask check-changed` refuses a target directory outside the checkout for that reason
-(`tools/xtask/src/tasks/check_changed.rs:260-264`). The documents disagree, though:
-`docs/testing.md:277-291` ("Local machine mode") and AGENTS.md's Gotchas still describe "a shared
-`CARGO_TARGET_DIR`". This study keeps the per-checkout rule.
+(`tools/xtask/src/tasks/check_changed.rs:260-264`). At the baseline `docs/testing.md` ("Local
+machine mode") and AGENTS.md's Gotchas still described "a shared `CARGO_TARGET_DIR`"; both now
+state the per-checkout rule, which this study keeps.
 
 ### The nested-cargo test builds
 

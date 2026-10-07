@@ -1117,6 +1117,226 @@ fn host_close_completion_whose_unwind_parks_a_failure() {
     );
 }
 
+/// A field composing "かな" whose completion is queued inside a frame, and
+/// whose presentation closes before that frame's anchor: the host abandons
+/// the composition, and the close commits it in place before it retires the
+/// store, so the controller the field keeps holds no composing range.
+fn host_close_before_the_anchor_commits_a_queued_completion() {
+    let controller = TextEditingController::new();
+    let node = FocusNode::with_debug_label("closed before the anchor");
+    let harness = focused(
+        EditableText::new(controller.clone(), Rc::clone(&node)),
+        &node,
+    );
+    let field = field(&harness);
+    assert_eq!(
+        project_ime_event(
+            &*field,
+            &ImeEvent::Preedit {
+                text: "かな".to_owned(),
+                cursor: Some((0, 0)),
+            },
+        ),
+        Ok(LockOutcome::Granted),
+        "preedit applies"
+    );
+    assert!(controller.composing_range().is_some(), "the field composes");
+    let host = Rc::new(Host::default());
+    let log = Rc::clone(&host.log);
+    let owner = pull_owner(host);
+    let _token = owner
+        .handle()
+        .attach(TextInputClient::new(Rc::clone(&field)))
+        .expect("the field moves to the closing presentation");
+    owner.set_transaction_open(true);
+    owner.complete_composition();
+    assert_eq!(raised(|| owner.close()), None, "the close fails nothing");
+    assert_eq!(*log.borrow(), ["focus", "complete", "unfocus"]);
+    assert_eq!(
+        controller.composing_range(),
+        None,
+        "the close committed the abandoned composition before retiring the store"
+    );
+    assert_eq!(controller.text(), "かな", "the composed text stays");
+    drop(harness);
+}
+
+/// A field composing "かな", moved to a push presentation whose completion
+/// is asked for inside a frame: the in-place commit is queued in the store
+/// behind the shut gate, beside a grant the platform queued before it.
+fn push_completion_queued_in_a_frame(
+    earlier_grant: impl Fn(&Log) + 'static,
+) -> (
+    Harness,
+    TextEditingController,
+    Rc<dyn TextStore>,
+    Rc<TextInputOwner>,
+    Log,
+) {
+    let controller = TextEditingController::new();
+    let node = FocusNode::with_debug_label("push, closed before the anchor");
+    let harness = focused(
+        EditableText::new(controller.clone(), Rc::clone(&node)),
+        &node,
+    );
+    let field = field(&harness);
+    assert_eq!(
+        project_ime_event(
+            &*field,
+            &ImeEvent::Preedit {
+                text: "かな".to_owned(),
+                cursor: Some((0, 0)),
+            },
+        ),
+        Ok(LockOutcome::Granted),
+        "preedit applies"
+    );
+    let owner = owner();
+    let _token = owner
+        .handle()
+        .attach(TextInputClient::new(Rc::clone(&field)))
+        .expect("the field moves to the push presentation");
+    owner.set_transaction_open(true);
+    let log: Log = Rc::default();
+    let earlier = Rc::clone(&log);
+    assert_eq!(
+        field.request_lock(
+            LockGrant::read(move |_| earlier_grant(&earlier)),
+            LockTiming::Async,
+        ),
+        Ok(LockOutcome::Deferred),
+        "the platform's grant waits for the anchor"
+    );
+    owner.complete_composition();
+    assert!(
+        controller.composing_range().is_some(),
+        "the commit waits behind the shut gate"
+    );
+    (harness, controller, field, owner, log)
+}
+
+/// A push presentation that closes before the anchor runs the commit it
+/// accepted, behind the grant queued ahead of it in the same store, before
+/// it retires the store.
+fn push_close_before_the_anchor_commits_a_queued_completion() {
+    let (harness, controller, _field, owner, log) =
+        push_completion_queued_in_a_frame(|log| log.borrow_mut().push("earlier grant"));
+    assert_eq!(raised(|| owner.close()), None, "the close fails nothing");
+    assert_eq!(
+        controller.composing_range(),
+        None,
+        "the close committed the queued completion before retiring the store"
+    );
+    assert_eq!(controller.text(), "かな", "the composed text stays");
+    assert_eq!(*log.borrow(), ["earlier grant"], "in the order accepted");
+    drop(harness);
+}
+
+/// The same, when the grant ahead of the commit panics: the close runs it
+/// inside its containment and raises its failure once the close is done;
+/// the owner is closed, and the field keeps working.
+fn push_close_whose_earlier_grant_panics() {
+    let (harness, _controller, field, owner, _log) =
+        push_completion_queued_in_a_frame(|_| panic!("queued grant failure"));
+    assert_eq!(
+        raised(|| owner.close()).as_deref(),
+        Some("queued grant failure"),
+        "the close raises the grant's failure"
+    );
+    assert!(owner.handle().ensure_open().is_err(), "the owner is closed");
+    assert_eq!(
+        edit(&*field, "z"),
+        Ok(LockOutcome::Granted),
+        "the field's next edit"
+    );
+    drop(harness);
+}
+
+/// A grant on a composing store asks its presentation for the completion,
+/// outside any frame, and then panics: the in-place commit the arbiter queued
+/// behind the locked store is accepted work, so a close before any anchor
+/// runs it before retiring the store.
+fn completion_inside_a_failing_grant_then_closed(owner: &Rc<TextInputOwner>) {
+    let store = composing_store();
+    let _token = owner
+        .handle()
+        .attach(TextInputClient::new(store.clone()))
+        .expect("attach");
+    let completing = Rc::downgrade(owner);
+    assert_eq!(
+        raised(|| {
+            let _ = store.request_lock(
+                LockGrant::read(move |_| {
+                    if let Some(owner) = completing.upgrade() {
+                        owner.complete_composition();
+                    }
+                    panic!("grant failure");
+                }),
+                LockTiming::Sync,
+            );
+        })
+        .as_deref(),
+        Some("grant failure"),
+        "the grant's own failure reaches its requester"
+    );
+    assert!(
+        store.composition().is_some(),
+        "the commit waits behind the failed grant"
+    );
+    assert_eq!(raised(|| owner.close()), None, "the close fails nothing");
+    assert_eq!(
+        store.composition(),
+        None,
+        "the close ran the commit it accepted"
+    );
+    assert_eq!(store.text(), "abかな", "the composed text stays");
+    assert_eq!(
+        edit(&*store, "z"),
+        Ok(LockOutcome::Granted),
+        "the store's next edit"
+    );
+}
+
+fn push_completion_inside_a_failing_grant_then_closed() {
+    completion_inside_a_failing_grant_then_closed(&owner());
+}
+
+/// The same on a pull host that abandons the composition, so the owner
+/// commits it in place behind the running grant.
+fn host_completion_inside_a_failing_grant_then_closed() {
+    let host = Rc::new(Host::default());
+    let log = Rc::clone(&host.log);
+    completion_inside_a_failing_grant_then_closed(&pull_owner(host));
+    assert_eq!(*log.borrow(), ["focus", "complete", "unfocus"]);
+}
+
+/// An owner dropped without a close, holding the last owners of two stores
+/// that owe a queued commit, both of whose destructors panic: they retire one
+/// at a time, the second retained behind the first, so the drop neither
+/// aborts nor raises.
+fn owner_dropped_with_two_completing_stores_whose_drops_panic() {
+    let owner = owner();
+    for message in [
+        "first completing store destroyed",
+        "second completing store destroyed",
+    ] {
+        let token = owner
+            .handle()
+            .attach(TextInputClient::new(store_panicking_on_drop(message)))
+            .expect("attach");
+        owner.set_transaction_open(true);
+        owner.complete_composition();
+        owner.set_transaction_open(false);
+        let _ = owner.handle().detach(token).expect("detach");
+    }
+    assert_eq!(
+        raised(|| drop(owner)),
+        None,
+        "a dropped owner contains its stores' failures"
+    );
+    the_owner_keeps_working(&self::owner());
+}
+
 // ----------------------------------------------------------------------------
 // The matrix
 // ----------------------------------------------------------------------------
@@ -1223,6 +1443,30 @@ const ROWS: &[(&str, fn())] = &[
     (
         "host: a close completion whose unwind parks a failure",
         host_close_completion_whose_unwind_parks_a_failure,
+    ),
+    (
+        "host: a completion queued in a frame, closed before the anchor",
+        host_close_before_the_anchor_commits_a_queued_completion,
+    ),
+    (
+        "push: a completion queued in a frame, closed before the anchor",
+        push_close_before_the_anchor_commits_a_queued_completion,
+    ),
+    (
+        "push: a close whose grant ahead of a queued completion panics",
+        push_close_whose_earlier_grant_panics,
+    ),
+    (
+        "push: a completion inside a failing grant, closed before the anchor",
+        push_completion_inside_a_failing_grant_then_closed,
+    ),
+    (
+        "host: a completion inside a failing grant, closed before the anchor",
+        host_completion_inside_a_failing_grant_then_closed,
+    ),
+    (
+        "drop: two completing stores whose destructors panic",
+        owner_dropped_with_two_completing_stores_whose_drops_panic,
     ),
     (
         "arbiter: a refused grant during an unwind",
