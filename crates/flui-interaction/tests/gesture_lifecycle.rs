@@ -1434,10 +1434,18 @@ fn sweep_cannot_grant_a_dependency_blocked_fallback() {
         log: Rc::clone(&log),
     });
     let fresh_entry = arena.add(pointer, &fresh);
-    arena.close(pointer);
     preferred_entry.resolve(GestureDisposition::Rejected);
     fallback_entry.resolve(GestureDisposition::Accepted);
     arena.drain_deferred_resolutions();
+    assert_eq!(
+        log.borrow().as_slice(),
+        [
+            ("preferred", GestureDisposition::Rejected),
+            ("fallback", GestureDisposition::Accepted)
+        ],
+        "the retained old verdict cannot close or resolve the fresh open generation"
+    );
+    arena.close(pointer);
     fresh_entry.resolve(GestureDisposition::Accepted);
     assert_eq!(
         log.borrow().as_slice(),
