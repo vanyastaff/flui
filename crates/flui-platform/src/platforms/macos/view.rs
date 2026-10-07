@@ -468,6 +468,14 @@ fn get_or_create_view_class() -> &'static AnyClass {
                 objc2::sel!(pressureChangeWithEvent:),
                 handle_input_event as extern "C-unwind" fn(_, _, *mut AnyObject),
             );
+            builder.add_method(
+                objc2::sel!(beginGestureWithEvent:),
+                handle_input_event as extern "C-unwind" fn(_, _, *mut AnyObject),
+            );
+            builder.add_method(
+                objc2::sel!(endGestureWithEvent:),
+                handle_input_event as extern "C-unwind" fn(_, _, *mut AnyObject),
+            );
 
             // Drawing — drawRect: drives the on_request_frame contract
             builder.add_method(

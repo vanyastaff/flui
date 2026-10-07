@@ -172,9 +172,12 @@ impl MacInputState {
             return vec![PlatformInput::Pointer(event)];
         }
         let position = position.or_else(|| {
-            if matches!(event_type, NSEventType::Magnify | NSEventType::Rotate)
-                && (event.phase().contains(NSEventPhase::Ended)
-                    || event.phase().contains(NSEventPhase::Cancelled))
+            if matches!(
+                event_type,
+                NSEventType::Magnify | NSEventType::Rotate | NSEventType::EndGesture
+            ) && (event_type == NSEventType::EndGesture
+                || event.phase().contains(NSEventPhase::Ended)
+                || event.phase().contains(NSEventPhase::Cancelled))
             {
                 self.gesture.as_ref().map(|gesture| gesture.position)
             } else {
@@ -226,6 +229,23 @@ impl MacInputState {
                 scroll = scroll.with_phase(phase);
             }
             return vec![PlatformInput::Pointer(PointerEvent::Scroll(scroll))];
+        }
+        if event_type == NSEventType::BeginGesture || event_type == NSEventType::EndGesture {
+            let phase = if event_type == NSEventType::BeginGesture {
+                NSEventPhase::Began
+            } else {
+                // A native outer terminal also retires a component whose own
+                // Ended notification never arrived.
+                if let Some(gesture) = self.gesture.as_mut() {
+                    gesture.components = 4;
+                }
+                NSEventPhase::Ended
+            };
+            return self
+                .gesture(4, phase, 1.0, 0.0, position, time, modifiers)
+                .into_iter()
+                .map(|event| PlatformInput::Pointer(PointerEvent::PanZoom(event)))
+                .collect();
         }
         let (component, scale, rotation) = if event_type == NSEventType::Magnify {
             (1, 1.0 + event.magnification(), 0.0)
@@ -537,5 +557,22 @@ mod tests {
                 .gesture(1, NSEventPhase::Changed, 1.1, 0.0, at, time, modifiers)
                 .is_empty()
         );
+        let outer = state.gesture(4, NSEventPhase::Began, 1.0, 0.0, at, time, modifiers);
+        assert_eq!(outer.len(), 1);
+        let outer_id = outer[0].pointer().id;
+        state.gesture(1, NSEventPhase::Began, 1.1, 0.0, at, time, modifiers);
+        assert!(
+            state
+                .gesture(1, NSEventPhase::Ended, 1.0, 0.0, at, time, modifiers)
+                .is_empty()
+        );
+        let rotation = state.gesture(2, NSEventPhase::Began, 1.0, 0.1, at, time, modifiers);
+        assert_eq!(rotation.len(), 1);
+        assert_eq!(rotation[0].pointer().id, outer_id);
+        state.gesture(2, NSEventPhase::Ended, 1.0, 0.0, at, time, modifiers);
+        let end = state.gesture(4, NSEventPhase::Ended, 1.0, 0.0, at, time, modifiers);
+        assert_eq!(end.len(), 1);
+        assert_eq!(end[0].phase, PanZoomPhase::End);
+        assert_eq!(end[0].pointer().id, outer_id);
     }
 }
