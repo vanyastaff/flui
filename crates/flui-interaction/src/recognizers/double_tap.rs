@@ -52,6 +52,7 @@ impl Drop for DoubleTapCallbacks {
 }
 /// Configure the recognizer before its callbacks become immutable. Capture a
 /// `Weak` through an external slot for callbacks that reach the recognizer.
+#[must_use]
 pub struct DoubleTapGestureRecognizerBuilder {
     arena: GestureArena,
     settings: GestureSettings,

@@ -124,6 +124,7 @@ impl Drop for TapCallbacks {
 
 /// Configure callbacks before they become immutable. Use a `Weak` through an
 /// external slot when a callback needs to reach its recognizer.
+#[must_use]
 pub struct TapGestureRecognizerBuilder {
     arena: GestureArena,
     settings: GestureSettings,
