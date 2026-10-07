@@ -17,6 +17,7 @@ pub enum GestureCompetition {
 /// Build preferred recognizers with the first handle and fallback recognizers
 /// with the second handle for [`GestureCompetition::RequireFirstFailure`].
 #[must_use]
+#[derive(Debug)]
 pub struct GestureBranches {
     first: GestureArena,
     second: GestureArena,
@@ -66,6 +67,22 @@ impl GestureArena {
     /// Membership inherits the branch on every admission, including recognizers
     /// that create a new arena member for each contact. The handles share the
     /// clock, owner lifetime and exact-generation close/sweep lifecycle.
+    /// A member can join at most one branch of a contact's competition.
+    /// Unadmitted or destroyed first-branch members count as failure after
+    /// membership closes. Sweep retains a still-blocked second branch instead
+    /// of granting it the gesture. Cancellation abandons both branches.
+    ///
+    /// ```rust
+    /// use flui_interaction::{GestureArena, DoubleTapGestureRecognizer, TapGestureRecognizer};
+    /// use flui_interaction::arena::GestureCompetition;
+    /// let arena = GestureArena::new();
+    /// let (preferred, fallback) = arena
+    ///     .compose(GestureCompetition::RequireFirstFailure)?
+    ///     .into_branches();
+    /// let double_tap = DoubleTapGestureRecognizer::builder(preferred).build();
+    /// let tap = TapGestureRecognizer::builder(fallback).build();
+    /// # Ok::<(), flui_interaction::arena::CompositionError>(())
+    /// ```
     ///
     /// # Errors
     /// Returns [`CompositionError::AlreadyComposed`] for a branch handle.
