@@ -20,10 +20,10 @@
 //! ┌─────────────────────┐
 //! │   GestureBinding    │ (owned by UiRealm/HeadlessBinding)
 //! │  ┌───────────────┐  │
-//! │  │ Hit Test Cache│  │  (DashMap<PointerId, HitTestResult>)
+//! │  │ Hit Test Cache│  │  (RefCell<HashMap<PointerId, CachedPointerRoute>>)
 //! │  └───────────────┘  │
 //! │  ┌───────────────┐  │
-//! │  │ Pending Moves │  │  (DashMap<PointerId, PointerEvent> - coalescing)
+//! │  │ Pending Moves │  │  (RefCell<HashMap<PointerId, PendingMoveState>>)
 //! │  └───────────────┘  │
 //! │  ┌───────────────┐  │
 //! │  │ PointerRouter │  │  (routes events to handlers)
@@ -72,13 +72,12 @@
 
 use std::{
     cell::{Cell, RefCell},
-    collections::HashSet,
+    collections::{HashMap, HashSet},
 };
 
 use crate::events::{
     CancelReason, PointerCancel, PointerEvent, PointerEventExt, PointerInfo, PointerKind,
 };
-use dashmap::DashMap;
 use flui_foundation::MonotonicClock;
 use flui_foundation::geometry::Offset;
 use smallvec::SmallVec;
@@ -349,11 +348,11 @@ pub struct GestureBinding {
     close_mode: crate::__runtime::CloseTombstone,
     /// Cached hit paths and resolved routes per pointer.
     /// Down resolves once; move/up events reuse the cached route.
-    hit_tests: DashMap<PointerId, CachedPointerRoute>,
+    hit_tests: RefCell<HashMap<PointerId, CachedPointerRoute>>,
 
     /// Pending move events for coalescing.
     /// Only the latest move per pointer is kept.
-    pending_moves: DashMap<PointerId, PendingMoveState>,
+    pending_moves: RefCell<HashMap<PointerId, PendingMoveState>>,
 
     /// Refused contacts cannot fall through to hover delivery.
     refused_contacts: RefCell<RefusedContacts>,
@@ -440,8 +439,8 @@ impl GestureBinding {
         Self {
             closed: Cell::new(false),
             close_mode: crate::__runtime::CloseTombstone::default(),
-            hit_tests: DashMap::new(),
-            pending_moves: DashMap::new(),
+            hit_tests: RefCell::new(HashMap::new()),
+            pending_moves: RefCell::new(HashMap::new()),
             refused_contacts: RefCell::new(RefusedContacts::default()),
             resampling_enabled: Cell::new(false),
             sampling_clock: Cell::new(SamplingClock::default()),
@@ -481,7 +480,7 @@ impl GestureBinding {
         if self.resampling_enabled.get() == enabled {
             return Ok(());
         }
-        let active_pointer_count = self.hit_tests.len();
+        let active_pointer_count = self.hit_tests.borrow().len();
         if active_pointer_count != 0 {
             return Err(ResamplingModeChangeError {
                 active_pointer_count,
@@ -520,7 +519,8 @@ impl GestureBinding {
     #[must_use]
     pub fn active_resampler_count(&self) -> usize {
         self.hit_tests
-            .iter()
+            .borrow()
+            .values()
             .filter(|cached| cached.resampler.is_tracked())
             .count()
     }
@@ -679,45 +679,49 @@ impl GestureBinding {
         // Freeze the complete direct/coalesced frame batch before any user
         // callback runs. Re-entrant moves replace their exact marker and
         // therefore always belong to the next frame.
-        let pointers: SmallVec<[PointerId; 4]> = self
-            .pending_moves
-            .iter()
-            .filter_map(|entry| entry.is_queued().then_some(*entry.key()))
-            .collect();
-        let mut drained: SmallVec<[(PointerId, PendingMoveGeneration, PendingMove); 4]> =
-            SmallVec::with_capacity(pointers.len());
-        for pointer_id in pointers {
-            let Some(mut entry) = self.pending_moves.get_mut(&pointer_id) else {
-                continue;
-            };
-            let generation = entry.generation();
-            let pending = entry.pending.take();
-            drop(entry);
-            if let Some(pending) = pending {
-                drained.push((pointer_id, generation, pending));
+        let drained = {
+            let mut moves = self.pending_moves.borrow_mut();
+            let mut pointers: SmallVec<[PointerId; 4]> = moves
+                .iter()
+                .filter_map(|(&pointer, state)| state.is_queued().then_some(pointer))
+                .collect();
+            pointers.sort_unstable();
+            let mut drained: SmallVec<[(PointerId, PendingMoveGeneration, PendingMove); 4]> =
+                SmallVec::with_capacity(pointers.len());
+            for pointer_id in pointers {
+                let entry = moves
+                    .get_mut(&pointer_id)
+                    .expect("BUG: snapshotted pending move remains present");
+                let generation = entry.generation();
+                if let Some(pending) = entry.pending.take() {
+                    drained.push((pointer_id, generation, pending));
+                }
             }
-        }
+            drained
+        };
 
         let mut count = 0;
         let mut first_panic = None;
 
         // A resampled contact has exactly one queue: the resampler owned by
         // its cached Down route. Snapshot route capabilities before callbacks
-        // so no DashMap guard crosses executable user code.
+        // so no map borrow crosses executable user code.
         if self.is_resampling_enabled()
             && let Some((sample_time, next_sample_time)) = sample_window
         {
-            let samples: SmallVec<[ResamplerSnapshot; 4]> = self
+            let mut samples: SmallVec<[ResamplerSnapshot; 4]> = self
                 .hit_tests
+                .borrow()
                 .iter()
-                .filter(|cached| cached.resampler.is_tracked())
-                .map(|cached| ResamplerSnapshot {
-                    pointer_id: *cached.key(),
+                .filter(|(_, cached)| cached.resampler.is_tracked())
+                .map(|(&pointer_id, cached)| ResamplerSnapshot {
+                    pointer_id,
                     sequence: cached.sequence,
                     token: cached.token,
                     resampler: cached.resampler.clone(),
                 })
                 .collect();
+            samples.sort_unstable_by_key(|snapshot| snapshot.pointer_id);
 
             for snapshot in samples {
                 let ResamplerSnapshot {
@@ -785,10 +789,14 @@ impl GestureBinding {
     /// Check whether direct/coalesced or resampled motion still needs a frame.
     #[inline]
     pub fn has_pending_motion(&self) -> bool {
-        self.pending_moves.iter().any(|state| state.is_queued())
+        self.pending_moves
+            .borrow()
+            .values()
+            .any(|state| state.is_queued())
             || self
                 .hit_tests
-                .iter()
+                .borrow()
+                .values()
                 .any(|route| route.resampler.has_pending_events())
     }
 
@@ -797,12 +805,14 @@ impl GestureBinding {
     pub fn pending_move_count(&self) -> usize {
         let direct = self
             .pending_moves
-            .iter()
+            .borrow()
+            .values()
             .filter(|state| state.is_queued())
             .count();
         let resampled = self
             .hit_tests
-            .iter()
+            .borrow()
+            .values()
             .map(|route| route.resampler.pending_event_count())
             .sum::<usize>();
         direct + resampled
@@ -815,6 +825,7 @@ impl GestureBinding {
     /// Get the cached hit test result for a pointer.
     pub fn get_hit_test(&self, pointer_id: PointerId) -> Option<HitTestResult> {
         self.hit_tests
+            .borrow()
             .get(&pointer_id)
             .map(|cached| cached.result.clone())
     }
@@ -822,7 +833,7 @@ impl GestureBinding {
     /// Check if there's a cached hit test for a pointer.
     #[inline]
     pub fn has_hit_test(&self, pointer_id: PointerId) -> bool {
-        self.hit_tests.contains_key(&pointer_id)
+        self.hit_tests.borrow().contains_key(&pointer_id)
     }
 
     /// Cancel every binding-owned state slot for a pointer.
@@ -869,22 +880,10 @@ impl GestureBinding {
         let mut failure = crate::__runtime::ClosePanic::for_close(mode, self.close_mode.clone());
         self.closed.set(true);
         *self.refused_contacts.borrow_mut() = RefusedContacts::default();
-        let mut pointers: Vec<_> = self.hit_tests.iter().map(|entry| *entry.key()).collect();
-        pointers.sort_unstable();
-        let routes: Vec<_> = pointers
-            .into_iter()
-            .filter_map(|pointer| self.hit_tests.remove(&pointer).map(|(_, route)| route))
-            .collect();
-        let mut pointers: Vec<_> = self
-            .pending_moves
-            .iter()
-            .map(|entry| *entry.key())
-            .collect();
-        pointers.sort_unstable();
-        let moves: Vec<_> = pointers
-            .into_iter()
-            .filter_map(|pointer| self.pending_moves.remove(&pointer).map(|(_, event)| event))
-            .collect();
+        let mut routes: Vec<_> = self.hit_tests.borrow_mut().drain().collect();
+        routes.sort_unstable_by_key(|(pointer, _)| *pointer);
+        let mut moves: Vec<_> = self.pending_moves.borrow_mut().drain().collect();
+        moves.sort_unstable_by_key(|(pointer, _)| *pointer);
         let arena_mode = if failure.preserving() {
             crate::__runtime::CloseMode::PreservingFailure
         } else {
@@ -897,7 +896,7 @@ impl GestureBinding {
             crate::__runtime::CloseMode::Ordinary
         };
         failure.invoke(|| self.pointer_router.close_with_mode(router_mode));
-        for route in routes {
+        for (_, route) in routes {
             route.resampler.clear();
             if let Some(token) = route.token
                 && let Ok(handle) = active_dispatch_handle()
@@ -906,7 +905,7 @@ impl GestureBinding {
             }
             failure.retire(crate::retain::Owned(route));
         }
-        for event in moves {
+        for (_, event) in moves {
             failure.retire(crate::retain::Owned(event));
         }
         if failure.preserving() {
@@ -945,8 +944,9 @@ impl GestureBinding {
         *self.refused_contacts.borrow_mut() = RefusedContacts::default();
         let mut pointers: Vec<_> = self
             .hit_tests
+            .borrow()
             .iter()
-            .map(|entry| (*entry.key(), entry.pointer, entry.time, entry.sequence))
+            .map(|(&pointer_id, entry)| (pointer_id, entry.pointer, entry.time, entry.sequence))
             .collect();
         pointers.sort_unstable_by_key(|(pointer_id, _, _, _)| *pointer_id);
         let mut first_panic = None;
@@ -988,9 +988,9 @@ impl GestureBinding {
     /// completion; this method covers abnormal interruption while a pointer is
     /// still down.
     pub fn handle_lifecycle_pause(&self) {
-        let hit_tests = self.hit_tests.len();
+        let hit_tests = self.hit_tests.borrow().len();
         let resamplers = self.active_resampler_count();
-        let pending_moves = self.pending_moves.len();
+        let pending_moves = self.pending_moves.borrow().len();
         let arenas = self.arena.len();
         // Mandatory state retirement precedes diagnostics, whose subscriber
         // is user code and can panic or reenter the binding.
@@ -1015,7 +1015,7 @@ impl GestureBinding {
     /// Get the number of active pointers (with cached hit tests).
     #[inline]
     pub fn active_pointer_count(&self) -> usize {
-        self.hit_tests.len()
+        self.hit_tests.borrow().len()
     }
 
     // ========================================================================
@@ -1093,7 +1093,8 @@ impl GestureBinding {
             if let PointerEvent::DeviceRemoved(device) = event {
                 let mut pointers: Vec<_> = self
                     .hit_tests
-                    .iter()
+                    .borrow()
+                    .values()
                     .filter(|entry| entry.pointer.device == Some(device.device))
                     .map(|entry| (entry.pointer, entry.sequence))
                     .collect();
@@ -1141,7 +1142,7 @@ impl GestureBinding {
             return;
         }
 
-        let refused_tail = !self.hit_tests.contains_key(&pointer_id)
+        let refused_tail = !self.hit_tests.borrow().contains_key(&pointer_id)
             && self.refused_contacts.borrow().contains(pointer_id);
         if matches!(
             event,
@@ -1150,16 +1151,18 @@ impl GestureBinding {
                 | PointerEvent::Cancel(_)
                 | PointerEvent::ButtonChange(_)
         ) && let Some(pointer) = crate::events::get_pointer_info(event)
-            && let Some(mut cached) = self.hit_tests.get_mut(&pointer_id)
         {
-            // The map key already matches PointerId. Device identity completes
-            // the source; kind/tool and primary role may change during contact.
-            if cached.pointer.device != pointer.device {
-                return;
-            }
-            cached.pointer = *pointer;
-            if let Some(time) = crate::events::get_event_time(event) {
-                cached.time = time;
+            let mut routes = self.hit_tests.borrow_mut();
+            if let Some(cached) = routes.get_mut(&pointer_id) {
+                // The map key already matches PointerId. Device identity completes
+                // the source; kind/tool and primary role may change during contact.
+                if cached.pointer.device != pointer.device {
+                    return;
+                }
+                cached.pointer = *pointer;
+                if let Some(time) = crate::events::get_event_time(event) {
+                    cached.time = time;
+                }
             }
         }
         match event {
@@ -1182,8 +1185,8 @@ impl GestureBinding {
         match event {
             PointerEvent::Down(down) => {
                 let mut first_panic = None;
-                let has_superseded_sequence = self.hit_tests.contains_key(&pointer_id)
-                    || self.pending_moves.contains_key(&pointer_id)
+                let has_superseded_sequence = self.hit_tests.borrow().contains_key(&pointer_id)
+                    || self.pending_moves.borrow().contains_key(&pointer_id)
                     || self.arena.has_active(pointer_id);
                 if has_superseded_sequence {
                     let guard =
@@ -1199,11 +1202,12 @@ impl GestureBinding {
                     drop(guard);
                 }
 
-                if self.hit_tests.len() >= MAX_SIMULTANEOUS_POINTERS {
+                let active = self.hit_tests.borrow().len();
+                if active >= MAX_SIMULTANEOUS_POINTERS {
                     self.refused_contacts.borrow_mut().refuse(pointer_id);
                     tracing::warn!(
                         ?pointer_id,
-                        active = self.hit_tests.len(),
+                        active,
                         "dropping Down: simultaneous-pointer cap reached"
                     );
                     if let Some(panic) = first_panic {
@@ -1241,7 +1245,7 @@ impl GestureBinding {
                 if self.is_resampling_enabled() {
                     resampler.start_tracking();
                 }
-                self.hit_tests.insert(
+                let replaced = self.hit_tests.borrow_mut().insert(
                     pointer_id,
                     CachedPointerRoute {
                         result,
@@ -1252,6 +1256,7 @@ impl GestureBinding {
                         time: down.sample.time,
                     },
                 );
+                drop(replaced);
 
                 let delivered = self.dispatch_event(event, token);
                 RoutePanic::preserve_first(&mut first_panic, delivered, "pointer Down dispatch");
@@ -1265,12 +1270,14 @@ impl GestureBinding {
                 let position = event
                     .position()
                     .expect("BUG: Move carries a checked position");
-                if let Some((sequence, resampler)) =
-                    self.hit_tests.get_mut(&pointer_id).map(|mut cached| {
+                let cached = {
+                    let mut routes = self.hit_tests.borrow_mut();
+                    routes.get_mut(&pointer_id).map(|cached| {
                         cached.time = pointer_move.current().time;
                         (cached.sequence, cached.resampler.clone())
                     })
-                {
+                };
+                if let Some((sequence, resampler)) = cached {
                     if self.is_resampling_enabled() {
                         resampler.add_event(event.clone());
                     } else {
@@ -1332,7 +1339,7 @@ impl GestureBinding {
                 // route hit-tested at Down, like every other mid-contact
                 // event of the sequence (a down pointer's events go over the
                 // result stored for it at Down).
-                let panic = if self.hit_tests.contains_key(&pointer_id) {
+                let panic = if self.hit_tests.borrow().contains_key(&pointer_id) {
                     self.dispatch_on_cached_route(pointer_id, event)
                 } else {
                     // A HOVERING pointer — the only state in which a
@@ -1366,14 +1373,15 @@ impl GestureBinding {
                 // the path's pan-zoom targets lets exactly one of them act.
                 // Without the second channel a pinch over nested consumers
                 // (two enabled `InteractiveViewer`s, say) transforms both.
-                let (path, mut first_panic) = if self.hit_tests.contains_key(&pointer_id) {
+                let (path, mut first_panic) = if self.hit_tests.borrow().contains_key(&pointer_id) {
                     // Snapshot the cached path BEFORE dispatching, and only
                     // when it actually carries a claimant: a handler must
                     // never run while this map reference is alive (the same
                     // reason `dispatch_on_cached_route` reads out the token
                     // and drops its reference before delivering).
                     let cached = {
-                        let cached = self.hit_tests.get(&pointer_id);
+                        let routes = self.hit_tests.borrow();
+                        let cached = routes.get(&pointer_id);
                         cached.and_then(|cached| {
                             cached
                                 .result
@@ -1448,6 +1456,7 @@ impl GestureBinding {
             PointerEvent::ButtonChange(_) => {
                 let cached = self
                     .hit_tests
+                    .borrow()
                     .get(&pointer_id)
                     .map(|cached| (cached.sequence, cached.token, cached.resampler.clone()));
                 let mut first_panic = None;
@@ -1455,10 +1464,7 @@ impl GestureBinding {
                     // Take the older accepted packet before any callback. A
                     // callback may enqueue its successor or replace this contact;
                     // neither belongs to the button edge admitted here.
-                    let pending = self
-                        .pending_moves
-                        .remove(&pointer_id)
-                        .map(|(_, state)| state);
+                    let pending = self.pending_moves.borrow_mut().remove(&pointer_id);
                     if let Some(PendingMove::Contact {
                         event: movement,
                         sequence: admitted,
@@ -1508,7 +1514,7 @@ impl GestureBinding {
                 }
             }
             PointerEvent::ScrollInertiaCancel(_) => {
-                let panic = if self.hit_tests.contains_key(&pointer_id) {
+                let panic = if self.hit_tests.borrow().contains_key(&pointer_id) {
                     self.dispatch_on_cached_route(pointer_id, event)
                 } else {
                     let result = event
@@ -1525,12 +1531,11 @@ impl GestureBinding {
     }
 
     fn detach_pointer_sequence(&self, pointer_id: PointerId) -> DetachedPointerSequence {
+        let cached = self.hit_tests.borrow_mut().remove(&pointer_id);
+        let pending_move = self.pending_moves.borrow_mut().remove(&pointer_id);
         DetachedPointerSequence {
-            cached: self.hit_tests.remove(&pointer_id).map(|(_, cached)| cached),
-            pending_move: self
-                .pending_moves
-                .remove(&pointer_id)
-                .map(|(_, event)| event),
+            cached,
+            pending_move,
             arena: self.arena.detach(pointer_id),
         }
     }
@@ -1557,10 +1562,7 @@ impl GestureBinding {
 
     fn queue_pending_move(&self, pointer_id: PointerId, mut pending: PendingMove) {
         let generation = self.allocate_pending_move_generation();
-        let mut previous = self
-            .pending_moves
-            .remove(&pointer_id)
-            .map(|(_, state)| state);
+        let mut previous = self.pending_moves.borrow_mut().remove(&pointer_id);
         let mismatch = match (&mut previous, &mut pending) {
             (
                 Some(PendingMoveState {
@@ -1607,6 +1609,7 @@ impl GestureBinding {
             // cancel it, and no later insertion may resurrect that old debt.
             let replaced = self
                 .pending_moves
+                .borrow_mut()
                 .insert(pointer_id, PendingMoveState::queued(generation, pending));
             let mut first_panic = match RoutePanic::try_run(|| match prior.pending.as_ref() {
                 Some(PendingMove::Contact { event, sequence })
@@ -1645,6 +1648,7 @@ impl GestureBinding {
         }
         let replaced = self
             .pending_moves
+            .borrow_mut()
             .insert(pointer_id, PendingMoveState::queued(generation, pending));
         // Commit the accepted replacement before retiring outgoing ownership,
         // and never retire a route or payload while holding a map guard.
@@ -1658,6 +1662,7 @@ impl GestureBinding {
         generation: PendingMoveGeneration,
     ) -> bool {
         self.pending_moves
+            .borrow()
             .get(&pointer_id)
             .is_some_and(|state| state.is_in_flight(generation))
     }
@@ -1667,17 +1672,23 @@ impl GestureBinding {
         pointer_id: PointerId,
         generation: PendingMoveGeneration,
     ) {
-        use dashmap::mapref::entry::Entry;
-
-        if let Entry::Occupied(entry) = self.pending_moves.entry(pointer_id)
-            && entry.get().is_in_flight(generation)
-        {
-            entry.remove();
-        }
+        let retired = {
+            let mut moves = self.pending_moves.borrow_mut();
+            if moves
+                .get(&pointer_id)
+                .is_some_and(|state| state.is_in_flight(generation))
+            {
+                moves.remove(&pointer_id)
+            } else {
+                None
+            }
+        };
+        drop(retired);
     }
 
     fn is_current_sequence(&self, pointer_id: PointerId, sequence: PointerSequence) -> bool {
         self.hit_tests
+            .borrow()
             .get(&pointer_id)
             .is_some_and(|cached| cached.sequence == sequence)
     }
@@ -1832,31 +1843,17 @@ impl GestureBinding {
     /// Detach and clean every interrupted pointer transaction.
     fn clear_all_pointer_state_capturing_panic(&self) -> Option<RoutePanic> {
         *self.refused_contacts.borrow_mut() = RefusedContacts::default();
-        let mut hit_pointers: Vec<PointerId> =
-            self.hit_tests.iter().map(|entry| *entry.key()).collect();
-        hit_pointers.sort_unstable();
-        let cached_routes: Vec<CachedPointerRoute> = hit_pointers
-            .into_iter()
-            .filter_map(|pointer| self.hit_tests.remove(&pointer).map(|(_, cached)| cached))
-            .collect();
-
-        let mut move_pointers: Vec<PointerId> = self
-            .pending_moves
-            .iter()
-            .map(|entry| *entry.key())
-            .collect();
-        move_pointers.sort_unstable();
-        let pending_moves: Vec<PendingMoveState> = move_pointers
-            .into_iter()
-            .filter_map(|pointer| self.pending_moves.remove(&pointer).map(|(_, event)| event))
-            .collect();
+        let mut cached_routes: Vec<_> = self.hit_tests.borrow_mut().drain().collect();
+        cached_routes.sort_unstable_by_key(|(pointer, _)| *pointer);
+        let mut pending_moves: Vec<_> = self.pending_moves.borrow_mut().drain().collect();
+        pending_moves.sort_unstable_by_key(|(pointer, _)| *pointer);
 
         // Every map above is empty before any arena callback or destructor
         // runs. Arena abandonment likewise removes all exact slots before
         // notifying members.
         let mut first_panic = RoutePanic::capture(|| self.arena.abandon_all());
 
-        for cached in cached_routes {
+        for (_, cached) in cached_routes {
             cached.resampler.clear();
             let route_cleanup = Self::release_route_capturing_panic(cached.token);
             RoutePanic::preserve_first(
@@ -1871,7 +1868,7 @@ impl GestureBinding {
                 "interrupted cached hit-test cleanup",
             );
         }
-        for event in pending_moves {
+        for (_, event) in pending_moves {
             let pending_drop = RoutePanic::capture(|| drop(event));
             RoutePanic::preserve_first(
                 &mut first_panic,
@@ -1914,14 +1911,14 @@ impl GestureBinding {
 
     /// Dispatch on the route cached for `pointer_id`, if any.
     ///
-    /// The cached token is copied out before dispatch so no `DashMap` shard
+    /// The cached token is copied out before dispatch so no map borrow
     /// guard is held while handlers re-enter the binding.
     fn dispatch_on_cached_route(
         &self,
         pointer_id: PointerId,
         event: &PointerEvent,
     ) -> Option<RoutePanic> {
-        let token = self.hit_tests.get(&pointer_id)?.token;
+        let token = self.hit_tests.borrow().get(&pointer_id)?.token;
         self.dispatch_event(event, token)
     }
 
@@ -1970,8 +1967,8 @@ impl GestureBinding {
 impl std::fmt::Debug for GestureBinding {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GestureBinding")
-            .field("active_pointers", &self.hit_tests.len())
-            .field("pending_moves", &self.pending_moves.len())
+            .field("active_pointers", &self.hit_tests.borrow().len())
+            .field("pending_moves", &self.pending_moves.borrow().len())
             .field("arena_count", &self.arena.len())
             .finish_non_exhaustive()
     }
