@@ -14,3 +14,5 @@ mod long_press_multi_tap;
 mod scale_force_press;
 #[path = "recognizer_api/tapdrag_eager.rs"]
 mod tapdrag_eager;
+#[path = "recognizer_api/observability.rs"]
+mod observability;
