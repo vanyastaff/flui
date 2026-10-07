@@ -1,8 +1,10 @@
-//! Consumer contracts for integer and weighted animation progress.
+//! Consumer contracts for integer, color-channel and weighted animation
+//! progress.
 
 use flui_animation::{
-    Animatable, FloatTween, IntTween, StepTween, TweenSequence, TweenSequenceItem,
+    Animatable, ColorTween, FloatTween, IntTween, StepTween, TweenSequence, TweenSequenceItem,
 };
+use flui_painting::styling::Color;
 
 fn ascending_extreme_integer_endpoints() {
     let rounded = IntTween::new(i32::MIN, i32::MAX);
@@ -35,6 +37,14 @@ fn ordinary_integer_rounding_and_clamping() {
     assert_eq!(stepped.transform(2.0), 3);
 }
 
+fn color_channels_round_to_nearest() {
+    let tween = ColorTween::new(Color::RED, Color::BLUE);
+    let mid = tween.transform(0.5);
+    // 255 * 0.5 = 127.5 rounds to 128; truncation would give 127.
+    assert_eq!(mid.r, 128);
+    assert_eq!(mid.b, 128);
+}
+
 #[test]
 fn integer_tweens_interpolate_across_the_full_range() {
     crate::run_table(&[
@@ -49,6 +59,10 @@ fn integer_tweens_interpolate_across_the_full_range() {
         (
             "ordinary integer rounding and clamping",
             ordinary_integer_rounding_and_clamping,
+        ),
+        (
+            "color channels round to nearest",
+            color_channels_round_to_nearest,
         ),
     ]);
 }

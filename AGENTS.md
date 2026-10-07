@@ -124,7 +124,9 @@ The root `ARCHITECTURE.md` is the facade's. `docs/architecture.md` describes the
   point several worktrees at one `CARGO_TARGET_DIR` (Cargo then links another worktree's
   sources — `docs/testing.md`, "One target directory per checkout"). Run
   `cargo xtask worktree prune` after a merge. Review someone else's PR from your own directory
-  (`gh pr diff`/`checkout`), not inside their worktree.
+  (`gh pr diff`/`checkout`), not inside their worktree. An agent worktree (including Claude
+  Code's under `.claude/worktrees/`) can reach 30–60 GB: a read-only agent needs none, and the
+  rest follow `docs/testing.md`, "Bounding disk use of agent worktrees".
 - **Commits** `area: what changed`, one logical change each. **PRs** are one task each, with
   `cargo xtask check-changed` green first; CI is the proof. Review your own branch against
   `main` before asking for review. CI runs Linux (and wasm32) only; Windows, macOS, Android and

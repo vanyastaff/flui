@@ -14,7 +14,7 @@ use web_time::{Duration, Instant};
 use flui_foundation::geometry::Offset;
 use parking_lot::Mutex;
 
-use super::recognizer::{GestureRecognizer, RecognizerBase};
+use super::recognizer::{CallbackSequence, GestureRecognizer, RecognizerBase};
 use crate::{
     arena::GestureArenaMember,
     events::{PointerEvent, PointerType, extract_pointer_id},
@@ -89,6 +89,18 @@ struct MultiTapCallbacks {
     on_multi_tap_cancel: Option<MultiTapCallback>,
 }
 
+impl MultiTapCallbacks {
+    /// Retire every capture one by one (see [`CallbackSequence::retire`]).
+    fn retire(self, sequence: &mut CallbackSequence) {
+        let Self {
+            on_multi_tap,
+            on_multi_tap_cancel,
+        } = self;
+        sequence.retire(on_multi_tap);
+        sequence.retire(on_multi_tap_cancel);
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MultiTapPhase {
     /// Ready to start
@@ -97,8 +109,6 @@ enum MultiTapPhase {
     Collecting,
     /// All pointers down, waiting for all up
     WaitingForUp,
-    /// Completed successfully
-    Completed,
     /// Cancelled
     Cancelled,
 }
@@ -266,7 +276,7 @@ impl MultiTapGestureRecognizer {
                 drop(state);
                 self.handle_cancel();
             }
-            _ => {}
+            MultiTapPhase::Cancelled => {}
         }
     }
 
@@ -311,9 +321,9 @@ impl MultiTapGestureRecognizer {
             let all_up = state.pointers.values().all(|info| !info.is_down);
 
             if all_up {
-                // Multi-tap completed!
-                state.phase = MultiTapPhase::Completed;
-
+                // Multi-tap completed! The recognizer resets and stops
+                // tracking before user code runs, so a callback that panics or
+                // disposes leaves it ready for the next gesture.
                 let positions: Vec<Offset<f64>> = state
                     .pointers
                     .values()
@@ -323,24 +333,19 @@ impl MultiTapGestureRecognizer {
                 let center = Self::calculate_center(&positions);
                 let count = positions.len();
 
+                *state = MultiTapState::default();
                 drop(state);
+                self.state.stop_tracking();
 
-                // Call callback
-                if let Some(callback) = self.callbacks.borrow().on_multi_tap.clone() {
-                    let details = MultiTapDetails {
+                let callback = self.callbacks.borrow().on_multi_tap.clone();
+                if let Some(callback) = callback {
+                    callback(MultiTapDetails {
                         pointer_count: count,
                         positions,
                         center,
                         kind,
-                    };
-                    callback(details);
+                    });
                 }
-
-                // Reset
-                self.gesture_state.lock().phase = MultiTapPhase::Ready;
-                self.gesture_state.lock().pointers.clear();
-                self.gesture_state.lock().first_down_time = None;
-                self.state.stop_tracking();
             }
         }
     }
@@ -475,8 +480,12 @@ impl GestureRecognizer for MultiTapGestureRecognizer {
         // Reject arena entries + clear tracked pointer, so a disposed
         // recognizer never lingers in the arena for a tracked pointer.
         self.state.reject();
-        self.callbacks.borrow_mut().on_multi_tap = None;
-        self.callbacks.borrow_mut().on_multi_tap_cancel = None;
+        // Captures are dropped outside the cell, so a capture whose destructor
+        // reaches this recognizer finds it unborrowed.
+        let callbacks = std::mem::take(&mut *self.callbacks.borrow_mut());
+        let mut retirement = CallbackSequence::new();
+        callbacks.retire(&mut retirement);
+        retirement.finish();
     }
 
     fn primary_pointer(&self) -> Option<PointerId> {

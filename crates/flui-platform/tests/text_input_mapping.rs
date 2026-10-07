@@ -3,7 +3,9 @@
 //! method places its windows against.
 
 use flui_foundation::geometry::{Bounds, DevicePixelRatio, DevicePoint, Point, Size};
-use flui_platform::shared::text_geometry::{ScreenRect, ScreenRectError, range_rect_to_screen};
+use flui_platform::shared::text_geometry::{
+    ScreenRect, ScreenRectError, range_rect_to_screen, screen_point_to_client,
+};
 
 fn ratio(value: f64) -> DevicePixelRatio {
     DevicePixelRatio::new(value).expect("a positive, finite test scale")
@@ -180,6 +182,108 @@ fn screen_rects_follow_scale_and_round_outwards() {
         .iter()
         .filter(|(_, row)| std::panic::catch_unwind(row).is_err())
         .map(|(name, _)| *name)
+        .collect();
+    assert!(failed.is_empty(), "failing rows: {failed:?}");
+}
+
+/// A screen point TSF asks about (`GetACPFromPoint`) maps to window-root
+/// logical pixels by the injected scale, for every pair of `i32` screen and
+/// origin coordinates: the difference of two extremes does not fit an `i32`,
+/// but is exact in `f64`. At the smallest ratio `DevicePixelRatio` admits,
+/// dividing by it overflows for all but the nearest points: a point with no
+/// finite logical position has none at all.
+#[test]
+fn screen_points_map_to_logical_client_points() {
+    // Name, screen point, client origin, scale, logical point.
+    type Row = (
+        &'static str,
+        DevicePoint,
+        DevicePoint,
+        f64,
+        Option<Point<f64>>,
+    );
+    let (min, max) = (i32::MIN, i32::MAX);
+    let span = f64::from(max) - f64::from(min);
+    let smallest = f64::MIN_POSITIVE;
+    let rows: &[Row] = &[
+        (
+            "offset by the client origin",
+            DevicePoint::new(130, 240),
+            ORIGIN,
+            1.0,
+            Some(Point::new(30.0, 40.0)),
+        ),
+        (
+            "divided by the scale",
+            DevicePoint::new(115, 203),
+            ORIGIN,
+            1.5,
+            Some(Point::new(10.0, 2.0)),
+        ),
+        (
+            "left of and above the client origin",
+            DevicePoint::new(90, 199),
+            ORIGIN,
+            2.0,
+            Some(Point::new(-5.0, -0.5)),
+        ),
+        (
+            "the largest screen point past the smallest origin",
+            DevicePoint::new(max, max),
+            DevicePoint::new(min, min),
+            1.0,
+            Some(Point::new(span, span)),
+        ),
+        (
+            "the smallest screen point before the largest origin",
+            DevicePoint::new(min, min + 1),
+            DevicePoint::new(max, max),
+            2.0,
+            Some(Point::new(-span / 2.0, -(span - 1.0) / 2.0)),
+        ),
+        (
+            "one past an extreme origin",
+            DevicePoint::new(min + 1, max - 1),
+            DevicePoint::new(min, max),
+            1.0,
+            Some(Point::new(1.0, -1.0)),
+        ),
+        (
+            "the client origin at the smallest ratio",
+            ORIGIN,
+            ORIGIN,
+            smallest,
+            Some(Point::new(0.0, 0.0)),
+        ),
+        (
+            "one pixel from the origin at the smallest ratio",
+            DevicePoint::new(101, 199),
+            ORIGIN,
+            smallest,
+            Some(Point::new(1.0 / smallest, -1.0 / smallest)),
+        ),
+        (
+            "opposite extremes at the smallest ratio",
+            DevicePoint::new(max, min),
+            DevicePoint::new(min, max),
+            smallest,
+            None,
+        ),
+        (
+            "one coordinate overflowing at the smallest ratio",
+            DevicePoint::new(max, 200),
+            ORIGIN,
+            smallest,
+            None,
+        ),
+    ];
+    let failed: Vec<&str> = rows
+        .iter()
+        .filter(|(_, at, origin, scale, expected)| {
+            std::panic::catch_unwind(|| screen_point_to_client(*at, *origin, ratio(*scale)))
+                .map_or(true, |point| point != *expected)
+        })
+        .map(|(name, ..)| *name)
         .collect();
     assert!(failed.is_empty(), "failing rows: {failed:?}");
 }

@@ -58,7 +58,7 @@ dpi = "0.1.2"
 # Checkout-only test edge: versionless, so Cargo drops it from the published manifest.
 flui-testing = { path = "../flui-testing" }
 static_assertions = { workspace = true }
-# Property tests of the velocity and resampling numerics.
+# Property tests of the gesture arena and of the velocity and resampling numerics.
 proptest = { workspace = true }
 # Criterion — hot-path regression guards. Benches cover VelocityTracker
 # (per-pointer-move), GestureArena (per-pointer-up), TapGestureRecognizer
