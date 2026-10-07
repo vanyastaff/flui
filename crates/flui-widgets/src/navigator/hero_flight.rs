@@ -226,13 +226,23 @@ impl FlightInner {
     /// Interpolated through the `create_rect_tween` factory when one is set,
     /// re-created each read from the current endpoints. `None` is the linear
     /// default.
+    ///
+    /// An overshooting `Hero::curve` extrapolates the tween past its end, which
+    /// for a shrinking flight turns the rect inside out; the size is clamped to
+    /// zero, keeping `min` (ADR-0149: the property owns its domain).
     fn current_rect(&self) -> Rect {
         let endpoints = *self.rect.lock();
         let t = self.proxy.value();
-        match self.rect_factory.lock().as_ref() {
+        let rect = match self.rect_factory.lock().as_ref() {
             Some(make) => make(endpoints.begin, endpoints.end).transform(t),
             None => endpoints.transform(t),
-        }
+        };
+        Rect::from_ltwh(
+            rect.min.x,
+            rect.min.y,
+            rect.width().max(0.0),
+            rect.height().max(0.0),
+        )
     }
 
     fn take_settled_status(&self) -> Option<AnimationStatus> {
