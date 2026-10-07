@@ -1,5 +1,5 @@
 //! [`GestureDetector`] — recognizes high-level gestures (tap, long-press,
-//! double-tap, and pan/drag) from the raw pointer stream a [`Listener`] delivers.
+//! double-tap, pan/drag, and scale) from the pointer stream a [`Listener`] delivers.
 
 use std::{
     cell::{Cell, RefCell},
@@ -56,7 +56,7 @@ type HorizontalDragCancelHandler = Rc<dyn Fn(&mut EventCx<'_>)>;
 /// pointer stream to every recognizer; an arena resolves the competition and the
 /// winning recognizer fires its callback.
 ///
-/// Five gesture families are wired:
+/// The detector supports these gesture families:
 /// - **tap** (`on_tap`) / **secondary tap** (`on_secondary_tap`) — a primary- /
 ///   secondary-button down + up without moving past the touch slop.
 /// - **long press** (`on_long_press`) — the contact held still past the
@@ -79,6 +79,10 @@ type HorizontalDragCancelHandler = Rc<dyn Fn(&mut EventCx<'_>)>;
 ///   [`DragGestureRecognizer`] ([`DragAxis::Horizontal`]) from the free-axis pan
 ///   recognizer above; see the [conflict](#pan-and-horizontal-drag-conflict)
 ///   note on why the two are mutually exclusive on one detector.
+/// - **scale** (`on_scale_start` / `on_scale_update` / `on_scale_end` /
+///   `on_scale_cancel`) — multi-contact scale and rotation, or a native trackpad
+///   pan/zoom session. Native input is claimed leaf-first before publishing
+///   callbacks; an ancestor does not also recognize the same update.
 ///
 /// Only the recognizers whose callback is set participate in the arena for a
 /// contact. Admission reads the current callbacks on Down; every admitted
@@ -696,8 +700,8 @@ struct Recognizers {
 /// rebuilds (the pointer stream is stateful), and are cancelled on unmount.
 ///
 /// `create_state` allocates only the live callback slots; the recognizers are
-/// built in `init_state` (which has the `BuildContext` needed to read the
-/// ambient arena) and read — never rebuilt — by `build`.
+/// built in `init_state` against the ambient arena. Policy changes replace only
+/// the affected owner and update its weak attachment before cancellation.
 struct RecognizerConfiguration {
     arena: flui_interaction::GestureArena,
     settings: flui_interaction::GestureSettings,
