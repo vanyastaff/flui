@@ -13,6 +13,556 @@ fn hit_entry(target: PointerTarget) -> HitTestEntry {
 }
 
 #[test]
+fn explicit_pointer_capture_contract() {
+    let rows: &[(&str, fn())] = &[
+        ("implicit_route", capture_keeps_the_full_implicit_down_route),
+        (
+            "exclusive_route",
+            capture_selects_one_target_after_the_down_round,
+        ),
+        (
+            "first_claim",
+            capture_cannot_be_stolen_by_a_later_down_target,
+        ),
+        (
+            "drop_loss",
+            capture_drop_defers_exactly_one_loss_to_owner_entry,
+        ),
+        (
+            "release_loss",
+            capture_release_defers_exactly_one_loss_to_owner_entry,
+        ),
+        (
+            "native_terminal",
+            capture_native_terminal_invalidates_the_token,
+        ),
+        (
+            "reused_identity",
+            capture_old_token_cannot_cancel_a_replacement_down,
+        ),
+        (
+            "callback_release",
+            capture_release_inside_motion_defers_loss_until_next_entry,
+        ),
+        (
+            "loss_failure",
+            capture_loss_callback_failure_still_retires_contact,
+        ),
+        (
+            "competing_loss_failure",
+            capture_loss_preserves_first_failure_and_next_contact,
+        ),
+        (
+            "owner_close",
+            capture_owner_close_invalidates_retained_token,
+        ),
+        (
+            "device_removal",
+            capture_device_removal_invalidates_retained_token,
+        ),
+        (
+            "accepted_motion",
+            capture_release_delivers_accepted_motion_before_loss,
+        ),
+        (
+            "released_tail",
+            capture_released_tail_waits_for_a_fresh_down,
+        ),
+        ("wake_failure", capture_wake_failure_preserves_release_debt),
+        (
+            "wake_during_unwind",
+            capture_wake_during_unwind_preserves_the_earlier_failure,
+        ),
+    ];
+    for &(name, row) in rows {
+        if let Err(payload) = std::panic::catch_unwind(row) {
+            eprintln!("capture contract row `{name}` failed");
+            std::panic::resume_unwind(payload);
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CaptureCase {
+    Implicit,
+    Exclusive,
+    FirstClaim,
+    Drop,
+    Release,
+    NativeLoss,
+    ReusedId,
+    CallbackRelease,
+    LossFailure,
+    CompetingLossFailure,
+    OwnerClose,
+    DeviceRemoval,
+    QueuedRelease,
+    ReleasedTail,
+}
+
+fn capture_keeps_the_full_implicit_down_route() {
+    assert_capture_route(CaptureCase::Implicit);
+}
+fn capture_selects_one_target_after_the_down_round() {
+    assert_capture_route(CaptureCase::Exclusive);
+}
+fn capture_cannot_be_stolen_by_a_later_down_target() {
+    assert_capture_route(CaptureCase::FirstClaim);
+}
+fn capture_drop_defers_exactly_one_loss_to_owner_entry() {
+    assert_capture_route(CaptureCase::Drop);
+}
+fn capture_release_defers_exactly_one_loss_to_owner_entry() {
+    assert_capture_route(CaptureCase::Release);
+}
+fn capture_native_terminal_invalidates_the_token() {
+    assert_capture_route(CaptureCase::NativeLoss);
+}
+fn capture_old_token_cannot_cancel_a_replacement_down() {
+    assert_capture_route(CaptureCase::ReusedId);
+}
+fn capture_release_inside_motion_defers_loss_until_next_entry() {
+    assert_capture_route(CaptureCase::CallbackRelease);
+}
+fn capture_loss_callback_failure_still_retires_contact() {
+    assert_capture_route(CaptureCase::LossFailure);
+}
+fn capture_loss_preserves_first_failure_and_next_contact() {
+    assert_capture_route(CaptureCase::CompetingLossFailure);
+}
+fn capture_owner_close_invalidates_retained_token() {
+    assert_capture_route(CaptureCase::OwnerClose);
+}
+fn capture_device_removal_invalidates_retained_token() {
+    assert_capture_route(CaptureCase::DeviceRemoval);
+}
+fn capture_release_delivers_accepted_motion_before_loss() {
+    assert_capture_route(CaptureCase::QueuedRelease);
+}
+fn capture_released_tail_waits_for_a_fresh_down() {
+    assert_capture_route(CaptureCase::ReleasedTail);
+}
+
+struct CaptureWakeWindow(std::sync::atomic::AtomicUsize);
+
+impl flui_platform_api::PlatformWindow for CaptureWakeWindow {
+    fn id(&self) -> flui_platform_api::WindowId {
+        flui_platform_api::WindowId::new(21)
+    }
+    fn physical_size(&self) -> flui_foundation::geometry::Size<i32> {
+        flui_foundation::geometry::Size::new(80, 80)
+    }
+    fn logical_size(&self) -> flui_foundation::geometry::Size<f64> {
+        flui_foundation::geometry::Size::new(80.0, 80.0)
+    }
+    fn scale_factor(&self) -> f64 {
+        1.0
+    }
+    fn request_redraw(&self) {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        panic!("capture wake failure");
+    }
+    fn is_focused(&self) -> bool {
+        true
+    }
+    fn is_visible(&self) -> bool {
+        true
+    }
+    fn set_cursor(
+        &self,
+        _: flui_platform_api::CursorIcon,
+    ) -> Result<(), flui_platform_api::CursorError> {
+        Ok(())
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+fn capture_wake_failure_preserves_release_debt() {
+    assert_capture_wake_failure(false);
+}
+fn capture_wake_during_unwind_preserves_the_earlier_failure() {
+    assert_capture_wake_failure(true);
+}
+
+fn assert_capture_wake_failure(active_unwind: bool) {
+    use flui_foundation::geometry::Offset;
+    use flui_interaction::events::{PointerEvent, PointerKind, make_down_event};
+    use flui_interaction::{GestureBinding, HitTestResult, PointerCapture};
+    use std::{
+        cell::{Cell, RefCell},
+        panic::{AssertUnwindSafe, catch_unwind},
+        rc::Rc,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
+
+    let lane = InteractionLane::try_new().expect("lane");
+    let binding = GestureBinding::new();
+    let window = Arc::new(CaptureWakeWindow(AtomicUsize::new(0)));
+    let capability: Arc<dyn flui_platform_api::PlatformWindow> = window.clone();
+    flui_interaction::__runtime::set_pointer_capture_wake(&binding, Arc::downgrade(&capability));
+    let held = Rc::new(RefCell::new(None::<PointerCapture>));
+    let store = held.clone();
+    let lost = Rc::new(Cell::new(0));
+    let callbacks = lost.clone();
+    lane.enter(|| {
+        let target = lane
+            .dispatch_handle()
+            .register_pointer(move |dispatch| match dispatch.global {
+                PointerEvent::Down(_) => {
+                    *store.borrow_mut() = Some(dispatch.capture().expect("real Down"))
+                }
+                PointerEvent::Cancel(cancel) => {
+                    assert_eq!(
+                        cancel.reason,
+                        flui_platform_api::pointer::CancelReason::CaptureLost
+                    );
+                    callbacks.set(callbacks.get() + 1);
+                }
+                _ => {}
+            })
+            .expect("target");
+        let down = make_down_event(Offset::new(5.0, 5.0), PointerKind::Touch).expect("down");
+        binding.handle_pointer_event(&down, |_| {
+            let mut path = HitTestResult::new();
+            path.add(hit_entry(target));
+            path
+        });
+        let token = held.borrow_mut().take().expect("retained token");
+        let failed = catch_unwind(AssertUnwindSafe(|| {
+            if active_unwind {
+                let _capture = token;
+                panic!("earlier capture failure");
+            }
+            drop(token);
+        }))
+        .expect_err("wake failure or earlier unwind propagates");
+        assert_eq!(
+            flui_foundation::panic::payload_text(&*failed),
+            Some(if active_unwind {
+                "earlier capture failure"
+            } else {
+                "capture wake failure"
+            })
+        );
+        assert_eq!(
+            window.0.load(Ordering::Relaxed),
+            1,
+            "release attempts the owning presentation wake once"
+        );
+        assert_eq!(
+            lost.get(),
+            0,
+            "wake failure does not invoke event callbacks from token Drop"
+        );
+        binding.flush_pending_moves();
+        binding.flush_pending_moves();
+        assert_eq!(
+            lost.get(),
+            1,
+            "committed loss remains deliverable after failed wake"
+        );
+        assert_eq!(binding.active_pointer_count(), 0);
+        assert!(binding.arena().is_empty());
+    });
+}
+
+fn assert_capture_route(case: CaptureCase) {
+    use flui_foundation::geometry::Offset;
+    use flui_interaction::events::{
+        PointerEvent, PointerKind, make_down_event, make_move_event, make_up_event,
+    };
+    use flui_interaction::{GestureBinding, HitTestResult, PointerCapture, PointerDispatch};
+    use flui_platform_api::pointer::CancelReason;
+    use std::{cell::RefCell, rc::Rc};
+
+    let lane = InteractionLane::try_new().expect("lane");
+    let handle = lane.dispatch_handle();
+    let binding = GestureBinding::new();
+    let tokens = Rc::new(RefCell::new(Vec::<PointerCapture>::new()));
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let mut down = make_down_event(Offset::new(5.0, 5.0), PointerKind::Touch).expect("down");
+    let device = flui_platform_api::pointer::DeviceId::try_from(17_u64).expect("nonzero device");
+    if case == CaptureCase::DeviceRemoval {
+        let PointerEvent::Down(press) = &mut down else {
+            unreachable!()
+        };
+        press.pointer = press.pointer.with_device(device);
+    }
+    assert!(
+        PointerDispatch::at_root(&down).capture().is_err(),
+        "synthetic dispatch has no capture authority"
+    );
+    let fails = matches!(
+        case,
+        CaptureCase::LossFailure | CaptureCase::CompetingLossFailure
+    );
+    lane.enter(|| {
+        if case == CaptureCase::CompetingLossFailure {
+            binding
+                .pointer_router()
+                .add_global_handler(Rc::new(|event| {
+                    assert!(
+                        !matches!(event, PointerEvent::Cancel(_)),
+                        "second capture loss failure"
+                    );
+                }));
+        }
+        let held = tokens.clone();
+        let first_log = log.clone();
+        let first = handle
+            .register_pointer(move |dispatch| {
+                first_log.borrow_mut().push((
+                    1,
+                    match dispatch.global {
+                        PointerEvent::Down(_) => "down",
+                        PointerEvent::Move(_) => "move",
+                        PointerEvent::Up(_) => "up",
+                        PointerEvent::Cancel(cancel) => {
+                            if case == CaptureCase::DeviceRemoval {
+                                assert_eq!(cancel.reason, CancelReason::DeviceRemoved);
+                                "removed"
+                            } else {
+                                assert_eq!(cancel.reason, CancelReason::CaptureLost);
+                                "lost"
+                            }
+                        }
+                        _ => "other",
+                    },
+                ));
+                if fails && matches!(dispatch.global, PointerEvent::Cancel(_)) {
+                    panic!("first capture loss failure");
+                }
+                if case != CaptureCase::Implicit && matches!(dispatch.global, PointerEvent::Down(_))
+                {
+                    let token = dispatch.capture().expect("real Down target can capture");
+                    held.borrow_mut().push(token);
+                } else if matches!(dispatch.global, PointerEvent::Move(_)) {
+                    assert!(
+                        dispatch.capture().is_err(),
+                        "Move cannot mint capture authority"
+                    );
+                    if case == CaptureCase::CallbackRelease {
+                        let token = held.borrow_mut().pop().expect("callback owns capture");
+                        drop(token);
+                        assert_eq!(
+                            first_log.borrow().last(),
+                            Some(&(1, "move")),
+                            "release within delivery invokes no nested cancellation"
+                        );
+                    }
+                }
+            })
+            .expect("first target");
+        let later_log = log.clone();
+        let second = handle
+            .register_pointer(move |dispatch| {
+                later_log.borrow_mut().push((
+                    2,
+                    match dispatch.global {
+                        PointerEvent::Down(_) => "down",
+                        PointerEvent::Move(_) => "move",
+                        PointerEvent::Up(_) => "up",
+                        PointerEvent::Cancel(_) => "lost",
+                        _ => "other",
+                    },
+                ));
+                if case == CaptureCase::FirstClaim
+                    && matches!(dispatch.global, PointerEvent::Down(_))
+                {
+                    assert!(
+                        dispatch.capture().is_err(),
+                        "first claimant keeps exclusive authority"
+                    );
+                }
+            })
+            .expect("second target");
+        let path = || {
+            let mut result = HitTestResult::new();
+            result.add(hit_entry(first));
+            result.add(hit_entry(second));
+            result
+        };
+        binding.handle_pointer_event(&down, |_| path());
+        assert_eq!(
+            &*log.borrow(),
+            &[(1, "down"), (2, "down")],
+            "capture does not truncate the committed Down round"
+        );
+        if matches!(case, CaptureCase::OwnerClose | CaptureCase::DeviceRemoval) {
+            if case == CaptureCase::OwnerClose {
+                flui_interaction::__runtime::close_gestures(
+                    &binding,
+                    flui_interaction::__runtime::CloseMode::Ordinary,
+                );
+            } else {
+                let removed = PointerEvent::DeviceRemoved(
+                    flui_platform_api::pointer::PointerDeviceChange::new(
+                        device,
+                        PointerKind::Touch,
+                        flui_platform_api::EventTime::from_nanos(1),
+                    ),
+                );
+                binding
+                    .handle_pointer_event(&removed, |_| panic!("device removal does not hit-test"));
+            }
+            let before_drop = log.borrow().clone();
+            let token = tokens
+                .borrow_mut()
+                .pop()
+                .expect("retained closed-owner token");
+            drop(token);
+            binding.flush_pending_moves();
+            assert_eq!(
+                &*log.borrow(),
+                &before_drop,
+                "closed owner/device invalidates token before callbacks"
+            );
+            assert_eq!(binding.active_pointer_count(), 0);
+            assert!(binding.arena().is_empty());
+            return;
+        }
+        if case == CaptureCase::ReusedId {
+            binding.handle_pointer_event(&down, |_| path());
+            let stale = tokens.borrow_mut().remove(0);
+            drop(stale);
+        }
+        if matches!(
+            case,
+            CaptureCase::Drop
+                | CaptureCase::Release
+                | CaptureCase::QueuedRelease
+                | CaptureCase::ReleasedTail
+        ) || fails
+        {
+            if case == CaptureCase::QueuedRelease {
+                let accepted = make_move_event(Offset::new(20.0, 20.0), PointerKind::Touch)
+                    .expect("accepted move");
+                binding
+                    .handle_pointer_event(&accepted, |_| panic!("accepted contact retains route"));
+            }
+            let token = tokens.borrow_mut().pop().expect("retained token");
+            if case == CaptureCase::Release {
+                token.release();
+            } else {
+                drop(token);
+            }
+            assert_eq!(
+                log.borrow().last(),
+                Some(&(2, "down")),
+                "release runs no event callback inline"
+            );
+            let drained = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                binding.flush_pending_moves()
+            }));
+            if fails {
+                let payload = drained.expect_err("loss failure propagates after mandatory cleanup");
+                assert_eq!(
+                    flui_foundation::panic::payload_text(&*payload),
+                    Some("first capture loss failure")
+                );
+            } else {
+                drained.expect("healthy release");
+            }
+            assert_eq!(log.borrow().last(), Some(&(1, "lost")));
+            if case == CaptureCase::QueuedRelease {
+                assert!(
+                    log.borrow().ends_with(&[(1, "move"), (1, "lost")]),
+                    "accepted motion precedes loss on its frozen capture route"
+                );
+            }
+            assert_eq!(binding.active_pointer_count(), 0);
+            binding.flush_pending_moves();
+            assert_eq!(
+                log.borrow()
+                    .iter()
+                    .filter(|(_, event)| *event == "lost")
+                    .count(),
+                1
+            );
+            assert!(binding.arena().is_empty());
+            if case == CaptureCase::ReleasedTail {
+                let tail = make_move_event(Offset::new(30.0, 30.0), PointerKind::Touch)
+                    .expect("released tail");
+                binding.handle_pointer_event(&tail, |_| {
+                    panic!("released contact tail cannot become hover")
+                });
+                binding.flush_pending_moves();
+                assert_eq!(
+                    log.borrow().last(),
+                    Some(&(1, "lost")),
+                    "unadmitted post-release motion is refused"
+                );
+            }
+            if fails || case == CaptureCase::ReleasedTail {
+                binding.handle_pointer_event(&down, |_| path());
+                let up =
+                    make_up_event(Offset::new(5.0, 5.0), PointerKind::Touch).expect("healthy up");
+                binding.handle_pointer_event(&up, |_| panic!("healthy terminal retains route"));
+                let token = tokens
+                    .borrow_mut()
+                    .pop()
+                    .expect("replacement contact capture");
+                drop(token);
+                binding.flush_pending_moves();
+                assert_eq!(
+                    log.borrow().last(),
+                    Some(&(1, "up")),
+                    "next contact completes after containment"
+                );
+            }
+            return;
+        }
+        let movement =
+            make_move_event(Offset::new(200.0, 200.0), PointerKind::Touch).expect("outside move");
+        binding.handle_pointer_event(&movement, |_| {
+            panic!("touch contact retains its Down route")
+        });
+        binding.flush_pending_moves();
+        let terminal = if case == CaptureCase::NativeLoss {
+            let PointerEvent::Down(press) = &down else {
+                unreachable!()
+            };
+            PointerEvent::Cancel(flui_platform_api::pointer::PointerCancel::new(
+                press.pointer,
+                flui_platform_api::EventTime::from_nanos(1),
+                CancelReason::CaptureLost,
+            ))
+        } else {
+            make_up_event(Offset::new(200.0, 200.0), PointerKind::Touch).expect("up")
+        };
+        binding.handle_pointer_event(&terminal, |_| panic!("terminal retains its Down route"));
+        let loses = matches!(case, CaptureCase::NativeLoss | CaptureCase::CallbackRelease);
+        let tail = if case == CaptureCase::Implicit {
+            vec![(1, "move"), (2, "move"), (1, "up"), (2, "up")]
+        } else if loses {
+            vec![(1, "move"), (1, "lost")]
+        } else {
+            vec![(1, "move"), (1, "up")]
+        };
+        assert!(
+            log.borrow().ends_with(&tail),
+            "later delivery uses the claimed target, or the entire implicit route"
+        );
+        tokens.borrow_mut().clear();
+        binding.flush_pending_moves();
+        assert_eq!(
+            log.borrow()
+                .iter()
+                .filter(|(_, event)| *event == "lost")
+                .count(),
+            usize::from(loses),
+            "native terminal and stale tokens cannot add cancellation"
+        );
+        assert_eq!(binding.active_pointer_count(), 0);
+    });
+}
+
+#[test]
 fn binding_input_contract_matrix() {
     let cases: &[(&str, fn())] = &[
         (

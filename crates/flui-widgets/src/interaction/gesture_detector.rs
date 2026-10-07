@@ -4,13 +4,13 @@
 use std::{
     cell::{Cell, RefCell},
     collections::VecDeque,
-    rc::Rc,
+    rc::{Rc, Weak},
     sync::{Arc, Mutex},
 };
 
 use flui_interaction::{
     DoubleTapDetails, DoubleTapGestureRecognizer, DragAxis, DragDownDetails, DragEndDetails,
-    DragGestureRecognizer, DragStartDetails, DragUpdateDetails, GestureRecognizer,
+    DragGestureRecognizer, DragPointerStrategy, DragStartDetails, DragUpdateDetails, GestureRecognizer,
     LongPressGestureRecognizer, TapGestureRecognizer, cancel_all,
 };
 use flui_rendering::hit_testing::HitTestBehavior;
@@ -166,6 +166,7 @@ pub struct GestureDetector {
     on_horizontal_drag_cancel: Option<HorizontalDragCancelHandler>,
     /// How the underlying [`Listener`] participates in hit-testing.
     behavior: HitTestBehavior,
+    drag_pointer_strategy: DragPointerStrategy,
     child: Child,
 }
 
@@ -186,6 +187,7 @@ impl Default for GestureDetector {
             on_horizontal_drag_end: None,
             on_horizontal_drag_cancel: None,
             behavior: HitTestBehavior::DeferToChild,
+            drag_pointer_strategy: DragPointerStrategy::PrimaryOnly,
             child: Child::empty(),
         }
     }
@@ -228,6 +230,13 @@ impl std::fmt::Debug for GestureDetector {
 }
 
 impl GestureDetector {
+    /// Configure contact handoff for pan and horizontal drags. A mounted
+    /// policy change cancels the outgoing drag and applies to the next Down.
+    #[must_use]
+    pub fn drag_pointer_strategy(mut self, strategy: DragPointerStrategy) -> Self {
+        self.drag_pointer_strategy = strategy;
+        self
+    }
     /// A detector with no callbacks yet.
     pub fn new() -> Self {
         Self::default()
@@ -485,7 +494,45 @@ struct Recognizers {
 /// `create_state` allocates only the live callback slots; the recognizers are
 /// built in `init_state` (which has the `BuildContext` needed to read the
 /// ambient arena) and read — never rebuilt — by `build`.
+struct RecognizerConfiguration {
+    arena: flui_interaction::GestureArena,
+    settings: flui_interaction::GestureSettings,
+    writer: WriterSource,
+}
+
+// The mounted Listener retains this stable weak attachment while a view
+// policy replaces its recognizer. Never hold the target borrow across dispatch.
+#[derive(Default)]
+struct DragAttachment {
+    target: RefCell<Weak<DragGestureRecognizer>>,
+}
+impl flui_interaction::GestureArenaMember for DragAttachment {
+    // Attachments never join an arena; their targets own exact contact members.
+    fn accept_gesture(&self, _: flui_interaction::PointerId) {}
+    fn reject_gesture(&self, _: flui_interaction::PointerId) {}
+}
+impl GestureRecognizer for DragAttachment {
+    fn add_pointer(&self, dispatch: flui_interaction::PointerDispatch<'_>) {
+        let target = self.target.borrow().upgrade();
+        if let Some(target) = target { target.add_pointer(dispatch); }
+    }
+    fn handle_event(&self, dispatch: flui_interaction::PointerDispatch<'_>) {
+        let target = self.target.borrow().upgrade();
+        if let Some(target) = target { target.handle_event(dispatch); }
+    }
+    fn cancel(&self) -> flui_interaction::CancelOutcome {
+        let target = self.target.borrow().upgrade();
+        target.map_or(flui_interaction::CancelOutcome::Idle, |target| target.cancel())
+    }
+}
+
+/// Persistent gesture state owns recognizers and weak listener attachments.
+/// Policy replacement commits new targets before cancelling outgoing drags.
 pub struct GestureDetectorState {
+    drag_pointer_strategy: DragPointerStrategy,
+    recognizer_configuration: Option<RecognizerConfiguration>,
+    drag_attachment: Rc<DragAttachment>,
+    horizontal_drag_attachment: Rc<DragAttachment>,
     /// Shared admission authority for captured pointer and semantics delivery.
     mounted: Rc<Cell<bool>>,
     /// The live `on_tap`, refreshed each `build`. The recognizer reads THIS slot
@@ -598,6 +645,10 @@ impl StatefulView for GestureDetector {
         // Allocate the live callback slots only — recognizers are built in
         // `init_state`, which has the context needed to read the ambient arena.
         GestureDetectorState {
+            drag_pointer_strategy: self.drag_pointer_strategy,
+            recognizer_configuration: None,
+            drag_attachment: Rc::new(DragAttachment::default()),
+            horizontal_drag_attachment: Rc::new(DragAttachment::default()),
             mounted: Rc::new(Cell::new(true)),
             tap_slot: Rc::new(RefCell::new(self.on_tap.clone())),
             secondary_tap_slot: Rc::new(RefCell::new(self.on_secondary_tap.clone())),
@@ -699,6 +750,31 @@ impl GestureDetectorState {
 }
 
 impl ViewState<GestureDetector> for GestureDetectorState {
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
+        self.recognizer_configuration = Some(RecognizerConfiguration {
+            arena: GestureArenaScope::of(ctx),
+            settings: GestureArenaScope::settings_of(ctx),
+            writer: ctx.writer_source(),
+        });
+    }
+
+    fn did_update_view(&mut self, old_view: &GestureDetector, new_view: &GestureDetector) {
+        if old_view.drag_pointer_strategy == new_view.drag_pointer_strategy { return; }
+        self.drag_pointer_strategy = new_view.drag_pointer_strategy;
+        let (drag, horizontal_drag) = self.make_drag_recognizers(self.drag_pointer_strategy);
+        let Some(recognizers) = self.recognizers.as_mut() else { return; };
+        // Both new owners and the already mounted Listener's weak targets
+        // become visible before retiring user-controlled outgoing callbacks.
+        let old_drag = std::mem::replace(&mut recognizers.drag, drag);
+        let old_horizontal = std::mem::replace(&mut recognizers.horizontal_drag, horizontal_drag);
+        *self.drag_attachment.target.borrow_mut() = Rc::downgrade(&recognizers.drag);
+        *self.horizontal_drag_attachment.target.borrow_mut() = Rc::downgrade(&recognizers.horizontal_drag);
+        cancel_all([
+            &*old_drag as &dyn GestureRecognizer,
+            &*old_horizontal as &dyn GestureRecognizer,
+        ]);
+    }
+
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         let writer = ctx.writer_source();
         self.semantics_delivery = Some(Rc::new(SemanticsDeliveryTarget {
@@ -709,6 +785,7 @@ impl ViewState<GestureDetector> for GestureDetectorState {
         }));
         let arena = GestureArenaScope::of(ctx);
         let settings = GestureArenaScope::settings_of(ctx);
+        self.recognizer_configuration = Some(RecognizerConfiguration { arena: arena.clone(), settings: settings.clone(), writer: writer.clone() });
         self.rebuild = Some(ctx.rebuild_handle());
         self.local_post_frame = ctx.local_post_frame_handle();
 
@@ -774,81 +851,9 @@ impl ViewState<GestureDetector> for GestureDetectorState {
                 .build()
         };
 
-        let drag = {
-            let start_slot = Rc::clone(&self.pan_slot);
-            let update_slot = Rc::clone(&self.pan_slot);
-            let end_slot = Rc::clone(&self.pan_slot);
-            let start_writer = writer.clone();
-            let update_writer = writer.clone();
-            let end_writer = writer.clone();
-            DragGestureRecognizer::builder(arena.clone(), DragAxis::Free)
-                .settings(settings.clone())
-                .on_start(move |details| {
-                    let callback = start_slot.borrow().start.clone();
-                    if let Some(callback) = callback {
-                        start_writer.write(|cx| callback(cx, details));
-                    }
-                })
-                .on_update(move |details| {
-                    let callback = update_slot.borrow().update.clone();
-                    if let Some(callback) = callback {
-                        update_writer.write(|cx| callback(cx, details));
-                    }
-                })
-                .on_end(move |details| {
-                    let callback = end_slot.borrow().end.clone();
-                    if let Some(callback) = callback {
-                        end_writer.write(|cx| callback(cx, details));
-                    }
-                })
-                .build()
-        };
-
-        let horizontal_drag = {
-            let down_slot = Rc::clone(&self.horizontal_drag_slot);
-            let start_slot = Rc::clone(&self.horizontal_drag_slot);
-            let update_slot = Rc::clone(&self.horizontal_drag_slot);
-            let end_slot = Rc::clone(&self.horizontal_drag_slot);
-            let cancel_slot = Rc::clone(&self.horizontal_drag_slot);
-            let down_writer = writer.clone();
-            let start_writer = writer.clone();
-            let update_writer = writer.clone();
-            let end_writer = writer.clone();
-            let cancel_writer = writer;
-            DragGestureRecognizer::builder(arena, DragAxis::Horizontal)
-                .settings(settings)
-                .on_down(move |details| {
-                    let callback = down_slot.borrow().down.clone();
-                    if let Some(callback) = callback {
-                        down_writer.write(|cx| callback(cx, details));
-                    }
-                })
-                .on_start(move |details| {
-                    let callback = start_slot.borrow().start.clone();
-                    if let Some(callback) = callback {
-                        start_writer.write(|cx| callback(cx, details));
-                    }
-                })
-                .on_update(move |details| {
-                    let callback = update_slot.borrow().update.clone();
-                    if let Some(callback) = callback {
-                        update_writer.write(|cx| callback(cx, details));
-                    }
-                })
-                .on_end(move |details| {
-                    let callback = end_slot.borrow().end.clone();
-                    if let Some(callback) = callback {
-                        end_writer.write(|cx| callback(cx, details));
-                    }
-                })
-                .on_cancel(move || {
-                    let callback = cancel_slot.borrow().cancel.clone();
-                    if let Some(callback) = callback {
-                        cancel_writer.write(|cx| callback(cx));
-                    }
-                })
-                .build()
-        };
+        let (drag, horizontal_drag) = self.make_drag_recognizers(self.drag_pointer_strategy);
+        *self.drag_attachment.target.borrow_mut() = Rc::downgrade(&drag);
+        *self.horizontal_drag_attachment.target.borrow_mut() = Rc::downgrade(&horizontal_drag);
 
         self.recognizers = Some(Recognizers {
             tap,
@@ -953,6 +958,90 @@ fn assert_no_pan_horizontal_drag_conflict(view: &GestureDetector) {
 }
 
 impl GestureDetectorState {
+    fn make_drag_recognizers(&self, strategy: DragPointerStrategy) -> (Rc<DragGestureRecognizer>, Rc<DragGestureRecognizer>) {
+        let configuration = self.recognizer_configuration.as_ref().expect("BUG: drag configuration acquired during init_state");
+        let arena = configuration.arena.clone();
+        let settings = configuration.settings.clone();
+        let writer = configuration.writer.clone();
+        let drag = {
+            let start_slot = Rc::clone(&self.pan_slot);
+            let update_slot = Rc::clone(&self.pan_slot);
+            let end_slot = Rc::clone(&self.pan_slot);
+            let start_writer = writer.clone();
+            let update_writer = writer.clone();
+            let end_writer = writer.clone();
+            DragGestureRecognizer::builder(arena.clone(), DragAxis::Free)
+                .pointer_strategy(strategy)
+                .settings(settings.clone())
+                .on_start(move |details| {
+                    let callback = start_slot.borrow().start.clone();
+                    if let Some(callback) = callback {
+                        start_writer.write(|cx| callback(cx, details));
+                    }
+                })
+                .on_update(move |details| {
+                    let callback = update_slot.borrow().update.clone();
+                    if let Some(callback) = callback {
+                        update_writer.write(|cx| callback(cx, details));
+                    }
+                })
+                .on_end(move |details| {
+                    let callback = end_slot.borrow().end.clone();
+                    if let Some(callback) = callback {
+                        end_writer.write(|cx| callback(cx, details));
+                    }
+                })
+                .build()
+        };
+
+        let horizontal_drag = {
+            let down_slot = Rc::clone(&self.horizontal_drag_slot);
+            let start_slot = Rc::clone(&self.horizontal_drag_slot);
+            let update_slot = Rc::clone(&self.horizontal_drag_slot);
+            let end_slot = Rc::clone(&self.horizontal_drag_slot);
+            let cancel_slot = Rc::clone(&self.horizontal_drag_slot);
+            let down_writer = writer.clone();
+            let start_writer = writer.clone();
+            let update_writer = writer.clone();
+            let end_writer = writer.clone();
+            let cancel_writer = writer;
+            DragGestureRecognizer::builder(arena, DragAxis::Horizontal)
+                .pointer_strategy(strategy)
+                .settings(settings)
+                .on_down(move |details| {
+                    let callback = down_slot.borrow().down.clone();
+                    if let Some(callback) = callback {
+                        down_writer.write(|cx| callback(cx, details));
+                    }
+                })
+                .on_start(move |details| {
+                    let callback = start_slot.borrow().start.clone();
+                    if let Some(callback) = callback {
+                        start_writer.write(|cx| callback(cx, details));
+                    }
+                })
+                .on_update(move |details| {
+                    let callback = update_slot.borrow().update.clone();
+                    if let Some(callback) = callback {
+                        update_writer.write(|cx| callback(cx, details));
+                    }
+                })
+                .on_end(move |details| {
+                    let callback = end_slot.borrow().end.clone();
+                    if let Some(callback) = callback {
+                        end_writer.write(|cx| callback(cx, details));
+                    }
+                })
+                .on_cancel(move || {
+                    let callback = cancel_slot.borrow().cancel.clone();
+                    if let Some(callback) = callback {
+                        cancel_writer.write(|cx| callback(cx));
+                    }
+                })
+                .build()
+        };
+        (drag, horizontal_drag)
+    }
     /// Build the [`Listener`] that drives the recognizers from the pointer
     /// stream.
     ///
@@ -992,11 +1081,11 @@ impl GestureDetectorState {
                 let gates = Rc::clone(&gates);
                 move |_| gates.double_tap_active()
             })
-            .recognizer_when(&recognizers.drag, {
+            .recognizer_when(&self.drag_attachment, {
                 let gates = Rc::clone(&gates);
                 move |_| gates.drag_active()
             })
-            .recognizer_when(&recognizers.horizontal_drag, move |_| {
+            .recognizer_when(&self.horizontal_drag_attachment, move |_| {
                 gates.horizontal_drag_active()
             })
     }

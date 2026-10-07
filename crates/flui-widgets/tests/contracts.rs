@@ -162,6 +162,7 @@ fn pointer_and_gesture_recognition() {
     run_cases(
         "pointer_and_gesture_recognition",
         &[
+            ("listener::presentation_resampling_uses_the_owner_frame_clock", crate::listener::presentation_resampling_uses_the_owner_frame_clock as fn()),
             ("pointer_vocabulary::viewer_native_pan_moves_the_scene_under_the_focal_point", crate::pointer_vocabulary::viewer_native_pan_moves_the_scene_under_the_focal_point as fn()),
             ("pointer_vocabulary::viewer_native_session_reports_one_start_and_one_terminal", crate::pointer_vocabulary::viewer_native_session_reports_one_start_and_one_terminal),
             ("pointer_vocabulary::viewer_pan_transitions_to_pinch_without_contact_count_jumps", crate::pointer_vocabulary::viewer_pan_transitions_to_pinch_without_contact_count_jumps),
@@ -174,6 +175,7 @@ fn pointer_and_gesture_recognition() {
             ("pointer_vocabulary::viewer_extreme_zoom_reports_the_finite_applied_change", crate::pointer_vocabulary::viewer_extreme_zoom_reports_the_finite_applied_change),
             ("pointer_vocabulary::viewer_page_overflow_and_empty_viewport_recover", crate::pointer_vocabulary::viewer_page_overflow_and_empty_viewport_recover),
             ("gesture_detector::clearing_pan_callbacks_mid_drag_still_finishes_the_drag", crate::gesture_detector::clearing_pan_callbacks_mid_drag_still_finishes_the_drag as fn()),
+            ("gesture_detector::mounted_drag_policy_replaces_targets_before_cancellation_and_recovers", crate::gesture_detector::mounted_drag_policy_replaces_targets_before_cancellation_and_recovers),
             ("gesture_detector::scoped_settings_control_touch_recognition_thresholds", crate::gesture_detector::scoped_settings_control_touch_recognition_thresholds),
             ("gesture_detector::scoped_settings_control_gesture_deadlines", crate::gesture_detector::scoped_settings_control_gesture_deadlines),
             ("gesture_detector::scoped_estimator_controls_delivered_drag_velocity", crate::gesture_detector::scoped_estimator_controls_delivered_drag_velocity),
@@ -185,6 +187,7 @@ fn pointer_and_gesture_recognition() {
             ("gesture_detector_advanced::long_press_fires_when_held_past_the_deadline", crate::gesture_detector_advanced::long_press_fires_when_held_past_the_deadline),
             ("absorb_pointer::absorbing_true_blocks_the_tap_from_reaching_a_child_gesture_detector", crate::absorb_pointer::absorbing_true_blocks_the_tap_from_reaching_a_child_gesture_detector),
             ("listener::listener_routes_down_and_up_to_their_own_callbacks", crate::listener::listener_routes_down_and_up_to_their_own_callbacks),
+            ("listener::listener_capture_retains_one_target_and_drop_delivers_loss", crate::listener::listener_capture_retains_one_target_and_drop_delivers_loss),
             ("listener::listener_admission_keeps_terminal_delivery_and_weak_ownership", crate::listener::listener_admission_keeps_terminal_delivery_and_weak_ownership),
             ("listener::listener_raw_observer_panic_still_delivers_the_recognizer_event", crate::listener::listener_raw_observer_panic_still_delivers_the_recognizer_event),
             ("listener::custom_recognizer_competes_through_a_listener", crate::listener::custom_recognizer_competes_through_a_listener),
@@ -202,6 +205,11 @@ fn focus_actions_and_shortcuts() {
     run_cases(
         "focus_actions_and_shortcuts",
         &[
+            ("focus::traversal_groups_order_blocks_without_creating_focus_scopes", crate::focus::traversal_groups_order_blocks_without_creating_focus_scopes as fn()),
+            ("focus::nested_scope_edges_visit_the_containing_group_and_reuse_policy_order", crate::focus::nested_scope_edges_visit_the_containing_group_and_reuse_policy_order as fn()),
+            ("focus::typed_focus_overrides_fall_back_after_target_invalidation", crate::focus::typed_focus_overrides_fall_back_after_target_invalidation as fn()),
+            ("focus::arrow_traversal_prefers_the_beam_and_respects_group_edges", crate::focus::arrow_traversal_prefers_the_beam_and_respects_group_edges as fn()),
+            ("focus::widget_scope_edge_configuration_reaches_the_tab_path", crate::focus::widget_scope_edge_configuration_reaches_the_tab_path as fn()),
             ("focus::tab_groups_vertically_overlapping_widgets_into_one_reading_row", crate::focus::tab_groups_vertically_overlapping_widgets_into_one_reading_row as fn()),
             ("focus::tab_reads_an_rtl_scope_from_its_inherited_directionality", crate::focus::tab_reads_an_rtl_scope_from_its_inherited_directionality as fn()),
             ("focus::a_tall_widget_cannot_bridge_disjoint_reading_rows", crate::focus::a_tall_widget_cannot_bridge_disjoint_reading_rows as fn()),

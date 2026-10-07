@@ -103,6 +103,174 @@ fn manual_clock_realm(clock: &ManualClock) -> UiRealm {
     .expect("runtime")
 }
 
+/// Forest isolation needs a private installation seam; input and frames still
+/// use the actual addressed ingress, cached route and owner pump.
+#[test]
+fn resampling_is_presentation_local_and_preserves_delivery_after_failure() {
+    crate::table_test::run_table(
+        "resampling_is_presentation_local_and_preserves_delivery_after_failure",
+        &[
+            ("healthy", resampling_siblings_healthy as fn()),
+            ("single_failure", resampling_siblings_single_failure),
+            ("competing_failures", resampling_siblings_competing_failures),
+        ],
+    );
+}
+
+fn resampling_siblings_healthy() {
+    resampling_sibling_case(false, false);
+}
+fn resampling_siblings_single_failure() {
+    resampling_sibling_case(true, false);
+}
+fn resampling_siblings_competing_failures() {
+    resampling_sibling_case(true, true);
+}
+
+fn resampling_sibling_case(fail: bool, compete: bool) {
+    use crate::presentation::PointerResampling;
+    use flui_platform_api::pointer::*;
+    use flui_platform_api::{EventTime, PlatformInput};
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+    let mut clock = ManualClock::new();
+    let mut realm = manual_clock_realm(&clock);
+    let a = realm.presentation_id();
+    let b = realm.install_second_presentation_for_test();
+    realm
+        .attach_root_widget(&flui_widgets::SizedBox::square(200.0))
+        .expect("A root");
+    realm
+        .attach_root_widget_to_for_test(b, &flui_widgets::SizedBox::square(200.0))
+        .expect("B root");
+    realm
+        .set_pointer_resampling(a, PointerResampling::FrameAligned)
+        .expect("A idle");
+    let a_seen = Rc::new(RefCell::new(Vec::new()));
+    let b_seen = Rc::new(RefCell::new(Vec::new()));
+    let armed = Rc::new(Cell::new(fail));
+    let seen = Rc::clone(&a_seen);
+    let flag = Rc::clone(&armed);
+    realm
+        .gestures()
+        .pointer_router()
+        .add_global_handler(Rc::new(move |event| {
+            if let PointerEvent::Move(event) = event {
+                seen.borrow_mut().push(event.current().position.get().x);
+                let count = seen.borrow().len();
+                if flag.get() && count == 1 {
+                    panic!("first presentation sample");
+                }
+                if flag.get() && compete && count == 2 {
+                    panic!("second presentation sample");
+                }
+            }
+        }));
+    let seen = Rc::clone(&b_seen);
+    realm
+        .presentation_gestures_for_test(b)
+        .pointer_router()
+        .add_global_handler(Rc::new(move |event| {
+            if let PointerEvent::Move(event) = event {
+                seen.borrow_mut().push(event.current().position.get().x);
+            }
+        }));
+    let mut sink = ScriptedSink::always_presents().with_size(200, 200);
+    realm.pump(&mut clock, &mut sink);
+    clock.advance(Duration::from_millis(1_000));
+    let pointer = PointerInfo::new(
+        PointerId::try_from(1_u64).expect("contact"),
+        PointerKind::Touch,
+    );
+    let sample = |x, ms| {
+        PointerSample::new(
+            EventTime::from_nanos(ms * 1_000_000),
+            PointerPosition::try_new(flui_foundation::geometry::Point::new(x, 10.0))
+                .expect("finite position"),
+        )
+    };
+    for id in [a, b] {
+        realm.enter(|realm| {
+            realm.handle_input_addressed(
+                id,
+                PlatformInput::Pointer(PointerEvent::Down(PointerPress::new(
+                    pointer,
+                    PointerButton::PRIMARY,
+                    PointerButtons::only(PointerButton::PRIMARY),
+                    sample(10.0, 1_000),
+                ))),
+            )
+        });
+        realm.enter(|realm| {
+            realm.handle_input_addressed(
+                id,
+                PlatformInput::Pointer(PointerEvent::Move(PointerMove::new(
+                    pointer,
+                    PointerButtons::only(PointerButton::PRIMARY),
+                    sample(10.0, 1_000),
+                ))),
+            )
+        });
+    }
+    clock.advance(Duration::from_millis(100));
+    for id in [a, b] {
+        realm.enter(|realm| {
+            realm.handle_input_addressed(
+                id,
+                PlatformInput::Pointer(PointerEvent::Move(PointerMove::new(
+                    pointer,
+                    PointerButtons::only(PointerButton::PRIMARY),
+                    sample(110.0, 1_100),
+                ))),
+            )
+        });
+    }
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        realm.pump(&mut clock, &mut sink)
+    }));
+    if fail {
+        let payload = result.expect_err("first sample callback failed");
+        assert_eq!(
+            payload.downcast_ref::<&str>().copied(),
+            Some("first presentation sample")
+        );
+    } else {
+        result.expect("healthy samples");
+    }
+    assert_eq!(
+        &*b_seen.borrow(),
+        &[110.0],
+        "default sibling coalesces on the same pump"
+    );
+    assert_eq!(
+        a_seen.borrow().len(),
+        2,
+        "accepted interpolation follows even after its first observer failed"
+    );
+    assert!((a_seen.borrow()[1] - 72.0).abs() < 1e-9);
+    assert!(
+        realm.needs_redraw(),
+        "accepted future sample debt arms the next frame"
+    );
+    armed.set(false);
+    clock.advance(Duration::from_millis(38));
+    realm.pump(&mut clock, &mut sink);
+    assert_eq!(
+        a_seen.borrow().last(),
+        Some(&110.0),
+        "tail survives containment"
+    );
+    assert_eq!(
+        &*b_seen.borrow(),
+        &[110.0],
+        "a sibling has no borrowed sample debt"
+    );
+    assert!(
+        !realm.needs_redraw(),
+        "tracked contact alone does not demand another frame"
+    );
+}
+
 /// A long-press recognizer on the realm's gesture arena fires once the
 /// realm's manual clock passes its deadline, with no wall time elapsed.
 ///

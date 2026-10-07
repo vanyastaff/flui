@@ -351,7 +351,11 @@ impl PointerEventResampler {
     /// call. `Down`, `Up`, `Cancel` and other non-move events are never
     /// dropped; a full queue coalesces moves instead.
     pub fn add_event(&self, event: PointerEvent) {
-        let arrival = Instant::now();
+        self.add_event_with_arrival(event, Instant::now());
+    }
+
+    /// The binding owns the arrival clock; keep mapping and enqueue atomic.
+    pub(crate) fn add_event_with_arrival(&self, event: PointerEvent, arrival: Instant) {
         // Derive the stamp, install the clock base and enqueue under one lock:
         // a `stop` from another handle in between would clear the base an
         // `EventTime` stamp relies on.

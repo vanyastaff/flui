@@ -32,9 +32,9 @@ use flui_view::prelude::*;
 use flui_view::{EventCx, EventOutcome};
 
 use super::actions::{
-    ActionChainProvider, Actions, ActivateIntent, CopySelectionTextIntent, Intent, NextFocusAction,
-    NextFocusIntent, PasteTextIntent, PreviousFocusAction, PreviousFocusIntent,
-    SelectAllTextIntent, chain_at, resolve,
+    ActionChainProvider, Actions, ActivateIntent, CopySelectionTextIntent, DirectionalFocusAction,
+    DirectionalFocusIntent, Intent, NextFocusAction, NextFocusIntent, PasteTextIntent,
+    PreviousFocusAction, PreviousFocusIntent, SelectAllTextIntent, chain_at, resolve,
 };
 use super::focus::Focus;
 use crate::support::event_callback;
@@ -415,9 +415,9 @@ impl ViewState<Shortcuts> for ShortcutsState {
 /// The application root is where these bindings are meant to be installed.
 /// Numpad Enter reaches FLUI as the
 /// same logical `Enter`, so one binding covers both; `GameButtonA` has no
-/// logical key in FLUI's key model and is not bound. The arrow-key
-/// directional traversal and `Escape` → dismiss bindings are not installed
-/// yet.
+/// logical key in FLUI's key model and is not bound. Unmodified arrows move
+/// geometrically after the focused control declines them; `Escape` → dismiss
+/// bindings are not installed yet.
 ///
 /// A clipboard chord resolves at the primary focus like every other binding
 /// here: an `EditableText` answers it on its own node, and with no text field
@@ -559,6 +559,20 @@ impl ViewState<DefaultFocusTraversal> for DefaultFocusTraversalState {
             .shortcut(SingleActivator::character(" "), ActivateIntent)
             .shortcut(SingleActivator::named(NamedKey::Select), ActivateIntent)
             .shortcut(command_activator(self.platform, "a"), SelectAllTextIntent);
+        for (key, direction) in [
+            (NamedKey::ArrowUp, flui_interaction::FocusDirection::Up),
+            (NamedKey::ArrowDown, flui_interaction::FocusDirection::Down),
+            (NamedKey::ArrowLeft, flui_interaction::FocusDirection::Left),
+            (
+                NamedKey::ArrowRight,
+                flui_interaction::FocusDirection::Right,
+            ),
+        ] {
+            shortcuts = shortcuts.shortcut(
+                SingleActivator::named(key),
+                DirectionalFocusIntent(direction),
+            );
+        }
         for (activator, binding) in clipboard_activators(self.platform) {
             shortcuts = match binding {
                 ClipboardBinding::Copy => {
@@ -572,7 +586,8 @@ impl ViewState<DefaultFocusTraversal> for DefaultFocusTraversalState {
         }
         Actions::new(shortcuts)
             .action(NextFocusAction::new(Rc::clone(&focus_owner)))
-            .action(PreviousFocusAction::new(focus_owner))
+            .action(PreviousFocusAction::new(Rc::clone(&focus_owner)))
+            .action(DirectionalFocusAction::new(focus_owner))
     }
 }
 

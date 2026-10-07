@@ -225,6 +225,7 @@ struct SecondaryWindowInstallConfig {
     reservation: WindowReservation,
     close_request_handler: Option<CloseRequestHandler>,
     frame_failure_detail: FrameFailureDetail,
+    pointer_resampling: flui_runtime::presentation::PointerResampling,
 }
 
 /// A resolved `Pending`-arm window waiting for installation.
@@ -718,6 +719,7 @@ pub(super) fn open_secondary_window_impl(
         reservation,
         close_request_handler: config.close_request_handler.clone(),
         frame_failure_detail: config.frame_failure_detail,
+        pointer_resampling: config.pointer_resampling,
     };
 
     match open {
@@ -797,6 +799,7 @@ where
                 reservation,
                 close_request_handler: config.close_request_handler.clone(),
                 frame_failure_detail: config.frame_failure_detail,
+                pointer_resampling: config.pointer_resampling,
             };
             let reload = crate::app::hot_reload::WorkerReload::from_config(&config);
             let host = APP_RUNTIME.with(|slot| slot.borrow().main_host_lifecycle);
@@ -936,6 +939,7 @@ fn finish_open_secondary_window(
         reservation: _reservation,
         close_request_handler,
         frame_failure_detail,
+        pointer_resampling,
     } = config;
 
     let realm_dispatch = match policy {
@@ -962,7 +966,8 @@ fn finish_open_secondary_window(
                 })?;
             install_presentation_alongside(
                 shared_with,
-                super::presentation_window(Arc::clone(&host)),
+                super::presentation_window(Arc::clone(&host))
+                    .with_pointer_resampling(pointer_resampling),
             )
             .map_err(mount_error)?
         }
@@ -971,7 +976,8 @@ fn finish_open_secondary_window(
             let wake = runtime_wake_callback();
             let ui_realm = super::host::build_runtime_realm(
                 &wake,
-                super::presentation_window(Arc::clone(&host)),
+                super::presentation_window(Arc::clone(&host))
+                    .with_pointer_resampling(pointer_resampling),
                 scale_factor,
             )
             .map_err(mount_error)?;

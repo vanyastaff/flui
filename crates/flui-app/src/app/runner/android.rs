@@ -175,7 +175,8 @@ where
                 return Err(anyhow::Error::from(error).context("Failed to create Android window"));
             }
         };
-        let presentation_window = super::presentation_window(host);
+        let presentation_window =
+            super::presentation_window(host).with_pointer_resampling(config.pointer_resampling);
         let window = Arc::clone(presentation_window.window());
 
         // 2. Create GPU renderer (Vulkan backend on Android). `Renderer::new`

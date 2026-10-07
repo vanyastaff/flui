@@ -105,10 +105,7 @@ impl Rig {
                 return;
             };
             let global = global(event);
-            let dispatch = PointerDispatch {
-                local: event,
-                global: &global,
-            };
+            let dispatch = PointerDispatch::new(event, &global);
             if matches!(event, PointerEvent::Down(_)) {
                 recognizer.add_pointer(dispatch);
             } else if alive.get() {
@@ -1431,10 +1428,7 @@ fn eager_wins_at_close_and_forgets_a_finished_contact() {
 }
 
 fn route<R: GestureRecognizer>(recognizer: &R, event: &PointerEvent) {
-    recognizer.handle_event(PointerDispatch {
-        local: event,
-        global: event,
-    });
+    recognizer.handle_event(PointerDispatch::at_root(event));
 }
 
 /// In a self-driven arena the recognizers close it themselves. A cancelled

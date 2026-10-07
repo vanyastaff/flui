@@ -20,7 +20,8 @@ use std::{
 
 use flui_foundation::geometry::Offset;
 use flui_interaction::arena::{
-    GestureArena, GestureArenaEntry, GestureArenaMember, GestureDisposition, run_pointer_lifecycle,
+    GestureArena, GestureArenaEntry, GestureArenaMember, GestureCompetition, GestureDisposition,
+    run_pointer_lifecycle,
 };
 use flui_interaction::events::{
     PointerButton, PointerEvent, PointerKind, make_down_event_for_id_with_button,
@@ -1183,6 +1184,14 @@ fn scale_captures_the_selected_estimator() {
 fn gesture_lifecycle_matrix() {
     let cases: &[(&str, fn())] = &[
         (
+            "fallback_acceptance_waits_for_preferred_failure",
+            fallback_acceptance_waits_for_preferred_failure,
+        ),
+        (
+            "sweep_cannot_grant_a_dependency_blocked_fallback",
+            sweep_cannot_grant_a_dependency_blocked_fallback,
+        ),
+        (
             "arena_polls_pointer_deadlines_in_identity_order",
             arena_polls_pointer_deadlines_in_identity_order,
         ),
@@ -1340,6 +1349,113 @@ fn gesture_lifecycle_matrix() {
 // ---------------------------------------------------------------------------
 // Arena property test
 // ---------------------------------------------------------------------------
+
+struct CompositionMember {
+    name: &'static str,
+    log: Rc<RefCell<Vec<(&'static str, GestureDisposition)>>>,
+}
+
+impl GestureArenaMember for CompositionMember {
+    fn accept_gesture(&self, _: PointerId) {
+        self.log
+            .borrow_mut()
+            .push((self.name, GestureDisposition::Accepted));
+    }
+    fn reject_gesture(&self, _: PointerId) {
+        self.log
+            .borrow_mut()
+            .push((self.name, GestureDisposition::Rejected));
+    }
+}
+
+fn fallback_acceptance_waits_for_preferred_failure() {
+    let arena = GestureArena::new();
+    let (preferred_arena, fallback_arena) = arena
+        .compose(GestureCompetition::RequireFirstFailure)
+        .expect("root arena can compose")
+        .into_branches();
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let preferred = Rc::new(CompositionMember {
+        name: "preferred",
+        log: Rc::clone(&log),
+    });
+    let fallback = Rc::new(CompositionMember {
+        name: "fallback",
+        log: Rc::clone(&log),
+    });
+    let pointer = PointerId::new(core::num::NonZeroU64::MIN);
+    let fallback_entry = fallback_arena.add(pointer, &fallback);
+    let preferred_entry = preferred_arena.add(pointer, &preferred);
+    arena.close(pointer);
+    fallback_entry.resolve(GestureDisposition::Accepted);
+    arena.drain_deferred_resolutions();
+    assert!(
+        log.borrow().is_empty(),
+        "fallback acceptance is pending while preferred remains viable"
+    );
+    preferred_entry.resolve(GestureDisposition::Rejected);
+    arena.drain_deferred_resolutions();
+    assert_eq!(
+        log.borrow().as_slice(),
+        [
+            ("preferred", GestureDisposition::Rejected),
+            ("fallback", GestureDisposition::Accepted)
+        ]
+    );
+}
+
+fn sweep_cannot_grant_a_dependency_blocked_fallback() {
+    let arena = GestureArena::new();
+    let (preferred_arena, fallback_arena) = arena
+        .compose(GestureCompetition::RequireFirstFailure)
+        .expect("root arena can compose")
+        .into_branches();
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let preferred = Rc::new(CompositionMember {
+        name: "preferred",
+        log: Rc::clone(&log),
+    });
+    let fallback = Rc::new(CompositionMember {
+        name: "fallback",
+        log: Rc::clone(&log),
+    });
+    let pointer = PointerId::new(core::num::NonZeroU64::MIN);
+    let fallback_entry = fallback_arena.add(pointer, &fallback);
+    let preferred_entry = preferred_arena.add(pointer, &preferred);
+    arena.close(pointer);
+    arena.sweep(pointer);
+    arena.drain_deferred_resolutions();
+    assert!(
+        log.borrow().is_empty(),
+        "sweep must retain a blocked fallback without granting either branch"
+    );
+    let fresh = Rc::new(CompositionMember {
+        name: "fresh",
+        log: Rc::clone(&log),
+    });
+    let fresh_entry = arena.add(pointer, &fresh);
+    preferred_entry.resolve(GestureDisposition::Rejected);
+    fallback_entry.resolve(GestureDisposition::Accepted);
+    arena.drain_deferred_resolutions();
+    assert_eq!(
+        log.borrow().as_slice(),
+        [
+            ("preferred", GestureDisposition::Rejected),
+            ("fallback", GestureDisposition::Accepted)
+        ],
+        "the retained old verdict cannot close or resolve the fresh open generation"
+    );
+    arena.close(pointer);
+    fresh_entry.resolve(GestureDisposition::Accepted);
+    assert_eq!(
+        log.borrow().as_slice(),
+        [
+            ("preferred", GestureDisposition::Rejected),
+            ("fallback", GestureDisposition::Accepted),
+            ("fresh", GestureDisposition::Accepted)
+        ]
+    );
+}
 
 const POINTERS: u64 = 3;
 

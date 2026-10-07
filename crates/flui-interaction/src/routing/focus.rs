@@ -651,7 +651,24 @@ impl FocusManager {
         let cursor = current
             .as_ref()
             .filter(|node| !Rc::ptr_eq(node, scope.as_focus_node()));
-        let step = scope.step(cursor, direction);
+        let step = super::traversal::linear_step(self, cursor, &scope, direction);
+        FocusScopeNode::perform_with_manager(self, step)
+    }
+
+    /// Move focus geometrically within its policy group and scope boundaries.
+    pub fn focus_in_direction(&self, direction: super::FocusDirection) -> bool {
+        if self.closed.get() {
+            return false;
+        }
+        let Some(current) = self.primary_focus() else {
+            return false;
+        };
+        let mut failure = FocusClosePanic::for_rejection(self.close_mode.mode());
+        let step = failure
+            .invoke(|| super::traversal::directional_step(self, &current, direction))
+            .unwrap_or_default();
+        failure.retire(current);
+        let step = failure.finish_with(step);
         FocusScopeNode::perform_with_manager(self, step)
     }
 

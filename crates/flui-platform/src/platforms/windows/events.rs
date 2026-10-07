@@ -21,7 +21,7 @@
 use flui_platform_api::{
     EventTime, Modifiers as KeyboardModifiers,
     keyboard::{Code, Key, KeyEvent, KeyRepeat, KeyState, Location, NamedKey},
-    pointer::{ButtonChange, CancelReason, PointerButton, PointerButtons, PointerCancel, PointerEvent, PointerMove, PointerPosition, PointerPress, PointerRelease, PointerSample, ScrollEvent},
+    pointer::{ButtonChange, CancelReason, PointerButton, PointerButtons, PointerCancel, PointerEvent, PointerMove, PointerPosition, PointerPress, PointerRelease, PointerSample, ScrollEvent, ScrollPrecision},
 };
 use windows::Win32::{
     Foundation::{HWND, LPARAM, POINT, WPARAM},
@@ -1144,7 +1144,17 @@ pub fn mouse_wheel_event(
     time: u64,
 ) -> Option<PlatformInput> {
     let sample = wheel_sample(hwnd, lparam, scale_factor, time)?;
-    Some(PlatformInput::Pointer(PointerEvent::Scroll(ScrollEvent::new(primary_mouse_info(), sample.time, sample.position, crate::shared::scroll::from_win32_wheel(wheel_distance(wparam))).with_modifiers(message_modifiers()))))
+    let distance = wheel_distance(wparam);
+    Some(PlatformInput::Pointer(PointerEvent::Scroll(
+        ScrollEvent::new(
+            primary_mouse_info(),
+            sample.time,
+            sample.position,
+            crate::shared::scroll::from_win32_wheel(distance),
+        )
+        .with_precision(wheel_packet_precision(distance))
+        .with_modifiers(message_modifiers()),
+    )))
 }
 
 /// Convert WM_MOUSEHWHEEL to a W3C pointer Scroll.
@@ -1162,7 +1172,29 @@ pub fn mouse_hwheel_event(
     time: u64,
 ) -> Option<PlatformInput> {
     let sample = wheel_sample(hwnd, lparam, scale_factor, time)?;
-    Some(PlatformInput::Pointer(PointerEvent::Scroll(ScrollEvent::new(primary_mouse_info(), sample.time, sample.position, crate::shared::scroll::from_win32_hwheel(wheel_distance(wparam))).with_modifiers(message_modifiers()))))
+    let distance = wheel_distance(wparam);
+    Some(PlatformInput::Pointer(PointerEvent::Scroll(
+        ScrollEvent::new(
+            primary_mouse_info(),
+            sample.time,
+            sample.position,
+            crate::shared::scroll::from_win32_hwheel(distance),
+        )
+        .with_precision(wheel_packet_precision(distance))
+        .with_modifiers(message_modifiers()),
+    )))
+}
+
+/// Fractional detent packets expose finer granularity, not physical device kind.
+/// An integral packet is ambiguous even when it came from a precise device.
+/// Win32 supplies no notch-capability flag here, so those packets remain Unknown.
+/// <https://learn.microsoft.com/en-us/windows/win32/inputdev/wm-mousewheel>
+fn wheel_packet_precision(distance: i16) -> ScrollPrecision {
+    if distance % 120 != 0 {
+        ScrollPrecision::Precise
+    } else {
+        ScrollPrecision::Unknown
+    }
 }
 
 // ============================================================================

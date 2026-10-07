@@ -54,11 +54,12 @@ pub use flui_platform_api::pointer::{
 pub use flui_interaction::events::KeyEvent;
 pub use flui_interaction::events::keyboard::{Code, Key, KeyState, Location, Modifiers, NamedKey};
 pub use flui_interaction::routing::{
-    FocusAttachment, FocusChangeCallback, FocusDetachOutcome, FocusManager, FocusNode,
-    FocusNodeChangeCallback, FocusNodeId, FocusNodeRegistration, FocusRequestOutcome,
-    FocusScopeNode, FocusSubscription, FocusTraversalPolicy, FocusTreeError, HitTestEntry,
-    HitTestHandle, HitTestSnapshot, InteractionDispatchError, KeyEventHandler, KeyEventResult,
-    ReadingOrderPolicy, RectProvider, ResolvedStep, TraversalDirection, TraversalEdgeBehavior,
+    FocusAttachment, FocusChangeCallback, FocusDetachOutcome, FocusDirection, FocusManager,
+    FocusNode, FocusNodeChangeCallback, FocusNodeId, FocusNodeRegistration, FocusRequestOutcome,
+    FocusScopeNode, FocusSubscription, FocusTraversalOverrides, FocusTraversalPolicy,
+    FocusTreeError, HitTestEntry, HitTestHandle, HitTestSnapshot, InteractionDispatchError,
+    KeyEventHandler, KeyEventResult, ReadingOrderPolicy, RectProvider, ResolvedStep,
+    TraversalDirection, TraversalEdgeBehavior,
 };
 pub use flui_interaction::text_input::{
     ClientToken, DetachOutcome, TextInputClient, TextInputError, TextInputHandle,

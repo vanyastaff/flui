@@ -15,6 +15,441 @@ use flui_platform_api::{
     keyboard::{Code, Key, KeyEvent, KeyState},
 };
 
+fn geometric_focus_navigation_pins_ranking_and_admission() {
+    use flui_foundation::geometry::Rect;
+    use flui_interaction::{FocusDirection, TraversalEdgeBehavior};
+    for (name, source, rectangles, expected) in [
+        (
+            "beam before diagonal",
+            Rect::new(0.0, 0.0, 10.0, 10.0),
+            vec![
+                Rect::new(11.0, 20.0, 21.0, 30.0),
+                Rect::new(90.0, 0.0, 100.0, 10.0),
+            ],
+            Some(1),
+        ),
+        (
+            "primary gap before secondary distance",
+            Rect::new(0.0, 0.0, 10.0, 10.0),
+            vec![
+                Rect::new(20.0, 5.0, 30.0, 15.0),
+                Rect::new(30.0, 0.0, 40.0, 10.0),
+            ],
+            Some(0),
+        ),
+        (
+            "secondary distance breaks equal primary gap",
+            Rect::new(0.0, 0.0, 10.0, 10.0),
+            vec![
+                Rect::new(20.0, 7.0, 30.0, 17.0),
+                Rect::new(20.0, 1.0, 30.0, 11.0),
+            ],
+            Some(1),
+        ),
+        (
+            "stable tree order breaks geometry ties",
+            Rect::new(0.0, 0.0, 10.0, 10.0),
+            vec![
+                Rect::new(20.0, 0.0, 30.0, 10.0),
+                Rect::new(20.0, 0.0, 30.0, 10.0),
+            ],
+            Some(0),
+        ),
+        (
+            "strict center half-plane rejects behind and coincident",
+            Rect::new(0.0, 0.0, 10.0, 10.0),
+            vec![
+                Rect::new(-20.0, 0.0, -10.0, 10.0),
+                Rect::new(0.0, 20.0, 10.0, 30.0),
+            ],
+            None,
+        ),
+        (
+            "missing zero and invalid rectangles are untargetable",
+            Rect::new(0.0, 0.0, 10.0, 10.0),
+            vec![
+                Rect::ZERO,
+                Rect::new(20.0, 0.0, f64::INFINITY, 10.0),
+                Rect::new(f64::NAN, 0.0, 30.0, 10.0),
+                Rect::new(20.0, 0.0, 20.0, 10.0),
+                Rect::new(-1.0e308, 0.0, f64::MAX, 10.0),
+            ],
+            None,
+        ),
+        (
+            "absent source geometry cannot navigate",
+            Rect::ZERO,
+            vec![Rect::new(20.0, 0.0, 30.0, 10.0)],
+            None,
+        ),
+        (
+            "fractional coordinates preserve ordering",
+            Rect::new(0.25, 0.25, 0.75, 0.75),
+            vec![
+                Rect::new(0.9, 0.25, 1.4, 0.75),
+                Rect::new(0.8, 0.25, 1.3, 0.75),
+            ],
+            Some(1),
+        ),
+        (
+            "overflowing finite gaps remain ordered",
+            Rect::new(-1.7e308, 0.0, -1.6e308, 10.0),
+            vec![
+                Rect::new(1.6e308, 0.0, 1.7e308, 10.0),
+                Rect::new(1.0e308, 0.0, 1.1e308, 10.0),
+            ],
+            Some(1),
+        ),
+    ] {
+        let manager = FocusManager::new();
+        manager
+            .root_scope()
+            .set_traversal_edge_behavior(TraversalEdgeBehavior::Stop);
+        let source_node = FocusNode::new();
+        source_node.set_rect(source);
+        let mut attachments = vec![
+            manager
+                .root_scope()
+                .attach_node(&source_node)
+                .expect("source"),
+        ];
+        let nodes: Vec<_> = rectangles
+            .into_iter()
+            .map(|rect| {
+                let node = FocusNode::new();
+                node.set_rect(rect);
+                attachments.push(manager.root_scope().attach_node(&node).expect("candidate"));
+                node
+            })
+            .collect();
+        let _ = source_node.request_focus();
+        assert_eq!(
+            manager.focus_in_direction(FocusDirection::Right),
+            expected.is_some(),
+            "{name}"
+        );
+        let target = expected.map_or(&source_node, |index| &nodes[index]);
+        assert!(target.has_primary_focus(), "{name}");
+    }
+}
+
+fn directional_edges_match_linear_scope_outcomes() {
+    use flui_foundation::geometry::Rect;
+    use flui_interaction::{FocusDirection, TraversalEdgeBehavior};
+    for direction in [
+        FocusDirection::Up,
+        FocusDirection::Down,
+        FocusDirection::Left,
+        FocusDirection::Right,
+    ] {
+        for edge in [
+            TraversalEdgeBehavior::Stop,
+            TraversalEdgeBehavior::ClosedLoop,
+            TraversalEdgeBehavior::LeaveView,
+            TraversalEdgeBehavior::ParentScope,
+        ] {
+            let manager = FocusManager::new();
+            manager.root_scope().set_traversal_edge_behavior(edge);
+            let nodes = [FocusNode::new(), FocusNode::new()];
+            nodes[0].set_rect(Rect::new(0.0, 0.0, 10.0, 10.0));
+            let rect = match direction {
+                FocusDirection::Up => Rect::new(0.0, 20.0, 10.0, 30.0),
+                FocusDirection::Down => Rect::new(0.0, -30.0, 10.0, -20.0),
+                FocusDirection::Left => Rect::new(20.0, 0.0, 30.0, 10.0),
+                FocusDirection::Right => Rect::new(-30.0, 0.0, -20.0, 10.0),
+            };
+            nodes[1].set_rect(rect);
+            let _attachments = [
+                manager.root_scope().attach_node(&nodes[0]).expect("source"),
+                manager
+                    .root_scope()
+                    .attach_node(&nodes[1])
+                    .expect("opposite"),
+            ];
+            let _ = nodes[0].request_focus();
+            let moved = manager.focus_in_direction(direction);
+            match edge {
+                TraversalEdgeBehavior::Stop => {
+                    assert!(!moved);
+                    assert!(nodes[0].has_primary_focus());
+                }
+                TraversalEdgeBehavior::LeaveView => {
+                    assert!(!moved);
+                    assert!(manager.primary_focus().is_none());
+                }
+                TraversalEdgeBehavior::ClosedLoop | TraversalEdgeBehavior::ParentScope => {
+                    assert!(moved);
+                    assert!(nodes[1].has_primary_focus());
+                }
+            }
+        }
+    }
+}
+
+fn weak_traversal_links_revalidate_groups_and_registration_generations() {
+    use flui_foundation::geometry::Rect;
+    use flui_interaction::{FocusTraversalOverrides, ReadingOrderPolicy, TraversalEdgeBehavior};
+    use flui_painting::typography::TextDirection;
+    let manager = FocusManager::new();
+    let group = FocusNode::new();
+    group.set_can_request_focus(false);
+    group.set_skip_traversal(true);
+    let _group_policy = group.register_traversal_group(
+        Rc::new(ReadingOrderPolicy),
+        TextDirection::Ltr,
+        TraversalEdgeBehavior::ClosedLoop,
+    );
+    let nodes = [FocusNode::new(), FocusNode::new(), FocusNode::new()];
+    for (left, node) in [0.0, 20.0, 40.0].into_iter().zip(&nodes) {
+        node.set_rect(Rect::new(left, 0.0, left + 10.0, 10.0));
+    }
+    let _attachments = [
+        manager.root_scope().attach_node(&group).expect("group"),
+        group.attach_node(&nodes[0]).expect("first"),
+        group.attach_node(&nodes[1]).expect("second"),
+        manager
+            .root_scope()
+            .attach_node(&nodes[2])
+            .expect("outside"),
+    ];
+    let first = nodes[0]
+        .register_traversal_overrides(FocusTraversalOverrides::default().with_next(&nodes[2]));
+    let _ = nodes[0].request_focus();
+    assert!(manager.focus_next());
+    assert!(
+        nodes[1].has_primary_focus(),
+        "same-owner links cannot jump across policy groups"
+    );
+    let current = nodes[0]
+        .register_traversal_overrides(FocusTraversalOverrides::default().with_next(&nodes[1]));
+    drop(first);
+    let previous = nodes[1]
+        .register_traversal_overrides(FocusTraversalOverrides::default().with_previous(&nodes[0]));
+    let _ = nodes[1].request_focus();
+    assert!(manager.focus_previous());
+    assert!(nodes[0].has_primary_focus());
+    assert!(
+        current.is_current(),
+        "old cleanup cannot erase a newer override generation"
+    );
+    drop(previous);
+    let detached = FocusNode::new();
+    let probe = Rc::downgrade(&detached);
+    let attachment = group.attach_node(&detached).expect("temporary target");
+    let stale = nodes[0]
+        .register_traversal_overrides(FocusTraversalOverrides::default().with_next(&detached));
+    let _ = attachment.detach();
+    drop(detached);
+    assert!(
+        probe.upgrade().is_none(),
+        "explicit traversal links retain no target ownership"
+    );
+    assert!(manager.focus_next());
+    assert!(
+        nodes[1].has_primary_focus(),
+        "a released target falls back to the ordinary group policy"
+    );
+    drop((stale, current));
+}
+
+fn directional_provider_failure_preserves_first_failure_and_recovery() {
+    use flui_foundation::geometry::Rect;
+    use flui_interaction::{FocusDirection, TraversalEdgeBehavior};
+    struct Capture {
+        owner: Weak<FocusNode>,
+        drops: Rc<Cell<usize>>,
+        fail: bool,
+    }
+    impl Drop for Capture {
+        fn drop(&mut self) {
+            self.drops.set(self.drops.get() + 1);
+            if let Some(node) = self.owner.upgrade() {
+                node.set_rect(Rect::new(0.0, 0.0, 10.0, 10.0));
+            }
+            assert!(!self.fail, "competing provider retirement");
+        }
+    }
+    for (provider_fails, destructor_fails) in [(true, false), (true, true), (false, true)] {
+        let manager = FocusManager::new();
+        manager
+            .root_scope()
+            .set_traversal_edge_behavior(TraversalEdgeBehavior::Stop);
+        let nodes = [FocusNode::new(), FocusNode::new()];
+        nodes[0].set_rect(Rect::new(0.0, 0.0, 10.0, 10.0));
+        nodes[1].set_rect(Rect::new(20.0, 0.0, 30.0, 10.0));
+        let _attachments = [
+            manager.root_scope().attach_node(&nodes[0]).expect("source"),
+            manager.root_scope().attach_node(&nodes[1]).expect("target"),
+        ];
+        let drops = Rc::new(Cell::new(0));
+        let captured = Capture {
+            owner: Rc::downgrade(&nodes[0]),
+            drops: Rc::clone(&drops),
+            fail: destructor_fails,
+        };
+        let probe = Rc::downgrade(&nodes[0]);
+        nodes[0].set_rect_provider(Rc::new(move || {
+            let _ = &captured;
+            probe.upgrade().expect("live source").clear_rect_provider();
+            assert!(!provider_fails, "first provider failure");
+            Some(Rect::new(0.0, 0.0, 10.0, 10.0))
+        }));
+        let _ = nodes[0].request_focus();
+        let payload = catch_unwind(AssertUnwindSafe(|| {
+            manager.focus_in_direction(FocusDirection::Right)
+        }))
+        .expect_err("failure propagates");
+        assert_eq!(
+            flui_foundation::panic::payload_text(payload.as_ref()),
+            Some(if provider_fails {
+                "first provider failure"
+            } else {
+                "competing provider retirement"
+            })
+        );
+        flui_foundation::panic::retain_opaque_payload(payload);
+        assert_eq!(drops.get(), usize::from(!provider_fails));
+        assert!(
+            nodes[0].has_primary_focus(),
+            "geometry failure cannot publish a focus change"
+        );
+        assert!(manager.focus_in_direction(FocusDirection::Right));
+        assert!(
+            nodes[1].has_primary_focus(),
+            "the cleared provider leaves the healthy fallback geometry usable"
+        );
+    }
+}
+
+fn group_policy_replacement_preserves_failure_and_future_traversal() {
+    use flui_foundation::geometry::Rect;
+    use flui_interaction::{FocusNodeRegistration, ReadingOrderPolicy, TraversalEdgeBehavior};
+    use flui_painting::typography::TextDirection;
+    #[derive(Debug)]
+    struct ReplacingPolicy {
+        group: Weak<FocusNode>,
+        replacement: Rc<RefCell<Option<FocusNodeRegistration>>>,
+        drops: Rc<Cell<usize>>,
+        sorting_fails: bool,
+        retirement_fails: bool,
+    }
+    impl FocusTraversalPolicy for ReplacingPolicy {
+        fn order(&self, nodes: &mut [Rc<FocusNode>], direction: TextDirection) {
+            let group = self.group.upgrade().expect("live group");
+            *self.replacement.borrow_mut() = Some(group.register_traversal_group(
+                Rc::new(ReadingOrderPolicy),
+                direction,
+                TraversalEdgeBehavior::Stop,
+            ));
+            assert!(!self.sorting_fails, "first group sorting failure");
+            ReadingOrderPolicy.order(nodes, direction);
+        }
+    }
+    impl Drop for ReplacingPolicy {
+        fn drop(&mut self) {
+            self.drops.set(self.drops.get() + 1);
+            if let Some(group) = self.group.upgrade() {
+                assert!(
+                    group.is_attached(),
+                    "policy retirement occurs outside the group borrow"
+                );
+            }
+            assert!(!self.retirement_fails, "competing group retirement failure");
+        }
+    }
+    for (sorting_fails, retirement_fails) in [(true, false), (true, true), (false, true)] {
+        let manager = FocusManager::new();
+        let group = FocusNode::new();
+        group.set_can_request_focus(false);
+        group.set_skip_traversal(true);
+        let nodes = [FocusNode::new(), FocusNode::new()];
+        nodes[0].set_rect(Rect::new(0.0, 0.0, 10.0, 10.0));
+        nodes[1].set_rect(Rect::new(20.0, 0.0, 30.0, 10.0));
+        let _attachments = [
+            manager.root_scope().attach_node(&group).expect("group"),
+            group.attach_node(&nodes[0]).expect("first"),
+            group.attach_node(&nodes[1]).expect("second"),
+        ];
+        let replacement = Rc::new(RefCell::new(None));
+        let drops = Rc::new(Cell::new(0));
+        let _registration = group.register_traversal_group(
+            Rc::new(ReplacingPolicy {
+                group: Rc::downgrade(&group),
+                replacement: Rc::clone(&replacement),
+                drops: Rc::clone(&drops),
+                sorting_fails,
+                retirement_fails,
+            }),
+            TextDirection::Ltr,
+            TraversalEdgeBehavior::Stop,
+        );
+        let _ = nodes[0].request_focus();
+        let payload = catch_unwind(AssertUnwindSafe(|| manager.focus_next()))
+            .expect_err("group failure propagates");
+        assert_eq!(
+            flui_foundation::panic::payload_text(payload.as_ref()),
+            Some(if sorting_fails {
+                "first group sorting failure"
+            } else {
+                "competing group retirement failure"
+            })
+        );
+        flui_foundation::panic::retain_opaque_payload(payload);
+        assert_eq!(drops.get(), usize::from(!sorting_fails));
+        assert!(nodes[0].has_primary_focus());
+        assert!(manager.focus_next());
+        assert!(
+            nodes[1].has_primary_focus(),
+            "the replacement policy serves the next healthy traversal"
+        );
+        let registration = replacement.borrow_mut().take();
+        drop(registration);
+    }
+}
+
+fn directional_geometry_snapshots_run_once_and_respect_reentrant_focus() {
+    use flui_foundation::geometry::Rect;
+    use flui_interaction::{FocusDirection, TraversalEdgeBehavior};
+    let manager = FocusManager::new();
+    manager
+        .root_scope()
+        .set_traversal_edge_behavior(TraversalEdgeBehavior::ClosedLoop);
+    let nodes = [FocusNode::new(), FocusNode::new()];
+    let reads = [Rc::new(Cell::new(0)), Rc::new(Cell::new(0))];
+    let _attachments = [
+        manager.root_scope().attach_node(&nodes[0]).expect("left"),
+        manager.root_scope().attach_node(&nodes[1]).expect("right"),
+    ];
+    for ((node, reads), left) in nodes.iter().zip(&reads).zip([0.0, 20.0]) {
+        let reads = Rc::clone(reads);
+        node.set_rect_provider(Rc::new(move || {
+            reads.set(reads.get() + 1);
+            Some(Rect::new(left, 0.0, left + 10.0, 10.0))
+        }));
+    }
+    let _ = nodes[1].request_focus();
+    assert!(manager.focus_in_direction(FocusDirection::Right));
+    assert!(nodes[0].has_primary_focus());
+    assert_eq!(
+        [reads[0].get(), reads[1].get()],
+        [1, 1],
+        "wrap reuses each provider snapshot from the same directional step"
+    );
+    let chosen = Rc::downgrade(&nodes[1]);
+    nodes[0].set_rect_provider(Rc::new(move || {
+        let _ = chosen
+            .upgrade()
+            .expect("live reentrant target")
+            .request_focus();
+        Some(Rect::new(0.0, 0.0, 10.0, 10.0))
+    }));
+    assert!(
+        !manager.focus_in_direction(FocusDirection::Right),
+        "the outdated step does not replace focus chosen reentrantly by its provider"
+    );
+    assert!(nodes[1].has_primary_focus());
+}
+
 fn subscription_withdrawal_preserves_independent_listeners() {
     let manager = FocusManager::new();
     let node = FocusNode::new();
@@ -894,6 +1329,30 @@ fn assert_queued_focus_recovery(from_node: bool, competing: bool) {
 #[test]
 fn caught_callback_failures_leave_captures_with_their_owner() {
     let cases: &[(&str, fn())] = &[
+        (
+            "directional geometry snapshots and reentrant focus",
+            directional_geometry_snapshots_run_once_and_respect_reentrant_focus,
+        ),
+        (
+            "group policy replacement and failure recovery",
+            group_policy_replacement_preserves_failure_and_future_traversal,
+        ),
+        (
+            "weak traversal ownership and generations",
+            weak_traversal_links_revalidate_groups_and_registration_generations,
+        ),
+        (
+            "directional provider failure and recovery",
+            directional_provider_failure_preserves_first_failure_and_recovery,
+        ),
+        (
+            "geometric focus ranking and admission",
+            geometric_focus_navigation_pins_ranking_and_admission,
+        ),
+        (
+            "directional scope edges",
+            directional_edges_match_linear_scope_outcomes,
+        ),
         (
             "subscription ownership and independent listeners",
             subscription_withdrawal_preserves_independent_listeners,

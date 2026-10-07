@@ -8,6 +8,7 @@ mod dismissible;
 mod drag_target;
 mod draggable;
 pub(crate) mod focus;
+mod focus_traversal_group;
 mod gesture_arena_scope;
 mod gesture_detector;
 mod ignore_pointer;
@@ -25,8 +26,9 @@ mod visibility_gate;
 pub use absorb_pointer::AbsorbPointer;
 pub use actions::{
     Action, ActionOutcome, Actions, ActivateIntent, ButtonActivateIntent, CallbackAction,
-    CopySelectionTextIntent, Intent, NextFocusAction, NextFocusIntent, PasteTextIntent,
-    PreviousFocusAction, PreviousFocusIntent, SelectAllTextIntent,
+    CopySelectionTextIntent, DirectionalFocusAction, DirectionalFocusIntent, Intent,
+    NextFocusAction, NextFocusIntent, PasteTextIntent, PreviousFocusAction, PreviousFocusIntent,
+    SelectAllTextIntent,
 };
 pub use dismissible::{
     DismissDirection, DismissDirectionCallback, DismissUpdateCallback, DismissUpdateDetails,
@@ -42,6 +44,7 @@ pub use focus::{
     ExcludeFocus, Focus, FocusChangeHandler, FocusRoot, FocusRootState, FocusScope,
     FocusScopeState, FocusState,
 };
+pub use focus_traversal_group::{FocusTraversalGroup, FocusTraversalGroupState};
 pub use gesture_arena_scope::GestureArenaScope;
 pub use gesture_detector::{GestureDetector, GestureDetectorState};
 pub use ignore_pointer::IgnorePointer;

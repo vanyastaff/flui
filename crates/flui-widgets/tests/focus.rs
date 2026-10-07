@@ -13,6 +13,263 @@ use flui_widgets::{Directionality, Positioned, SizedBox, Stack};
 
 use crate::common::harness::mount;
 
+fn traversal_field(node: &Rc<FocusNode>, x: f64, y: f64) -> BoxedView {
+    Positioned::new(Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Rc::clone(node)))
+        .left(x)
+        .top(y)
+        .width(10.0)
+        .height(10.0)
+        .into_view()
+        .boxed()
+}
+
+pub(crate) fn traversal_groups_order_blocks_without_creating_focus_scopes() {
+    use flui_interaction::{FocusTraversalPolicy, ReadingOrderPolicy, TraversalEdgeBehavior};
+    use flui_painting::typography::TextDirection;
+    use flui_widgets::interaction::FocusTraversalGroup;
+    #[derive(Debug)]
+    struct Reverse;
+    impl FocusTraversalPolicy for Reverse {
+        fn order(&self, nodes: &mut [Rc<FocusNode>], direction: TextDirection) {
+            ReadingOrderPolicy.order(nodes, direction);
+            nodes.reverse();
+        }
+    }
+    let scope = FocusScopeNode::new();
+    let nodes: Vec<_> = (0..4).map(|_| FocusNode::new()).collect();
+    let group = FocusTraversalGroup::new(Stack::new(vec![
+        traversal_field(&nodes[1], 20.0, 0.0),
+        traversal_field(&nodes[2], 40.0, 0.0),
+    ]))
+    .policy(Rc::new(Reverse))
+    .edge_behavior(TraversalEdgeBehavior::ParentScope);
+    let harness = mount(FocusScope::with_external_node(
+        Rc::clone(&scope),
+        Stack::new(vec![
+            traversal_field(&nodes[0], 0.0, 0.0),
+            group.into_view().boxed(),
+            traversal_field(&nodes[3], 60.0, 0.0),
+        ]),
+    ));
+    assert!(
+        Rc::ptr_eq(&nodes[1].enclosing_scope().expect("existing scope"), &scope),
+        "a policy group does not introduce focus history or autofocus scope semantics"
+    );
+    let manager = harness.focus_manager();
+    let _ = nodes[0].request_focus();
+    for index in [2, 1, 3, 0] {
+        assert!(manager.dispatch_key_event(&tab_event(false)).is_handled());
+        assert!(
+            nodes[index].has_primary_focus(),
+            "forward group target {index}"
+        );
+    }
+    for index in [3, 1, 2, 0] {
+        assert!(manager.dispatch_key_event(&tab_event(true)).is_handled());
+        assert!(
+            nodes[index].has_primary_focus(),
+            "reverse group target {index}"
+        );
+    }
+}
+
+pub(crate) fn nested_scope_edges_visit_the_containing_group_and_reuse_policy_order() {
+    use flui_interaction::{
+        FocusTraversalPolicy, KeyEventResult, ReadingOrderPolicy, TraversalEdgeBehavior,
+    };
+    use flui_painting::typography::TextDirection;
+    use flui_widgets::interaction::FocusTraversalGroup;
+    use std::cell::Cell;
+    #[derive(Debug)]
+    struct CountingPolicy(Rc<Cell<usize>>);
+    impl FocusTraversalPolicy for CountingPolicy {
+        fn order(&self, nodes: &mut [Rc<FocusNode>], direction: TextDirection) {
+            self.0.set(self.0.get() + 1);
+            ReadingOrderPolicy.order(nodes, direction);
+        }
+    }
+    for edge in [
+        TraversalEdgeBehavior::Stop,
+        TraversalEdgeBehavior::ParentScope,
+    ] {
+        let source = FocusNode::new();
+        let outside = FocusNode::new();
+        let calls = Rc::new(Cell::new(0));
+        let inner = FocusTraversalGroup::new(traversal_field(&source, 0.0, 0.0))
+            .policy(Rc::new(CountingPolicy(Rc::clone(&calls))))
+            .edge_behavior(TraversalEdgeBehavior::ParentScope);
+        let outer = FocusTraversalGroup::new(
+            FocusScope::new(inner).edge_behavior(TraversalEdgeBehavior::ParentScope),
+        )
+        .edge_behavior(edge);
+        let harness = mount(Stack::new(vec![
+            outer.into_view().boxed(),
+            traversal_field(&outside, 100.0, 0.0),
+        ]));
+        let manager = harness.focus_manager();
+        let _ = source.request_focus();
+        let result = manager.dispatch_key_event(&tab_event(false));
+        assert_eq!(
+            calls.get(),
+            1,
+            "parent retries reuse the inner group's in-flight policy order"
+        );
+        match edge {
+            TraversalEdgeBehavior::Stop => {
+                assert_eq!(result, KeyEventResult::SkipRemainingHandlers);
+                assert!(source.has_primary_focus());
+            }
+            TraversalEdgeBehavior::ParentScope => {
+                assert_eq!(result, KeyEventResult::Handled);
+                assert!(outside.has_primary_focus());
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
+pub(crate) fn typed_focus_overrides_fall_back_after_target_invalidation() {
+    use flui_interaction::FocusTraversalOverrides;
+    let nodes = [FocusNode::new(), FocusNode::new(), FocusNode::new()];
+    let scope = FocusScopeNode::new();
+    let first = Positioned::new(
+        Focus::new(SizedBox::new(10.0, 10.0))
+            .focus_node(Rc::clone(&nodes[0]))
+            .traversal_overrides(FocusTraversalOverrides::default().with_next(&nodes[2])),
+    )
+    .left(0.0)
+    .top(0.0)
+    .width(10.0)
+    .height(10.0)
+    .into_view()
+    .boxed();
+    let harness = mount(FocusScope::with_external_node(
+        scope,
+        Stack::new(vec![
+            first,
+            traversal_field(&nodes[1], 20.0, 0.0),
+            traversal_field(&nodes[2], 40.0, 0.0),
+        ]),
+    ));
+    let manager = harness.focus_manager();
+    let _ = nodes[0].request_focus();
+    assert!(manager.dispatch_key_event(&tab_event(false)).is_handled());
+    assert!(
+        nodes[2].has_primary_focus(),
+        "explicit weak target wins over reading order"
+    );
+    nodes[2].set_can_request_focus(false);
+    let _ = nodes[0].request_focus();
+    assert!(manager.dispatch_key_event(&tab_event(false)).is_handled());
+    assert!(
+        nodes[1].has_primary_focus(),
+        "disabled override falls back to policy"
+    );
+    let foreign = FocusNode::new();
+    let foreign_manager = flui_interaction::FocusManager::new();
+    let _attachment = foreign_manager
+        .root_scope()
+        .attach_node(&foreign)
+        .expect("foreign attachment");
+    let _replacement = nodes[0]
+        .register_traversal_overrides(FocusTraversalOverrides::default().with_next(&foreign));
+    let _ = nodes[0].request_focus();
+    assert!(manager.dispatch_key_event(&tab_event(false)).is_handled());
+    assert!(nodes[1].has_primary_focus());
+    assert!(
+        !foreign.has_primary_focus(),
+        "an override cannot cross presentation ownership"
+    );
+}
+
+pub(crate) fn arrow_traversal_prefers_the_beam_and_respects_group_edges() {
+    use flui_interaction::{KeyEventResult, TraversalEdgeBehavior};
+    use flui_platform_api::{
+        EventTime,
+        keyboard::{Code, Key, KeyEvent, KeyState, NamedKey},
+    };
+    use flui_widgets::interaction::FocusTraversalGroup;
+    let origin = FocusNode::new();
+    let diagonal = FocusNode::new();
+    let beam = FocusNode::new();
+    let outside = FocusNode::new();
+    let group = FocusTraversalGroup::new(Stack::new(vec![
+        traversal_field(&origin, 0.0, 0.0),
+        traversal_field(&diagonal, 20.0, 30.0),
+        traversal_field(&beam, 80.0, 0.0),
+    ]))
+    .edge_behavior(TraversalEdgeBehavior::Stop);
+    let harness = mount(Stack::new(vec![
+        group.into_view().boxed(),
+        traversal_field(&outside, 120.0, 0.0),
+    ]));
+    let manager = harness.focus_manager();
+    let right = KeyEvent::new(
+        KeyState::Down,
+        Key::Named(NamedKey::ArrowRight),
+        Code::ArrowRight,
+        EventTime::from_nanos(0),
+    );
+    let left = KeyEvent::new(
+        KeyState::Down,
+        Key::Named(NamedKey::ArrowLeft),
+        Code::ArrowLeft,
+        EventTime::from_nanos(0),
+    );
+    let _ = origin.request_focus();
+    assert_eq!(manager.dispatch_key_event(&right), KeyEventResult::Handled);
+    assert!(
+        beam.has_primary_focus(),
+        "beam overlap beats a closer diagonal candidate"
+    );
+    assert_eq!(
+        manager.dispatch_key_event(&right),
+        KeyEventResult::SkipRemainingHandlers
+    );
+    assert!(
+        beam.has_primary_focus(),
+        "Stop does not leave the group or consume native default handling"
+    );
+    assert_eq!(manager.dispatch_key_event(&left), KeyEventResult::Handled);
+    assert!(origin.has_primary_focus());
+}
+
+pub(crate) fn widget_scope_edge_configuration_reaches_the_tab_path() {
+    use flui_interaction::{KeyEventResult, TraversalEdgeBehavior};
+    for edge in [
+        TraversalEdgeBehavior::Stop,
+        TraversalEdgeBehavior::LeaveView,
+        TraversalEdgeBehavior::ClosedLoop,
+    ] {
+        let nodes = [FocusNode::new(), FocusNode::new()];
+        let harness = mount(
+            FocusScope::new(Stack::new(vec![
+                traversal_field(&nodes[0], 0.0, 0.0),
+                traversal_field(&nodes[1], 20.0, 0.0),
+            ]))
+            .edge_behavior(edge),
+        );
+        let manager = harness.focus_manager();
+        let _ = nodes[1].request_focus();
+        let result = manager.dispatch_key_event(&tab_event(false));
+        match edge {
+            TraversalEdgeBehavior::ClosedLoop => {
+                assert_eq!(result, KeyEventResult::Handled);
+                assert!(nodes[0].has_primary_focus());
+            }
+            TraversalEdgeBehavior::Stop => {
+                assert_eq!(result, KeyEventResult::SkipRemainingHandlers);
+                assert!(nodes[1].has_primary_focus());
+            }
+            TraversalEdgeBehavior::LeaveView => {
+                assert_eq!(result, KeyEventResult::SkipRemainingHandlers);
+                assert!(manager.primary_focus().is_none());
+            }
+            TraversalEdgeBehavior::ParentScope => unreachable!(),
+        }
+    }
+}
+
 /// A root that can drop the focus subtree without changing its own type —
 /// `swap_root` dispatches by `TypeId`.
 #[derive(Clone)]

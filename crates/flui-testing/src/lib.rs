@@ -109,6 +109,7 @@ pub use a11y::{
     InvokeActionError, NodeId, NotTreeBound, TreeId,
 };
 pub use bootstrap::{BuildCapabilities, MountOptions, MountOwners, Mounted};
+pub use flui_runtime::presentation::{PointerResampling, PointerResamplingError};
 pub use host::{HeadlessDevAgent, HeadlessHost, HeadlessSink, HeadlessWindow, HeadlessWindowId};
 pub use log_capture::{CapturedLog, CapturedRecord, capture, disarm_interest_cache};
 pub use replay::{GestureRecorder, PointerPhase, PointerScript, ScriptedPointer};

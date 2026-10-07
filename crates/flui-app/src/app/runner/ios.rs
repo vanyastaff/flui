@@ -241,7 +241,8 @@ where
         with_owner_platform(f).expect("BUG: bootstrap_ios runs only after install_owner_platform")
     }
 
-    let presentation_window = super::presentation_window(host);
+    let presentation_window =
+        super::presentation_window(host).with_pointer_resampling(config.pointer_resampling);
     let window = Arc::clone(presentation_window.window());
 
     // 0b. This window's device-recovery backoff, constructed before the

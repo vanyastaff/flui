@@ -68,7 +68,7 @@ pub use contact::{ArenaMembership, BeginContactError, ContactId, ContactSnapshot
 pub use double_tap::{DoubleTapDetails, DoubleTapGestureRecognizer, DoubleTapGestureRecognizerBuilder};
 pub use drag::{
     DragCancelCallback, DragDownCallback, DragDownDetails, DragEndCallback, DragEndDetails,
-    DragGestureRecognizer, DragGestureRecognizerBuilder, DragStartCallback, DragStartDetails, DragUpdateCallback,
+    DragGestureRecognizer, DragGestureRecognizerBuilder, DragPointerStrategy, DragStartCallback, DragStartDetails, DragUpdateCallback,
     DragUpdateDetails, GestureEndReason,
 };
 pub use eager::{EagerGestureRecognizer, EagerGestureRecognizerBuilder};

@@ -522,6 +522,10 @@ impl UiRealm {
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) fn render_frame<S: crate::sink::FrameSink + ?Sized>(&self, sink: &mut S) -> bool {
         let mut input_panic = None;
+        let frame_time = self
+            .frame_time
+            .get()
+            .unwrap_or_else(|| flui_foundation::MonotonicClock::now(&self.clock));
         for presentation in self.presentations.iter() {
             let deferred = catch_unwind(AssertUnwindSafe(|| {
                 presentation.gestures().drain_deferred_arena_resolutions();
@@ -533,7 +537,19 @@ impl UiRealm {
                 "frame deferred arena resolution",
             );
             let motion = catch_unwind(AssertUnwindSafe(|| {
-                presentation.gestures().flush_pending_moves();
+                let gestures = presentation.gestures();
+                if gestures.is_resampling_enabled() {
+                    let sample = frame_time
+                        .checked_sub(flui_interaction::processing::DEFAULT_RESAMPLE_LOOKBACK)
+                        .unwrap_or(frame_time);
+                    if let Some(next) = sample.checked_add(gestures.sampling_clock().period()) {
+                        gestures
+                            .flush_pending_moves_at(sample, next)
+                            .expect("BUG: positive sampling period creates an advancing window");
+                    }
+                } else {
+                    gestures.flush_pending_moves();
+                }
             }))
             .err();
             super::input::preserve_first_input_panic(
@@ -542,6 +558,12 @@ impl UiRealm {
                 "frame pointer motion",
             );
         }
+        let pending_wake = self.wake_pending_pointer_samples();
+        super::input::preserve_first_input_panic(
+            &mut input_panic,
+            pending_wake,
+            "pending pointer sample wake",
+        );
         if let Some(payload) = input_panic {
             resume_unwind(payload);
         }
@@ -963,7 +985,27 @@ impl UiRealm {
             }
         }
 
+        // This frame's mark_rendered must not erase accepted sampling debt.
+        if let Some(payload) = self.wake_pending_pointer_samples() {
+            resume_unwind(payload);
+        }
         presented
+    }
+
+    fn wake_pending_pointer_samples(&self) -> Option<Box<dyn std::any::Any + Send>> {
+        let mut first = None;
+        for presentation in self.presentations.iter() {
+            if presentation.gestures().has_pending_pointer_samples() {
+                let wake =
+                    catch_unwind(AssertUnwindSafe(|| self.request_redraw_for(presentation))).err();
+                super::input::preserve_first_input_panic(
+                    &mut first,
+                    wake,
+                    "pointer sample presentation wake",
+                );
+            }
+        }
+        first
     }
 
     /// Finalize and record this pump's [`flui_scheduler::FrameSnapshot`] for
