@@ -61,7 +61,7 @@ pub(crate) fn clearing_pan_callbacks_mid_drag_still_finishes_the_drag() {
 pub(crate) fn unmount_mid_drag_cancels_once_and_hands_the_arena_to_the_rival() {
     use std::{cell::Cell, rc::Rc};
     use crate::common::{ProbeSignals, SignalProbe};
-    use flui_view::{IntoView, SignalWriteExt, View};
+    use flui_view::{IntoView, SignalWriteExt, ViewExt};
 
     let mounted = Rc::new(Cell::new(true));
     let cancelled = Rc::new(Cell::new(0));
