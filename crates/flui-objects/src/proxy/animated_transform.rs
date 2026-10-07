@@ -1,4 +1,4 @@
-//! `RenderAnimatedTransform` — a transform that follows an animation without
+﻿//! `RenderAnimatedTransform` â€” a transform that follows an animation without
 //! rebuilding the element tree.
 //!
 //! # One cached sample
@@ -14,7 +14,7 @@
 //!
 //! A tick classifies the matrix the new sample produces as *identity*,
 //! *layered* (finite, invertible and not the identity) or *degenerate*
-//! (singular — a scale of 0 — or non-finite). Crossing between classes
+//! (singular â€” a scale of 0 â€” or non-finite). Crossing between classes
 //! adds or removes the transform layer, so it marks paint; a tick that stays
 //! layered marks only a composited-layer update, which patches the existing
 //! `TransformLayer` in the enclosing repaint boundary's retained capture
@@ -47,10 +47,10 @@
 //! swaps the proxy's parent to retarget, so the node is never replaced. The
 //! tick listener captures only the shared sample cache, the invalidation
 //! handle and a `Weak` to the node's proxy handle: a strong capture would form
-//! a proxy → listener → proxy cycle that outlives the tree.
+//! a proxy â†’ listener â†’ proxy cycle that outlives the tree.
 
 use std::f64::consts::TAU;
-use std::sync::atomic::{AtomicU64, Ordering, fence};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering, fence};
 use std::sync::{Arc, Weak};
 
 use flui_animation::{Animation, ProxyAnimation};
@@ -75,8 +75,8 @@ use crate::TranslationFraction;
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum TransformMotion {
-    /// Translation by a fraction of the node's own size: `(dx·width,
-    /// dy·height)` logical pixels. Under [`TextDirection::Rtl`] `dx` is
+    /// Translation by a fraction of the node's own size: `(dxÂ·width,
+    /// dyÂ·height)` logical pixels. Under [`TextDirection::Rtl`] `dx` is
     /// mirrored, so a positive value moves toward the reading-direction start.
     Slide {
         /// The fractional offset.
@@ -119,75 +119,168 @@ enum Class {
     Degenerate,
 }
 
+/// A sample tagged with the order its reading was taken in.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Versioned {
+    generation: u64,
+    value: (f64, f64),
+}
+
+/// One buffer of a [`Register`]: a sequence counter (odd while written)
+/// guarding a generation and a two-word value.
+#[derive(Debug, Default)]
+struct Slot {
+    sequence: AtomicU64,
+    generation: AtomicU64,
+    first: AtomicU64,
+    second: AtomicU64,
+}
+
+impl Slot {
+    /// A consistent read, or `None` when a write overlapped it.
+    fn try_read(&self) -> Option<Versioned> {
+        let start = self.sequence.load(Ordering::Acquire);
+        if !start.is_multiple_of(2) {
+            return None;
+        }
+        let generation = self.generation.load(Ordering::Relaxed);
+        let first = self.first.load(Ordering::Relaxed);
+        let second = self.second.load(Ordering::Relaxed);
+        fence(Ordering::Acquire);
+        (self.sequence.load(Ordering::Relaxed) == start).then_some(Versioned {
+            generation,
+            value: (f64::from_bits(first), f64::from_bits(second)),
+        })
+    }
+
+    /// Writes `entry` with the sequence odd for the duration.
+    fn write(&self, entry: Versioned) {
+        self.sequence.fetch_add(1, Ordering::Relaxed);
+        fence(Ordering::Release);
+        self.generation.store(entry.generation, Ordering::Relaxed);
+        self.first.store(entry.value.0.to_bits(), Ordering::Relaxed);
+        self.second
+            .store(entry.value.1.to_bits(), Ordering::Relaxed);
+        self.sequence.fetch_add(1, Ordering::Release);
+    }
+}
+
+/// A two-word value that concurrent writers publish in generation order and
+/// a paint or hit-test walk reads without a lock.
+///
+/// # Protocol
+///
+/// Two [`Slot`]s; `current` names the one holding the newest published
+/// entry. Writers exclude each other with the `writing` flag, taken by
+/// compare-exchange, held for a few stores and never across user code; a
+/// reader never touches it. The holder compares its generation with the
+/// current entry's: an older or equal one is discarded, so the published
+/// generation only grows and an older reading never replaces a newer one.
+/// A newer entry is written into the slot that is *not* current, then
+/// `current` flips to it with `Release`.
+///
+/// A reader loads `current` and reads that slot under its sequence. A writer
+/// stalled mid-write owns only the slot that is not current, so it never
+/// blocks a reader. A read fails only when two newer entries were published
+/// while it ran (the second reusing its slot), so every reader retry follows
+/// another writer's completed publication, never a stalled one.
+#[derive(Debug, Default)]
+struct Register {
+    writing: AtomicBool,
+    slots: [Slot; 2],
+    current: AtomicUsize,
+}
+
+impl Register {
+    fn new(entry: Versioned) -> Self {
+        let register = Self::default();
+        register.slots[0].write(entry);
+        register
+    }
+
+    fn load(&self) -> Versioned {
+        loop {
+            let current = self.current.load(Ordering::Acquire);
+            if let Some(entry) = self.slots[current].try_read() {
+                return entry;
+            }
+            std::hint::spin_loop();
+        }
+    }
+
+    /// Publishes `entry` unless a newer-or-equal generation already is;
+    /// returns whether it was published.
+    fn publish(&self, entry: Versioned) -> bool {
+        while self
+            .writing
+            .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
+            std::hint::spin_loop();
+        }
+        let current = self.current.load(Ordering::Relaxed);
+        let newest = self.slots[current]
+            .try_read()
+            .expect("BUG: only the `writing` holder writes a slot, and never the current one");
+        let published = entry.generation > newest.generation;
+        if published {
+            let next = 1 - current;
+            self.slots[next].write(entry);
+            self.current.store(next, Ordering::Release);
+        }
+        self.writing.store(false, Ordering::Release);
+        published
+    }
+}
+
 /// The published sample, the last delivered sample and the size they are
 /// mapped against.
 ///
 /// Atomics because the render tree is `Send` today and the tick listener
-/// must be `Send + Sync`. The published sample is a two-word value a frame on
-/// another thread may read while the listener writes it, so it sits behind a
-/// sequence counter (one writer, the listener; a reader retries a torn read)
-/// and is published with `Release` before any mark can wake that frame. The
-/// delivered sample and the size are each read only by their own writer's
-/// side of the pipeline, so `Relaxed` suffices for them.
-#[derive(Debug, Default)]
+/// must be `Send + Sync`, so two notifications of one animation may commit
+/// concurrently. Each commit takes a [`ticket`](Self::ticket) *before*
+/// reading the animation, so the newest ticket's reading was taken after
+/// every mutation already notified: generation order is reading order, and
+/// the newest generation holds the final value. Both samples are
+/// [`Register`]s ordered by that generation; the published one is written
+/// with `Release` before any mark can wake a frame. The size is written only
+/// by layout, so `Relaxed` suffices for it.
+#[derive(Debug)]
 struct SampleCell {
-    sequence: AtomicU64,
-    first: AtomicU64,
-    second: AtomicU64,
-    delivered_first: AtomicU64,
-    delivered_second: AtomicU64,
+    tickets: AtomicU64,
+    published: Register,
+    delivered: Register,
     width: AtomicU64,
     height: AtomicU64,
 }
 
 impl SampleCell {
     fn new(sample: (f64, f64)) -> Self {
-        let cell = Self::default();
-        cell.store_sample(sample);
-        cell.store_delivered(sample);
-        cell
+        let seed = Versioned {
+            generation: 0,
+            value: sample,
+        };
+        Self {
+            tickets: AtomicU64::new(0),
+            published: Register::new(seed),
+            delivered: Register::new(seed),
+            width: AtomicU64::new(0),
+            height: AtomicU64::new(0),
+        }
+    }
+
+    /// The generation for a reading about to be taken. Saturates: a cell
+    /// that exhausted `u64` keeps its last sample rather than reissuing an
+    /// older generation.
+    fn ticket(&self) -> u64 {
+        self.tickets
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |n| n.checked_add(1))
+            .map_or(u64::MAX, |n| n + 1)
     }
 
     /// The published sample, never a mix of two writes.
     fn sample(&self) -> (f64, f64) {
-        loop {
-            let start = self.sequence.load(Ordering::Acquire);
-            if start.is_multiple_of(2) {
-                let first = self.first.load(Ordering::Relaxed);
-                let second = self.second.load(Ordering::Relaxed);
-                fence(Ordering::Acquire);
-                if self.sequence.load(Ordering::Relaxed) == start {
-                    return (f64::from_bits(first), f64::from_bits(second));
-                }
-            }
-            std::hint::spin_loop();
-        }
-    }
-
-    fn store_sample(&self, (first, second): (f64, f64)) {
-        let start = self.sequence.load(Ordering::Relaxed);
-        self.sequence
-            .store(start.wrapping_add(1), Ordering::Relaxed);
-        fence(Ordering::Release);
-        self.first.store(first.to_bits(), Ordering::Relaxed);
-        self.second.store(second.to_bits(), Ordering::Relaxed);
-        self.sequence
-            .store(start.wrapping_add(2), Ordering::Release);
-    }
-
-    /// The last sample whose marks were all sent.
-    fn delivered(&self) -> (f64, f64) {
-        (
-            f64::from_bits(self.delivered_first.load(Ordering::Relaxed)),
-            f64::from_bits(self.delivered_second.load(Ordering::Relaxed)),
-        )
-    }
-
-    fn store_delivered(&self, (first, second): (f64, f64)) {
-        self.delivered_first
-            .store(first.to_bits(), Ordering::Relaxed);
-        self.delivered_second
-            .store(second.to_bits(), Ordering::Relaxed);
+        self.published.load().value
     }
 
     fn size(&self) -> Size {
@@ -235,7 +328,10 @@ fn is_finite(m: &Matrix4) -> bool {
 /// so its entries are finite exactly when the determinant (the linear part)
 /// and the image of the origin (the translation part) are.
 fn classify(kind: Kind, sample: (f64, f64), size: Size) -> Class {
-    let m = matrix(kind, sample, size);
+    classify_matrix(&matrix(kind, sample, size))
+}
+
+fn classify_matrix(m: &Matrix4) -> Class {
     let determinant = m.determinant();
     let (ox, oy) = m.transform_point(0.0, 0.0);
     if determinant == 0.0 || !determinant.is_finite() || !ox.is_finite() || !oy.is_finite() {
@@ -247,7 +343,7 @@ fn classify(kind: Kind, sample: (f64, f64), size: Size) -> Class {
     }
 }
 
-/// A finite reading of the animation, or `None` for NaN/±∞.
+/// A finite reading of the animation, or `None` for NaN/Â±âˆž.
 fn finite(sample: (f64, f64)) -> Option<(f64, f64)> {
     (sample.0.is_finite() && sample.1.is_finite()).then_some(sample)
 }
@@ -297,11 +393,13 @@ impl Source {
             let handle = handle.clone();
             proxy.add_listener(Arc::new(move || {
                 if let Some(proxy) = weak.upgrade() {
+                    // The ticket precedes the read: see `SampleCell`.
+                    let generation = cell.ticket();
                     let value = read(&proxy.value());
                     // Release the proxy before marking: the marks never call
                     // back into it, but nothing here needs it any longer.
                     drop(proxy);
-                    commit(&cell, kind, value, &handle);
+                    commit(&cell, kind, generation, value, &handle);
                 }
             }))
         }
@@ -321,19 +419,25 @@ impl Source {
 
 /// Applies a fresh animation reading: publishes it, then sends the marks the
 /// change from the last *delivered* sample owes, and records it as delivered
-/// only once every mark was sent. Returns whether the change was delivered.
+/// only once every mark was sent. A reading whose `generation` is older than
+/// the published one is discarded unmarked: the newer commit owns delivery.
+/// Returns whether the change was delivered.
 fn commit(
     cell: &SampleCell,
     kind: Kind,
+    generation: u64,
     value: (f64, f64),
     handle: &RenderInvalidationHandle,
 ) -> bool {
     let Some(value) = finite(value) else {
         return false;
     };
+    let entry = Versioned { generation, value };
     // Published first: a mark may run (or wake) the frame that reads it.
-    cell.store_sample(value);
-    let old = cell.delivered();
+    if !cell.published.publish(entry) {
+        return false;
+    }
+    let old = cell.delivered.load().value;
     if old.0.to_bits() == value.0.to_bits() && old.1.to_bits() == value.1.to_bits() {
         return false;
     }
@@ -355,7 +459,9 @@ fn commit(
         );
         return false;
     }
-    cell.store_delivered(value);
+    // Ordered like the published sample: an older commit finishing late
+    // cannot replace a newer delivery record.
+    cell.delivered.publish(entry);
     true
 }
 
@@ -433,13 +539,13 @@ impl RenderAnimatedTransform {
         }
     }
 
-    /// The matrix the cached sample produces over `size`.
-    fn current_matrix(&self, size: Size) -> Matrix4 {
-        matrix(self.kind, self.cell.sample(), size)
-    }
-
-    fn current_class(&self, size: Size) -> Class {
-        classify(self.kind, self.cell.sample(), size)
+    /// The class and matrix of one read of the cached sample over `size`.
+    /// Always taken together: a tick between two reads could pair a class
+    /// approved for one sample with the (possibly overflowed) matrix of the
+    /// next.
+    fn current(&self, size: Size) -> (Class, Matrix4) {
+        let m = matrix(self.kind, self.cell.sample(), size);
+        (classify_matrix(&m), m)
     }
 }
 
@@ -491,11 +597,12 @@ impl RenderBox for RenderAnimatedTransform {
             return ctx.hit_test_child(0, *ctx.position());
         }
         let size = ctx.own_size();
-        match self.current_class(size) {
+        let (class, matrix) = self.current(size);
+        match class {
             Class::Degenerate => false,
             Class::Identity => ctx.hit_test_child(0, *ctx.position()),
             Class::Layered => {
-                let Some(inverse) = self.current_matrix(size).try_inverse() else {
+                let Some(inverse) = matrix.try_inverse() else {
                     return false;
                 };
                 let position = ctx.position();
@@ -506,7 +613,7 @@ impl RenderBox for RenderAnimatedTransform {
     }
 
     fn skip_paint(&self) -> bool {
-        self.current_class(self.cell.size()) == Class::Degenerate
+        self.current(self.cell.size()).0 == Class::Degenerate
     }
 
     fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
@@ -518,10 +625,13 @@ impl RenderBox for RenderAnimatedTransform {
     }
 
     fn paint_effects(&self, size: Size) -> PaintEffects {
-        if !self.has_child || self.current_class(size) != Class::Layered {
+        if !self.has_child {
             return PaintEffects::NONE;
         }
-        PaintEffects::NONE.with_transform(self.current_matrix(size))
+        match self.current(size) {
+            (Class::Layered, matrix) => PaintEffects::NONE.with_transform(matrix),
+            _ => PaintEffects::NONE,
+        }
     }
 
     fn apply_paint_transform(
@@ -534,11 +644,9 @@ impl RenderBox for RenderAnimatedTransform {
         // A singular matrix composes (the child maps to a point); an
         // overflowed one is left out, so coordinate conversion falls back to
         // the untransformed position instead of publishing NaN or infinity.
-        if self.current_class(size) != Class::Identity {
-            let matrix = self.current_matrix(size);
-            if is_finite(&matrix) {
-                *transform *= matrix;
-            }
+        let (class, matrix) = self.current(size);
+        if class != Class::Identity && is_finite(&matrix) {
+            *transform *= matrix;
         }
         *transform *= Matrix4::translation(child_offset.dx, child_offset.dy, 0.0);
     }
@@ -547,14 +655,26 @@ impl RenderBox for RenderAnimatedTransform {
         // Must agree with `hit_test`: an untransformed hit gets no matrix on
         // its entry, or the delivered position would be mapped through a
         // transform the hit did not use.
-        (self.transform_hit_tests && self.current_class(size) == Class::Layered)
-            .then(|| self.current_matrix(size))
+        if !self.transform_hit_tests {
+            return None;
+        }
+        let (class, matrix) = self.current(size);
+        (class == Class::Layered).then_some(matrix)
     }
 
     fn attach(&mut self, handle: RenderInvalidationHandle) {
         self.listener_id = Some(self.source.subscribe(&self.cell, self.kind, &handle));
         // Catch up with a change made while nothing listened (a reattach).
-        commit(&self.cell, self.kind, self.source.read(), &handle);
+        // Its ticket is taken before the read like a listener's, so a
+        // listener delivery that read later wins over this reading.
+        let generation = self.cell.ticket();
+        commit(
+            &self.cell,
+            self.kind,
+            generation,
+            self.source.read(),
+            &handle,
+        );
     }
 
     fn detach(&mut self) {
@@ -608,12 +728,12 @@ mod tests {
         drop(owner);
         let cell = scale_cell();
         assert!(
-            !commit(&cell, Kind::Scale, (0.5, 0.0), &dead),
+            !commit(&cell, Kind::Scale, cell.ticket(), (0.5, 0.0), &dead),
             "a failed send must report the change undelivered"
         );
         let (_owner, live) = owner_with_handle(|| {});
         assert!(
-            commit(&cell, Kind::Scale, (0.5, 0.0), &live),
+            commit(&cell, Kind::Scale, cell.ticket(), (0.5, 0.0), &live),
             "the next tick with the same value must retry the owed marks"
         );
     }
@@ -631,12 +751,124 @@ mod tests {
             move || seen.lock().expect("unpoisoned").push(cell.sample())
         });
         seen.lock().expect("unpoisoned").clear();
-        assert!(commit(&cell, Kind::Scale, (0.5, 0.0), &handle));
+        assert!(commit(
+            &cell,
+            Kind::Scale,
+            cell.ticket(),
+            (0.5, 0.0),
+            &handle
+        ));
         let seen = seen.lock().expect("unpoisoned");
         assert!(!seen.is_empty(), "the mark must have woken a frame");
         assert!(
             seen.iter().all(|&sample| sample == (0.5, 0.0)),
             "every woken frame must read the new sample: {seen:?}"
         );
+    }
+
+    // Two notifications of one animation commit concurrently; whichever
+    // finishes last, the reading taken last (the newer ticket) stays
+    // published and delivered. The older-finishing-last order is also the
+    // attach catch-up race: its ticket precedes a listener's that read later.
+    #[test]
+    fn newer_generation_wins_in_either_commit_order() {
+        let (_owner, handle) = owner_with_handle(|| {});
+        for older_finishes_last in [false, true] {
+            let cell = scale_cell();
+            let older = cell.ticket();
+            let newer = cell.ticket();
+            let commits = [(older, (0.5, 0.0)), (newer, (0.25, 0.0))];
+            let order: Vec<_> = if older_finishes_last {
+                commits.iter().rev().collect()
+            } else {
+                commits.iter().collect()
+            };
+            for &&(generation, value) in &order {
+                commit(&cell, Kind::Scale, generation, value, &handle);
+            }
+            assert_eq!(
+                cell.sample(),
+                (0.25, 0.0),
+                "older finishes last = {older_finishes_last}: the newer reading must stay published"
+            );
+            assert_eq!(
+                cell.delivered.load(),
+                Versioned {
+                    generation: newer,
+                    value: (0.25, 0.0)
+                },
+                "older finishes last = {older_finishes_last}: delivery must record the newer commit"
+            );
+        }
+    }
+
+    // A writer preempted mid-write must not stall a paint-time read: it owns
+    // only the slot that is not current.
+    #[test]
+    fn stalled_writer_does_not_block_readers() {
+        let cell = Arc::new(scale_cell());
+        let register = &cell.published;
+        register.writing.store(true, Ordering::SeqCst);
+        let idle = 1 - register.current.load(Ordering::SeqCst);
+        register.slots[idle].sequence.fetch_add(1, Ordering::SeqCst);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let reader = Arc::clone(&cell);
+        std::thread::spawn(move || {
+            let _ = sender.send(reader.sample());
+        });
+        assert_eq!(
+            receiver.recv_timeout(Duration::from_secs(2)),
+            Ok((1.0, 0.0)),
+            "a read during a stalled write must return the last published sample"
+        );
+    }
+
+    // Concurrent writers with interleaved tickets, a concurrent reader:
+    // every read is a value some writer published, and the newest ticket's
+    // value ends published.
+    #[test]
+    fn concurrent_writers_publish_the_newest_reading() {
+        const PER_WRITER: u64 = 2_000;
+        let cell = Arc::new(scale_cell());
+        let (_owner, handle) = owner_with_handle(|| {});
+        let done = Arc::new(AtomicBool::new(false));
+        let reader = {
+            let cell = Arc::clone(&cell);
+            let done = Arc::clone(&done);
+            std::thread::spawn(move || {
+                while !done.load(Ordering::Acquire) {
+                    let (first, second) = cell.sample();
+                    // Writers publish (n, -n): a torn read breaks the pair.
+                    assert!(
+                        first == 1.0 && second == 0.0 || first == -second,
+                        "torn read ({first}, {second})"
+                    );
+                }
+            })
+        };
+        let writers: Vec<_> = (0..2)
+            .map(|_| {
+                let cell = Arc::clone(&cell);
+                let handle = handle.clone();
+                std::thread::spawn(move || {
+                    for _ in 0..PER_WRITER {
+                        let generation = cell.ticket();
+                        #[expect(clippy::cast_precision_loss, reason = "test values stay small")]
+                        let n = generation as f64;
+                        commit(&cell, Kind::Scale, generation, (n, -n), &handle);
+                    }
+                })
+            })
+            .collect();
+        for writer in writers {
+            writer.join().expect("writer must not panic");
+        }
+        done.store(true, Ordering::Release);
+        reader
+            .join()
+            .expect("reader must not observe a torn sample");
+        #[expect(clippy::cast_precision_loss, reason = "test values stay small")]
+        let last = (2 * PER_WRITER) as f64;
+        assert_eq!(cell.sample(), (last, -last));
     }
 }

@@ -33,7 +33,6 @@
 
 use std::{
     rc::Rc,
-    sync::atomic::{AtomicBool, Ordering},
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -77,15 +76,57 @@ const INDICATOR_COLOR: Color = Color {
 // RefreshControllerInner — Arc-shared state
 // ---------------------------------------------------------------------------
 
+/// Whether a refresh is running, and how many times that has changed.
+///
+/// The epoch is bumped under the same lock as the flag, so a listener that
+/// reads both learns the order of the mutation it observed: notifications
+/// on two threads may finish in either order, but the epoch only grows.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct Phase {
+    refreshing: bool,
+    epoch: u64,
+}
+
+impl Phase {
+    fn set(&mut self, refreshing: bool) {
+        if self.refreshing != refreshing {
+            self.refreshing = refreshing;
+            self.epoch = self.epoch.saturating_add(1);
+        }
+    }
+}
+
+/// The last [`Phase`] a listener acted on, advanced only forward.
+#[derive(Debug)]
+struct PhaseTracker(Mutex<Phase>);
+
+impl PhaseTracker {
+    /// Records `observed` if it is newer than the tracked phase; returns
+    /// whether that flipped the refresh flag. An older observation finishing
+    /// late is ignored, so it cannot restore a superseded phase.
+    fn advance(&self, observed: Phase) -> bool {
+        let mut last = self
+            .0
+            .lock()
+            .expect("BUG: PhaseTracker is never held across a panic");
+        if observed.epoch <= last.epoch {
+            return false;
+        }
+        let flipped = last.refreshing != observed.refreshing;
+        *last = observed;
+        flipped
+    }
+}
+
 struct RefreshControllerInner {
     pull_distance_px: Mutex<f64>,
-    is_refreshing: Mutex<bool>,
+    phase: Mutex<Phase>,
     notifier: ChangeNotifier,
 }
 
 impl std::fmt::Debug for RefreshControllerInner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let is_refreshing = self.is_refreshing.lock().is_ok_and(|g| *g);
+        let is_refreshing = self.phase.lock().is_ok_and(|g| g.refreshing);
         let pull = self.pull_distance_px.lock().map_or(0.0, |g| *g);
         f.debug_struct("RefreshControllerInner")
             .field("is_refreshing", &is_refreshing)
@@ -130,7 +171,7 @@ impl Default for RefreshController {
         Self {
             inner: Arc::new(RefreshControllerInner {
                 pull_distance_px: Mutex::new(0.0),
-                is_refreshing: Mutex::new(false),
+                phase: Mutex::new(Phase::default()),
                 notifier: ChangeNotifier::new(),
             }),
         }
@@ -148,11 +189,16 @@ impl RefreshController {
     /// been called but [`finish`](Self::finish) has not yet been called.
     #[must_use]
     pub fn is_refreshing(&self) -> bool {
+        self.phase().refreshing
+    }
+
+    /// The refresh phase and its mutation epoch, read together.
+    fn phase(&self) -> Phase {
         *self
             .inner
-            .is_refreshing
+            .phase
             .lock()
-            .expect("BUG: RefreshController is_refreshing mutex is never held across a panic; poisoning means a bug elsewhere already corrupted controller state")
+            .expect("BUG: RefreshController phase mutex is never held across a panic; poisoning means a bug elsewhere already corrupted controller state")
     }
 
     /// The current pull distance in logical pixels.
@@ -175,10 +221,10 @@ impl RefreshController {
     pub fn finish(&self) {
         let mut guard = self
             .inner
-            .is_refreshing
+            .phase
             .lock()
-            .expect("BUG: RefreshController is_refreshing mutex is never held across a panic; poisoning means a bug elsewhere already corrupted controller state");
-        *guard = false;
+            .expect("BUG: RefreshController phase mutex is never held across a panic; poisoning means a bug elsewhere already corrupted controller state");
+        guard.set(false);
         drop(guard);
         self.inner.notifier.notify_listeners();
     }
@@ -213,15 +259,15 @@ impl RefreshController {
         {
             let mut refreshing = self
                 .inner
-                .is_refreshing
+                .phase
                 .lock()
-                .expect("BUG: RefreshController is_refreshing mutex is never held across a panic; poisoning means a bug elsewhere already corrupted controller state");
+                .expect("BUG: RefreshController phase mutex is never held across a panic; poisoning means a bug elsewhere already corrupted controller state");
             let mut pull = self
                 .inner
                 .pull_distance_px
                 .lock()
                 .expect("BUG: RefreshController pull_distance_px mutex is never held across a panic; poisoning means a bug elsewhere already corrupted controller state");
-            *refreshing = true;
+            refreshing.set(true);
             *pull = 0.0;
         }
         self.inner.notifier.notify_listeners();
@@ -447,10 +493,11 @@ impl RefreshIndicatorState {
             return;
         };
         let watched = controller.clone();
-        let last_phase = AtomicBool::new(controller.is_refreshing());
+        let last_phase = PhaseTracker(Mutex::new(controller.phase()));
         let id = controller.inner.add_listener(Arc::new(move || {
-            let phase = watched.is_refreshing();
-            if last_phase.swap(phase, Ordering::Relaxed) != phase {
+            // Ordered by the mutation's epoch, not by which notification
+            // finishes first.
+            if last_phase.advance(watched.phase()) {
                 rebuild.schedule(RebuildReason::StateChange);
             }
         }));
@@ -628,5 +675,40 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
             vsync.unregister(&registration);
         }
         self.fling_controller.dispose();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The start notification read the refreshing phase, then stalled while
+    // `finish` ran and its notification completed. When the start resumes it
+    // must be ignored, or the tracker records `refreshing` while the
+    // controller is idle and the next start schedules no rebuild. A private
+    // seam: the public surface cannot pause one notification inside another.
+    #[test]
+    fn phase_tracker_follows_mutation_order() {
+        let idle = Phase::default();
+        let mut refreshing = idle;
+        refreshing.set(true);
+        let mut finished = refreshing;
+        finished.set(false);
+        let mut restarted = finished;
+        restarted.set(true);
+
+        let tracker = PhaseTracker(Mutex::new(idle));
+        assert!(
+            !tracker.advance(finished),
+            "idle to idle (through a refresh) changes nothing visible"
+        );
+        assert!(
+            !tracker.advance(refreshing),
+            "the older notification finishing late must be ignored"
+        );
+        assert!(
+            tracker.advance(restarted),
+            "the next refresh must still schedule a rebuild"
+        );
     }
 }
