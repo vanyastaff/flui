@@ -272,6 +272,80 @@ fn impulse_recovers_constant_velocity_exactly() {
     );
 }
 
+fn long_pause_matches_an_independent_fresh_tail(estimator: VelocityEstimator) {
+    let t0 = origin();
+    let mut prefixed = VelocityTracker::with_estimator(PointerKind::Touch, estimator);
+    let mut fresh = VelocityTracker::with_estimator(PointerKind::Touch, estimator);
+    for (millis, x) in [(0, 0.0), (10, 80.0), (20, 160.0)] {
+        prefixed.add_position(t0 + Duration::from_millis(millis), Offset::new(x, 0.0));
+    }
+    assert!(prefixed.velocity_at(t0 + ms(20.0)).dx() > 0.0);
+    assert_eq!(prefixed.velocity_at(t0 + ms(1000.0)), Velocity::ZERO);
+
+    // The pointer resumes after a long stationary interval. Three fresh
+    // positions travel at 100 px/s and also determine an LSQ fit. The gap's
+    // displacement is not an interval of the resumed movement. An independent
+    // tracker receives exactly this same tail, without the old fast stroke.
+    let tail = [(1000, 500.0), (1010, 501.0), (1020, 502.0)];
+    for (millis, x) in tail {
+        let time = t0 + Duration::from_millis(millis);
+        prefixed.add_position(time, Offset::new(x, 0.0));
+        fresh.add_position(time, Offset::new(x, 0.0));
+    }
+    let terminal = t0 + ms(1020.0);
+    let expected = fresh.estimate_at(terminal).expect("fresh moving tail");
+    assert!(expected.is_valid() && expected.pixels_per_second.dx > 0.0);
+    for _ in 0..2 {
+        assert_eq!(
+            prefixed.estimate_at(terminal),
+            Some(expected),
+            "{estimator:?}: stale prefix must not affect resumed velocity or span"
+        );
+    }
+    assert_eq!(prefixed.velocity_at(t0 + ms(1060.0)), Velocity::ZERO);
+    assert_eq!(fresh.velocity_at(t0 + ms(1060.0)), Velocity::ZERO);
+
+    // Reuse both handles after reset; the stopped query must neither poison
+    // the fit cache nor change the selected policy for the next stroke.
+    prefixed.reset();
+    fresh.reset();
+    for (millis, x) in tail {
+        let time = t0 + Duration::from_millis(millis);
+        prefixed.add_position(time, Offset::new(-x, 0.0));
+        fresh.add_position(time, Offset::new(-x, 0.0));
+    }
+    assert!(fresh.velocity_at(terminal).dx() < 0.0);
+    assert_eq!(prefixed.estimate_at(terminal), fresh.estimate_at(terminal));
+}
+
+fn lsq_recovers_from_a_long_pause() {
+    long_pause_matches_an_independent_fresh_tail(VelocityEstimator::LeastSquares);
+}
+
+fn impulse_recovers_from_a_long_pause() {
+    long_pause_matches_an_independent_fresh_tail(VelocityEstimator::Impulse);
+}
+
+fn ios_weights_recover_from_a_long_pause() {
+    long_pause_matches_an_independent_fresh_tail(VelocityEstimator::Ios);
+}
+
+fn macos_weights_recover_from_a_long_pause() {
+    long_pause_matches_an_independent_fresh_tail(VelocityEstimator::Macos);
+}
+
+fn selected_estimators_recover_from_a_long_pause() {
+    run_rows(
+        "long-pause recovery",
+        &[
+            ("least squares", lsq_recovers_from_a_long_pause),
+            ("impulse", impulse_recovers_from_a_long_pause),
+            ("iOS weights", ios_weights_recover_from_a_long_pause),
+            ("macOS weights", macos_weights_recover_from_a_long_pause),
+        ],
+    );
+}
+
 #[test]
 fn velocity_estimates_are_finite_bounded_and_on_the_sample_clock() {
     run_rows(
@@ -297,6 +371,10 @@ fn velocity_estimates_are_finite_bounded_and_on_the_sample_clock() {
             (
                 "constant impulse motion",
                 impulse_recovers_constant_velocity_exactly,
+            ),
+            (
+                "long-pause recovery",
+                selected_estimators_recover_from_a_long_pause,
             ),
         ],
     );
