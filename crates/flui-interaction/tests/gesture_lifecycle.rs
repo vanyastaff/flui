@@ -30,9 +30,9 @@ use flui_interaction::events::{
 use flui_interaction::routing::PointerDispatch;
 use flui_interaction::sealed::CustomGestureRecognizer;
 use flui_interaction::{
-    DoubleTapGestureRecognizer, DragAxis, DragGestureRecognizer, GestureRecognizer,
-    LongPressGestureRecognizer, ManualClock, MultiTapGestureRecognizer, PointerId,
-    TapGestureRecognizer,
+    DoubleTapGestureRecognizer, DragAxis, DragGestureRecognizer, GestureEndReason,
+    GestureRecognizer, LongPressGestureRecognizer, ManualClock, MultiTapGestureRecognizer,
+    PointerId, TapGestureRecognizer,
 };
 use proptest::prelude::*;
 
@@ -293,6 +293,132 @@ fn second_finger_leaves_a_long_press_alone() {
     );
     lane.send(&up(id(2), at(10.0, 10.0), touch));
     assert_eq!((ends.get(), cancels.get()), (1, 0));
+}
+
+fn drag_cancel_callback_admits_the_next_contact_once() {
+    assert_drag_terminal_callback_admits_the_next_contact_once(false);
+}
+
+fn drag_cancelled_end_callback_admits_the_next_contact_once() {
+    assert_drag_terminal_callback_admits_the_next_contact_once(true);
+}
+
+fn assert_drag_terminal_callback_admits_the_next_contact_once(started: bool) {
+    let mut lane = Lane::new();
+    let pointer = id(2);
+    let touch = PointerType::Touch;
+    let downs = Rc::new(RefCell::new(Vec::new()));
+    let starts = Rc::new(RefCell::new(Vec::new()));
+    let ends = Rc::new(RefCell::new(Vec::new()));
+    let cancels = counter();
+    let slot: Rc<RefCell<std::sync::Weak<DragGestureRecognizer>>> = Rc::default();
+    let readmit_slot = Rc::clone(&slot);
+    let readmit = Rc::new(move || {
+        let recognizer = readmit_slot
+            .borrow()
+            .upgrade()
+            .expect("recognizer is routed");
+        let next_down = down(pointer, at(100.0, 10.0), touch);
+        recognizer.add_pointer_down(PointerDispatch::at_root(&next_down));
+    });
+    let (d, s, e, c) = (
+        Rc::clone(&downs),
+        Rc::clone(&starts),
+        Rc::clone(&ends),
+        Rc::clone(&cancels),
+    );
+    let readmit_cancel = Rc::clone(&readmit);
+    let drag = DragGestureRecognizer::new(lane.arena.clone(), DragAxis::Free)
+        .with_on_down(move |details| {
+            d.borrow_mut()
+                .push((details.local_position, details.global_position));
+        })
+        .with_on_start(move |details| {
+            s.borrow_mut()
+                .push((details.local_position, details.global_position));
+        })
+        .with_on_end(move |details| {
+            e.borrow_mut()
+                .push((details.reason, details.local_position));
+            if details.reason == GestureEndReason::Cancelled {
+                readmit();
+            }
+        })
+        .with_on_cancel(move || {
+            c.set(c.get() + 1);
+            readmit_cancel();
+        });
+    *slot.borrow_mut() = Arc::downgrade(&drag);
+    lane.join(&drag);
+    let first_down = down(pointer, at(0.0, 0.0), touch);
+    if started {
+        lane.send(&first_down);
+        lane.send(&motion(pointer, at(40.0, 0.0), touch));
+    } else {
+        // A closed arena defers its lone winner until the input-end drain.
+        // Restart while the first contact still awaits that verdict.
+        drag.add_pointer_down(PointerDispatch::at_root(&first_down));
+        lane.arena.close(pointer);
+    }
+
+    lane.send(&down(pointer, at(200.0, 20.0), touch));
+    assert_eq!(
+        &*downs.borrow(),
+        &[
+            (at(0.0, 0.0), at(0.0, 0.0)),
+            (at(100.0, 10.0), at(100.0, 10.0))
+        ],
+        "the retiring callback's admission supersedes the outer Down"
+    );
+    lane.send(&motion(pointer, at(140.0, 10.0), touch));
+    lane.send(&up(pointer, at(140.0, 10.0), touch));
+    let expected_starts = if started {
+        vec![
+            (at(0.0, 0.0), at(0.0, 0.0)),
+            (at(100.0, 10.0), at(100.0, 10.0)),
+        ]
+    } else {
+        vec![(at(100.0, 10.0), at(100.0, 10.0))]
+    };
+    assert_eq!(
+        &*starts.borrow(),
+        &expected_starts,
+        "one start per accepted contact"
+    );
+    let expected_ends = if started {
+        vec![
+            (GestureEndReason::Cancelled, at(40.0, 0.0)),
+            (GestureEndReason::Completed, at(140.0, 10.0)),
+        ]
+    } else {
+        vec![(GestureEndReason::Completed, at(140.0, 10.0))]
+    };
+    assert_eq!(
+        &*ends.borrow(),
+        &expected_ends,
+        "the inner contact completes once"
+    );
+    assert_eq!(cancels.get(), u32::from(!started));
+    assert!(
+        lane.arena.is_empty(),
+        "the reused pointer's contest has settled"
+    );
+
+    lane.send(&down(pointer, at(300.0, 30.0), touch));
+    lane.send(&motion(pointer, at(340.0, 30.0), touch));
+    lane.send(&up(pointer, at(340.0, 30.0), touch));
+    assert_eq!(
+        downs.borrow().len(),
+        3,
+        "the same pointer serves the next gesture"
+    );
+    assert_eq!(starts.borrow().len(), expected_starts.len() + 1);
+    assert_eq!(ends.borrow().len(), expected_ends.len() + 1);
+    assert_eq!(
+        ends.borrow().last(),
+        Some(&(GestureEndReason::Completed, at(340.0, 30.0)))
+    );
+    assert!(lane.arena.is_empty());
 }
 
 fn other_finger_does_not_complete_a_double_tap_contact() {
@@ -755,6 +881,14 @@ fn gesture_lifecycle_matrix() {
         (
             "second_finger_leaves_a_running_drag_alone",
             second_finger_leaves_a_running_drag_alone,
+        ),
+        (
+            "drag_cancel_callback_admits_the_next_contact_once",
+            drag_cancel_callback_admits_the_next_contact_once,
+        ),
+        (
+            "drag_cancelled_end_callback_admits_the_next_contact_once",
+            drag_cancelled_end_callback_admits_the_next_contact_once,
         ),
         (
             "second_finger_leaves_a_long_press_alone",
