@@ -2644,6 +2644,7 @@ mod native_windows {
             assert_eq!(downs.len(), 2, "{expected_kind:?}: {log:?}");
             let ups: Vec<_> = log.iter().filter_map(|event| if let PointerEvent::Up(release) = event { Some(release) } else { None }).collect();
             assert_eq!(ups.len(), 2, "{expected_kind:?}: {log:?}");
+            assert!(!log.iter().any(|event| matches!(event, PointerEvent::ButtonChange(_))), "single-button injection must not invent another press on ENTER: {log:?}");
             for (down, up) in downs.iter().zip(&ups) {
                 assert_eq!(down.pointer.kind, expected_kind);
                 assert!(down.pointer.device.is_some(), "native source handle retained");

@@ -832,9 +832,26 @@ mod native_pointer_contracts {
             native_contacts_survive_independent_device_removal,
             native_terminal_identity_survives_callback_readmission,
             exhausted_native_identity_never_wraps,
+            enter_after_native_down_is_not_another_button_press,
         ] {
             case();
         }
+    }
+
+    fn enter_after_native_down_is_not_another_button_press() {
+        use flui_platform_api::pointer::PointerEvent;
+        use windows::Win32::UI::{Input::Pointer::{POINTER_CHANGE_FIRSTBUTTON_DOWN, POINTER_FLAG_DOWN, POINTER_FLAG_FIRSTBUTTON, POINTER_FLAG_INCONTACT}, WindowsAndMessaging::{WM_POINTERDOWN, WM_POINTERENTER}};
+        let mut registry = NativePointerRegistry::default();
+        let native = POINTER_INFO {
+            pointerId: 7,
+            pointerFlags: POINTER_FLAG_DOWN | POINTER_FLAG_FIRSTBUTTON | POINTER_FLAG_INCONTACT,
+            ButtonChangeType: POINTER_CHANGE_FIRSTBUTTON_DOWN,
+            ..info()
+        };
+        let admitted = registry.commit(&native, packet(0x3450, 1), WM_POINTERDOWN);
+        let entered = registry.commit(&native, packet(0x3450, 1), WM_POINTERENTER);
+        assert!(admitted.iter().any(|input| matches!(input, PlatformInput::Pointer(PointerEvent::Down(_)))));
+        assert!(matches!(entered.as_slice(), [PlatformInput::Pointer(PointerEvent::Enter(_))]), "the native DOWN packet also backs the following ENTER notification: {entered:?}");
     }
 }
 
