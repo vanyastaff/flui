@@ -99,6 +99,7 @@ fn containment_and_isolation_matrix() {
     run_table(
         "containment_and_isolation_matrix",
         &[
+            ("runtime_input_lifecycle::held_replay_preserves_hardware_history_and_drag_velocity", runtime_input_lifecycle::held_replay_preserves_hardware_history_and_drag_velocity as fn()),
             ("runtime_input_lifecycle::a_secondary_contact_move_is_delivered_by_the_next_frame", runtime_input_lifecycle::a_secondary_contact_move_is_delivered_by_the_next_frame as fn()),
             ("runtime_input_lifecycle::host_pause_discards_a_queued_hover_before_resume", runtime_input_lifecycle::host_pause_discards_a_queued_hover_before_resume as fn()),
             ("runtime_input_lifecycle::window_blur_keeps_a_queued_hover", runtime_input_lifecycle::window_blur_keeps_a_queued_hover as fn()),

@@ -14,6 +14,8 @@ mod runner_frame_ordering;
 #[path = "runner_teardown.rs"]
 mod runner_teardown;
 
+mod pointer_pipeline;
+
 /// Runs every case even after one fails, then panics listing the failing case names.
 fn run_table(table: &str, cases: &[(&str, fn())]) {
     let failed: Vec<&str> = cases

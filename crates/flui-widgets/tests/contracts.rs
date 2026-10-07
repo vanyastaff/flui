@@ -162,6 +162,14 @@ fn pointer_and_gesture_recognition() {
     run_cases(
         "pointer_and_gesture_recognition",
         &[
+            ("pointer_vocabulary::scroll_claim_preserves_owned_source_units_and_phase", crate::pointer_vocabulary::scroll_claim_preserves_owned_source_units_and_phase as fn()),
+            ("pointer_vocabulary::pointer_delivery_preserves_source_and_sample_families", crate::pointer_vocabulary::pointer_delivery_preserves_source_and_sample_families),
+            ("pointer_vocabulary::page_scroll_resolves_against_the_actual_viewport", crate::pointer_vocabulary::page_scroll_resolves_against_the_actual_viewport),
+            ("pointer_vocabulary::viewer_page_zoom_resolves_against_the_actual_viewport", crate::pointer_vocabulary::viewer_page_zoom_resolves_against_the_actual_viewport),
+            ("pointer_vocabulary::viewer_cumulative_zoom_survives_rebuild_and_resets", crate::pointer_vocabulary::viewer_cumulative_zoom_survives_rebuild_and_resets),
+            ("pointer_vocabulary::viewer_unstarted_pinch_updates_remain_independent_steps", crate::pointer_vocabulary::viewer_unstarted_pinch_updates_remain_independent_steps),
+            ("pointer_vocabulary::viewer_extreme_zoom_reports_the_finite_applied_change", crate::pointer_vocabulary::viewer_extreme_zoom_reports_the_finite_applied_change),
+            ("pointer_vocabulary::viewer_page_overflow_and_empty_viewport_recover", crate::pointer_vocabulary::viewer_page_overflow_and_empty_viewport_recover),
             ("gesture_detector::clearing_pan_callbacks_mid_drag_still_finishes_the_drag", crate::gesture_detector::clearing_pan_callbacks_mid_drag_still_finishes_the_drag as fn()),
             ("gesture_detector::unmount_mid_drag_cancels_once_and_hands_the_arena_to_the_rival", crate::gesture_detector::unmount_mid_drag_cancels_once_and_hands_the_arena_to_the_rival as fn()),
             ("gesture_detector::viewer_reports_cancelled_then_completed_interactions", crate::gesture_detector::viewer_reports_cancelled_then_completed_interactions as fn()),
