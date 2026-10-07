@@ -26,9 +26,7 @@ use std::time::{Duration, Instant};
 use criterion::{Criterion, criterion_group, criterion_main};
 use flui_foundation::geometry::Offset;
 use flui_interaction::PointerKind;
-use flui_interaction::processing::{
-    ImpulseVelocityTracker, IosFlingVelocityTracker, OneEuroFilter2D, VelocityTracker,
-};
+use flui_interaction::processing::{OneEuroFilter2D, VelocityEstimator, VelocityTracker};
 
 /// Build a deterministic linear swipe: `samples` positions equally spaced
 /// over `duration_ms`, with `dx` advancing `slope_px_per_s` per second.
@@ -151,16 +149,17 @@ fn bench_add_position(c: &mut Criterion) {
 /// motion.
 fn bench_ios_estimate(c: &mut Criterion) {
     let samples = black_box(linear_swipe(20, 100, 1000.0));
-    c.bench_function("IosFlingVelocityTracker::estimate (20 samples)", |b| {
+    c.bench_function("VelocityTracker::estimate Ios (20 samples)", |b| {
         b.iter_batched(
             || {
-                let mut tracker = IosFlingVelocityTracker::with_kind(PointerKind::Touch);
+                let mut tracker =
+                    VelocityTracker::with_estimator(PointerKind::Touch, VelocityEstimator::Ios);
                 for (t, p) in &samples {
                     tracker.add_position(*t, *p);
                 }
                 tracker
             },
-            |tracker| black_box(tracker.estimate()),
+            |mut tracker| black_box(tracker.estimate()),
             criterion::BatchSize::SmallInput,
         );
     });
@@ -170,16 +169,17 @@ fn bench_ios_estimate(c: &mut Criterion) {
 /// the LSQ bench, so the two strategies price against each other directly.
 fn bench_estimate_impulse(c: &mut Criterion) {
     let samples = black_box(linear_swipe(20, 100, 1000.0));
-    c.bench_function("ImpulseVelocityTracker::estimate (20 samples)", |b| {
+    c.bench_function("VelocityTracker::estimate Impulse (20 samples)", |b| {
         b.iter_batched(
             || {
-                let mut tracker = ImpulseVelocityTracker::with_kind(PointerKind::Touch);
+                let mut tracker =
+                    VelocityTracker::with_estimator(PointerKind::Touch, VelocityEstimator::Impulse);
                 for (t, p) in &samples {
                     tracker.add_position(*t, *p);
                 }
                 tracker
             },
-            |tracker| black_box(tracker.get_velocity_estimate()),
+            |mut tracker| black_box(tracker.get_velocity_estimate()),
             criterion::BatchSize::SmallInput,
         );
     });

@@ -3,8 +3,8 @@
 //! Feeds a synthetic noisy drag-then-decelerate gesture through:
 //!
 //! 1. [`OneEuroFilter2D`] — speed-adaptive jitter removal (Casiez CHI 2012);
-//! 2. [`ImpulseVelocityTracker`] (Android's default fling strategy) next to
-//!    the least-squares [`VelocityTracker`], showing how
+//! 2. [`VelocityEstimator::Impulse`] next to the default least-squares
+//!    [`VelocityTracker`], showing how
 //!    the impulse model discounts stale samples after a sharp deceleration.
 //!
 //! Run with: `cargo run -p flui-interaction --example pointer_filtering`
@@ -12,7 +12,8 @@
 use std::time::{Duration, Instant};
 
 use flui_foundation::geometry::Offset;
-use flui_interaction::processing::{ImpulseVelocityTracker, OneEuroFilter2D, VelocityTracker};
+use flui_interaction::processing::{OneEuroFilter2D, VelocityEstimator, VelocityTracker};
+use flui_platform_api::pointer::PointerKind;
 
 fn main() {
     println!("FLUI pointer filtering example\n");
@@ -60,7 +61,8 @@ fn main() {
     println!("\n2. Fling velocity after a sharp deceleration:");
     println!("   gesture: 4 intervals at 2000 px/s, then 5 intervals at 200 px/s\n");
 
-    let mut impulse = ImpulseVelocityTracker::default();
+    let mut impulse =
+        VelocityTracker::with_estimator(PointerKind::Touch, VelocityEstimator::Impulse);
     let mut lsq = VelocityTracker::new();
 
     let mut pos = 0.0_f64;
@@ -80,7 +82,7 @@ fn main() {
 
     let impulse_v = impulse.get_velocity().pixels_per_second.dx;
     let lsq_v = lsq.get_velocity().pixels_per_second.dx;
-    println!("   impulse (Android default): {impulse_v:8.1} px/s");
+    println!("   impulse:                   {impulse_v:8.1} px/s");
     println!("   least-squares:             {lsq_v:8.1} px/s");
     println!(
         "\n   The impulse model weights each interval by the velocity CHANGE it\n   \
