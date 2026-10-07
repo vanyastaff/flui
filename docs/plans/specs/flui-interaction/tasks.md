@@ -70,3 +70,17 @@
   `CustomGestureRecognizer`, `CustomHitTestable`/`HitTestable`/`HitTestTarget` (последние три — зона T6d).
 - `GestureRecognizer` — dyn-compatible точка расширения; `Listener::recognizer(..)` вместо ручной
   проводки в 4 виджетах; `add_pointer(dispatch)` вместо `add_pointer`/`add_pointer_with_kind`.
+
+## Реентерабельность уведомлений распознавателей (после I2)
+
+Колбэк, вошедший в тот же распознаватель, завершает или открывает последовательность, пока
+уже собранные уведомления ещё доставляются. Общее решение — уведомление несёт поколение своей
+последовательности; доставка прекращается после её завершения, но не после допуска следующей.
+
+| ID | Сценарий | Файл |
+|---|---|---|
+| R1 | `on_start` снимает контакт при давлении выше пика: `Start → End → Peak`; так же `on_peak` перед `Update` | `recognizers/force_press.rs` |
+| R2 | `on_start` снимает контакт при захвате: `Start → End → Update` | `recognizers/scale.rs` |
+| R3 | `on_tap_down` допускает следующий контакт — поколение растёт и уже принятый `TapUp` теряется (счёт 2 без первого Up) | `recognizers/tap_and_drag.rs` |
+| R4 | Самоуправляемая арена с соперником: Cancel у Eager делает sweep с семантикой Up и награждает соперника; отмена должна снимать поколение без победителя (и в других путях withdraw-and-sweep) | `recognizers/eager.rs`, `arena/**` |
+| R5 | Повторный допуск того же указателя из cancel-колбэка drag запускает жест дважды | `recognizers/drag.rs` |
