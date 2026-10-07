@@ -170,7 +170,13 @@ impl TouchInputState {
             || touch.view().is_some_and(|view| {
                 view.traitCollection().forceTouchCapability() == UIForceTouchCapability::Available
             });
-        let orientation = is_pen.then(|| (touch.altitudeAngle(), touch.azimuthAngleInView(None)));
+        let orientation = is_pen.then(|| {
+            let view = touch.view();
+            (
+                touch.altitudeAngle(),
+                touch.azimuthAngleInView(view.as_deref()),
+            )
+        });
         let sample = touch_sample(
             position,
             time,
@@ -216,7 +222,8 @@ fn pointer_kind(touch: &UITouch) -> PointerKind {
 }
 
 fn pointer_position(touch: &UITouch) -> Option<PointerPosition> {
-    let location = touch.locationInView(None);
+    let view = touch.view();
+    let location = touch.locationInView(view.as_deref());
     PointerPosition::try_new(Point::new(location.x, location.y)).ok()
 }
 
