@@ -6,7 +6,7 @@ use flui_foundation::geometry::Size;
 use crate::{
     constraints::BoxConstraints,
     context::{BoxHitTestContext, BoxLayoutContext},
-    hit_testing::{CursorIcon, HitTestBehavior, MouseTrackerAnnotation},
+    hit_testing::{CursorRequest, HitTestBehavior, MouseTrackerAnnotation},
     parent_data::ParentData,
     protocol::BoxProtocol,
     traits::{HitTestOutcome, PaintEffects, RenderObject},
@@ -475,8 +475,8 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     }
 
     /// The mouse cursor this box contributes to its hit entry.
-    fn mouse_cursor(&self) -> CursorIcon {
-        CursorIcon::Default
+    fn mouse_cursor(&self) -> CursorRequest {
+        CursorRequest::Defer
     }
 
     /// Opaque payload this box attaches to any hit that lands on it — see
@@ -855,7 +855,7 @@ where
         <T as RenderBox>::pan_zoom_target(self)
     }
 
-    fn mouse_cursor(&self) -> CursorIcon {
+    fn mouse_cursor(&self) -> CursorRequest {
         <T as RenderBox>::mouse_cursor(self)
     }
 

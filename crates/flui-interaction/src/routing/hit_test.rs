@@ -94,6 +94,16 @@ impl HitTestBehavior {
 // HIT TEST ENTRY (Base)
 // ============================================================================
 
+/// A hit target's mouse cursor contribution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CursorRequest {
+    /// Let the next target in the hit path choose the cursor.
+    #[default]
+    Defer,
+    /// Select this icon, including the platform's default arrow.
+    Icon(CursorIcon),
+}
+
 /// Base hit test entry.
 ///
 /// Data-only (`Send + Sync`): executable pointer callbacks live in the
@@ -143,7 +153,7 @@ pub struct HitTestEntry {
     pub pan_zoom_target: Option<PanZoomTarget>,
 
     /// Mouse cursor for this target.
-    pub cursor: CursorIcon,
+    pub cursor: CursorRequest,
 
     /// Mouse-tracker annotation contributed by this target, if it wants
     /// enter/exit/hover tracking.
@@ -178,7 +188,7 @@ impl HitTestEntry {
             pointer_target: None,
             scroll_target: None,
             pan_zoom_target: None,
-            cursor: CursorIcon::Default,
+            cursor: CursorRequest::Defer,
             mouse_annotation: None,
             metadata: None,
         }
@@ -199,6 +209,12 @@ impl HitTestEntry {
 
     /// Builder: set cursor.
     pub fn cursor(mut self, cursor: CursorIcon) -> Self {
+        self.cursor = CursorRequest::Icon(cursor);
+        self
+    }
+
+    /// Builder: contribute an explicit cursor or defer to the next entry.
+    pub fn cursor_request(mut self, cursor: CursorRequest) -> Self {
         self.cursor = cursor;
         self
     }
@@ -418,17 +434,21 @@ impl HitTestResult {
     /// The entry transform depth is restored both on return and on unwind.
     /// A caller may catch a descendant's panic and continue the same hit walk
     /// without giving the next entry the failed descendant's coordinate space.
-    pub fn with_paint_offset<F, R>(&mut self, offset: Offset<f64>, f: F) -> R
+    /// Non-finite offsets return `None` without invoking the subtree.
+    pub fn with_paint_offset<F, R>(&mut self, offset: Offset<f64>, f: F) -> Option<R>
     where
         F: FnOnce(&mut Self) -> R,
     {
+        if !offset.dx.is_finite() || !offset.dy.is_finite() {
+            return None;
+        }
         let depth = self.transforms.len() + self.local_transforms.len();
         self.push_offset(-offset);
         let guard = TransformGuard {
             result: self,
             depth,
         };
-        f(&mut *guard.result)
+        Some(f(&mut *guard.result))
     }
 
     /// Runs `f` with the INVERSE of `transform` pushed onto the transform
@@ -734,12 +754,12 @@ impl HitTestResult {
 
     /// Resolves the active mouse cursor.
     ///
-    /// Returns the first non-default cursor in the path, or
+    /// Returns the first explicit cursor in the path, or
     /// `CursorIcon::Default`.
     pub fn resolve_cursor(&self) -> CursorIcon {
         for entry in &self.path {
-            if entry.cursor != CursorIcon::Default {
-                return entry.cursor;
+            if let CursorRequest::Icon(cursor) = entry.cursor {
+                return cursor;
             }
         }
         CursorIcon::Default
@@ -811,6 +831,10 @@ impl<T: crate::sealed::CustomHitTestable> HitTestable for T {
 // HELPER FUNCTIONS
 // ============================================================================
 
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "line and page deltas use the upstream f32 representation"
+)]
 pub(crate) fn transform_pointer_event(event: &PointerEvent, transform: &Matrix4) -> PointerEvent {
     use ui_events::pointer::{PointerButtonEvent, PointerScrollEvent, PointerUpdate};
 
@@ -844,8 +868,24 @@ pub(crate) fn transform_pointer_event(event: &PointerEvent, transform: &Matrix4)
             PointerEvent::Move(PointerUpdate {
                 pointer: e.pointer,
                 current: new_current,
-                coalesced: e.coalesced.clone(),
-                predicted: e.predicted.clone(),
+                coalesced: e
+                    .coalesced
+                    .iter()
+                    .map(|sample| {
+                        let mut sample = sample.clone();
+                        sample.position = transform_position(sample.position);
+                        sample
+                    })
+                    .collect(),
+                predicted: e
+                    .predicted
+                    .iter()
+                    .map(|sample| {
+                        let mut sample = sample.clone();
+                        sample.position = transform_position(sample.position);
+                        sample
+                    })
+                    .collect(),
             })
         }
         PointerEvent::Scroll(e) => {
@@ -854,7 +894,24 @@ pub(crate) fn transform_pointer_event(event: &PointerEvent, transform: &Matrix4)
             PointerEvent::Scroll(PointerScrollEvent {
                 pointer: e.pointer,
                 state: new_state,
-                delta: e.delta,
+                delta: match e.delta {
+                    ui_events::pointer::ScrollDelta::PixelDelta(delta) => {
+                        let local = transform_delta(transform, Offset::new(delta.x, delta.y));
+                        ui_events::pointer::ScrollDelta::PixelDelta(dpi::PhysicalPosition::new(
+                            local.dx, local.dy,
+                        ))
+                    }
+                    ui_events::pointer::ScrollDelta::LineDelta(x, y) => {
+                        let local =
+                            transform_delta(transform, Offset::new(f64::from(x), f64::from(y)));
+                        ui_events::pointer::ScrollDelta::LineDelta(local.dx as f32, local.dy as f32)
+                    }
+                    ui_events::pointer::ScrollDelta::PageDelta(x, y) => {
+                        let local =
+                            transform_delta(transform, Offset::new(f64::from(x), f64::from(y)));
+                        ui_events::pointer::ScrollDelta::PageDelta(local.dx as f32, local.dy as f32)
+                    }
+                },
             })
         }
         PointerEvent::Gesture(e) => {
@@ -955,9 +1012,15 @@ fn transform_scroll_event(event: &ScrollEventData, transform: &Matrix4) -> Scrol
 
     ScrollEventData {
         position: Offset::new(x, y),
-        delta: event.delta,
+        delta: transform_delta(transform, event.delta),
         modifiers: event.modifiers,
     }
+}
+
+fn transform_delta(transform: &Matrix4, delta: Offset<f64>) -> Offset<f64> {
+    let (x, y) = transform.transform_point(delta.dx, delta.dy);
+    let (origin_x, origin_y) = transform.transform_point(0.0, 0.0);
+    Offset::new(x - origin_x, y - origin_y)
 }
 
 // ============================================================================

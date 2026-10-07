@@ -40,7 +40,7 @@ use downcast_rs::{Downcast, impl_downcast};
 use flui_foundation::Diagnosticable;
 
 use crate::{
-    hit_testing::{CursorIcon, MouseTrackerAnnotation},
+    hit_testing::{CursorRequest, MouseTrackerAnnotation},
     parent_data::ParentData,
     protocol::{Protocol, ProtocolConstraints, ProtocolGeometry, ProtocolPosition},
     semantics::SemanticsConfiguration,
@@ -637,11 +637,11 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
 
     /// The mouse cursor this render object contributes to its hit entry.
     ///
-    /// Default `CursorIcon::Default`; `RenderMouseRegion` overrides this so
+    /// Defaults to deferring; `RenderMouseRegion` overrides this so
     /// [`MouseTracker`](flui_interaction::routing::MouseTracker) can resolve the active
     /// platform cursor from the leaf-first hit-test path.
-    fn mouse_cursor(&self) -> CursorIcon {
-        CursorIcon::Default
+    fn mouse_cursor(&self) -> CursorRequest {
+        CursorRequest::Defer
     }
 
     /// An opaque payload this render object attaches to any hit that lands on

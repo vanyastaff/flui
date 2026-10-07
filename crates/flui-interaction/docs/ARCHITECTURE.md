@@ -41,6 +41,20 @@ the executable gesture graph from accidentally becoming cross-thread.
 
 Local design choices and why. Each entry names the conflict, the choice, and the reference (a strategy clause, a design rule, or a precedent plan).
 
+- **An arrow request differs from deferring a cursor.** `CursorRequest::Defer`
+  leaves the choice to the next hit target; `Icon(CursorIcon::Default)` selects
+  the arrow even when an ancestor asks for another icon. Render objects without
+  a cursor contribution and unconfigured `MouseRegion` widgets defer.
+  `explicit_arrow_cursor_wins` pins both hit-path resolution and tracker delivery.
+- **Hover annotations survive until every device leaves.** The tracker keeps a
+  shared resolved annotation while any device remains in its region. Devices
+  refresh in identity order, each failed hit test preserves that device's prior
+  state for retry, and every committed callback batch runs before the first
+  failure resumes. Replaced and departed captures retire outside the tracker
+  borrow under ADR-0127. `shared_region_exit_per_device`,
+  `ambient_refresh_contains_each_device` and
+  `released_region_destructor_reenters_tracker` pin these contracts.
+
 - **Focus node identities are never reissued.** The allocator admits its final nonzero identity once and then refuses every new `FocusNode` with a panic, permanently, even after that panic is caught. Wrapping would hand a retired identity, and the focus authority it names, to a new node; refusing keeps every attached node's requests and listeners intact.
 - **Recogniser is a `Clone` struct; the lifecycle lives on `RecognizerBase`.** Multiple consumers can hold `Arc<Self>` cheaply. The trade-off: users get a stable struct API but cannot observe field changes without an explicit notifier (deferred; `flui-foundation::Notifier` is the candidate).
 - **Pointer event types are W3C `ui-events`, not a local re-implementation.** Pointer events are `ui_events::pointer::*` (W3C-compliant), with a `DeviceId = i32` shim at the `InputEvent` enum layer. This keeps the crate aligned with the platform layer's event types and follows the workspace preference for a mature crate over a hand-rolled one.

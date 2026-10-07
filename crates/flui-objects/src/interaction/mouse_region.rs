@@ -6,7 +6,7 @@ use flui_rendering::{
     constraints::BoxConstraints,
     context::{BoxDryLayoutCtx, BoxHitTestContext, BoxLayoutContext},
     hit_testing::{
-        CursorIcon, DeviceId, HitTestBehavior, MouseRegionTarget, MouseTrackerAnnotation,
+        CursorRequest, DeviceId, HitTestBehavior, MouseRegionTarget, MouseTrackerAnnotation,
     },
     parent_data::BoxParentData,
     traits::RenderBox,
@@ -27,7 +27,7 @@ pub struct RenderMouseRegion {
     /// Owner-local mouse target delivering enter/hover/exit callbacks; the
     /// render object stores only this data-plane identity.
     mouse_target: Option<MouseRegionTarget>,
-    cursor: CursorIcon,
+    cursor: CursorRequest,
     valid_for_mouse_tracker: bool,
     opaque: bool,
     behavior: HitTestBehavior,
@@ -38,7 +38,7 @@ impl Default for RenderMouseRegion {
     fn default() -> Self {
         Self {
             mouse_target: None,
-            cursor: CursorIcon::Default,
+            cursor: CursorRequest::Defer,
             valid_for_mouse_tracker: true,
             opaque: true,
             behavior: HitTestBehavior::Opaque,
@@ -48,7 +48,7 @@ impl Default for RenderMouseRegion {
 }
 
 impl RenderMouseRegion {
-    /// Creates an opaque mouse region with no callbacks and the default cursor.
+    /// Creates an opaque mouse region with no callbacks and a deferring cursor.
     pub fn new() -> Self {
         Self::default()
     }
@@ -66,12 +66,12 @@ impl RenderMouseRegion {
 
     /// Returns the active cursor.
     #[must_use]
-    pub const fn cursor(&self) -> CursorIcon {
+    pub const fn cursor(&self) -> CursorRequest {
         self.cursor
     }
 
     /// Updates the active cursor; returns true when hit-test state changed.
-    pub fn set_cursor(&mut self, cursor: CursorIcon) -> bool {
+    pub fn set_cursor(&mut self, cursor: CursorRequest) -> bool {
         if self.cursor == cursor {
             return false;
         }
@@ -205,7 +205,7 @@ impl RenderBox for RenderMouseRegion {
         hit_target && self.opaque
     }
 
-    fn mouse_cursor(&self) -> CursorIcon {
+    fn mouse_cursor(&self) -> CursorRequest {
         self.cursor
     }
 

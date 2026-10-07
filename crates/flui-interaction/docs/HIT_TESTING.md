@@ -82,7 +82,7 @@ let mut result = HitTestResult::new();
 
 // `with_paint_offset` takes the forward paint offset and pushes its
 // inverse (negated) internally.
-result.with_paint_offset(Offset::new(10.0, 20.0), |result| {
+let _ = result.with_paint_offset(Offset::new(10.0, 20.0), |result| {
     child.hit_test(position, result);
 });
 
