@@ -333,7 +333,7 @@ impl ViewState<Slider> for SliderState {
                 }
             })
             .on_key_event(move |cx, event| {
-                if event.state != KeyState::Down || !key.usable() || !key.admits_context(cx) {
+                if event.state() != KeyState::Down || !key.usable() || !key.admits_context(cx) {
                     return KeyEventResult::Ignored;
                 }
                 if crate::SingleActivator::character_ignoring_shift("+").matches(event) {

@@ -856,6 +856,12 @@ impl EditableTextState {
             let drag_anchor = Rc::clone(&drag_anchor);
             let commit = self.composition_commit();
             move |_cx: &mut EventCx<'_>, dispatch: PointerDispatch<'_>| {
+                let flui_interaction::PointerEvent::Down(press) = dispatch.global else {
+                    return;
+                };
+                let Some(position) = dispatch.global.position() else {
+                    return;
+                };
                 if !enabled || drag_anchor.get().is_some() {
                     return;
                 }
@@ -865,11 +871,11 @@ impl EditableTextState {
                 // disablement, controller replacement or cancel retires it,
                 // which the identity check below sees. The anchor is resolved
                 // again once the commit has laid the text out as committed.
-                let Some(provisional) = resolve(dispatch.global.position()) else {
+                let Some(provisional) = resolve(position) else {
                     return;
                 };
                 let admitted = SelectionDrag {
-                    contact: flui_interaction::events::extract_pointer_id(dispatch.global),
+                    contact: press.pointer.id,
                     source_anchor: provisional,
                 };
                 drag_anchor.set(Some(admitted));
@@ -883,7 +889,7 @@ impl EditableTextState {
                     if drag_anchor.get() != Some(admitted) {
                         return;
                     }
-                    let Some(offset) = resolve(dispatch.global.position()) else {
+                    let Some(offset) = resolve(position) else {
                         drag_anchor.set(None);
                         return;
                     };
@@ -908,10 +914,12 @@ impl EditableTextState {
                 let Some(drag) = drag_anchor.get() else {
                     return;
                 };
-                if flui_interaction::events::extract_pointer_id(dispatch.global) != drag.contact {
+                if flui_interaction::events::extract_pointer_id(dispatch.global)
+                    != Some(drag.contact)
+                {
                     return;
                 }
-                let Some(to) = resolve(dispatch.global.position()) else {
+                let Some(to) = dispatch.global.position().and_then(&resolve) else {
                     return;
                 };
                 // The anchor stays where the drag began; the caret follows the
@@ -929,7 +937,8 @@ impl EditableTextState {
             let drag_anchor = Rc::clone(&drag_anchor);
             move |_: &mut EventCx<'_>, dispatch: PointerDispatch<'_>| {
                 if drag_anchor.get().is_some_and(|drag| {
-                    drag.contact == flui_interaction::events::extract_pointer_id(dispatch.global)
+                    Some(drag.contact)
+                        == flui_interaction::events::extract_pointer_id(dispatch.global)
                 }) {
                     drag_anchor.set(None);
                 }
@@ -939,7 +948,8 @@ impl EditableTextState {
             let drag_anchor = Rc::clone(&drag_anchor);
             move |_: &mut EventCx<'_>, dispatch: PointerDispatch<'_>| {
                 if drag_anchor.get().is_some_and(|drag| {
-                    drag.contact == flui_interaction::events::extract_pointer_id(dispatch.global)
+                    Some(drag.contact)
+                        == flui_interaction::events::extract_pointer_id(dispatch.global)
                 }) {
                     drag_anchor.set(None);
                 }
