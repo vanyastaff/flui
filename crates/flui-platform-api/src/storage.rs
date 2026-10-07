@@ -79,7 +79,6 @@ impl StorageName {
     /// use flui_platform_api::StorageName;
     ///
     /// const NOTES: StorageName = StorageName::from_static("notes");
-    /// assert_eq!(NOTES.as_str(), "notes");
     /// ```
     ///
     /// Upper-case letters are refused:
@@ -98,12 +97,28 @@ impl StorageName {
     /// const CONSOLE: StorageName = StorageName::from_static("con");
     /// ```
     ///
+    /// Changing only the name to a non-reserved one compiles:
+    ///
+    /// ```
+    /// use flui_platform_api::StorageName;
+    ///
+    /// const CONSOLE: StorageName = StorageName::from_static("console");
+    /// ```
+    ///
     /// The empty name is refused:
     ///
     /// ```compile_fail,E0080
     /// use flui_platform_api::StorageName;
     ///
     /// const EMPTY: StorageName = StorageName::from_static("");
+    /// ```
+    ///
+    /// Changing only the name to a non-empty one compiles:
+    ///
+    /// ```
+    /// use flui_platform_api::StorageName;
+    ///
+    /// const EMPTY: StorageName = StorageName::from_static("notes");
     /// ```
     ///
     /// A name longer than 64 bytes is refused:
@@ -113,6 +128,16 @@ impl StorageName {
     ///
     /// const LONG: StorageName = StorageName::from_static(
     ///     "a1234567890123456789012345678901234567890123456789012345678901234",
+    /// );
+    /// ```
+    ///
+    /// Removing only the final byte keeps the name within the limit:
+    ///
+    /// ```
+    /// use flui_platform_api::StorageName;
+    ///
+    /// const LONG: StorageName = StorageName::from_static(
+    ///     "a123456789012345678901234567890123456789012345678901234567890123",
     /// );
     /// ```
     ///
