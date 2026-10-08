@@ -119,20 +119,33 @@ verification pending означает ограничения из `pointer-vocab
 
 ## NEW
 
-Сверка 2026-10-08 на интеграционной базе `64ab42b43`: все 20 утверждённых строк
+Сверка 2026-10-08 на интеграционной базе `a0e535e94`: все 20 утверждённых строк
 ниже имеют реализацию или ранее merged-реализацию. Это не означает завершение
 15 задач приёмки: недостающие inverse-проверки, финальные gates и native smoke
 остаются явными условиями. Целевые прогоны прошли для 43 pointer-строк,
 56 scroll-строк, нижнего reveal/retirement и counting-allocator контракта.
 Повторный restored-прогон на базе `9d171de1` проверил binding,
 private resampling, lower reveal/retirement и обе публичные widget-семьи.
-Counting-allocator matrix проверена отдельно: её allocations 2/8/32 не
-приписываются прогонам с фильтром только по pointer/binding именам тестов.
+Counting-allocator matrix проверена отдельно, а не через фильтр по
+pointer/binding именам тестов. Точный identity и global route с обеими history
+дают ноль allocations; translated и near-identity route сохраняют bound
+2/8/32 для 1/4/16 targets. Sample/Stop без изменения времени дают ноль,
+а raised-floor control сохраняет checked history policy. Saturated admission
+сохраняет cap 100 без повторной копии checked prefix: не более трёх allocations,
+199 сохранённых readings в 99 Move, metadata, predictions и Down/Up проверены.
+Независимые identity/unchanged-time inverses воспроизводят две лишние копии;
+consumer-only overflow inverse даёт семь allocations при зелёной API table.
+Все хунки восстановлены, целевые публичные проверки прошли. Подробности —
+в `tasks.md`, «Публичные allocation contracts».
 Полный gate, CI и слияние в `main` ещё не выполнены.
 После пяти независимых CombinedMode/scale-velocity/focal-fling/rotation/boundary
 откатов точные production-хунки восстановлены; повторный прогон всех 43
 pointer/gesture widget-строк на базе `85a5f10e6` прошёл. Это не заменяет
-оставшиеся native, docs, benchmark и final-gate проверки.
+оставшиеся native и final-gate проверки. Interaction source doctests и восемь
+прямых Markdown-примеров прошли; GestureDetector snippet проверен widget
+doctests (33 runtime и три compile-fail; 13 других примеров ignored).
+Все пять wire-бенчей измерены на `64ab42b43`; после обнаруженных и исправленных
+allocation regressions окончательные AFTER timings ещё впереди.
 
 | Row | Requirement | Status | Closure |
 |---|---|---|---|

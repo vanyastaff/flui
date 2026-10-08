@@ -9,7 +9,7 @@
 
 ## Текущее выполнение
 
-Сверка 2026-10-08 по интеграционной базе `64ab42b43`, коду и именам тестов.
+Сверка 2026-10-08 по интеграционной базе `a0e535e94`, коду и именам тестов.
 Отмеченные прогоны — целевые проверки интеграции. Итоговые `check-changed`,
 optional-feature/platform gates, CI и слияние в `main` ещё не объявляются завершёнными.
 
@@ -30,7 +30,7 @@ optional-feature/platform gates, CI и слияние в `main` ещё не об
 | C6 | Реализована | PR #1478 merged; типизированные Down/Up и `DeviceId(NonZeroU64)` в новом словаре |
 | C7 | Реализована локально | Owner-local MessageClock использует `wrapping_sub` тиков; мёртвый `is_key_pressed` удалён. Реальная очередь hidden HWND и rollover прошли, обе проверки падают при откате и снова проходят после восстановления |
 | S1, S2 | Основные миграции и compiler-контракты проверены; итоговый gate впереди | Owned vocabulary, checked focus ID, typed focus contracts, RAII listeners, immutable Rc builders и production estimator selection подключены. Public gesture details защищены non-exhaustive compiler fixtures; обычный `trybuild_ui` прошёл все 12 fixtures без обновления expected stderr, включая external construction failures и законные constructors. HandlerId, ложная sealed-иерархия, team/standalone signal resolver, predictor и общий vocabulary bridge удалены по scope; `__runtime` остаётся намеренным контрактом ADR-0081 |
-| S3, S4 | Source doctests и прямые Markdown-примеры прошли; итоговые бенчи впереди | Пустые `include_str!` модули удалены. На базе `3139a3193` all-features source doctests: 51 runtime-пример и один compile-fail прошли, ignored нет. Свежая прямая Markdown-проверка: README 4, GESTURES 3, HIT_TESTING 1 — все восемь прошли; ARCHITECTURE/PERFORMANCE не содержат executable examples, ignored нет. Предыдущие ownership timings относятся к прежней форме событий и не подменяют текущие wire-бенчи. Counting-allocator контракт `resolved_route_move_invocation_allocates_no_heap_after_setup` проверяет ноль аллокаций scalar Move и не более двух на каждый translated target с обеими history: измерены 2/8/32 для 1/4/16 targets, с проверкой всех sample fields и global history; PERFORMANCE.md описывает этот bound отдельно от elapsed time |
+| S3, S4 | Source doctests, прямые Markdown-примеры и allocator contracts прошли; итоговые timings и gate впереди | Пустые `include_str!` модули удалены. На базе `3139a3193` all-features interaction source doctests: 51 runtime-пример и один compile-fail прошли, ignored нет. Прямая Markdown-проверка: README 4, GESTURES 3, HIT_TESTING 1 — все восемь прошли; ARCHITECTURE/PERFORMANCE не содержат executable examples, ignored нет. Runnable GestureDetector snippet проверен widget doctests: 33 runtime-примера и три compile-fail прошли; 13 ignored относятся к другим примерам. Все пять текущих wire-бенчей измерены на `64ab42b43`; повторы обнаружили allocation regressions, исправленные на текущей базе. Окончательные AFTER timings ещё не получены. Публичная allocator matrix ниже отделяет storage bounds от elapsed time |
 | S5 | Реализована локально; итоговый gate впереди | DPI исправлен PR #1493; frame flush, drain и hover refresh обходят все input owners. Публичные runtime-проверки прошли |
 | R5 | Текущий same-pointer контракт закреплён; итоговый gate впереди | В `gesture_lifecycle_matrix` сохраняются `drag_cancel_callback_admits_the_next_contact_once` и `drag_cancelled_end_callback_admits_the_next_contact_once`. Таблица `drag_lifecycle_contracts` проверяет same-pointer replacement из terminal callback, первую панику и следующий Up; она прошла в restored-прогоне 49 связанных тестов на базе `502a8334f` до main merge. Этот прогон не объявляется пост-merge gate; исторический guard inverse не выдаётся за новый дефект изменённого drag |
 
@@ -39,7 +39,8 @@ RA1–RA4 интегрированы атомарно с публичными п
 прошёл без обновления expected stderr: семь compile-fail fixtures (включая три
 E0277 и non-exhaustive details) и пять успешных внешних fixtures. Исправления retirement и
 diagnostics подтверждены откатом production-хунков. RA5 и ADR-0161 интегрированы,
-RA6 ownership-измерения сохранены; итоговый gate зависимых потребителей и текущие wire-бенчи впереди.
+RA6 ownership-измерения сохранены; пять текущих wire-бенчей измерены, но после
+performance-исправлений окончательные timings и gate зависимых потребителей впереди.
 Задачи идут по графу `recognizer-api/tasks.md`. P1 словаря завершена; P2/P3 реализованы,
 но финальная приёмка и ограничения producer smoke остаются в `pointer-vocabulary/tasks.md`.
 Все 20 утверждённых NEW-строк повторно сверены в `scope-closure.md`: наличие реализации
@@ -56,8 +57,8 @@ cargo nextest run --locked -p flui-interaction -p flui-widgets -p flui-rendering
 43 pointer- и 56 scroll-строк, 15 runtime containment-строк и lower reveal.
 Allocator test `resolved_route_move_invocation_allocates_no_heap_after_setup`
 не совпадает с этим `test(...)` фильтром: слово pointer в имени test binary
-не расширяет фильтр по имени теста. Его ранее проверенная отдельная matrix
-дала 2/8/32 allocations для translated history; она не включается в число 49.
+не расширяет фильтр по имени теста. Отдельная allocator matrix, включая
+последующие performance-исправления ниже, не включается в число 49.
 Последующее слияние актуального `origin/main` в `8cfc0ea64` требует итоговой
 проверки интеграции; этот более ранний целевой прогон её не заменяет.
 
@@ -75,6 +76,36 @@ cargo clippy -p flui-runtime -p flui-app -p flui --locked --target aarch64-linux
 Android здесь скомпилирован, не запущен. Команда использует default features
 и не объявляет пройденными all-features/all-targets, native smoke или весь
 platform gate.
+
+## Публичные allocation contracts
+
+Отдельный `resolved_route_move_invocation_allocates_no_heap_after_setup`
+проверяет реальные route и resampler paths с обеими history и всеми sample
+fields. Scalar Move, global route и точный identity transform из
+`HitTestResult::add` дают ноль allocations. Translated и near-identity targets
+с ненулевым смещением порядка `1e-6` сохраняют локализованные данные и bound
+2/8/32 для 1/4/16 targets. До исправления exact identity копировал две history
+(2 вместо 0); независимый inverse identity guard снова дал 2 вместо 0.
+Оба случая восстановлены и отдельная публичная matrix прошла.
+
+Sample и Stop с неизменённым временем передают принадлежащие resampler данные
+без копирования history: ноль allocations, весь принятый Down/Move/Up и
+полное равенство metadata. Контроль с действительно поднятым timestamp floor
+сохраняет checked history policy и повторно проверяет predictions. До
+исправления и при независимом inverse unchanged-time delivery копировал две
+history (2 вместо 0); точный source-хунк восстановлен, matrix прошла.
+
+Saturated admission ограничивает уже проверенную coalesced history через
+`PointerMove::retain_latest_coalesced`, удаляя старый prefix без повторного
+копирования. Публичная platform-api table проверяет limits 0/1/2/3/4/99,
+разные readings с одинаковым coarse timestamp, metadata и predictions.
+Production resampler задаёт cap 100; его публичный allocator case проверяет
+не более трёх allocations на saturated admission, все 199 сохранённых
+readings в 99 Move, последние принятые данные, Down/Up и predictions.
+До исправления было семь allocations; consumer-only inverse возвращает семь
+при зелёной platform-api table. Точный consumer-хунк восстановлен, все девять
+целевых тестов прошли. Этот bounded contract не обещает хранить бесконечную
+историю без потерь и не подменяет окончательные elapsed-time measurements.
 
 ## Hover retirement и double-tap debounce
 
