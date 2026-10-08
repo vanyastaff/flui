@@ -40,10 +40,10 @@ fn with_activity<T>(
             // SAFETY: AndroidApp owns this global Activity reference for the
             // entire borrow of app. as_cast_raw borrows it without deleting it.
             let activity = unsafe { env.as_cast_raw::<Global<JObject<'_>>>(&raw_activity)? };
-            query(env, activity.as_ref().as_ref())
+            query(env, activity.as_ref())
         })();
         if result.is_err() {
-            let _ = env.exception_clear();
+            env.exception_clear();
         }
         result
     })
