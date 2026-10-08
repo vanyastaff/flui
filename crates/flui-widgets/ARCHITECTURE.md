@@ -2242,6 +2242,16 @@ coasting distance; no second default ceiling constrains the resolved impulse.
 `vertical_dismissal_release_uses_its_captured_fling_profile` preserve dismissal
 thresholds and the active contact's impulse on both axes.
 
+`InteractiveViewer` seeds focal friction from
+`ScaleEndDetails::focal_fling_velocity()`. Contact Down and native Begin capture
+the release policy; replacing the source before End affects the next sequence.
+Its public interaction callback retains the raw focal measurement in logical
+pixels per second and the separate dimensionless scale velocity.
+`viewer_touch_focal_inertia_uses_the_admitted_profile` and
+`viewer_native_focal_inertia_uses_the_admitted_profile` observe below-minimum
+rest, the captured maximum and fresh-sequence recovery through actual frame
+motion.
+
 ### Accepted gesture cancellation does not commit a release action
 
 Accepted drag cancellation still reaches `on_end`, carrying
@@ -2280,7 +2290,7 @@ counter and next completed swipe.
 `InteractionEndDetails`. Discrete wheel and panzoom updates synthesize
 `Completed`, without claiming a physical pointer release.
 `viewer_reports_cancelled_then_completed_interactions` checks what the public
-callback observes. The viewer still has no built-in pan inertia.
+callback observes. Cancellation stops focal inertia without a release impulse.
 
 
 ### Text-store exact points use source scalar intervals in either direction

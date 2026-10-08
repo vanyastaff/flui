@@ -20,8 +20,9 @@
 //!
 //! The scene point under the moving focal point remains anchored when bounds
 //! permit. Rotation that cannot fit the boundary at the admitted scale is
-//! refused; no extra zoom is invented. Focal release velocity drives a library
-//! friction simulation through the presentation's VsyncScope. New contact or
+//! refused; no extra zoom is invented. Focal release velocity admitted by the
+//! gesture's captured minimum and maximum drives a library friction simulation
+//! through the presentation's VsyncScope. New contact or
 //! accepted wheel input stops it; source cancellation supplies no impulse.
 //! - **`constrained: false`** (an unconstrained child laid out via an
 //!   `OverflowBox`-equivalent, escaping the viewport) is **deferred**. V1
