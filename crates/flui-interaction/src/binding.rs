@@ -84,7 +84,7 @@ use std::{
 };
 
 use crate::events::{
-    CancelReason, PointerCancel, PointerEvent, PointerEventExt, PointerInfo, PointerKind,
+    CancelReason, DeviceId, PointerCancel, PointerEvent, PointerEventExt, PointerInfo, PointerKind,
 };
 use crate::routing::pointer_capture::ContactCapture;
 use flui_foundation::MonotonicClock;
@@ -284,7 +284,7 @@ const MAX_SIMULTANEOUS_POINTERS: usize = 32;
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum RefusalPolicy {
     NativeTerminal,
-    FreshDown,
+    FreshDown(Option<DeviceId>),
 }
 
 #[derive(Clone, Copy)]
@@ -305,9 +305,15 @@ impl Default for RefusedContacts {
 }
 
 impl RefusedContacts {
-    fn contains(&self, pointer: PointerId) -> bool {
+    fn contains(&self, pointer: PointerId, device: Option<DeviceId>) -> bool {
         match self {
-            Self::Tracking(ids) => ids.iter().flatten().any(|entry| entry.pointer == pointer),
+            Self::Tracking(ids) => ids.iter().flatten().any(|entry| {
+                entry.pointer == pointer
+                    && match entry.policy {
+                        RefusalPolicy::NativeTerminal => true,
+                        RefusalPolicy::FreshDown(released_device) => released_device == device,
+                    }
+            }),
             Self::Saturated => true,
         }
     }
@@ -316,8 +322,8 @@ impl RefusedContacts {
         self.insert(pointer, RefusalPolicy::NativeTerminal);
     }
 
-    fn release(&mut self, pointer: PointerId) {
-        self.insert(pointer, RefusalPolicy::FreshDown);
+    fn release(&mut self, pointer: PointerInfo) {
+        self.insert(pointer.id, RefusalPolicy::FreshDown(pointer.device));
     }
 
     fn insert(&mut self, pointer: PointerId, policy: RefusalPolicy) {
@@ -1220,7 +1226,10 @@ impl GestureBinding {
             return;
         }
         let refused_tail = !self.hit_tests.borrow().contains_key(&pointer_id)
-            && self.refused_contacts.borrow().contains(pointer_id);
+            && self
+                .refused_contacts
+                .borrow()
+                .contains(pointer_id, event.device_id());
         if matches!(
             event,
             PointerEvent::Move(_)
@@ -1676,7 +1685,7 @@ impl GestureBinding {
             else {
                 continue;
             };
-            self.refused_contacts.borrow_mut().release(pointer.id);
+            self.refused_contacts.borrow_mut().release(pointer);
             let detached = self.detach_pointer_sequence(pointer.id);
             let cancel =
                 PointerEvent::Cancel(PointerCancel::new(pointer, time, CancelReason::CaptureLost));
