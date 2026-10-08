@@ -133,7 +133,7 @@ against static dispatch on the new implementation. Weak-member resolution
 must keep a strong fixture owner alive; measuring dead weak references would
 exercise withdrawal instead of arbitration.
 
-## Timing measurements
+## Complete pinned measurement
 
 The matched measurement on 2026-10-08 used Windows 11 Pro 10.0.26200,
 an Intel Core i9-13900K and rustc 1.99.0 (b940084d7). Each benchmark process
@@ -233,7 +233,43 @@ would change the release-velocity contract. LSQ20 also increased by 31.45%
 in this run. Its bounded walk and least-squares mathematics remain the same;
 authored estimator selection and cache representation changed, but their
 individual timing shares have not been established. The measured LSQ increase
-remains visible rather than being attributed to an unverified cause.
+remains in this source snapshot; the separate paired follow-up below measures
+the remedy without overwriting this evidence.
+
+### Paired least-squares follow-up
+
+The LSQ increase prompted an isolated change at
+`c1dc178815c05ba7646f201fd0cbbcf9ff36adf5`: prevent inlining of the existing
+private `compute_estimate` kernel into the four-estimator dispatcher. The
+bounded walk, numerical solver, public types and query-clock policy are
+unchanged. Release-code inspection found that the original dispatcher shared
+a 1752-byte scratch frame across estimator branches, versus 1144 bytes in the
+historical fit path; the numerical solver's 585 normalized instructions were
+identical. Static inspection does not establish the timing share of that
+layout difference.
+
+A fresh paired run on logical processor 0 used the same host, toolchain and
+Criterion settings, saved as `interaction_pinned_before_lsq_pair` and
+`interaction_pinned_after_lsq_candidate`. Both five-estimate executables
+completed successfully. These independently paired means retain their own
+BEFORE values:
+
+| Criterion estimate row | Paired BEFORE ns [95% CI] | Current AFTER ns [95% CI] | Change |
+|---|---:|---:|---:|
+| `VelocityTracker::estimate (LSQ, 20 samples)` | 566.027 [550.809, 585.972] | 557.446 [551.604, 563.479] | -1.52% |
+| `VelocityTracker::estimate (LSQ, 3 samples)` | 209.198 [202.932, 218.703] | 210.300 [208.101, 212.562] | 0.53% |
+| `VelocityTracker::estimate (LSQ, 4 repeated queries)` | 538.125 [528.131, 553.246] | 582.440 [576.523, 588.652] | 8.24% |
+| `VelocityTracker::estimate Impulse (20 samples)` | 457.849 [449.000, 471.144] | 457.603 [450.309, 466.967] | -0.05% |
+| `VelocityTracker::estimate Ios (20 samples)` | 111.519 [109.147, 114.430] | 376.382 [373.397, 379.545] | 237.51% |
+
+LSQ20 is now 1.52% below its fresh paired BEFORE mean, with overlapping mean
+confidence intervals. LSQ3, four cached queries and Impulse remain within
+10% of their paired historical means. The original LSQ20 increase is retained
+above with its source revision. Ios remains slower because its corrected
+weighted estimate examines eligible continuous history; the follow-up does
+not relax that contract. These measurements support keeping the private
+kernel separation without claiming that all of its gain comes from a
+particular register, stack or instruction-layout effect.
 
 Tap direct and dyn paths complete the same live three-event sequence:
 
