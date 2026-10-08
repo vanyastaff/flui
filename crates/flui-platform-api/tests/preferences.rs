@@ -26,13 +26,24 @@ fn motion_duration_observations_preserve_their_meaning() {
 }
 
 fn invalid_text_observations_cannot_enter_a_snapshot() {
-    for invalid in [0.0, -0.0, -1.0, f64::NEG_INFINITY, f64::INFINITY, f64::NAN] {
+    for invalid in [
+        0.0,
+        -0.0,
+        -1.0,
+        f64::NEG_INFINITY,
+        f64::INFINITY,
+        f64::NAN,
+        f64::from_bits(1),
+        (1.0_f64 / 64.0).next_down(),
+        64.0_f64.next_up(),
+        f64::MAX,
+    ] {
         assert_eq!(
             SystemPreferences::default().with_text_scale(invalid),
             Err(InvalidPreference::TextScale)
         );
     }
-    for valid in [f64::from_bits(1), 0.5, 1.0, 2.0, f64::MAX] {
+    for valid in [1.0 / 64.0, 0.5, 1.0, 2.0, 64.0] {
         assert!(SystemPreferences::default().with_text_scale(valid).is_ok());
     }
 }

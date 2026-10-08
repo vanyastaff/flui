@@ -28,6 +28,13 @@ framework fallback values belong to consumer policy. Failed refresh and an
 unsupported observation are distinct outcomes. A failed refresh preserves the
 last accepted value and its pending delivery.
 
+Text-scale admission supports `1/64..=64`, inclusive, as a deliberately broad
+accessibility range rather than arbitrary geometric zoom. Merely requiring a
+positive finite `f64` permits observations that overflow or underflow downstream
+`f32` shaping. Out-of-range observations fail validation, preserving the normal
+source failure policy; they are not silently clamped to a different preference.
+This bounds the system multiplier, not every possible authored text metric.
+
 The host owns one observation set, possibly using several native notification
 mechanisms. It lives before the first user window and ends with that host
 incarnation. Brightness, geometry and safe-area remain presentation-specific.

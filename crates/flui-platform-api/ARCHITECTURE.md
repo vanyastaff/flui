@@ -57,10 +57,14 @@ path.
 ### Preference observations preserve unavailable values and native units
 
 `SystemPreferences` records observations rather than framework fallback values
-(ADR-0172). Text factors are finite and positive; motion observations distinguish
+(ADR-0172). Text factors use the bounded accessibility range `1/64..=64`;
+motion observations distinguish
 reduced motion from duration scaling. Vertical wheel lines/pages and horizontal
 character counts have separate representations. The `preferences_contract` table
-pins numeric admission, including subnormal scales and both signs of zero. Source
+pins numeric admission, including adjacent rejected boundary values, subnormal
+text factors and both signs of zero. The widget contract
+`media_text_scaling_changes_the_laid_out_text` checks real paragraph layout at
+both admitted boundaries and fallback after extreme observations. Source
 lifecycle, ordered delivery and consumer projection remain under implementation in
 the platform-layer spec; these value tests do not establish those behaviors.
 

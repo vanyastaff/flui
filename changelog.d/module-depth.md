@@ -1,5 +1,8 @@
 ### Changed
 
+- Reject system text scales outside `1/64..=64` before publishing preferences,
+  preventing extreme observations from breaking paragraph layout.
+
 - Deliver host contrast preferences to inherited media data, Cupertino dynamic
   colors and optional Material contrast themes. Preserve explicit brightness,
   authored colors and nested media overrides during live changes.

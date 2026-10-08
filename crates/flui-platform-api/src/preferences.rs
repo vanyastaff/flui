@@ -12,8 +12,8 @@ use crate::Locale;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum InvalidPreference {
-    /// Text sizing factors must be finite and strictly positive.
-    #[error("text scale must be finite and strictly positive")]
+    /// Text sizing factors must be in the supported accessibility range.
+    #[error("text scale must be between 1/64 and 64 inclusive")]
     TextScale,
     /// Motion duration factors must be finite and nonnegative.
     #[error("motion duration scale must be finite and nonnegative")]
@@ -179,7 +179,7 @@ pub struct SystemPreferences {
 }
 
 impl SystemPreferences {
-    /// An observed positive text-size preference; no observation is `None`.
+    /// An observed text-size preference in `1/64..=64`; no observation is `None`.
     #[must_use]
     pub const fn text_scale(&self) -> Option<f64> {
         self.text_scale
@@ -187,10 +187,16 @@ impl SystemPreferences {
 
     /// Record an observed text-size preference.
     ///
+    /// The supported range is `1/64..=64`, inclusive. This is an accessibility
+    /// multiplier, not an arbitrary geometric zoom. Bounding both ends keeps
+    /// extreme native observations from overflowing or underflowing text
+    /// sizing when consumers narrow to their shaping representation. Authored
+    /// font sizes and other text metrics still require their own validation.
+    ///
     /// # Errors
-    /// Rejects zero, negative, NaN and infinite values.
+    /// Rejects values outside `1/64..=64`, including NaN and infinities.
     pub fn with_text_scale(mut self, value: f64) -> Result<Self, InvalidPreference> {
-        if !value.is_finite() || value <= 0.0 {
+        if !(1.0 / 64.0..=64.0).contains(&value) {
             return Err(InvalidPreference::TextScale);
         }
         self.text_scale = Some(value);
