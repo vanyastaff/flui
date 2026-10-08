@@ -13,7 +13,7 @@ pub use flui_foundation::RenderId;
 use flui_foundation::geometry::{Matrix4, Offset, Point};
 use flui_platform_api::pointer::{
     ButtonChange, PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerMove, PointerPosition,
-    PointerSample, ScrollDelta, ScrollEvent,
+    PointerSample, ScrollDelta, ScrollEvent, ScrollUnit,
 };
 
 use crate::{
@@ -874,12 +874,15 @@ fn transform_sample(mut sample: PointerSample, transform: &Matrix4) -> Option<Po
     Some(sample)
 }
 
-/// Localize the focal point and cumulative pan without changing dimensionless scale or rotation.
+/// Localize cumulative pan as a chord anchored at this event's current focal.
+///
+/// No starting global focal is inferred from an Update. Scale and rotation
+/// remain dimensionless, and the source event retains its cumulative values.
 fn transform_pan_zoom_event(event: &PanZoomEvent, transform: &Matrix4) -> Option<PanZoomEvent> {
     let mut local = *event;
     local.position = transform_position(event.position, transform)?;
     if let PanZoomPhase::Update(value) = event.phase {
-        let pan = transform_delta(transform, value.pan());
+        let pan = transform_delta(transform, event.position, value.pan())?;
         local.phase = PanZoomPhase::Update(
             PanZoomTransform::try_new(pan, value.scale(), value.rotation()).ok()?,
         );
@@ -890,15 +893,35 @@ fn transform_pan_zoom_event(event: &PanZoomEvent, transform: &Matrix4) -> Option
 fn transform_scroll_event(event: &ScrollEvent, transform: &Matrix4) -> Option<ScrollEvent> {
     let mut local = *event;
     local.position = transform_position(event.position, transform)?;
-    let delta = transform_delta(transform, Offset::new(event.delta.x(), event.delta.y()));
-    local.delta = ScrollDelta::try_new(event.delta.unit(), delta.dx, delta.dy).ok()?;
+    // Only Pixels describes a geometric displacement. Line/Page counts are
+    // resolved by the consuming scrollable against its own metrics; treating
+    // them as screen endpoints would silently change that quantity.
+    if event.delta.unit() == ScrollUnit::Pixels {
+        let delta = transform_delta(
+            transform, event.position, Offset::new(event.delta.x(), event.delta.y()),
+        )?;
+        local.delta = ScrollDelta::try_new(ScrollUnit::Pixels, delta.dx, delta.dy).ok()?;
+    }
     Some(local)
 }
 
-fn transform_delta(transform: &Matrix4, delta: Offset<f64>) -> Offset<f64> {
-    let (x, y) = transform.transform_point(delta.dx, delta.dy);
-    let (origin_x, origin_y) = transform.transform_point(0.0, 0.0);
-    Offset::new(x - origin_x, y - origin_y)
+/// A projective displacement is a chord between two admitted plane points,
+/// not a vector transformed at an unrelated global origin.
+fn transform_delta(
+    transform: &Matrix4,
+    focal: PointerPosition,
+    delta: Offset<f64>,
+) -> Option<Offset<f64>> {
+    let focal = focal.get();
+    let endpoint_x = focal.x + delta.dx;
+    let endpoint_y = focal.y + delta.dy;
+    if !endpoint_x.is_finite() || !endpoint_y.is_finite() {
+        return None;
+    }
+    let (origin_x, origin_y) = transform.unproject_to_plane(focal.x, focal.y)?;
+    let (x, y) = transform.unproject_to_plane(endpoint_x, endpoint_y)?;
+    let local = Offset::new(x - origin_x, y - origin_y);
+    (local.dx.is_finite() && local.dy.is_finite()).then_some(local)
 }
 
 // ============================================================================
