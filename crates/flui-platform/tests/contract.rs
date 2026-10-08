@@ -2620,7 +2620,7 @@ mod native_windows {
         pump_pointer_thread();
         let mut target = POINT { x: 40, y: 40 };
         // SAFETY: the live shown owner window and initialized point.
-        assert!(unsafe { ClientToScreen(hwnd, &mut target) }.as_bool());
+        assert!(unsafe { ClientToScreen(hwnd, &raw mut target) }.as_bool());
         // Injection uses actual hit testing, never hwndTarget as an override.
         if unsafe { WindowFromPoint(target) } != hwnd {
             eprintln!("CANNOT_VERIFY synthetic pointer delivery: shown target is occluded or the desktop is unavailable");
@@ -2651,7 +2651,7 @@ mod native_windows {
                 // SAFETY: queries for this live ephemeral window do not redirect
                 // or fabricate the native injected target.
                 unsafe {
-                    assert!(ClientToScreen(hwnd, &mut current_origin).as_bool());
+                    assert!(ClientToScreen(hwnd, &raw mut current_origin).as_bool());
                     assert_eq!((current_origin.x, current_origin.y), (target.x, target.y), "owned target must not move during injection");
                     assert_eq!(WindowFromPoint(target), hwnd, "native injection must still hit the owned target");
                     assert_eq!(windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow(), hwnd, "owned target must remain foreground during injection");
@@ -2701,12 +2701,12 @@ mod native_windows {
                 assert!(down.pointer.device.is_some(), "native source handle retained");
                 assert_eq!(down.pointer, up.pointer);
                 assert!(up.sample.time >= down.sample.time, "native terminal sample cannot predate its admitted press: down={:?} up={:?}", down.sample.time, up.sample.time);
-                assert_eq!(down.sample.pressure.map(|value| value.get()), Some(0.5));
+                assert_eq!(down.sample.pressure.map(flui_platform_api::pointer::Pressure::get), Some(0.5));
                 let point = down.sample.position.get();
                 assert_eq!((point.x, point.y), (40.0 / window.scale_factor(), 40.0 / window.scale_factor()));
             }
             assert_ne!(downs[0].pointer.id, downs[1].pointer.id, "fresh admission after Up");
-            assert!(log.iter().any(|event| matches!(event, PointerEvent::Move(movement) if movement.current().pressure.map(|value| value.get()) == Some(0.75))), "actual update sensor reading: {log:?}");
+            assert!(log.iter().any(|event| matches!(event, PointerEvent::Move(movement) if movement.current().pressure.map(flui_platform_api::pointer::Pressure::get) == Some(0.75))), "actual update sensor reading: {log:?}");
             if native_kind == PT_TOUCH {
                 let contact = downs[0].sample.contact_size.expect("injected contact area").get();
                 assert_eq!((contact.width, contact.height), (20.0 / window.scale_factor(), 30.0 / window.scale_factor()));
@@ -2727,9 +2727,9 @@ mod native_windows {
             let mut message = MSG::default();
             // SAFETY: this child owns every window on this thread, including
             // the platform's message-only broker. No HWND filter excludes it.
-            if !unsafe { PeekMessageW(&mut message, None, 0, 0, PM_REMOVE) }.as_bool() { return; }
+            if !unsafe { PeekMessageW(&raw mut message, None, 0, 0, PM_REMOVE) }.as_bool() { return; }
             // SAFETY: dispatch the actual message retrieved by this thread.
-            unsafe { let _ = TranslateMessage(&message); DispatchMessageW(&message); }
+            unsafe { let _ = TranslateMessage(&raw const message); DispatchMessageW(&raw const message); }
         }
         panic!("native pointer child queue did not drain");
     }
@@ -2752,8 +2752,8 @@ mod native_windows {
         let mut original = POINT::default();
         // SAFETY: initialized points and a live owner-thread window.
         unsafe {
-            assert!(ClientToScreen(hwnd, &mut target).as_bool());
-            GetCursorPos(&mut original).expect("capture cursor for restoration");
+            assert!(ClientToScreen(hwnd, &raw mut target).as_bool());
+            GetCursorPos(&raw mut original).expect("capture cursor for restoration");
         }
         let _restore = Cursor(original);
         if unsafe { WindowFromPoint(target) } != hwnd {
@@ -2824,7 +2824,7 @@ mod native_windows {
         events.lock().expect("pointer log").clear();
         let mut screen = POINT { x: 40, y: 40 };
         // SAFETY: a writable POINT and this row's live HWND.
-        assert!(unsafe { ClientToScreen(hwnd, &mut screen) }.as_bool());
+        assert!(unsafe { ClientToScreen(hwnd, &raw mut screen) }.as_bool());
         for (message, distance) in [
             (WM_MOUSEWHEEL, 30_i16),
             (WM_MOUSEWHEEL, -60),
