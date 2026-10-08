@@ -117,6 +117,36 @@ pub(crate) fn viewer_native_session_reports_one_start_and_one_terminal() {
     );
 }
 
+pub(crate) fn viewer_repeated_native_start_retires_the_previous_generation() {
+    use flui_widgets::{GestureEndReason, InteractiveViewer, TransformationController};
+    let controller = TransformationController::new();
+    let reasons = Rc::new(RefCell::new(Vec::new()));
+    let log = reasons.clone();
+    let laid = lay_out(
+        InteractiveViewer::new()
+            .controller(controller.clone())
+            .boundary_margin(EdgeInsets::all(1000.0))
+            .on_interaction_end(move |_, details| log.borrow_mut().push(details.reason))
+            .child(SizedBox::new(100.0, 100.0)),
+        tight(100.0, 100.0),
+    );
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::Start));
+    laid.dispatch_pointer_event(&zoom_update(1.5));
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::Start));
+    assert_eq!(
+        *reasons.borrow(),
+        [GestureEndReason::Cancelled],
+        "repeated Start settles the old accepted session"
+    );
+    laid.dispatch_pointer_event(&zoom_update(1.2));
+    assert_scale(scale_of(&controller), 1.8);
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::End));
+    assert_eq!(
+        *reasons.borrow(),
+        [GestureEndReason::Cancelled, GestureEndReason::Completed]
+    );
+}
+
 /// A newly enabled descendant cannot steal its ancestor's accepted source.
 pub(crate) fn viewer_native_owner_survives_descendant_enable_during_rebuild() {
     use flui_widgets::{InteractiveViewer, TransformationController};
