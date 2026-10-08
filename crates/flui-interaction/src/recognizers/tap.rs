@@ -3,7 +3,7 @@
 use super::{
     callback_containment::{CallbackSequence, finish_containment, invoke_callback},
     contact::{ArenaMembership, ContactId, PrimaryContact},
-    recognizer::{CancelOutcome, GestureRecognizer},
+    recognizer::{CancelOutcome, GestureRecognizer, measured_positions},
 };
 use crate::events::PointerButton;
 use crate::{
@@ -455,10 +455,12 @@ impl GestureRecognizer for TapGestureRecognizer {
         };
         match dispatch.local {
             PointerEvent::Move(_) => {
-                if member.contact.moved_beyond(
-                    details.local_position,
-                    snapshot.settings.hit_slop(snapshot.kind),
-                ) {
+                if measured_positions(dispatch.local).any(|position| {
+                    member.contact.moved_beyond(
+                        position,
+                        snapshot.settings.hit_slop(snapshot.kind),
+                    )
+                }) {
                     self.cancel_sequence(member.sequence, details);
                 } else {
                     invoke_callback(
