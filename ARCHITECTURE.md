@@ -6,6 +6,16 @@ dependency checklist for application authors.
 
 ## Mapping decisions
 
+### View authoring excludes the composition-root seam
+
+The facade's `view` module shadows `flui_view::__runtime` with a private module
+(ADR-0081 §4). Application authors can name `flui::view::View`; composition
+roots reach `BindingRuntime` through the implementation crate. The
+`thread_boundary_ui` compiler test pins E0603 for importing the facade's module
+itself and compiles both intended caller paths. Checking the module directly
+keeps an exposed empty module from hiding a privacy regression behind a missing
+trait import.
+
 ### `TextField` prelude collision — renamed the widgets primitive, not shadowed
 
 `flui-widgets` and `flui-material` used to ship two distinct types both named

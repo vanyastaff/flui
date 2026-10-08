@@ -1,0 +1,14 @@
+error[E0599]: no method named `run_frame` found for struct `PipelineOwner<flui_rendering::pipeline::Layout>` in the current scope
+ --> tests/compile_fail/frame_from_layout.rs:6:19
+  |
+6 |     let _ = owner.run_frame();
+  |                   ^^^^^^^^^ method not found in `PipelineOwner<flui_rendering::pipeline::Layout>`
+  |
+note: there's an earlier shadowed binding `owner` of type `PipelineOwner` that has method `run_frame` available
+ --> tests/compile_fail/frame_from_layout.rs:4:9
+  |
+4 |     let owner = PipelineOwner::new(TextContextHandle::standalone());
+  |         ^^^^^ `owner` of type `PipelineOwner` that has method `run_frame` defined earlier here
+5 |     let owner = owner.into_layout();
+  |         ----- earlier `owner` shadowed here with type `PipelineOwner<flui_rendering::pipeline::Layout>`
+  = note: the method was found for `PipelineOwner`

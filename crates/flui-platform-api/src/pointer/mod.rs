@@ -351,8 +351,20 @@ pub type PointerRelease = PointerButtonEvent<Release>;
 /// # use flui_platform_api::pointer::*;
 /// # let info = PointerInfo::new(PointerId::try_from(1_u64).unwrap(), PointerKind::Mouse);
 /// # let at = PointerSample::new(EventTime::from_nanos(0), PointerPosition::try_new(Point::new(0.0, 0.0)).unwrap());
-/// let release = PointerRelease::new(info, PointerButton::PRIMARY, PointerButtons::NONE, at);
-/// let _ = PointerEvent::Down(release); // a release is not a press
+/// let button = PointerRelease::new(info, PointerButton::PRIMARY, PointerButtons::NONE, at);
+/// let _ = PointerEvent::Down(button);
+/// ```
+///
+/// Changing only the constructor to a press makes the same sequence compile:
+///
+/// ```
+/// # use flui_foundation::geometry::Point;
+/// # use flui_platform_api::EventTime;
+/// # use flui_platform_api::pointer::*;
+/// # let info = PointerInfo::new(PointerId::try_from(1_u64).unwrap(), PointerKind::Mouse);
+/// # let at = PointerSample::new(EventTime::from_nanos(0), PointerPosition::try_new(Point::new(0.0, 0.0)).unwrap());
+/// let button = PointerPress::new(info, PointerButton::PRIMARY, PointerButtons::NONE, at);
+/// let _ = PointerEvent::Down(button);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]

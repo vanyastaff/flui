@@ -411,15 +411,23 @@ struct WindowedGpuStack {
 /// FnMut() + Send>` field (a `!Sync` type with no `!Sync` marker of its
 /// own would have quietly gone `Sync` the day that field's type changed);
 /// the `_single_mutator` marker field below now states the contract as a
-/// field, not a side effect. The doctest below pins the contract so a
+/// field, not a side effect. The doctests below pin the contract so a
 /// future field addition that accidentally makes every field `Sync` fails
 /// loudly at compile time instead of silently reopening `Arc<Renderer>`
 /// shared-mutation. The `assert_impl_all!`/`assert_not_impl_any!` pair after
 /// this struct pins the `Send`/`!Sync` split itself.
 ///
+/// The examples differ only in the required bound. The same public type and
+/// helper compile with `Send`, while `Sync` is rejected without creating a GPU.
+///
+/// ```
+/// fn assert_bound<T: Send>() {}
+/// assert_bound::<flui_engine::Renderer>();
+/// ```
+///
 /// ```compile_fail
-/// fn assert_sync<T: Sync>() {}
-/// assert_sync::<flui_engine::Renderer>();
+/// fn assert_bound<T: Sync>() {}
+/// assert_bound::<flui_engine::Renderer>();
 /// ```
 pub struct Renderer {
     // `instance` and `adapter` are kept alive for the lifetime of the renderer

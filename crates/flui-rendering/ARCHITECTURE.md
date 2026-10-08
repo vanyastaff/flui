@@ -30,6 +30,12 @@ deepest-first element unmount so view lifecycle hooks remain canonical.
 
 ## Mapping decisions
 
+The `trybuild_ui` test in `tests/compile_fail.rs` pins pipeline constructor
+admission and phase boundaries: E0061 for construction without a text context,
+E0277 for `Default` construction and downstream phase implementations, and
+E0599 for painting from idle/layout or running a frame from layout. A passing
+caller runs the complete phase sequence and returns to idle for `run_frame`.
+
 This section records design decisions and why they were taken. Each entry follows the "Accepted trade-offs" format established by [`docs/plans/2026-03-31-custom-render-callback-design.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/plans/2026-03-31-custom-render-callback-design.md): state the rule (or absence of rule), the choice, the alternatives considered, the trade-off accepted.
 
 ### Scroll caches preserve materialized descendant reveal

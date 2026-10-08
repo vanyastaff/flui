@@ -38,6 +38,15 @@ struct DetachedRenderNode {
 ///     let _duplicate = token.clone();
 /// }
 /// ```
+///
+/// Moving the token transfers its exclusive capability:
+///
+/// ```
+/// use flui_rendering::pipeline::DetachedRenderSubtrees;
+/// fn duplicate(token: DetachedRenderSubtrees) {
+///     let _duplicate = token;
+/// }
+/// ```
 #[must_use = "a detached render batch must be reattached or released for finalization"]
 pub struct DetachedRenderSubtrees {
     owner_seal: Rc<RelocationOwnerSeal>,
@@ -259,8 +268,18 @@ impl PipelineOwner<Idle> {
     ///
     /// ```compile_fail
     /// use flui_foundation::RenderId;
-    /// use flui_rendering::pipeline::{Layout, PipelineOwner};
+    /// use flui_rendering::pipeline::{Idle, Layout, PipelineOwner};
     /// fn cannot_detach_during_layout(owner: &mut PipelineOwner<Layout>) {
+    ///     owner.detach_render_subtrees(&[RenderId::new(1)]);
+    /// }
+    /// ```
+    ///
+    /// The same call is available on an idle owner:
+    ///
+    /// ```
+    /// use flui_foundation::RenderId;
+    /// use flui_rendering::pipeline::{Idle, Layout, PipelineOwner};
+    /// fn cannot_detach_during_layout(owner: &mut PipelineOwner<Idle>) {
     ///     owner.detach_render_subtrees(&[RenderId::new(1)]);
     /// }
     /// ```
@@ -347,9 +366,21 @@ impl PipelineOwner<Idle> {
     /// This method exists only on `PipelineOwner<Idle>`:
     ///
     /// ```compile_fail
-    /// use flui_rendering::pipeline::{DetachedRenderSubtrees, Layout, PipelineOwner};
+    /// use flui_rendering::pipeline::{DetachedRenderSubtrees, Idle, Layout, PipelineOwner};
     /// fn cannot_attach_during_layout(
     ///     owner: &mut PipelineOwner<Layout>,
+    ///     token: DetachedRenderSubtrees,
+    /// ) {
+    ///     owner.attach_render_subtrees(token);
+    /// }
+    /// ```
+    ///
+    /// An idle owner accepts the same token-consuming call:
+    ///
+    /// ```
+    /// use flui_rendering::pipeline::{DetachedRenderSubtrees, Idle, Layout, PipelineOwner};
+    /// fn cannot_attach_during_layout(
+    ///     owner: &mut PipelineOwner<Idle>,
     ///     token: DetachedRenderSubtrees,
     /// ) {
     ///     owner.attach_render_subtrees(token);
@@ -443,9 +474,21 @@ impl PipelineOwner<Idle> {
     /// ```
     ///
     /// ```compile_fail
-    /// use flui_rendering::pipeline::{DetachedRenderSubtrees, PaintPhase, PipelineOwner};
+    /// use flui_rendering::pipeline::{DetachedRenderSubtrees, Idle, PaintPhase, PipelineOwner};
     /// fn cannot_release_during_paint(
     ///     owner: &mut PipelineOwner<PaintPhase>,
+    ///     token: DetachedRenderSubtrees,
+    /// ) {
+    ///     owner.release_detached_render_subtrees_for_finalization(token);
+    /// }
+    /// ```
+    ///
+    /// Finalization release is available on an idle owner:
+    ///
+    /// ```
+    /// use flui_rendering::pipeline::{DetachedRenderSubtrees, Idle, PaintPhase, PipelineOwner};
+    /// fn cannot_release_during_paint(
+    ///     owner: &mut PipelineOwner<Idle>,
     ///     token: DetachedRenderSubtrees,
     /// ) {
     ///     owner.release_detached_render_subtrees_for_finalization(token);

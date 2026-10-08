@@ -1,0 +1,10 @@
+error[E0624]: associated function `new` is private
+ --> tests/ui/element_depth_minting_is_private.rs:4:37
+  |
+4 |     element.set_depth(ElementDepth::new(9));
+  |                                     ^^^ private associated function
+  |
+ ::: src/view/view.rs
+  |
+  |     pub(crate) const fn new(depth: usize) -> Self {
+  |     --------------------------------------------- private associated function defined here

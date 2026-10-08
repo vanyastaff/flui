@@ -110,7 +110,7 @@ const OWNER_TURN_BUDGET: usize = 32;
 // unconstructed there.
 #[cfg_attr(
     all(
-        not(test),
+        not(all(test, not(any(target_os = "android", target_os = "ios")))),
         // Only android and iOS drop the window-event variants: the web runner
         // constructs `WindowFocus`/`WindowHover` through the browser's
         // visibility/focus signals, so on wasm32 they are live.
@@ -142,7 +142,7 @@ pub(in crate::app) enum PlatformToUi {
     /// One atomic observation after callback registration. Keep this lossless:
     /// a suspended or unfocused snapshot can cancel active input sequences.
     #[cfg_attr(
-        all(not(test), any(target_arch = "wasm32", target_os = "android")),
+        any(all(not(test), target_arch = "wasm32"), target_os = "android"),
         expect(
             dead_code,
             reason = "desktop and UIKit seed batched window observations"
@@ -263,7 +263,15 @@ pub(in crate::app) enum RealmTask {
     Pump(Box<dyn FnOnce(&mut crate::app::ui_realm::UiRealm)>),
     /// Commit the owner inbox, then poll async work without running a frame.
     #[cfg(any(test, target_os = "ios"))]
+    #[cfg_attr(
+        all(test, target_os = "android"),
+        expect(dead_code, reason = "background pump tests are excluded on Android")
+    )]
     BackgroundPump,
+    #[cfg_attr(
+        all(test, target_os = "android"),
+        expect(dead_code, reason = "presentation close tests are excluded on Android")
+    )]
     ClosePresentation(flui_foundation::PresentationId),
 }
 
@@ -675,6 +683,10 @@ pub(super) fn install_platform_realm(
                   have no caller outside this module's own tests"
     )
 )]
+#[cfg_attr(
+    all(test, target_os = "android"),
+    expect(dead_code, reason = "realm install tests are excluded on Android")
+)]
 pub(super) fn install_realm_alongside(
     realm: crate::app::ui_realm::UiRealm,
     window: &std::sync::Arc<dyn flui_platform::traits::PlatformWindow>,
@@ -739,6 +751,13 @@ pub(super) fn install_realm_alongside(
     )
 )]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[cfg_attr(
+    all(test, any(target_os = "android", target_os = "ios")),
+    expect(
+        dead_code,
+        reason = "presentation install tests are excluded on mobile"
+    )
+)]
 pub(super) enum InstallPresentationError {
     /// `dispatcher`'s realm no longer exists (a newer realm replaced it, or
     /// it was already torn down).
@@ -835,6 +854,13 @@ pub(super) enum InstallPresentationError {
         dead_code,
         reason = "open_secondary_window (its production caller) is desktop-only -- android/wasm32 \
                   have no caller outside this module's own tests"
+    )
+)]
+#[cfg_attr(
+    all(test, any(target_os = "android", target_os = "ios")),
+    expect(
+        dead_code,
+        reason = "presentation install tests are excluded on mobile"
     )
 )]
 pub(super) fn install_presentation_alongside(
@@ -964,6 +990,10 @@ pub(super) fn install_presentation_alongside(
                   android/wasm32 have no caller outside this module's own tests"
     )
 )]
+#[cfg_attr(
+    all(test, target_os = "android"),
+    expect(dead_code, reason = "presentation close tests are excluded on Android")
+)]
 fn close_presentation(
     dispatcher: RealmDispatcher,
     id: flui_foundation::PresentationId,
@@ -988,6 +1018,13 @@ fn close_presentation(
         dead_code,
         reason = "its production callers (run_desktop, open_secondary_window) are desktop-only \
                   -- android/wasm32 have no caller outside this module's own tests"
+    )
+)]
+#[cfg_attr(
+    all(test, target_os = "android"),
+    expect(
+        dead_code,
+        reason = "desktop window close tests are excluded on Android"
     )
 )]
 pub(super) fn close_this_window(dispatcher: RealmDispatcher) {
@@ -1349,6 +1386,10 @@ fn finish_owner_callback() {
         not(target_arch = "wasm32")
     )
 ))]
+#[cfg_attr(
+    all(test, target_os = "android"),
+    expect(dead_code, reason = "desktop owner-turn tests are excluded on Android")
+)]
 fn continue_owner_turns() {
     let claimed = APP_RUNTIME.with(|slot| {
         let mut state = slot.borrow_mut();
@@ -1813,6 +1854,13 @@ fn drop_removed_realms(
         not(target_arch = "wasm32")
     )
 ))]
+#[cfg_attr(
+    all(test, target_os = "android"),
+    expect(
+        dead_code,
+        reason = "desktop realm iteration tests are excluded on Android"
+    )
+)]
 fn for_each_installed_realm(mut f: impl FnMut(&crate::app::ui_realm::UiRealm)) {
     let ids = APP_RUNTIME.with(|slot| {
         let mut state = slot.borrow_mut();

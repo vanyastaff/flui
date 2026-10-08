@@ -45,7 +45,6 @@ impl Gradient {
     /// side cannot be sampled (see [`LinearGradient::lerp`]).
     #[inline]
     pub fn lerp(a: &Self, b: &Self, t: f64) -> Option<Self> {
-        let t = t.clamp(0.0, 1.0);
         match (a, b) {
             (Gradient::Linear(a), Gradient::Linear(b)) => {
                 LinearGradient::lerp(a, b, t).map(Gradient::Linear)
@@ -187,28 +186,42 @@ impl LinearGradient {
     ///
     /// Returns `None` if either side has no colours, explicit stops do not
     /// match its colours one for one, stops are outside `0..=1` or descending, or
-    /// `t` is NaN. Repeated stops preserve a hard transition.
+    /// geometry or `t` is non-finite, or extrapolated geometry overflows.
+    /// Geometry extrapolates outside `0..=1`; colors saturate at the endpoints.
+    /// Repeated stops preserve a hard transition.
     #[inline]
     pub fn lerp(a: &Self, b: &Self, t: f64) -> Option<Self> {
-        if t.is_nan()
+        if !t.is_finite()
+            || !valid_alignment(a.begin)
+            || !valid_alignment(a.end)
+            || !valid_alignment(b.begin)
+            || !valid_alignment(b.end)
             || !valid_stops(&a.colors, a.stops.as_deref())
             || !valid_stops(&b.colors, b.stops.as_deref())
         {
             return None;
         }
-        // Equal gradients short-circuit to `a`.
+        let begin = lerp_alignment(a.begin, b.begin, t)?;
+        let end = lerp_alignment(a.end, b.end, t)?;
+        if !(end.x - begin.x).is_finite()
+            || !(end.y - begin.y).is_finite()
+            || distorted_span(a.begin.x, a.end.x, b.begin.x, b.end.x, end.x - begin.x, t)
+            || distorted_span(a.begin.y, a.end.y, b.begin.y, b.end.y, end.y - begin.y, t)
+        {
+            return None;
+        }
+        // Preserve the representation of valid equal gradients.
         if a == b {
             return Some(a.clone());
         }
-        let t = t.clamp(0.0, 1.0);
         let (colors, stops) = interpolate_colors_and_stops(
             (&a.colors, a.stops.as_deref()),
             (&b.colors, b.stops.as_deref()),
             t,
         )?;
         Some(Self {
-            begin: Alignment::lerp(a.begin, b.begin, t),
-            end: Alignment::lerp(a.end, b.end, t),
+            begin,
+            end,
             colors,
             stops: Some(stops),
             tile_mode: if t < 0.5 { a.tile_mode } else { b.tile_mode },
@@ -315,6 +328,8 @@ impl RadialGradient {
     /// Linearly interpolate between two radial gradients. Colours and stops
     /// combine as in [`LinearGradient::lerp`], the radii never go below
     /// zero, and a missing focal radius counts as `0.0`.
+    /// Non-finite geometry, negative input radii, and unrepresentable
+    /// normalized circle values are rejected before paint-bounds resolution.
     ///
     /// A focal point on one side only moves to or from the other side's
     /// *center*, because a gradient without a focal point is focused on its
@@ -323,36 +338,72 @@ impl RadialGradient {
     /// anywhere else.
     #[inline]
     pub fn lerp(a: &Self, b: &Self, t: f64) -> Option<Self> {
-        if t.is_nan()
+        if !t.is_finite()
+            || !valid_alignment(a.center)
+            || !valid_alignment(b.center)
+            || !valid_radius(a.radius)
+            || !valid_radius(b.radius)
+            || a.focal.is_some_and(|focal| !valid_alignment(focal))
+            || b.focal.is_some_and(|focal| !valid_alignment(focal))
+            || a.focal_radius.is_some_and(|radius| !valid_radius(radius))
+            || b.focal_radius.is_some_and(|radius| !valid_radius(radius))
             || !valid_stops(&a.colors, a.stops.as_deref())
             || !valid_stops(&b.colors, b.stops.as_deref())
         {
             return None;
         }
-        // Equal gradients short-circuit to `a`.
+        let center = lerp_alignment(a.center, b.center, t)?;
+        let radius = lerp_radius(a.radius, b.radius, t)?;
+
+        let focal = match (a.focal, b.focal) {
+            (Some(a_focal), Some(b_focal)) => Some(lerp_alignment(a_focal, b_focal, t)?),
+            (Some(a_focal), None) => Some(lerp_alignment(a_focal, b.center, t)?),
+            (None, Some(b_focal)) => Some(lerp_alignment(a.center, b_focal, t)?),
+            (None, None) => None,
+        };
+        let focal_radius = match (a.focal_radius, b.focal_radius) {
+            (None, None) => None,
+            (a_r, b_r) => Some(lerp_radius(a_r.unwrap_or(0.0), b_r.unwrap_or(0.0), t)?),
+        };
+        let a_focal = a.focal.unwrap_or(a.center);
+        let b_focal = b.focal.unwrap_or(b.center);
+        let mixed_focal = focal.unwrap_or(center);
+        if distorted_span(
+            a.center.x,
+            a_focal.x,
+            b.center.x,
+            b_focal.x,
+            mixed_focal.x - center.x,
+            t,
+        ) || distorted_span(
+            a.center.y,
+            a_focal.y,
+            b.center.y,
+            b_focal.y,
+            mixed_focal.y - center.y,
+            t,
+        ) || !valid_normalized_circles(center, mixed_focal, radius, focal_radius.unwrap_or(0.0))
+        {
+            return None;
+        }
+        if focal.unwrap_or(center) == center
+            && focal_radius.unwrap_or(0.0) == radius
+            && radius != 0.0
+        {
+            return None;
+        }
+        // Equal gradients preserve their representation after validating geometry.
         if a == b {
             return Some(a.clone());
         }
-        let t = t.clamp(0.0, 1.0);
         let (colors, stops) = interpolate_colors_and_stops(
             (&a.colors, a.stops.as_deref()),
             (&b.colors, b.stops.as_deref()),
             t,
         )?;
-
-        let focal = match (a.focal, b.focal) {
-            (Some(a_focal), Some(b_focal)) => Some(Alignment::lerp(a_focal, b_focal, t)),
-            (Some(a_focal), None) => Some(Alignment::lerp(a_focal, b.center, t)),
-            (None, Some(b_focal)) => Some(Alignment::lerp(a.center, b_focal, t)),
-            (None, None) => None,
-        };
-        let focal_radius = match (a.focal_radius, b.focal_radius) {
-            (None, None) => None,
-            (a_r, b_r) => Some(lerp_f32(a_r.unwrap_or(0.0), b_r.unwrap_or(0.0), t).max(0.0)),
-        };
         Some(Self {
-            center: Alignment::lerp(a.center, b.center, t),
-            radius: lerp_f32(a.radius, b.radius, t).max(0.0),
+            center,
+            radius,
             colors,
             stops: Some(stops),
             tile_mode: if t < 0.5 { a.tile_mode } else { b.tile_mode },
@@ -422,38 +473,327 @@ impl SweepGradient {
     }
 
     /// Linearly interpolate between two sweep gradients. Colours and stops
-    /// combine as in [`LinearGradient::lerp`]; the angles never go below zero.
+    /// combine as in [`LinearGradient::lerp`]; finite signed angles extrapolate.
+    /// Returns `None` when the phase-reduced angle span cannot be represented
+    /// by the renderer's `f32` angles, including a nonzero span lost to rounding.
     #[inline]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "narrowing checks the renderer's angle representation before publication"
+    )]
     pub fn lerp(a: &Self, b: &Self, t: f64) -> Option<Self> {
-        if t.is_nan()
+        if !t.is_finite()
+            || !valid_alignment(a.center)
+            || !valid_alignment(b.center)
+            || !a.start_angle.is_finite()
+            || !b.start_angle.is_finite()
+            || !a.end_angle.is_finite()
+            || !b.end_angle.is_finite()
             || !valid_stops(&a.colors, a.stops.as_deref())
             || !valid_stops(&b.colors, b.stops.as_deref())
         {
             return None;
         }
-        // Equal gradients short-circuit to `a`.
+        let center = lerp_alignment(a.center, b.center, t)?;
+        let start_angle = lerp_finite(a.start_angle, b.start_angle, t)?;
+        let end_angle = lerp_finite(a.end_angle, b.end_angle, t)?;
+        // The renderer reduces the phase before narrowing; absolute angles
+        // can exceed f32 while their signed span remains representable.
+        let span = end_angle - start_angle;
+        let phase = start_angle.rem_euclid(std::f64::consts::TAU);
+        let packed_end = (phase + span) as f32;
+        let packed_span = packed_end - phase as f32;
+        // A box dimension can round up from just above half the smallest f32
+        // subnormal. Refuse centers impossible even at that scale; smaller
+        // boxes can otherwise represent centers beyond the unit-box f32 range.
+        let minimum_dimension = f64::from(f32::from_bits(1)) * 0.5;
+        // Extrapolation must not amplify packing error into a changed angular
+        // scale. Bounded interpolation and unchanged gradients retain the
+        // renderer's existing small-span representation.
+        if !span.is_finite()
+            || distorted_span(
+                a.start_angle,
+                a.end_angle,
+                b.start_angle,
+                b.end_angle,
+                span,
+                t,
+            )
+            || !packed_end.is_finite()
+            || !packed_span.is_finite()
+            || ![center.x, center.y]
+                .into_iter()
+                .all(|value| ((value * 0.5 * minimum_dimension) as f32).is_finite())
+            || (span != 0.0 && packed_span == 0.0)
+            || (!(0.0..=1.0).contains(&t)
+                && (a.start_angle != b.start_angle || a.end_angle != b.end_angle)
+                && (f64::from(packed_span) - span).abs()
+                    > span.abs().max(f64::from(packed_span).abs()) * f64::from(f32::EPSILON))
+        {
+            return None;
+        }
+        // Preserve the representation of valid equal gradients.
         if a == b {
             return Some(a.clone());
         }
-        let t = t.clamp(0.0, 1.0);
         let (colors, stops) = interpolate_colors_and_stops(
             (&a.colors, a.stops.as_deref()),
             (&b.colors, b.stops.as_deref()),
             t,
         )?;
         Some(Self {
-            center: Alignment::lerp(a.center, b.center, t),
+            center,
             colors,
             stops: Some(stops),
             tile_mode: if t < 0.5 { a.tile_mode } else { b.tile_mode },
-            start_angle: lerp_f32(a.start_angle, b.start_angle, t).max(0.0),
-            end_angle: lerp_f32(a.end_angle, b.end_angle, t).max(0.0),
+            start_angle,
+            end_angle,
         })
     }
 }
 
-fn lerp_f32(a: f64, b: f64, t: f64) -> f64 {
-    a + (b - a) * t
+fn valid_alignment(value: Alignment) -> bool {
+    value.x.is_finite() && value.y.is_finite()
+}
+
+// Coordinate interpolation can distort a span under a large common translation.
+// Compare independently interpolated spans, allowing rounding below the
+// renderer's relative f32 precision rather than rejecting ordinary f64 noise.
+fn distorted_span(a_start: f64, a_end: f64, b_start: f64, b_end: f64, mixed: f64, t: f64) -> bool {
+    if !mixed.is_finite() {
+        return true;
+    }
+    let Some((a, a_error)) = span_parts(a_end, a_start) else {
+        return false;
+    };
+    let Some((b, b_error)) = span_parts(b_end, b_start) else {
+        return false;
+    };
+    let Some((span, error)) = lerp_finite(a, b, t).zip(lerp_finite(a_error, b_error, t)) else {
+        return true;
+    };
+    let span = span + error;
+    !span.is_finite()
+        || (span - mixed).abs() > span.abs().max(mixed.abs()) * f64::from(f32::EPSILON)
+}
+
+// Error-free TwoDiff decomposition: keep the low part when opposite large
+// endpoint spans cancel, so their finite residual is not mistaken for zero.
+fn span_parts(end: f64, start: f64) -> Option<(f64, f64)> {
+    let span = end - start;
+    if !span.is_finite() {
+        return None;
+    }
+    let virtual_start = end - span;
+    let virtual_end = span + virtual_start;
+    Some((span, (end - virtual_end) + (virtual_start - start)))
+}
+
+fn valid_radius(value: f64) -> bool {
+    value.is_finite() && value >= 0.0
+}
+
+fn valid_normalized_circles(
+    center: Alignment,
+    focal: Alignment,
+    radius: f64,
+    focal_radius: f64,
+) -> bool {
+    // Normalize relative to a unit paint box, using the engine's shared circle
+    // scale. A raw radius above f32::MAX can still pack successfully. Actual
+    // bounds remain engine checks.
+    let positions = [center.x, center.y, focal.x, focal.y].map(|value| value.mul_add(0.5, 0.5));
+    valid_circles(positions, radius, focal_radius, [1.0, 1.0])
+}
+
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "validate normalized renderer packing"
+)]
+fn valid_circles(positions: [f64; 4], radius: f64, focal_radius: f64, bounds: [f64; 2]) -> bool {
+    if !positions.into_iter().chain(bounds).all(f64::is_finite)
+        || !valid_radius(radius)
+        || !valid_radius(focal_radius)
+        || (radius != 0.0
+            && radius == focal_radius
+            && positions[0] == positions[2]
+            && positions[1] == positions[3])
+    {
+        return false;
+    }
+    let scale = positions.iter().fold(
+        radius
+            .max(focal_radius)
+            .max(bounds[0].abs())
+            .max(bounds[1].abs()),
+        |scale, value| scale.max(value.abs()),
+    );
+    let scale = if scale == 0.0 { 1.0 } else { scale };
+    let values = [
+        positions[0] / scale,
+        positions[1] / scale,
+        radius / scale,
+        positions[2] / scale,
+        positions[3] / scale,
+        focal_radius / scale,
+        scale.recip(),
+    ];
+    if !values
+        .into_iter()
+        .all(|value| (value as f32).is_finite() && (value == 0.0 || value as f32 != 0.0))
+    {
+        return false;
+    }
+    let packed = values.map(|value| value as f32);
+    if ![(bounds[0], packed[3]), (bounds[1], packed[4])]
+        .into_iter()
+        .all(|(dimension, focal)| {
+            let normalized = dimension as f32 * packed[6];
+            normalized.is_finite()
+                && (dimension == 0.0 || (normalized != 0.0 && normalized - focal != -focal))
+        })
+    {
+        return false;
+    }
+    let dx = packed[0] - packed[3];
+    let dy = packed[1] - packed[4];
+    let dr = packed[2] - packed[5];
+    let quadratic = dx * dx + dy * dy - dr * dr;
+    let native_dx = values[0] - values[3];
+    let native_dy = values[1] - values[4];
+    let native_dr = values[2] - values[5];
+    let native_quadratic = native_dx * native_dx + native_dy * native_dy - native_dr * native_dr;
+    if !quadratic.is_finite()
+        || (native_quadratic == 0.0) != (quadratic == 0.0)
+        || (native_quadratic > 0.0 && quadratic < 0.0)
+        || (native_quadratic < 0.0 && quadratic > 0.0)
+    {
+        return false;
+    }
+    [(0, 3), (1, 4), (2, 5)].into_iter().all(|(outer, inner)| {
+        values[outer] - values[inner] == 0.0 || packed[outer] - packed[inner] != 0.0
+    })
+}
+
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "validate bounds-local renderer packing"
+)]
+pub(crate) fn valid_bounds(
+    gradient: &Gradient,
+    rect: flui_foundation::geometry::Rect<f64>,
+    bounds: flui_foundation::geometry::Rect<f64>,
+) -> bool {
+    let center = rect.center();
+    let local = |alignment: Alignment| {
+        [
+            (center.x + alignment.x * (rect.width() / 2.0)) - bounds.left(),
+            (center.y + alignment.y * (rect.height() / 2.0)) - bounds.top(),
+        ]
+    };
+    match gradient {
+        Gradient::Linear(linear) => valid_linear_bounds(linear, rect, bounds),
+        Gradient::Radial(radial) => {
+            let center = local(radial.center);
+            let focal = local(radial.focal.unwrap_or(radial.center));
+            let half_side = (rect.width() / 2.0).min(rect.height() / 2.0);
+            valid_circles(
+                [center[0], center[1], focal[0], focal[1]],
+                radial.radius * half_side * 2.0,
+                radial.focal_radius.unwrap_or(0.0) * half_side * 2.0,
+                [bounds.width(), bounds.height()],
+            )
+        }
+        Gradient::Sweep(sweep) => local(sweep.center).into_iter().all(|value| {
+            value.is_finite() && (value as f32).is_finite() && (value == 0.0 || value as f32 != 0.0)
+        }),
+    }
+}
+
+// The decoration producer knows the real paint box, unlike interpolation.
+fn valid_linear_bounds(
+    gradient: &LinearGradient,
+    rect: flui_foundation::geometry::Rect<f64>,
+    bounds: flui_foundation::geometry::Rect<f64>,
+) -> bool {
+    let center = rect.center();
+    let at = |alignment: Alignment| {
+        [
+            center.x + alignment.x * (rect.width() / 2.0),
+            center.y + alignment.y * (rect.height() / 2.0),
+        ]
+    };
+    let from = at(gradient.begin);
+    let to = at(gradient.end);
+    valid_resolved_linear_projection(
+        [from[0] - bounds.left(), from[1] - bounds.top()],
+        [to[0] - from[0], to[1] - from[1]],
+        [bounds.width(), bounds.height()],
+    )
+}
+
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "validate renderer projection packing"
+)]
+fn valid_resolved_linear_projection(start: [f64; 2], delta: [f64; 2], bounds: [f64; 2]) -> bool {
+    if !start.into_iter().chain(delta).all(f64::is_finite) {
+        return false;
+    }
+    let scale = delta[0].abs().max(delta[1].abs());
+    if scale == 0.0 {
+        return true;
+    }
+    let normalized = delta.map(|value| value / scale);
+    let norm = normalized[0] * normalized[0] + normalized[1] * normalized[1];
+    if scale <= 0.01 && scale * scale * norm <= 0.0001 {
+        return true;
+    }
+    let [a, b] = normalized.map(|value| (value / norm) / scale);
+    let c = -(start[0] * a + start[1] * b);
+    let coefficients = [a, b, c];
+    if !coefficients.into_iter().all(|value| {
+        value.is_finite() && (value as f32).is_finite() && (value == 0.0 || value as f32 != 0.0)
+    }) {
+        return false;
+    }
+    let packed = coefficients.map(|value| value as f32);
+    let bound = f64::from(packed[0]).abs() * f64::from(bounds[0] as f32)
+        + f64::from(packed[1]).abs() * f64::from(bounds[1] as f32)
+        + f64::from(packed[2]).abs();
+    bound.is_finite() && bound <= f64::from(f32::MAX) * 0.5
+}
+
+fn lerp_radius(a: f64, b: f64, t: f64) -> Option<f64> {
+    // Admitted radii are nonnegative, so subtraction cannot overflow.
+    // Clamp negative infinity before checking the published radius.
+    let value = (b - a).mul_add(t, a).max(0.0);
+    valid_radius(value).then_some(value)
+}
+
+fn lerp_alignment(a: Alignment, b: Alignment, t: f64) -> Option<Alignment> {
+    Some(Alignment::new(
+        lerp_finite(a.x, b.x, t)?,
+        lerp_finite(a.y, b.y, t)?,
+    ))
+}
+
+fn lerp_finite(a: f64, b: f64, t: f64) -> Option<f64> {
+    let value = if t == 0.0 || a == b {
+        a
+    } else if t == 1.0 {
+        b
+    } else {
+        let span = b - a;
+        if span.is_finite() {
+            span.mul_add(t, a)
+        } else {
+            // Opposite finite extremes can overflow the subtraction even
+            // though their weighted interpolation is representable.
+            a * (1.0 - t) + b * t
+        }
+    };
+    value.is_finite().then_some(value)
 }
 
 fn valid_stops(colors: &[Color], stops: Option<&[f64]>) -> bool {

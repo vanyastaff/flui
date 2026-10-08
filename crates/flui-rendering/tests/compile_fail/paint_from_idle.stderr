@@ -1,0 +1,7 @@
+error[E0599]: no method named `run_paint` found for struct `PipelineOwner` in the current scope
+ --> tests/compile_fail/paint_from_idle.rs:5:11
+  |
+5 |     owner.run_paint();
+  |           ^^^^^^^^^ method not found in `PipelineOwner`
+  |
+  = note: the method was found for `PipelineOwner<PaintPhase>`

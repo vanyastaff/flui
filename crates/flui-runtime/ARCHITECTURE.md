@@ -92,7 +92,10 @@ host.
   (`local_post_frame_lane`) is `test-support` only, so a host has no way to
   draw a frame, or end one, except the pump. Tests of the draw step alone
   reach it through `render_frame_for_test` and `draw_frame`, both under
-  `test-support`.
+  `test-support`. `trybuild_ui::ui_tests` checks the private draw-step diagnostic
+  from a host caller and compiles a valid pump caller. It also rejects moving
+  a clone from `RenderingBinding::root_pipeline_owner` to another thread while
+  accepting local access to that same binding's pipeline.
 - **The realm renders through a sink, never an engine.** `UiRealm::pump`
   takes any `&mut dyn FrameSink`; the host picks one (`flui-app`'s raster
   lane, or its direct sink over a borrowed backend on the web runner), and

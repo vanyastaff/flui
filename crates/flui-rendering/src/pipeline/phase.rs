@@ -8,13 +8,17 @@
 //!
 //! # Compile-time enforcement examples
 //!
+//! `tests/compile_fail.rs` pins the exact diagnostics for the three invalid
+//! phase calls below and for a downstream phase implementation, alongside a
+//! passing constructor and complete phase sequence.
+//!
 //! `run_layout`, `run_compositing`, `run_paint`, and `run_semantics`
 //! each live on the matching phase's impl block. Calling them on the
 //! wrong phase (or on `<Idle>`) fails at compile time:
 //!
 //! ```compile_fail
 //! use flui_rendering::pipeline::PipelineOwner;
-//! let owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone()); // <Idle>
+//! let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone()); // <Idle>
 //! owner.run_paint();                       // error[E0599]: run_paint is on <PaintPhase> only
 //! ```
 //!
