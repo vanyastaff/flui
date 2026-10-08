@@ -429,16 +429,16 @@ fn extract_modifiers(event: &NSEvent) -> Modifiers {
 
     let mut modifiers = Modifiers::NONE;
     if flags.contains(NSEventModifierFlags::Shift) {
-        modifiers.insert(Modifiers::SHIFT);
+        modifiers |= Modifiers::SHIFT;
     }
     if flags.contains(NSEventModifierFlags::Control) {
-        modifiers.insert(Modifiers::CONTROL);
+        modifiers |= Modifiers::CONTROL;
     }
     if flags.contains(NSEventModifierFlags::Option) {
-        modifiers.insert(Modifiers::ALT);
+        modifiers |= Modifiers::ALT;
     }
     if flags.contains(NSEventModifierFlags::Command) {
-        modifiers.insert(Modifiers::META); // Command = Meta
+        modifiers |= Modifiers::META; // Command = Meta
     }
     modifiers
 }
