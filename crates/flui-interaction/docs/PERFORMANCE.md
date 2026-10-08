@@ -47,6 +47,10 @@ allocation. The allocation matrix covers that producer alongside translated
 paths and a small nonzero translation. Approximate identity is not sufficient:
 even a small authored displacement must localize every reading. Nonidentity
 paths retain checked plane projection and their required owned histories.
+Transform classification also borrows its optional matrix until admission.
+Passing that large optional payload by value can materialize a matrix copy
+before checking an absent transform; only an admitted nonidentity route needs
+to own the matrix. This ownership choice does not remove any geometry checks.
 
 ## Bounds
 

@@ -52,6 +52,10 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   that exact matrix as an unlocalized route keeps measured and predicted
   histories borrowed and preserves source metadata. A near-identity matrix
   still follows checked localization; a tolerance would erase authored motion.
+  Transform classification borrows the optional matrix until a nonidentity
+  transform is admitted. Only that branch needs an owned matrix in the cached
+  route; inspecting absence or exact identity does not require copying the
+  whole optional payload first.
   `resolved_route_move_invocation_allocates_no_heap_after_setup` covers real
   identity, translated and near-identity hit paths, complete sample families
   and their allocation contracts.
