@@ -139,7 +139,7 @@ pub fn replacing_and_unmounting_the_field_withdraws_its_node_subscription() {
         theme.clone(),
         TextField::new(controller).focus_node(Rc::clone(&replacement)),
     ));
-    replacement.request_focus();
+    let _ = replacement.request_focus();
     laid.tick();
     let decorated_box = laid
         .try_find_by_render_type("RenderDecoratedBox")

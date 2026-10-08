@@ -27,7 +27,7 @@ pub fn pointer_and_keyboard_activation_write_the_owning_signal() {
     laid.dispatch_pointer_down(40.0, 20.0);
     laid.dispatch_pointer_up(40.0, 20.0);
     assert_eq!(probe.value(), Ok(1));
-    node.request_focus();
+    let _ = node.request_focus();
     assert!(laid.focus_manager().dispatch_key_event(&enter()));
     assert_eq!(probe.value(), Ok(2));
     laid.pump();

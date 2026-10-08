@@ -453,7 +453,7 @@ impl ViewState<TextField> for MaterialTextFieldState {
 
         GestureDetector::new()
             .on_tap(move |_cx| {
-                focus_node.request_focus();
+                let _ = focus_node.request_focus();
             })
             .child(
                 InputDecorator::new(decoration)

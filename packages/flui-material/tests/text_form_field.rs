@@ -47,7 +47,7 @@ pub fn validator_error_reaches_the_input_decorator_error_line() {
     laid.tick();
     assert!(laid.find_text("Required").is_some(), "the error line shows");
 
-    node.request_focus();
+    let _ = node.request_focus();
     let event = KeyEventBuilder::new(Code::KeyA)
         .with_key(Key::Character("a".to_owned()))
         .with_state(KeyState::Down)
