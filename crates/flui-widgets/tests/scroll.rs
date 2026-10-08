@@ -2076,6 +2076,66 @@ fn assert_notification_failures(log: &flui_testing::log_capture::CapturedLog, ex
     );
 }
 
+pub(crate) fn nested_fling_equal_edge_jump_cancels_old_handoff_and_next_gesture_recovers() {
+    use flui_foundation::geometry::Axis::Vertical;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let (outer, inner, vsync) = (
+        ScrollController::new(),
+        ScrollController::new(),
+        Vsync::new(),
+    );
+    let mut laid = crate::common::lay_out_animated(
+        nested_fling_content(&outer, &inner, &vsync, Vertical, Vertical, false, false),
+        tight(300.0, 300.0),
+        vsync,
+    );
+    outer.jump_to(600.0);
+    inner.jump_to(650.0);
+    laid.tick();
+    let pending_jump = Arc::new(AtomicBool::new(true));
+    let jump = Arc::clone(&pending_jump);
+    let controller = inner.clone();
+    let listenable = inner.as_listenable();
+    let listener = listenable.add_listener(Arc::new(move || {
+        if controller.pixels() == 800.0 && jump.swap(false, Ordering::SeqCst) {
+            // Explicit programmatic cancellation must win even when it leaves
+            // the already-committed edge pixels unchanged.
+            controller.jump_to(800.0);
+        }
+    }));
+    release_inner_fling(&laid, Vertical, false);
+    assert_eq!(
+        inner.pixels(),
+        670.0,
+        "actual release retains its accepted velocity"
+    );
+    for _ in 0..15 {
+        laid.pump_for(Duration::from_millis(16));
+    }
+    assert!(
+        !pending_jump.load(Ordering::SeqCst),
+        "edge notification actually reentered jump_to"
+    );
+    assert_eq!(inner.pixels(), 800.0);
+    assert_eq!(
+        outer.pixels(),
+        600.0,
+        "the explicit equal-edge jump cancels the older residual impulse"
+    );
+    listenable.remove_listener(listener);
+    inner.jump_to(650.0);
+    outer.jump_to(600.0);
+    laid.tick();
+    release_inner_fling(&laid, Vertical, false);
+    for _ in 0..15 {
+        laid.pump_for(Duration::from_millis(16));
+    }
+    assert!(
+        outer.pixels() > 600.0,
+        "a fresh gesture can still hand off after cancellation"
+    );
+}
+
 pub(crate) fn nested_fling_skips_saturated_parent_and_reentrant_jump_retires_transfer() {
     let (outer, middle, inner, vsync) = (
         ScrollController::new(),
