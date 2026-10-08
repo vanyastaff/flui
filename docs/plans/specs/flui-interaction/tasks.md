@@ -166,6 +166,24 @@ hardware smoke и не обещание безграничного окна velo
 Контрольный запуск: `cargo nextest run --locked -p flui-interaction
 tap_and_drag_resolves_through_the_shared_arena --no-capture`.
 
+## Минимальный интервал DoubleTap
+
+Утверждённый M2-T4 закрыт локально: DoubleTap сохраняет время первого Up на
+owner clock арены и допускает иначе подходящий второй Down начиная с 40 ms.
+Более ранний Down игнорируется без потери удержанного первого verdict и без
+перезапуска его timeout; последующий Up не допускает этот контакт задним
+числом. Duration первого нажатия не подменяет интервал после первого Up.
+Timeout и межконтактный slop по frozen settings сохраняют отдельную политику.
+
+`tap_and_drag_resolves_through_the_shared_arena` проверяет Mouse/Touch,
+39 ms refusal, exact40 admission, первое нажатие продолжительностью 0/250 ms
+и следующую здоровую пару с повторным pointer ID. Baseline и независимый
+production inverse воспроизвели лишний second-down callback на 39 ms; контроль
+40 ms прошёл при откате. Точные production-хунки восстановлены; расширенная
+публичная таблица, обычный trybuild и `tap_builder_lifecycle_contract` после
+коррекции его нулевого timing premise прошли. Финальные gates зависимых
+потребителей и CI остаются отдельными условиями приёмки.
+
 ## Порядок принятого motion перед Keyboard и IME
 
 Дополнительная runtime-регрессия реализована локально: `UiRealm` доставляет

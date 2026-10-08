@@ -36,7 +36,7 @@ PR #1467 (held Down на blur), #1476 (контрактные тесты hover/h
 |---|---|---|---|
 | M1-14 | OS-level capture (drag leaves the window) | broken (Win32, web) | PR #1471 (Win32 `SetCapture`/`WM_CAPTURECHANGED`; web — pointer-vocabulary V14) |
 | M2-T3 | Button filtering for non-tap recognizers | broken | PR #1474 |
-| M2-T4 | Double tap: timeout, slop between taps, debounce | partial | PR #1474 (per-kind slop; the 40 ms debounce is not mentioned in the PR — verify) |
+| M2-T4 | Double tap: timeout, slop between taps, debounce | implemented locally; final gates pending | Existing timeout/per-kind slop are retained; second Down is eligible at 40 ms after first Up on the frozen owner-clock snapshot. Public Mouse/Touch 39/40 ms, held-first-contact and reused-ID recovery rows pass. Independent debounce inverse admits the 39 ms Down and fails, exact40 control stays GREEN; exact source was restored and broader public/trybuild plus cancellation-reuse checks passed |
 | M2-L1 | Long press timeout and movement tolerance | partial | PR #1474 |
 | M2-X3 | Per-device-kind settings | partial | PR #1474 (`touch_slop()` crate-private — S1) |
 | M2-V3 | Velocity samples use the event timestamp | broken | PR #1474 |
