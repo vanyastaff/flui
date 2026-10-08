@@ -109,7 +109,7 @@ enum DoubleTapState {
         details: DoubleTapDetails,
         first_up: Instant,
         deadline: Option<Instant>,
-        settings: GestureSettings,
+        settings: Box<GestureSettings>,
         device: Option<DeviceId>,
     },
     SecondDown,
@@ -281,7 +281,7 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
                         self.contact.finish();
                     });
                     second = true;
-                    admitted_settings = settings;
+                    admitted_settings = *settings;
                 }
             }
             DoubleTapState::Ready => {}
@@ -367,7 +367,7 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
                             details,
                             first_up,
                             deadline,
-                            settings: contact.settings,
+                            settings: Box::new(contact.settings),
                             device,
                         };
                     }
