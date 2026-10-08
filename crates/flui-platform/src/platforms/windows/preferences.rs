@@ -9,17 +9,22 @@ use std::sync::{
 };
 use std::time::Duration;
 
+use flui_foundation::geometry::{DevicePixelRatio, Size};
 use flui_platform_api::{
-    GesturePreferences, MotionPreference, SystemPreferences, WheelPreferences, WheelStep,
+    GesturePreferences, MotionPreference, NativeMouseGeometry, PreferenceQueryError,
+    SystemPreferences, WheelPreferences, WheelStep,
 };
 use windows::Foundation::TypedEventHandler;
 use windows::UI::ViewManagement::{AccessibilitySettings, UISettings};
+use windows::Win32::Foundation::{GetLastError, SetLastError, WIN32_ERROR};
 use windows::Win32::System::WinRT::{
     RO_INIT_SINGLETHREADED, RoActivateInstance, RoInitialize, RoUninitialize,
 };
+use windows::Win32::UI::HiDpi::GetSystemMetricsForDpi;
 use windows::Win32::UI::Input::KeyboardAndMouse::GetDoubleClickTime;
 use windows::Win32::UI::WindowsAndMessaging::{
-    SPI_GETWHEELSCROLLCHARS, SPI_GETWHEELSCROLLLINES, SYSTEM_PARAMETERS_INFO_ACTION,
+    SM_CXDOUBLECLK, SM_CXDRAG, SM_CYDOUBLECLK, SM_CYDRAG, SPI_GETWHEELSCROLLCHARS,
+    SPI_GETWHEELSCROLLLINES, SYSTEM_METRICS_INDEX, SYSTEM_PARAMETERS_INFO_ACTION,
     SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW,
 };
 use windows::core::{Interface, RuntimeName};
@@ -337,6 +342,37 @@ fn vertical_wheel(count: u32) -> WheelStep {
     }
 }
 
+/// Query mouse metrics at the consuming coordinate context, without subscribing.
+pub(super) fn mouse_geometry(dpi: u32) -> Result<NativeMouseGeometry, PreferenceQueryError> {
+    let ratio =
+        DevicePixelRatio::new(f64::from(dpi) / 96.0).ok_or(PreferenceQueryError::Unavailable)?;
+    let metric = |index: SYSTEM_METRICS_INDEX| -> Result<i32, PreferenceQueryError> {
+        // SAFETY: these scalar getters take no pointers. Clear the thread's error
+        // slot so a legitimate zero metric cannot inherit an older API failure.
+        let (value, error) = unsafe {
+            SetLastError(WIN32_ERROR(0));
+            let value = GetSystemMetricsForDpi(index, dpi);
+            (value, GetLastError())
+        };
+        if value == 0 && error.0 != 0 {
+            return Err(PreferenceQueryError::Native {
+                message: windows::core::Error::from(error).to_string(),
+            });
+        }
+        Ok(value)
+    };
+    let double_click = Size::new(metric(SM_CXDOUBLECLK)?, metric(SM_CYDOUBLECLK)?);
+    // SM_CXDRAG/CYDRAG already denote displacement on each side, unlike the
+    // full double-click rectangle. Their documented negative form has the same
+    // magnitude; widen before absolute value and refuse an unrepresentable size.
+    let drag_extent = |index| -> Result<i32, PreferenceQueryError> {
+        i32::try_from(i64::from(metric(index)?).abs())
+            .map_err(|_| flui_platform_api::InvalidPreference::GestureArea.into())
+    };
+    let drag = Size::new(drag_extent(SM_CXDRAG)?, drag_extent(SM_CYDRAG)?);
+    Ok(NativeMouseGeometry::new(double_click, drag, ratio)?)
+}
+
 fn sample(
     ui: &UISettings,
     accessibility: &AccessibilitySettings,
@@ -359,7 +395,12 @@ fn sample(
         .with_high_contrast(high_contrast)
         .with_gestures(
             GesturePreferences::default()
-                .with_double_click_interval(Duration::from_millis(u64::from(double_click))),
+                .with_double_click_interval(Duration::from_millis(u64::from(double_click)))
+                // This window-independent reading detects changes. Exact
+                // presentation metrics are queried separately at its actual DPI.
+                .with_native_mouse_geometry(mouse_geometry(96).map_err(|error| {
+                    PlatformError::Preferences { message: error.to_string() }
+                })?),
         )
         .with_wheel(
             WheelPreferences::default()
