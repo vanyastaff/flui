@@ -2398,3 +2398,14 @@ velocity remains available for reporting; `Draggable` reports it without an
 internal inertial animation. `mounted_back_swipe_settle_uses_the_admitted_fling_bound`
 pins retained policy and the subsequent contact's fresh bound against actual
 mounted route transitions.
+
+Native scale Begin stages the actor's immutable profile without claiming the
+stream or delivering recognized callbacks. The actor's typed disposition
+distinguishes dormant admission from refusal and recognized handling. A Begin
+refused while touch contacts are active remains refused until its terminal
+event; a later Update cannot revive that session after touch release. Admitted
+dormant End and cancellation retire the actor before an independent Update can
+start. `mounted_native_begin_retains_estimator_before_first_claim` pins the
+estimator at Begin, identity updates and unclaimed terminal cleanup;
+`mounted_native_begin_refused_by_touch_cannot_claim_after_touch_terminal` pins
+refusal, standalone updates and fresh-session recovery.
