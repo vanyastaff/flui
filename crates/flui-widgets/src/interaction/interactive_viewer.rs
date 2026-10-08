@@ -141,6 +141,9 @@ pub struct InteractionEndDetails {
     /// The gesture's release velocity. [`Velocity::ZERO`] for a discrete
     /// wheel-scale interaction (there is no release to measure).
     pub velocity: Velocity,
+    /// Measured scale change in scale units per second. Zero for cancellation
+    /// and a discrete wheel step, which supply no scale release history.
+    pub scale_velocity: f64,
 }
 
 type StartCallback = Rc<dyn Fn(&mut EventCx<'_>, InteractionStartDetails)>;
@@ -738,6 +741,7 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
                         InteractionEndDetails {
                             reason: GestureEndReason::Completed,
                             velocity: details.focal_velocity,
+                            scale_velocity: details.velocity,
                         },
                     );
                 }
@@ -858,6 +862,7 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
                             InteractionEndDetails {
                                 reason: GestureEndReason::Completed,
                                 velocity: Velocity::ZERO,
+                                scale_velocity: 0.0,
                             },
                         );
                     }
@@ -962,6 +967,7 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
                             InteractionEndDetails {
                                 reason: GestureEndReason::Cancelled,
                                 velocity: Velocity::ZERO,
+                                scale_velocity: 0.0,
                             },
                         );
                     }
