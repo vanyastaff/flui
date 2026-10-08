@@ -19,7 +19,7 @@ optional-feature/platform gates, CI и слияние в `main` ещё не об
 | I2, C2, R1–R4 | Реализованы | PR #1472 и #1500 merged; таблицы многоконтактных и реентерабельных жестов |
 | I3, C3 | Численные исправления и перенос времени в потребителей реализованы; итоговый gate впереди | PR #1479 merged; `velocity_and_resampling.rs`; C5 подключает время Up и `velocity_at` во всех четырёх производителях, целевые проверки и откаты прошли |
 | I4, C4 | Реализованы в интеграционной ветке; PR ещё не опубликован | Шесть контрактов включены и проходят; добавлены конкурирующие отказы и восстановление. ADR-0158 фиксирует cursor/finite-offset контракт |
-| I5 | Конвейер реализован локально; системный источник настроек остаётся I11/LY8 | Owner-local binding сохраняет admission, claim, finite вход и coalesced history. Authored settings доходят через `GestureArenaScope` до production-распознавателей. Restored-прогон проверил binding, private resampling, allocator, 43 pointer- и 56 scroll-контрактов; принятая доставка сохраняется при конкурирующих отказах |
+| I5 | Конвейер реализован локально; системный источник настроек остаётся I11/LY8 | Owner-local binding сохраняет admission, claim, finite вход и coalesced history. Восемь slop-sensitive распознавателей учитывают измеренную историю до текущей позиции; origin-return, prediction control и восстановление проверены отдельными публичными строками и независимыми откатами admission. Authored settings доходят через `GestureArenaScope` до production-распознавателей. Restored-прогон проверил binding, private resampling, allocator, 43 pointer- и 56 scroll-контрактов; принятая доставка сохраняется при конкурирующих отказах |
 | I6 | Реализована локально; итоговый gate впереди | Уведомления продолжаются после паники, принятый запрос фокуса сохраняется, первая ошибка остаётся исходной. Все 28 строк `focus_actions_and_shortcuts` и public/private failure matrices проходят; откаты порядка siblings и provider containment воспроизводят нарушения. ADR-0160 и ADR-0165 |
 | I7 | Реализована локально; итоговый gate впереди | Lifecycle pause подключён к drain каждого input owner, deferred Down отменяется; публичные runtime-проверки прошли. Итоговая проверка зависимых потребителей впереди |
 | I8 | Реализована локально; аппаратная проверка ограничена | Owned Win32 producer и owner-local MessageClock интегрированы; hidden-HWND Xbutton/coarse-clock и откаты прошли. Финальные decoder и fractional-wheel hidden-HWND проверки прошли. ForcePress отвергает mouse без датчика. Full pen/touch activation отказал (CANNOT_VERIFY) |
@@ -121,6 +121,38 @@ RA6 ownership-измерения сохранены; итоговый gate за�
 | R3 ✅ | `on_tap_down` допускает следующий контакт — поколение растёт и уже принятый `TapUp` теряется (счёт 2 без первого Up) | `recognizers/tap_and_drag.rs` |
 | R4 ✅ | Самоуправляемая арена с соперником: Cancel у Eager делает sweep с семантикой Up и награждает соперника; отмена должна снимать поколение без победителя (и в других путях withdraw-and-sweep) | `recognizers/eager.rs`, `arena/**` |
 | R5 | Повторный допуск того же указателя из cancel-колбэка drag запускает жест дважды | `recognizers/drag.rs` |
+
+## Измеренная история и gesture admission
+
+Дополнение I5/M1-9/M2-V4 реализовано локально. Binding сохраняет измеренные
+samples при объединении пакетов; Tap, DoubleTap, LongPress, MultiTap, Drag,
+MultiDrag, TapAndDrag и Scale проверяют slop по всей доставленной measured
+истории и текущей позиции. Движение 100 → 200 → 100 внутри одного кадра не
+восстанавливает tap viability и не скрывает crossing у движущихся recognizers.
+Predicted samples не участвуют в admission. Callback cadence, текущие local/root
+координаты, event timeline и обычное arena ordering сохраняются; исторические
+samples не порождают отдельные пользовательские callbacks.
+
+Публичная таблица `tap_and_drag_resolves_through_the_shared_arena` проверяет
+каждое из восьми семейств отдельно: два queued Move и authored coalesced packet,
+следующий здоровый контакт с повторным pointer ID, prediction-only control и
+реентерабельные Cancel/Down/Up из coalesced drag start. Для moving-семейств
+сохраняется настоящий rival с большим slop, чтобы default arena win не подменял
+проверку crossing. Составной Tap/Drag конфликт остаётся дополнительной строкой,
+а не единственным доказательством каждого admission.
+
+Все восемь независимых production-откатов воспроизвели ожидаемый отказ своей
+строки: stationary cancellation или moving start оставались равны нулю вместо
+одного. Prediction control проходил при каждом откате; точные production-хунки
+восстановлены. До откатов полный recognizer-прогон прошёл. Итоговый расширенный
+restored-прогон и gate зависимых потребителей ещё не объявляются завершёнными.
+`resampler_interpolates_on_event_time_and_never_drops_terminals` отдельно
+проверяет три пакета с шестью measured samples и только newest prediction
+family. Это локальные публичные binding/recognizer доказательства, не native
+hardware smoke и не обещание безграничного окна velocity estimator.
+
+Контрольный запуск: `cargo nextest run --locked -p flui-interaction
+tap_and_drag_resolves_through_the_shared_arena --no-capture`.
 
 ## Порядок принятого motion перед Keyboard и IME
 

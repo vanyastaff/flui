@@ -94,6 +94,21 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   `pointer_source_contracts` pins mouse source identity fallback and reentry;
   the mounted `pointer_delivery_preserves_source_and_sample_families` and
   `scroll_claim_preserves_owned_source_units_and_phase` rows pin the widget edge.
+- **Measured excursions survive frame coalescing.** A delivered Move's ordered
+  measured history and current position participate in slop admission. Returning
+  to the contact origin within one frame cannot restore tap viability or hide a
+  drag/scale threshold crossing. Tap, double-tap, long-press, multi-tap, drag,
+  multi-drag, tap-and-drag and scale use borrowed measured positions; predictions
+  never admit or cancel a gesture. Geometry callbacks retain their frame-current
+  local/root positions and event timeline instead of replaying one callback per
+  historical sample. Velocity trackers still consume the measured timestamps
+  within their estimator's own retention window. Recognition still follows
+  arena verdicts, and callback reentry rechecks the exact contact generation.
+  `tap_and_drag_resolves_through_the_shared_arena` pins each recognizer's isolated
+  excursion, queued/authored history equivalence, prediction exclusion, reused-ID
+  recovery and cancellation from a coalesced start callback.
+  `resampler_interpolates_on_event_time_and_never_drops_terminals` pins preservation
+  of three packets' six measured readings and only the newest prediction family.
 - **`TapButton` is a typed enum, not integer button constants.** `TapButton` (`src/recognizers/tap.rs`) maps pointer buttons explicitly through `from_pointer_button`, so the type system enforces the choice. It is `#[non_exhaustive]` so a future fourth button slot can be added without breaking downstream.
 - **Weak arena membership.** The inline-four member list stores weak identities,
   not lifetime ownership. Dead members withdraw; queued verdicts recheck

@@ -86,8 +86,8 @@ verification pending означает ограничения из `pointer-vocab
 | M3-K4 | Pressed-key set sync on window focus change | absent | spec focus-keyboard T6 |
 | M3-K8 | Full default intent set | partial | spec focus-keyboard T8 (arrows after M3-F4) |
 | M3-K6 | IME composition flag on key events | partial | spec text-ime T5 |
-| M1-9 | Coalesced events kept | broken | spec send-flip T6d (binding, I5 handoff) |
-| M2-V4 | No sample loss to the velocity tracker | broken | spec send-flip T6d (binding, I5 handoff) |
+| M1-9 | Coalesced events kept | implemented locally; final gates pending | Binding preserves three packets' six measured readings and only the newest prediction family. All eight slop-sensitive recognizers inspect delivered measured excursions, including origin-return packets, without prediction admission or per-sample callback replay. Public queued/authored history, reentry and recovery rows pass; eight independent admission inverses fail their isolated rows and exact source hunks were restored |
+| M2-V4 | No sample loss to the velocity tracker | implemented locally; final gates pending | Drag, multi-drag, scale and tap-and-drag feed delivered measured history with production timestamps into the selected estimator; bounded estimator retention remains deliberate. `resampler_interpolates_on_event_time_and_never_drops_terminals` pins merged measured history and newest predictions; selected-estimator and terminal-clock families pin the consumers |
 | M3-H3 | Non-finite positions rejected at the edge | absent | spec send-flip T6d (handoff H17) |
 | M3-H10 | Dead or legacy surface | broken (unwired) | spec send-flip T6d (handoff N6) |
 | M3-C5 | Cursor defer vs explicit arrow | broken | spec send-flip T6d (contract test in PR #1476) |
