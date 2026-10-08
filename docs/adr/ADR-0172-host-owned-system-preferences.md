@@ -95,6 +95,16 @@ therefore affects new sequences without silently changing an active sequence's
 thresholds. Terminal fling policy also comes from that admitted snapshot rather
 than a later settings read or a framework default.
 
+Velocity estimation is consumer policy, not an observed OS preference. The
+framework uses least squares for absolute pointer-position gestures on every
+platform; authored scopes may select another estimator, and each admitted
+contact or native session retains that selection. This keeps one tested baseline
+without asserting native fling parity from a platform name. Android's
+[axis-specific default strategy](https://android.googlesource.com/platform/frameworks/native.git/+/refs/heads/main/libs/input/VelocityTracker.cpp)
+uses least squares for X/Y and impulse for differential scroll input; that
+differential policy does not apply to absolute gesture-position samples. The
+other estimators are configurable strategies, not native system observations.
+
 Authored scope settings remain authoritative. An actual authored provider
 replacement commits new recognizer ownership before cancelling outgoing owners
 through existing containment; an equal fixed profile or an unchanged live
