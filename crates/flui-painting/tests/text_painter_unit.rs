@@ -264,7 +264,7 @@ pub(crate) fn text_weight_adjustment_shapes_once_and_restores_authored_weights()
             let coverage = |images: &[flui_painting::GlyphImage]| {
                 images
                     .iter()
-                    .flat_map(|image| image.data())
+                    .flat_map(flui_painting::GlyphImage::data)
                     .map(|value| u64::from(*value))
                     .sum::<u64>()
             };
