@@ -9,8 +9,9 @@
 
 ## Текущее выполнение
 
-Сверка 2026-10-07 по `main` @ `4bcd9d04a`, коду, именам тестов и состоянию PR.
-Наличие реализации ниже не означает повторный прогон тестов на этой базе.
+Сверка 2026-10-07 по интеграционной базе `3cf7329c6`, коду и именам тестов.
+Отмеченные прогоны — целевые проверки интеграции. Итоговые `check-changed`,
+optional-feature/platform gates, CI и слияние в `main` ещё не объявляются завершёнными.
 
 | Задачи | Состояние | Доказательство или следующий шаг |
 |---|---|---|
@@ -18,28 +19,30 @@
 | I2, C2, R1–R4 | Реализованы | PR #1472 и #1500 merged; таблицы многоконтактных и реентерабельных жестов |
 | I3, C3 | Численные исправления реализованы; перенос времени в потребителей не закончен | PR #1479 merged; `velocity_and_resampling.rs`; C5 остаётся открытой |
 | I4, C4 | Реализованы в интеграционной ветке; PR ещё не опубликован | Шесть контрактов включены и проходят; добавлены конкурирующие отказы и восстановление. ADR-0158 фиксирует cursor/finite-offset контракт |
-| I5 | Частично реализована локально | Admission и доставка принятого claim, finite вход и coalesced history исправлены. Десять новых строк проходят и падают при откате: пять finite-контрактов, история и скорость всех четырёх производителей. Owner-local binding и настройки впереди |
-| I6 | Реализована локально; итоговый gate впереди | Уведомления продолжаются после паники, принятый запрос фокуса сохраняется, первая ошибка остаётся исходной. Все 23 строки `focus_actions_and_shortcuts` проходят; откат порядка siblings воспроизводит неверный порядок геометрических ties. ADR-0160 |
+| I5 | Конвейер реализован локально; системный источник настроек остаётся I11/LY8 | Owner-local binding сохраняет admission, claim, finite вход и coalesced history. Authored settings доходят через `GestureArenaScope` до production-распознавателей. 43 pointer-контракта проходят; принятая доставка сохраняется при конкурирующих отказах |
+| I6 | Реализована локально; итоговый gate впереди | Уведомления продолжаются после паники, принятый запрос фокуса сохраняется, первая ошибка остаётся исходной. Все 28 строк `focus_actions_and_shortcuts` и public/private failure matrices проходят; откаты порядка siblings и provider containment воспроизводят нарушения. ADR-0160 и ADR-0165 |
 | I7 | Реализована локально; итоговый gate впереди | Lifecycle pause подключён к drain каждого input owner, deferred Down отменяется; публичные runtime-проверки прошли. Итоговая проверка зависимых потребителей впереди |
-| I8 | Реализована локально в согласованной зоне мыши | Время сообщения передаётся через owner-local MessageClock; queued-message и rollover проверки прошли на Windows. ForcePress отвергает mouse без датчика; типизированный backend-словарь остаётся в P3 |
-| I9 | Реализована локально; wasm gate впереди | В живом Chrome проверены cancel/recovery, захват с выходом за canvas и дробные координаты. Контракт transformed canvas ограничен задокументированным fallback; общая поддержка трансформаций не заявлена |
+| I8 | Реализована локально; аппаратная проверка ограничена | Owned Win32 producer и owner-local MessageClock интегрированы; hidden-HWND Xbutton/coarse-clock и откаты прошли. ForcePress отвергает mouse без датчика. Full pen/touch activation отказал (CANNOT_VERIFY), fractional wheel smoke не выполнен |
+| I9 | Реализована локально; финальный wasm gate впереди | В живом Chrome после V15 проверены cancel/recovery, capture, дробные координаты и getter reentry. Контракт transformed canvas ограничен задокументированным fallback; общая поддержка DOM-трансформаций не заявлена |
 | I10 | Реализована в интеграционной ветке; итоговый gate впереди | Owner-local состояние, постоянный отказ при исчерпании signal ID и удержание отклонённого callback; lifecycle/property проверки проходят. ADR-0159 |
-| I11 | Не реализована | После recognizer-api и platform-layer LY8/LY9; отдельный источник настроек жестов не вводится |
+| I11 | Authored-settings consumer реализован; системный producer не реализован | `GestureArenaScope::settings` → `GestureDetector`/production builders проверен RED/GREEN и откатом. Не вводится дублирующий settings scope. `SystemPreferences::gestures()` требует внешней Proposed LY8; OS timings/slop и динамическое обновление не объявляются реализованными |
 | C5 | Реализована в интеграционной ветке; PR ещё не опубликован | Четыре производителя используют время Up и `velocity_at`; строки движения/паузы/восстановления проходят и падают при откате production-hunk |
 | C6 | Реализована | PR #1478 merged; типизированные Down/Up и `DeviceId(NonZeroU64)` в новом словаре |
 | C7 | Реализована локально | Owner-local MessageClock использует `wrapping_sub` тиков; мёртвый `is_key_pressed` удалён. Реальная очередь hidden HWND и rollover прошли, обе проверки падают при откате и снова проходят после восстановления |
-| S1, S2 | Не завершены | Публичная поверхность и неподключённые пути требуют миграции production-потребителей либо удаления согласно scope |
-| S3, S4 | Документация проверена; итоговые измерения впереди | Семь Markdown примеров в пяти документах прошли прямой `rustdoc --test`; пустые модули `include_str!` удалены по замечанию владельца. `cargo test --locked -p flui-interaction --doc --all-features` проверил 50 исполняемых примеров и один compile-fail без ignored; `rg 'rust,ignore\|include_str!' crates/flui-interaction/src` не нашёл исключений. Эти результаты относятся к исходникам до подключения выбора estimator. Baseline/after recognizer измерения в PERFORMANCE.md относятся к прежней форме событий; текущие итоговые бенчи и allocations dispatch ещё не проверены |
+| S1, S2 | Основные миграции интегрированы; итоговая проверка поверхности впереди | Owned vocabulary, checked focus ID, typed focus contracts, RAII listeners, immutable Rc builders и production estimator selection подключены. HandlerId, ложная sealed-иерархия, team/standalone signal resolver, predictor и общий vocabulary bridge удалены по scope; `__runtime` остаётся намеренным контрактом ADR-0081 |
+| S3, S4 | Документация актуализирована; финальные doctests/бенчи впереди | Пустые `include_str!` модули удалены. Ранее прошли семь Markdown примеров и 50 source doctests + один compile-fail; после новых API ожидается повторный прогон восьми Markdown примеров. Ownership baseline/after в PERFORMANCE.md относится к прежней форме событий; текущие итоговые бенчи ещё не сняты. Counting-allocator контракт `resolved_route_move_invocation_allocates_no_heap_after_setup` проходит на текущем cached Move без истории; это не bound для событий с history |
 | S5 | Реализована локально; итоговый gate впереди | DPI исправлен PR #1493; frame flush, drain и hover refresh обходят все input owners. Публичные runtime-проверки прошли |
-| R5 | Пробел покрытия закрыт; текущий дефект не воспроизведён | Обе публичные строки проходят с существующим generation guard и падают при его откате из-за лишнего внешнего Down; production не менялась |
+| R5 | Текущий same-pointer контракт закреплён; отдельный новый дефект не заявляется | В текущем `gesture_lifecycle_matrix` остаются `drag_cancel_callback_admits_the_next_contact_once` и `drag_cancelled_end_callback_admits_the_next_contact_once`; drag проверяет exact `is_current` после reentrant terminal callback. Новый continuation matrix также проверяет same-pointer replacement, первую панику и следующий Up. Исторический guard inverse не заменяет новую проверку изменённого drag |
 
 RA0 подготовлена: живые baseline-бенчи сохранены, исходные E0277 и E0038 подтверждены.
 RA1–RA4 интегрированы атомарно с публичными потребителями; обычный `trybuild_ui`
 проверяет три E0277 и два успешных внешних extension-контракта. Исправления retirement и
-diagnostics подтверждены откатом production-хунков. RA5 завершает чистку поверхности и ADR,
-RA6 recognizer измерения сохранены; итоговый gate зависимых потребителей впереди. Задачи идут по графу
-`recognizer-api/tasks.md`. P1 словаря завершена; P2/P3 остаются в
-`pointer-vocabulary/tasks.md`. Строки NEW сверяются отдельно в `scope-closure.md`.
+diagnostics подтверждены откатом production-хунков. RA5 и ADR-0161 интегрированы,
+RA6 ownership-измерения сохранены; итоговый gate зависимых потребителей и текущие wire-бенчи впереди.
+Задачи идут по графу `recognizer-api/tasks.md`. P1 словаря завершена; P2/P3 реализованы,
+но финальная приёмка и ограничения producer smoke остаются в `pointer-vocabulary/tasks.md`.
+Все 20 утверждённых NEW-строк повторно сверены в `scope-closure.md`: наличие реализации
+отделено от отсутствующих inverse/нативных и итоговых проверок.
 
 ## Занятые файлы (не трогать без согласования)
 

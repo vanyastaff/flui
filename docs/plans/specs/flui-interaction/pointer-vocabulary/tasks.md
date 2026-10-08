@@ -1,6 +1,6 @@
 # pointer-vocabulary — задачи
 
-- **Статус:** P1 завершена (PR #1478 merged); P2, P3 — не начаты
+- **Статус:** P1 завершена (PR #1478 merged); P2 и производители P3 реализованы в интеграционной ветке; итоговые gates и платформенная проверка остаются условиями приёмки
 - **Дата:** 2026-10-06
 - **Дизайн:** [design.md](design.md); требования — [requirements.md](requirements.md)
 - **Правила:** задача = ветка `interaction/<slug>` = worktree = draft-PR; `[P]` — можно
@@ -8,6 +8,25 @@
   тестах и коммитах. Каждая сборка — через общий замок хоста. Win32 — прогон на Windows-хосте
   с выводом в PR; macOS/iOS/Android — только `cargo xtask cross-typecheck`, в матрице
   «скомпилировано, не запущено»; web — `cargo xtask wasm-check`.
+
+## Текущая сверка
+
+Сверка исходников 2026-10-07 на интеграционной базе `3cf7329c6`.
+`PlatformInput`, binding, routing, распознаватели, runtime, widgets, testing и facade
+используют owned-словарь. Общий pointer-мост удалён; каждый backend строит события
+на своей границе. Сохранённый приватный keyboard adapter использует mature upstream
+таблицы клавиш, не возвращая upstream-типы в публичные сигнатуры.
+
+| Задачи | Реализация | Остаток проверки |
+|---|---|---|
+| V1–V4 | Типы и генератор уже merged; ADR-0143 принят | Исторический P1-мост заменён прямыми производителями |
+| V5–V7 | Owned-события проходят production-конвейер; единицы scroll доходят до viewport | Итоговый gate зависимых потребителей и optional features |
+| V8 | Миграция и changelog интегрированы | `cargo xtask check-changed` ещё не объявлен завершённым |
+| V9 | Win32 pointer/mouse/keyboard производители интегрированы | Hidden-HWND Xbutton/coarse-clock проверки и откаты прошли; pen/touch activation отказал, поэтому CANNOT_VERIFY. Fractional wheel smoke не выполнен |
+| V10 | winit producer интегрирован | Финальная optional-feature проверка и live smoke по доступности |
+| V11–V13 | macOS/iOS/Android producer интегрированы | Предыдущая cross-typecheck прошла: скомпилировано, не запущено. После последних V15/API изменений требуется повторная финальная cross-typecheck |
+| V14 | Web producer интегрирован | Живой Chrome smoke после V15, включая getter reentry, прошёл; это не заменяет финальный wasm gate после последующих изменений |
+| V15 | `flui-platform-api` не зависит от `ui-events`/`keyboard-types`/`dpi`; общий мост удалён; xtask использует прямой `keyboard-types` | `ui-events` остаётся только там, где нужны platform keyboard tables; итоговые `deps`/`reach` впереди |
 
 ## P1 — словарь, ADR, мост (без изменения поведения)
 

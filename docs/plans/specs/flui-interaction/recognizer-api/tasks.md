@@ -1,6 +1,6 @@
 # Распознаватели жестов: API — задачи
 
-- **Статус:** дизайн утверждён; RA0 подготовлена, RA1–RA4 интегрированы локально, RA5 завершает чистку поверхности, RA6 впереди
+- **Статус:** дизайн утверждён; RA0–RA5 интегрированы локально, RA6 ownership-измерения сохранены; итоговый gate и проверка текущей owned-wire базы впереди
 - **Дата:** 2026-10-06
 - **Design:** [design.md](design.md); требования — [requirements.md](requirements.md); волна —
   [../tasks.md](../tasks.md) «Спека `recognizer-api/`»
@@ -37,6 +37,16 @@
   длинная, 1,5) → RA4 → RA5 → RA6 ≈ 10 рабочих дней.
 
 ## Правила исполнения
+
+Сверка реализации 2026-10-07 на базе `3cf7329c6`: builder до `Rc`, dyn-compatible
+extension points, weak arena members, `RecognizerSet` и production-вызовы через
+`Listener` интегрированы. Ложные sealed/legacy extension слои удалены; lasting
+решение — ADR-0161. `trybuild_ui` проверяет три `!Send` отказа E0277 и два успешных
+extension-контракта. Ранее выполненные ownership-измерения RA6 опубликованы в
+`crates/flui-interaction/docs/PERFORMANCE.md`: они предшествуют owned-wire миграции;
+изолированный strong-resolution baseline отсутствует и не заменяется eager-conflict
+измерением. Итоговые `check-changed`, facade/optional-feature и platform gates
+после всех изменений не объявляются пройденными. I11/LY8 здесь не закрываются.
 
 - Интеграционная ветка `interaction/recognizer-api` (worktree `cargo xtask worktree new
   interaction/recognizer-api`), один PR в `main`. Подзадачи — ветки от неё, PR в неё; слияние squash.

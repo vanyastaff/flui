@@ -47,31 +47,37 @@ PR #1467 (held Down на blur), #1476 (контрактные тесты hover/h
 
 ## Спека
 
+Owned vocabulary и прямые producers в строках ниже интегрированы, но producer
+verification pending означает ограничения из `pointer-vocabulary/tasks.md`:
+предыдущая Apple/Android cross-typecheck — только компиляция, pen/touch activation
+на Windows отказал, fractional wheel smoke и финальные gates не выполнены.
+Строки внешних focus-keyboard/text-ime/platform-layer спецификаций этим не закрываются.
+
 | Row | Requirement | Status | Closure |
 |---|---|---|---|
-| M1-1 | Device kinds mouse/touch/pen | partial | spec pointer-vocabulary P3-Win32 (V9); unified enum — P2 V6 |
-| M1-2 | Eraser / inverted stylus | absent | spec pointer-vocabulary P3-Win32 (V9) |
-| M1-3 | Pressure (real sensor) | partial | spec pointer-vocabulary P3-Win32 (V9) |
-| M1-5 | Tilt / altitude-azimuth | broken (iOS) / absent | spec pointer-vocabulary P3-Win32 (V9); iOS — V12 |
-| M1-6 | Twist (barrel rotation) | absent | spec pointer-vocabulary P3-Win32 (V9) |
-| M1-7 | Contact width/height | broken (Android) / partial | spec pointer-vocabulary P3-Android (V13); typed `ContactSize` — PR #1478 |
-| M1-8 | Pen hover | partial | spec pointer-vocabulary P3-Win32 (V9) |
-| M1-16 | pointercancel: system gesture / OS takeover | partial | spec pointer-vocabulary P3-web (V14) |
-| M1-17 | pointercancel: device removed | absent | spec pointer-vocabulary P3-Win32 (V9) |
-| M1-18 | Multi-touch | partial | spec pointer-vocabulary P3-Win32 (V9) |
-| M1-19 | Primary pointer | partial | spec pointer-vocabulary P2 (V6) |
-| M1-21 | Chorded buttons / button change | broken | spec pointer-vocabulary P2 (V6) (`ButtonChange`); Win32 producer V9 |
-| M1-22 | Device id (persistent) | absent | spec pointer-vocabulary P2 (V6) |
-| M1-23 | Timestamps: monotonic, platform-provided | partial | spec pointer-vocabulary P3-Win32 (V9) (`GetMessageTime`, deferred from #1471) |
-| M1-26 | Wheel delta modes line/pixel/page | partial | spec pointer-vocabulary P2 (V7) (resolution in `Scrollable`, step from LY8 `wheel()`) |
-| M1-29 | Scroll / gesture phases | absent | spec pointer-vocabulary P3-macOS (V11) / winit V10 |
-| M1-30 | Momentum phase + inertia cancel | absent | spec pointer-vocabulary P3-macOS (V11) |
-| M1-31 | Trackpad pinch / rotate as distinct events | partial | spec pointer-vocabulary P3-winit (V10) |
-| M1-32 | Trackpad two-finger pan as pan-zoom | absent | spec pointer-vocabulary P3-macOS (V11) |
-| M1-36 | High-DPI: logical vs device px types | partial | spec pointer-vocabulary P2 (V6); web float coords — V14 |
-| M1-39 | Android mouse wheel (`ACTION_SCROLL`) | absent | spec pointer-vocabulary P3-Android (V13) |
-| M1-40 | Win32 pen and touch (`WM_POINTER`) | absent | spec pointer-vocabulary P3-Win32 (V9) |
-| M3-D1 | Logical vs device px at input ingress | broken (type hazard) | spec pointer-vocabulary P2 (V6) |
+| M1-1 | Device kinds mouse/touch/pen | implemented locally; producer verification pending | spec pointer-vocabulary P3-Win32 (V9); unified enum — P2 V6 |
+| M1-2 | Eraser / inverted stylus | implemented locally; producer verification pending | spec pointer-vocabulary P3-Win32 (V9) |
+| M1-3 | Pressure (real sensor) | implemented locally; producer verification pending | spec pointer-vocabulary P3-Win32 (V9) |
+| M1-5 | Tilt / altitude-azimuth | implemented locally; producer verification pending | spec pointer-vocabulary P3-Win32 (V9); iOS — V12 |
+| M1-6 | Twist (barrel rotation) | implemented locally; producer verification pending | spec pointer-vocabulary P3-Win32 (V9) |
+| M1-7 | Contact width/height | implemented locally; producer verification pending | spec pointer-vocabulary P3-Android (V13); typed `ContactSize` — PR #1478 |
+| M1-8 | Pen hover | implemented locally; producer verification pending | spec pointer-vocabulary P3-Win32 (V9) |
+| M1-16 | pointercancel: system gesture / OS takeover | implemented locally; producer verification pending | spec pointer-vocabulary P3-web (V14) |
+| M1-17 | pointercancel: device removed | implemented locally; producer verification pending | spec pointer-vocabulary P3-Win32 (V9) |
+| M1-18 | Multi-touch | implemented locally; producer verification pending | spec pointer-vocabulary P3-Win32 (V9) |
+| M1-19 | Primary pointer | implemented locally; producer verification pending | spec pointer-vocabulary P2 (V6) |
+| M1-21 | Chorded buttons / button change | implemented locally; producer verification pending | spec pointer-vocabulary P2 (V6) (`ButtonChange`); Win32 producer V9 |
+| M1-22 | Device id (persistent) | implemented locally; producer verification pending | spec pointer-vocabulary P2 (V6) |
+| M1-23 | Timestamps: monotonic, platform-provided | implemented locally; producer verification pending | spec pointer-vocabulary P3-Win32 (V9) (`GetMessageTime`, deferred from #1471) |
+| M1-26 | Wheel delta modes line/pixel/page | implemented locally; producer verification pending | spec pointer-vocabulary P2 (V7) (resolution in `Scrollable`, step from LY8 `wheel()`) |
+| M1-29 | Scroll / gesture phases | implemented locally; producer verification pending | spec pointer-vocabulary P3-macOS (V11) / winit V10 |
+| M1-30 | Momentum phase + inertia cancel | implemented locally; producer verification pending | spec pointer-vocabulary P3-macOS (V11) |
+| M1-31 | Trackpad pinch / rotate as distinct events | implemented locally; producer verification pending | spec pointer-vocabulary P3-winit (V10) |
+| M1-32 | Trackpad two-finger pan as pan-zoom | implemented locally; producer verification pending | spec pointer-vocabulary P3-macOS (V11) |
+| M1-36 | High-DPI: logical vs device px types | implemented locally; producer verification pending | spec pointer-vocabulary P2 (V6); web float coords — V14 |
+| M1-39 | Android mouse wheel (`ACTION_SCROLL`) | implemented locally; producer verification pending | spec pointer-vocabulary P3-Android (V13) |
+| M1-40 | Win32 pen and touch (`WM_POINTER`) | implemented locally; producer verification pending | spec pointer-vocabulary P3-Win32 (V9) |
+| M3-D1 | Logical vs device px at input ingress | implemented locally; producer verification pending | spec pointer-vocabulary P2 (V6) |
 | M1-20 | Buttons bitmask incl. X1/X2 | partial | spec focus-keyboard T5 |
 | M3-F7 | Focus restore after focused node removed | absent | spec focus-keyboard T7 (R15) |
 | M3-F10 | Focus visible (input modality) | absent | spec focus-keyboard T3 (R17) |
@@ -95,38 +101,45 @@ PR #1467 (held Down на blur), #1476 (контрактные тесты hover/h
 | M2-T6 | Multi-finger tap semantics | partial | spec flui-interaction S3 (record as a mapping decision) |
 | M2-D2 | Pan slop value | partial | spec flui-interaction I11 |
 | M2-D6 | Mouse drag threshold from the OS | absent | spec flui-interaction I11 (after LY8) |
-| M2-V2 | Estimator choice per platform reaches production | partial (unwired) | spec flui-interaction S2 |
+| M2-V2 | Estimator choice per platform reaches production | authored selection implemented; OS producer pending | `GestureSettings::with_velocity_estimator` reaches drag/multidrag/scale/tap-and-drag; selected-estimator public rows pass. Platform policy source remains I11/LY8 |
 | M2-R2 | Prediction | withdrawn (local extrapolation) | S2: локальный extrapolator удалён; сохранение аппаратных predicted samples не означает реализацию синтезированной prediction для ink/drag |
-| M2-X2 | Settings profile reaches recognizers | broken | spec flui-interaction I11 |
-| M2-X5 | Cheapest sound ownership on the gesture path | partial | spec flui-interaction I10 (settings `Cell` — I11) |
+| M2-X2 | Settings profile reaches recognizers | authored consumer implemented; OS producer pending | `GestureArenaScope::settings` reaches mounted production builders; threshold/deadline rows pass and fail with the consumer wiring reverted. `SystemPreferences` producer remains I11/LY8 |
+| M2-X5 | Cheapest sound ownership on the gesture path | owner-local implementation integrated; final gates pending | I10/recognizer-api use Rc/RefCell, weak arena slots and immutable authored configuration. No dynamic OS settings path is claimed |
 | M3-C1 | Re-hit-test after layout per presentation | partial | spec flui-interaction S5 |
 | M3-D2 | DPI change per presentation | partial | spec flui-interaction S5 |
 | M3-M1 | Per-window input state | partial | spec flui-interaction S5 |
 
 ## NEW
 
+Сверка 2026-10-07 на интеграционной базе `3cf7329c6`: все 20 утверждённых строк
+ниже имеют реализацию или ранее merged-реализацию. Это не означает завершение
+15 задач приёмки: недостающие inverse-проверки, финальные gates и native smoke
+остаются явными условиями. Целевые прогоны прошли для 43 pointer-строк,
+55 scroll-строк, нижнего reveal/retirement и counting-allocator контракта.
+Полный gate, CI и слияние в `main` ещё не выполнены.
+
 | Row | Requirement | Status | Closure |
 |---|---|---|---|
-| M1-11 | Resampling to the vsync (enable policy) | partial (unwired) | NEW: resampling-policy — runtime/app opt-in per presentation that turns the fixed resampler on |
-| M1-13 | Explicit pointer capture + lost capture | absent | NEW: pointer-capture-token — typed `PointerCapture` from the down route, release on drop, `CaptureLost` delivered |
-| M3-H8 | Explicit pointer capture/release API | absent | NEW: pointer-capture-token (same task; the OS side is PR #1471) |
-| M1-27 | High-precision vs notched wheel | partial | NEW: smooth-wheel-scrolling — Win32 classifies precise vs notched deltas, `Scrollable` animates notched input only |
-| M1-28 | Smooth notched-wheel scrolling | absent | NEW: smooth-wheel-scrolling (same task) |
+| M1-11 | Resampling to the vsync (enable policy) | implemented locally; final gates pending | `PresentationConfig::with_pointer_resampling` connects frame-aligned delivery; public pointer and private `resampling_is_presentation_local_and_preserves_delivery_after_failure` families pass |
+| M1-13 | Explicit pointer capture + lost capture | implemented locally; final gates pending | `PointerCapture` preserves the Down route and defers one `CaptureLost`; `explicit_pointer_capture_contract` passes, four independent production inverses fail and restored sources pass; ADR-0164 |
+| M3-H8 | Explicit pointer capture/release API | implemented locally; final gates pending | Same token contract, mounted `listener_capture_retains_one_target_and_drop_delivers_loss`; native capture remains a separately checked producer contract |
+| M1-27 | High-precision vs notched wheel | implemented locally; fractional native smoke pending | Owned `ScrollPrecision` reaches `Scrollable`; only notched deltas animate. Current public families pass; actual fractional-wheel producer smoke remains unrun |
+| M1-28 | Smooth notched-wheel scrolling | implemented locally; inverse pending | `notched_wheel_accumulates_distance_and_eases_out_in_150ms`, interruption/replacement/unmount/sibling rows pass; separate behavior inverse remains required |
 | M1-34 | Shift+wheel → horizontal scroll | implemented | PR #1487 merged: `wheel_axis_delta`, `shift_wheel_scrolls_the_horizontal_axis` |
-| M1-35 | Scroll latching | absent | NEW: scroll-latching — latch a wheel/gesture to the first scroller, release on phase end or timeout |
-| M2-A6 | Competing-recognizer composition | absent | NEW: recognizer-composition — typed exclusive / require-to-fail combinators resolved in the arena (after recognizer-api) |
-| M2-D5 | Multi-pointer drag strategy | partial | NEW: drag-multi-pointer-strategy — strategy enum so a second finger continues a drag when the first lifts |
-| M2-S1 | Scale + rotate consumed by a widget | partial | NEW: interactive-viewer-pinch — `InteractiveViewer` uses `ScaleGestureRecognizer` for pinch/rotate, with focal fling and trackpad pan-zoom |
-| M2-S6 | Scale end velocity | partial | NEW: interactive-viewer-pinch (same task) |
-| M2-S7 | Trackpad pan/zoom fed to recognizers | partial | NEW: interactive-viewer-pinch (same task) |
-| M2-X4 | Nested scroll fling handoff | partial | NEW: nested-scroll-handoff — an inner scrollable at its edge hands remaining velocity to the outer one |
-| M3-H2 | Perspective transforms unproject the ray | partial | NEW: hit-test-perspective — unproject the pointer ray onto z=0 for perspective matrices |
-| M3-F3 | Explicit traversal order and groups | partial | NEW: focus-traversal-groups — `FocusTraversalGroup` widget with typed next/previous overrides and scope edge behaviour |
-| M3-F5 | Scope edge behaviour | partial | NEW: focus-traversal-groups (same task) |
-| M3-F4 | Directional navigation | absent | NEW: directional-focus — geometric search over focus rects, scoped by groups; arrow intents |
+| M1-35 | Scroll latching | implemented locally; final gates pending | `nested_scroll_sequence_keeps_its_first_consumptive_target`, phase/cancel/timeout/device/source-local rows pass in the current scroll family |
+| M2-A6 | Competing-recognizer composition | implemented locally; final gates pending | `GestureCompetition` feeds real GestureDetector arbitration; eight arena rows pass, admission inverse fails and restored sources pass |
+| M2-D5 | Multi-pointer drag strategy | implemented locally; inverse pending | `DragPointerStrategy::ContinueWithRemaining` reaches GestureDetector/Scrollable; continuation and reentrant cancellation rows pass |
+| M2-S1 | Scale + rotate consumed by a widget | implemented locally; inverse pending | Scale recognizer reaches mounted InteractiveViewer; pivot rotation, finite recovery, touch transition and focal-fling rows pass |
+| M2-S6 | Scale end velocity | implemented locally; inverse pending | `viewer_reports_scale_velocity_separately_from_focal_velocity` and terminal event-clock cases pass |
+| M2-S7 | Trackpad pan/zoom fed to recognizers | implemented locally; inverse pending | Native claim/session owner connects PanZoom to Scale/Viewer; repeated Start, descendant rebuild and terminal ownership rows pass |
+| M2-X4 | Nested scroll fling handoff | implemented locally; final gates pending | Current nested-fling rows pass inside all 55 scroll rows: axes/reverse, replacement, saturated parent, bounce policy, reentrant jumps and competing physics retirement |
+| M3-H2 | Perspective transforms unproject the ray | implemented locally; final gates pending | Two public transform matrices pass; position and vector/widget inverses fail and restored sources pass; ADR-0162 |
+| M3-F3 | Explicit traversal order and groups | implemented locally; final gates pending | Group/weak override production path is covered by 28 mounted focus rows and public/private containment; ADR-0165 |
+| M3-F5 | Scope edge behaviour | implemented locally; final gates pending | Widget scope edges and nested actual group/scope retries pass; policy order is reused during a parent retry |
+| M3-F4 | Directional navigation | implemented locally; final gates pending | Four-way beam/gap/distance search, arrow fallback and reentrant geometry pass. Provider containment inverse fails and restored sources pass; broader traversal inverses remain separate |
 | M3-K5 | Dead keys | implemented | PR #1489 merged: Win32 emits `Key::Dead`; production conversion contract rows |
 | M3-K9 | Character shortcuts independent of Shift | implemented | PR #1490 merged: `SingleActivator::character(...).ignoring_shift()` and shortcut contracts; a separate duplicate type is unnecessary |
-| M3-A5 | Scroll actions and ShowOnScreen on scrollables | partial | PR #1488 merged the four axis-specific scroll actions and `assistive_scroll_actions_move_a_scrollable`; ShowOnScreen remains NEW: scrollable-a11y-actions |
+| M3-A5 | Scroll actions and ShowOnScreen on scrollables | implemented locally; final gates pending | Existing axis actions plus routed ShowOnScreen cover both axes/reverse, nested ancestors, published geometry and sibling reentry. All 55 scroll rows and lower reveal/retirement pass; published-basis and retirement inverses fail and restored sources pass |
 
 ## OUT
 
