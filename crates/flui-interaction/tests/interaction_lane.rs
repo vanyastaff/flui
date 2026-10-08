@@ -2438,6 +2438,16 @@ fn assert_signal_lease(case: ScrollLeaseCase, native: bool) {
             }
             ScrollLeaseCase::TerminalReentry => {
                 binding.handle_pointer_event(&packet(ScrollPhase::Ended), |_| fresh_path.clone());
+                assert_eq!(
+                    selected_calls.get(),
+                    2,
+                    "the admitted old consumer receives terminal before the next packet"
+                );
+                assert_eq!(
+                    fresh_calls.get(),
+                    1,
+                    "the replacement receives only its reentrant Begin"
+                );
                 binding
                     .handle_pointer_event(&packet(ScrollPhase::Changed), |_| selected_path.clone());
                 assert_eq!(
