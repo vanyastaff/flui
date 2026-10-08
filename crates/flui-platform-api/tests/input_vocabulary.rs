@@ -352,6 +352,7 @@ fn coalescing_preserves_the_latest_dispatch_and_real_history() {
 
 fn bounded_coalesced_history_keeps_latest_readings_and_predictions() {
     use flui_platform_api::keyboard::Modifiers;
+    use flui_platform_api::pointer::DeviceId;
     let ordinary = sampled_at(25);
     let sensor = ordinary.with_pressure(Pressure::try_new(0.2).expect("valid pressure"));
     let initial = PointerMove::new(
