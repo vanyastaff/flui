@@ -297,6 +297,7 @@ pub struct PresentationState {
     /// Presentation-local projection of the host's accepted interaction policy.
     /// Recognizers read it at admission; active sequences keep owned snapshots.
     pub(super) gesture_settings: flui_interaction::GestureSettingsSource,
+    pub(crate) gesture_geometry: RefCell<crate::ui_runtime::preferences::GeometryProjection>,
     pub(super) window_visible: Cell<bool>,
     pub(super) window_focused: Cell<bool>,
     pub(super) window_execution: Cell<flui_platform_api::WindowExecutionState>,
@@ -767,6 +768,7 @@ impl PresentationState {
 
         let state = Self {
             id,
+            gesture_geometry: RefCell::new(Default::default()),
             gesture_settings: flui_interaction::GestureSettingsSource::new(
                 gestures.default_settings().clone(),
             ),
@@ -855,6 +857,7 @@ impl PresentationState {
 
         let state = Self {
             id,
+            gesture_geometry: RefCell::new(Default::default()),
             gesture_settings: flui_interaction::GestureSettingsSource::new(
                 gestures.default_settings().clone(),
             ),

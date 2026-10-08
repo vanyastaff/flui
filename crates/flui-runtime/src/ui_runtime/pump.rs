@@ -101,6 +101,7 @@ impl UiRuntime {
             if report != DrainReport::default() {
                 tracing::trace!(?report, "owner inbox drained at pump start");
             }
+            ui_runtime.service_gesture_geometry();
             // Begin, draw and end frame run as the ui_runtime's text-store
             // transaction, with the commit anchor after it (ADR-0027 §3).
             let presented = ui_runtime.drive_frame(now, deadline, || ui_runtime.render_frame(sink));
@@ -121,6 +122,7 @@ impl UiRuntime {
     pub fn pump_background(&mut self) {
         self.enter(|ui_runtime| {
             ui_runtime.scheduler.finish_async_pump();
+            ui_runtime.service_gesture_geometry();
             ui_runtime.owner_frame.poll_ready();
         });
     }
@@ -138,6 +140,7 @@ impl UiRuntime {
         if report != DrainReport::default() {
             tracing::trace!(?report, "owner inbox drained");
         }
+        self.service_gesture_geometry();
         self.take_redraw_request()
     }
 }

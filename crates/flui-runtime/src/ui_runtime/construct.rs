@@ -173,9 +173,14 @@ impl UiRuntime {
         // The frame-time origin reads the ui_runtime's clock, so a manual clock's
         // frame timestamps measure from the same timeline they advance on.
         let start = flui_foundation::MonotonicClock::now(&clock);
-        if let Some(snapshot) = &preferences {
-            super::preferences::publish(&presentation, snapshot);
-        }
+        let unknown = flui_platform_api::SystemPreferences::default();
+        super::preferences::publish(
+            &presentation,
+            preferences
+                .as_ref()
+                .map_or(&unknown, |snapshot| &snapshot.values),
+            start,
+        );
         Ok(Self {
             id: ui_runtime_id,
             preferences: RefCell::new(preferences),
