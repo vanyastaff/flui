@@ -350,6 +350,35 @@ fn coalescing_preserves_the_latest_dispatch_and_real_history() {
     );
 }
 
+fn coalescing_transfers_only_checked_history_ownership() {
+    use flui_platform_api::keyboard::Modifiers;
+    let sensor = sampled_at(20).with_pressure(Pressure::try_new(0.2).expect("pressure"));
+    for (old_time, old_history, new_history, expected) in [
+        (10, vec![sampled_at(0), sampled_at(5)], vec![sampled_at(15)],
+            vec![sampled_at(0), sampled_at(5), sampled_at(10), sampled_at(15)]),
+        (10, vec![sampled_at(0)], vec![sampled_at(5), sampled_at(15)],
+            vec![sampled_at(0), sampled_at(5), sampled_at(10), sampled_at(15)]),
+        (20, vec![sampled_at(10), sensor], vec![sampled_at(10), sensor],
+            vec![sampled_at(10), sampled_at(10), sensor, sensor]),
+        (30, vec![sampled_at(10), sampled_at(20), sensor, sampled_at(25)], vec![sampled_at(5)],
+            vec![sampled_at(5), sampled_at(10), sensor]),
+    ] {
+        let mut older = PointerMove::new(mouse(), PointerButtons::NONE, sampled_at(old_time))
+            .with_modifiers(Modifiers::ALT)
+            .with_coalesced(old_history)
+            .with_predicted(vec![sampled_at(40)]);
+        let mut newer = PointerMove::new(mouse(), PointerButtons::only(PointerButton::PRIMARY), sampled_at(20))
+            .with_modifiers(Modifiers::SHIFT)
+            .with_coalesced(new_history)
+            .with_predicted(vec![sampled_at(35)]);
+        let old_header = older.clone().with_coalesced(vec![]);
+        let new_dispatch = newer.clone().with_coalesced(expected);
+        newer.try_coalesce_from(&mut older).expect("same full pointer identity");
+        assert_eq!(older, old_header, "only older measured history transfers");
+        assert_eq!(newer, new_dispatch, "chronology, coarse sensor readings and dispatch metadata survive");
+    }
+}
+
 fn bounded_coalesced_history_keeps_latest_readings_and_predictions() {
     use flui_platform_api::keyboard::Modifiers;
     use flui_platform_api::pointer::DeviceId;
@@ -396,6 +425,13 @@ fn coalescing_refuses_every_pointer_metadata_mismatch_without_mutation() {
         assert_eq!(newer, before);
         assert_eq!(*older.current(), sampled_at(0));
         assert_eq!(older.pointer, other);
+        let mut older = older.with_coalesced(vec![sampled_at(0).with_pressure(
+            Pressure::try_new(0.2).expect("pressure"),
+        )]).with_predicted(vec![sampled_at(10)]);
+        let old_before = older.clone();
+        assert_eq!(newer.try_coalesce_from(&mut older), Err(MismatchedPointerInfo));
+        assert_eq!(newer, before);
+        assert_eq!(older, old_before, "refusal retains both owned histories");
     }
 }
 
@@ -496,6 +532,10 @@ fn input_vocabulary_contract() {
             (
                 "bounded_coalesced_history_keeps_latest_readings_and_predictions",
                 bounded_coalesced_history_keeps_latest_readings_and_predictions,
+            ),
+            (
+                "coalescing_transfers_only_checked_history_ownership",
+                coalescing_transfers_only_checked_history_ownership,
             ),
             (
                 "coalescing_keeps_distinct_current_time_readings_and_excludes_future_history",
