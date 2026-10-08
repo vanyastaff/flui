@@ -359,7 +359,9 @@ pub(crate) fn viewer_rotation_refuses_an_unfittable_quad_then_recovers() {
         assert!(scene.dx >= -1e-9 && scene.dx <= 100.0 + 1e-9);
         assert!(scene.dy >= -1e-9 && scene.dy <= 100.0 + 1e-9);
     }
-    assert_eq!(*updates.borrow(), [1.5]);
+    let updates = updates.borrow();
+    assert_eq!(updates.len(), 1);
+    assert_scale(updates[0], 1.5);
     laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::End));
 }
 
