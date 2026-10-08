@@ -22,7 +22,7 @@ const REASON_COUNT: usize = 10;
 ///
 /// Interior state is private atomics; nothing here exposes a lock.
 /// Counter updates use `Relaxed` (bare tallies; the observation contract
-/// serializes emissions per realm), while the end-of-stream flag is
+/// serializes emissions per UI runtime), while the end-of-stream flag is
 /// Release/Acquire so a snapshot that observes the stream end also
 /// observes every count that preceded it.
 #[derive(Debug, Default)]

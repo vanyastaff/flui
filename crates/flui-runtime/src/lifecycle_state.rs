@@ -193,31 +193,32 @@ mod lifecycle_derivation_tests {
     }
 
     fn multi_step_lifecycle_commits_the_target_before_the_first_panic_resumes() {
-        let realm = crate::ui_realm::UiRealm::for_test();
-        realm.synchronize_window_lifecycle();
+        let ui_runtime = crate::ui_runtime::UiRuntime::for_test();
+        ui_runtime.synchronize_window_lifecycle();
         let lane = InteractionLane::try_new().expect("test interaction lane");
         let handle = lane.dispatch_handle();
         let observer = Arc::new(LifecycleSeen(Mutex::new(Vec::new())));
         let observer_handle: Arc<dyn WidgetsBindingObserver> = observer.clone();
-        realm.widgets().add_observer(observer_handle.clone());
+        ui_runtime.widgets().add_observer(observer_handle.clone());
         let scheduler_listener_panicked = Arc::new(AtomicBool::new(false));
         let scheduler_probe = Arc::clone(&scheduler_listener_panicked);
-        let scheduler_listener =
-            realm
-                .scheduler()
-                .add_lifecycle_state_listener(Arc::new(move |state| {
-                    if state == AppLifecycleState::Paused {
-                        scheduler_probe.store(true, Ordering::Release);
-                        panic!("scheduler lifecycle listener panic");
-                    }
-                }));
+        let scheduler_listener = ui_runtime
+            .scheduler()
+            .add_lifecycle_state_listener(Arc::new(move |state| {
+                if state == AppLifecycleState::Paused {
+                    scheduler_probe.store(true, Ordering::Release);
+                    panic!("scheduler lifecycle listener panic");
+                }
+            }));
         let widget_listener_panicked = Arc::new(AtomicBool::new(false));
         let panicking_observer: Arc<dyn WidgetsBindingObserver> = Arc::new(
             PanickingLifecycleObserver(Arc::clone(&widget_listener_panicked)),
         );
-        realm.widgets().add_observer(panicking_observer.clone());
+        ui_runtime
+            .widgets()
+            .add_observer(panicking_observer.clone());
 
-        realm.enter(|realm| {
+        ui_runtime.enter(|ui_runtime| {
             lane.enter(|| {
                 let owner = PanicOnLifecycleRouteDrop;
                 let target = handle
@@ -229,13 +230,15 @@ mod lifecycle_derivation_tests {
                 result.add(HitTestEntry::new(RenderId::new(1)).pointer_target(target));
                 let down = make_down_event(Offset::new(3.0, 5.0), PointerKind::Touch)
                     .expect("finite test position");
-                realm.gestures().handle_pointer_event(&down, |_| result);
+                ui_runtime
+                    .gestures()
+                    .handle_pointer_event(&down, |_| result);
                 handle
                     .unregister_pointer(target)
                     .expect("cached route retains lifecycle target");
 
                 let unwind = catch_unwind(AssertUnwindSafe(|| {
-                    realm.update_host_lifecycle(AppLifecycleState::Paused);
+                    ui_runtime.update_host_lifecycle(AppLifecycleState::Paused);
                 }));
                 let payload = unwind.expect_err("route cleanup panic must propagate");
 
@@ -252,9 +255,9 @@ mod lifecycle_derivation_tests {
                     ],
                     "the complete synthesized ladder must reach widget observers"
                 );
-                assert_eq!(realm.gestures().active_pointer_count(), 0);
+                assert_eq!(ui_runtime.gestures().active_pointer_count(), 0);
                 assert_eq!(
-                    realm.scheduler().lifecycle_state(),
+                    ui_runtime.scheduler().lifecycle_state(),
                     AppLifecycleState::Paused,
                     "the target state must commit before the first panic resumes"
                 );
@@ -268,14 +271,14 @@ mod lifecycle_derivation_tests {
                 );
 
                 assert!(
-                    realm
+                    ui_runtime
                         .scheduler()
                         .remove_lifecycle_state_listener(scheduler_listener),
                     "test scheduler listener must be removable"
                 );
-                realm.widgets().remove_observer(&panicking_observer);
-                realm.widgets().remove_observer(&observer_handle);
-                realm.update_host_lifecycle(AppLifecycleState::Resumed);
+                ui_runtime.widgets().remove_observer(&panicking_observer);
+                ui_runtime.widgets().remove_observer(&observer_handle);
+                ui_runtime.update_host_lifecycle(AppLifecycleState::Resumed);
             });
         });
     }

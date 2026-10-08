@@ -2799,7 +2799,7 @@ fn moved_to_a_replacement_controller(
 /// edit changed, and the rebuild does not trip over a borrow the key handler
 /// holds. A semantic edit reports through the same `EditObserver::around`,
 /// but no harness path rebuilds the field inside one: the action runs in the
-/// realm's owner scope, under a shared borrow of the realm that a frame,
+/// UI runtime's owner scope, under a shared borrow of the UI runtime that a frame,
 /// which needs it exclusively, cannot nest in.
 fn editable_key_edit_whose_listener_replaces_the_controller() {
     let heard = key_edit_whose_listener_rebuilds_the_field(

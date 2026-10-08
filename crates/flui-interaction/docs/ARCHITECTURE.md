@@ -15,7 +15,7 @@ Crate-level design notes for `flui_interaction`: subsystems, ownership, mapping 
 
 ## Ownership and synchronization
 
-The synchronous pointer pipeline belongs to one `UiRealm`. `GestureBinding`,
+The synchronous pointer pipeline belongs to one `UiRuntime`. `GestureBinding`,
 `GestureArena`, recognizers, pointer routes, and executable callbacks are
 intentionally `!Send + !Sync`; callbacks may capture `Rc` widget state.
 Strong `Rc` ownership belongs to widget state. Arena membership and cached

@@ -1,4 +1,4 @@
-//! ADR-0074: realm-scoped signals driven through the real widget pipeline
+//! ADR-0074: UI runtime-scoped signals driven through the real widget pipeline
 //! (`lay_out` mounts a tree in a `HeadlessBinding`; `tick` pumps one frame
 //! without dirtying anything itself).
 //!

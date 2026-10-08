@@ -828,7 +828,7 @@ adds its own entry.
   documented it in passing ("dead in production") and that stopped nobody.
 
 **Replacement coverage:** `register_self_hit_entry` is exercised end-to-end by
-`mouse_region_cursor_reaches_the_window_through_the_realm` (`crates/flui-testing/tests/realm_driver.rs`):
+`mouse_region_cursor_reaches_the_window_through_the_ui_runtime` (`crates/flui-testing/tests/runtime_driver.rs`):
 `RenderMouseRegion` enters the hit path only through it, and the test asserts the hovered region's
 cursor reaches the window. The deleted tests asserted a write landed in a structure nobody read, so
 they were removed rather than adapted: they could not fail for a reason a user would notice.
@@ -1017,12 +1017,12 @@ computed twice (engine for pixels, rendering for hit-test) because a single comp
 need the downstream engine to write into the upstream owner; the logic lives once in
 `resolve_follower_offset`. Translation only, like the render path.
 
-### Layout contexts lend the realm's text context, one measurement at a time
+### Layout contexts lend the UI runtime's text context, one measurement at a time
 
-**Rule.** A `PipelineOwner` holds the realm's `TextContextHandle`
+**Rule.** A `PipelineOwner` holds the UI runtime's `TextContextHandle`
 (`Rc<RefCell<flui_painting::TextContext>>`), a constructor argument: `PipelineOwner::new` and
 `new_with_capacity` take it, and there is no `Default` (ADR-0092 §10 step 3). A pipeline with no
-realm behind it (a hot-reload plugin image, a test) passes `TextContextHandle::standalone`, a
+UI runtime behind it (a hot-reload plugin image, a test) passes `TextContextHandle::standalone`, a
 context over a collection of its own. A frame driver that moves the owner out of its slot for a
 typestate transition calls `take_idle`, whose placeholder shares the handle, so the slot a
 transition that unwinds leaves still measures through it. The layout walk passes the
@@ -1039,14 +1039,14 @@ hold a loan across a child query. Nothing builds a context implicitly: every lay
 and dry-query context is constructed with a `TextSource`, and `layout_leaf_only` takes one.
 Slivers get no text accessor: nothing that measures text is a sliver.
 
-**Why a channel.** The realm owns its text context (no ambient, engine-wide font
+**Why a channel.** The UI runtime owns its text context (no ambient, engine-wide font
 collection), so the context has to reach the render object through the pipeline that lays it
 out.
 
-**Alternatives.** Threading `&mut TextContext` down from the realm would change
+**Alternatives.** Threading `&mut TextContext` down from the UI runtime would change
 `PipelineOwner::run_frame`, `run_layout` and every binding and harness that drives them, and
-the realm reaches its presentations through `&self`. A lock would put contention on every
-measurement. The `RefCell` sits between the realm and its pipelines, borrowed once per
+the UI runtime reaches its presentations through `&self`. A lock would put contention on every
+measurement. The `RefCell` sits between the UI runtime and its pipelines, borrowed once per
 measurement on the owner thread; a second borrow at the same time is a `BUG:` panic, which
 only a measurement that synchronously drives another could cause (a `PipelineCell` checkout is
 not re-entrant). A `RefMut` drops on unwind, so a panicking layout releases the loan before the
@@ -1160,7 +1160,7 @@ control, checking published extents and the cached items' committed geometry.
 | `PipelineOwner` parent/back-references throughout [`src/pipeline/owner/mod.rs`](src/pipeline/owner/mod.rs) | `Arc<RwLock<PipelineOwner>>`, `Weak<RwLock<PipelineOwner>>` | Shared infrastructure | Soundness-rewrite precedent ([core-crates-hardening Task 7](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/plans/2026-03-31-core-crates-hardening.md)). |
 | `RenderTree::nodes` (`src/storage/tree.rs:59`) | `Slab<RenderNode>` | Auto-derived Send+Sync | No `unsafe impl` needed after U2. |
 | Viewport listener list (`ScrollableViewportOffset::listeners`, `src/view/viewport_offset.rs`) | `RwLock<Vec<…>>` | Listener registry | Off layout/paint hot path. `FixedViewportOffset`'s former listener list was deleted as speculative API (a fixed offset never notifies). |
-| `PipelineOwner::text` (`src/pipeline/text_context.rs`) | `Rc<RefCell<TextContext>>` | Owner-thread shared infrastructure | The realm's text context, shared by its presentations' pipelines. Borrowed once per measurement, never across a child's layout; `!Send`, like the owner. See "Layout contexts lend the realm's text context". |
+| `PipelineOwner::text` (`src/pipeline/text_context.rs`) | `Rc<RefCell<TextContext>>` | Owner-thread shared infrastructure | The UI runtime's text context, shared by its presentations' pipelines. Borrowed once per measurement, never across a child's layout; `!Send`, like the owner. See "Layout contexts lend the UI runtime's text context". |
 
 Two rows left this table because their sites left the crate: the mouse tracker
 lives in `flui-interaction` (`crates/flui-interaction/src/routing/mouse_tracker.rs`) and

@@ -134,7 +134,7 @@ Subsecond reads there.
   for doctests and for launching the executable outside `cargo run`; and every facade
   combination that builds in release with `--all-features` must leave the feature out.
 - rustc links each crate once per artifact, so a dylib holds exactly one copy of every
-  process-global static. Dynamic linking does not split realm or registry identity and needs no
+  process-global static. Dynamic linking does not split UI runtime or registry identity and needs no
   entry in ADR-0097's allowlist.
 - The reading of the dlopen worker in the study found two unreported hazards (the old image
   unmapped before the reassemble drops its views; the worker's own `REQUEST_REBUILD`,

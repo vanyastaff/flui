@@ -1,4 +1,4 @@
-//! Paragraph shaping on a realm's [`TextContext`](crate::TextContext)
+//! Paragraph shaping on a UI runtime's [`TextContext`](crate::TextContext)
 //! (ADR-0092 §1).
 //!
 //! `TextPainter` measures every paragraph here and paints the same layout:

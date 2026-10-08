@@ -3,7 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-08-02
 - **Amended:** 2026-09-30 — "What is untouched" states this ADR's scope without the "ported 1:1" directive it quoted; FLUI is not a Flutter port ([`AGENTS.md`](../../AGENTS.md) Design stance). The decision is unchanged.
-- **Related:** [ADR-0028](ADR-0028-design-system-decoupling-contract.md) (design-system decoupling — Material and Cupertino are independent siblings above the widget catalog); [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (one realm per window — why appearance is per-presentation, and why package/ownership topology is a sanctioned leapfrog zone); [ADR-0037](ADR-0037-presentation-ownership-domains.md) (per-presentation owner state); [ADR-0041](ADR-0041-workspace-topology-contract.md) (layer policy — `flui-app` is L9, the design systems are L7)
+- **Related:** [ADR-0028](ADR-0028-design-system-decoupling-contract.md) (design-system decoupling — Material and Cupertino are independent siblings above the widget catalog); [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (one UI runtime per window — why appearance is per-presentation, and why package/ownership topology is a sanctioned leapfrog zone); [ADR-0037](ADR-0037-presentation-ownership-domains.md) (per-presentation owner state); [ADR-0041](ADR-0041-workspace-topology-contract.md) (layer policy — `flui-app` is L9, the design systems are L7)
 - **Issue:** [#569](https://github.com/vanyastaff/flui/issues/569) — public package surface cleanup
 
 *OS appearance is a per-window signal carried by `MediaQueryData::platform_brightness`; theme *selection* (`ThemeMode`) belongs to the design system that defines the tokens, not to the application framework; the resolved theme is published through an in-tree inherited widget, separately in each window. There is no universal `ThemeData` abstraction over Material and Cupertino, and `WidgetsApp` works with neither. `flui-app` owns no design tokens — the parked `AppTheme`/`AppColorScheme` surface is removed rather than moved.*
@@ -26,7 +26,7 @@ The parked surface also extends badly to everything theming has to grow into: hi
 
 **1. OS appearance belongs to the presentation, not the application.**
 
-The system's light/dark signal reaches the tree as `MediaQueryData::platform_brightness`, scoped to one window's UI tree. An OS theme change updates that window's `MediaQuery` and rebuilds its dependents; it does not mutate a process-global value. This follows directly from ADR-0027's one-realm-per-window model: a per-window signal delivered through a process-scoped configuration object would be unable to express two windows disagreeing, which they legitimately can.
+The system's light/dark signal reaches the tree as `MediaQueryData::platform_brightness`, scoped to one window's UI tree. An OS theme change updates that window's `MediaQuery` and rebuilds its dependents; it does not mutate a process-global value. This follows directly from ADR-0027's one-UI runtime-per-window model: a per-window signal delivered through a process-scoped configuration object would be unable to express two windows disagreeing, which they legitimately can.
 
 **2. Theme *selection* belongs to the design system.**
 

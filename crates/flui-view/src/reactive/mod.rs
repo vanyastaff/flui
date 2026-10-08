@@ -1,7 +1,7 @@
-//! Realm-scoped signals — ADR-0074, placed by ADR-0085.
+//! Runtime-scoped signals — ADR-0074, placed by ADR-0085.
 //!
 //! One [`Reactive`] graph per `BuildOwner` (so per presentation, and every
-//! presentation belongs to a realm): an arena of generational slots holding
+//! presentation belongs to a UI runtime): an arena of generational slots holding
 //! [`Signal`] values, plus the **reader registry** that makes the whole thing
 //! worth having:
 //!
@@ -68,12 +68,12 @@
 //!
 //! # Threading
 //!
-//! Everything here is `!Send + !Sync` — realm-affine like the element tree. A
-//! handle carries the id of the graph that minted it, so a handle from realm
-//! A used against realm B is [`SignalError::ForeignGraph`], not a silent read
-//! of someone else's slot. A cross-thread write is a realm command executed on
+//! Everything here is `!Send + !Sync` — UI runtime-affine like the element tree. A
+//! handle carries the id of the graph that minted it, so a handle from UI runtime
+//! A used against UI runtime B is [`SignalError::ForeignGraph`], not a silent read
+//! of someone else's slot. A cross-thread write is a UI runtime command executed on
 //! the owner thread (`UiCommand::SignalWrite` in `flui-app`, carrying a
-//! [`SignalSender`]), never a shared cell. The realm routes that command by
+//! [`SignalSender`]), never a shared cell. The UI runtime routes that command by
 //! [`SignalSlot::graph`] to the presentation whose graph minted the slot
 //! (ADR-0085 §1).
 
@@ -145,7 +145,7 @@ struct Inner {
     destroying_refused: bool,
 }
 
-/// The reactive graph of one `BuildOwner` (one realm). Cheap to clone (an
+/// The reactive graph of one `BuildOwner` (one UI runtime). Cheap to clone (an
 /// `Rc`); `!Send + !Sync` by construction.
 #[derive(Clone)]
 pub struct Reactive {
@@ -350,7 +350,7 @@ impl Reactive {
     }
 
     /// Create a signal that lives as long as the graph — application-level
-    /// state released with the realm. Widget-level state belongs to its
+    /// state released with the UI runtime. Widget-level state belongs to its
     /// element: use [`Reactive::signal_owned_by`] (or `cx.signal(..)` from
     /// `init_state`, which does that for you) so the slot is released when
     /// the element unmounts.
@@ -756,7 +756,7 @@ impl Reactive {
                 target: "flui::signals",
                 slot = ?slot,
                 ?element,
-                "refused: a signal was written during build (write from a callback, init_state or a realm command)"
+                "refused: a signal was written during build (write from a callback, init_state or a ui_runtime command)"
             );
             return Err(SignalError::WrittenDuringBuild { element });
         }

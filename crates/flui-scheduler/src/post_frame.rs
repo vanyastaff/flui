@@ -1,8 +1,8 @@
-//! The realm's owner-local frame state, and post-frame capabilities.
+//! The UI runtime's owner-local frame state, and post-frame capabilities.
 //!
 //! [`OwnerFrame`] is what a frame needs from its owner thread that the
 //! (still `Send`) [`UpdateScheduler`] cannot hold: the owner-local post-frame
-//! queue and the async task store. A realm (or a headless binding) owns
+//! queue and the async task store. A UI runtime (or a headless binding) owns
 //! exactly one and is the only strong owner; every frame entry point takes it
 //! by reference — [`UpdateScheduler::drive_frame`],
 //! [`UpdateScheduler::handle_begin_frame`], [`UpdateScheduler::end_frame`],
@@ -43,12 +43,12 @@ struct LocalLaneInner {
     closed: Cell<bool>,
 }
 
-/// The realm's owner-local frame state: its post-frame queue and its async
+/// The UI runtime's owner-local frame state: its post-frame queue and its async
 /// tasks.
 ///
-/// Runtime-internal: public only because the realm and the headless bindings
+/// Runtime-internal: public only because the UI runtime and the headless bindings
 /// live in sibling crates. `!Send + !Sync` through its `Rc` storage, and not
-/// `Clone`: its owner — the realm, or a headless binding — holds the only
+/// `Clone`: its owner — the UI runtime, or a headless binding — holds the only
 /// strong reference to the tasks and callbacks, so they are created, run and
 /// dropped on the owner thread and never outlive it. Widgets reach it through
 /// `Weak` handles ([`AsyncDriver`], [`LocalPostFrameHandle`]).
@@ -158,7 +158,7 @@ impl OwnerFrame {
     /// Drop every queued post-frame callback, then every task, on this (the
     /// owner) thread, each under its own catch, and admit nothing afterwards.
     ///
-    /// A realm's teardown calls it in its own order, before it resumes any
+    /// A UI runtime's teardown calls it in its own order, before it resumes any
     /// earlier failure, so the captures of both queues are dropped on the
     /// owner exactly once. Returns the first panic a destructor raised; later
     /// ones are retained, never dropped. During an existing unwind the values
@@ -304,7 +304,7 @@ pub enum OwnerFrameError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum LocalPostFrameScheduleError {
-    /// The owning realm (its owner frame or its scheduler) is gone or retired
+    /// The owning UI runtime (its owner frame or its scheduler) is gone or retired
     /// — there is no frame left for the callback to observe, and it is
     /// guaranteed never to run.
     #[error("the handle's owner-local lane is closed")]
@@ -334,7 +334,7 @@ impl LocalPostFrameHandle {
     /// Schedule an owner-local callback after the next completed frame.
     ///
     /// The callback may capture `Rc`/`RefCell` state. On error (the owning
-    /// realm is gone or retired) the callback is dropped without running —
+    /// UI runtime is gone or retired) the callback is dropped without running —
     /// provably: nothing retains it once this call returns `Err`.
     ///
     /// Runs in the same total order as every [`PostFrameHandle::schedule`]
@@ -402,8 +402,8 @@ impl std::fmt::Debug for LocalPostFrameHandle {
 ///
 /// Holds a [`WeakUpdateScheduler`], not a strong `UpdateScheduler`: this handle is
 /// `Clone + Send + Sync` and vended into widget capabilities (ADR-0021) that
-/// may legitimately outlive the realm that built them, so a surviving handle
-/// must fail closed instead of pinning a dead realm's scheduler alive.
+/// may legitimately outlive the UI runtime that built them, so a surviving handle
+/// must fail closed instead of pinning a dead UI runtime's scheduler alive.
 #[derive(Clone)]
 pub struct PostFrameHandle {
     scheduler: WeakUpdateScheduler,
@@ -420,7 +420,7 @@ impl PostFrameHandle {
 
     /// Schedule a `Send` callback after the next completed frame.
     ///
-    /// If the backing scheduler is already gone (its owning realm has torn
+    /// If the backing scheduler is already gone (its owning UI runtime has torn
     /// down), the callback is dropped without running and a `tracing::warn!`
     /// is emitted — there is no frame left for it to observe.
     pub fn schedule(&self, callback: impl FnOnce(&FrameTiming) + Send + 'static) {

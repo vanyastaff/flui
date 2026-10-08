@@ -22,9 +22,9 @@
 //! `WidgetsBinding` continues to own its `BuildOwner` and `ElementTree`
 //! inline behind a single `RwLock<WidgetsBindingInner>` — and the
 //! registry captures one binding's owner state. The active handle is selected
-//! by the [`UiRealm`](../../../flui-runtime/src/ui_realm/mod.rs) entry scope.
+//! by the [`UiRuntime`](../../../flui-runtime/src/ui_runtime/mod.rs) entry scope.
 //!
-//! Activation is thread-local and stack-shaped. Nested realm entry restores
+//! Activation is thread-local and stack-shaped. Nested UI runtime entry restores
 //! the previous handle, including during panic unwinding. A lookup clones the
 //! active handle and releases the TLS `RefCell` borrow before invoking either
 //! framework or user code.
@@ -50,7 +50,7 @@ use flui_foundation::{ElementId, ViewKey};
 /// `GlobalKey::current_element` / `with_current_state` consult.
 ///
 /// Held by one [`WidgetsBinding`](crate::WidgetsBinding) and activated only
-/// while its owning realm is entered.
+/// while its owning UI runtime is entered.
 ///
 /// The struct is `Clone` so internal copies stay cheap — both
 /// invariants funnel through the same `Arc`-shared closure pair.
@@ -153,7 +153,7 @@ impl GlobalKeyRegistryHandle {
 }
 
 /// Build one composite handle spanning `members`, consulted in the given
-/// order (ADR-0043 §1's realm composite, over per-presentation
+/// order (ADR-0043 §1's UI runtime composite, over per-presentation
 /// `WidgetsBinding` registries).
 ///
 /// `GlobalKeyScope`'s uniqueness invariant guarantees at most one member ever
@@ -235,7 +235,7 @@ const _: () = assert!(!std::mem::needs_drop::<DropFreeTestRegistrySlot>());
 
 thread_local! {
     /// Active registry stack for this owner thread. A stack, rather than a
-    /// replaceable singleton, makes nested realm entry restore correctly.
+    /// replaceable singleton, makes nested UI runtime entry restore correctly.
     ///
     /// `ManuallyDrop` is required because this module can be instantiated in a
     /// hot-reload cdylib. `RegistryActivation` empties the stack explicitly.
@@ -312,7 +312,7 @@ pub(crate) fn take_registry() -> Option<GlobalKeyRegistryHandle> {
     TEST_REGISTRY.with(|slot| slot.borrow_mut().take())
 }
 
-/// Run `f` against the currently-active realm handle (or isolated legacy
+/// Run `f` against the currently-active UI runtime handle (or isolated legacy
 /// fixture lane), returning the closure's result. Returns `None` when neither
 /// lane is active
 /// (the quiescent state — e.g. unit tests that bypass the binding).

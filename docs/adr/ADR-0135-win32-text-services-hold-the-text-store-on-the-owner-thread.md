@@ -119,7 +119,7 @@ composition must still end somewhere.
 ## Consequences
 
 - `TextInputOwner::new` takes a `TextInputBackend` (a breaking change, `changelog.d/`), and
-  `TextInputOwner::active_store` and the realm's test-only `active_text_store` are gone. Tests reach
+  `TextInputOwner::active_store` and the UI runtime's test-only `active_text_store` are gone. Tests reach
   the focused store through the host the headless window offers:
   `HeadlessWindow::with_text_store_host` and `flui_testing::RecordingTextStoreHost`;
   `widgets::harness::mount_with_ime` is pull-model and `mount_with_push_ime` keeps the push

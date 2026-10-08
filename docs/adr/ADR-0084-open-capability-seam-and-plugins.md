@@ -43,14 +43,14 @@ The platform side already has more than the widget side can reach:
 - **Haptics.** `PlatformWindow::haptics()` exists (`crates/flui-platform-api/src/platform_window.rs`),
   and `PresentationState::perform_haptic_feedback` resolves it
   (`crates/flui-runtime/src/presentation.rs:970`), but that method and its forwarder
-  `UiRealm::perform_haptic_feedback` (`crates/flui-runtime/src/ui_realm/frame_clock.rs:466`) carry
+  `UiRuntime::perform_haptic_feedback` (`crates/flui-runtime/src/ui_runtime/frame_clock.rs:466`) carry
   `expect(dead_code)` with "no production caller yet" (both moved from `flui-app` by
   ADR-0083). ADR-0031 §4 deferred the widget-facing handle "with the first widget
   consumer, as a lifecycle capability".
 - **Clipboard.** `Platform::clipboard()` is a required method
   (`crates/flui-platform/src/traits/platform.rs:423`), resolved once per loop into `AppRuntime`
   (ADR-0038 §9). When this ADR was written the accessor that would hand it out was dead code.
-  It now has a caller: every realm takes the platform clipboard at construction
+  It now has a caller: every UI runtime takes the platform clipboard at construction
   (`runner::host::runtime_clipboard`) and installs a `ClipboardHandle` in each presentation's
   build owner, reached through `LifecycleContext::clipboard_handle`. That closed method is the
   interim route; it is replaced by `cx.capability::<Clipboard>()` when this seam lands, and
@@ -95,7 +95,7 @@ the registry stood in `crates/flui-view/src/capability/` in place of `flui-platf
     `presentation.rs` wiring) and the conflict-at-run path were **not exercised**.
 - **Corrected by this revision.**
   - The prototype shared one registry per application through an owner-thread cell
-    (`runner/host.rs`). Android, iOS and web realms got an empty one, where even the clipboard
+    (`runner/host.rs`). Android, iOS and web UI runtimes got an empty one, where even the clipboard
     answers `NotRegistered`.
   - It registered `Cursor`, `TextInput` and `Accessibility` as widget capabilities, against §5.
   - It removed the defaults of `text_input()` and `accessibility()` but kept `Option`.
@@ -197,11 +197,11 @@ impl<T: LifecycleContext + ?Sized> LifecycleContextExt for T {}
 `flui-view → flui-platform-api` (tier K to tier C, legal under ADR-0081 §1).
 
 `LifecycleContext` stays sealed, so only `flui-view`'s contexts implement `capability_erased`,
-and they forward to the realm. `LifecycleContextExt` is in the prelude. Because the method lives
+and they forward to the UI runtime. `LifecycleContextExt` is in the prelude. Because the method lives
 on `LifecycleContext`, `cx.capability::<Haptics>()` inside `build` is still a compile error, the
 same `E0599` ADR-0078 relies on. The 136 `&dyn LifecycleContext` sites are untouched.
 
-### 3. The registry is per realm, a parameter of realm construction
+### 3. The registry is per UI runtime, a parameter of UI runtime construction
 
 - **The provider table is built once per `Application::run`.** `Application::run` validates the
   plugins and overrides **before the platform starts**; a conflict returns
@@ -209,22 +209,22 @@ same `E0599` ADR-0078 relies on. The 136 `&dyn LifecycleContext` sites are untou
   clipboard and data transfer capture the platform's services, so they join the table once the
   platform exists. That step cannot conflict: the built-in key set is fixed and was part of the
   validation.
-- **Each realm receives its own `CapabilityRegistry` as a parameter of its construction.** Today
-  that is a field of `RealmServices` (`crates/flui-app/src/app/runtime.rs:162`); after ADR-0083
-  it is the runtime's realm constructor. The registries share the validated table by `Rc` on the
-  owner thread (ADR-0091); handles are cached per presentation; a provider keeps no per-realm
-  state. No realm constructor exists without the parameter, so no realm starts with a silently
+- **Each UI runtime receives its own `CapabilityRegistry` as a parameter of its construction.** Today
+  that is a field of `RuntimeServices` (`crates/flui-app/src/app/runtime.rs:162`); after ADR-0083
+  it is the runtime's UI runtime constructor. The registries share the validated table by `Rc` on the
+  owner thread (ADR-0091); handles are cached per presentation; a provider keeps no per-UI runtime
+  state. No UI runtime constructor exists without the parameter, so no UI runtime starts with a silently
   empty registry. The table is never a thread-local or a static (ADR-0097), which rules out the
   prototype's owner-thread cell. The table never changes after validation; there is no
-  registration at run time. The `Rc` assumes one owner thread; if ADR-0091's per-realm owner
+  registration at run time. The `Rc` assumes one owner thread; if ADR-0091's per-UI runtime owner
   threads are adopted, the table becomes an `Arc` over `Send + Sync` providers or is built once
   per owner thread.
 - **Lookup order.** `NotRegistered` (the table has no provider), then `NoWindow` (the
   presentation's window is gone, and its cache with it), then the provider, which returns a
   handle or its own `NotOnThisPlatform`.
 - **A `BuildOwner` with no installed scope answers `NotRegistered` for everything.** That is a
-  unit test that mounts without a realm. The guarantee for core capabilities is a property of
-  realm construction, and `flui-testing`'s driver builds its realms through it.
+  unit test that mounts without a UI runtime. The guarantee for core capabilities is a property of
+  UI runtime construction, and `flui-testing`'s driver builds its UI runtimes through it.
 
 ### 4. Registration is explicit, one line per plugin
 
@@ -349,7 +349,7 @@ start here. Haptics ships as the first plugin, over the existing `PlatformWindow
 which is ADR-0031's degradation contract made visible: a caller may ignore the error and get
 Flutter's silent no-op.
 
-Under a realm, a lookup of clipboard or data transfer returns a handle or `NoWindow`, never
+Under a UI runtime, a lookup of clipboard or data transfer returns a handle or `NoWindow`, never
 `NotRegistered`. `NotRegistered` arises only for an optional capability the application did not
 install, or under a bare owner (§3).
 
@@ -379,7 +379,7 @@ the capability keeps its type `C`, so `cx.capability::<C>()` call sites do not c
 
 - **A generic method on `LifecycleContext`.** Breaks object safety and all 136 `&dyn` sites.
 - **Unsealing `LifecycleContext` so plugins add extension traits with their own storage.** Every
-  plugin would need somewhere to keep per-realm state, which pushes it toward a process-global
+  plugin would need somewhere to keep per-UI runtime state, which pushes it toward a process-global
   or a thread-local, and a context implemented outside `flui-view` could hand out capabilities in
   `build`.
 - **Link-time auto-registration (`inventory`, `linkme`).** Registration would depend on which
@@ -397,8 +397,8 @@ the capability keeps its type `C`, so `cx.capability::<C>()` call sites do not c
 - **Two doors: backend methods for core capabilities, the registry for optional ones.** A move
   between classes would change every call site; with one door it changes only the provider.
 - **A registry per application shared through an owner-thread cell** (the prototype). Rejected:
-  a realm built on any path that does not fill the cell gets an empty registry silently, as the
-  prototype's Android, iOS and web realms did.
+  a UI runtime built on any path that does not fill the cell gets an empty registry silently, as the
+  prototype's Android, iOS and web UI runtimes did.
 - **Register cursor, text input and accessibility as widget capabilities** (the prototype).
   Rejected: each would be a second route beside the framework's own (§5).
 - **A class marker on `PlatformCapability`.** Rejected: moving a capability between classes
@@ -413,7 +413,7 @@ the capability keeps its type `C`, so `cx.capability::<C>()` call sites do not c
 - The interim `LifecycleContext::clipboard_handle` gives way to the built-in clipboard
   provider, which hands out the same `ClipboardHandle`. The haptics forwarders
   (`crates/flui-runtime/src/presentation.rs:984`,
-  `crates/flui-runtime/src/ui_realm/frame_clock.rs:466`) get production callers or are deleted in favour
+  `crates/flui-runtime/src/ui_runtime/frame_clock.rs:466`) get production callers or are deleted in favour
   of the haptics plugin.
 - **Breaks.** `PlatformWindow::text_input()` returns `Arc<dyn PlatformTextInput>` with no
   default. `accessibility()` moves to the backend extension trait (ADR-0082 §3) and returns
@@ -428,9 +428,9 @@ the capability keeps its type `C`, so `cx.capability::<C>()` call sites do not c
 - AGENTS.md's "Platform capability" row states the classification rule of §5, so a contributor
   adding a capability knows which class to put it in.
 - ADR-0038 §7's `DataTransferHandle` is acquired as `cx.capability::<DataTransfer>()`.
-- Registered capabilities are data the realm can list; ADR-0095's protocol can expose that list
+- Registered capabilities are data the UI runtime can list; ADR-0095's protocol can expose that list
   to tools and agents.
-- The seam depends on ADR-0082 (for `flui-platform-api`) and ADR-0083 (for the realm's
+- The seam depends on ADR-0082 (for `flui-platform-api`) and ADR-0083 (for the UI runtime's
   registry).
 - The runtime's handle cache is per presentation; a presentation that closes drops its handles,
   so a widget that outlives its window sees `Unsupported { reason: NoWindow }` on its next
@@ -447,7 +447,7 @@ the capability keeps its type `C`, so `cx.capability::<C>()` call sites do not c
 | An out-of-workspace fixture on **`flui-platform-api` and `flui-sdk` only**: `a_plugin_capability_reaches_init_state`, `without_the_plugin_the_capability_is_not_registered` | A third-party capability is declared, registered through a plugin and acquired in `init_state`; without the plugin it is `NotRegistered`. Still outstanding: the prototype used stand-ins | The crates do not exist |
 | `a_capability_conflict_fails_run_before_any_window_opens` (`flui-app`, headless runner) | `Application::run` returns `Err(AppRunError::CapabilityConflict(..))` with `first: Plugin(a)`, `second: Plugin(b)`, and zero windows opened | No plugin API; the prototype's quit path was never run |
 | `a_plugin_over_a_built_in_is_a_conflict`, `an_application_override_resolves_a_conflict`, `a_later_override_replaces_an_earlier_one`, `conflicts_are_reported_in_installation_order` | The rules of §4; the last one is deterministic across runs | No registry |
-| `every_realm_the_runner_builds_resolves_the_clipboard` (through `Application` and the runner, main and secondary windows) | An `Ok` handle, never `NotRegistered` | No seam; the prototype's runner path was untested |
+| `every_ui_runtime_the_runner_builds_resolves_the_clipboard` (through `Application` and the runner, main and secondary windows) | An `Ok` handle, never `NotRegistered` | No seam; the prototype's runner path was untested |
 | `not_registered_is_reported_before_no_window`, `a_closed_window_answers_no_window` | The lookup order of §3 | No seam |
 | Haptics: `NotOnThisPlatform` on a window without haptics; `FakeHaptics` on `MockWindow` observes the call; `NotRegistered` without the plugin | ADR-0031's degradation contract | No seam |
 | `compile_fail` with a compiling twin: a `PlatformWindow` without `text_input`, and a backend extension impl without `accessibility`, do not compile | The core obligation of §5 | The defaults exist |

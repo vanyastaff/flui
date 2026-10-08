@@ -334,7 +334,7 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     /// context and call the protocol-level `compute_*` methods (e.g.
     /// [`RenderBox::compute_min_intrinsic_width`](crate::traits::RenderBox::compute_min_intrinsic_width)).
     ///
-    /// `text` is the realm's text context the node measures with; `None`
+    /// `text` is the UI runtime's text context the node measures with; `None`
     /// leaves the typed context one of its own.
     ///
     /// Default: `0.0` for every

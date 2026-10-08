@@ -3,14 +3,14 @@
 - **Status:** Accepted
 - **Date:** 2026-10-01
 - **Related:** ADR-0045 (reliable raster completion), ADR-0068 (presentation
-  disposition), ADR-0083 (host-free realm), ADR-0100 (prepared GPU work).
+  disposition), ADR-0083 (host-free UI runtime), ADR-0100 (prepared GPU work).
 
 ## Context
 
 Resource admission can defer a frame while earlier GPU work is outstanding. A
 missing retained source also requires another attempt with full damage. Calling
 these errors recoverable inside the engine does not schedule that attempt: mapping
-them to the realm's terminal failure verdict drains input epochs and loses the
+them to the UI runtime's terminal failure verdict drains input epochs and loses the
 last update of a static scene until unrelated input arrives.
 
 ## Decision
@@ -21,7 +21,7 @@ publishes `retry_required` before retiring the ticket and waking the owner. A fu
 telemetry acknowledgment channel cannot erase that fact.
 
 The application's raster lane and direct web sink map transient rendering failure
-to the exhaustive, GPU-free `SubmitVerdict::Retry`. The realm retains input epochs,
+to the exhaustive, GPU-free `SubmitVerdict::Retry`. The UI runtime retains input epochs,
 marks the presentation for full repaint, and requests its ordinary paced frame
 wake. No new input, surface-generation change or device replacement is required.
 A wake alone is insufficient because the failed attempt already consumed paint

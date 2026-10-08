@@ -1,4 +1,4 @@
-//! What one [`UiRealm::pump`](crate::ui_realm::UiRealm::pump) reads and
+//! What one [`UiRuntime::pump`](crate::ui_runtime::UiRuntime::pump) reads and
 //! reports: the frame clock it samples once, and the outcome it hands back to
 //! the host's pacing.
 //!
@@ -9,7 +9,7 @@
 ///
 /// Read once per pump and handed to the scheduler's begin frame (its frame
 /// timing, and the timestamp every transient and post-frame callback
-/// receives) and to the realm's `Vsync` tick, so `Vsync` controllers advance
+/// receives) and to the UI runtime's `Vsync` tick, so `Vsync` controllers advance
 /// on the frame's clock rather than on whenever the tick read the wall clock.
 ///
 /// A `flui_scheduler::Ticker` does not follow it: a controller built on the
@@ -44,10 +44,10 @@ impl FrameClockSource for SampledClock {
 /// timestamp — and every `Vsync` controller ticked at it — is a value the
 /// test controls rather than whatever the wall clock read. It is the clock
 /// `flui-testing`'s headless binding already drives its gesture-arena
-/// deadlines from, so a driver that pumps a realm off the same handle keeps
+/// deadlines from, so a driver that pumps a UI runtime off the same handle keeps
 /// the frame timestamp and those deadlines on one timeline (clones share it).
 ///
-/// A realm built on [`flui_scheduler::ClockSource::Manual`] with a clone of
+/// A UI runtime built on [`flui_scheduler::ClockSource::Manual`] with a clone of
 /// the same clock measures frame time from that clock's reading at
 /// construction, so its frame timestamps, gesture deadlines and produce gate
 /// all sit on the one timeline the test advances.

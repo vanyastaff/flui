@@ -779,7 +779,9 @@ fn binding_keeps_all_measured_packets_and_only_latest_predictions() {
         EventTime,
         pointer::{PointerButtons, PointerMove, PointerSample},
     };
-    for contact_active in [false, true] {
+    for (contact_active, before_input) in
+        [(false, false), (true, false), (false, true), (true, true)]
+    {
         let binding = GestureBinding::new();
         let observed = Rc::new(RefCell::new(Vec::new()));
         let output = observed.clone();
@@ -818,7 +820,12 @@ fn binding_keeps_all_measured_packets_and_only_latest_predictions() {
             .with_predicted(vec![sample(at + 5)]);
             binding.handle_pointer_event(&PointerEvent::Move(update), |_| HitTestResult::new());
         }
-        assert_eq!(binding.flush_pending_moves(), 1, "one combined observation");
+        let delivered = if before_input {
+            binding.flush_pending_input()
+        } else {
+            binding.flush_pending_moves()
+        };
+        assert_eq!(delivered, 1, "one combined observation");
         let updates = observed.borrow();
         let [update] = updates.as_slice() else {
             panic!("one Move")

@@ -10,7 +10,7 @@
 //!
 //! The existing `flui::reconcile` tracing stream is deliberately NOT this
 //! seam (typed payloads degrade to strings there, its subscriber lifecycle
-//! is process-global, and it cannot be realm-scoped); it remains unchanged
+//! is process-global, and it cannot be UI runtime-scoped); it remains unchanged
 //! for trace tooling.
 
 use core::any::TypeId;
@@ -160,7 +160,7 @@ impl ElementUnmounted {
 /// # Ordering contract
 ///
 /// The stream is a **totally-ordered tree-mutation log**, emitted
-/// synchronously on the realm's owner thread in the exact order the
+/// synchronously on the UI runtime's owner thread in the exact order the
 /// mutations happen. Per element it is causal: `element_mounted` first,
 /// then any interleaving of `element_rebuilt` / `element_moved`, then
 /// `element_unmounted` last. **No phase bucketing is promised**: builds run
@@ -171,11 +171,11 @@ impl ElementUnmounted {
 ///
 /// # Threading, re-entrancy, and deadlock
 ///
-/// Callbacks run on the realm's owner thread, inside frame phases, while
-/// the realm's locks are held. The contract is absolute: an observer
-/// callback must not call **any** flui-view binding, realm, or owner API —
+/// Callbacks run on the UI runtime's owner thread, inside frame phases, while
+/// the UI runtime's locks are held. The contract is absolute: an observer
+/// callback must not call **any** flui-view binding, UI runtime, or owner API —
 /// the natural accessors take a non-reentrant read lock while the frame
-/// drive holds the write lock, which deadlocks the realm thread in release
+/// drive holds the write lock, which deadlocks the UI runtime thread in release
 /// builds. A callback may touch only its own state (atomics, lock-free
 /// structures, `try_send` into a channel it owns) and must return promptly.
 /// Inspection-driven mutation must go through out-of-frame channels (a

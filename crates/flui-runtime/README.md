@@ -1,6 +1,6 @@
 # flui-runtime
 
-The frame runtime of FLUI: the UI realm and the per-presentation machinery it
+The frame runtime of FLUI: the UI runtime and the per-presentation machinery it
 drives between the widget tree and a host. **Internal** — it is not an
 embedder API and its surface changes with the framework, except the execution
 host-injection seam (`HostExecutors` and its companions) and the frame-failure
@@ -10,16 +10,16 @@ the Stable promise (ADR-0089 §1). Applications depend on `flui`, and hosts on
 
 ## What is in it
 
-- `ui_realm`: `UiRealm`, the owner-affine realm — the presentations it hosts,
+- `ui_runtime`: `UiRuntime`, the owner-affine UI runtime — the presentations it hosts,
   their frame transaction (`render_frame` through any `FrameSink`), input
   routing, lifecycle, and the bounded command inbox other threads reach it
   through.
 - `presentation`: one presentation's owner-thread state (its widget tree,
-  pipeline, gestures, focus, IME, semantics). The mount-ordered set a realm
+  pipeline, gestures, focus, IME, semantics). The mount-ordered set a UI runtime
   hosts is private to the crate.
 - `lifecycle_state`: the application lifecycle a presentation observes.
 - `frame_failure`: what a contained frame failure reports (ADR-0048).
-- `media_query_root`: the `MediaQuery` a realm installs above each root.
+- `media_query_root`: the `MediaQuery` a UI runtime installs above each root.
 - `renderer_binding`: `RenderingBinding`, a presentation's rendering
   binding over its pipeline owner.
 - `epoch`: the tree revision a presentation's frames advance, and whether the
@@ -35,15 +35,15 @@ the Stable promise (ADR-0089 §1). Applications depend on `flui`, and hosts on
 - `semantics_host`: per-presentation semantics enablement and platform
   accessibility delivery.
 - `sink`: the `FrameSink` a host implements and a frame is submitted through,
-  and the `SubmitVerdict` the realm classifies.
-- `reload` (`hot-reload` feature): the development reload tier a realm
+  and the `SubmitVerdict` the UI runtime classifies.
+- `reload` (`hot-reload` feature): the development reload tier a UI runtime
   applies.
 - `testing` (`test-support` feature): a window double and a scripted sink for
-  driving a realm headlessly.
+  driving a UI runtime headlessly.
 
 ## What is not
 
 No platform backend, windowing, GPU or engine type: the runners, the platform
-wiring, the raster lane and the realm dispatch layer stay in `flui-app`, which
+wiring, the raster lane and the UI runtime dispatch layer stay in `flui-app`, which
 depends on this crate. See
 [ADR-0083](../../docs/adr/ADR-0083-one-frame-transaction-in-flui-runtime.md).

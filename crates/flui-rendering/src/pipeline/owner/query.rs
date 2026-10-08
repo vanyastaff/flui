@@ -237,7 +237,7 @@ pub(super) struct QuerySlot<'a> {
 /// walk's borrows are released.
 pub(super) struct QueryPoisonCx<'a> {
     poison: &'a LayoutPoison,
-    /// The realm's text context, lent to every node the query measures;
+    /// The UI runtime's text context, lent to every node the query measures;
     /// each loan records the node it was made for.
     text: TextLender<'a>,
     failures: Vec<(

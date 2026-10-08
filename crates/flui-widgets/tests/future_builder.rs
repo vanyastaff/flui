@@ -1,7 +1,7 @@
 //! Public-API tests for [`FutureBuilder`].
 //!
 //! These drive the widget through the real `flui_widgets::prelude` surface and a
-//! real `HeadlessBinding` frame — the same path `UiRealm::draw_frame` takes.
+//! real `HeadlessBinding` frame — the same path `UiRuntime::draw_frame` takes.
 //! The `flui-view` unit tests cover the seam's internals; this file covers what an
 //! app author can observe.
 //!
@@ -148,7 +148,7 @@ pub(crate) fn future_builder_pending_then_error() {
 }
 
 /// A future, key and payload that hold `Rc` state: the builder runs it on
-/// the realm's owner thread, and the owner completes it between frames.
+/// the UI runtime's owner thread, and the owner completes it between frames.
 pub(crate) fn future_builder_accepts_an_owner_local_future() {
     type Shared = Rc<std::cell::Cell<i32>>;
     type Builds = Rc<std::cell::RefCell<Vec<(ConnectionState, Option<i32>)>>>;

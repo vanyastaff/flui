@@ -219,7 +219,7 @@ The gates explain their own findings; this is what to design for up front.
 |------|-------------|
 | Presentation capabilities (`rebuild_handle`, `focus_manager`, `text_input_handle`, `pipeline_owner`, …) are acquired only in `init_state`/`did_change_dependencies` | type system: they live on `LifecycleContext`, which only those hooks receive (ADR-0078) |
 | Signals are read in `build`, never written or created there | run-time guard in `flui-view::reactive` (ADR-0074) |
-| **ID offset** — slab indices are 0-based. Plain slab-backed IDs (`ViewId`, `LayerId`, `SemanticsId`) are 1-based `NonZeroUsize`: insert `slab_index + 1`, look up `id.get() - 1`. Generational keys (`ElementId`, `RenderId`, `RealmId`) pack the 0-based slot and a non-zero generation: mint with `new_gen(slab_index, generation)`, read `.index()` | `NonZeroUsize` / `NonZeroU64` + ID newtypes |
+| **ID offset** — slab indices are 0-based. Plain slab-backed IDs (`ViewId`, `LayerId`, `SemanticsId`) are 1-based `NonZeroUsize`: insert `slab_index + 1`, look up `id.get() - 1`. Generational keys (`ElementId`, `RenderId`, `UiRuntimeId`) pack the 0-based slot and a non-zero generation: mint with `new_gen(slab_index, generation)`, read `.index()` | `NonZeroUsize` / `NonZeroU64` + ID newtypes |
 | Logical and device geometry don't mix (no `Point + Point`, no `Size` as an `Offset`, no `DevicePoint` as a `Point`, no `f64`/`i32` mixing; ADR-0098) | trybuild suite `crates/flui-painting/tests/compile_fail/` |
 | No bare `unwrap()` in production: `expect("BUG: <invariant>")` for internal invariants, `thiserror` in libraries, `anyhow` in apps ([`docs/PANIC-POLICY.md`](docs/PANIC-POLICY.md)); no `todo!`/`dbg!`; no lock guard held across an `if let`/`match` | clippy (`unwrap_used`, `significant_drop_in_scrutinee`, …) |
 | Dependencies point down the tiers declared in `[package.metadata.flui]`; an exception names the ADR that removes it. Official packages depend on `flui-sdk` and the contract crates only | `cargo xtask workspace`, `cargo xtask reach` (ADR-0081, ADR-0088) |
@@ -362,7 +362,7 @@ script gates already run in CI, so formatting and anything they catch is not wor
   together. A pixel claim needs a readback whose sample points distinguish the fixed code from
   the broken code — rotation about the centre, SSAA area gates and framebuffer rebases have each
   produced tests that passed both ways.
-- **Runtime and platform:** state belongs to a realm (scheduler, focus, GlobalKeys), never to the
+- **Runtime and platform:** state belongs to a UI runtime (scheduler, focus, GlobalKeys), never to the
   process. Only the Linux/headless platform path executes in CI; Win32, AppKit, Android and iOS
   are clippy-only, so a change there is unverified unless the PR shows a run. Event-translation
   changes need the live smoke path, not a synthetic gesture test.

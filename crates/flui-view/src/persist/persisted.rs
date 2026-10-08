@@ -13,7 +13,7 @@ use crate::LifecycleContext;
 use crate::context::CrateToken;
 use crate::flush_registry::FlushRegistry;
 
-/// One [`Document`] kept for a widget: loaded from the realm's storage,
+/// One [`Document`] kept for a widget: loaded from the UI runtime's storage,
 /// written on every [`set`](Self::set), with its [`SaveStatus`].
 ///
 /// Open it in `ViewState::init_state` and keep it in the state; clones share
@@ -31,7 +31,7 @@ pub struct Persisted<D: Document> {
 
 /// What the clones of one [`Persisted`] share.
 struct OpenDocument<D> {
-    /// The realm's storage, if it has one.
+    /// The UI runtime's storage, if it has one.
     storage: Option<Arc<dyn Storage>>,
     /// The host's flush registry, which `set` publishes into.
     #[expect(dead_code, reason = "published into once set writes")]
@@ -57,7 +57,7 @@ impl<D: Document> fmt::Debug for Persisted<D> {
 }
 
 impl<D: Document> Persisted<D> {
-    /// The document [`D::NAME`](Document::NAME) in the storage of the realm
+    /// The document [`D::NAME`](Document::NAME) in the storage of the UI runtime
     /// `cx` belongs to. Call it from `init_state` or
     /// `did_change_dependencies`; nothing is read until [`load`](Self::load).
     #[must_use]

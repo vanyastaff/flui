@@ -152,6 +152,18 @@ impl RenderEditable {
         self
     }
 
+    /// Updates text sizing and invalidates glyph, selection and caret geometry.
+    pub fn set_text_scale_factor(&mut self, factor: f64) -> flui_rendering::RenderUpdateImpact {
+        let previous = self.painter.text_scale_factor();
+        self.painter.set_text_scale_factor(factor);
+        if self.painter.text_scale_factor() == previous {
+            flui_rendering::RenderUpdateImpact::NONE
+        } else {
+            flui_rendering::RenderUpdateImpact::LAYOUT
+                | flui_rendering::RenderUpdateImpact::SEMANTICS
+        }
+    }
+
     /// Sets the collapsed caret byte offset into the plain text (builder form).
     #[must_use]
     pub fn with_caret_byte_offset(mut self, offset: usize) -> Self {

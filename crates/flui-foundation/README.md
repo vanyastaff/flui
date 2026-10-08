@@ -6,7 +6,7 @@ FLUI Foundation provides fundamental building blocks used throughout the FLUI UI
 
 ## Features
 
-- **Tree IDs**: Type-safe `Id<T>` with wgpu-style marker traits, and generational keys (`ElementId`, `RenderId`, `RealmId`) for slots that are reused
+- **Tree IDs**: Type-safe `Id<T>` with wgpu-style marker traits, and generational keys (`ElementId`, `RenderId`, `UiRuntimeId`) for slots that are reused
 - **Keys**: `Key`, `ValueKey`, `UniqueKey` for widget identity (GlobalKey/ObjectKey in flui-view)
 - **Change Notification**: `ChangeNotifier`, `ValueNotifier`, and the generic `Notifier<Arg>`
 - **Diagnostics**: `DiagnosticsNode` trees and the `Diagnosticable` trait
@@ -67,7 +67,7 @@ assert_eq!(layer_id.unzip() - 1, slab_index); // ID 3 → slot 2
 let first_view = ViewId::zip(1);              // slot 0 → ID 1
 
 // Generational keys (`ElementId`, and `GenId<T>` aliases `RenderId`,
-// `RealmId`, `DataTransferId`) pack a 32-bit slab index and a non-zero 32-bit
+// `UiRuntimeId`, `DataTransferId`) pack a 32-bit slab index and a non-zero 32-bit
 // generation into a `NonZeroU64`. They do NOT implement `Identifier` (no bare
 // `.get()` that would strip the generation); use `.index()` / `.generation()`.
 let element_id = ElementId::new(1);           // 1-based ctor → index 0, generation 1
@@ -97,8 +97,8 @@ any_tree_id(render_id);
 |------|-------|
 | **Plain `Id<T>`**, slab slot + 1 | `ViewId`, `LayerId`, `SemanticsId` |
 | **Plain `Id<T>`**, opaque counter (no slot) | `ListenerId`, `ObserverId`, `FrameCallbackId`, `FrameId`, `TaskId`, `TickerId` |
-| **Generational** (slab index + generation) | `ElementId`, `RenderId`, `RealmId`, `DataTransferId`, `PresentationId` |
-| **Composite** | `PresentationAddress` (a `RealmId` plus a `PresentationId`) |
+| **Generational** (slab index + generation) | `ElementId`, `RenderId`, `UiRuntimeId`, `DataTransferId`, `PresentationId` |
+| **Composite** | `PresentationAddress` (a `UiRuntimeId` plus a `PresentationId`) |
 
 ### Keys for Widget Identity
 
@@ -253,7 +253,7 @@ let index = id.unzip() - 1;                // ID → slab index
 let node = slab.get(index);
 ```
 
-The generational keys (`ElementId`, `RenderId`, `RealmId`, …) do **not**
+The generational keys (`ElementId`, `RenderId`, `UiRuntimeId`, …) do **not**
 follow this 1-based `zip`/`unzip` convention. Mint one with
 `new_gen(slab_index, generation)` and read the slab slot with `.index()`; the
 generation guards against stale ids addressing a reused slot.

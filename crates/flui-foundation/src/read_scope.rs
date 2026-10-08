@@ -73,7 +73,7 @@ impl SignalSlot {
     }
 
     /// The id of the graph that minted this slot. Graph ids come from a
-    /// process-wide monotonic counter, so a realm uses this to route a
+    /// process-wide monotonic counter, so a UI runtime uses this to route a
     /// cross-thread write to the one graph that can accept it (ADR-0085 §1),
     /// and to refuse a slot none of its graphs minted.
     #[must_use]
@@ -295,13 +295,13 @@ impl<S: ReadScope + ?Sized> ReadScope for Box<S> {
 /// A `Copy` handle to a value in a reactive graph.
 ///
 /// `!Send + !Sync`: a handle is only meaningful on the thread that owns its
-/// graph, which is realm-affine. Reading subscribes the scope's sink; writing
+/// graph, which is UI runtime-affine. Reading subscribes the scope's sink; writing
 /// and creating go through the graph's owner (`flui-view`). Use
 /// [`Signal::detach`] to carry the handle across threads.
 pub struct Signal<T: 'static> {
     slot: SignalSlot,
     _t: PhantomData<fn() -> T>,
-    /// Realm-affine, like the graph itself.
+    /// Runtime-affine, like the graph itself.
     _local: PhantomData<*const ()>,
 }
 
@@ -645,7 +645,7 @@ impl<T: 'static> Signal<T> {
         self.with(cx, T::clone)
     }
 
-    /// Read without subscribing anyone (callbacks, tests, realm commands).
+    /// Read without subscribing anyone (callbacks, tests, UI runtime commands).
     ///
     /// # Errors
     ///
@@ -659,7 +659,7 @@ impl<T: 'static> Signal<T> {
 /// boundary: it carries only the slot, and can do nothing until it is
 /// re-attached on the owner thread (inside a `UiCommand::SignalWrite`
 /// closure, ADR-0074 §5.8), where [`SignalSender::attach`] hands back the
-/// realm-affine [`Signal`]. The realm routes that command by
+/// UI runtime-affine [`Signal`]. The UI runtime routes that command by
 /// [`SignalSlot::graph`] of [`SignalSender::slot`] to the presentation whose
 /// graph minted it (ADR-0085 §1).
 pub struct SignalSender<T: 'static> {
@@ -691,7 +691,7 @@ impl<T: 'static> SignalSender<T> {
         Signal::from_slot(self.slot)
     }
 
-    /// The arena slot behind this handle. Readable on any thread: a realm
+    /// The arena slot behind this handle. Readable on any thread: a UI runtime
     /// routes the write this sender carries by its [`SignalSlot::graph`].
     #[must_use]
     pub const fn slot(self) -> SignalSlot {

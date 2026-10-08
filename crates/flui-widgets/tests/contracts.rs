@@ -44,7 +44,7 @@ fn callback_failure_containment() {
             ("raw_button::a_refused_write_in_a_press_is_reported_not_panicked", crate::raw_button::a_refused_write_in_a_press_is_reported_not_panicked),
             ("draggable_events::a_refused_write_in_a_target_callback_is_reported_not_panicked", crate::draggable_events::a_refused_write_in_a_target_callback_is_reported_not_panicked),
             ("semantics::a_refused_write_in_an_action_handler_is_reported_not_panicked", crate::semantics::a_refused_write_in_an_action_handler_is_reported_not_panicked),
-            ("semantics::an_action_invoked_outside_its_realm_is_dropped_with_a_warning", crate::semantics::an_action_invoked_outside_its_realm_is_dropped_with_a_warning),
+            ("semantics::an_action_invoked_outside_its_ui_runtime_is_dropped_with_a_warning", crate::semantics::an_action_invoked_outside_its_ui_runtime_is_dropped_with_a_warning),
             ("text_field_widget::raw_text_field_callbacks_write_through_the_forwarded_cx", crate::text_field_widget::raw_text_field_callbacks_write_through_the_forwarded_cx),
             ("form::a_panicking_reset_callback_does_not_disable_later_form_validation", crate::form::a_panicking_reset_callback_does_not_disable_later_form_validation),
             ("form::a_form_handle_refuses_a_second_simultaneous_mount_before_mutating_the_first", crate::form::a_form_handle_refuses_a_second_simultaneous_mount_before_mutating_the_first),
@@ -75,6 +75,7 @@ fn reactivity_and_dependencies() {
             ("draggable_events::a_drag_leaving_a_target_writes_through_on_leave_and_on_move", crate::draggable_events::a_drag_leaving_a_target_writes_through_on_leave_and_on_move),
             ("semantics::an_action_handler_writes_a_signal_and_rebuilds_its_reader", crate::semantics::an_action_handler_writes_a_signal_and_rebuilds_its_reader),
             ("media_query_fields::a_size_only_change_rebuilds_size_and_whole_readers_only", crate::media_query_fields::a_size_only_change_rebuilds_size_and_whole_readers_only),
+            ("media_query_fields::a_text_scale_change_relayouts_a_preserved_text_subtree", crate::media_query_fields::a_text_scale_change_relayouts_a_preserved_text_subtree),
             ("directionality_dependency::a_start_aligned_column_depends_on_directionality", crate::directionality_dependency::a_start_aligned_column_depends_on_directionality),
             ("localizations::the_global_delegate_makes_an_rtl_locale_subtree_rtl", crate::localizations::the_global_delegate_makes_an_rtl_locale_subtree_rtl),
             ("hot_reload_state::perform_reassemble_rebuilds_in_place_and_preserves_state", crate::hot_reload_state::perform_reassemble_rebuilds_in_place_and_preserves_state),
@@ -89,6 +90,7 @@ fn text_editing() {
     run_cases(
         "text_editing",
         &[
+            ("editable_text::inherited_text_sizing_updates_editable_glyphs_and_caret", crate::editable_text::inherited_text_sizing_updates_editable_glyphs_and_caret),
             ("editable_text::native_actions::queued_focus_and_text_reach_the_current_field_and_event_context", crate::editable_text::native_actions::queued_focus_and_text_reach_the_current_field_and_event_context),
             ("editable_text::native_actions::native_actions_follow_the_replacement_controller_and_focus_node", crate::editable_text::native_actions::native_actions_follow_the_replacement_controller_and_focus_node),
             ("editable_text::native_actions::disabled_unmounted_and_closed_fields_refuse_native_actions", crate::editable_text::native_actions::disabled_unmounted_and_closed_fields_refuse_native_actions),
@@ -134,6 +136,7 @@ fn text_editing() {
             ("text_field::focused_character_key_inserts_into_controller", crate::text_field::focused_character_key_inserts_into_controller),
             ("text_field::unfocused_field_does_not_receive_key_events", crate::text_field::unfocused_field_does_not_receive_key_events),
             ("text::an_enclosing_default_text_style_styles_a_bare_run", crate::text::an_enclosing_default_text_style_styles_a_bare_run),
+            ("text::media_text_scaling_changes_the_laid_out_text", crate::text::media_text_scaling_changes_the_laid_out_text),
         ],
     );
 }

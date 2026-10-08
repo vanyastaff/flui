@@ -10,18 +10,18 @@
 //! The full production loop, no shortcuts:
 //!
 //! ```text
-//! AnimationController::repeat(reverse) → registered with the realm's Vsync
-//!   → the realm ticks Vsync once per frame (`UiRealm::draw_frame`)
+//! AnimationController::repeat(reverse) → registered with the UI runtime's Vsync
+//!   → the UI runtime ticks Vsync once per frame (`UiRuntime::draw_frame`)
 //!   → the controller's Listenable notification marks this AnimatedView's
 //!     element dirty (see `flui_view::AnimatedView`) → `build` recolors the
 //!     leaf render object from the controller's current value
 //!   → next frame, next tick → …
 //! ```
 //!
-//! There is no process-global scheduler to reach for any more (each realm
+//! There is no process-global scheduler to reach for any more (each UI runtime
 //! now owns its own): the controller is built with
 //! [`AnimationController::with_detached_ticker`] and driven entirely through
-//! the ambient `VsyncScope` the realm wraps every mounted tree in — the same
+//! the ambient `VsyncScope` the UI runtime wraps every mounted tree in — the same
 //! seam `AnimatedSize` uses internally, and the same constructor it picked,
 //! since a ticker-less controller cannot report `is_animating()`.
 //!
@@ -44,7 +44,7 @@
 //! directly from the ticker listener (`AppBinding::instance().render_pipeline_mut()`)
 //! to mutate the mounted `RenderColoredBox` in place, bypassing the widget
 //! tree. That ambient process-wide reach retired along with `AppBinding`:
-//! `AppRuntime`/`UiRealm` are deliberately `pub(crate)`, not a public escape
+//! `AppRuntime`/`UiRuntime` are deliberately `pub(crate)`, not a public escape
 //! hatch, so an application author now drives per-tick recoloring the
 //! idiomatic way instead: subscribe an
 //! `AnimatedView` to the controller's `Listenable` and let the framework
@@ -180,11 +180,11 @@ impl App {
     pub fn new() -> Self {
         // A real, but permanently detached, ticker -- `with_detached_ticker`,
         // not `without_ticker`. There is no process-global scheduler to reach
-        // for any more (each realm now owns its own);
+        // for any more (each ui_runtime now owns its own);
         // `AnimatedBoxDemoState::init_state` registers this controller with the
-        // ambient `VsyncScope` the realm wraps every mounted tree in — the same
+        // ambient `VsyncScope` the ui_runtime wraps every mounted tree in — the same
         // seam `AnimatedSize` uses internally — so it advances once mounted
-        // under a real realm. But `is_animating()` is intentionally
+        // under a real ui_runtime. But `is_animating()` is intentionally
         // ticker-based (it reports whether a ticker is active, not this
         // controller's own status), so a ticker-less controller can never
         // report it, and `repeat()` on one logs "the animation will not

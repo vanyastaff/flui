@@ -125,8 +125,8 @@ mod test_only_global_key_registry {
     /// local tree, run their assertions, then call
     /// [`test_only_clear_global_key_registry`].
     ///
-    /// **Not for production code.** Production activates the realm-owned
-    /// binding handle only inside `UiRealm::enter`.
+    /// **Not for production code.** Production activates the UI runtime-owned
+    /// binding handle only inside `UiRuntime::enter`.
     #[doc(hidden)]
     pub fn test_only_set_global_key_registry(
         tree: &Arc<RwLock<ElementTree>>,
@@ -216,7 +216,7 @@ pub use flui_scheduler::{
 // Keys
 pub use key::{GlobalKey, GlobalKeyId, ObjectKey, ValueKey};
 // Legacy test-only handle for `GlobalKey::current_*` lookup. Production code
-// activates the handle through `UiRealm::enter`; tests bypass the binding.
+// activates the handle through `UiRuntime::enter`; tests bypass the binding.
 pub use test_only_global_key_registry::{
     test_only_clear_global_key_registry, test_only_set_global_key_registry,
 };

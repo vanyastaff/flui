@@ -468,7 +468,7 @@ impl PipelineOwner<Layout> {
         // `subtree_arena::SubtreeArena`; this call site is safe.  The arena
         // also borrows the poison table read-only for the walk so poisoned
         // nodes are skipped in place.
-        // The realm's text context, lent to every node the walk measures.
+        // The ui_runtime's text context, lent to every node the walk measures.
         // One `Rc` clone per dirty root; the walk borrows the cell once per
         // measurement, never across a child's layout.
         let text = self.text_handle();

@@ -58,7 +58,7 @@ needed if a holder ever outlives the frame that minted it (none does today).
 
 `LayerLink` is a `Copy` token, so the tree holds `leaders: HashMap<LayerLink, LayerId>`, filled in `push_child` when the layer is
 a `Leader`. The earlier shape — a `LinkRegistry` beside the tree that the composer filled and the
-realm had to commit "as one pair" with the tree — duplicated the leader's offset and size off the
+UI runtime had to commit "as one pair" with the tree — duplicated the leader's offset and size off the
 `LeaderLayer` and kept a reverse follower index nothing read. Two leaders on one link in one frame
 is a widget-tree error; a debug build trips, a release build keeps the later one.
 

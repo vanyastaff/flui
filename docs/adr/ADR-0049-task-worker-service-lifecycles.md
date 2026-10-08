@@ -17,7 +17,7 @@ for four distinct concepts (scoped Task, reusable Worker, durable Service, optio
 ProcessWorker) precisely because those lifetimes need different delivery and shutdown
 guarantees; the issue adds the application-policy half — editor-like last-window exit and
 messenger-like background lifetime under one contract, deterministic shutdown deadlines, and
-late results that cannot revive a closed realm.
+late results that cannot revive a closed UI runtime.
 
 The market's structured-concurrency consensus (Kotlin coroutines, Swift structured tasks,
 `smol`'s cancel-on-drop `Task`) is that *unowned* concurrency is the defect: work should be
@@ -67,7 +67,7 @@ nothing.
 ### Services: declared lifetime, registry ownership, typed events
 
 `AppConfig::with_service(ServiceDefinition::new(name, lifetime, factory))` declares a service;
-the desktop and Android bootstraps start each one once the realm install has resolved the
+the desktop and Android bootstraps start each one once the UI runtime install has resolved the
 loop's execution services, and a start failure fails the bootstrap (a declared service is
 load-bearing, not optional). The factory gets the same panic containment as every body this
 layer runs: a panic while constructing the future becomes `ServiceStartError::FactoryPanicked`,
@@ -105,7 +105,7 @@ global, no thread-local.
 
 ### Staged shutdown, ordered before the pools
 
-Loop-exit teardown (`teardown_platform_realm`) now runs two stages in a load-bearing order:
+Loop-exit teardown (`teardown_platform_ui_runtime`) now runs two stages in a load-bearing order:
 
 1. **Service shutdown** (`ServiceRegistry::shutdown`): stop admission → cancel *every*
    service first (flush windows overlap, they do not serialize) → join each against **one
@@ -123,7 +123,7 @@ child of the pools' root cancellation token, so even the last-resort `Drop` tear
 reaches all outstanding work.
 
 The registry is loop-scoped like the pools: hot-restart never touches running services; a
-second loop on the same thread reopens admission at its realm install, mirroring the
+second loop on the same thread reopens admission at its UI runtime install, mirroring the
 execution slot's reset.
 
 ## Alternatives considered

@@ -1,8 +1,8 @@
-//! The app's fonts and the per-realm text context Parley shapes through.
+//! The app's fonts and the per-UI runtime text context Parley shapes through.
 //!
 //! - `context` — [`FontCollection`], the app's add-only font collection,
 //!   [`HostFontFeed`], which adds the host's faces to it off the owner
-//!   thread, and [`TextContext`], the per-realm service built from it
+//!   thread, and [`TextContext`], the per-UI runtime service built from it
 //!   (ADR-0092 §2–§3, §7).
 //! - `host` — [`HostFonts`], the one scan of the host's installed fonts a
 //!   collection is fed from, with its generic families and fallback lists.

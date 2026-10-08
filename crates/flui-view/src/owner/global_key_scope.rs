@@ -9,13 +9,13 @@
 //! only — sufficient for the reparent/retake machinery that already lives
 //! in `crate::tree::element_tree`, but blind to a second owner mounting the
 //! same `GlobalKey` in a different tree. `GlobalKeyScope` is the shared,
-//! realm-agnostic index that closes that gap: every owner that shares one
+//! UI runtime-agnostic index that closes that gap: every owner that shares one
 //! scope participates in one cross-owner uniqueness domain, so a duplicate
 //! `GlobalKey` mount fails eagerly instead of silently aliasing.
 //!
-//! `flui-view` knows nothing about realms or presentations — a scope is
+//! `flui-view` knows nothing about UI runtimes or presentations — a scope is
 //! just "a set of owners agreeing to share one uniqueness domain". Wiring
-//! one scope per realm is a decision made above this crate, at presentation
+//! one scope per UI runtime is a decision made above this crate, at presentation
 //! assembly time, via [`BuildOwner::set_global_key_scope`](super::BuildOwner::set_global_key_scope).
 //!
 //! # Split authority
@@ -48,7 +48,7 @@
 //!
 //! The execution contract this scope is designed for, the three defined
 //! outcomes of violating it, and why the third one cannot arise inside a
-//! real realm are documented on [`GlobalKeyScope`] itself — the type this
+//! real UI runtime are documented on [`GlobalKeyScope`] itself — the type this
 //! module exists to define — not here.
 
 use std::{
@@ -211,14 +211,14 @@ impl ScopeState {
     }
 }
 
-/// A realm-agnostic shared uniqueness domain for `GlobalKey`s across
+/// A UI runtime-agnostic shared uniqueness domain for `GlobalKey`s across
 /// multiple [`BuildOwner`]s.
 ///
-/// Cheap to clone (`Rc`-backed): every owner sharing one realm's scope holds
+/// Cheap to clone (`Rc`-backed): every owner sharing one UI runtime's scope holds
 /// its own clone of the same handle. `flui-view` is presentation-agnostic —
-/// this type carries no notion of a realm or a presentation, only "a set of
+/// this type carries no notion of a UI runtime or a presentation, only "a set of
 /// owners agreeing to share one `GlobalKey` uniqueness domain". Construct
-/// one per realm at presentation-assembly time and install it into each
+/// one per UI runtime at presentation-assembly time and install it into each
 /// owner via [`BuildOwner::set_global_key_scope`](super::BuildOwner::set_global_key_scope).
 ///
 /// # Contract
@@ -228,14 +228,14 @@ impl ScopeState {
 /// deactivated keys being unmounted for real) runs inside its own segment —
 /// never observed mid-flight by a different owner's segment. Under that
 /// contract, `GlobalKey` uniqueness across every owner sharing a scope is
-/// realm-scoped and eager: a key's state never silently migrates between
+/// UI runtime-scoped and eager: a key's state never silently migrates between
 /// owners, and a key is mountable in another owner exactly when its claim
 /// has been released by unmount or finalize.
 ///
 /// This type does not enforce that contract — it cannot see thread
 /// scheduling or segment boundaries, only claims. Violating the contract
 /// (a hand-rolled multi-owner rig driving claim/release/retake/finalize in
-/// an order a real realm would never produce) still yields one of three
+/// an order a real UI runtime would never produce) still yields one of three
 /// defined outcomes, never undefined behavior:
 ///
 /// 1. **An eager panic naming both owners** — the ordinary case: a
@@ -257,14 +257,14 @@ impl ScopeState {
 ///    its own tree, and the duplicate self-heals the moment either one is
 ///    genuinely unmounted, because that release is tag-checked against
 ///    whoever currently holds the claim (outcome 2). It cannot arise inside
-///    a real realm: every realm-native path that frees an owner's claim
+///    a real ui_runtime: every UI runtime-native path that frees an owner's claim
 ///    either runs that owner's own finalize first (which destroys the
 ///    retake candidate `remove_finalized` would otherwise leave behind) or
 ///    drops the owner outright (destroying every candidate it could ever
-///    retake) — there is no realm path that reclaims a live claim while its
+///    retake) — there is no UI runtime path that reclaims a live claim while its
 ///    owner still has an unfinalized candidate sitting on the other side of
 ///    it. Reaching outcome 3 requires calling `reclaim_owner` directly,
-///    which no realm-native code path does.
+///    which no UI runtime-native code path does.
 ///
 /// Outcome 1's panic is a fatal application bug, not a recoverable error: the
 /// panicking owner's tree is left in a non-resumable state (the rejected

@@ -52,12 +52,12 @@
 //!
 //! The layer owns at most one frame at a time, keyed by the frame span's `Id`.
 //! Phase spans count only when they are *descendants* of that owning span, and
-//! only its own close ends the frame. So when two `UiRealm`s render
-//! concurrently under one shared subscriber, the second realm's frame — and
+//! only its own close ends the frame. So when two `UiRuntime`s render
+//! concurrently under one shared subscriber, the second UI runtime's frame — and
 //! every phase inside it — is **dropped whole** rather than mixed into the
-//! first realm's measurements: a missing frame is honest, a blended one is a
-//! fabrication. To profile several realms at once, install one
-//! `FrameTimingLayer` + [`Profiler`] pair per realm.
+//! first UI runtime's measurements: a missing frame is honest, a blended one is a
+//! fabrication. To profile several UI runtimes at once, install one
+//! `FrameTimingLayer` + [`Profiler`] pair per UI runtime.
 //!
 //! # Timing comes from the span, not the callback
 //!
@@ -137,7 +137,7 @@ pub struct FrameTimingLayer {
     /// Shared across clones (`Arc`) so a cloned layer still sees the same
     /// single-frame ownership. `Some` from the owning span's creation until
     /// its close; a frame span created while this is `Some` belongs to a
-    /// concurrently rendering realm and is ignored entirely.
+    /// concurrently rendering UI runtime and is ignored entirely.
     active_frame: Arc<parking_lot::Mutex<Option<Id>>>,
 }
 
@@ -176,9 +176,9 @@ where
         // any phase span the same frame may create.
         let mut active_frame = self.active_frame.lock();
         if active_frame.is_some() {
-            // A second realm's frame under the same subscriber. Dropping it
+            // A second ui_runtime's frame under the same subscriber. Dropping it
             // whole is honest; letting its `begin_frame` reset the running
-            // frame would blend two realms' timings into one measurement.
+            // frame would blend two ui_runtimes' timings into one measurement.
             return;
         }
         *active_frame = Some(id.clone());
@@ -192,7 +192,7 @@ where
         };
 
         // Only phases inside the owning frame span count. A phase from a
-        // concurrently rendering realm — or outside any frame — must not be
+        // concurrently rendering ui_runtime — or outside any frame — must not be
         // attributed to the frame being measured.
         let owning_frame = self.active_frame.lock().clone();
         let Some(frame_id) = owning_frame else { return };

@@ -70,7 +70,7 @@ pub struct PlatformHandlers {
     /// unaffected by it.
     ///
     /// `Arc`, not `Box`: the hook itself re-enters `flui-app` (it walks
-    /// every hosted realm and takes gesture-arena locks), so a caller
+    /// every hosted UI runtime and takes gesture-arena locks), so a caller
     /// holding this platform's own state lock must clone the `Arc` out and
     /// invoke it AFTER releasing that lock (ADR-0038 §5's discipline) —
     /// a `Box` would force either an in-lock call or a full field swap.

@@ -1,13 +1,5 @@
-//! Const-table oracle-diff test for [`CupertinoColors`] — every V1-scoped
-//! constant's full 8-variant ARGB table, asserted against
-//! `cupertino/colors.dart` at tag `3.44.0`.
-//!
-//! Each assertion is written against the raw `(r, g, b, a)` channels rather
-//! than re-deriving `Color::rgba(...)` calls that would just restate
-//! `src/colors.rs`'s own construction — a copy-paste-the-source test proves
-//! nothing. The oracle's `dark` `systemBlue` value is the flagged trap: the
-//! actual tag-3.44.0 value is `(10, 132, 255)`, one digit away from the
-//! superficially-plausible `(9, 132, 255)`.
+//! Mounted color resolution: selective dependencies, live contrast and
+//! brightness changes, authored colors and nested media overrides.
 
 #![expect(clippy::unwrap_used)]
 
@@ -16,11 +8,12 @@ use crate::common;
 use std::sync::{Arc, Mutex};
 
 use common::{lay_out, loose};
-use flui_cupertino::{CupertinoColor, CupertinoTheme, CupertinoThemeData};
+use flui_cupertino::{CupertinoColor, CupertinoDynamicColor, CupertinoTheme, CupertinoThemeData};
 use flui_sdk::painting::Color;
 use flui_sdk::platform::Brightness;
 use flui_sdk::view::prelude::*;
-use flui_sdk::widgets::SizedBox;
+use flui_sdk::view::{BoxedView, ProxyView};
+use flui_sdk::widgets::{MediaQuery, MediaQueryData, SizedBox};
 
 /// Captures `CupertinoColor::Static(sentinel).resolve(ctx)` during `build()`
 /// — proving `resolve` actually runs against a real mounted `BuildContext`
@@ -66,4 +59,175 @@ pub fn static_color_resolves_to_itself_through_a_real_context() {
         .unwrap()
         .expect("build should have run and captured a resolved color");
     assert_eq!(resolved, sentinel);
+}
+
+/// Suppresses parent-driven rebuilds: only inherited dependencies can reach
+/// the mounted resolver when the outer provider changes.
+#[derive(Clone)]
+struct RetainedChild(BoxedView);
+
+impl View for RetainedChild {
+    fn create_element(&self) -> flui_sdk::view::element::ElementKind {
+        flui_sdk::view::element::ElementKind::proxy(self)
+    }
+
+    fn should_skip_rebuild(&self, _previous: &Self) -> bool {
+        true
+    }
+}
+
+impl ProxyView for RetainedChild {
+    fn child(&self) -> &dyn View {
+        &*self.0.0
+    }
+}
+
+#[derive(Clone, StatelessView)]
+struct ColorReader {
+    color: CupertinoColor,
+    seen: std::rc::Rc<std::cell::RefCell<Vec<Color>>>,
+}
+
+impl StatelessView for ColorReader {
+    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+        self.seen.borrow_mut().push(self.color.resolve(ctx));
+        SizedBox::square(10.0)
+    }
+}
+
+pub fn retained_colors_follow_contrast_and_explicit_brightness() {
+    use std::{cell::RefCell, rc::Rc};
+
+    let light = Color::rgb(10, 20, 30);
+    let dark = Color::rgb(40, 50, 60);
+    let light_contrast = Color::rgb(70, 80, 90);
+    let dark_contrast = Color::rgb(100, 110, 120);
+    let palette = CupertinoDynamicColor::with_brightness_and_contrast(
+        light,
+        dark,
+        light_contrast,
+        dark_contrast,
+    );
+    for explicit in [None, Some(Brightness::Light), Some(Brightness::Dark)] {
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let mut theme = CupertinoThemeData::default();
+        if let Some(brightness) = explicit {
+            theme = theme.with_brightness(brightness);
+        }
+        let child = RetainedChild(
+            CupertinoTheme::new(
+                theme,
+                ColorReader {
+                    color: palette.into(),
+                    seen: Rc::clone(&seen),
+                },
+            )
+            .boxed(),
+        );
+        let mut data = MediaQueryData::default();
+        let mut tree = lay_out(MediaQuery::new(data.clone(), child.clone()), loose(400.0));
+        let expected = if explicit == Some(Brightness::Dark) {
+            dark
+        } else {
+            light
+        };
+        assert_eq!(*seen.borrow(), [expected]);
+
+        data.high_contrast = true;
+        tree.pump_widget(MediaQuery::new(data.clone(), child.clone()));
+        let expected_contrast = if explicit == Some(Brightness::Dark) {
+            dark_contrast
+        } else {
+            light_contrast
+        };
+        assert_eq!(
+            *seen.borrow(),
+            [expected, expected_contrast],
+            "contrast reaches retained color"
+        );
+
+        let count = seen.borrow().len();
+        data.size.width += 1.0;
+        tree.pump_widget(MediaQuery::new(data.clone(), child.clone()));
+        assert_eq!(
+            seen.borrow().len(),
+            count,
+            "color does not depend on window size"
+        );
+
+        data.platform_brightness = Brightness::Dark;
+        tree.pump_widget(MediaQuery::new(data.clone(), child.clone()));
+        let effective_dark = explicit != Some(Brightness::Light);
+        assert_eq!(
+            seen.borrow().last(),
+            Some(&if effective_dark {
+                dark_contrast
+            } else {
+                light_contrast
+            })
+        );
+        if explicit.is_some() {
+            assert_eq!(
+                seen.borrow().len(),
+                count,
+                "explicit brightness masks platform brightness"
+            );
+        }
+        data.high_contrast = false;
+        tree.pump_widget(MediaQuery::new(data, child));
+        assert_eq!(
+            seen.borrow().last(),
+            Some(&if effective_dark { dark } else { light })
+        );
+    }
+}
+
+pub fn authored_and_nested_colors_ignore_outer_contrast() {
+    use std::{cell::RefCell, rc::Rc};
+
+    let base = Color::rgb(10, 20, 30);
+    for (color, nested) in [
+        (CupertinoColor::Static(base), false),
+        (
+            CupertinoDynamicColor::with_brightness(base, Color::rgb(40, 50, 60)).into(),
+            false,
+        ),
+        (
+            CupertinoDynamicColor::with_brightness_and_contrast(
+                base,
+                base,
+                Color::rgb(70, 80, 90),
+                Color::rgb(70, 80, 90),
+            )
+            .into(),
+            true,
+        ),
+    ] {
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let reader = ColorReader {
+            color,
+            seen: Rc::clone(&seen),
+        };
+        let child = RetainedChild(if nested {
+            MediaQuery::new(MediaQueryData::default(), reader).boxed()
+        } else {
+            reader.boxed()
+        });
+        let mut tree = lay_out(
+            MediaQuery::new(MediaQueryData::default(), child.clone()),
+            loose(400.0),
+        );
+        tree.pump_widget(MediaQuery::new(
+            MediaQueryData {
+                high_contrast: true,
+                ..MediaQueryData::default()
+            },
+            child,
+        ));
+        assert_eq!(
+            *seen.borrow(),
+            [base],
+            "irrelevant outer contrast does not rebuild or recolor"
+        );
+    }
 }

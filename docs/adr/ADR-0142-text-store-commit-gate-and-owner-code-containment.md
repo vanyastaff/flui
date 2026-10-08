@@ -80,9 +80,9 @@ framework does not control is contained.
    not undo the grant, which already ran: the arbiter catches it, hands the first payload to the
    store's `CommitGate` (`defer_failure`; later ones are retained per ADR-0127), and the queue
    keeps running; the gate's owner takes it (`take_failure`) and reports it at its next turn
-   through the realm's panic report: `TextInputOwner::dispatch` and `run_deferred_grants` take it
+   through the UI runtime's panic report: `TextInputOwner::dispatch` and `run_deferred_grants` take it
    once they return and resume it inside their containment (the first failure stays
-   authoritative), so it reaches the realm's report from the dispatch or anchor that follows. A
+   authoritative), so it reaches the UI runtime's report from the dispatch or anchor that follows. A
    store also tells its observer before it resumes an owner panic, so a grant queued behind it
    never runs before the platform hears of an edit the owner made. A store whose owner never
    installed a gate resumes the panic once the lock is released. Under TSF the grant's
@@ -110,11 +110,11 @@ framework does not control is contained.
    stale token and do nothing. A failure in that commit is kept and the attach goes on. Until
    this item lands, a form reset during a composition leaves the
    preedit in the field (the reset writes only the committed text it compares against).
-5. **A commit anchor skipped by an unwound frame is a debt of the realm**, paid at its next owner
+5. **A commit anchor skipped by an unwound frame is a debt of the UI runtime**, paid at its next owner
    turn (a drained inbox, a background pump or a pump), not at the next frame, and a failed wake
    does not clear it.
-6. **The commit gate is open only while the realm is in its slot and not driving a frame.** A
-   platform entry while the realm is checked out (a frame, the end of a session) is refused a
+6. **The commit gate is open only while the UI runtime is in its slot and not driving a frame.** A
+   platform entry while the UI runtime is checked out (a frame, the end of a session) is refused a
    synchronous lock and queues an asynchronous one; no user code runs. A presentation's close is
    its last turn and opens the gate for good: no anchor follows it, so a completion queued in a
    frame the close cuts short commits (item 4) before its store is retired. An accepted
@@ -180,7 +180,7 @@ framework does not control is contained.
 - `TextStore` implementors deliver owner notifications from `settle` and run owner code through
   `OwnerCalls`; the conformance kit's version 2 checks the notification rules.
 - A failure in owner code after a grant no longer escapes the platform call that granted it: it
-  reaches the realm's report from the presentation's next dispatch, anchor or close.
+  reaches the UI runtime's report from the presentation's next dispatch, anchor or close.
 - Values a failed scope retains are leaked by design (ADR-0127).
 
 ## Verification
@@ -220,5 +220,5 @@ Outstanding:
 
 - Items 4–6, with their tests: undo (the field has none yet) and unmount committing a
   composition (item 4), the runtime's pointer-down and close
-  hooks, anchor debt and the gate's realm rule (items 4–6), and a failure the gate holds being
+  hooks, anchor debt and the gate's UI runtime rule (items 4–6), and a failure the gate holds being
   reported through the anchor debt when no dispatch or anchor follows (items 2 and 5).

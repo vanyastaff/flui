@@ -423,7 +423,7 @@ macro_rules! app_plugin {
                         $root_view,
                         width,
                         height,
-                        // The plugin image is a realm of its own for text: the
+                        // The plugin image is a ui_runtime of its own for text: the
                         // host's context cannot cross the dlopen boundary.
                         $crate::__private_text::TextContextHandle::standalone(),
                     ))

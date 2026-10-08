@@ -703,11 +703,11 @@ pub(crate) struct BuildCapabilities {
     pub(crate) text_input_handle: Option<flui_interaction::TextInputHandle>,
     /// The presentation's plain-text clipboard.
     pub(crate) clipboard_handle: Option<flui_interaction::ClipboardHandle>,
-    /// The realm's byte storage.
+    /// The UI runtime's byte storage.
     pub(crate) storage: Option<std::sync::Arc<dyn flui_platform_api::Storage>>,
     /// The host's flush registry; crate-private, for `Persisted`.
     pub(crate) flush_registry: Option<crate::flush_registry::FlushRegistry>,
-    /// The realm's fresh-hit-test capability, narrowed from its interaction
+    /// The UI runtime's fresh-hit-test capability, narrowed from its interaction
     /// dispatch handle.
     pub(crate) hit_test_handle: Option<flui_interaction::HitTestHandle>,
     /// The render tree this element is mounted in, cloned from its own

@@ -101,6 +101,7 @@ pub mod keyboard;
 mod locale;
 mod platform_window;
 pub mod pointer;
+mod preferences;
 mod storage;
 mod target_platform;
 mod text_input;
@@ -130,6 +131,10 @@ pub use pointer::{
     PointerButton, PointerButtons, PointerCancel, PointerEvent, PointerId, PointerInfo,
     PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease, PointerRole,
     PointerSample, ScrollDelta, ScrollEvent, ScrollPhase, ScrollPrecision, ScrollUnit,
+};
+pub use preferences::{
+    DurationScale, GesturePreferences, InvalidPreference, MotionPreference, SystemPreferences,
+    WheelPreferences, WheelStep,
 };
 pub use storage::{
     Storage, StorageError, StorageFuture, StorageName, Stored, StoredVersion, WriteMode,

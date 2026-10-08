@@ -56,7 +56,7 @@ with one device-global engine returns the same `Arc` from every window.
 - **Headless:** `FakeHaptics` records every call in order (`calls()`,
   `last()`); `MockWindow` returns the same instance on every `haptics()` call.
 - **`flui-app`:** `PresentationState::perform_haptic_feedback` resolves its own
-  window's capability through its `Weak` window reference; `UiRealm` forwards
+  window's capability through its `Weak` window reference; `UiRuntime` forwards
   to it. A closed window or a window without haptics is a silent no-op —
   Flutter's degradation contract, not a gap.
 

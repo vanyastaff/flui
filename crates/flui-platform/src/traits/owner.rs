@@ -117,6 +117,14 @@ impl OwnerPlatform {
         self.platform.active_window()
     }
 
+    /// Read the host's system preferences without choosing a user window.
+    ///
+    /// # Errors
+    /// Forwards native read and owner-lifetime failures.
+    pub fn preferences(&self) -> Result<flui_platform_api::SystemPreferences, PlatformError> {
+        self.platform.preferences()
+    }
+
     /// All available displays (monitors).
     #[must_use]
     pub fn displays(&self) -> Vec<Arc<dyn PlatformDisplay>> {
@@ -163,7 +171,7 @@ impl OwnerPlatform {
         SharedPlatform::new(Arc::clone(&self.platform))
     }
 
-    /// Mints a cross-thread capability, handed to workers, realms, or
+    /// Mints a cross-thread capability, handed to workers, UI runtimes, or
     /// tasks that need to reach the owner from off-thread.
     #[must_use]
     pub fn proxy(&self) -> PlatformProxy {

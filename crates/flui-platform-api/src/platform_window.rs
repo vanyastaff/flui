@@ -158,7 +158,7 @@ pub trait PlatformWindow: Send + Sync {
     ///
     /// A window that cannot state its identity cannot be demultiplexed
     /// (ADR-0037 §2): the identity is what lets the demux boundary look up
-    /// which `(RealmId, PresentationId)` a native event belongs to. Every
+    /// which `(UiRuntimeId, PresentationId)` a native event belongs to. Every
     /// implementor must return a real, stable-for-the-window's-lifetime
     /// value — never a shared sentinel that would make two different
     /// windows compare equal.

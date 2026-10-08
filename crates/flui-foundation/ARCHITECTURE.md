@@ -96,7 +96,7 @@ checks that conversion preserves a NaN-bearing matrix rather than dropping it.
 ## The signal read contract (`read_scope`)
 
 `flui_foundation::read_scope` holds the *read side* of the
-realm's reactive graph (ADR-0085 §2); the graph itself — slot arena, reader registry, writes,
+UI runtime's reactive graph (ADR-0085 §2); the graph itself — slot arena, reader registry, writes,
 the build-time guard — lives in `flui-view`, and so does every type that names a reader.
 
 **What it holds.** The handles (`SignalSlot`, `Signal<T>`, `SignalSender<T>`), the error type
@@ -117,7 +117,7 @@ it, and the sinks that subscribe real elements are private to `flui-view`. A sco
 `SignalSlot::new` are public but `#[doc(hidden)]`, for `flui-view`) is
 `SignalError::TypeMismatch`, never a panic; a `ReadGraph` that returns `Ok` without calling the
 reader is refused as `Released`; a refused read subscribes nobody. `Signal<T>` is
-`!Send + !Sync` (realm-affine); `SignalSender<T>` is `Send + Sync` and carries only the slot.
+`!Send + !Sync` (UI runtime-affine); `SignalSender<T>` is `Send + Sync` and carries only the slot.
 For a valid read, a panic from the user closure keeps chronological priority over
 loan finalization, subscription, returned-value destruction, and panic-payload
 destruction. Cleanup is contained before `resume_unwind`; this is required because
@@ -195,7 +195,7 @@ typed protocol tree rather than this diagnostics representation (ADR-0095).
 | IDs | `Id<T: Marker>` (wgpu-style) |
 | Tree storage | `Slab` with typed IDs |
 | Platform channels | `bytes` crate |
-| Binding system | Trait composition; every binding-shaped value is constructed and owned per `UiRealm`/`AppRuntime`, never process-global |
+| Binding system | Trait composition; every binding-shaped value is constructed and owned per `UiRuntime`/`AppRuntime`, never process-global |
 
 ---
 
@@ -228,7 +228,7 @@ Latent question worth tracking — not a violation:
 Items below are concrete cleanups visible from `flui-foundation` outward. Each is sized for an `/aif-implement` dispatch without out-of-band clarification.
 
 - **`Notifier` re-entrancy semantics — DONE.** Both `ChangeNotifier::notify_listeners` and `Notifier::notify` now document the round-N-vs-round-N+1 behaviour (snapshot-then-fire, mid-notify removals skipped, post-snapshot additions deferred to the next round, `catch_unwind` isolation).
-- **State-notification surface decided** — `Notifier`/`ChangeNotifier` in this crate is the listener-notification mechanism. The signals crate that the summary table once pointed at (`flui-reactivity`) was removed 2026-07-28. Realm-scoped signals (ADR-0074) are not a crate: their read contract is this crate's `read_scope` module and their graph lives in `flui-view` (ADR-0085). The `Arc<Mutex<…>>` notifier stays for `Send + Sync` users until the UI callback surface loses `Send` (ADR-0091 §1), when a `Listenable` adapter over a signal replaces it.
+- **State-notification surface decided** — `Notifier`/`ChangeNotifier` in this crate is the listener-notification mechanism. The signals crate that the summary table once pointed at (`flui-reactivity`) was removed 2026-07-28. Runtime-scoped signals (ADR-0074) are not a crate: their read contract is this crate's `read_scope` module and their graph lives in `flui-view` (ADR-0085). The `Arc<Mutex<…>>` notifier stays for `Send + Sync` users until the UI callback surface loses `Send` (ADR-0091 §1), when a `Listenable` adapter over a signal replaces it.
 
 ---
 

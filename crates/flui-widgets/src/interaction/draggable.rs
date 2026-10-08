@@ -800,11 +800,11 @@ fn localize(global: Offset<f64>, transform: Option<&Matrix4>) -> Offset<f64> {
 /// makes the innermost of a set of nested targets win.
 ///
 /// A target tags its node with a lane ticket, resolved here to its
-/// owner-local slot; this runs inside pointer dispatch, where the realm's
+/// owner-local slot; this runs inside pointer dispatch, where the UI runtime's
 /// lane is active. A ticket that no longer resolves because its target
 /// unmounted since the hit test is skipped, as a foreign payload is. Any
-/// other lane error means the question could not be asked at all (no realm
-/// entered, or another realm's), so the answer is `None`, not an empty list:
+/// other lane error means the question could not be asked at all (no UI runtime
+/// entered, or another UI runtime's), so the answer is `None`, not an empty list:
 /// see [`DragSession::discover`].
 fn drag_targets_on(
     path: &[HitTestEntry],

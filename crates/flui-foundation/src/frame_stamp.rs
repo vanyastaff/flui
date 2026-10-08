@@ -1,4 +1,4 @@
-//! [`FrameStamp`] bundles the typed presentation address, per-realm frame
+//! [`FrameStamp`] bundles the typed presentation address, per-UI runtime frame
 //! epoch, raster surface generation and GPU resource generation that cross
 //! the raster boundary together.
 //!
@@ -15,19 +15,19 @@ use crate::epoch::{FrameEpoch, GpuResourceGeneration, SurfaceGeneration};
 use crate::id::PresentationAddress;
 
 /// The identity group that stamps one frame: which presentation produced it,
-/// at what per-realm epoch, against which raster surface configuration.
+/// at what per-UI runtime epoch, against which raster surface configuration.
 ///
 /// # Frame identity
 ///
 /// A frame's full identity is `(address, epoch)`, never `epoch` alone:
-/// [`FrameEpoch`] is only per-*realm* monotonic, so two presentations
-/// belonging to the same realm's forest may composite in the same epoch —
-/// `address` disambiguates them. `address` is the full `(realm_id,
+/// [`FrameEpoch`] is only per-*UI runtime* monotonic, so two presentations
+/// belonging to the same UI runtime's forest may composite in the same epoch —
+/// `address` disambiguates them. `address` is the full `(ui_runtime_id,
 /// presentation_id)` pair — never `presentation_id` alone, since two
-/// different realm incarnations can mint an identical `PresentationId` and
+/// different UI runtime incarnations can mint an identical `PresentationId` and
 /// only the full pair safely distinguishes them. `surface_generation` is a
 /// separate axis, scoped *per presentation*: it is minted by that
-/// presentation's own raster seam (ADR-0037 §8), never by the realm or by
+/// presentation's own raster seam (ADR-0037 §8), never by the UI runtime or by
 /// frame counting. `gpu_resource_generation` is a third, independent axis
 /// (ADR-0045 decision 4): `surface_generation` guards against a torn-down
 /// swapchain, `gpu_resource_generation` guards against a torn-down
@@ -48,7 +48,7 @@ use crate::id::PresentationAddress;
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrameStamp {
-    /// The full realm+presentation address that composited this frame.
+    /// The full UI runtime+presentation address that composited this frame.
     pub address: PresentationAddress,
     /// The runtime's per-frame counter at the time this frame was
     /// composited.
@@ -75,11 +75,11 @@ impl FrameStamp {
     /// ```rust
     /// use flui_foundation::{
     ///     FrameEpoch, FrameStamp, GpuResourceGeneration, PresentationAddress, PresentationId,
-    ///     RealmId, SurfaceGeneration,
+    ///     UiRuntimeId, SurfaceGeneration,
     /// };
     ///
     /// let address = PresentationAddress {
-    ///     realm_id: RealmId::new(1),
+    ///     ui_runtime_id: UiRuntimeId::new(1),
     ///     presentation_id: PresentationId::new(1),
     /// };
     /// let stamp = FrameStamp::new(address, FrameEpoch::ZERO, SurfaceGeneration::ZERO, GpuResourceGeneration::ZERO);
@@ -94,11 +94,11 @@ impl FrameStamp {
     /// ```compile_fail
     /// use flui_foundation::{
     ///     FrameEpoch, FrameStamp, GpuResourceGeneration, PresentationAddress, PresentationId,
-    ///     RealmId, SurfaceGeneration,
+    ///     UiRuntimeId, SurfaceGeneration,
     /// };
     ///
     /// let address = PresentationAddress {
-    ///     realm_id: RealmId::new(1),
+    ///     ui_runtime_id: UiRuntimeId::new(1),
     ///     presentation_id: PresentationId::new(1),
     /// };
     /// let stamp = FrameStamp::new(address, SurfaceGeneration::ZERO, FrameEpoch::ZERO, GpuResourceGeneration::ZERO);

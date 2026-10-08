@@ -904,7 +904,7 @@ struct SchedulerInner {
 ///
 /// `UpdateScheduler` is a cheap-clone handle over one `Arc<SchedulerInner>`
 /// allocation — cloning bumps one refcount, not five. [`UpdateScheduler::downgrade`]
-/// vends a [`WeakUpdateScheduler`] for a handle that must not keep a dead realm's
+/// vends a [`WeakUpdateScheduler`] for a handle that must not keep a dead UI runtime's
 /// scheduler alive (see that type's doc).
 ///
 /// ## Callback Cancellation
@@ -936,7 +936,7 @@ pub struct UpdateScheduler {
 /// stored on an `AnimationController`, a `PostFrameHandle` vended to a
 /// widget capability) can fail closed instead of keeping the whole scheduler
 /// — and everything it owns — alive. [`upgrade`](Self::upgrade) returns
-/// `None` once the realm that owns the backing `UpdateScheduler` has dropped its
+/// `None` once the UI runtime that owns the backing `UpdateScheduler` has dropped its
 /// last strong reference; every caller here treats that as "silently done",
 /// matching a disposed ticker's own short-circuit.
 ///
@@ -960,7 +960,7 @@ impl UpdateScheduler {
 impl WeakUpdateScheduler {
     /// Upgrade to a strong [`UpdateScheduler`] handle, or `None` if every strong
     /// reference to the backing scheduler has already been dropped (its
-    /// owning realm has torn down).
+    /// owning UI runtime has torn down).
     #[must_use]
     pub fn upgrade(&self) -> Option<UpdateScheduler> {
         self.inner.upgrade().map(|inner| UpdateScheduler { inner })
@@ -994,10 +994,10 @@ impl std::fmt::Debug for UpdateScheduler {
 /// Asks a scheduler for a frame from any thread.
 ///
 /// Obtained from [`UpdateScheduler::frame_waker`]. `Clone + Send + Sync`:
-/// the cross-thread half of a realm's scheduling, which a worker keeps while
+/// the cross-thread half of a UI runtime's scheduling, which a worker keeps while
 /// everything it would wake stays on the owner thread. Holds a `Weak` to its
-/// scheduler, so it wakes only its own realm, keeps nothing alive, and is a
-/// no-op once the realm is gone.
+/// scheduler, so it wakes only its own UI runtime, keeps nothing alive, and is a
+/// no-op once the UI runtime is gone.
 #[derive(Clone)]
 pub struct FrameWaker {
     inner: std::sync::Weak<SchedulerInner>,
@@ -1125,7 +1125,7 @@ impl UpdateScheduler {
     /// hook, and a worker that needs a frame for any other reason sends a
     /// clone. It requests a frame exactly as [`request_frame`](Self::request_frame)
     /// does — one platform wake per `false → true` edge of the frame latch —
-    /// wakes this scheduler's realm and no other, and does nothing once the
+    /// wakes this scheduler's UI runtime and no other, and does nothing once the
     /// scheduler is gone.
     #[must_use]
     pub fn frame_waker(&self) -> FrameWaker {
@@ -1305,7 +1305,7 @@ impl UpdateScheduler {
         //
         // The begin frame owns the step and takes the owner frame as a parameter,
         // so no frame driver can forget it, run it twice, or poll some other
-        // realm's tasks.
+        // ui_runtime's tasks.
         owner.poll_ready();
 
         frame_id
@@ -1631,7 +1631,7 @@ impl UpdateScheduler {
     ///
     /// Every frame driver goes through here — `HeadlessBinding::pump_frame` on its
     /// binding-local scheduler, and the desktop / android / wasm runners on
-    /// the realm's own owned `UpdateScheduler` (`UiRealm.scheduler`, in flui-app —
+    /// the UI runtime's own owned `UpdateScheduler` (`UiRuntime.scheduler`, in flui-app —
     /// there is no process-global scheduler singleton any more) — so
     /// headless and production cannot drift.
     ///
@@ -1717,7 +1717,7 @@ impl UpdateScheduler {
     /// Under `panic = "abort"` nothing is caught and the process dies with the
     /// frame open, which is moot.
     ///
-    /// `owner` is the realm's owner-local frame state: its ready tasks are
+    /// `owner` is the UI runtime's owner-local frame state: its ready tasks are
     /// polled in the mid-frame slot and its post-frame queue drains with the
     /// shared one (see [`end_frame`](Self::end_frame) for the ordering).
     pub fn drive_frame<R>(
@@ -2464,10 +2464,10 @@ impl UpdateScheduler {
     ///
     /// Listener callbacks fire synchronously, on whatever thread calls this
     /// method — there is no dispatch/queueing here. Production callers are
-    /// expected to already be on the realm's owner thread (the platform
-    /// event-loop thread that drives `flui-app`'s realm dispatch); this
+    /// expected to already be on the UI runtime's owner thread (the platform
+    /// event-loop thread that drives `flui-app`'s UI runtime dispatch); this
     /// method does not itself verify that, since the scheduler has no
-    /// notion of "realm" or "owner thread" to assert against. A caller with
+    /// notion of "UI runtime" or "owner thread" to assert against. A caller with
     /// that context cheaply available should assert it before calling in.
     ///
     /// # Example
@@ -3642,7 +3642,7 @@ mod tests {
     // Idle Callback Tests
 
     // =========================================================================
-    // Teardown pins (scheduler realm-ownership) — `WeakUpdateScheduler` must
+    // Teardown pins (scheduler ui_runtime-ownership) — `WeakUpdateScheduler` must
     // fail closed once its backing scheduler's last strong reference drops,
     // never observe stale state, and never panic.
     // =========================================================================

@@ -28,7 +28,7 @@ binding, cached contact route and frame transaction.
 `PointerResampling::FrameAligned` opts a presentation into measured-motion
 interpolation. `PresentationWindow::with_pointer_resampling` supplies its
 initial policy; app configuration forwards it during presentation assembly.
-`UiRealm::set_pointer_resampling` addresses an existing presentation, and
+`UiRuntime::set_pointer_resampling` addresses an existing presentation, and
 `HeadlessHost` forwards the same runtime operation.
 
 A contact keeps the policy under which its Down was admitted. Changing policy
@@ -49,7 +49,7 @@ Clock-base installation and enqueue share one guarded operation; diagnostics
 and delivery run after the guard is released. Unrepresentable mappings use the
 existing arrival fallback, and zero remains a valid hardware timestamp.
 
-`UiRealm::pump` publishes the one frame Instant read from its
+`UiRuntime::pump` publishes the one frame Instant read from its
 `FrameClockSource`. The frame-aligned path samples at that Instant minus the
 38 ms lookback and supplies an explicit next-sample window using the binding's
 configured positive period. It does not independently read the wall clock to

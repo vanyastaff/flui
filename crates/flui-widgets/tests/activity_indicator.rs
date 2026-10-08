@@ -288,7 +288,7 @@ fn indicator_unmount_mid_frame_releases_controller() {
 }
 
 #[test]
-fn indicator_realm_stop_mid_repeat() {
+fn indicator_ui_runtime_stop_mid_repeat() {
     let vsync = Vsync::new();
     let mut laid = indicator(&vsync);
     laid.pump_for(ms(450));

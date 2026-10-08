@@ -15,7 +15,7 @@
   ADR is superseded.
 - **Related:** [ADR-0027](ADR-0027-owner-affine-ui-realms.md) §9 (owner-queued hot reload stays
   in the closed command vocabulary), [ADR-0039](ADR-0039-event-loop-affinity-capability.md) §6
-  (the loop may host another realm, as hot restart does),
+  (the loop may host another UI runtime, as hot restart does),
   [ADR-0043](ADR-0043-presentation-bundled-trees-and-realm-globalkey-scope.md),
   [ADR-0045](ADR-0045-raster-lane.md) (the Android dlopen inline-lane consequence retires with
   the dlopen path), [ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md),
@@ -41,7 +41,7 @@ the mounted pipeline is leaked on unload rather than dropped
 crate does not document. Both are **hypotheses from reading the code; neither was run**:
 
 1. `WorkerReloadDriver::poll` unloads the old image (`crates/flui-hot-reload/src/worker.rs:458`)
-   and loads the new one (`worker.rs:460`) before the realm reassembles
+   and loads the new one (`worker.rs:460`) before the UI runtime reassembles
    (`crates/flui-app/src/app/hot_reload.rs:226-228`). The element tree still holds views and
    closures built by the old image — the worker returns a `BoxedView`
    (`examples/hot_reload_counter/logic/src/lib.rs:29`) with an `on_tap` closure (`lib.rs:36`).
@@ -62,8 +62,8 @@ lane because a plugin `Scene` could drop on the raster thread while the dylib un
 owner thread (`docs/adr/ADR-0045-raster-lane.md:295-296`).
 
 **A core crate names the dev tool.** `flui-app` has a `hot-reload` feature and an optional
-dependency on `flui-hot-reload` (`crates/flui-app/Cargo.toml:65`, `:108-110`), and its realm
-took `flui_hot_reload::HotReloadTier` in production code until the realm moved to
+dependency on `flui-hot-reload` (`crates/flui-app/Cargo.toml:65`, `:108-110`), and its UI runtime
+took `flui_hot_reload::HotReloadTier` in production code until the UI runtime moved to
 `flui-runtime` (ADR-0083); it now takes `flui_runtime::reload::ReloadTier`
 (`crates/flui-runtime/src/reload.rs`), which `flui-app`'s `hot_reload` module translates the
 driver's tier into. The facade re-exports the crate
@@ -101,7 +101,7 @@ merged.
     The signal and `StateCell` path was not exercised: its `count` stayed 0.
   - A `State` size change (`extra: [u64; 8]`) is caught by a fingerprint of size, alignment, drop
     glue and type name, and the root is remounted with fresh state. That was a remount in the
-    same realm, primary presentation only, not a fresh realm.
+    same UI runtime, primary presentation only, not a fresh UI runtime.
 - **Statics and thread-locals in the patched crate break.** Every patch gets a zeroed copy of
   each app-crate `static`. A `thread_local!` in the app crate crashes on first access from patched
   code (`0xc000041d`, an exception inside a window callback; the mechanism is unknown). Framework
@@ -153,7 +153,7 @@ pub trait DevReloadHook: 'static {
     /// for the user's type, so it lives in the app crate and has a jump-table entry.
     fn call(&self, entry: fn(*mut ()), data: *mut ());
     /// What changed since the last poll: nothing, patched code, or a change that
-    /// needs a fresh realm.
+    /// needs a fresh UI runtime.
     fn poll(&mut self) -> ReloadEvent;
 }
 ```
@@ -161,7 +161,7 @@ pub trait DevReloadHook: 'static {
 Only the `call(entry, data)` signature was run in the spike. The spike's trait was
 `DevReloadHook: Send + Sync + 'static` with `call` alone, and `poll` was a free function over a
 `PENDING` static. The `poll` method and the `'static`-only bound are this record's decisions: the
-instance lives on its realm and is called on the owner thread, and patch notifications reach it
+instance lives on its UI runtime and is called on the owner thread, and patch notifications reach it
 through the owner-queued command (§3), so it needs no `Send` or `Sync`. The exact safe wrapper
 over that raw shape is settled in the Subsecond implementation step.
 
@@ -170,19 +170,19 @@ over that raw shape is settled in the Subsecond implementation step.
   be shown. User render objects' layout, paint and hit-test are not routed: an edit there
   restarts, pending a measurement of what routing them would cost on the hot path.
 - Types stay low (ADR-0083 §1): the trait lives in `flui-view`, and the runtime owns the
-  instance and installs it per realm. No `static` holds it; the spike's `HOOK`, `WAKER` and
+  instance and installs it per UI runtime. No `static` holds it; the spike's `HOOK`, `WAKER` and
   `PENDING` statics and its `DEV_RESTART` thread-local would fail `cargo xtask globals`
   ([ADR-0097](ADR-0097-no-process-global-state-gate.md)).
 - The hook is installed explicitly on the application builder (`Application`,
   `crates/flui-app/src/app/application.rs:53`), by the application, never discovered. With no
   hook installed, the element seam calls the user method directly; the only cost is checking
-  the realm's `Option` hook.
-- `ReloadEvent::Patched` becomes an owner-queued hot reload in every realm (ADR-0027 §9), which
+  the UI runtime's `Option` hook.
+- `ReloadEvent::Patched` becomes an owner-queued hot reload in every UI runtime (ADR-0027 §9), which
   runs the existing reassemble: every element dirty, state kept
   (`WidgetsBinding::perform_reassemble`, `crates/flui-view/src/binding.rs:1068`).
-- `ReloadEvent::RestartRequired` tears the realm down and hosts a fresh one on the same loop
+- `ReloadEvent::RestartRequired` tears the UI runtime down and hosts a fresh one on the same loop
   (ADR-0039 §6), in every presentation. State is lost; the process and its windows are not. The
-  spike showed only a root remount in the same realm.
+  spike showed only a root remount in the same UI runtime.
 - The reload tier type belongs to the runtime. `flui_hot_reload::HotReloadTier` leaves
   `flui-app`'s signatures.
 
@@ -204,21 +204,21 @@ The hook is split so the edge from `flui-app` could go before Subsecond exists.
 - **Attach once per loop.** The desktop and iOS hosts attach the hook when the loop starts,
   before the first window, and detach it when the loop ends; a second attach while one is live
   is refused. The Android host only asks it for scene frames. The web host drives no hook.
-- **`Patched` reaches every realm once, at its frame boundary, not through the owner inbox.**
-  Each realm polls the hook at its frame boundary on the owner thread, before the frame's own
-  work. A poll that returns `Patched` advances an epoch; each realm reassembles
+- **`Patched` reaches every UI runtime once, at its frame boundary, not through the owner inbox.**
+  Each UI runtime polls the hook at its frame boundary on the owner thread, before the frame's own
+  work. A poll that returns `Patched` advances an epoch; each UI runtime reassembles
   (`ReloadTier::Reassemble`) when its own boundary finds it behind the latest patch. The runner
-  records a realm at the current epoch when its root mounts, since the tree is built from the
-  code loaded then: a realm mounted before a patch applies it at its first frame, and one mounted
+  records a UI runtime at the current epoch when its root mounts, since the tree is built from the
+  code loaded then: a UI runtime mounted before a patch applies it at its first frame, and one mounted
   after it does not replay it. An idle window applies a patch when it next draws. This replaces the owner-queued command
   of the bullet above: the poll already runs on the owner thread at a boundary, so queueing
-  adds nothing, and the epoch keeps a patch that one realm's poll saw from being lost to the
+  adds nothing, and the epoch keeps a patch that one UI runtime's poll saw from being lost to the
   others. The worker's `request_rebuild` now sets a flag and wakes the host through the same
-  path, so it too reaches every realm (before, only the most recently opened window's).
+  path, so it too reaches every UI runtime (before, only the most recently opened window's).
 - **Failure containment.** Each call runs with the hook out of its slot and no lock held, so a
   hook that re-enters the host finds nothing to call. A call that panics is logged, and the hook
   is dropped inside its own containment and never called again; the frame continues and the
-  realm is untouched. A `detach` that arrives while a call has the hook runs when that call
+  UI runtime is untouched. A `detach` that arrives while a call has the hook runs when that call
   returns.
 - **Each host calls a fixed set of methods.** Desktop and iOS call `attach`, `poll` and
   `detach`; Android calls only `scene_frame`, and logs so when a hook is installed; the web calls
@@ -281,12 +281,12 @@ A code patcher that keeps the original image keeps its statics; one that resets 
 or a patch that brings its own copy, splits whatever state lives in them. The process-global
 state that ADR-0097 lists is reduced first, and at least the entries this design touches —
 `REQUEST_REBUILD`, `REGISTRY_STACK`'s `ManuallyDrop` form, `FONT_SYSTEM` — are gone or
-realm-owned before the spike's "no residual TLS or static breakage" criterion is evaluated.
+UI runtime-owned before the spike's "no residual TLS or static breakage" criterion is evaluated.
 
 ### 5. The dlopen path is deleted only after the spike passes
 
 The spike runs a logic edit and a State type edit on Windows, macOS and Android. It passes
-when a logic edit keeps state, a State type edit restarts the realm, and nothing breaks through
+when a logic edit keeps state, a State type edit restarts the UI runtime, and nothing breaks through
 a remaining static or thread-local. Then, and not before, the following are deleted together:
 the worker/host/types template, the `--scene` scene plugin, the dlopen driver in
 `flui-hot-reload`, the `hot_reload_counter` and `hot_reload_lifecycle_fixture` examples, and
@@ -347,14 +347,14 @@ into `flui-hot-reload`'s crate docs.
 The spike seam exists on `spike/subsecond` (not merged). The driver half of §1 is covered:
 
 - **Host (`crates/flui-app/src/app/hot_reload/tests.rs`).** A patch polled through the hook
-  reassembles the realm; with no hook, or an `Unchanged` poll, nothing is marked dirty; one patch
-  reaches each of two realms exactly once; a realm mounted before a patch that another realm's
-  poll took applies it at its first boundary; a realm first polled after a patch does not replay
+  reassembles the UI runtime; with no hook, or an `Unchanged` poll, nothing is marked dirty; one patch
+  reaches each of two UI runtimes exactly once; a UI runtime mounted before a patch that another UI runtime's
+  poll took applies it at its first boundary; a UI runtime first polled after a patch does not replay
   it;
   a panicking `poll` (with a panicking `Drop`) is contained, the hook dropped once and never
   polled again; `attach` and `detach` pair once per loop and a second attach is refused; a detach
   that arrives during a hook call runs when the call returns; a panicking `attach` leaves the
-  loop without reload; each event maps to its realm tier. The runner test
+  loop without reload; each event maps to its UI runtime tier. The runner test
   `main_window_reload_hook_stays_attached_across_failed_reopens_and_detaches_with_loop` drives a
   real loop: one attach at start, none again across failed opens, one detach at the end.
 - **Package (`crates/flui-hot-reload/src/hook/tests.rs`).** Each worker poll outcome maps to its
@@ -372,7 +372,7 @@ None of the tests below exists yet.
   `cargo xtask workspace` rejects a core manifest that names it even optionally (ADR-0088).
 - **Hook contract, headless.** A test installs a fake `DevReloadHook` that counts `call`s and
   scripts `poll`: every framework call into a user `build` runs through `call`; `Patched` re-runs `build()` with a
-  stateful counter's value preserved; `RestartRequired` mounts a fresh realm whose counter is
+  stateful counter's value preserved; `RestartRequired` mounts a fresh UI runtime whose counter is
   back at its initial value; with no hook the frame runs unchanged.
 - **Type edits restart.** A same-size `State` change and a `View` field change both yield
   `RestartRequired`.
@@ -381,7 +381,7 @@ None of the tests below exists yet.
 - **Hook coverage.** The hook covers `did_update_view`, `did_change_dependencies` and
   `dispose`.
 - **Spike acceptance,** recorded in this ADR before it is accepted: logic edit keeps state,
-  State type edit restarts the realm, no residual static or thread-local breakage, on Windows,
+  State type edit restarts the UI runtime, no residual static or thread-local breakage, on Windows,
   macOS and Android.
 - **Live loop.** The device check drives `flui run` on the Subsecond loop through the CLI's
   `--json` events: an edit reloads with state kept, a syntax error is refused with the app

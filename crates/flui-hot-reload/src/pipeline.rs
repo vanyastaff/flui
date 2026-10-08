@@ -4,18 +4,18 @@
 //! Render) inside a plugin, producing a [`Scene`] that can be passed back to
 //! the host via the `app_plugin!` macro.
 //!
-//! This is intentionally independent of the host's realm — the plugin owns its
+//! This is intentionally independent of the host's UI runtime — the plugin owns its
 //! own `WidgetsBinding` and `PipelineOwner`, so it never shares mutable UI
-//! state with the host's `UiRealm`.
+//! state with the host's `UiRuntime`.
 //!
 //! Text is no exception. The pipeline measures through the
 //! [`TextContextHandle`] it is mounted with, and `app_plugin!` passes a
 //! [`TextContextHandle::standalone`] one: a context over the plugin image's
-//! own font collection, holding the bundled faces. The host realm's context
+//! own font collection, holding the bundled faces. The host UI runtime's context
 //! does not cross the `dlopen` boundary: `flui_app_build` has no parameter
 //! that could carry it, and `abi_token` does not cover `TextContext`'s layout.
 //! Faces the host app registers are not visible to the plugin (ARCHITECTURE.md,
-//! "The plugin image is a realm of its own for text").
+//! "The plugin image is a UI runtime of its own for text").
 
 #[cfg(test)]
 use std::sync::Arc;
@@ -79,7 +79,7 @@ impl PluginPipeline {
     /// Mount a root widget and create the rendering pipeline.
     ///
     /// This mirrors the `mount_root()` logic in `flui-app`'s runner,
-    /// but uses a standalone `WidgetsBinding` instead of the host realm's
+    /// but uses a standalone `WidgetsBinding` instead of the host UI runtime's
     /// widget machinery. Every measurement the pipeline makes goes through
     /// `text`.
     pub fn mount<V>(root: V, width: f64, height: f64, text: TextContextHandle) -> Self
@@ -158,7 +158,7 @@ impl PluginPipeline {
             }
 
             // Legal frame boundary: widget build has released its binding
-            // write lock, while the plugin realm's GlobalKey activation is
+            // write lock, while the plugin ui_runtime's GlobalKey activation is
             // still in dynamic scope. Tests observe the production entrypoint
             // here without querying GlobalKey from inside `build()`.
             #[cfg(test)]
@@ -168,7 +168,7 @@ impl PluginPipeline {
 
             // Phase 2: Run the full frame through the typestate-driven
             // pipeline. Force-mark the root dirty first so we always produce
-            // a fresh LayerTree -- unlike the host realm's frame loop (which
+            // a fresh LayerTree -- unlike the host ui_runtime's frame loop (which
             // skips frames when nothing is dirty and the previous frame is
             // still on-screen), the plugin must return a Scene every time
             // it's called: the
@@ -185,7 +185,7 @@ impl PluginPipeline {
                     log("draw_frame: WARNING — no root_id in pipeline");
                 }
                 // The root lays out at this frame's surface size, as the host
-                // realm's root does at its window's every frame. Without root
+                // ui_runtime's root does at its window's every frame. Without root
                 // constraints the pipeline lays nothing out and paints an
                 // unmeasured tree; constraints set once at mount would keep the
                 // first size after a resize.

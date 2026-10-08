@@ -17,7 +17,7 @@ fn known() -> Known {
             "crates/flui-view/tests/main.rs",
             "crates/flui-view/docs/NOTES.md",
             "crates/flui-app/Cargo.toml",
-            "crates/flui-app/tests/realm.rs",
+            "crates/flui-app/tests/ui_runtime.rs",
         ]
         .map(str::to_owned),
     )
@@ -730,7 +730,7 @@ fn a_path_resolves_from_the_root_the_doc_or_its_package() {
         ("tests/main.rs", true),
         ("src/platforms/mod.rs", true),
         // a doc inside a package names its own layout, not another's
-        ("tests/realm.rs", false),
+        ("tests/ui_runtime.rs", false),
         ("src/lib.rs", true),
         // a directory, and one asked for as a directory
         ("crates/flui-view/src", true),
@@ -748,7 +748,7 @@ fn a_path_resolves_from_the_root_the_doc_or_its_package() {
     // layouts, in whichever package has the path
     assert!(!known.resolves("docs/testing.md", "platforms/mod.rs"));
     assert!(known.resolves("docs/testing.md", "adr/ADR-0081-tiers.md"));
-    assert!(known.resolves("docs/testing.md", "tests/realm.rs"));
+    assert!(known.resolves("docs/testing.md", "tests/ui_runtime.rs"));
 }
 
 fn an_llms_link_resolves_like_a_github_link() {

@@ -11,7 +11,7 @@ use flui_rendering::protocol::BoxProtocol;
 use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// The user-supplied clip-shape function: maps the laid-out box size to the
-/// [`Path`] to clip against. The closure stays owner-local (UI-realm affine, never sent across
+/// [`Path`] to clip against. The closure stays owner-local (UI-UI runtime affine, never sent across
 /// threads); render storage receives only a data-plane target token — the
 /// same convention [`ClipPath`](crate::ClipPath) uses for its own
 /// `Fn(Size) -> Path` clipper.

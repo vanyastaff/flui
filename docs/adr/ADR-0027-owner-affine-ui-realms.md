@@ -1,15 +1,17 @@
-# ADR-0027: Owner-affine UI realms — a multi-threaded runtime of single-writer ownership domains
+# ADR-0027: Owner-affine UI runtimes — a multi-threaded runtime of single-writer ownership domains
 
 - **Status:** Accepted
+- **Superseded-by:** ADR-0171 for terminology only; the ownership and threading
+  decisions below remain in force.
 - **Date:** 2026-07-11
 - **Absorbs:** ADR-0027 (engine-wide threading architecture)
 - **Refined by:** ADR-0037 (presentation ownership domains), ADR-0043 (per-presentation trees,
-  realm `GlobalKeyScope`), ADR-0045 (the raster lane)
+  UI runtime `GlobalKeyScope`), ADR-0045 (the raster lane)
 - **Amended by:** [ADR-0097](ADR-0097-no-process-global-state-gate.md) (the runner's
   thread-local `AppRuntime` slot is a permanent `trampoline`, the host's only one; every other
   process-global is listed and gated by `cargo xtask globals`)
 
-Mutable UI state is scoped to an explicit `UiRealm` — a single-owner UI session, structurally
+Mutable UI state is scoped to an explicit `UiRuntime` — a single-owner UI session, structurally
 `!Send + !Sync` — presented through one or more presentations and hosted by one `AppRuntime`.
 Everything crosses threads only as typed `Send` capabilities, bounded ownership-transfer
 channels, and immutable snapshots.
@@ -17,29 +19,29 @@ channels, and immutable snapshots.
 ## Verdict
 
 > **FLUI is a multi-threaded runtime built from single-writer ownership domains.** Each
-> `UiRealm` has exactly one owner executor and performs its UI transaction serially. Multiple
-> realms may execute concurrently. CPU-intensive pure work, asynchronous I/O, and
-> rasterization execute outside the realm and communicate through bounded ownership-transfer
+> `UiRuntime` has exactly one owner executor and performs its UI transaction serially. Multiple
+> UI runtimes may execute concurrently. CPU-intensive pure work, asynchronous I/O, and
+> rasterization execute outside the UI runtime and communicate through bounded ownership-transfer
 > channels and immutable snapshots.
 
 Not a single-threaded framework and not a shared-memory multithreaded tree: single writer per
-UI tree, real parallelism between realms, workers, the compositor and the GPU. The
+UI tree, real parallelism between UI runtimes, workers, the compositor and the GPU. The
 single-writer transaction is not a language limitation: lifecycle, reconciliation,
 parent-driven layout and paint order are causally ordered, and per-node parallelism buys
 scheduler overhead and races, not throughput.
 
 ```text
 Platform/Event-loop thread
-        │ events (AppRuntime demux: presentation → realm)
+        │ events (AppRuntime demux: presentation → UI runtime)
         ▼
 ┌────────────────────────┐
-│ UiRealm A owner        │ owner executor 1
+│ UiRuntime A owner        │ owner executor 1
 │ build/layout/paint     │
 └──────────┬─────────────┘
            │ SceneSnapshot (owned, immutable)
            ▼
 ┌────────────────────────┐   ┌────────────────────────┐
-│ Compositor / Raster    │   │ UiRealm B owner        │ executor 2 (platform policy)
+│ Compositor / Raster    │   │ UiRuntime B owner        │ executor 2 (platform policy)
 │ surfaces / GPU submit  │   │ independent UI tree    │
 └────────────────────────┘   └────────────────────────┘
 
@@ -60,7 +62,7 @@ moved a view, element, context or callback across threads — the bounds were fo
 not by use. Cross-thread delivery was broken: the public foreground executor was an unbounded,
 wake-less queue drained only by the Win32 pump. The earlier threading decision (ADR-0027) had
 drawn the control-plane/data-plane boundary but answered only *which thread*, not *which owner
-object*, and its `thread_local!` remedy could not express two realms on one thread or one realm
+object*, and its `thread_local!` remedy could not express two UI runtimes on one thread or one UI runtime
 with two presentations.
 
 Flutter keeps one `BuildOwner`, one GlobalKey registry and one `FocusManager` per process — a
@@ -74,11 +76,11 @@ Chromium separates the mutable main tree from a compositor snapshot synchronized
 
 ```text
 AppRuntime — process/application host (one per process)
-├── platform event loop ownership + presentation→realm demux
+├── platform event loop ownership + presentation→UI runtime demux
 ├── SharedEngineServices (explicit, constructor-injected — not hidden globals):
 │     GPU device/queue · ImageCache · font service · worker pools · async I/O runtime
-├── application models / actors (shared business state, passed into realms explicitly)
-└── UiRealm 1..N — independent UI session, single-writer owner, !Send + !Sync
+├── application models / actors (shared business state, passed into UI runtimes explicitly)
+└── UiRuntime 1..N — independent UI session, single-writer owner, !Send + !Sync
     ├── update scheduler, post-frame lane, interaction dispatch, async driving
     ├── GlobalKey uniqueness scope (ADR-0043)
     ├── focus coordination across its presentations
@@ -90,15 +92,15 @@ AppRuntime — process/application host (one per process)
         └── SceneSnapshot producer → raster owner (SurfaceGeneration authority)
 ```
 
-Instantiation is **policy, not architecture**: desktop default is one realm per window; fully
-independent windows are N realms × 1 presentation; one session on several surfaces is 1 realm ×
-N presentations; a headless test is 1 realm × a headless presentation. Realm count per owner
-thread is an embedder policy (AppKit may serve several realms on the main thread; Win32, Linux
+Instantiation is **policy, not architecture**: desktop default is one UI runtime per window; fully
+independent windows are N UI runtimes × 1 presentation; one session on several surfaces is 1 UI runtime ×
+N presentations; a headless test is 1 UI runtime × a headless presentation. Runtime count per owner
+thread is an embedder policy (AppKit may serve several UI runtimes on the main thread; Win32, Linux
 and headless may use distinct owner threads; wasm is sequential). The widget API never names a
 thread.
 
-`SharedEngineServices` is owned by `AppRuntime` and injected; sharing between realms is a
-constructor decision. Scheduling splits by level: the realm's update scheduler (priorities,
+`SharedEngineServices` is owned by `AppRuntime` and injected; sharing between UI runtimes is a
+constructor decision. Scheduling splits by level: the UI runtime's update scheduler (priorities,
 transactions), each presentation's `FrameClock` (physical pacing — one window at 60 Hz,
 another at 144 Hz, a background one frozen), and raster scheduling (GPU backpressure).
 
@@ -110,7 +112,7 @@ task wakers and `FrameWaker` alone cross that boundary. The remaining contracts 
 
 | Type | Contract |
 |---|---|
-| `UiRealm`, element and render trees, `PipelineCell`, views, contexts, UI callbacks | `!Send + !Sync` — single writer, structurally |
+| `UiRuntime`, element and render trees, `PipelineCell`, views, contexts, UI callbacks | `!Send + !Sync` — single writer, structurally |
 | `SceneSnapshot`, `Scene`, `LayerTree` | `Send`, moves by value — the immutable commit artifact |
 | `WorkerJob<Input>` / `WorkerResult<Output>` | `Send`, owned immutable payloads |
 | `UiCommandSender` | `Clone + Send + Sync` — enqueue-and-wake capability, closed vocabulary |
@@ -123,25 +125,25 @@ positive ones by `assert_impl_all!` assertions. A render object reaches its owne
 through an attachment-scoped `RenderInvalidationHandle`, never a stored `PipelineCell`, which
 would close an `Rc` cycle.
 
-Within one realm the transaction is serial: lifecycle, state mutation, reconciliation, build,
-layout, paint order, focus/navigation, commit. What runs in parallel: different realms; raster
+Within one UI runtime the transaction is serial: lifecycle, state mutation, reconciliation, build,
+layout, paint order, focus/navigation, commit. What runs in parallel: different UI runtimes; raster
 versus UI; image decode; font loading and shaping; path processing; tessellation; shader
 preparation; asset I/O; heavy user computation.
 
 ### 3. Message flow and commit points
 
-- **Commands and worker results commit only while the realm's scheduler phase is Idle** —
+- **Commands and worker results commit only while the UI runtime's scheduler phase is Idle** —
   before entering `drive_frame` or after it returns, never inside the frame transaction. One
   frame observes one committed state. The mid-frame microtask slot is reserved for ADR-0018
   `AsyncDriver` continuations; idempotent dirty-mark drains stay at their phase-start anchors.
 - **Reentrancy gate:** platform callbacks deliver input synchronously in causal order; a
-  callback that re-enters while the realm is mid-transaction (nested Win32/AppKit pump: modal
-  resize, native dialogs) is queued into a realm-local ordered FIFO and applied at the next
+  callback that re-enters while the UI runtime is mid-transaction (nested Win32/AppKit pump: modal
+  resize, native dialogs) is queued into a UI runtime-local ordered FIFO and applied at the next
   permitted anchor.
 - **Wake contract:** enqueue-then-wake is one operation for the sender; the waker reaches the
   owner's event loop without spawning a thread (Win32 `PostMessageW` to a message-only HWND,
   AppKit run-loop source, winit `EventLoopProxy`, headless flag + pump).
-- **Self-wake rule:** a drain that dirties the tree requests a frame; a realm never goes idle
+- **Self-wake rule:** a drain that dirties the tree requests a frame; a UI runtime never goes idle
   with a dirty tree.
 
 ### 4. Queues — reliability classes, not one FIFO
@@ -164,7 +166,7 @@ Compositing produces an owned, immutable `SceneSnapshot` per presentation per fr
 
 ```rust
 pub struct SceneSnapshot {           // Send; moves by value; never Arc<Scene>
-    pub realm_id: RealmId,
+    pub ui_runtime_id: UiRuntimeId,
     pub epoch: FrameEpoch,
     pub surface_generation: SurfaceGeneration,
     pub damage: DamageRegion,
@@ -184,8 +186,8 @@ pub struct SceneSnapshot {           // Send; moves by value; never Arc<Scene>
 
 ### 6. Identity, versioning, cancellation — freshness is per work class
 
-- **Channel identity is the lifetime boundary.** A realm's channels are created with it and die
-  with it; senders into a dead realm get `OwnerGone`. No epoch comparison across owner
+- **Channel identity is the lifetime boundary.** A UI runtime's channels are created with it and die
+  with it; senders into a dead UI runtime get `OwnerGone`. No epoch comparison across owner
   lifetimes exists to get wrong.
 - **Freshness by work class** (a blanket `FrameEpoch` check would discard every long-running
   result during animation):
@@ -195,40 +197,40 @@ pub struct SceneSnapshot {           // Send; moves by value; never Arc<Scene>
 | Asset / decode | `ResourceGeneration` current on its `GenerationGate` |
 | Snapshot computation (future) | input revision |
 | Raster frame | `FrameEpoch` + `SurfaceGeneration` |
-| Lifetime isolation | channel identity (+ generational `RealmId`) |
+| Lifetime isolation | channel identity (+ generational `UiRuntimeId`) |
 
-- `RealmId` is a generational id (a recreated realm never compares equal); the native window
-  id stays platform-internal and `AppRuntime` owns the only native↔realm mapping. `FrameEpoch`
-  is per realm; generational `ElementId`/`RenderId` keep protecting slot reuse.
-- Every worker job carries a cancel-on-drop token. Realm disposal cancels its jobs; racing
+- `UiRuntimeId` is a generational id (a recreated UI runtime never compares equal); the native window
+  id stays platform-internal and `AppRuntime` owns the only native↔UI runtime mapping. `FrameEpoch`
+  is per UI runtime; generational `ElementId`/`RenderId` keep protecting slot reuse.
+- Every worker job carries a cancel-on-drop token. Runtime disposal cancels its jobs; racing
   results hit dead channels or fail their freshness check.
 
-### 7. Shutdown protocol (per realm)
+### 7. Shutdown protocol (per UI runtime)
 
-0. `AppRuntime` detaches the realm's platform callbacks — delivery stops before teardown.
-1. The realm stops accepting frames; the owner inbox flips to drain-and-refuse (`OwnerGone`).
+0. `AppRuntime` detaches the UI runtime's platform callbacks — delivery stops before teardown.
+1. The UI runtime stops accepting frames; the owner inbox flips to drain-and-refuse (`OwnerGone`).
 2. Worker jobs are cancelled; in-flight results hit the refused inbox or fail freshness.
 3. The snapshot mailbox closes; the raster owner finishes or drops in-flight work and fires the
    one-shot shutdown completion.
 4. Renderer and surface teardown happen in the raster owner before the window handle is
    destroyed.
-5. The realm drops; surviving handles turn `OwnerGone`.
+5. The UI runtime drops; surviving handles turn `OwnerGone`.
 
 The web runner cannot yet detach: `WebPlatform::run` installs its animation-frame loop and
 returns, and the platform has no detach hook enclosing that registration, so web keeps its
 owner host for the page lifetime.
 
-### 8. Focus, GlobalKey, and multi-realm semantics
+### 8. Focus, GlobalKey, and multi-UI runtime semantics
 
-- **Focus is per realm**: one focus tree per presentation; OS activation selects the active
-  presentation; cross-realm focus does not exist by construction.
-- **GlobalKey is realm-scoped**: unique within one realm. Within one presentation tree, a
+- **Focus is per UI runtime**: one focus tree per presentation; OS activation selects the active
+  presentation; cross-UI runtime focus does not exist by construction.
+- **GlobalKey is UI runtime-scoped**: unique within one UI runtime. Within one presentation tree, a
   retake preserves element, state and render identity. Every presentation owns its own element
-  tree (ADR-0043), so a keyed subtree moving between presentations or realms is an unmount plus
+  tree (ADR-0043), so a keyed subtree moving between presentations or UI runtimes is an unmount plus
   a fresh mount (`init_state` re-fires). Cross-presentation state continuity would be a
   dedicated checkpoint/restore primitive, not a reparent.
-- Tickers and animation controllers belong to their realm's scheduler; a subtree remounted in
-  another realm re-registers with that realm's clock.
+- Tickers and animation controllers belong to their UI runtime's scheduler; a subtree remounted in
+  another UI runtime re-registers with that UI runtime's clock.
 
 These are deliberate divergences from Flutter's process-global shape.
 
@@ -243,8 +245,8 @@ These are deliberate divergences from Flutter's process-global shape.
   handle verbs. The run-a-closure primitive is crate-private; a public arbitrary-closure
   executor is rejected as a standing constraint. Raw channels never appear in public
   signatures.
-- `UiRealm`, its dispatcher and command protocol are `pub(crate)` in `flui-app`, not an
-  embedder API. A public realm/runtime surface is designed separately; it is not obtained by
+- `UiRuntime`, its dispatcher and command protocol are `pub(crate)` in `flui-app`, not an
+  embedder API. A public UI runtime/runtime surface is designed separately; it is not obtained by
   making these types public.
 - Every public type documents its thread affinity and where its callbacks run. Nothing goes
   `pub` for tests. Capability acquisition follows ADR-0078.
@@ -270,12 +272,12 @@ reintroducing `Send` on the layout arena's node pointers without a fresh soundne
 |---|---|
 | **Shared-memory concurrent UI tree** (`Arc<RwLock<Tree>>`, `Send + Sync` everywhere) | No production code needs cross-thread tree access; the price is real (no `Rc`/`RefCell` in user state, lock graphs, non-deterministic lifecycle). Formally multithreaded, factually serialized on locks. |
 | **Flutter's literal shape** — one process-wide runtime and registries, per-window render view only | Couples every window's state, keeps process-global registries and their test-serialization tax, and makes window isolation impossible to add later. |
-| **Native window == runtime** | Cannot express embedded views, headless UI, offscreen rendering, tabs, external displays or one session across surfaces. 1 realm × 1 window is the default *policy*. |
+| **Native window == runtime** | Cannot express embedded views, headless UI, offscreen rendering, tabs, external displays or one session across surfaces. 1 UI runtime × 1 window is the default *policy*. |
 | **Fully sequential status quo** | Leaves broken foreground dispatch, unbounded queues and singleton test locks, and no seam for decode or multi-window. |
-| Epoch arithmetic across realm recreation | Rests on cross-lifetime monotonicity nothing enforces; channel identity makes the question unaskable. |
+| Epoch arithmetic across UI runtime recreation | Rests on cross-lifetime monotonicity nothing enforces; channel identity makes the question unaskable. |
 | One FIFO for all delivery guarantees | Shutdown drain-and-refuse would deadlock the completion handshake; telemetry could displace control messages. |
 | `Arc<Scene>` handoff | Invites retained references and defeats latest-frame-wins accounting. |
-| One god runtime object | `UiRealm`/`AppRuntime` own, wire and vend capabilities; behavior stays in subsystems. |
+| One god runtime object | `UiRuntime`/`AppRuntime` own, wire and vend capabilities; behavior stays in subsystems. |
 | Bevy's `NonSend`-in-a-`Send`-world | A natively `!Send` owner holding thread-affine state directly is simpler, and Bevy is moving away from the pattern. |
 
 ## Consequences

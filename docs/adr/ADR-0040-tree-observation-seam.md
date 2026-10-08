@@ -13,7 +13,7 @@
   the tree stack through the facade).
 
 *`flui-foundation` declares a narrow `TreeObserver` trait plus typed event structs; `BuildOwner`
-holds one per-realm `Option<Arc<dyn TreeObserver>>` slot; emissions fire from the tree's true
+holds one per-UI runtime `Option<Arc<dyn TreeObserver>>` slot; emissions fire from the tree's true
 mutation funnels (mint, move, rebuild drain, the two unmount primitives); `flui-devtools`
 implements the trait behind its `inspector` feature, naming only the seam
 (`flui_sdk::foundation::observe`). The `flui::reconcile` tracing stream (FR-035) stays, but is not the seam.*
@@ -32,8 +32,8 @@ What the decision builds on:
 - **A tracing stream with devtools ambitions.** The keyed reconciler emits structured
   `flui::reconcile` events (Mount, Unmount, Reuse, Reorder, Reparent). Whether that stream *is*
   the seam is §1's question.
-- **Ownership.** The element tree and its `BuildOwner` are realm-owned (`WidgetsBinding` inside
-  each `UiRealm`, ADR-0027); the render pipeline is process-hosted. Hence this ADR commits only to
+- **Ownership.** The element tree and its `BuildOwner` are UI runtime-owned (`WidgetsBinding` inside
+  each `UiRuntime`, ADR-0027); the render pipeline is process-hosted. Hence this ADR commits only to
   element-tree observation.
 - **DAG position.** `flui-view`, `flui-rendering` and `flui-scheduler` all sit above
   `flui-foundation`; a vocabulary all of them must speak can only live there.
@@ -60,7 +60,7 @@ devtools seam because:
 2. **Subscriber lifecycle is process-global and race-prone.** Installing/dropping a dispatcher
    rebuilds tracing-core's global callsite interest cache; the repo's tests have hit that race
    twice. A panel attaching at runtime is that cycle in production.
-3. **No realm scoping.** A dispatcher is global or thread-scoped; "observe *this* realm" has no
+3. **No UI runtime scoping.** A dispatcher is global or thread-scoped; "observe *this* UI runtime" has no
    expression under ADR-0027.
 4. **Event-only.** A trait registered on the owner is a natural anchor for a later query surface.
 5. **Enabled-path overhead.** Erased `Visit` dispatch per field vs. one virtual call with typed
@@ -110,10 +110,10 @@ pub trait TreeObserver: Send + Sync {
   implementors.
 - **`#[non_exhaustive]` + `new`:** protects matchers; constructors are in-workspace only, so
   appending a field is not a consumer break.
-- **`Send + Sync`:** emission happens on the realm's owner thread, while a devtools reader (or one
-  collector shared by several realms) lives elsewhere.
+- **`Send + Sync`:** emission happens on the UI runtime's owner thread, while a devtools reader (or one
+  collector shared by several UI runtimes) lives elsewhere.
 
-### 3. Registration is per-realm, one slot, on `BuildOwner` — with a seeded install for mid-run attach
+### 3. Registration is per-UI runtime, one slot, on `BuildOwner` — with a seeded install for mid-run attach
 
 ```rust
 impl BuildOwner {
@@ -137,13 +137,13 @@ impl WidgetsBinding {
 - **Mid-run attach is first-class.** Without a baseline an event-only seam is useless to a panel
   attached to a running app. Replay covers structure, parent/slot edges and logical types; state
   versions and dependency edges are pull-shaped and out of scope.
-- **Per-realm by construction.** The slot belongs to one realm's `BuildOwner`; events carry no
-  `RealmId`. A multi-realm consumer installs a thin per-realm wrapper tagging a shared sink.
+- **Per-UI runtime by construction.** The slot belongs to one UI runtime's `BuildOwner`; events carry no
+  `UiRuntimeId`. A multi-UI runtime consumer installs a thin per-UI runtime wrapper tagging a shared sink.
   Flutter is not the reference for this topology (ADR-0027).
 - **One `Option` slot, not a `Vec`.** Fan-out composes in the consumer; replace semantics make a
   later multi-slot widening additive.
 - **Teardown honesty.** Nothing synthesizes `element_unmounted` for elements alive at teardown
-  (`detach_root_widget` removes only the root node; a realm drop drops the slab). `detached()` is
+  (`detach_root_widget` removes only the root node; a UI runtime drop drops the slab). `detached()` is
   the end-of-life signal. A `BuildOwner` dropped without `clear_tree_observer` emits no
   `detached()` — embedders that install must clear (install/clear symmetry).
 - **Not a `BuildContext` capability.** The observer is embedder infrastructure, deliberately absent
@@ -169,7 +169,7 @@ Every site emits through one private helper, `flui_view::owner::emit_observation
 the payload lazily inside a closure and runs the call under `catch_unwind` (§6).
 
 **Ordering:** the stream is a totally ordered tree-mutation log, emitted synchronously on the
-realm's owner thread in mutation order. Per element: mounted first, then any interleaving of
+UI runtime's owner thread in mutation order. Per element: mounted first, then any interleaving of
 rebuilt/moved, then unmounted last. **No phase bucketing is promised** — builds run mid-layout and
 post-layout, eager unmounts happen inline, `finalize_tree` runs several times a frame. Per-frame
 buckets need frame-demarcation events (a follow-up). Known approximation: between a keyed
@@ -185,16 +185,16 @@ as the adjacent tracing interest check. With an observer installed, each emissio
 `catch_unwind` frame. The claim is checked by `packages/flui-devtools/benches/tree_observer_overhead.rs`
 (observer absent vs. no-op vs. counting, over a rebuild-heavy tree).
 
-Emission is unconditionally compiled; the runtime `Option` is the per-realm, per-run off switch.
+Emission is unconditionally compiled; the runtime `Option` is the per-UI runtime, per-run off switch.
 
 ### 6. Threading, non-reentrancy, and the panic policy
 
-Callbacks run on the realm's owner thread, inside frame phases, with the realm's locks held.
+Callbacks run on the UI runtime's owner thread, inside frame phases, with the UI runtime's locks held.
 
 1. **Same-thread deadlock.** Emissions run while the frame drive holds the binding's `inner`
    write lock; every binding accessor (`with_build_owner`, `with_element_tree`, `root_element`)
    takes `inner.read()` on a non-reentrant `parking_lot` lock. A callback must not call any
-   flui-view binding, realm or owner API. It may touch only its own state (atomics, lock-free
+   flui-view binding, UI runtime or owner API. It may touch only its own state (atomics, lock-free
    structures, `try_send` into its own channel) and must return promptly.
 2. **No scheduling into the emitter.** Synchronous re-entry into the build is a debug assertion,
    which covers neither the deadlock nor release builds. A smuggled `RebuildHandle` called from a
@@ -247,9 +247,9 @@ counts, reason sets, the §4 balance invariant, and `detached()` on teardown. Te
    a new crate adds DAG surface and isolates nothing.
 6. **`#[cfg(feature)]`-gated emission in core.** Feature unification makes it always-on in the
    workspace while varying for external consumers; features are compile-time and process-global,
-   the requirement is runtime and per-realm (attach to a running app).
+   the requirement is runtime and per-UI runtime (attach to a running app).
 7. **`Vec` fan-out in core.** Not needed; composable outside, and widening later is non-breaking.
-8. **Observer as a `BuildContext` capability.** Wrong owner (embedder/realm, not widget), and it
+8. **Observer as a `BuildContext` capability.** Wrong owner (embedder/UI runtime, not widget), and it
    would invite frame-phase acquisition.
 9. **Emitting `ElementUnmounted` from `finalize_tree`.** Wrong: un-keyed unmounts never reach the
    inactive queue, so most unmounts would be missed and mirrors would leak.
@@ -259,7 +259,7 @@ counts, reason sets, the §4 balance invariant, and `detached()` on teardown. Te
 **Positive**
 - Devtools observe the tree through the seam alone (`flui_sdk::foundation::observe`); the seam
   is inert without an installed observer.
-- Typed, realm-scoped, mutation-ordered events; generational `ElementId`s make consumer stores
+- Typed, UI runtime-scoped, mutation-ordered events; generational `ElementId`s make consumer stores
   ABA-safe; the §4 invariant keeps a mirror's parent/slot edges correct through reparents and
   reorders.
 - Mid-run attach starts from an exact structural baseline.
@@ -273,20 +273,20 @@ counts, reason sets, the §4 balance invariant, and `detached()` on teardown. Te
   different consumers, different contracts, consolidation left explicit.
 - The no-reentrancy contract is documentation plus a partial debug assertion, not a static
   guarantee; a panicking observer silently stops receiving events (logged, no `detached()`).
-- A realm torn down without `clear_tree_observer` gives no `detached()` — the embedder's
+- A UI runtime torn down without `clear_tree_observer` gives no `detached()` — the embedder's
   obligation.
 
 ## Out of scope and follow-ups
 
 - **Render-phase observation** needs its own ADR first: the pipeline is process-hosted, so a slot
-  on `PipelineOwner` would be process-wide observation wearing a realm-shaped API. The vocabulary
+  on `PipelineOwner` would be process-wide observation wearing a UI runtime-shaped API. The vocabulary
   (defaulted methods carrying `RenderId` + a typed cause) is expected to carry over; placement is
   the open decision.
 - **Pull/query inspection** (walk the live tree, state versions, dependency edges, memory) is a
-  different seam with a different hazard profile (re-entering realm-owned state); it needs its own
+  different seam with a different hazard profile (re-entering UI runtime-owned state); it needs its own
   ADR. This event seam serves the structural subset only.
 - **Frame-demarcation events** (build-scope and frame begin/end) so consumers can bucket per frame.
 - **Active-task observation** from `flui-scheduler`'s `AsyncDriver`, via new defaulted methods.
 - **Wire format / remote protocol** — none defined here.
-- A realm-teardown hook that guarantees `clear_tree_observer`, closing the "dropped without
+- A UI runtime-teardown hook that guarantees `clear_tree_observer`, closing the "dropped without
   detach" gap by construction.

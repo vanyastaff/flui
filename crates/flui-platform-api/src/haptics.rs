@@ -46,7 +46,7 @@
 //!    replacement) — `Platform`/`Box<dyn Platform>` is consumed by `run()`
 //!    and not kept around — so a device-global accessor on `Platform` would
 //!    be unreachable from the one production bridge this capability needs
-//!    (`UiRealm::perform_haptic_feedback`, forwarded through
+//!    (`UiRuntime::perform_haptic_feedback`, forwarded through
 //!    `PresentationState`).
 //!
 //! Desktop backends with a single device-global haptics engine (if one ever

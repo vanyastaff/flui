@@ -3,7 +3,7 @@
 // ============================================================================
 //
 // The sync device-rebuild seam plus the shared retry/backoff logic the
-// desktop, Android and iOS frame drivers use around `UiRealm::pump`. Web's own recovery (`bootstrap_web`)
+// desktop, Android and iOS frame drivers use around `UiRuntime::pump`. Web's own recovery (`bootstrap_web`)
 // stays un-unified: its `recover()` is driven through
 // `wasm_bindgen_futures::spawn_local`, not a synchronous call this trait
 // could wrap — see that call site's own comment for why.
@@ -129,12 +129,10 @@ pub(super) struct FrameRecoveryOutcome {
     /// field carries no separate production obligation of its own — kept
     /// on the struct anyway because it is what makes the wake-on-failure-
     /// only contract independently checkable per call.
+    // Dependency builds can cap dead_code while still checking expectations.
     #[cfg_attr(
         not(all(test, not(any(target_os = "android", target_os = "ios")))),
-        expect(
-            dead_code,
-            reason = "read by this module's own tests only -- see field doc"
-        )
+        allow(dead_code, reason = "read by this module's own tests only")
     )]
     pub(super) just_failed: bool,
     /// The earliest instant the next recovery attempt is allowed, if the
@@ -145,21 +143,18 @@ pub(super) struct FrameRecoveryOutcome {
     /// `DeviceRecoveryBackoff::next_attempt_at` directly instead.
     #[cfg_attr(
         not(all(test, not(any(target_os = "android", target_os = "ios")))),
-        expect(
-            dead_code,
-            reason = "read by this module's own tests only -- see field doc"
-        )
+        allow(dead_code, reason = "read by this module's own tests only")
     )]
     pub(super) next_attempt_at: Option<web_time::Instant>,
 }
 
-/// Drive one frame through `realm` against `lane`'s raster mailbox,
+/// Drive one frame through `ui_runtime` against `lane`'s raster mailbox,
 /// rebuilding a lost device around it.
 ///
 /// A device already lost at frame start gets a backoff-gated recovery
 /// attempt here, BEFORE
-/// the realm's pump through the lane (whose draw phase is
-/// `UiRealm::render_frame`) — but that frame drive runs regardless of
+/// the UI runtime's pump through the lane (whose draw phase is
+/// `UiRuntime::render_frame`) — but that frame drive runs regardless of
 /// whether that attempt happened or what it returned. Skipping it on a still-lost device was the
 /// original bug this function fixes: `render_frame` is the only
 /// caller of `drain_deferred_arena_resolutions`, `flush_pending_moves`,
@@ -183,12 +178,12 @@ pub(super) struct FrameRecoveryOutcome {
 /// the other one skips — attempting twice in one wake would silently double
 /// the effective retry rate the backoff exists to bound.
 ///
-/// A SUCCESSFUL PRE-frame attempt calls [`crate::app::ui_realm::UiRealm::
-/// mark_primary_needs_full_repaint`] — never [`crate::app::ui_realm::UiRealm::
-/// wake_frame`], and never bare [`crate::app::ui_realm::UiRealm::request_redraw`]
+/// A SUCCESSFUL PRE-frame attempt calls [`crate::app::ui_runtime::UiRuntime::
+/// mark_primary_needs_full_repaint`] — never [`crate::app::ui_runtime::UiRuntime::
+/// wake_frame`], and never bare [`crate::app::ui_runtime::UiRuntime::request_redraw`]
 /// either. Neither of those alone is enough: `wake_frame` does not open
 /// `render_frame`'s OWN per-presentation dirty gate
-/// (`presentation.take_redraw_pending()`, `ui_realm/`'s
+/// (`presentation.take_redraw_pending()`, `ui_runtime/`'s
 /// `draw_frame_entered`) at all, and `request_redraw` alone opens that gate
 /// but still leaves `PipelineOwner`'s OWN independent dirty tracking
 /// untouched — confirmed by a probe, not assumed: with `request_redraw`
@@ -207,14 +202,14 @@ pub(super) struct FrameRecoveryOutcome {
 /// loss was even noticed, so there is no known-blank backing store to force
 /// a fresh submit for.
 ///
-/// The two checks bracket the whole [`UiRealm::pump`](crate::app::ui_realm::UiRealm::pump),
+/// The two checks bracket the whole [`UiRuntime::pump`](crate::app::ui_runtime::UiRuntime::pump),
 /// not just its pipeline: the pre-frame attempt runs before begin frame and
 /// the post-frame one after the post-frame callbacks. Neither touches the
 /// tree except `mark_primary_needs_full_repaint`, which still lands before
 /// the pipeline that repaints. `now` is also the pump's frame timestamp.
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) fn pump_with_device_recovery<B>(
-    realm: &mut crate::app::ui_realm::UiRealm,
+    ui_runtime: &mut crate::app::ui_runtime::UiRuntime,
     lane: &mut crate::app::raster_lane::RasterLane<B>,
     backoff: &DeviceRecoveryBackoff,
     now: web_time::Instant,
@@ -238,10 +233,10 @@ where
                 lane.note_surface_recreated();
                 // Pre-frame only: nothing has presented since the device
                 // died, so the recovered backing store needs a genuinely
-                // fresh submit — see `UiRealm::mark_primary_needs_full_
+                // fresh submit — see `UiRuntime::mark_primary_needs_full_
                 // repaint`'s own doc for why `request_redraw` alone does
                 // not get one.
-                realm.mark_primary_needs_full_repaint();
+                ui_runtime.mark_primary_needs_full_repaint();
             }
             RecoveryAttempt::Failed(deadline) => {
                 just_failed = true;
@@ -251,7 +246,7 @@ where
         }
     }
 
-    let presented = realm.pump(&mut SampledClock(now), lane).presented();
+    let presented = ui_runtime.pump(&mut SampledClock(now), lane).presented();
 
     if next_attempt_at.is_none() && lane.is_device_lost() {
         match lane.with_backend(|renderer| attempt_device_recovery(renderer, backoff, now)) {
@@ -281,7 +276,7 @@ where
         // `mark_rendered()` silently clobbers an earlier `wake_frame()`
         // whenever this frame's tree had nothing new to paint
         // (`draw_frame_entered` returns `Idle`, so `retry_needed` stays
-        // `false` at the `ui_realm` layer). That is exactly what happens
+        // `false` at the `ui_runtime` layer). That is exactly what happens
         // on every wake AFTER the first against a permanently dead device,
         // once the initial mount's content is already consumed — a
         // pre-frame `wake_frame()` call here self-extinguishes one hop
@@ -289,7 +284,7 @@ where
         // Raising it here, after `render_frame` has already run
         // its own tail, is the only place a failed recovery's wake
         // survives it.
-        realm.wake_frame();
+        ui_runtime.wake_frame();
     }
 
     FrameRecoveryOutcome {
@@ -355,12 +350,12 @@ mod device_recovery_tests {
         }
     }
 
-    fn mount_root() -> crate::app::ui_realm::UiRealm {
-        let realm = crate::app::ui_realm::UiRealm::for_test();
-        realm
-            .enter(|realm| realm.attach_root_widget(&LeafView))
+    fn mount_root() -> crate::app::ui_runtime::UiRuntime {
+        let ui_runtime = crate::app::ui_runtime::UiRuntime::for_test();
+        ui_runtime
+            .enter(|ui_runtime| ui_runtime.attach_root_widget(&LeafView))
             .expect("attach succeeds");
-        realm
+        ui_runtime
     }
 
     /// Wraps a scripted backend in the raster lane the production frame
@@ -371,7 +366,7 @@ mod device_recovery_tests {
         crate::app::raster_lane::RasterLane::new(
             backend,
             flui_foundation::PresentationAddress {
-                realm_id: flui_foundation::RealmId::new(1),
+                ui_runtime_id: flui_foundation::UiRuntimeId::new(1),
                 presentation_id: flui_foundation::PresentationId::new(1),
             },
             800,
@@ -456,7 +451,7 @@ mod device_recovery_tests {
     }
 
     fn a_pre_frame_loss_with_a_failing_recovery_still_renders_the_frame_and_backs_off() {
-        let mut realm = mount_root();
+        let mut ui_runtime = mount_root();
         let mut lane = lane_over(ScriptedDeviceBackend {
             lost: true,
             // The real `Renderer::acquire_surface_texture` bails on the
@@ -468,11 +463,11 @@ mod device_recovery_tests {
             recover_clears_lost: false,
             ..ScriptedDeviceBackend::healthy()
         });
-        realm.mark_rendered();
+        ui_runtime.mark_rendered();
         let backoff = new_device_recovery_backoff();
         let now = Instant::now();
 
-        let outcome = pump_with_device_recovery(&mut realm, &mut lane, &backoff, now);
+        let outcome = pump_with_device_recovery(&mut ui_runtime, &mut lane, &backoff, now);
 
         assert!(!outcome.presented, "a still-lost device presents nothing");
         assert_eq!(
@@ -500,7 +495,7 @@ mod device_recovery_tests {
             "the first failed attempt backs off by exactly the base interval"
         );
         assert!(
-            realm.needs_redraw(),
+            ui_runtime.needs_redraw(),
             "the failed recovery must arm the retry wake: on a quiescent loop — no \
              input, no animations — nothing else would ever schedule the next \
              recovery attempt"
@@ -508,18 +503,18 @@ mod device_recovery_tests {
     }
 
     fn a_mid_frame_loss_with_a_failing_recovery_backs_off() {
-        let mut realm = mount_root();
+        let mut ui_runtime = mount_root();
         let mut lane = lane_over(ScriptedDeviceBackend {
             lose_on_render: true,
             recover_outcome: Some(Err(EngineError::DeviceLost)),
             recover_clears_lost: false,
             ..ScriptedDeviceBackend::healthy()
         });
-        realm.mark_rendered();
+        ui_runtime.mark_rendered();
         let backoff = new_device_recovery_backoff();
         let now = Instant::now();
 
-        let outcome = pump_with_device_recovery(&mut realm, &mut lane, &backoff, now);
+        let outcome = pump_with_device_recovery(&mut ui_runtime, &mut lane, &backoff, now);
 
         assert_eq!(
             lane.with_backend(|b| b.render_calls),
@@ -546,7 +541,7 @@ mod device_recovery_tests {
              pre-frame failure"
         );
         assert!(
-            realm.needs_redraw(),
+            ui_runtime.needs_redraw(),
             "the post-render recovery wake must survive render_frame's own \
              mark_rendered(), so the recovered renderer renders again on a quiescent \
              loop"
@@ -560,14 +555,14 @@ mod device_recovery_tests {
     /// since a quiescent tree with nothing new to paint produces `Idle`,
     /// not `Errored`) silently clobbers it one hop later. A two-frame drive
     /// does not catch this: the FIRST frame still has the mount's own
-    /// pending paint, reaches `render_scene`, and `ui_realm`'s OWN
+    /// pending paint, reaches `render_scene`, and `ui_runtime`'s OWN
     /// `DeviceLost` arm independently arms `needs_redraw` too (`retry_needed
-    /// = true` there, from this same issue's `ui_realm/` fix) — the bug
+    /// = true` there, from this same issue's `ui_runtime/` fix) — the bug
     /// only shows up once that leftover demand is exhausted, on the frame
     /// AFTER, which is exactly why this drives (and checks) three.
     fn needs_redraw_stays_armed_across_three_consecutive_frames_against_a_permanently_dead_device()
     {
-        let mut realm = mount_root();
+        let mut ui_runtime = mount_root();
         let backoff = new_device_recovery_backoff();
         let mut now = Instant::now();
 
@@ -579,9 +574,9 @@ mod device_recovery_tests {
                 recover_clears_lost: false,
                 ..ScriptedDeviceBackend::healthy()
             });
-            let _ = pump_with_device_recovery(&mut realm, &mut lane, &backoff, now);
+            let _ = pump_with_device_recovery(&mut ui_runtime, &mut lane, &backoff, now);
             assert!(
-                realm.needs_redraw(),
+                ui_runtime.needs_redraw(),
                 "needs_redraw must still be armed after frame {frame} against a \
                  permanently dead device — a device that never recovers must never let \
                  this flag settle back to false, or nothing will ever wake the loop to \

@@ -6,7 +6,7 @@
 //! needs the opposite: a fresh test at the pointer's *current* global position
 //! on every move, independent of where the drag went down.
 //!
-//! The capability is declared in `flui-interaction`, where realm identity and
+//! The capability is declared in `flui-interaction`, where UI runtime identity and
 //! thread affinity already live, and implemented here, where the tree is.
 
 use flui_foundation::geometry::Offset;
@@ -16,7 +16,7 @@ use super::{PipelineCell, WeakPipelineCell};
 
 /// A [`HitTestProbe`] backed by a live [`PipelineCell`].
 ///
-/// Installed on a realm's interaction lane at construction, so widget code
+/// Installed on a UI runtime's interaction lane at construction, so widget code
 /// reaching `LifecycleContext::hit_test_handle()` tests against the same tree
 /// pointer dispatch walks — not a parallel registry that would drift from it.
 ///
@@ -30,7 +30,7 @@ use super::{PipelineCell, WeakPipelineCell};
 /// `PipelineCell`, and a widget that stores one keeps the tree's allocation
 /// alive past its presentation's close; a probe treating "the allocation is
 /// freed" as "the presentation closed" would go on answering from a detached
-/// tree. Under `WindowPolicy::Shared` the realm ticket stays valid too, since a sibling
+/// tree. Under `WindowPolicy::Shared` the UI runtime ticket stays valid too, since a sibling
 /// presentation is still live, so nothing else would catch it. The presentation
 /// therefore owns a token, and dropping the presentation drops it regardless of
 /// who still holds the tree.

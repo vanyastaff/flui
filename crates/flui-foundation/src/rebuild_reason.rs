@@ -36,7 +36,7 @@ pub enum RebuildReason {
     RootChange,
     /// Hot reload requested that every live element rebuild in place.
     HotReload,
-    /// A realm-scoped signal this element read during its last build was
+    /// A UI runtime-scoped signal this element read during its last build was
     /// written (ADR-0074).
     SignalChange,
 }

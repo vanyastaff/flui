@@ -110,8 +110,8 @@ impl StatelessView for NonDependent {
 /// Wraps a child subtree and unconditionally opts it out of rebuild — see
 /// the module docs for why this is load-bearing, not a shortcut.
 #[derive(Clone)]
-struct StaticChild {
-    inner: BoxedView,
+pub(crate) struct StaticChild {
+    pub(crate) inner: BoxedView,
 }
 
 impl View for StaticChild {

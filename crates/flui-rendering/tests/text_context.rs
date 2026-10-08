@@ -1,4 +1,4 @@
-//! The realm's text context, lent through a pipeline's layout, intrinsic and
+//! The UI runtime's text context, lent through a pipeline's layout, intrinsic and
 //! dry queries (ADR-0092 §10 step 3), and released on every failure path.
 
 use flui_foundation::Leaf;
@@ -17,7 +17,7 @@ use flui_rendering::{
     traits::{RenderBox, TextBaseline},
 };
 
-fn realm_text() -> TextContextHandle {
+fn ui_runtime_text() -> TextContextHandle {
     TextContextHandle::standalone()
 }
 
@@ -29,7 +29,7 @@ fn loose() -> BoxConstraints {
     BoxConstraints::new(0.0, 400.0, 0.0, 400.0)
 }
 
-/// A leaf that takes the realm's text context and panics while it holds it.
+/// A leaf that takes the UI runtime's text context and panics while it holds it.
 #[derive(Debug)]
 struct PanicsWithTheTextContextLent;
 
@@ -76,7 +76,7 @@ fn paragraph(text: &str) -> tree::TreeNode {
     .label("paragraph")
 }
 
-/// A panic unwinds out of a layout that holds the realm's context. The loan
+/// A panic unwinds out of a layout that holds the UI runtime's context. The loan
 /// ends with the unwind: the sibling paragraph laid out later in the same
 /// walk measures through the same context, and so does the next frame. The
 /// panic stays the one failure: the panicking leaf is poisoned, the
@@ -87,7 +87,7 @@ fn a_layout_that_panics_while_holding_the_text_context_releases_it() {
     let hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(|_| {}));
 
-    let text = realm_text();
+    let text = ui_runtime_text();
     let (owner, labels) = mount(
         &text,
         box_node(RenderFlex::column())
@@ -118,7 +118,7 @@ fn a_layout_that_panics_while_holding_the_text_context_releases_it() {
     let first_frame = lends(&text);
     assert!(
         first_frame > 0,
-        "the paragraph measured through the realm's context"
+        "the paragraph measured through the ui_runtime's context"
     );
 
     owner.mark_needs_layout(paragraph);
@@ -158,7 +158,7 @@ fn a_layout_that_panics_while_holding_the_text_context_releases_it() {
 /// object a context of its own.
 #[test]
 fn intrinsic_and_dry_queries_measure_through_the_pipelines_context() {
-    let text = realm_text();
+    let text = ui_runtime_text();
     let (mut owner, labels) = mount(
         &text,
         box_node(RenderParagraph::new(
@@ -186,7 +186,7 @@ fn intrinsic_and_dry_queries_measure_through_the_pipelines_context() {
     assert!(width > 0.0 && size.width > 0.0 && baseline.is_some_and(|b| b > 0.0));
     assert!(
         after_intrinsic > before,
-        "the intrinsic query measured on the realm's context"
+        "the intrinsic query measured on the ui_runtime's context"
     );
     assert!(
         after_dry_layout > after_intrinsic,
@@ -205,7 +205,7 @@ fn intrinsic_and_dry_queries_measure_through_the_pipelines_context() {
 /// placeholder is built with any other context.
 #[test]
 fn a_taken_pipeline_leaves_an_owner_that_measures_through_the_same_context() {
-    let text = realm_text();
+    let text = ui_runtime_text();
     let mut slot = PipelineOwner::new(text.clone());
     let taken = slot.take_idle();
     assert!(
@@ -234,7 +234,7 @@ fn a_taken_pipeline_leaves_an_owner_that_measures_through_the_same_context() {
 /// changes the collection's generation.
 const PROBE_MONO: &[u8] = include_bytes!("../../flui-painting/assets/fonts/probe-mono-100.ttf");
 
-/// A leaf that measures through the realm's context and nothing else: no
+/// A leaf that measures through the UI runtime's context and nothing else: no
 /// hook, no painter, no font listener of its own.
 #[derive(Debug)]
 struct MeasuresThroughTheContext;
@@ -306,7 +306,7 @@ fn laid_out_paragraph_and_box(
 /// that measured text, and not the one that measured none. Fails if the
 /// pipeline never learns of the change, or marks the whole tree.
 fn a_font_change_marks_only_the_nodes_that_measured_text() {
-    let text = realm_text();
+    let text = ui_runtime_text();
     let (mut owner, paragraph, colored) = laid_out_paragraph_and_box(&text);
 
     register_probe(&text);
@@ -330,7 +330,7 @@ fn a_font_change_marks_only_the_nodes_that_measured_text() {
 /// no code of its own that listens for fonts. Fails if the marking needs the
 /// render object to opt in.
 fn a_render_object_with_no_font_hook_is_marked() {
-    let text = realm_text();
+    let text = ui_runtime_text();
     let (owner, labels) = mount(&text, box_node(MeasuresThroughTheContext).label("leaf"));
     let leaf = labels.get("leaf").expect("labelled");
     let (mut owner, result) = owner.run_frame();
@@ -349,7 +349,7 @@ fn a_render_object_with_no_font_hook_is_marked() {
 /// record costs no layout while the collection is unchanged. Fails if a
 /// drain treats the record itself as a change.
 fn no_change_marks_nothing() {
-    let text = realm_text();
+    let text = ui_runtime_text();
     let (mut owner, _, _) = laid_out_paragraph_and_box(&text);
 
     owner.drain_pending_dirty();
@@ -364,7 +364,7 @@ fn no_change_marks_nothing() {
 /// the lent context unconditionally (a `BUG:` panic), or if a deferred change
 /// is forgotten.
 fn a_drain_while_the_context_is_lent_defers_the_change() {
-    let text = realm_text();
+    let text = ui_runtime_text();
     let (mut owner, paragraph, _) = laid_out_paragraph_and_box(&text);
 
     text.with(|lent| {
@@ -389,7 +389,7 @@ fn a_drain_while_the_context_is_lent_defers_the_change() {
 /// is still marked. Fails if a stale record stops the walk or the change
 /// reaches no one.
 fn a_node_removed_after_measuring_is_skipped() {
-    let text = realm_text();
+    let text = ui_runtime_text();
     let (owner, labels) = mount(
         &text,
         box_node(RenderFlex::column())
@@ -425,7 +425,7 @@ fn a_node_removed_after_measuring_is_skipped() {
 /// built. Fails if removed nodes stay recorded until a font change.
 fn the_record_stays_bounded_without_a_font_change() {
     const REBUILDS: usize = 500;
-    let text = realm_text();
+    let text = ui_runtime_text();
     let mut owner = PipelineOwner::new(text);
     for _ in 0..REBUILDS {
         let previous = owner.root_id();

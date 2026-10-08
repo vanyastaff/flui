@@ -43,7 +43,7 @@ path.
   accessibility bridge speaks AccessKit, so `flui-platform`'s
   `HostWindow: PlatformWindow` carries it host-side: `open_window` returns an
   `Arc<dyn HostWindow>`, and the runner reads the bridge once before handing
-  the realm an `Arc<dyn PlatformWindow>`. A `compile_fail` doctest on the
+  the UI runtime an `Arc<dyn PlatformWindow>`. A `compile_fail` doctest on the
   trait, paired with a twin that compiles, pins that the method is gone.
 - **The raw-handle impls live with the trait.** `HasWindowHandle` and
   `HasDisplayHandle` for `dyn PlatformWindow` are here because the orphan rule
@@ -53,6 +53,20 @@ path.
   `WindowHandle`/`DisplayHandle`/`HandleError` (ADR-0089).
 
 ## Mapping decisions
+
+### Preference observations preserve unavailable values and native units
+
+`SystemPreferences` records observations rather than framework fallback values
+(ADR-0172). Text factors use the bounded accessibility range `1/64..=64`;
+motion observations distinguish
+reduced motion from duration scaling. Vertical wheel lines/pages and horizontal
+character counts have separate representations. The `preferences_contract` table
+pins numeric admission, including adjacent rejected boundary values, subnormal
+text factors and both signs of zero. The widget contract
+`media_text_scaling_changes_the_laid_out_text` checks real paragraph layout at
+both admitted boundaries and fallback after extreme observations. Source
+lifecycle, ordered delivery and consumer projection remain under implementation in
+the platform-layer spec; these value tests do not establish those behaviors.
 
 ### Platform services are capability traits in a contract crate
 

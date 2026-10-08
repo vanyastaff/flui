@@ -12,6 +12,19 @@ recorded so far.
 
 ## Mapping decisions
 
+### Contrast selects authored palettes within the effective brightness family
+
+`MaterialApp` selects light/dark using `ThemeMode` and, for System mode, the
+nearest media brightness. Contrast remains independent of an explicit mode.
+The selected family's optional contrast theme wins when requested. Missing
+contrast themes retain ordinary selection: dark theme, then base theme, then
+default; light selection uses base theme, then default. A light contrast theme
+is never substituted for a missing dark contrast theme. Authored colors are
+not automatically transformed.
+
+`contrast_selects_authored_themes_in_a_retained_app` exercises mode, ambient
+brightness, missing slots, live restoration and unrelated size updates.
+
 ### Catalog events forward the dispatch's write context
 
 Press, selection and value-change setters accept `&mut EventCx` and an
@@ -217,7 +230,7 @@ decoration).
 
 ## Thread safety
 
-No locks. Material widgets are built and mutated on the UI realm thread;
+No locks. Material widgets are built and mutated on the UI UI runtime thread;
 shared interaction state uses `WidgetStatesController` / `Rc` callbacks as
 elsewhere in the widget layer.
 
@@ -335,7 +348,7 @@ family separately injects completion, entrance-listener and scaffold-delivery
 failures, individually and in chronological competition. Lifecycle-acquired
 rebuild probes have distinct mounted owner inboxes so each fanout wake is
 observable. Their private map registration is a delivery fault seam, not
-supported cross-realm Messenger topology. Rows check the first failure, every
+supported cross-UI runtime Messenger topology. Rows check the first failure, every
 eligible delivery, actual subsequent rebuilds and accepted queue progress.
 Four bounded children add hostile secondary payloads with several panicking
 destructors and assert that none retire before or after recovery. Readiness is

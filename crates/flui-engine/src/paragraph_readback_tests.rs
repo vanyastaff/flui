@@ -29,7 +29,7 @@ fn sample(pixels: &[u8], x: u32, y: u32) -> [u8; 4] {
 /// measured it, placed through `ShapedRun::placed_glyphs` and rasterised
 /// through flui-painting's `SwashRasterizer` (ADR-0065, ADR-0067, ADR-0092
 /// §4-§5). The performance overlay's labels arrive shaped too, recorded
-/// upstream through the realm's text context, so no text-context, font
+/// upstream through the UI runtime's text context, so no text-context, font
 /// collection or paragraph-spec name appears either.
 fn the_engine_does_not_shape() {
     let sources = [

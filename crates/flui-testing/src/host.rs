@@ -1,15 +1,15 @@
-//! A headless host for a [`UiRealm`]: the product frame transaction
-//! (`UiRealm::pump`, ADR-0083 §1) on a manual clock, a window double and a
+//! A headless host for a [`UiRuntime`]: the product frame transaction
+//! (`UiRuntime::pump`, ADR-0083 §1) on a manual clock, a window double and a
 //! sink that keeps what the frame composited.
 //!
-//! [`HeadlessHost`] is to a realm what a runner is on screen: it owns the
-//! window the realm presents into, the sink a frame is submitted through and
+//! [`HeadlessHost`] is to a UI runtime what a runner is on screen: it owns the
+//! window the UI runtime presents into, the sink a frame is submitted through and
 //! the clock the frame reads, and it drives frames and input through the
-//! realm's own entry points. Nothing here re-implements a phase of the frame:
+//! UI runtime's own entry points. Nothing here re-implements a phase of the frame:
 //! applying commands, begin frame, the pipeline, end frame and the text-store
-//! commit anchor all run inside `UiRealm::pump`.
+//! commit anchor all run inside `UiRuntime::pump`.
 //!
-//! One [`ManualClock`] drives the whole realm: the realm reads it as its
+//! One [`ManualClock`] drives the whole ui_runtime: the UI runtime reads it as its
 //! [`ClockSource`] (frame-time origin, gesture-arena deadlines, the
 //! presentation's `FrameClock`), and [`HeadlessHost::pump`] hands a clone to
 //! the pump as the frame's timestamp. A test advances time only through
@@ -17,14 +17,14 @@
 //!
 //! # Failures
 //!
-//! A realm contains a panic that escapes a frame segment, and a pipeline
+//! A UI runtime contains a panic that escapes a frame segment, and a pipeline
 //! error, as a dropped frame (ADR-0048) and reports it to its frame-failure
 //! handler; on screen the process survives. Under test that containment would
 //! hide the failure, so [`HeadlessHost::pump`] raises the first dropped-frame
 //! report of the pump as a panic once the pump has returned, carrying the
-//! report's text (the realm retains it verbatim here). A later panic that
+//! report's text (the UI runtime retains it verbatim here). A later panic that
 //! unwinds out of the same pump does not replace it: the first failure stays
-//! authoritative. A dropped-frame report the realm makes between pumps is
+//! authoritative. A dropped-frame report the UI runtime makes between pumps is
 //! raised by the next pump, before it frames. A lifecycle panic the tree recovered from (an `ErrorView`
 //! substitution) is not raised: the frame it happened in completed.
 
@@ -50,7 +50,7 @@ use flui_runtime::frame_failure::{
 use flui_runtime::presentation::PresentationWindow;
 use flui_runtime::pump::FrameOutcome;
 use flui_runtime::sink::{FrameSink, SubmitVerdict};
-use flui_runtime::ui_realm::{RealmHostServices, UiRealm};
+use flui_runtime::ui_runtime::{RuntimeHostServices, UiRuntime};
 use flui_scheduler::{ClockSource, LocalPostFrameHandle};
 use flui_semantics::platform::{
     AccessibilityActionListener, AccessibilityActivationListener, PlatformAccessibility,
@@ -64,9 +64,9 @@ use crate::text_store_host::RecordingTextStoreHost;
 /// The window a [`HeadlessHost`] presents into: window 1 at scale factor 1 (a
 /// window [opened](HeadlessHost::open_window) beside it takes the next
 /// identity, and [`HeadlessHost::set_scale_factor`] moves it), focused and
-/// visible, with the logical size the realm was built at.
+/// visible, with the logical size the UI runtime was built at.
 ///
-/// It records what the realm asks of a window that a test asserts on: the
+/// It records what the UI runtime asks of a window that a test asserts on: the
 /// cursor a hovered region sets, and, when built with a text input, every
 /// IME enable and cursor-area call.
 pub struct HeadlessWindow {
@@ -101,7 +101,7 @@ impl HeadlessWindow {
         }
     }
 
-    /// Offer a pull-model text input instead: the realm's presentation gets
+    /// Offer a pull-model text input instead: the UI runtime's presentation gets
     /// a [`RecordingTextStoreHost`] ([`HeadlessHost::text_store_host`]) and
     /// tells it which field's store takes input, as it tells the Win32 text
     /// services. It wins over [`Self::with_text_input`].
@@ -111,7 +111,7 @@ impl HeadlessWindow {
         self
     }
 
-    /// Offer a text-input capability that records every call the realm's
+    /// Offer a text-input capability that records every call the UI runtime's
     /// text-input owner makes, so the presentation installs a working
     /// `TextInputHandle` over it.
     #[must_use]
@@ -120,13 +120,13 @@ impl HeadlessWindow {
         self
     }
 
-    /// The last cursor the realm set on this window.
+    /// The last cursor the UI runtime set on this window.
     #[must_use]
     pub fn cursor(&self) -> CursorIcon {
         *self.cursor.lock()
     }
 
-    /// Every IME cursor area the realm reported, in delivery order; `None`
+    /// Every IME cursor area the UI runtime reported, in delivery order; `None`
     /// for a window built without a text input.
     #[must_use]
     pub fn ime_cursor_areas(&self) -> Option<Vec<Bounds<f64>>> {
@@ -135,7 +135,7 @@ impl HeadlessWindow {
             .map(|input| input.cursor_areas.lock().clone())
     }
 
-    /// Every IME enable (`true`) and disable (`false`) the realm asked for,
+    /// Every IME enable (`true`) and disable (`false`) the UI runtime asked for,
     /// in delivery order; `None` for a window built without a text input.
     #[must_use]
     pub fn ime_allowed_calls(&self) -> Option<Vec<bool>> {
@@ -222,7 +222,7 @@ impl PlatformTextInput for RecordingTextInput {
 
 /// The accessibility bridge of a [`HeadlessHost`]'s window: assistive
 /// technology attaches when a test asks, published updates are folded into
-/// the tree an adapter would hold, and the action listener the realm
+/// the tree an adapter would hold, and the action listener the UI runtime
 /// registers is handed to a test that plays the adapter.
 #[derive(Default)]
 struct HeadlessAccessibility {
@@ -233,7 +233,7 @@ struct HeadlessAccessibility {
 }
 
 impl HeadlessAccessibility {
-    /// Attach assistive technology: the listener the realm registered flips
+    /// Attach assistive technology: the listener the UI runtime registered flips
     /// the presentation's semantics flag, which the next frame reconciles
     /// onto the pipeline.
     fn attach(&self) {
@@ -346,10 +346,10 @@ impl FrameSink for HeadlessSink {
 ///
 /// Every [`HeadlessHost`] built [`with`](HeadlessHost::with_dev_agent) it
 /// hands the hook its window, as a runner hands it each window it opens, so
-/// one hook can serve several realms, and a realm dropped before the hook is
+/// one hook can serve several UI runtimes, and a UI runtime dropped before the hook is
 /// a window that closed while the tool kept running. Containment is the
 /// runtime's (`flui_runtime::dev_agent`): a hook that panics is dropped, and
-/// the realms keep pumping.
+/// the UI runtimes keep pumping.
 pub struct HeadlessDevAgent {
     host: DevAgentHost,
     attachment: Option<DevAgentAttachment>,
@@ -379,11 +379,11 @@ impl std::fmt::Debug for HeadlessDevAgent {
     }
 }
 
-/// A [`UiRealm`] hosted headlessly, driven frame by frame on a manual clock.
+/// A [`UiRuntime`] hosted headlessly, driven frame by frame on a manual clock.
 /// See the [module docs](self).
-#[doc(alias = "HeadlessRealm")]
+#[doc(alias = "HeadlessRuntime")]
 pub struct HeadlessHost {
-    realm: UiRealm,
+    ui_runtime: UiRuntime,
     clock: ManualClock,
     sink: HeadlessSink,
     window: Arc<HeadlessWindow>,
@@ -393,7 +393,7 @@ pub struct HeadlessHost {
     secondary: Vec<SecondaryWindow>,
     text_store_host: Option<Rc<RecordingTextStoreHost>>,
     /// Dropped-frame reports not yet raised, as the text a raised failure
-    /// carries: those of the pump in progress, and any the realm made
+    /// carries: those of the pump in progress, and any the UI runtime made
     /// between pumps, which the next pump raises before it frames.
     failures: Arc<Mutex<Vec<String>>>,
 }
@@ -401,7 +401,7 @@ pub struct HeadlessHost {
 impl std::fmt::Debug for HeadlessHost {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HeadlessHost")
-            .field("realm", &self.realm)
+            .field("ui_runtime", &self.ui_runtime)
             .field("window", &self.window)
             .field("sink", &self.sink)
             .finish_non_exhaustive()
@@ -409,11 +409,11 @@ impl std::fmt::Debug for HeadlessHost {
 }
 
 impl HeadlessHost {
-    /// A realm over `window`, whose surface has the window's size.
+    /// A UI runtime over `window`, whose surface has the window's size.
     ///
     /// # Panics
     ///
-    /// If the realm's interaction lane cannot be created (its identity space
+    /// If the UI runtime's interaction lane cannot be created (its identity space
     /// is exhausted).
     #[must_use]
     pub fn new(window: HeadlessWindow) -> Self {
@@ -437,13 +437,13 @@ impl HeadlessHost {
         let accessibility = Arc::new(HeadlessAccessibility::default());
         let clipboard = Arc::new(InMemoryClipboard::new());
         let clock = ManualClock::new();
-        // A collection of its own: the realm owns a `TextContext` over it
-        // (ADR-0092 §3), exactly as a hosted realm does. Deliberately
+        // A collection of its own: the ui_runtime owns a `TextContext` over it
+        // (ADR-0092 §3), exactly as a hosted ui_runtime does. Deliberately
         // bundled-only, unlike the app's host-fed one
         // (`FontCollection::with_host_fonts`), so text measures the same on
         // every host a test runs on.
         let fonts = flui_painting::FontCollection::new();
-        let mut host = RealmHostServices::new(
+        let mut host = RuntimeHostServices::new(
             Arc::new(|| {}),
             Arc::new(AtomicBool::new(false)),
             Arc::clone(&clipboard) as Arc<dyn flui_platform_api::Clipboard>,
@@ -453,7 +453,7 @@ impl HeadlessHost {
         if let Some(storage) = storage {
             host = host.with_storage(storage);
         }
-        let realm = UiRealm::new(
+        let ui_runtime = UiRuntime::new(
             PresentationWindow::new(
                 Arc::clone(&window) as Arc<dyn PlatformWindow>,
                 Some(Arc::clone(&accessibility) as Arc<dyn PlatformAccessibility>),
@@ -468,15 +468,15 @@ impl HeadlessHost {
         )
         .expect("BUG: interaction lane identity exhausted");
         let failures = Arc::new(Mutex::new(Vec::new()));
-        realm.set_frame_failure_detail(FrameFailureDetail::Verbatim);
+        ui_runtime.set_frame_failure_detail(FrameFailureDetail::Verbatim);
         let recorded = Arc::clone(&failures);
-        realm.set_frame_failure_handler(Some(FrameFailureHandler::new(move |report| {
+        ui_runtime.set_frame_failure_handler(Some(FrameFailureHandler::new(move |report| {
             if let Some(text) = dropped_frame_text(report) {
                 recorded.lock().push(text);
             }
         })));
         Self {
-            realm,
+            ui_runtime,
             clock,
             sink: HeadlessSink::new(surface.0, surface.1),
             window,
@@ -488,9 +488,9 @@ impl HeadlessHost {
         }
     }
 
-    /// Hand this realm's window to `agent`'s hook, as a runner hands it a
+    /// Hand this UI runtime's window to `agent`'s hook, as a runner hands it a
     /// window it has installed. The window's first semantics tree is built
-    /// by the next [`pump`](Self::pump); dropping the realm closes the window,
+    /// by the next [`pump`](Self::pump); dropping the UI runtime closes the window,
     /// and the hook's handle to it answers `gone` from then on.
     ///
     /// Does nothing when the hook is not attached.
@@ -498,12 +498,12 @@ impl HeadlessHost {
     pub fn with_dev_agent(self, agent: &HeadlessDevAgent) -> Self {
         agent
             .host
-            .publish(&self.realm, self.realm.presentation_id());
+            .publish(&self.ui_runtime, self.ui_runtime.presentation_id());
         self
     }
 
-    /// Attach `view` as the realm's root widget, the root view sized to the
-    /// window. The realm wraps it in its root scopes (`GestureArenaScope`,
+    /// Attach `view` as the UI runtime's root widget, the root view sized to the
+    /// window. The UI runtime wraps it in its root scopes (`GestureArenaScope`,
     /// `VsyncScope`, `FocusRoot`, `MediaQuery`); the first
     /// [`pump`](Self::pump) builds, lays out and paints it.
     ///
@@ -514,7 +514,7 @@ impl HeadlessHost {
     where
         V: flui_view::View + Clone + 'static,
     {
-        self.realm.attach_root_widget_with_size(
+        self.ui_runtime.attach_root_widget_with_size(
             view,
             self.window.size.width,
             self.window.size.height,
@@ -522,7 +522,7 @@ impl HeadlessHost {
     }
 
     /// Advance the clock by `dt`, then run one frame through
-    /// `UiRealm::pump` at the new instant.
+    /// `UiRuntime::pump` at the new instant.
     ///
     /// The clock moves before the frame starts, once: a caller that catches
     /// a raised failure and pumps again with `Duration::ZERO` retries at the
@@ -530,9 +530,9 @@ impl HeadlessHost {
     ///
     /// # Panics
     ///
-    /// With a dropped-frame report the realm made since the last pump, before
+    /// With a dropped-frame report the UI runtime made since the last pump, before
     /// this one frames or moves the clock; with the first dropped-frame
-    /// report of this pump (a segment panic or a pipeline error the realm
+    /// report of this pump (a segment panic or a pipeline error the UI runtime
     /// contained), after the pump returned; or with a panic that unwound out
     /// of the pump when nothing was reported before it. See the
     /// [module docs](self#failures).
@@ -543,8 +543,10 @@ impl HeadlessHost {
         }
         self.clock.advance(dt);
         let mut frame_clock = self.clock.clone();
-        let Self { realm, sink, .. } = self;
-        let attempt = catch_unwind(AssertUnwindSafe(|| realm.pump(&mut frame_clock, sink)));
+        let Self {
+            ui_runtime, sink, ..
+        } = self;
+        let attempt = catch_unwind(AssertUnwindSafe(|| ui_runtime.pump(&mut frame_clock, sink)));
         let first_failure = {
             let mut failures = self.failures.lock();
             let first = failures.first().cloned();
@@ -570,10 +572,10 @@ impl HeadlessHost {
         }
     }
 
-    /// Deliver `input` to the realm's primary presentation, as a runner
+    /// Deliver `input` to the UI runtime's primary presentation, as a runner
     /// delivers a platform event, then flush the pointer moves it queued.
     ///
-    /// The realm coalesces pointer moves and dispatches them at the next
+    /// The UI runtime coalesces pointer moves and dispatches them at the next
     /// frame; the flush makes a synthetic move observable before that frame,
     /// so a test sees its effect immediately. It runs the same queue and
     /// dispatch code the frame would. An opted-in resampling presentation
@@ -584,15 +586,15 @@ impl HeadlessHost {
     /// With the first panic a dispatch raised; a later one is logged and
     /// discarded.
     pub fn dispatch(&self, input: PlatformInput) {
-        self.realm.enter(|realm| {
+        self.ui_runtime.enter(|ui_runtime| {
             let delivered = catch_unwind(AssertUnwindSafe(|| {
-                realm.handle_input_addressed(realm.presentation_id(), input);
+                ui_runtime.handle_input_addressed(ui_runtime.presentation_id(), input);
             }));
             let flushed = catch_unwind(AssertUnwindSafe(|| {
-                if !realm.gestures().is_resampling_enabled() {
-                    realm.gestures().flush_pending_moves();
+                if !ui_runtime.gestures().is_resampling_enabled() {
+                    ui_runtime.gestures().flush_pending_moves();
                 }
-                realm.gestures().drain_deferred_arena_resolutions();
+                ui_runtime.gestures().drain_deferred_arena_resolutions();
             }));
             match (delivered, flushed) {
                 (Err(first), Err(later)) => {
@@ -618,14 +620,14 @@ impl HeadlessHost {
         window: HeadlessWindowId,
         policy: crate::PointerResampling,
     ) -> Result<(), crate::PointerResamplingError> {
-        self.realm.set_pointer_resampling(window.0, policy)
+        self.ui_runtime.set_pointer_resampling(window.0, policy)
     }
 
-    /// The pointer left the window: the realm sweeps hover state, so every
+    /// The pointer left the window: the UI runtime sweeps hover state, so every
     /// hovered region gets its exit and the cursor resets.
     pub fn dispatch_hover_left(&self) {
-        self.realm.enter(|realm| {
-            realm.handle_window_hover_addressed(realm.presentation_id(), false);
+        self.ui_runtime.enter(|ui_runtime| {
+            ui_runtime.handle_window_hover_addressed(ui_runtime.presentation_id(), false);
         });
     }
 
@@ -642,58 +644,58 @@ impl HeadlessHost {
     /// the next pump has run.
     #[must_use]
     pub fn collects_semantics(&self) -> bool {
-        self.realm
-            .presentation_collects_semantics_for_test(self.realm.presentation_id())
-            .expect("BUG: a headless realm's window stays resident while the realm lives")
+        self.ui_runtime
+            .presentation_collects_semantics_for_test(self.ui_runtime.presentation_id())
+            .expect("BUG: a headless ui_runtime's window stays resident while the ui_runtime lives")
     }
 
-    /// The listener the realm registered for actions assistive technology
+    /// The listener the UI runtime registered for actions assistive technology
     /// requests. It is `Send + Sync`: a test plays the platform adapter by
-    /// calling it, from any thread, and the realm queues the request in its
+    /// calling it, from any thread, and the UI runtime queues the request in its
     /// owner inbox for the next pump to apply.
     #[must_use]
     pub fn accessibility_action_listener(&self) -> Option<AccessibilityActionListener> {
         self.accessibility.action.lock().clone()
     }
 
-    /// Run `f` inside the realm's owner scope (its interaction lane, global
-    /// key registry and post-frame lane), as every realm entry point does.
+    /// Run `f` inside the UI runtime's owner scope (its interaction lane, global
+    /// key registry and post-frame lane), as every UI runtime entry point does.
     ///
-    /// Crate-private, as is [`realm`](Self::realm): the realm's frame entry
+    /// Crate-private, as is [`ui_runtime`](Self::ui_runtime): the UI runtime's frame entry
     /// points are the host's (ADR-0083 §2), and `flui-runtime` is not an
-    /// embedder API, so a test reaches the realm only through this host.
-    pub(crate) fn enter<R>(&self, f: impl FnOnce(&UiRealm) -> R) -> R {
-        self.realm.enter(f)
+    /// embedder API, so a test reaches the UI runtime only through this host.
+    pub(crate) fn enter<R>(&self, f: impl FnOnce(&UiRuntime) -> R) -> R {
+        self.ui_runtime.enter(f)
     }
 
-    /// The hosted realm.
-    pub(crate) fn realm(&self) -> &UiRealm {
-        &self.realm
+    /// The hosted UI runtime.
+    pub(crate) fn ui_runtime(&self) -> &UiRuntime {
+        &self.ui_runtime
     }
 
-    /// The owner-local post-frame handle the realm installed on its build
+    /// The owner-local post-frame handle the UI runtime installed on its build
     /// owner: a callback scheduled through it runs in the next pump's
     /// post-frame phase.
     ///
     /// # Panics
     ///
-    /// If the realm installed no owner-local post-frame handle, which a
-    /// realm's presentation always does.
+    /// If the UI runtime installed no owner-local post-frame handle, which a
+    /// UI runtime's presentation always does.
     #[must_use]
     pub fn local_post_frame_handle(&self) -> LocalPostFrameHandle {
-        self.realm
+        self.ui_runtime
             .widgets()
             .with_build_owner(|owner| owner.local_post_frame_handle().cloned())
-            .expect("BUG: a realm's presentation installs its owner-local post-frame handle")
+            .expect("BUG: a ui_runtime's presentation installs its owner-local post-frame handle")
     }
 
-    /// Ask the realm for a frame, as a widget's `setState` would: the next
+    /// Ask the UI runtime for a frame, as a widget's `setState` would: the next
     /// [`pump`](Self::pump) runs the pipeline even with nothing dirty.
     pub fn request_frame(&self) {
-        self.realm.request_redraw();
+        self.ui_runtime.request_redraw();
     }
 
-    /// The clock the realm reads. Advancing it moves the frame time, the
+    /// The clock the UI runtime reads. Advancing it moves the frame time, the
     /// gesture-arena deadlines and the produce gate together.
     #[must_use]
     pub fn clock(&self) -> &ManualClock {
@@ -706,20 +708,20 @@ impl HeadlessHost {
         &self.sink
     }
 
-    /// The window the realm presents into.
+    /// The window the UI runtime presents into.
     #[must_use]
     pub fn window(&self) -> &HeadlessWindow {
         &self.window
     }
 
-    /// The pull-model host the realm's presentation speaks to, for a window
+    /// The pull-model host the UI runtime's presentation speaks to, for a window
     /// built [`HeadlessWindow::with_text_store_host`].
     #[must_use]
     pub fn text_store_host(&self) -> Option<&Rc<RecordingTextStoreHost>> {
         self.text_store_host.as_ref()
     }
 
-    /// The clipboard the realm hands its widgets.
+    /// The clipboard the UI runtime hands its widgets.
     #[must_use]
     pub fn clipboard(&self) -> Arc<InMemoryClipboard> {
         Arc::clone(&self.clipboard)
@@ -738,14 +740,14 @@ impl HeadlessHost {
         }
     }
 
-    /// The window the realm was built on.
+    /// The window the UI runtime was built on.
     #[must_use]
     pub fn primary_window(&self) -> HeadlessWindowId {
-        HeadlessWindowId(self.realm.presentation_id())
+        HeadlessWindowId(self.ui_runtime.presentation_id())
     }
 
     /// Open `window` beside the existing ones, as a runner installs a
-    /// presentation for a window the app opened: the realm builds it a
+    /// presentation for a window the app opened: the UI runtime builds it a
     /// pipeline of its own at the window's scale factor. It shows nothing
     /// until a view is [attached](Self::attach_to) to it.
     ///
@@ -759,7 +761,7 @@ impl HeadlessHost {
         let text_store_host = window.text_store_host.then(RecordingTextStoreHost::new);
         let window = Arc::new(window);
         let accessibility = Arc::new(HeadlessAccessibility::default());
-        let presentation = self.realm.assemble_presentation(
+        let presentation = self.ui_runtime.assemble_presentation(
             PresentationWindow::new(
                 Arc::clone(&window) as Arc<dyn PlatformWindow>,
                 Some(Arc::clone(&accessibility) as Arc<dyn PlatformAccessibility>),
@@ -770,7 +772,7 @@ impl HeadlessHost {
                     .map(|host| host as Rc<dyn TextStoreHost>),
             ),
         );
-        let id = self.realm.install_presentation(presentation);
+        let id = self.ui_runtime.install_presentation(presentation);
         self.secondary.push(SecondaryWindow {
             text_store_host,
             id,
@@ -804,7 +806,7 @@ impl HeadlessHost {
         // The same environment the primary root gets: this window's own
         // `MediaQuery` and its size.
         let size = self.secondary_of(window).window.size;
-        self.realm
+        self.ui_runtime
             .attach_root_widget_with_size_to(window.0, view, size.width, size.height)
     }
 
@@ -838,12 +840,9 @@ impl HeadlessHost {
                 u32::try_from(physical.height).expect("BUG: a window's device size is positive"),
             );
         }
-        self.realm.enter(|realm| {
-            realm.set_device_pixel_ratio_for(window.0, scale_factor);
-            if let Some(source) = realm.media_query_for(window.0) {
-                source.update(|data| data.device_pixel_ratio = scale_factor);
-            }
-            realm.request_redraw();
+        self.ui_runtime.enter(|ui_runtime| {
+            ui_runtime.set_device_pixel_ratio_for(window.0, scale_factor);
+            ui_runtime.request_redraw();
         });
     }
 
@@ -920,7 +919,7 @@ mod tests {
 
     use super::{HeadlessHost, HeadlessWindow};
 
-    /// A dropped-frame report the realm made between pumps (from input
+    /// A dropped-frame report the UI runtime made between pumps (from input
     /// delivery, say) is raised by the next pump, before it frames or moves
     /// the clock, and only once.
     ///
@@ -928,26 +927,28 @@ mod tests {
     /// report is erased unseen and the pump returns normally.
     #[test]
     fn a_report_made_between_pumps_is_raised_by_the_next_pump() {
-        let mut realm = HeadlessHost::new(HeadlessWindow::new(40, 24));
-        realm
+        let mut ui_runtime = HeadlessHost::new(HeadlessWindow::new(40, 24));
+        ui_runtime
             .failures
             .lock()
             .push("frame dropped: reported between pumps".to_owned());
-        let before = flui_foundation::MonotonicClock::now(realm.clock());
+        let before = flui_foundation::MonotonicClock::now(ui_runtime.clock());
 
-        let raised = catch_unwind(AssertUnwindSafe(|| realm.pump(Duration::from_millis(16))))
-            .expect_err("the leftover report is raised");
+        let raised = catch_unwind(AssertUnwindSafe(|| {
+            ui_runtime.pump(Duration::from_millis(16))
+        }))
+        .expect_err("the leftover report is raised");
 
         assert_eq!(
             raised.downcast_ref::<String>().map(String::as_str),
             Some("frame dropped: reported between pumps")
         );
         assert_eq!(
-            flui_foundation::MonotonicClock::now(realm.clock()),
+            flui_foundation::MonotonicClock::now(ui_runtime.clock()),
             before,
             "the raising pump did not move the clock"
         );
-        let _outcome = realm.pump(Duration::ZERO);
+        let _outcome = ui_runtime.pump(Duration::ZERO);
     }
 
     /// The kept tree holds what an adapter holds: a node an incremental

@@ -6,8 +6,8 @@
 //! build pass (reconciling and mounting the whole subtree's render objects),
 //! then drives a real headless frame and exposes the resulting render-node
 //! geometry. The tree is the root of a [`HeadlessHost`](crate::HeadlessHost):
-//! every frame is the realm's own `UiRealm::pump` on a manual clock, under
-//! the realm's root scopes (`GestureArenaScope`, `VsyncScope`, `FocusRoot`,
+//! every frame is the UI runtime's own `UiRuntime::pump` on a manual clock, under
+//! the UI runtime's root scopes (`GestureArenaScope`, `VsyncScope`, `FocusRoot`,
 //! `MediaQuery`), exactly as a runner drives it on screen. No GPU, no OS
 //! window, no process-global state, so the tests are order-independent and
 //! run in parallel.
@@ -68,10 +68,10 @@ use crate::host::HeadlessWindow;
 /// A laid-out widget tree, mounted in a [`HeadlessHost`](crate::HeadlessHost)
 /// so geometry can be queried after layout, and re-driven with
 /// [`LaidOut::pump`] / [`LaidOut::tick`] / [`LaidOut::pump_for`]. Every frame
-/// is the realm's own `UiRealm::pump`.
+/// is the UI runtime's own `UiRuntime::pump`.
 ///
-/// `pipeline_owner` is a clone of the realm's own `PipelineCell`, so
-/// geometry reads observe the frame the realm just ran.
+/// `pipeline_owner` is a clone of the UI runtime's own `PipelineCell`, so
+/// geometry reads observe the frame the UI runtime just ran.
 pub struct LaidOut {
     host: WidgetHost,
     pipeline_owner: PipelineCell,
@@ -99,7 +99,7 @@ pub struct LaidOut {
 
 impl std::fmt::Debug for LaidOut {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // The realm/pipeline internals are deliberately opaque here — a
+        // The ui_runtime/pipeline internals are deliberately opaque here — a
         // harness value in a test failure message is identified by what it
         // mounted, not by the machinery driving it.
         f.debug_struct("LaidOut")
@@ -109,7 +109,7 @@ impl std::fmt::Debug for LaidOut {
 }
 
 /// Pointer-contact identity for synthetic dispatch: every Down gets a fresh
-/// pointer id so sequential contacts cannot collide in the realm-owned
+/// pointer id so sequential contacts cannot collide in the UI runtime-owned
 /// arena (matching production, where the platform never recycles an id into
 /// a still-tracked gesture), while the contact's own Move/Up/Cancel share
 /// the id its Down allocated.
@@ -187,13 +187,13 @@ impl PointerContacts {
 /// coalesced input is replayed toward the frame, a different quantity from
 /// how far apart a test spaces the raw samples it feeds in.
 ///
-/// Advancing the realm's virtual clock by this fixed amount before each
+/// Advancing the UI runtime's virtual clock by this fixed amount before each
 /// such dispatch means the spacing the velocity tracker records never depends
 /// on how much real time the test process happened to be scheduled between
 /// calls.
 pub const POINTER_SAMPLE_INTERVAL: Duration = Duration::from_millis(8);
 
-/// Synthetic readings use the same virtual time as the realm's frame and
+/// Synthetic readings use the same virtual time as the UI runtime's frame and
 /// gesture clocks. Explicit hardware events bypass this producer.
 fn dispatch_synthetic_pointer(host: &WidgetHost, mut event: PointerEvent) {
     let nanos = u64::try_from(host.clock().elapsed().as_nanos())
@@ -256,7 +256,7 @@ fn unconstrained_wrap_for(constraints: &BoxConstraints) -> UnconstrainedWrap {
     }
 }
 
-/// Presentation wrap under the realm's root scopes: optional `Align`
+/// Presentation wrap under the UI runtime's root scopes: optional `Align`
 /// loosener, then `UnconstrainedBox` for infinite axes, then `ConstrainedBox`
 /// for the caller's constraints when the surface cannot carry them. Always
 /// boxed, so [`LaidOut::pump_widget`] hands the harness root the same shape
@@ -320,12 +320,12 @@ fn surface_for(constraints: &BoxConstraints) -> (u32, u32) {
     )
 }
 
-/// Build `root`, mount it under a headless realm, and lay it out under
-/// `constraints` with one realm frame. A frame the realm drops (a panic or a
+/// Build `root`, mount it under a headless UI runtime, and lay it out under
+/// `constraints` with one UI runtime frame. A frame the UI runtime drops (a panic or a
 /// pipeline error) is raised, so a regression is loud.
 ///
-/// The realm's surface is the constraints' biggest finite size in whole
-/// pixels (800×600 per unbounded axis), and the realm tight-fills it. A tight
+/// The UI runtime's surface is the constraints' biggest finite size in whole
+/// pixels (800×600 per unbounded axis), and the UI runtime tight-fills it. A tight
 /// whole-pixel request reaches the caller as it is; anything else goes
 /// through an `Align` loosener, with the caller's constraints re-applied
 /// below it where the surface cannot carry them. Infinite maxes are restored
@@ -335,7 +335,7 @@ pub fn lay_out(root: impl View, constraints: BoxConstraints) -> LaidOut {
     mount_laid_out(root, constraints, None)
 }
 
-/// Like [`lay_out`], with `storage` as the realm's byte storage: the tree's
+/// Like [`lay_out`], with `storage` as the UI runtime's byte storage: the tree's
 /// widgets reach it through `LifecycleContext::storage`. Mounting a new tree
 /// over the same storage after dropping the first is how a test restarts an
 /// application.
@@ -437,14 +437,14 @@ fn resolve_logical_render_root(host: &WidgetHost, logical_root_type: TypeId) -> 
 
 /// Like [`lay_out`], but drives implicitly-animated widgets under a registry
 /// the caller built: the harness adopts `vsync` and ticks it at every frame's
-/// time, beside the realm's own registry, so every controller a descendant
+/// time, beside the UI runtime's own registry, so every controller a descendant
 /// `VsyncScope` (built from the same `vsync`) registered advances.
 ///
 /// The caller threads `vsync` into the root widget (so its build wraps the
 /// animated subtree in `VsyncScope::new(vsync.clone(), …)`) AND passes the same
 /// handle here, so the scope a descendant reads and the registry the harness
 /// drives are one and the same. A widget below no scope of its own registers
-/// with the realm's registry, which the realm ticks itself.
+/// with the UI runtime's registry, which the UI runtime ticks itself.
 pub fn lay_out_animated(root: impl View, constraints: BoxConstraints, vsync: Vsync) -> LaidOut {
     let laid = lay_out(root, constraints);
     laid.host.adopt_vsync(vsync);
@@ -455,8 +455,8 @@ impl LaidOut {
     /// Focus manager that owns this mounted widget tree.
     pub fn focus_manager(&self) -> Rc<flui_interaction::FocusManager> {
         self.host
-            .realm()
-            .realm()
+            .ui_runtime()
+            .ui_runtime()
             .widgets()
             .with_build_owner(flui_view::BuildOwner::focus_manager)
     }
@@ -464,22 +464,22 @@ impl LaidOut {
     /// The clipboard this tree's widgets reach through
     /// `LifecycleContext::clipboard_handle`.
     pub fn clipboard(&self) -> Arc<InMemoryClipboard> {
-        self.host.realm().clipboard()
+        self.host.ui_runtime().clipboard()
     }
 
-    /// The realm's own scheduler, for a probe that must observe frame
+    /// The UI runtime's own scheduler, for a probe that must observe frame
     /// ordering directly (e.g. whether a callback fired from inside
     /// [`LaidOut::pump_widget`]'s postframe recheck lands in the SAME
     /// frame's post-frame phase or a later one). `UpdateScheduler` is
     /// `Arc`-backed and `Clone`, so cloning it merely shares a handle to the
-    /// same realm-owned callback queues.
+    /// same UI runtime-owned callback queues.
     pub fn scheduler(&self) -> flui_scheduler::UpdateScheduler {
-        self.host.realm().realm().scheduler().clone()
+        self.host.ui_runtime().ui_runtime().scheduler().clone()
     }
 
-    /// Run an owner-side action inside the realm's owner scope.
+    /// Run an owner-side action inside the UI runtime's owner scope.
     pub fn enter_owner_scope<R>(&self, callback: impl FnOnce() -> R) -> R {
-        self.host.realm().enter(|_| callback())
+        self.host.ui_runtime().enter(|_| callback())
     }
 
     /// Close the tree's presentation for `reason`, as the host does once the
@@ -492,8 +492,8 @@ impl LaidOut {
     pub fn request_close(&self, reason: flui_view::CloseReason) {
         let _ = reason;
         self.host
-            .realm()
-            .enter(flui_runtime::ui_realm::UiRealm::stop_presentations);
+            .ui_runtime()
+            .enter(flui_runtime::ui_runtime::UiRuntime::stop_presentations);
     }
 
     /// End the session the tree runs in, as the operating system does at log
@@ -507,7 +507,7 @@ impl LaidOut {
     }
 
     /// Deliver an accessibility action to the node it addresses, as a platform
-    /// adapter would, inside this tree's realm — where a widget's owner-local
+    /// adapter would, inside this tree's UI runtime — where a widget's owner-local
     /// action handlers run.
     ///
     /// Synchronous: the handler has run when this returns. The production
@@ -526,36 +526,36 @@ impl LaidOut {
     ) -> Result<(), crate::InvokeActionError> {
         let pipeline = self.pipeline_owner();
         self.host
-            .realm()
+            .ui_runtime()
             .enter(|_| crate::a11y::invoke_semantics_action(&pipeline, request))
     }
 
-    /// The owner-local post-frame handle the realm installed on this tree's
+    /// The owner-local post-frame handle the UI runtime installed on this tree's
     /// `BuildOwner`, so a test can `schedule_local` a callback that captures
     /// the (`!Send`) [`PipelineCell`] — `PostFrameHandle::schedule`'s `Send`
     /// bound cannot carry it.
     pub fn local_post_frame_handle(&mut self) -> flui_scheduler::LocalPostFrameHandle {
         self.host
-            .realm()
-            .realm()
+            .ui_runtime()
+            .ui_runtime()
             .widgets()
             .with_build_owner(|owner| owner.local_post_frame_handle().cloned())
-            .expect("the realm installs an owner-local post-frame handle")
+            .expect("the ui_runtime installs an owner-local post-frame handle")
     }
 
-    /// The last cursor the realm set on its window, from the hovered
+    /// The last cursor the UI runtime set on its window, from the hovered
     /// region's cursor through the presentation's mouse tracker.
     pub fn cursor(&self) -> flui_platform_api::CursorIcon {
-        self.host.realm().window().cursor()
+        self.host.ui_runtime().window().cursor()
     }
 
-    /// The listener the realm registered on its window for actions assistive
+    /// The listener the UI runtime registered on its window for actions assistive
     /// technology requests; see
     /// [`HeadlessHost::accessibility_action_listener`](crate::HeadlessHost::accessibility_action_listener).
     pub fn accessibility_action_listener(
         &self,
     ) -> Option<flui_semantics::platform::AccessibilityActionListener> {
-        self.host.realm().accessibility_action_listener()
+        self.host.ui_runtime().accessibility_action_listener()
     }
 
     /// The current render id of the root widget's render object.
@@ -600,7 +600,7 @@ impl LaidOut {
     }
 
     /// Count live elements whose concrete view type is `V` in the tree under
-    /// test (the realm's root scopes above it are not counted).
+    /// test (the UI runtime's root scopes above it are not counted).
     ///
     /// Build failures are recovered in the element tree as `ErrorView`
     /// substitutions and need not remove an outer presentation wrapper's
@@ -759,10 +759,10 @@ impl LaidOut {
     /// Off by default: a harness that never asks pays nothing for the phase.
     /// It must be called BEFORE the frame that should carry the tree — the
     /// phase it controls has already run for the mount frame. It attaches
-    /// assistive technology to the realm's window, as a platform adapter
+    /// assistive technology to the UI runtime's window, as a platform adapter
     /// does, and the next frame reconciles that onto the pipeline.
     pub fn enable_semantics(&mut self) {
-        self.host.realm().enable_semantics();
+        self.host.ui_runtime().enable_semantics();
     }
 
     /// The accessibility tree exactly as a platform adapter would receive it,
@@ -813,8 +813,8 @@ impl LaidOut {
     /// headless twin of production `PresentationState::apply_hot_reload`.
     pub fn perform_reassemble(&mut self) {
         self.host
-            .realm()
-            .enter(|realm| realm.widgets().perform_reassemble());
+            .ui_runtime()
+            .enter(|ui_runtime| ui_runtime.widgets().perform_reassemble());
     }
 
     /// Hot-reload render half: mark the render tree's layout + paint dirty.
@@ -826,16 +826,21 @@ impl LaidOut {
             .with_mut(flui_rendering::pipeline::PipelineOwner::reassemble);
     }
 
-    /// Register `controller` with the realm's registry so each
+    /// Register `controller` with the UI runtime's registry so each
     /// [`pump`](Self::pump) / [`tick`](Self::tick) / [`pump_for`](Self::pump_for)
     /// advances it at the frame's time (restart-aware). Register before
     /// starting the controller.
     pub fn register_controller(&mut self, controller: AnimationController) {
-        let _registration = self.host.realm().realm().vsync().register(controller);
+        let _registration = self
+            .host
+            .ui_runtime()
+            .ui_runtime()
+            .vsync()
+            .register(controller);
     }
 
     /// Adopt `vsync`: every frame ticks it at the frame's time, beside the
-    /// realm's own registry. Descendants must receive the same handle through
+    /// UI runtime's own registry. Descendants must receive the same handle through
     /// their `VsyncScope`. Replaces a registry adopted before.
     pub fn adopt_vsync(&mut self, vsync: Vsync) {
         self.host.adopt_vsync(vsync);
@@ -853,17 +858,21 @@ impl LaidOut {
 
     /// Run `f` over the tree's `BuildOwner`, for a test that needs to reach a
     /// knob the public widget surface does not expose (the fixpoint's
-    /// lazy-band pass budget, a planted layout-builder entry). The realm
+    /// lazy-band pass budget, a planted layout-builder entry). The UI runtime
     /// holds the owner behind its widgets binding, so the access is a
     /// closure, not a borrow.
     pub fn with_build_owner_mut<R>(
         &mut self,
         f: impl FnOnce(&mut flui_view::BuildOwner) -> R,
     ) -> R {
-        self.host.realm().realm().widgets().with_build_owner_mut(f)
+        self.host
+            .ui_runtime()
+            .ui_runtime()
+            .widgets()
+            .with_build_owner_mut(f)
     }
 
-    /// The realm's **own** scheduler — never `UpdateScheduler::instance()`.
+    /// The UI runtime's **own** scheduler — never `UpdateScheduler::instance()`.
     ///
     /// `pump_for` drives this one; a post-frame callback parked anywhere else is
     /// never drained.
@@ -1311,10 +1320,10 @@ impl LaidOut {
     /// The structural form of [`layer_kinds`](Self::layer_kinds), for the cases
     /// that need parent/child shape rather than a flat list — e.g. walking a
     /// single-child *container chain* and asserting `first_child == last_child`
-    /// at every step, which a flattened list cannot express. It is the scene the realm last submitted to its sink, retained
+    /// at every step, which a flattened list cannot express. It is the scene the UI runtime last submitted to its sink, retained
     /// across frames that painted nothing.
     pub fn layer_tree(&self) -> Option<&flui_rendering::layer::LayerTree> {
-        self.host.realm().sink().layer_tree()
+        self.host.ui_runtime().sink().layer_tree()
     }
 
     /// Every draw operation in the last submitted scene's picture layers, in
@@ -1340,7 +1349,7 @@ impl LaidOut {
 
     /// Number of harness frames that produced a fresh layer tree.
     pub fn painted_frame_count(&self) -> u64 {
-        self.host.realm().sink().submits()
+        self.host.ui_runtime().sink().submits()
     }
 
     /// The kinds of every layer the most recent pumped frame composited, in
@@ -1487,10 +1496,10 @@ impl LaidOut {
     }
 
     /// Hit-test at a root-local position and return the canonical data-only
-    /// path, as the realm's input path would route it.
+    /// path, as the UI runtime's input path would route it.
     ///
-    /// Hit-testing runs inside the realm's owner scope: production
-    /// (`UiRealm::enter` around every addressed event) hit-tests and
+    /// Hit-testing runs inside the UI runtime's owner scope: production
+    /// (`UiRuntime::enter` around every addressed event) hit-tests and
     /// dispatches from inside the same entry, and hit-testing itself can
     /// resolve lane-registered owner-local state (`ClipPath`'s custom path
     /// clipper via `resolve_path_clip_target`), which falls back to the
@@ -1498,7 +1507,7 @@ impl LaidOut {
     pub fn hit_test_pointer(&self, position: Offset) -> flui_rendering::hit_testing::HitTestResult {
         use flui_rendering::hit_testing::HitTestResult;
 
-        self.host.realm().enter(|_| {
+        self.host.ui_runtime().enter(|_| {
             let mut result = HitTestResult::new();
             self.pipeline_owner.with(|owner| {
                 owner.hit_test(position, &mut result);
@@ -1511,19 +1520,19 @@ impl LaidOut {
     /// (winit `CursorLeft`): sweep hover state — every hovered
     /// `MouseRegion` gets its `on_exit`, and the cursor resets.
     pub fn dispatch_window_hover_left(&self) {
-        self.host.realm().dispatch_hover_left();
+        self.host.ui_runtime().dispatch_hover_left();
     }
 
-    /// Dispatch an already-constructed pointer event through the realm's
+    /// Dispatch an already-constructed pointer event through the UI runtime's
     /// input path, as platform input arrives.
     pub fn dispatch_pointer_event(&self, event: &PointerEvent) {
         self.host.dispatch_pointer(event);
     }
 
-    /// Advance the realm's virtual clock by `dt` before a synthetic Move
+    /// Advance the UI runtime's virtual clock by `dt` before a synthetic Move
     /// that records a new velocity sample.
     ///
-    /// Synthetic readings carry the realm clock's elapsed time as their
+    /// Synthetic readings carry the UI runtime clock's elapsed time as their
     /// hardware timestamp. Advancing that clock explicitly,
     /// instead of spin-waiting on `Instant::now()` to tick, means consecutive
     /// samples get a fixed, deterministic spacing no matter how much real
@@ -1554,7 +1563,7 @@ impl LaidOut {
 
     /// Hit-test at root-local `(x, y)` and dispatch a synthetic pointer-down
     /// event there — the headless analogue of a platform pointer-down reaching
-    /// the framework (`UiRealm::handle_input_addressed` → hit_test → dispatch). Used by
+    /// the framework (`UiRuntime::handle_input_addressed` → hit_test → dispatch). Used by
     /// the `Listener` test to assert its callback fires.
     ///
     /// See [`hit_test_pointer`](Self::hit_test_pointer) for why hit-testing runs inside

@@ -157,7 +157,7 @@ impl WakePump {
     /// Consult the installed hook, with the platform's handler lock released.
     ///
     /// The `Arc` is cloned out first and called after the guard drops, because
-    /// the hook walks every hosted realm and takes gesture-arena locks — the
+    /// the hook walks every hosted UI runtime and takes gesture-arena locks — the
     /// exact re-entrancy [`PlatformHandlers::wake_deadline`] warns about.
     fn consult(&self) -> Option<web_time::Instant> {
         let hook = self.handlers.lock().wake_deadline.clone();

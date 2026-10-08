@@ -1,6 +1,6 @@
 # State: setState, InheritedView, ValueNotifier
 
-FLUI has four ways state enters the tree: the three familiar from Flutter, plus realm-scoped signals:
+FLUI has four ways state enters the tree: the three familiar from Flutter, plus presentation-scoped signals:
 
 ## `setState`
 
@@ -19,7 +19,7 @@ count.update(|n| n + 1);
 
 ## Signals
 
-`examples/counter.rs` keeps its count in a realm-scoped signal instead. `flui::prelude::Signal<T>`
+`examples/counter.rs` keeps its count in a presentation-scoped signal instead. `flui::prelude::Signal<T>`
 (ADR-0074, placed by ADR-0085) is a `Copy` handle to a value in the presentation's reactive graph:
 created in `init_state` (`self.count = ctx.signal(0)`), read in `build` (`count.get(ctx)`, which
 subscribes the element), and written from an event callback through the `cx` it receives

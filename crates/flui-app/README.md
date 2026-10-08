@@ -3,7 +3,7 @@
 **The application layer — where the trees meet the platform.**
 
 `flui-app` is the top of the framework stack: it owns the `run_app` entry
-point, constructs an owner-affine `UiRealm`, hosts the process services still
+point, constructs an owner-affine `UiRuntime`, hosts the process services still
 being extracted by ADR-0027, and drives the frame loop that turns platform
 callbacks into build → layout → paint → composite passes.
 
@@ -16,12 +16,12 @@ consumed by path (not published to crates.io).
 run_app(view)                       — bootstrap: window, GPU surface, frame loop
     │
     ▼
-UiRealm (owner-affine, !Send + !Sync)
+UiRuntime (owner-affine, !Send + !Sync)
     ├── WidgetsBinding              — View → Element, BuildOwner, GlobalKey scope
     ├── GestureBinding              — single-presentation pointer state
     ├── RenderingBinding     — render-view registry, first-frame gate
     └── UpdateScheduler             — frame callbacks, animation tickers (flui-scheduler);
-                                      one fresh instance per realm, never shared
+                                      one fresh instance per UI runtime, never shared
 
 PresentationState (per-window, private to flui-app)
     ├── FocusManager                — keyboard event dispatch
@@ -31,13 +31,15 @@ PresentationState (per-window, private to flui-app)
 AppRuntime (loop-scoped composition root)
     ├── SharedEngineServices        — painting/accessibility, resolved once per owner thread
     ├── frame-wake + platform clipboard
-    └── RealmRegistry               — any number of RealmId-keyed realms
+    └── InstalledHost
+        ├── OwnerHost (flui-runtime) — runtime membership and ordered logical delivery
+        └── NativeBindings          — windows, frame drivers and close handlers
 ```
 
 - **Entry points** — `run_app` / `run_app_with_config` bootstrap a platform
-  window and hand the root `View` to the runner-owned `UiRealm`, which
+  window and hand the root `View` to the runner-owned `UiRuntime`, which
   auto-wraps it in an outer `GestureArenaScope` plus `VsyncScope`, so competing
-  detectors share the realm arena and implicit-animation widgets tick with
+  detectors share the UI runtime arena and implicit-animation widgets tick with
   zero boilerplate.
 - **`run_direct`** — an **experimental, direct-engine** escape hatch that
   bypasses the widget tree for raw `SceneBuilder`-callback rendering. It is
@@ -69,21 +71,21 @@ that implement it are tracked in issue #573.
 
 Singleton retirement is complete: `WidgetsBinding`, `GestureBinding`,
 `RenderingBinding`, `UpdateScheduler`, and GlobalKey identity are all
-realm-owned now — `AppBinding` is deleted, not slimmed, and no test needs a
+UI runtime-owned now — `AppBinding` is deleted, not slimmed, and no test needs a
 serialization guard against shared binding state any more (each test
-constructs its own independent realm). `AppRuntime` now hosts any number of
-`RealmId`-keyed realms, and each `UiRealm` owns an insertion-ordered
-presentation forest. `WindowPolicy::Isolated` installs a new realm for a
+constructs its own independent UI runtime). `AppRuntime` now hosts any number of
+`UiRuntimeId`-keyed UI runtimes, and each `UiRuntime` owns an insertion-ordered
+presentation forest. `WindowPolicy::Isolated` installs a new UI runtime for a
 secondary window; `WindowPolicy::Shared` installs another presentation in
-the first hosted realm. The remaining hosting gap is content and rendering:
+the first hosted UI runtime. The remaining hosting gap is content and rendering:
 `open_secondary_window` mounts no root widget, constructs no GPU renderer, and
 registers no frame callback for the new window. Production multi-presentation
 rendering therefore still needs per-window frame pumps, constraints, sinks,
 and submit routing, plus root attachment to a non-primary presentation; that
 work remains with issue #559. Logical scheduling (`UpdateScheduler`), physical
 pacing, and raster scheduling also remain split across issue #556's remaining
-slices. Gesture state is realm-owned but intentionally models one presentation
-per realm until that second real presentation consumer exists.
+slices. Gesture state is UI runtime-owned but intentionally models one presentation
+per UI runtime until that second real presentation consumer exists.
 
 ## Documentation
 

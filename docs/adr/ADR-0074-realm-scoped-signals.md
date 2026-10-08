@@ -1,4 +1,4 @@
-# ADR-0074: Realm-scoped signals as the canonical application-state layer
+# ADR-0074: Runtime-scoped signals as the canonical application-state layer
 
 - **Status:** Accepted — for `Signal<T>` and the reader registry, always compiled (the `signals`
   feature was removed by ADR-0085 §5). Derived values and effects (`Computed<T>`, `Effect`) are
@@ -46,7 +46,7 @@ A three-screen app (list of 10 000 rows, a 20-field form, a settings value read 
 must answer, without the author slicing widgets for performance:
 
 1. **Where does state that outlives a screen live?** Not in a `ViewState` (navigation disposes
-   it), not in a process global (ADR-0027: two windows are two realms). In something the realm
+   it), not in a process global (ADR-0027: two windows are two UI runtimes). In something the UI runtime
    owns and screens borrow.
 2. **One form field changes** → rebuild that field and the "Save" button, not all 20.
 3. **Row 4 217 changes** → that row, not the list or its visible siblings.
@@ -90,19 +90,19 @@ and a memo node that stops propagation on unchanged output.
 A React-Hooks port: a process-global `SignalRuntime` on `DashMap`, every value an
 `Arc<Mutex<T>>`, hook-index identity, thread-local dependency tracking and batching, `Send + Sync`
 callbacks. It never built at removal time and was never wired to an Element. The removal
-rationale stands: its global runtime predates `UiRealm` and would bleed across realms.
+rationale stands: its global runtime predates `UiRuntime` and would bleed across UI runtimes.
 
 | Old crate | This ADR |
 |---|---|
-| process/thread-global runtime | every node owned by one `UiRealm`; the tracker is a field of the build owner |
+| process/thread-global runtime | every node owned by one `UiRuntime`; the tracker is a field of the build owner |
 | hook order is identity | a signal is a value with a handle; no call-order contract (§5.7) |
-| `Send + 'static` callbacks, `Mutex` inside | realm-affine `!Send` cells; cross-thread writes are a `UiCommand` |
+| `Send + 'static` callbacks, `Mutex` inside | UI runtime-affine `!Send` cells; cross-thread writes are a `UiCommand` |
 | effects scheduled by the write | no effects here (ADR-0075) |
 | independent of the tree | the only side effect is scheduling a reader element |
 
 ## 4. Decision
 
-Add a realm-owned reactive graph — `Signal<T>` values in a generational arena plus a reader
+Add a UI runtime-owned reactive graph — `Signal<T>` values in a generational arena plus a reader
 registry — to the view layer. **Reading a signal inside `build` registers the building element as
 a reader; writing a signal schedules exactly the reader elements** on the existing dirty heap.
 `setState`, `ValueNotifier` and `InheritedView` remain.
@@ -112,7 +112,7 @@ a reader; writing a signal schedules exactly the reader elements** on the existi
 ### 5.1 Types
 
 ```rust
-/// Realm-owned cell. `Copy` handle (graph id + slot index + generation); `!Send`.
+/// Runtime-owned cell. `Copy` handle (graph id + slot index + generation); `!Send`.
 pub struct Signal<T: 'static> { /* SignalSlot */ }
 
 impl<T> Signal<T> {
@@ -121,7 +121,7 @@ impl<T> Signal<T> {
     pub fn with<R>(self, cx: &dyn BuildContext, f: impl FnMut(&T) -> R) -> R;
     pub fn try_get(self, cx: &dyn BuildContext) -> Result<T, SignalError>;
     pub fn try_with<R>(self, cx: &dyn BuildContext, f: impl FnMut(&T) -> R) -> Result<R, SignalError>;
-    // outside build: callbacks, tests, realm commands
+    // outside build: callbacks, tests, UI runtime commands
     pub fn peek<R>(self, r: &Reactive, f: impl FnMut(&T) -> R) -> Result<R, SignalError>;
     pub fn set(self, r: &Reactive, value: T) -> Result<(), SignalError>;  // marks readers, equal or not
     pub fn update<R>(self, r: &Reactive, f: impl FnMut(&mut T) -> R) -> Result<R, SignalError>;
@@ -135,13 +135,13 @@ impl<T> Signal<T> {
 
 - **Creation is owned.** The idiom is `cx.signal(value)` from `init_state` (or
   `did_change_dependencies`): the slot is owned by that element and released when it unmounts.
-  App-level state uses `Reactive::signal(value)`, released with the realm;
+  App-level state uses `Reactive::signal(value)`, released with the UI runtime;
   `Reactive::signal_owned_by(element, value)` is the explicit form. All have `try_` variants.
   Creating a slot inside `build` is `SignalError::CreatedDuringBuild` (one slot per rebuild would
   leak).
-- **`Reactive`** is the realm's graph, reachable as `cx.reactive()` and from the headless driver;
-  `!Send + !Sync`, lives beside `BuildOwner`, dropped with the realm. Each graph has a
-  process-unique id carried by its slots, so a handle used against another realm is
+- **`Reactive`** is the UI runtime's graph, reachable as `cx.reactive()` and from the headless driver;
+  `!Send + !Sync`, lives beside `BuildOwner`, dropped with the UI runtime. Each graph has a
+  process-unique id carried by its slots, so a handle used against another UI runtime is
   `SignalError::ForeignGraph`, never a read of someone else's value.
 - **No bound on `T` beyond `'static`.** `set`/`update` always mark readers; `set_if_changed`
   (`T: PartialEq`) is the opt-in that skips an equal write (§5.7).
@@ -208,7 +208,7 @@ signal.set(v)                         // owner thread, outside build
 ### 5.4 Effects
 
 Deferred to [ADR-0075](ADR-0075-derived-state-and-effects.md) with derived values. Until then,
-side effects run from callbacks, `did_update_view`, or realm commands.
+side effects run from callbacks, `did_update_view`, or UI runtime commands.
 
 ### 5.5 One scheduler and one discipline, two registries: `InheritedView` field masks (#1090)
 
@@ -300,23 +300,23 @@ A headless test builds the model with the binding's `reactive()`, writes with
   may read signals in any order, conditionally, or in loops.
 - `build` stays a pure function of `(View, State, reads)`; reads are recorded, not ordered.
 - Lifetime is ownership: an element-owned slot is released at unmount (with that element's
-  reads); an app-level slot with the realm. A stale handle is `SignalError::Released` from
+  reads); an app-level slot with the UI runtime. A stale handle is `SignalError::Released` from
   `try_*`/`peek` and a documented panic from `get`/`with`.
 - Equality is opt-in: plain `set` marks readers even for an equal value; only `set_if_changed`
   compares.
 
 ### 5.8 Threads
 
-- `Signal` and `Reactive` are `!Send + !Sync`, realm-affine like the element tree (ADR-0027).
-- Cross-thread writes go through the realm proxy: `UiCommand::SignalWrite(Box<dyn FnMut(&Reactive)
+- `Signal` and `Reactive` are `!Send + !Sync`, UI runtime-affine like the element tree (ADR-0027).
+- Cross-thread writes go through the UI runtime proxy: `UiCommand::SignalWrite(Box<dyn FnMut(&Reactive)
   + Send>)` runs on the owner thread at the next idle drain, marks readers, and wakes a frame. The
   closure captures `signal.detach()` — a `Send + Sync` `SignalSender<T>` re-attached with
   `.attach()` on the owner side. If the command panics after a partial signal commit, the owning
-  presentation and realm retain redraw demand before the original panic resumes; a sibling
+  presentation and UI runtime retain redraw demand before the original panic resumes; a sibling
   presentation is not woken.
-- Writes from a dead realm's sender return `OwnerGone`, like every realm-scoped command.
+- Writes from a dead UI runtime's sender return `OwnerGone`, like every UI runtime-scoped command.
 - `UiCommand::SignalWrite` and `UiCommandSender::send_signal_write` are `pub(crate)` until an
-  async task API vends a `SignalSender` through the realm handle; this ADR adds no public realm
+  async task API vends a `SignalSender` through the UI runtime handle; this ADR adds no public UI runtime
   API.
 
 ### 5.9 Testability
@@ -339,13 +339,13 @@ Nothing is removed.
 - `ValueNotifier`/`ChangeNotifier` stay the `Listenable` contract for controllers. Bridging is a
   listener that writes the signal, or a listener that `peek`s it; no adapter type ships.
 - `InheritedView` stays the scoping mechanism; a provider whose value is a `Signal<T>` is the
-  recommended way to put realm state into a subtree.
+  recommended way to put UI runtime state into a subtree.
 
 ## 6. Consequences
 
 **Positive.** Application state has a framework-visible home; rebuild scope follows reads, not
 widget slicing; `Copy` handles remove listener/handle boilerplate; the headless driver tests state
-directly; cross-thread writes reuse the realm command inbox.
+directly; cross-thread writes reuse the UI runtime command inbox.
 
 **Negative.**
 - Reader-set clear-and-rebuild per build is a real (allocation-free) cost per read; idle cost is
@@ -358,7 +358,7 @@ directly; cross-thread writes reuse the realm command inbox.
 
 ## 7. Amendment to FOUNDATIONS C1 (applied)
 
-C1's signals clause is replaced with: *"A realm-owned reactive graph (`Signal` and its reader
+C1's signals clause is replaced with: *"A UI runtime-owned reactive graph (`Signal` and its reader
 registry, ADR-0074; derived values and effects in ADR-0075) is a first-class state layer of the
 view crate. Reading a signal in `build` is the sanctioned subscription path (the same class as
 `depend_on`); writing or creating a signal inside `build`/`layout`/`paint` is refused at run time.
@@ -414,7 +414,7 @@ the Save cell) measured 4 elements / 17.9 µs against 44 / 39.2 µs.
 
 ## References
 
-- FOUNDATIONS C1, C5, C8; ADR-0018; ADR-0027 (`UiRealm`, `UiCommandSender`);
+- FOUNDATIONS C1, C5, C8; ADR-0018; ADR-0027 (`UiRuntime`, `UiCommandSender`);
   ADR-0078 (capability and build-phase rules); issue #1090.
 - `docs/research/state-model-2026.md` — market survey with sources.
 - ADR-0075 — derived values and effects; follow-ups #1248–#1254.

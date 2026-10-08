@@ -13,7 +13,7 @@ application through the OS: UI Automation on Windows, real input, capture. The r
 puts `flui mcp` on top of the devtools protocol (G1) and says the agent protocol rides on
 standards: MCP as the transport, AccessKit as the vocabulary for roles and properties, a
 specification of our own only for what MCP lacks. The desktop server is the first backend
-of that protocol, and the in-process FLUI backend (a realm's own semantics tree, driven
+of that protocol, and the in-process FLUI backend (a UI runtime's own semantics tree, driven
 without the OS in between) is the second.
 
 What agents and the skills written for them learn from the first backend becomes the
@@ -133,7 +133,7 @@ timeout on the window cannot end an application whose launch succeeded.
 ## Not decided here
 
 The in-process backend's transport (whether the devtools protocol carries these shapes or
-the MCP server proxies a realm), server-side search (`FindAll` with a condition instead
+the MCP server proxies a UI runtime), server-side search (`FindAll` with a condition instead
 of a client-side walk), modifiers on pointer tools, admitting a hosted child process for
 keyboard input, and the vocabulary for properties beyond the ones listed. Each is an
 additive change on this contract.

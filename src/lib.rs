@@ -220,7 +220,7 @@ pub use flui_app::app::AppConfig;
     not(target_arch = "wasm32")
 ))]
 pub use flui_app::app::AppWindowError;
-/// Whether an additional window joins the caller's realm or gets its own.
+/// Whether an additional window joins the caller's UI runtime or gets its own.
 /// Re-exported from [`app`] (`flui-app`); absent on iOS, where no
 /// secondary-window entry point exists.
 #[cfg(not(target_os = "ios"))]
@@ -282,7 +282,7 @@ pub use flui_app::run_app_with_config;
 /// Call on the app's owner thread, before startup or from an app callback.
 /// Registration on a worker thread does not update the running app: send the
 /// bytes to its owner thread first. Successful registration updates each
-/// realm's text layout on its next frame; faces are never removed.
+/// UI runtime's text layout on its next frame; faces are never removed.
 ///
 /// Invalid font bytes, repeated bytes, and reentry while the runtime is borrowed
 /// return [`FontRegistrationError`] without adding a face. See

@@ -52,7 +52,7 @@
 //! when nothing needs a wall-clock wake, `ControlFlow::WaitUntil(deadline)`
 //! when the registered wake-deadline hook (issue #556) answers `Some`. This
 //! is deliberate, not decorative: `flui-app`'s frame loop is wake-driven (a
-//! redraw is requested only from `UiRealm::wake_frame`/`request_redraw`,
+//! redraw is requested only from `UiRuntime::wake_frame`/`request_redraw`,
 //! never polled), and steady-state pacing for a frame that DOES present
 //! comes entirely from the GPU-side blocking Fifo present in
 //! `flui-engine`'s `Renderer::render_scene` (see the frame-pacing ADR). If
@@ -78,7 +78,7 @@
 //! `WindowEvent::RedrawRequested` for the next iteration — the exact same
 //! `dispatch_request_frame`/`on_request_frame`/`wake_action` path every
 //! other wake in this backend already goes through, so a deadline that
-//! resolves nothing new (nothing was actually due, or the realm has no
+//! resolves nothing new (nothing was actually due, or the UI runtime has no
 //! other demand) still costs at most one extra `wake_action::Skip`, never
 //! a second spin.
 
@@ -593,7 +593,7 @@ impl WinitPlatform {
     /// consulted outside it (ADR-0039) — the same take/invoke/restore-if-none
     /// discipline [`Self::lease_window_event_handler`] uses, for the same
     /// reason: the hook's own body (`flui-app`'s `AppRuntime::should_exit`)
-    /// drops removed realm state, whose destructors (a dispose hook opening
+    /// drops removed UI runtime state, whose destructors (a dispose hook opening
     /// another window, say) may call back into this platform. Calling the
     /// hook while still holding this non-reentrant lock would deadlock the
     /// instant such a callback re-entered any `with_state`-guarded method.
@@ -1239,7 +1239,7 @@ impl ApplicationHandler for WinitApp {
                 // default, the window is resized to the value suggested by
                 // the OS" — winit::event::WindowEvent::ScaleFactorChanged),
                 // so a Resized always follows, and THAT arm reads the
-                // post-change scale factor — the realm's device-pixel ratio
+                // post-change scale factor — the ui_runtime's device-pixel ratio
                 // updates through the proven path with the correct new
                 // size. Dispatching here would divide the still-unchanged
                 // physical size by the new scale and publish a transiently
@@ -1369,8 +1369,8 @@ impl ApplicationHandler for WinitApp {
 
         // Wall-clock wake: consult the registered
         // wake-deadline hook (issue #556 — `flui-app` computes the earliest
-        // instant any hosted realm's pending gesture/timer deadline needs
-        // the loop to wake at, across every realm on this thread) fresh on
+        // instant any hosted ui_runtime's pending gesture/timer deadline needs
+        // the loop to wake at, across every ui_runtime on this thread) fresh on
         // EVERY iteration, not just once — a deadline that fires, a new one
         // getting armed, or every deadline clearing must all be reflected
         // immediately, not stale from whenever the hook was installed.
@@ -1382,7 +1382,7 @@ impl ApplicationHandler for WinitApp {
         //
         // Lock discipline (ADR-0038 §5, the same rule this module's
         // `CursorMoved`/`HoveredFileCancelled` arms already follow): the
-        // hook itself re-enters `flui-app`, walking every hosted realm and
+        // hook itself re-enters `flui-app`, walking every hosted ui_runtime and
         // taking gesture-arena locks — it must never run while this
         // platform's own state mutex is held. Clone the `Arc` out, drop the
         // lock, THEN call it.
@@ -1770,7 +1770,7 @@ impl WinitApp {
     ///    embedder may defer;
     /// 2. the per-window `on_close` callback (an embedder tears down what it
     ///    hung on this window — `flui-app` closes the window's presentation
-    ///    here, BEFORE the exit policy below reads its realm registry);
+    ///    here, BEFORE the exit policy below reads its UI runtime registry);
     /// 3. removal from the window/cursor maps (and from `active_window`,
     ///    which otherwise keeps naming a window that no longer exists), and
     ///    retirement of any drag session addressed at this window (ADR-0038
@@ -1788,7 +1788,7 @@ impl WinitApp {
     /// 6. the exit-policy consult, only when this backend's own map is now
     ///    empty. That map is not the only ledger: an embedder hosting more
     ///    than one top-level window (issue #555's `WindowPolicy`) tracks
-    ///    realms/presentations this layer cannot see, and a queued "open
+    ///    ui_runtimes/presentations this layer cannot see, and a queued "open
     ///    another window" request (a splash's close handler asking for the
     ///    main window) must not be raced by an unconditional exit — so the
     ///    hook, when installed, gets the final word; unset, this is the
@@ -1796,7 +1796,7 @@ impl WinitApp {
     ///
     /// Lock discipline (ADR-0039): the global handler and the exit-policy
     /// hook are lease-taken and invoked OUTSIDE the platform state lock. The
-    /// hook's own body drops removed realm state, whose destructors may call
+    /// hook's own body drops removed UI runtime state, whose destructors may call
     /// back into this platform (a dispose hook opening another window);
     /// consulting it under this non-reentrant lock would deadlock the
     /// instant such a callback re-entered `with_state`.

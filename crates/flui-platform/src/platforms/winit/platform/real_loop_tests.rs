@@ -319,7 +319,7 @@ fn record_global_close_events(
 /// 1. the window leaves the tracking map and is reported not visible;
 /// 2. `on_close` fires on the OWNER thread, not the calling worker —
 ///    an embedder's owner-affine close handling (`flui-app` rejects
-///    realm dispatch off its owner thread) would otherwise silently
+///    UI runtime dispatch off its owner thread) would otherwise silently
 ///    refuse it;
 /// 3. the registered callbacks are cleared inside the teardown, while
 ///    the window and loop are alive (the #713 ordering the compositor

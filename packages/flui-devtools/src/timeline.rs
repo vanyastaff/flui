@@ -432,7 +432,7 @@ impl Timeline {
     /// The event name embeds [`FrameSnapshot::presentation`], not just
     /// `frame_id`: a `frame_id` is scoped to the presentation whose clock
     /// minted it (each starts counting from 1), so two presentations'
-    /// snapshots recorded into the SAME `Timeline` — a realm hosting more
+    /// snapshots recorded into the SAME `Timeline` — a UI runtime hosting more
     /// than one presentation, e.g. via `open_secondary_window` — would
     /// otherwise both name themselves "Frame 1", "Frame 2", … and collide
     /// in one exported trace file. The `presentation` field is ALSO carried

@@ -7,7 +7,7 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
-description = "Application runner for FLUI - bootstraps the platform, renderer and UI realm on desktop, mobile and web"
+description = "Application runner for FLUI - bootstraps the platform, renderer and UI UI runtime on desktop, mobile and web"
 keywords = ["gui", "ui", "flutter", "application", "runtime"]
 categories = ["gui"]
 # All root tests/*.rs files are compiled as modules of ONE integration-test
@@ -97,17 +97,17 @@ flui-platform = { path = "../flui-platform", version = "=0.2.0-dev" }
 # present in flui-app's closure (verified via `cargo tree -p flui-app`); this adds
 # only a direct Cargo edge + re-exports. FOUNDATIONS.md targets app → widgets.
 flui-widgets = { path = "../flui-widgets", version = "=0.2.0-dev" }
-# The frame runtime (ADR-0083): the realm core the runners drive, and the
+# The frame runtime (ADR-0083): the UI runtime core the runners drive, and the
 # per-presentation lanes it owns. `hot-reload` is its `reload::ReloadTier`, the
 # reload an installed development reload hook (ADR-0094 §1) applies to a
-# realm; it names no reload tool.
+# UI runtime; it names no reload tool.
 flui-runtime = { path = "../flui-runtime", version = "=0.2.0-dev", features = ["hot-reload"] }
 
 # Utilities
 tracing.workspace = true
 parking_lot.workspace = true
 thiserror.workspace = true
-# UiRealm owner inbox (bounded typed mailbox)
+# UiRuntime owner inbox (bounded typed mailbox)
 crossbeam-channel.workspace = true
 anyhow.workspace = true
 pollster = { workspace = true }
@@ -151,7 +151,7 @@ flui-engine = { path = "../flui-engine", version = "=0.2.0-dev", features = ["vu
 flui-testing = { workspace = true }
 static_assertions.workspace = true
 # `HeldPointerQueue::append`/`len`, `SemanticsHost::ensure_semantics`,
-# `ExecutionServices::with_limits`/`default_pools_started`, the realm's test
+# `ExecutionServices::with_limits`/`default_pools_started`, the UI runtime's test
 # constructors and the `testing` doubles, which this crate's tests use and
 # which exist only under `test-support`.
 flui-runtime = { path = "../flui-runtime", version = "=0.2.0-dev", features = ["test-support"] }
@@ -171,7 +171,7 @@ flui-view = { path = "../flui-view", version = "=0.2.0-dev", features = ["test-u
 # collection with. Same dev-only feature-unification pattern.
 flui-painting = { path = "../flui-painting", version = "=0.2.0-dev", features = ["testing"] }
 # The concrete render object and the animation controller the runner's
-# device-recovery, frame-pacing and dispatch tests mount; the realm that
+# device-recovery, frame-pacing and dispatch tests mount; the UI runtime that
 # production code drives names them from `flui-runtime`.
 flui-objects = { path = "../flui-objects", version = "=0.2.0-dev" }
 
@@ -189,7 +189,7 @@ tier-kind = "internal"
 order = 2
 # Process-global state, checked by `cargo xtask globals` (ADR-0097).
 globals = [
-    { item = "app::runner::host::APP_RUNTIME", grant = "ADR-0097", class = "trampoline", reason = "the host of every realm, which OS event callbacks reach without a user-data pointer" },
+    { item = "app::runner::host::APP_RUNTIME", grant = "ADR-0097", class = "trampoline", reason = "the host of every UI runtime, which OS event callbacks reach without a user-data pointer" },
     { item = "app::runner::secondary_window::PENDING_SECONDARY_WINDOW_COMPLETIONS", exit = "ADR-0083", reason = "secondary-window completions queued beside the host cell; they fold into the runtime" },
     { item = "app::runner::secondary_window::PENDING_SECONDARY_WINDOW_OPENS", exit = "ADR-0083", reason = "secondary-window open requests queued beside the host cell; they fold into the runtime" },
     { item = "app::runner::secondary_window::POLLING_PENDING_WINDOWS", exit = "ADR-0083", reason = "reentrancy flag of the secondary-window queue; it folds into the runtime" },

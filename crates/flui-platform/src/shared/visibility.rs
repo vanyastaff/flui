@@ -2,7 +2,7 @@
 //!
 //! The runtime's hidden-surface gating (`PlatformWindow::
 //! on_visibility_status_change` → `PlatformToUi::WindowVisibility` → the
-//! per-presentation `FrameClock` gate and the realm-wide `AppLifecycleState`
+//! per-presentation `FrameClock` gate and the UI runtime-wide `AppLifecycleState`
 //! derivation) only ever fires if a backend actually *dispatches* the
 //! callback. The winit backend rides `WindowEvent::Occluded`; the native
 //! Win32 and AppKit backends have no such ready-made event and must derive

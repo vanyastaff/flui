@@ -6,7 +6,7 @@
 //! from the atlas's [`GlyphRasterizer`], keyed by the key each run places
 //! (ADR-0067). The engine's atlas is a [`TextAtlas`]: swash drawing the faces
 //! the paragraphs' runs carry, which the atlas's own registry keeps alive, so
-//! rasterization takes no lock and shares no state with any realm. What the
+//! rasterization takes no lock and shares no state with any ui_runtime. What the
 //! engine owns is the cache: where each bitmap sits, how long it stays, and
 //! the bind group the glyph pipeline samples it through.
 //!

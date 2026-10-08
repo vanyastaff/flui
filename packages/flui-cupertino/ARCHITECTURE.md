@@ -5,6 +5,20 @@ and callbacks are owner-local; the package does not own a reactive graph.
 
 ## Mapping decisions
 
+### Palette resolution shares brightness precedence and contrast dependencies
+
+Standalone dynamic colors, theme materialization and text roles use one private
+color resolver. A theme's explicit brightness wins even before that theme is
+installed as an ancestor; contrast follows the nearest `MediaQuery`. Static
+colors remain authored values. Dynamic colors subscribe only to relevant media
+fields, so unrelated window size changes do not rerun their resolution.
+
+`retained_colors_follow_contrast_and_explicit_brightness` and
+`authored_and_nested_colors_ignore_outer_contrast` pin retained-tree behavior.
+`explicit_app_brightness_applies_to_live_contrast_colors` checks the app's
+published palette and text roles during live contrast changes. Elevation
+variants remain stored but unresolved; no interface-level source is implemented.
+
 ### Event callbacks borrow the originating dispatch's write context
 
 `CupertinoButton` press/long-press and `CupertinoTabBar` selection handlers

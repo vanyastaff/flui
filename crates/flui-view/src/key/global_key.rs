@@ -110,8 +110,8 @@ impl<T: 'static> GlobalKey<T> {
     ///
     /// # Registry access
     ///
-    /// Reads the registry handle activated by the current owner-thread realm
-    /// scope (or by the legacy test harness adapter). When no realm is active
+    /// Reads the registry handle activated by the current owner-thread UI runtime
+    /// scope (or by the legacy test harness adapter). When no UI runtime is active
     /// the method returns `None` — this is the
     /// quiescent state expected in pure-unit tests that bypass the
     /// framework binding.
@@ -128,7 +128,7 @@ impl<T: 'static> GlobalKey<T> {
     /// (from `build`, a lifecycle hook, `dispose`, or a layout-builder build),
     /// this returns `None` (logged at `debug`) instead of the element:
     /// that presentation's tree is locked for the frame and is
-    /// not read re-entrantly. Keys held by other presentations of the realm
+    /// not read re-entrantly. Keys held by other presentations of the UI runtime
     /// resolve normally.
     #[must_use]
     pub fn current_element(&self) -> Option<ElementId> {
@@ -191,7 +191,7 @@ impl<T: 'static> GlobalKey<T> {
     {
         let element_id = self.current_element()?;
 
-        // `with_registry` yields `None` when no realm/fixture handle is
+        // `with_registry` yields `None` when no ui_runtime/fixture handle is
         // active; `with_element` yields `Err` when the owning binding is busy
         // and `Ok(None)` when the id is no longer in the tree; the inner
         // closure yields `None` when the state downcast fails.

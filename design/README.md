@@ -51,9 +51,9 @@ closure of what their signatures name, with no upstream type in it except raw-wi
 Official packages (Material, Cupertino, devtools, hot reload) live in `packages/` of this
 workspace, build on an Evolving `flui-sdk`, and the facade names none of them. Platform
 capabilities come in two classes behind one door, core-required backend methods and optional
-plugins; signals stay realm-owned, are read
+plugins; signals stay UI runtime-owned, are read
 through `ReadScope` and written through `EventCx`; rendering gets one raster contract with wgpu and
-CPU backends and damage from retained layer identity; text moves to Parley per realm; navigation
+CPU backends and damage from retained layer identity; text moves to Parley per UI runtime; navigation
 becomes Router-first; hot reload moves to Subsecond; process-global state is gated down to one
 trampoline cell. Development-build dynamic linking was measured and deferred; a build-footprint
 study and a CI redesign take up the build cost instead.
@@ -85,19 +85,19 @@ their back-links then.
 | [ADR-0082](../docs/adr/ADR-0082-platform-api-contract-crate.md) | `flui-platform-api` is the contract crate; OS backends stay in `flui-platform` |
 | [ADR-0083](../docs/adr/ADR-0083-one-frame-transaction-in-flui-runtime.md) | One frame transaction lives in `flui-runtime` above `flui-widgets` |
 | [ADR-0084](../docs/adr/ADR-0084-open-capability-seam-and-plugins.md) | Platform capabilities are an open, typed set in two classes (core-required backend methods, optional plugins) behind one door |
-| [ADR-0085](../docs/adr/ADR-0085-reactive-core-placement-and-phase-subscribers.md) | The reactive graph is realm-owned and stays in `flui-view`; reads go through a `ReadScope` contract in `flui-foundation` |
+| [ADR-0085](../docs/adr/ADR-0085-reactive-core-placement-and-phase-subscribers.md) | The reactive graph is UI runtime-owned and stays in `flui-view`; reads go through a `ReadScope` contract in `flui-foundation` |
 | [ADR-0086](../docs/adr/ADR-0086-signal-writes-through-event-context.md) | Signal writes go through `EventCx` opened by a `WriterSource` |
 | [ADR-0087](../docs/adr/ADR-0087-raster-contract-and-cpu-backend.md) | One raster contract in `flui-layer` with wgpu and CPU backends; retained layer identity drives damage |
 | [ADR-0088](../docs/adr/ADR-0088-official-packages-sdk-and-facade.md) | Official packages live in this workspace, build on `flui-sdk`, and the facade names none of them |
 | [ADR-0089](../docs/adr/ADR-0089-upstream-types-in-stable-signatures.md) | Stable signatures carry no upstream type except raw-window-handle |
 | [ADR-0090](../docs/adr/ADR-0090-ime-pull-text-store-contract.md) | IME talks to a pull text-store contract with edits and asynchronous locks |
-| [ADR-0091](../docs/adr/ADR-0091-one-owner-thread-isolated-realms-raster-thread.md) | One owner thread hosts isolated realms; one raster thread per `GpuContext`; schedules the `!Send` flip before the first crates.io publication |
-| [ADR-0092](../docs/adr/ADR-0092-per-realm-text-over-parley.md) | Text shapes per realm over Parley and crosses the display list as neutral shaped runs |
+| [ADR-0091](../docs/adr/ADR-0091-one-owner-thread-isolated-realms-raster-thread.md) | One owner thread hosts isolated UI runtimes; one raster thread per `GpuContext`; schedules the `!Send` flip before the first crates.io publication |
+| [ADR-0092](../docs/adr/ADR-0092-per-realm-text-over-parley.md) | Text shapes per UI runtime over Parley and crosses the display list as neutral shaped runs |
 | [ADR-0093](../docs/adr/ADR-0093-router-is-the-primary-navigation-api.md) | Router is the primary navigation API |
 | [ADR-0094](../docs/adr/ADR-0094-hot-reload-through-subsecond.md) | Hot reload goes through Subsecond behind a runtime hook |
 | [ADR-0095](../docs/adr/ADR-0095-agent-protocol-schema-crate.md) | `flui-protocol` is the typed schema shared by tests, devtools and agents |
 | [ADR-0096](../docs/adr/ADR-0096-dev-build-dynamic-linking.md) | Dynamic linking for development builds: not for framework or test builds; app-side deferred to H1 or later |
-| [ADR-0097](../docs/adr/ADR-0097-no-process-global-state-gate.md) | Process-global state is gated: one trampoline cell, everything else realm-owned |
+| [ADR-0097](../docs/adr/ADR-0097-no-process-global-state-gate.md) | Process-global state is gated: one trampoline cell, everything else UI runtime-owned |
 | [ADR-0098](../docs/adr/ADR-0098-owned-f64-geometry-values.md) | Geometry values are FLUI-owned `f64` structs; flui-geometry and flui-types dissolve |
 
 ## How this relates to the other plans

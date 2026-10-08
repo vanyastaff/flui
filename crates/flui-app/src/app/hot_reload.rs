@@ -6,8 +6,8 @@
 //! it, and every runner goes through the crate-private wrappers below:
 //!
 //! - `WorkerReload` (desktop and iOS): attaches the hook once per loop,
-//!   polls it at each realm's frame boundary and applies a patch once to
-//!   every realm;
+//!   polls it at each UI runtime's frame boundary and applies a patch once to
+//!   every UI runtime;
 //! - `ScenePlugin` (Android): lets the hook's scene plugin own a frame. It
 //!   calls only `scene_frame`; the Android runner never attaches or polls.
 //!
@@ -23,7 +23,7 @@
 //! call is a no-op instead of a deadlock. A call that panics is logged, and
 //! the hook is dropped — inside its own containment, because its `Drop` may
 //! panic too — and never called again; the frame that caught the panic
-//! continues, and the realm is untouched.
+//! continues, and the UI runtime is untouched.
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -39,8 +39,8 @@ use parking_lot::Mutex;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::app::AppConfig;
 #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
-use crate::app::ui_realm::UiRealm;
-use flui_foundation::RealmId;
+use crate::app::ui_runtime::UiRuntime;
+use flui_foundation::UiRuntimeId;
 use flui_runtime::reload::ReloadTier;
 
 /// A development reload driver installed on an [`AppConfig`].
@@ -48,18 +48,18 @@ use flui_runtime::reload::ReloadTier;
 /// Built by [`AppConfig::with_dev_reload`]. `Clone` shares the one hook and
 /// its bookkeeping, so every window opened with clones of the same
 /// configuration is driven by the same hook: attached once per loop, polled
-/// at each realm's frame boundary, and each patch applied once to every
-/// realm.
+/// at each UI runtime's frame boundary, and each patch applied once to every
+/// ui_runtime.
 #[derive(Clone)]
 pub struct DevReload(Arc<Mutex<Slot>>);
 
 // The web runner drives no hook, and the Android runner only asks it for
-// scene frames, so neither reads the realm bookkeeping.
+// scene frames, so neither reads the ui_runtime bookkeeping.
 #[cfg_attr(
     any(target_arch = "wasm32", target_os = "android"),
     expect(
         dead_code,
-        reason = "only the desktop and iOS runners poll the hook for realms"
+        reason = "only the desktop and iOS runners poll the hook for ui_runtimes"
     )
 )]
 struct Slot {
@@ -76,8 +76,8 @@ struct Slot {
     /// The epoch of the latest patch, and the tier it asks for.
     patched_at: u64,
     patched_tier: Option<ReloadTier>,
-    /// The epoch each realm last caught up to. Cleared when the loop ends.
-    seen: HashMap<RealmId, u64>,
+    /// The epoch each UI runtime last caught up to. Cleared when the loop ends.
+    seen: HashMap<UiRuntimeId, u64>,
 }
 
 impl DevReload {
@@ -147,7 +147,7 @@ impl DevReload {
         }
     }
 
-    /// The loop ended: detach the hook and forget every realm.
+    /// The loop ended: detach the hook and forget every UI runtime.
     #[cfg(not(target_os = "android"))]
     fn detach(&self) {
         {
@@ -189,7 +189,7 @@ fn contain(body: impl FnOnce()) {
     }
 }
 
-/// The realm reload an event asks for. Exhaustive, so a new event does not
+/// The UI runtime reload an event asks for. Exhaustive, so a new event does not
 /// compile until it is given a meaning here.
 #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
 const fn reload_tier(event: ReloadEvent) -> Option<ReloadTier> {
@@ -253,33 +253,33 @@ impl WorkerReload {
         }
     }
 
-    /// Record a realm the runner has just mounted as current with the latest
+    /// Record a UI runtime the runner has just mounted as current with the latest
     /// patch: its tree was built from the code loaded now, so it must apply
-    /// every later patch, including one another realm's boundary polls
-    /// before this realm's first frame. The runner calls this right after
+    /// every later patch, including one another UI runtime's boundary polls
+    /// before this UI runtime's first frame. The runner calls this right after
     /// the root attaches.
-    pub(crate) fn register_realm(&self, realm: &UiRealm) {
+    pub(crate) fn register_ui_runtime(&self, ui_runtime: &UiRuntime) {
         let Some(reload) = &self.0 else {
             return;
         };
         let mut slot = reload.0.lock();
         let epoch = slot.epoch;
-        slot.seen.insert(realm.realm_id(), epoch);
+        slot.seen.insert(ui_runtime.id(), epoch);
     }
 
-    /// Poll the hook at `realm`'s frame boundary and reassemble the realm
+    /// Poll the hook at `ui_runtime`'s frame boundary and reassemble the UI runtime
     /// if a patch has arrived that it has not applied yet.
     ///
-    /// A patch reaches every realm exactly once: the poll that sees it
-    /// advances an epoch, and each realm applies the latest patch when its
-    /// own boundary finds it behind. A realm the runner did not
-    /// [register](Self::register_realm) starts at the epoch of its first
+    /// A patch reaches every UI runtime exactly once: the poll that sees it
+    /// advances an epoch, and each UI runtime applies the latest patch when its
+    /// own boundary finds it behind. A UI runtime the runner did not
+    /// [register](Self::register_ui_runtime) starts at the epoch of its first
     /// poll, so it never replays a patch older than itself.
-    pub(crate) fn poll_and_apply(&self, realm: &UiRealm) {
+    pub(crate) fn poll_and_apply(&self, ui_runtime: &UiRuntime) {
         let Some(reload) = &self.0 else {
             return;
         };
-        let id = realm.realm_id();
+        let id = ui_runtime.id();
         {
             let mut slot = reload.0.lock();
             let epoch = slot.epoch;
@@ -305,7 +305,7 @@ impl WorkerReload {
         };
         if let Some(tier) = apply {
             tracing::info!(?tier, "hot reload: reassembling");
-            realm.perform_hot_reload_entered(tier);
+            ui_runtime.perform_hot_reload_entered(tier);
         }
     }
 }

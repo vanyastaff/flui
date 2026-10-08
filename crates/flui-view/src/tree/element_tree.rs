@@ -2129,7 +2129,7 @@ impl ElementTree {
     ///
     /// Walks from the root via `child_ids`, so soft-removed keyed elements
     /// parked in the inactive queue are NOT replayed. The caller
-    /// (`WidgetsBinding::install_tree_observer`) holds the realm write lock
+    /// (`WidgetsBinding::install_tree_observer`) holds the UI runtime write lock
     /// across replay + install, so no mutation can interleave.
     pub fn replay_mounts(&self, observer: &dyn flui_foundation::observe::TreeObserver) {
         let Some(root) = self.root else {

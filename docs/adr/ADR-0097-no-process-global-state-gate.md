@@ -1,4 +1,4 @@
-# ADR-0097: Process-global state is gated: one trampoline cell, everything else realm-owned
+# ADR-0097: Process-global state is gated: one trampoline cell, everything else UI runtime-owned
 
 - **Status:** Accepted in part (2026-09-26): §1–§4, the gate (`cargo xtask globals`) and its
   seeded allowlist; removing each global remains with its exit ADR. Of the entries whose exit
@@ -31,8 +31,8 @@ inventory as of the ADR's date.
 
 ## Context
 
-ADR-0027 makes the realm the owner of UI state: scheduler, focus, GlobalKeys, tickers. The code
-still carries process-global and thread-global state that no realm owns. Examples, each
+ADR-0027 makes the UI runtime the owner of UI state: scheduler, focus, GlobalKeys, tickers. The code
+still carries process-global and thread-global state that no UI runtime owns. Examples, each
 re-checked:
 
 | Item | Where | Kind |
@@ -40,7 +40,7 @@ re-checked:
 | `FONT_SYSTEM` | flui-painting's `text_layout/layout.rs:124` | `static OnceLock<Arc<Mutex<FontState>>>` |
 | `TIME_DILATION` | `crates/flui-scheduler/src/config.rs:43`, written at `:94` | `static AtomicU64` holding configuration |
 | `AssetRegistry::global` | `crates/flui-assets/src/registry/mod.rs:83-90` | `static LazyLock<AssetRegistry>` behind a `pub fn` |
-| `APP_RUNTIME` | `crates/flui-app/src/app/runner/host.rs:25-47` | `thread_local!` host of every realm |
+| `APP_RUNTIME` | `crates/flui-app/src/app/runner/host.rs:25-47` | `thread_local!` host of every UI runtime |
 | `POLLING_PENDING_WINDOWS`, `PENDING_SECONDARY_WINDOW_OPENS`, `PENDING_SECONDARY_WINDOW_COMPLETIONS` | `crates/flui-app/src/app/runner/secondary_window.rs:453-471` | `thread_local!` queues beside the host cell |
 | `REQUEST_REBUILD` | `crates/flui-hot-reload/src/dispatch.rs:24` | `static LazyLock<Mutex<…>>` hook slot |
 | `REGISTRY_STACK`, `TEST_REGISTRY` | `crates/flui-view/src/key/registry.rs:198-212` | `thread_local!`, `ManuallyDrop` for a hot-reload cdylib |
@@ -59,9 +59,9 @@ to find their owner (`DELEGATE_STATE`, `crates/flui-platform/src/platforms/ios/p
 29, and it cannot tell a counter from configuration or leave out inline test modules. The inventory
 is whatever the scan below produces.
 
-This state costs three things. It breaks isolation: two realms share one font system and one
+This state costs three things. It breaks isolation: two UI runtimes share one font system and one
 time dilation, and `TIME_DILATION` contradicts ADR-0027 §8 ("Tickers and animation controllers
-belong to their realm's scheduler"). It breaks code patching: a copy of a static in a second
+belong to their UI runtime's scheduler"). It breaks code patching: a copy of a static in a second
 image, or a reset thread-local, splits whatever lives there — the dlopen worker already needed
 a fix for its own `FONT_SYSTEM` (`docs/hot-reload.md:213`), and ADR-0094 makes globals reduction
 a precondition of its spike. It breaks determinism of tests that run in one process.
@@ -122,7 +122,7 @@ findings like any other: `TIME_DILATION` is configuration, not an identifier.
   `crates/flui-platform/src/platforms/` may hold at most one of its own. The entry is declared
   with class `trampoline`, and the gate fails if a crate other than `flui-app` and
   `flui-platform`, or a second cell in the host or in one backend module, claims it. The secondary-window queues
-  beside `APP_RUNTIME` are not trampolines; they fold into it or into a realm.
+  beside `APP_RUNTIME` are not trampolines; they fold into it or into a UI runtime.
 - **Everything else** is an allowlist entry with a reason and either an `exit`, the ADR whose
   change removes it (`FONT_SYSTEM` → ADR-0092; `NAVIGATOR_COMMAND_TARGETS` → ADR-0093;
   `REQUEST_REBUILD` and `REGISTRY_STACK`'s `ManuallyDrop` form → ADR-0094; `TIME_DILATION`
@@ -234,6 +234,6 @@ runs on the pinned stable toolchain, which dylint does not.
 - `cargo xtask globals` is green on the seeded allowlist and is part of `cargo xtask checks`,
   pinned by the checks-list test. Adding `static X: std::sync::Mutex<u8> = …;` to any scanned
   file, or removing a seeded entry, makes it exit 1.
-- Each removal lands with a test that fails with the global back: two realms with different time
-  dilation animate at different rates; two realms register different fonts and each shapes only
-  with its own; a navigation intent reaches the realm that owns the router.
+- Each removal lands with a test that fails with the global back: two UI runtimes with different time
+  dilation animate at different rates; two UI runtimes register different fonts and each shapes only
+  with its own; a navigation intent reaches the UI runtime that owns the router.

@@ -42,7 +42,7 @@
 //!
 //! # Determinism
 //!
-//! Text is measured and painted on the realm's font collection, which holds
+//! Text is measured and painted on the UI runtime's font collection, which holds
 //! only the bundled faces, so the geometry and the recorded paragraphs do not
 //! depend on the host; carets come from the same layout. Nothing in the test
 //! host scans this machine's fonts. Everything else in the serialized form is

@@ -46,7 +46,7 @@ use super::{SchedulerClosed, SchedulerInner};
 ///
 /// This runs only once every strong [`super::UpdateScheduler`] reference is gone —
 /// the ordinary `Arc` rule, nothing special to this type. A task holding its
-/// OWN strong clone (captured into an `async` block spawned on the realm's
+/// OWN strong clone (captured into an `async` block spawned on the UI runtime's
 /// [`AsyncDriver`](crate::AsyncDriver), say) defers this for as long as that
 /// task is still pending, and a live strong clone anywhere else — an embedder
 /// holding one, another thread's handle — does the same. The scheduler's
