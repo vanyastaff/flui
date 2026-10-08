@@ -108,6 +108,7 @@ struct Effects {
     native_sizes: RefCell<Vec<(Size<f64>, f64)>>,
     fail_resize: Cell<bool>,
     fail_tail: Cell<bool>,
+    geometry_gate: RefCell<Option<flui_foundation::ManualClock>>,
 }
 
 impl OwnerEffects for Effects {
@@ -128,6 +129,16 @@ impl OwnerEffects for Effects {
     fn frame(&self, address: PresentationAddress, runtime: &mut UiRuntime) {
         assert_eq!(address, self.address);
         self.trace.borrow_mut().push("frame");
+        let gate = self.geometry_gate.borrow_mut().take();
+        if let Some(clock) = gate {
+            // Match a native runner's before-gate drain followed by a frame,
+            // with deliberately slow host work between the two entrypoints.
+            runtime.drain_owner_inbox();
+            clock.advance(std::time::Duration::from_secs(2));
+            self.frame_time.set(
+                flui_foundation::MonotonicClock::now(&clock) - std::time::Duration::from_millis(16),
+            );
+        }
         let now = self.frame_time.get() + std::time::Duration::from_millis(16);
         self.frame_time.set(now);
         let presented = runtime
@@ -250,6 +261,7 @@ fn resize_and_surface_restore_reach_the_product_frame() {
         native_sizes: RefCell::new(Vec::new()),
         fail_resize: Cell::new(false),
         fail_tail: Cell::new(false),
+        geometry_gate: RefCell::new(None),
     };
     let frames = owner.frame_dispatcher(address).expect("frame authority");
     frames.deliver(&effects).expect("initial frame");
@@ -454,6 +466,7 @@ fn a_secondary_window_observation_does_not_present_the_primary() {
         native_sizes: RefCell::new(Vec::new()),
         fail_resize: Cell::new(false),
         fail_tail: Cell::new(false),
+        geometry_gate: RefCell::new(None),
     };
     let frames = owner.frame_dispatcher(primary).expect("primary frames");
     frames.deliver(&effects).expect("initial frame");
@@ -484,6 +497,10 @@ fn owner_metrics_contract() {
             (
                 "native_geometry_controls_admission_and_retries_without_a_frame",
                 native_geometry_controls_admission_and_retries_without_a_frame as fn(),
+            ),
+            (
+                "late_geometry_recovery_is_isolated_per_presentation",
+                late_geometry_recovery_is_isolated_per_presentation as fn(),
             ),
             (
                 "wheel_preferences_reach_the_next_mounted_input",
@@ -521,12 +538,195 @@ fn owner_metrics_contract() {
     );
 }
 
+fn late_geometry_recovery_is_isolated_per_presentation() {
+    use flui_foundation::{
+        ManualClock, MonotonicClock,
+        geometry::{DevicePixelRatio, Offset},
+    };
+    use flui_interaction::{
+        events::PointerKind,
+        testing::input::{pointer_down, pointer_move, pointer_up},
+    };
+    use flui_platform_api::{
+        Distance, GestureGeometry, PlatformInput, PreferenceQueryError, SystemPreferences,
+    };
+    use std::{
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+        },
+        time::Duration,
+    };
+
+    let owner = OwnerHost::new();
+    let clock = ManualClock::new();
+    let mut recipients = Vec::new();
+    for ratio in [1.0, 2.0] {
+        let window = Arc::new(GeometryWindow {
+            inner: Arc::clone(crate::owner_publication::window().window()),
+            answer: Mutex::new(Err(PreferenceQueryError::Unavailable)),
+            calls: AtomicUsize::new(0),
+            query_time: Mutex::new(None),
+            panic_next: AtomicBool::new(false),
+        });
+        let fonts = flui_painting::FontCollection::new();
+        let mut services = flui_runtime::ui_runtime::RuntimeHostServices::new(
+            Arc::new(|| {}),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(flui_platform_api::InMemoryClipboard::new()),
+            &fonts,
+            flui_scheduler::ClockSource::Manual(clock.clone()),
+        );
+        if let Some(snapshot) = owner.preferences().expect("host preferences") {
+            services = services.with_preferences(snapshot);
+        }
+        let runtime = UiRuntime::new(
+            flui_runtime::presentation::PresentationWindow::new(window.clone(), None),
+            ratio,
+            services,
+        )
+        .expect("late runtime");
+        let taps = Rc::new(Cell::new(0));
+        let output = Rc::clone(&taps);
+        runtime
+            .attach_root_widget_with_size(
+                &flui_widgets::GestureDetector::new()
+                    .on_tap(move |_| output.set(output.get() + 1))
+                    .child(flui_widgets::ColoredBox::new(
+                        flui_painting::styling::Color::RED,
+                    )),
+                800.0,
+                600.0,
+            )
+            .expect("mounted cold recipient");
+        let address = owner
+            .publication(owner.prepare_runtime(runtime))
+            .expect("publish recipient")
+            .commit();
+        let size = Rc::new(Cell::new((800, 600)));
+        let effects = Effects {
+            address,
+            sink: RefCell::new(Sink {
+                size: Rc::clone(&size),
+                submitted: 0,
+            }),
+            size,
+            frame_time: Cell::new(clock.now()),
+            trace: RefCell::default(),
+            expects_present: Cell::new(None),
+            owner: owner.clone(),
+            burst: Cell::new(false),
+            native_sizes: RefCell::default(),
+            fail_resize: Cell::new(false),
+            fail_tail: Cell::new(false),
+            geometry_gate: RefCell::new(None),
+        };
+        owner
+            .frame_dispatcher(address)
+            .expect("frame")
+            .deliver(&effects)
+            .expect("first cold layout");
+        if recipients.is_empty() {
+            owner
+                .update_preferences(
+                    SystemPreferences::default().with_high_contrast(true),
+                    &effects,
+                )
+                .expect("accepted host snapshot before late recipient");
+        }
+        recipients.push((window, effects, taps, ratio));
+    }
+    let tap = |index: usize| {
+        let (_, effects, _, _) = &recipients[index];
+        let target = owner
+            .presentation_dispatcher(effects.address)
+            .expect("input");
+        for event in [
+            pointer_down(Offset::new(40.0, 40.0), PointerKind::Touch).expect("down"),
+            pointer_move(Offset::new(45.0, 40.0), PointerKind::Touch).expect("move"),
+            pointer_up(Offset::new(45.0, 40.0), PointerKind::Touch).expect("up"),
+        ] {
+            target
+                .input(PlatformInput::Pointer(event), effects)
+                .expect("contact");
+        }
+    };
+    tap(0);
+    tap(1);
+    assert_eq!(
+        (recipients[0].2.get(), recipients[1].2.get()),
+        (1, 1),
+        "both cold presentations admit baseline contacts"
+    );
+    let before = recipients
+        .iter()
+        .map(|(window, _, _, _)| window.calls.load(Ordering::Relaxed))
+        .collect::<Vec<_>>();
+    for (window, _, _, ratio) in &recipients {
+        *window.answer.lock().expect("script") = Ok(Some(
+            GestureGeometry::new(DevicePixelRatio::new(*ratio).expect("ratio"))
+                .with_touch_slop(Distance::new(2.0).expect("slop")),
+        ));
+    }
+    clock.advance(Duration::from_millis(101));
+    owner
+        .runtime_dispatcher(recipients[1].1.address.ui_runtime_id)
+        .expect("late runtime")
+        .deliver(
+            flui_runtime::owner::RuntimeOperation::Background,
+            &recipients[1].1,
+        )
+        .expect("late recovery");
+    assert_eq!(
+        recipients[0].0.calls.load(Ordering::Relaxed),
+        before[0],
+        "another runtime's turn cannot consume the first presentation's debt"
+    );
+    assert_eq!(recipients[1].0.calls.load(Ordering::Relaxed), before[1] + 1);
+    tap(0);
+    tap(1);
+    assert_eq!(
+        (recipients[0].2.get(), recipients[1].2.get()),
+        (2, 1),
+        "only recovered presentation adopts its exact DPI profile"
+    );
+    owner
+        .presentation_dispatcher(recipients[0].1.address)
+        .expect("first presentation")
+        .close(&recipients[0].1)
+        .expect("close pending recipient");
+    assert_eq!(
+        owner.next_wake().expect("remaining presentation"),
+        None,
+        "closing one recipient cancels only its unresolved query"
+    );
+    clock.advance(Duration::from_secs(2));
+    owner
+        .runtime_dispatcher(recipients[1].1.address.ui_runtime_id)
+        .expect("surviving runtime")
+        .deliver(
+            flui_runtime::owner::RuntimeOperation::Background,
+            &recipients[1].1,
+        )
+        .expect("survivor continues");
+    tap(1);
+    assert_eq!(recipients[1].2.get(), 1);
+    assert_eq!(
+        recipients[0].0.calls.load(Ordering::Relaxed),
+        before[0],
+        "closed query cannot revive"
+    );
+    owner.shutdown(&recipients[1].1);
+}
+
 struct GeometryWindow {
     inner: std::sync::Arc<dyn flui_platform_api::PlatformWindow>,
     answer: std::sync::Mutex<
         Result<Option<flui_platform_api::GestureGeometry>, flui_platform_api::PreferenceQueryError>,
     >,
     calls: std::sync::atomic::AtomicUsize,
+    query_time: std::sync::Mutex<Option<(flui_foundation::ManualClock, std::time::Duration)>>,
+    panic_next: std::sync::atomic::AtomicBool,
 }
 
 impl flui_platform_api::PlatformWindow for GeometryWindow {
@@ -566,6 +766,16 @@ impl flui_platform_api::PlatformWindow for GeometryWindow {
     {
         self.calls
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if self
+            .panic_next
+            .swap(false, std::sync::atomic::Ordering::Relaxed)
+        {
+            panic!("scripted geometry query failure");
+        }
+        let query_time = self.query_time.lock().expect("query duration").clone();
+        if let Some((clock, duration)) = query_time {
+            clock.advance(duration);
+        }
         self.answer.lock().expect("query script").clone()
     }
 }
@@ -598,6 +808,8 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
                 .with_touch_slop(Distance::new(2.0).expect("distance")),
         ))),
         calls: AtomicUsize::new(0),
+        query_time: std::sync::Mutex::new(None),
+        panic_next: AtomicBool::new(false),
     });
     let runtime = UiRuntime::new(
         flui_runtime::presentation::PresentationWindow::new(window.clone(), None),
@@ -613,10 +825,13 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
     .expect("runtime");
     let taps = Rc::new(Cell::new(0));
     let output = taps.clone();
+    let holds = Rc::new(Cell::new(0));
+    let held = holds.clone();
     runtime
         .attach_root_widget_with_size(
             &flui_widgets::GestureDetector::new()
                 .on_tap(move |_| output.set(output.get() + 1))
+                .on_long_press(move |_| held.set(held.get() + 1))
                 .child(flui_widgets::ColoredBox::new(
                     flui_painting::styling::Color::RED,
                 )),
@@ -644,15 +859,13 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
         native_sizes: RefCell::new(Vec::new()),
         fail_resize: Cell::new(false),
         fail_tail: Cell::new(false),
+        geometry_gate: RefCell::new(None),
     };
     owner
         .frame_dispatcher(address)
         .expect("frames")
         .deliver(&effects)
         .expect("layout");
-    owner
-        .update_preferences(SystemPreferences::default(), &effects)
-        .expect("preferences");
     let target = owner.presentation_dispatcher(address).expect("input");
     let tap = || {
         for event in [
@@ -669,8 +882,11 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
     assert_eq!(
         taps.get(),
         0,
-        "native slop cancels a five-pixel tap without rebuilding"
+        "first presentation admission uses native geometry before any host revision"
     );
+    owner
+        .update_preferences(SystemPreferences::default(), &effects)
+        .expect("preferences");
     *window.answer.lock().expect("script") = Err(PreferenceQueryError::Unavailable);
     owner
         .update_preferences(
@@ -705,6 +921,272 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
         effects.sink.borrow().submitted,
         1,
         "query retry does not submit a frame"
+    );
+
+    let geometry = |ratio, slop| {
+        Some(
+            GestureGeometry::new(DevicePixelRatio::new(ratio).expect("ratio"))
+                .with_touch_slop(Distance::new(slop).expect("distance")),
+        )
+    };
+    *window.answer.lock().expect("script") = Ok(geometry(1.0, 2.0));
+    owner
+        .update_preferences(SystemPreferences::default(), &effects)
+        .expect("restored native geometry");
+    target
+        .input(
+            PlatformInput::Pointer(
+                pointer_down(Offset::new(40.0, 40.0), PointerKind::Touch).expect("down"),
+            ),
+            &effects,
+        )
+        .expect("retained contact");
+    *window.answer.lock().expect("script") = Err(PreferenceQueryError::Unavailable);
+    target
+        .observe(
+            WindowObservation::Metrics {
+                size: Size::new(800.0, 600.0),
+                scale_factor: 2.0,
+            },
+            &effects,
+        )
+        .expect("accepted new DPI");
+    for event in [
+        pointer_move(Offset::new(45.0, 40.0), PointerKind::Touch).expect("move"),
+        pointer_up(Offset::new(45.0, 40.0), PointerKind::Touch).expect("up"),
+    ] {
+        target
+            .input(PlatformInput::Pointer(event), &effects)
+            .expect("retained terminal");
+    }
+    assert_eq!(
+        taps.get(),
+        1,
+        "old active contact retains the accepted DPI1 threshold"
+    );
+    tap();
+    assert_eq!(
+        taps.get(),
+        2,
+        "fresh contact uses baseline after DPI2 query failure"
+    );
+    target
+        .input(
+            PlatformInput::Pointer(
+                pointer_down(Offset::new(40.0, 40.0), PointerKind::Touch).expect("down"),
+            ),
+            &effects,
+        )
+        .expect("fallback admission");
+    *window.answer.lock().expect("script") = Ok(geometry(2.0, 1.0));
+    let due = owner.next_wake().expect("wake").expect("query retry");
+    clock.advance(due.duration_since(clock.now()) + Duration::from_millis(1));
+    owner
+        .runtime_dispatcher(address.ui_runtime_id)
+        .expect("background")
+        .deliver(flui_runtime::owner::RuntimeOperation::Background, &effects)
+        .expect("retry");
+    for event in [
+        pointer_move(Offset::new(45.0, 40.0), PointerKind::Touch).expect("move"),
+        pointer_up(Offset::new(45.0, 40.0), PointerKind::Touch).expect("up"),
+    ] {
+        target
+            .input(PlatformInput::Pointer(event), &effects)
+            .expect("fallback terminal");
+    }
+    assert_eq!(
+        taps.get(),
+        3,
+        "already admitted fallback contact survives successful refresh"
+    );
+    tap();
+    assert_eq!(
+        taps.get(),
+        3,
+        "next contact adopts exact DPI2 native threshold"
+    );
+
+    *window.answer.lock().expect("script") = Ok(geometry(2.0, f64::MAX));
+    owner
+        .update_preferences(
+            SystemPreferences::default()
+                .with_high_contrast(true)
+                .with_gestures(
+                    flui_platform_api::GesturePreferences::default()
+                        .with_long_press_timeout(Duration::from_millis(10)),
+                ),
+            &effects,
+        )
+        .expect("finite maximum native observation");
+    assert_eq!(
+        owner.next_wake().expect("successful query acknowledged"),
+        None,
+        "successful native query creates no retry debt"
+    );
+    tap();
+    assert_eq!(
+        taps.get(),
+        4,
+        "runtime's equal touch tiers admit the finite maximum without inventing overflow"
+    );
+    target
+        .input(
+            PlatformInput::Pointer(
+                pointer_down(Offset::new(40.0, 40.0), PointerKind::Touch).expect("down"),
+            ),
+            &effects,
+        )
+        .expect("latest timing admission");
+    clock.advance(Duration::from_millis(20));
+    effects
+        .frame_time
+        .set(clock.now() - Duration::from_millis(16));
+    owner
+        .frame_dispatcher(address)
+        .expect("frames")
+        .deliver(&effects)
+        .expect("real hold deadline frame");
+    assert_eq!(
+        holds.get(),
+        1,
+        "native geometry publication preserves latest accepted timing"
+    );
+    target
+        .input(
+            PlatformInput::Pointer(
+                pointer_up(Offset::new(40.0, 40.0), PointerKind::Touch).expect("up"),
+            ),
+            &effects,
+        )
+        .expect("hold terminal");
+    *window.answer.lock().expect("script") = Ok(None);
+    owner
+        .update_preferences(SystemPreferences::default(), &effects)
+        .expect("healthy following barrier");
+    tap();
+    assert_eq!(
+        taps.get(),
+        5,
+        "a subsequent accepted absence restores baseline after maximum native geometry"
+    );
+
+    let submissions_before_retries = effects.sink.borrow().submitted;
+    *window.answer.lock().expect("script") = Err(PreferenceQueryError::Unavailable);
+    owner
+        .update_preferences(
+            SystemPreferences::default().with_high_contrast(true),
+            &effects,
+        )
+        .expect("bounded failure");
+    let background = owner
+        .runtime_dispatcher(address.ui_runtime_id)
+        .expect("background");
+    for delay in [100, 200, 400, 800, 1000, 1000] {
+        let before = window.calls.load(Ordering::Relaxed);
+        let due = owner.next_wake().expect("wake").expect("retry");
+        assert_eq!(
+            due.duration_since(clock.now()),
+            Duration::from_millis(delay)
+        );
+        background
+            .deliver(flui_runtime::owner::RuntimeOperation::Background, &effects)
+            .expect("early turn");
+        assert_eq!(
+            window.calls.load(Ordering::Relaxed),
+            before,
+            "early owner turn never spins"
+        );
+        clock.advance(Duration::from_millis(delay));
+        background
+            .deliver(flui_runtime::owner::RuntimeOperation::Background, &effects)
+            .expect("due turn");
+        assert_eq!(
+            window.calls.load(Ordering::Relaxed),
+            before + 1,
+            "one due query per presentation per turn"
+        );
+    }
+    assert_eq!(
+        effects.sink.borrow().submitted,
+        submissions_before_retries,
+        "failure recovery produces no synthetic frames"
+    );
+    *window.query_time.lock().expect("scripted slow read") =
+        Some((clock.clone(), Duration::from_millis(1200)));
+    let before_slow = window.calls.load(Ordering::Relaxed);
+    let due = owner.next_wake().expect("wake").expect("retry");
+    clock.advance(due.duration_since(clock.now()));
+    background
+        .deliver(flui_runtime::owner::RuntimeOperation::Background, &effects)
+        .expect("slow failed query");
+    assert_eq!(
+        window.calls.load(Ordering::Relaxed),
+        before_slow + 1,
+        "a slow getter cannot consume two attempts in one owner turn"
+    );
+    *window.query_time.lock().expect("restore read duration") = None;
+    let before_gate = window.calls.load(Ordering::Relaxed);
+    let due = owner.next_wake().expect("wake").expect("retry");
+    clock.advance(due.duration_since(clock.now()));
+    *effects.geometry_gate.borrow_mut() = Some(clock.clone());
+    owner
+        .frame_dispatcher(address)
+        .expect("normal frame")
+        .deliver(&effects)
+        .expect("slow native gate then normal pump");
+    assert_eq!(
+        window.calls.load(Ordering::Relaxed),
+        before_gate + 1,
+        "native before-gate drain and frame pump share one structural attempt budget even after deadline passes"
+    );
+    window.panic_next.store(true, Ordering::Relaxed);
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        owner
+            .update_preferences(SystemPreferences::default(), &effects)
+            .expect("panicking query barrier");
+    }))
+    .expect_err("getter failure remains authoritative");
+    assert_eq!(
+        failure.downcast_ref::<&str>(),
+        Some(&"scripted geometry query failure")
+    );
+    *window.answer.lock().expect("recovery") = Ok(geometry(2.0, 2.0));
+    let before_recovery = window.calls.load(Ordering::Relaxed);
+    let due = owner
+        .next_wake()
+        .expect("wake after containment")
+        .expect("accepted retry survives panic");
+    clock.advance(due.duration_since(clock.now()));
+    background
+        .deliver(flui_runtime::owner::RuntimeOperation::Background, &effects)
+        .expect("next operation recovers after panic");
+    assert_eq!(
+        window.calls.load(Ordering::Relaxed),
+        before_recovery + 1,
+        "unwinding resets the owner turn budget for recovery"
+    );
+    let before_tap = taps.get();
+    tap();
+    assert_eq!(
+        taps.get(),
+        before_tap,
+        "recovered native threshold reaches actual next admission"
+    );
+    *window.answer.lock().expect("pending before close") = Err(PreferenceQueryError::Unavailable);
+    owner
+        .update_preferences(
+            SystemPreferences::default().with_high_contrast(true),
+            &effects,
+        )
+        .expect("debt before close");
+    let before = window.calls.load(Ordering::Relaxed);
+    target.close(&effects).expect("close with pending retry");
+    clock.advance(Duration::from_secs(2));
+    assert_eq!(owner.next_wake().expect("closed deadlines"), None);
+    assert_eq!(
+        window.calls.load(Ordering::Relaxed),
+        before,
+        "retired address cannot retry its query"
     );
 }
 
@@ -753,6 +1235,7 @@ fn wheel_preferences_reach_the_next_mounted_input() {
             native_sizes: RefCell::new(Vec::new()),
             fail_resize: Cell::new(false),
             fail_tail: Cell::new(false),
+            geometry_gate: RefCell::new(None),
         };
         owner
             .frame_dispatcher(address)
@@ -1032,6 +1515,7 @@ fn gesture_preferences_are_captured_in_input_order_before_a_frame() {
             native_sizes: RefCell::new(Vec::new()),
             fail_resize: Cell::new(false),
             fail_tail: Cell::new(false),
+            geometry_gate: RefCell::new(None),
         };
         let frames = owner.frame_dispatcher(address).expect("frame dispatcher");
         let frame = |duration| {
@@ -1164,6 +1648,7 @@ fn preference_fanout_survives_a_failing_runtime() {
                 native_sizes: RefCell::default(),
                 fail_resize: Cell::new(false),
                 fail_tail: Cell::new(false),
+                geometry_gate: RefCell::new(None),
             };
             owner
                 .frame_dispatcher(address)
@@ -1277,6 +1762,7 @@ fn queued_state_bursts_coalesce_between_observing_frames() {
         native_sizes: RefCell::new(Vec::new()),
         fail_resize: Cell::new(false),
         fail_tail: Cell::new(false),
+        geometry_gate: RefCell::new(None),
     };
     owner
         .frame_dispatcher(address)
@@ -1379,6 +1865,7 @@ fn resize_failure_preserves_other_batched_window_state() {
             native_sizes: RefCell::new(Vec::new()),
             fail_resize: Cell::new(false),
             fail_tail: Cell::new(false),
+            geometry_gate: RefCell::new(None),
         };
         let frame = owner.frame_dispatcher(address).expect("frame");
         let target = owner.presentation_dispatcher(address).expect("window");
@@ -1574,6 +2061,7 @@ fn pointer_stream_and_keyboard_survive_interleaved_resize() {
                 native_sizes: RefCell::new(Vec::new()),
                 fail_resize: Cell::new(false),
                 fail_tail: Cell::new(false),
+                geometry_gate: RefCell::new(None),
             };
             let frame = owner.frame_dispatcher(address).expect("frame");
             frame

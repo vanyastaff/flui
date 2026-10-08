@@ -1,16 +1,50 @@
 use std::{
+    cell::RefCell,
     panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
     rc::Rc,
     time::Duration,
 };
 
-use flui_foundation::{MonotonicClock, geometry::DevicePixelRatio};
+use flui_foundation::{MonotonicClock, PresentationId, geometry::DevicePixelRatio};
 use flui_interaction::GestureSettings;
 use flui_platform_api::{GestureGeometry, PreferenceQueryError, SystemPreferences};
 use flui_rendering::binding::RendererBinding as _;
 
 use super::UiRuntime;
 use crate::{owner::SystemPreferencesSnapshot, presentation::PresentationState};
+
+type RetryBudget = Rc<RefCell<Option<Vec<PresentationId>>>>;
+
+/// An owner operation and its nested gates/pumps share one retry budget. The
+/// owned guard leaves no borrow on the runtime while the host drives a frame.
+pub(crate) enum GeometryTurn {
+    Owner(RetryBudget),
+    Joined(RetryBudget),
+}
+
+impl GeometryTurn {
+    fn admit(&self, id: PresentationId) -> bool {
+        let (Self::Owner(budget) | Self::Joined(budget)) = self;
+        let mut turn = budget.borrow_mut();
+        let attempts = turn
+            .as_mut()
+            .expect("BUG: geometry turn guard outlived its owner");
+        if attempts.contains(&id) {
+            return false;
+        }
+        attempts.push(id);
+        true
+    }
+}
+
+impl Drop for GeometryTurn {
+    fn drop(&mut self) {
+        if let Self::Owner(budget) = self {
+            // Only framework IDs retire here, with no user code or runtime borrow.
+            budget.borrow_mut().take();
+        }
+    }
+}
 
 #[derive(Debug)]
 pub(crate) struct GeometryProjection {
@@ -182,12 +216,40 @@ fn refresh(
             "system preferences publication",
         );
     }
+    // A slow failed getter/diagnostic must not return an already overdue retry.
+    // This pacing is separate from the structural per-operation turn budget.
+    let failure = catch_unwind(AssertUnwindSafe(|| {
+        let completed = MonotonicClock::now(presentation.clock().source());
+        let mut state = presentation.gesture_geometry.borrow_mut();
+        if let Some(debt) = state
+            .pending
+            .as_mut()
+            .filter(|debt| Rc::ptr_eq(&debt.barrier, &attempt.barrier))
+        {
+            debt.deadline = debt.deadline.max(completed + debt.delay);
+        }
+    }))
+    .err();
+    crate::lifecycle_state::preserve_first_lifecycle_panic(
+        &mut first_failure,
+        failure,
+        "gesture geometry retry pacing",
+    );
     if let Some(failure) = first_failure {
         resume_unwind(failure);
     }
 }
 
 impl UiRuntime {
+    pub(crate) fn begin_geometry_turn(&self) -> GeometryTurn {
+        let mut turn = self.geometry_turn.borrow_mut();
+        if turn.is_some() {
+            GeometryTurn::Joined(Rc::clone(&self.geometry_turn))
+        } else {
+            *turn = Some(Vec::new());
+            GeometryTurn::Owner(Rc::clone(&self.geometry_turn))
+        }
+    }
     pub(crate) fn refresh_gesture_context_for(&self, id: flui_foundation::PresentationId) {
         let Some(presentation) = self.presentations.get(id) else {
             return;
@@ -213,7 +275,7 @@ impl UiRuntime {
         );
     }
 
-    pub(super) fn service_gesture_geometry(&self) {
+    pub(super) fn service_gesture_geometry(&self, turn: &GeometryTurn) {
         let values = self
             .preferences
             .borrow()
@@ -223,6 +285,15 @@ impl UiRuntime {
         let now = self.clock.now();
         let mut first_failure = None;
         for presentation in self.presentations.iter() {
+            let due = !presentation.closing_requested.get()
+                && presentation
+                    .gesture_geometry
+                    .borrow()
+                    .next_wake()
+                    .is_some_and(|deadline| deadline <= now);
+            if !due || !turn.admit(presentation.id()) {
+                continue;
+            }
             let failure = catch_unwind(AssertUnwindSafe(|| {
                 refresh(
                     presentation,

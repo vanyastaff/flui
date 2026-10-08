@@ -184,6 +184,7 @@ impl UiRuntime {
         Ok(Self {
             id: ui_runtime_id,
             preferences: RefCell::new(preferences),
+            geometry_turn: std::rc::Rc::new(RefCell::new(None)),
             owner_frame,
             interaction_lane,
             global_key_scope,
