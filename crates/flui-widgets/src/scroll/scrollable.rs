@@ -67,7 +67,7 @@ use flui_foundation::{Listenable, ListenerId};
 use flui_rendering::constraints::AxisDirection;
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::pipeline::{PipelineOwner, WeakPipelineCell};
-use flui_rendering::view::{ScrollDirection, ScrollPosition};
+use flui_rendering::view::{ScrollDirection, ScrollPosition, ViewportOffset};
 use flui_view::prelude::StatefulView;
 use flui_view::{
     BoxedView, BuildContext, BuildContextExt, Child, InheritedView, IntoView, LifecycleContext,
@@ -84,7 +84,7 @@ use flui_platform_api::{
     pointer::{ScrollEvent, ScrollPrecision, ScrollUnit},
 };
 use flui_scheduler::PostFrameHandle;
-use flui_semantics::{ActionArgs, SemanticsAction};
+use flui_rendering::semantics::{ActionArgs, SemanticsAction};
 
 use super::scroll_position_scope::ScrollPositionScope;
 
