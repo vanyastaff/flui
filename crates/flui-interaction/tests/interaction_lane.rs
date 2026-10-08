@@ -713,8 +713,8 @@ fn assert_capture_route(case: CaptureCase) {
 
 #[test]
 fn binding_input_contract_matrix() {
-    if std::env::var_os("FLUI_HOVER_METADATA_WORKER").is_some() {
-        assert_hover_path_retirement(true, 2);
+    if let Ok(mode) = std::env::var("FLUI_HOVER_METADATA_WORKER") {
+        assert_hover_path_retirement(mode != "metadata-only", 2);
         return;
     }
     let cases: &[(&str, fn())] = &[
@@ -733,6 +733,14 @@ fn binding_input_contract_matrix() {
         (
             "hover_competing_metadata_drop",
             hover_competing_metadata_retirement_is_contained,
+        ),
+        (
+            "hover_metadata_failure_alone",
+            hover_metadata_retirement_failure_alone,
+        ),
+        (
+            "hover_metadata_failures_compete_without_body_failure",
+            hover_metadata_retirement_failures_compete_without_body_failure,
         ),
         (
             "non_finite_hover_move_is_refused",
@@ -1011,6 +1019,17 @@ fn assert_hover_path_retirement(callback_fails: bool, failing_metadata: usize) {
                 0,
                 "failed delivery retains last-owner opaque metadata before any destructor runs"
             );
+        } else if failing_metadata != 0 {
+            let first = outcome.expect_err("metadata retirement failed after healthy delivery");
+            assert_eq!(
+                first.downcast_ref::<&str>().copied(),
+                Some("later hover metadata retirement failure")
+            );
+            assert_eq!(
+                drops.load(Ordering::SeqCst),
+                1,
+                "the first failed metadata retirement retains later entries"
+            );
         } else {
             assert_eq!(outcome.expect("healthy hover delivery"), 1);
             assert_eq!(
@@ -1052,6 +1071,18 @@ fn hover_callback_failure_stays_first_before_metadata_drop() {
     assert_hover_path_retirement(true, 1);
 }
 fn hover_competing_metadata_retirement_is_contained() {
+    assert_isolated_hover_metadata_retirement("competing");
+}
+
+fn hover_metadata_retirement_failure_alone() {
+    assert_hover_path_retirement(false, 1);
+}
+
+fn hover_metadata_retirement_failures_compete_without_body_failure() {
+    assert_isolated_hover_metadata_retirement("metadata-only");
+}
+
+fn assert_isolated_hover_metadata_retirement(mode: &str) {
     // Two ordinary metadata destructors can abort a default path Vec Drop.
     // Isolate that baseline failure; no panic payload has a hostile destructor.
     let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
@@ -1060,7 +1091,7 @@ fn hover_competing_metadata_retirement_is_contained() {
             "interaction_lane::binding_input_contract_matrix",
             "--nocapture",
         ])
-        .env("FLUI_HOVER_METADATA_WORKER", "competing")
+        .env("FLUI_HOVER_METADATA_WORKER", mode)
         .env("RUST_BACKTRACE", "0")
         .output()
         .expect("isolated hover metadata worker");
