@@ -99,6 +99,13 @@ fn containment_and_isolation_matrix() {
     run_table(
         "containment_and_isolation_matrix",
         &[
+            ("runtime_input_lifecycle::mouse_motion_precedes_keyboard_without_a_frame", runtime_input_lifecycle::mouse_motion_precedes_keyboard_without_a_frame as fn()),
+            ("runtime_input_lifecycle::touch_motion_precedes_keyboard_without_a_frame", runtime_input_lifecycle::touch_motion_precedes_keyboard_without_a_frame as fn()),
+            ("runtime_input_lifecycle::resampled_mouse_motion_precedes_keyboard_without_a_frame", runtime_input_lifecycle::resampled_mouse_motion_precedes_keyboard_without_a_frame as fn()),
+            ("runtime_input_lifecycle::resampled_touch_motion_precedes_keyboard_without_a_frame", runtime_input_lifecycle::resampled_touch_motion_precedes_keyboard_without_a_frame as fn()),
+            ("runtime_input_lifecycle::motion_failure_keeps_following_keyboard_and_contact_terminal", runtime_input_lifecycle::motion_failure_keeps_following_keyboard_and_contact_terminal as fn()),
+            ("runtime_input_lifecycle::keyboard_failure_keeps_preceding_motion_and_contact_terminal", runtime_input_lifecycle::keyboard_failure_keeps_preceding_motion_and_contact_terminal as fn()),
+            ("runtime_input_lifecycle::motion_failure_precedes_competing_keyboard_failure_and_recovers", runtime_input_lifecycle::motion_failure_precedes_competing_keyboard_failure_and_recovers as fn()),
             ("runtime_input_lifecycle::held_replay_preserves_hardware_history_and_drag_velocity", runtime_input_lifecycle::held_replay_preserves_hardware_history_and_drag_velocity as fn()),
             ("runtime_input_lifecycle::a_secondary_contact_move_is_delivered_by_the_next_frame", runtime_input_lifecycle::a_secondary_contact_move_is_delivered_by_the_next_frame as fn()),
             ("runtime_input_lifecycle::host_pause_discards_a_queued_hover_before_resume", runtime_input_lifecycle::host_pause_discards_a_queued_hover_before_resume as fn()),
