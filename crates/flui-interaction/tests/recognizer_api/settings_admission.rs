@@ -1282,9 +1282,86 @@ fn native_touch_span_preserves_baseline_ratio() {
     scale.cancel();
 }
 
+fn native_scale_retains_estimator_until_end_and_readmits_next_begin() {
+    use flui_foundation::geometry::Offset;
+    use flui_interaction::{
+        processing::VelocityEstimator, recognizers::scale::PanZoomDisposition,
+        routing::PanZoomDispatch,
+    };
+    use flui_platform_api::pointer::{PanZoomEvent, PanZoomPhase, PanZoomTransform};
+
+    let old =
+        GestureSettings::touch_defaults().with_velocity_estimator(VelocityEstimator::LeastSquares);
+    let new = old
+        .clone()
+        .with_velocity_estimator(VelocityEstimator::Impulse);
+    let source = GestureSettingsSource::new(old.clone());
+    let ends = Rc::new(RefCell::new(Vec::new()));
+    let output = ends.clone();
+    let scale = ScaleGestureRecognizer::builder(GestureArena::new())
+        .settings(source.provider())
+        .on_end(move |details| output.borrow_mut().push(details.focal_velocity.dx()))
+        .build();
+    let info = PointerInfo::new(
+        PointerId::try_from(510_u64).expect("nonzero"),
+        PointerKind::Touch,
+    );
+    for (sequence, expected) in [500.0, 1_589.925_798_583_198_2, 500.0]
+        .into_iter()
+        .enumerate()
+    {
+        let base = u64::try_from(sequence).expect("small sequence") * 100;
+        let deliver = |millis, phase| {
+            let event = PanZoomEvent::new(
+                info,
+                EventTime::from_nanos((base + millis) * 1_000_000),
+                PointerPosition::try_new(Point::ZERO).expect("finite anchor"),
+                phase,
+            );
+            scale.handle_pan_zoom(PanZoomDispatch {
+                local: &event,
+                global: &event,
+            })
+        };
+        assert_eq!(
+            deliver(0, PanZoomPhase::Start),
+            PanZoomDisposition::Admitted
+        );
+        if sequence == 0 {
+            source.replace(new.clone());
+        } else if sequence == 1 {
+            source.replace(old.clone());
+        }
+        for (millis, x) in [(10, 30.0), (20, 50.0), (30, 60.0)] {
+            assert_eq!(
+                deliver(
+                    millis,
+                    PanZoomPhase::Update(
+                        PanZoomTransform::try_new(Offset::new(x, 0.0), 1.0, 0.0)
+                            .expect("finite native trajectory"),
+                    )
+                ),
+                PanZoomDisposition::Handled
+            );
+        }
+        assert_eq!(deliver(30, PanZoomPhase::End), PanZoomDisposition::Handled);
+        let delivered = ends.borrow();
+        assert_eq!(delivered.len(), sequence + 1);
+        assert!(
+            (delivered[sequence] - expected).abs() < 1e-6,
+            "native session {sequence}: got {}, expected {expected}",
+            delivered[sequence]
+        );
+    }
+}
+
 #[test]
 fn admitted_gesture_settings_contract() {
     let cases: &[(&str, fn())] = &[
+        (
+            "native scale estimator admission",
+            native_scale_retains_estimator_until_end_and_readmits_next_begin,
+        ),
         (
             "force press live drift admission",
             force_press_snapshots_live_drift_policy_at_down,
