@@ -28,10 +28,10 @@ pub use pointer::{
 #[must_use]
 pub(crate) fn pointer_info(event: &PointerEvent) -> Option<&PointerInfo> {
     match event {
-        PointerEvent::Down(data) => Some(&data.pointer),
-        PointerEvent::Up(data) => Some(&data.pointer),
-        PointerEvent::ButtonChange(ButtonChange::Pressed(data)) => Some(&data.pointer),
-        PointerEvent::ButtonChange(ButtonChange::Released(data)) => Some(&data.pointer),
+        PointerEvent::Down(data)
+        | PointerEvent::ButtonChange(ButtonChange::Pressed(data)) => Some(&data.pointer),
+        PointerEvent::Up(data)
+        | PointerEvent::ButtonChange(ButtonChange::Released(data)) => Some(&data.pointer),
         PointerEvent::Move(data) => Some(&data.pointer),
         PointerEvent::Cancel(data) => Some(&data.pointer),
         PointerEvent::Enter(data)
@@ -47,10 +47,10 @@ pub(crate) fn pointer_info(event: &PointerEvent) -> Option<&PointerInfo> {
 #[must_use]
 fn pointer_sample(event: &PointerEvent) -> Option<&PointerSample> {
     match event {
-        PointerEvent::Down(data) => Some(&data.sample),
-        PointerEvent::Up(data) => Some(&data.sample),
-        PointerEvent::ButtonChange(ButtonChange::Pressed(data)) => Some(&data.sample),
-        PointerEvent::ButtonChange(ButtonChange::Released(data)) => Some(&data.sample),
+        PointerEvent::Down(data)
+        | PointerEvent::ButtonChange(ButtonChange::Pressed(data)) => Some(&data.sample),
+        PointerEvent::Up(data)
+        | PointerEvent::ButtonChange(ButtonChange::Released(data)) => Some(&data.sample),
         PointerEvent::Move(data) => Some(data.current()),
         _ => None,
     }
@@ -60,10 +60,10 @@ fn pointer_sample(event: &PointerEvent) -> Option<&PointerSample> {
 #[must_use]
 pub(crate) fn event_time(event: &PointerEvent) -> Option<flui_platform_api::EventTime> {
     Some(match event {
-        PointerEvent::Down(data) => data.sample.time,
-        PointerEvent::Up(data) => data.sample.time,
-        PointerEvent::ButtonChange(ButtonChange::Pressed(data)) => data.sample.time,
-        PointerEvent::ButtonChange(ButtonChange::Released(data)) => data.sample.time,
+        PointerEvent::Down(data)
+        | PointerEvent::ButtonChange(ButtonChange::Pressed(data)) => data.sample.time,
+        PointerEvent::Up(data)
+        | PointerEvent::ButtonChange(ButtonChange::Released(data)) => data.sample.time,
         PointerEvent::Move(data) => data.current().time,
         PointerEvent::Scroll(data) => data.time,
         PointerEvent::PanZoom(data) => data.time,

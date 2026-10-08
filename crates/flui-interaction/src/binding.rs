@@ -370,13 +370,13 @@ struct RefusedContact {
 }
 
 enum RefusedContacts {
-    Tracking([Option<RefusedContact>; MAX_SIMULTANEOUS_POINTERS]),
+    Tracking(Box<[Option<RefusedContact>; MAX_SIMULTANEOUS_POINTERS]>),
     Saturated,
 }
 
 impl Default for RefusedContacts {
     fn default() -> Self {
-        Self::Tracking([None; MAX_SIMULTANEOUS_POINTERS])
+        Self::Tracking(Box::new([None; MAX_SIMULTANEOUS_POINTERS]))
     }
 }
 
@@ -1033,7 +1033,7 @@ impl GestureBinding {
         self.pending_moves
             .borrow()
             .values()
-            .any(|state| state.is_queued())
+            .any(PendingMoveState::is_queued)
             || self.hit_tests.borrow().values().any(|route| {
                 route.capture.release_requested() || route.resampler.has_pending_events()
             })
@@ -1502,7 +1502,7 @@ impl GestureBinding {
                         self.handle_pointer_event_after_signal_withdrawal(
                             &cancel,
                             terminal_hit_test,
-                        )
+                        );
                     });
                     RoutePanic::preserve_first(
                         &mut first_panic,
@@ -1997,9 +1997,9 @@ impl GestureBinding {
                         && (closing
                             || ending == Some(cached.pointer.id)
                             || (!cached.capture.is_delivering()
-                                && !moves
+                                && moves
                                     .get(&cached.pointer.id)
-                                    .is_some_and(|state| state.pending.is_none())))
+                                    .is_none_or(|state| state.pending.is_some())))
                 })
                 .map(|cached| (cached.pointer, cached.time, cached.sequence))
                 .collect()
