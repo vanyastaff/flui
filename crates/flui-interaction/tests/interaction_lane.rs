@@ -926,8 +926,10 @@ fn binding_input_contract_matrix() {
 }
 
 fn assert_hover_path_retirement(callback_fails: bool, failing_metadata: usize) {
-    use flui_interaction::events::{PointerEvent, PointerKind, make_move_event};
-    use flui_interaction::{GestureBinding, HitTestResult, Offset};
+    use flui_interaction::events::{
+        PointerEvent, PointerKind, make_move_event, make_move_event_for_id,
+    };
+    use flui_interaction::{GestureBinding, HitTestResult, Offset, PointerId};
     use std::{
         any::Any,
         cell::{Cell, RefCell},
@@ -967,10 +969,16 @@ fn assert_hover_path_retirement(callback_fails: bool, failing_metadata: usize) {
     let owner = Rc::clone(&external);
     let calls = Rc::new(Cell::new(0));
     let observed = Rc::clone(&calls);
+    let peer_calls = Rc::new(Cell::new(0));
+    let peer = Rc::clone(&peer_calls);
     binding
         .pointer_router()
         .add_global_handler(Rc::new(move |event| {
-            if matches!(event, PointerEvent::Move(_)) {
+            if let PointerEvent::Move(motion) = event {
+                if motion.pointer.id == PointerId::try_from(2_u64).expect("peer identity") {
+                    peer.set(peer.get() + 1);
+                    return;
+                }
                 observed.set(observed.get() + 1);
                 // The accepted hover path is now each payload's last owner. This
                 // retirement is safe before failure because that path still owns it.
@@ -1001,6 +1009,21 @@ fn assert_hover_path_retirement(callback_fails: bool, failing_metadata: usize) {
             }
             path
         });
+        let peer_movement = make_move_event_for_id(
+            PointerId::try_from(2_u64).expect("peer identity"),
+            Offset::new(30.0, 30.0),
+            PointerKind::Mouse,
+        )
+        .expect("finite peer hover");
+        let PointerEvent::Move(peer_motion) = peer_movement else {
+            unreachable!()
+        };
+        let peer_movement = PointerEvent::Move(flui_platform_api::pointer::PointerMove::new(
+            peer_motion.pointer,
+            flui_platform_api::pointer::PointerButtons::NONE,
+            *peer_motion.current(),
+        ));
+        binding.handle_pointer_event(&peer_movement, |_| HitTestResult::new());
         assert_eq!(
             calls.get(),
             0,
@@ -1031,7 +1054,7 @@ fn assert_hover_path_retirement(callback_fails: bool, failing_metadata: usize) {
                 "the first failed metadata retirement retains later entries"
             );
         } else {
-            assert_eq!(outcome.expect("healthy hover delivery"), 1);
+            assert_eq!(outcome.expect("healthy hover delivery"), 2);
             assert_eq!(
                 drops.load(Ordering::SeqCst),
                 1,
@@ -1043,6 +1066,11 @@ fn assert_hover_path_retirement(callback_fails: bool, failing_metadata: usize) {
             "callback released its independent metadata owners"
         );
         assert_eq!(calls.get(), 1);
+        assert_eq!(
+            peer_calls.get(),
+            1,
+            "metadata retirement cannot discard the remaining accepted frame peer"
+        );
         binding.pointer_router().clear();
         let healthy_calls = Rc::new(Cell::new(0));
         let healthy = Rc::clone(&healthy_calls);
