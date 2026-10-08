@@ -22,7 +22,7 @@
 //! still gets a fresh generational [`UiRuntimeId`], so results stamped for a
 //! dead runtime are droppable by identity, not by convention.
 
-mod preferences;
+pub(crate) mod preferences;
 mod presentation_factory;
 pub use presentation_factory::PresentationFactory;
 mod presentation_lifecycle;

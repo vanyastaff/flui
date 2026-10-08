@@ -1186,6 +1186,48 @@ fn nonrepresentable_component_estimate_is_refused() {
     }
 }
 
+fn force_press_snapshots_live_drift_policy_at_down() {
+    let arena = GestureArena::new();
+    let old = GestureSettings::touch_defaults();
+    let source = GestureSettingsSource::new(old.clone());
+    let starts = Rc::new(Cell::new(0));
+    let output = starts.clone();
+    let force = ForcePressGestureRecognizer::builder(arena.clone())
+        .settings(source.provider())
+        .on_start(move |_| output.set(output.get() + 1))
+        .build();
+    for (id, expected) in [(190, 1), (191, 1), (192, 2)] {
+        let mut down = event(id, PointerKind::Touch, id * 100, 0.0, 0.0, 0);
+        if let PointerEvent::Down(data) = &mut down {
+            data.sample.pressure = Some(Pressure::try_new(0.2).expect("valid pressure"));
+        }
+        send(&*force, &arena, &down);
+        if id == 190 {
+            source.replace(old.clone().try_with_touch_slop(2.0).expect("valid slop"));
+        }
+        let info = PointerInfo::new(
+            PointerId::try_from(id).expect("nonzero pointer"),
+            PointerKind::Touch,
+        );
+        let movement = PointerEvent::Move(PointerMove::new(
+            info,
+            PointerButtons::NONE.with(PointerButton::PRIMARY),
+            sample(id * 100 + 10, 5.0, 0.0)
+                .with_pressure(Pressure::try_new(0.7).expect("valid pressure")),
+        ));
+        send(&*force, &arena, &movement);
+        assert_eq!(
+            starts.get(),
+            expected,
+            "contact{id} retains admitted drift policy"
+        );
+        force.cancel();
+        if id == 191 {
+            source.replace(old.clone());
+        }
+    }
+}
+
 fn native_touch_span_preserves_baseline_ratio() {
     use flui_platform_api::Distance;
     let baseline = GestureSettings::touch_defaults()
@@ -1243,6 +1285,10 @@ fn native_touch_span_preserves_baseline_ratio() {
 #[test]
 fn admitted_gesture_settings_contract() {
     let cases: &[(&str, fn())] = &[
+        (
+            "force press live drift admission",
+            force_press_snapshots_live_drift_policy_at_down,
+        ),
         (
             "native touch span ratio",
             native_touch_span_preserves_baseline_ratio,

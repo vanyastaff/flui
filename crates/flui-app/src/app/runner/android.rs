@@ -143,22 +143,19 @@ where
         let surface_recreation_retry = Arc::new(SurfaceRecreationRetry::new());
         let surface_retry_for_callback = Arc::clone(&surface_recreation_retry);
 
-        // 0c. Wire the wall-clock-wake hook to both retries. Unlike
-        // `install_wake_deadline_hook` (desktop's `bootstrap_desktop`), this
-        // does NOT also fold in `AppRuntime::next_wake()` (ui_runtime-level
-        // deadlines: gesture-arena timers, animation continuations) — this
-        // backend's `Platform::set_wake_deadline_hook` override
-        // (`flui-platform`'s `platforms/android/mod.rs`) was added
-        // specifically to carry recovery deadlines; folding in ui_runtime-level
-        // deadlines too would change this backend's existing, untested-here
-        // wake behavior for gesture/animation timers.
+        // The existing owner wake carries runtime deadlines as well as device
+        // and surface recovery. Geometry refresh is owner work even while a
+        // hidden presentation cannot produce frames.
         owner_platform_installed(|owner| {
             let device_recovery_backoff = Arc::clone(&device_recovery_backoff);
             let surface_recreation_retry = Arc::clone(&surface_recreation_retry);
             owner.shared().set_wake_deadline_hook(Box::new(move || {
                 super::host::merge_wake_deadlines(
-                    device_recovery_backoff.next_attempt_at(),
-                    surface_recreation_retry.next_attempt_at(),
+                    APP_RUNTIME.with(|slot| slot.borrow().next_wake()),
+                    super::host::merge_wake_deadlines(
+                        device_recovery_backoff.next_attempt_at(),
+                        surface_recreation_retry.next_attempt_at(),
+                    ),
                 )
             }));
         });

@@ -615,6 +615,16 @@ pub(crate) fn mounted_drag_policy_replaces_targets_before_cancellation_and_recov
 }
 
 pub(crate) fn authored_settings_replace_active_owners_and_preserve_equal_profiles() {
+    crate::common::cases::run_cases(
+        "authored drag owner replacement",
+        &[
+            ("pan", || authored_drag_owner_replacement(false)),
+            ("horizontal drag", || authored_drag_owner_replacement(true)),
+        ],
+    );
+}
+
+fn authored_drag_owner_replacement(horizontal: bool) {
     use crate::common::{ProbeSignals, SignalProbe};
     use flui_foundation::geometry::Offset;
     use flui_interaction::events::{
@@ -643,29 +653,50 @@ pub(crate) fn authored_settings_replace_active_owners_and_preserve_equal_profile
             remembered.set(Some(count));
             let (started, cancels, ends, fail) =
                 (started.clone(), cancels.clone(), ends.clone(), fail.clone());
+            let on_start = move |_: &mut flui_view::EventCx<'_>,
+                                 _: flui_interaction::DragStartDetails| {
+                started.set(started.get() + 1);
+            };
+            let on_end = move |_: &mut flui_view::EventCx<'_>,
+                               details: flui_interaction::DragEndDetails| {
+                match details.reason {
+                    GestureEndReason::Completed => ends.set(ends.get() + 1),
+                    GestureEndReason::Cancelled => {
+                        cancels.set(cancels.get() + 1);
+                        assert!(!fail.replace(false), "authored settings cancellation");
+                    }
+                }
+            };
+            let detector = if horizontal {
+                GestureDetector::new()
+                    .on_horizontal_drag_start(on_start)
+                    .on_horizontal_drag_end(on_end)
+            } else {
+                GestureDetector::new()
+                    .on_pan_start(on_start)
+                    .on_pan_end(on_end)
+            };
             ConfiguredGesture {
                 settings: GestureSettings::default()
                     .try_with_touch_slop(90.0)
                     .expect("tap remains a contender below the drag threshold")
                     .try_with_pan_slop(profile.get())
-                    .expect("finite authored threshold"),
-                detector: GestureDetector::new()
+                    .expect("finite authored threshold")
+                    .try_with_pan_slop_horizontal(profile.get())
+                    .expect("finite authored axis threshold"),
+                detector: detector
                     .on_tap(|_| {})
-                    .on_pan_start(move |_, _| started.set(started.get() + 1))
-                    .on_pan_end(move |_, details| match details.reason {
-                        GestureEndReason::Completed => ends.set(ends.get() + 1),
-                        GestureEndReason::Cancelled => {
-                            cancels.set(cancels.get() + 1);
-                            assert!(!fail.replace(false), "authored settings cancellation");
-                        }
-                    })
                     .child(ColoredBox::new(Color::rgb(10, 20, 30))),
             }
         });
         let mut laid = lay_out(probe.view(), tight(100.0, 100.0));
         let send = |laid: &crate::common::LaidOut, id: u64, y, phase| {
             let pointer = flui_interaction::PointerId::try_from(id).expect("nonzero touch");
-            let position = Offset::new(50.0, y);
+            let position = if horizontal {
+                Offset::new(y, 50.0)
+            } else {
+                Offset::new(50.0, y)
+            };
             let event = match phase {
                 0 => make_down_event_for_id(pointer, position, PointerKind::Touch),
                 1 => make_move_event_for_id(pointer, position, PointerKind::Touch),
@@ -733,6 +764,192 @@ pub(crate) fn authored_settings_replace_active_owners_and_preserve_equal_profile
         send(&laid, 3, 90.0, 2);
         assert_eq!(completed.get(), if changes { 1 } else { 2 });
     }
+}
+
+pub(crate) fn authored_settings_retire_tap_candidates_and_deadlines() {
+    crate::common::cases::run_cases(
+        "authored contact owner replacement",
+        &[
+            ("tap", || authored_contact_owner_replacement("tap")),
+            ("long press", || {
+                authored_contact_owner_replacement("long press")
+            }),
+            ("double tap", || {
+                authored_contact_owner_replacement("double tap")
+            }),
+        ],
+    );
+}
+
+fn authored_contact_owner_replacement(family: &'static str) {
+    use crate::common::{ProbeSignals, SignalProbe};
+    use flui_foundation::geometry::Offset;
+    use flui_interaction::GestureSettings;
+    use flui_interaction::events::{PointerKind, make_down_event_for_id, make_up_event_for_id};
+    use flui_view::SignalWriteExt;
+    use std::{cell::Cell, rc::Rc, time::Duration};
+
+    let changed = Rc::new(Cell::new(false));
+    let calls = Rc::new(Cell::new(0));
+    let signal = Rc::new(Cell::new(None));
+    let (profile, invoked, remembered) = (changed.clone(), calls.clone(), signal.clone());
+    let probe = SignalProbe::new(move |ProbeSignals { count, .. }| {
+        remembered.set(Some(count));
+        let invoked = invoked.clone();
+        let detector = match family {
+            "tap" => GestureDetector::new().on_tap(move |_| invoked.set(invoked.get() + 1)),
+            "long press" => {
+                GestureDetector::new().on_long_press(move |_| invoked.set(invoked.get() + 1))
+            }
+            _ => GestureDetector::new().on_double_tap(move |_| invoked.set(invoked.get() + 1)),
+        }
+        .child(ColoredBox::new(Color::RED));
+        let timeout = Duration::from_millis(if profile.get() { 400 } else { 100 });
+        ConfiguredGesture {
+            settings: GestureSettings::default()
+                .with_long_press_timeout(timeout)
+                .with_double_tap_timeout(timeout),
+            detector,
+        }
+    });
+    let mut laid = lay_out(probe.view(), tight(100.0, 100.0));
+    let send = |laid: &crate::common::LaidOut, id: u64, down| {
+        let pointer = flui_interaction::PointerId::try_from(id).expect("nonzero touch");
+        let position = Offset::new(50.0, 50.0);
+        let event = if down {
+            make_down_event_for_id(pointer, position, PointerKind::Touch)
+        } else {
+            make_up_event_for_id(pointer, position, PointerKind::Touch)
+        }
+        .expect("finite touch fixture");
+        laid.dispatch_pointer_event(&event);
+    };
+    send(&laid, 1, true);
+    if family == "double tap" {
+        send(&laid, 1, false);
+    }
+    changed.set(true);
+    probe
+        .write(|cx| signal.get().expect("mounted probe").set(cx, 1))
+        .expect("replace authored contact profile");
+    laid.pump();
+    if family == "long press" {
+        laid.pump_for(Duration::from_millis(200));
+    } else if family == "double tap" {
+        laid.pump_for(Duration::from_millis(50));
+    }
+    if family != "double tap" {
+        send(&laid, 1, false);
+    }
+    assert_eq!(
+        calls.get(),
+        0,
+        "outgoing contact or candidate is retired: {family}"
+    );
+    send(&laid, 2, true);
+    if family == "long press" {
+        laid.pump_for(Duration::from_millis(200));
+        assert_eq!(calls.get(), 0, "fresh hold uses the replacement timeout");
+        laid.pump_for(Duration::from_millis(250));
+    }
+    send(&laid, 2, false);
+    if family == "double tap" {
+        assert_eq!(
+            calls.get(),
+            0,
+            "the retired first tap cannot complete a double tap"
+        );
+        laid.pump_for(Duration::from_millis(50));
+        send(&laid, 3, true);
+        send(&laid, 3, false);
+    }
+    assert_eq!(
+        calls.get(),
+        1,
+        "fresh owner delivers its callback: {family}"
+    );
+}
+
+pub(crate) fn authored_settings_retire_native_scale_session_before_fresh_admission() {
+    use crate::common::{ProbeSignals, SignalProbe};
+    use flui_foundation::geometry::{Offset, Point};
+    use flui_interaction::GestureSettings;
+    use flui_platform_api::{
+        EventTime,
+        pointer::{
+            PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerEvent, PointerId, PointerInfo,
+            PointerKind, PointerPosition,
+        },
+    };
+    use flui_view::SignalWriteExt;
+    use std::{cell::Cell, rc::Rc, time::Duration};
+
+    let changed = Rc::new(Cell::new(false));
+    let starts = Rc::new(Cell::new(0));
+    let cancelled = Rc::new(Cell::new(0));
+    let completed = Rc::new(Cell::new(0));
+    let signal = Rc::new(Cell::new(None));
+    let (profile, started, cancels, ends, remembered) = (
+        changed.clone(),
+        starts.clone(),
+        cancelled.clone(),
+        completed.clone(),
+        signal.clone(),
+    );
+    let probe = SignalProbe::new(move |ProbeSignals { count, .. }| {
+        remembered.set(Some(count));
+        let (started, cancels, ends) = (started.clone(), cancels.clone(), ends.clone());
+        ConfiguredGesture {
+            settings: GestureSettings::default().with_long_press_timeout(Duration::from_millis(
+                if profile.get() { 400 } else { 100 },
+            )),
+            detector: GestureDetector::new()
+                .on_scale_start(move |_, _| started.set(started.get() + 1))
+                .on_scale_cancel(move |_| cancels.set(cancels.get() + 1))
+                .on_scale_end(move |_, _| ends.set(ends.get() + 1))
+                .child(ColoredBox::new(Color::RED)),
+        }
+    });
+    let mut laid = lay_out(probe.view(), tight(100.0, 100.0));
+    let send = |laid: &crate::common::LaidOut, phase| {
+        laid.dispatch_pointer_event(&PointerEvent::PanZoom(PanZoomEvent::new(
+            PointerInfo::new(
+                PointerId::try_from(1_u64).expect("nonzero pointer"),
+                PointerKind::Mouse,
+            ),
+            EventTime::from_nanos(1),
+            PointerPosition::try_new(Point::new(50.0, 50.0)).expect("finite position"),
+            phase,
+        )));
+    };
+    let update = || {
+        PanZoomPhase::Update(
+            PanZoomTransform::try_new(Offset::ZERO, 1.5, 0.0).expect("finite scale"),
+        )
+    };
+    send(&laid, PanZoomPhase::Start);
+    send(&laid, update());
+    assert_eq!(starts.get(), 1);
+    changed.set(true);
+    probe
+        .write(|cx| signal.get().expect("mounted probe").set(cx, 1))
+        .expect("replace authored scale owner");
+    laid.pump();
+    assert_eq!(
+        cancelled.get(),
+        1,
+        "active native scale is retired exactly once"
+    );
+    send(&laid, PanZoomPhase::End);
+    assert_eq!(
+        completed.get(),
+        0,
+        "stale native terminal cannot complete a replacement"
+    );
+    send(&laid, PanZoomPhase::Start);
+    send(&laid, update());
+    send(&laid, PanZoomPhase::End);
+    assert_eq!((starts.get(), cancelled.get(), completed.get()), (2, 1, 1));
 }
 
 pub(crate) fn unmount_mid_drag_cancels_once_and_hands_the_arena_to_the_rival() {
