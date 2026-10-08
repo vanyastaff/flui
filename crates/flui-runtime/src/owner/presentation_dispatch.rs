@@ -139,6 +139,15 @@ impl PendingWindowState {
                 self.metrics = None;
             }
         }
+        if self.metrics.is_some() {
+            let failure =
+                catch_unwind(AssertUnwindSafe(|| runtime.refresh_gesture_context_for(id))).err();
+            crate::lifecycle_state::preserve_first_lifecycle_panic(
+                &mut first,
+                failure,
+                "accepted pixel ratio gesture projection",
+            );
+        }
         let failure = catch_unwind(AssertUnwindSafe(|| {
             if let Some(source) = runtime.media_query_for(id) {
                 source.update(|data| {
