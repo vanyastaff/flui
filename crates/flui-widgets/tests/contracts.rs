@@ -332,6 +332,14 @@ fn scroll_physics_and_activity() {
                 crate::scroll::shift_wheel_scrolls_the_horizontal_axis as fn(),
             ),
             (
+                "scroll::wheel_policy_resolves_authored_axes_and_provider_replacement",
+                crate::scroll::wheel_policy_resolves_authored_axes_and_provider_replacement as fn(),
+            ),
+            (
+                "scroll::wheel_distances_refuse_overflow_and_the_next_packet_recovers",
+                crate::scroll::wheel_distances_refuse_overflow_and_the_next_packet_recovers as fn(),
+            ),
+            (
                 "scroll::a_wheel_tick_over_nested_scrollables_moves_only_the_inner",
                 crate::scroll::a_wheel_tick_over_nested_scrollables_moves_only_the_inner as fn(),
             ),
