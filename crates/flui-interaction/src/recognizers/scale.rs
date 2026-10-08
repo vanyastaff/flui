@@ -792,9 +792,9 @@ impl ScaleGestureRecognizer {
     /// callbacks or claiming delivery. Recognized Updates and terminal events
     /// report handling, allowing a leaf-first widget claimant to stop delivery to
     /// its ancestors. A terminal event also retires an admitted dormant session.
-    /// An Update
-    /// without Start is an independent relative step and completes immediately.
-    /// Callers performing arbitration must admit the input before calling this.
+    /// An Update without Start is an independent relative step and completes
+    /// immediately. Callers arbitrate native delivery before forwarding the
+    /// first Update that can recognize the session.
     pub fn handle_pan_zoom(&self, dispatch: PanZoomDispatch<'_>) -> PanZoomDisposition {
         let (local, global) = (dispatch.local, dispatch.global);
         let source = *local.pointer();
