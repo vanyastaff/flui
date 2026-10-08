@@ -182,7 +182,27 @@ frame clock и без завершения живых контактов. Keyboa
 
 Контрольный запуск: `cargo nextest run --locked -p flui-testing
 containment_and_isolation_matrix --no-capture`. Это локальные public runtime и
-headless widget доказательства, не native hardware smoke. Независимые inverse
-проверки wiring Keyboard/IME, freeze measured prefixes, coalesced admission и
-capture guard ещё предстоят; итоговый gate зависимых потребителей и CI также
-не объявляются завершёнными.
+headless widget доказательства, не native hardware smoke.
+
+Пять независимых production inverse-проверок воспроизвели ожидаемые отказы:
+
+- Без Keyboard wiring measured motion отсутствует до Key, а competing Key
+  failure заменяет ожидаемую более раннюю ошибку motion.
+- Без IME wiring настоящему EditableText `on_changed` доступно x=0 вместо
+  x=30; competing owner failure заменяет ожидаемую ошибку motion.
+- Если measured prefix каждого контакта забирается лишь перед его callback,
+  реентерабельный B80 попадает в первый Key вместо следующей операции.
+- Без coalesced prefix authority новый queued marker стирает frozen B40:
+  обе строки direct replacement и capture release теряют этот Move.
+- Без direct capture guard B40 теряется только в capture-release строке;
+  исходный prefix, поздний tail и CaptureLost больше не доставляются в
+  требуемом порядке.
+
+Production-хунки после каждого отката восстановлены в точности. Restored
+таблица всех 15 causal строк и полный recognizer-прогон ранее прошли; повторный
+расширенный прогон связанных семейств, итоговый gate зависимых потребителей,
+optional-feature/platform gates и CI ещё не объявляются завершёнными.
+Предыдущие ownership-измерения и historical baseline не доказывают performance
+нового barrier: актуальные wire-бенчи и native producer smoke сохраняют свои
+отдельные задачи приёмки. Эти пять доказательств не означают live hardware
+проверку Keyboard/IME timing или нового input sampling поведения.

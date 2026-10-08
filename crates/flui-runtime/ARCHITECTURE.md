@@ -226,6 +226,14 @@ debt intact; terminal/replacement invalidation still refuses stale publication.
 Capture guards hold the committed prefix through reentrant release, then loss
 settlement drains its accepted tail and one Cancel before observing input.
 
+Independent removal of Keyboard or IME barrier wiring makes the corresponding
+public rows observe stale motion state and the wrong competing first failure.
+Per-contact dispatch-time measured draining admits newer reentrant movement
+into the old Key round. Removing coalesced prefix authority loses the committed
+old Move; removing only its capture guard loses that Move during release.
+These source inverses distinguish production behavior from eventual frame
+delivery and from a test-only flush seam (ADR-0163).
+
 ### Frame input and ambient hover belong to each presentation
 
 The frame drains deferred arena decisions and queued pointer motion in

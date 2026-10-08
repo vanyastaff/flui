@@ -164,6 +164,17 @@ the actual GestureDetector consumer; and
 pins presentation resolution. These rows assert state before another frame,
 then terminal delivery and healthy recovery, rather than only eventual counts.
 
+Independent removal of Keyboard wiring and IME wiring makes the corresponding
+public rows miss prior measured motion; the actual EditableText sees x=0
+instead of x=30 and competing failure loses motion's first-failure authority.
+Changing measured-prefix freezing to per-contact dispatch-time draining pulls
+reentrant newer motion into the first Key. Removing only coalesced prefix
+authority loses the frozen old Move in both replacement and release rows;
+removing only its capture guard loses it in the release row. Each independent
+source inverse fails its intended behavior assertion and the original source
+is restored. These proofs establish causality and ownership, not barrier
+performance, native hardware timing or completion of optional platform gates.
+
 ## Consequences
 
 Hosts can opt in without exposing substrate queues or inventing another input
