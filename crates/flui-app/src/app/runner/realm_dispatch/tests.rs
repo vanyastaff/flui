@@ -254,7 +254,7 @@ fn system_key_default_follows_the_realms_decision() {
             realm.focus_manager().add_global_key_handler(Rc::new(
                 move |_: &flui_interaction::events::KeyEvent| {
                     delivered_in_handler.set(delivered_in_handler.get() + 1);
-                    false
+                    flui_interaction::KeyEventResult::Ignored
                 },
             ));
             let native = turn_window
@@ -283,7 +283,13 @@ fn system_key_default_follows_the_realms_decision() {
         dispatcher,
         RealmTask::Frame(Box::new(|realm| {
             realm.focus_manager().add_global_key_handler(Rc::new(
-                |event: &flui_interaction::events::KeyEvent| event.code == Code::F4,
+                |event: &flui_interaction::events::KeyEvent| {
+                    if event.code == Code::F4 {
+                        flui_interaction::KeyEventResult::Handled
+                    } else {
+                        flui_interaction::KeyEventResult::Ignored
+                    }
+                },
             ));
         })),
     )
