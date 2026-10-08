@@ -156,6 +156,54 @@ fn value_contract() {
         "value",
         &[
             (
+                "radial_overshoot_refuses_coincident_nonzero_circles",
+                values::radial_overshoot_refuses_coincident_nonzero_circles,
+            ),
+            (
+                "gradient_geometry_rejects_invalid_inputs_before_equal_shortcuts",
+                values::gradient_geometry_rejects_invalid_inputs_before_equal_shortcuts,
+            ),
+            (
+                "gradient_geometry_checks_intermediate_and_output_overflow",
+                values::gradient_geometry_checks_intermediate_and_output_overflow,
+            ),
+            (
+                "gradient_packing_preserves_extrapolated_geometry",
+                values::gradient_packing_preserves_extrapolated_geometry,
+            ),
+            (
+                "decoration_gradient_falls_back_after_bounds_scaling",
+                values::decoration_gradient_falls_back_after_bounds_scaling,
+            ),
+            (
+                "decoration_gradient_centers_fall_back_after_bounds_scaling",
+                values::decoration_gradient_centers_fall_back_after_bounds_scaling,
+            ),
+            (
+                "decoration_silhouette_and_terminal_fallback",
+                values::decoration_silhouette_and_terminal_fallback,
+            ),
+            (
+                "decoration_endpoint_ramp_preserves_stop_limit",
+                values::decoration_endpoint_ramp_preserves_stop_limit,
+            ),
+            (
+                "decoration_linear_overshoot_resolves_in_small_box",
+                values::decoration_linear_overshoot_resolves_in_small_box,
+            ),
+            (
+                "gradient_domains_keep_zero_radii_and_signed_angles",
+                values::gradient_domains_keep_zero_radii_and_signed_angles,
+            ),
+            (
+                "gradient_geometry_preserves_overshoot",
+                values::gradient_geometry_preserves_overshoot,
+            ),
+            (
+                "decoration_gradient_geometry_preserves_overshoot",
+                values::decoration_gradient_geometry_preserves_overshoot,
+            ),
+            (
                 "negative_linear_stops_are_rejected",
                 values::negative_linear_stops_are_rejected,
             ),
