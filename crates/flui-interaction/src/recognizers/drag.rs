@@ -499,7 +499,9 @@ impl DragGestureRecognizer {
             let mut first = clock_failure;
             for contact in outgoing {
                 let candidate = crate::routing::RoutePanic::capture(|| {
-                    if reason == GestureEndReason::Completed && contact.id == active.id {
+                    // An unaccepted drag bows out before pointer-up can sweep
+                    // the remaining competition; it must not win by order.
+                    if accepted && reason == GestureEndReason::Completed && contact.id == active.id {
                         contact.contact.finish();
                     } else if accepted {
                         contact.contact.cancel();
