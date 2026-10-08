@@ -1,13 +1,13 @@
 # Распознаватели жестов: API — задачи
 
-- **Статус:** дизайн утверждён; RA0–RA5 интегрированы локально, RA6 ownership-измерения сохранены; итоговый gate и проверка текущей owned-wire базы впереди
+- **Статус:** RA0–RA5 интегрированы, RA6 измерена на текущей owned-wire базе; локальный итоговый gate прошёл. CI/merge впереди, I11 отложена отдельно; native ограничения указаны ниже.
 - **Дата:** 2026-10-06
 - **Design:** [design.md](design.md); требования — [requirements.md](requirements.md); волна —
   [../tasks.md](../tasks.md) «Спека `recognizer-api/`»
 - **Старт:** после слияния I1 (`interaction/arena-recognizer-lifecycle`) и I2
   (`interaction/multi-pointer-recognizers`) в `main`, включая поправки C1/C2 (`recognizers/callback_containment.rs`).
   RA1 — после I10. I11 — после RA (меняет поле настроек на `Cell`).
-- **Сверка 2026-10-07:** I1/I2 и C1/C2 уже merged (PR #1474, #1472,
+- **Историческая сверка 2026-10-07:** I1/I2 и C1/C2 уже merged (PR #1474, #1472,
   #1494, #1500). RA0 подготовлена в интеграционной ветке; I10 реализована локально,
   lifecycle/property проверки зелёные, итоговый gate и PR ещё впереди. RA1 начата
   после публичных красных тестов слабого владения и дедлайнов. Слабое владение,
@@ -38,15 +38,26 @@
 
 ## Правила исполнения
 
-Сверка реализации 2026-10-07 на базе `3cf7329c6`: builder до `Rc`, dyn-compatible
+Сверка реализации 2026-10-08 на базе `5f28646ad`: builder до `Rc`, dyn-compatible
 extension points, weak arena members, `RecognizerSet` и production-вызовы через
 `Listener` интегрированы. Ложные sealed/legacy extension слои удалены; lasting
 решение — ADR-0161. `trybuild_ui` проверяет три `!Send` отказа E0277 и два успешных
-extension-контракта. Ранее выполненные ownership-измерения RA6 опубликованы в
-`crates/flui-interaction/docs/PERFORMANCE.md`: они предшествуют owned-wire миграции;
-изолированный strong-resolution baseline отсутствует и не заменяется eager-conflict
-измерением. Итоговые `check-changed`, facade/optional-feature и platform gates
-после всех изменений не объявляются пройденными. I11/LY8 здесь не закрываются.
+extension-контракта. В `crates/flui-interaction/docs/PERFORMANCE.md` сохранены
+исторические ownership-измерения и окончательные CPU-pinned owned-wire результаты:
+33 BEFORE/AFTER пары, шесть AFTER-only cases и отдельный свежий paired estimate run.
+Сравнение owned strong-resolution и borrowed weak-resolution включает разные
+контракты публичного вызова; whole RecognizerSet sequence включает admission и
+failure containment, поэтому изолированная цена Rc/Arc или virtual dispatch не заявляется.
+Регрессии больше 10% объяснены, исходные timings не перезаписаны.
+
+`cargo xtask check-changed --base d6ad274194483c6d1bc100f9a14d42e3890b6c0e`
+завершился exit 0 на `5f28646ad`: strict clippy, driver 46/46, workspace 793/793
+(62 skipped), strict rustdoc и workspace doctests, Windows required-feature
+all-targets, wasm workspace/facade и platform trybuild прошли. Классифицированный
+план не запускал cargo-hack matrix каждого feature. macOS без cargo-zigbuild,
+iOS без Apple SDK, Android без NDK и Linux native execution без Linux/xvfb
+пропущены; более ранняя узкая cross-compilation не заменяет аппаратное выполнение.
+CI ещё не опубликован, merge не выполнен. I11/LY8 здесь не закрываются.
 
 - Интеграционная ветка `interaction/recognizer-api` (worktree `cargo xtask worktree new
   interaction/recognizer-api`), один PR в `main`. Подзадачи — ветки от неё, PR в неё; слияние squash.
@@ -106,7 +117,7 @@ cargo bench -p flui-interaction --bench tap_detector_bench -- --baseline before
 cargo bench -p flui-interaction --bench gesture_arena_bench -- --baseline before
 ```
 
-Строки «до» для `/dyn` и `/weak` на базе отсутствуют по смыслу (сегодня `dyn GestureRecognizer`
+Строки «до» для `/dyn` и `/weak` на BEFORE-базе отсутствуют по смыслу (там `dyn GestureRecognizer`
 невозможен, участник — сильный `Arc<dyn>`): сравниваются `static` до/после (цена `Rc` вместо `Arc` и
 `Cell` вместо атомиков), `/dyn` против `static` после (цена набора) и `resolve/weak` после против
 `resolve/strong` до.
