@@ -52,6 +52,7 @@ impl TapButton {
 pub type TapCallback = Rc<dyn Fn(TapDetails)>;
 /// Position and device kind of a tap contact.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct TapDetails {
     /// Position in the root coordinate space.
     pub global_position: Offset<f64>,

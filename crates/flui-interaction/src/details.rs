@@ -18,6 +18,7 @@ use crate::{PointerKind, Velocity};
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 /// Details for a tap-down event: the pointer has contacted the screen and
 /// might begin a tap.
+#[non_exhaustive]
 pub struct TapDownDetails {
     /// The global position where the tap occurred
     pub global_position: Offset<f64>,
@@ -52,6 +53,7 @@ impl TapDownDetails {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 /// Details for a tap-up event: the pointer that triggered a tap has
 /// stopped contacting the screen.
+#[non_exhaustive]
 pub struct TapUpDetails {
     /// The global position where the tap ended
     pub global_position: Offset<f64>,
@@ -90,6 +92,7 @@ impl TapUpDetails {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 /// Details for a long-press-move-update event: the pointer has moved
 /// while the long press is held, carrying offsets from the press origin.
+#[non_exhaustive]
 pub struct LongPressMoveUpdateDetails {
     /// The global position of the pointer
     pub global_position: Offset<f64>,
@@ -126,6 +129,7 @@ impl LongPressMoveUpdateDetails {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 /// Details for a long-press-end event: the pointer that held the long
 /// press has stopped contacting the screen.
+#[non_exhaustive]
 pub struct LongPressEndDetails {
     /// The global position where the long press ended
     pub global_position: Offset<f64>,
@@ -161,6 +165,7 @@ impl LongPressEndDetails {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 /// Details for a force-press event: the pointer's pressure on a
 /// pressure-sensitive screen, along with its position.
+#[non_exhaustive]
 pub struct ForcePressDetails {
     /// The global position of the pointer
     pub global_position: Offset<f64>,

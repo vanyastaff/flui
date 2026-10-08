@@ -23,6 +23,7 @@ use web_time::Instant;
 pub type DoubleTapCallback = Rc<dyn Fn(DoubleTapDetails)>;
 /// Position and device kind of a double tap contact.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct DoubleTapDetails {
     /// Position in the root coordinate space.
     pub global_position: Offset<f64>,

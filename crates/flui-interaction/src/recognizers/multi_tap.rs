@@ -29,6 +29,7 @@ use web_time::{Duration, Instant};
 pub type MultiTapCallback = Rc<dyn Fn(MultiTapDetails)>;
 /// Positions and device kind of a multi-contact tap.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct MultiTapDetails {
     /// Number of admitted contacts.
     pub pointer_count: usize,

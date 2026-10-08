@@ -30,6 +30,7 @@ pub type LongPressCallback = Rc<dyn Fn(LongPressDetails)>;
 
 /// Initial press contact in root and recognizer coordinates.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct LongPressDownDetails {
     /// Root-space position.
     pub global_position: Offset<f64>,
@@ -40,6 +41,7 @@ pub struct LongPressDownDetails {
 }
 /// Contact at recognition time.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct LongPressStartDetails {
     /// Root-space position.
     pub global_position: Offset<f64>,
@@ -50,6 +52,7 @@ pub struct LongPressStartDetails {
 }
 /// Contact at movement, release, or cancellation.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct LongPressDetails {
     /// Root-space position.
     pub global_position: Offset<f64>,
