@@ -31,11 +31,11 @@ pub use focus_scope::{
     FocusTraversalPolicy, FocusTreeError, KeyEventHandler, KeyEventResult, NodeContext,
     ReadingOrderPolicy, RectProvider, ResolvedStep, TraversalDirection, TraversalEdgeBehavior,
 };
-pub(crate) use hit_test::ScrollRoute;
 pub use hit_test::{
     CursorRequest, EventPropagation, HitTestBehavior, HitTestEntry, HitTestResult, RenderId,
     TransformGuard,
 };
+pub(crate) use hit_test::{PanZoomRoute, ScrollRoute};
 #[doc(hidden)]
 pub use interaction_lane::DispatchCustody;
 pub(crate) use interaction_lane::OwnerLatch;

@@ -67,6 +67,14 @@
 //! reentrant replacement; `scroll_physics_and_activity` covers nested scrollers
 //! and clock-driven wheel inactivity through the widget consumer.
 //!
+//! Native pan/zoom uses an independent bounded source lease, selected on first
+//! consumption and localized with its admitted transform while retaining the
+//! actual root-space event. Repeated Start for the same contact replaces its
+//! admission authority but preserves its consumer through old-session
+//! cancellation; only a terminal edge permits the next fresh source to choose
+//! a different target. `binding_input_contract_matrix` covers native observer,
+//! claimant and capture-retirement failures, replacement, and recovery.
+//!
 //! # Example
 //!
 //! ```rust
@@ -104,7 +112,7 @@ use crate::events::{
 use crate::routing::pointer_capture::ContactCapture;
 use flui_foundation::MonotonicClock;
 use flui_foundation::geometry::Offset;
-use flui_platform_api::pointer::{ScrollEvent, ScrollPhase};
+use flui_platform_api::pointer::{PanZoomEvent, PanZoomPhase, ScrollEvent, ScrollPhase};
 use smallvec::SmallVec;
 
 use crate::{
@@ -112,8 +120,8 @@ use crate::{
     ids::PointerId,
     processing::{PointerEventResampler, SamplingClock},
     routing::{
-        HitTestResult, MouseTracker, PointerMotionKind, PointerRouter, ResolvedRouteToken,
-        RoutePanic, ScrollRoute, active_dispatch_handle,
+        HitTestResult, MouseTracker, PanZoomRoute, PointerMotionKind, PointerRouter,
+        ResolvedRouteToken, RoutePanic, ScrollRoute, active_dispatch_handle,
     },
     settings::GestureSettings,
 };
@@ -302,12 +310,12 @@ const MAX_SIMULTANEOUS_POINTERS: usize = 32;
 const SCROLL_INACTIVITY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-enum ScrollSource {
+enum SignalSource {
     Device(DeviceId),
     Unidentified(PointerInfo),
 }
 
-impl From<PointerInfo> for ScrollSource {
+impl From<PointerInfo> for SignalSource {
     fn from(pointer: PointerInfo) -> Self {
         pointer
             .device
@@ -327,6 +335,17 @@ struct ScrollSequence {
 enum ScrollAdmission {
     Active(Rc<ScrollSequence>),
     Terminal(Option<ScrollRoute>),
+    Refused,
+}
+
+struct PanZoomSequence {
+    route: Cell<Option<PanZoomRoute>>,
+    pointer: PointerId,
+}
+
+enum PanZoomAdmission {
+    Active(Rc<PanZoomSequence>),
+    Terminal(Option<PanZoomRoute>),
     Refused,
 }
 
@@ -440,7 +459,8 @@ pub struct GestureBinding {
     hit_tests: RefCell<HashMap<PointerId, CachedPointerRoute>>,
 
     /// First consumptive scroll route per source, bounded like contact routes.
-    scroll_sequences: RefCell<HashMap<ScrollSource, Rc<ScrollSequence>>>,
+    scroll_sequences: RefCell<HashMap<SignalSource, Rc<ScrollSequence>>>,
+    pan_zoom_sequences: RefCell<HashMap<SignalSource, Rc<PanZoomSequence>>>,
 
     /// Pending move events for coalescing.
     /// Only the latest move per pointer is kept.
@@ -535,6 +555,7 @@ impl GestureBinding {
             capture_wake: RefCell::new(None),
             hit_tests: RefCell::new(HashMap::new()),
             scroll_sequences: RefCell::new(HashMap::new()),
+            pan_zoom_sequences: RefCell::new(HashMap::new()),
             pending_moves: RefCell::new(HashMap::new()),
             refused_contacts: RefCell::new(RefusedContacts::default()),
             resampling_enabled: Cell::new(false),
@@ -992,6 +1013,7 @@ impl GestureBinding {
         let mut failure = crate::__runtime::ClosePanic::for_close(mode, self.close_mode.clone());
         self.closed.set(true);
         self.scroll_sequences.borrow_mut().clear();
+        self.pan_zoom_sequences.borrow_mut().clear();
         if !failure.preserving() {
             failure.invoke(|| {
                 if let Some(loss) = self.drain_capture_losses(None) {
@@ -1065,6 +1087,7 @@ impl GestureBinding {
     /// window.
     pub fn cancel_active_pointers(&self) {
         self.scroll_sequences.borrow_mut().clear();
+        self.pan_zoom_sequences.borrow_mut().clear();
         let mut first_panic = self.drain_capture_losses(None);
         *self.refused_contacts.borrow_mut() = RefusedContacts::default();
         let mut pointers: Vec<_> = self
@@ -1210,7 +1233,7 @@ impl GestureBinding {
 
     fn prepare_scroll_sequence(&self, event: &ScrollEvent) -> ScrollAdmission {
         let now = self.clock.now();
-        let source = ScrollSource::from(event.pointer);
+        let source = SignalSource::from(event.pointer);
         let mut sequences = self.scroll_sequences.borrow_mut();
         sequences.retain(|_, sequence| {
             !sequence.phase_less.get()
@@ -1260,7 +1283,59 @@ impl GestureBinding {
     ) -> bool {
         self.scroll_sequences
             .borrow()
-            .get(&ScrollSource::from(pointer))
+            .get(&SignalSource::from(pointer))
+            .is_some_and(|current| Rc::ptr_eq(current, sequence))
+    }
+
+    fn prepare_pan_zoom_sequence(&self, event: &PanZoomEvent) -> PanZoomAdmission {
+        let pointer = *event.pointer();
+        let source = SignalSource::from(pointer);
+        let mut sequences = self.pan_zoom_sequences.borrow_mut();
+        if let Some(sequence) = sequences.get(&source)
+            && sequence.pointer != pointer.id
+            && !matches!(event.phase, PanZoomPhase::Start)
+        {
+            return PanZoomAdmission::Refused;
+        }
+        if matches!(event.phase, PanZoomPhase::End | PanZoomPhase::Cancelled) {
+            return PanZoomAdmission::Terminal(
+                sequences
+                    .remove(&source)
+                    .and_then(|sequence| sequence.route.get()),
+            );
+        }
+        let route = if matches!(event.phase, PanZoomPhase::Start) {
+            // Repeated exact Start replaces the cumulative session, while its
+            // admitted consumer receives retirement and the new staged pair.
+            sequences.remove(&source).and_then(|sequence| {
+                (sequence.pointer == pointer.id)
+                    .then(|| sequence.route.get())
+                    .flatten()
+            })
+        } else if let Some(sequence) = sequences.get(&source) {
+            return PanZoomAdmission::Active(Rc::clone(sequence));
+        } else {
+            None
+        };
+        if sequences.len() >= MAX_SIMULTANEOUS_POINTERS {
+            return PanZoomAdmission::Refused;
+        }
+        let sequence = Rc::new(PanZoomSequence {
+            route: Cell::new(route),
+            pointer: pointer.id,
+        });
+        sequences.insert(source, Rc::clone(&sequence));
+        PanZoomAdmission::Active(sequence)
+    }
+
+    fn is_current_pan_zoom_sequence(
+        &self,
+        pointer: PointerInfo,
+        sequence: &Rc<PanZoomSequence>,
+    ) -> bool {
+        self.pan_zoom_sequences
+            .borrow()
+            .get(&SignalSource::from(pointer))
             .is_some_and(|current| Rc::ptr_eq(current, sequence))
     }
 
@@ -1274,7 +1349,10 @@ impl GestureBinding {
         if let PointerEvent::Cancel(cancel) = event {
             self.scroll_sequences
                 .borrow_mut()
-                .remove(&ScrollSource::from(cancel.pointer));
+                .remove(&SignalSource::from(cancel.pointer));
+            self.pan_zoom_sequences
+                .borrow_mut()
+                .remove(&SignalSource::from(cancel.pointer));
         }
         let Some(pointer_id) = crate::PointerEventExt::pointer_id(event) else {
             // Device lifecycle has no contact identity. It still reaches
@@ -1283,7 +1361,10 @@ impl GestureBinding {
             if let PointerEvent::DeviceRemoved(device) = event {
                 self.scroll_sequences
                     .borrow_mut()
-                    .remove(&ScrollSource::Device(device.device));
+                    .remove(&SignalSource::Device(device.device));
+                self.pan_zoom_sequences
+                    .borrow_mut()
+                    .remove(&SignalSource::Device(device.device));
                 let mut pointers: Vec<_> = self
                     .hit_tests
                     .borrow()
@@ -1579,55 +1660,48 @@ impl GestureBinding {
                 }
             }
             PointerEvent::PanZoom(gesture) => {
-                // Two channels, the same observe-then-arbitrate shape the
-                // Scroll arm below uses: every pointer target on the path
-                // observes the raw tick, then the leaf-first claim walk over
-                // the path's pan-zoom targets lets exactly one of them act.
-                // Without the second channel a pinch over nested consumers
-                // (two enabled `InteractiveViewer`s, say) transforms both.
-                let (path, mut first_panic) = if self.hit_tests.borrow().contains_key(&pointer_id) {
-                    // Snapshot the cached path BEFORE dispatching, and only
-                    // when it actually carries a claimant: a handler must
-                    // never run while this map reference is alive (the same
-                    // reason `dispatch_on_cached_route` reads out the token
-                    // and drops its reference before delivering).
-                    let cached = {
-                        let routes = self.hit_tests.borrow();
-                        let cached = routes.get(&pointer_id);
-                        cached.and_then(|cached| {
-                            cached
-                                .result
-                                .entries_with_pan_zoom_targets()
-                                .next()
-                                .is_some()
-                                .then(|| cached.result.clone())
-                        })
+                let admission = self.prepare_pan_zoom_sequence(gesture);
+                let position = event
+                    .position()
+                    .expect("BUG: PanZoom carries a checked position");
+                // Native gesture observation follows fresh geometry; accepted
+                // consumption stays with its exact owner across rebuilds.
+                let path = hit_test_fn(position);
+                let mut first_panic = self.dispatch_ephemeral(event, &path);
+                let claim = RoutePanic::capture(|| {
+                    let claimed = match &admission {
+                        PanZoomAdmission::Terminal(Some(route)) => route.dispatch(gesture, || {}),
+                        PanZoomAdmission::Terminal(None) => path.dispatch_pan_zoom(gesture),
+                        PanZoomAdmission::Refused => false,
+                        PanZoomAdmission::Active(sequence) => {
+                            if let Some(route) = sequence.route.get() {
+                                route.dispatch(gesture, || {})
+                            } else if self
+                                .is_current_pan_zoom_sequence(*gesture.pointer(), sequence)
+                            {
+                                path.dispatch_pan_zoom_with_claim(gesture, |route| {
+                                    if self
+                                        .is_current_pan_zoom_sequence(*gesture.pointer(), sequence)
+                                    {
+                                        sequence.route.set(Some(route));
+                                    }
+                                })
+                            } else {
+                                false
+                            }
+                        }
                     };
-                    let delivered = self.dispatch_on_cached_route(pointer_id, event);
-                    (cached, delivered)
-                } else {
-                    let position = event
-                        .position()
-                        .expect("BUG: PanZoom carries a checked position");
-                    let result = hit_test_fn(position);
-                    let delivered = self.dispatch_ephemeral(event, &result);
-                    (Some(result), delivered)
-                };
-                if let Some(path) = path {
-                    let claim = RoutePanic::capture(|| {
-                        let claimed = path.dispatch_pan_zoom(gesture);
-                        tracing::trace!(
-                            claimed,
-                            pan_zoom_targets = path.entries_with_pan_zoom_targets().count(),
-                            "pan-zoom arbitration"
-                        );
-                    });
-                    RoutePanic::preserve_first(
-                        &mut first_panic,
-                        claim,
-                        "pan-zoom claim after pointer dispatch",
+                    tracing::trace!(
+                        claimed,
+                        pan_zoom_targets = path.entries_with_pan_zoom_targets().count(),
+                        "pan-zoom arbitration"
                     );
-                }
+                });
+                RoutePanic::preserve_first(
+                    &mut first_panic,
+                    claim,
+                    "pan-zoom claim after pointer dispatch",
+                );
                 if let Some(panic) = first_panic {
                     panic.resume();
                 }
@@ -2129,6 +2203,7 @@ impl GestureBinding {
     /// Detach and clean every interrupted pointer transaction.
     fn clear_all_pointer_state_capturing_panic(&self) -> Option<RoutePanic> {
         self.scroll_sequences.borrow_mut().clear();
+        self.pan_zoom_sequences.borrow_mut().clear();
         let mut first_panic = self.drain_capture_losses(None);
         *self.refused_contacts.borrow_mut() = RefusedContacts::default();
         let mut cached_routes: Vec<_> = self.hit_tests.borrow_mut().drain().collect();

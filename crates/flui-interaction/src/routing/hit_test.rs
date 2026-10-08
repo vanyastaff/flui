@@ -104,6 +104,56 @@ impl ScrollRoute {
     }
 }
 
+/// Selected native gesture consumer; preserves the true root-space event.
+#[derive(Clone, Copy)]
+pub(crate) struct PanZoomRoute {
+    target: PanZoomTarget,
+    transform: Option<Matrix4>,
+}
+
+impl PanZoomRoute {
+    pub(crate) fn dispatch(self, event: &PanZoomEvent, claimed: impl FnOnce()) -> bool {
+        let local_event = if let Some(transform) = self.transform {
+            if !transform.is_invertible() {
+                return false;
+            }
+            let Some(local) = transform_pan_zoom_event(event, &transform) else {
+                return false;
+            };
+            local
+        } else {
+            *event
+        };
+        let handle = match active_dispatch_handle() {
+            Ok(handle) => handle,
+            Err(error) => {
+                tracing::debug!(
+                    ?error,
+                    "pan-zoom dispatch skipped without an active owner lane"
+                );
+                return false;
+            }
+        };
+        match handle.invoke_pan_zoom_target_with_claim(
+            self.target,
+            PanZoomDispatch {
+                local: &local_event,
+                global: event,
+            },
+            claimed,
+        ) {
+            Ok(propagation) => propagation.should_stop(),
+            Err(error) => {
+                tracing::debug!(
+                    ?error,
+                    "pan-zoom target unavailable during owner-lane dispatch"
+                );
+                false
+            }
+        }
+    }
+}
+
 // ============================================================================
 // HIT TEST BEHAVIOR
 // ============================================================================
@@ -739,52 +789,22 @@ impl HitTestResult {
     ///
     /// Returns `true` when a target claimed the event.
     pub fn dispatch_pan_zoom(&self, event: &PanZoomEvent) -> bool {
-        let handle = match active_dispatch_handle() {
-            Ok(handle) => handle,
-            Err(error) => {
-                tracing::debug!(
-                    ?error,
-                    "pan-zoom dispatch skipped without an active owner lane"
-                );
-                return false;
-            }
-        };
+        self.dispatch_pan_zoom_with_claim(event, |_| {})
+    }
+
+    pub(crate) fn dispatch_pan_zoom_with_claim(
+        &self,
+        event: &PanZoomEvent,
+        mut claimed: impl FnMut(PanZoomRoute),
+    ) -> bool {
         for entry in &self.path {
             if let Some(target) = entry.pan_zoom_target {
-                let local_event = if let Some(ref transform) = entry.transform {
-                    // `transform` is already global-to-local (see
-                    // `HitTestEntry::transform`'s doc). A degenerate ancestor
-                    // transform makes the composed matrix singular; such an
-                    // entry skips delivery rather than reporting a focal
-                    // point that is not on screen, exactly as the scroll walk
-                    // does.
-                    if transform.is_invertible() {
-                        let Some(local) = transform_pan_zoom_event(event, transform) else {
-                            continue;
-                        };
-                        local
-                    } else {
-                        continue;
-                    }
-                } else {
-                    *event
-                };
-
-                match handle.invoke_pan_zoom_target(
+                let route = PanZoomRoute {
                     target,
-                    PanZoomDispatch {
-                        local: &local_event,
-                        global: event,
-                    },
-                ) {
-                    Ok(propagation) if propagation.should_stop() => return true,
-                    Ok(_) => {}
-                    Err(error) => {
-                        tracing::debug!(
-                            ?error,
-                            "pan-zoom target unavailable during owner-lane dispatch"
-                        );
-                    }
+                    transform: entry.transform,
+                };
+                if route.dispatch(event, || claimed(route)) {
+                    return true;
                 }
             }
         }
