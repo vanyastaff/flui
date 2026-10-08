@@ -241,9 +241,9 @@ thread_local! {
     /// hot-reload cdylib. `RegistryActivation` empties the stack explicitly.
     #[cfg_attr(
         target_os = "android",
-        expect(
+        allow(
             clippy::missing_const_for_thread_local,
-            reason = "Rust 1.99's Android OS TLS macro misreports this explicit const initializer"
+            reason = "Rust 1.99's Android OS TLS macro can misreport this explicit const initializer on cross hosts"
         )
     )]
     static REGISTRY_STACK: DropFreeRegistryStack = const {
@@ -253,9 +253,9 @@ thread_local! {
     /// `take_registry` is its explicit teardown path.
     #[cfg_attr(
         target_os = "android",
-        expect(
+        allow(
             clippy::missing_const_for_thread_local,
-            reason = "Rust 1.99's Android OS TLS macro misreports this explicit const initializer"
+            reason = "Rust 1.99's Android OS TLS macro can misreport this explicit const initializer on cross hosts"
         )
     )]
     static TEST_REGISTRY: DropFreeTestRegistrySlot = const {

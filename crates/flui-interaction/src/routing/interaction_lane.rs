@@ -887,9 +887,9 @@ thread_local! {
         RefCell::new(HashMap::new());
     #[cfg_attr(
         target_os = "android",
-        expect(
+        allow(
             clippy::missing_const_for_thread_local,
-            reason = "Rust 1.99's OS TLS macro erases this explicit const initializer"
+            reason = "Rust 1.99's OS TLS macro can erase this explicit const initializer on cross hosts"
         )
     )]
     static ACTIVE_LANES: RefCell<Vec<LaneTicket>> = const { RefCell::new(Vec::new()) };
