@@ -765,6 +765,7 @@ impl PresentationState {
             id,
             media_query: Rc::new(crate::media_query_root::MediaQuerySource::from_window(
                 window.as_ref(),
+                pipeline.with(PipelineOwner::device_pixel_ratio),
             )),
             window_visible: Cell::new(window.is_visible()),
             window_focused: Cell::new(window.is_focused()),
@@ -849,6 +850,7 @@ impl PresentationState {
             id,
             media_query: Rc::new(crate::media_query_root::MediaQuerySource::from_window(
                 window.as_ref(),
+                pipeline.with(PipelineOwner::device_pixel_ratio),
             )),
             window_visible: Cell::new(window.is_visible()),
             window_focused: Cell::new(window.is_focused()),
