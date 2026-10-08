@@ -313,15 +313,19 @@ impl MultiDragGestureRecognizer {
                 )
             } else {
                 state.pending_delta = pending;
-                let magnitude = match self.axis {
-                    MultiDragAxis::Free => state.pending_delta.distance(),
-                    MultiDragAxis::Horizontal => state.pending_delta.dx.abs(),
-                    MultiDragAxis::Vertical => state.pending_delta.dy.abs(),
-                };
+                let crossed = super::recognizer::measured_positions(dispatch.local).any(|position| {
+                    let delta = position - state.initial_position;
+                    let magnitude = match self.axis {
+                        MultiDragAxis::Free => delta.dx.hypot(delta.dy),
+                        MultiDragAxis::Horizontal => delta.dx.abs(),
+                        MultiDragAxis::Vertical => delta.dy.abs(),
+                    };
+                    magnitude > state.slop
+                });
                 (
                     None,
                     None,
-                    (!state.accepted && magnitude > state.slop).then(|| state.arena_entry.clone()),
+                    (!state.accepted && crossed).then(|| state.arena_entry.clone()),
                 )
             }
         };

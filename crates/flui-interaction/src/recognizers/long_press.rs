@@ -3,7 +3,7 @@
 use super::{
     ArenaMembership, CancelOutcome, ContactId, PrimaryContact,
     callback_containment::{CallbackSequence, finish_containment, retire_callbacks},
-    recognizer::{GestureRecognizer, is_primary_down},
+    recognizer::{GestureRecognizer, is_primary_down, measured_positions},
 };
 use crate::{
     arena::{GestureArena, GestureArenaMember},
@@ -316,9 +316,10 @@ impl GestureRecognizer for LongPressGestureRecognizer {
                 let global = dispatch.global.position().unwrap_or(contact.global);
                 let phase = self.state.borrow().phase;
                 if phase == LongPressPhase::Possible
-                    && self
-                        .contact
-                        .moved_beyond(local, contact.settings.hit_slop(contact.kind))
+                    && measured_positions(dispatch.local).any(|position| {
+                        let delta = position - contact.local;
+                        delta.dx.hypot(delta.dy) > contact.settings.hit_slop(contact.kind)
+                    })
                 {
                     self.cancel();
                     return;

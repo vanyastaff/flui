@@ -3,7 +3,7 @@
 use super::{
     callback_containment::{finish_containment, invoke_callback},
     contact::{ArenaMembership, PrimaryContact},
-    recognizer::{CancelOutcome, GestureRecognizer, is_primary_down},
+    recognizer::{CancelOutcome, GestureRecognizer, is_primary_down, measured_positions},
 };
 use crate::{
     arena::{GestureArena, GestureArenaEntry, GestureArenaMember, GestureDisposition},
@@ -314,10 +314,10 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
                 if matches!(
                     state,
                     DoubleTapState::FirstDown | DoubleTapState::SecondDown
-                ) && self.contact.moved_beyond(
-                    details.local_position,
-                    contact.settings.hit_slop(contact.kind),
-                ) {
+                ) && measured_positions(dispatch.local).any(|position| {
+                    let delta = position - contact.local;
+                    delta.dx.hypot(delta.dy) > contact.settings.hit_slop(contact.kind)
+                }) {
                     self.retire_attempt(details, true);
                 }
             }

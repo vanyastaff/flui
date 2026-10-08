@@ -5,7 +5,7 @@ use super::{
     callback_containment::{
         CallbackSequence, finish_containment, retire_callbacks, withdraw_cancelled,
     },
-    recognizer::GestureRecognizer,
+    recognizer::{GestureRecognizer, measured_positions},
 };
 use crate::{
     arena::{
@@ -337,10 +337,12 @@ impl GestureRecognizer for MultiTapGestureRecognizer {
                     let Some(contact) = sequence.contacts.get(&pointer) else {
                         return;
                     };
-                    let delta = position - contact.initial;
                     !position.dx.is_finite()
                         || !position.dy.is_finite()
-                        || delta.dx.hypot(delta.dy) > sequence.settings.hit_slop(contact.kind)
+                        || measured_positions(dispatch.local).any(|position| {
+                            let delta = position - contact.initial;
+                            delta.dx.hypot(delta.dy) > sequence.settings.hit_slop(contact.kind)
+                        })
                 };
                 if exceeded {
                     self.cancel();

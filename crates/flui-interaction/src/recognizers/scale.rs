@@ -1072,10 +1072,15 @@ impl ScaleGestureRecognizer {
         if state.contacts[index].id != id {
             return;
         }
+        let baseline = state.baseline;
+        let mut crossed = false;
         for (stamp, position) in history {
             let timestamp = state.timeline.instant(stamp, now);
             state.contacts[index].position = position;
-            if state.sample().is_some() && state.contacts.len() >= 2 {
+            let measure = state.sample();
+            crossed |= state.contacts.len() >= state.start_mode.minimum_contacts()
+                && measure.is_some_and(|measure| baseline.is_some_and(|b| self.should_accept(b, measure, kind)));
+            if measure.is_some() && state.contacts.len() >= 2 {
                 let scale = state.current.scale;
                 state
                     .scale_velocity_tracker
@@ -1085,15 +1090,13 @@ impl ScaleGestureRecognizer {
             state.focal_velocity_tracker.add_position(timestamp, focal);
         }
         let now = state.timeline.instant(stamp, now);
-        let baseline = state.baseline;
         state.contacts[index].position = position;
         state.contacts[index].global_position = global_position;
         let Some(measure) = state.sample() else {
             return;
         };
-        // A frame can cross the acceptance threshold only at its current
-        // sample. Retain the measured approach to that threshold as well, so
-        // accepting the gesture does not erase its hardware velocity history.
+        // Admission observes the measured approach as well as the current
+        // geometry; callback cadence and published positions stay frame-local.
         if state.contacts.len() >= 2 {
             let scale = state.current.scale;
             state
@@ -1109,7 +1112,7 @@ impl ScaleGestureRecognizer {
                 // invoke callbacks: `accept_gesture` (or `claim`) is the start
                 // transition, so an observer never sees `on_start` for a
                 // gesture a competitor then takes.
-                let crossed = state.contacts.len() >= state.start_mode.minimum_contacts()
+                crossed |= state.contacts.len() >= state.start_mode.minimum_contacts()
                     && baseline.is_some_and(|b| self.should_accept(b, measure, kind));
                 if crossed && !state.won {
                     state.claiming = true;
