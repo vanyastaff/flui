@@ -45,8 +45,8 @@
 //! 1. **Pointer Down**: Hit test → cache result → dispatch → close arena
 //! 2. **Contact Move**: Reuse the Down route → dispatch (coalesced)
 //! 3. **Hover Move**: Fresh hit test → ephemeral dispatch (coalesced)
-//! 4. **Pointer Up**: Use cached hit test → dispatch → sweep arena → clear cache
-//! 5. **Pointer Cancel**: Use cached hit test → dispatch recognizer rejection →
+//! 4. **Pointer Up**: Use resolved Down route → dispatch → sweep arena → clear cache
+//! 5. **Pointer Cancel**: Use resolved Down route → dispatch recognizer rejection →
 //!    clear cache without a binding sweep
 //! 6. **Enter/Leave**: cached route mid-contact; otherwise a fresh ephemeral
 //!    hit test at the device's last-known hover position (the events carry
@@ -131,18 +131,19 @@ fn terminal_hit_test(_: Offset<f64>) -> HitTestResult {
     unreachable!("BUG: terminal Cancel never hit-tests")
 }
 
-/// Per-pointer state cached at Down: the data-only hit path plus the
-/// owner-local resolved route token that Move reuses and Up/Cancel releases.
+/// Contact admission identity, independent of a reusable platform pointer ID.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PointerSequence(u64);
+
+/// Per-pointer state cached at Down. The owner-local resolved token retains
+/// the admitted handlers and transforms that Move reuses and Up/Cancel releases.
+/// The original spatial hit snapshot is no longer needed after resolution.
 ///
 /// `token` is `None` when no interaction lane was active at Down (a
 /// gesture-only binding without a mounted tree) or when the path carried no
 /// pointer targets; the pointer router still routes such events.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct PointerSequence(u64);
-
 #[derive(Clone)]
 struct CachedPointerRoute {
-    result: HitTestResult,
     token: Option<ResolvedRouteToken>,
     sequence: PointerSequence,
     capture: Rc<ContactCapture>,
@@ -455,7 +456,7 @@ pub struct GestureBinding {
     closed: Cell<bool>,
     close_mode: crate::__runtime::CloseTombstone,
     capture_wake: RefCell<Option<std::sync::Weak<dyn flui_platform_api::PlatformWindow>>>,
-    /// Cached hit paths and resolved routes per pointer.
+    /// Resolved Down routes per pointer.
     /// Down resolves once; move/up events reuse the cached route.
     hit_tests: RefCell<HashMap<PointerId, CachedPointerRoute>>,
 
@@ -1544,6 +1545,9 @@ impl GestureBinding {
                 };
 
                 let token = Self::resolve_route(&result);
+                // Hit entries contain inert target identities and transforms;
+                // the resolved token owns the actual admitted handler route.
+                drop(result);
                 let sequence = self.allocate_pointer_sequence();
                 let capture = ContactCapture::new(
                     down.pointer,
@@ -1557,7 +1561,6 @@ impl GestureBinding {
                 let replaced = self.hit_tests.borrow_mut().insert(
                     pointer_id,
                     CachedPointerRoute {
-                        result,
                         token,
                         sequence,
                         capture,
