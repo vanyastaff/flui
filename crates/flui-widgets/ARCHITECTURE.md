@@ -2362,3 +2362,29 @@ recognizers are no longer invoked. The controlled slider retirement row pins
 mid-contact disablement, stale Move/Up delivery and a fresh mounted contact.
 Disclosure explicitly merges its named Focus/action header semantics while its
 body remains a separate subtree; indicator direction uses the header allocation.
+
+## Mounted gesture policy ownership
+
+`GestureDetector`, `Draggable` and the navigator's edge-swipe detector acquire
+the resolved `GestureSettingsProvider` in lifecycle hooks. Live host publication
+updates that same provider; recognizers snapshot policy at admission and retain
+it through the contact or candidate's terminal event. An authored fixed profile
+or a different source identity replaces the owning recognizers instead. Equal
+profiles and the same live source preserve active work.
+
+Mounted listeners retain private weak attachments. Replacement commits every
+incoming owner and target before cancelling outgoing owners, so cached routes
+cannot reach a retired actor. Disposal revokes admission before cleanup.
+`authored_settings_replace_active_owners_and_preserve_equal_profiles`,
+`authored_settings_retire_tap_candidates_and_deadlines` and
+`authored_settings_retire_native_scale_session_before_fresh_admission` pin the
+six detector families. `draggable_reads_admission_profiles_and_retires_authored_owners`
+and `replacing_authored_back_swipe_policy_cancels_the_outgoing_contact` cover
+the direct consumers and their next healthy operation.
+
+The back-swipe settle converts the admitted fling vector's signed horizontal
+component to route widths per second, then applies directionality. Raw measured
+velocity remains available for reporting; `Draggable` reports it without an
+internal inertial animation. `mounted_back_swipe_settle_uses_the_admitted_fling_bound`
+pins retained policy and the subsequent contact's fresh bound against actual
+mounted route transitions.
