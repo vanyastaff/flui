@@ -273,9 +273,9 @@ impl UiRuntime {
                     != FrameCommitState::Committed
                     || !presentation.held_pointer_input().borrow().is_empty();
                 if should_hold_pointer {
-                    let pointer_id = flui_interaction::events::extract_pointer_id(&pointer_event);
+                    let pointer_id = flui_interaction::PointerEventExt::pointer_id(&pointer_event);
                     let has_active_contact_sequence =
-                        presentation.gestures().has_hit_test(pointer_id);
+                        pointer_id.is_some_and(|id| presentation.gestures().has_hit_test(id));
                     presentation
                         .held_pointer_input()
                         .borrow_mut()
@@ -293,7 +293,8 @@ impl UiRuntime {
                 let dispatch = Self::dispatch_after_pending_motion(presentation, || {
                     handled = presentation
                         .focus_manager()
-                        .dispatch_key_event(&keyboard_event);
+                        .dispatch_key_event(&keyboard_event)
+                        .is_handled();
                 });
                 self.finish_addressed_input_dispatch(presentation, dispatch);
                 handled
@@ -311,9 +312,8 @@ impl UiRuntime {
         }
     }
 
-    /// Motion callbacks and the accepted following input each get their own
-    /// containment boundary. A failing move must neither erase the key/IME nor
-    /// let its failure be replaced by another callback or deferred resolution.
+    /// The already resolved presentation owns both the measured prefix and the
+    /// accepted observing input, even if motion changes the active focus owner.
     fn dispatch_after_pending_motion(
         presentation: &PresentationState,
         dispatch: impl FnOnce(),
@@ -328,7 +328,7 @@ impl UiRuntime {
         .err();
         preserve_first_input_panic(&mut first, resolved, "input motion resolution");
         let dispatched = catch_unwind(AssertUnwindSafe(dispatch)).err();
-        preserve_first_input_panic(&mut first, dispatched, "input after pending motion");
+        preserve_first_input_panic(&mut first, dispatched, "input after measured motion");
         first.map_or(Ok(()), Err)
     }
 

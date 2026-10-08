@@ -98,9 +98,8 @@ pub trait RendererBinding {
 
     /// Hit test at the given position in the given view.
     ///
-    /// Distinct from `flui_interaction::HitTestable`, which operates on
-    /// individual render objects without a view context. This adds the
-    /// `view_id` parameter to route hit tests to the correct render tree.
+    /// The `view_id` selects the presentation's render tree before its
+    /// render objects perform protocol-specific hit testing.
     fn hit_test_in_view(
         &self,
         result: &mut HitTestResult,

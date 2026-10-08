@@ -10,14 +10,18 @@
 //! serve.
 
 pub use flui_foundation::RenderId;
-use flui_foundation::geometry::{Matrix4, Offset};
+use flui_foundation::geometry::{Matrix4, Offset, Point};
+use flui_platform_api::pointer::{
+    ButtonChange, PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerMove, PointerPosition,
+    PointerSample, ScrollDelta, ScrollEvent, ScrollUnit,
+};
 
-use crate::pan_zoom::PointerPanZoomEvent;
 use crate::{
-    events::{CursorIcon, PointerEvent, ScrollEventData},
+    events::{CursorIcon, PointerEvent},
     routing::MouseTrackerAnnotation,
     routing::interaction_lane::{
-        PanZoomTarget, PointerTarget, RoutePanic, ScrollTarget, active_dispatch_handle,
+        PanZoomDispatch, PanZoomTarget, PointerTarget, RoutePanic, ScrollTarget,
+        active_dispatch_handle,
     },
 };
 
@@ -53,6 +57,100 @@ impl EventPropagation {
     #[inline]
     pub const fn should_stop(self) -> bool {
         matches!(self, Self::Stop)
+    }
+}
+
+/// An exact selected scroll consumer and its admitted global-to-local transform.
+/// This holds data only; unregistering a target does not retain its callbacks.
+#[derive(Clone, Copy)]
+pub(crate) struct ScrollRoute {
+    target: ScrollTarget,
+    transform: Option<Matrix4>,
+}
+
+impl ScrollRoute {
+    pub(crate) fn dispatch(self, event: &ScrollEvent, claimed: impl FnOnce()) -> bool {
+        let local_event = if let Some(transform) = self.transform {
+            if !transform.is_invertible() {
+                return false;
+            }
+            let Some(local) = transform_scroll_event(event, &transform) else {
+                return false;
+            };
+            local
+        } else {
+            *event
+        };
+        let handle = match active_dispatch_handle() {
+            Ok(handle) => handle,
+            Err(error) => {
+                tracing::debug!(
+                    ?error,
+                    "scroll dispatch skipped without an active owner lane"
+                );
+                return false;
+            }
+        };
+        match handle.invoke_scroll_target_with_claim(self.target, &local_event, claimed) {
+            Ok(propagation) => propagation.should_stop(),
+            Err(error) => {
+                tracing::debug!(
+                    ?error,
+                    "scroll target unavailable during owner-lane dispatch"
+                );
+                false
+            }
+        }
+    }
+}
+
+/// Selected native gesture consumer; preserves the true root-space event.
+#[derive(Clone, Copy)]
+pub(crate) struct PanZoomRoute {
+    target: PanZoomTarget,
+    transform: Option<Matrix4>,
+}
+
+impl PanZoomRoute {
+    pub(crate) fn dispatch(self, event: &PanZoomEvent, claimed: impl FnOnce()) -> bool {
+        let local_event = if let Some(transform) = self.transform {
+            if !transform.is_invertible() {
+                return false;
+            }
+            let Some(local) = transform_pan_zoom_event(event, &transform) else {
+                return false;
+            };
+            local
+        } else {
+            *event
+        };
+        let handle = match active_dispatch_handle() {
+            Ok(handle) => handle,
+            Err(error) => {
+                tracing::debug!(
+                    ?error,
+                    "pan-zoom dispatch skipped without an active owner lane"
+                );
+                return false;
+            }
+        };
+        match handle.invoke_pan_zoom_target_with_claim(
+            self.target,
+            PanZoomDispatch {
+                local: &local_event,
+                global: event,
+            },
+            claimed,
+        ) {
+            Ok(propagation) => propagation.should_stop(),
+            Err(error) => {
+                tracing::debug!(
+                    ?error,
+                    "pan-zoom target unavailable during owner-lane dispatch"
+                );
+                false
+            }
+        }
     }
 }
 
@@ -94,6 +192,16 @@ impl HitTestBehavior {
 // HIT TEST ENTRY (Base)
 // ============================================================================
 
+/// A hit target's mouse cursor contribution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CursorRequest {
+    /// Let the next target in the hit path choose the cursor.
+    #[default]
+    Defer,
+    /// Select this icon, including the platform's default arrow.
+    Icon(CursorIcon),
+}
+
 /// Base hit test entry.
 ///
 /// Data-only (`Send + Sync`): executable pointer callbacks live in the
@@ -134,6 +242,12 @@ pub struct HitTestEntry {
     /// inside the pipeline, holding the tree; a caller resolving it later
     /// would need the pipeline itself, and would be reading a tree that may
     /// have moved on.
+    ///
+    /// Healthy retirement releases the payload. During unwind it is retained,
+    /// so a later entry's destructor cannot replace the first failure. This
+    /// guards ownership between entries; it cannot contain competing panics
+    /// inside one opaque payload's destructor. Use [`Option::take`] to move the
+    /// payload out of an owned entry.
     pub metadata: Option<std::sync::Arc<dyn std::any::Any + Send + Sync>>,
 
     /// Data-plane identity of this target's owner-local scroll handler.
@@ -143,11 +257,22 @@ pub struct HitTestEntry {
     pub pan_zoom_target: Option<PanZoomTarget>,
 
     /// Mouse cursor for this target.
-    pub cursor: CursorIcon,
+    pub cursor: CursorRequest,
 
     /// Mouse-tracker annotation contributed by this target, if it wants
     /// enter/exit/hover tracking.
     pub mouse_annotation: Option<MouseTrackerAnnotation>,
+}
+
+impl Drop for HitTestEntry {
+    fn drop(&mut self) {
+        let metadata = self.metadata.take();
+        if std::thread::panicking() {
+            crate::retain::Retain::retain(metadata);
+        } else {
+            drop(metadata);
+        }
+    }
 }
 
 impl std::fmt::Debug for HitTestEntry {
@@ -178,7 +303,7 @@ impl HitTestEntry {
             pointer_target: None,
             scroll_target: None,
             pan_zoom_target: None,
-            cursor: CursorIcon::Default,
+            cursor: CursorRequest::Defer,
             mouse_annotation: None,
             metadata: None,
         }
@@ -198,30 +323,42 @@ impl HitTestEntry {
     }
 
     /// Builder: set cursor.
+    #[must_use]
     pub fn cursor(mut self, cursor: CursorIcon) -> Self {
+        self.cursor = CursorRequest::Icon(cursor);
+        self
+    }
+
+    /// Builder: contribute an explicit cursor or defer to the next entry.
+    #[must_use]
+    pub fn cursor_request(mut self, cursor: CursorRequest) -> Self {
         self.cursor = cursor;
         self
     }
 
     /// Builder: set mouse-tracker annotation.
+    #[must_use]
     pub fn mouse_annotation(mut self, annotation: MouseTrackerAnnotation) -> Self {
         self.mouse_annotation = Some(annotation);
         self
     }
 
     /// Builder: set the owner-local pointer target identity.
+    #[must_use]
     pub fn pointer_target(mut self, target: PointerTarget) -> Self {
         self.pointer_target = Some(target);
         self
     }
 
     /// Builder: set the owner-local scroll target identity.
+    #[must_use]
     pub fn scroll_target(mut self, target: ScrollTarget) -> Self {
         self.scroll_target = Some(target);
         self
     }
 
     /// Builder: set the owner-local pan-zoom target identity.
+    #[must_use]
     pub fn pan_zoom_target(mut self, target: PanZoomTarget) -> Self {
         self.pan_zoom_target = Some(target);
         self
@@ -289,6 +426,23 @@ impl TransformPart {
 }
 
 impl HitTestResult {
+    /// Retire framework-owned entries individually after dispatch, outside any
+    /// binding borrow. An opaque payload's destructor may reenter or fail.
+    pub(crate) fn retire_metadata(mut self, first: &mut Option<RoutePanic>) {
+        let unwinding = std::thread::panicking();
+        for entry in &mut self.path {
+            let Some(metadata) = entry.metadata.take() else {
+                continue;
+            };
+            if unwinding || first.is_some() {
+                crate::retain::Retain::retain(metadata);
+            } else {
+                let retired = RoutePanic::capture(|| drop(metadata));
+                RoutePanic::preserve_first(first, retired, "hover hit-test metadata retirement");
+            }
+        }
+    }
+
     /// Creates an empty hit test result.
     pub fn new() -> Self {
         Self {
@@ -418,17 +572,22 @@ impl HitTestResult {
     /// The entry transform depth is restored both on return and on unwind.
     /// A caller may catch a descendant's panic and continue the same hit walk
     /// without giving the next entry the failed descendant's coordinate space.
-    pub fn with_paint_offset<F, R>(&mut self, offset: Offset<f64>, f: F) -> R
+    /// Non-finite offsets return `None` without invoking the subtree.
+    #[must_use = "None means the subtree was not visited"]
+    pub fn with_paint_offset<F, R>(&mut self, offset: Offset<f64>, f: F) -> Option<R>
     where
         F: FnOnce(&mut Self) -> R,
     {
+        if !offset.dx.is_finite() || !offset.dy.is_finite() {
+            return None;
+        }
         let depth = self.transforms.len() + self.local_transforms.len();
         self.push_offset(-offset);
         let guard = TransformGuard {
             result: self,
             depth,
         };
-        f(&mut *guard.result)
+        Some(f(&mut *guard.result))
     }
 
     /// Runs `f` with the INVERSE of `transform` pushed onto the transform
@@ -447,6 +606,7 @@ impl HitTestResult {
     ///
     /// The entry transform depth is restored on return and unwind, just as for
     /// [`with_paint_offset`](Self::with_paint_offset).
+    #[must_use = "None means the subtree was not visited"]
     pub fn with_paint_transform<F, R>(&mut self, transform: Matrix4, f: F) -> Option<R>
     where
         F: FnOnce(&mut Self) -> R,
@@ -622,46 +782,23 @@ impl HitTestResult {
     }
 
     /// Dispatches a scroll event to all entries.
-    pub fn dispatch_scroll(&self, event: &ScrollEventData) -> bool {
-        let handle = match active_dispatch_handle() {
-            Ok(handle) => handle,
-            Err(error) => {
-                tracing::debug!(
-                    ?error,
-                    "scroll dispatch skipped without an active owner lane"
-                );
-                return false;
-            }
-        };
+    pub fn dispatch_scroll(&self, event: &ScrollEvent) -> bool {
+        self.dispatch_scroll_with_claim(event, |_| {})
+    }
+
+    pub(crate) fn dispatch_scroll_with_claim(
+        &self,
+        event: &ScrollEvent,
+        mut claimed: impl FnMut(ScrollRoute),
+    ) -> bool {
         for entry in &self.path {
             if let Some(target) = entry.scroll_target {
-                let local_event = if let Some(ref transform) = entry.transform {
-                    // `transform` is already global-to-local (see
-                    // `HitTestEntry::transform`'s doc) -- apply it directly.
-                    // `is_invertible` is a well-formedness probe -- it skips
-                    // computing (and discarding) the inverse itself: a
-                    // degenerate ancestor transform makes the composed
-                    // `transform` itself singular, and such an entry must
-                    // still skip delivery rather than report a bogus point
-                    // (unchanged pre-existing behavior).
-                    if transform.is_invertible() {
-                        transform_scroll_event(event, transform)
-                    } else {
-                        continue;
-                    }
-                } else {
-                    *event
+                let route = ScrollRoute {
+                    target,
+                    transform: entry.transform,
                 };
-
-                match handle.invoke_scroll_target(target, &local_event) {
-                    Ok(propagation) if propagation.should_stop() => return true,
-                    Ok(_) => {}
-                    Err(error) => {
-                        tracing::debug!(
-                            ?error,
-                            "scroll target unavailable during owner-lane dispatch"
-                        );
-                    }
+                if route.dispatch(event, || claimed(route)) {
+                    return true;
                 }
             }
         }
@@ -680,52 +817,28 @@ impl HitTestResult {
     /// so a viewer already clamped at its scale extent hands the pinch to the
     /// one above it.
     ///
-    /// Routing trackpad pan-zoom through the SCALE GESTURE ARENA would
-    /// resolve the same contention with full gesture arbitration. This claim
-    /// walk is the interim arbitration FLUI has until a recognizer takes
-    /// pan-zoom input; it is deliberately shaped like
-    /// the pointer-signal claim walk, which is the arbitration primitive this
-    /// codebase already has.
+    /// A native gesture is admitted before its recognizer publishes callbacks.
+    /// The claimant receives the localized gesture alongside its original
+    /// root-space event, so both focal points retain their actual coordinates.
     ///
     /// Returns `true` when a target claimed the event.
-    pub fn dispatch_pan_zoom(&self, event: &PointerPanZoomEvent) -> bool {
-        let handle = match active_dispatch_handle() {
-            Ok(handle) => handle,
-            Err(error) => {
-                tracing::debug!(
-                    ?error,
-                    "pan-zoom dispatch skipped without an active owner lane"
-                );
-                return false;
-            }
-        };
+    pub fn dispatch_pan_zoom(&self, event: &PanZoomEvent) -> bool {
+        self.dispatch_pan_zoom_with_claim(event, |_| {})
+    }
+
+    pub(crate) fn dispatch_pan_zoom_with_claim(
+        &self,
+        event: &PanZoomEvent,
+        mut claimed: impl FnMut(PanZoomRoute),
+    ) -> bool {
         for entry in &self.path {
             if let Some(target) = entry.pan_zoom_target {
-                let local_event = if let Some(ref transform) = entry.transform {
-                    // `transform` is already global-to-local (see
-                    // `HitTestEntry::transform`'s doc). A degenerate ancestor
-                    // transform makes the composed matrix singular; such an
-                    // entry skips delivery rather than reporting a focal
-                    // point that is not on screen, exactly as the scroll walk
-                    // does.
-                    if transform.is_invertible() {
-                        transform_pan_zoom_event(event, transform)
-                    } else {
-                        continue;
-                    }
-                } else {
-                    *event
+                let route = PanZoomRoute {
+                    target,
+                    transform: entry.transform,
                 };
-
-                match handle.invoke_pan_zoom_target(target, &local_event) {
-                    Ok(propagation) if propagation.should_stop() => return true,
-                    Ok(_) => {}
-                    Err(error) => {
-                        tracing::debug!(
-                            ?error,
-                            "pan-zoom target unavailable during owner-lane dispatch"
-                        );
-                    }
+                if route.dispatch(event, || claimed(route)) {
+                    return true;
                 }
             }
         }
@@ -734,12 +847,12 @@ impl HitTestResult {
 
     /// Resolves the active mouse cursor.
     ///
-    /// Returns the first non-default cursor in the path, or
+    /// Returns the first explicit cursor in the path, or
     /// `CursorIcon::Default`.
     pub fn resolve_cursor(&self) -> CursorIcon {
         for entry in &self.path {
-            if entry.cursor != CursorIcon::Default {
-                return entry.cursor;
+            if let CursorRequest::Icon(cursor) = entry.cursor {
+                return cursor;
             }
         }
         CursorIcon::Default
@@ -783,181 +896,125 @@ impl Drop for TransformGuard<'_> {
 }
 
 // ============================================================================
-// HIT TESTABLE TRAIT
-// ============================================================================
-
-/// Trait for objects that can be hit-tested.
-pub trait HitTestable: crate::sealed::hit_testable::Sealed {
-    /// Performs hit testing at the given position.
-    fn hit_test(&self, position: Offset<f64>, result: &mut HitTestResult) -> bool;
-
-    /// Returns the hit test behavior.
-    fn hit_test_behavior(&self) -> HitTestBehavior {
-        HitTestBehavior::DeferToChild
-    }
-}
-
-impl<T: crate::sealed::CustomHitTestable> HitTestable for T {
-    fn hit_test(&self, position: Offset<f64>, result: &mut HitTestResult) -> bool {
-        self.perform_hit_test(position, result)
-    }
-
-    fn hit_test_behavior(&self) -> HitTestBehavior {
-        self.get_hit_test_behavior()
-    }
-}
-
-// ============================================================================
 // HELPER FUNCTIONS
 // ============================================================================
 
-pub(crate) fn transform_pointer_event(event: &PointerEvent, transform: &Matrix4) -> PointerEvent {
-    use ui_events::pointer::{PointerButtonEvent, PointerScrollEvent, PointerUpdate};
-
-    let transform_position = |pos: dpi::PhysicalPosition<f64>| -> dpi::PhysicalPosition<f64> {
-        let (x, y) = transform.transform_point(pos.x, pos.y);
-        dpi::PhysicalPosition::new(x, y)
-    };
-
-    match event {
-        PointerEvent::Down(e) => {
-            let mut new_state = e.state.clone();
-            new_state.position = transform_position(e.state.position);
-            PointerEvent::Down(PointerButtonEvent {
-                button: e.button,
-                pointer: e.pointer,
-                state: new_state,
-            })
-        }
-        PointerEvent::Up(e) => {
-            let mut new_state = e.state.clone();
-            new_state.position = transform_position(e.state.position);
-            PointerEvent::Up(PointerButtonEvent {
-                button: e.button,
-                pointer: e.pointer,
-                state: new_state,
-            })
-        }
-        PointerEvent::Move(e) => {
-            let mut new_current = e.current.clone();
-            new_current.position = transform_position(e.current.position);
-            PointerEvent::Move(PointerUpdate {
-                pointer: e.pointer,
-                current: new_current,
-                coalesced: e.coalesced.clone(),
-                predicted: e.predicted.clone(),
-            })
-        }
-        PointerEvent::Scroll(e) => {
-            let mut new_state = e.state.clone();
-            new_state.position = transform_position(e.state.position);
-            PointerEvent::Scroll(PointerScrollEvent {
-                pointer: e.pointer,
-                state: new_state,
-                delta: e.delta,
-            })
-        }
-        PointerEvent::Gesture(e) => {
-            // A gesture's focal point localizes exactly like a scroll's
-            // position — without this, a pinch consumer under any offset or
-            // transform scales around a window-global point and the content
-            // jumps instead of staying under the fingers.
-            let mut new_state = e.state.clone();
-            new_state.position = transform_position(e.state.position);
-            PointerEvent::Gesture(ui_events::pointer::PointerGestureEvent {
-                pointer: e.pointer,
-                gesture: e.gesture.clone(),
-                state: new_state,
-            })
-        }
-        // Cancel, Enter, Leave don't have position - just clone
-        other => other.clone(),
-    }
-}
-
-/// Re-express a pan-zoom event in an entry's local space.
-///
-/// Each field is localized differently:
-///
-/// - `position` and `pan` are **positions**: transformed as points.
-/// - `pan_delta` is a **delta anchored at `pan`**: the delta's start and end
-///   points are transformed separately and subtracted, rather than mapping
-///   the offset directly — mathematically equivalent for an affine matrix,
-///   but it also stays correct under perspective and carries less precision
-///   error.
-/// - `scale` and `rotation` are dimensionless and pass through untouched.
-///
-/// Localizing `pan`/`pan_delta` matters even though today's W3C adapter
-/// synthesizes both as zero (`convert_gesture` has no upstream pan field to
-/// read): `PointerPanZoomEvent` is public and `dispatch_pan_zoom` accepts a
-/// fully populated one, so a richer producer must not silently observe
-/// global-space offsets inside a scaled or rotated subtree.
-fn transform_pan_zoom_event(
-    event: &PointerPanZoomEvent,
+pub(crate) fn transform_pointer_event(
+    event: &PointerEvent,
     transform: &Matrix4,
-) -> PointerPanZoomEvent {
-    let localize = |point: Offset<f64>| {
-        let (x, y) = transform.transform_point(point.dx, point.dy);
-        Offset::new(x, y)
-    };
-    match *event {
-        PointerPanZoomEvent::Start {
-            pointer_id,
-            position,
-            timestamp_nanos,
-            device_kind,
-        } => PointerPanZoomEvent::Start {
-            pointer_id,
-            position: localize(position),
-            timestamp_nanos,
-            device_kind,
-        },
-        PointerPanZoomEvent::Update {
-            pointer_id,
-            position,
-            pan,
-            pan_delta,
-            scale,
-            rotation,
-            timestamp_nanos,
-            device_kind,
-        } => {
-            let local_pan = localize(pan);
-            PointerPanZoomEvent::Update {
-                pointer_id,
-                position: localize(position),
-                pan: local_pan,
-                // `transformDeltaViaPositions`: end minus start, both mapped
-                // as positions, with `pan` as the delta's end point.
-                pan_delta: local_pan - localize(pan - pan_delta),
-                scale,
-                rotation,
-                timestamp_nanos,
-                device_kind,
+) -> Option<PointerEvent> {
+    if let PointerEvent::Move(movement) = event {
+        return transform_move_event(movement, transform).map(PointerEvent::Move);
+    }
+    let mut local = event.clone();
+    match &mut local {
+        PointerEvent::Down(event) => event.sample = transform_sample(event.sample, transform)?,
+        PointerEvent::Up(event) => event.sample = transform_sample(event.sample, transform)?,
+        PointerEvent::ButtonChange(ButtonChange::Pressed(event)) => {
+            event.sample = transform_sample(event.sample, transform)?;
+        }
+        PointerEvent::ButtonChange(ButtonChange::Released(event)) => {
+            event.sample = transform_sample(event.sample, transform)?;
+        }
+        PointerEvent::Scroll(event) => *event = transform_scroll_event(event, transform)?,
+        PointerEvent::PanZoom(event) => *event = transform_pan_zoom_event(event, transform)?,
+        PointerEvent::Enter(event)
+        | PointerEvent::Leave(event)
+        | PointerEvent::ScrollInertiaCancel(event) => {
+            if let Some(position) = event.position {
+                event.position = Some(transform_position(position, transform)?);
             }
         }
-        PointerPanZoomEvent::End {
-            pointer_id,
-            position,
-            timestamp_nanos,
-            device_kind,
-        } => PointerPanZoomEvent::End {
-            pointer_id,
-            position: localize(position),
-            timestamp_nanos,
-            device_kind,
-        },
+        _ => {}
     }
+    Some(local)
 }
 
-fn transform_scroll_event(event: &ScrollEventData, transform: &Matrix4) -> ScrollEventData {
-    let (x, y) = transform.transform_point(event.position.dx, event.position.dy);
+/// Localize each source reading directly into the required owned histories.
+fn transform_move_event(event: &PointerMove, transform: &Matrix4) -> Option<PointerMove> {
+    let current = transform_sample(*event.current(), transform)?;
+    let coalesced = event
+        .coalesced()
+        .iter()
+        .copied()
+        .map(|sample| transform_sample(sample, transform))
+        .collect::<Option<Vec<_>>>()?;
+    let predicted = event
+        .predicted()
+        .iter()
+        .copied()
+        .map(|sample| transform_sample(sample, transform))
+        .collect::<Option<Vec<_>>>()?;
+    Some(
+        PointerMove::new(event.pointer, event.buttons, current)
+            .with_modifiers(event.modifiers)
+            .with_coalesced(coalesced)
+            .with_predicted(predicted),
+    )
+}
 
-    ScrollEventData {
-        position: Offset::new(x, y),
-        delta: event.delta,
-        modifiers: event.modifiers,
+/// Refuse a local coordinate that cannot be represented by the checked vocabulary.
+fn transform_position(position: PointerPosition, transform: &Matrix4) -> Option<PointerPosition> {
+    let point = position.get();
+    let (x, y) = transform.unproject_to_plane(point.x, point.y)?;
+    PointerPosition::try_new(Point::new(x, y)).ok()
+}
+
+fn transform_sample(mut sample: PointerSample, transform: &Matrix4) -> Option<PointerSample> {
+    sample.position = transform_position(sample.position, transform)?;
+    Some(sample)
+}
+
+/// Localize cumulative pan as a chord anchored at this event's current focal.
+///
+/// No starting global focal is inferred from an Update. Scale and rotation
+/// remain dimensionless, and the source event retains its cumulative values.
+fn transform_pan_zoom_event(event: &PanZoomEvent, transform: &Matrix4) -> Option<PanZoomEvent> {
+    let mut local = *event;
+    local.position = transform_position(event.position, transform)?;
+    if let PanZoomPhase::Update(value) = event.phase {
+        let pan = transform_delta(transform, event.position, value.pan())?;
+        local.phase = PanZoomPhase::Update(
+            PanZoomTransform::try_new(pan, value.scale(), value.rotation()).ok()?,
+        );
     }
+    Some(local)
+}
+
+fn transform_scroll_event(event: &ScrollEvent, transform: &Matrix4) -> Option<ScrollEvent> {
+    let mut local = *event;
+    local.position = transform_position(event.position, transform)?;
+    // Only Pixels describes a geometric displacement. Line/Page counts are
+    // resolved by the consuming scrollable against its own metrics; treating
+    // them as screen endpoints would silently change that quantity.
+    if event.delta.unit() == ScrollUnit::Pixels {
+        let delta = transform_delta(
+            transform,
+            event.position,
+            Offset::new(event.delta.x(), event.delta.y()),
+        )?;
+        local.delta = ScrollDelta::try_new(ScrollUnit::Pixels, delta.dx, delta.dy).ok()?;
+    }
+    Some(local)
+}
+
+/// A projective displacement is a chord between two admitted plane points,
+/// not a vector transformed at an unrelated global origin.
+fn transform_delta(
+    transform: &Matrix4,
+    focal: PointerPosition,
+    delta: Offset<f64>,
+) -> Option<Offset<f64>> {
+    let focal = focal.get();
+    let endpoint_x = focal.x + delta.dx;
+    let endpoint_y = focal.y + delta.dy;
+    if !endpoint_x.is_finite() || !endpoint_y.is_finite() {
+        return None;
+    }
+    let (origin_x, origin_y) = transform.unproject_to_plane(focal.x, focal.y)?;
+    let (x, y) = transform.unproject_to_plane(endpoint_x, endpoint_y)?;
+    let local = Offset::new(x - origin_x, y - origin_y);
+    (local.dx.is_finite() && local.dy.is_finite()).then_some(local)
 }
 
 // ============================================================================
@@ -967,7 +1024,7 @@ fn transform_scroll_event(event: &ScrollEventData, transform: &Matrix4) -> Scrol
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::events::PointerType;
+    use crate::events::PointerKind;
 
     #[test]
     fn dispatch_reaches_every_target_leaf_first_without_stopping() {
@@ -995,7 +1052,8 @@ mod tests {
             result.add(HitTestEntry::new(RenderId::new(1)).pointer_target(leaf));
             result.add(HitTestEntry::new(RenderId::new(2)).pointer_target(root));
 
-            let event = crate::events::make_down_event(Offset::new(50.0, 50.0), PointerType::Mouse);
+            let event = crate::events::make_down_event(Offset::new(50.0, 50.0), PointerKind::Mouse)
+                .expect("finite input");
             result.dispatch(&event);
         });
         assert_eq!(&*order.borrow(), &["leaf", "root"]);

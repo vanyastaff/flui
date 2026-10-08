@@ -9,7 +9,9 @@ mod browser {
     use flui_platform::platforms::web::WebPlatform;
     use flui_platform::{DispatchEventResult, Platform, WindowOptions};
     use flui_platform_api::PlatformInput;
-    use ui_events::pointer::{PointerButton, PointerEvent};
+    use flui_platform_api::pointer::{
+        ButtonChange, PointerButton, PointerButtons, PointerEvent, PointerSample,
+    };
     use wasm_bindgen::prelude::*;
 
     fn publish(name: &str, value: &str) {
@@ -30,6 +32,40 @@ mod browser {
         element.set_text_content(Some(value));
     }
 
+    fn sample_json(sample: &PointerSample) -> String {
+        let number =
+            |value: Option<f64>| value.map_or_else(|| "null".to_owned(), |value| value.to_string());
+        let point = sample.position.get();
+        format!(
+            r#"{{"time":{},"x":{},"y":{},"pressure":{},"tangential":{},"altitude":{},"azimuth":{},"twist":{},"width":{},"height":{}}}"#,
+            sample.time.as_nanos(),
+            point.x,
+            point.y,
+            number(sample.pressure.map(|value| f64::from(value.get()))),
+            number(
+                sample
+                    .tangential_pressure
+                    .map(|value| f64::from(value.get()))
+            ),
+            number(sample.orientation.and_then(|value| value.altitude())),
+            number(sample.orientation.and_then(|value| value.azimuth())),
+            number(sample.twist.map(|value| value.radians())),
+            number(sample.contact_size.map(|value| value.get().width)),
+            number(sample.contact_size.map(|value| value.get().height)),
+        )
+    }
+
+    fn append_result(name: &str, value: &str) {
+        let previous = web_sys::window()
+            .expect("browser window")
+            .document()
+            .expect("document")
+            .get_element_by_id(name)
+            .and_then(|node| node.text_content())
+            .unwrap_or_default();
+        publish(name, &format!("{previous}{value},"));
+    }
+
     #[wasm_bindgen]
     pub fn input_probe() -> Result<(), JsValue> {
         let platform = WebPlatform::new().map_err(|error| JsValue::from_str(&error.to_string()))?;
@@ -37,26 +73,80 @@ mod browser {
             .open_window(WindowOptions::default())
             .map_err(|error| JsValue::from_str(&error.to_string()))?;
         window.on_input(Box::new(|input| {
-            if let PlatformInput::Pointer(event) = input {
-                let (kind, state) = match &event {
-                    PointerEvent::Down(event) => ("down", Some(&event.state)),
-                    PointerEvent::Up(event) => ("up", Some(&event.state)),
-                    PointerEvent::Move(event) => ("move", Some(&event.current)),
-                    PointerEvent::Scroll(event) => ("scroll", Some(&event.state)),
-                    _ => ("other", None),
+            if let PlatformInput::Keyboard(event) = &input {
+                let key = match &event.key {
+                    flui_platform_api::keyboard::Key::Named(key) => key.as_str(),
+                    flui_platform_api::keyboard::Key::Character(text) => text.as_str(),
+                    _ => "unknown",
                 };
-                if let Some(state) = state {
-                    // FLUI's contract is logical even though ui-events names this
-                    // storage PhysicalPosition; consumers read these values directly.
+                append_result("keyboard-sequence", key);
+                publish("keyboard", &format!(
+                    r#"{{"key":"{}","code":"{}","state":"{:?}","location":"{:?}","repeat":"{:?}","composition":"{:?}","shift":{}}}"#,
+                    key, event.code.as_str(), event.state(), event.location,
+                    event.repeat(), event.composition,
+                    event.modifiers.contains(flui_platform_api::keyboard::Modifiers::SHIFT),
+                ));
+            }
+            if let PlatformInput::Pointer(event) = input {
+                if let PointerEvent::Scroll(event) = &event {
+                    append_result("wheel-sequence", &event.delta.x().to_string());
+                    publish("scroll-data", &format!(
+                        r#"{{"unit":"{:?}","x":{},"y":{},"precision":"{:?}","shift":{}}}"#,
+                        event.delta.unit(), event.delta.x(), event.delta.y(), event.precision,
+                        event.modifiers.contains(flui_platform_api::keyboard::Modifiers::SHIFT),
+                    ));
+                }
+                if let PointerEvent::Move(event) = &event {
+                    let readings = |samples: &[PointerSample]| samples.iter().map(sample_json).collect::<Vec<_>>().join(",");
+                    publish("samples", &format!(
+                        r#"{{"kind":"{:?}","role":"{:?}","current":{},"coalesced":[{}],"predicted":[{}]}}"#,
+                        event.pointer.kind, event.pointer.role, sample_json(event.current()),
+                        readings(event.coalesced()), readings(event.predicted()),
+                    ));
+                }
+                if let PointerEvent::Cancel(event) = &event {
+                    publish("cancel-reason", &format!("{:?}", event.reason));
+                }
+                let (kind, position, buttons) = match &event {
+                    PointerEvent::Down(event) => {
+                        ("down", Some(event.sample.position), event.buttons())
+                    }
+                    PointerEvent::Up(event) => ("up", Some(event.sample.position), event.buttons()),
+                    PointerEvent::ButtonChange(ButtonChange::Pressed(event)) => ("button-press", Some(event.sample.position), event.buttons()),
+                    PointerEvent::ButtonChange(ButtonChange::Released(event)) => ("button-release", Some(event.sample.position), event.buttons()),
+                    PointerEvent::Move(event) => {
+                        ("move", Some(event.current().position), event.buttons)
+                    }
+                    PointerEvent::Scroll(event) => {
+                        ("scroll", Some(event.position), PointerButtons::NONE)
+                    }
+                    PointerEvent::Cancel(_) => ("cancel", None, PointerButtons::NONE),
+                    _ => ("other", None, PointerButtons::NONE),
+                };
+                let document = web_sys::window()
+                    .expect("browser window")
+                    .document()
+                    .expect("document");
+                let previous = document
+                    .get_element_by_id("sequence")
+                    .and_then(|node| node.text_content())
+                    .unwrap_or_default();
+                publish("sequence", &format!("{previous}{kind},"));
+                if kind == "cancel" {
+                    publish("cancel-event", "delivered");
+                }
+                if let Some(position) = position {
+                    let point = position.get();
                     publish(
                         kind,
                         &format!(
-                            r#"{{"x":{},"y":{},"scale":{},"x1":{},"x2":{}}}"#,
-                            state.position.x,
-                            state.position.y,
-                            state.scale_factor,
-                            state.buttons.contains(PointerButton::X1),
-                            state.buttons.contains(PointerButton::X2),
+                            r#"{{"x":{},"y":{},"x1":{},"x2":{},"primary":{},"secondary":{}}}"#,
+                            point.x,
+                            point.y,
+                            buttons.contains(PointerButton::BACK),
+                            buttons.contains(PointerButton::FORWARD),
+                            buttons.contains(PointerButton::PRIMARY),
+                            buttons.contains(PointerButton::SECONDARY),
                         ),
                     );
                 }

@@ -2,6 +2,7 @@
 
 use flui_foundation::geometry::Size;
 use flui_log::AppIdentity;
+pub use flui_runtime::presentation::PointerResampling;
 
 use super::close_request::CloseRequestHandler;
 use super::dev_agent::DevAgent;
@@ -198,6 +199,8 @@ pub struct AppConfig {
     /// or its typed pipeline `RenderError`; handlers must treat those as
     /// potentially sensitive.
     pub frame_failure_detail: FrameFailureDetail,
+    /// Pointer interpolation for this window's presentation; disabled by default.
+    pub pointer_resampling: PointerResampling,
 
     /// Optional per-window close-request veto (issue #558): asked, for
     /// each window opened with this config, whether that window may
@@ -265,6 +268,7 @@ impl Default for AppConfig {
             executors: None,
             frame_failure_handler: None,
             frame_failure_detail: FrameFailureDetail::default(),
+            pointer_resampling: PointerResampling::Disabled,
             close_request_handler: None,
             #[cfg(not(target_arch = "wasm32"))]
             services: Vec::new(),
@@ -275,6 +279,13 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
+    /// Opt this window's presentation into frame-aligned pointer interpolation.
+    #[must_use]
+    pub fn with_pointer_resampling(mut self, policy: PointerResampling) -> Self {
+        self.pointer_resampling = policy;
+        self
+    }
+
     /// Create a new default configuration.
     pub fn new() -> Self {
         Self::default()

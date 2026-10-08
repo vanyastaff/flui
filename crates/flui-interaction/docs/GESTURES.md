@@ -6,16 +6,15 @@ times are `Instant`/`Duration`.
 
 ## Traits
 
-```
-GestureArenaMember (sealed)
- └── GestureRecognizer            add_pointer(self: &Arc<Self>, ..) / handle_event / dispose / primary_pointer
-      ├── OneSequenceGestureRecognizer
-      └── PrimaryPointerGestureRecognizer   deadline hook (did_exceed_deadline)
-```
+Both extension traits are open and dyn-compatible. `GestureArenaMember`
+provides `accept_gesture`, `reject_gesture`, `deadline() -> Option<Instant>`
+and `poll_deadline(now)`. The arena reads its clock outside state borrows and
+polls only armed, due deadlines.
 
-Built-in recognizers implement `GestureArenaMember` directly. Code outside the
-crate implements `CustomGestureRecognizer`, whose blanket impl supplies
-`GestureArenaMember` (`src/arena/mod.rs`).
+`GestureRecognizer: GestureArenaMember` adds `add_pointer(&self,
+PointerDispatch<'_>)`, `handle_event(&self, PointerDispatch<'_>)` and
+`cancel(&self) -> CancelOutcome`. A heterogeneous collection can store
+`Rc<dyn GestureRecognizer>` and upcast to the arena-member trait.
 
 Built-in recognizers: `TapGestureRecognizer`, `DoubleTapGestureRecognizer`,
 `LongPressGestureRecognizer`, `DragGestureRecognizer` (plus the
@@ -26,25 +25,35 @@ Built-in recognizers: `TapGestureRecognizer`, `DoubleTapGestureRecognizer`,
 
 ## Construction
 
-`new(arena)` (drag: `new(arena, axis)`, multi-tap: `new(arena, count)`) and
-`with_settings(arena, .., settings)` return `Arc<Self>`. Each `with_on_*`
-builder takes and returns that `Arc`. `set_settings(&self, settings)` replaces
-the settings later. Callbacks are stored as owner-local `Rc<dyn Fn>`.
+`builder(arena)` returns an unshared builder. Drag additionally takes its axis,
+multi-tap its contact count, and multi-drag its axis. Configure callbacks and
+`.settings(GestureSettings)` before `.build()`, which returns `Rc<Self>`.
+Callbacks are immutable after construction and may capture `Rc` UI state.
+
+Callback detail payloads are `#[non_exhaustive]`: read their public fields or
+use a destructuring pattern with `..`. Existing detail constructors support
+authored payloads where consumers need them; recognizer-produced outputs do
+not require consumers to construct an exhaustive struct literal. The
+`trybuild_ui` family pins both rejected literals and supported constructors.
 
 ```rust
-let tap = TapGestureRecognizer::new(arena.clone())
-    .with_on_tap_down(|d: TapDetails| { /* contact */ })
-    .with_on_tap_up(|d| { /* release, after the arena win */ })
-    .with_on_tap(|d| { /* tap */ })
-    .with_on_tap_cancel(|d| { /* cancelled */ });
+use flui_interaction::{GestureArena, TapGestureRecognizer};
+
+let tap = TapGestureRecognizer::builder(GestureArena::new())
+    .on_tap_down(|_| { /* contact */ })
+    .on_tap_up(|_| { /* release, after the arena win */ })
+    .on_tap(|_| { /* tap */ })
+    .on_tap_cancel(|_| { /* cancelled */ })
+    .build();
 ```
 
-Tap also has `with_on_secondary_tap*` and `with_on_tertiary_tap*` per button
+Tap also has `on_secondary_tap*` and `on_tertiary_tap*` per button
 (`TapButton`).
 
 ## Recognizers
 
-State names below are the private phase enums in each file.
+The descriptions below state observable recognition behavior; phase names are
+only a shorthand for the corresponding state machine.
 
 ### Tap (`tap.rs`, `TapState`)
 
@@ -62,26 +71,26 @@ Phases: `Ready`, `FirstDown`, `WaitingForSecond`, `SecondDown`, `Completed`,
   the first goes to `SecondDown`.
 - A second down farther than `double_tap_slop()` is ignored: the first entry
   stays held and the phase stays `WaitingForSecond`.
-- After the window expires, `check_timeout()` releases the held entry (so a
+- After the window expires, deadline polling releases the held entry (so a
   competing single tap can win), fires `on_double_tap_cancel`, and returns to
   `Ready`; a new contact then counts as a first tap.
 - Movement beyond slop during `FirstDown` or `SecondDown` cancels.
 
-Builders: `with_on_double_tap`, `with_on_double_tap_down`,
-`with_on_double_tap_cancel`.
+Builder methods: `on_double_tap`, `on_double_tap_down`,
+`on_double_tap_cancel`.
 
 ### Long press (`long_press.rs`, `LongPressPhase`)
 
 `Ready → Possible` on down; `Possible → Started` when `long_press_timeout()`
 elapses within slop; movement beyond slop before that cancels. Firing goes
-through one path, `try_fire_timer`, which is reached from frame deadline
-polling, `handle_move`, and the public `check_timer()`. It accepts the arena
+through one deadline path, reached from frame polling or subsequent input.
+It accepts the arena
 entry before invoking `on_long_press` / `on_long_press_start`, so a competing
 tap on the same region is already rejected when the callbacks run.
 
-Builders: `with_on_long_press_down`, `with_on_long_press`,
-`with_on_long_press_start`, `with_on_long_press_move_update`,
-`with_on_long_press_up`, `with_on_long_press_end`, `with_on_long_press_cancel`.
+Builder methods: `on_long_press_down`, `on_long_press`,
+`on_long_press_start`, `on_long_press_move_update`,
+`on_long_press_up`, `on_long_press_end`, `on_long_press_cancel`.
 
 ### Drag (`drag.rs`, `DragPhase`)
 
@@ -91,7 +100,7 @@ claims the win while competitors remain. `DragStartBehavior::Start` (default)
 reports the position at acceptance, `Down` the down position. Up or an accepted
 Cancel ends the drag; rejection before acceptance fires `on_cancel`.
 
-```rust
+```text
 pub enum DragAxis { Vertical, Horizontal, Free }
 
 pub struct DragDownDetails   { global_position, local_position, kind }
@@ -105,7 +114,8 @@ pub struct DragEndDetails    { reason: GestureEndReason, velocity: Velocity,
 `DragEndDetails::reason` is `Completed` for pointer Up and `Cancelled` for an
 accepted pointer Cancel; the measured velocity is kept in both cases
 (ADR-0112). `DragGestureRecognizer::is_fling(&velocity)` compares speed with
-`min_fling_velocity()`.
+`min_fling_velocity()`. Completed Up evaluates velocity at the terminal event's
+time, so a stationary pause before release cannot publish an old fast fling.
 
 ### Scale (`scale.rs`, `ScalePhase`)
 
@@ -129,29 +139,66 @@ Calculations (`calculate_spans`, `calculate_rotation`):
 Dropping below two pointers ends a started gesture. `ScaleEndDetails` carries
 `focal_point`, `scale`, `rotation` and `velocity` (scale units per second).
 
+The default `ScaleStartMode::Scale` requires two contacts. Choose
+`ScaleStartMode::PanOrScale` explicitly for one-contact pan that continues as
+contacts join or leave:
+
+```rust
+use flui_interaction::{GestureArena, ScaleGestureRecognizer};
+use flui_interaction::recognizers::scale::ScaleStartMode;
+
+let recognizer = ScaleGestureRecognizer::builder(GestureArena::new())
+    .start_mode(ScaleStartMode::PanOrScale)
+    .on_update(|details| {
+        let local_motion = details.focal_point_delta;
+        let global_focal = details.focal_point;
+    })
+    .build();
+```
+
 ### Force press (`force_press.rs`, `ForcePressPhase`)
 
-Down with pressure `0.0` means the device reports no pressure: `Ended`
-immediately. Otherwise `Possible`, then `Started` at `start_pressure`
+Mouse pressure and constant synthetic readings do not establish a pressure
+sensor. A non-mouse contact must supply varying nonzero readings before force
+recognition starts; non-finite readings are ignored. The recognizer starts at `start_pressure`
 (`FORCE_PRESS_START_PRESSURE = 0.4`) and `Peaked` at `peak_pressure`
 (`FORCE_PRESS_PEAK_PRESSURE = 0.85`); both are configurable with
-`with_start_pressure` / `with_peak_pressure`. Dropping below the start pressure
-from `Peaked`, pointer Up, or movement beyond `hit_slop(kind)` ends a started
+`start_pressure` / `peak_pressure` on the builder. Dropping below the start pressure
+from an active press, pointer Up, or movement beyond `hit_slop(kind)` ends a started
 press; movement beyond slop while `Possible` rejects it silently.
 `ForcePressDetails { global_position, local_position, pressure, max_pressure }`.
 
 ### Multi-tap (`multi_tap.rs`, `MultiTapPhase`)
 
-`new(arena, n)` recognizes `n` simultaneous contacts that stay within slop and
+`builder(arena, n)` recognizes `n` simultaneous contacts that stay within slop and
 are all released. Each contact is tracked by its own pointer identity
 (`multi_contact_events_keep_independent_pointer_identity`).
 
 ### Trackpad pan-zoom (`pan_zoom.rs`)
 
-`convert_gesture` / `from_w3c_event` map an upstream `PointerGesture` to a
-`PointerPanZoomEvent::Update`. The upstream event carries one tick, so `scale`
-(`1.0 + pinch`) and `rotation` are per-tick deltas, not values accumulated
-since a `Start`; `pan` and `pan_delta` are always zero.
+`PointerEvent::PanZoom` carries the canonical `PanZoomEvent`. Its phase is
+`Start`, `Update(PanZoomTransform)`, `End` or `Cancelled`. Pan offset, scale
+and rotation in an Update are cumulative since Start; consumers subtract pan
+and rotation or divide scales to derive one step. `PanZoomEvent` always reports
+`PointerKind::Trackpad` and keeps its pointer identity, production time,
+logical focal position and modifiers.
+
+Native claims receive `PanZoomDispatch`: `local` contains checked receiving-plane
+geometry and `global` retains the original source event. Local cumulative pan
+uses a chord at the Update's current focal; scale and rotation remain unchanged
+(see [HIT_TESTING.md](HIT_TESTING.md)). `ScaleGestureRecognizer::handle_pan_zoom`
+drives the same immutable callbacks used for touch input.
+
+`GestureDetector` admits a native source when enabled scale callbacks accept a
+meaningful Update. `GestureBinding` retains the selected owner until the source
+ends or is cancelled; an enabled descendant cannot steal that session during
+a rebuild. `InteractiveViewer` consumes these callbacks rather than retaining
+a second native actor. Public rows
+`viewer_native_session_reports_one_start_and_one_terminal`,
+`viewer_repeated_native_start_retires_the_previous_generation` and
+`viewer_native_owner_survives_descendant_enable_during_rebuild` pin this lifecycle.
+An Update without Start is an independent compatibility step: the recognizer
+emits start/update/end for that step instead of inventing a continuing source.
 
 ## GestureSettings (`settings.rs`)
 
@@ -168,18 +215,26 @@ since a `Start`; `pan` and `pan_delta` are always zero.
 
 Presets: `touch_defaults`, `mouse_defaults`, `pen_defaults`, `android_defaults`
 (400 ms long press), `ios_defaults`, `for_device`, `for_platform`, `native`.
-Builders: `with_touch_slop`, `with_pan_slop`, `with_double_tap_timeout`,
-`with_long_press_timeout`, `with_min_fling_velocity`, `with_max_fling_velocity`
-and others.
+Timing builders include `with_double_tap_timeout` and `with_long_press_timeout`.
+Numeric builders such as `try_with_touch_slop`, `try_with_pan_slop` and
+`try_with_fling_velocity` return `GestureSettingsError` for invalid ranges.
+Each admitted contact freezes a settings snapshot for its complete sequence.
 
 ## Arena integration
 
-A recognizer joins the arena from `add_pointer`, which receives the owning
-`Arc` so the registered identity is the recognizer itself
-(`RecognizerBase::start_tracking(pointer, position, global_position, self)`).
+A recognizer joins the arena from `add_pointer(dispatch)`. `ArenaMembership`
+holds the exact allocation's weak identity, established with `Rc::new_cyclic`.
+`PrimaryContact` combines membership with one admitted contact, its distinct
+`ContactId`, frozen settings, deadline and slop checks. `begin` refuses an
+already active contact rather than replacing it.
 `GestureArena::add` returns a `GestureArenaEntry` whose `resolve`, `hold`,
 `release` and `sweep` act on that one membership. The arena calls
-`accept_gesture` / `reject_gesture` after releasing its own locks.
+`accept_gesture` / `reject_gesture` after releasing its own borrows.
+
+Arena members, eager winners and pending notifications are weak. A callback
+upgrades its participant only immediately before invocation; an owner released
+by an earlier callback is skipped. Silent contact destruction queues exact
+membership withdrawal for deferred resolution and never calls peers inline.
 
 At runtime `GestureBinding` hit-tests on Down, calls `add_pointer` along the
 route, closes the arena, sweeps on Up, and does not sweep on Cancel.
@@ -187,39 +242,54 @@ route, closes the arena, sweeps on Up, and does not sweep on Cancel.
 ## Velocity tracking (`processing/velocity.rs`)
 
 ```rust
-let mut tracker = VelocityTracker::with_kind(PointerDeviceKind::Touch);
-tracker.add_position(time, position);       // Offset<f64>
-let v: Velocity = tracker.get_velocity();   // pixels_per_second: Offset<f64>
-let fling = tracker.get_fling_velocity(false);
-let estimate = tracker.get_velocity_estimate(); // Option<VelocityEstimate>
+use web_time::Instant;
+use flui_foundation::geometry::Offset;
+use flui_interaction::{PointerKind, Velocity, VelocityTracker};
+
+let mut tracker = VelocityTracker::with_kind(PointerKind::Touch);
+let now = Instant::now();
+tracker.add_position(now, Offset::ZERO);
+let v: Velocity = tracker.velocity_at(now); // pixels_per_second: Offset<f64>
+let estimate = tracker.estimate_at(now); // Option<VelocityEstimate>
 ```
 
 A quadratic least-squares fit over at most 20 samples within a 100 ms horizon;
 fewer than 3 samples gives no fit, and a pointer still for 40 ms reports zero.
-`IosFlingVelocityTracker`, `MacosFlingVelocityTracker` and
-`ImpulseVelocityTracker` are alternative strategies with the same shape.
+Use `processing::VelocityTracker::with_estimator(kind, estimator)` for a
+different `processing::VelocityEstimator`, or configure a recognizer through
+`GestureSettings::with_velocity_estimator`. Drag, multi-drag, tap-and-drag and
+scale capture this policy when their contact sequence begins. Defaults remain
+least squares on every platform; selecting weighted recent intervals or impulse
+integration is an authored policy rather than an OS preference. All algorithms
+share the explicit sample-clock stop gate exposed by `estimate_at(now)`.
+
+Owned `PointerMove` exposes current, coalesced and predicted samples separately.
+Recognizers consume measured history in source order and never feed predictions
+into velocity estimation. Device timestamps, including epoch zero, remain
+valid `EventTime` values. Button changes are mid-contact state, not a second
+Down; device-only events do not invent a pointer contact.
 
 ## Custom recognizers
 
-Implement `CustomGestureRecognizer` (`on_arena_accept`, `on_arena_reject`) and
-`GestureRecognizer`. In `add_pointer`, pass `self` (the `&Arc<Self>`) to the
-arena. Building a new `Arc` from a clone registers a different allocation:
-its entry handle goes stale once the arena resolves, and timers after
-resolution cannot reach the recognizer (`GestureRecognizer::add_pointer` docs).
+Implement `GestureArenaMember` and `GestureRecognizer` directly. Construct the
+recognizer with `Rc::new_cyclic`, pass its weak identity into
+`ArenaMembership::new`, and use `PrimaryContact` when recognition tracks one
+contact. Multi-contact recognizers use membership for each independent pointer.
+Measure with `dispatch.local` and report root coordinates from `dispatch.global`.
 
-```rust
-impl GestureRecognizer for TripleTap {
-    fn add_pointer(self: &Arc<Self>, pointer: PointerId,
-                   position: Offset<f64>, global: Offset<f64>) {
-        self.base.start_tracking(pointer, position, global, self);
-    }
-    fn handle_event(&self, dispatch: PointerDispatch<'_>) {
-        // measure with dispatch.local; report dispatch.global
-    }
-    fn dispose(&self) { self.base.mark_disposed(); }
-    fn primary_pointer(&self) -> Option<PointerId> { self.base.primary_pointer() }
-}
-```
+Keep strong ownership in widget state, and attach through
+`Listener::recognizer` or `RecognizerSet`. Attachments hold weak identities.
+`recognizer_when` / `attach_when` filter new Down admission only; they cannot
+erase the Move/Up/Cancel tail of a contact admitted earlier. The
+[custom recognizer example](../examples/custom_recognizer.rs) demonstrates the
+open extension point without a parallel marker trait.
+
+Explicit `cancel()` delivers cancellation once for an active sequence and
+returns `Cancelled`, or `Idle` when there is none. It does not disable the
+recognizer. `cancel_all` attempts every supplied recognizer before resuming the
+first failure. Last-owner destruction withdraws contacts silently and retires
+captures outside state borrows, preserving an incoming or previously caught
+failure according to ADR-0127.
 
 ## Ownership and threading
 

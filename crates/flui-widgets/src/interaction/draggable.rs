@@ -34,7 +34,7 @@
 //!    independent of that route, which is the whole point.
 //!
 //!    **Where the position comes from.** FLUI's pointer events are
-//!    `ui_events` types with room for one position, so dispatch delivers the
+//!    owned input values with room for one position, so dispatch delivers the
 //!    global/local pair beside the event, as a `PointerDispatch`.
 //!    `GestureRecognizer::handle_event` takes the dispatch, and every
 //!    `Drag*Details` reports its `global_position` from the untransformed
@@ -123,8 +123,7 @@ use flui_foundation::geometry::{Matrix4, Offset};
 use flui_interaction::{
     DragUpdateDetails, GestureRecognizer, HitTestEntry, HitTestHandle, InteractionDispatchError,
     LocalPayloadTarget, MultiDragAxis, MultiDragEndDetails, MultiDragGestureRecognizer,
-    MultiDragHandle, MultiDragStartCallback, MultiDragUpdateDetails, PointerEventExt as _,
-    PointerId, Velocity, resolve_local_payload,
+    MultiDragHandle, MultiDragUpdateDetails, PointerId, Velocity, resolve_local_payload,
 };
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
@@ -427,7 +426,7 @@ pub struct DraggableState<T: Clone + Send + Sync + 'static> {
     /// [`DragConfig`]; see [`FeedbackConfig`] for why the two are separate.
     feedback_config: Rc<RefCell<FeedbackConfig>>,
     /// Built once in `init_state` against the presentation arena.
-    recognizer: Option<Arc<MultiDragGestureRecognizer>>,
+    recognizer: Option<Rc<MultiDragGestureRecognizer>>,
     /// Ties this state to `Draggable<T>` even though no field stores a `T`
     /// directly (see [`DragConfig`]'s docs on why the session drops it).
     _data: std::marker::PhantomData<T>,
@@ -1151,13 +1150,13 @@ impl MultiDragHandle for DragSession {
                 Some(Axis::Vertical) => details.delta.dy,
                 None => 0.0,
             };
-            let update = DragUpdateDetails {
-                global_position: details.global_position,
-                local_position: details.local_position,
-                delta: details.delta,
+            let update = DragUpdateDetails::new(
+                details.global_position,
+                details.local_position,
+                details.delta,
                 primary_delta,
-                kind: details.kind,
-            };
+                details.kind,
+            );
             self.writer.write(|cx| callback(cx, update));
         }
     }
@@ -1284,7 +1283,7 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
         let hit_test = Rc::clone(&self.hit_test);
         let listener_node = Rc::clone(&self.listener_node);
         let pipeline = Rc::clone(&self.pipeline);
-        let on_start: MultiDragStartCallback = Rc::new(move |pointer, initial_position| {
+        let on_start = move |pointer, initial_position| {
             {
                 let guard = config.borrow();
                 if let Some(max) = guard.max_simultaneous_drags
@@ -1330,7 +1329,7 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
                 feedback_offset,
             };
 
-            Some(Box::new(DragSession {
+            Some(Rc::new(DragSession {
                 active_count: Arc::clone(&active_count),
                 rebuild: rebuild.clone(),
                 config: Rc::clone(&config),
@@ -1347,11 +1346,13 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
                 active: RefCell::new(None),
                 offset: Mutex::new(Offset::ZERO),
                 feedback,
-            }) as Box<dyn MultiDragHandle>) // see flui-interaction's MultiDragStartCallback — the per-pointer handle `MultiDragGestureRecognizer::with_on_start` requires.
-        });
+            }) as Rc<dyn MultiDragHandle>)
+        };
 
         self.recognizer = Some(
-            MultiDragGestureRecognizer::new(arena, MultiDragAxis::Free).with_on_start(on_start),
+            MultiDragGestureRecognizer::builder(arena, MultiDragAxis::Free)
+                .on_start(on_start)
+                .build(),
         );
     }
 
@@ -1384,11 +1385,6 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
         let max = view.max_simultaneous_drags;
         let active_count = Arc::clone(&self.active_count);
 
-        let down_recognizer = Arc::clone(&recognizer);
-        let move_recognizer = Arc::clone(&recognizer);
-        let up_recognizer = Arc::clone(&recognizer);
-        let cancel_recognizer = recognizer;
-
         let listener = Listener::new()
             // The whole pair goes through. `DragSession`'s accumulated
             // position, `to_global` and the `DragOrigin` probe are all built
@@ -1396,22 +1392,9 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
             // that way; the global half is what lets a recogniser report a
             // global position at all, since dispatch rewrote it away before
             // any handler here runs.
-            .on_pointer_down(move |_cx, dispatch| {
-                if let Some(max) = max
-                    && active_count.load(Ordering::Acquire) >= max
-                {
-                    return;
-                }
-                let event = dispatch.local;
-                down_recognizer.add_pointer(
-                    event.pointer_id(),
-                    event.position(),
-                    dispatch.global.position(),
-                );
-            })
-            .on_pointer_move(move |_cx, dispatch| move_recognizer.handle_event(dispatch))
-            .on_pointer_up(move |_cx, dispatch| up_recognizer.handle_event(dispatch))
-            .on_pointer_cancel(move |_cx, dispatch| cancel_recognizer.handle_event(dispatch));
+            .recognizer_when(&recognizer, move |_| {
+                max.is_none_or(|max| active_count.load(Ordering::Acquire) < max)
+            });
 
         let currently_active = self.active_count.load(Ordering::Acquire);
         let showing_child_when_dragging =
@@ -1458,7 +1441,7 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
     /// drag is canceled here instead of surviving unmount.
     ///
     /// Also removes the feedback layer directly, if one is still showing:
-    /// `recognizer.dispose()`'s `cancel()` calls schedule a rebuild
+    /// `recognizer.cancel()` calls schedule a rebuild
     /// (`DragSession::end_active`), but this element is unmounting — no
     /// later `build` will ever run to act on it (see `build`'s own teardown
     /// check), so this is the last chance.
@@ -1472,8 +1455,8 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
         if let Some(entry) = stale {
             entry.remove();
         }
-        if let Some(recognizer) = self.recognizer.as_ref() {
-            recognizer.dispose();
+        if let Some(recognizer) = self.recognizer.take() {
+            recognizer.cancel();
         }
     }
 }

@@ -27,19 +27,25 @@ pub(crate) fn raw_text_field_callbacks_write_through_the_forwarded_cx() {
             .on_submitted(move |cx, _text| count.update(cx, |n| *n += 100))
     });
     let harness = mount(probe.view());
-    focus_node.request_focus();
+    let _ = focus_node.request_focus();
 
     let typed = KeyEventBuilder::new(Code::KeyA)
-        .with_key(Key::Character("a".to_owned()))
+        .with_key(Key::character("a"))
         .with_state(KeyState::Down)
         .build();
-    harness.focus_manager().dispatch_key_event(&typed);
+    let _ = harness
+        .focus_manager()
+        .dispatch_key_event(&typed)
+        .is_handled();
     assert_eq!(probe.value(), Ok(1), "on_changed wrote");
 
     let enter = KeyEventBuilder::new(Code::Enter)
         .with_key(Key::Named(NamedKey::Enter))
         .with_state(KeyState::Down)
         .build();
-    harness.focus_manager().dispatch_key_event(&enter);
+    let _ = harness
+        .focus_manager()
+        .dispatch_key_event(&enter)
+        .is_handled();
     assert_eq!(probe.value(), Ok(101), "on_submitted wrote");
 }

@@ -2065,8 +2065,6 @@ version = "0.2.0-dev"
 dependencies = [
  "criterion",
  "cursor-icon",
- "dashmap",
- "dpi",
  "flui-foundation",
  "flui-interaction",
  "flui-painting",
@@ -2079,7 +2077,7 @@ dependencies = [
  "static_assertions",
  "thiserror 2.0.20",
  "tracing",
- "ui-events",
+ "trybuild",
  "web-time",
 ]
 
@@ -2210,10 +2208,11 @@ dependencies = [
  "dirs",
  "dispatch",
  "dispatch2",
- "dpi",
  "flui-foundation",
  "flui-platform-api",
  "flui-semantics",
+ "jni",
+ "js-sys",
  "keyboard-types",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
@@ -2228,6 +2227,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "trybuild",
  "ui-events",
  "ui-events-winit",
  "wasm-bindgen",
@@ -2252,7 +2252,6 @@ dependencies = [
  "static_assertions",
  "thiserror 2.0.20",
  "tracing",
- "ui-events",
 ]
 
 [[package]]
@@ -2322,6 +2321,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "trybuild",
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
  "web-time",
@@ -2360,6 +2360,7 @@ dependencies = [
  "flui-scheduler",
  "flui-view",
  "flui-widgets",
+ "trybuild",
 ]
 
 [[package]]
@@ -2450,7 +2451,7 @@ dependencies = [
  "console_error_panic_hook",
  "flui-foundation",
  "flui-platform",
- "ui-events",
+ "flui-platform-api",
  "wasm-bindgen",
  "web-sys",
 ]
@@ -7803,6 +7804,7 @@ dependencies = [
  "anyhow",
  "cargo_metadata",
  "clap",
+ "keyboard-types",
  "proc-macro2",
  "pulldown-cmark",
  "regex",

@@ -4,7 +4,8 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use flui_foundation::geometry::{Matrix4, Point, Rect};
-use flui_interaction::events::{Key, KeyEvent, KeyState, NamedKey};
+use flui_interaction::events::{Code, Key, KeyState, NamedKey};
+use flui_interaction::testing::input::KeyEventBuilder;
 use flui_painting::display_list::DrawOp;
 use flui_painting::paint::Clip;
 use flui_painting::styling::Color;
@@ -69,11 +70,14 @@ fn action(app: &LaidOut, id: NodeId, action: Action) {
 
 fn key(app: &LaidOut, key: Key) -> bool {
     app.enter_owner_scope(|| {
-        app.focus_manager().dispatch_key_event(&KeyEvent {
-            key,
-            state: KeyState::Down,
-            ..KeyEvent::default()
-        })
+        app.focus_manager()
+            .dispatch_key_event(
+                &KeyEventBuilder::new(Code::Unidentified)
+                    .with_key(key)
+                    .with_state(KeyState::Down)
+                    .build(),
+            )
+            .is_handled()
     })
 }
 
@@ -219,7 +223,7 @@ pub(crate) fn disclosure_proposes_controlled_changes_and_retains_real_header_foc
         "focus changes the painted indicator"
     );
     assert!(key(&app, Key::Named(NamedKey::Enter)));
-    assert!(key(&app, Key::Character(" ".into())));
+    assert!(key(&app, Key::character(" ")));
     assert_eq!(
         proposals.borrow().len(),
         3,
@@ -342,7 +346,7 @@ pub(crate) fn disclosure_disabled_and_replaced_handlers_do_not_run_old_proposals
     assert!(!header.supports_action(Action::Focus));
     app.dispatch_pointer_down(20.0, 10.0);
     app.dispatch_pointer_up(20.0, 10.0);
-    let _ = key(&app, Key::Character(" ".into()));
+    let _ = key(&app, Key::character(" "));
     assert_eq!(next.borrow().len(), 1, "disabled input proposes nothing");
     app.pump_widget(section(ExpansionState::Expanded, Some(&next), &taps));
     app.dispatch_pointer_down(20.0, 10.0);
@@ -355,7 +359,7 @@ pub(crate) fn disclosure_disabled_and_replaced_handlers_do_not_run_old_proposals
     assert_eq!(next.borrow().last(), Some(&ExpansionState::Collapsed));
     let new_id = header_node(&mut app);
     action(&app, new_id, Action::Focus);
-    assert!(key(&app, Key::Character(" ".into())));
+    assert!(key(&app, Key::character(" ")));
     assert_eq!(next.borrow().last(), Some(&ExpansionState::Collapsed));
     app.pump_widget(section(ExpansionState::Expanded, Some(&next), &taps).label("Updated"));
     app.tick();

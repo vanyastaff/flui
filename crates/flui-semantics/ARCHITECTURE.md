@@ -12,6 +12,23 @@ shape.
 
 ## Mapping decisions
 
+### Descendant reveal snapshots retain current ownership and geometry
+
+[ADR-0168](../../docs/adr/ADR-0168-descendant-reveal-through-scroll-ancestors.md)
+defines the render/semantics/Scrollable contract. Automatic reveal uses actual
+ancestor handlers with separate unclipped root-logical geometry and a published
+scroll-position basis. Detached descendant-reveal invocations validate weak per-tree membership
+for the target and its full ancestor path; clones carry no authority, and
+replacement, reparenting or mutable geometry access revokes stale snapshots.
+
+Invocation and intentional snapshot destruction retire each callback separately
+outside pipeline borrows. The first failure remains authoritative; remaining
+user ownership is retained, live ancestor delivery continues, and healthy
+destruction still runs. Public family
+`descendant_reveal_snapshots_preserve_identity_failure_and_recovery` checks stale
+paths, single/competing body failure, recovery and healthy/failed capture
+retirement, including an uninvoked last-owner snapshot.
+
 ### Failed incremental publication keeps delivery pending
 
 The published-node mirror and published focus advance only after the platform

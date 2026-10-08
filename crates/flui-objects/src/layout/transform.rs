@@ -395,7 +395,9 @@ impl RenderBox for RenderTransform {
             return false;
         };
         let local_pos = ctx.position();
-        let (tx, ty) = inverse.transform_point(local_pos.dx, local_pos.dy);
+        let Some((tx, ty)) = inverse.unproject_to_plane(local_pos.dx, local_pos.dy) else {
+            return false;
+        };
         // Transform symmetry: the child sees the SAME point the paint
         // matrix mapped — forward the inverse-transformed position, not
         // the original one. (The pre-fix shape passed the untransformed

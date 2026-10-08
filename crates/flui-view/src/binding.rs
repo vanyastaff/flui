@@ -1238,6 +1238,8 @@ impl WidgetsBinding {
             build_owner.build_scope(element_tree);
 
             tracing::debug!("Build phase complete");
+        } else {
+            inner.build_owner.clear_frame_build_report();
         }
 
         // Note: Layout and paint phases would be called here via super.draw_frame()

@@ -1,5 +1,6 @@
 #![cfg(test)]
 
+use flui::geometry::{Point, Rect, Size};
 use flui::painting::{Canvas, CustomPainter, DrawOp, Paint};
 use flui::prelude::*;
 use flui::rendering::{
@@ -7,7 +8,6 @@ use flui::rendering::{
     RenderBox, RenderUpdateImpact, Single,
 };
 use flui::testing::widgets::{lay_out, loose};
-use flui::geometry::{Point, Rect, Size};
 use flui::view::{RenderObjectContext, RenderView};
 use flui::widgets::AnimatedBuilder;
 use std::sync::{
@@ -163,26 +163,30 @@ fn proxy_macros_forward_live_and_dry_layout() {
 
 #[test]
 fn gesture_recognizer_uses_headless_virtual_time() {
-    use flui::interaction::{
-        GestureRecognizer, GestureSettings, LongPressGestureRecognizer, PointerId,
-    };
     use flui::geometry::Offset;
+    use flui::interaction::{
+        GestureRecognizer, GestureSettings, LongPressGestureRecognizer, PointerDispatch, PointerId,
+    };
     let mut binding = flui::testing::HeadlessBinding::new();
     let fired = Arc::new(AtomicUsize::new(0));
     let callback = fired.clone();
-    let recognizer = LongPressGestureRecognizer::with_settings(
-        binding.arena().clone(),
-        GestureSettings::touch_defaults().with_long_press_timeout(Duration::from_millis(500)),
-    )
-    .with_on_long_press_start(move |_details: flui::interaction::LongPressStartDetails| {
-        callback.fetch_add(1, Ordering::SeqCst);
-    });
+    let recognizer = LongPressGestureRecognizer::builder(binding.arena().clone())
+        .settings(
+            GestureSettings::touch_defaults().with_long_press_timeout(Duration::from_millis(500)),
+        )
+        .on_long_press_start(move |_details: flui::interaction::LongPressStartDetails| {
+            callback.fetch_add(1, Ordering::SeqCst);
+        })
+        .build();
     let position = Offset::new(8.0, 8.0);
-    recognizer.add_pointer(
-        PointerId::new(1).expect("nonzero pointer"),
+    let down = flui::testing::replay::ScriptedPointer::new(
+        Duration::ZERO,
+        PointerId::try_from(1_u64).expect("nonzero pointer"),
+        flui::testing::replay::PointerPhase::Down,
         position,
-        position,
-    );
+    )
+    .to_event();
+    recognizer.add_pointer(PointerDispatch::at_root(&down));
     binding.pump_frame(Duration::from_millis(300));
     assert_eq!(fired.load(Ordering::SeqCst), 0);
     binding.pump_frame(Duration::from_millis(250));
@@ -242,83 +246,82 @@ fn typed_drag_down_callback_is_available_from_the_widget_surface() {
     tree.dispatch_pointer_up(10.0, 10.0);
 }
 
-#[derive(Clone, Debug)]
 struct DistanceRecognizer {
-    base: flui::interaction::RecognizerBase,
+    contact: flui::interaction::PrimaryContact,
     threshold: f64,
     accepted: Arc<AtomicUsize>,
     rejected: Arc<AtomicUsize>,
 }
 
-impl flui::interaction::CustomGestureRecognizer for DistanceRecognizer {
-    fn on_arena_accept(&self, pointer: flui::interaction::PointerId) {
-        assert_eq!(self.base.primary_pointer(), Some(pointer));
+impl flui::interaction::GestureArenaMember for DistanceRecognizer {
+    fn accept_gesture(&self, pointer: flui::interaction::PointerId) {
+        assert!(self.contact.tracks(pointer));
         self.accepted.fetch_add(1, Ordering::SeqCst);
     }
 
-    fn on_arena_reject(&self, pointer: flui::interaction::PointerId) {
-        assert_eq!(self.base.primary_pointer(), Some(pointer));
+    fn reject_gesture(&self, pointer: flui::interaction::PointerId) {
+        assert!(self.contact.tracks(pointer));
         self.rejected.fetch_add(1, Ordering::SeqCst);
     }
 }
 
 impl flui::interaction::GestureRecognizer for DistanceRecognizer {
-    fn add_pointer(
-        self: &Arc<Self>,
-        pointer: flui::interaction::PointerId,
-        position: flui::geometry::Offset,
-        global_position: flui::geometry::Offset,
-    ) {
-        self.base
-            .start_tracking(pointer, position, global_position, self);
+    fn add_pointer(&self, dispatch: flui::interaction::PointerDispatch<'_>) {
+        self.contact
+            .begin(dispatch, &flui::interaction::GestureSettings::default())
+            .expect("fixture contact admitted");
     }
 
     fn handle_event(&self, dispatch: flui::widgets::PointerDispatch<'_>) {
         use flui::interaction::{PointerEvent, PointerEventExt};
         if let PointerEvent::Move(_) = dispatch.local {
-            let origin = self.base.initial_position().expect("tracked pointer");
-            if dispatch.local.position().dx - origin.dx >= self.threshold {
-                self.base.accept_tracked();
+            let origin = self.contact.current().expect("tracked pointer").local;
+            if dispatch.local.position().expect("move position").dx - origin.dx >= self.threshold {
+                self.contact.accept();
             }
         }
     }
 
-    fn dispose(&self) {
-        self.base.stop_tracking();
-        self.base.mark_disposed();
-    }
-
-    fn primary_pointer(&self) -> Option<flui::interaction::PointerId> {
-        self.base.primary_pointer()
+    fn cancel(&self) -> flui::interaction::CancelOutcome {
+        if self.contact.withdraw().is_some() {
+            flui::interaction::CancelOutcome::Cancelled
+        } else {
+            flui::interaction::CancelOutcome::Idle
+        }
     }
 }
 
 #[test]
 fn downstream_custom_recognizer_competes_in_the_arena() {
-    use flui::interaction::{GestureArenaMember, GestureRecognizer, PointerId, RecognizerBase};
-    use flui::testing::replay::{PointerPhase, ScriptedPointer};
     use flui::geometry::Offset;
+    use flui::interaction::{
+        ArenaMembership, GestureArenaMember, GestureRecognizer, PointerId, PrimaryContact,
+    };
+    use flui::testing::replay::{PointerPhase, ScriptedPointer};
     use flui::widgets::PointerDispatch;
+    use std::rc::Rc;
 
     let binding = flui::testing::HeadlessBinding::new();
     let arena = binding.arena();
     let recognizer = |threshold| {
-        Arc::new(DistanceRecognizer {
-            base: RecognizerBase::new(arena.clone()),
-            threshold,
-            accepted: Arc::new(AtomicUsize::new(0)),
-            rejected: Arc::new(AtomicUsize::new(0)),
-        })
+        Rc::new_cyclic(
+            |this: &std::rc::Weak<DistanceRecognizer>| DistanceRecognizer {
+                contact: PrimaryContact::new(ArenaMembership::new(arena.clone(), this.clone())),
+                threshold,
+                accepted: Arc::new(AtomicUsize::new(0)),
+                rejected: Arc::new(AtomicUsize::new(0)),
+            },
+        )
     };
     let first = recognizer(10.0);
     let second = recognizer(20.0);
-    // The public custom-recognizer contract supplies the sealed arena-member
-    // implementation. Registration below uses those exact Arc identities.
-    let _member: Arc<dyn GestureArenaMember> = first.clone();
-    let pointer = PointerId::new(11).expect("nonzero pointer");
+    let _member: Rc<dyn GestureArenaMember> = first.clone();
+    let pointer = PointerId::try_from(11_u64).expect("nonzero pointer");
+    let down =
+        ScriptedPointer::new(Duration::ZERO, pointer, PointerPhase::Down, Offset::ZERO).to_event();
     for candidate in [&first, &second] {
-        candidate.add_pointer(pointer, Offset::ZERO, Offset::ZERO);
-        assert_eq!(candidate.primary_pointer(), Some(pointer));
+        candidate.add_pointer(PointerDispatch::at_root(&down));
+        assert!(candidate.contact.tracks(pointer));
     }
     arena.close(pointer);
 
@@ -345,8 +348,8 @@ fn downstream_custom_recognizer_competes_in_the_arena() {
     assert_eq!(second.accepted.load(Ordering::SeqCst), 0);
     assert_eq!(second.rejected.load(Ordering::SeqCst), 1);
     for candidate in [&first, &second] {
-        candidate.dispose();
-        assert_eq!(candidate.primary_pointer(), None);
+        candidate.cancel();
+        assert!(candidate.contact.current().is_none());
     }
 }
 
@@ -496,10 +499,9 @@ use flui::interaction::{
     ClientToken, Code, DetachOutcome, FocusAttachment, FocusChangeCallback, FocusDetachOutcome,
     FocusManager, FocusNode, FocusNodeChangeCallback, FocusNodeId, FocusNodeRegistration,
     FocusRequestOutcome, FocusScopeNode, FocusTraversalPolicy, FocusTreeError, HitTestEntry,
-    HitTestHandle, HitTestSnapshot, InteractionDispatchError, Key, KeyEvent, KeyEventCallback,
-    KeyEventHandler, KeyEventResult, KeyState, KeyboardEvent, Location, Modifiers, NamedKey,
-    ReadingOrderPolicy, RectProvider, ResolvedStep, TextInputClient, TextInputError,
-    TextInputHandle, TraversalEdgeBehavior,
+    HitTestHandle, HitTestSnapshot, InteractionDispatchError, Key, KeyEvent, KeyEventHandler,
+    KeyEventResult, KeyState, Location, Modifiers, NamedKey, ReadingOrderPolicy, RectProvider,
+    ResolvedStep, TextInputClient, TextInputError, TextInputHandle, TraversalEdgeBehavior,
 };
 
 #[test]
@@ -523,7 +525,6 @@ fn interaction_callback_vocabulary_is_nameable_through_the_facade() {
     nameable::<HitTestEntry>();
     nameable::<HitTestSnapshot>();
     nameable::<InteractionDispatchError>();
-    nameable::<KeyEventCallback>();
     nameable::<KeyEventHandler>();
     nameable::<KeyEventResult>();
     nameable::<ReadingOrderPolicy>();
@@ -534,7 +535,6 @@ fn interaction_callback_vocabulary_is_nameable_through_the_facade() {
     nameable::<Code>();
     nameable::<Key>();
     nameable::<KeyState>();
-    nameable::<KeyboardEvent>();
     nameable::<Location>();
     nameable::<Modifiers>();
     nameable::<NamedKey>();
@@ -615,7 +615,10 @@ struct LifecycleProbeState {
 impl StatefulView for LifecycleProbe {
     type State = LifecycleProbeState;
     fn create_state(&self) -> Self::State {
-        LifecycleProbeState { view: self.clone(), subscription: None }
+        LifecycleProbeState {
+            view: self.clone(),
+            subscription: None,
+        }
     }
 }
 impl ViewState<LifecycleProbe> for LifecycleProbeState {
@@ -623,50 +626,103 @@ impl ViewState<LifecycleProbe> for LifecycleProbeState {
         self.view.initialized.set(true);
         let handle = context.lifecycle_handle();
         assert_eq!(handle.is_some(), self.view.expected);
-        let Some(handle) = handle else { return; };
+        let Some(handle) = handle else {
+            return;
+        };
         let events = self.view.events.clone();
-        let (initial, subscription) = handle.subscribe(move |state| events.borrow_mut().push(state)).expect("open");
+        let (initial, subscription) = handle
+            .subscribe(move |state| events.borrow_mut().push(state))
+            .expect("open");
         assert_eq!(initial, None);
-        assert!(self.view.events.borrow().is_empty(), "no callback before token storage");
+        assert!(
+            self.view.events.borrow().is_empty(),
+            "no callback before token storage"
+        );
         self.subscription = Some(subscription);
         *self.view.captured.borrow_mut() = Some(handle);
     }
-    fn build(&self, _: &LifecycleProbe, _: &dyn BuildContext) -> impl IntoView { SizedBox::new(20.0, 20.0) }
+    fn build(&self, _: &LifecycleProbe, _: &dyn BuildContext) -> impl IntoView {
+        SizedBox::new(20.0, 20.0)
+    }
 }
 
 #[test]
 fn presentation_lifecycle_subscription_runs_through_the_facade() {
     use flui::view::{AppLifecycleState, LifecycleClosed};
-    let view = LifecycleProbe { expected: true, initialized: Rc::default(), captured: Rc::default(), events: Rc::default() };
+    let view = LifecycleProbe {
+        expected: true,
+        initialized: Rc::default(),
+        captured: Rc::default(),
+        events: Rc::default(),
+    };
     let mut binding = flui::testing::HeadlessBinding::new();
-    binding.mount_root(&view, flui::testing::MountOwners::fresh(), flui::testing::MountOptions::loose(100.0));
+    binding.mount_root(
+        &view,
+        flui::testing::MountOwners::fresh(),
+        flui::testing::MountOptions::loose(100.0),
+    );
     let handle = view.captured.borrow().as_ref().expect("captured").clone();
-    binding.set_lifecycle_state(AppLifecycleState::Detached).expect("observed detached");
-    binding.set_lifecycle_state(AppLifecycleState::Resumed).expect("reversible");
-    binding.set_lifecycle_state(AppLifecycleState::Hidden).expect("hide");
+    binding
+        .set_lifecycle_state(AppLifecycleState::Detached)
+        .expect("observed detached");
+    binding
+        .set_lifecycle_state(AppLifecycleState::Resumed)
+        .expect("reversible");
+    binding
+        .set_lifecycle_state(AppLifecycleState::Hidden)
+        .expect("hide");
     let extra = Rc::new(RefCell::new(Vec::new()));
     let recorded = extra.clone();
-    let (snapshot, token) = handle.subscribe(move |state| recorded.borrow_mut().push(state)).expect("second subscriber");
+    let (snapshot, token) = handle
+        .subscribe(move |state| recorded.borrow_mut().push(state))
+        .expect("second subscriber");
     assert_eq!(snapshot, Some(AppLifecycleState::Hidden));
     assert!(extra.borrow().is_empty());
-    binding.set_lifecycle_state(AppLifecycleState::Inactive).expect("show unfocused");
+    binding
+        .set_lifecycle_state(AppLifecycleState::Inactive)
+        .expect("show unfocused");
     assert_eq!(handle.snapshot(), Ok(Some(AppLifecycleState::Inactive)));
     assert_eq!(*extra.borrow(), [AppLifecycleState::Inactive]);
     drop(token);
-    binding.set_lifecycle_state(AppLifecycleState::Hidden).expect("hide again");
+    binding
+        .set_lifecycle_state(AppLifecycleState::Hidden)
+        .expect("hide again");
     binding.close_lifecycle();
-    assert_eq!(*extra.borrow(), [AppLifecycleState::Inactive], "dropped token suppresses later events");
-    assert_eq!(*view.events.borrow(), [AppLifecycleState::Detached, AppLifecycleState::Resumed, AppLifecycleState::Hidden, AppLifecycleState::Inactive, AppLifecycleState::Hidden, AppLifecycleState::Detached]);
+    assert_eq!(
+        *extra.borrow(),
+        [AppLifecycleState::Inactive],
+        "dropped token suppresses later events"
+    );
+    assert_eq!(
+        *view.events.borrow(),
+        [
+            AppLifecycleState::Detached,
+            AppLifecycleState::Resumed,
+            AppLifecycleState::Hidden,
+            AppLifecycleState::Inactive,
+            AppLifecycleState::Hidden,
+            AppLifecycleState::Detached
+        ]
+    );
     assert_eq!(handle.snapshot(), Err(LifecycleClosed));
     assert!(handle.subscribe(|_| {}).is_err());
 }
 
-
 #[test]
 fn presentation_lifecycle_capability_is_absent_when_not_installed() {
-    let view = LifecycleProbe { expected: false, initialized: Rc::default(), captured: Rc::default(), events: Rc::default() };
+    let view = LifecycleProbe {
+        expected: false,
+        initialized: Rc::default(),
+        captured: Rc::default(),
+        events: Rc::default(),
+    };
     let mut binding = flui::testing::HeadlessBinding::new();
-    binding.mount_root(&view, flui::testing::MountOwners::fresh(), flui::testing::MountOptions::loose(100.0).with_capabilities(flui::testing::BuildCapabilities::AsyncDriverOnly));
+    binding.mount_root(
+        &view,
+        flui::testing::MountOwners::fresh(),
+        flui::testing::MountOptions::loose(100.0)
+            .with_capabilities(flui::testing::BuildCapabilities::AsyncDriverOnly),
+    );
     assert!(view.initialized.get());
     assert!(view.captured.borrow().is_none());
 }

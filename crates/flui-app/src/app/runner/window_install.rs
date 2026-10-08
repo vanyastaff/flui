@@ -8,6 +8,11 @@ use std::sync::{
 use flui_platform::traits::PlatformWindow;
 use flui_runtime::owner::{InstallInitialization, PreparedInstall, WindowObservation};
 
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_arch = "wasm32"),
+    any(test, not(target_os = "ios"))
+))]
 use crate::app::close_request::{CloseRequestHandler, CloseResponse, PreparedCloseRequest};
 use crate::app::window_registry::PreparedWindowRegistration;
 
@@ -64,8 +69,8 @@ impl InstallationWindow {
         self.published = true;
     }
 
+    #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
     pub(super) fn notify_opened(&mut self) {
-        #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
         if let Some((agent, window)) = self.agent.take() {
             agent.window_opened(window);
         }
@@ -179,6 +184,11 @@ impl WindowInstall {
         Ok(registration)
     }
 
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_arch = "wasm32"),
+        any(test, not(target_os = "ios"))
+    ))]
     pub(super) fn close_requests(&mut self, handler: Option<CloseRequestHandler>) {
         let address = self.prepared.address();
         self.native.close = Some(PreparedCloseRequest::new(
@@ -195,6 +205,7 @@ impl WindowInstall {
         }));
     }
 
+    #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
     pub(super) fn on_close(&self, mut run: impl FnMut() + Send + 'static) {
         let closed = self.window.cancellation();
         self.window.native().on_close(Box::new(move || {

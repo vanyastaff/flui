@@ -8,19 +8,22 @@ use std::{
 };
 
 use flui_foundation::geometry::Offset;
-use flui_interaction::{
-    HitTestResult,
-    events::{PointerType, make_down_event},
-};
+#[cfg(not(target_os = "ios"))]
+use flui_interaction::HitTestResult;
+use flui_interaction::events::{PointerKind, make_down_event};
 use flui_platform::traits::{PlatformInput, PlatformWindow};
 
 use super::super::host::{
     OwnerHostClearGuard, install_exit_policy_hook, install_owner_platform, with_owner_platform,
 };
+#[cfg(not(target_os = "ios"))]
 use super::super::secondary_window::open_secondary_window;
 use super::*;
+#[cfg(not(target_os = "ios"))]
 use crate::app::AppConfig;
-use crate::app::runtime::{ExitPolicy, WindowPolicy};
+use crate::app::runtime::ExitPolicy;
+#[cfg(not(target_os = "ios"))]
+use crate::app::runtime::WindowPolicy;
 
 static_assertions::assert_impl_all!(RuntimeEvent: Send);
 
@@ -226,10 +229,10 @@ fn presentation_assembly_reentry_revalidates_its_authorizer() {
 }
 
 fn down_input(offset: f64) -> PlatformInput {
-    PlatformInput::Pointer(make_down_event(
-        Offset::new(offset, offset),
-        PointerType::Mouse,
-    ))
+    PlatformInput::Pointer(
+        make_down_event(Offset::new(offset, offset), PointerKind::Mouse)
+            .expect("finite mouse down position"),
+    )
 }
 
 fn test_window() -> std::sync::Arc<dyn flui_platform::traits::PlatformWindow> {
@@ -309,6 +312,7 @@ fn background_owner_pump_drains_before_polling_without_a_frame() {
     teardown_platform_ui_runtime();
 }
 
+#[cfg(not(target_os = "ios"))]
 fn explicit_platform_quit_detaches_every_installed_ui_runtime() {
     let _clear = OwnerHostClearGuard::arm();
     let platform = flui_platform::HeadlessPlatform::new();
@@ -474,9 +478,9 @@ fn system_key_default_follows_the_ui_runtimes_decision() {
         dispatcher,
         RuntimeTask::TestCallback(Box::new(move |ui_runtime| {
             ui_runtime.focus_manager().add_global_key_handler(Rc::new(
-                move |_: &flui_interaction::events::KeyboardEvent| {
+                move |_: &flui_interaction::events::KeyEvent| {
                     delivered_in_handler.set(delivered_in_handler.get() + 1);
-                    false
+                    flui_interaction::KeyEventResult::Ignored
                 },
             ));
             let native = turn_window
@@ -505,7 +509,13 @@ fn system_key_default_follows_the_ui_runtimes_decision() {
         dispatcher,
         RuntimeTask::TestCallback(Box::new(|ui_runtime| {
             ui_runtime.focus_manager().add_global_key_handler(Rc::new(
-                |event: &flui_interaction::events::KeyboardEvent| event.code == Code::F4,
+                |event: &flui_interaction::events::KeyEvent| {
+                    if event.code == Code::F4 {
+                        flui_interaction::KeyEventResult::Handled
+                    } else {
+                        flui_interaction::KeyEventResult::Ignored
+                    }
+                },
             ));
         })),
     )
@@ -688,7 +698,7 @@ fn native_keyboard_cannot_overtake_queued_window_changes_and_keys() {
                 } else {
                     "new key"
                 });
-                false
+                flui_interaction::KeyEventResult::Ignored
             }));
         let mut installation = prepare_replacement_ui_runtime(runtime, Arc::clone(&window));
         let dispatcher = installation.dispatcher();
@@ -797,11 +807,13 @@ fn reentrant_owner_turns_preserve_global_fifo_across_ui_runtimes() {
 /// one) — both windows this helper and its caller open come from the
 /// SAME headless platform instance, so their native window identities
 /// cannot collide once both are registered in the one `WindowRegistry`.
+#[cfg(not(target_os = "ios"))]
 fn install_ui_runtime_a_through_a_real_owner_platform()
 -> (PresentationDispatcher, OwnerHostClearGuard) {
     install_ui_runtime_a_with_driver(None)
 }
 
+#[cfg(not(target_os = "ios"))]
 fn install_ui_runtime_a_with_driver(
     driver: Option<super::super::frame_driver::FrameDriver>,
 ) -> (PresentationDispatcher, OwnerHostClearGuard) {
@@ -847,6 +859,7 @@ fn install_ui_runtime_a_with_driver(
 /// routes to the share-nothing path, not just the underlying primitive.
 /// The oracle: a pointer dispatched only to UI runtime A must leave UI runtime B's
 /// gesture arena completely untouched.
+#[cfg(not(target_os = "ios"))]
 fn two_ui_runtimes_via_isolated_policy_share_nothing() {
     let (dispatcher_a, _clear_guard) = install_ui_runtime_a_through_a_real_owner_platform();
 
@@ -1358,6 +1371,7 @@ fn platform_replacement_contains_reentrant_retirement() {
 /// fed from the host again would be one), or if the runtime resolves a new one
 /// per call. `the_runtime_launches_one_host_feed_for_every_ui_runtime` pins that
 /// the runtime's collection is the one its host feed feeds.
+#[cfg(not(target_os = "ios"))]
 fn isolated_windows_shape_over_the_runtimes_font_collection() {
     let (dispatcher_a, _clear_guard) = install_ui_runtime_a_through_a_real_owner_platform();
 
@@ -1418,6 +1432,7 @@ fn isolated_windows_shape_over_the_runtimes_font_collection() {
 /// routing (a second PRESENTATION of the SAME UI runtime), not a second UI runtime
 /// in disguise: the hosted-UI runtime count must stay at one, while the
 /// UI runtime's own presentation count grows from one to two.
+#[cfg(not(target_os = "ios"))]
 fn one_ui_runtime_two_windows_policy_routes_by_presentation() {
     let (dispatcher_a, _clear_guard) = install_ui_runtime_a_through_a_real_owner_platform();
 
@@ -1457,6 +1472,7 @@ fn one_ui_runtime_two_windows_policy_routes_by_presentation() {
 /// A `Resized` stamped for a secondary window of a shared UI runtime, delivered
 /// through `dispatch_platform_ui_runtime`, rescales that window's pipeline (and so
 /// its semantics bounds) and leaves the primary's at its old ratio.
+#[cfg(not(target_os = "ios"))]
 fn resized_rescales_only_the_addressed_presentation() {
     let (primary, _clear_guard) = install_ui_runtime_a_through_a_real_owner_platform();
     let (secondary, _window) = super::super::secondary_window::open_secondary_window_impl(
@@ -1517,6 +1533,7 @@ fn resized_rescales_only_the_addressed_presentation() {
 /// renderer: the primary's surface keeps its size, so the constraints its
 /// next frame is laid out under (surface / primary ratio) stay put. A
 /// `Resized` for the primary still applies.
+#[cfg(not(target_os = "ios"))]
 fn resizing_a_secondary_leaves_the_primary_surface_alone() {
     use std::{cell::Cell, rc::Rc};
 
@@ -2213,6 +2230,7 @@ fn owner_dispatch_matrix() {
                 "background_owner_pump_drains_before_polling_without_a_frame",
                 background_owner_pump_drains_before_polling_without_a_frame as fn(),
             ),
+            #[cfg(not(target_os = "ios"))]
             (
                 "explicit_platform_quit_detaches_every_installed_ui_runtime",
                 explicit_platform_quit_detaches_every_installed_ui_runtime as fn(),
@@ -2245,18 +2263,22 @@ fn owner_dispatch_matrix() {
                 "carried_work_shares_one_callback_budget_across_runtimes",
                 carried_work_shares_one_callback_budget_across_runtimes as fn(),
             ),
+            #[cfg(not(target_os = "ios"))]
             (
                 "two_ui_runtimes_via_isolated_policy_share_nothing",
                 two_ui_runtimes_via_isolated_policy_share_nothing as fn(),
             ),
+            #[cfg(not(target_os = "ios"))]
             (
                 "one_ui_runtime_two_windows_policy_routes_by_presentation",
                 one_ui_runtime_two_windows_policy_routes_by_presentation as fn(),
             ),
+            #[cfg(not(target_os = "ios"))]
             (
                 "resized_rescales_only_the_addressed_presentation",
                 resized_rescales_only_the_addressed_presentation as fn(),
             ),
+            #[cfg(not(target_os = "ios"))]
             (
                 "resizing_a_secondary_leaves_the_primary_surface_alone",
                 resizing_a_secondary_leaves_the_primary_surface_alone as fn(),
@@ -2270,6 +2292,7 @@ fn owner_dispatch_matrix() {
                 panicking_stop_notifies_siblings_and_restores_runtime_delivery
                     as fn(),
             ),
+            #[cfg(not(target_os = "ios"))]
             (
                 "isolated_windows_shape_over_the_runtimes_font_collection",
                 isolated_windows_shape_over_the_runtimes_font_collection as fn(),

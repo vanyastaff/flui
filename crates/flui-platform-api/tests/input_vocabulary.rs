@@ -115,9 +115,56 @@ fn an_out_of_range_reading_is_refused_or_saturated() {
 
 fn periodic_angles_are_wrapped() {
     let orientation = PenOrientation::try_new(FRAC_PI_2, -FRAC_PI_2).expect("valid");
-    assert!((orientation.azimuth() - 3.0 * FRAC_PI_2).abs() < 1e-12);
+    assert!((orientation.azimuth().expect("reported azimuth") - 3.0 * FRAC_PI_2).abs() < 1e-12);
     let twist = Twist::try_new(-1e-300).expect("finite").radians();
     assert!((0.0..TAU).contains(&twist), "{twist}");
+}
+
+fn partial_pen_orientation_preserves_only_reported_angles() {
+    let cases = [
+        (
+            PenOrientation::try_altitude(0.0).expect("reported altitude"),
+            Some(0.0),
+            None,
+        ),
+        (
+            PenOrientation::try_altitude(FRAC_PI_2).expect("perpendicular"),
+            Some(FRAC_PI_2),
+            None,
+        ),
+        (
+            PenOrientation::try_azimuth(-FRAC_PI_2).expect("reported azimuth"),
+            None,
+            Some(3.0 * FRAC_PI_2),
+        ),
+        (
+            PenOrientation::try_new(FRAC_PI_2, -FRAC_PI_2).expect("both angles"),
+            Some(FRAC_PI_2),
+            Some(3.0 * FRAC_PI_2),
+        ),
+    ];
+    for (orientation, altitude, azimuth) in cases {
+        let sample = PointerSample::new(T0, position(1.0, 2.0)).with_orientation(orientation);
+        let reported = sample.orientation.expect("at least one reported angle");
+        assert_eq!(reported.altitude(), altitude);
+        assert_eq!(reported.azimuth(), azimuth);
+        assert_eq!(sample.time, T0);
+    }
+    assert_eq!(
+        PenOrientation::try_altitude(f64::NAN).map(drop),
+        non_finite(Quantity::Altitude),
+    );
+    assert!(matches!(
+        PenOrientation::try_altitude(FRAC_PI_2 + 0.001),
+        Err(InputValueError::OutOfRange {
+            quantity: Quantity::Altitude,
+            ..
+        }),
+    ));
+    assert_eq!(
+        PenOrientation::try_azimuth(f64::INFINITY).map(drop),
+        non_finite(Quantity::Azimuth),
+    );
 }
 
 fn a_negative_or_non_finite_contact_size_is_refused() {
@@ -266,6 +313,192 @@ fn event_times_subtract_without_underflow() {
     assert_eq!(T0.saturating_duration_since(later), Duration::ZERO);
 }
 
+fn coalescing_preserves_the_latest_dispatch_and_real_history() {
+    use flui_platform_api::keyboard::Modifiers;
+    let old_current = sampled_at(10);
+    let changed_sensor = old_current.with_pressure(Pressure::try_new(0.2).expect("valid pressure"));
+    let older = PointerMove::new(mouse(), PointerButtons::NONE, old_current)
+        .with_coalesced(vec![sampled_at(0), changed_sensor, sampled_at(5)])
+        .with_predicted(vec![sampled_at(15)]);
+    let mut newer = PointerMove::new(
+        mouse(),
+        PointerButtons::only(PointerButton::PRIMARY),
+        sampled_at(20),
+    )
+    .with_modifiers(Modifiers::SHIFT)
+    .with_coalesced(vec![old_current, changed_sensor, sampled_at(18)])
+    .with_predicted(vec![sampled_at(25)]);
+    let accepted_older = older.clone();
+    newer.try_coalesce(&older).expect("same pointer metadata");
+    assert_eq!(
+        older, accepted_older,
+        "the accepted earlier dispatch remains owned"
+    );
+    assert_eq!(*newer.current(), sampled_at(20));
+    assert_eq!(newer.predicted(), &[sampled_at(25)]);
+    assert_eq!(newer.buttons, PointerButtons::only(PointerButton::PRIMARY));
+    assert_eq!(newer.modifiers, Modifiers::SHIFT);
+    assert_eq!(
+        newer.coalesced(),
+        &[
+            sampled_at(0),
+            sampled_at(5),
+            changed_sensor,
+            old_current,
+            old_current,
+            changed_sensor,
+            sampled_at(18)
+        ]
+    );
+}
+
+fn coalescing_transfers_only_checked_history_ownership() {
+    use flui_platform_api::keyboard::Modifiers;
+    let sensor = sampled_at(20).with_pressure(Pressure::try_new(0.2).expect("pressure"));
+    let boundary_sensor = sampled_at(10).with_pressure(Pressure::try_new(0.2).expect("pressure"));
+    for (old_time, old_history, new_history, expected) in [
+        (10, vec![], vec![], vec![sampled_at(10)]),
+        (
+            10,
+            vec![sampled_at(0), sampled_at(5)],
+            vec![sampled_at(15)],
+            vec![sampled_at(0), sampled_at(5), sampled_at(10), sampled_at(15)],
+        ),
+        (
+            10,
+            vec![boundary_sensor],
+            vec![sampled_at(10), boundary_sensor],
+            vec![
+                boundary_sensor,
+                sampled_at(10),
+                sampled_at(10),
+                boundary_sensor,
+            ],
+        ),
+        (
+            10,
+            vec![sampled_at(0)],
+            vec![sampled_at(5), sampled_at(15)],
+            vec![sampled_at(0), sampled_at(5), sampled_at(10), sampled_at(15)],
+        ),
+        (
+            20,
+            vec![sampled_at(10), sensor],
+            vec![sampled_at(10), sensor],
+            vec![sampled_at(10), sampled_at(10), sensor, sensor],
+        ),
+        (
+            30,
+            vec![sampled_at(10), sampled_at(20), sensor, sampled_at(25)],
+            vec![sampled_at(5)],
+            vec![sampled_at(5), sampled_at(10), sensor],
+        ),
+    ] {
+        let mut older = PointerMove::new(mouse(), PointerButtons::NONE, sampled_at(old_time))
+            .with_modifiers(Modifiers::ALT)
+            .with_coalesced(old_history)
+            .with_predicted(vec![sampled_at(40)]);
+        let mut newer = PointerMove::new(
+            mouse(),
+            PointerButtons::only(PointerButton::PRIMARY),
+            sampled_at(20),
+        )
+        .with_modifiers(Modifiers::SHIFT)
+        .with_coalesced(new_history)
+        .with_predicted(vec![sampled_at(35)]);
+        let old_header = older.clone().with_coalesced(vec![]);
+        let new_dispatch = newer.clone().with_coalesced(expected);
+        newer
+            .try_coalesce_from(&mut older)
+            .expect("same full pointer identity");
+        assert_eq!(older, old_header, "only older measured history transfers");
+        assert_eq!(
+            newer, new_dispatch,
+            "chronology, coarse sensor readings and dispatch metadata survive"
+        );
+    }
+}
+
+fn bounded_coalesced_history_keeps_latest_readings_and_predictions() {
+    use flui_platform_api::keyboard::Modifiers;
+    use flui_platform_api::pointer::DeviceId;
+    let ordinary = sampled_at(25);
+    let sensor = ordinary.with_pressure(Pressure::try_new(0.2).expect("valid pressure"));
+    let initial = PointerMove::new(
+        mouse()
+            .with_device(DeviceId::try_from(7_u64).expect("device identity"))
+            .with_role(PointerRole::Additional),
+        PointerButtons::only(PointerButton::PRIMARY),
+        sampled_at(50),
+    )
+    .with_modifiers(Modifiers::SHIFT)
+    .with_coalesced(vec![sampled_at(0), ordinary, sensor, sampled_at(40)])
+    .with_predicted(vec![sampled_at(60), sampled_at(75)]);
+    for (maximum, readings) in [
+        (0, vec![]),
+        (1, vec![sampled_at(40)]),
+        (2, vec![sensor, sampled_at(40)]),
+        (3, vec![ordinary, sensor, sampled_at(40)]),
+        (4, vec![sampled_at(0), ordinary, sensor, sampled_at(40)]),
+        (99, vec![sampled_at(0), ordinary, sensor, sampled_at(40)]),
+    ] {
+        let mut movement = initial.clone();
+        movement.retain_latest_coalesced(maximum);
+        assert_eq!(
+            movement,
+            initial.clone().with_coalesced(readings),
+            "bounded measured readings retain ordering, coarse-time identity and every other dispatch field"
+        );
+    }
+}
+
+fn coalescing_refuses_every_pointer_metadata_mismatch_without_mutation() {
+    use flui_platform_api::pointer::{DeviceId, MismatchedPointerInfo};
+    let base = mouse();
+    for other in [
+        PointerInfo::new(PointerId::try_from(2_u64).expect("nonzero"), base.kind)
+            .with_role(base.role),
+        base.with_device(DeviceId::try_from(3_u64).expect("nonzero")),
+        PointerInfo::new(base.id, PointerKind::Touch).with_role(base.role),
+        base.with_role(PointerRole::Additional),
+    ] {
+        let older = PointerMove::new(other, PointerButtons::NONE, sampled_at(0));
+        let mut newer = PointerMove::new(base, PointerButtons::NONE, sampled_at(20));
+        let before = newer.clone();
+        assert_eq!(newer.try_coalesce(&older), Err(MismatchedPointerInfo));
+        assert_eq!(newer, before);
+        assert_eq!(*older.current(), sampled_at(0));
+        assert_eq!(older.pointer, other);
+        let mut older = older
+            .with_coalesced(vec![
+                sampled_at(0).with_pressure(Pressure::try_new(0.2).expect("pressure")),
+            ])
+            .with_predicted(vec![sampled_at(10)]);
+        let old_before = older.clone();
+        assert_eq!(
+            newer.try_coalesce_from(&mut older),
+            Err(MismatchedPointerInfo)
+        );
+        assert_eq!(newer, before);
+        assert_eq!(older, old_before, "refusal retains both owned histories");
+    }
+}
+
+fn coalescing_keeps_distinct_current_time_readings_and_excludes_future_history() {
+    let current = sampled_at(20);
+    let same_time_sensor = current.with_pressure(Pressure::try_new(0.5).expect("valid pressure"));
+    let older = PointerMove::new(mouse(), PointerButtons::NONE, sampled_at(30))
+        .with_coalesced(vec![sampled_at(10), current, same_time_sensor]);
+    let mut newer = PointerMove::new(mouse(), PointerButtons::NONE, current)
+        .with_coalesced(vec![sampled_at(10)]);
+    newer.try_coalesce(&older).expect("same pointer metadata");
+    assert_eq!(
+        newer.coalesced(),
+        &[sampled_at(10), sampled_at(10), same_time_sensor]
+    );
+    assert_eq!(*newer.current(), current);
+}
+
 #[test]
 fn input_vocabulary_contract() {
     run_table(
@@ -288,6 +521,10 @@ fn input_vocabulary_contract() {
                 an_out_of_range_reading_is_refused_or_saturated,
             ),
             ("periodic_angles_are_wrapped", periodic_angles_are_wrapped),
+            (
+                "partial_pen_orientation_preserves_only_reported_angles",
+                partial_pen_orientation_preserves_only_reported_angles,
+            ),
             (
                 "a_negative_or_non_finite_contact_size_is_refused",
                 a_negative_or_non_finite_contact_size_is_refused,
@@ -332,6 +569,26 @@ fn input_vocabulary_contract() {
             (
                 "event_times_subtract_without_underflow",
                 event_times_subtract_without_underflow,
+            ),
+            (
+                "coalescing_preserves_the_latest_dispatch_and_real_history",
+                coalescing_preserves_the_latest_dispatch_and_real_history,
+            ),
+            (
+                "coalescing_refuses_every_pointer_metadata_mismatch_without_mutation",
+                coalescing_refuses_every_pointer_metadata_mismatch_without_mutation,
+            ),
+            (
+                "bounded_coalesced_history_keeps_latest_readings_and_predictions",
+                bounded_coalesced_history_keeps_latest_readings_and_predictions,
+            ),
+            (
+                "coalescing_transfers_only_checked_history_ownership",
+                coalescing_transfers_only_checked_history_ownership,
+            ),
+            (
+                "coalescing_keeps_distinct_current_time_readings_and_excludes_future_history",
+                coalescing_keeps_distinct_current_time_readings_and_excludes_future_history,
             ),
         ],
     );

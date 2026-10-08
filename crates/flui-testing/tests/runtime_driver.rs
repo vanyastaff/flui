@@ -92,7 +92,7 @@ fn harness_frames_are_text_store_transactions() {
         controller,
         Rc::clone(&focus_node),
     ));
-    laid.enter_owner_scope(|| focus_node.request_focus());
+    let _ = laid.enter_owner_scope(|| focus_node.request_focus());
     laid.tick();
     let store = laid
         .active_text_store()
@@ -156,7 +156,7 @@ fn a_grant_queued_before_an_unwind_runs_at_the_next_pumps_anchor() {
         controller,
         Rc::clone(&focus_node),
     ));
-    laid.enter_owner_scope(|| focus_node.request_focus());
+    let _ = laid.enter_owner_scope(|| focus_node.request_focus());
     laid.tick();
     let store = laid
         .active_text_store()

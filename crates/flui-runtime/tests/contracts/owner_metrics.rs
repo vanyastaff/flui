@@ -885,7 +885,7 @@ fn resize_failure_preserves_other_batched_window_state() {
 fn pointer_stream_and_keyboard_survive_interleaved_resize() {
     use flui_foundation::geometry::Offset;
     use flui_interaction::{
-        events::{Code, PointerType},
+        events::{Code, PointerKind},
         testing::input::{KeyEventBuilder, pointer_cancel, pointer_down, pointer_move, pointer_up},
     };
     use flui_platform_api::{PlatformInput, WindowExecutionState};
@@ -893,10 +893,10 @@ fn pointer_stream_and_keyboard_survive_interleaved_resize() {
     use flui_widgets::{Listener, SizedBox, prelude::HitTestBehavior};
 
     for (pointer_type, resampling) in [
-        (PointerType::Mouse, false),
-        (PointerType::Touch, false),
-        (PointerType::Mouse, true),
-        (PointerType::Touch, true),
+        (PointerKind::Mouse, false),
+        (PointerKind::Touch, false),
+        (PointerKind::Mouse, true),
+        (PointerKind::Touch, true),
     ] {
         for (move_fails, key_fails) in [(false, false), (true, false), (false, true), (true, true)]
         {
@@ -943,7 +943,7 @@ fn pointer_stream_and_keyboard_survive_interleaved_resize() {
                 .add_global_key_handler(Rc::new(move |_| {
                     keyboard.borrow_mut().push("key");
                     assert!(!key_fails, "keyboard failure");
-                    true
+                    flui_interaction::KeyEventResult::Handled
                 }));
             let address = owner
                 .publication(owner.prepare_runtime(runtime))
@@ -972,13 +972,31 @@ fn pointer_stream_and_keyboard_survive_interleaved_resize() {
                 .expect("layout and present hit-test tree");
             let target = owner.presentation_dispatcher(address).expect("input");
             let inputs = [
-                PlatformInput::Pointer(pointer_down(Offset::new(10.0, 10.0), pointer_type)),
-                PlatformInput::Pointer(pointer_move(Offset::new(20.0, 10.0), pointer_type)),
-                PlatformInput::Pointer(pointer_move(Offset::new(30.0, 10.0), pointer_type)),
+                PlatformInput::Pointer(
+                    pointer_down(Offset::new(10.0, 10.0), pointer_type)
+                        .expect("finite pointer position"),
+                ),
+                PlatformInput::Pointer(
+                    pointer_move(Offset::new(20.0, 10.0), pointer_type)
+                        .expect("finite pointer position"),
+                ),
+                PlatformInput::Pointer(
+                    pointer_move(Offset::new(30.0, 10.0), pointer_type)
+                        .expect("finite pointer position"),
+                ),
                 PlatformInput::Keyboard(KeyEventBuilder::new(Code::F4).build()),
-                PlatformInput::Pointer(pointer_move(Offset::new(40.0, 10.0), pointer_type)),
-                PlatformInput::Pointer(pointer_up(Offset::new(30.0, 10.0), pointer_type)),
-                PlatformInput::Pointer(pointer_down(Offset::new(10.0, 10.0), pointer_type)),
+                PlatformInput::Pointer(
+                    pointer_move(Offset::new(40.0, 10.0), pointer_type)
+                        .expect("finite pointer position"),
+                ),
+                PlatformInput::Pointer(
+                    pointer_up(Offset::new(30.0, 10.0), pointer_type)
+                        .expect("finite pointer position"),
+                ),
+                PlatformInput::Pointer(
+                    pointer_down(Offset::new(10.0, 10.0), pointer_type)
+                        .expect("finite pointer position"),
+                ),
                 PlatformInput::Pointer(pointer_cancel(pointer_type)),
             ];
             effects.expects_present.set(Some(false));

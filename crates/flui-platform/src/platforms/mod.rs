@@ -28,7 +28,10 @@ pub mod web;
 // winit fallback backend — primary on Linux until native Wayland/X11 lands
 // (roadmap Cross.P); optional on Windows/macOS behind the `winit-backend`
 // feature.
-#[cfg(feature = "winit-backend")]
+#[cfg(all(
+    feature = "winit-backend",
+    any(target_os = "windows", target_os = "macos", target_os = "linux")
+))]
 pub mod winit;
 
 // Re-exports
@@ -48,5 +51,8 @@ pub use macos::MacOSPlatform;
 pub use web::WebPlatform;
 #[cfg(windows)]
 pub use windows::WindowsPlatform;
-#[cfg(feature = "winit-backend")]
+#[cfg(all(
+    feature = "winit-backend",
+    any(target_os = "windows", target_os = "macos", target_os = "linux")
+))]
 pub use winit::WinitPlatform; // winit fallback backend — see `platforms::winit` docs

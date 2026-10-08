@@ -1,0 +1,5 @@
+error[E0616]: field `width` of struct `GlyphImage` is private
+ --> tests/compile_fail/glyph_image_dimensions_are_private.rs:7:11
+  |
+7 |     image.width = 2;
+  |           ^^^^^ private field

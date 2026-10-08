@@ -51,6 +51,8 @@ mod pointer_script_replay;
 mod post_frame_after_layout;
 #[path = "runtime_driver.rs"]
 mod runtime_driver;
+#[path = "runtime_input_lifecycle.rs"]
+mod runtime_input_lifecycle;
 #[path = "self_rescheduling_local_post_frame.rs"]
 mod self_rescheduling_local_post_frame;
 #[path = "text_store_kit.rs"]
@@ -97,6 +99,33 @@ fn containment_and_isolation_matrix() {
     run_table(
         "containment_and_isolation_matrix",
         &[
+            ("runtime_input_lifecycle::keyboard_coalesced_prefix_survives_reentrant_capture_release", runtime_input_lifecycle::keyboard_coalesced_prefix_survives_reentrant_capture_release as fn()),
+            ("runtime_input_lifecycle::keyboard_barrier_keeps_frozen_coalesced_motion_before_reentrant_replacement", runtime_input_lifecycle::keyboard_barrier_keeps_frozen_coalesced_motion_before_reentrant_replacement as fn()),
+            ("runtime_input_lifecycle::runtime_keyboard_barrier_preserves_scale_contacts_and_continuity", runtime_input_lifecycle::runtime_keyboard_barrier_preserves_scale_contacts_and_continuity as fn()),
+            ("runtime_input_lifecycle::keyboard_motion_barrier_uses_resolved_focus_owner_during_reentrant_focus_change", runtime_input_lifecycle::keyboard_motion_barrier_uses_resolved_focus_owner_during_reentrant_focus_change as fn()),
+            ("runtime_input_lifecycle::ime_commit_observes_preceding_measured_motion", runtime_input_lifecycle::ime_commit_observes_preceding_measured_motion as fn()),
+            ("runtime_input_lifecycle::ime_commit_survives_competing_motion_and_owner_failures", runtime_input_lifecycle::ime_commit_survives_competing_motion_and_owner_failures as fn()),
+            ("runtime_input_lifecycle::keyboard_reads_all_frozen_contacts_after_sibling_failure", runtime_input_lifecycle::keyboard_reads_all_frozen_contacts_after_sibling_failure as fn()),
+            ("runtime_input_lifecycle::keyboard_barrier_keeps_reentrant_contact_motion_for_the_next_round", runtime_input_lifecycle::keyboard_barrier_keeps_reentrant_contact_motion_for_the_next_round as fn()),
+            ("runtime_input_lifecycle::mouse_motion_precedes_keyboard_without_a_frame", runtime_input_lifecycle::mouse_motion_precedes_keyboard_without_a_frame as fn()),
+            ("runtime_input_lifecycle::touch_motion_precedes_keyboard_without_a_frame", runtime_input_lifecycle::touch_motion_precedes_keyboard_without_a_frame as fn()),
+            ("runtime_input_lifecycle::resampled_mouse_motion_precedes_keyboard_without_a_frame", runtime_input_lifecycle::resampled_mouse_motion_precedes_keyboard_without_a_frame as fn()),
+            ("runtime_input_lifecycle::resampled_touch_motion_precedes_keyboard_without_a_frame", runtime_input_lifecycle::resampled_touch_motion_precedes_keyboard_without_a_frame as fn()),
+            ("runtime_input_lifecycle::motion_failure_keeps_following_keyboard_and_contact_terminal", runtime_input_lifecycle::motion_failure_keeps_following_keyboard_and_contact_terminal as fn()),
+            ("runtime_input_lifecycle::keyboard_failure_keeps_preceding_motion_and_contact_terminal", runtime_input_lifecycle::keyboard_failure_keeps_preceding_motion_and_contact_terminal as fn()),
+            ("runtime_input_lifecycle::motion_failure_precedes_competing_keyboard_failure_and_recovers", runtime_input_lifecycle::motion_failure_precedes_competing_keyboard_failure_and_recovers as fn()),
+            ("runtime_input_lifecycle::held_replay_preserves_hardware_history_and_drag_velocity", runtime_input_lifecycle::held_replay_preserves_hardware_history_and_drag_velocity as fn()),
+            ("runtime_input_lifecycle::a_secondary_contact_move_is_delivered_by_the_next_frame", runtime_input_lifecycle::a_secondary_contact_move_is_delivered_by_the_next_frame as fn()),
+            ("runtime_input_lifecycle::host_pause_discards_a_queued_hover_before_resume", runtime_input_lifecycle::host_pause_discards_a_queued_hover_before_resume as fn()),
+            ("runtime_input_lifecycle::window_blur_keeps_a_queued_hover", runtime_input_lifecycle::window_blur_keeps_a_queued_hover as fn()),
+            ("runtime_input_lifecycle::a_secondary_layout_refreshes_its_stationary_hover", runtime_input_lifecycle::a_secondary_layout_refreshes_its_stationary_hover as fn()),
+            ("runtime_input_lifecycle::a_secondary_deferred_arena_verdict_is_delivered_by_the_next_frame", runtime_input_lifecycle::a_secondary_deferred_arena_verdict_is_delivered_by_the_next_frame as fn()),
+            ("runtime_input_lifecycle::host_pause_discards_a_hover_held_before_the_first_commit", runtime_input_lifecycle::host_pause_discards_a_hover_held_before_the_first_commit as fn()),
+            ("runtime_input_lifecycle::host_pause_keeps_a_completed_held_tap_for_the_first_commit", runtime_input_lifecycle::host_pause_keeps_a_completed_held_tap_for_the_first_commit as fn()),
+            ("runtime_input_lifecycle::a_panicking_primary_motion_does_not_erase_the_secondary_motion", runtime_input_lifecycle::a_panicking_primary_motion_does_not_erase_the_secondary_motion as fn()),
+            ("runtime_input_lifecycle::competing_frame_motion_failures_preserve_the_first_and_recover", runtime_input_lifecycle::competing_frame_motion_failures_preserve_the_first_and_recover as fn()),
+            ("runtime_input_lifecycle::a_panicking_pause_diagnostic_cannot_skip_motion_drain", runtime_input_lifecycle::a_panicking_pause_diagnostic_cannot_skip_motion_drain as fn()),
+            ("runtime_input_lifecycle::a_cancel_failure_precedes_a_pause_diagnostic_failure_and_recovers", runtime_input_lifecycle::a_cancel_failure_precedes_a_pause_diagnostic_failure_and_recovers as fn()),
             ("lifecycle_panic_containment::lifecycle_panic_containment_init_state_paints_exact_error_slot", lifecycle_panic_containment::lifecycle_panic_containment_init_state_paints_exact_error_slot as fn()),
             ("owner_scope::interaction_targets_are_isolated_between_headless_bindings", owner_scope::interaction_targets_are_isolated_between_headless_bindings as fn()),
             ("owner_scope::pointer_route_panic_still_runs_the_down_arena_lifecycle", owner_scope::pointer_route_panic_still_runs_the_down_arena_lifecycle as fn()),

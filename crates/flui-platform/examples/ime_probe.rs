@@ -109,17 +109,11 @@ mod appkit_ime_probe {
     use flui_platform::{
         DispatchEventResult, Platform, PlatformTextInput, PlatformWindow, WindowOptions,
     };
-    use flui_platform_api::ImeEvent;
+    use flui_platform_api::{ImeEvent, keyboard::KeyState};
     use objc2::runtime::{AnyClass, AnyObject, Bool};
     use objc2::{ClassType, msg_send};
     use objc2_app_kit::NSApplication;
     use objc2_foundation::{NSNotFound, NSPoint, NSRange, NSRect, NSString};
-    // Named from the dependency, not from a re-export: `KeyboardEvent` is
-    // re-exported by `flui_platform::traits` but its `state` field's type is
-    // not, so `KeyState` is unnameable through this crate's public surface even
-    // though the field reading it is public. Assertion E judges an event on
-    // that field, so it names the type at its source.
-    use keyboard_types::KeyState;
     use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
     /// `id`/`nil`/`YES`/`NO` spelled as this probe's raw `msg_send!` shape
@@ -668,8 +662,8 @@ mod appkit_ime_probe {
             .iter()
             .filter_map(|input| input.as_keyboard())
             .filter_map(|event| match &event.key {
-                Key::Character(characters) => Some(characters.clone()),
-                Key::Named(_) => None,
+                Key::Character(characters) => Some(characters.as_str().to_owned()),
+                _ => None,
             })
             .collect()
     }
@@ -686,8 +680,8 @@ mod appkit_ime_probe {
         events
             .iter()
             .filter_map(|input| input.as_keyboard())
-            .filter_map(|event| match (event.state, &event.key) {
-                (KeyState::Up, Key::Character(characters)) => Some(characters.clone()),
+            .filter_map(|event| match (event.state(), &event.key) {
+                (KeyState::Up, Key::Character(characters)) => Some(characters.as_str().to_owned()),
                 _ => None,
             })
             .collect()

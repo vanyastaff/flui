@@ -61,7 +61,8 @@ impl UiRuntime {
     /// ```
     ///
     /// The draw step on its own, without begin and end frame, is not
-    /// reachable:
+    /// reachable. `trybuild_ui::ui_tests` pins the private-method diagnostic
+    /// alongside a valid host pump caller:
     ///
     /// ```compile_fail
     /// use flui_runtime::sink::FrameSink;

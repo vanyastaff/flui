@@ -1,31 +1,35 @@
 //! Input event helpers
 //!
-//! Utilities for creating test events using ui-events types.
+//! Utilities for creating checked events in the owned input vocabulary.
 //!
 //! # Example
 //!
-//! ```rust,ignore
+//! ```rust
 //! use flui_interaction::testing::input::{pointer_down, pointer_up};
 //! use flui_foundation::geometry::Offset;
-//! use ui_events::pointer::PointerType;
+//! use flui_platform_api::pointer::PointerKind;
 //!
-//! let down = pointer_down(Offset::new(100.0, 100.0), PointerType::Mouse);
-//! let up = pointer_up(Offset::new(100.0, 100.0), PointerType::Mouse);
+//! let down = pointer_down(Offset::new(100.0, 100.0), PointerKind::Mouse)?;
+//! let up = pointer_up(Offset::new(100.0, 100.0), PointerKind::Mouse)?;
+//! assert!(matches!(down, flui_interaction::PointerEvent::Down(_)));
+//! assert!(matches!(up, flui_interaction::PointerEvent::Up(_)));
+//! # Ok::<(), flui_platform_api::pointer::InputValueError>(())
 //! ```
 
 use flui_foundation::geometry::Offset;
-use ui_events::keyboard::Location;
-
-use crate::events::{
-    Code, Key, KeyState, KeyboardEvent, Modifiers, NamedKey, PointerEvent, PointerType,
-    make_cancel_event, make_down_event, make_move_event, make_up_event,
+use flui_platform_api::EventTime;
+use flui_platform_api::keyboard::{
+    Code, ImeComposition, Key, KeyEvent, KeyRepeat, KeyState, Location, Modifiers, NamedKey,
 };
+use flui_platform_api::pointer::{InputValueError, PointerEvent, PointerKind};
+
+use crate::events::{make_cancel_event, make_down_event, make_move_event, make_up_event};
 
 // ============================================================================
 // Device Kind Helpers
 // ============================================================================
 
-/// Convert platform pointer button to PointerType
+/// Convert the test's button convention to a pointer kind.
 ///
 /// This is a helper for platform integration code.
 ///
@@ -34,10 +38,10 @@ use crate::events::{
 /// - 0, 1, 2: Mouse buttons (left, right, middle)
 /// - Others: Touch or stylus
 #[inline]
-pub fn device_kind_from_button(button: u32) -> PointerType {
+pub fn device_kind_from_button(button: u32) -> PointerKind {
     match button {
-        0..=2 => PointerType::Mouse,
-        _ => PointerType::Touch,
+        0..=2 => PointerKind::Mouse,
+        _ => PointerKind::Touch,
     }
 }
 
@@ -47,25 +51,34 @@ pub fn device_kind_from_button(button: u32) -> PointerType {
 
 /// Create a PointerEvent::Down
 #[inline]
-pub fn pointer_down(position: Offset<f64>, device_kind: PointerType) -> PointerEvent {
+pub fn pointer_down(
+    position: Offset<f64>,
+    device_kind: PointerKind,
+) -> Result<PointerEvent, InputValueError> {
     make_down_event(position, device_kind)
 }
 
 /// Create a PointerEvent::Up
 #[inline]
-pub fn pointer_up(position: Offset<f64>, device_kind: PointerType) -> PointerEvent {
+pub fn pointer_up(
+    position: Offset<f64>,
+    device_kind: PointerKind,
+) -> Result<PointerEvent, InputValueError> {
     make_up_event(position, device_kind)
 }
 
 /// Create a PointerEvent::Move
 #[inline]
-pub fn pointer_move(position: Offset<f64>, device_kind: PointerType) -> PointerEvent {
+pub fn pointer_move(
+    position: Offset<f64>,
+    device_kind: PointerKind,
+) -> Result<PointerEvent, InputValueError> {
     make_move_event(position, device_kind)
 }
 
 /// Create a PointerEvent::Cancel
 #[inline]
-pub fn pointer_cancel(device_kind: PointerType) -> PointerEvent {
+pub fn pointer_cancel(device_kind: PointerKind) -> PointerEvent {
     make_cancel_event(device_kind)
 }
 
@@ -77,7 +90,8 @@ pub fn pointer_cancel(device_kind: PointerType) -> PointerEvent {
 ///
 /// # Example
 ///
-/// ```rust,ignore
+/// ```rust
+/// use flui_interaction::testing::input::ModifiersBuilder;
 /// let modifiers = ModifiersBuilder::new()
 ///     .ctrl(true)
 ///     .shift(true)
@@ -93,7 +107,7 @@ impl ModifiersBuilder {
     #[inline]
     pub const fn new() -> Self {
         Self {
-            modifiers: Modifiers::empty(),
+            modifiers: Modifiers::NONE,
         }
     }
 
@@ -148,9 +162,9 @@ impl ModifiersBuilder {
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// use crate::testing::input::KeyEventBuilder;
-/// use ui_events::keyboard::Code;
+/// ```rust
+/// use flui_interaction::testing::input::KeyEventBuilder;
+/// use flui_platform_api::keyboard::{Code, KeyState, Modifiers};
 ///
 /// let event = KeyEventBuilder::new(Code::KeyA)
 ///     .with_state(KeyState::Down)
@@ -175,7 +189,7 @@ impl KeyEventBuilder {
             code,
             key: Key::Named(NamedKey::Unidentified),
             state: KeyState::Down,
-            modifiers: Modifiers::empty(),
+            modifiers: Modifiers::NONE,
             location: Location::Standard,
             repeat: false,
             is_composing: false,
@@ -218,16 +232,20 @@ impl KeyEventBuilder {
         self
     }
 
-    /// Builds the `KeyboardEvent`.
-    pub fn build(self) -> KeyboardEvent {
-        KeyboardEvent {
-            state: self.state,
-            key: self.key,
-            code: self.code,
-            location: self.location,
-            modifiers: self.modifiers,
-            repeat: self.repeat,
-            is_composing: self.is_composing,
-        }
+    /// Builds the owned `KeyEvent` at the synthetic time origin.
+    pub fn build(self) -> KeyEvent {
+        KeyEvent::new(self.state, self.key, self.code, EventTime::from_nanos(0))
+            .with_location(self.location)
+            .with_modifiers(self.modifiers)
+            .with_repeat(if self.repeat {
+                KeyRepeat::AutoRepeat
+            } else {
+                KeyRepeat::First
+            })
+            .with_composition(if self.is_composing {
+                ImeComposition::Active
+            } else {
+                ImeComposition::Inactive
+            })
     }
 }

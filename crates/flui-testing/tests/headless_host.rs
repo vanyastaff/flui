@@ -319,7 +319,7 @@ fn secondary_window_preserves_its_text_store_backend() {
     )
     .expect("secondary root");
     let _ = host.pump(Duration::ZERO);
-    node.request_focus();
+    let _ = node.request_focus();
     let _ = host.pump(Duration::ZERO);
     assert!(
         host.text_store_host_on(enabled)

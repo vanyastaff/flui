@@ -53,6 +53,9 @@ use crate::task::Task;
 /// Owner-thread platform capability. See the module docs for the full
 /// contract.
 ///
+/// `trybuild_ui::ui_tests` pins the `Send` refusal diagnostic and compiles
+/// the valid owner-local and thread-safe residual callers.
+///
 /// ```compile_fail,E0277
 /// // Illustration only: the item-position `assert_not_impl_any!` below is
 /// // the compile-time evidence. This doctest runs with the workspace

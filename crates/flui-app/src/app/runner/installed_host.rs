@@ -297,6 +297,7 @@ impl OwnerEffects for HostState {
             // Native activation can close the window or tear down its host.
             // The development hook sees only a still-live installation and
             // may itself close it before the readiness receipt is settled.
+            #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
             if first.is_none() && self.installation_is_live(&entry) {
                 contain(&mut first, || entry.window.notify_opened());
             }

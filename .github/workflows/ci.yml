@@ -1,9 +1,9 @@
 name: CI
 
-# Linux-only CI. Ordinary PRs take docs/tooling/wide lanes; main and merge
+# Runtime CI runs on Linux. Ordinary PRs take docs/tooling/wide lanes; main and merge
 # queue add Linux full checks. Nightly/manual runs use the same Linux jobs.
 # No label enables native Windows/macOS or GPU jobs. Platform typechecking
-# remains on Linux; OS runtime checks are local commands.
+# uses Linux cross tools and macOS SDK legs; OS runtime checks are local commands.
 # test-nested and test-trybuild run independently, restoring the test cache.
 # All jobs except the notification are gated by the ci aggregator.
 
@@ -226,7 +226,7 @@ jobs:
   #               whether the change was a set of packages (`packages`) or a
   #               workspace-wide input (`full`: Cargo.lock, root Cargo.toml,
   #               .cargo/, the toolchain, a workflow, the lane code)
-  # Local check-changed also uses iOS scope; CI stays on Linux. The
+  # Local check-changed also uses discovered native scope. The
   # docs-only allowlist and the triggers live in
   # tools/xtask/src/change_scope/, once; `cargo xtask checks` proves no
   # compiled include_str!() target falls inside it.
@@ -357,7 +357,6 @@ jobs:
   # links the examples and benches with the same features, so it compiles
   # nothing twice (a target whose `required-features` the test scope leaves
   # off is compiled per feature by `feature-matrix`, not linked). The nested-cargo group runs beside it in `test-nested`.
-  # Windows and macOS run the suite in `test-windows` and `macos-ci`.
   # `cross-typecheck` is the only job touching the AppKit/Win32/Android
   # backends on a pull request, and it only type-checks them.
   # ─────────────────────────────────────────────────────────────────────────
@@ -402,7 +401,7 @@ jobs:
       # The local command, so CI and a local run cannot drift. nextest gives
       # each test its own process, so a test that mutates a genuinely
       # process-global resource needs a lock scoped to its module
-      # (AGENTS.md). Windows runs flui-platform in `platform-windows`.
+      # (AGENTS.md). Native runtime suites remain local commands.
       - name: cargo xtask test --fast
         run: cargo xtask test --fast
 
@@ -475,8 +474,11 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install pinned Rust
+      # Exact diagnostic snapshots include standard-library declarations.
+      - name: Install pinned Rust + diagnostic sources
         uses: ./.github/actions/rust-toolchain
+        with:
+          components: rust-src
 
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -974,105 +976,72 @@ jobs:
         run: cargo xtask wasm-test
 
   # ─────────────────────────────────────────────────────────────────────────
-  # cross-typecheck — flui-platform's per-OS backends, LINTED from Linux.
-  # `cargo clippy` does not link, so the Win32, AppKit, and Android backends
-  # compile from any host. Before this job they were only ever built by
-  # whoever happened to develop on that OS: the Windows backend had a hard
-  # `missing_docs` error (`pub mod win32`) and both backends had missing
-  # Debug impls that the Linux and wasm gates structurally could not see.
-  # Android joined this matrix later, for the identical reason: it had never
-  # been built, type-checked, or linted anywhere in CI, so that whole module
-  # could have stopped compiling with no gate to notice. On arrival it had 24
-  # violations under `-D warnings`, one of them a derived `Debug` that printed
-  # the user's clipboard.
-  #
-  # clippy, not plain check, on purpose: `cfg(windows)`/`cfg(macos)`/
-  # `cfg(target_os = "android")` code is invisible to every other lint gate,
-  # and running only `cargo check` here let ~80 deny-level lint violations
-  # accumulate unseen on Windows/macOS (found the day this switched) and a
-  # further ~24 on Android (found when it joined this matrix). It still does
-  # NOT link and runs NO tests — Android's own build needs the NDK's
-  # cross-linker, which this runner does not have; `cargo clippy` never
-  # reaches that step. The `test` job's dedicated flui-platform step only
-  # runs the Linux-buildable backends (headless + winit-on-X11); the
-  # Windows, macOS, and Android backends this job lints are never linked or
-  # executed by anything, so this remains the only gate touching that
-  # source at all. Green here means "compiles clean under the workspace
-  # lints", nothing more. Triples are the shipped desktop ones — MSVC (what
-  # backend uses) and aarch64 macOS — plus aarch64 Android, with
-  # `--all-targets` so per-OS test targets compile too.
+  # cross-typecheck — source-derived native package selection, including
+  # each selected package's tests, examples and benches. Clippy does not
+  # execute native targets, but C build scripts still need target headers.
+  # Linux uses MSVC cross tools and the bundled NDK. Both Apple targets use
+  # genuine Xcode SDKs, including os/log.h for optional macOS logging.
+  # Runtime and GPU validation remain local; a green leg proves compilation
+  # under the enabled features, not native runtime behavior.
   # ─────────────────────────────────────────────────────────────────────────
   cross-typecheck:
-    name: cross-typecheck
+    name: cross-typecheck (${{ matrix.target }})
     needs: [checks, plan]
     if: contains(fromJSON('["wide","full","extended"]'), needs.plan.outputs.lane)
-    runs-on: ubuntu-26.04
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+            os: ubuntu-26.04
+          - target: aarch64-apple-darwin
+            os: macos-26
+          - target: aarch64-linux-android
+            os: ubuntu-26.04
+          - target: aarch64-apple-ios
+            os: macos-26
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - name: Install pinned Rust + windows/macos/android targets
+      - name: Install pinned Rust + native target
         uses: ./.github/actions/rust-toolchain
         with:
-          targets: x86_64-pc-windows-msvc,aarch64-apple-darwin,aarch64-linux-android,aarch64-apple-ios
+          targets: ${{ matrix.target }}
 
-      # `--features a11y` on every line: the UIA/NSAccessibility bridges are
-      # feature-gated and this job is the ONLY gate that compiles them at all
-      # (the a11y-off configuration is a strict subset — no cfg(not(a11y))
-      # code exists — so checking with the feature supersedes checking
-      # without; on Android the feature enables nothing target-gated).
-      - name: cargo clippy (windows backend)
-        run: cargo clippy -p flui-platform --locked --all-targets --features a11y --target x86_64-pc-windows-msvc -- -D warnings
+      - name: Install native C cross tools
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -y && sudo apt-get install -y --no-install-recommends clang llvm
 
-      - name: cargo clippy (macos backend)
-        run: cargo clippy -p flui-platform --locked --all-targets --features a11y --target aarch64-apple-darwin -- -D warnings
+      - name: Configure bundled Android NDK
+        if: matrix.target == 'aarch64-linux-android'
+        run: |
+          tools="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          test -x "$tools/aarch64-linux-android21-clang"
+          test -x "$tools/llvm-ar"
+          echo "CC_aarch64_linux_android=$tools/aarch64-linux-android21-clang" >> "$GITHUB_ENV"
+          echo "AR_aarch64_linux_android=$tools/llvm-ar" >> "$GITHUB_ENV"
 
-      - name: cargo clippy (android backend)
-        run: cargo clippy -p flui-platform --locked --all-targets --features a11y --target aarch64-linux-android -- -D warnings
+      # stacker's Windows C shim includes windows.h. cargo-xwin provisions
+      # the MSVC SDK/CRT for clang-cl while retaining the shipped MSVC triple.
+      - name: Install cargo-xwin
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        with:
+          tool: cargo-xwin@0.23.1
 
-      # flui-desktop-mcp's real backends (UI Automation, capture, input) sit
-      # behind cfg(windows) / cfg(target_os = "macos"); on this Linux runner
-      # every other gate compiles only its unsupported fallbacks.
-      - name: cargo clippy (desktop-mcp, windows)
-        run: cargo clippy -p flui-desktop-mcp --locked --all-targets --target x86_64-pc-windows-msvc -- -D warnings
-
-      - name: cargo clippy (desktop-mcp, macos)
-        run: cargo clippy -p flui-desktop-mcp --locked --all-targets --target aarch64-apple-darwin -- -D warnings
-
-      # The native UIKit backend had no lint gate at all before this step.
-      # `cargo xtask device ios-sim` (run on a Mac) is the only
-      # EXECUTING coverage; this line is the type-check half, matching how the
-      # other three native backends are gated.
-      - name: cargo clippy (ios backend)
-        run: cargo clippy -p flui-platform --locked --all-targets --features a11y --target aarch64-apple-ios -- -D warnings
-
-      # The mobile RUNNERS live in flui-app (`app/runner/{android,ios}.rs`),
-      # behind `cfg(target_os = ...)`, so the four platform lines above never
-      # compile them: until these two steps, a broken Android or iOS runner
-      # was invisible to every gate (found the day they were added — an
-      # unused import and a `map_or_else` finding on the Android runner, and
-      # a facade re-export of an item flui-app gates out on iOS). The `flui`
-      # facade rides along for that last class: it is what a consumer builds
-      # against on these targets. Library targets only: the tests are
-      # host-run by the `test` job, and `--all-targets` would pull
-      # dev-dependencies this runner cannot build for the mobile triples.
-      # iOS runner checks need xcrun and are performed locally on macOS.
-      - name: cargo clippy (android runner)
+      - name: Lint source-derived native targets
+        run: cargo xtask cross-typecheck --target "$NATIVE_TARGET"
         env:
-          CC_aarch64_linux_android: clang
-          CFLAGS_aarch64_linux_android: --target=aarch64-linux-android21
-          AR_aarch64_linux_android: ar
-        run: cargo clippy -p flui-app -p flui --locked --target aarch64-linux-android -- -D warnings
+          NATIVE_TARGET: ${{ matrix.target }}
 
-      # The CLI ships on Windows but the `test` matrix is Linux-only and no
-      # Windows job exists, so a Windows-only compile break in `flui-cli`
-      # was invisible (found the day this step was added: tokio's `signal`
-      # feature does not expose `enable_io` on Windows). `--all-targets`
-      # so the integration suite's Windows arms type-check too.
-      - name: cargo clippy (cli, windows)
-        run: cargo clippy -p flui-cli --locked --all-targets --target x86_64-pc-windows-msvc -- -D warnings
+      - name: Lint optional native features
+        run: cargo xtask cross-typecheck --target "$NATIVE_TARGET" --all-features
+        env:
+          NATIVE_TARGET: ${{ matrix.target }}
 
   # ─────────────────────────────────────────────────────────────────────────
   # ci — require each planned Linux job and reject unexpected skips.

@@ -815,7 +815,7 @@ struct MockWindowState {
     closed: bool,
     fullscreen: bool,
     hovered: bool,
-    modifiers: keyboard_types::Modifiers,
+    modifiers: flui_platform_api::keyboard::Modifiers,
     appearance: WindowAppearance,
     cursor: CursorIcon,
 }
@@ -869,7 +869,7 @@ impl MockWindow {
                 closed: false,
                 fullscreen: false,
                 hovered: false,
-                modifiers: keyboard_types::Modifiers::empty(),
+                modifiers: flui_platform_api::keyboard::Modifiers::NONE,
                 appearance: WindowAppearance::default(),
                 cursor: CursorIcon::default(),
             })),
@@ -1278,7 +1278,7 @@ impl PlatformWindow for MockWindow {
         Point::default()
     }
 
-    fn modifiers(&self) -> keyboard_types::Modifiers {
+    fn modifiers(&self) -> flui_platform_api::keyboard::Modifiers {
         self.state.lock().modifiers
     }
 

@@ -17,8 +17,8 @@
 //!   timing entirely: nothing advanced a clock between events, so a
 //!   `long_press` recording replayed as an instant tap and a `double_tap` as
 //!   two taps with no gap between them;
-//! - it hand-built `PointerEventData` with `pressure: 1.0` and a
-//!   `PointerId::PRIMARY` hardcoded into capture, so multi-touch recordings
+//! - it hand-built pointer data with `pressure: 1.0` and a
+//!   primary pointer id hardcoded into capture, so multi-touch recordings
 //!   were corrupted on the way in and single-touch ones asserted against a
 //!   contract no real wire meets.
 //!
@@ -43,11 +43,11 @@
 //! ));
 //! ```
 
-use std::time::Duration;
+use std::{num::NonZeroU64, time::Duration};
 
 use flui_foundation::geometry::Offset;
 use flui_interaction::events::{
-    PointerType, make_cancel_event_for_id, make_down_event_for_id, make_move_event_for_id,
+    PointerKind, make_cancel_event_for_id, make_down_event_for_id, make_move_event_for_id,
     make_up_event_for_id,
 };
 use flui_interaction::{HitTestResult, PointerEvent, PointerId};
@@ -86,7 +86,7 @@ pub struct ScriptedPointer {
     pub position: Offset<f64>,
     /// Device kind. Slop thresholds and velocity policy differ per kind, so a
     /// script that means "touch" must say so.
-    pub device: PointerType,
+    pub device: PointerKind,
 }
 
 impl ScriptedPointer {
@@ -103,13 +103,13 @@ impl ScriptedPointer {
             pointer,
             phase,
             position,
-            device: PointerType::Touch,
+            device: PointerKind::Touch,
         }
     }
 
     /// Same event, attributed to a different device kind.
     #[must_use]
-    pub fn with_device(mut self, device: PointerType) -> Self {
+    pub fn with_device(mut self, device: PointerKind) -> Self {
         self.device = device;
         self
     }
@@ -118,11 +118,11 @@ impl ScriptedPointer {
     ///
     /// Built through `flui_interaction`'s own event constructors — the same
     /// ones every synthetic-input test uses — rather than by assembling
-    /// `PointerEventData` by hand, so a script cannot drift from the shape a
+    /// unchecked pointer samples by hand, so a script cannot drift from the shape a
     /// real platform translation produces.
     ///
     /// One thing those constructors do not carry is [`at`](Self::at): they
-    /// stamp `PointerState.time` as zero, as every synthetic event in this
+    /// stamp `EventTime` as zero, as every synthetic event in this
     /// workspace does. A script's timing reaches recognisers through the
     /// arena's clock, which the replay advances, not through this field — so
     /// the one consumer that reads it (`pan_zoom`'s `timestamp_nanos`) sees
@@ -132,9 +132,12 @@ impl ScriptedPointer {
     #[must_use]
     pub fn to_event(self) -> PointerEvent {
         match self.phase {
-            PointerPhase::Down => make_down_event_for_id(self.pointer, self.position, self.device),
-            PointerPhase::Move => make_move_event_for_id(self.pointer, self.position, self.device),
-            PointerPhase::Up => make_up_event_for_id(self.pointer, self.position, self.device),
+            PointerPhase::Down => make_down_event_for_id(self.pointer, self.position, self.device)
+                .expect("scripted pointer positions must be finite"),
+            PointerPhase::Move => make_move_event_for_id(self.pointer, self.position, self.device)
+                .expect("scripted pointer positions must be finite"),
+            PointerPhase::Up => make_up_event_for_id(self.pointer, self.position, self.device)
+                .expect("scripted pointer positions must be finite"),
             PointerPhase::Cancel => make_cancel_event_for_id(self.pointer, self.device),
         }
     }
@@ -223,7 +226,7 @@ impl PointerScript {
 
     /// Re-attribute every event to `device`.
     #[must_use]
-    pub fn on_device(mut self, device: PointerType) -> Self {
+    pub fn on_device(mut self, device: PointerKind) -> Self {
         for event in &mut self.events {
             event.device = device;
         }
@@ -238,13 +241,13 @@ impl PointerScript {
         Self::new("tap")
             .with(ScriptedPointer::new(
                 Duration::ZERO,
-                PointerId::PRIMARY,
+                PointerId::new(NonZeroU64::MIN),
                 PointerPhase::Down,
                 position,
             ))
             .with(ScriptedPointer::new(
                 Duration::from_millis(50),
-                PointerId::PRIMARY,
+                PointerId::new(NonZeroU64::MIN),
                 PointerPhase::Up,
                 position,
             ))
@@ -270,13 +273,13 @@ impl PointerScript {
         Self::new("double_tap")
             .with(ScriptedPointer::new(
                 Duration::ZERO,
-                PointerId::PRIMARY,
+                PointerId::new(NonZeroU64::MIN),
                 PointerPhase::Down,
                 position,
             ))
             .with(ScriptedPointer::new(
                 Duration::from_millis(50),
-                PointerId::PRIMARY,
+                PointerId::new(NonZeroU64::MIN),
                 PointerPhase::Up,
                 position,
             ))
@@ -305,13 +308,13 @@ impl PointerScript {
         Self::new("long_press")
             .with(ScriptedPointer::new(
                 Duration::ZERO,
-                PointerId::PRIMARY,
+                PointerId::new(NonZeroU64::MIN),
                 PointerPhase::Down,
                 position,
             ))
             .with(ScriptedPointer::new(
                 hold,
-                PointerId::PRIMARY,
+                PointerId::new(NonZeroU64::MIN),
                 PointerPhase::Up,
                 position,
             ))
@@ -339,7 +342,7 @@ impl PointerScript {
         assert!(steps > 0, "a drag needs at least one move sample");
         let mut script = Self::new("drag").with(ScriptedPointer::new(
             Duration::ZERO,
-            PointerId::PRIMARY,
+            PointerId::new(NonZeroU64::MIN),
             PointerPhase::Down,
             start,
         ));
@@ -351,14 +354,14 @@ impl PointerScript {
             );
             script.push(ScriptedPointer::new(
                 sample * step as u32,
-                PointerId::PRIMARY,
+                PointerId::new(NonZeroU64::MIN),
                 PointerPhase::Move,
                 position,
             ));
         }
         script.push(ScriptedPointer::new(
             sample * (steps + 1) as u32,
-            PointerId::PRIMARY,
+            PointerId::new(NonZeroU64::MIN),
             PointerPhase::Up,
             end,
         ));
@@ -398,7 +401,7 @@ impl PointerScript {
     ) -> Self {
         assert!(steps > 0, "a pinch needs at least one move sample");
         let sample = Duration::from_millis(8);
-        let first = PointerId::PRIMARY;
+        let first = PointerId::new(NonZeroU64::MIN);
         let second = secondary_pointer();
         let pair = |distance: f64| {
             let half = distance / 2.0;
@@ -449,7 +452,7 @@ impl PointerScript {
 
 /// The second contact id used by the multi-contact presets.
 fn secondary_pointer() -> PointerId {
-    PointerId::new(2).expect("BUG: 2 is a nonzero pointer id")
+    PointerId::try_from(2_u64).expect("BUG: 2 is a nonzero pointer id")
 }
 
 /// Records the pointer events a test dispatches, stamped on a binding's
@@ -484,7 +487,7 @@ impl GestureRecorder {
         pointer: PointerId,
         phase: PointerPhase,
         position: Offset<f64>,
-        device: PointerType,
+        device: PointerKind,
     ) {
         let now = binding.clock().elapsed();
         let start = *self.start.get_or_insert(now);

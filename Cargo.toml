@@ -194,6 +194,8 @@ tokio-util = { version = "0.7", default-features = false }
 # wasm32 `spawn_local` on the browser's microtask queue: the web runner's frame
 # loop and the execution services' sequential IO lane.
 wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+keyboard-types = "0.8"
 
 # SYNCHRONIZATION - Used by multiple crates
 parking_lot = "0.12"
@@ -260,6 +262,7 @@ objc2 = { version = "0.6.4", features = ["std"] }
 objc2-foundation = { version = "0.3.2", default-features = false }
 objc2-app-kit = { version = "0.3.2", default-features = false }
 dispatch2 = "0.3.1"
+jni = "0.22.4"
 # Quartz window identities, including windows omitted from capture lists.
 core-foundation = "0.10"
 core-graphics = "0.25"

@@ -3,7 +3,7 @@
 
 use flui_foundation::geometry::{Point, Size};
 use windows::{
-    Win32::{Foundation::LPARAM, UI::Input::KeyboardAndMouse::GetAsyncKeyState},
+    Win32::Foundation::LPARAM,
     core::{PCWSTR, w},
 };
 
@@ -97,22 +97,6 @@ pub unsafe fn load_cursor_style(style: PCWSTR) -> Result<HCURSOR, CursorError> {
         LoadCursorW(None, style)
             .map_err(|e| CursorError::Backend(format!("Failed to load cursor: {e}")))
     }
-}
-
-/// Check if a key is pressed
-///
-/// # Safety
-///
-/// None, in the memory-safety sense: `GetAsyncKeyState` takes a plain `i32`
-/// virtual-key code and returns a bit-packed `SHORT` — an out-of-range
-/// `vkey` is documented to return an unspecified-but-defined value, not UB.
-/// This is `unsafe fn` for FFI-boundary consistency with the call it wraps,
-/// not because a caller must uphold an invariant to avoid unsoundness.
-#[inline]
-pub unsafe fn is_key_pressed(vkey: i32) -> bool {
-    // SAFETY: see the `# Safety` section above — no precondition to
-    // discharge beyond the ordinary FFI call.
-    unsafe { (GetAsyncKeyState(vkey) as i32 & 0x8000) != 0 }
 }
 
 /// DPI constants

@@ -21,6 +21,21 @@ recorded so far.
 
 ## Mapping decisions
 
+### Hidden layout retention does not imply accessibility retention
+
+`RenderVisibility` lays its child out even when hidden. Its child participates
+in semantics only when visible or explicitly retained with `maintain_semantics`.
+This uses `RenderBox::visits_child_for_semantics`, independently of paint and
+hit testing. A visibility change requests paint and, unless semantics is
+retained, a semantics update. Changing retention while hidden requests only
+semantics; changing it while visible changes no current presentation.
+
+`harness_visibility_keeps_child_geometry_while_hidden` pins layout retention,
+and `harness_visibility_reports_effective_semantics_changes` pins public update
+impacts. The widgets' `retained_visibility_hides_child_semantics_by_default` and
+`retained_visibility_updates_semantics_without_changing_layout` assert the
+assembled accessibility output and mounted configuration changes.
+
 ### An animated translation keeps its transform layer
 
 **Rule:** `RenderTransform` paints a pure translation as a plain child offset,

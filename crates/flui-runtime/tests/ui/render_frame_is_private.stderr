@@ -1,0 +1,10 @@
+error[E0624]: method `render_frame` is private
+ --> tests/ui/render_frame_is_private.rs:5:11
+  |
+5 |     realm.render_frame(sink)
+  |           ^^^^^^^^^^^^ private method
+  |
+ ::: src/ui_runtime/frame.rs
+  |
+  |     pub(crate) fn render_frame<S: crate::sink::FrameSink + ?Sized>(&self, sink: &mut S) -> bool {
+  |     ------------------------------------------------------------------------------------------- private method defined here

@@ -221,6 +221,8 @@ impl std::fmt::Debug for WinitPlatform {
 
 /// Internal state for WinitPlatform
 struct WinitPlatformState {
+    /// Native pointer identities and phase state are committed before dispatch.
+    native_pointer: winit_events::NativePointerState,
     /// Callback handlers
     handlers: PlatformHandlers,
 
@@ -267,70 +269,6 @@ struct WinitPlatformState {
     /// converted once per read site rather than cached in a second form
     /// that could drift from what `ModifiersChanged` actually reported.
     current_modifiers: ModifiersState,
-
-    /// Mouse buttons currently held, tracked as RAW winit buttons from
-    /// `MouseInput` transitions — winit's `CursorMoved` carries no button
-    /// state of its own, and a move with an empty button set is a HOVER to
-    /// the gesture layer, so without this the pan recognizer never receives
-    /// drag updates (live drag-scrolling did nothing).
-    ///
-    /// Raw, not normalized: `convert_mouse_button` folds the unbounded
-    /// `MouseButton::Other(_)` id space onto ui-events' finite exotic
-    /// button band, so two distinct vendor buttons can normalize to the
-    /// same `PointerButton` — a normalized set would let releasing one
-    /// clear the shared bit while the other is still down. The normalized
-    /// set is DERIVED per event by [`held_pointer_buttons`].
-    pressed_buttons: std::collections::HashSet<winit::event::MouseButton>,
-    /// Stable pointer ids for live touch contacts, keyed by the winit
-    /// `(device, contact)` pair — two touch devices commonly both report
-    /// contact 0, and the interaction binding keys routes, pending moves and
-    /// gesture arenas solely by pointer id, so a shared id would let either
-    /// contact tear down the other's sequence. Entries are removed on the
-    /// terminal phases (Ended/Cancelled).
-    touch_contacts: std::collections::HashMap<(winit::event::DeviceId, u64), u64>,
-    /// Buttons whose PRESS was dropped for lack of a tracked cursor
-    /// position: the matching release must be suppressed too, or consumers
-    /// receive an orphan Up (and, in between, moves that look like a drag
-    /// for a Down that never existed). Entries clear on the release.
-    suppressed_buttons: std::collections::HashSet<winit::event::MouseButton>,
-    /// Next pointer id to hand a new touch contact. Starts past
-    /// `PointerId::PRIMARY` (the mouse) and only grows — contact ids are
-    /// never reused within a session, which keeps a late event for a dead
-    /// contact from aliasing a live one.
-    next_touch_pointer_id: u64,
-}
-
-/// The normalized W3C button set for the currently held raw buttons.
-/// Resolve a stable pointer id for one touch contact, allocating on the
-/// first sighting and releasing on the terminal phases. See the
-/// `touch_contacts` field doc for why identity is the `(device, contact)`
-/// pair and why ids are never reused.
-fn resolve_touch_pointer_id(
-    contacts: &mut std::collections::HashMap<(winit::event::DeviceId, u64), u64>,
-    next_id: &mut u64,
-    key: (winit::event::DeviceId, u64),
-    phase: winit::event::TouchPhase,
-) -> u64 {
-    use winit::event::TouchPhase;
-    let pointer_id = *contacts.entry(key).or_insert_with(|| {
-        let id = *next_id;
-        *next_id += 1;
-        id
-    });
-    if matches!(phase, TouchPhase::Ended | TouchPhase::Cancelled) {
-        contacts.remove(&key);
-    }
-    pointer_id
-}
-
-fn held_pointer_buttons(
-    pressed: &std::collections::HashSet<winit::event::MouseButton>,
-) -> ui_events::pointer::PointerButtons {
-    let mut buttons = ui_events::pointer::PointerButtons::default();
-    for raw in pressed {
-        buttons.insert(winit_events::convert_mouse_button(*raw));
-    }
-    buttons
 }
 
 impl WinitPlatformState {
@@ -349,6 +287,7 @@ impl WinitPlatformState {
         );
 
         Self {
+            native_pointer: winit_events::NativePointerState::default(),
             handlers: PlatformHandlers::new(),
             background_executor: Arc::new(BackgroundExecutor::new()),
             clipboard,
@@ -363,10 +302,6 @@ impl WinitPlatformState {
             },
             cursor_positions: HashMap::new(),
             current_modifiers: ModifiersState::empty(),
-            pressed_buttons: std::collections::HashSet::new(),
-            touch_contacts: std::collections::HashMap::new(),
-            suppressed_buttons: std::collections::HashSet::new(),
-            next_touch_pointer_id: 2,
         }
     }
 
@@ -926,6 +861,44 @@ struct WinitApp {
     self_close_route: SelfCloseRoute,
 }
 
+enum NativeDispatch {
+    Input(PlatformInput),
+    Hover(bool),
+}
+
+fn dispatch_native_inputs(inputs: Vec<(Arc<WinitWindow>, NativeDispatch)>) {
+    let mut first = None;
+    for (window, input) in inputs {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match input {
+            NativeDispatch::Input(input) => {
+                window.callbacks().dispatch_input(input);
+            }
+            NativeDispatch::Hover(hovered) => {
+                window.callbacks().dispatch_hover_status_change(hovered);
+            }
+        }));
+        if let Err(payload) = result {
+            if first.is_some() {
+                flui_foundation::panic::retain_opaque_payload(payload);
+            } else {
+                first = Some(payload);
+            }
+        }
+        // Callback reentry can close the window and release its final other
+        // owner. After a failure, its opaque captures must not retire here.
+        if first.is_some() {
+            std::mem::forget(window);
+        } else if let Err(payload) =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(window)))
+        {
+            first = Some(payload);
+        }
+    }
+    if let Some(payload) = first {
+        std::panic::resume_unwind(payload);
+    }
+}
+
 /// Completes a dequeued window request even if owner-side processing
 /// unwinds. Wraps the claim-slot owner half (ADR-0039 §3) rather than the
 /// pre-ADR-0039 buffered `sync_channel(1)` one-shot.
@@ -1055,6 +1028,32 @@ impl ApplicationHandler for WinitApp {
         }
     }
 
+    fn device_event(
+        &mut self,
+        _event_loop: &ActiveEventLoop,
+        device_id: winit::event::DeviceId,
+        event: winit::event::DeviceEvent,
+    ) {
+        let inputs = self.platform.with_state(|state| {
+            let mut windows: Vec<_> = state.windows.keys().copied().collect();
+            windows.sort_by_key(|window| window.0);
+            let inputs = state
+                .native_pointer
+                .device_event(device_id, &event, &windows);
+            inputs
+                .into_iter()
+                .filter_map(|(window, input)| {
+                    state
+                        .windows
+                        .get(&window)
+                        .cloned()
+                        .map(|window| (window, NativeDispatch::Input(input)))
+                })
+                .collect()
+        });
+        dispatch_native_inputs(inputs);
+    }
+
     fn window_event(
         &mut self,
         event_loop: &ActiveEventLoop,
@@ -1071,6 +1070,70 @@ impl ApplicationHandler for WinitApp {
             tracing::warn!("Received event for unknown window");
             return;
         };
+
+        let native_pointer = matches!(
+            event,
+            WinitWindowEvent::CursorMoved { .. }
+                | WinitWindowEvent::MouseInput { .. }
+                | WinitWindowEvent::Touch(_)
+                | WinitWindowEvent::MouseWheel { .. }
+                | WinitWindowEvent::PinchGesture { .. }
+                | WinitWindowEvent::RotationGesture { .. }
+                | WinitWindowEvent::PanGesture { .. }
+                | WinitWindowEvent::TouchpadPressure { .. }
+                | WinitWindowEvent::CursorEntered { .. }
+                | WinitWindowEvent::CursorLeft { .. }
+        );
+        if native_pointer {
+            let Some(window) = window else {
+                return;
+            };
+            if let WinitWindowEvent::MouseWheel { delta, .. } = &event {
+                tracing::debug!(?delta, "MouseWheel");
+            }
+            let scale = window.scale_factor();
+            let inputs = self.platform.with_state(|state| {
+                if let WinitWindowEvent::CursorMoved { position, .. } = &event {
+                    state.cursor_positions.insert(platform_id, *position);
+                }
+                let modifiers = from_winit_modifier_state(state.current_modifiers);
+                state
+                    .native_pointer
+                    .window_event(platform_id, &event, scale, modifiers)
+                    .unwrap_or_default()
+            });
+            let mut batch: Vec<_> = inputs
+                .into_iter()
+                .map(|input| (Arc::clone(&window), NativeDispatch::Input(input)))
+                .collect();
+            match event {
+                WinitWindowEvent::CursorEntered { .. } => {
+                    batch.push((Arc::clone(&window), NativeDispatch::Hover(true)));
+                }
+                WinitWindowEvent::CursorLeft { .. } => {
+                    batch.push((Arc::clone(&window), NativeDispatch::Hover(false)));
+                }
+                _ => {}
+            }
+            dispatch_native_inputs(batch);
+            return;
+        }
+        if matches!(event, WinitWindowEvent::Focused(false)) {
+            let inputs = self.platform.with_state(|state| {
+                state.native_pointer.cancel_window(
+                    platform_id,
+                    flui_platform_api::pointer::CancelReason::FocusLost,
+                )
+            });
+            if let Some(window) = window.as_ref() {
+                dispatch_native_inputs(
+                    inputs
+                        .into_iter()
+                        .map(|input| (Arc::clone(window), NativeDispatch::Input(input)))
+                        .collect(),
+                );
+            }
+        }
 
         match event {
             WinitWindowEvent::CloseRequested => {
@@ -1150,15 +1213,8 @@ impl ApplicationHandler for WinitApp {
                 self.platform.with_state(|state| {
                     if focused {
                         state.active_window = Some(platform_id);
-                    } else {
-                        if state.active_window == Some(platform_id) {
-                            state.active_window = None;
-                        }
-                        // A release delivered while unfocused never reaches
-                        // `MouseInput`, so a set left as-is would replay the
-                        // stale hold on refocus and misclassify the next
-                        // cursor move as a drag.
-                        state.pressed_buttons.clear();
+                    } else if state.active_window == Some(platform_id) {
+                        state.active_window = None;
                     }
                 });
 
@@ -1190,195 +1246,6 @@ impl ApplicationHandler for WinitApp {
                 // wrong logical size. Backends without winit's guarantee
                 // must dispatch the resize themselves (the headless mock's
                 // simulate_scale_factor_change pins that contract).
-            }
-            WinitWindowEvent::CursorMoved { position, .. } => {
-                let (modifiers, held_buttons) = self.platform.with_state(|state| {
-                    state.cursor_positions.insert(platform_id, position);
-                    (
-                        from_winit_modifier_state(state.current_modifiers),
-                        held_pointer_buttons(&state.pressed_buttons),
-                    )
-                });
-
-                if let Some(ref win) = window {
-                    let scale = win.scale_factor();
-                    let input =
-                        winit_events::cursor_moved_event(position, scale, modifiers, held_buttons);
-                    win.callbacks().dispatch_input(input);
-                }
-            }
-            WinitWindowEvent::MouseInput { state, button, .. } => {
-                let (modifiers, cursor_pos, held_buttons, suppressed) =
-                    self.platform.with_state(|s| {
-                        let cursor_pos = s.cursor_positions.get(&platform_id).copied();
-                        // A press with no tracked cursor position cannot be
-                        // delivered anywhere real (the old (0,0) stand-in
-                        // actuated the top-left widget) — suppress the WHOLE
-                        // sequence: the press never enters the held set, and
-                        // the matching release is swallowed below, so
-                        // consumers never see a drag or an orphan Up for a
-                        // Down that never existed.
-                        let suppressed = match state {
-                            winit::event::ElementState::Pressed => {
-                                if cursor_pos.is_none() {
-                                    s.suppressed_buttons.insert(button);
-                                    true
-                                } else {
-                                    // Track the RAW transition: the emitted
-                                    // event's `buttons` is the set held AFTER
-                                    // it, and raw tracking keeps aliased
-                                    // buttons from clearing each other's bits.
-                                    s.pressed_buttons.insert(button);
-                                    false
-                                }
-                            }
-                            winit::event::ElementState::Released => {
-                                if s.suppressed_buttons.remove(&button) {
-                                    true
-                                } else {
-                                    s.pressed_buttons.remove(&button);
-                                    false
-                                }
-                            }
-                        };
-                        (
-                            from_winit_modifier_state(s.current_modifiers),
-                            cursor_pos,
-                            held_pointer_buttons(&s.pressed_buttons),
-                            suppressed,
-                        )
-                    });
-
-                if suppressed {
-                    tracing::debug!(
-                        ?platform_id,
-                        ?state,
-                        "suppressing a button event from an unpositioned press sequence"
-                    );
-                    return;
-                }
-                let Some(cursor_pos) = cursor_pos else {
-                    // A release whose press WAS delivered but whose position
-                    // tracking has since been lost (focus loss cleared it):
-                    // nothing sane to deliver at — drop, traced. The raw set
-                    // was already updated above.
-                    tracing::debug!(
-                        ?platform_id,
-                        "dropping a mouse button event with no tracked cursor position"
-                    );
-                    return;
-                };
-                if let Some(ref win) = window {
-                    let scale = win.scale_factor();
-                    let input = winit_events::mouse_button_event(
-                        button,
-                        state,
-                        cursor_pos,
-                        scale,
-                        modifiers,
-                        held_buttons,
-                    );
-                    win.callbacks().dispatch_input(input);
-                }
-            }
-            // NaN (documented possible) folds to None in the shared
-            // conversion; the guard drops the tick without touching the
-            // rest of this handler (the trailing wildcard arm covers it).
-            WinitWindowEvent::PinchGesture { delta, .. }
-                if crate::shared::gestures::pinch(delta).is_some() =>
-            {
-                let gesture = crate::shared::gestures::pinch(delta)
-                    .expect("BUG: the match guard just checked Some");
-                let (modifiers, cursor_pos) = self.platform.with_state(|s| {
-                    (
-                        from_winit_modifier_state(s.current_modifiers),
-                        s.cursor_positions.get(&platform_id).copied(),
-                    )
-                });
-                // Same no-made-up-origin contract as clicks and wheels: a
-                // gesture with no tracked cursor position is dropped.
-                let Some(cursor_pos) = cursor_pos else {
-                    tracing::debug!(
-                        ?platform_id,
-                        "dropping a trackpad gesture with no tracked cursor position"
-                    );
-                    return;
-                };
-                if let Some(ref win) = window {
-                    let input = winit_events::trackpad_gesture_event(
-                        gesture,
-                        cursor_pos,
-                        win.scale_factor(),
-                        modifiers,
-                    );
-                    win.callbacks().dispatch_input(input);
-                }
-            }
-            WinitWindowEvent::RotationGesture { delta, .. } => {
-                let (modifiers, cursor_pos) = self.platform.with_state(|s| {
-                    (
-                        from_winit_modifier_state(s.current_modifiers),
-                        s.cursor_positions.get(&platform_id).copied(),
-                    )
-                });
-                // Same no-made-up-origin contract as clicks and wheels: a
-                // gesture with no tracked cursor position is dropped.
-                let Some(cursor_pos) = cursor_pos else {
-                    tracing::debug!(
-                        ?platform_id,
-                        "dropping a trackpad gesture with no tracked cursor position"
-                    );
-                    return;
-                };
-                if let Some(ref win) = window {
-                    let input = winit_events::trackpad_gesture_event(
-                        crate::shared::gestures::rotation_ccw_degrees(delta),
-                        cursor_pos,
-                        win.scale_factor(),
-                        modifiers,
-                    );
-                    win.callbacks().dispatch_input(input);
-                }
-            }
-            WinitWindowEvent::Touch(touch) => {
-                let (modifiers, pointer_id) = self.platform.with_state(|s| {
-                    let pointer_id = resolve_touch_pointer_id(
-                        &mut s.touch_contacts,
-                        &mut s.next_touch_pointer_id,
-                        (touch.device_id, touch.id),
-                        touch.phase,
-                    );
-                    (from_winit_modifier_state(s.current_modifiers), pointer_id)
-                });
-                if let Some(ref win) = window {
-                    let scale = win.scale_factor();
-                    let input = winit_events::touch_event(touch, pointer_id, scale, modifiers);
-                    win.callbacks().dispatch_input(input);
-                }
-            }
-            WinitWindowEvent::MouseWheel { delta, .. } => {
-                tracing::debug!(?delta, "MouseWheel");
-                let (modifiers, cursor_pos) = self.platform.with_state(|s| {
-                    (
-                        from_winit_modifier_state(s.current_modifiers),
-                        s.cursor_positions.get(&platform_id).copied(),
-                    )
-                });
-                // Same untracked-position posture as the button arm above.
-                let Some(cursor_pos) = cursor_pos else {
-                    tracing::debug!(
-                        ?platform_id,
-                        "dropping a wheel event with no tracked cursor position"
-                    );
-                    return;
-                };
-
-                if let Some(ref win) = window {
-                    let scale = win.scale_factor();
-                    let input =
-                        winit_events::mouse_wheel_event(delta, cursor_pos, scale, modifiers);
-                    win.callbacks().dispatch_input(input);
-                }
             }
             WinitWindowEvent::KeyboardInput {
                 event,
@@ -1442,16 +1309,6 @@ impl ApplicationHandler for WinitApp {
                 self.platform.with_state(|state| {
                     state.current_modifiers = new_modifiers.state();
                 });
-            }
-            WinitWindowEvent::CursorEntered { .. } => {
-                if let Some(ref win) = window {
-                    win.callbacks().dispatch_hover_status_change(true);
-                }
-            }
-            WinitWindowEvent::CursorLeft { .. } => {
-                if let Some(ref win) = window {
-                    win.callbacks().dispatch_hover_status_change(false);
-                }
             }
             WinitWindowEvent::Moved(_) => {
                 if let Some(ref win) = window {
@@ -1803,6 +1660,10 @@ impl WinitApp {
             let window = state.windows.remove(&window_id);
             state.window_id_map.retain(|_, v| *v != window_id);
             state.cursor_positions.remove(&window_id);
+            state.native_pointer.cancel_window(
+                window_id,
+                flui_platform_api::pointer::CancelReason::FocusLost,
+            );
             (window, Arc::clone(&state.data_transfer))
         });
         if let Some(window) = window {
@@ -1956,6 +1817,10 @@ impl WinitApp {
             state.window_id_map.retain(|_, v| *v != platform_id);
             state.windows.remove(&platform_id);
             state.cursor_positions.remove(&platform_id);
+            state.native_pointer.cancel_window(
+                platform_id,
+                flui_platform_api::pointer::CancelReason::FocusLost,
+            );
             if state.active_window == Some(platform_id) {
                 state.active_window = None;
             }

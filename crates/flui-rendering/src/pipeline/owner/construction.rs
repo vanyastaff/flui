@@ -34,6 +34,8 @@ impl PipelineOwner<Idle> {
     /// pipeline with no UI runtime behind it passes
     /// [`TextContextHandle::standalone`]. There is no constructor without a
     /// context, so no pipeline measures on one it made up for itself:
+    /// `tests/compile_fail.rs` pins the missing-context and missing-`Default`
+    /// diagnostics alongside a passing context-backed pipeline caller.
     ///
     /// ```compile_fail
     /// let owner = flui_rendering::PipelineOwner::new();

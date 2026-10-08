@@ -211,8 +211,15 @@ impl<'a> TextLender<'a> {
 ///
 /// ```compile_fail
 /// fn hold(source: flui_rendering::TextSource<'_>) {
-///     // The cell is crate-private: a raw render object cannot borrow it.
 ///     let _loan = source.cell().borrow_mut();
+/// }
+/// ```
+///
+/// A render object can forward the opaque source without opening a loan:
+///
+/// ```
+/// fn hold(source: flui_rendering::TextSource<'_>) {
+///     let _loan = source;
 /// }
 /// ```
 #[derive(Clone, Copy)]

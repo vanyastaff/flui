@@ -502,6 +502,114 @@ impl Matrix4 {
         }
     }
 
+    /// Unprojects a screen point onto the local `z = 0` plane.
+    ///
+    /// **The receiver is the inverse global-to-local matrix**, usually obtained
+    /// from the forward paint transform with [`Self::try_inverse`]. A projected
+    /// screen point does not specify its depth: this method intersects its ray
+    /// with the local plane instead of assuming that screen depth is zero.
+    ///
+    /// Returns `None` for a non-finite matrix or point, a parallel ray, an
+    /// intersection at infinity, a point behind the camera (forward homogeneous
+    /// `w <= 0`), or arithmetic that cannot publish finite local coordinates.
+    /// Homogeneous cancellation within floating-point precision is refused.
+    /// [`Self::transform_point`] retains its separate forward projection semantics.
+    #[must_use]
+    pub fn unproject_to_plane(&self, x: f64, y: f64) -> Option<(f64, f64)> {
+        if !x.is_finite() || !y.is_finite() || self.m.iter().any(|value| !value.is_finite()) {
+            return None;
+        }
+        let point_scale = x.abs().max(y.abs()).max(1.0);
+        let sx = x / point_scale;
+        let sy = y / point_scale;
+        let sw = 1.0 / point_scale;
+        if self.m[2] == 0.0 && self.m[6] == 0.0 && self.m[14] == 0.0 {
+            // The local plane is screen-depth zero already. Exclude irrelevant
+            // depth coefficients: a finite z scale must not erase a meaningful
+            // 2D quotient during normalization.
+            if self.m[10] == 0.0 {
+                return None;
+            }
+            if self.m[3] == 0.0 && self.m[7] == 0.0 && self.m[15] > 0.0 {
+                // Preserve ordinary affine evaluation order and its exact
+                // coordinates. Normalize only when direct arithmetic cannot
+                // produce a finite result, rather than adding roundoff to a
+                // translation or scale that already fits the admitted range.
+                let local_x = (self.m[0] * x + self.m[4] * y + self.m[12]) / self.m[15];
+                let local_y = (self.m[1] * x + self.m[5] * y + self.m[13]) / self.m[15];
+                if local_x.is_finite() && local_y.is_finite() {
+                    return Some((local_x, local_y));
+                }
+            }
+            let plane = [
+                self.m[0], self.m[1], self.m[3], self.m[4], self.m[5], self.m[7], self.m[12],
+                self.m[13], self.m[15],
+            ];
+            let scale = plane
+                .iter()
+                .fold(0.0_f64, |scale, value| scale.max(value.abs()));
+            if scale == 0.0 {
+                return None;
+            }
+            let [xx, yx, wx, xy, yy, wy, tx, ty, tw] = plane.map(|value| value / scale);
+            let weight = wx * sx + wy * sy + tw * sw;
+            let uncertainty = f64::EPSILON * ((wx * sx).abs() + (wy * sy).abs() + (tw * sw).abs());
+            if weight <= uncertainty {
+                return None;
+            }
+            let local_x = (xx * sx + xy * sy + tx * sw) / weight;
+            let local_y = (yx * sx + yy * sy + ty * sw) / weight;
+            return (local_x.is_finite() && local_y.is_finite()).then_some((local_x, local_y));
+        }
+        let matrix_scale = self
+            .m
+            .iter()
+            .fold(0.0_f64, |scale, value| scale.max(value.abs()));
+        if matrix_scale == 0.0 {
+            return None;
+        }
+        // Both normalizations are positive, so they preserve visibility and the
+        // final projective quotient while keeping every product bounded.
+        let m = self.m.map(|value| value / matrix_scale);
+        let ray = [
+            m[0] * sx + m[4] * sy + m[12] * sw,
+            m[1] * sx + m[5] * sy + m[13] * sw,
+            m[2] * sx + m[6] * sy + m[14] * sw,
+            m[3] * sx + m[7] * sy + m[15] * sw,
+        ];
+        // Changing screen depth moves along inverse column 2. Eliminate
+        // screen depth in homogeneous coordinates before dividing by w.
+        if m[10] == 0.0 {
+            return None;
+        }
+        // Normalize the elimination pair independently. Otherwise an admitted
+        // anisotropic inverse can square a tiny depth coefficient into zero
+        // even though the local projective quotient is finite.
+        let elimination_scale = m[10].abs().max(ray[2].abs());
+        let depth = m[10] / elimination_scale;
+        let ray_depth = ray[2] / elimination_scale;
+        let weight_at_origin = ray[3] * depth;
+        let weight_along_ray = m[11] * ray_depth;
+        let weight = weight_at_origin - weight_along_ray;
+        let ray_weight_bound = (m[3] * sx).abs() + (m[7] * sy).abs() + (m[15] * sw).abs();
+        let ray_depth_bound = (m[2] * sx).abs() + (m[6] * sy).abs() + (m[14] * sw).abs();
+        let depth_uncertainty = if m[11] == 0.0 {
+            0.0
+        } else {
+            (m[11].abs() * ray_depth_bound) / elimination_scale
+        };
+        let uncertainty = f64::EPSILON * (ray_weight_bound * depth.abs() + depth_uncertainty);
+        if !uncertainty.is_finite()
+            || weight.abs() <= uncertainty
+            || weight.is_sign_positive() != depth.is_sign_positive()
+        {
+            return None;
+        }
+        let local_x = (ray[0] * depth - m[8] * ray_depth) / weight;
+        let local_y = (ray[1] * depth - m[9] * ray_depth) / weight;
+        (local_x.is_finite() && local_y.is_finite()).then_some((local_x, local_y))
+    }
+
     /// Transforms a rectangle by this matrix, returning the bounding box of the
     /// result.
     ///

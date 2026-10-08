@@ -21,8 +21,8 @@ use flui_foundation::geometry::{Offset, Rect, Size};
 use flui_painting::paint::{Path, Shader};
 
 use super::hit_test::{EventPropagation, HitTestEntry, HitTestResult, transform_pointer_event};
-use crate::events::{DeviceId, PointerEvent, PointerEventExt, ScrollEventData};
-use crate::pan_zoom::PointerPanZoomEvent;
+use super::pointer_capture::{CaptureRequest, ContactCapture, PointerCapture, PointerCaptureError};
+use crate::events::{PanZoomEvent, PointerEvent, PointerEventExt, PointerInfo, ScrollEvent};
 use crate::retain::Retain;
 
 static NEXT_LANE_ID: AtomicU64 = AtomicU64::new(1);
@@ -305,15 +305,14 @@ fn try_mint_lane_id(source: &AtomicU64) -> Result<LaneId, InteractionDispatchErr
 /// One pointer event as delivered to one hit-test target, in both of the
 /// coordinate spaces a handler can legitimately need.
 ///
-/// FLUI's pointer events are [`ui_events`] types with room for exactly one
-/// position, and dispatch rewrites that one into the receiving entry's space,
-/// so the root-space and target-space events are carried side by side.
+/// Dispatch localises the owned event's measured and predicted positions into
+/// the receiving entry's space. The original root-space event travels beside
+/// it, including events whose platform supplied no position.
 ///
 /// Both fields borrow values the dispatch already owns, so building one costs
 /// no clone and no matrix work beyond the localisation dispatch performs
 /// anyway.
 ///
-/// [`ui_events`]: https://docs.rs/ui-events
 #[derive(Clone, Copy, Debug)]
 pub struct PointerDispatch<'a> {
     /// The event rewritten into the receiving target's own space — the value
@@ -324,6 +323,7 @@ pub struct PointerDispatch<'a> {
     /// Never re-derived from a transform, so a frame that moves the receiving
     /// target between one event and the next cannot shift it.
     pub global: &'a PointerEvent,
+    capture: Option<CaptureRequest<'a>>,
 }
 
 impl<'a> PointerDispatch<'a> {
@@ -340,24 +340,63 @@ impl<'a> PointerDispatch<'a> {
         Self {
             local: event,
             global: event,
+            capture: None,
         }
+    }
+
+    /// Borrow a local and root-space event without admitted capture authority.
+    #[must_use]
+    pub const fn new(local: &'a PointerEvent, global: &'a PointerEvent) -> Self {
+        Self {
+            local,
+            global,
+            capture: None,
+        }
+    }
+
+    /// Claim exclusive delivery of later contact packets to this Down target.
+    ///
+    /// The original Down still reaches every target in its committed route.
+    /// The first successful claimant wins; retaining the returned token keeps
+    /// the claim until native termination or deferred explicit release.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PointerCaptureError`] for a non-Down event, a synthetic
+    /// dispatch, a prior claim, or a contact whose authority has ended.
+    pub fn capture(self) -> Result<PointerCapture, PointerCaptureError> {
+        let PointerEvent::Down(press) = self.global else {
+            return Err(PointerCaptureError::NotDown);
+        };
+        self.capture
+            .ok_or(PointerCaptureError::Unavailable)?
+            .claim(press.pointer)
     }
 }
 
 type PointerHandler = Rc<dyn Fn(PointerDispatch<'_>) + 'static>;
-type ScrollHandler = Rc<dyn Fn(&ScrollEventData) -> EventPropagation + 'static>;
-type PanZoomHandler = Rc<dyn Fn(&PointerPanZoomEvent) -> EventPropagation + 'static>;
+type ScrollHandler = Rc<dyn Fn(&ScrollEvent) -> EventPropagation + 'static>;
+/// A native gesture in the receiving target's space and the root's space.
+#[derive(Clone, Copy, Debug)]
+pub struct PanZoomDispatch<'a> {
+    /// The gesture localized to the receiving target.
+    pub local: &'a PanZoomEvent,
+    /// The original gesture delivered by the presentation.
+    pub global: &'a PanZoomEvent,
+}
+
+type PanZoomHandler = Rc<dyn Fn(PanZoomDispatch<'_>) -> EventPropagation + 'static>;
 type PathClipper = Rc<dyn Fn(Size) -> Path + 'static>;
 type ShaderMaskFactory = Rc<dyn Fn(Rect<f64>) -> Shader + 'static>;
 
 /// Callback for mouse enter events.
-pub type MouseEnterCallback = Rc<dyn Fn(DeviceId, Offset<f64>) + 'static>;
+pub type MouseEnterCallback = Rc<dyn Fn(PointerInfo, Offset<f64>) + 'static>;
 
 /// Callback for mouse exit events.
-pub type MouseExitCallback = Rc<dyn Fn(DeviceId, Offset<f64>) + 'static>;
+pub type MouseExitCallback = Rc<dyn Fn(PointerInfo, Offset<f64>) + 'static>;
 
 /// Callback for mouse hover events.
-pub type MouseHoverCallback = Rc<dyn Fn(DeviceId, Offset<f64>) + 'static>;
+pub type MouseHoverCallback = Rc<dyn Fn(PointerInfo, Offset<f64>) + 'static>;
 
 /// Owner-local callback set for one mouse region target.
 #[doc(hidden)]
@@ -521,9 +560,13 @@ enum LocalEventTransform {
 }
 
 impl LocalEventTransform {
-    fn capture(transform: Option<Matrix4>) -> Self {
+    fn capture(transform: Option<&Matrix4>) -> Self {
         match transform {
             None => Self::Global,
+            // A composed root identity changes no source reading. Borrow the
+            // original event, including both histories, instead of owning a
+            // localized copy. Approximate identity would erase real motion.
+            Some(transform) if *transform == Matrix4::IDENTITY => Self::Global,
             // `HitTestResult` composes `transform` by left-multiplying each
             // ancestor level's own inverse as the walk descends (see
             // `HitTestEntry::transform`'s doc), so it already maps global to
@@ -533,7 +576,7 @@ impl LocalEventTransform {
             // pipeline's guarded traversal (ADR-0113).
             Some(transform) => {
                 if transform.is_invertible() {
-                    Self::Local(transform)
+                    Self::Local(*transform)
                 } else {
                     Self::NonInvertible
                 }
@@ -543,6 +586,7 @@ impl LocalEventTransform {
 }
 
 struct ResolvedHitEntry {
+    target: PointerTarget,
     owner: Option<std::sync::Arc<DispatchOwner>>,
     handler_cell: Rc<HandlerCell>,
     local_transform: LocalEventTransform,
@@ -597,26 +641,45 @@ impl ResolvedHitRoute {
     /// can perform mandatory cleanup (arena close/sweep, route release) before
     /// resuming it; later panics are traced without replacing the first, so
     /// one target's panic never starves the entries after it.
-    fn invoke(&self, event: &PointerEvent) -> Option<RoutePanic> {
+    fn invoke(
+        &self,
+        event: &PointerEvent,
+        capture: Option<&Rc<ContactCapture>>,
+    ) -> Option<RoutePanic> {
         let mut first_panic = None;
+        // Freeze the admitted selection for this observer round. A callback
+        // may release its token or end the contact reentrantly, but it cannot
+        // change which entries were committed to this packet's delivery.
+        let selected = (!matches!(event, PointerEvent::Down(_)))
+            .then(|| capture.and_then(|capture| capture.target()))
+            .flatten();
         for entry in &self.entries {
+            if selected.is_some_and(|target| target != entry.target) {
+                continue;
+            }
             if entry.owner.as_ref().is_some_and(|owner| owner.is_closed()) {
                 continue;
             }
             let local_event = match &entry.local_transform {
                 LocalEventTransform::Global => None,
-                LocalEventTransform::Local(local) => Some(transform_pointer_event(event, local)),
+                LocalEventTransform::Local(local) => {
+                    let Some(event) = transform_pointer_event(event, local) else {
+                        continue;
+                    };
+                    Some(event)
+                }
                 LocalEventTransform::NonInvertible => continue,
             };
             let handler = entry.handler_cell.snapshot();
             // No localised event means the entry composed no transform, so its
             // own space IS the root's.
-            let dispatch = match local_event.as_ref() {
-                Some(local) => PointerDispatch {
-                    local,
-                    global: event,
-                },
-                None => PointerDispatch::at_root(event),
+            let dispatch = PointerDispatch {
+                local: local_event.as_ref().unwrap_or(event),
+                global: event,
+                capture: capture.map(|contact| CaptureRequest {
+                    contact,
+                    target: entry.target,
+                }),
             };
             let delivered = RoutePanic::capture(|| {
                 handler(dispatch);
@@ -696,15 +759,21 @@ impl RoutePanic {
         if first.is_none() {
             *first = Some(candidate);
         } else {
-            tracing::error!(
-                phase,
-                "dispatch phase panicked after an earlier phase; only the first panic is resumed"
-            );
             // Panic payloads are arbitrary user values and may themselves
             // panic in Drop. Discarding a secondary payload normally could
             // therefore replace the first panic (or abort during unwind).
             // Only a known inert payload is released.
             candidate.retain();
+            // Diagnostics are user code too. Retire the superseded payload
+            // before reporting it, and contain a failing subscriber without
+            // recursively reporting that diagnostic's own failure.
+            Self::capture(|| {
+                tracing::error!(
+                    phase,
+                    "dispatch phase panicked after an earlier phase; only the first panic is resumed"
+                );
+            })
+            .retain();
         }
     }
 
@@ -816,6 +885,13 @@ impl LocalLaneInner {
 thread_local! {
     static LOCAL_LANES: RefCell<HashMap<LaneId, Weak<LocalLaneInner>>> =
         RefCell::new(HashMap::new());
+    #[cfg_attr(
+        target_os = "android",
+        allow(
+            clippy::missing_const_for_thread_local,
+            reason = "Rust 1.99's OS TLS macro can erase this explicit const initializer on cross hosts"
+        )
+    )]
     static ACTIVE_LANES: RefCell<Vec<LaneTicket>> = const { RefCell::new(Vec::new()) };
 }
 
@@ -1597,7 +1673,7 @@ impl InteractionDispatchHandle {
     /// Register a scroll/pointer-signal handler in the active owner lane.
     pub fn register_scroll(
         &self,
-        handler: impl Fn(&ScrollEventData) -> EventPropagation + 'static,
+        handler: impl Fn(&ScrollEvent) -> EventPropagation + 'static,
     ) -> Result<ScrollTarget, InteractionDispatchError> {
         let handler = self.admit(handler)?;
         let lane = self.active_lane()?;
@@ -1616,7 +1692,7 @@ impl InteractionDispatchHandle {
     pub fn replace_scroll(
         &self,
         target: ScrollTarget,
-        handler: impl Fn(&ScrollEventData) -> EventPropagation + 'static,
+        handler: impl Fn(&ScrollEvent) -> EventPropagation + 'static,
     ) -> Result<(), InteractionDispatchError> {
         let handler = self.admit(handler)?;
         let lane = self.active_lane()?;
@@ -1650,7 +1726,18 @@ impl InteractionDispatchHandle {
     pub fn invoke_scroll_target(
         &self,
         target: ScrollTarget,
-        event: &ScrollEventData,
+        event: &ScrollEvent,
+    ) -> Result<EventPropagation, InteractionDispatchError> {
+        self.invoke_scroll_target_with_claim(target, event, || {})
+    }
+
+    /// Publish a consumed route before retiring its snapshotted captures.
+    /// The hook belongs to the binding, not the consumer callback channel.
+    pub(crate) fn invoke_scroll_target_with_claim(
+        &self,
+        target: ScrollTarget,
+        event: &ScrollEvent,
+        claimed: impl FnOnce(),
     ) -> Result<EventPropagation, InteractionDispatchError> {
         let lane = self.active_lane()?;
         self.validate_lane(target.lane_id)?;
@@ -1665,7 +1752,13 @@ impl InteractionDispatchHandle {
             return Err(InteractionDispatchError::TargetGone);
         }
         let handler = cell.snapshot();
-        Ok(latch.invoke(cell, handler, |handler| handler(event)))
+        Ok(latch.invoke(cell, handler, |handler| {
+            let propagation = handler(event);
+            if propagation.should_stop() {
+                claimed();
+            }
+            propagation
+        }))
     }
 
     /// Register a trackpad pan-zoom claim handler in the active owner lane.
@@ -1676,7 +1769,7 @@ impl InteractionDispatchHandle {
     /// thread, or when the lane's private identity source is exhausted.
     pub fn register_pan_zoom(
         &self,
-        handler: impl Fn(&PointerPanZoomEvent) -> EventPropagation + 'static,
+        handler: impl Fn(PanZoomDispatch<'_>) -> EventPropagation + 'static,
     ) -> Result<PanZoomTarget, InteractionDispatchError> {
         let handler = self.admit(handler)?;
         let lane = self.active_lane()?;
@@ -1700,7 +1793,7 @@ impl InteractionDispatchHandle {
     pub fn replace_pan_zoom(
         &self,
         target: PanZoomTarget,
-        handler: impl Fn(&PointerPanZoomEvent) -> EventPropagation + 'static,
+        handler: impl Fn(PanZoomDispatch<'_>) -> EventPropagation + 'static,
     ) -> Result<(), InteractionDispatchError> {
         let handler = self.admit(handler)?;
         let lane = self.active_lane()?;
@@ -1747,7 +1840,16 @@ impl InteractionDispatchHandle {
     pub fn invoke_pan_zoom_target(
         &self,
         target: PanZoomTarget,
-        event: &PointerPanZoomEvent,
+        event: PanZoomDispatch<'_>,
+    ) -> Result<EventPropagation, InteractionDispatchError> {
+        self.invoke_pan_zoom_target_with_claim(target, event, || {})
+    }
+
+    pub(crate) fn invoke_pan_zoom_target_with_claim(
+        &self,
+        target: PanZoomTarget,
+        event: PanZoomDispatch<'_>,
+        claimed: impl FnOnce(),
     ) -> Result<EventPropagation, InteractionDispatchError> {
         let lane = self.active_lane()?;
         self.validate_lane(target.lane_id)?;
@@ -1762,7 +1864,13 @@ impl InteractionDispatchHandle {
             return Err(InteractionDispatchError::TargetGone);
         }
         let handler = cell.snapshot();
-        Ok(latch.invoke(cell, handler, |handler| handler(event)))
+        Ok(latch.invoke(cell, handler, |handler| {
+            let propagation = handler(event);
+            if propagation.should_stop() {
+                claimed();
+            }
+            propagation
+        }))
     }
 
     /// Register a path clipper in the active owner lane.
@@ -2038,9 +2146,10 @@ impl InteractionDispatchHandle {
                 };
                 if let Some(cell) = registered.get(&target.target_id) {
                     entries.push(ResolvedHitEntry {
+                        target,
                         owner: lane.target_owners.borrow().get(&target.target_id).cloned(),
                         handler_cell: Rc::clone(cell),
-                        local_transform: LocalEventTransform::capture(entry.transform),
+                        local_transform: LocalEventTransform::capture(entry.transform.as_ref()),
                     });
                 } else {
                     misses.push(RouteResolutionMiss::TargetGone { path_index });
@@ -2073,6 +2182,15 @@ impl InteractionDispatchHandle {
         token: ResolvedRouteToken,
         event: &PointerEvent,
     ) -> Result<Option<RoutePanic>, InteractionDispatchError> {
+        self.invoke_pointer_route_with_capture(token, event, None)
+    }
+
+    pub(crate) fn invoke_pointer_route_with_capture(
+        &self,
+        token: ResolvedRouteToken,
+        event: &PointerEvent,
+        capture: Option<&Rc<ContactCapture>>,
+    ) -> Result<Option<RoutePanic>, InteractionDispatchError> {
         let lane = self.active_lane()?;
         self.validate_lane(token.lane_id)?;
         let route = lane
@@ -2081,7 +2199,7 @@ impl InteractionDispatchHandle {
             .get(&token.route_id)
             .cloned()
             .ok_or(InteractionDispatchError::StaleRoute)?;
-        let mut first_panic = route.invoke(event);
+        let mut first_panic = route.invoke(event, capture);
         // A hit callback may release this token re-entrantly, leaving the
         // invocation snapshot as the route's final owner. Keep its entry and
         // HandlerCell destructors in the transaction returned to the binding,
@@ -2201,7 +2319,7 @@ impl InteractionDispatchHandle {
         // all.
         let hover_qualifies = matches!(
             event,
-            PointerEvent::Move(update) if update.current.buttons.is_empty()
+            PointerEvent::Move(update) if update.buttons.is_empty()
         );
 
         let resolved: Vec<ResolvedHoverInterleavedEntry> = {
@@ -2212,7 +2330,7 @@ impl InteractionDispatchHandle {
                         targets.get(&target.target_id).cloned().map(|cell| {
                             (
                                 cell,
-                                LocalEventTransform::capture(entry.transform),
+                                LocalEventTransform::capture(entry.transform.as_ref()),
                                 lane.owner_latch(target.target_id),
                             )
                         })
@@ -2244,25 +2362,24 @@ impl InteractionDispatchHandle {
                 .collect()
         };
 
-        let device_id = event.device_id();
+        let pointer = crate::events::pointer_info(event).copied();
         let position = event.position();
         let mut first_panic = None;
         for entry in resolved {
             if let Some((cell, transform, latch)) = entry.pointer {
                 let local_event = match &transform {
-                    LocalEventTransform::Local(local) => {
-                        Some(transform_pointer_event(event, local))
-                    }
+                    LocalEventTransform::Local(local) => transform_pointer_event(event, local),
                     LocalEventTransform::Global | LocalEventTransform::NonInvertible => None,
                 };
                 // An earlier callback may have closed this entry's owner.
-                if !latch.is_closed() && !matches!(transform, LocalEventTransform::NonInvertible) {
+                if !latch.is_closed()
+                    && !matches!(transform, LocalEventTransform::NonInvertible)
+                    && (!matches!(transform, LocalEventTransform::Local(_))
+                        || local_event.is_some())
+                {
                     let handler = cell.snapshot();
                     let dispatch = match local_event.as_ref() {
-                        Some(local) => PointerDispatch {
-                            local,
-                            global: event,
-                        },
+                        Some(local) => PointerDispatch::new(local, event),
                         None => PointerDispatch::at_root(event),
                     };
                     let delivered = RoutePanic::capture(|| {
@@ -2292,8 +2409,10 @@ impl InteractionDispatchHandle {
                 );
             }
             if let Some((callback, latch)) = entry.hover_callback {
-                if !latch.is_closed() {
-                    let delivered = RoutePanic::capture(|| callback(device_id, position));
+                if !latch.is_closed()
+                    && let (Some(pointer), Some(position)) = (pointer, position)
+                {
+                    let delivered = RoutePanic::capture(|| callback(pointer, position));
                     RoutePanic::preserve_first(
                         &mut first_panic,
                         delivered,
@@ -2402,7 +2521,7 @@ mod tests {
     use static_assertions::assert_not_impl_any;
 
     use super::*;
-    use crate::events::{PointerType, make_down_event};
+    use crate::events::{PointerKind, make_down_event};
     use flui_foundation::geometry::Offset;
 
     assert_not_impl_any!(HandlerCell: Send, Sync);
@@ -2413,7 +2532,7 @@ mod tests {
     assert_not_impl_any!(ResolvedHitRoute: Send, Sync);
 
     fn event() -> PointerEvent {
-        make_down_event(Offset::ZERO, PointerType::Touch)
+        make_down_event(Offset::ZERO, PointerKind::Touch).expect("finite input")
     }
 
     /// A transform-less hit entry addressing `target`, for resolver tests.

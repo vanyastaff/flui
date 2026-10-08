@@ -41,11 +41,22 @@ pub(super) fn runtime_storage() -> Option<Arc<dyn flui_platform_api::Storage>> {
     APP_RUNTIME.with(|slot| slot.borrow().host_storage())
 }
 
+/// Shared host services cannot depend on a desktop window-request error.
+#[derive(Debug, thiserror::Error)]
+pub(super) enum HostServicesError {
+    #[error(transparent)]
+    Preferences(#[from] flui_platform::PlatformError),
+    #[error(transparent)]
+    Owner(#[from] flui_runtime::owner::DispatchError),
+    #[error(transparent)]
+    Runtime(#[from] crate::app::ui_runtime::UiRuntimeError),
+}
+
 pub(super) fn refresh_preferences_with(
     read: impl FnOnce(
         &flui_platform::OwnerPlatform,
     ) -> Result<flui_platform_api::SystemPreferences, flui_platform::PlatformError>,
-) -> Result<(), crate::app::AppWindowError> {
+) -> Result<(), HostServicesError> {
     let (owner, host) = APP_RUNTIME.with(|slot| {
         let state = slot.borrow();
         (state.owner_platform.clone(), state.installed_host.clone())
@@ -75,14 +86,8 @@ pub(super) fn refresh_preferences_with(
         // unrelated owner wakes must not flood diagnostics during backoff.
         return Ok(());
     }
-    let values = observation.map_err(|error| crate::app::AppWindowError::Mount {
-        source: Arc::new(error),
-    })?;
-    host.logical()
-        .update_preferences(values, host.effects())
-        .map_err(|error| crate::app::AppWindowError::Mount {
-            source: Arc::new(error),
-        })?;
+    let values = observation?;
+    host.logical().update_preferences(values, host.effects())?;
     Ok(())
 }
 
@@ -95,12 +100,9 @@ pub(super) fn build_ui_runtime(
     wake: &Arc<dyn Fn() + Send + Sync>,
     window: impl Into<crate::app::presentation::PresentationWindow>,
     scale_factor: f64,
-) -> Result<crate::app::ui_runtime::UiRuntime, crate::app::AppWindowError> {
-    let preferences = APP_RUNTIME
-        .with(|slot| slot.borrow().installed_host.logical().preferences())
-        .map_err(|error| crate::app::AppWindowError::Mount {
-            source: Arc::new(error),
-        })?;
+) -> Result<crate::app::ui_runtime::UiRuntime, HostServicesError> {
+    let preferences =
+        APP_RUNTIME.with(|slot| slot.borrow().installed_host.logical().preferences())?;
     let fonts = runtime_font_collection();
     let mut host = crate::app::ui_runtime::RuntimeHostServices::new(
         Arc::clone(wake),
@@ -115,11 +117,11 @@ pub(super) fn build_ui_runtime(
     if let Some(preferences) = preferences {
         host = host.with_preferences(preferences);
     }
-    crate::app::ui_runtime::UiRuntime::new(window, scale_factor, host).map_err(|error| {
-        crate::app::AppWindowError::Mount {
-            source: Arc::new(error),
-        }
-    })
+    Ok(crate::app::ui_runtime::UiRuntime::new(
+        window,
+        scale_factor,
+        host,
+    )?)
 }
 
 /// A clone of the loop-scoped `needs_redraw` flag, for [`crate::app::ui_runtime::UiRuntime::new`]'s
@@ -338,6 +340,13 @@ pub(crate) fn install_owner_platform(
                   never call this"
     )
 )]
+#[cfg_attr(
+    all(test, target_os = "android"),
+    expect(
+        dead_code,
+        reason = "desktop exit-policy tests are excluded on Android"
+    )
+)]
 pub(super) fn install_exit_policy_hook(policy: ExitPolicy) {
     let shared = with_owner_platform(|owner| {
         owner.shared().set_exit_policy_hook(Box::new(move || {
@@ -459,6 +468,13 @@ pub(super) fn install_platform_quit_hook() {
                   never call this"
     )
 )]
+#[cfg_attr(
+    all(test, any(target_os = "android", target_os = "ios")),
+    expect(
+        dead_code,
+        reason = "desktop wake-deadline tests are excluded on mobile"
+    )
+)]
 pub(super) fn install_wake_deadline_hook(
     secondary_deadline: impl Fn() -> Option<web_time::Instant> + Send + Sync + 'static,
 ) {
@@ -566,20 +582,27 @@ pub(super) fn desktop_secondary_wake_deadline(
 /// through [`OwnerPlatform::shared`](flui_platform::OwnerPlatform::shared),
 /// which returns `SharedPlatform` — a type whose method list IS the fence
 /// (no owner-affine method, e.g. `open_window`, is ever added to it; see
-/// its own rustdoc). This
-/// `compile_fail` doctest is CI-run evidence for that fence: `flui-app`
-/// dev/normal-depends on `flui-platform`, and its doc tests run in CI's
-/// `doc-test` job and in `cargo xtask ci`.
+/// its own rustdoc). The failing and passing examples share a bootstrap
+/// callback and differ only in the window-opening receiver: the shared
+/// residual has no `open_window`, while the owner capability does. The
+/// examples compile in the doctest suite; the valid callback is not run.
 ///
 /// ```compile_fail,E0599
 /// use flui_platform::headless_platform;
 ///
 /// let _ = headless_platform().run(Box::new(|owner| {
 ///     let shared = owner.shared();
-///     // `SharedPlatform` has no `open_window` — it stays owner-affine on
-///     // `OwnerPlatform` only. Fails with "no method named `open_window`
-///     // found for struct `SharedPlatform`" (E0599).
 ///     let _ = shared.open_window(Default::default());
+///     Ok(())
+/// }));
+/// ```
+///
+/// ```no_run
+/// use flui_platform::headless_platform;
+///
+/// let _ = headless_platform().run(Box::new(|owner| {
+///     let shared = owner.shared();
+///     let _ = owner.open_window(Default::default());
 ///     Ok(())
 /// }));
 /// ```

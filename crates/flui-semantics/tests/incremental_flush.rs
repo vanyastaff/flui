@@ -976,3 +976,302 @@ fn numeric_setters_are_checked_against_the_current_range() {
         "numeric range admission rows failed: {failures:?}"
     );
 }
+
+struct RevealFixture {
+    owner: SemanticsOwner,
+    outer: flui_foundation::SemanticsId,
+    inner: flui_foundation::SemanticsId,
+    target: flui_foundation::SemanticsId,
+    identity: flui_semantics::AccessibilityNodeId,
+    calls: Arc<Mutex<Vec<&'static str>>>,
+    failures: [Arc<AtomicBool>; 2],
+    retired: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+struct RevealCapture {
+    retired: Arc<std::sync::atomic::AtomicUsize>,
+    panic_on_drop: bool,
+    failure: &'static str,
+}
+
+impl Drop for RevealCapture {
+    fn drop(&mut self) {
+        self.retired.fetch_add(1, Ordering::SeqCst);
+        if self.panic_on_drop {
+            std::panic::panic_any(self.failure);
+        }
+    }
+}
+
+impl RevealFixture {
+    fn new(panic_on_drop: bool) -> Self {
+        Self::with_retirement_failures([panic_on_drop, false])
+    }
+
+    fn with_retirement_failures(retirement_failures: [bool; 2]) -> Self {
+        use flui_foundation::geometry::Rect;
+        use flui_semantics::{ActionArgs, SemanticsAction};
+        let (mut owner, _) = recording_owner();
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let failures = [
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        ];
+        let retired = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut make_owner = |index, name, failure: &Arc<AtomicBool>, panic_on_drop| {
+            let mut ancestor = node(index, name);
+            ancestor.set_reveal_rect(Rect::new(0.0, 0.0, 200.0, 200.0));
+            let sink = Arc::clone(&calls);
+            let failure = Arc::clone(failure);
+            let capture = RevealCapture {
+                retired: Arc::clone(&retired),
+                panic_on_drop,
+                failure: if name == "inner" {
+                    "inner capture retirement"
+                } else {
+                    "outer capture retirement"
+                },
+            };
+            ancestor.config_mut().add_action(
+                SemanticsAction::ShowOnScreen,
+                Arc::new(move |_, args| {
+                    let _capture = &capture;
+                    assert!(matches!(args, Some(ActionArgs::ShowOnScreen { .. })));
+                    sink.lock().push(name);
+                    assert!(!failure.load(Ordering::SeqCst), "{name} reveal failure");
+                }),
+            );
+            owner.insert(ancestor)
+        };
+        let outer = make_owner(0, "outer", &failures[1], retirement_failures[1]);
+        let inner = make_owner(1, "inner", &failures[0], retirement_failures[0]);
+        let mut target_node = node(2, "reveal target");
+        target_node.set_reveal_rect(Rect::new(0.0, 600.0, 40.0, 640.0));
+        target_node.config_mut().set_has_reveal_ancestor(true);
+        let identity = target_node
+            .accessibility_id()
+            .expect("render-backed target");
+        let target = owner.insert(target_node);
+        owner.add_child(outer, inner);
+        owner.add_child(inner, target);
+        owner.set_root(Some(outer));
+        Self {
+            owner,
+            outer,
+            inner,
+            target,
+            identity,
+            calls,
+            failures,
+            retired,
+        }
+    }
+
+    fn resolve(&self) -> flui_semantics::SemanticsActionInvocation {
+        self.owner
+            .resolve_action(flui_semantics::SemanticsActionRequest::new(
+                self.identity,
+                flui_semantics::SemanticsAction::ShowOnScreen,
+            ))
+            .expect("rooted descendant reveal")
+    }
+}
+
+fn reveal_stale_snapshot_is_refused_and_fresh_replacement_recovers() {
+    for replace_target in [true, false] {
+        let mut fixture = RevealFixture::new(false);
+        let held = fixture.resolve();
+        let id = if replace_target {
+            fixture.target
+        } else {
+            fixture.inner
+        };
+        let replacement = fixture.owner.get(id).expect("live node").clone();
+        assert!(fixture.owner.tree_mut().replace_node(id, replacement));
+        held.invoke();
+        assert!(
+            fixture.calls.lock().is_empty(),
+            "replaced membership is stale"
+        );
+        fixture.resolve().invoke();
+        assert_eq!(*fixture.calls.lock(), ["inner", "outer"]);
+    }
+}
+
+fn reveal_removed_and_reparented_paths_do_not_deliver_old_geometry() {
+    for remove in [true, false] {
+        let mut fixture = RevealFixture::new(false);
+        let held = fixture.resolve();
+        if remove {
+            fixture.owner.remove(fixture.target);
+        } else {
+            fixture.owner.add_child(fixture.outer, fixture.target);
+        }
+        held.invoke();
+        assert!(fixture.calls.lock().is_empty());
+        if !remove {
+            fixture.resolve().invoke();
+            assert_eq!(*fixture.calls.lock(), ["outer"]);
+        }
+    }
+}
+
+fn reveal_first_body_failure_keeps_live_outer_progress_and_recovery() {
+    for competing in [false, true] {
+        let fixture = RevealFixture::new(false);
+        fixture.failures[0].store(true, Ordering::SeqCst);
+        fixture.failures[1].store(competing, Ordering::SeqCst);
+        let first = catch_unwind(AssertUnwindSafe(|| fixture.resolve().invoke()))
+            .expect_err("inner callback fails");
+        assert_eq!(
+            first.downcast_ref::<String>().map(String::as_str),
+            Some("inner reveal failure")
+        );
+        assert_eq!(*fixture.calls.lock(), ["inner", "outer"]);
+        fixture.failures[0].store(false, Ordering::SeqCst);
+        fixture.failures[1].store(false, Ordering::SeqCst);
+        fixture.resolve().invoke();
+        assert_eq!(*fixture.calls.lock(), ["inner", "outer", "inner", "outer"]);
+        let retired = Arc::clone(&fixture.retired);
+        drop(fixture);
+        assert_eq!(
+            retired.load(Ordering::SeqCst),
+            0,
+            "failed snapshot retains captures after final owner release"
+        );
+    }
+}
+
+fn reveal_healthy_capture_retirement_and_failed_retirement_keep_authority() {
+    let fixture = RevealFixture::new(false);
+    fixture.resolve().invoke();
+    let retired = Arc::clone(&fixture.retired);
+    drop(fixture);
+    assert_eq!(retired.load(Ordering::SeqCst), 2);
+
+    let mut fixture = RevealFixture::new(true);
+    let held = fixture.resolve();
+    fixture.owner.clear();
+    let first =
+        catch_unwind(AssertUnwindSafe(|| held.invoke())).expect_err("capture retirement fails");
+    assert_eq!(
+        first.downcast_ref::<&str>().copied(),
+        Some("inner capture retirement")
+    );
+    assert!(
+        fixture.calls.lock().is_empty(),
+        "stale geometry never invokes a callback"
+    );
+    assert_eq!(
+        fixture.retired.load(Ordering::SeqCst),
+        1,
+        "first retirement failure retains the remaining callback"
+    );
+}
+
+fn unused_reveal_snapshot_retirement_worker(competing: bool) {
+    let mut fixture = RevealFixture::with_retirement_failures([true, competing]);
+    let held = fixture.resolve();
+    fixture.owner.clear();
+    let first = catch_unwind(AssertUnwindSafe(|| drop(held)))
+        .expect_err("unused snapshot capture retirement fails");
+    assert_eq!(
+        first.downcast_ref::<&str>().copied(),
+        Some("inner capture retirement")
+    );
+    assert_eq!(
+        fixture.retired.load(Ordering::SeqCst),
+        1,
+        "first failed retirement retains remaining snapshot ownership"
+    );
+    assert!(
+        fixture.calls.lock().is_empty(),
+        "intentionally dropped snapshot never delivers callbacks"
+    );
+    let healthy = RevealFixture::new(false);
+    healthy.resolve().invoke();
+    assert_eq!(*healthy.calls.lock(), ["inner", "outer"]);
+    let retired = Arc::clone(&healthy.retired);
+    drop(healthy);
+    assert_eq!(
+        retired.load(Ordering::SeqCst),
+        2,
+        "fresh healthy ownership still retires"
+    );
+}
+
+fn unused_reveal_snapshot_contains_single_and_competing_capture_retirement() {
+    // The baseline owns both failing captures in a Vec: its implicit Drop can
+    // double-panic before an outer catch is reached. Keep that causal failure
+    // isolated without introducing a hostile panic-payload destructor.
+    let executable = std::env::current_exe().expect("integration test executable");
+    let mut failures = Vec::new();
+    for competing in [false, true] {
+        let result = std::process::Command::new(&executable)
+            .args([
+                "--exact",
+                "descendant_reveal_snapshots_preserve_identity_failure_and_recovery",
+                "--nocapture",
+            ])
+            .env(
+                "FLUI_REVEAL_RETIREMENT_WORKER",
+                if competing { "competing" } else { "single" },
+            )
+            .env("RUST_BACKTRACE", "0")
+            .output()
+            .expect("start isolated capture-retirement witness");
+        if !result.status.success() {
+            failures.push(competing);
+            eprintln!(
+                "unused snapshot competing={competing}: {}\n{}",
+                String::from_utf8_lossy(&result.stdout),
+                String::from_utf8_lossy(&result.stderr)
+            );
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "unused reveal snapshot retirement failed for competing={failures:?}"
+    );
+}
+
+#[test]
+fn descendant_reveal_snapshots_preserve_identity_failure_and_recovery() {
+    if let Ok(mode) = std::env::var("FLUI_REVEAL_RETIREMENT_WORKER") {
+        unused_reveal_snapshot_retirement_worker(mode == "competing");
+        return;
+    }
+    let cases: &[(&str, fn())] = &[
+        (
+            "replaced membership and recovery",
+            reveal_stale_snapshot_is_refused_and_fresh_replacement_recovers,
+        ),
+        (
+            "removed and reparented geometry",
+            reveal_removed_and_reparented_paths_do_not_deliver_old_geometry,
+        ),
+        (
+            "single and competing body failure",
+            reveal_first_body_failure_keeps_live_outer_progress_and_recovery,
+        ),
+        (
+            "healthy and failed capture retirement",
+            reveal_healthy_capture_retirement_and_failed_retirement_keep_authority,
+        ),
+        (
+            "unused snapshot single and competing retirement",
+            unused_reveal_snapshot_contains_single_and_competing_capture_retirement,
+        ),
+    ];
+    let mut failures = Vec::new();
+    for &(name, run) in cases {
+        if let Err(payload) = catch_unwind(run) {
+            failures.push(name);
+            std::mem::forget(payload);
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "descendant reveal rows failed: {failures:?}"
+    );
+}

@@ -381,6 +381,27 @@ impl UiRuntime {
                     failure,
                     "presentation input cancellation",
                 );
+                if let Some(presentation) = self.presentations.get(id)
+                    && matches!(
+                        self.execution_lifecycle(presentation),
+                        AppLifecycleState::Hidden
+                            | AppLifecycleState::Paused
+                            | AppLifecycleState::Detached
+                    )
+                {
+                    // Focus loss still delivers Cancel and preserves hovering.
+                    // Suspension also discards motion queued before the pause;
+                    // this phase must run even when Cancel delivery panicked.
+                    let failure = catch_unwind(AssertUnwindSafe(|| {
+                        presentation.gestures().handle_lifecycle_pause();
+                    }))
+                    .err();
+                    self.record_lifecycle_failure(
+                        &mut first_panic,
+                        failure,
+                        "presentation paused input drain",
+                    );
+                }
             }
             // Resource eligibility is plain owner-local state. Commit it before
             // scheduler callbacks; redraw/wake effects follow the scheduler.
@@ -551,8 +572,9 @@ mod tests {
                 flui_platform_api::PlatformInput::Pointer(
                     flui_interaction::events::make_down_event(
                         flui_foundation::geometry::Offset::new(1.0, 1.0),
-                        flui_interaction::events::PointerType::Mouse,
-                    ),
+                        flui_interaction::events::PointerKind::Mouse,
+                    )
+                    .expect("finite test position"),
                 ),
             );
         });

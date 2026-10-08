@@ -2,44 +2,40 @@
 //!
 //! This module provides the core event routing system:
 //!
-//! - [`EventRouter`] - Main event dispatcher
 //! - [`HitTestResult`] - Spatial hit testing
 //! - [`FocusManager`] - Keyboard focus management
 //! - [`FocusScopeNode`] - Groups focusable elements for keyboard navigation
 //! - [`FocusTraversalPolicy`] - Determines Tab/Shift+Tab navigation order
 //! - [`PointerRouter`] - Centralized pointer event routing
 //!
-//! # Architecture
-//!
-//! ```text
-//! Platform Events
-//!       ↓
-//! EventRouter (dispatches based on event type)
-//!       ├─ Pointer Events → HitTest → Handlers
-//!       ├─ Key Events → FocusManager → FocusScope → Focused Element
-//!       └─ Scroll Events → HitTest → Scroll Handlers
-//! ```
+//! [`crate::GestureBinding`] retains pointer hit routes resolved by
+//! [`InteractionLane`]. [`FocusManager`] owns keyboard dispatch for the
+//! presentation.
 
-pub(crate) mod event_router;
 mod focus;
 pub mod focus_scope;
 mod hit_test;
 mod interaction_lane;
 pub(crate) mod mouse_tracker;
+pub(crate) mod pointer_capture;
 mod pointer_router;
+mod traversal;
 
-pub use event_router::EventRouter;
-pub use focus::{FocusChangeCallback, FocusManager, KeyEventCallback};
+pub use pointer_capture::{PointerCapture, PointerCaptureError};
+pub use traversal::{FocusDirection, FocusTraversalOverrides};
+
+pub use focus::{FocusChangeCallback, FocusManager};
 pub use focus_scope::{
     FocusAttachment, FocusDetachOutcome, FocusNode, FocusNodeChangeCallback, FocusNodeId,
-    FocusNodeRegistration, FocusRequestOutcome, FocusScopeNode, FocusTraversalPolicy,
-    FocusTreeError, KeyEventHandler, KeyEventResult, NodeContext, ReadingOrderPolicy, RectProvider,
-    ResolvedStep, TraversalEdgeBehavior,
+    FocusNodeRegistration, FocusRequestOutcome, FocusScopeNode, FocusSubscription,
+    FocusTraversalPolicy, FocusTreeError, KeyEventHandler, KeyEventResult, NodeContext,
+    ReadingOrderPolicy, RectProvider, ResolvedStep, TraversalDirection, TraversalEdgeBehavior,
 };
 pub use hit_test::{
-    EventPropagation, HitTestBehavior, HitTestEntry, HitTestResult, HitTestable, RenderId,
+    CursorRequest, EventPropagation, HitTestBehavior, HitTestEntry, HitTestResult, RenderId,
     TransformGuard,
 };
+pub(crate) use hit_test::{PanZoomRoute, ScrollRoute};
 #[doc(hidden)]
 pub use interaction_lane::DispatchCustody;
 pub(crate) use interaction_lane::OwnerLatch;
@@ -47,10 +43,10 @@ pub(crate) use interaction_lane::active_dispatch_handle;
 pub use interaction_lane::{
     HitTestHandle, HitTestProbe, HitTestSnapshot, InteractionDispatchError,
     InteractionDispatchHandle, InteractionLane, LocalPayloadTarget, MouseEnterCallback,
-    MouseExitCallback, MouseHoverCallback, MouseRegionCallbacks, MouseRegionTarget, PanZoomTarget,
-    PathClipTarget, PointerDispatch, PointerTarget, ResolvedRouteToken, RoutePanic,
-    RouteResolution, RouteResolutionMiss, ScrollTarget, ShaderMaskTarget, resolve_local_payload,
-    resolve_path_clip_target, resolve_shader_mask_target,
+    MouseExitCallback, MouseHoverCallback, MouseRegionCallbacks, MouseRegionTarget,
+    PanZoomDispatch, PanZoomTarget, PathClipTarget, PointerDispatch, PointerTarget,
+    ResolvedRouteToken, RoutePanic, RouteResolution, RouteResolutionMiss, ScrollTarget,
+    ShaderMaskTarget, resolve_local_payload, resolve_path_clip_target, resolve_shader_mask_target,
 };
 pub use mouse_tracker::{
     CursorChangeCallback, DeviceId, MouseTracker, MouseTrackerAnnotation, PointerMotionKind,

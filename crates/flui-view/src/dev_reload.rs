@@ -165,7 +165,18 @@ pub trait DevReloadHook: Send + 'static {
     /// ```compile_fail,E0133
     /// use flui_view::dev_reload::DevReloadHook;
     /// fn render_frame(hook: &mut dyn DevReloadHook) {
+    ///     // SAFETY: this callback retains no plugin-backed data.
     ///     hook.scene_frame(100.0, 100.0, &mut |_scene, _reset_fonts| true);
+    /// }
+    /// ```
+    ///
+    /// A caller meeting the payload lifetime contract acknowledges it explicitly:
+    ///
+    /// ```
+    /// use flui_view::dev_reload::DevReloadHook;
+    /// fn render_frame(hook: &mut dyn DevReloadHook) {
+    ///     // SAFETY: this callback retains no plugin-backed data.
+    ///     unsafe { hook.scene_frame(100.0, 100.0, &mut |_scene, _reset_fonts| true); }
     /// }
     /// ```
     #[expect(unsafe_code, reason = "plugin payload lifetime is a caller obligation")]

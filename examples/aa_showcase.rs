@@ -16,8 +16,15 @@
 //! White-on-dark so the boundary band is easy to inspect (zoom in on the 45° rect
 //! and the star tips). Run with: `cargo run --example aa_showcase`.
 
+#[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
 use flui_app::{AppConfig, run_direct};
 
+#[cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))]
+fn main() {
+    eprintln!("This example requires a desktop platform.");
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
 fn main() -> anyhow::Result<()> {
     run_direct(
         AppConfig::new()

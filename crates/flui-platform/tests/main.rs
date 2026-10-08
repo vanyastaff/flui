@@ -23,8 +23,6 @@ mod android_exit_path;
 mod contract;
 #[path = "file_store.rs"]
 mod file_store;
-#[path = "input_vocabulary.rs"]
-mod input_vocabulary;
 #[path = "preferences.rs"]
 mod preferences;
 #[path = "text_input_mapping.rs"]

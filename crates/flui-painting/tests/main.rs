@@ -16,6 +16,139 @@
 
 #[path = "caret_contract.rs"]
 mod caret_contract;
+
+/// Carets, selection boxes, hit-testing and word boundaries read the layout
+/// that measured and painted (ADR-0092 §10 step 5).
+#[test]
+fn caret_contract() {
+    use caret_contract as cc;
+    run_cases(
+        "caret",
+        &[
+            ("caret_position", cc::caret_position),
+            (
+                "unbounded_breaking_uses_the_minimum_allocated_width",
+                cc::unbounded_breaking_uses_the_minimum_allocated_width,
+            ),
+            (
+                "centered_lines_use_the_tight_allocated_box",
+                cc::centered_lines_use_the_tight_allocated_box,
+            ),
+            (
+                "right_aligned_lines_use_the_tight_allocated_box",
+                cc::right_aligned_lines_use_the_tight_allocated_box,
+            ),
+            (
+                "loose_centered_lines_stay_inside_the_measured_box",
+                cc::loose_centered_lines_stay_inside_the_measured_box,
+            ),
+            (
+                "unbounded_centered_lines_align_without_wrapping",
+                cc::unbounded_centered_lines_align_without_wrapping,
+            ),
+            (
+                "rtl_start_aligns_each_line_right",
+                cc::rtl_start_aligns_each_line_right,
+            ),
+            (
+                "rtl_end_aligns_each_line_left",
+                cc::rtl_end_aligns_each_line_left,
+            ),
+            (
+                "native_rtl_lines_center_in_the_allocated_box",
+                cc::native_rtl_lines_center_in_the_allocated_box,
+            ),
+            (
+                "native_rtl_lines_align_to_the_right_edge",
+                cc::native_rtl_lines_align_to_the_right_edge,
+            ),
+            (
+                "a_last_kept_soft_line_retains_native_justification",
+                cc::a_last_kept_soft_line_retains_native_justification,
+            ),
+            (
+                "trailing_whitespace_does_not_shift_visible_alignment",
+                cc::trailing_whitespace_does_not_shift_visible_alignment,
+            ),
+            (
+                "justification_expands_soft_lines_but_not_the_final_line",
+                cc::justification_expands_soft_lines_but_not_the_final_line,
+            ),
+            (
+                "justification_leaves_hard_break_lines_unstretched",
+                cc::justification_leaves_hard_break_lines_unstretched,
+            ),
+            (
+                "alignment_change_replaces_cached_positions",
+                cc::alignment_change_replaces_cached_positions,
+            ),
+            (
+                "ellipsized_lines_align_only_the_kept_text",
+                cc::ellipsized_lines_align_only_the_kept_text,
+            ),
+            (
+                "two_space_run_word_boundary",
+                cc::two_space_run_word_boundary,
+            ),
+            (
+                "byte_offsets_snap_backward_and_clamp_at_the_text_end",
+                cc::byte_offsets_snap_backward_and_clamp_at_the_text_end,
+            ),
+            (
+                "a_combining_mark_is_one_hit_target",
+                cc::a_combining_mark_is_one_hit_target,
+            ),
+            (
+                "a_zwj_family_is_one_hit_target",
+                cc::a_zwj_family_is_one_hit_target,
+            ),
+            (
+                "rtl_paragraph_carets_run_right_to_left",
+                cc::rtl_paragraph_carets_run_right_to_left,
+            ),
+            (
+                "mixed_bidi_boxes_carry_their_run_direction",
+                cc::mixed_bidi_boxes_carry_their_run_direction,
+            ),
+            (
+                "a_trailing_newline_puts_the_caret_on_the_empty_line",
+                cc::a_trailing_newline_puts_the_caret_on_the_empty_line,
+            ),
+            (
+                "crlf_is_one_break_for_carets",
+                cc::crlf_is_one_break_for_carets,
+            ),
+            (
+                "multi_line_selection_boxes_follow_their_line",
+                cc::multi_line_selection_boxes_follow_their_line,
+            ),
+            (
+                "carets_sit_on_the_painted_glyphs",
+                cc::carets_sit_on_the_painted_glyphs,
+            ),
+            (
+                "a_soft_wrap_caret_follows_its_affinity",
+                cc::a_soft_wrap_caret_follows_its_affinity,
+            ),
+            (
+                "truncated_carets_stay_in_kept_lines",
+                cc::truncated_carets_stay_in_kept_lines,
+            ),
+            (
+                "truncated_text_without_an_ellipsis_stays_in_its_kept_line",
+                cc::truncated_text_without_an_ellipsis_stays_in_its_kept_line,
+            ),
+            (
+                "line_metrics_index_each_line",
+                cc::line_metrics_index_each_line,
+            ),
+            (
+                "a_lam_alef_ligature_is_one_glyph_and_two_caret_stops",
+                cc::a_lam_alef_ligature_is_one_glyph_and_two_caret_stops,
+            ),
+        ],
+    );
+}
 #[path = "support/cases.rs"]
 mod cases;
 #[path = "color_blend.rs"]
@@ -155,6 +288,54 @@ fn value_contract() {
     run_cases(
         "value",
         &[
+            (
+                "radial_overshoot_refuses_coincident_nonzero_circles",
+                values::radial_overshoot_refuses_coincident_nonzero_circles,
+            ),
+            (
+                "gradient_geometry_rejects_invalid_inputs_before_equal_shortcuts",
+                values::gradient_geometry_rejects_invalid_inputs_before_equal_shortcuts,
+            ),
+            (
+                "gradient_geometry_checks_intermediate_and_output_overflow",
+                values::gradient_geometry_checks_intermediate_and_output_overflow,
+            ),
+            (
+                "gradient_packing_preserves_extrapolated_geometry",
+                values::gradient_packing_preserves_extrapolated_geometry,
+            ),
+            (
+                "decoration_gradient_falls_back_after_bounds_scaling",
+                values::decoration_gradient_falls_back_after_bounds_scaling,
+            ),
+            (
+                "decoration_gradient_centers_fall_back_after_bounds_scaling",
+                values::decoration_gradient_centers_fall_back_after_bounds_scaling,
+            ),
+            (
+                "decoration_silhouette_and_terminal_fallback",
+                values::decoration_silhouette_and_terminal_fallback,
+            ),
+            (
+                "decoration_endpoint_ramp_preserves_stop_limit",
+                values::decoration_endpoint_ramp_preserves_stop_limit,
+            ),
+            (
+                "decoration_linear_overshoot_resolves_in_small_box",
+                values::decoration_linear_overshoot_resolves_in_small_box,
+            ),
+            (
+                "gradient_domains_keep_zero_radii_and_signed_angles",
+                values::gradient_domains_keep_zero_radii_and_signed_angles,
+            ),
+            (
+                "gradient_geometry_preserves_overshoot",
+                values::gradient_geometry_preserves_overshoot,
+            ),
+            (
+                "decoration_gradient_geometry_preserves_overshoot",
+                values::decoration_gradient_geometry_preserves_overshoot,
+            ),
             (
                 "negative_linear_stops_are_rejected",
                 values::negative_linear_stops_are_rejected,
@@ -392,139 +573,6 @@ fn text_contract() {
             (
                 "bidirectional_text_lays_out",
                 rich_text_example::example_bidirectional_text,
-            ),
-        ],
-    );
-}
-
-/// Carets, selection boxes, hit-testing and word boundaries read the layout
-/// that measured and painted (ADR-0092 §10 step 5).
-#[test]
-fn caret_contract() {
-    use caret_contract as cc;
-    run_cases(
-        "caret",
-        &[
-            ("caret_position", cc::caret_position),
-            (
-                "unbounded_breaking_uses_the_minimum_allocated_width",
-                cc::unbounded_breaking_uses_the_minimum_allocated_width,
-            ),
-            (
-                "centered_lines_use_the_tight_allocated_box",
-                cc::centered_lines_use_the_tight_allocated_box,
-            ),
-            (
-                "right_aligned_lines_use_the_tight_allocated_box",
-                cc::right_aligned_lines_use_the_tight_allocated_box,
-            ),
-            (
-                "loose_centered_lines_stay_inside_the_measured_box",
-                cc::loose_centered_lines_stay_inside_the_measured_box,
-            ),
-            (
-                "unbounded_centered_lines_align_without_wrapping",
-                cc::unbounded_centered_lines_align_without_wrapping,
-            ),
-            (
-                "rtl_start_aligns_each_line_right",
-                cc::rtl_start_aligns_each_line_right,
-            ),
-            (
-                "rtl_end_aligns_each_line_left",
-                cc::rtl_end_aligns_each_line_left,
-            ),
-            (
-                "native_rtl_lines_center_in_the_allocated_box",
-                cc::native_rtl_lines_center_in_the_allocated_box,
-            ),
-            (
-                "native_rtl_lines_align_to_the_right_edge",
-                cc::native_rtl_lines_align_to_the_right_edge,
-            ),
-            (
-                "a_last_kept_soft_line_retains_native_justification",
-                cc::a_last_kept_soft_line_retains_native_justification,
-            ),
-            (
-                "trailing_whitespace_does_not_shift_visible_alignment",
-                cc::trailing_whitespace_does_not_shift_visible_alignment,
-            ),
-            (
-                "justification_expands_soft_lines_but_not_the_final_line",
-                cc::justification_expands_soft_lines_but_not_the_final_line,
-            ),
-            (
-                "justification_leaves_hard_break_lines_unstretched",
-                cc::justification_leaves_hard_break_lines_unstretched,
-            ),
-            (
-                "alignment_change_replaces_cached_positions",
-                cc::alignment_change_replaces_cached_positions,
-            ),
-            (
-                "ellipsized_lines_align_only_the_kept_text",
-                cc::ellipsized_lines_align_only_the_kept_text,
-            ),
-            (
-                "two_space_run_word_boundary",
-                cc::two_space_run_word_boundary,
-            ),
-            (
-                "byte_offsets_snap_backward_and_clamp_at_the_text_end",
-                cc::byte_offsets_snap_backward_and_clamp_at_the_text_end,
-            ),
-            (
-                "a_combining_mark_is_one_hit_target",
-                cc::a_combining_mark_is_one_hit_target,
-            ),
-            (
-                "a_zwj_family_is_one_hit_target",
-                cc::a_zwj_family_is_one_hit_target,
-            ),
-            (
-                "rtl_paragraph_carets_run_right_to_left",
-                cc::rtl_paragraph_carets_run_right_to_left,
-            ),
-            (
-                "mixed_bidi_boxes_carry_their_run_direction",
-                cc::mixed_bidi_boxes_carry_their_run_direction,
-            ),
-            (
-                "a_trailing_newline_puts_the_caret_on_the_empty_line",
-                cc::a_trailing_newline_puts_the_caret_on_the_empty_line,
-            ),
-            (
-                "crlf_is_one_break_for_carets",
-                cc::crlf_is_one_break_for_carets,
-            ),
-            (
-                "multi_line_selection_boxes_follow_their_line",
-                cc::multi_line_selection_boxes_follow_their_line,
-            ),
-            (
-                "carets_sit_on_the_painted_glyphs",
-                cc::carets_sit_on_the_painted_glyphs,
-            ),
-            (
-                "a_soft_wrap_caret_follows_its_affinity",
-                cc::a_soft_wrap_caret_follows_its_affinity,
-            ),
-            (
-                "truncated_carets_stay_in_kept_lines",
-                cc::truncated_carets_stay_in_kept_lines,
-            ),
-            (
-                "truncated_text_without_an_ellipsis_stays_in_its_kept_line",
-                cc::truncated_text_without_an_ellipsis_stays_in_its_kept_line,
-            ),
-            (
-                "line_metrics_index_each_line",
-                cc::line_metrics_index_each_line,
-            ),
-            (
-                "a_lam_alef_ligature_is_one_glyph_and_two_caret_stops",
-                cc::a_lam_alef_ligature_is_one_glyph_and_two_caret_stops,
             ),
         ],
     );

@@ -115,7 +115,7 @@ pub mod prelude {
     // Arity system
     // Re-export RenderId from flui_foundation
     pub use flui_foundation::{RenderId, SemanticsId};
-    pub use flui_interaction::{HitTestBehavior, HitTestEntry, HitTestResult, HitTestTarget};
+    pub use flui_interaction::{HitTestBehavior, HitTestEntry, HitTestResult};
     // Re-export commonly used value types
     pub use flui_foundation::geometry::{Offset, Point, RRect, Rect, Size};
 
@@ -139,9 +139,7 @@ pub mod prelude {
     // `BoxProtocol`/`SliverProtocol` (see lib.rs protocol prelude).
     // `PointerEventKind` was dropped alongside the deletion of the
     // rendering-side `target.rs` module; canonical pointer-event types
-    // live in `flui_interaction::events` (re-exported at line 82 via
-    // `flui_interaction::{HitTestTarget, ...}`).
-    pub use crate::hit_testing::MatrixTransformPart;
+    // live in `flui_interaction::events`.
     // Render hit-test metadata; executable tracking remains owned by the
     // presentation's interaction runtime.
     pub use crate::hit_testing::{CursorIcon, MouseTrackerAnnotation};

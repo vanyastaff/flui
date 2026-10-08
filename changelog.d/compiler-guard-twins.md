@@ -1,0 +1,22 @@
+### Changed
+
+- Platform contract examples pair failing pointer, storage-name and window implementations with compiling examples that differ only at the guarded line.
+- The SDK runtime-seam privacy guard checks the exact compiler diagnostic alongside compiling public and composition-root paths.
+- Foundation's identifier, frame-stamp and notifier compiler examples have passing companions; frame-stamp documentation describes its current required axes and non-exhaustive construction rules.
+- Generational identifier compiler guards bring `Identifier` into scope so a forbidden trait implementation cannot pass unnoticed.
+- Spring construction and borrowed asset-name compiler examples have passing companions that pin valid constructor and owner-lifetime paths.
+- Clip-token privacy examples reject destructuring without relying on an invalid field type; clip-token and semantics expansion examples have passing companions.
+- Pipeline constructor and phase compiler guards pin exact diagnostics, including a mutable idle caller that cannot mask an exposed paint method.
+- Render-subtree relocation compiler examples pair forbidden token cloning and frame-phase operations with matching move and idle-owner callers.
+- Rendering context, paint-arity, snapshot-phase and layout-callback thread guards have matching valid callers.
+- Local-state thread bounds and element-depth authority guards pin exact compiler diagnostics alongside valid local callers.
+- Lifecycle capability and reload-hook unsafe-call compiler examples have matching valid callers.
+- Private writer minting and the facade's composition-root module pin exact diagnostics; the facade guard checks module visibility independently of its contents.
+- Typed field-mask examples share the same setup, so the passing and failing callers differ only in their selector type.
+- Runtime pipeline thread ownership and private draw-step guards pin exact diagnostics alongside valid local-pipeline and frame-pump callers.
+- Platform owner-thread and hidden-token compiler guards pin exact diagnostics; each retired platform name is checked independently.
+- Diagnostic derive shape and field-attribute compiler examples have matching valid companions.
+- The app's shared-platform window-opening compiler example has a matching valid owner-capability callback.
+- Navigation compiler examples share identical setup for typed route outputs and lifecycle context admission.
+- Renderer thread-trait compiler examples share a valid public-type assertion setup.
+- AppKit tab compiler examples share the same borrowed-window caller setup.

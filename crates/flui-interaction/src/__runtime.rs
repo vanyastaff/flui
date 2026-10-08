@@ -94,6 +94,14 @@ pub fn close_gestures(owner: &crate::GestureBinding, mode: CloseMode) {
     owner.close_with_mode(mode);
 }
 
+/// Install the owning presentation's weak redraw capability for logical capture release.
+pub fn set_pointer_capture_wake(
+    owner: &crate::GestureBinding,
+    window: std::sync::Weak<dyn flui_platform_api::PlatformWindow>,
+) {
+    owner.set_pointer_capture_wake(window);
+}
+
 /// Withdraw mouse publication and callback ownership for a terminal presentation.
 pub fn close_mouse_tracker(owner: &crate::routing::MouseTracker, mode: CloseMode) {
     owner.close_with_mode(mode);

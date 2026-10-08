@@ -97,6 +97,8 @@ flui-testing = { path = "../flui-testing" }
 flui-platform = { path = "../flui-platform", version = "=0.2.0-dev" }
 flui-objects = { path = "../flui-objects", version = "=0.2.0-dev" }
 static_assertions = { workspace = true }
+# Exact diagnostics for owner-thread and frame-entry boundaries.
+trybuild = { workspace = true }
 # A semantics agent's read round-trips through JSON in its tests.
 flui-protocol = { workspace = true, features = ["serde"] }
 serde_json = { workspace = true }

@@ -320,6 +320,14 @@ pub(crate) struct CloseRequestRouter {
 pub(crate) struct PreparedCloseRequest(PresentationCloseEntry);
 
 impl PreparedCloseRequest {
+    #[cfg(any(
+        test,
+        all(
+            not(target_os = "android"),
+            not(target_os = "ios"),
+            not(target_arch = "wasm32")
+        )
+    ))]
     pub(crate) fn new(
         address: PresentationAddress,
         window: &Arc<dyn PlatformWindow>,

@@ -10,7 +10,7 @@
 
 use std::{sync::LazyLock, time::Instant};
 
-use ui_events::pointer::{PointerId, PointerInfo, PointerType};
+use flui_platform_api::pointer::{PointerId, PointerInfo, PointerKind, PointerRole};
 
 /// Process-start epoch for monotonic event timestamps.
 static PROCESS_START: LazyLock<Instant> = LazyLock::new(Instant::now);
@@ -18,9 +18,7 @@ static PROCESS_START: LazyLock<Instant> = LazyLock::new(Instant::now);
 /// Get monotonic timestamp in nanoseconds since process start.
 #[inline]
 pub fn event_timestamp_ns() -> u64 {
-    // Upstream ui-events documents PointerState.time as NANOSECONDS
-    // ("u64 nanoseconds real time"); a millisecond stamp here silently
-    // broke the unit for every consumer comparing across devices.
+    // EventTime is nanoseconds; every producer shares this epoch.
     #[expect(clippy::cast_possible_truncation)] // ~584 years of nanoseconds fit u64
     {
         PROCESS_START.elapsed().as_nanos() as u64
@@ -31,9 +29,9 @@ pub fn event_timestamp_ns() -> u64 {
 #[inline]
 #[must_use]
 pub fn primary_mouse_info() -> PointerInfo {
-    PointerInfo {
-        pointer_id: Some(PointerId::PRIMARY),
-        pointer_type: PointerType::Mouse,
-        persistent_device_id: None,
-    }
+    PointerInfo::new(
+        PointerId::try_from(1_u64).expect("BUG: primary mouse identity is nonzero"),
+        PointerKind::Mouse,
+    )
+    .with_role(PointerRole::Primary)
 }

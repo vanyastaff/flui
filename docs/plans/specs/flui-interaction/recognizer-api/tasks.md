@@ -1,16 +1,63 @@
 # Распознаватели жестов: API — задачи
 
-- **Статус:** черновик
+- **Статус:** RA0–RA5 интегрированы, RA6 измерена на текущей owned-wire базе; локальный итоговый gate прошёл. CI/merge впереди, I11 отложена отдельно; native ограничения указаны ниже.
 - **Дата:** 2026-10-06
 - **Design:** [design.md](design.md); требования — [requirements.md](requirements.md); волна —
   [../tasks.md](../tasks.md) «Спека `recognizer-api/`»
 - **Старт:** после слияния I1 (`interaction/arena-recognizer-lifecycle`) и I2
   (`interaction/multi-pointer-recognizers`) в `main`, включая поправки C1/C2 (`recognizers/callback_containment.rs`).
   RA1 — после I10. I11 — после RA (меняет поле настроек на `Cell`).
+- **Историческая сверка 2026-10-07:** I1/I2 и C1/C2 уже merged (PR #1474, #1472,
+  #1494, #1500). RA0 подготовлена в интеграционной ветке; I10 реализована локально,
+  lifecycle/property проверки зелёные, итоговый gate и PR ещё впереди. RA1 начата
+  после публичных красных тестов слабого владения и дедлайнов. Слабое владение,
+  обновление `Weak` перед каждым уведомлением и изоляция запросов дедлайна проверены
+  runtime-прогоном `62f61d8c-4f84-4097-9dd3-82532f9bb86a`; единственный красный
+  тест этого прогона относится к вложенному закрытию фокуса. Удержание текущего
+  последнего владельца уведомления доказано откатом `retain` в прогоне
+  `1d9c331f-b05d-4732-bdff-996310af987c` (освобождение 1 вместо 0), затем хунк восстановлен.
+  RA2/RA3 и механическая граница вызовов интегрируются атомарно без совместимого
+  второго трейта. Новые публичные строки до появления API хранятся невключёнными;
+  отсутствие API не считается доказательством поведения.
+  Перед baseline RA0 исправляет повторное использование permanently-disposed
+  распознавателя в `tap_detector_bench`: иначе после первой итерации измеряется
+  отказ допуска вместо жеста.
+- **Порядок compiler-проверок:** на базе RA0 существует только
+  `recognizer_stays_on_its_thread`. Builder и `RecognizerSet` появляются в RA2,
+  поэтому их фикстуры добавляются в RA0, но включаются в harness после появления
+  типов. E0432/E0599 от отсутствующего API не считается доказательством `!Send`;
+  после RA2 обе фикстуры должны отказать с E0277 на передаче значения в поток.
+- **Baseline:** исправленный tap-бенч проверяет реальные контакты и три callback
+  вместо повторного использования disposed-объекта. `static` tap и arena baseline
+  сохранены на том же хосте/toolchain для сравнения в RA6. `recognizer_stays_on_its_thread`
+  выдаёт E0277; dyn-compatible fixture пока выдаёт ожидаемый E0038. Direct arena-member
+  fixture включена для проверки снятия маркера. Ни один ожидаемо красный compiler-контракт
+  не объявляется готовой реализацией API.
 - **Итог:** 11 задач (RA3 — пять `[P]`), ≈ 15 инженеро-дней; критический путь RA0 → RA1 → RA2 → RA3 (самая
   длинная, 1,5) → RA4 → RA5 → RA6 ≈ 10 рабочих дней.
 
 ## Правила исполнения
+
+Сверка реализации 2026-10-08 на базе `5f28646ad`: builder до `Rc`, dyn-compatible
+extension points, weak arena members, `RecognizerSet` и production-вызовы через
+`Listener` интегрированы. Ложные sealed/legacy extension слои удалены; lasting
+решение — ADR-0161. `trybuild_ui` проверяет три `!Send` отказа E0277 и два успешных
+extension-контракта. В `crates/flui-interaction/docs/PERFORMANCE.md` сохранены
+исторические ownership-измерения и окончательные CPU-pinned owned-wire результаты:
+33 BEFORE/AFTER пары, шесть AFTER-only cases и отдельный свежий paired estimate run.
+Сравнение owned strong-resolution и borrowed weak-resolution включает разные
+контракты публичного вызова; whole RecognizerSet sequence включает admission и
+failure containment, поэтому изолированная цена Rc/Arc или virtual dispatch не заявляется.
+Регрессии больше 10% объяснены, исходные timings не перезаписаны.
+
+`cargo xtask check-changed --base d6ad274194483c6d1bc100f9a14d42e3890b6c0e`
+завершился exit 0 на `5f28646ad`: strict clippy, driver 46/46, workspace 793/793
+(62 skipped), strict rustdoc и workspace doctests, Windows required-feature
+all-targets, wasm workspace/facade и platform trybuild прошли. Классифицированный
+план не запускал cargo-hack matrix каждого feature. macOS без cargo-zigbuild,
+iOS без Apple SDK, Android без NDK и Linux native execution без Linux/xvfb
+пропущены; более ранняя узкая cross-compilation не заменяет аппаратное выполнение.
+CI ещё не опубликован, merge не выполнен. I11/LY8 здесь не закрываются.
 
 - Интеграционная ветка `interaction/recognizer-api` (worktree `cargo xtask worktree new
   interaction/recognizer-api`), один PR в `main`. Подзадачи — ветки от неё, PR в неё; слияние squash.
@@ -70,7 +117,7 @@ cargo bench -p flui-interaction --bench tap_detector_bench -- --baseline before
 cargo bench -p flui-interaction --bench gesture_arena_bench -- --baseline before
 ```
 
-Строки «до» для `/dyn` и `/weak` на базе отсутствуют по смыслу (сегодня `dyn GestureRecognizer`
+Строки «до» для `/dyn` и `/weak` на BEFORE-базе отсутствуют по смыслу (там `dyn GestureRecognizer`
 невозможен, участник — сильный `Arc<dyn>`): сравниваются `static` до/после (цена `Rc` вместо `Arc` и
 `Cell` вместо атомиков), `/dyn` против `static` после (цена набора) и `resolve/weak` после против
 `resolve/strong` до.

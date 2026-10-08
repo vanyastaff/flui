@@ -24,17 +24,17 @@
 use std::any::Any;
 use std::rc::Rc;
 
-use flui_interaction::events::{Key, KeyEvent, NamedKey};
 use flui_interaction::routing::{FocusNode, KeyEventResult};
 use flui_platform_api::TargetPlatform;
+use flui_platform_api::keyboard::{Key, KeyEvent, KeyRepeat, KeyState, Modifiers, NamedKey};
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use flui_view::{EventCx, EventOutcome};
 
 use super::actions::{
-    ActionChainProvider, Actions, ActivateIntent, CopySelectionTextIntent, Intent, NextFocusAction,
-    NextFocusIntent, PasteTextIntent, PreviousFocusAction, PreviousFocusIntent,
-    SelectAllTextIntent, chain_at, resolve,
+    ActionChainProvider, Actions, ActivateIntent, CopySelectionTextIntent, DirectionalFocusAction,
+    DirectionalFocusIntent, Intent, NextFocusAction, NextFocusIntent, PasteTextIntent,
+    PreviousFocusAction, PreviousFocusIntent, SelectAllTextIntent, chain_at, resolve,
 };
 use super::focus::Focus;
 use crate::support::event_callback;
@@ -81,7 +81,7 @@ impl SingleActivator {
     /// An activator for the character `character` produces — `"c"`, `"+"`.
     #[must_use]
     pub fn character(character: impl Into<String>) -> Self {
-        Self::new(Key::Character(character.into()))
+        Self::new(Key::character(character))
     }
 
     /// A character trigger independent of the Shift key needed to produce it.
@@ -145,15 +145,15 @@ impl SingleActivator {
     /// Lock or Shift. The exact Shift check still tells Ctrl+Shift+C apart.
     #[must_use]
     pub fn matches(&self, event: &KeyEvent) -> bool {
-        event.state.is_down()
-            && (self.include_repeats || !event.repeat)
+        event.state() == KeyState::Down
+            && (self.include_repeats || event.repeat() == KeyRepeat::First)
             && trigger_matches(&self.trigger, &event.key)
-            && event.modifiers.ctrl() == self.control
+            && event.modifiers.contains(Modifiers::CONTROL) == self.control
             && self
                 .shift
-                .is_none_or(|required| event.modifiers.shift() == required)
-            && event.modifiers.alt() == self.alt
-            && event.modifiers.meta() == self.meta
+                .is_none_or(|required| event.modifiers.contains(Modifiers::SHIFT) == required)
+            && event.modifiers.contains(Modifiers::ALT) == self.alt
+            && event.modifiers.contains(Modifiers::META) == self.meta
     }
 }
 
@@ -161,6 +161,8 @@ impl SingleActivator {
 fn trigger_matches(trigger: &Key, pressed: &Key) -> bool {
     match (trigger, pressed) {
         (Key::Character(trigger), Key::Character(pressed)) => {
+            let trigger = trigger.as_str();
+            let pressed = pressed.as_str();
             trigger == pressed
                 || (trigger.len() == 1
                     && trigger.bytes().all(|byte| byte.is_ascii_alphabetic())
@@ -413,9 +415,9 @@ impl ViewState<Shortcuts> for ShortcutsState {
 /// The application root is where these bindings are meant to be installed.
 /// Numpad Enter reaches FLUI as the
 /// same logical `Enter`, so one binding covers both; `GameButtonA` has no
-/// logical key in FLUI's key model and is not bound. The arrow-key
-/// directional traversal and `Escape` → dismiss bindings are not installed
-/// yet.
+/// logical key in FLUI's key model and is not bound. Unmodified arrows move
+/// geometrically after the focused control declines them; `Escape` → dismiss
+/// bindings are not installed yet.
 ///
 /// A clipboard chord resolves at the primary focus like every other binding
 /// here: an `EditableText` answers it on its own node, and with no text field
@@ -557,6 +559,20 @@ impl ViewState<DefaultFocusTraversal> for DefaultFocusTraversalState {
             .shortcut(SingleActivator::character(" "), ActivateIntent)
             .shortcut(SingleActivator::named(NamedKey::Select), ActivateIntent)
             .shortcut(command_activator(self.platform, "a"), SelectAllTextIntent);
+        for (key, direction) in [
+            (NamedKey::ArrowUp, flui_interaction::FocusDirection::Up),
+            (NamedKey::ArrowDown, flui_interaction::FocusDirection::Down),
+            (NamedKey::ArrowLeft, flui_interaction::FocusDirection::Left),
+            (
+                NamedKey::ArrowRight,
+                flui_interaction::FocusDirection::Right,
+            ),
+        ] {
+            shortcuts = shortcuts.shortcut(
+                SingleActivator::named(key),
+                DirectionalFocusIntent(direction),
+            );
+        }
         for (activator, binding) in clipboard_activators(self.platform) {
             shortcuts = match binding {
                 ClipboardBinding::Copy => {
@@ -570,7 +586,8 @@ impl ViewState<DefaultFocusTraversal> for DefaultFocusTraversalState {
         }
         Actions::new(shortcuts)
             .action(NextFocusAction::new(Rc::clone(&focus_owner)))
-            .action(PreviousFocusAction::new(focus_owner))
+            .action(PreviousFocusAction::new(Rc::clone(&focus_owner)))
+            .action(DirectionalFocusAction::new(focus_owner))
     }
 }
 

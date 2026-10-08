@@ -43,8 +43,17 @@ windows = { workspace = true, features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 
+[dev-dependencies]
+# Authoritative source for the generated owned key vocabulary.
+keyboard-types.workspace = true
+
 [lints]
 workspace = true
+
+# The key-vocabulary generator reads keyboard-types source files through Cargo
+# metadata instead of importing its Rust types. It remains a pinned input.
+[package.metadata.cargo-shear]
+ignored = ["keyboard-types"]
 
 [package.metadata.flui]
 tier-kind = "tool"

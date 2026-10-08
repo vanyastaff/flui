@@ -13,21 +13,21 @@ instantiations are the device-pixel grid (`DevicePoint`, `DeviceSize`, `DeviceRe
 lives here too: `snap`, `snap_point`, `snap_edges`, `cover`, `device_rect_covering`,
 `device_size` and `resolve_stroke_width`; the engine decides where they apply.
 
-Floating `Point::midpoint` and its `Line::midpoint` delegate average through
+Floating `Point::midpoint` averages through
 `FloatUnit::midpoint`: `f32` and `f64` use their native standard-library operation,
 so same-sign finite extremes do not overflow and subnormals retain native rounding.
 The trait default uses the existing `f64` conversions for custom scalar implementations.
 NaN operands and opposite infinities produce NaN in the affected coordinate;
 equal infinities keep their sign. Integer geometry does not expose midpoint.
 The public family `floating_geometry_midpoints_preserve_the_scalar_range`
-checks these boundaries through points and lines.
+checks these boundaries through points.
 
 Point distances convert each coordinate to `f64` before subtraction, matching
 their returned scalar. Thus a distance between finite `f32` endpoints can exceed
 `f32::MAX` while remaining finite, including the squared result. `f64` differences
 and squared results can still exceed their representable range. The public family
 `single_precision_geometry_distances_use_double_precision_range` checks point
-distances and their line-length delegates against exact power-of-two results.
+distances against exact power-of-two results.
 
 `Circle::contains` and `Circle::contains_strict` compare the `hypot` distance
 `Point::distance` with the radius rather than squaring both sides, which
@@ -41,7 +41,7 @@ Vector normalization refuses non-finite components and preserves its existing
 magnitude, scaling before `hypot` preserves their unit direction instead of
 returning zero. `vector_normalization_keeps_finite_directions_and_refuses_invalid_input`
 checks ordinary and extreme vectors, fallback admission, and the actual
-`Line::direction` and `Circle::nearest_point` consumers. Endpoint subtraction
+`Circle::nearest_point` consumer. Endpoint subtraction
 and other vector operations retain their own floating-point range limits. `Offset::normalize`
 delegates to the same `Vec2` policy, including zero and near-zero refusal and
 non-finite components returning zero. Infinite offsets previously produced NaN
@@ -317,18 +317,7 @@ destruction cannot call user code. Other dynamic payload types remain retained;
 callback snapshot retention and recovery ordering are unchanged.
 
 
-## Circle intersections require a computed line direction
-
-`Circle::intersect_line` treats its input as an infinite line, not an endpoint
-segment. A computed squared direction of zero returns `None`, including coincident
-endpoints and directions whose squared magnitude underflows to zero. Dividing
-by that zero previously reported NaN intersections. Ordinary crossings, tangents
-and misses retain their quadratic calculation; no wider-range quadratic solution
-is promised. Public family `circle_line_intersection_requires_a_computed_direction`
-checks refusals followed by a healthy crossing and intersections outside the
-endpoint segment.
-
-### `Matrix4::lerp` decomposes in `f64` and borrows orientation for a collapsed axis
+## `Matrix4::lerp` decomposes in `f64` and borrows orientation for a collapsed axis
 
 [ADR-0149](../../docs/adr/ADR-0149-interpolation-contracts.md) item 3.
 `Matrix4::lerp` does its own decomposition (`geometry/matrix4_decompose.rs`)

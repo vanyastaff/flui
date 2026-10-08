@@ -25,6 +25,22 @@ An explicitly configured caret height remains a logical length. Mount/update
 equivalence and restoration of glyph/caret geometry are pinned by
 `inherited_text_sizing_updates_editable_glyphs_and_caret`.
 
+## Accessibility of hidden retained children
+
+`Visibility::maintain_size` preserves layout while hidden, with child semantics
+excluded by default. `maintain_semantics` explicitly retains accessibility and
+requires `maintain_size`, so the retained child keeps its normal geometry.
+Pointer interactivity and focus remain independently configured. The composed
+`VisibilityGate` forwards retention to `RenderVisibility`'s existing child
+visitation hook; it also provides the same default and opt-in when used directly.
+No global rule ties paint suppression to semantics suppression.
+
+`retained_visibility_hides_child_semantics_by_default` pins the visible premise
+and hidden default in the assembled a11y tree.
+`retained_visibility_updates_semantics_without_changing_layout` updates a
+mounted widget through visible, hidden and explicitly retained configurations,
+asserting the child's accessibility label and unchanged allocated size.
+
 ## Overlay entry identity admission
 
 Overlay entry allocation admits the final nonzero identity once and then refuses
@@ -2145,6 +2161,64 @@ scrollables driving one position. The public rows
 `retiring_one_scrollable_preserves_a_later_owners_jump_hook` exercise virtual
 frames, retired-controller commands and a shared-controller detach.
 
+
+### Wheel precision selects local animation policy
+
+`Scrollable` applies `Precise` and `Unknown` wheel packets immediately, stopping
+the previous synthetic trajectory once. A `Notched` packet uses the existing
+animation controller for a 150 ms ease-out. Repeated accepted ticks add to the
+committed outstanding destination, then animate from the displayed pixels;
+restarting does not discard unfinished distance. Accepted motion identity is
+committed before activity callbacks, so reentry cannot let an older handler
+overwrite newer work. A current drag, controller replacement or unmount retires
+that owner's motion. Independent presentations use their own clock and state.
+
+This is an authored local default. There is no wired `SystemPreferences` or
+duration-scale producer supplying this scroll policy. Ambient vsync remains
+required for animated progress. Public rows
+`notched_wheel_accumulates_distance_and_eases_out_in_150ms`,
+`precise_and_unknown_wheels_interrupt_synthetic_motion_once`,
+`replacing_or_unmounting_a_scrollable_retires_its_notched_motion` and
+`dragging_interrupts_notched_motion_and_windows_progress_independently` pin
+distance, interruption, retirement and independent-clock behavior.
+
+Win32 packet distance alone does not establish a device's physical notch
+capability. Microsoft documents smaller-than-120 wheel messages for finer
+resolution in [WM_MOUSEWHEEL](https://learn.microsoft.com/en-us/windows/win32/inputdev/wm-mousewheel).
+The native adapter marks observed nonzero fractional wheel units `Precise`;
+integral and zero packets remain `Unknown`. Known backend classification can
+produce `Notched`, including Winit's `LineDelta`. The platform contract row
+`fractional_native_wheel_packets_preserve_observed_precision_and_source` drives
+actual queued messages through an owned hidden HWND, preserving source metadata
+and signed units with fractional packets and an integral unknown control.
+
+### Remaining touch contacts retain scroll drag ownership
+
+`Scrollable` explicitly selects `DragPointerStrategy::ContinueWithRemaining`
+on its actual `GestureDetector`. Lifting the current touch while another
+admitted touch remains rebaselines the drag rather than emitting an intermediate
+release or fling. The final release uses that surviving contact's measured
+motion. Other `GestureDetector` consumers keep their selected policy. The public
+row `a_remaining_touch_continues_scroll_without_an_intermediate_fling` observes
+continued pixels before final release and subsequent ballistic progress.
+
+### Nested ballistic transfer belongs to the accepted run
+
+[ADR-0169](../../docs/adr/ADR-0169-nested-scroll-ballistic-handoff.md) records the
+physics, animation and mounted-owner boundary. Clamping physics obtains the
+remaining hard-edge velocity from the existing friction simulation. The exact
+run continuation visits the nearest live same-axis willing parent, preserving
+reversal and each parent's actual physics. A bouncing parent can accept motion
+at its extent; a saturated clamping parent is traversed. Replacement, unmount,
+supersession and accepted controller commands retire old delivery authority.
+Owner-local default physics retains identity across ordinary configuration
+rebuilds; explicit physics retains the caller's identity contract.
+
+The nested fling rows in `scroll_physics_and_activity` cover both axes, reversal,
+local bounce, nearest willing parent, same-controller rebuild, replacement,
+equal-edge cancellation, custom physics callback/retirement competition and
+fresh gesture recovery. Pixel listener failures follow the notifier's existing
+diagnostic contract rather than implying frame-pump propagation.
 
 ### Accepted gesture cancellation does not commit a release action
 

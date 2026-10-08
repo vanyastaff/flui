@@ -14,7 +14,7 @@ use flui_foundation::geometry::{Bounds, Offset, Point, Rect};
 use flui_foundation::notifier::Listenable;
 use flui_interaction::PointerDispatch;
 use flui_interaction::events::PointerEventExt;
-use flui_interaction::events::{Key, KeyState, Modifiers, NamedKey, PointerId};
+use flui_interaction::events::PointerId;
 use flui_interaction::routing::{
     FocusAttachment, FocusManager, FocusNode, FocusNodeRegistration, KeyEventHandler,
     KeyEventResult, RectProvider,
@@ -26,6 +26,7 @@ use flui_painting::{
     typography::{TextDirection, TextSpan, TextStyle},
 };
 use flui_platform_api::TargetPlatform;
+use flui_platform_api::keyboard::{Key, KeyRepeat, KeyState, Modifiers, NamedKey};
 use flui_platform_api::text_store::OwnerCalls;
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::pipeline::PipelineCell;
@@ -855,6 +856,12 @@ impl EditableTextState {
             let drag_anchor = Rc::clone(&drag_anchor);
             let commit = self.composition_commit();
             move |_cx: &mut EventCx<'_>, dispatch: PointerDispatch<'_>| {
+                let flui_interaction::PointerEvent::Down(press) = dispatch.global else {
+                    return;
+                };
+                let Some(position) = dispatch.global.position() else {
+                    return;
+                };
                 if !enabled || drag_anchor.get().is_some() {
                     return;
                 }
@@ -864,11 +871,11 @@ impl EditableTextState {
                 // disablement, controller replacement or cancel retires it,
                 // which the identity check below sees. The anchor is resolved
                 // again once the commit has laid the text out as committed.
-                let Some(provisional) = resolve(dispatch.global.position()) else {
+                let Some(provisional) = resolve(position) else {
                     return;
                 };
                 let admitted = SelectionDrag {
-                    contact: flui_interaction::events::extract_pointer_id(dispatch.global),
+                    contact: press.pointer.id,
                     source_anchor: provisional,
                 };
                 drag_anchor.set(Some(admitted));
@@ -882,7 +889,7 @@ impl EditableTextState {
                     if drag_anchor.get() != Some(admitted) {
                         return;
                     }
-                    let Some(offset) = resolve(dispatch.global.position()) else {
+                    let Some(offset) = resolve(position) else {
                         drag_anchor.set(None);
                         return;
                     };
@@ -891,7 +898,7 @@ impl EditableTextState {
                         ..admitted
                     };
                     drag_anchor.set(Some(drag));
-                    focus_node.request_focus();
+                    let _ = focus_node.request_focus();
                     if drag_anchor.get() == Some(drag) {
                         controller.borrow().set_caret_byte_offset(offset);
                     }
@@ -907,10 +914,12 @@ impl EditableTextState {
                 let Some(drag) = drag_anchor.get() else {
                     return;
                 };
-                if flui_interaction::events::extract_pointer_id(dispatch.global) != drag.contact {
+                if flui_interaction::PointerEventExt::pointer_id(dispatch.global)
+                    != Some(drag.contact)
+                {
                     return;
                 }
-                let Some(to) = resolve(dispatch.global.position()) else {
+                let Some(to) = dispatch.global.position().and_then(&resolve) else {
                     return;
                 };
                 // The anchor stays where the drag began; the caret follows the
@@ -928,7 +937,8 @@ impl EditableTextState {
             let drag_anchor = Rc::clone(&drag_anchor);
             move |_: &mut EventCx<'_>, dispatch: PointerDispatch<'_>| {
                 if drag_anchor.get().is_some_and(|drag| {
-                    drag.contact == flui_interaction::events::extract_pointer_id(dispatch.global)
+                    Some(drag.contact)
+                        == flui_interaction::PointerEventExt::pointer_id(dispatch.global)
                 }) {
                     drag_anchor.set(None);
                 }
@@ -938,7 +948,8 @@ impl EditableTextState {
             let drag_anchor = Rc::clone(&drag_anchor);
             move |_: &mut EventCx<'_>, dispatch: PointerDispatch<'_>| {
                 if drag_anchor.get().is_some_and(|drag| {
-                    drag.contact == flui_interaction::events::extract_pointer_id(dispatch.global)
+                    Some(drag.contact)
+                        == flui_interaction::PointerEventExt::pointer_id(dispatch.global)
                 }) {
                     drag_anchor.set(None);
                 }
@@ -1183,7 +1194,7 @@ impl FieldSemanticsActions {
             return;
         }
         if let Some(node) = self.live_node().filter(|node| node.can_request_focus()) {
-            node.request_focus();
+            let _ = node.request_focus();
         }
     }
 
@@ -1963,7 +1974,7 @@ impl ViewState<EditableText> for EditableTextState {
         // A platform that still holds the store (or a grant queued in it)
         // must not reach the controller of a field that is gone.
         if let Some(store) = self.text_store.take() {
-            calls.run(|| store.detach());
+            let _ = calls.run(|| store.detach());
             calls.retire(store);
         }
 
@@ -1980,7 +1991,7 @@ impl ViewState<EditableText> for EditableTextState {
 
         // Detach through the generation-checked lifecycle authority.
         if let Some(attachment) = attachment {
-            calls.run(|| attachment.detach());
+            let _ = calls.run(|| attachment.detach());
         }
         self.parent = None;
 
@@ -2236,8 +2247,10 @@ fn word_jump_modifier(platform: TargetPlatform) -> Modifiers {
 /// be its own new bug.
 #[inline]
 fn is_word_jump_modifier(modifiers: Modifiers, platform: TargetPlatform) -> bool {
-    let command_mask = Modifiers::CONTROL | Modifiers::ALT | Modifiers::META;
-    (modifiers & command_mask) == word_jump_modifier(platform)
+    let required = word_jump_modifier(platform);
+    [Modifiers::CONTROL, Modifiers::ALT, Modifiers::META]
+        .into_iter()
+        .all(|modifier| modifiers.contains(modifier) == required.contains(modifier))
 }
 
 /// Build the key-event handler closure for `controller`.
@@ -2271,7 +2284,7 @@ fn build_key_handler(
         if !focus_node.can_request_focus() {
             return KeyEventResult::Ignored;
         }
-        if event.state != KeyState::Down {
+        if event.state() != KeyState::Down {
             return KeyEventResult::Ignored;
         }
         match &event.key {
@@ -2418,14 +2431,14 @@ fn build_key_handler(
                 // `Down` events, not one Down followed by held state) must
                 // not resubmit on every tick — the key is still consumed
                 // (`Handled`), just without calling the callback again.
-                if !event.repeat {
+                if event.repeat() == KeyRepeat::First {
                     let text = controller.text();
                     drop(controller);
                     writer.write(|cx| callback(cx, &text));
                 }
                 KeyEventResult::Handled
             }
-            Key::Named(_) => KeyEventResult::Ignored,
+            _ => KeyEventResult::Ignored,
         }
     })
 }

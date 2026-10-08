@@ -110,7 +110,11 @@ fn fixture(handled: bool) -> (OwnerHost, PresentationAddress, Effects) {
             } else {
                 "queued key"
             });
-            handled
+            if handled {
+                flui_interaction::KeyEventResult::Handled
+            } else {
+                flui_interaction::KeyEventResult::Ignored
+            }
         }));
     let address = owner
         .publication(owner.prepare_runtime(runtime))

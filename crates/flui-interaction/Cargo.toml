@@ -33,13 +33,10 @@ web-time = { workspace = true }
 # the OS backends (ADR-0082).
 flui-platform-api = { workspace = true }
 
-# UI Events - Cross-platform input event abstraction (W3C compliant)
-ui-events = { workspace = true }
 cursor-icon = { workspace = true }
 
 # Synchronization & Concurrency
 parking_lot = { workspace = true }
-dashmap = { workspace = true }
 
 # Collections (optimized for small sizes)
 smallvec = { workspace = true }
@@ -47,7 +44,6 @@ smallvec = { workspace = true }
 # Logging
 tracing = { workspace = true }
 thiserror = { workspace = true }
-dpi = "0.1.2"
 
 [dev-dependencies]
 # `log_capture::disarm_interest_cache`, which this crate's tracing-capturing
@@ -58,13 +54,13 @@ dpi = "0.1.2"
 # Checkout-only test edge: versionless, so Cargo drops it from the published manifest.
 flui-testing = { path = "../flui-testing" }
 static_assertions = { workspace = true }
+trybuild = { workspace = true }
 # Property tests of the gesture arena and of the velocity and resampling numerics.
 proptest = { workspace = true }
 # Criterion — hot-path regression guards. Benches cover VelocityTracker
 # (per-pointer-move), GestureArena (per-pointer-up), TapGestureRecognizer
 # (per-pointer-event), PointerEventResampler (per-raw-input), and
-# InteractionLane route resolution/invocation. Each follows the workspace
-# benchmark template at `rust-studio/.../templates/benchmark-report.md`.
+# InteractionLane route resolution/invocation.
 criterion = { workspace = true }
 # Bench fixtures use the `make_*_event` test helpers which are gated
 # behind the `testing` feature (they're not part of the release API).
@@ -74,6 +70,11 @@ flui-interaction = { path = ".", features = ["testing"] }
 [[test]]
 name = "interaction_it"
 path = "tests/main.rs"
+
+# Compiler contracts invoke Cargo in a separate test process.
+[[test]]
+name = "compile_fail"
+path = "tests/compile_fail.rs"
 
 # Own target: installs a counting `#[global_allocator]`, which is process-wide.
 [[test]]
@@ -111,7 +112,7 @@ default = []
 testing = []
 
 # Serialize the gesture values (details, velocity, pointer device kind).
-serde = ["dep:serde", "flui-painting/serde"]
+serde = ["dep:serde", "flui-painting/serde", "flui-platform-api/serde"]
 
 [lints]
 workspace = true

@@ -145,7 +145,8 @@ pub(crate) fn redirty_pipeline_root(pipeline_owner: &PipelineCell) {
 /// `assert_not_impl_any!(PipelineCell: Send, Sync)` and
 /// `assert_not_impl_any!(PipelineOwner: Send, Sync)` in
 /// `flui_rendering::pipeline::owner::cell`'s own tests. A clone taken from
-/// this binding cannot cross a thread boundary:
+/// this binding cannot cross a thread boundary. `trybuild_ui::ui_tests` pins
+/// the diagnostic and a valid local caller; this example illustrates it:
 ///
 /// ```compile_fail
 /// use flui_runtime::renderer_binding::RenderingBinding;
@@ -154,10 +155,6 @@ pub(crate) fn redirty_pipeline_root(pipeline_owner: &PipelineCell) {
 /// let binding =
 ///     RenderingBinding::new(flui_rendering::TextContextHandle::standalone());
 /// let pipeline = binding.root_pipeline_owner().clone();
-/// // error[E0277]: `Rc<RefCell<PipelineOwner>>` cannot be sent between
-/// // threads safely -- `PipelineCell` is `!Send` by construction, so this
-/// // never reaches the runtime deadlock the old `Arc<RwLock<_>>` shape
-/// // risked; it fails to compile instead.
 /// std::thread::spawn(move || {
 ///     pipeline.with(|owner| owner.root_id());
 /// });

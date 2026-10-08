@@ -74,7 +74,8 @@ where
                 return Err(anyhow::Error::from(error).context("Failed to create canvas window"));
             }
         };
-        let presentation_window = super::presentation_window(host);
+        let presentation_window =
+            super::presentation_window(host).with_pointer_resampling(config.pointer_resampling);
         let window = Arc::clone(presentation_window.window());
 
         // 2. Shared renderer slot — starts as None, filled async once the WebGPU

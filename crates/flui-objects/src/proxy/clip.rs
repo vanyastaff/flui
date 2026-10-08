@@ -88,13 +88,30 @@ struct ClipSourceMarker;
 /// ```compile_fail
 /// use flui_objects::ClipSourceToken;
 ///
-/// let _ = ClipSourceToken(1);
+/// let ClipSourceToken(..) = ClipSourceToken::fresh();
+/// ```
+///
+/// Minting a token through its public constructor is allowed:
+///
+/// ```
+/// use flui_objects::ClipSourceToken;
+///
+/// let _ = ClipSourceToken::fresh();
 /// ```
 ///
 /// ```compile_fail
 /// use flui_objects::ClipSourceToken;
 ///
 /// let raw = ClipSourceToken::fresh().get();
+/// # let _ = raw;
+/// ```
+///
+/// Cloning a token preserves its opaque identity:
+///
+/// ```
+/// use flui_objects::ClipSourceToken;
+///
+/// let raw = ClipSourceToken::fresh().clone();
 /// # let _ = raw;
 /// ```
 #[derive(Clone)]

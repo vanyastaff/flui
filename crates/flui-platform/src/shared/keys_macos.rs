@@ -33,7 +33,7 @@
 //! `flagsChanged:` today; modifier *state* rides every event's
 //! `modifierFlags` instead.
 
-use keyboard_types::{Code, Key, NamedKey};
+use flui_platform_api::keyboard::{Code, Key, NamedKey};
 
 /// Apple's `kVK_*` virtual keycodes, from Carbon `HIToolbox/Events.h`.
 ///
@@ -393,7 +393,7 @@ pub fn keycode_to_key(key_code: u16) -> Option<Key> {
         // Space types text but its `characters` IS the space — still, keep
         // the historical intercept so the key never depends on the
         // characters path.
-        kvk::SPACE => return Some(Key::Character(" ".to_string())),
+        kvk::SPACE => return Some(Key::character(" ")),
 
         _ => return None,
     };

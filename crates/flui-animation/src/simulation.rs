@@ -331,7 +331,15 @@ impl<S: Simulation + ?Sized> Simulation for Box<S> {
 /// ```compile_fail
 /// use flui_animation::simulation::SpringDescription;
 ///
-/// let spring = SpringDescription { omega: 10.0, zeta: -1.0 }; // private fields
+/// let spring = SpringDescription { omega: 10.0, zeta: -1.0 };
+/// ```
+///
+/// Construction through the validated public constructor compiles:
+///
+/// ```
+/// use flui_animation::simulation::SpringDescription;
+///
+/// let spring = SpringDescription::new(1.0, 100.0, 20.0).unwrap();
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SpringDescription {

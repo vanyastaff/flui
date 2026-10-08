@@ -3,7 +3,7 @@
 //! This crate provides the complete event handling and gesture infrastructure
 //! for FLUI:
 //!
-//! - **EventRouter**: Routes pointer/keyboard events via hit testing
+//! - **GestureBinding**: Routes presentation-owned pointer streams via hit testing
 //! - **HitTest**: Determines which UI elements are under cursor/touch
 //! - **FocusManager**: Manages keyboard focus for one presentation
 //! - **FocusScope**: Groups focusable elements for keyboard navigation
@@ -16,12 +16,11 @@
 //!
 //! This crate makes extensive use of Rust's advanced type system:
 //!
-//! - **Sealed traits**: `HitTestable` and `GestureArenaMember` cannot be
-//!   implemented outside this crate, allowing API evolution without breaking
-//!   changes
+//! - **Open gesture traits**: external recognizers implement the same
+//!   dyn-compatible arbitration and event-delivery contracts as built-ins
 //! - **Canonical pointer id**: [`PointerId`] is re-exported from the
-//!   `ui-events` crate (`NonZeroU64`-backed). [`FocusNodeId`] and
-//!   [`HandlerId`] are crate-local `NonZeroU64` newtypes that prevent
+//!   `flui-platform-api` crate (`NonZeroU64`-backed). [`FocusNodeId`] is a
+//!   crate-local `NonZeroU64` newtype that prevents
 //!   mixing up different ID types at compile time
 //! - **Niche optimization**: `Option<FocusNodeId>` is the same size as
 //!   `FocusNodeId`
@@ -36,11 +35,11 @@
 //!     ↓
 //! PointerEvent/KeyEvent
 //!     ↓
-//! EventRouter (event routing)
-//!     ├─ Hit Testing (spatial)
-//!     └─ Focus Management (keyboard)
+//! GestureBinding (pointers) / FocusManager (keyboard)
+//!     ├─ Hit Testing → InteractionLane route
+//!     └─ RecognizerSet attachments
 //!         ↓
-//! Handlers (closures in Layers)
+//! Owner-local handlers (render storage keeps data-only route identities)
 //!     ↓
 //! GestureRecognizers (gesture recognition)
 //!     ├─ GestureArena (conflict resolution)
@@ -58,20 +57,21 @@
 //! // 1. The recogniser set lives behind a single shared `GestureArena`.
 //! let arena = GestureArena::new();
 //!
-//! // 2. Construct the recogniser; the builder returns an `Arc<Self>`.
-//! let recognizer = TapGestureRecognizer::new(arena)
-//!     .with_on_tap(|details| {
+//! // 2. Configure callbacks before sharing the recognizer as an `Rc`.
+//! let recognizer = TapGestureRecognizer::builder(arena)
+//!     .on_tap(|details| {
 //!         // The user callback fires only after the arena confirms
 //!         // this recogniser won (`pending_up` deferral).
 //!         let _pos = details.global_position;
-//!     });
+//!     })
+//!     .build();
 //! // `recognizer` is now ready to receive pointer events via
 //! // `flui_interaction::GestureBinding` at runtime.
 //! ```
 //!
 //! # Example: Keyboard Focus
 //!
-//! ```rust,ignore
+//! ```rust
 //! use flui_interaction::{FocusManager, FocusNode};
 //!
 //! let manager = FocusManager::new();
@@ -79,7 +79,7 @@
 //! let attachment = manager.root_scope().attach_node(&node)?;
 //!
 //! // Request focus
-//! node.request_focus();
+//! let _ = node.request_focus();
 //!
 //! // Check focus
 //! if node.has_primary_focus() {
@@ -90,15 +90,10 @@
 //!
 //! # Example: Type-Safe IDs
 //!
-//! ```rust,ignore
-//! use flui_interaction::ids::{PointerId, FocusNodeId};
-//!
-//! let pointer = PointerId::PRIMARY;
-//! let focus = FocusNodeId::new(42);
-//!
-//! // These are different types - cannot mix!
-//! // fn process(id: PointerId) { ... }
-//! // process(focus); // Compile error!
+//! ```compile_fail
+//! use flui_interaction::{PointerId, FocusNode};
+//! fn process_pointer(id: PointerId) {}
+//! process_pointer(FocusNode::new().id()); // A focus identity cannot name a pointer.
 //! ```
 //!
 //! # Modules
@@ -106,7 +101,6 @@
 //! ## Core Infrastructure
 //! - [`ids`] - Type-safe identifiers (PointerId, FocusNodeId, etc.)
 //! - [`traits`] - Core traits and extension traits
-//! - [`sealed`] - Sealed trait infrastructure (internal)
 //!
 //! ## Event Routing
 //! - [`routing`] - Event routing, hit testing, focus management
@@ -116,7 +110,7 @@
 //! - [`arena`] - Gesture conflict resolution
 //!
 //! ## Input Processing
-//! - [`processing`] - Velocity tracking, prediction, resampling
+//! - [`processing`] - Velocity tracking, resampling and explicit smoothing filters
 //!
 //! ## Testing Utilities
 //! - `testing` - Synthetic event builders (requires `testing` feature). Gesture
@@ -124,7 +118,6 @@
 //!
 //! ## Other
 //! - [`routing::MouseTracker`] — Mouse enter/exit/hover tracking
-//! - [`PointerSignalResolver`] — Pointer signal conflict resolution
 //!
 //! # Separation from Rendering
 //!
@@ -134,13 +127,8 @@
 //! - ✅ Clear separation of concerns (SOLID principles)
 //! - ✅ Smaller compile times and dependencies
 
-// Ship bar (wave 2): every public item is documented; keep it that way.
+// Public items keep their contract documentation at the API boundary.
 #![deny(missing_docs)]
-// ADR-0027: gesture arenas and recognizers are owner-local, but this crate still
-// exposes `Arc`-shaped handles at the arena/member seams. Do not restore
-// `Send + Sync` to executable callbacks to satisfy this lint; a future focused
-// pass can migrate the owner-local handle graph to `Rc`.
-#![expect(clippy::arc_with_non_send_sync)]
 
 // ============================================================================
 // Core infrastructure modules
@@ -150,7 +138,6 @@
 pub mod __runtime;
 
 pub mod ids;
-pub mod sealed;
 pub mod traits;
 
 // ============================================================================
@@ -181,7 +168,7 @@ mod retain;
 pub mod testing;
 
 // ============================================================================
-// Events (W3C-compliant types from ui-events and cursor-icon)
+// Events (owned platform contracts and cursor-icon)
 // ============================================================================
 
 pub mod events;
@@ -193,9 +180,7 @@ pub mod events;
 pub mod binding;
 pub mod clipboard;
 pub mod details;
-pub mod device_kind;
 pub mod observability;
-pub mod pan_zoom;
 pub mod settings;
 pub mod text_input;
 pub mod velocity;
@@ -208,8 +193,8 @@ pub mod velocity;
 // Re-exports: Gesture Recognition
 // ============================================================================
 pub use arena::{
-    GestureArena, GestureArenaEntry, GestureArenaMember, GestureArenaTeam, GestureDisposition,
-    PointerSignalResolver, SignalPriority, SweepModel, TeamEntry, run_pointer_lifecycle,
+    GestureArena, GestureArenaEntry, GestureArenaMember, GestureDisposition, SweepModel,
+    run_pointer_lifecycle,
 };
 // ============================================================================
 // Re-exports: Other
@@ -220,48 +205,52 @@ pub use details::{
     ForcePressDetails, LongPressEndDetails, LongPressMoveUpdateDetails, TapDownDetails,
     TapUpDetails,
 };
-pub use device_kind::PointerDeviceKind;
 // The monotonic clock primitive now lives in `flui-foundation`; re-exported here
 // because the gesture arena's public API takes a `MonotonicClock` (and tests /
 // the headless binding construct `ManualClock`/`SystemClock` against the arena).
 pub use flui_foundation::{ManualClock, MonotonicClock, SystemClock};
 // ============================================================================
-// Re-exports: Events (W3C-compliant types)
+// Re-exports: Owned input contracts
 // ============================================================================
 
 // Re-export commonly used event types at crate root
-pub use events::{CursorIcon, KeyboardEvent, PointerEvent};
+pub use events::{CursorIcon, KeyEvent, PointerEvent, PointerEventExt};
 // Re-export observability surface — typed event names + span constants.
+pub use flui_platform_api::pointer::{
+    ButtonChange, CancelReason, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenTool,
+    PointerButton, PointerButtons, PointerInfo, PointerKind, PointerMove, PointerPosition,
+    PointerPress, PointerRelease, PointerRole, PointerSample, ScrollDelta, ScrollEvent,
+    ScrollPhase, ScrollPrecision, ScrollUnit,
+};
 pub use observability::{GestureEvent, SPAN_ARENA, SPAN_RECOGNIZER, pointer_event_kind};
-// Trackpad pan/zoom module — canonical public entry point for the
-// `PointerPanZoomEvent` type and its W3C conversion helpers
-// (`from_w3c_event`, `convert_gesture`). Re-exported at the crate root so
-// `use crate::PointerPanZoomEvent` is the single import path.
-pub use pan_zoom::{PointerPanZoomEvent, convert_gesture, from_w3c_event};
 // ============================================================================
 // Re-exports: geometry from flui_foundation
 // ============================================================================
 pub use flui_foundation::geometry::{Offset, Rect};
 pub use flui_platform_api::ImeEvent;
-pub use ids::{FocusNodeId, HandlerId, PointerId};
+pub use ids::{DeviceId, FocusNodeId, PointerId};
 // ============================================================================
 // Re-exports: Input Processing
 // ============================================================================
-pub use processing::{
-    InputMode, InputPredictor, PointerEventResampler, PredictedPosition, PredictionConfig,
-    RawInputHandler, RawPointerEvent, Velocity, VelocityEstimate, VelocityTracker,
+pub use processing::{PointerEventResampler, Velocity, VelocityEstimate, VelocityTracker};
+pub use recognizers::{
+    ArenaMembership, BeginContactError, CancelOutcome, ContactId, ContactSnapshot,
+    DoubleTapDetails, DoubleTapGestureRecognizer, DragCancelCallback, DragDownCallback,
+    DragDownDetails, DragEndCallback, DragEndDetails, DragGestureRecognizer, DragPointerStrategy,
+    DragStartCallback, DragStartDetails, DragUpdateCallback, DragUpdateDetails,
+    EagerGestureRecognizer, ForcePressGestureRecognizer, GestureEndReason, GestureRecognizer,
+    LongPressGestureRecognizer, MultiDragAxis, MultiDragEndDetails, MultiDragGestureRecognizer,
+    MultiDragHandle, MultiDragStartCallback, MultiDragUpdateDetails, MultiTapGestureRecognizer,
+    PrimaryContact, RecognizerSet, ScaleGestureRecognizer, TapAndDragGestureRecognizer,
+    TapDragDownCallback, TapDragDownDetails, TapDragEndCallback, TapDragEndDetails,
+    TapDragStartCallback, TapDragStartDetails, TapDragUpCallback, TapDragUpDetails,
+    TapDragUpdateCallback, TapDragUpdateDetails, TapGestureRecognizer, cancel_all,
 };
 pub use recognizers::{
-    DoubleTapDetails, DoubleTapGestureRecognizer, DragCancelCallback, DragDownCallback,
-    DragDownDetails, DragEndCallback, DragEndDetails, DragGestureRecognizer, DragStartCallback,
-    DragStartDetails, DragUpdateCallback, DragUpdateDetails, EagerGestureRecognizer,
-    ForcePressGestureRecognizer, GestureEndReason, GestureRecognizer, LongPressGestureRecognizer,
-    MultiDragAxis, MultiDragEndDetails, MultiDragGestureRecognizer, MultiDragHandle,
-    MultiDragStartCallback, MultiDragUpdateDetails, MultiTapGestureRecognizer,
-    ScaleGestureRecognizer, TapAndDragGestureRecognizer, TapDragDownCallback, TapDragDownDetails,
-    TapDragEndCallback, TapDragEndDetails, TapDragStartCallback, TapDragStartDetails,
-    TapDragUpCallback, TapDragUpDetails, TapDragUpdateCallback, TapDragUpdateDetails,
-    TapGestureRecognizer,
+    DoubleTapGestureRecognizerBuilder, DragGestureRecognizerBuilder, EagerGestureRecognizerBuilder,
+    ForcePressGestureRecognizerBuilder, LongPressGestureRecognizerBuilder,
+    MultiDragGestureRecognizerBuilder, MultiTapGestureRecognizerBuilder,
+    ScaleGestureRecognizerBuilder, TapAndDragGestureRecognizerBuilder, TapGestureRecognizerBuilder,
 };
 // Re-exports for the drag axis sub-recognisers (vertical, horizontal, pan).
 // Aliased to `DragGestureRecognizer` so a recogniser's axis is fixed at the
@@ -273,18 +262,19 @@ pub use recognizers::drag_variants::{
 // Re-exports: Event Routing
 // ============================================================================
 pub use routing::{
-    EventPropagation, EventRouter, FocusAttachment, FocusChangeCallback, FocusDetachOutcome,
+    EventPropagation, FocusAttachment, FocusChangeCallback, FocusDetachOutcome, FocusDirection,
     FocusManager, FocusNode, FocusNodeChangeCallback, FocusNodeRegistration, FocusRequestOutcome,
-    FocusScopeNode, FocusTraversalPolicy, FocusTreeError, GlobalPointerHandler, HitTestBehavior,
-    HitTestEntry, HitTestHandle, HitTestProbe, HitTestResult, HitTestSnapshot, HitTestable,
-    InteractionDispatchError, InteractionDispatchHandle, InteractionLane, KeyEventCallback,
-    KeyEventHandler, KeyEventResult, LocalPayloadTarget, NodeContext, PathClipTarget,
+    FocusScopeNode, FocusSubscription, FocusTraversalOverrides, FocusTraversalPolicy,
+    FocusTreeError, GlobalPointerHandler, HitTestBehavior, HitTestEntry, HitTestHandle,
+    HitTestProbe, HitTestResult, HitTestSnapshot, InteractionDispatchError,
+    InteractionDispatchHandle, InteractionLane, KeyEventHandler, KeyEventResult,
+    LocalPayloadTarget, NodeContext, PathClipTarget, PointerCapture, PointerCaptureError,
     PointerDispatch, PointerRouteHandler, PointerRouter, PointerTarget, ReadingOrderPolicy,
     RectProvider, RenderId, ResolvedRouteToken, ResolvedStep, RoutePanic, RouteResolution,
-    RouteResolutionMiss, ScrollTarget, ShaderMaskTarget, TransformGuard, TraversalEdgeBehavior,
-    resolve_local_payload, resolve_path_clip_target, resolve_shader_mask_target,
+    RouteResolutionMiss, ScrollTarget, ShaderMaskTarget, TransformGuard, TraversalDirection,
+    TraversalEdgeBehavior, resolve_local_payload, resolve_path_clip_target,
+    resolve_shader_mask_target,
 };
-pub use sealed::{CustomGestureRecognizer, CustomHitTestable};
 pub use settings::{
     DEFAULT_DOUBLE_TAP_SLOP, DEFAULT_DOUBLE_TAP_TIMEOUT, DEFAULT_LONG_PRESS_TIMEOUT,
     DEFAULT_MAX_FLING_VELOCITY, DEFAULT_MIN_FLING_VELOCITY, DEFAULT_MOUSE_PAN_SLOP,
@@ -304,10 +294,7 @@ pub use testing::ModifiersBuilder;
 // ============================================================================
 // Re-exports: Traits
 // ============================================================================
-pub use traits::{
-    Disposable, DragAxis, GestureCallback, GestureRecognizerExt, HitTestTarget,
-    PointerEventExtTrait as PointerEventExt,
-};
+pub use traits::DragAxis;
 
 // ============================================================================
 // Prelude
@@ -317,7 +304,7 @@ pub use traits::{
 ///
 /// # Usage
 ///
-/// ```rust,ignore
+/// ```rust
 /// use flui_interaction::prelude::*;
 /// ```
 pub mod prelude {
@@ -327,30 +314,25 @@ pub mod prelude {
 
     // Gesture recognition
     pub use crate::arena::*;
-    // Events (W3C-compliant)
-    pub use crate::events::{CursorIcon, KeyboardEvent, PointerEvent};
+    // Owned input contracts
+    pub use crate::events::{CursorIcon, KeyEvent, PointerEvent, PointerEventExt};
+    pub use flui_platform_api::pointer::{PanZoomEvent, PanZoomPhase, PointerKind};
     // Advanced interaction
     pub use crate::routing::{MouseTracker, MouseTrackerAnnotation, PointerMotionKind};
     // Input processing
-    pub use crate::processing::{InputPredictor, PointerEventResampler, Velocity, VelocityTracker};
+    pub use crate::processing::{PointerEventResampler, Velocity, VelocityTracker};
     // Event routing
     pub use crate::routing::{
-        EventPropagation, EventRouter, FocusManager, HitTestBehavior, HitTestEntry, HitTestResult,
-        HitTestable, PointerRouter, RenderId, TransformGuard,
+        EventPropagation, FocusManager, HitTestBehavior, HitTestEntry, HitTestResult,
+        PointerRouter, RenderId, TransformGuard,
     };
-    // Extension traits for custom types
-    pub use crate::sealed::{CustomGestureRecognizer, CustomHitTestable};
     // Testing (feature-gated)
     #[cfg(any(test, feature = "testing"))]
     pub use crate::testing::ModifiersBuilder;
     // Traits
-    pub use crate::traits::{
-        Disposable, DragAxis, GestureCallback, GestureRecognizerExt, HitTestTarget,
-        PointerEventExtTrait as PointerEventExt,
-    };
+    pub use crate::traits::DragAxis;
     pub use crate::{
-        arena::{GestureArenaTeam, PointerSignalResolver, SignalPriority, TeamEntry},
-        ids::{DeviceId, FocusNodeId, HandlerId, PointerId, RegionId},
+        ids::{DeviceId, FocusNodeId, PointerId, RegionId},
         recognizers::{
             DoubleTapGestureRecognizer, DragGestureRecognizer, ForcePressGestureRecognizer,
             LongPressGestureRecognizer, MultiTapGestureRecognizer, ScaleGestureRecognizer,
@@ -380,7 +362,6 @@ mod static_assertions {
     // IDs should be Send + Sync (they are Copy)
     impl AssertSendSync for PointerId {}
     impl AssertSendSync for FocusNodeId {}
-    impl AssertSendSync for HandlerId {}
     impl AssertSendSync for ScrollTarget {}
     impl AssertSendSync for PathClipTarget {}
     impl AssertSendSync for ShaderMaskTarget {}

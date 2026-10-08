@@ -74,9 +74,9 @@
 //! `Clone` shares storage (both fields are `Rc`-backed): every clone reads
 //! and writes the same value and the same rebuild slot. Binding through any
 //! one clone binds all of them. Both types are `!Send`/`!Sync` by
-//! construction (`Rc` is neither); the `compile_fail` doctests on each type
-//! pin that down at a concrete type, so a future field change that made
-//! either type shareable across threads would fail `cargo test --doc`.
+//! construction (`Rc` is neither). `trybuild_ui::ui_tests` pins the concrete
+//! `Send` and `Sync` rejection diagnostics for both types alongside valid
+//! local-state construction; the compile-fail doctests illustrate the bounds.
 
 use std::cell::{Cell, RefCell};
 use std::fmt;

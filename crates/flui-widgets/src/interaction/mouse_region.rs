@@ -4,8 +4,9 @@ use std::rc::Rc;
 
 use flui_foundation::geometry::Offset;
 use flui_objects::RenderMouseRegion;
+use flui_platform_api::pointer::PointerInfo;
 use flui_rendering::hit_testing::{
-    CursorIcon, DeviceId, HitTestBehavior, MouseEnterCallback, MouseExitCallback,
+    CursorIcon, CursorRequest, HitTestBehavior, MouseEnterCallback, MouseExitCallback,
     MouseHoverCallback, MouseRegionCallbacks,
 };
 use flui_rendering::protocol::BoxProtocol;
@@ -15,24 +16,24 @@ use flui_view::{
 
 /// An enter, hover or exit callback, stored already adapted to report its
 /// outcome.
-type MouseCallback = Rc<dyn Fn(&mut EventCx<'_>, DeviceId, Offset)>;
+type MouseCallback = Rc<dyn Fn(&mut EventCx<'_>, PointerInfo, Offset)>;
 
 /// Store a mouse callback, adapted to report its outcome.
 fn mouse_callback<F, R>(callback: F) -> MouseCallback
 where
-    F: Fn(&mut EventCx<'_>, DeviceId, Offset) -> R + 'static,
+    F: Fn(&mut EventCx<'_>, PointerInfo, Offset) -> R + 'static,
     R: EventOutcome,
 {
-    Rc::new(move |cx: &mut EventCx<'_>, device, position| {
-        callback(cx, device, position).report();
+    Rc::new(move |cx: &mut EventCx<'_>, pointer, position| {
+        callback(cx, pointer, position).report();
     })
 }
 
 /// Wrap a stored callback into the lane's shape: one write per event.
-fn in_write(writer: &WriterSource, callback: &MouseCallback) -> Rc<dyn Fn(DeviceId, Offset)> {
+fn in_write(writer: &WriterSource, callback: &MouseCallback) -> Rc<dyn Fn(PointerInfo, Offset)> {
     let writer = writer.clone();
     let callback = Rc::clone(callback);
-    Rc::new(move |device, position| writer.write(|cx| callback(cx, device, position)))
+    Rc::new(move |pointer, position| writer.write(|cx| callback(cx, pointer, position)))
 }
 
 /// Calls callbacks when the mouse enters, hovers within, or exits its bounds.
@@ -42,7 +43,8 @@ fn in_write(writer: &WriterSource, callback: &MouseCallback) -> Rc<dyn Fn(Device
 ///
 /// Each callback receives the dispatch's `&mut EventCx<'_>` first, so it
 /// writes a signal directly (ADR-0086):
-/// `.on_enter(move |cx, _device, _position| hovered.set(cx, true))`. The
+/// `.on_enter(move |cx, _pointer, _position| hovered.set(cx, true))`. The
+/// pointer metadata preserves kind, role and the optional hardware device identity.
 /// region has no `init_state`; it takes the owner's [`WriterSource`] from the
 /// render-object context that registers its callbacks. A stationary device's
 /// re-hit-test after layout also delivers enter and exit, so those writes
@@ -52,7 +54,7 @@ pub struct MouseRegion {
     on_enter: Option<MouseCallback>,
     on_hover: Option<MouseCallback>,
     on_exit: Option<MouseCallback>,
-    cursor: CursorIcon,
+    cursor: CursorRequest,
     opaque: bool,
     behavior: HitTestBehavior,
     child: Child,
@@ -64,7 +66,7 @@ impl Default for MouseRegion {
             on_enter: None,
             on_hover: None,
             on_exit: None,
-            cursor: CursorIcon::Default,
+            cursor: CursorRequest::Defer,
             opaque: true,
             behavior: HitTestBehavior::Opaque,
             child: Child::empty(),
@@ -86,7 +88,7 @@ impl std::fmt::Debug for MouseRegion {
 }
 
 impl MouseRegion {
-    /// Creates an opaque mouse region with no callbacks and the default cursor.
+    /// Creates an opaque mouse region with no callbacks and a deferring cursor.
     pub fn new() -> Self {
         Self::default()
     }
@@ -95,7 +97,7 @@ impl MouseRegion {
     #[must_use]
     pub fn on_enter<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, DeviceId, Offset) -> R + 'static,
+        F: Fn(&mut EventCx<'_>, PointerInfo, Offset) -> R + 'static,
         R: EventOutcome,
     {
         self.on_enter = Some(mouse_callback(callback));
@@ -106,7 +108,7 @@ impl MouseRegion {
     #[must_use]
     pub fn on_hover<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, DeviceId, Offset) -> R + 'static,
+        F: Fn(&mut EventCx<'_>, PointerInfo, Offset) -> R + 'static,
         R: EventOutcome,
     {
         self.on_hover = Some(mouse_callback(callback));
@@ -117,7 +119,7 @@ impl MouseRegion {
     #[must_use]
     pub fn on_exit<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, DeviceId, Offset) -> R + 'static,
+        F: Fn(&mut EventCx<'_>, PointerInfo, Offset) -> R + 'static,
         R: EventOutcome,
     {
         self.on_exit = Some(mouse_callback(callback));
@@ -127,7 +129,7 @@ impl MouseRegion {
     /// Sets the mouse cursor reported while this region is active.
     #[must_use]
     pub fn cursor(mut self, cursor: CursorIcon) -> Self {
-        self.cursor = cursor;
+        self.cursor = CursorRequest::Icon(cursor);
         self
     }
 

@@ -384,12 +384,9 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// `point` from `ancestor`'s space (the render root's, when `None`) into
     /// `id`'s local space.
     ///
-    /// FLUI's transforms are affine 2-D
-    /// (`Matrix4::translation`/`scaling`/`rotation_z`/`skew_2d`), so a
-    /// plain inverse is exact for every matrix any render object here produces.
-    /// **A perspective transform would need an un-projection through the
-    /// perspective divide onto the local z = 0 plane**; none exists in this
-    /// repository, and one arriving must revisit this method.
+    /// Intersects the point's screen ray with the object's local `z = 0` plane,
+    /// including perspective. A parallel ray, an intersection at infinity or
+    /// a point behind the camera returns `None`.
     ///
     /// `None` when the transform is missing or **singular** — a zero-scale
     /// `FittedBox`, for instance, which maps every local point to one global
@@ -404,7 +401,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     ) -> Option<flui_foundation::geometry::Point> {
         let ancestor = ancestor.or(self.root_id)?;
         let inverse = self.transform_to(id, ancestor)?.try_inverse()?;
-        let (x, y) = inverse.transform_point(point.x, point.y);
+        let (x, y) = inverse.unproject_to_plane(point.x, point.y)?;
         Some(flui_foundation::geometry::Point::new(x, y))
     }
 
@@ -726,22 +723,27 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                                 return false;
                             }
                             let child_offset = child_node.offset();
-                            result.with_paint_offset(child_offset, |result| {
-                                let child_position = Self::sliver_hit_position_from_paint_offset(
-                                    child_node,
-                                    position - child_offset,
-                                );
-                                self.hit_test_sliver_subtree(child_id, child_position, result)
-                            })
+                            result
+                                .with_paint_offset(child_offset, |result| {
+                                    let child_position =
+                                        Self::sliver_hit_position_from_paint_offset(
+                                            child_node,
+                                            position - child_offset,
+                                        );
+                                    self.hit_test_sliver_subtree(child_id, child_position, result)
+                                })
+                                .unwrap_or(false)
                         };
                     }
                     if let Some(child_position) = override_pos {
                         self.hit_test_subtree(child_id, child_position, result)
                     } else {
                         let child_offset = child_node.offset();
-                        result.with_paint_offset(child_offset, |result| {
-                            self.hit_test_subtree(child_id, position - child_offset, result)
-                        })
+                        result
+                            .with_paint_offset(child_offset, |result| {
+                                self.hit_test_subtree(child_id, position - child_offset, result)
+                            })
+                            .unwrap_or(false)
                     }
                 };
 
@@ -777,7 +779,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                     Some(target) => entry.pan_zoom_target(target),
                     None => entry,
                 };
-                let entry = entry.cursor(render_object.mouse_cursor());
+                let entry = entry.cursor_request(render_object.mouse_cursor());
                 let entry = match render_object.metadata() {
                     Some(payload) => entry.metadata(payload),
                     None => entry,
@@ -792,7 +794,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             hit.blocks_below
         };
         let hit_follower = |result: &mut crate::hit_testing::HitTestResult| match follower_offset {
-            Some(offset) => result.with_paint_offset(offset, hit_node),
+            Some(offset) => result.with_paint_offset(offset, hit_node).unwrap_or(false),
             None => hit_node(result),
         };
         match hit_transform {
@@ -1048,9 +1050,11 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                         position,
                         child_offset,
                     );
-                    result.with_paint_offset(child_offset, |result| {
-                        self.hit_test_sliver_subtree(child_id, child_position, result)
-                    })
+                    result
+                        .with_paint_offset(child_offset, |result| {
+                            self.hit_test_sliver_subtree(child_id, child_position, result)
+                        })
+                        .unwrap_or(false)
                 }
             } else if let Some(child_entry) = child_node.as_box() {
                 let Some(child_size) = child_entry.state().geometry() else {
@@ -1068,9 +1072,11 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                     child_main_position,
                     child_offset,
                 );
-                result.with_paint_offset(child_offset, |result| {
-                    self.hit_test_subtree(child_id, child_position, result)
-                })
+                result
+                    .with_paint_offset(child_offset, |result| {
+                        self.hit_test_subtree(child_id, child_position, result)
+                    })
+                    .unwrap_or(false)
             } else {
                 false
             }
@@ -1078,8 +1084,8 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
 
         let hit = render_object.hit_test_raw(position, children.len(), own_size, &mut hit_child);
         if hit.add_self {
-            let entry =
-                crate::hit_testing::HitTestEntry::new(id).cursor(render_object.mouse_cursor());
+            let entry = crate::hit_testing::HitTestEntry::new(id)
+                .cursor_request(render_object.mouse_cursor());
             let entry = match render_object.mouse_tracker_annotation(id) {
                 Some(annotation) => entry.mouse_annotation(annotation),
                 None => entry,

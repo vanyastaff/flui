@@ -305,7 +305,8 @@ impl FrameBuildCounts {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub struct FrameBuildReport {
-    /// Distinct elements rebuilt by the last `build_scope`.
+    /// Distinct elements rebuilt in the most recent widget draw frame or
+    /// explicit `build_scope`.
     pub elements_built: usize,
     /// Every build run this frame, re-entries included.
     ///
@@ -1351,17 +1352,27 @@ impl BuildOwner {
         super::RebuildHandle::new(self.external_scheduler(), element)
     }
 
-    /// What the most recent `build_scope` rebuilt: the number of distinct
-    /// elements built this frame and, per [`RebuildReason`], how many of them
+    /// What the most recent widget draw frame or explicit `build_scope`
+    /// rebuilt: the number of distinct elements built this frame and, per
+    /// [`RebuildReason`], how many of them
     /// carried that cause (an element scheduled for two reasons counts once in
     /// `elements_built` and once under each reason). Reset at every
-    /// `build_scope`, so read it after a pump, before the next one.
+    /// `build_scope` and every binding draw frame, including a clean one.
+    /// A pump that produces no draw frame leaves the previous report intact.
     pub fn last_frame_build_report(&self) -> FrameBuildReport {
         FrameBuildReport {
             elements_built: self.built_this_frame.len(),
             builds_run: self.frame_builds.builds_run,
             by_reason: self.frame_builds.by_reason(),
         }
+    }
+
+    /// Start a fresh telemetry report without routing or draining build work.
+    /// A clean binding frame still owns an empty report; lazy child service
+    /// later in that frame may add its builds to it.
+    pub(crate) fn clear_frame_build_report(&mut self) {
+        self.built_this_frame.clear();
+        self.frame_builds.clear();
     }
 
     /// Number of elements queued in the out-of-frame inbox, awaiting the next
@@ -1451,8 +1462,7 @@ impl BuildOwner {
             self.mid_drain_cap_streak = false;
         }
         self.mid_drain_absorbs_left = MAX_MID_DRAIN_ABSORBS;
-        self.built_this_frame.clear();
-        self.frame_builds.clear();
+        self.clear_frame_build_report();
 
         self.build_scope_impl(tree);
     }

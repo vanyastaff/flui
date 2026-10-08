@@ -227,7 +227,16 @@ pub trait Marker: 'static + WasmNotSendSync + Debug {}
 /// use flui_foundation::{ViewId, ElementId};
 ///
 /// let view_id = ViewId::new(1);
-/// let element_id: ElementId = view_id; // Compile error!
+/// let id: ElementId = view_id;
+/// ```
+///
+/// Keeping the identifier in its own domain compiles:
+///
+/// ```
+/// use flui_foundation::{ViewId, ElementId};
+///
+/// let view_id = ViewId::new(1);
+/// let id: ViewId = view_id;
 /// ```
 ///
 /// # Examples
@@ -781,10 +790,17 @@ ids! {
 /// [`Self::generation`] inside the owning tree's accessors only.
 ///
 /// ```compile_fail
-/// use flui_foundation::RenderId;
+/// use flui_foundation::{Identifier, RenderId};
 /// let id = RenderId::new(1);
-/// // ERROR: no method named `get` — RenderId is generational.
 /// let _ = id.get();
+/// ```
+///
+/// The owner's slot accessor compiles:
+///
+/// ```
+/// use flui_foundation::{Identifier, RenderId};
+/// let id = RenderId::new(1);
+/// let _ = id.index();
 /// ```
 ///
 /// # Niche optimisation
@@ -961,7 +977,16 @@ impl Marker for PresentationMarker {}
 /// use flui_foundation::{PresentationId, UiRuntimeId};
 ///
 /// let ui_runtime = UiRuntimeId::new(1);
-/// let presentation: PresentationId = ui_runtime;
+/// let id: PresentationId = ui_runtime;
+/// ```
+///
+/// Keeping the UI runtime's own type compiles:
+///
+/// ```
+/// use flui_foundation::{PresentationId, UiRuntimeId};
+///
+/// let ui_runtime = UiRuntimeId::new(1);
+/// let id: UiRuntimeId = ui_runtime;
 /// ```
 ///
 /// Like [`GenId`] and [`ElementId`], this type intentionally does not
@@ -969,10 +994,19 @@ impl Marker for PresentationMarker {}
 /// generation instead of indexing through a generation-erasing `get()`.
 ///
 /// ```compile_fail
-/// use flui_foundation::PresentationId;
+/// use flui_foundation::{Identifier, PresentationId};
 ///
 /// let presentation = PresentationId::new(1);
 /// let _ = presentation.get();
+/// ```
+///
+/// The owner's slot accessor compiles:
+///
+/// ```
+/// use flui_foundation::{Identifier, PresentationId};
+///
+/// let presentation = PresentationId::new(1);
+/// let _ = presentation.index();
 /// ```
 ///
 /// The non-zero generation preserves the null niche, so
@@ -1146,10 +1180,17 @@ const _: () = {
 /// generational id has no `get()` (nor `Identifier::zip`/`unzip`):
 ///
 /// ```compile_fail
-/// use flui_foundation::ElementId;
+/// use flui_foundation::{ElementId, Identifier};
 /// let id = ElementId::new(1);
-/// // ERROR: no method named `get` — ElementId is not an `Identifier`.
 /// let _ = id.get();
+/// ```
+///
+/// The owner's slot accessor compiles:
+///
+/// ```
+/// use flui_foundation::{ElementId, Identifier};
+/// let id = ElementId::new(1);
+/// let _ = id.index();
 /// ```
 ///
 /// # Wire format

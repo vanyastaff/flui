@@ -297,22 +297,12 @@ impl LayoutCapability for BoxLayout {
 ///
 /// # Thread confinement
 ///
-/// `NodePtr`'s manual `unsafe impl Send`/`unsafe impl Sync`
-/// (`pipeline::owner::subtree_arena`) and the `SubtreeArena::check_thread`
-/// runtime assert that used to backstop it were both deleted once nothing
-/// required `NodePtr: Send + Sync` any more -- both types are private to
-/// this crate, so this doctest exercises `LayoutChildCallback` itself: the
-/// nearest *public* type with the identical never-`Send` shape, `&'a dyn
-/// Fn(RenderId, BoxConstraints) -> Size`, a trait-object reference with no
-/// `Send`/`Sync` bound in its own type. Cross-linked to
-/// `assert_not_impl_any!(NodePtr: Send, Sync)` and
-/// `assert_not_impl_any!(SubtreeArena<'_>: Send, Sync)` in
-/// `subtree_arena.rs`'s own tests -- do not delete either pin as
-/// "redundant" without checking the other: the in-crate asserts pin the
-/// private types directly, this doctest is the externally observable
-/// evidence for the same fact, and the message below is what a user who
-/// tries to spawn a `perform_layout`-style layout-child call onto another
-/// thread actually sees instead of the deleted runtime panic.
+/// Layout invokes its borrowed callback synchronously on the owner thread.
+/// The trait object has no [`Sync`] bound, so its reference cannot be sent
+/// to another thread. The private `NodePtr` and `SubtreeArena` types have
+/// separate `assert_not_impl_any!(...: Send, Sync)` assertions in
+/// `pipeline::owner::subtree_arena`; these examples exercise the public
+/// callback boundary.
 ///
 /// ```compile_fail
 /// use flui_foundation::RenderId;
@@ -325,15 +315,23 @@ impl LayoutCapability for BoxLayout {
 /// }
 ///
 /// let cb: LayoutChildCallback<'_> = &callback;
-/// // error[E0277]: `dyn Fn(RenderId, BoxConstraints) -> Size` cannot be
-/// // shared between threads safely -- `LayoutChildCallback` carries no
-/// // `Send`/`Sync` bound, so a `RenderBox::perform_layout` body that tried
-/// // to hand its layout-child callback to another thread never reaches a
-/// // cross-thread `NodePtr` deref; it fails to compile instead of hitting
-/// // the deleted `check_thread` panic at runtime.
-/// std::thread::spawn(move || {
-///     drop(cb);
-/// });
+/// std::thread::spawn(move || { let _ = cb(RenderId::new(1), BoxConstraints::tight(Size::ZERO)); });
+/// ```
+///
+/// Invoking the same closure on the owner thread is allowed:
+///
+/// ```
+/// use flui_foundation::RenderId;
+/// use flui_rendering::constraints::BoxConstraints;
+/// use flui_rendering::protocol::box_protocol::LayoutChildCallback;
+/// use flui_foundation::geometry::Size;
+///
+/// fn callback(_id: RenderId, _constraints: BoxConstraints) -> Size {
+///     Size::ZERO
+/// }
+///
+/// let cb: LayoutChildCallback<'_> = &callback;
+/// (move || { let _ = cb(RenderId::new(1), BoxConstraints::tight(Size::ZERO)); })();
 /// ```
 pub type LayoutChildCallback<'a> = &'a dyn Fn(flui_foundation::RenderId, BoxConstraints) -> Size;
 

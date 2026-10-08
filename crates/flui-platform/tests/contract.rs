@@ -383,6 +383,34 @@ mod native_windows {
             "pointer_modifiers_are_the_message_state",
             pointer_modifiers_are_the_message_state,
         ),
+        (
+            "queued_mouse_samples_keep_native_message_time",
+            queued_mouse_samples_keep_native_message_time,
+        ),
+        (
+            "extended_mouse_buttons_share_contact_and_capture",
+            extended_mouse_buttons_share_contact_and_capture,
+        ),
+        (
+            "extended_mouse_capture_loss_cancels_and_recovers",
+            extended_mouse_capture_loss_cancels_and_recovers,
+        ),
+        (
+            "unknown_native_pointer_messages_do_not_invent_contacts",
+            unknown_native_pointer_messages_do_not_invent_contacts,
+        ),
+        (
+            "synthetic_touch_and_pen_reach_native_pointer_dispatch",
+            synthetic_touch_and_pen_reach_native_pointer_dispatch,
+        ),
+        (
+            "native_mouse_wheels_keep_hover_identity_and_signed_units",
+            native_mouse_wheels_keep_hover_identity_and_signed_units,
+        ),
+        (
+            "fractional_native_wheel_packets_preserve_observed_precision_and_source",
+            fractional_native_wheel_packets_preserve_observed_precision_and_source,
+        ),
     ];
 
     pub(super) fn run_requested_child() -> bool {
@@ -467,6 +495,59 @@ mod native_windows {
                 ..Default::default()
             })
             .expect("create actual shown Win32 window")
+    }
+
+    struct ClosePointerTarget(Arc<dyn HostWindow>);
+
+    impl Drop for ClosePointerTarget {
+        fn drop(&mut self) {
+            self.0.close();
+        }
+    }
+
+    #[expect(
+        unsafe_code,
+        reason = "keeps only the ephemeral injected-input target above unrelated host windows"
+    )]
+    fn open_pointer_target(
+        platform: &WindowsPlatform,
+    ) -> Option<(Arc<dyn HostWindow>, ClosePointerTarget)> {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GetForegroundWindow, HWND_TOPMOST, SetForegroundWindow,
+        };
+        let window = open_shown(platform);
+        let close = ClosePointerTarget(Arc::clone(&window));
+        // SAFETY: the fixture's exact live owner-thread HWND. It is destroyed
+        // by the RAII owner on success, early refusal, or assertion unwind;
+        // no pre-existing host window's z-order or style is changed.
+        unsafe {
+            SetWindowPos(
+                hwnd_of(&window),
+                Some(HWND_TOPMOST),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE,
+            )
+        }
+        .expect("keep ephemeral pointer target above host windows");
+        // SAFETY: only this fixture's live HWND is activated; its RAII owner
+        // destroys it on failure as well. Pump activation before real input
+        // so a first contact cannot be consumed merely to activate the target.
+        let _ = unsafe { SetForegroundWindow(hwnd_of(&window)) };
+        for _ in 0..25 {
+            pump_pointer_thread();
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        // SAFETY: observes desktop activation without retaining a native handle.
+        if unsafe { GetForegroundWindow() } != hwnd_of(&window) {
+            eprintln!(
+                "CANNOT_VERIFY native input: host foreground policy refused activation of the owned ephemeral target"
+            );
+            return None;
+        }
+        Some((window, close))
     }
 
     fn deadline_rearms_independent_windows_without_input() {
@@ -1110,7 +1191,9 @@ mod native_windows {
             window.on_input(Box::new(move |event| {
                 assert_eq!(
                     event.as_keyboard().expect("native key event").key,
-                    keyboard_types::Key::Named(keyboard_types::NamedKey::F4)
+                    flui_platform_api::keyboard::Key::Named(
+                        flui_platform_api::keyboard::NamedKey::F4
+                    )
                 );
                 let first = input_observations.fetch_add(1, Ordering::SeqCst) == 0;
                 if mode == "deferred" && first {
@@ -1288,8 +1371,8 @@ mod native_windows {
             .expect("Win32 backend")
             .hwnd();
         let keys = Arc::new(Mutex::new(Vec::<(
-            keyboard_types::KeyState,
-            keyboard_types::Key,
+            flui_platform_api::keyboard::KeyState,
+            flui_platform_api::keyboard::Key,
         )>::new()));
         let observed = Arc::clone(&keys);
         window.on_input(Box::new(move |event| {
@@ -1298,18 +1381,18 @@ mod native_windows {
             if let Some(keyboard) = event.as_keyboard()
                 && !matches!(
                     keyboard.key,
-                    keyboard_types::Key::Named(
-                        keyboard_types::NamedKey::Control
-                            | keyboard_types::NamedKey::Alt
-                            | keyboard_types::NamedKey::AltGraph
-                            | keyboard_types::NamedKey::Shift
+                    flui_platform_api::keyboard::Key::Named(
+                        flui_platform_api::keyboard::NamedKey::Control
+                            | flui_platform_api::keyboard::NamedKey::Alt
+                            | flui_platform_api::keyboard::NamedKey::AltGraph
+                            | flui_platform_api::keyboard::NamedKey::Shift
                     )
                 )
             {
                 observed
                     .lock()
                     .expect("keys")
-                    .push((keyboard.state, keyboard.key.clone()));
+                    .push((keyboard.state(), keyboard.key.clone()));
             }
             DispatchEventResult::resolved(true, false)
         }));
@@ -1374,18 +1457,22 @@ mod native_windows {
         // Leave no composition pending for the rows that follow.
         flush_dead_key_state();
         drop(layout);
-        let dead = keyboard_types::Key::Named(keyboard_types::NamedKey::Dead);
+        let dead =
+            flui_platform_api::keyboard::Key::Named(flui_platform_api::keyboard::NamedKey::Dead);
         let expected = if matches!(case, DeadKeyCase::FocusLostWhileHeld) {
-            let apostrophe = keyboard_types::Key::Character("'".into());
+            let apostrophe = flui_platform_api::keyboard::Key::character("'");
             vec![
-                (keyboard_types::KeyState::Down, dead),
-                (keyboard_types::KeyState::Down, apostrophe.clone()),
-                (keyboard_types::KeyState::Up, apostrophe),
+                (flui_platform_api::keyboard::KeyState::Down, dead),
+                (
+                    flui_platform_api::keyboard::KeyState::Down,
+                    apostrophe.clone(),
+                ),
+                (flui_platform_api::keyboard::KeyState::Up, apostrophe),
             ]
         } else {
             vec![
-                (keyboard_types::KeyState::Down, dead.clone()),
-                (keyboard_types::KeyState::Up, dead),
+                (flui_platform_api::keyboard::KeyState::Down, dead.clone()),
+                (flui_platform_api::keyboard::KeyState::Up, dead),
             ]
         };
         assert_eq!(
@@ -1519,13 +1606,13 @@ mod native_windows {
         let typed_observations = Arc::clone(&typed);
         window.on_input(Box::new(move |event| {
             if let Some(keyboard) = event.as_keyboard()
-                && keyboard.state == keyboard_types::KeyState::Down
-                && let keyboard_types::Key::Character(text) = &keyboard.key
+                && keyboard.state() == flui_platform_api::keyboard::KeyState::Down
+                && let flui_platform_api::keyboard::Key::Character(text) = &keyboard.key
             {
                 typed_observations
                     .lock()
                     .expect("typed characters")
-                    .push(text.clone());
+                    .push(text.as_str().to_owned());
             }
             DispatchEventResult::resolved(true, false)
         }));
@@ -1658,7 +1745,7 @@ mod native_windows {
         window.on_input(Box::new(move |event| {
             if event
                 .as_keyboard()
-                .is_some_and(|key| key.state == keyboard_types::KeyState::Down)
+                .is_some_and(|key| key.state() == flui_platform_api::keyboard::KeyState::Down)
             {
                 keydown_observations.fetch_add(1, Ordering::SeqCst);
                 if pump {
@@ -1895,8 +1982,10 @@ mod native_windows {
         }
         assert!(
             observed.lock().expect("keys").iter().any(|event| event.key
-                == keyboard_types::Key::Character("+".into())
-                && event.modifiers.shift()),
+                == flui_platform_api::keyboard::Key::character("+")
+                && event
+                    .modifiers
+                    .contains(flui_platform_api::keyboard::Modifiers::SHIFT)),
             "native character translation retains the Shift that produced the character"
         );
         window.close();
@@ -2253,7 +2342,7 @@ mod native_windows {
     /// Every pointer event `window` delivers, in order.
     fn record_pointer(
         window: &Arc<dyn HostWindow>,
-    ) -> Arc<Mutex<Vec<ui_events::pointer::PointerEvent>>> {
+    ) -> Arc<Mutex<Vec<flui_platform_api::pointer::PointerEvent>>> {
         let events = Arc::new(Mutex::new(Vec::new()));
         let recorded = Arc::clone(&events);
         window.on_input(Box::new(move |input| {
@@ -2265,8 +2354,8 @@ mod native_windows {
         events
     }
 
-    fn kinds(events: &Mutex<Vec<ui_events::pointer::PointerEvent>>) -> Vec<&'static str> {
-        use ui_events::pointer::PointerEvent;
+    fn kinds(events: &Mutex<Vec<flui_platform_api::pointer::PointerEvent>>) -> Vec<&'static str> {
+        use flui_platform_api::pointer::PointerEvent;
         events
             .lock()
             .expect("pointer log")
@@ -2274,6 +2363,12 @@ mod native_windows {
             .map(|event| match event {
                 PointerEvent::Down(_) => "down",
                 PointerEvent::Up(_) => "up",
+                PointerEvent::ButtonChange(flui_platform_api::pointer::ButtonChange::Pressed(
+                    _,
+                )) => "button_down",
+                PointerEvent::ButtonChange(flui_platform_api::pointer::ButtonChange::Released(
+                    _,
+                )) => "button_up",
                 PointerEvent::Move(_) => "move",
                 PointerEvent::Cancel(_) => "cancel",
                 _ => "other",
@@ -2294,6 +2389,14 @@ mod native_windows {
             (VK_LBUTTON, mask & MK_LBUTTON != 0),
             (VK_RBUTTON, mask & MK_RBUTTON != 0),
             (VK_MBUTTON, false),
+            (
+                windows::Win32::UI::Input::KeyboardAndMouse::VK_XBUTTON1,
+                mask & 0x0020 != 0,
+            ),
+            (
+                windows::Win32::UI::Input::KeyboardAndMouse::VK_XBUTTON2,
+                mask & 0x0040 != 0,
+            ),
             (VK_SHIFT, mask & MK_SHIFT != 0),
             (VK_LSHIFT, mask & MK_SHIFT != 0),
         ])
@@ -2320,7 +2423,7 @@ mod native_windows {
     /// released outside the client area still reaches the window — at the
     /// sign-extended client coordinates of that outside point.
     fn press_captures_the_mouse_until_the_last_release() {
-        use ui_events::pointer::PointerEvent;
+        use flui_platform_api::pointer::PointerEvent;
         let platform = WindowsPlatform::new().expect("native Windows platform");
         let window = open(&platform, true);
         let hwnd = hwnd_of(&window);
@@ -2343,14 +2446,14 @@ mod native_windows {
         send_mouse(hwnd, WM_RBUTTONUP, 0, mouse_lparam(-40, -30));
         assert!(captured().is_invalid(), "the last release lets go");
 
-        assert_eq!(kinds(&events), ["down", "down", "up", "up"]);
+        assert_eq!(kinds(&events), ["down", "button_down", "button_up", "up"]);
         let scale = window.scale_factor();
         let log = events.lock().expect("pointer log");
         let PointerEvent::Up(last) = log.last().expect("last release") else {
             unreachable!("kinds checked above");
         };
         assert_eq!(
-            (last.state.position.x, last.state.position.y),
+            (last.sample.position.get().x, last.sample.position.get().y),
             (-40.0 / scale, -30.0 / scale),
             "an outside release keeps its negative client coordinates"
         );
@@ -2389,6 +2492,729 @@ mod native_windows {
         window.close();
     }
 
+    fn extended_mouse_buttons_share_contact_and_capture() {
+        use flui_platform_api::pointer::{ButtonChange, PointerButton, PointerEvent};
+        use windows::Win32::UI::WindowsAndMessaging::{WM_XBUTTONDOWN, WM_XBUTTONUP};
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let window = open(&platform, true);
+        let hwnd = hwnd_of(&window);
+        let events = record_pointer(&window);
+        send_mouse(
+            hwnd,
+            WM_XBUTTONDOWN,
+            (1 << 16) | 0x0020,
+            mouse_lparam(10, 10),
+        );
+        assert_eq!(captured(), hwnd, "the first extended button captures");
+        send_mouse(
+            hwnd,
+            WM_XBUTTONDOWN,
+            (2 << 16) | 0x0060,
+            mouse_lparam(10, 10),
+        );
+        send_mouse(hwnd, WM_XBUTTONUP, (1 << 16) | 0x0040, mouse_lparam(10, 10));
+        assert_eq!(captured(), hwnd, "another extended button retains capture");
+        send_mouse(hwnd, WM_XBUTTONUP, 2 << 16, mouse_lparam(-30, -20));
+        assert!(
+            captured().is_invalid(),
+            "the final extended release lets go"
+        );
+        assert_eq!(kinds(&events), ["down", "button_down", "button_up", "up"]);
+        let log = events.lock().expect("pointer log");
+        let [
+            PointerEvent::Down(first),
+            PointerEvent::ButtonChange(ButtonChange::Pressed(second)),
+            PointerEvent::ButtonChange(ButtonChange::Released(released)),
+            PointerEvent::Up(last),
+        ] = log.as_slice()
+        else {
+            panic!("the checked extended-button transitions");
+        };
+        assert_eq!(first.button(), PointerButton::BACK);
+        assert_eq!(second.button(), PointerButton::FORWARD);
+        assert!(second.buttons().contains(PointerButton::BACK));
+        assert!(second.buttons().contains(PointerButton::FORWARD));
+        assert!(!released.buttons().contains(PointerButton::BACK));
+        assert!(released.buttons().contains(PointerButton::FORWARD));
+        assert_eq!(last.button(), PointerButton::FORWARD);
+        assert!(last.buttons().is_empty());
+        assert_eq!(first.pointer.id, second.pointer.id);
+        assert_eq!(first.pointer.id, released.pointer.id);
+        assert_eq!(first.pointer.id, last.pointer.id);
+        assert_eq!(first.sample.pressure, None, "a mouse reports no sensor");
+        drop(log);
+        window.close();
+    }
+
+    #[expect(
+        unsafe_code,
+        reason = "moves capture between actual owned hidden windows"
+    )]
+    fn extended_mouse_capture_loss_cancels_and_recovers() {
+        use flui_platform_api::pointer::{CancelReason, PointerEvent};
+        use windows::Win32::UI::WindowsAndMessaging::{WM_XBUTTONDOWN, WM_XBUTTONUP};
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let window = open(&platform, true);
+        let thief = open(&platform, true);
+        let hwnd = hwnd_of(&window);
+        let events = record_pointer(&window);
+        send_mouse(
+            hwnd,
+            WM_XBUTTONDOWN,
+            (1 << 16) | 0x0020,
+            mouse_lparam(10, 10),
+        );
+        assert_eq!(captured(), hwnd, "an extended press captures");
+        let mut held = queue_state_for(0x0020);
+        // SAFETY: another live window created by this fixture on this thread.
+        unsafe { SetCapture(hwnd_of(&thief)) };
+        held.restore();
+        assert_eq!(kinds(&events), ["down", "cancel"]);
+        {
+            let log = events.lock().expect("pointer log");
+            let PointerEvent::Cancel(cancel) = &log[1] else {
+                panic!("capture loss must cancel");
+            };
+            assert_eq!(cancel.reason, CancelReason::CaptureLost);
+        }
+        // SAFETY: release this owner thread's fixture capture; no arguments.
+        unsafe { ReleaseCapture() }.expect("release the thief's capture");
+        send_mouse(
+            hwnd,
+            WM_XBUTTONDOWN,
+            (2 << 16) | 0x0040,
+            mouse_lparam(10, 10),
+        );
+        assert_eq!(captured(), hwnd, "a fresh press captures again");
+        send_mouse(hwnd, WM_XBUTTONUP, 2 << 16, mouse_lparam(10, 10));
+        assert_eq!(kinds(&events), ["down", "cancel", "down", "up"]);
+        assert!(captured().is_invalid());
+        thief.close();
+        window.close();
+    }
+
+    fn unknown_native_pointer_messages_do_not_invent_contacts() {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            WM_POINTERCAPTURECHANGED, WM_POINTERDOWN, WM_POINTERENTER, WM_POINTERLEAVE,
+            WM_POINTERUP, WM_POINTERUPDATE,
+        };
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let window = open(&platform, true);
+        let hwnd = hwnd_of(&window);
+        let events = record_pointer(&window);
+        for message in [
+            WM_POINTERDOWN,
+            WM_POINTERUPDATE,
+            WM_POINTERUP,
+            WM_POINTERCAPTURECHANGED,
+            WM_POINTERENTER,
+            WM_POINTERLEAVE,
+        ] {
+            send_mouse(hwnd, message, 0xffff, mouse_lparam(10, 10));
+        }
+        assert!(events.lock().expect("pointer log").is_empty());
+        send_mouse(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, mouse_lparam(10, 10));
+        send_mouse(hwnd, WM_LBUTTONUP, 0, mouse_lparam(10, 10));
+        assert_eq!(kinds(&events), ["down", "up"], "ordinary input recovers");
+        window.close();
+    }
+
+    #[expect(
+        unsafe_code,
+        reason = "real native pointer injection into an ephemeral shown test window"
+    )]
+    fn synthetic_touch_and_pen_reach_native_pointer_dispatch() {
+        use flui_platform_api::pointer::{PenTool, PointerEvent, PointerKind};
+        use windows::Win32::UI::{
+            Controls::{
+                CreateSyntheticPointerDevice, DestroySyntheticPointerDevice,
+                HSYNTHETICPOINTERDEVICE, POINTER_FEEDBACK_NONE, POINTER_TYPE_INFO,
+                POINTER_TYPE_INFO_0,
+            },
+            Input::Pointer::{
+                InjectSyntheticPointerInput, POINTER_FLAG_DOWN, POINTER_FLAG_INCONTACT,
+                POINTER_FLAG_INRANGE, POINTER_FLAG_UP, POINTER_FLAG_UPDATE, POINTER_INFO,
+                POINTER_PEN_INFO, POINTER_TOUCH_INFO,
+            },
+            WindowsAndMessaging::{
+                PEN_MASK_PRESSURE, PEN_MASK_ROTATION, PEN_MASK_TILT_X, PEN_MASK_TILT_Y, PT_PEN,
+                PT_TOUCH, TOUCH_MASK_CONTACTAREA, TOUCH_MASK_PRESSURE, WindowFromPoint,
+            },
+        };
+        struct Device(HSYNTHETICPOINTERDEVICE);
+        impl Drop for Device {
+            fn drop(&mut self) {
+                // SAFETY: this fixture uniquely owns the device returned by Create.
+                unsafe { DestroySyntheticPointerDevice(self.0) };
+            }
+        }
+        fn unsupported_host(error: &windows::core::Error) -> bool {
+            // Explicit host capability/permission refusals. Invalid arguments
+            // and sequencing failures are fixture defects, not coverage skips.
+            matches!(
+                error.code().0 as u32,
+                0x8007_0005 | 0x8007_0032 | 0x8007_0078 | 0x8000_4001
+            )
+        }
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let Some((window, _close)) = open_pointer_target(&platform) else {
+            return;
+        };
+        let hwnd = hwnd_of(&window);
+        pump_pointer_thread();
+        let mut target = POINT { x: 40, y: 40 };
+        // SAFETY: the live shown owner window and initialized point.
+        assert!(unsafe { ClientToScreen(hwnd, &raw mut target) }.as_bool());
+        // Injection uses actual hit testing, never hwndTarget as an override.
+        if unsafe { WindowFromPoint(target) } != hwnd {
+            eprintln!(
+                "CANNOT_VERIFY synthetic pointer delivery: shown target is occluded or the desktop is unavailable"
+            );
+            window.close();
+            return;
+        }
+        let events = record_pointer(&window);
+        for (native_kind, expected_kind) in [
+            (PT_TOUCH, PointerKind::Touch),
+            (PT_PEN, PointerKind::Pen { tool: PenTool::Tip }),
+        ] {
+            // SAFETY: one ephemeral synthetic device, no borrowed native resources.
+            let device = match unsafe {
+                CreateSyntheticPointerDevice(native_kind, 1, POINTER_FEEDBACK_NONE)
+            } {
+                Ok(device) => Device(device),
+                Err(error) => {
+                    assert!(
+                        unsupported_host(&error),
+                        "CreateSyntheticPointerDevice failed unexpectedly: {error}"
+                    );
+                    eprintln!(
+                        "CANNOT_VERIFY synthetic {expected_kind:?}: CreateSyntheticPointerDevice refused: {error}"
+                    );
+                    continue;
+                }
+            };
+            events.lock().expect("pointer log").clear();
+            let mut supported = true;
+            for (flags, pressure) in [
+                (
+                    POINTER_FLAG_DOWN | POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT,
+                    512,
+                ),
+                (
+                    POINTER_FLAG_UPDATE | POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT,
+                    768,
+                ),
+                (POINTER_FLAG_UP, 0),
+                (
+                    POINTER_FLAG_DOWN | POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT,
+                    512,
+                ),
+                (POINTER_FLAG_UP, 0),
+            ] {
+                let mut current_origin = POINT { x: 40, y: 40 };
+                // SAFETY: queries for this live ephemeral window do not redirect
+                // or fabricate the native injected target.
+                unsafe {
+                    assert!(ClientToScreen(hwnd, &raw mut current_origin).as_bool());
+                    assert_eq!(
+                        (current_origin.x, current_origin.y),
+                        (target.x, target.y),
+                        "owned target must not move during injection"
+                    );
+                    assert_eq!(
+                        WindowFromPoint(target),
+                        hwnd,
+                        "native injection must still hit the owned target"
+                    );
+                    assert_eq!(
+                        windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow(),
+                        hwnd,
+                        "owned target must remain foreground during injection"
+                    );
+                }
+                let info = POINTER_INFO {
+                    pointerType: native_kind,
+                    pointerId: 1,
+                    pointerFlags: flags,
+                    ptPixelLocation: target,
+                    ptPixelLocationRaw: target,
+                    ..Default::default()
+                };
+                let packet = if native_kind == PT_TOUCH {
+                    let contact = RECT {
+                        left: target.x - 10,
+                        top: target.y - 15,
+                        right: target.x + 10,
+                        bottom: target.y + 15,
+                    };
+                    POINTER_TYPE_INFO {
+                        r#type: native_kind,
+                        Anonymous: POINTER_TYPE_INFO_0 {
+                            touchInfo: POINTER_TOUCH_INFO {
+                                pointerInfo: info,
+                                touchMask: TOUCH_MASK_CONTACTAREA | TOUCH_MASK_PRESSURE,
+                                pressure,
+                                rcContact: contact,
+                                rcContactRaw: contact,
+                                ..Default::default()
+                            },
+                        },
+                    }
+                } else {
+                    POINTER_TYPE_INFO {
+                        r#type: native_kind,
+                        Anonymous: POINTER_TYPE_INFO_0 {
+                            penInfo: POINTER_PEN_INFO {
+                                pointerInfo: info,
+                                penMask: PEN_MASK_PRESSURE
+                                    | PEN_MASK_ROTATION
+                                    | PEN_MASK_TILT_X
+                                    | PEN_MASK_TILT_Y,
+                                pressure,
+                                rotation: 180,
+                                tiltX: 45,
+                                tiltY: 0,
+                                ..Default::default()
+                            },
+                        },
+                    }
+                };
+                // SAFETY: initialized union arm matches type and device; the
+                // packet slice remains alive for the synchronous native copy.
+                if let Err(error) = unsafe { InjectSyntheticPointerInput(device.0, &[packet]) } {
+                    assert!(
+                        unsupported_host(&error),
+                        "InjectSyntheticPointerInput failed unexpectedly: {error}"
+                    );
+                    eprintln!(
+                        "CANNOT_VERIFY synthetic {expected_kind:?}: InjectSyntheticPointerInput refused: {error}"
+                    );
+                    supported = false;
+                    break;
+                }
+                let limit = Instant::now() + Duration::from_millis(500);
+                while Instant::now() < limit {
+                    pump_pointer_thread();
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                // SAFETY: read the actual hit target after native queue pumping.
+                assert_eq!(
+                    unsafe { WindowFromPoint(target) },
+                    hwnd,
+                    "owned target must remain hit-testable after native dispatch"
+                );
+            }
+            if !supported {
+                continue;
+            }
+            let log = events.lock().expect("pointer log");
+            let downs: Vec<_> = log
+                .iter()
+                .filter_map(|event| {
+                    if let PointerEvent::Down(press) = event {
+                        (press.pointer.kind == expected_kind).then_some(press)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            // Successful injection with no producer delivery is a regression,
+            // not an unsupported-platform skip.
+            assert_eq!(downs.len(), 2, "{expected_kind:?}: {log:?}");
+            let ups: Vec<_> = log
+                .iter()
+                .filter_map(|event| {
+                    if let PointerEvent::Up(release) = event {
+                        (release.pointer.kind == expected_kind).then_some(release)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            assert_eq!(ups.len(), 2, "{expected_kind:?}: {log:?}");
+            assert!(
+                !log.iter().any(|event| match event {
+                    PointerEvent::ButtonChange(
+                        flui_platform_api::pointer::ButtonChange::Pressed(press),
+                    ) => press.pointer.kind == expected_kind,
+                    PointerEvent::ButtonChange(
+                        flui_platform_api::pointer::ButtonChange::Released(release),
+                    ) => release.pointer.kind == expected_kind,
+                    _ => false,
+                }),
+                "single-button injection must not invent another press on ENTER: {log:?}"
+            );
+            for (down, up) in downs.iter().zip(&ups) {
+                assert_eq!(down.pointer.kind, expected_kind);
+                assert!(
+                    down.pointer.device.is_some(),
+                    "native source handle retained"
+                );
+                assert_eq!(down.pointer, up.pointer);
+                assert!(
+                    up.sample.time >= down.sample.time,
+                    "native terminal sample cannot predate its admitted press: down={:?} up={:?}",
+                    down.sample.time,
+                    up.sample.time
+                );
+                assert_eq!(
+                    down.sample
+                        .pressure
+                        .map(flui_platform_api::pointer::Pressure::get),
+                    Some(0.5)
+                );
+                let point = down.sample.position.get();
+                assert_eq!(
+                    (point.x, point.y),
+                    (40.0 / window.scale_factor(), 40.0 / window.scale_factor())
+                );
+            }
+            assert_ne!(
+                downs[0].pointer.id, downs[1].pointer.id,
+                "fresh admission after Up"
+            );
+            assert!(log.iter().any(|event| matches!(event, PointerEvent::Move(movement) if movement.current().pressure.map(flui_platform_api::pointer::Pressure::get) == Some(0.75))), "actual update sensor reading: {log:?}");
+            if native_kind == PT_TOUCH {
+                let contact = downs[0]
+                    .sample
+                    .contact_size
+                    .expect("injected contact area")
+                    .get();
+                assert_eq!(
+                    (contact.width, contact.height),
+                    (20.0 / window.scale_factor(), 30.0 / window.scale_factor())
+                );
+            } else {
+                let orientation = downs[0]
+                    .sample
+                    .orientation
+                    .expect("reported both tilt axes");
+                assert!(
+                    (orientation.altitude().expect("altitude") - std::f64::consts::FRAC_PI_4).abs()
+                        < 1e-12
+                );
+                assert_eq!(orientation.azimuth(), Some(0.0));
+                assert!(
+                    (downs[0].sample.twist.expect("rotation").radians() - std::f64::consts::PI)
+                        .abs()
+                        < 1e-12
+                );
+            }
+        }
+        window.close();
+    }
+
+    #[expect(
+        unsafe_code,
+        reason = "drains actual native pointer broker messages on the child window's owner thread"
+    )]
+    fn pump_pointer_thread() {
+        for _ in 0..256 {
+            let mut message = MSG::default();
+            // SAFETY: this child owns every window on this thread, including
+            // the platform's message-only broker. No HWND filter excludes it.
+            if !unsafe { PeekMessageW(&raw mut message, None, 0, 0, PM_REMOVE) }.as_bool() {
+                return;
+            }
+            // SAFETY: dispatch the actual message retrieved by this thread.
+            unsafe {
+                let _ = TranslateMessage(&raw const message);
+                DispatchMessageW(&raw const message);
+            }
+        }
+        panic!("native pointer child queue did not drain");
+    }
+
+    #[expect(
+        unsafe_code,
+        reason = "real native mouse input directed to an ephemeral hit-tested window with cursor restoration"
+    )]
+    fn native_mouse_wheels_keep_hover_identity_and_signed_units() {
+        use flui_platform_api::pointer::{PointerEvent, PointerKind, ScrollUnit};
+        use windows::Win32::UI::{
+            Input::KeyboardAndMouse::{
+                INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_HWHEEL, MOUSEEVENTF_WHEEL, MOUSEINPUT,
+                SendInput,
+            },
+            WindowsAndMessaging::{GetCursorPos, SetCursorPos, WindowFromPoint},
+        };
+        struct Cursor(POINT);
+        impl Drop for Cursor {
+            fn drop(&mut self) {
+                // SAFETY: restore the position captured before this child row.
+                let _ = unsafe { SetCursorPos(self.0.x, self.0.y) };
+            }
+        }
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let Some((window, _close)) = open_pointer_target(&platform) else {
+            return;
+        };
+        let hwnd = hwnd_of(&window);
+        let mut target = POINT { x: 40, y: 40 };
+        let mut original = POINT::default();
+        // SAFETY: initialized points and a live owner-thread window.
+        unsafe {
+            assert!(ClientToScreen(hwnd, &raw mut target).as_bool());
+            GetCursorPos(&raw mut original).expect("capture cursor for restoration");
+        }
+        let _restore = Cursor(original);
+        if unsafe { WindowFromPoint(target) } != hwnd {
+            eprintln!(
+                "CANNOT_VERIFY native wheel: shown target is occluded or desktop unavailable"
+            );
+            window.close();
+            return;
+        }
+        let events = record_pointer(&window);
+        // SAFETY: this point was checked against our shown ephemeral target.
+        unsafe { SetCursorPos(target.x, target.y) }.expect("move cursor to owned target");
+        for _ in 0..25 {
+            pump_translated(hwnd);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        let hover = events
+            .lock()
+            .expect("pointer log")
+            .iter()
+            .find_map(|event| match event {
+                PointerEvent::Move(movement) if movement.pointer.kind == PointerKind::Mouse => {
+                    Some(movement.pointer)
+                }
+                PointerEvent::Enter(signal) if signal.pointer.kind == PointerKind::Mouse => {
+                    Some(signal.pointer)
+                }
+                _ => None,
+            })
+            .expect("actual native mouse hover identity");
+        events.lock().expect("pointer log").clear();
+        for flags in [MOUSEEVENTF_WHEEL, MOUSEEVENTF_HWHEEL] {
+            let input = INPUT {
+                r#type: INPUT_MOUSE,
+                Anonymous: INPUT_0 {
+                    mi: MOUSEINPUT {
+                        mouseData: 120,
+                        dwFlags: flags,
+                        ..Default::default()
+                    },
+                },
+            };
+            // SAFETY: initialized mouse union arm; cursor is over owned target.
+            assert_eq!(
+                unsafe { SendInput(&[input], std::mem::size_of::<INPUT>() as i32) },
+                1,
+                "native wheel injection accepted"
+            );
+            for _ in 0..25 {
+                pump_translated(hwnd);
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        }
+        let log = events.lock().expect("pointer log");
+        let scrolls: Vec<_> = log
+            .iter()
+            .filter_map(|event| {
+                if let PointerEvent::Scroll(scroll) = event {
+                    Some(scroll)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(
+            scrolls.len(),
+            2,
+            "exactly one dispatch per native wheel: {log:?}"
+        );
+        for (scroll, expected) in scrolls.iter().zip([(0.0, -1.0), (1.0, 0.0)]) {
+            assert_eq!(
+                scroll.pointer, hover,
+                "native wheel retains actual hover metadata"
+            );
+            assert_eq!(scroll.delta.unit(), ScrollUnit::Lines);
+            assert_eq!((scroll.delta.x(), scroll.delta.y()), expected);
+            assert_eq!(scroll.phase, None, "a wheel tick supplies no gesture phase");
+            let point = scroll.position.get();
+            assert_eq!(
+                (point.x, point.y),
+                (40.0 / window.scale_factor(), 40.0 / window.scale_factor())
+            );
+        }
+        drop(log);
+        window.close();
+    }
+
+    #[expect(
+        unsafe_code,
+        reason = "queued native wheel packets target an actual owned hidden HWND"
+    )]
+    fn fractional_native_wheel_packets_preserve_observed_precision_and_source() {
+        use flui_platform_api::pointer::{PointerEvent, ScrollPrecision, ScrollUnit};
+        use windows::Win32::UI::WindowsAndMessaging::{WM_MOUSEHWHEEL, WM_MOUSEWHEEL};
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let window = open(&platform, false);
+        let hwnd = hwnd_of(&window);
+        let events = record_pointer(&window);
+        pump_translated(hwnd);
+        // SAFETY: this owner-thread HWND stays live until the end of the row;
+        // the queued message contains only by-value mouse coordinates.
+        unsafe { PostMessageW(Some(hwnd), WM_MOUSEMOVE, WPARAM(0), mouse_lparam(40, 40)) }
+            .expect("queue actual hover source");
+        pump_translated(hwnd);
+        let source = events
+            .lock()
+            .expect("pointer log")
+            .iter()
+            .find_map(|event| {
+                if let PointerEvent::Move(movement) = event {
+                    Some(movement.pointer)
+                } else {
+                    None
+                }
+            })
+            .expect("native window procedure supplied hover metadata");
+        events.lock().expect("pointer log").clear();
+        let mut screen = POINT { x: 40, y: 40 };
+        // SAFETY: a writable POINT and this row's live HWND.
+        assert!(unsafe { ClientToScreen(hwnd, &raw mut screen) }.as_bool());
+        for (message, distance) in [
+            (WM_MOUSEWHEEL, 30_i16),
+            (WM_MOUSEWHEEL, -60),
+            (WM_MOUSEHWHEEL, 30),
+            (WM_MOUSEHWHEEL, -60),
+            (WM_MOUSEWHEEL, 120),
+            (WM_MOUSEHWHEEL, 120),
+            (WM_MOUSEWHEEL, 0),
+        ] {
+            let packet = WPARAM(usize::from(distance.cast_unsigned()) << 16);
+            // SAFETY: exact owned hidden HWND and native by-value wheel data;
+            // no global injection or focus/cursor changes occur.
+            unsafe {
+                PostMessageW(
+                    Some(hwnd),
+                    message,
+                    packet,
+                    mouse_lparam(
+                        i16::try_from(screen.x).expect("screen x fits native wheel coordinates"),
+                        i16::try_from(screen.y).expect("screen y fits native wheel coordinates"),
+                    ),
+                )
+            }
+            .expect("queue native wheel packet");
+            pump_translated(hwnd);
+        }
+        let log = events.lock().expect("pointer log");
+        let scrolls: Vec<_> = log
+            .iter()
+            .filter_map(|event| {
+                if let PointerEvent::Scroll(scroll) = event {
+                    Some(scroll)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(
+            scrolls.len(),
+            7,
+            "each native packet remains deliverable: {log:?}"
+        );
+        for (scroll, (x, y, precision)) in scrolls.iter().zip([
+            (0.0, -0.25, ScrollPrecision::Precise),
+            (0.0, 0.5, ScrollPrecision::Precise),
+            (0.25, 0.0, ScrollPrecision::Precise),
+            (-0.5, 0.0, ScrollPrecision::Precise),
+            (0.0, -1.0, ScrollPrecision::Unknown),
+            (1.0, 0.0, ScrollPrecision::Unknown),
+            (0.0, 0.0, ScrollPrecision::Unknown),
+        ]) {
+            assert_eq!(
+                scroll.pointer, source,
+                "packet classification retains actual source"
+            );
+            assert_eq!(scroll.delta.unit(), ScrollUnit::Lines);
+            assert_eq!((scroll.delta.x(), scroll.delta.y()), (x, y));
+            assert_eq!(
+                scroll.precision, precision,
+                "observed granularity is not hardware identity"
+            );
+            assert_eq!(scroll.phase, None);
+            assert_eq!(scroll.position.get().x, 40.0 / window.scale_factor());
+            assert_eq!(scroll.position.get().y, 40.0 / window.scale_factor());
+        }
+        drop(log);
+        window.close();
+    }
+
+    /// Delaying dispatch cannot compress the time between generated samples.
+    #[expect(
+        unsafe_code,
+        reason = "queues and dispatches mouse messages for an owned window"
+    )]
+    fn queued_mouse_samples_keep_native_message_time() {
+        use flui_platform_api::pointer::PointerEvent;
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        // A hidden native window excludes unrelated physical cursor traffic
+        // while retaining the actual queue and window-procedure producer.
+        let window = open(&platform, false);
+        let hwnd = hwnd_of(&window);
+        let events = record_pointer(&window);
+        // Remove creation traffic before the two queued samples.
+        pump_translated(hwnd);
+        events.lock().expect("pointer log").clear();
+        // SAFETY: an owned live HWND, with only integer mouse coordinates.
+        unsafe { PostMessageW(Some(hwnd), WM_MOUSEMOVE, WPARAM(0), mouse_lparam(5, 5)) }
+            .expect("queue first sample");
+        std::thread::sleep(Duration::from_millis(40));
+        // SAFETY: same owned window and by-value message data.
+        unsafe { PostMessageW(Some(hwnd), WM_MOUSEMOVE, WPARAM(0), mouse_lparam(6, 6)) }
+            .expect("queue second sample");
+        std::thread::sleep(Duration::from_millis(40));
+        let mut ticks = Vec::new();
+        for _ in 0..32 {
+            let mut message = MSG::default();
+            // SAFETY: writable MSG and a live window on this owner thread.
+            if !unsafe {
+                PeekMessageW(
+                    &raw mut message,
+                    Some(hwnd),
+                    WM_MOUSEMOVE,
+                    WM_MOUSEMOVE,
+                    PM_REMOVE,
+                )
+            }
+            .as_bool()
+            {
+                break;
+            }
+            ticks.push(message.time);
+            // SAFETY: dispatch the message just retrieved from this queue.
+            unsafe { DispatchMessageW(&raw const message) };
+        }
+        assert_eq!(ticks.len(), 2, "two queued native samples");
+        let native_gap = ticks[1].wrapping_sub(ticks[0]);
+        assert!(
+            native_gap >= 20,
+            "samples were generated apart before dispatch"
+        );
+        let log = events.lock().expect("pointer log");
+        let times: Vec<_> = log
+            .iter()
+            .filter_map(|event| match event {
+                PointerEvent::Move(update) => Some(update.current().time.as_nanos()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(times.len(), 2, "both samples delivered");
+        assert_eq!(
+            times[1] - times[0],
+            u64::from(native_gap) * 1_000_000,
+            "event timestamps preserve queue generation time rather than dispatch time"
+        );
+        drop(log);
+        window.close();
+    }
+
     /// A pointer event carries the modifiers of its message — the
     /// queue-synchronized state — not the keyboard at processing time.
     fn pointer_modifiers_are_the_message_state() {
@@ -2401,18 +3227,18 @@ mod native_windows {
         send_mouse(hwnd, WM_MOUSEMOVE, 0, mouse_lparam(6, 6));
 
         let log = events.lock().expect("pointer log");
-        let modifiers: Vec<keyboard_types::Modifiers> = log
+        let modifiers: Vec<flui_platform_api::keyboard::Modifiers> = log
             .iter()
             .map(|event| match event {
-                ui_events::pointer::PointerEvent::Move(update) => update.current.modifiers,
+                flui_platform_api::pointer::PointerEvent::Move(update) => update.modifiers,
                 _ => unreachable!("only moves were sent"),
             })
             .collect();
         assert_eq!(
             modifiers,
             [
-                keyboard_types::Modifiers::SHIFT,
-                keyboard_types::Modifiers::empty()
+                flui_platform_api::keyboard::Modifiers::SHIFT,
+                flui_platform_api::keyboard::Modifiers::NONE
             ]
         );
         drop(log);

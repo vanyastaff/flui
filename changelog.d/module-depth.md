@@ -52,8 +52,6 @@
   fails, retaining the first failure across redraw and owner completion.
 - Notify development agents only after native window initialization remains live;
   closing a window during activation cannot hand over a failed installation.
-- Preserve measured pointer samples when pending moves are combined, retaining
-  bounded history and only the newest prediction.
 - Deliver pending pointer motion before keyboard and IME callbacks without ending
   pointer contacts, preserving the first callback failure and the following input.
 - Route surface resize through the installed frame driver's lifetime, preserving

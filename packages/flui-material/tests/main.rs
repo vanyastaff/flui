@@ -222,6 +222,10 @@ fn text_input_contracts() {
             text_field::error_line_sits_below_the_indicator_outside_the_tap_target,
         ),
         (
+            "text_field::replacing and unmounting the field withdraws its node subscription",
+            text_field::replacing_and_unmounting_the_field_withdraws_its_node_subscription,
+        ),
+        (
             "text_form_field::validator error reaches the input decorator error line",
             text_form_field::validator_error_reaches_the_input_decorator_error_line,
         ),

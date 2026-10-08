@@ -1,11 +1,11 @@
 //! Input event types for cross-platform support
 //!
-//! This module re-exports W3C-compliant event types from the `ui-events`
-//! crate and provides the conversion helpers backends use to fill them.
+//! Platform dispatch carries the owned pointer and keyboard vocabulary
+//! (ADR-0143), alongside IME and external drag-and-drop events.
 //!
 //! # Design
 //!
-//! 1. **W3C compliant** - standard `ui-events` types everywhere
+//! 1. **Owned contracts** - validated FLUI input values at the public boundary
 //! 2. **Platform agnostic** - the same types work on desktop, mobile, and web
 //! 3. **No duplication** - a backend converts native events into these types
 //! 4. **Concrete** - no generics in the public API
@@ -15,27 +15,14 @@
 //!     ↓
 //! Platform backend (converts to logical pixels)
 //!     ↓
-//! ui-events types (W3C PointerEvent, KeyboardEvent)
+//! pointer::PointerEvent / keyboard::KeyEvent
 //!     ↓
 //! flui_interaction (gesture recognition)
 //! ```
 //!
-//! The `ui-events` re-exports are ADR-0089 debt: this crate's own types
-//! replace them before its first release.
-
+use crate::{keyboard::KeyEvent, pointer::PointerEvent};
 use flui_foundation::DataTransferId;
 use flui_foundation::geometry::{Offset, Point};
-/// Re-export scroll events
-pub use ui_events::ScrollDelta;
-/// Re-export W3C keyboard event from ui-events
-pub use ui_events::keyboard::KeyboardEvent;
-/// Re-export of the `keyboard-types` key and modifier vocabulary, through
-/// `ui-events` (which re-exports that crate whole).
-pub use ui_events::keyboard::{Key, Modifiers};
-/// Re-export W3C pointer events
-pub use ui_events::pointer::{
-    PointerButton, PointerButtons, PointerEvent, PointerId, PointerType, PointerUpdate,
-};
 
 /// Result of dispatching an input event through a callback
 ///
@@ -88,29 +75,22 @@ impl Default for DispatchEventResult {
 
 /// Platform input event wrapper
 ///
-/// This enum wraps ui-events types for platform-specific dispatching.
+/// This enum carries FLUI-owned types for platform-specific dispatching.
 /// Platform implementations convert native events to these types.
 ///
 /// # Pointer positions are logical pixels
 ///
-/// `PointerState::position` is typed `PhysicalPosition` by `ui-events`, but
-/// every backend fills it with **logical** pixels — window points, not
-/// device pixels — and the framework reads it that way with no further
-/// scaling (`flui-interaction`'s `PointerEventExt::position`).
-/// `PointerState::scale_factor` travels alongside for a consumer that needs
-/// the device-pixel value back. A backend whose OS reports device pixels
-/// (winit, Android) divides before filling the field; one that reports
-/// points already (AppKit, UIKit, CSS pixels on the web) passes them
-/// through. Getting this wrong is invisible at scale 1 and moves every
-/// touch off-screen at any other scale, which is how the Android backend
-/// shipped its first emulator run (2026-09-22).
+/// Pointer samples use validated `PointerPosition` values in logical pixels.
+/// A backend whose OS reports device pixels divides by the window scale before
+/// constructing those values; one reporting points or CSS pixels passes them
+/// through. Geometry and device metadata remain distinct typed values.
 #[derive(Debug, Clone)]
 pub enum PlatformInput {
-    /// Pointer event (mouse, touch, pen) - W3C compliant
+    /// Pointer, scrolling, trackpad or device-lifecycle event.
     Pointer(PointerEvent),
 
     /// Keyboard event
-    Keyboard(KeyboardEvent),
+    Keyboard(KeyEvent),
 
     /// IME composition/commit event. See [`ImeEvent`](crate::ImeEvent) for the
     /// vocabulary and [`crate::PlatformTextInput`] for the
@@ -135,7 +115,7 @@ impl PlatformInput {
 
     /// Extract keyboard event if this is a keyboard input
     #[inline]
-    pub fn as_keyboard(&self) -> Option<&KeyboardEvent> {
+    pub fn as_keyboard(&self) -> Option<&KeyEvent> {
         match self {
             PlatformInput::Keyboard(event) => Some(event),
             PlatformInput::Pointer(_) | PlatformInput::Ime(_) | PlatformInput::DragDrop(_) => None,

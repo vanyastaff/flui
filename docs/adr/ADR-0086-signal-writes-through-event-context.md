@@ -17,6 +17,9 @@
   - `&Reactive` removal and both `reactive()` accessors (§8 step 3);
   - `StateCell::schedule` refused during `build` (§7).
 - **Date:** 2026-09-25
+- **Superseded-by:** [ADR-0161](ADR-0161-immutable-owner-local-gesture-recognizers.md),
+  only §4's gesture extension signature compatibility promise; the signal write
+  boundary and widget-side `WriterSource` wrapping remain in force
 - **Revised:** 2026-09-28 — the transitional `SignalWrite` callback is a retained `FnMut`
   envelope invoked at most once; success disposes captures after redraw demand is durable, while
   callback panic retains the opaque bundle because aggregate drop glue cannot be made
@@ -207,10 +210,15 @@ configuration compares equal; invoked outside any UI runtime, it is dropped with
 
 ### 4. The gesture arena does not change
 
-`GestureArenaMember` and the recognizer callback aliases (`tap.rs:91`, `drag.rs:113-121`) keep
-their signatures. A widget captures its `WriterSource` in the recognizer closure (legal: the
-aliases are `Rc`) and calls `source.write(|cx| user_callback(cx, details))`. Consequences:
-`flui-interaction` does not depend on the reactive graph, and custom recognizers do not break.
+*Partially superseded by [ADR-0161](ADR-0161-immutable-owner-local-gesture-recognizers.md)
+on 2026-10-07.* The original gesture-signature compatibility promise no longer
+applies: gesture extension traits, construction and lifecycle use the immutable
+owner-local API recorded there.
+
+The write boundary is unchanged. A widget captures its `WriterSource` in the
+recognizer closure (legal: callback ownership is `Rc`) and calls
+`source.write(|cx| user_callback(cx, details))`. `flui-interaction` does not
+depend on the reactive graph; gesture callbacks do not receive an `EventCx`.
 
 ### 5. Listener, animation-status and post-frame callbacks
 
@@ -286,7 +294,7 @@ the signatures and production dispatch sites decide the event/query classificati
 
 | Migrated family | Dispatch and ownership |
 |---|---|
-| GestureDetector, Listener, MouseRegion | Recognizer/pointer dispatch; the mounted presentation supplies the writer. Recognizer contracts are unchanged. |
+| GestureDetector, Listener, MouseRegion | Recognizer/pointer dispatch; the mounted presentation supplies the writer. Gesture construction and attachment follow ADR-0161; the widget write boundary is unchanged. |
 | Focus and editable text | Focus/key, IME and clipboard dispatch; lifecycle autofocus is outside the signal build guard. The focus regression tests include initial mount, reconfiguration and node replacement. |
 | Forms | `save`, `reset` and `did_change` validate owner identity and build phase before mutation, then forward the caller's context; validators remain queries. |
 | Material and Cupertino controls | Gesture contexts pass through composition; owner-local keyboard bridges acquire a source in lifecycle. Drawer callbacks use their mounted controller's source. |

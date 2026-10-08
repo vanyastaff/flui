@@ -139,7 +139,7 @@ impl<'a> RenderObjectContext<'a> {
     pub fn register_scroll(
         &self,
         handler: impl Fn(
-            &flui_interaction::events::ScrollEventData,
+            &flui_platform_api::pointer::ScrollEvent,
         ) -> flui_interaction::routing::EventPropagation
         + 'static,
     ) -> Result<flui_interaction::routing::ScrollTarget, RenderObjectContextError> {
@@ -157,7 +157,7 @@ impl<'a> RenderObjectContext<'a> {
         &self,
         target: flui_interaction::routing::ScrollTarget,
         handler: impl Fn(
-            &flui_interaction::events::ScrollEventData,
+            &flui_platform_api::pointer::ScrollEvent,
         ) -> flui_interaction::routing::EventPropagation
         + 'static,
     ) -> Result<(), RenderObjectContextError> {
@@ -193,7 +193,7 @@ impl<'a> RenderObjectContext<'a> {
     pub fn register_pan_zoom(
         &self,
         handler: impl Fn(
-            &flui_interaction::PointerPanZoomEvent,
+            flui_interaction::routing::PanZoomDispatch<'_>,
         ) -> flui_interaction::routing::EventPropagation
         + 'static,
     ) -> Result<flui_interaction::routing::PanZoomTarget, RenderObjectContextError> {
@@ -211,7 +211,7 @@ impl<'a> RenderObjectContext<'a> {
         &self,
         target: flui_interaction::routing::PanZoomTarget,
         handler: impl Fn(
-            &flui_interaction::PointerPanZoomEvent,
+            flui_interaction::routing::PanZoomDispatch<'_>,
         ) -> flui_interaction::routing::EventPropagation
         + 'static,
     ) -> Result<(), RenderObjectContextError> {

@@ -42,11 +42,9 @@ flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
 # Wasm-safe Instant for input timestamps (std re-export on native).
 web-time = { workspace = true }
 
-# UI Events - W3C compliant event types
-ui-events = { workspace = true }
 cursor-icon = { workspace = true }
-keyboard-types = "0.8"
-dpi = "0.1"
+# Native keyboard adapters are confined to Winit and Android.
+keyboard-types = { workspace = true, optional = true }
 
 # Windowing (for platform implementations)
 winit = { workspace = true, optional = true }
@@ -62,9 +60,6 @@ winit = { workspace = true, optional = true }
 # `[patch.crates-io]` pointing at the upstream git repo (and add that repo
 # to `deny.toml`'s `sources.allow-git`) rather than reviving a hand table.
 ui-events-winit = { version = "0.3", optional = true }
-
-# Clipboard (for winit backend)
-arboard = { workspace = true, optional = true }
 
 # Error handling & logging. `anyhow` is deliberately absent here: the
 # public API is typed (`PlatformError`/`OpenWindowError`, thiserror), and
@@ -90,6 +85,11 @@ bitflags = "2.6"
 # assertions never expand outside this crate's own test builds.
 static_assertions = { workspace = true }
 
+# The winit fallback uses a desktop clipboard; mobile backends own their
+# native clipboard implementations even when every feature is enabled.
+[target.'cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))'.dependencies]
+arboard = { workspace = true, optional = true }
+
 # Windows platform
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { workspace = true, features = [
@@ -98,6 +98,7 @@ windows = { workspace = true, features = [
     "Win32_System_WinRT",
     "Win32_Foundation",
     "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Input_Pointer",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Controls",
     "Win32_UI_Shell",
@@ -112,6 +113,7 @@ windows = { workspace = true, features = [
     "Win32_System_Ole",
     "Win32_System_Threading",
     "Win32_Security",
+    "Win32_System_SystemInformation",
     # TSF: the thread manager, document managers and the `ITextStoreACP`
     # text store (ADR-0090 §3). `Win32_UI_Input_Ime` (IMM32) stays off: the
     # text services are the only IME path. `Variant` is required by the
@@ -142,6 +144,7 @@ objc2-foundation = { workspace = true, features = [
     "NSDictionary",
     "NSValue",
     "NSThread",
+    "NSProcessInfo",
     "NSGeometry",
     "NSEnumerator",
     "NSRunLoop",
@@ -181,7 +184,10 @@ dispatch = "0.2"
 
 # Android platform
 [target.'cfg(target_os = "android")'.dependencies]
+ui-events = { workspace = true }
+keyboard-types = { workspace = true }
 android-activity = { version = "0.6", features = ["native-activity"] }
+jni.workspace = true
 
 # Native-only async dependencies (not available on wasm32)
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -195,6 +201,7 @@ tempfile = { workspace = true, optional = true }
 # Web/WASM platform
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
+js-sys.workspace = true
 web-sys = { version = "0.3", features = [
     # Core DOM
     "Window",
@@ -264,6 +271,7 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "NSObject",
     "NSString",
     "NSSet",
+    "NSProcessInfo",
     "NSArray",
     "NSDictionary",
     "NSNotification",
@@ -286,6 +294,8 @@ objc2-ui-kit = { version = "0.3.2", default-features = false, features = [
     "UISceneOptions",
     "UIWindowScene",
     "UIEvent",
+    "UIGestureRecognizer",
+    "UIHoverGestureRecognizer",
     "UIGeometry",
     "UIKey",
     "UIResponder",
@@ -336,7 +346,13 @@ a11y = ["dep:accesskit_unix", "dep:accesskit_windows", "dep:accesskit_macos"]
 
 # winit fallback backend — primary on Linux until native Wayland/X11 lands
 # (roadmap Cross.P); optional on Windows/macOS.
-winit-backend = ["dep:winit", "dep:arboard", "dep:crossbeam-channel", "dep:ui-events-winit"]
+winit-backend = [
+    "dep:winit",
+    "dep:arboard",
+    "dep:crossbeam-channel",
+    "dep:ui-events-winit",
+    "dep:keyboard-types",
+]
 
 # Web platform
 # Honest note (verified 2026-08-04): no-op selector — zero
@@ -368,6 +384,13 @@ workspace = true
 # dependency again: no `anyhow` token may appear in this crate's public API.
 anyhow = { workspace = true }
 tracing-subscriber = { workspace = true }
+# Exact diagnostics for owner capabilities and retired public names.
+trybuild = { workspace = true }
+
+# Nested Cargo stays separate from the native platform contract binary.
+[[test]]
+name = "compiler_guards"
+path = "tests/compiler_guards.rs"
 
 [[test]]
 name = "platform_it"

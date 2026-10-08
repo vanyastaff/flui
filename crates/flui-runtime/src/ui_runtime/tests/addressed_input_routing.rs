@@ -4,7 +4,7 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use flui_foundation::geometry::Offset;
-use flui_interaction::events::{PointerType, make_down_event, make_up_event};
+use flui_interaction::events::{PointerKind, make_down_event, make_up_event};
 use flui_interaction::routing::{FocusNode, KeyEventResult};
 use flui_interaction::testing::input::KeyEventBuilder;
 use flui_rendering::hit_testing::HitTestBehavior;
@@ -60,7 +60,8 @@ pub(crate) fn input_stamped_for_b_never_reaches_as_arena() {
     let a_id = ui_runtime.presentation_id();
     let b_id = ui_runtime.install_second_presentation_for_test();
 
-    let down = make_down_event(Offset::new(4.0, 6.0), PointerType::Mouse);
+    let down =
+        make_down_event(Offset::new(4.0, 6.0), PointerKind::Mouse).expect("finite test position");
     ui_runtime.enter(|ui_runtime| {
         ui_runtime.handle_input_addressed(b_id, PlatformInput::Pointer(down));
     });
@@ -117,7 +118,7 @@ pub(crate) fn panicking_keyboard_dispatch_keeps_priority_over_a_panicking_wake()
     let mut backend = ScriptedSink::always_presents();
     ui_runtime.render_frame(&mut backend);
     ui_runtime.notify_presentation_focus_gained(b_id);
-    node.request_focus();
+    let _ = node.request_focus();
     let _ = ui_runtime.take_redraw_request();
     let _ = ui_runtime
         .presentations
@@ -216,7 +217,10 @@ fn press(ui_runtime: &UiRuntime, id: PresentationId) {
     ui_runtime.enter(|ui_runtime| {
         ui_runtime.handle_input_addressed(
             id,
-            PlatformInput::Pointer(make_down_event(Offset::new(4.0, 6.0), PointerType::Touch)),
+            PlatformInput::Pointer(
+                make_down_event(Offset::new(4.0, 6.0), PointerKind::Touch)
+                    .expect("finite test position"),
+            ),
         );
     });
 }
@@ -239,7 +243,10 @@ fn release(ui_runtime: &UiRuntime, id: PresentationId) {
     ui_runtime.enter(|ui_runtime| {
         ui_runtime.handle_input_addressed(
             id,
-            PlatformInput::Pointer(make_up_event(Offset::new(4.0, 6.0), PointerType::Touch)),
+            PlatformInput::Pointer(
+                make_up_event(Offset::new(4.0, 6.0), PointerKind::Touch)
+                    .expect("finite test position"),
+            ),
         );
     });
 }

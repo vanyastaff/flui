@@ -578,7 +578,8 @@ impl HeadlessHost {
     /// The UI runtime coalesces pointer moves and dispatches them at the next
     /// frame; the flush makes a synthetic move observable before that frame,
     /// so a test sees its effect immediately. It runs the same queue and
-    /// dispatch code the frame would.
+    /// dispatch code the frame would. An opted-in resampling presentation
+    /// retains measured moves until its owner frame is pumped.
     ///
     /// # Panics
     ///
@@ -590,7 +591,9 @@ impl HeadlessHost {
                 ui_runtime.handle_input_addressed(ui_runtime.presentation_id(), input);
             }));
             let flushed = catch_unwind(AssertUnwindSafe(|| {
-                ui_runtime.gestures().flush_pending_moves();
+                if !ui_runtime.gestures().is_resampling_enabled() {
+                    ui_runtime.gestures().flush_pending_moves();
+                }
                 ui_runtime.gestures().drain_deferred_arena_resolutions();
             }));
             match (delivered, flushed) {
@@ -606,6 +609,18 @@ impl HeadlessHost {
                 (Ok(()), Ok(())) => {}
             }
         });
+    }
+
+    /// Set exactly this window's presentation policy through the runtime owner.
+    ///
+    /// # Errors
+    /// The runtime refuses a mode change while the presentation has a contact.
+    pub fn set_pointer_resampling(
+        &self,
+        window: HeadlessWindowId,
+        policy: crate::PointerResampling,
+    ) -> Result<(), crate::PointerResamplingError> {
+        self.ui_runtime.set_pointer_resampling(window.0, policy)
     }
 
     /// The pointer left the window: the UI runtime sweeps hover state, so every

@@ -39,6 +39,9 @@ pub use flui_widgets as widgets;
 /// ```compile_fail,E0603
 /// use flui_sdk::view::__runtime::BindingRuntime;
 /// ```
+///
+/// The exact module-privacy diagnostic is pinned by `trybuild_ui::ui_tests`
+/// in `tests/compiler_guards.rs`, alongside a compiling composition-root path.
 pub mod view {
     pub use flui_view::*;
     #[expect(
@@ -59,6 +62,7 @@ pub mod interaction {
     pub use flui_interaction::DragDownDetails;
     pub use flui_interaction::GestureEndReason;
     pub use flui_interaction::routing::FocusNode;
+    pub use flui_interaction::routing::FocusSubscription;
 }
 
 /// Custom painting and the paint, style and text values, at the paths `flui::painting` uses.

@@ -1,45 +1,15 @@
-//! [`FrameStamp`] — the frame-identity group threaded through the raster
-//! boundary: which presentation produced a frame, at what per-UI runtime epoch,
-//! against which raster surface configuration.
+//! [`FrameStamp`] bundles the typed presentation address, per-UI runtime frame
+//! epoch, raster surface generation and GPU resource generation that cross
+//! the raster boundary together.
 //!
-//! # Why a bundled type
+//! Every axis is required. In particular, [`GpuResourceGeneration`] and
+//! [`SurfaceGeneration`] protect different failure boundaries and must both
+//! be checked before rendering (ADR-0045 decision 4).
 //!
-//! `flui_layer::SceneSnapshot` used to hold these three values as three flat
-//! fields, each threaded separately through its own positional constructor
-//! argument. Bundling them into one value here is a real simplification for
-//! `SceneSnapshot`: its own identity collapses from three fields to one
-//! (`stamp: FrameStamp`).
-//!
-//! # What bundling does *not* buy: construction is not additive
-//!
-//! An earlier revision of this type used a typestate builder on the claim
-//! that it would make a *future* field addition to `FrameStamp` non-
-//! breaking. That claim was tested — by literally adding a field — and was
-//! false: no value-type construction shape in Rust, positional constructor
-//! or typestate builder alike, makes adding a *required* field additive.
-//! Additivity is available only for *optional* fields, and ADR-0045
-//! decision 4's [`GpuResourceGeneration`] axis cannot be optional (the
-//! decision requires both generations to be checked before a frame
-//! renders). That field landed for real in the same change as this
-//! paragraph's correction (not merely tested and reverted): adding it
-//! changed [`FrameStamp::new`]'s signature and broke every call site that
-//! called it — **six, across three crates**, each named directly by the
-//! compiler as an arity mismatch: this module's own unit test and its
-//! positive doctest (`flui-foundation`); `scene_snapshot.rs`'s stamp helper
-//! (`flui-layer`); and the `raster_owner.rs` test helper, the
-//! `raster_backpressure` bench and the `raster_backpressure_allocation`
-//! integration test (`flui-engine`). The `compile_fail` doctest below was a
-//! seventh site that needed different handling — see its own note, updated
-//! in the same change rather than left describing a field that had not
-//! landed yet. An earlier revision of this paragraph said "three, all in
-//! `flui-engine`"; the compiler named six, and a paragraph whose whole
-//! purpose is to be the trustworthy version of a claim that was previously
-//! untrustworthy has to survive being checked.
-//! That is a real, compiler-guided, small-blast-radius breaking change —
-//! narrowed from five positional arguments (`SceneSnapshot`'s own former
-//! shape) to four, not eliminated — and no amount of builder ceremony
-//! changes that, so this type uses the plain constructor the honest version
-//! of that claim implies.
+//! [`FrameStamp::new`] takes these four values directly. A builder would not
+//! make adding another required value compatible with existing callers:
+//! each caller must still supply it. The plain constructor exposes that
+//! requirement without another construction protocol.
 
 use crate::epoch::{FrameEpoch, GpuResourceGeneration, SurfaceGeneration};
 use crate::id::PresentationAddress;
@@ -68,16 +38,13 @@ use crate::id::PresentationAddress;
 ///
 /// # `#[non_exhaustive]`, and what it does and does not do here
 ///
-/// This struct is deliberately `#[non_exhaustive]`. That constrains
-/// *matching* from outside this crate — an external struct-literal pattern
-/// without `..` fails to compile — never construction; see
-/// [`FrameStamp::new`]'s own doc for why no annotation makes a future
-/// required field additive to construction. The benefit is real but
-/// narrow: this workspace has no consumer of `FrameStamp` outside this
-/// crate that destructures it today, so the guard is not yet load-bearing,
-/// but it costs nothing (no destructuring pattern exists anywhere in this
-/// workspace for it to complicate) and it is scoped honestly to the one
-/// thing `#[non_exhaustive]` actually buys.
+/// As specified by the [Rust Reference], `#[non_exhaustive]` prevents
+/// external struct-literal construction and requires `..` in external
+/// struct patterns. Callers construct a stamp through [`FrameStamp::new`].
+/// The attribute does not make a required addition to that constructor's
+/// arguments compatible with existing calls.
+///
+/// [Rust Reference]: https://doc.rust-lang.org/reference/attributes/type_system.html#the-non_exhaustive-attribute
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrameStamp {
@@ -111,15 +78,11 @@ impl FrameStamp {
     ///     UiRuntimeId, SurfaceGeneration,
     /// };
     ///
-    /// let stamp = FrameStamp::new(
-    ///     PresentationAddress {
-    ///         ui_runtime_id: UiRuntimeId::new(1),
-    ///         presentation_id: PresentationId::new(1),
-    ///     },
-    ///     FrameEpoch::ZERO,
-    ///     SurfaceGeneration::ZERO,
-    ///     GpuResourceGeneration::ZERO,
-    /// );
+    /// let address = PresentationAddress {
+    ///     ui_runtime_id: UiRuntimeId::new(1),
+    ///     presentation_id: PresentationId::new(1),
+    /// };
+    /// let stamp = FrameStamp::new(address, FrameEpoch::ZERO, SurfaceGeneration::ZERO, GpuResourceGeneration::ZERO);
     ///
     /// assert_eq!(stamp.epoch, FrameEpoch::ZERO);
     /// ```
@@ -127,16 +90,6 @@ impl FrameStamp {
     /// Swapping `epoch` and `surface_generation` — the two fields whose
     /// underlying representation looks alike (both wrap a `u64` counter) —
     /// does not compile:
-    ///
-    /// **This block went vacuous once, and was fixed in the same change**
-    /// that added `gpu_resource_generation` as the fourth field: it would
-    /// otherwise fail on arity rather than on the type transposition its
-    /// comment names, reporting success while testing nothing. It is kept
-    /// at four arguments (transposing the same two as before, with the new
-    /// fourth argument supplied correctly) precisely so the failure stays
-    /// `E0308` on the transposed pair rather than becoming `E0061` on the
-    /// count — re-confirmed by extraction against this crate's own source
-    /// after the field landed, not assumed from the shape of the diff.
     ///
     /// ```compile_fail
     /// use flui_foundation::{
@@ -148,14 +101,9 @@ impl FrameStamp {
     ///     ui_runtime_id: UiRuntimeId::new(1),
     ///     presentation_id: PresentationId::new(1),
     /// };
-    /// // ERROR[E0308]: expected `FrameEpoch`, found `SurfaceGeneration` —
-    /// // the two arguments are transposed, and each is a distinct newtype.
-    /// let _ = FrameStamp::new(
-    ///     address,
-    ///     SurfaceGeneration::ZERO,
-    ///     FrameEpoch::ZERO,
-    ///     GpuResourceGeneration::ZERO,
-    /// );
+    /// let stamp = FrameStamp::new(address, SurfaceGeneration::ZERO, FrameEpoch::ZERO, GpuResourceGeneration::ZERO);
+    ///
+    /// assert_eq!(stamp.epoch, FrameEpoch::ZERO);
     /// ```
     #[must_use]
     pub fn new(

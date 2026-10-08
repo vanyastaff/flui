@@ -7,19 +7,22 @@
 
 use std::{
     cell::{Cell, RefCell},
-    cmp::Ordering,
     collections::VecDeque,
+    num::NonZeroU64,
     rc::{Rc, Weak},
     sync::atomic::{AtomicU64, Ordering as AtomicOrdering},
 };
 
+use super::traversal::{FocusTraversalOverrides, GroupConfig, GroupOrderCache, GroupOrderSnapshot};
 use flui_foundation::ListenerId;
 use flui_foundation::geometry::Rect;
+use flui_painting::typography::TextDirection;
+use flui_platform_api::keyboard::KeyEvent;
 use thiserror::Error;
 
 use super::focus::FocusClosePanic;
 use crate::__runtime::{CloseMode, CloseTombstone};
-use crate::{FocusManager, events::KeyEvent};
+use crate::FocusManager;
 
 pub use crate::ids::FocusNodeId;
 
@@ -33,7 +36,7 @@ fn allocate_focus_node_id(counter: &AtomicU64) -> FocusNodeId {
             |current| (current != 0).then(|| current.checked_add(1).unwrap_or(0)),
         )
         .expect("BUG: focus node identity capacity exhausted");
-    FocusNodeId::new(raw)
+    FocusNodeId::new(NonZeroU64::new(raw).expect("BUG: allocated focus identity is nonzero"))
 }
 
 /// Owner-local callback for handling key events.
@@ -56,7 +59,11 @@ pub type NodeContext = Rc<dyn std::any::Any>;
 pub type FocusNodeChangeCallback = Rc<dyn Fn()>;
 
 /// Result of one focus-node key handler.
+///
+/// These three outcomes form the closed propagation algebra: continue, consume,
+/// or stop without consuming.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[must_use]
 pub enum KeyEventResult {
     /// Stop propagation and consume the event.
     Handled,
@@ -67,8 +74,13 @@ pub enum KeyEventResult {
 }
 
 impl KeyEventResult {
-    /// Combine several handler channels on one node.
+    /// Whether native default handling should be prevented.
     #[must_use]
+    pub const fn is_handled(self) -> bool {
+        matches!(self, Self::Handled)
+    }
+
+    /// Combine several handler channels on one node.
     pub fn combine(self, other: Self) -> Self {
         use KeyEventResult::{Handled, Ignored, SkipRemainingHandlers};
         match (self, other) {
@@ -81,6 +93,7 @@ impl KeyEventResult {
 
 /// A structural focus-tree mutation failed.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum FocusTreeError {
     /// The mutation would create a parent cycle.
     #[error(
@@ -144,6 +157,8 @@ pub enum FocusTreeError {
 
 /// Result of a node-level focus request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+#[must_use]
 pub enum FocusRequestOutcome {
     /// Accepted — applied immediately, or, when requested from inside a
     /// focus-change listener, queued and applied after the in-flight
@@ -162,6 +177,8 @@ pub enum FocusRequestOutcome {
 
 /// Result of detaching through a [`FocusAttachment`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+#[must_use]
 pub enum FocusDetachOutcome {
     /// The live attachment was detached.
     Detached,
@@ -284,18 +301,42 @@ impl FocusAttachment {
     }
 }
 
+/// Ownership of one focus-node listener registration.
+///
+/// Dropping the subscription withdraws its listener. The subscription holds a
+/// weak node reference, so retaining it cannot keep the focus tree alive.
+/// Withdrawal commits before callback captures are retired and follows the
+/// owner's existing panic-preservation policy.
+#[must_use = "retain the subscription for as long as the listener should remain installed"]
+#[derive(Debug)]
+pub struct FocusSubscription {
+    node: Weak<FocusNode>,
+    listener_id: ListenerId,
+}
+
+impl Drop for FocusSubscription {
+    fn drop(&mut self) {
+        if let Some(node) = self.node.upgrade() {
+            node.remove_listener(self.listener_id);
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FocusNodeRegistrationKind {
     KeyHandler,
     RectProvider,
     Context,
+    TraversalGroup,
+    TraversalOverrides,
 }
 
 /// Generation-checked ownership of one replaceable [`FocusNode`] property.
 ///
 /// A registration is returned by
 /// [`FocusNode::register_on_key_event`],
-/// [`FocusNode::register_rect_provider`] or [`FocusNode::register_context`].
+/// [`FocusNode::register_rect_provider`], [`FocusNode::register_context`],
+/// [`FocusNode::register_traversal_group`] or [`FocusNode::register_traversal_overrides`].
 /// Dropping it clears the installed
 /// value only when no later writer has replaced that property. This lets a
 /// widget clean up the callback it installed without erasing newer
@@ -339,6 +380,12 @@ impl FocusNodeRegistration {
                         FocusNodeRegistrationKind::Context => {
                             node.context_generation.get() == self.generation
                         }
+                        FocusNodeRegistrationKind::TraversalGroup => {
+                            node.traversal_group_generation.get() == self.generation
+                        }
+                        FocusNodeRegistrationKind::TraversalOverrides => {
+                            node.traversal_overrides_generation.get() == self.generation
+                        }
                     }
             })
     }
@@ -369,6 +416,14 @@ impl FocusNodeRegistration {
             }
             FocusNodeRegistrationKind::Context => {
                 node.clear_context_generation(self.generation);
+            }
+            FocusNodeRegistrationKind::TraversalGroup => {
+                node.clear_traversal_group_generation(self.generation);
+            }
+            FocusNodeRegistrationKind::TraversalOverrides => {
+                if node.traversal_overrides_generation.get() == self.generation {
+                    *node.traversal_overrides.borrow_mut() = FocusTraversalOverrides::default();
+                }
             }
         }
     }
@@ -414,6 +469,10 @@ pub struct FocusNode {
     pending_focus_request: Cell<bool>,
     attachment_generation: Cell<u64>,
     on_key_event_generation: Cell<u64>,
+    traversal_group: RefCell<Option<GroupConfig>>,
+    traversal_group_generation: Cell<u64>,
+    traversal_overrides: RefCell<FocusTraversalOverrides>,
+    traversal_overrides_generation: Cell<u64>,
 }
 
 pub(super) struct ClosedFocusNode {
@@ -422,6 +481,7 @@ pub(super) struct ClosedFocusNode {
     rect_provider: Option<RectProvider>,
     context: Option<NodeContext>,
     policy: Option<Rc<dyn FocusTraversalPolicy>>,
+    group_policy: Option<Rc<dyn FocusTraversalPolicy>>,
 }
 
 impl ClosedFocusNode {
@@ -432,6 +492,7 @@ impl ClosedFocusNode {
             rect_provider,
             context,
             policy,
+            group_policy,
         } = self;
         // The order a healthy close always kept: key handler, listeners,
         // rect provider, context.
@@ -443,6 +504,7 @@ impl ClosedFocusNode {
         failure.retire(rect_provider);
         failure.retire(context);
         failure.retire(policy);
+        failure.retire(group_policy);
         failure.retire(node);
     }
 }
@@ -491,6 +553,10 @@ impl FocusNode {
             pending_focus_request: Cell::new(false),
             attachment_generation: Cell::new(1),
             on_key_event_generation: Cell::new(0),
+            traversal_group: RefCell::new(None),
+            traversal_group_generation: Cell::new(0),
+            traversal_overrides: RefCell::new(FocusTraversalOverrides::default()),
+            traversal_overrides_generation: Cell::new(0),
         })
     }
 
@@ -603,14 +669,22 @@ impl FocusNode {
     }
 
     /// Current traversal geometry.
+    ///
+    /// Providers may replace themselves reentrantly. Snapshot retirement runs
+    /// outside the provider borrow and preserves the first provider failure.
     pub fn rect(&self) -> Rect<f64> {
         let provider = self.rect_provider.borrow().clone();
-        if let Some(provider) = provider
-            && let Some(rect) = provider()
-        {
-            return rect;
-        }
-        self.rect.get()
+        let mut failure = FocusClosePanic::for_rejection(self.close_mode());
+        let rect = provider.as_ref().and_then(|provider| {
+            if failure.preserving() {
+                None
+            } else {
+                failure.invoke(|| provider()).flatten()
+            }
+        });
+        failure.retire(provider);
+        failure.finish();
+        rect.unwrap_or_else(|| self.rect.get())
     }
 
     /// Store fallback traversal geometry.
@@ -744,8 +818,83 @@ impl FocusNode {
         next
     }
 
+    /// Install weak linear traversal links with generation-checked cleanup.
+    pub fn register_traversal_overrides(
+        self: &Rc<Self>,
+        overrides: FocusTraversalOverrides,
+    ) -> FocusNodeRegistration {
+        let generation = Self::next_property_generation(&self.traversal_overrides_generation);
+        if !self.is_closed() {
+            *self.traversal_overrides.borrow_mut() = overrides;
+        }
+        FocusNodeRegistration::new(
+            self,
+            generation,
+            FocusNodeRegistrationKind::TraversalOverrides,
+        )
+    }
+
+    /// Establish a policy boundary without introducing a focus scope or history.
+    pub fn register_traversal_group(
+        self: &Rc<Self>,
+        policy: Rc<dyn FocusTraversalPolicy>,
+        direction: TextDirection,
+        edge: TraversalEdgeBehavior,
+    ) -> FocusNodeRegistration {
+        let generation = Self::next_property_generation(&self.traversal_group_generation);
+        let mut failure = FocusClosePanic::for_rejection(self.close_mode());
+        if self.is_closed() {
+            failure.retire(policy);
+        } else {
+            let previous = self.traversal_group.borrow_mut().replace(GroupConfig {
+                policy,
+                direction,
+                edge,
+            });
+            if let Some(previous) = previous {
+                failure.retire(previous.policy);
+            }
+        }
+        failure.finish();
+        FocusNodeRegistration::new(self, generation, FocusNodeRegistrationKind::TraversalGroup)
+    }
+
+    fn clear_traversal_group_generation(&self, generation: u64) {
+        if self.traversal_group_generation.get() != generation {
+            return;
+        }
+        let previous = self.traversal_group.borrow_mut().take();
+        let mut failure = FocusClosePanic::for_rejection(self.close_mode());
+        if let Some(previous) = previous {
+            failure.retire(previous.policy);
+        }
+        failure.finish();
+    }
+
+    pub(super) fn traversal_group_snapshot(&self) -> Option<GroupConfig> {
+        self.traversal_group.borrow().clone()
+    }
+    pub(super) fn traversal_group_edge(&self) -> Option<TraversalEdgeBehavior> {
+        self.traversal_group
+            .borrow()
+            .as_ref()
+            .map(|group| group.edge)
+    }
+    pub(super) fn traversal_override_target(
+        &self,
+        direction: TraversalDirection,
+    ) -> Option<Rc<FocusNode>> {
+        self.traversal_overrides.borrow().target(direction)
+    }
+    pub(super) fn traversal_close_mode(&self) -> CloseMode {
+        self.close_mode()
+    }
+    pub(super) fn traversal_geometry_snapshot(&self) -> (Option<RectProvider>, Rect<f64>) {
+        (self.rect_provider.borrow().clone(), self.rect.get())
+    }
+
     /// Register a listener for focus or focusability changes on this node.
-    pub fn add_listener(&self, callback: FocusNodeChangeCallback) -> ListenerId {
+    pub(super) fn add_listener(&self, callback: FocusNodeChangeCallback) -> ListenerId {
         let id = ListenerId::new(self.next_listener_id.get());
         let next = self
             .next_listener_id
@@ -763,8 +912,16 @@ impl FocusNode {
         id
     }
 
+    /// Subscribe to focus or focusability changes until the returned guard is dropped.
+    pub fn subscribe(self: &Rc<Self>, callback: FocusNodeChangeCallback) -> FocusSubscription {
+        FocusSubscription {
+            node: Rc::downgrade(self),
+            listener_id: self.add_listener(callback),
+        }
+    }
+
     /// Remove one node listener.
-    pub fn remove_listener(&self, id: ListenerId) {
+    pub(super) fn remove_listener(&self, id: ListenerId) {
         let removed = {
             let mut listeners = self.listeners.borrow_mut();
             listeners
@@ -772,24 +929,27 @@ impl FocusNode {
                 .position(|(held, _)| *held == id)
                 .map(|index| listeners.remove(index))
         };
-        drop(removed);
-    }
-
-    /// Number of node listeners, for deterministic lifecycle tests.
-    #[cfg(any(test, feature = "testing"))]
-    #[must_use]
-    pub fn listener_count(&self) -> usize {
-        self.listeners.borrow().len()
+        let mut failure = FocusClosePanic::for_rejection(self.close_mode());
+        if let Some((_, callback)) = removed {
+            failure.retire(callback);
+        }
+        failure.finish();
     }
 
     pub(crate) fn notify_listeners(&self) {
+        let mut failure = FocusClosePanic::for_rejection(self.close_mode());
+        self.notify_listeners_in_round(&mut failure);
+        failure.finish();
+    }
+
+    pub(super) fn notify_listeners_in_round(&self, failure: &mut FocusClosePanic) {
         if self.parent.borrow().is_none() {
             return;
         }
-        self.notify_listeners_after_tree_change();
+        self.notify_tree_change_in_round(failure);
     }
 
-    pub(crate) fn notify_listeners_after_tree_change(&self) {
+    pub(super) fn notify_tree_change_in_round(&self, failure: &mut FocusClosePanic) {
         let ids: Vec<_> = self.listeners.borrow().iter().map(|(id, _)| *id).collect();
         for id in ids {
             // Mirrors `FocusManager::notify_listeners`: a listener removed
@@ -802,10 +962,16 @@ impl FocusNode {
                 .find(|(registered, _)| *registered == id)
                 .map(|(_, listener)| Rc::clone(listener));
             if let Some(listener) = listener {
-                let mut failure = FocusClosePanic::for_rejection(self.close_mode());
+                let owner = self.manager();
+                let failure_guard = owner
+                    .as_ref()
+                    .map(|owner| owner.notification_failure_scope(failure));
+                failure.adopt(self.close_mode());
                 let _ = failure.invoke(|| listener());
+                if let Some(guard) = &failure_guard {
+                    guard.preserve(failure.preserving());
+                }
                 failure.retire(listener);
-                failure.finish();
             }
         }
     }
@@ -829,7 +995,10 @@ impl FocusNode {
     fn close_mode(&self) -> CloseMode {
         match &*self.manager_binding.borrow() {
             ManagerBinding::Closed(tombstone) => tombstone.mode(),
-            _ => CloseMode::Ordinary,
+            ManagerBinding::Bound(owner) => owner.upgrade().map_or(CloseMode::Ordinary, |owner| {
+                owner.notification_failure_mode()
+            }),
+            ManagerBinding::Unbound => CloseMode::Ordinary,
         }
     }
 
@@ -968,11 +1137,11 @@ impl FocusNode {
         }
     }
 
-    /// Iterate depth-first over descendants.
+    /// Iterate depth-first over descendants in sibling attachment order.
     pub fn descendants(&self) -> impl Iterator<Item = Rc<FocusNode>> {
-        DescendantIterator {
-            stack: self.children(),
-        }
+        let mut stack = self.children();
+        stack.reverse();
+        DescendantIterator { stack }
     }
 
     /// Depth in the focus tree.
@@ -1253,7 +1422,7 @@ impl FocusNode {
 
     fn fulfill_pending_subtree(node: &Rc<FocusNode>) {
         if node.pending_focus_request.replace(false) {
-            node.request_focus();
+            let _ = node.request_focus();
         }
         for child in node.children() {
             Self::fulfill_pending_subtree(&child);
@@ -1348,6 +1517,12 @@ impl FocusNode {
             let key_handler = node.on_key_event.borrow_mut().take();
             let rect_provider = node.rect_provider.borrow_mut().take();
             let context = node.context.borrow_mut().take();
+            let group_policy = node
+                .traversal_group
+                .borrow_mut()
+                .take()
+                .map(|group| group.policy);
+            *node.traversal_overrides.borrow_mut() = FocusTraversalOverrides::default();
             let policy = node.as_scope().map(|scope| {
                 scope.pending_first_focus.set(false);
                 scope.focus_history.borrow_mut().clear();
@@ -1362,6 +1537,7 @@ impl FocusNode {
                 rect_provider,
                 context,
                 policy,
+                group_policy,
             });
         }
         retired
@@ -1418,8 +1594,8 @@ pub(crate) fn focus_node_identity_exhaustion_preserves_notifications() {
                 .push((name, node.has_primary_focus()));
         }));
     }
-    first.request_focus();
-    last.request_focus();
+    let _ = first.request_focus();
+    let _ = last.request_focus();
     for _ in 0..8 {
         let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             FocusNode::create_with_counter(None, None, &counter)
@@ -1427,7 +1603,7 @@ pub(crate) fn focus_node_identity_exhaustion_preserves_notifications() {
         .expect_err("exhausted allocator must permanently refuse");
         flui_foundation::panic::retain_opaque_payload(failure);
     }
-    first.request_focus();
+    let _ = first.request_focus();
     assert_eq!(
         *notifications.borrow(),
         vec![
@@ -1449,7 +1625,7 @@ pub(crate) fn focus_node_identity_exhaustion_preserves_notifications() {
         .root_scope()
         .attach_node(&fresh)
         .expect("fresh node attaches");
-    fresh.request_focus();
+    let _ = fresh.request_focus();
     assert!(Rc::ptr_eq(
         &manager.primary_focus().expect("fresh focus"),
         &fresh
@@ -1511,6 +1687,7 @@ pub struct FocusScopeNode {
     autofocus: Cell<bool>,
     traps_focus: Cell<bool>,
     traversal_policy: RefCell<Rc<dyn FocusTraversalPolicy>>,
+    text_direction: Cell<TextDirection>,
     traversal_edge_behavior: Cell<TraversalEdgeBehavior>,
 }
 
@@ -1538,6 +1715,7 @@ impl FocusScopeNode {
             autofocus: Cell::new(false),
             traps_focus: Cell::new(false),
             traversal_policy: RefCell::new(Rc::new(ReadingOrderPolicy)),
+            text_direction: Cell::new(TextDirection::Ltr),
             traversal_edge_behavior: Cell::new(TraversalEdgeBehavior::default()),
         })
     }
@@ -1592,6 +1770,19 @@ impl FocusScopeNode {
             return;
         }
         let _prev = std::mem::replace(&mut *self.traversal_policy.borrow_mut(), policy);
+    }
+
+    /// Reading direction used by this scope's traversal policy.
+    #[must_use]
+    pub fn text_direction(&self) -> TextDirection {
+        self.text_direction.get()
+    }
+
+    /// Record the inherited direction without replacing the custom policy.
+    pub fn set_text_direction(&self, direction: TextDirection) {
+        if !self.inner.is_closed() {
+            self.text_direction.set(direction);
+        }
     }
 
     /// Most recently focused structurally live descendant.
@@ -1738,6 +1929,14 @@ impl FocusScopeNode {
     /// outgoing values are retained rather than running arbitrary destruction.
     /// During an existing unwind, sorting is skipped and the order is empty.
     pub fn sorted_traversal_order(&self, cursor: Option<&Rc<FocusNode>>) -> Vec<Rc<FocusNode>> {
+        self.sorted_traversal_order_with_cache(cursor, &mut Vec::new())
+    }
+
+    fn sorted_traversal_order_with_cache(
+        &self,
+        cursor: Option<&Rc<FocusNode>>,
+        cache: &mut GroupOrderCache,
+    ) -> Vec<Rc<FocusNode>> {
         let mut nodes = self.collect_focusable_nodes();
         if let Some(cursor) = cursor
             && !nodes.iter().any(|node| Rc::ptr_eq(node, cursor))
@@ -1745,24 +1944,34 @@ impl FocusScopeNode {
         {
             nodes.push(Rc::clone(cursor));
         }
+        let groups = GroupOrderSnapshot::new(&nodes, &self.inner);
         let policy = Rc::clone(&self.traversal_policy.borrow());
+        let direction = self.text_direction.get();
         let mut failure = FocusClosePanic::for_rejection(self.close_mode());
-        let mut order = None;
-        failure.run(|| order = Some(policy.sort_descendants(&nodes)));
+        failure.run(|| policy.order(&mut nodes, direction));
+        groups.order(&mut nodes, cache, &mut failure);
+        groups.retire(&mut failure);
         failure.retire(policy);
-        for node in nodes {
-            failure.retire(node);
-        }
-        failure.finish_with(order).unwrap_or_default()
+        failure.finish_with(nodes)
     }
 
     /// Resolve one traversal step without applying it.
     pub fn resolve_traversal(
         &self,
         current: Option<&Rc<FocusNode>>,
-        forward: bool,
+        direction: TraversalDirection,
     ) -> ResolvedStep {
-        let order = self.sorted_traversal_order(current);
+        self.resolve_traversal_with_cache(current, direction, &mut Vec::new())
+    }
+
+    pub(super) fn resolve_traversal_with_cache(
+        &self,
+        current: Option<&Rc<FocusNode>>,
+        direction: TraversalDirection,
+        cache: &mut GroupOrderCache,
+    ) -> ResolvedStep {
+        let forward = matches!(direction, TraversalDirection::Forward);
+        let order = self.sorted_traversal_order_with_cache(current, cache);
 
         let Some(current) = current else {
             let target = if forward {
@@ -1814,21 +2023,25 @@ impl FocusScopeNode {
 
     /// Focus the next node in this scope.
     pub fn focus_next_in_scope(&self, current: &Rc<FocusNode>) -> bool {
-        self.perform(self.step(Some(current), true))
+        self.perform(self.step(Some(current), TraversalDirection::Forward))
     }
 
     /// Focus the previous node in this scope.
     pub fn focus_previous_in_scope(&self, current: &Rc<FocusNode>) -> bool {
-        self.perform(self.step(Some(current), false))
+        self.perform(self.step(Some(current), TraversalDirection::Backward))
     }
 
     /// Resolve a step, following parent-scope edge behavior.
-    pub fn step(&self, current: Option<&Rc<FocusNode>>, forward: bool) -> ResolvedStep {
+    pub fn step(
+        &self,
+        current: Option<&Rc<FocusNode>>,
+        direction: TraversalDirection,
+    ) -> ResolvedStep {
         let mut scope: Option<Rc<FocusScopeNode>> = None;
         loop {
             let step = scope.as_ref().map_or_else(
-                || self.resolve_traversal(current, forward),
-                |scope| scope.resolve_traversal(current, forward),
+                || self.resolve_traversal(current, direction),
+                |scope| scope.resolve_traversal(current, direction),
             );
             if !matches!(step, ResolvedStep::RetryInParent) {
                 return step;
@@ -1907,6 +2120,15 @@ impl std::fmt::Debug for FocusScopeNode {
     }
 }
 
+/// The direction through the scope's ordered traversal candidates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TraversalDirection {
+    /// Move toward the following candidate.
+    Forward,
+    /// Move toward the preceding candidate.
+    Backward,
+}
+
 /// What traversal does when it runs off a scope edge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TraversalEdgeBehavior {
@@ -1922,16 +2144,25 @@ pub enum TraversalEdgeBehavior {
 }
 
 /// A typed traversal intent.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub enum ResolvedStep {
     /// Move primary focus to this node.
     Focus(Rc<FocusNode>),
     /// Release primary focus.
     Unfocus,
     /// No focus change.
+    #[default]
     None,
     /// Re-resolve the step in the enclosing scope.
     RetryInParent,
+}
+
+impl crate::retain::Retain for ResolvedStep {
+    fn retain(self) {
+        if let Self::Focus(node) = self {
+            crate::retain::Retain::retain(node);
+        }
+    }
 }
 
 impl std::fmt::Debug for ResolvedStep {
@@ -1952,35 +2183,80 @@ fn is_traversable(node: &Rc<FocusNode>) -> bool {
 
 /// Orders traversal candidates.
 pub trait FocusTraversalPolicy: std::fmt::Debug {
-    /// Return `nodes` in policy order.
-    fn sort_descendants(&self, nodes: &[Rc<FocusNode>]) -> Vec<Rc<FocusNode>>;
+    /// Permute the supplied candidates in place using the scope's direction.
+    ///
+    /// Implementations must retain every supplied node exactly once. Direction
+    /// is frozen for the current traversal; changes apply to the next call.
+    fn order(&self, nodes: &mut [Rc<FocusNode>], direction: TextDirection);
 }
 
-/// Top-to-bottom, then left-to-right traversal.
+/// Top-to-bottom rows, then leading-edge traversal within each row.
+///
+/// A row has a shared, strictly nonempty vertical intersection; a tall node
+/// cannot bridge disjoint rows. Exact ties retain structural order. Invalid
+/// or empty rectangles follow valid rows in structural order.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ReadingOrderPolicy;
 
 impl FocusTraversalPolicy for ReadingOrderPolicy {
-    fn sort_descendants(&self, nodes: &[Rc<FocusNode>]) -> Vec<Rc<FocusNode>> {
-        Self::sorted_indices(nodes)
-            .into_iter()
-            .map(|index| Rc::clone(&nodes[index]))
-            .collect()
-    }
-}
-
-impl ReadingOrderPolicy {
-    fn sorted_indices(nodes: &[Rc<FocusNode>]) -> Vec<usize> {
-        let mut indices: Vec<_> = (0..nodes.len()).collect();
-        indices.sort_by(|&left, &right| {
-            let left_rect = nodes[left].rect();
-            let right_rect = nodes[right].rect();
-            let y = left_rect.top().total_cmp(&right_rect.top());
-            if y != Ordering::Equal {
-                return y;
-            }
-            left_rect.left().total_cmp(&right_rect.left())
+    fn order(&self, nodes: &mut [Rc<FocusNode>], direction: TextDirection) {
+        // Rect providers are user code: snapshot once before comparisons.
+        let rectangles: Vec<_> = nodes.iter().map(|node| node.rect()).collect();
+        let (mut spatial, fallback): (Vec<_>, Vec<_>) = (0..nodes.len()).partition(|&index| {
+            let rect = rectangles[index];
+            [rect.left(), rect.top(), rect.right(), rect.bottom()]
+                .into_iter()
+                .all(f64::is_finite)
+                && rect.left() < rect.right()
+                && rect.top() < rect.bottom()
         });
-        indices
+        spatial.sort_by(|&left, &right| {
+            rectangles[left]
+                .top()
+                .total_cmp(&rectangles[right].top())
+                .then_with(|| left.cmp(&right))
+        });
+        let mut row_start = 0;
+        while row_start < spatial.len() {
+            let first = rectangles[spatial[row_start]];
+            let mut top = first.top();
+            let mut bottom = first.bottom();
+            let mut row_end = row_start + 1;
+            while row_end < spatial.len() {
+                let next = rectangles[spatial[row_end]];
+                let shared_top = top.max(next.top());
+                let shared_bottom = bottom.min(next.bottom());
+                if shared_top >= shared_bottom {
+                    break;
+                }
+                top = shared_top;
+                bottom = shared_bottom;
+                row_end += 1;
+            }
+            spatial[row_start..row_end].sort_by(|&left, &right| {
+                let left_rect = rectangles[left];
+                let right_rect = rectangles[right];
+                match direction {
+                    TextDirection::Ltr => left_rect.left().total_cmp(&right_rect.left()),
+                    TextDirection::Rtl => right_rect.right().total_cmp(&left_rect.right()),
+                }
+                .then_with(|| left.cmp(&right))
+            });
+            row_start = row_end;
+        }
+        spatial.extend(fallback);
+        // Convert source indices into destinations, then follow permutation
+        // cycles without cloning or retiring any candidate handle.
+        let mut destinations = vec![0; nodes.len()];
+        for (destination, source) in spatial.into_iter().enumerate() {
+            destinations[source] = destination;
+        }
+        for index in 0..nodes.len() {
+            while destinations[index] != index {
+                let destination = destinations[index];
+                nodes.swap(index, destination);
+                destinations.swap(index, destination);
+            }
+        }
     }
 }

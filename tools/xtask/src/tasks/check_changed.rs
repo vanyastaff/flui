@@ -15,9 +15,7 @@ use anyhow::{Context, bail};
 
 use super::exec::{Cmd, Host, Runner, Step, installed, installed_targets};
 use super::{
-    ANDROID_TARGET, IOS_TARGET, MACOS_TARGET, PLATFORM_TARGETS, WASM_TARGET, WINDOWS_TARGET,
-    android_runner, cli_windows, desktop_mcp_clippy, engine_testing_clippy, hack_passes,
-    ios_runner, platform_clippy, wasm_facade_check,
+    WASM_TARGET, driver_tests, engine_testing_clippy, hack_passes, native, wasm_facade_check,
 };
 use crate::change_scope;
 use crate::util::repo_root;
@@ -35,11 +33,6 @@ struct Lane {
     test_args: String,
     features: String,
     platform: bool,
-    cross_platform: bool,
-    cross_app: bool,
-    cross_cli: bool,
-    cross_desktop_mcp: bool,
-    cross_ios: bool,
     wasm_args: String,
     wasm_facade: bool,
     hack_args: String,
@@ -72,11 +65,6 @@ impl Lane {
             test_args: text("test_args")?,
             features: text("features")?,
             platform: flag("platform", text("platform")?)?,
-            cross_platform: flag("cross_platform", text("cross_platform")?)?,
-            cross_app: flag("cross_app", text("cross_app")?)?,
-            cross_cli: flag("cross_cli", text("cross_cli")?)?,
-            cross_desktop_mcp: flag("cross_desktop_mcp", text("cross_desktop_mcp")?)?,
-            cross_ios: flag("cross_ios", text("cross_ios")?)?,
             wasm_args: text("wasm_args")?,
             wasm_facade: flag("wasm_facade", text("wasm_facade")?)?,
             hack_args: text("hack_args")?,
@@ -125,7 +113,13 @@ fn outside_checkout(target: &Path, cwd: &Path, checkout: &Path) -> bool {
 
 /// The compiling steps for `lane`, after `cargo fmt`. `targets` are the installed rustup targets; `have_hack` says whether
 /// cargo-hack is.
-fn plan(lane: &Lane, host: Host, targets: &BTreeSet<String>, have_hack: bool) -> Vec<Step> {
+fn plan(
+    lane: &Lane,
+    host: Host,
+    targets: &BTreeSet<String>,
+    have_hack: bool,
+    native: &[Step],
+) -> Vec<Step> {
     let have = |target: &str| targets.contains(target);
     let mut steps: Vec<Step> = vec![
         Cmd::cargo(["clippy"])
@@ -137,13 +131,18 @@ fn plan(lane: &Lane, host: Host, targets: &BTreeSet<String>, have_hack: bool) ->
         steps.push(engine_testing_clippy().into());
     }
     if !lane.test_args.is_empty() {
-        steps.push(
-            Cmd::cargo(["nextest", "run"])
-                .split(&lane.test_args)
-                .args(["--locked", "--no-fail-fast", "--no-tests=pass"])
-                .split(&lane.features)
-                .into(),
-        );
+        let split_driver = host == Host::Windows && lane.packages.is_empty();
+        if split_driver {
+            steps.push(driver_tests().into());
+        }
+        let mut tests = Cmd::cargo(["nextest", "run"])
+            .split(&lane.test_args)
+            .args(["--locked", "--no-fail-fast", "--no-tests=pass"])
+            .split(&lane.features);
+        if split_driver {
+            tests = tests.args(["--exclude", "xtask"]);
+        }
+        steps.push(tests.into());
     }
     if !lane.doc_args.is_empty() {
         steps.push(
@@ -162,56 +161,7 @@ fn plan(lane: &Lane, host: Host, targets: &BTreeSet<String>, have_hack: bool) ->
                 .into(),
         );
     }
-    // cfg-gated code this host's build never compiles (the cross-typecheck commands)
-    if lane.cross_platform {
-        for target in PLATFORM_TARGETS {
-            steps.push(if have(target) {
-                platform_clippy(target).into()
-            } else {
-                Step::Note(format!(
-                    "check-changed: skipped flui-platform on {target} (rustup target add {target}; CI runs it)"
-                ))
-            });
-        }
-    }
-    if lane.cross_app {
-        steps.push(if have(ANDROID_TARGET) {
-            android_runner().into()
-        } else {
-            Step::Note(format!(
-                "check-changed: skipped the android runner (rustup target add {ANDROID_TARGET}; CI runs it)"
-            ))
-        });
-    }
-    if lane.cross_cli {
-        steps.push(if have(WINDOWS_TARGET) {
-            cli_windows().into()
-        } else {
-            Step::Note(format!(
-                "check-changed: skipped flui-cli on windows (rustup target add {WINDOWS_TARGET}; CI runs it)"
-            ))
-        });
-    }
-    if lane.cross_desktop_mcp {
-        for target in [WINDOWS_TARGET, MACOS_TARGET] {
-            steps.push(if have(target) {
-                desktop_mcp_clippy(target).into()
-            } else {
-                Step::Note(format!(
-                    "check-changed: skipped flui-desktop-mcp on {target} (rustup target add {target}; CI runs it)"
-                ))
-            });
-        }
-    }
-    if lane.cross_ios {
-        steps.push(if host == Host::MacOs && have(IOS_TARGET) {
-            ios_runner().into()
-        } else {
-            Step::Note(format!(
-                "check-changed: skipped the iOS runner (needs macOS + rustup target add {IOS_TARGET}; run it locally on macOS)"
-            ))
-        });
-    }
+    steps.extend_from_slice(native);
     if !lane.wasm_args.is_empty() {
         if have(WASM_TARGET) {
             steps.push(
@@ -241,16 +191,59 @@ fn plan(lane: &Lane, host: Host, targets: &BTreeSet<String>, have_hack: bool) ->
         }
     }
     if lane.platform {
+        steps.push(super::platform_compiler_tests().into());
         steps.push(if host == Host::Linux {
-            super::platform_suite_linux().into()
+            super::platform_suite_linux()
+                .args(["-E", "not (group(trybuild))"])
+                .into()
         } else {
             Step::Note(
-                "check-changed: flui-platform is in scope, but its suite needs xvfb-run (Linux); CI runs it"
+                "check-changed: flui-platform is in scope, but its native suite needs xvfb-run (Linux); CI runs it"
                     .to_owned(),
             )
         });
     }
     steps
+}
+
+/// Admit a local native command only when its target and native toolchain exist.
+fn local_native_step(
+    target: &str,
+    step: Step,
+    host: Host,
+    targets: &BTreeSet<String>,
+    have_tool: impl Fn(&str) -> bool,
+    have_android_ndk: impl Fn() -> (bool, bool),
+) -> Step {
+    if targets.contains(target) {
+        if target == super::ANDROID_TARGET {
+            let (compiler, archiver) = have_android_ndk();
+            if !compiler || !archiver {
+                return Step::Note(format!(
+                    "check-changed: skipped native source checks on {target} (install the Android NDK and configure CC_aarch64_linux_android and AR_aarch64_linux_android; CI runs it)"
+                ));
+            }
+        }
+        let wrapper = if target == super::WINDOWS_TARGET && host != Host::Windows {
+            Some("cargo-xwin")
+        } else if target == super::MACOS_TARGET && host != Host::MacOs {
+            Some("cargo-zigbuild")
+        } else {
+            None
+        };
+        if let Some(tool) = wrapper
+            && !have_tool(tool)
+        {
+            return Step::Note(format!(
+                "check-changed: skipped native source checks on {target} (cargo install --locked {tool}; CI runs it)"
+            ));
+        }
+        step
+    } else {
+        Step::Note(format!(
+            "check-changed: skipped native source checks on {target} (rustup target add {target}; CI runs it)"
+        ))
+    }
 }
 
 /// `cargo xtask check-changed`.
@@ -288,11 +281,38 @@ pub(super) fn run(runner: Runner, base: &str) -> anyhow::Result<ExitCode> {
         }
     );
     let have_hack = !lane.hack_args.is_empty() && installed("cargo", &["hack", "--version"]);
+    let targets = installed_targets();
+    let mut native_steps = Vec::new();
+    for (target, step) in native::plans(
+        &repo_root(),
+        &lane.packages,
+        Host::current(),
+        native::FeatureSet::RequiredTargets,
+    )? {
+        native_steps.push(local_native_step(
+            target,
+            step,
+            Host::current(),
+            &targets,
+            |tool| installed(tool, &["--version"]),
+            || {
+                (
+                    crate::doctor::android_compiler_available(&crate::doctor::android_tool(
+                        "CC", "clang",
+                    )),
+                    crate::doctor::android_archiver_available(&crate::doctor::android_tool(
+                        "AR", "llvm-ar",
+                    )),
+                )
+            },
+        ));
+    }
     runner.steps(&plan(
         &lane,
         Host::current(),
-        &installed_targets(),
+        &targets,
         have_hack,
+        &native_steps,
     ))?;
     Ok(ExitCode::SUCCESS)
 }
@@ -317,11 +337,6 @@ mod tests {
                 .to_owned(),
             features: "--features flui/cupertino".to_owned(),
             platform: false,
-            cross_platform: false,
-            cross_app: true,
-            cross_cli: false,
-            cross_desktop_mcp: false,
-            cross_ios: true,
             wasm_args: "-p flui -p flui-material -p flui-web-counter --lib --bins".to_owned(),
             wasm_facade: true,
             hack_args: "-p flui-material".to_owned(),
@@ -332,41 +347,103 @@ mod tests {
     }
 
     fn all_targets() -> BTreeSet<String> {
-        PLATFORM_TARGETS
+        super::super::PLATFORM_TARGETS
             .into_iter()
             .chain([WASM_TARGET])
             .map(str::to_owned)
             .collect()
     }
 
+    fn missing_cross_wrappers_leave_native_steps_runnable() {
+        for (target, tool) in [
+            (super::super::WINDOWS_TARGET, "cargo-xwin"),
+            (super::super::MACOS_TARGET, "cargo-zigbuild"),
+        ] {
+            for available in [false, true] {
+                let step = local_native_step(
+                    target,
+                    Cmd::cargo(["clippy"]).into(),
+                    Host::Linux,
+                    &all_targets(),
+                    |requested| {
+                        assert_eq!(requested, tool);
+                        available
+                    },
+                    || panic!("non-Android target must not probe the NDK"),
+                );
+                let text = step.to_string();
+                if available {
+                    assert_eq!(text, "$ cargo clippy");
+                } else {
+                    assert!(text.contains("skipped") && text.contains(tool), "{text}");
+                }
+            }
+        }
+    }
+
+    fn android_without_an_ndk_leaves_other_native_checks_runnable() {
+        let dir = tempfile::tempdir().expect("temporary missing-tool directory");
+        let missing_archiver = dir.path().join("missing-android-archiver");
+        for (compiler, archiver) in [(false, false), (true, false), (false, true), (true, true)] {
+            let step = local_native_step(
+                super::super::ANDROID_TARGET,
+                Cmd::cargo(["clippy"]).into(),
+                Host::Linux,
+                &all_targets(),
+                |_| panic!("Android does not need a cross wrapper"),
+                || {
+                    (
+                        compiler,
+                        crate::doctor::android_archiver_available(if archiver {
+                            std::ffi::OsStr::new("cargo")
+                        } else {
+                            missing_archiver.as_os_str()
+                        }),
+                    )
+                },
+            );
+            let text = step.to_string();
+            if compiler && archiver {
+                assert_eq!(text, "$ cargo clippy");
+            } else {
+                assert!(
+                    text.contains("skipped") && text.contains("Android NDK"),
+                    "{text}"
+                );
+            }
+        }
+    }
+
     fn a_package_change_runs_the_scoped_commands() {
         assert_eq!(
-            lines(&plan(&material(), Host::Linux, &all_targets(), true)),
+            lines(&plan(&material(), Host::Linux, &all_targets(), true, &[])),
             [
                 "$ cargo clippy -p flui -p flui-material -p flui-web-counter --all-targets --locked -- -D warnings",
                 "$ cargo nextest run -p flui -p flui-material -p flui-web-counter --lib --bins --tests --locked --no-fail-fast --no-tests=pass --features flui/cupertino",
                 "$ RUSTDOCFLAGS='-D warnings' cargo doc -p flui -p flui-material -p flui-web-counter --features flui/testing --no-deps --locked --document-private-items",
                 "$ cargo test -p flui -p flui-material --locked --doc",
-                "$ CC_aarch64_linux_android=clang CFLAGS_aarch64_linux_android=--target=aarch64-linux-android21 AR_aarch64_linux_android=ar cargo clippy -p flui-app -p flui --locked --target aarch64-linux-android -- -D warnings",
-                "check-changed: skipped the iOS runner (needs macOS + rustup target add aarch64-apple-ios; run it locally on macOS)",
                 "$ cargo clippy -p flui -p flui-material -p flui-web-counter --lib --bins --locked --target wasm32-unknown-unknown -- -D warnings",
                 "$ cargo check -p flui --locked --target wasm32-unknown-unknown --no-default-features --features hot-reload",
                 "$ cargo hack clippy -p flui-material --locked --each-feature --keep-going -- -D warnings",
                 "$ cargo hack clippy -p flui-material --locked --each-feature --keep-going --tests --benches --examples -- -D warnings",
             ]
         );
-        let on_mac = lines(&plan(&material(), Host::MacOs, &all_targets(), true));
-        assert!(on_mac.contains(
-            &"$ cargo clippy -p flui-app -p flui --locked --target aarch64-apple-ios -- -D warnings"
-                .to_owned()
+        let native = [Step::Note("discovered native coverage".to_owned())];
+        let on_mac = lines(&plan(
+            &material(),
+            Host::MacOs,
+            &all_targets(),
+            true,
+            &native,
         ));
+        assert!(on_mac.contains(&"discovered native coverage".to_owned()));
     }
 
     fn the_whole_workspace_also_lints_the_engine_testing_code() {
         let mut lane = material();
         lane.packages = String::new();
         lane.pkg_args = "--workspace".to_owned();
-        let steps = lines(&plan(&lane, Host::Linux, &all_targets(), true));
+        let steps = lines(&plan(&lane, Host::Linux, &all_targets(), true, &[]));
         assert_eq!(
             &steps[..2],
             [
@@ -395,6 +472,59 @@ mod tests {
             }
         }
         assert!(Lane::from_fields(bad).is_err());
+    }
+
+    fn windows_workspace_testing_preserves_the_driver_suite() {
+        let mut lane = material();
+        lane.packages = String::new();
+        lane.pkg_args = "--workspace".to_owned();
+        lane.test_args = "--workspace --exclude flui-platform --lib --bins --tests".to_owned();
+        let nextest = |host| {
+            lines(&plan(&lane, host, &all_targets(), true, &[]))
+                .into_iter()
+                .filter(|line| line.starts_with("$ cargo nextest run"))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            nextest(Host::Windows),
+            [
+                "$ cargo nextest run -p xtask --bins --tests --locked --no-fail-fast --no-tests=pass",
+                "$ cargo nextest run --workspace --exclude flui-platform --lib --bins --tests --locked --no-fail-fast --no-tests=pass --features flui/cupertino --exclude xtask",
+            ]
+        );
+        for host in [Host::Linux, Host::MacOs] {
+            assert_eq!(
+                nextest(host),
+                [
+                    "$ cargo nextest run --workspace --exclude flui-platform --lib --bins --tests --locked --no-fail-fast --no-tests=pass --features flui/cupertino",
+                ]
+            );
+        }
+    }
+
+    fn platform_compiler_checks_run_only_when_in_scope_on_every_host() {
+        for host in [Host::Linux, Host::Windows, Host::MacOs, Host::Other] {
+            let mut lane = material();
+            for in_scope in [false, true] {
+                lane.platform = in_scope;
+                let commands = lines(&plan(&lane, host, &all_targets(), true, &[]));
+                assert_eq!(
+                    commands
+                        .iter()
+                        .filter(|line| line.contains("-p flui-platform --test compiler_guards"))
+                        .count(),
+                    usize::from(in_scope),
+                    "{host:?} in scope {in_scope}: {commands:?}"
+                );
+                if in_scope && host == Host::Linux {
+                    let native = commands
+                        .iter()
+                        .find(|line| line.contains("xvfb-run"))
+                        .expect("Linux native suite remains scheduled");
+                    assert!(native.ends_with("-E 'not (group(trybuild))'"), "{native}");
+                }
+            }
+        }
     }
 
     fn a_target_dir_outside_the_checkout_is_refused() {
@@ -439,6 +569,14 @@ mod tests {
             "check_changed_contract",
             &[
                 (
+                    "android_without_an_ndk_leaves_other_native_checks_runnable",
+                    android_without_an_ndk_leaves_other_native_checks_runnable as fn(),
+                ),
+                (
+                    "missing_cross_wrappers_leave_native_steps_runnable",
+                    missing_cross_wrappers_leave_native_steps_runnable as fn(),
+                ),
+                (
                     "a_package_change_runs_the_scoped_commands",
                     a_package_change_runs_the_scoped_commands as fn(),
                 ),
@@ -451,8 +589,16 @@ mod tests {
                     the_lane_reads_every_field_change_scope_gives as fn(),
                 ),
                 (
+                    "windows_workspace_testing_preserves_the_driver_suite",
+                    windows_workspace_testing_preserves_the_driver_suite as fn(),
+                ),
+                (
                     "a_target_dir_outside_the_checkout_is_refused",
                     a_target_dir_outside_the_checkout_is_refused as fn(),
+                ),
+                (
+                    "platform_compiler_checks_run_only_when_in_scope_on_every_host",
+                    platform_compiler_checks_run_only_when_in_scope_on_every_host as fn(),
                 ),
             ],
         );

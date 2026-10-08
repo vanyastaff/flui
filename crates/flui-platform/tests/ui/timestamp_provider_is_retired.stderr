@@ -1,0 +1,7 @@
+error[E0432]: unresolved import `flui_platform::traits::TimestampProvider`
+ --> tests/ui/timestamp_provider_is_retired.rs:1:5
+  |
+1 | use flui_platform::traits::TimestampProvider;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^-----------------
+  |                            |
+  |                            no `TimestampProvider` in `traits`

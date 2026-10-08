@@ -128,6 +128,7 @@ pub struct AndroidPlatform {
     background_executor: Arc<SimpleExecutor>,
     clipboard: Arc<MockClipboard>,
     capabilities: MobileCapabilities,
+    input_state: Mutex<input::AndroidInputState>,
 }
 
 // Opaque on purpose, matching `HeadlessPlatform` and `WinitPlatform`. A
@@ -155,12 +156,23 @@ impl AndroidPlatform {
             background_executor: Arc::new(SimpleExecutor),
             clipboard: Arc::new(MockClipboard::new()),
             capabilities: MobileCapabilities::android(),
+            input_state: Mutex::new(input::AndroidInputState::default()),
         }
     }
 
     /// Get the underlying `AndroidApp`
     pub fn app(&self) -> &AndroidApp {
         &self.app
+    }
+
+    fn cancel_input_contacts(&self, reason: flui_platform_api::pointer::CancelReason) {
+        let events = self.input_state.lock().cancel_contacts(reason);
+        let window = self.window.lock().clone();
+        if let Some(window) = window {
+            for event in events {
+                window.callbacks().dispatch_input(event);
+            }
+        }
     }
 
     /// Process pending input events from the Android event queue.
@@ -175,7 +187,7 @@ impl AndroidPlatform {
         static FIRST_MOTION_SEEN: AtomicBool = AtomicBool::new(false);
 
         let window_guard = self.window.lock();
-        let Some(window) = window_guard.as_ref() else {
+        let Some(window) = window_guard.as_ref().cloned() else {
             // No window yet — still drain events to prevent ANR
             drop(window_guard);
             if let Ok(mut iter) = self.app.input_events_iter() {
@@ -183,6 +195,8 @@ impl AndroidPlatform {
             }
             return;
         };
+
+        drop(window_guard);
 
         let scale_factor = window.scale_factor();
         let callbacks = window.callbacks();
@@ -194,7 +208,13 @@ impl AndroidPlatform {
 
                     let handled = match event {
                         InputEvent::MotionEvent(motion) => {
-                            let events = input::convert_motion_event(motion, scale_factor);
+                            let cached = self.input_state.lock().capabilities(motion.device_id());
+                            let device = input::motion_device(&self.app, motion, cached);
+                            let events = self.input_state.lock().convert_motion_event(
+                                motion,
+                                scale_factor,
+                                device,
+                            );
                             // The one place a touch is visible between the
                             // OS and the framework: a tap that changes
                             // nothing on screen is diagnosed from these
@@ -370,6 +390,7 @@ impl Platform for AndroidPlatform {
                             // continuation request must not acknowledge a redraw opportunity
                             // that this loop will refuse to dispatch.
                             platform.execution_resumed.store(false, Ordering::SeqCst);
+                            platform.cancel_input_contacts(flui_platform_api::pointer::CancelReason::FocusLost);
 
                             // Release BEFORE deactivating: the drop is the one
                             // step here with a validity window behind it, and
@@ -402,6 +423,7 @@ impl Platform for AndroidPlatform {
                             }
                         }
                         MainEvent::TerminateWindow { .. } => {
+                            platform.cancel_input_contacts(flui_platform_api::pointer::CancelReason::CaptureLost);
                             tracing::debug!(
                                 "Android: TerminateWindow — the native window is going away, \
                                  releasing the surface"
@@ -416,6 +438,7 @@ impl Platform for AndroidPlatform {
                             }
                         }
                         MainEvent::Destroy => {
+                            platform.cancel_input_contacts(flui_platform_api::pointer::CancelReason::FocusLost);
                             tracing::info!("Android: Destroy — shutting down");
                             platform.execution_resumed.store(false, Ordering::SeqCst);
 
@@ -454,6 +477,7 @@ impl Platform for AndroidPlatform {
                             }
                         }
                         MainEvent::LostFocus => {
+                            platform.cancel_input_contacts(flui_platform_api::pointer::CancelReason::FocusLost);
                             tracing::debug!("Android: Lost focus");
                             if let Some(ref w) = *platform.window.lock() {
                                 w.callbacks().dispatch_active_status_change(false);
@@ -586,11 +610,20 @@ impl Platform for AndroidPlatform {
         &self,
         _options: WindowOptions,
     ) -> Result<Arc<dyn crate::traits::HostWindow>, OpenWindowError> {
+        let cancelled = self
+            .input_state
+            .lock()
+            .cancel_contacts(flui_platform_api::pointer::CancelReason::CaptureLost);
         let window = Arc::new(AndroidWindow::new(
             self.app.clone(),
             Arc::clone(&self.execution_resumed),
         ));
-        let _prev = self.window.lock().replace(Arc::clone(&window));
+        let previous = self.window.lock().replace(Arc::clone(&window));
+        if let Some(previous) = previous {
+            for event in cancelled {
+                previous.callbacks().dispatch_input(event);
+            }
+        }
         tracing::info!("Android window created (wrapping ANativeWindow)");
         Ok(window)
     }

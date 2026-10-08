@@ -356,11 +356,13 @@ impl WindowsWindow {
                 exit_policy,
                 callbacks: WindowCallbacks::counting_frames(frames.counter()),
                 scale_factor: std::cell::Cell::new(scale_factor),
+                message_clock: super::events::MessageClock::new(),
+                pointer_registry: std::cell::RefCell::default(),
                 mode: std::cell::Cell::new(WindowMode::Normal),
                 last_size: std::cell::Cell::new(initial_size),
                 config,
                 is_hovered: std::cell::Cell::new(false),
-                modifiers: std::cell::Cell::new(keyboard_types::Modifiers::empty()),
+                modifiers: std::cell::Cell::new(flui_platform_api::Modifiers::NONE),
                 cursor: std::cell::Cell::new(CursorIcon::default()),
                 restore_style: std::cell::Cell::new(0),
                 last_visibility_dispatched: std::cell::Cell::new(
@@ -1034,9 +1036,9 @@ impl PlatformWindow for WindowsWindow {
         }
     }
 
-    fn modifiers(&self) -> keyboard_types::Modifiers {
+    fn modifiers(&self) -> flui_platform_api::keyboard::Modifiers {
         super::platform::with_window_context(self.hwnd, "modifiers", |ctx| ctx.modifiers.get())
-            .unwrap_or_else(keyboard_types::Modifiers::empty)
+            .unwrap_or(flui_platform_api::Modifiers::NONE)
     }
 
     fn appearance(&self) -> WindowAppearance {

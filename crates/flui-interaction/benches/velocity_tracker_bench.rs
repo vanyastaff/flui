@@ -1,19 +1,16 @@
 //! VelocityTracker benchmarks
 //!
-//! Hot path: `VelocityTracker::estimate` is called by `DragGestureRecognizer`
-//! on every `pointerup` / `pointercancel` to seed the fling animation. The
+//! Hot path: `DragGestureRecognizer` queries `VelocityTracker::velocity_at`
+//! at terminal event time; this benchmark measures its `estimate_at` fit. The
 //! algorithm walks a 20-slot circular buffer and runs a least-squares
 //! quadratic fit on the surviving samples; cost is O(N) where N ≤ 20.
 //!
 //! Performance targets (per `docs/testing.md` and the constitution's "60 fps
 //! / 16 ms frame" budget):
-//! - `estimate` on a full 20-sample buffer: < 5 µs (12.5% of one frame is
-//!   already a lot; 5 µs is comfortable headroom for the rest of drag-end).
+//! - `estimate_at` on a full 20-sample buffer: < 5 µs (about 0.03% of a 16 ms
+//!   frame; this is a target, not a measured frame-time guarantee).
 //! - `add_position` push: < 100 ns (one slot write; must not allocate).
-//!
-//! Follows the workspace benchmark template at
-//! `rust-studio/.../templates/benchmark-report.md` (Setup / Workload /
-//! Results / Profile Notes / Interpretation / Decision).
+//!   The push row measures construction plus 20 pushes, not one push.
 //!
 //! Run with `cargo bench -p flui-interaction --bench velocity_tracker_bench`.
 
@@ -25,10 +22,8 @@ use std::time::{Duration, Instant};
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use flui_foundation::geometry::Offset;
-use flui_interaction::PointerDeviceKind;
-use flui_interaction::processing::{
-    ImpulseVelocityTracker, IosFlingVelocityTracker, OneEuroFilter2D, VelocityTracker,
-};
+use flui_interaction::PointerKind;
+use flui_interaction::processing::{OneEuroFilter2D, VelocityEstimator, VelocityTracker};
 
 /// Build a deterministic linear swipe: `samples` positions equally spaced
 /// over `duration_ms`, with `dx` advancing `slope_px_per_s` per second.
@@ -48,20 +43,42 @@ fn linear_swipe(
         .collect()
 }
 
+/// Check the known trajectory before timing, on the samples' own clock.
+fn verify_linear_swipe(
+    samples: &[(Instant, Offset<f64>)],
+    estimator: VelocityEstimator,
+    expected_px_per_second: f64,
+) {
+    let mut tracker = VelocityTracker::with_estimator(PointerKind::Touch, estimator);
+    for (time, position) in samples {
+        tracker.add_position(*time, *position);
+    }
+    let query = samples.last().expect("non-empty swipe").0;
+    let estimate = tracker
+        .estimate_at(query)
+        .expect("the linear swipe has an estimate");
+    assert!(
+        (estimate.pixels_per_second.dx - expected_px_per_second).abs() < 1.0,
+        "the measured estimator follows the independent linear trajectory"
+    );
+    assert!(estimate.pixels_per_second.dy.abs() < 1.0);
+}
+
 /// Benchmark `VelocityTracker::estimate` on a full 20-sample buffer.
 ///
 /// The tracker is filled in the (untimed) `iter_batched` setup so the timed
-/// region is ONLY `estimate()` — the cost the bench name claims. (Per-move
-/// fill cost is measured separately by `bench_add_position`.)
+/// region is ONLY `estimate()` — the cost the bench name claims. Construction
+/// and 20 pushes together are measured separately by `bench_add_position`.
 fn bench_estimate_lsq(c: &mut Criterion) {
     let samples = black_box(linear_swipe(20, 100, 1000.0));
     // Query on the samples' own clock, right after the newest one, so a
     // slow batch setup can never trip the stop gate and time a no-op.
     let query = samples.last().expect("non-empty swipe").0;
     c.bench_function("VelocityTracker::estimate (LSQ, 20 samples)", |b| {
+        verify_linear_swipe(&samples, VelocityEstimator::LeastSquares, 1000.0);
         b.iter_batched(
             || {
-                let mut tracker = VelocityTracker::with_kind(PointerDeviceKind::Touch);
+                let mut tracker = VelocityTracker::with_kind(PointerKind::Touch);
                 for (t, p) in &samples {
                     tracker.add_position(*t, *p);
                 }
@@ -82,9 +99,10 @@ fn bench_estimate_short(c: &mut Criterion) {
     // slow batch setup can never trip the stop gate and time a no-op.
     let query = samples.last().expect("non-empty swipe").0;
     c.bench_function("VelocityTracker::estimate (LSQ, 3 samples)", |b| {
+        verify_linear_swipe(&samples, VelocityEstimator::LeastSquares, 500.0);
         b.iter_batched(
             || {
-                let mut tracker = VelocityTracker::with_kind(PointerDeviceKind::Touch);
+                let mut tracker = VelocityTracker::with_kind(PointerKind::Touch);
                 for (t, p) in &samples {
                     tracker.add_position(*t, *p);
                 }
@@ -97,7 +115,7 @@ fn bench_estimate_short(c: &mut Criterion) {
 }
 
 /// Benchmark repeated `estimate()` queries on an unchanged buffer — the
-/// pattern on the drag-end / prediction path, where a single frame asks for
+/// pattern on the drag-end path, where a single frame asks for
 /// the velocity and the estimate (and any future code may re-query). With the
 /// estimate memoized, only the first call per unchanged buffer runs the O(N)
 /// QR solve; the rest are cache hits. The fill happens in (untimed) setup, so
@@ -109,9 +127,10 @@ fn bench_estimate_repeated(c: &mut Criterion) {
     // slow batch setup can never trip the stop gate and time a no-op.
     let query = samples.last().expect("non-empty swipe").0;
     c.bench_function("VelocityTracker::estimate (LSQ, 4 repeated queries)", |b| {
+        verify_linear_swipe(&samples, VelocityEstimator::LeastSquares, 1000.0);
         b.iter_batched(
             || {
-                let mut tracker = VelocityTracker::with_kind(PointerDeviceKind::Touch);
+                let mut tracker = VelocityTracker::with_kind(PointerKind::Touch);
                 for (t, p) in &samples {
                     tracker.add_position(*t, *p);
                 }
@@ -129,58 +148,65 @@ fn bench_estimate_repeated(c: &mut Criterion) {
     });
 }
 
-/// `add_position` push cost. Called once per pointer-move event on the
-/// drag hot path. Target: < 100 ns per push, zero allocations.
+/// Construction plus 20 `add_position` calls and a sample-count observation.
+/// The historical row name is retained for before/after matching. This whole
+/// workload's timing does not establish the individual < 100 ns push target.
 fn bench_add_position(c: &mut Criterion) {
     let samples = black_box(linear_swipe(20, 100, 1000.0));
     c.bench_function("VelocityTracker::add_position (push)", |b| {
         b.iter(|| {
-            let mut tracker = VelocityTracker::with_kind(PointerDeviceKind::Touch);
+            let mut tracker = VelocityTracker::with_kind(PointerKind::Touch);
             for (t, p) in &samples {
                 tracker.add_position(*t, *p);
             }
+            // Count observes only occupancy; also make the stored samples observable.
+            black_box(&tracker);
             black_box(tracker.sample_count())
         });
     });
 }
 
-/// iOS-flavour tracker (weighted 2-point velocity). Same input workload
-/// as the LSQ case so the two benches are directly comparable. The iOS
-/// flavour should be faster than the LSQ fit (3 multiplies vs 20-sample
-/// matrix solve) but reports lower-quality velocity for non-linear
-/// motion.
+/// iOS-flavour tracker (weighted 2-point velocity), with the same 20 samples
+/// as LSQ. PerIteration matches the historical argument-free query fixture;
+/// LSQ uses SmallInput, so cross-estimator timings include batching differences.
 fn bench_ios_estimate(c: &mut Criterion) {
     let samples = black_box(linear_swipe(20, 100, 1000.0));
-    c.bench_function("IosFlingVelocityTracker::estimate (20 samples)", |b| {
+    let query = samples.last().expect("non-empty swipe").0;
+    c.bench_function("VelocityTracker::estimate Ios (20 samples)", |b| {
+        verify_linear_swipe(&samples, VelocityEstimator::Ios, 1000.0);
         b.iter_batched(
             || {
-                let mut tracker = IosFlingVelocityTracker::with_kind(PointerDeviceKind::Touch);
+                let mut tracker =
+                    VelocityTracker::with_estimator(PointerKind::Touch, VelocityEstimator::Ios);
                 for (t, p) in &samples {
                     tracker.add_position(*t, *p);
                 }
                 tracker
             },
-            |tracker| black_box(tracker.estimate()),
-            criterion::BatchSize::SmallInput,
+            |mut tracker| black_box(tracker.estimate_at(query)),
+            criterion::BatchSize::PerIteration,
         );
     });
 }
 
-/// Benchmark the AOSP impulse strategy on the same full 20-sample buffer as
-/// the LSQ bench, so the two strategies price against each other directly.
+/// Impulse estimation of the same 20-sample trajectory. PerIteration matches
+/// its historical fixture; comparison with LSQ includes batching differences.
 fn bench_estimate_impulse(c: &mut Criterion) {
     let samples = black_box(linear_swipe(20, 100, 1000.0));
-    c.bench_function("ImpulseVelocityTracker::estimate (20 samples)", |b| {
+    let query = samples.last().expect("non-empty swipe").0;
+    c.bench_function("VelocityTracker::estimate Impulse (20 samples)", |b| {
+        verify_linear_swipe(&samples, VelocityEstimator::Impulse, 1000.0);
         b.iter_batched(
             || {
-                let mut tracker = ImpulseVelocityTracker::with_kind(PointerDeviceKind::Touch);
+                let mut tracker =
+                    VelocityTracker::with_estimator(PointerKind::Touch, VelocityEstimator::Impulse);
                 for (t, p) in &samples {
                     tracker.add_position(*t, *p);
                 }
                 tracker
             },
-            |tracker| black_box(tracker.get_velocity_estimate()),
-            criterion::BatchSize::SmallInput,
+            |mut tracker| black_box(tracker.estimate_at(query)),
+            criterion::BatchSize::PerIteration,
         );
     });
 }

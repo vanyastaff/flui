@@ -166,6 +166,16 @@ pub struct BoxDecoration<T: Unit> {
     /// If this is specified, `color` has no effect.
     pub gradient: Option<Gradient>,
 
+    // Retain the bounded endpoint until paint bounds are available. The raw
+    // gradient is also retained so direct writes to the public gradient field
+    // cannot accidentally use a stale fallback. Box this rare state rather
+    // than adding two full gradient values to every decoration.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub(crate) gradient_fallback: Option<Box<(Gradient, Gradient)>>,
+
     /// The shape to fill the background, gradient, and image into, and
     /// to cast as the box shadow.
     ///
@@ -199,6 +209,7 @@ impl<T: Unit> BoxDecoration<T> {
             border_radius: None,
             box_shadow: None,
             gradient: None,
+            gradient_fallback: None,
             shape: BoxShape::Rectangle,
         }
     }
@@ -213,6 +224,7 @@ impl<T: Unit> BoxDecoration<T> {
             border_radius: None,
             box_shadow: None,
             gradient: None,
+            gradient_fallback: None,
             shape: BoxShape::Rectangle,
         }
     }
@@ -227,6 +239,7 @@ impl<T: Unit> BoxDecoration<T> {
             border_radius: None,
             box_shadow: None,
             gradient: Some(gradient),
+            gradient_fallback: None,
             shape: BoxShape::Rectangle,
         }
     }
@@ -241,6 +254,7 @@ impl<T: Unit> BoxDecoration<T> {
             border_radius: None,
             box_shadow: None,
             gradient: None,
+            gradient_fallback: None,
             shape: BoxShape::Rectangle,
         }
     }
@@ -277,6 +291,7 @@ impl<T: Unit> BoxDecoration<T> {
     #[inline]
     pub fn set_gradient(mut self, gradient: Option<Gradient>) -> Self {
         self.gradient = gradient;
+        self.gradient_fallback = None;
         self
     }
 
@@ -294,19 +309,56 @@ where
 {
     /// Linearly interpolate between two box decorations.
     ///
-    /// `t` is clamped to `0..=1`, and the endpoints return `a` and `b`
-    /// exactly. A field set on only one side fades toward nothing: a lone
+    /// The exact endpoints return `a` and `b`. A paired gradient's geometry
+    /// extrapolates with `t`; other fields clamp `t` to `0..=1`.
+    /// Extrapolation retains a bounded endpoint for painting when the resolved
+    /// geometry cannot be represented at the actual box size.
+    /// A field set on only one side fades toward nothing: a lone
     /// color or gradient scales its alpha, a lone border, radius or shadow
     /// list scales its geometry (by `1 - t` for `a`'s, `t` for `b`'s). The
     /// image and shape are not interpolated and switch at `t = 0.5`.
     #[inline]
     pub fn lerp(a: &Self, b: &Self, t: f64) -> Self {
-        let t = t.clamp(0.0, 1.0);
         if t == 0.0 {
             return a.clone();
         }
         if t == 1.0 {
             return b.clone();
+        }
+        let gradient_t = t;
+        let t = t.clamp(0.0, 1.0);
+        if t == 0.0 || t == 1.0 {
+            let mut endpoint = if t == 0.0 { a.clone() } else { b.clone() };
+            if let (Some(a_gradient), Some(b_gradient)) = (&a.gradient, &b.gradient)
+                && let Some(mut gradient) = Gradient::lerp(a_gradient, b_gradient, gradient_t)
+            {
+                if let Some(bounded) = &endpoint.gradient {
+                    // Only geometry extrapolates. Keep the saturated endpoint's
+                    // ramp instead of merging disjoint stop positions again.
+                    match (&mut gradient, bounded) {
+                        (Gradient::Linear(raw), Gradient::Linear(end)) => {
+                            raw.colors.clone_from(&end.colors);
+                            raw.stops.clone_from(&end.stops);
+                        }
+                        (Gradient::Radial(raw), Gradient::Radial(end)) => {
+                            raw.colors.clone_from(&end.colors);
+                            raw.stops.clone_from(&end.stops);
+                        }
+                        (Gradient::Sweep(raw), Gradient::Sweep(end)) => {
+                            raw.colors.clone_from(&end.colors);
+                            raw.stops.clone_from(&end.stops);
+                        }
+                        _ => {}
+                    }
+                    if &gradient != bounded {
+                        let terminal = endpoint.terminal_gradient().unwrap_or(bounded);
+                        endpoint.gradient_fallback =
+                            Some(Box::new((gradient.clone(), terminal.clone())));
+                    }
+                }
+                endpoint.gradient = Some(gradient);
+            }
+            return endpoint;
         }
         let (fade_a, fade_b) = (1.0 - t, t);
 
@@ -340,11 +392,24 @@ where
             (None, Some(shadows)) => Some(scale_shadows(shadows, fade_b)),
             (None, None) => None,
         };
-        let gradient = match (&a.gradient, &b.gradient) {
-            (Some(a_grad), Some(b_grad)) => Gradient::lerp(a_grad, b_grad, t),
+        let mix_gradient = |a: Option<&Gradient>, b: Option<&Gradient>| match (a, b) {
+            (Some(a_grad), Some(b_grad)) => Gradient::lerp(a_grad, b_grad, gradient_t)
+                .or_else(|| Gradient::lerp(a_grad, b_grad, t)),
             (Some(gradient), None) => Some(scale_gradient(gradient, fade_a)),
             (None, Some(gradient)) => Some(scale_gradient(gradient, fade_b)),
             (None, None) => None,
+        };
+        let gradient = mix_gradient(a.gradient.as_ref(), b.gradient.as_ref());
+        let bounded = if a.gradient_fallback.is_some() || b.gradient_fallback.is_some() {
+            mix_gradient(a.terminal_gradient(), b.terminal_gradient())
+        } else {
+            None
+        };
+        let (gradient, gradient_fallback) = match (gradient, bounded) {
+            (Some(raw), Some(bounded)) if raw != bounded => {
+                (Some(raw.clone()), Some(Box::new((raw, bounded))))
+            }
+            (raw, bounded) => (raw.or(bounded), None),
         };
 
         // Images are not crossfaded; they switch at the midpoint.
@@ -364,8 +429,19 @@ where
             border_radius,
             box_shadow,
             gradient,
+            gradient_fallback,
             shape,
         }
+    }
+
+    /// Ignore retained state after direct replacement of the public gradient.
+    fn terminal_gradient(&self) -> Option<&Gradient> {
+        self.gradient.as_ref().map(|gradient| {
+            self.gradient_fallback
+                .as_deref()
+                .filter(|(raw, _)| raw == gradient)
+                .map_or(gradient, |(_, bounded)| bounded)
+        })
     }
 }
 

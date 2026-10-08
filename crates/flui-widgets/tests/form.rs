@@ -23,7 +23,7 @@ use crate::common::{LaidOut, SignalProbe, lay_out, tight};
 
 fn character(ch: char) -> KeyEvent {
     KeyEventBuilder::new(Code::KeyA)
-        .with_key(Key::Character(ch.to_string()))
+        .with_key(Key::character(ch.to_string()))
         .with_state(KeyState::Down)
         .build()
 }
@@ -38,7 +38,10 @@ fn named(key: NamedKey, modifiers: Modifiers) -> KeyEvent {
 
 fn type_text(laid: &LaidOut, text: &str) {
     for ch in text.chars() {
-        laid.focus_manager().dispatch_key_event(&character(ch));
+        let _ = laid
+            .focus_manager()
+            .dispatch_key_event(&character(ch))
+            .is_handled();
     }
 }
 
@@ -85,7 +88,7 @@ pub(crate) fn validate_shows_the_validator_error_and_revalidating_a_valid_value_
         "validate shows the error"
     );
 
-    node.request_focus();
+    let _ = node.request_focus();
     type_text(&laid, "x");
     assert!(form.validate());
     laid.tick();
@@ -115,10 +118,13 @@ pub(crate) fn reset_restores_initial_values_and_clears_errors_and_interaction() 
         )
         .handle(form.clone()),
     );
-    let backspace = named(NamedKey::Backspace, Modifiers::empty());
-    node.request_focus();
+    let backspace = named(NamedKey::Backspace, Modifiers::NONE);
+    let _ = node.request_focus();
     for _ in 0..4 {
-        laid.focus_manager().dispatch_key_event(&backspace);
+        let _ = laid
+            .focus_manager()
+            .dispatch_key_event(&backspace)
+            .is_handled();
     }
     laid.tick();
     assert!(
@@ -136,7 +142,10 @@ pub(crate) fn reset_restores_initial_values_and_clears_errors_and_interaction() 
     assert!(!form.has_interacted_by_user());
 
     for _ in 0..4 {
-        laid.focus_manager().dispatch_key_event(&backspace);
+        let _ = laid
+            .focus_manager()
+            .dispatch_key_event(&backspace)
+            .is_handled();
     }
     laid.tick();
     assert!(
@@ -178,7 +187,7 @@ pub(crate) fn a_text_form_field_validates_and_saves_the_committed_text() {
         )
         .handle(form.clone()),
     );
-    node.request_focus();
+    let _ = node.request_focus();
     harness.tick();
     validated.borrow_mut().clear();
     let store = harness
@@ -254,7 +263,7 @@ pub(crate) fn dropping_a_composing_controller_keeps_the_preedit_out_of_the_value
     };
     let mut harness =
         crate::common::harness::mount_with_ime(configure(RawTextFormField::new(controller)));
-    node.request_focus();
+    let _ = node.request_focus();
     harness.tick();
     let store = harness
         .active_text_store()
@@ -318,7 +327,7 @@ pub(crate) fn setting_the_shown_text_as_the_value_ends_a_reconversion() {
         )
         .handle(form),
     );
-    node.request_focus();
+    let _ = node.request_focus();
     harness.tick();
     let store = harness
         .active_text_store()
@@ -367,7 +376,7 @@ pub(crate) fn setting_the_shown_preedit_as_the_value_commits_it() {
             .focus_node(Rc::clone(&node))
             .handle(field.clone()),
     ));
-    node.request_focus();
+    let _ = node.request_focus();
     harness.tick();
     let store = harness
         .active_text_store()
