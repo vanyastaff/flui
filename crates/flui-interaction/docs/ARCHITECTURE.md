@@ -47,6 +47,20 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   A second target trait or generic dispatcher would duplicate this ownership
   boundary without providing a producer. `transformed_entry_receives_local_samples_and_deltas`
   pins dispatch through the actual lane, including local geometry.
+- **Explicit capture belongs to one admitted Down generation (ADR-0164).**
+  A real target's `PointerDispatch::capture` returns a non-Clone weak token.
+  The first claimant selects later target delivery while the original Down
+  observation round finishes unchanged. Release commits capture-loss debt
+  before waking the exact presentation, outside all borrows; wake failure
+  cannot erase it. Already accepted motion and committed frame batches finish
+  before the one `CaptureLost`, and newer released tails are refused by pointer
+  and optional device identity. Missing device identity cannot distinguish
+  unreported sources. Listener unmount removes future hit-test admission but
+  preserves the cached contact's terminal obligation; presentation close has
+  its separate retirement policy. This controls logical routing and does not
+  advertise an OS capture-release operation. `explicit_pointer_capture_contract`
+  and widget `listener_unmount_preserves_one_captured_contact_terminal` pin the
+  lifecycle, failure and accepted-motion boundaries.
 - **An arrow request differs from deferring a cursor (ADR-0158).** `CursorRequest::Defer`
   leaves the choice to the next hit target; `Icon(CursorIcon::Default)` selects
   the arrow even when an ancestor asks for another icon. Render objects without
