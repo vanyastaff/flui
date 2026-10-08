@@ -1,13 +1,31 @@
 # flui-interaction — задачи (волна 1)
 
-- **Статус:** в работе; текущий остаток сверяется с кодом и merged-PR
+- **Статус:** основная реализация merged; I11 в работе после появления host-owned SystemPreferences
 - **Дата:** 2026-10-06, база `main` @ `9a4daa3ed`
 - **Источник:** [orchestration.md](orchestration.md), [matrix.md](matrix.md); ledger'ы этапа 1 — вне репозитория.
 - **Правила:** задача = ветка `interaction/<slug>` = worktree = draft-PR. Каждый фикс: тест через
   публичный API, красный с откатом фикса (вывод в PR), `cargo xtask check-changed` зелёный.
   ID задач — только здесь.
 
-## Текущее выполнение
+## Сверка после слияния
+
+[PR #1514](https://github.com/vanyastaff/flui/pull/1514) слит в `main`
+2026-10-08, merge commit `91bb1fe1d`. [CI на head `3e803ebfc`](https://github.com/vanyastaff/flui/actions/runs/37737270723)
+завершился успешно: `deps`, `live-smoke`, strict clippy, тесты и native
+cross-typecheck Windows/macOS/iOS/Android прошли. Native cross-typecheck означает
+компиляцию, а не исполнение на этих платформах; physical pen/touch остаётся
+отдельным ограничением.
+
+[PR #1515](https://github.com/vanyastaff/flui/pull/1515) добавил host-owned
+SystemPreferences и его доставку. На базе `main` @ `b357bc903` публикация runtime
+применяет text scale и contrast; gesture timing, geometry, fling и wheel ещё
+не подключены к полной цепочке потребителей. I11 не закрыта наличием снимка
+или host FIFO и продолжается по ADR-0172 и platform-layer LY9.
+
+Ниже сохранена локальная приёмка до публикации PR #1514. Указанные в её таблице
+«CI/merge впереди» относятся к этому историческому состоянию.
+
+## Локальная приёмка до публикации
 
 Сверка 2026-10-08 по интеграционной базе `5f28646ad`, коду и именам тестов.
 Локальный `check-changed` завершился exit 0; CI ещё не опубликован, слияние

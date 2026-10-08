@@ -85,14 +85,23 @@ DPI without creating another native observer. Wheel disabled, line/character and
 page values remain distinguishable; pixel-based input does not acquire a second
 system multiplier.
 
-`GestureArenaScope` distributes the interaction projection alongside its existing
-arena identity. Its production consumers observe changes through lifecycle
-dependencies. A settings update has an explicit active-sequence policy, pinned
-through recognizer behavior: retain the admitted settings until terminal, or
-replace/cancel through existing containment. Silently changing an active
-sequence's thresholds is not an implementation choice. Authored overrides remain
-authoritative. A separate gesture-settings source or parallel inherited scope
-would recreate the authority this decision removes.
+`GestureArenaScope` distributes a read-only, owner-local interaction projection
+alongside its existing arena identity. Host publication commits this projection
+before the next admitted input; a later inherited rebuild is not its delivery
+barrier. Each new contact or gesture session captures an immutable settings
+snapshot. Active contacts, multi-contact handoffs and consecutive-tap candidates
+retain their admitted settings until terminal. Changing the host observation
+therefore affects new sequences without silently changing an active sequence's
+thresholds. Terminal fling policy also comes from that admitted snapshot rather
+than a later settings read or a framework default.
+
+Authored scope settings remain authoritative. An actual authored provider
+replacement commits new recognizer ownership before cancelling outgoing owners
+through existing containment; an equal fixed profile or an unchanged live
+provider identity does not cancel a gesture. Lifecycle dependencies handle these
+provider replacements, while ordinary host updates use the existing live
+projection. A separate native settings source or parallel inherited scope would
+recreate the authority this decision removes.
 
 Motion observations distinguish no preference, reduced motion and a finite,
 strictly positive duration scale. An OS scale of zero maps to reduced motion;
