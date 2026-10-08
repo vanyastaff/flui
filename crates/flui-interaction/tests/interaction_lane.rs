@@ -77,6 +77,10 @@ fn explicit_pointer_capture_contract() {
             "committed_frame_release",
             capture_release_keeps_another_pointers_committed_frame_motion,
         ),
+        (
+            "released_device_identity",
+            capture_release_refuses_only_its_own_device_tail,
+        ),
     ];
     for &(name, row) in rows {
         if let Err(payload) = std::panic::catch_unwind(row) {
@@ -210,6 +214,69 @@ fn capture_release_keeps_another_pointers_committed_frame_motion() {
         let token = held.borrow_mut().remove(&first).expect("remaining token");
         drop(token);
         assert_eq!(binding.active_pointer_count(), 0);
+    });
+}
+
+fn capture_release_refuses_only_its_own_device_tail() {
+    use flui_foundation::geometry::Offset;
+    use flui_interaction::events::{
+        DeviceId, PointerEvent, PointerKind, make_down_event_for_id, make_move_event_for_id,
+    };
+    use flui_interaction::{GestureBinding, HitTestResult, PointerCapture, PointerId};
+    use std::{cell::RefCell, rc::Rc};
+    let lane = InteractionLane::try_new().expect("lane");
+    let binding = GestureBinding::new();
+    let id = PointerId::try_from(1_u64).expect("primary contact");
+    let first = DeviceId::try_from(17_u64).expect("first device");
+    let other = DeviceId::try_from(18_u64).expect("other device");
+    let held = Rc::new(RefCell::new(None::<PointerCapture>));
+    let store = held.clone();
+    let devices = Rc::new(RefCell::new(Vec::new()));
+    let observed = devices.clone();
+    lane.enter(|| {
+        let target = lane
+            .dispatch_handle()
+            .register_pointer(move |dispatch| match dispatch.global {
+                PointerEvent::Down(_) => {
+                    *store.borrow_mut() = Some(dispatch.capture().expect("real Down"))
+                }
+                PointerEvent::Move(motion) => observed.borrow_mut().push(motion.pointer.device),
+                _ => {}
+            })
+            .expect("target");
+        let path = || {
+            let mut result = HitTestResult::new();
+            result.add(hit_entry(target));
+            result
+        };
+        let mut down = make_down_event_for_id(id, Offset::ZERO, PointerKind::Mouse).expect("down");
+        let PointerEvent::Down(press) = &mut down else {
+            unreachable!()
+        };
+        press.pointer = press.pointer.with_device(first);
+        binding.handle_pointer_event(&down, |_| path());
+        let token = held.borrow_mut().take().expect("capture");
+        drop(token);
+        binding.flush_pending_moves();
+        for device in [first, other] {
+            let mut movement =
+                make_move_event_for_id(id, Offset::new(20.0, 20.0), PointerKind::Mouse)
+                    .expect("motion");
+            let PointerEvent::Move(motion) = &mut movement else {
+                unreachable!()
+            };
+            motion.pointer = motion.pointer.with_device(device);
+            binding.handle_pointer_event(&movement, |_| {
+                assert_eq!(device, other, "released device tail cannot hit-test");
+                path()
+            });
+            binding.flush_pending_moves();
+        }
+        assert_eq!(
+            &*devices.borrow(),
+            &[Some(other)],
+            "released contact identity cannot suppress another device's hover"
+        );
     });
 }
 
