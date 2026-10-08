@@ -1284,7 +1284,10 @@ fn native_touch_span_preserves_baseline_ratio() {
 
 fn native_scale_retains_estimator_until_end_and_readmits_next_begin() {
     use flui_foundation::geometry::Offset;
-    use flui_interaction::{processing::VelocityEstimator, routing::PanZoomDispatch};
+    use flui_interaction::{
+        processing::VelocityEstimator, recognizers::scale::PanZoomDisposition,
+        routing::PanZoomDispatch,
+    };
     use flui_platform_api::pointer::{PanZoomEvent, PanZoomPhase, PanZoomTransform};
 
     let old =
@@ -1320,22 +1323,28 @@ fn native_scale_retains_estimator_until_end_and_readmits_next_begin() {
                 global: &event,
             })
         };
-        assert!(!deliver(0, PanZoomPhase::Start));
+        assert_eq!(
+            deliver(0, PanZoomPhase::Start),
+            PanZoomDisposition::Admitted
+        );
         if sequence == 0 {
             source.replace(new.clone());
         } else if sequence == 1 {
             source.replace(old.clone());
         }
         for (millis, x) in [(10, 30.0), (20, 50.0), (30, 60.0)] {
-            assert!(deliver(
-                millis,
-                PanZoomPhase::Update(
-                    PanZoomTransform::try_new(Offset::new(x, 0.0), 1.0, 0.0)
-                        .expect("finite native trajectory"),
-                )
-            ));
+            assert_eq!(
+                deliver(
+                    millis,
+                    PanZoomPhase::Update(
+                        PanZoomTransform::try_new(Offset::new(x, 0.0), 1.0, 0.0)
+                            .expect("finite native trajectory"),
+                    )
+                ),
+                PanZoomDisposition::Handled
+            );
         }
-        assert!(deliver(30, PanZoomPhase::End));
+        assert_eq!(deliver(30, PanZoomPhase::End), PanZoomDisposition::Handled);
         let delivered = ends.borrow();
         assert_eq!(delivered.len(), sequence + 1);
         assert!(
