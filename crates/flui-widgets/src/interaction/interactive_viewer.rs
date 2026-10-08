@@ -38,8 +38,8 @@
 //! `on_interaction_start`/`on_interaction_update`/`on_interaction_end` carry
 //! FLUI's own detail types ([`InteractionStartDetails`] etc.) rather than
 //! the recognizer's cumulative measurements. The update carries the applied
-//! scale multiplier (1.0 for a pure pan), a focal point,
-//! a translation delta, and a release velocity.
+//! scale multiplier (1.0 for a pure pan), a focal point and a translation
+//! delta. The end carries separate focal and scale release velocities.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -447,7 +447,7 @@ impl StatefulView for InteractiveViewer {
 // ============================================================================
 
 /// Tracks the in-flight pan gesture's dominant-axis lock (for
-/// [`PanAxis::Aligned`]) across the several `on_pan_update` calls one drag
+/// [`PanAxis::Aligned`]) across the scale updates of one interaction
 /// produces. `Rc`-shared into the closures `build` hands to `GestureDetector`
 /// so it survives from `on_pan_start` through the matching `on_pan_end`, even
 /// across a rebuild that swaps in fresh closures mid-gesture.
@@ -1184,10 +1184,9 @@ fn transform_viewport(matrix: Matrix4, viewport: Rect<f64>) -> Rect<f64> {
 /// one axis, signed so that adding it to the viewport's position moves it
 /// back inside the boundary. Zero when already inside (inclusive).
 ///
-/// With rotation permanently disabled (see the module docs), this plain
-/// interval comparison is sufficient, including a viewport wider than the
-/// boundary on this axis (checked against both edges; the edge quoting the
-/// larger-magnitude excess wins).
+/// The caller supplies the transformed viewport's bounding rectangle, so the
+/// interval comparison also covers rotation. If the viewport is wider than
+/// the boundary, the edge with the larger-magnitude excess wins.
 fn axis_excess(view_min: f64, view_max: f64, bound_min: f64, bound_max: f64) -> f64 {
     let excess_min = if view_min < bound_min {
         bound_min - view_min
