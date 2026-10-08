@@ -99,6 +99,7 @@ fn containment_and_isolation_matrix() {
     run_table(
         "containment_and_isolation_matrix",
         &[
+            ("runtime_input_lifecycle::keyboard_coalesced_prefix_survives_reentrant_capture_release", runtime_input_lifecycle::keyboard_coalesced_prefix_survives_reentrant_capture_release as fn()),
             ("runtime_input_lifecycle::keyboard_barrier_keeps_frozen_coalesced_motion_before_reentrant_replacement", runtime_input_lifecycle::keyboard_barrier_keeps_frozen_coalesced_motion_before_reentrant_replacement as fn()),
             ("runtime_input_lifecycle::runtime_keyboard_barrier_preserves_scale_contacts_and_continuity", runtime_input_lifecycle::runtime_keyboard_barrier_preserves_scale_contacts_and_continuity as fn()),
             ("runtime_input_lifecycle::keyboard_motion_barrier_uses_resolved_focus_owner_during_reentrant_focus_change", runtime_input_lifecycle::keyboard_motion_barrier_uses_resolved_focus_owner_during_reentrant_focus_change as fn()),

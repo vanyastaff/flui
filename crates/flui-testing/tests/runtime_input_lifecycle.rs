@@ -370,6 +370,145 @@ pub(crate) fn keyboard_barrier_keeps_frozen_coalesced_motion_before_reentrant_re
     assert_keyboard_contact_prefix(false, true, false);
 }
 
+pub(crate) fn keyboard_coalesced_prefix_survives_reentrant_capture_release() {
+    use flui_interaction::events::{make_down_event_for_id, make_up_event_for_id};
+    use flui_interaction::routing::KeyEventResult;
+    use flui_interaction::testing::input::KeyEventBuilder;
+    use flui_platform_api::keyboard::Code;
+    use std::rc::Weak;
+
+    let mut realm = UiRealm::for_test();
+    let primary = realm.presentation_id();
+    let one = PointerId::try_from(1_u64).expect("contact");
+    let two = PointerId::try_from(2_u64).expect("contact");
+    let unrelated = PointerId::try_from(3_u64).expect("hover");
+    let owner = Rc::new(RefCell::new(Weak::<UiRealm>::new()));
+    let input_owner = Rc::clone(&owner);
+    let token = Rc::new(RefCell::new(None));
+    let captured = Rc::clone(&token);
+    let released = Rc::clone(&token);
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let motions = Rc::clone(&events);
+    let cancels = Rc::clone(&events);
+    let first = Cell::new(true);
+    realm
+        .attach_root_widget(
+            &Listener::new()
+                .behavior(HitTestBehavior::Opaque)
+                .on_pointer_down(move |_, dispatch| {
+                    if let PointerEvent::Down(event) = dispatch.global
+                        && event.pointer.id == two
+                    {
+                        *captured.borrow_mut() =
+                            Some(dispatch.capture().expect("real Down authority"));
+                    }
+                })
+                .on_pointer_move(move |_, event| {
+                    let PointerEvent::Move(event) = event.global else {
+                        panic!("motion");
+                    };
+                    motions.borrow_mut().push((
+                        "move",
+                        event.pointer.id,
+                        event.current().position.get().x,
+                    ));
+                    if event.pointer.id == one && first.replace(false) {
+                        let realm = input_owner.borrow().upgrade().expect("live owner");
+                        dispatch(
+                            &realm,
+                            primary,
+                            make_move_event_for_id(
+                                two,
+                                Offset::new(80.0, 10.0),
+                                PointerKind::Touch,
+                            )
+                            .expect("new motion"),
+                        );
+                        let capture = released.borrow_mut().take();
+                        drop(capture);
+                        let mut hover = make_move_event_for_id(
+                            unrelated,
+                            Offset::new(90.0, 10.0),
+                            PointerKind::Mouse,
+                        )
+                        .expect("hover");
+                        if let PointerEvent::Move(event) = &mut hover {
+                            event.buttons = Default::default();
+                        }
+                        dispatch(&realm, primary, hover);
+                    }
+                })
+                .on_pointer_cancel(move |_, event| {
+                    let PointerEvent::Cancel(event) = event.global else {
+                        panic!("cancel");
+                    };
+                    assert_eq!(
+                        event.reason,
+                        flui_platform_api::pointer::CancelReason::CaptureLost
+                    );
+                    cancels.borrow_mut().push(("cancel", event.pointer.id, 0.0));
+                })
+                .child(SizedBox::new(100.0, 40.0)),
+        )
+        .expect("real capture consumer");
+    realm.synchronize_window_snapshot(primary, WindowExecutionState::Running, true, true);
+    pump(&mut realm);
+    let observed = Rc::clone(&events);
+    let reads = Rc::new(RefCell::new(Vec::new()));
+    let key_reads = Rc::clone(&reads);
+    realm
+        .focus_manager()
+        .add_global_key_handler(Rc::new(move |_| {
+            key_reads.borrow_mut().push(observed.borrow().clone());
+            KeyEventResult::Handled
+        }));
+    let realm = Rc::new(realm);
+    *owner.borrow_mut() = Rc::downgrade(&realm);
+    for (id, x) in [(one, 10.0), (two, 30.0)] {
+        dispatch(
+            &realm,
+            primary,
+            make_down_event_for_id(id, Offset::new(x, 10.0), PointerKind::Touch).expect("down"),
+        );
+    }
+    for (id, x) in [(one, 20.0), (two, 40.0)] {
+        dispatch(
+            &realm,
+            primary,
+            make_move_event_for_id(id, Offset::new(x, 10.0), PointerKind::Touch).expect("motion"),
+        );
+    }
+    realm.enter(|realm| {
+        realm.handle_input_addressed(
+            primary,
+            PlatformInput::Keyboard(KeyEventBuilder::new(Code::F4).build()),
+        );
+    });
+    let expected = [
+        ("move", one, 20.0),
+        ("move", two, 40.0),
+        ("move", two, 80.0),
+        ("cancel", two, 0.0),
+    ];
+    assert_eq!(
+        *events.borrow(),
+        expected,
+        "frozen prefix finishes before loss settles its later accepted tail"
+    );
+    assert_eq!(reads.borrow()[0], expected);
+    dispatch(
+        &realm,
+        primary,
+        make_up_event_for_id(two, Offset::new(80.0, 10.0), PointerKind::Touch)
+            .expect("old terminal"),
+    );
+    assert_eq!(
+        *events.borrow(),
+        expected,
+        "native tail cannot duplicate capture loss"
+    );
+}
+
 fn assert_keyboard_contact_prefix(fail: bool, reenter: bool, resampling: bool) {
     use flui_interaction::events::{make_down_event_for_id, make_up_event_for_id};
     use flui_interaction::routing::KeyEventResult;
