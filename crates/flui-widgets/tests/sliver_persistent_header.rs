@@ -219,8 +219,31 @@ pub(crate) fn a_floating_snap_header_snaps_fully_open_when_a_startward_scroll_en
     // what must trigger the snap.
     laid.dispatch_pointer_down(150.0, 100.0);
     laid.dispatch_pointer_move(150.0, 170.0); // 70px down: slop + pan_start
+    laid.tick(); // Deliver the start before the next frame's accepted update.
     laid.dispatch_pointer_move(150.0, 175.0); // small further drag
+    laid.tick();
+    assert_eq!(
+        controller.pixels(),
+        195.0,
+        "premise: the accepted drag moves toward the start"
+    );
+    assert!(
+        controller.position().is_scrolling(),
+        "premise: the drag is active"
+    );
+    assert_eq!(
+        controller.position().user_scroll_direction(),
+        flui_rendering::view::ScrollDirection::Forward,
+        "premise: the snap listener has a startward user direction"
+    );
+    // Hardware timestamps follow the virtual clock. A stationary gap makes
+    // this a release without a fling, rather than two rapid samples at Up.
+    laid.pump_for(Duration::from_millis(100));
     laid.dispatch_pointer_up(150.0, 175.0);
+    assert!(
+        !controller.position().is_scrolling(),
+        "premise: the stationary release ends scrolling"
+    );
 
     // Drive frames: whatever the release produced (immediate end or a brief
     // ballistic run), the snap animation must then expand the header to
