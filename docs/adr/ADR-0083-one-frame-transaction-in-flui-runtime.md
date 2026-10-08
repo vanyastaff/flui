@@ -136,7 +136,7 @@ before `flui-testing` and `flui-sdk`. It owns:
 - `OwnerHost`: an ordinary loop-scoped, `!Send + !Sync` host of UI runtimes. It owns the
   UI runtime-neutral registry, one host-wide FIFO of addressed typed operations, checkout state and
   deferred UI runtime-map mutations. It does **not** own the native-window registry, platform or
-  engine objects, surface appliers, application services, execution pools or the TLS that lets
+  engine objects, native frame drivers, application services, execution pools or the TLS that lets
   an OS callback find it.
 
 `flui-runtime` depends only on crates in tiers V–K and on `flui-platform-api` (ADR-0082). Its
@@ -179,7 +179,7 @@ delegates, UIKit, Android JNI) reach exactly **one** thread-local cell: `APP_RUN
 `OwnerHost` alongside host-only state. No second TLS cell is added in `flui-runtime`.
 
 The boundary follows ADR-0037's three owners. `flui-app` keeps `WindowRegistry` and native
-window demultiplexing, renderer `SurfaceApplier`s, platform appearance normalization,
+window demultiplexing, renderer resize operations, platform appearance normalization,
 close-admission routing, the owner-platform capability, raster/engine state, application
 services and execution-pool lifetime. It translates a platform callback into a FLUI-owned,
 `flui-platform-api`-only operation carrying its exact `PresentationAddress`; `OwnerHost`
@@ -195,6 +195,34 @@ methods. True cross-thread producers use a bounded typed ingress plus the host's
 capability; an owner-local dispatcher is `!Send` and only appends to the same FIFO. The owner
 executes a bounded batch, then requests exactly one continuation wake when work remains. Each
 operation class declares whether it is lossless, latest-value coalescible or edge-coalesced.
+
+Owner admission combines only adjacent pending `Metrics`, `SafeArea` and `Brightness`
+observations for the same exact `PresentationAddress`. The batch retains the last size/DPI
+pair and the last value of each other property. Applying it resizes the native surface
+once, then updates the presentation's media query together. Any other operation, including
+input, frame delivery, lifecycle, close and another window's observation, ends the batch.
+An operation already executing is never replaced; admission adds no debounce delay.
+The combined operation consumes one unit of the physical callback budget.
+If native resize fails, its size/DPI pair remains unpublished, while accepted
+appearance and safe-area values still settle. Media-query publication, redraw
+and owner completion preserve the first failure; failure of one batched property
+must not erase another property's accepted value. The public owner contract
+`resize_failure_preserves_other_batched_window_state` verifies these values through
+a mounted widget, competing failures and a subsequent successful resize.
+`queued_state_bursts_coalesce_between_observing_frames` verifies widget-visible metrics
+and brightness; `pending_metrics_do_not_cross_ordered_operations` verifies the barriers.
+This owner policy does not specify downstream pointer-motion sampling in `GestureBinding`.
+
+Keyboard and IME dispatch finish pending motion on their resolved presentation before
+invoking the following input's callbacks. This is distinct from frame sampling: it drains
+accepted resampler events regardless of the next sample time, retains each contact and
+its interpolation state, and snapshots pending events before user callbacks. It neither
+invents an Up/Cancel nor changes the sequence's resampling mode. Motion dispatch, deferred
+arena resolution and the following input have separate containment; the first failure is
+preserved while the accepted following input still gets its dispatch opportunity.
+`pointer_stream_and_keyboard_survive_interleaved_resize` pins keyboard ordering and
+competing callback failures through a mounted widget. `input_barrier_preserves_pinch_contacts_and_continuity`
+pins contact continuity and scale across the interaction-layer operation.
 
 While platform callbacks still require `Send` (ADR-0082 §4), the UI runtime stays behind this one
 app-owned trampoline cell; the extraction does not wait for the `Send` removal.
@@ -311,7 +339,7 @@ The crate is created first and filled in five moves, each independently mergeabl
 | 5a. Owner FIFO correctness (done; platform-target acceptance waits on CI) | Before extraction, replace the per-UI runtime/rejection dispatch with one host-wide FIFO of addressed owner work. A reentrant dispatch to any UI runtime appends instead of recursing or being lost; execution-time admission drops a target made stale by earlier work; checkout restoration and UI runtime-owning drops remain panic-safe and happen outside live mutable host borrows. `NestedCrossRuntimeDispatchRejected` is gone. This transitional queue retains the pre-existing unbounded drain-until-empty policy and private `RuntimeTask` vocabulary; neither is an extraction contract | move 4 |
 | 5b. Bounded owner batches (done; platform-target acceptance waits on CI) | Bound each continuation callback and request one sequence-stamped later opportunity when work remains. Fresh native roots and carried FIFO entries share the callback budget; a root stays synchronous while budget remains, and excess roots join the FIFO. Terminal close admission fences later work for that exact presentation incarnation. Desktop/iOS use their owner signal, Android uses a non-dirty redraw poke, and web consumes the continuation on the next RAF. Deterministic tests prove a self-enqueueing cross-UI runtime chain yields at every budget boundary and that fresh roots cannot extend a continuation beyond its budget | move 5a |
 | 5c. Closed owner operations | Replace arbitrary `RuntimeTask::Frame`/`Pump` closures with target-typed presentation, UI runtime and registry operations plus explicit pump/background-pump methods. Give lossless transitions, latest-value state and edge-coalesced wakes distinct admission rules. True cross-thread producers use a bounded typed ingress plus a wake capability; the owner-local dispatcher remains `!Send` | move 5b |
-| 5d. Transaction and host extraction (the pump has moved; acceptance of its Android, iOS and wasm sites waits on CI's `cross-typecheck`, `wasm-check` and `wasm-test`) | `UiRuntime::pump` absorbs the runners' `drive_frame_with_lane` calls: every runner's frame wake is its gate, then the pump, then its pacing; the device-recovery wrapper brackets the whole pump; the background arm is `UiRuntime::pump_background`; `flui-app`'s `RuntimeRaster` is test-only. Extract the UI runtime-neutral registry, FIFO, checkout and deferred-mutation machinery as ordinary `flui_runtime::OwnerHost`. `APP_RUNTIME` remains the sole TLS in `flui-app` and contains it beside the `WindowRegistry`, surface appliers and other host-only state; no platform, engine, application-service or execution-pool owner moves with it. The pump verification tests remain in `flui-runtime`, where the pump lives: they reach its crate-private pipeline. Rollback: revert (no `legacy-frame-driver` feature, see `## Consequences`) | move 5c |
+| 5d. Transaction and host extraction (the pump has moved; acceptance of its Android, iOS and wasm sites waits on CI's `cross-typecheck`, `wasm-check` and `wasm-test`) | `UiRuntime::pump` absorbs the runners' `drive_frame_with_lane` calls: every runner's frame wake is its gate, then the pump, then its pacing; the device-recovery wrapper brackets the whole pump; the background arm is `UiRuntime::pump_background`; `flui-app`'s `RuntimeRaster` is test-only. Extract the UI runtime-neutral registry, FIFO, checkout and deferred-mutation machinery as ordinary `flui_runtime::OwnerHost`. `APP_RUNTIME` remains the sole TLS in `flui-app` and contains it beside the `WindowRegistry`, native frame drivers and other host-only state; no platform, engine, application-service or execution-pool owner moves with it. The pump verification tests remain in `flui-runtime`, where the pump lives: they reach its crate-private pipeline. Rollback: revert (no `legacy-frame-driver` feature, see `## Consequences`) | move 5c |
 | 6a. Test driver on the pump (done) | `flui-testing` moves above the runtime (`order = 6`, a normal dependent the runtime admits beside `flui-app`) and absorbs `flui_widgets::testing` as `flui_testing::widgets`; `flui-widgets` loses its `testing` feature. A UI runtime takes its clock as a `ClockSource`, so one `ManualClock` drives its frame time, gesture deadlines and produce gate. `HeadlessHost` hosts a `UiRuntime` over a headless window and sink and raises a contained frame failure after the pump, the first one authoritative. The widget harness (`lay_out`, `harness::mount`) runs every frame, the mount included, through `UiRuntime::pump`; the tests that pinned what the old driver lacked (no root `MediaQuery` or `VsyncScope`, no post-frame lanes, no text-input capability) mount on `HeadlessBinding` or assert the UI runtime's behaviour | move 4 |
 | 6b. Substrate suites on the pump | `HeadlessBinding::pump_frame`, `run_pipeline` and `pump_presentation`/`pump_all` are deleted; the raw-owner suites (`flui-view`, animation, scheduler, interaction, `flui-widgets`' `perf` target and its baseline, the facade's `tests/*.rs`) mount under the UI runtime's root scopes, which changes their tree shapes and needs its own review; per-presentation clocks become separate UI runtimes | move 6a |
 

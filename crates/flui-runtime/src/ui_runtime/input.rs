@@ -205,7 +205,10 @@ impl UiRuntime {
     ///
     /// Pointer events are coalesced by the target presentation's own
     /// `GestureBinding` — high-frequency move events are stored and flushed
-    /// once per frame by the draw step of [`Self::pump`].
+    /// by the draw step of [`Self::pump`]. Keyboard and IME first deliver that
+    /// target's pending motion without waiting for a frame or ending contacts.
+    /// A motion callback failure does not erase the following input; both are
+    /// contained independently and the first failure remains authoritative.
     ///
     /// Returns whether a handler consumed the event: a key event a global
     /// key handler (a shortcut) or a focused node handled. Every other kind,
@@ -259,9 +262,9 @@ impl UiRuntime {
             PlatformInput::Ime(ime_event) => {
                 let clock = presentation.clock();
                 clock.stamp_input_epoch(clock.now());
-                let dispatch = catch_unwind(AssertUnwindSafe(|| {
+                let dispatch = Self::dispatch_after_pending_motion(presentation, || {
                     presentation.text_input().dispatch(&ime_event);
-                }));
+                });
                 self.finish_addressed_input_dispatch(presentation, dispatch);
                 false
             }
@@ -287,11 +290,11 @@ impl UiRuntime {
                 let clock = presentation.clock();
                 clock.stamp_input_epoch(clock.now());
                 let mut handled = false;
-                let dispatch = catch_unwind(AssertUnwindSafe(|| {
+                let dispatch = Self::dispatch_after_pending_motion(presentation, || {
                     handled = presentation
                         .focus_manager()
                         .dispatch_key_event(&keyboard_event);
-                }));
+                });
                 self.finish_addressed_input_dispatch(presentation, dispatch);
                 handled
             }
@@ -306,6 +309,27 @@ impl UiRuntime {
                 false
             }
         }
+    }
+
+    /// Motion callbacks and the accepted following input each get their own
+    /// containment boundary. A failing move must neither erase the key/IME nor
+    /// let its failure be replaced by another callback or deferred resolution.
+    fn dispatch_after_pending_motion(
+        presentation: &PresentationState,
+        dispatch: impl FnOnce(),
+    ) -> Result<(), Box<dyn std::any::Any + Send>> {
+        let mut first = catch_unwind(AssertUnwindSafe(|| {
+            presentation.gestures().flush_pending_input();
+        }))
+        .err();
+        let resolved = catch_unwind(AssertUnwindSafe(|| {
+            presentation.gestures().drain_deferred_arena_resolutions();
+        }))
+        .err();
+        preserve_first_input_panic(&mut first, resolved, "input motion resolution");
+        let dispatched = catch_unwind(AssertUnwindSafe(dispatch)).err();
+        preserve_first_input_panic(&mut first, dispatched, "input after pending motion");
+        first.map_or(Ok(()), Err)
     }
 
     pub(super) fn dispatch_pointer_event_entered(

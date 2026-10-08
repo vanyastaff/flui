@@ -1,5 +1,30 @@
 # flui-widgets architecture
 
+## Inherited presentation data
+
+`MediaQuery` lives in the lower `media_query` module, below text, interaction and
+application composition. Consumers import its crate-root types; the `app` module
+owns the shell and `SafeArea`, not the source of inherited presentation data.
+The module DAG enforces this direction. Field-specific dependency behavior is
+pinned by `a_size_only_change_rebuilds_size_and_whole_readers_only`.
+
+`RichText` reads inherited text sizing during its stateless build and passes
+the value with its unchanged authored spans to a private render view. Native
+settings and inherited lookups do not enter `RenderObjectContext`. The paragraph
+update reports layout and semantics invalidation when sizing changes, so the same
+render object produces updated geometry. `Text` composes this path after merging
+its ambient style. Initial sizing is pinned by
+`media_text_scaling_changes_the_laid_out_text`; live updates, restoration from
+authored size and nested override retention by
+`a_text_scale_change_relayouts_a_preserved_text_subtree`.
+
+`EditableText` subscribes during its own build and carries sizing through its
+appearance value to `RenderEditable`. The editor retains authored styles and
+document offsets; selection and caret position use the newly laid-out paragraph.
+An explicitly configured caret height remains a logical length. Mount/update
+equivalence and restoration of glyph/caret geometry are pinned by
+`inherited_text_sizing_updates_editable_glyphs_and_caret`.
+
 ## Overlay entry identity admission
 
 Overlay entry allocation admits the final nonzero identity once and then refuses

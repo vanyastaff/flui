@@ -11,9 +11,7 @@
 use flui_painting::RegisterFontError;
 
 use super::host::APP_RUNTIME;
-use super::owner_dispatch::{
-    PresentationDispatcher, RuntimeEvent, RuntimeTask, dispatch_platform_ui_runtime,
-};
+use super::owner_dispatch::RuntimeDispatcher;
 
 /// Why [`register_font`] refused a font.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -101,21 +99,19 @@ pub(super) fn announce_font_change() {
             return Vec::new();
         };
         runtime
-            .ui_runtimes
-            .iter()
-            .map(|(_, ui_runtime)| PresentationDispatcher {
-                owner_thread,
-                address: ui_runtime.address,
-            })
+            .installed_host
+            .logical()
+            .runtime_ids()
+            .expect("BUG: font announcement runs outside pure publication")
+            .into_iter()
+            .map(|id| RuntimeDispatcher { owner_thread, id })
             .collect::<Vec<_>>()
     });
     for dispatcher in ui_runtimes {
         // Outside the runtime borrow: a ui_runtime that is idle runs the notice
         // now, one that is checked out (the caller's own) gets it queued
         // behind the running turn.
-        if let Err(error) =
-            dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Event(RuntimeEvent::FontsChanged))
-        {
+        if let Err(error) = dispatcher.fonts_changed() {
             // A ui_runtime closing or gone needs no layout.
             tracing::debug!(?dispatcher, ?error, "font change notice not delivered");
         }

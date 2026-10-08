@@ -117,7 +117,7 @@ impl LaneStamp {
 /// and updates the shared stamp state, without touching the backend — the
 /// pump applies the actual surface reconfiguration before the next render.
 ///
-/// Cheap to clone into the surface-applier closure; holds no backend and no
+/// Cheap to clone out of a frame driver's lane guard; holds no backend and no
 /// lock beyond the mailbox's own internal one.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone)]
@@ -251,7 +251,7 @@ impl<B: RasterBackend> RasterLane<B> {
         self.damage.set_mode(mode);
     }
 
-    /// The resize entry point for the platform's surface applier.
+    /// The resize entry point for the installed frame driver.
     pub(crate) fn resize_hook(&self) -> RasterResizeHook {
         RasterResizeHook {
             handle: self.handle.clone(),

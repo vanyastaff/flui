@@ -282,6 +282,12 @@ impl UiRuntime {
         self.mark_needs_full_repaint_for(self.presentations.primary());
     }
 
+    pub(crate) fn surface_restored(&self, id: flui_foundation::PresentationId) {
+        if let Some(presentation) = self.presentations.get(id) {
+            self.mark_needs_full_repaint_for(presentation);
+        }
+    }
+
     /// Whether a redraw is needed.
     pub fn needs_redraw(&self) -> bool {
         self.needs_redraw.load(Ordering::Relaxed)
@@ -420,16 +426,33 @@ impl UiRuntime {
             .perform_haptic_feedback(feedback);
     }
 
-    /// Apply a new device pixel ratio to presentation `id`'s render pipeline
-    /// and semantics owner (the resize path; construction applies the
-    /// initial ratio directly).
+    /// Apply a new device pixel ratio to presentation `id`'s render pipeline,
+    /// semantics owner and inherited window data. Mounted consumers observe
+    /// the new ratio on their next build; logical window size is unchanged.
     ///
     /// Each window has its own scale (monitors differ), so the ratio reaches
     /// only the presentation whose window reported it; its siblings keep
     /// theirs. Returns `false`, changing nothing, when `id` names no
-    /// presentation this UI runtime hosts — a close for it was delivered first,
-    /// the same interleaving [`Self::media_query_for`] drops.
+    /// presentation this UI runtime hosts — for example, when its close was
+    /// delivered before the scale change.
     pub fn set_device_pixel_ratio_for(&self, id: PresentationId, device_pixel_ratio: f64) -> bool {
+        if !self.set_pipeline_device_pixel_ratio_for(id, device_pixel_ratio) {
+            return false;
+        }
+        if let Some(source) = self.media_query_for(id) {
+            source.update(|data| data.device_pixel_ratio = device_pixel_ratio);
+        }
+        true
+    }
+
+    /// The native resize batch updates render scale before publishing size,
+    /// scale and appearance together. Keep this partial operation internal so
+    /// external hosts cannot leave the inherited ratio behind the renderer.
+    pub(crate) fn set_pipeline_device_pixel_ratio_for(
+        &self,
+        id: PresentationId,
+        device_pixel_ratio: f64,
+    ) -> bool {
         let Some(presentation) = self.presentations.get(id) else {
             return false;
         };

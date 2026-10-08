@@ -87,8 +87,8 @@
 use std::sync::{Arc, Weak};
 use std::thread::ThreadId;
 
+use flui_foundation::PresentationAddress;
 use flui_foundation::panic::payload_text;
-use flui_foundation::{PresentationAddress, UiRuntimeId};
 use flui_platform::traits::PlatformWindow;
 pub use flui_view::CloseReason;
 use parking_lot::Mutex;
@@ -316,6 +316,33 @@ pub(crate) struct CloseRequestRouter {
     entries: Mutex<Vec<PresentationCloseEntry>>,
 }
 
+/// An unpublished handler and weak native window, prepared outside all guards.
+pub(crate) struct PreparedCloseRequest(PresentationCloseEntry);
+
+impl PreparedCloseRequest {
+    pub(crate) fn new(
+        address: PresentationAddress,
+        window: &Arc<dyn PlatformWindow>,
+        handler: Option<CloseRequestHandler>,
+    ) -> Self {
+        Self(PresentationCloseEntry {
+            address,
+            window: Arc::downgrade(window),
+            handler,
+            owner_thread: std::thread::current().id(),
+        })
+    }
+}
+
+/// Capacity and identity reservation held through joint native publication.
+pub(crate) struct ClosePublication<'a>(parking_lot::MutexGuard<'a, Vec<PresentationCloseEntry>>);
+
+impl ClosePublication<'_> {
+    pub(crate) fn publish(mut self, prepared: PreparedCloseRequest) {
+        self.0.push(prepared.0);
+    }
+}
+
 impl std::fmt::Debug for CloseRequestRouter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CloseRequestRouter")
@@ -325,51 +352,23 @@ impl std::fmt::Debug for CloseRequestRouter {
 }
 
 impl CloseRequestRouter {
+    pub(crate) fn publication(
+        &self,
+        prepared: &PreparedCloseRequest,
+    ) -> Option<ClosePublication<'_>> {
+        let mut entries = self.entries.lock();
+        if entries
+            .iter()
+            .any(|entry| entry.address == prepared.0.address)
+        {
+            return None;
+        }
+        entries.reserve(1);
+        Some(ClosePublication(entries))
+    }
     /// An empty router.
     pub(crate) fn new() -> Self {
         Self::default()
-    }
-
-    /// Register `address` so it can be asked about, and closed
-    /// programmatically. Called once per presentation, from the bootstrap
-    /// that installed it, whether or not `handler` is `Some` — a window
-    /// with no handler still has to be closable through
-    /// [`Self::request_close`].
-    ///
-    /// Replaces any entry at the same address. `PresentationAddress` is
-    /// generational, so this can only ever be a genuine re-registration of
-    /// the same live presentation, never a stale incarnation colliding with
-    /// a fresh one.
-    #[cfg_attr(
-        all(target_arch = "wasm32", not(test)),
-        expect(
-            dead_code,
-            reason = "reached through the loop-exit teardown (desktop/android/iOS); wasm32 has \
-                      no loop-exit teardown at all"
-        )
-    )]
-    pub(crate) fn register(
-        &self,
-        address: PresentationAddress,
-        window: &Arc<dyn PlatformWindow>,
-        handler: Option<CloseRequestHandler>,
-    ) -> Option<CloseRequestHandler> {
-        let entry = PresentationCloseEntry {
-            address,
-            window: Arc::downgrade(window),
-            handler,
-            owner_thread: std::thread::current().id(),
-        };
-        let replaced = {
-            let mut entries = self.entries.lock();
-            if let Some(existing) = entries.iter_mut().find(|e| e.address == address) {
-                Some(std::mem::replace(existing, entry))
-            } else {
-                entries.push(entry);
-                None
-            }
-        };
-        replaced.and_then(|entry| entry.handler)
     }
 
     /// Remove the entry and return its handler for retirement outside host borrows.
@@ -382,21 +381,7 @@ impl CloseRequestRouter {
         removed.handler
     }
 
-    /// Remove a runtime's entries and hand their owners to the completion executor.
-    pub(crate) fn take_ui_runtime(&self, ui_runtime: UiRuntimeId) -> Vec<CloseRequestHandler> {
-        let removed = {
-            let mut entries = self.entries.lock();
-            entries
-                .extract_if(.., |entry| entry.address.ui_runtime_id == ui_runtime)
-                .collect::<Vec<_>>()
-        };
-        removed
-            .into_iter()
-            .filter_map(|entry| entry.handler)
-            .collect()
-    }
-
-    /// Remove every registration and return its handlers for loop-exit retirement.
+    /// Remove every registration for loop exit or final native-owner retirement.
     ///
     /// Not reachable by UI runtime-by-UI runtime removal: an explicit platform quit,
     /// or a bootstrap that fails after a window is wired but before its
@@ -404,14 +389,6 @@ impl CloseRequestRouter {
     /// per-UI runtime teardown ever names. Since a second `Platform::run` on the
     /// same thread reuses this `AppRuntime`, those would otherwise be
     /// consulted by the NEXT loop's windows.
-    #[cfg_attr(
-        all(target_arch = "wasm32", not(test)),
-        expect(
-            dead_code,
-            reason = "reached through the loop-exit teardown (desktop/android/iOS); wasm32 has \
-                      no loop-exit teardown at all"
-        )
-    )]
     pub(crate) fn take_all(&self) -> Vec<CloseRequestHandler> {
         let removed = std::mem::take(&mut *self.entries.lock());
         removed
@@ -563,6 +540,19 @@ mod tests {
         Arc::new(TestWindow::new().with_id(id)) as Arc<dyn PlatformWindow>
     }
 
+    fn register(
+        router: &CloseRequestRouter,
+        address: PresentationAddress,
+        window: &Arc<dyn PlatformWindow>,
+        handler: Option<CloseRequestHandler>,
+    ) {
+        let prepared = PreparedCloseRequest::new(address, window, handler);
+        router
+            .publication(&prepared)
+            .expect("fresh test registration")
+            .publish(prepared);
+    }
+
     /// Two presentations, two answers, one router: the addressing that lets
     /// a document window refuse a close while the preferences window beside
     /// it closes normally. The sibling's handler must not even be consulted.
@@ -574,19 +564,21 @@ mod tests {
 
         let keeps_open_asked = Arc::new(AtomicUsize::new(0));
         let asked = Arc::clone(&keeps_open_asked);
-        drop(router.register(
+        register(
+            &router,
             keeps_open,
             &window(1),
             Some(CloseRequestHandler::new(move |_| {
                 asked.fetch_add(1, Ordering::SeqCst);
                 CloseResponse::KeepOpen
             })),
-        ));
-        drop(router.register(
+        );
+        register(
+            &router,
             closes,
             &window(2),
             Some(CloseRequestHandler::new(|_| CloseResponse::Close)),
-        ));
+        );
 
         assert_eq!(
             router.consult(closes, CloseReason::User),
@@ -620,7 +612,8 @@ mod tests {
         let panics = Arc::new(std::sync::atomic::AtomicBool::new(true));
         let panics_in_handler = Arc::clone(&panics);
 
-        drop(router.register(
+        register(
+            &router,
             a,
             &window(1),
             Some(CloseRequestHandler::new(move |_| {
@@ -630,7 +623,7 @@ mod tests {
                 );
                 CloseResponse::Close
             })),
-        ));
+        );
 
         // A quiet hook is exactly why the payload has to be carried into
         // the `tracing` field: with the default output suppressed, the
@@ -675,14 +668,15 @@ mod tests {
         let a = address(1, 1);
         let reasons = Arc::new(Mutex::new(Vec::new()));
         let seen = Arc::clone(&reasons);
-        drop(router.register(
+        register(
+            &router,
             a,
             &window(1),
             Some(CloseRequestHandler::new(move |request| {
                 seen.lock().push(request.reason());
                 CloseResponse::KeepOpen
             })),
-        ));
+        );
 
         router.consult(a, CloseReason::Program);
         router.consult(a, CloseReason::User);
@@ -724,11 +718,12 @@ mod tests {
     impl Drop for RegisterOnDrop {
         fn drop(&mut self) {
             let router = self.router.upgrade().expect("router still owned");
-            drop(router.register(
+            register(
+                &router,
                 self.address,
                 &self.window,
                 Some(CloseRequestHandler::new(|_| CloseResponse::KeepOpen)),
-            ));
+            );
         }
     }
 
@@ -742,16 +737,17 @@ mod tests {
                 window: window(2),
                 address: next,
             };
-            drop(router.register(
+            register(
+                &router,
                 old,
                 &window(1),
                 Some(CloseRequestHandler::new(move |_| {
                     let _ = &capture;
                     CloseResponse::Close
                 })),
-            ));
+            );
             if whole_runtime {
-                drop(router.take_ui_runtime(old.ui_runtime_id));
+                drop(router.take_all());
             } else {
                 drop(router.take(old));
             }

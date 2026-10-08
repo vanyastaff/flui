@@ -80,9 +80,32 @@ struct SessionRecord {
     attaching: bool,
     retiring: bool,
     closing: bool,
+    installation: Option<PendingSceneInstallation>,
+}
+
+struct PendingSceneInstallation {
+    origin: SceneOrigin,
+    scene: Retained<UIWindowScene>,
+    resource_generation: u64,
+    completion: crate::shared::window_installation::PendingWindowInstallation,
+}
+
+struct SceneInstallationGuard<'a> {
+    platform: &'a IOSPlatform,
+    origin: Option<SceneOrigin>,
+}
+impl Drop for SceneInstallationGuard<'_> {
+    fn drop(&mut self) {
+        if let Some(origin) = self.origin.take()
+            && self.platform.current(&origin).is_some()
+        {
+            self.platform.enqueue(SceneAction::Rollback(origin));
+        }
+    }
 }
 enum SceneAction {
     Connect(SceneOrigin, Retained<UIWindowScene>),
+    Publish(PendingSceneInstallation),
     Observe(SceneOrigin, LifecycleObservation),
     Disconnect(SceneOrigin),
     Discard(IOSSceneSessionId, bool),
@@ -140,8 +163,12 @@ impl IOSPlatform {
             let identity = Arc::clone(&signal_identity);
             dispatch2::DispatchQueue::main().exec_async(move || {
                 FluiAppDelegate::with_platform(|platform| {
-                    if Arc::ptr_eq(&platform.identity, &identity) && platform.signal.drive() {
-                        platform.finish_quit();
+                    if Arc::ptr_eq(&platform.identity, &identity) {
+                        let quitting = platform.signal.drive();
+                        platform.poll_scene_installation();
+                        if quitting {
+                            platform.finish_quit();
+                        }
                     }
                 });
             });
@@ -588,6 +615,7 @@ impl IOSPlatform {
                         attaching: false,
                         retiring: false,
                         closing: false,
+                        installation: None,
                     });
                 }
                 admitted
@@ -725,6 +753,7 @@ impl IOSPlatform {
             crate::shared::panic_boundary::contain_owner_callback(|| self.apply_scene(action));
         }
         drop(guard);
+        self.poll_scene_installation();
         if !self.running.load(Ordering::SeqCst) {
             self.invoke_quit();
             let callback = self.state().borrow_mut().handler.take();
@@ -775,6 +804,29 @@ impl IOSPlatform {
         }
     }
 
+    fn poll_scene_installation(&self) {
+        let completed = {
+            let mut state = self.state().borrow_mut();
+            state.session.as_mut().and_then(|record| {
+                let outcome = record.installation.as_ref()?.completion.outcome()?;
+                Some((
+                    record
+                        .installation
+                        .take()
+                        .expect("BUG: observed installation is retained"),
+                    outcome,
+                ))
+            })
+        };
+        if let Some((pending, outcome)) = completed {
+            if outcome.is_ok() {
+                self.enqueue(SceneAction::Publish(pending));
+            } else {
+                self.enqueue(SceneAction::Rollback(pending.origin.clone()));
+            }
+        }
+    }
+
     fn apply_scene(&self, action: SceneAction) {
         let marker = MainThreadMarker::new().expect("BUG: scene actions run on main");
         match action {
@@ -796,28 +848,18 @@ impl IOSPlatform {
                             record.origin = origin.clone();
                             record.attaching = true;
                             record.retiring = false;
-                            (Arc::clone(&record.window), record.installed)
+                            (
+                                Arc::clone(&record.window),
+                                record.installed,
+                                record.installation.take(),
+                            )
                         })
                 };
-                let Some((window, reconnect)) = current else {
+                let Some((window, reconnect, replaced)) = current else {
                     return;
                 };
-                struct Installation<'a> {
-                    platform: &'a IOSPlatform,
-                    origin: Option<SceneOrigin>,
-                }
-                impl Drop for Installation<'_> {
-                    fn drop(&mut self) {
-                        if let Some(origin) = self.origin.take()
-                            && self.platform.current(&origin).is_some()
-                        {
-                            // The scene pump is still leased: queue cleanup,
-                            // never invoke a consumer during stack unwinding.
-                            self.platform.enqueue(SceneAction::Rollback(origin));
-                        }
-                    }
-                }
-                let mut installation = Installation {
+                drop(replaced);
+                let mut installation = SceneInstallationGuard {
                     platform: self,
                     origin: Some(origin.clone()),
                 };
@@ -826,20 +868,48 @@ impl IOSPlatform {
                     return;
                 }
                 let resource_generation = window.resource_generation();
+                let proxy = crate::PlatformProxy::new(Arc::new(
+                    crate::shared::owner_signal::SignalTransport::new(&self.signal),
+                ));
+                let (acknowledgement, completion) =
+                    crate::shared::window_installation::WindowInstallation::channel(proxy);
+                if let Some(record) = self.state().borrow_mut().session.as_mut() {
+                    record.installation = Some(PendingSceneInstallation {
+                        origin: origin.clone(),
+                        scene,
+                        resource_generation,
+                        completion,
+                    });
+                }
                 let result = self.emit_scene(IOSSceneEvent::Connected {
                     session: origin.session.clone(),
                     attachment: IOSSceneAttachmentId(origin.attachment),
                     window: Arc::clone(&window) as Arc<dyn crate::traits::HostWindow>,
                     reconnect,
+                    installation: acknowledgement,
                 });
                 if let Err(error) = result {
                     tracing::error!(%error, "scene installation failed");
                     self.enqueue(SceneAction::Rollback(origin));
                     return;
                 }
-                if self.current(&origin).is_none() {
+                installation.origin = None;
+                self.poll_scene_installation();
+            }
+            SceneAction::Publish(pending) => {
+                let PendingSceneInstallation {
+                    origin,
+                    scene,
+                    resource_generation,
+                    ..
+                } = pending;
+                let mut installation = SceneInstallationGuard {
+                    platform: self,
+                    origin: Some(origin.clone()),
+                };
+                let Some((window, _)) = self.current(&origin) else {
                     return;
-                }
+                };
                 if let Some(record) = self.state().borrow_mut().session.as_mut() {
                     record.installed = true;
                     record.attaching = false;

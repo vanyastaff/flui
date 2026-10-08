@@ -41,6 +41,8 @@ pub mod text_geometry;
 // `pub` for the same Linux-tested/off-target-consumed reason as
 // `hwnd_affinity` above (consumers: the Win32 and AppKit backends).
 pub mod visibility;
+// UIKit consumes this acknowledgement; its transport contract runs on every host.
+pub mod window_installation;
 
 #[cfg(target_os = "ios")]
 pub(crate) use handlers::LifecycleEvent;

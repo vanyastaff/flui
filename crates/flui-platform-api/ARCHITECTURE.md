@@ -54,6 +54,16 @@ path.
 
 ## Mapping decisions
 
+### Preference observations preserve unavailable values and native units
+
+`SystemPreferences` records observations rather than framework fallback values
+(ADR-0159). Text factors are finite and positive; motion observations distinguish
+reduced motion from duration scaling. Vertical wheel lines/pages and horizontal
+character counts have separate representations. The `preferences_contract` table
+pins numeric admission, including subnormal scales and both signs of zero. Source
+lifecycle, ordered delivery and consumer projection remain under implementation in
+the platform-layer spec; these value tests do not establish those behaviors.
+
 ### Platform services are capability traits in a contract crate
 
 Text input, haptics, clipboard and system chrome are typed capability traits

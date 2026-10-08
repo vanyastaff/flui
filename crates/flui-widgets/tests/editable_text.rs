@@ -775,6 +775,58 @@ fn with_render_editable<T>(
     })
 }
 
+/// Glyph geometry and the caret must use the same updated text sizing.
+pub(crate) fn inherited_text_sizing_updates_editable_glyphs_and_caret() {
+    use flui_painting::typography::TextStyle;
+    use flui_view::ViewExt;
+    use flui_widgets::{MediaQuery, MediaQueryData};
+
+    let controller = TextEditingController::with_text("mmmm");
+    let focus = FocusNode::with_debug_label("text sizing");
+    let field = |scale| {
+        MediaQuery::new(
+            MediaQueryData {
+                text_scale_factor: scale,
+                ..MediaQueryData::default()
+            },
+            crate::media_query_fields::StaticChild {
+                inner: EditableText::new(controller.clone(), Rc::clone(&focus))
+                    .text_style(TextStyle::default().with_font_size(16.0))
+                    .boxed(),
+            },
+        )
+    };
+    let geometry = |harness: &crate::common::harness::Harness| {
+        with_render_editable(harness, |render| {
+            (
+                render.local_rect_for_range(0..4).expect("laid out glyphs"),
+                render.local_rect_for_range(4..4).expect("laid out caret"),
+            )
+        })
+        .expect("mounted editable")
+    };
+    let mut harness = crate::common::harness::mount(field(2.0));
+    let initially_enlarged = geometry(&harness);
+    harness.swap_root(field(1.0));
+    let original = geometry(&harness);
+    harness.swap_root(field(2.0));
+    let enlarged = geometry(&harness);
+    assert_eq!(
+        enlarged, initially_enlarged,
+        "mount and update resolve the same sizing"
+    );
+    assert!(
+        enlarged.0.size().width > original.0.size().width * 1.5
+            && enlarged.0.size().height > original.0.size().height * 1.5
+            && enlarged.1.origin().x > original.1.origin().x * 1.5,
+        "editable glyphs and the end caret must follow text sizing: original={original:?}, enlarged={enlarged:?}"
+    );
+    harness.swap_root(field(1.0));
+    assert_eq!(geometry(&harness), original);
+    assert_eq!(controller.text(), "mmmm");
+    assert_eq!(controller.caret_byte_offset(), 4);
+}
+
 /// An obscured field's real characters never reach the render object.
 ///
 /// This is the criterion — "obscured text never leaks through paint,

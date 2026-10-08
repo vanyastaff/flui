@@ -49,6 +49,7 @@ use windows::{
     core::{PCWSTR, w},
 };
 const WAKE: u32 = WM_APP + 19;
+mod wake;
 /// Asks the owner to consult the exit policy; see [`ExitPolicyRequest`].
 const EXIT_POLICY: u32 = WM_APP + 20;
 const OWNER_CLASS: PCWSTR = w!("FLUIOwnerSignalWindow");
@@ -65,6 +66,7 @@ pub(super) struct OwnerControlContext {
     handlers: Rc<RefCell<PlatformHandlers>>,
     turn: Rc<OwnerTurnSlot>,
     frames: Rc<FrameCount>,
+    preferences: Rc<super::preferences::PreferenceSource>,
     /// The platform's tracked top-level windows, read by the exit-policy
     /// check. Weak: the owner window does not keep the platform's state alive.
     windows: Weak<WindowMap>,
@@ -84,6 +86,7 @@ pub(super) struct OwnerShares {
     pub(super) turn: Rc<OwnerTurnSlot>,
     /// Frame callbacks dispatched by every window this platform opens.
     pub(super) frames: Rc<FrameCount>,
+    pub(super) preferences: Rc<super::preferences::PreferenceSource>,
     /// Posts the owner's exit-policy check; handed to every window context
     /// so the last window's `WM_DESTROY` can ask for it.
     pub(super) exit_policy: ExitPolicyRequest,
@@ -136,6 +139,7 @@ pub(super) struct OwnerGate {
 
 pub(super) struct OwnerControl {
     pub(super) signal: Arc<OwnerSignal>,
+    pub(super) wake: Arc<wake::OwnerWake>,
     gate: OwnerGate,
 }
 impl OwnerControl {
@@ -170,18 +174,20 @@ impl OwnerControl {
             })?;
         let address = Arc::new(Mutex::new(None::<isize>));
         let target = Arc::clone(&address);
+        let wake = Arc::new(wake::OwnerWake::new().map_err(|error| PlatformError::Init {
+            message: error.to_string(),
+        })?);
+        let transport = Arc::clone(&wake);
         let signal = OwnerSignal::new(Arc::new(move || {
             let address = target.lock();
             let raw = address.ok_or_else(|| PlatformError::EventLoop {
                 message: "owner message window is closed".into(),
             })?;
-            // SAFETY: admission is closed before this address is retired. Posting
-            // carries no pointer or user closure and never synchronously invokes the procedure.
-            unsafe { PostMessageW(Some(HWND(raw as *mut _)), WAKE, WPARAM(0), LPARAM(0)) }.map_err(
-                |error| PlatformError::EventLoop {
+            transport
+                .post(HWND(raw as *mut _))
+                .map_err(|error| PlatformError::EventLoop {
                     message: error.to_string(),
-                },
-            )
+                })
         }));
         let exit_policy_pending = Arc::new(AtomicBool::new(false));
         let context = Box::new(OwnerControlContext {
@@ -190,6 +196,7 @@ impl OwnerControl {
             handlers: Rc::new(RefCell::new(PlatformHandlers::default())),
             turn: Rc::new(OwnerTurnSlot::default()),
             frames: Rc::new(FrameCount::default()),
+            preferences: Rc::new(super::preferences::PreferenceSource::new(&signal)?),
             windows,
             exit_policy_pending: Arc::clone(&exit_policy_pending),
         });
@@ -225,6 +232,7 @@ impl OwnerControl {
         }
         Ok(Self {
             signal,
+            wake,
             gate: OwnerGate {
                 address,
                 identity,
@@ -241,6 +249,16 @@ impl OwnerControl {
     /// A gate the owner hooks can hold.
     pub(super) fn gate(&self) -> OwnerGate {
         self.gate.clone()
+    }
+
+    pub(super) fn drive_fallback(&self) {
+        contain_owner_callback(|| {
+            if let Ok(shares) = self.shares("fallback owner wake")
+                && self.signal.drive_in(shares.turn.as_ref())
+            {
+                quit_owner_loop(&self.signal, shares.turn.as_ref());
+            }
+        });
     }
 
     /// See [`ExitPolicyRequest`].
@@ -328,6 +346,7 @@ impl OwnerGate {
                     handlers: Rc::clone(&context.handlers),
                     turn: Rc::clone(&context.turn),
                     frames: Rc::clone(&context.frames),
+                    preferences: Rc::clone(&context.preferences),
                     exit_policy: self.exit_policy_request(),
                 })
             }
@@ -364,7 +383,13 @@ impl OwnerHooks for WindowsOwnerHooks {
         // `OwnerPlatform`, the only caller, is `!Send`, so this runs on the
         // owner thread; a refusal here means the owner window is gone.
         match self.gate.shares("on_wake") {
-            Ok(shares) => self.signal.register_in(&*shares.turn, callback),
+            Ok(shares) => {
+                self.signal.register_in(&*shares.turn, callback)?;
+                if shares.preferences.pending() {
+                    let _ = self.signal.wake();
+                }
+                Ok(())
+            }
             Err(reason) => {
                 tracing::debug!(?reason, "owner-turn registration refused");
                 drop(callback);

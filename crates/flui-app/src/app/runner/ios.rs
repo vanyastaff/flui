@@ -40,9 +40,8 @@ use super::host::{
     with_owner_platform,
 };
 use super::owner_dispatch::{
-    PresentationDispatcher, RuntimeEvent, RuntimeTask, close_this_window,
-    dispatch_platform_ui_runtime, install_input_wiring, install_surface_applier,
-    install_ui_runtime_alongside, teardown_platform_ui_runtime,
+    RuntimeEvent, RuntimeTask, close_this_window, dispatch_platform_ui_runtime,
+    install_input_wiring, prepare_ui_runtime_alongside, teardown_platform_ui_runtime,
 };
 use super::surface_lifecycle::{
     SurfaceLifecycleOutcome, SurfaceRecreationRetry, report_surface_settlement,
@@ -74,40 +73,67 @@ where
 use super::session_controller::{SessionController, contain};
 pub(in crate::app) type IOSController = SessionController<IOSSceneSessionId>;
 
-fn scene_event(event: IOSSceneEvent) -> Result<(), flui_platform::BootstrapError> {
-    let controller = APP_RUNTIME
-        .with(|slot| slot.borrow_mut().ios_controller.take())
-        .ok_or_else(|| anyhow::anyhow!("iOS process controller is unavailable"))?;
-    struct Lease(Option<IOSController>);
-    impl Drop for Lease {
-        fn drop(&mut self) {
-            let controller = self.0.take();
-            let retired = APP_RUNTIME.with(|slot| {
-                let mut runtime = slot.borrow_mut();
-                if runtime.ios_running {
-                    std::mem::replace(&mut runtime.ios_controller, controller)
-                } else {
-                    controller
-                }
-            });
-            contain(|| drop(retired));
-            // A nested owner turn may have arrived while the controller was
-            // leased. Re-arm after restoration instead of losing that wake.
-            if APP_RUNTIME.with(|slot| slot.borrow().ios_controller.is_some()) {
-                let _ = with_owner_platform(|owner| owner.proxy().wake());
+struct ControllerLease {
+    controller: Option<IOSController>,
+    identity: Arc<()>,
+}
+impl Drop for ControllerLease {
+    fn drop(&mut self) {
+        let controller = self.controller.take();
+        let retired = APP_RUNTIME.with(|slot| {
+            let mut runtime = slot.borrow_mut();
+            if runtime.ios_running
+                && Arc::ptr_eq(&runtime.loop_identity, &self.identity)
+                && runtime.ios_controller.is_none()
+            {
+                std::mem::replace(&mut runtime.ios_controller, controller)
+            } else {
+                controller
             }
+        });
+        contain(|| drop(retired));
+        // A nested owner turn may have arrived while the controller was
+        // leased. Re-arm after restoration instead of losing that wake.
+        if APP_RUNTIME.with(|slot| {
+            slot.borrow()
+                .ios_controller
+                .as_ref()
+                .is_some_and(SessionController::has_pending)
+        }) {
+            let _ = with_owner_platform(|owner| owner.proxy().wake());
         }
     }
-    let mut lease = Lease(Some(controller));
-    let controller = lease.0.as_mut().expect("BUG: live controller lease");
+}
+
+fn lease_controller() -> Option<ControllerLease> {
+    APP_RUNTIME.with(|slot| {
+        let mut state = slot.borrow_mut();
+        state
+            .ios_controller
+            .take()
+            .map(|controller| ControllerLease {
+                controller: Some(controller),
+                identity: Arc::clone(&state.loop_identity),
+            })
+    })
+}
+
+fn scene_event(event: IOSSceneEvent) -> Result<(), flui_platform::BootstrapError> {
+    let mut lease = lease_controller()
+        .ok_or_else(|| anyhow::anyhow!("iOS process controller is unavailable"))?;
+    let controller = lease
+        .controller
+        .as_mut()
+        .expect("BUG: live controller lease");
     match event {
         IOSSceneEvent::Connected {
             session,
             window,
             reconnect,
+            installation,
             ..
         } => {
-            controller.connect(session.clone(), window, reconnect)?;
+            controller.connect(session.clone(), window, reconnect, installation)?;
             if !APP_RUNTIME.with(|slot| slot.borrow().ios_running) {
                 controller.discard(&session);
                 return Err(anyhow::anyhow!("iOS process stopped during installation").into());
@@ -125,6 +151,13 @@ fn scene_event(event: IOSSceneEvent) -> Result<(), flui_platform::BootstrapError
 }
 
 fn drive_owner() {
+    if let Some(mut lease) = lease_controller() {
+        lease
+            .controller
+            .as_mut()
+            .expect("BUG: live controller lease")
+            .poll();
+    }
     // A continuation exists to make progress on roots already carried across
     // the previous finite owner turn. Generating another Pump for every
     // retained scene here could consume the whole budget before that FIFO is
@@ -143,7 +176,7 @@ fn drive_owner() {
                     .unwrap_or_default()
             });
             for dispatcher in dispatchers {
-                let _ = dispatch_platform_ui_runtime(dispatcher, RuntimeTask::BackgroundPump);
+                let _ = dispatcher.runtime().background();
             }
         },
         || {
@@ -228,7 +261,7 @@ fn bootstrap_ios<V>(
     config: AppConfig,
     worker_reload: WorkerReload,
     host: Arc<dyn HostWindow>,
-) -> anyhow::Result<PresentationDispatcher>
+) -> anyhow::Result<super::installed_host::Installation>
 where
     V: View + StatelessView + Clone + 'static,
 {
@@ -316,16 +349,8 @@ where
         .dev_agent
         .as_ref()
         .and_then(|agent| agent.vend(&ui_runtime, ui_runtime.presentation_id()));
-    let owner_dispatch = install_ui_runtime_alongside(ui_runtime, &window)?;
-    struct ProvisionalRuntime(Option<PresentationDispatcher>);
-    impl Drop for ProvisionalRuntime {
-        fn drop(&mut self) {
-            if let Some(dispatcher) = self.0.take() {
-                contain(|| close_this_window(dispatcher));
-            }
-        }
-    }
-    let mut provisional = ProvisionalRuntime(Some(owner_dispatch));
+    let mut installation = prepare_ui_runtime_alongside(ui_runtime, Arc::clone(&window));
+    let owner_dispatch = installation.dispatcher();
 
     // 4. Adopt the raster mailbox (ADR-0045's inline lane).
     let lane = Arc::new(Mutex::new(crate::app::raster_lane::RasterLane::new(
@@ -335,30 +360,17 @@ where
         phys_size.height as u32,
     )));
 
-    {
-        let resize_hook = lane.lock().resize_hook();
-        install_surface_applier(
-            owner_dispatch.address.ui_runtime_id,
-            move |size, scale_factor| {
-                let w = (size.width * scale_factor) as u32;
-                let h = (size.height * scale_factor) as u32;
-                resize_hook.apply(w, h);
-            },
-        );
-    }
-
     // 5. Input -> entered ui_runtime input dispatch.
     install_input_wiring(owner_dispatch, window.as_ref());
 
-    let frame = super::frame_driver::install_frame_driver(
-        owner_dispatch,
-        super::frame_driver::FrameDriver::Ios(IosFrameDriver {
+    installation.dev_agent(config.dev_agent.clone().zip(agent_window));
+    let frame =
+        installation.frame_driver(super::frame_driver::FrameDriver::Ios(IosFrameDriver {
             lane: Arc::clone(&lane),
             worker_reload: worker_reload.clone(),
             device_recovery_backoff,
             surface_recreation_retry,
-        }),
-    )?;
+        }))?;
     let binding = frame.binding;
     window.on_request_frame(Box::new(move || {
         let _ = dispatch_platform_ui_runtime(owner_dispatch, RuntimeTask::Frame(binding));
@@ -431,18 +443,19 @@ where
     let execution = window.execution_state();
     let focused = window.is_focused();
     let visible = window.is_visible();
-    let _ = dispatch_platform_ui_runtime(
-        owner_dispatch,
-        RuntimeTask::Event(RuntimeEvent::WindowSnapshot {
-            execution,
-            focused,
-            visible,
-        }),
-    );
+    installation.observe(flui_runtime::owner::WindowObservation::Snapshot {
+        execution,
+        focused,
+        visible,
+    });
+    installation.observe(flui_runtime::owner::WindowObservation::Metrics {
+        size: window.logical_size(),
+        scale_factor: window.scale_factor(),
+    });
 
-    window.on_close(Box::new(move || {
+    installation.on_close(move || {
         close_this_window(owner_dispatch);
-    }));
+    });
 
     // 9. Store the window in the redraw-poke slot BEFORE the initial redraw.
     APP_RUNTIME.with(|slot| slot.borrow().set_redraw_window(window));
@@ -453,15 +466,7 @@ where
         "iOS bootstrap must run on the ui_runtime's owner thread"
     );
 
-    // 10. Request the initial redraw.
-    wake();
-
-    tracing::info!("iOS platform initialized with callbacks");
-    provisional.0 = None;
-    if let (Some(agent), Some(window)) = (config.dev_agent.as_ref(), agent_window) {
-        agent.window_opened(window);
-    }
-    Ok(owner_dispatch)
+    Ok(installation.submit())
 }
 
 pub(super) struct IosFrameDriver {
@@ -472,6 +477,16 @@ pub(super) struct IosFrameDriver {
 }
 
 impl IosFrameDriver {
+    pub(super) fn installed(&mut self) {
+        tracing::info!("iOS platform initialized with callbacks");
+    }
+    pub(super) fn resize(&mut self, size: flui_foundation::geometry::Size<f64>, scale_factor: f64) {
+        let resize = self.lane.lock().resize_hook();
+        resize.apply(
+            (size.width * scale_factor) as u32,
+            (size.height * scale_factor) as u32,
+        );
+    }
     pub(super) fn wake(&mut self, ui_runtime: &mut crate::app::ui_runtime::UiRuntime) {
         let lane_frame = &self.lane;
         let worker_reload_frame = &self.worker_reload;

@@ -375,6 +375,10 @@ fn surface_contracts() {
 fn theme_and_app_contracts() {
     common::run_cases(&[
         (
+            "material_app::contrast selects authored themes in a retained app",
+            material_app::contrast_selects_authored_themes_in_a_retained_app,
+        ),
+        (
             "theme::theme of panicking accessor returns ancestor theme data",
             theme::theme_of_panicking_accessor_returns_ancestor_theme_data,
         ),

@@ -280,6 +280,45 @@ fn scale_axis_with_zero_baseline_holds_finite() {
     assert!((last.vertical_scale - 1.5).abs() < 1e-9);
 }
 
+fn input_barrier_preserves_pinch_contacts_and_continuity() {
+    for resampling in [false, true] {
+        let rig = Rig::new();
+        rig.binding
+            .set_resampling_enabled(resampling)
+            .expect("before contacts");
+        let (_scale, log) = scale_on(&rig);
+        rig.down(1, 100.0, 200.0);
+        rig.down(2, 300.0, 200.0);
+        rig.frame();
+        for (left, right, expected) in [(50.0, 350.0, 1.5), (0.0, 400.0, 2.0)] {
+            for (pointer, x) in [(1, left), (2, right)] {
+                rig.send(&make_move_event_for_id(
+                    id(pointer),
+                    Offset::new(x, 200.0),
+                    PointerType::Touch,
+                ));
+            }
+            assert_eq!(rig.binding.flush_pending_input(), 2);
+            rig.binding.drain_deferred_arena_resolutions();
+            assert!((log.last_update().scale - expected).abs() < 1e-9);
+            assert_eq!(
+                rig.binding.active_pointer_count(),
+                2,
+                "barrier must not end contact"
+            );
+            let updates = log.updates.borrow().len();
+            assert_eq!(rig.binding.flush_pending_input(), 0);
+            assert_eq!(log.updates.borrow().len(), updates, "no duplicate delivery");
+        }
+        rig.up(1, 0.0, 200.0);
+        rig.up(2, 400.0, 200.0);
+        assert_eq!(rig.binding.active_pointer_count(), 0);
+        assert_eq!(log.starts.get(), 1);
+        assert_eq!(log.ends.borrow().len(), 1);
+        assert!(log.all_finite());
+    }
+}
+
 fn scale_from_coincident_contacts_stays_finite() {
     let rig = Rig::new();
     let (_scale, log) = scale_on(&rig);
@@ -524,6 +563,10 @@ fn scale_publishes_finite_continuous_values_and_owns_its_contacts() {
     run_rows(
         "scale",
         &[
+            (
+                "input barrier preserves contacts",
+                input_barrier_preserves_pinch_contacts_and_continuity,
+            ),
             (
                 "extreme finite contacts",
                 scale_measures_extreme_finite_contacts,
@@ -1081,6 +1124,10 @@ fn tap_and_drag_resolves_through_the_shared_arena() {
     run_rows(
         "tap and drag",
         &[
+            (
+                "queued out-and-back motion is a drag",
+                queued_out_and_back_motion_is_a_drag,
+            ),
             ("tap against a tap", tap_wins_against_a_later_tap_recognizer),
             ("drag against a pan", drag_claims_the_arena_before_starting),
             ("consecutive clicks", consecutive_clicks_count_up_and_reset),
@@ -1109,6 +1156,41 @@ fn tap_and_drag_resolves_through_the_shared_arena() {
             ),
         ],
     );
+}
+
+fn queued_out_and_back_motion_is_a_drag() {
+    for resampling in [false, true] {
+        let rig = Rig::new();
+        rig.binding
+            .set_resampling_enabled(resampling)
+            .expect("before contact");
+        let drags = Rc::new(Cell::new(0));
+        let taps = Rc::new(Cell::new(0));
+        let started = Rc::clone(&drags);
+        let tapped = Rc::clone(&taps);
+        let drag = DragGestureRecognizer::new(rig.binding.arena().clone(), DragAxis::Free)
+            .with_on_start(move |_| started.set(started.get() + 1));
+        let tap = TapGestureRecognizer::new(rig.binding.arena().clone())
+            .with_on_tap(move |_| tapped.set(tapped.get() + 1));
+        rig.attach(&drag, None);
+        rig.attach(&tap, None);
+        rig.down(1, 100.0, 100.0);
+        for x in [200.0, 100.0] {
+            rig.send(&make_move_event_for_id(
+                id(1),
+                Offset::new(x, 100.0),
+                PointerType::Touch,
+            ));
+        }
+        rig.binding.flush_pending_input();
+        rig.binding.drain_deferred_arena_resolutions();
+        rig.up(1, 100.0, 100.0);
+        assert_eq!(
+            (drags.get(), taps.get()),
+            (1, 0),
+            "crossing slop cannot disappear, resampling={resampling}"
+        );
+    }
 }
 
 // ============================================================================

@@ -45,6 +45,7 @@ pub(in crate::app) struct MainController {
     installer: Option<Installer>,
     config: AppConfig,
     open: Option<RenderedMain>,
+    installing: Option<RenderedMain>,
     pending: Option<PendingWindow>,
     pending_wake: Option<Arc<OpenWake>>,
     closing: bool,
@@ -58,6 +59,7 @@ pub(in crate::app) struct MainController {
 }
 impl Drop for MainController {
     fn drop(&mut self) {
+        self.cancel_pending();
         let watcher = self.watcher.take();
         contain(|| drop(watcher));
         let agent = self.agent.take();
@@ -152,11 +154,20 @@ impl MainController {
             self.cancel();
             return;
         }
+        if self.installing.is_some() {
+            self.finish_install();
+            return;
+        }
         let removed = self
             .open
             .as_ref()
             .filter(|open| {
-                !APP_RUNTIME.with(|slot| slot.borrow().registry.contains_address(open.address))
+                !APP_RUNTIME.with(|slot| {
+                    slot.borrow()
+                        .installed_host
+                        .native()
+                        .contains_address(open.address)
+                })
             })
             .map(|open| open.address);
         if let Some(address) = removed {
@@ -212,8 +223,12 @@ impl MainController {
                     .map_err(|error| AppWindowError::Show {
                         source: Arc::new(error),
                     });
-            let still_registered =
-                APP_RUNTIME.with(|slot| slot.borrow().registry.contains_address(open.address));
+            let still_registered = APP_RUNTIME.with(|slot| {
+                slot.borrow()
+                    .installed_host
+                    .native()
+                    .contains_address(open.address)
+            });
             if !still_registered {
                 self.ingress.finish_close(open.address);
                 let closed = self.open.take();
@@ -301,15 +316,9 @@ impl MainController {
             }
         };
         match result {
-            Ok(open)
-                if self.is_current()
-                    && APP_RUNTIME
-                        .with(|slot| slot.borrow().registry.contains_address(open.address)) =>
-            {
-                let address = open.address;
-                self.open = Some(open);
-                self.initial = false;
-                self.ingress.settle(Ok(address));
+            Ok(open) if self.is_current() => {
+                self.installing = Some(open);
+                self.finish_install();
             }
             Ok(open) => {
                 contain(|| window.close());
@@ -330,7 +339,54 @@ impl MainController {
             }
         }
     }
+    fn finish_install(&mut self) {
+        let Some(outcome) = self
+            .installing
+            .as_ref()
+            .and_then(|open| open.installation.outcome())
+        else {
+            return;
+        };
+        let open = self
+            .installing
+            .take()
+            .expect("BUG: observed installation owns its window");
+        let registered = self.is_current()
+            && APP_RUNTIME.with(|slot| {
+                slot.borrow()
+                    .installed_host
+                    .native()
+                    .contains_address(open.address)
+            });
+        match outcome {
+            Ok(()) if registered => {
+                let address = open.address;
+                self.open = Some(open);
+                self.initial = false;
+                self.ingress.settle(Ok(address));
+            }
+            outcome => {
+                contain(|| open.window.close());
+                contain(|| drop(open));
+                if self.is_current() {
+                    self.fail(match outcome {
+                        Err(source) => AppWindowError::Mount {
+                            source: Arc::new(source),
+                        },
+                        Ok(()) => AppWindowError::Cancelled,
+                    });
+                } else {
+                    self.cancel();
+                }
+            }
+        }
+    }
     fn cancel_pending(&mut self) {
+        if let Some(installing) = self.installing.take() {
+            installing.installation.cancel();
+            contain(|| installing.window.close());
+            contain(|| drop(installing));
+        }
         if let Some(mut pending) = self.pending.take() {
             if let Some(Ok(window)) = pending.try_take() {
                 contain(|| window.close());
@@ -412,7 +468,12 @@ impl Drop for ControllerLease {
 pub(super) fn drive_main_window() {
     let leased = APP_RUNTIME.with(|slot| {
         let mut runtime = slot.borrow_mut();
-        if runtime.dispatched_ui_runtime_id.is_some() || runtime.iterating_all_ui_runtimes {
+        if runtime
+            .installed_host
+            .logical()
+            .is_executing()
+            .unwrap_or(true)
+        {
             return None;
         }
         runtime
@@ -443,7 +504,7 @@ pub(super) fn drive_main_window() {
 pub(super) fn main_window_closing(address: flui_foundation::PresentationAddress) {
     let ingress = APP_RUNTIME.with(|slot| {
         let mut runtime = slot.borrow_mut();
-        if !runtime.registry.contains_address(address) {
+        if !runtime.installed_host.native().contains_address(address) {
             return None;
         }
         if let Some(controller) = runtime.main_controller.as_mut()
@@ -465,7 +526,7 @@ pub(super) fn main_window_closed(address: flui_foundation::PresentationAddress) 
         let mut runtime = slot.borrow_mut();
         // Closing while a ui_runtime is checked out queues disposal. Keep its close
         // fence until the restored dispatcher has actually removed the address.
-        if runtime.registry.contains_address(address) {
+        if runtime.installed_host.native().contains_address(address) {
             return (None, None);
         }
         let removed = runtime.main_controller.as_mut().and_then(|controller| {
@@ -612,6 +673,7 @@ where
                 installer: Some(installer),
                 config: config.clone(),
                 open: None,
+                installing: None,
                 pending: None,
                 pending_wake: None,
                 closing: false,
@@ -696,6 +758,7 @@ mod tests {
                 installer: Some(installer),
                 config: AppConfig::new(),
                 open: None,
+                installing: None,
                 pending: None,
                 pending_wake: None,
                 closing: false,
@@ -762,6 +825,155 @@ mod tests {
         ));
     }
     use std::cell::Cell;
+
+    fn main_window_waits_for_deferred_runtime_publication() {
+        use super::super::frame_driver::{FrameDriver, TestFrameDriver};
+        use super::super::owner_dispatch::{
+            RuntimeTask, dispatch_platform_ui_runtime, install_platform_ui_runtime,
+            prepare_ui_runtime_alongside,
+        };
+        use flui_runtime::ui_runtime::UiRuntime;
+
+        let _owner = OwnerHostClearGuard::arm();
+        let _cleanup = LoopTeardown;
+        Box::new(HeadlessPlatform::new())
+            .run(Box::new(move |owner| {
+                let handle = install_test_controller(
+                    owner,
+                    Box::new(|_, window, host| {
+                        let runtime = UiRuntime::for_test();
+                        runtime
+                            .attach_root_widget(&flui_widgets::SizedBox::new(20.0, 30.0))
+                            .expect("mount root");
+                        let window: Arc<dyn flui_platform::traits::PlatformWindow> = window;
+                        let mut prepared =
+                            prepare_ui_runtime_alongside(runtime, Arc::clone(&window));
+                        let address = prepared.dispatcher().address;
+                        prepared
+                            .frame_driver(FrameDriver::Test(TestFrameDriver {
+                                installed: None,
+                                sink: flui_runtime::testing::ScriptedSink::new(|_, _| {
+                                    flui_runtime::sink::SubmitVerdict::Presented
+                                }),
+                                prelude: None,
+                                resize: None,
+                            }))
+                            .expect("prepare frame driver");
+                        prepared.lifecycle(host);
+                        let installation = prepared.submit();
+                        assert!(
+                            installation.outcome().is_none(),
+                            "completion tail cannot publish during the current owner turn"
+                        );
+                        Ok(RenderedMain {
+                            window,
+                            address,
+                            installation,
+                        })
+                    }),
+                    None,
+                );
+                let outer = install_platform_ui_runtime(
+                    UiRuntime::for_test(),
+                    &crate::app::window_test_support::headless_test_window(),
+                );
+                let reply = Rc::new(RefCell::new(None));
+                let requested = Rc::clone(&reply);
+                dispatch_platform_ui_runtime(
+                    outer,
+                    RuntimeTask::TestCallback(Box::new(move |_| {
+                        let mut request = handle
+                            .request_show_main_window()
+                            .expect("admit show request");
+                        assert!(
+                            request.try_result().is_none(),
+                            "request is not ready during the caller's operation"
+                        );
+                        *requested.borrow_mut() = Some(request);
+                    })),
+                )
+                .expect("complete caller and installation");
+                let result = reply
+                    .borrow_mut()
+                    .as_mut()
+                    .expect("request submitted")
+                    .try_result();
+                assert!(
+                    matches!(result, Some(Ok(_))),
+                    "ready follows publication: {result:?}"
+                );
+                Ok(())
+            }))
+            .expect("headless bootstrap");
+    }
+
+    fn owner_failure_defers_new_window_work_until_recovery() {
+        use super::super::owner_dispatch::{
+            RuntimeTask, dispatch_platform_ui_runtime, install_platform_ui_runtime,
+        };
+        let _owner = OwnerHostClearGuard::arm();
+        let _cleanup = LoopTeardown;
+        Box::new(HeadlessPlatform::new())
+            .run(Box::new(move |owner| {
+                let calls = Rc::new(Cell::new(0));
+                let called = Rc::clone(&calls);
+                let handle = install_test_controller(
+                    owner,
+                    Box::new(move |_, _, _| {
+                        called.set(called.get() + 1);
+                        Err(AppWindowError::Cancelled)
+                    }),
+                    None,
+                );
+                let outer = install_platform_ui_runtime(
+                    flui_runtime::ui_runtime::UiRuntime::for_test(),
+                    &crate::app::window_test_support::headless_test_window(),
+                );
+                let reply = Rc::new(RefCell::new(None));
+                let requested = Rc::clone(&reply);
+                let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    dispatch_platform_ui_runtime(
+                        outer,
+                        RuntimeTask::TestCallback(Box::new(move |_| {
+                            *requested.borrow_mut() = Some(
+                                handle
+                                    .request_show_main_window()
+                                    .expect("admit request before failure"),
+                            );
+                            panic!("owner callback failed");
+                        })),
+                    )
+                    .expect("admitted callback");
+                }))
+                .expect_err("preserve callback failure");
+                assert_eq!(
+                    failure.downcast_ref::<&str>(),
+                    Some(&"owner callback failed")
+                );
+                assert_eq!(calls.get(), 0, "recovery must not invoke a fresh installer");
+                assert!(
+                    reply
+                        .borrow_mut()
+                        .as_mut()
+                        .expect("accepted request")
+                        .try_result()
+                        .is_none()
+                );
+                dispatch_platform_ui_runtime(outer, RuntimeTask::TestCallback(Box::new(|_| {})))
+                    .expect("next healthy owner opportunity");
+                assert_eq!(calls.get(), 1, "accepted request survives the failed turn");
+                assert!(matches!(
+                    reply
+                        .borrow_mut()
+                        .as_mut()
+                        .expect("accepted request")
+                        .try_result(),
+                    Some(Err(AppWindowError::Cancelled))
+                ));
+                Ok(())
+            }))
+            .expect("headless recovery host");
+    }
 
     fn main_window_factory_panic_is_typed_and_initial_window_is_fatal() {
         let app = Application::new(|_| -> flui_widgets::Text {
@@ -834,6 +1046,11 @@ mod tests {
         crate::table_test::run_table(
             "main_window_installer_matrix",
             &[
+                ("owner_failure_defers_new_window_work_until_recovery", owner_failure_defers_new_window_work_until_recovery as fn()),
+                (
+                    "main_window_waits_for_deferred_runtime_publication",
+                    main_window_waits_for_deferred_runtime_publication as fn(),
+                ),
                 (
                     "main_window_pending_coalesces_and_recovers_after_installer_panic",
                     main_window_pending_coalesces_and_recovers_after_installer_panic as fn(),
@@ -1042,23 +1259,26 @@ mod tests {
                 )),
         )
         .on_ready(move |_| {
-            super::super::secondary_window::open_secondary_window(
+            let (dispatcher, _window) = super::super::secondary_window::open_secondary_window_impl(
                 AppConfig::default(),
                 crate::app::runtime::WindowPolicy::Isolated,
             )
-            .expect("WindowPolicy::Isolated installs a ui_runtime");
-            seen.set(APP_RUNTIME.with(|slot| {
-                let runtime = slot.borrow();
-                runtime
-                    .ui_runtimes
-                    .iter()
-                    .find_map(|(_, slot)| slot.ui_runtime.as_ref())
-                    .map(|ui_runtime| {
-                        ui_runtime
-                            .widgets()
-                            .with_build_owner(|owner| owner.storage().is_some())
-                    })
-            }));
+            .expect("WindowPolicy::Isolated installs a ui_runtime")
+            .expect("headless window publishes synchronously");
+            let observed = Rc::clone(&seen);
+            super::super::owner_dispatch::dispatch_platform_ui_runtime(
+                dispatcher,
+                super::super::owner_dispatch::RuntimeTask::TestCallback(Box::new(
+                    move |ui_runtime| {
+                        observed.set(Some(
+                            ui_runtime
+                                .widgets()
+                                .with_build_owner(|owner| owner.storage().is_some()),
+                        ));
+                    },
+                )),
+            )
+            .expect("observe storage through the installed owner");
         });
         run_with_platform(app, Box::new(HeadlessPlatform::new())).expect("ordinary owner teardown");
 

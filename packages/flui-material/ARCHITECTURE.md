@@ -12,6 +12,19 @@ recorded so far.
 
 ## Mapping decisions
 
+### Contrast selects authored palettes within the effective brightness family
+
+`MaterialApp` selects light/dark using `ThemeMode` and, for System mode, the
+nearest media brightness. Contrast remains independent of an explicit mode.
+The selected family's optional contrast theme wins when requested. Missing
+contrast themes retain ordinary selection: dark theme, then base theme, then
+default; light selection uses base theme, then default. A light contrast theme
+is never substituted for a missing dark contrast theme. Authored colors are
+not automatically transformed.
+
+`contrast_selects_authored_themes_in_a_retained_app` exercises mode, ambient
+brightness, missing slots, live restoration and unrelated size updates.
+
 ### Catalog events forward the dispatch's write context
 
 Press, selection and value-change setters accept `&mut EventCx` and an

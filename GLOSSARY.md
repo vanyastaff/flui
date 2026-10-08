@@ -24,3 +24,14 @@ _Avoid_: Session, host, native window
 A platform window used to present UI. Its lifetime and identity are distinct
 from those of the UI runtime and presentation it serves.
 _Avoid_: Presentation, session
+
+**System preference**:
+A user or operating-system preference that can affect several presentations,
+independently of whether any native window currently exists. A presentation's
+geometry and appearance remain its own properties.
+_Avoid_: Window state, application policy
+
+**Application policy**:
+An application's choice of how to respond to a system preference. It can honor
+or override that preference without changing the operating system's setting.
+_Avoid_: System preference

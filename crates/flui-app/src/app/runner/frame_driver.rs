@@ -9,7 +9,7 @@ use std::rc::Rc;
 use std::rc::Weak;
 
 use super::native_retirement::NativeRetirement;
-use flui_foundation::{PresentationAddress, UiRuntimeId};
+use flui_foundation::PresentationAddress;
 use flui_runtime::ui_runtime::UiRuntime;
 
 /// The immutable presentation incarnation that installed a frame driver.
@@ -73,12 +73,64 @@ pub(super) enum FrameDriver {
 }
 
 #[cfg(test)]
+type TestResize = Box<dyn FnMut(flui_foundation::geometry::Size<f64>, f64)>;
+
+#[cfg(test)]
 pub(super) struct TestFrameDriver {
     pub(super) sink: flui_runtime::testing::ScriptedSink,
+    pub(super) installed: Option<Box<dyn FnOnce()>>,
     pub(super) prelude: Option<Box<dyn FnMut()>>,
+    pub(super) resize: Option<TestResize>,
 }
 
 impl FrameDriver {
+    fn installed(&mut self, record: &Rc<FrameRecord>) {
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = record;
+        match self {
+            #[cfg(all(
+                not(target_os = "android"),
+                not(target_os = "ios"),
+                not(target_arch = "wasm32")
+            ))]
+            Self::Desktop(_) => super::desktop::DesktopFrameDriver::installed(),
+            #[cfg(target_os = "android")]
+            Self::Android(_) => {}
+            #[cfg(target_os = "ios")]
+            Self::Ios(driver) => driver.installed(),
+            #[cfg(target_arch = "wasm32")]
+            Self::Web(driver) => driver.installed(FrameLiveness(Rc::downgrade(record))),
+            #[cfg(test)]
+            Self::Test(driver) => {
+                if let Some(installed) = driver.installed.take() {
+                    installed();
+                }
+            }
+        }
+    }
+    fn resize(&mut self, size: flui_foundation::geometry::Size<f64>, scale_factor: f64) {
+        match self {
+            #[cfg(all(
+                not(target_os = "android"),
+                not(target_os = "ios"),
+                not(target_arch = "wasm32")
+            ))]
+            Self::Desktop(driver) => driver.resize(size, scale_factor),
+            #[cfg(target_os = "android")]
+            Self::Android(driver) => driver.resize(size, scale_factor),
+            #[cfg(target_os = "ios")]
+            Self::Ios(driver) => driver.resize(size, scale_factor),
+            #[cfg(target_arch = "wasm32")]
+            Self::Web(driver) => driver.resize(size, scale_factor),
+            #[cfg(test)]
+            Self::Test(driver) => {
+                if let Some(resize) = driver.resize.as_mut() {
+                    resize(size, scale_factor);
+                }
+            }
+        }
+    }
+
     fn wake(&mut self, runtime: &mut UiRuntime, record: &Rc<FrameRecord>) {
         #[cfg(not(target_arch = "wasm32"))]
         let _ = record;
@@ -116,6 +168,7 @@ enum DriverState {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum FrameAdmission {
+    Prepared,
     Open,
     Closing,
 }
@@ -127,6 +180,34 @@ struct FrameRecord {
     admission: Cell<FrameAdmission>,
 }
 
+/// Owns a complete driver before logical/native publication. Its weak async
+/// authority stays inactive until the native registry commits this record.
+pub(super) struct PreparedFrame(Rc<FrameRecord>);
+
+impl PreparedFrame {
+    pub(super) fn new(
+        address: PresentationAddress,
+        driver: FrameDriver,
+    ) -> (Self, FrameRegistration) {
+        let binding = FrameBinding(address);
+        let record = Rc::new(FrameRecord {
+            binding,
+            state: RefCell::new(DriverState::Ready(driver)),
+            admission: Cell::new(FrameAdmission::Prepared),
+        });
+        let registration = FrameRegistration {
+            binding,
+            #[cfg(test)]
+            liveness: FrameLiveness(Rc::downgrade(&record)),
+        };
+        (Self(record), registration)
+    }
+
+    pub(super) fn address(&self) -> PresentationAddress {
+        self.0.binding.0
+    }
+}
+
 /// Native resource storage, separate from logical runtime membership.
 pub(in crate::app) struct FrameDrivers {
     records: Vec<Rc<FrameRecord>>,
@@ -135,45 +216,14 @@ pub(in crate::app) struct FrameDrivers {
 
 pub(super) struct FrameRegistration {
     pub(super) binding: FrameBinding,
-    #[cfg(any(test, target_arch = "wasm32"))]
+    #[cfg(test)]
     pub(super) liveness: FrameLiveness,
 }
 
 #[derive(Debug, thiserror::Error)]
 pub(super) enum FrameInstallError {
-    #[error("frame installation ran on a different owner thread")]
-    WrongThread,
-    #[error("the presentation closed before its frame driver was installed")]
-    TargetRetired,
     #[error("the UI runtime already has an installed frame driver")]
     AlreadyInstalled,
-}
-
-pub(super) fn install_frame_driver(
-    dispatcher: super::owner_dispatch::PresentationDispatcher,
-    driver: FrameDriver,
-) -> Result<FrameRegistration, FrameInstallError> {
-    let result = if std::thread::current().id() == dispatcher.owner_thread {
-        super::host::APP_RUNTIME.with(|slot| {
-            let mut state = slot.borrow_mut();
-            if !state.registry.contains_address(dispatcher.address)
-                || state.closing_presentations.contains(&dispatcher.address)
-            {
-                return Err((FrameInstallError::TargetRetired, driver));
-            }
-            state
-                .frame_drivers
-                .install(dispatcher.address, driver)
-                .map_err(|driver| (FrameInstallError::AlreadyInstalled, driver))
-        })
-    } else {
-        Err((FrameInstallError::WrongThread, driver))
-    };
-    result.map_err(|(error, driver)| {
-        // A rejected driver can own user reload captures. Retire outside TLS.
-        drop(driver);
-        error
-    })
 }
 
 impl FrameDrivers {
@@ -183,41 +233,35 @@ impl FrameDrivers {
             retirement,
         }
     }
-    /// The caller validates logical/native authority before this pure insert.
-    /// A binding is never replaced, including while its driver is leased out.
-    pub(super) fn install(
+    pub(super) fn reserve_prepared(
         &mut self,
-        address: PresentationAddress,
-        driver: FrameDriver,
-    ) -> Result<FrameRegistration, FrameDriver> {
+        frame: &PreparedFrame,
+    ) -> Result<(), FrameInstallError> {
         if self
             .records
             .iter()
-            .any(|record| record.binding.0.ui_runtime_id == address.ui_runtime_id)
+            .any(|record| record.binding.0.ui_runtime_id == frame.address().ui_runtime_id)
         {
-            return Err(driver);
+            return Err(FrameInstallError::AlreadyInstalled);
         }
-        let binding = FrameBinding(address);
-        let record = Rc::new(FrameRecord {
-            binding,
-            state: RefCell::new(DriverState::Ready(driver)),
-            admission: Cell::new(FrameAdmission::Open),
-        });
-        #[cfg(any(test, target_arch = "wasm32"))]
-        let liveness = FrameLiveness(Rc::downgrade(&record));
-        self.records.push(record);
-        Ok(FrameRegistration {
-            binding,
-            #[cfg(any(test, target_arch = "wasm32"))]
-            liveness,
-        })
+        self.records.reserve(1);
+        Ok(())
     }
 
-    pub(super) fn checkout(&self, binding: FrameBinding) -> Option<FrameDriverLease> {
+    /// Called only after reservation, while the same driver-store borrow is held.
+    pub(super) fn publish_prepared(&mut self, frame: PreparedFrame) {
+        frame.0.admission.set(FrameAdmission::Open);
+        self.records.push(frame.0);
+    }
+
+    pub(super) fn checkout_presentation(
+        &self,
+        address: PresentationAddress,
+    ) -> Option<FrameDriverLease> {
         let record = self
             .records
             .iter()
-            .find(|record| record.binding == binding)?;
+            .find(|record| record.binding.0 == address)?;
         let driver = {
             let mut state = record.state.borrow_mut();
             if !matches!(*state, DriverState::Ready(_)) {
@@ -234,16 +278,6 @@ impl FrameDrivers {
             retirement: self.retirement.clone(),
             driver: Some(driver),
         })
-    }
-
-    /// Revokes async and frame authority before observers or resource cleanup.
-    /// Owned drivers move to retirement; no user destructor runs here.
-    pub(in crate::app) fn retire_runtime(&mut self, id: UiRuntimeId) {
-        for record in &self.records {
-            if record.binding.0.ui_runtime_id == id {
-                self.retire_record(record);
-            }
-        }
     }
 
     pub(super) fn retire_presentation(&mut self, address: PresentationAddress) {
@@ -299,6 +333,18 @@ pub(super) struct FrameDriverLease {
 }
 
 impl FrameDriverLease {
+    pub(super) fn installed(&mut self) {
+        self.driver
+            .as_mut()
+            .expect("BUG: active frame lease owns its driver")
+            .installed(&self.record);
+    }
+    pub(super) fn resize(&mut self, size: flui_foundation::geometry::Size<f64>, scale_factor: f64) {
+        self.driver
+            .as_mut()
+            .expect("BUG: active frame lease owns its driver")
+            .resize(size, scale_factor);
+    }
     pub(super) fn wake(&mut self, runtime: &mut UiRuntime) {
         self.driver
             .as_mut()

@@ -102,6 +102,7 @@ pub mod keyboard;
 mod locale;
 mod platform_window;
 pub mod pointer;
+mod preferences;
 mod storage;
 mod target_platform;
 mod text_input;
@@ -127,6 +128,10 @@ pub use input::{
 };
 pub use locale::Locale;
 pub use platform_window::PlatformWindow;
+pub use preferences::{
+    DurationScale, GesturePreferences, InvalidPreference, MotionPreference, SystemPreferences,
+    WheelPreferences, WheelStep,
+};
 pub use storage::{
     Storage, StorageError, StorageFuture, StorageName, Stored, StoredVersion, WriteMode,
 };

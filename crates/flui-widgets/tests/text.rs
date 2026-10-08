@@ -4,7 +4,35 @@
 
 use crate::common::{lay_out, loose};
 use flui_painting::typography::TextStyle;
-use flui_widgets::{DefaultTextStyle, Text};
+use flui_widgets::{DefaultTextStyle, MediaQuery, MediaQueryData, Text};
+
+/// A preference must reach paragraph layout, not merely a data-reader widget.
+pub(crate) fn media_text_scaling_changes_the_laid_out_text() {
+    let text =
+        || Text::new("accessibility sizing").style(TextStyle::default().with_font_size(16.0));
+    let normal = lay_out(
+        MediaQuery::new(MediaQueryData::default(), text()),
+        loose(1000.0),
+    );
+    let enlarged = lay_out(
+        MediaQuery::new(
+            MediaQueryData {
+                text_scale_factor: 2.0,
+                ..MediaQueryData::default()
+            },
+            text(),
+        ),
+        loose(1000.0),
+    );
+    let normal_size = normal.size(normal.root());
+    let enlarged_size = enlarged.size(enlarged.root());
+    assert!(normal_size.width > 0.0 && normal_size.height > 0.0);
+    assert!(
+        enlarged_size.width > normal_size.width * 1.5
+            && enlarged_size.height > normal_size.height * 1.5,
+        "text scaling must enlarge the shaped paragraph: normal={normal_size:?}, enlarged={enlarged_size:?}"
+    );
+}
 
 // ============================================================================
 // DefaultTextStyle (text.dart:55-136, consumed by Text.build :716-765)

@@ -34,6 +34,10 @@ impl std::fmt::Debug for PresentationForest {
 }
 
 impl PresentationForest {
+    pub(crate) fn reserve_presentation(&mut self) {
+        self.presentations.reserve(1);
+    }
+
     pub(crate) fn take_all(&mut self) -> Vec<PresentationState> {
         std::mem::take(&mut self.presentations)
     }

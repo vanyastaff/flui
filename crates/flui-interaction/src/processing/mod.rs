@@ -22,6 +22,7 @@
 //! ```
 
 mod lsq_solver;
+mod motion_history;
 mod one_euro;
 mod prediction;
 mod raw_input;
@@ -32,6 +33,7 @@ mod velocity;
 // `lsq_solver` (LeastSquaresSolver / PolynomialFit / MAX_*) is crate-internal
 // numerical machinery shared by the velocity tracker; it is intentionally NOT
 // re-exported, so the public API is not pinned to the solver's internals.
+pub(crate) use motion_history::prepend_motion_history;
 pub use one_euro::{OneEuroFilter, OneEuroFilter2D};
 pub use prediction::{InputPredictor, PredictedPosition, PredictionConfig};
 pub use raw_input::{InputMode, RawInputHandler, RawPointerEvent};

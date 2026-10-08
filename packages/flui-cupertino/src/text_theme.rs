@@ -248,10 +248,10 @@ impl TextThemeDefaults {
         )
     }
 
-    /// Collapses both colors to the variant implied by `ctx`.
-    fn resolve_from(&self, ctx: &dyn BuildContext) -> Self {
-        let resolved_label = self.label_color.resolve_from(ctx);
-        let resolved_inactive_gray = self.inactive_gray_color.resolve_from(ctx);
+    /// Collapses both colors using the same policy as the containing theme.
+    fn resolve_colors(&self, colors: &crate::colors::ColorResolver<'_>) -> Self {
+        let resolved_label = colors.dynamic(self.label_color);
+        let resolved_inactive_gray = colors.dynamic(self.inactive_gray_color);
         Self::new(
             CupertinoDynamicColor::with_brightness(resolved_label, resolved_label),
             CupertinoDynamicColor::with_brightness(resolved_inactive_gray, resolved_inactive_gray),
@@ -436,9 +436,13 @@ impl CupertinoTextThemeData {
     /// `ctx` — see the type doc's "Read-time dynamic resolution" section.
     #[must_use]
     pub fn resolve_from(&self, ctx: &dyn BuildContext) -> Self {
-        let resolved_primary = self.primary_color.resolve_from(ctx);
+        self.resolve_colors(&crate::colors::ColorResolver::new(ctx, None))
+    }
+
+    pub(crate) fn resolve_colors(&self, colors: &crate::colors::ColorResolver<'_>) -> Self {
+        let resolved_primary = colors.dynamic(self.primary_color);
         Self {
-            defaults: self.defaults.resolve_from(ctx),
+            defaults: self.defaults.resolve_colors(colors),
             primary_color: CupertinoDynamicColor::with_brightness(
                 resolved_primary,
                 resolved_primary,

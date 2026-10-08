@@ -17,6 +17,12 @@ substrate driver over raw owners, which the raw-owner suites still use.
   `tests/runtime_driver.rs` fail against a harness that drives the pipeline
   itself (the root `MediaQuery`, the commit gate, the owner inbox, the
   window's cursor).
+- **A scale change has one runtime entry.** `HeadlessHost::set_scale_factor`
+  updates its native-window stand-in and surface dimensions, then calls
+  `UiRuntime::set_device_pixel_ratio_for`. The runtime owns render/semantics and
+  inherited-data publication; the driver cannot mutate its internal source.
+  `a_secondary_window_publishes_its_own_media_query` and the two addressed
+  semantics scale cases in `headless_frame_driver_matrix` pin this path.
 - **One `ManualClock` drives the UI runtime.** The UI runtime takes it as its
   `ClockSource`, so the frame-time origin, the gesture arena's deadlines and
   each presentation's `FrameClock` read it, and the pump reads a clone of it

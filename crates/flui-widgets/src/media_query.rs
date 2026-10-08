@@ -1,15 +1,15 @@
-//! [`MediaQuery`] and [`MediaQueryData`] — ambient logical-screen data.
+//! [`MediaQuery`] and [`MediaQueryData`] — inherited presentation data.
 //!
 //! ## Implemented subset
 //!
 //! `size`, `device_pixel_ratio`, `text_scale_factor`, `padding`,
-//! `view_insets`, `platform_brightness` — the six fields a typical widget
-//! tree needs for layout and theming.
+//! `view_insets`, `platform_brightness`, `high_contrast` — presentation and
+//! preference fields for layout and theming.
 //!
 //! ## Deferred (not yet implemented)
 //!
 //! View padding, system gesture insets, 24-hour-format preference,
-//! accessible navigation, inverted colors, high contrast, disabled
+//! accessible navigation, inverted colors, disabled
 //! animations, bold text, display features, and navigation mode.
 //! These require platform event plumbing (accessibility bridge, IME state)
 //! that lives above this layer.
@@ -43,6 +43,7 @@ use flui_view::{BoxedView, FieldMask, InheritedData, InheritedView, impl_inherit
 /// - [`padding`](Self::padding)
 /// - [`view_insets`](Self::view_insets)
 /// - [`platform_brightness`](Self::platform_brightness)
+/// - [`high_contrast`](Self::high_contrast)
 #[derive(Debug, Clone, PartialEq, flui_view::prelude::InheritedData)]
 pub struct MediaQueryData {
     /// Logical size of the current display surface (window or full screen).
@@ -73,6 +74,10 @@ pub struct MediaQueryData {
     /// An app-level `Theme` (e.g. `flui_material::Theme`) may override this
     /// for its subtree; this field reflects the platform signal only.
     pub platform_brightness: Brightness,
+
+    /// Whether the user requests a higher-contrast palette. An unavailable
+    /// platform observation projects to `false`; nested providers may override it.
+    pub high_contrast: bool,
 }
 
 impl Default for MediaQueryData {
@@ -84,6 +89,7 @@ impl Default for MediaQueryData {
             padding: EdgeInsets::ZERO,
             view_insets: EdgeInsets::ZERO,
             platform_brightness: Brightness::Light,
+            high_contrast: false,
         }
     }
 }
@@ -201,6 +207,14 @@ impl MediaQuery {
     pub fn platform_brightness_of(ctx: &dyn BuildContext) -> Option<Brightness> {
         Self::depend_on_fields(ctx, MediaQueryData::FIELD_PLATFORM_BRIGHTNESS, |d| {
             d.platform_brightness
+        })
+    }
+
+    /// The contrast preference, depending on `high_contrast` only.
+    #[must_use]
+    pub fn high_contrast_of(ctx: &dyn BuildContext) -> Option<bool> {
+        Self::depend_on_fields(ctx, MediaQueryData::FIELD_HIGH_CONTRAST, |d| {
+            d.high_contrast
         })
     }
 }

@@ -1,6 +1,9 @@
 # Платформенный слой — дизайн
 
 - **Статус:** черновик, редакция 2 (после ревью), на утверждение владельцу
+- **Ограниченное утверждение:** §6 исполняется по
+  [ADR-0159](../../../adr/ADR-0159-host-owned-system-preferences.md) в текущих
+  `flui-platform-api`/`flui-platform`. Остальной redesign сохраняет статус черновика.
 - **Дата:** 2026-10-06
 - **База:** `main` @ `d56188c14`
 - **Требования:** [requirements.md](requirements.md)
@@ -30,7 +33,7 @@
 | `BackgroundExecutor` и `Task` живые: их используют Win32, macOS, winit; файловые диалоги Win32 возвращают `Task` (ADR-0039 §2) | [R] `windows/platform.rs:660,831,2444-2538`, `macos/platform.rs:49,135`, `winit/platform.rs:228,353` |
 | «Нет возможности» сообщается по-разному: `Option::None`, `CursorError::Unsupported`, `Ok(None)` у диалога по умолчанию (читается как отмена), no-op у `open_url`, выдуманный дисплей на Android, паника `LinuxPlatform` | [R] |
 | `AppLifecycleState` — в `flui-scheduler` (ADR-0035); производитель — `flui-app`. Пробелы ADR-0035: видимость native-Windows, minimize Windows, web `visibilitychange`, транспорт pause/resume Android, `onExitRequested` | [R] `flui-scheduler/src/frame.rs:230`; ADR-0035:102-108 |
-| `AccessibilityFeatures` никто не пишет и не читает; `text_scale_factor` всегда 1.0; локаль системы не доставляется; `GestureSettings` — константы, `for_platform`/`native()` не вызываются | [R] `flui-app/src/app/runtime.rs:92-97`, `flui-widgets/src/app/media_query.rs:60`, `flui-interaction/src/settings.rs` |
+| `AccessibilityFeatures` никто не пишет и не читает; `text_scale_factor` всегда 1.0; локаль системы не доставляется; `GestureSettings` — константы, `for_platform`/`native()` не вызываются | [R] `flui-app/src/app/runtime.rs:92-97`, `flui-widgets/src/media_query.rs:60`, `flui-interaction/src/settings.rs` |
 | Возможность до виджета: `RealmHostServices` → `RealmServices` → `PresentationState` → `BuildOwner` → `BuildCapabilities` → `LifecycleContext`, производитель в `flui-app`; у `LifecycleContext` 16 методов (15 публичных); пакет добавить возможность не может; ADR-0084 — 0 строк кода | [R] `build_context.rs:369-631` |
 | `ClipboardHandle` уже owner-local (`PhantomData<Rc<()>>`) и читает через колбэк (под асинхронный транспорт, ADR-0038 §6); единственный production-потребитель — `EditableText` | [R] `flui-interaction/src/clipboard.rs:1-24`, `editable_text.rs:1384` |
 | В CI исполняются только Linux/headless; Win32, AppKit, iOS, Android — clippy cross-typecheck; Windows-job из комментария `ci.yml:405` не существует | [R] |
@@ -174,10 +177,14 @@ handle; `Unsupported` — `#[non_exhaustive]` с конструктором `of:
 
 ## 6. Системные настройки (решение Q2)
 
-Один источник, свои представления.
+Один источник, свои представления. Нормативное решение —
+[ADR-0159](../../../adr/ADR-0159-host-owned-system-preferences.md).
+Ниже сохранён эскиз словаря, а не утверждённые Rust-сигнатуры: представление
+масштаба текста и native-геометрии уточняется по реальным производителям.
+Полнота реализации требует всей цепочки, включая обновления после mount.
 
 ```rust
-// flui-platform::preferences — собрано в scratch-крейте (rustc 1.99.0), вывод — в PR
+// Эскиз значений в flui-platform-api; не доказательство реализации/нативного поведения.
 #[non_exhaustive]
 pub struct SystemPreferences { /* приватные поля */ }
 impl SystemPreferences {
@@ -223,13 +230,17 @@ pub enum InvalidPreference { TextScale, DurationScale, GestureArea, Distance, Sp
   — значения по умолчанию, пока нет источника (порталы XDG — позже). Где у ОС нет значения,
   поле жестов или колеса — `None`, и потребитель держит своё умолчание (контракт «системных
   умолчаний» не выдумывает); масштаб текста по умолчанию — 1, motion — `NoPreference`.
-  `Distance` и `Speed` — проверенные значения настроек (f64 логических пикселей и пикселей в
+  Начальные 1 и NoPreference — fallback фреймворка, а не наблюдение ОС.
+  Windows использует скрытый top-level приёмник и scoped WinRT STA; message-only HWND
+  не получает broadcast. Единицы native-геометрии сохраняются до проекции под DPI
+  конкретного presentation; общий logical Size из произвольного окна недопустим.
+  `Distance` и `Speed` — проверенные значения проекции (f64 логических пикселей и пикселей в
   секунду по ADR-0098, конечные), а не единицы измерения: геометрия остаётся f64-значениями
   `flui_foundation::geometry`, без `px()`.
 - **Доставка:** `flui-app` кладёт текущее значение в каждый realm при создании (значение есть до
   первого окна) и рассылает изменение одной типизированной операцией хоста.
 - **Потребители** строят своё: `MediaQuery` (масштаб текста, контраст, bold, локали, motion для
-  виджетов); `flui-interaction` — `GestureSettings` через `GestureSettingsScope` (interaction X2),
+  виджетов); `flui-interaction` — `GestureSettings` через существующий `GestureArenaScope` (interaction X2),
   пересчитывая логические `Size` в пороги своего типа указателя; `flui-animation` — свою политику
   движения из `motion` и политики приложения.
 - **Политика приложения** (motion «как в системе / всегда / никогда» и подобные) живёт в realm и
@@ -369,6 +380,10 @@ conformance-таблицы, крейты возможностей вне пое�
 ## 11. Текст для спек animation и interaction (решение Q2)
 
 Владельцы вставляют в свои design.md без правок.
+
+Историческая запись ниже уточнена ADR-0159 и текущим §6: вместо отдельного
+GestureSettingsScope используется GestureArenaScope; native-геометрия требует
+контекста presentation, а LY8/LY9 отделены от окна capability/rename-миграции.
 
 > **Системные настройки: один источник, свои представления (решение владельца, 2026-10-06;
 > ADR-0151 §4, спека platform-layer §6).**

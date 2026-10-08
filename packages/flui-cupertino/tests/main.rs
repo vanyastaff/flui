@@ -98,6 +98,18 @@ fn component_contracts() {
 fn theme_and_color_resolution() {
     common::run_cases(&[
         (
+            "colors::authored and nested colors ignore outer contrast",
+            colors::authored_and_nested_colors_ignore_outer_contrast,
+        ),
+        (
+            "cupertino_app::explicit app brightness applies to live contrast colors",
+            cupertino_app::explicit_app_brightness_applies_to_live_contrast_colors,
+        ),
+        (
+            "colors::retained colors follow contrast and explicit brightness",
+            colors::retained_colors_follow_contrast_and_explicit_brightness,
+        ),
+        (
             "colors::static color resolves to itself through a real context",
             colors::static_color_resolves_to_itself_through_a_real_context,
         ),

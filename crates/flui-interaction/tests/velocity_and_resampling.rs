@@ -579,6 +579,10 @@ fn resampler_interpolates_on_event_time_and_never_drops_terminals() {
         "resampler",
         &[
             (
+                "binding preserves merged motion history",
+                binding_preserves_merged_motion_history,
+            ),
+            (
                 "interpolation factor",
                 interpolation_uses_the_bracketing_samples,
             ),
@@ -598,6 +602,75 @@ fn resampler_interpolates_on_event_time_and_never_drops_terminals() {
             ),
         ],
     );
+}
+
+fn binding_preserves_merged_motion_history() {
+    for (contact_active, before_input) in
+        [(false, false), (true, false), (false, true), (true, true)]
+    {
+        let binding = GestureBinding::new();
+        let observed = Rc::new(RefCell::new(Vec::new()));
+        let output = Rc::clone(&observed);
+        binding
+            .pointer_router()
+            .add_global_handler(Rc::new(move |event: &PointerEvent| {
+                if let PointerEvent::Move(update) = event {
+                    output.borrow_mut().push(update.clone());
+                }
+            }));
+        if contact_active {
+            binding.handle_pointer_event(
+                &make_down_event_for_id(contact(), Offset::ZERO, PointerType::Touch),
+                |_| HitTestResult::new(),
+            );
+        }
+        for at in [10_u64, 20, 30] {
+            let mut event = with_time(move_to(at as f64), at);
+            if let PointerEvent::Move(update) = &mut event {
+                let mut history = update.current.clone();
+                history.time = at - 5;
+                history.position.x = (at - 5) as f64;
+                update.coalesced.push(history);
+                let mut prediction = update.current.clone();
+                prediction.time = at + 5;
+                prediction.position.x = (at + 5) as f64;
+                update.predicted.push(prediction);
+            }
+            binding.handle_pointer_event(&event, |_| HitTestResult::new());
+        }
+        if before_input {
+            binding.flush_pending_input();
+        } else {
+            binding.flush_pending_moves();
+        }
+        let updates = observed.borrow();
+        let [update] = updates.as_slice() else {
+            panic!("one combined move");
+        };
+        let actual: Vec<_> = update
+            .coalesced
+            .iter()
+            .chain(std::iter::once(&update.current))
+            .map(|sample| (sample.time, sample.position.x))
+            .collect();
+        assert_eq!(
+            actual,
+            [
+                (5, 5.0),
+                (10, 10.0),
+                (15, 15.0),
+                (20, 20.0),
+                (25, 25.0),
+                (30, 30.0)
+            ],
+            "contact={contact_active}, input={before_input}"
+        );
+        assert_eq!(update.predicted.len(), 1);
+        assert_eq!(
+            update.predicted[0].time, 35,
+            "only newest prediction survives"
+        );
+    }
 }
 
 /// The subscriber reads the public handle on a worker with a bounded wait:

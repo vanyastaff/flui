@@ -13,30 +13,22 @@
 //! test-only `PlatformWindow` mock restating `fn id(&self) -> WindowId`, and
 //! `AppRuntime::release_redraw_window_for`, which compares a window's own id.
 //!
-//! # Derived-cache invariant
+//! # Joint publication
 //!
-//! Each hosted UI runtime's own `RuntimeSlot.address: PresentationAddress`
-//! (`app/runtime.rs`'s `RuntimeRegistry`) is a **derived cache** of this
-//! registry, not a second source of truth. Both are written together, in
-//! the same TLS borrow: `install_platform_ui_runtime`/`teardown_platform_ui_runtime`
-//! for the legacy single-primary-UI runtime path, and `AppRuntime::apply_install`/
-//! `apply_uninstall` for the multi-UI runtime registry/uninstall path (issue
-//! #555) — in each case the registry write and the `RuntimeSlot` write happen
-//! inside the same borrow, in the order ADR-0037 §2 requires: on install,
-//! the registry is written first (which also removes every mapping of a
-//! UI runtime displaced by a panic-recovery reinstall — never just the new
-//! window), then the UI runtime entry; on uninstall/teardown, the registry
-//! entries are removed first — so map removal stops new routing before the
-//! queued old-generation events still sitting in the host's queue are
-//! dropped.
+//! The installed host owns this native map and the logical OwnerHost together.
+//! It prepares native identity outside borrows, reserves logical publication,
+//! inserts the native mapping, then commits logical membership without invoking
+//! user code between those writes. Closure withdraws native routes before user
+//! cleanup; active leases retain their original host across TLS replacement.
 
 use std::sync::Arc;
 
-use flui_foundation::{PresentationAddress, UiRuntimeId};
+use flui_foundation::PresentationAddress;
 use flui_platform::traits::{PlatformWindow, WindowId};
 
 /// A native identity sampled before entering a registry publication interval.
-/// The window itself is not retained by a deferred logical/native install.
+/// The registration stores only identity; the installation separately retains
+/// its native window through initialization.
 #[derive(Debug)]
 pub(crate) struct PreparedWindowRegistration {
     id: WindowId,
@@ -48,19 +40,12 @@ impl PreparedWindowRegistration {
     }
 }
 
-/// Errors from [`WindowRegistry::try_register`].
-///
-/// Reached from `AppRuntime::apply_install`
-/// (`crates/flui-app/src/app/runtime.rs`): the strict, refuse-on-collision
-/// path `install_ui_runtime_alongside`'s non-displacing install uses, so a
-/// second UI runtime's window id colliding with an already-registered one is
-/// refused rather than silently re-routed onto the sibling's mapping.
+/// Native identity conflicts detected before joint window publication.
+/// A second runtime cannot redirect an already registered window's route.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub(crate) enum RegistryError {
-    /// The window already has a mapped address; `try_register` never
-    /// replaces (use `WindowRegistry::register` — the Android/web
-    /// replace-semantics install, not linked because it is target-gated).
+    /// The window already has a mapped address. Publication never replaces it.
     #[error("window is already mapped to {existing:?}")]
     WindowAlreadyMapped {
         /// The address the window was already mapped to.
@@ -70,83 +55,44 @@ pub(crate) enum RegistryError {
 
 /// The sole `WindowId -> PresentationAddress` mint/lookup authority.
 ///
-/// API designed for N windows per UI runtime, instantiated for exactly one
-/// window today: storage is a plain linear-scan `Vec` with no TLS
-/// assumption inside the type itself — a future multi-window `AppRuntime`
-/// lifts this struct unchanged. `WindowId` never crosses this module's
-/// boundary except through the methods below, which take an already-known
-/// window/id and hand back an address; callers outside this file never
-/// construct or hold a `WindowId`.
+/// Each installed host owns one registry for its runtimes and presentations.
+/// Native identity is read before publication; the registry itself calls no
+/// platform code and has no TLS dependency.
 #[derive(Debug, Default)]
 pub(crate) struct WindowRegistry {
     entries: Vec<(WindowId, PresentationAddress)>,
 }
 
 impl WindowRegistry {
+    pub(crate) fn reserve_registration(
+        &mut self,
+        registration: &PreparedWindowRegistration,
+    ) -> Result<(), RegistryError> {
+        if let Some(existing) = self.resolve(registration.id) {
+            return Err(RegistryError::WindowAlreadyMapped { existing });
+        }
+        self.entries.reserve(1);
+        Ok(())
+    }
+
+    /// The same registry borrow reserved capacity and checked identity first.
+    pub(crate) fn publish_registration(
+        &mut self,
+        registration: &PreparedWindowRegistration,
+        address: PresentationAddress,
+    ) {
+        self.entries.push((registration.id, address));
+    }
+    pub(crate) fn clear(&mut self) -> usize {
+        let count = self.entries.len();
+        self.entries.clear();
+        count
+    }
+
     pub(crate) const fn new() -> Self {
         Self {
             entries: Vec::new(),
         }
-    }
-
-    /// Publishes a prepared native identity at `address`, replacing any mapping
-    /// for the same window and returning the displaced address.
-    ///
-    /// Replacement (not a hard error) keeps install recoverable after a
-    /// mid-`on_ready` panic: `OwnerHostClearGuard` only clears
-    /// `AppRuntime.owner_platform`, not the UI runtime-facing fields this
-    /// registry lives alongside. [`Self::try_register`] is the strict alternative
-    /// for a caller that must refuse a collision.
-    ///
-    /// This only replaces the mapping for the exact same `WindowId` — it
-    /// does **not** remove any *other* window mapped to a UI runtime this
-    /// address's UI runtime is displacing. A caller reinstalling an entire UI runtime
-    /// under a fresh window must call [`Self::remove_ui_runtime`] for the
-    /// displaced UI runtime first (see `install_platform_ui_runtime`'s use of both).
-    ///
-    /// Returns the displaced address for diagnostics after registry borrows end.
-    #[cfg(any(test, target_os = "android", target_arch = "wasm32"))]
-    pub(crate) fn register(
-        &mut self,
-        registration: PreparedWindowRegistration,
-        address: PresentationAddress,
-    ) -> Option<PresentationAddress> {
-        let id = registration.id;
-        let displaced = if let Some(entry) = self
-            .entries
-            .iter_mut()
-            .find(|(existing, _)| *existing == id)
-        {
-            Some(std::mem::replace(&mut entry.1, address))
-        } else {
-            self.entries.push((id, address));
-            None
-        };
-        debug_assert_eq!(
-            self.resolve(id),
-            Some(address),
-            "BUG: window_registry install-time self-check failed immediately after insert"
-        );
-        displaced
-    }
-
-    /// The strict alternative to `Self::register` (target-gated, so
-    /// not linked): refuses instead
-    /// of replacing when `window`'s id is already mapped. See
-    /// [`RegistryError`]'s doc for its one production caller.
-    ///
-    /// Preparation already sampled the native identity outside registry borrows.
-    pub(crate) fn try_register(
-        &mut self,
-        registration: PreparedWindowRegistration,
-        address: PresentationAddress,
-    ) -> Result<(), RegistryError> {
-        let id = registration.id;
-        if let Some(existing) = self.resolve(id) {
-            return Err(RegistryError::WindowAlreadyMapped { existing });
-        }
-        self.entries.push((id, address));
-        Ok(())
     }
 
     /// Looks up the address currently mapped to `id`, if any.
@@ -172,41 +118,9 @@ impl WindowRegistry {
             .any(|(_, entry_address)| *entry_address == address)
     }
 
-    /// Removes and returns **every** entry addressed to `ui_runtime_id`.
-    ///
-    /// The target model is one UI runtime owning any number of windows, so a
-    /// UI runtime's teardown (or its displacement by a panic-recovery reinstall)
-    /// must not leave a second, third, ... window's mapping behind just
-    /// because only the first one happened to be removed. This is the
-    /// teardown real read: the caller asserts the returned entries against
-    /// the address(es) it installed, proving the registry tracked the same
-    /// window/address pairs for this UI runtime's whole lifetime.
-    // `teardown_platform_ui_runtime` and `install_platform_ui_runtime` (runner.rs) are
-    // the only production callers, and `teardown_platform_ui_runtime` does not
-    // exist on wasm32 — the web host never tears down (see its own module
-    // doc) — so the wasm lib check would see this as dead if
-    // `install_platform_ui_runtime`'s reinstall-cleanup call did not also reach
-    // it; kept unconditional since that second call site is not wasm-gated.
-    pub(crate) fn remove_ui_runtime(
-        &mut self,
-        ui_runtime_id: UiRuntimeId,
-    ) -> Vec<(WindowId, PresentationAddress)> {
-        let mut removed = Vec::new();
-        self.entries.retain(|(id, address)| {
-            if address.ui_runtime_id == ui_runtime_id {
-                removed.push((*id, *address));
-                false
-            } else {
-                true
-            }
-        });
-        removed
-    }
-
     /// Removes and returns every entry mapped to this EXACT
     /// `(UiRuntimeId, PresentationId)` address — never a sibling presentation
-    /// within the same UI runtime, and never every window the UI runtime owns (see
-    /// [`Self::remove_ui_runtime`] for that whole-UI runtime removal). This is step 1
+    /// within the same UI runtime. This is step 1
     /// of closing a single presentation out of a UI runtime that keeps hosting
     /// others: the closed presentation's own window mapping must stop
     /// resolving to it before the presentation itself goes away, or a stale

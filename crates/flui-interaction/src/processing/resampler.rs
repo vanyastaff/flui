@@ -75,10 +75,6 @@ pub const DEFAULT_RESAMPLE_LOOKBACK: Duration = Duration::from_millis(38);
 /// boundaries a caller adds without ever sampling.
 const MAX_BUFFERED_EVENTS: usize = 100;
 
-/// Most `coalesced` samples one move keeps when the queue folds older moves
-/// into it; the oldest beyond this are dropped.
-const MAX_COALESCED_HISTORY: usize = MAX_BUFFERED_EVENTS;
-
 /// Minimum time between samples to prevent excessive resampling
 const MIN_SAMPLE_INTERVAL: Duration = Duration::from_millis(1); // 1ms
 
@@ -246,23 +242,15 @@ impl ResamplerInner {
         }) else {
             return false;
         };
-        let mut history = match &mut self.event_queue[index].event {
-            PointerEvent::Move(older) => {
-                let mut history = std::mem::take(&mut older.coalesced);
-                history.push(older.current.clone());
-                history
-            }
-            _ => return false,
-        };
-        if let PointerEvent::Move(newer) = &mut self.event_queue[index + 1].event {
-            history.append(&mut newer.coalesced);
-            // Keep the newest samples only, so a queue that is never sampled
-            // cannot grow without bound through the history either.
-            let excess = history.len().saturating_sub(MAX_COALESCED_HISTORY);
-            history.drain(..excess);
-            newer.coalesced = history;
+        let mut older = self
+            .event_queue
+            .remove(index)
+            .expect("BUG: adjacent move index was found");
+        if let (PointerEvent::Move(older), PointerEvent::Move(newer)) =
+            (&mut older.event, &mut self.event_queue[index].event)
+        {
+            super::prepend_motion_history(newer, older);
         }
-        self.event_queue.remove(index);
         true
     }
 
@@ -524,6 +512,18 @@ impl PointerEventResampler {
         for event in emitted {
             callback(event);
         }
+    }
+
+    /// Commit the accepted prefix without ending its contact or inventing a
+    /// frame timestamp. The binding freezes every pointer before user dispatch.
+    pub(crate) fn take_pending_events(&self) -> SmallVec<[PointerEvent; 4]> {
+        let mut inner = self.inner.lock();
+        let mut emitted = SmallVec::new();
+        while let Some(buffered) = inner.event_queue.pop_front() {
+            let at = inner.timestamp(buffered.stamp);
+            inner.emit(buffered.event, at, &mut emitted);
+        }
+        emitted
     }
 
     /// Checks if the pointer is currently down

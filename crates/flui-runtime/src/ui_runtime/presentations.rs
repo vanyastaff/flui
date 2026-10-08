@@ -14,6 +14,14 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 impl UiRuntime {
+    pub(crate) fn presentation_ids(&self) -> impl Iterator<Item = PresentationId> + '_ {
+        self.presentations.iter().map(PresentationState::id)
+    }
+
+    pub(crate) fn reserve_presentation(&mut self) {
+        self.presentations.reserve_presentation();
+    }
+
     /// Current presentation incarnation.
     #[must_use]
     pub fn presentation_id(&self) -> PresentationId {
@@ -37,16 +45,11 @@ impl UiRuntime {
     /// The presentation id that would become this UI runtime's PRIMARY if `id`
     /// were removed right now — WITHOUT actually removing it.
     ///
-    /// `runner.rs`'s `RuntimeTask::ClosePresentation` handling reads this
-    /// BEFORE running `id`'s own teardown/dispose hooks (`close_presentation_
-    /// entered`'s step 2-3), not after: `RuntimeSlot::address.presentation_id`
-    /// must already name the SURVIVING primary by the time a dispose hook
-    /// could re-enter `dispatch_platform_ui_runtime` with `id`'s own dispatcher,
-    /// or that reentrant dispatch would still compare EQUAL against the
-    /// not-yet-updated address, pass the `StalePresentation` check, and get
-    /// enqueued (same-UI runtime reentrancy) instead of refused — running later
-    /// in the same drain loop against whatever survives the close, silently
-    /// misaddressed rather than refused outright.
+    /// Owner close delivery reads this before teardown/dispose hooks. It
+    /// withdraws the closing address from logical and native routing before
+    /// those hooks can reenter, while retaining the surviving primary's route.
+    /// Reentrant work addressed to the closing presentation must be refused,
+    /// never redirected to the survivor.
     ///
     /// Mirrors exactly what `PresentationForest::remove`'s `Vec::remove`
     /// shift produces: if `id` is the CURRENT primary, the new primary is
@@ -162,6 +165,9 @@ impl UiRuntime {
     /// `AppRuntime`/`WindowRegistry` at all.
     pub fn install_presentation(&mut self, presentation: PresentationState) -> PresentationId {
         let presentation_id = presentation.id();
+        if let Some(snapshot) = self.preferences.borrow().as_ref() {
+            super::preferences::publish(&presentation, snapshot);
+        }
         if presentation.window_focused.get() && presentation.window_visible.get() {
             for previous in self.presentations.iter() {
                 previous.window_focused.set(false);
@@ -352,7 +358,7 @@ impl UiRuntime {
     /// ([`Self::handle_input_addressed`], [`Self::update_window_focus`],
     /// [`Self::update_window_execution`]) treats that same interleaving the
     /// same way: drop the addressed effect, keep the UI runtime-wide one.
-    pub fn media_query_for(
+    pub(crate) fn media_query_for(
         &self,
         id: PresentationId,
     ) -> Option<&std::rc::Rc<crate::media_query_root::MediaQuerySource>> {
@@ -579,7 +585,18 @@ impl UiRuntime {
     /// returns — not nested inside it, so there is no borrow conflict and
     /// no need to give `PresentationForest` interior mutability.
     pub fn close_presentation_entered(&mut self, id: PresentationId) -> bool {
+        self.close_presentation_after_failure(id, None)
+    }
+
+    pub(crate) fn close_presentation_after_failure(
+        &mut self,
+        id: PresentationId,
+        failure: Option<Box<dyn std::any::Any + Send>>,
+    ) -> bool {
         if self.presentations.get(id).is_none() {
+            if let Some(failure) = failure {
+                resume_unwind(failure);
+            }
             return false;
         }
         let mut first_panic = catch_unwind(AssertUnwindSafe(|| {
@@ -589,7 +606,7 @@ impl UiRuntime {
                 {
                     ui_runtime.focus_coordinator.note_focus_gained(surviving);
                 }
-                ui_runtime.stop_presentation(id);
+                ui_runtime.stop_presentation_after_failure(id, failure);
             });
         }))
         .err();

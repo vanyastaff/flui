@@ -683,15 +683,27 @@ impl PresentationState {
         // scheduler actually accepted the demand.
         let scheduler = capabilities.scheduler.downgrade();
         let redraw_window = Arc::downgrade(&window);
+        let request_frame = Arc::new(move || {
+            if let Some(scheduler) = scheduler.upgrade()
+                && scheduler.ensure_visual_update()
+                && let Some(window) = redraw_window.upgrade()
+            {
+                window.request_redraw();
+            }
+        });
+        // Install before mounting any element: rebuild handles capture this
+        // hook at creation. Every presentation needs the same scheduling edge,
+        // including those assembled without a desktop runner.
+        widgets.with_build_owner_mut(|owner| {
+            let request_frame = Arc::clone(&request_frame);
+            owner.set_on_build_scheduled(move || request_frame());
+        });
+        {
+            let request_frame = Arc::clone(&request_frame);
+            widgets.set_on_need_frame(move || request_frame());
+        }
         pipeline.with_mut(|owner| {
-            owner.set_on_need_visual_update(move || {
-                if let Some(scheduler) = scheduler.upgrade()
-                    && scheduler.ensure_visual_update()
-                    && let Some(window) = redraw_window.upgrade()
-                {
-                    window.request_redraw();
-                }
-            });
+            owner.set_on_need_visual_update(move || request_frame());
         });
 
         let semantics = SemanticsHost::new();

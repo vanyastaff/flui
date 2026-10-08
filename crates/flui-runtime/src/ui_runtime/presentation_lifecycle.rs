@@ -160,23 +160,36 @@ impl UiRuntime {
     /// Begin closing every presentation: each is told it is detached and
     /// drops its held input, and later lifecycle updates are ignored.
     pub fn stop_presentations(&self) {
+        self.stop_presentations_after_failure(None);
+    }
+
+    pub(crate) fn stop_presentations_after_failure(
+        &self,
+        failure: Option<Box<dyn std::any::Any + Send>>,
+    ) {
         self.host_lifecycle.set(HostLifecycle::Stopping);
         for presentation in self.presentations.iter() {
             presentation.closing_requested.set(true);
             presentation.widgets().lifecycle_source().begin_close();
             presentation.held_pointer_input().borrow_mut().clear();
         }
-        self.reconcile_lifecycle(Vec::new());
+        self.reconcile_lifecycle_after_failure(Vec::new(), failure);
     }
 
     /// Begin closing presentation `id` alone: it is told it is detached and
     /// drops its held input.
-    pub(crate) fn stop_presentation(&self, id: PresentationId) {
+    pub(super) fn stop_presentation_after_failure(
+        &self,
+        id: PresentationId,
+        failure: Option<Box<dyn std::any::Any + Send>>,
+    ) {
         if let Some(presentation) = self.presentations.get(id) {
             presentation.closing_requested.set(true);
             presentation.widgets().lifecycle_source().begin_close();
             presentation.held_pointer_input().borrow_mut().clear();
-            self.reconcile_lifecycle(Vec::new());
+            self.reconcile_lifecycle_after_failure(Vec::new(), failure);
+        } else if let Some(failure) = failure {
+            resume_unwind(failure);
         }
     }
 
@@ -186,7 +199,7 @@ impl UiRuntime {
     /// stops and removes it in one step.
     #[cfg(any(test, feature = "test-support"))]
     pub fn stop_presentation_for_test(&self, id: PresentationId) {
-        self.stop_presentation(id);
+        self.stop_presentation_after_failure(id, None);
     }
 
     fn execution_lifecycle(
@@ -270,7 +283,15 @@ impl UiRuntime {
         preserve_first_lifecycle_panic(first_panic, failure, phase);
     }
 
-    fn reconcile_lifecycle(&self, mut cancel: Vec<PresentationId>) {
+    fn reconcile_lifecycle(&self, cancel: Vec<PresentationId>) {
+        self.reconcile_lifecycle_after_failure(cancel, None);
+    }
+
+    fn reconcile_lifecycle_after_failure(
+        &self,
+        mut cancel: Vec<PresentationId>,
+        mut first_panic: Option<Box<dyn std::any::Any + Send>>,
+    ) {
         // A closing presentation's terminal recovery spans this whole pass;
         // its preserving policy ends when the pass returns (ADR-0123).
         let lifecycle_windows: Vec<_> = self
@@ -279,7 +300,7 @@ impl UiRuntime {
             .filter(|presentation| presentation.closing_requested.get())
             .map(|presentation| presentation.widgets().lifecycle_source().close_window())
             .collect();
-        if std::thread::panicking() {
+        if first_panic.is_some() || std::thread::panicking() {
             self.seed_terminal_lifecycle_recovery();
         }
         let transitions: Vec<_> = self
@@ -305,7 +326,6 @@ impl UiRuntime {
             .max()
             .unwrap_or(0)
             .max(1);
-        let mut first_panic = None;
         for round in 0..rounds {
             // Commit every local step before running any user callback. Input
             // cleanup can still observe the preceding aggregate scheduler state;

@@ -56,14 +56,10 @@
 //! - `CupertinoTabBar`'s blur on a translucent background, and state
 //!   restoration for `CupertinoTabScaffold` — see [`bottom_tab_bar`]'s and
 //!   [`tab_scaffold`]'s module docs.
-//! - The contrast and interface-elevation axes of [`CupertinoDynamicColor`]
-//!   resolution — both are stored (all 8 variants of every color are
-//!   carried) but resolution always treats them as "normal contrast, base
-//!   elevation": there is no `MediaQuery::high_contrast` field or
-//!   `CupertinoUserInterfaceLevel` ambient in FLUI yet to resolve them
-//!   against. Only the brightness axis (`CupertinoTheme` ambient, falling back
-//!   to `MediaQuery::platform_brightness`) is fully resolved. See
-//!   [`colors`] module docs.
+//! - The interface-elevation axis of [`CupertinoDynamicColor`] resolution:
+//!   elevated variants are stored but resolution uses base elevation, as no
+//!   interface-level ambient exists yet. Brightness and contrast resolve from
+//!   the ambient theme and media data; see [`colors`] module docs.
 //! - [`CupertinoButton`]'s focus ring (`RoundedSuperellipseBorder`
 //!   outline — `flui-painting` has the primitive, this crate does not draw
 //!   it yet), `WidgetState`-resolved mouse cursor, and

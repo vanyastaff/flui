@@ -2,6 +2,9 @@
 
 - **Status:** Proposed (2026-10-06). Awaiting the owner's approval; nothing in this ADR is
   implemented.
+- **Superseded-by:** [ADR-0159](ADR-0159-host-owned-system-preferences.md) for §4 only;
+  the remaining proposal retains its status. The accepted preference work uses
+  the current crate names independently of this proposal's rename and capability work.
 - **Date:** 2026-10-06
 - **Supersedes, on acceptance:**
   [ADR-0082](ADR-0082-platform-api-contract-crate.md) §1's item list and §2's crate names (the
@@ -135,6 +138,10 @@ crate (ADR-0154). Only `flui-app` depends on it.
 that moves them supersedes ADR-0039 §2.
 
 ### 4. System preferences: one host source, each consumer its own representation
+
+Superseded by [ADR-0159](ADR-0159-host-owned-system-preferences.md). The text below
+records the original proposal; source ownership, native units, ordered delivery
+and consumer acceptance now follow that decision.
 
 `flui_platform::SystemPreferences` holds text scale, contrast, bold text, motion
 (`NoPreference`, `Reduce`, `Scaled(DurationScale)`, where a `DurationScale` is finite and

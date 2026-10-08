@@ -116,6 +116,7 @@ impl UiRuntime {
         let redraw_pending = Arc::new(AtomicBool::new(false));
         let command_wake_debt = Arc::new(WakeDebt::default());
         let RuntimeServices {
+            preferences,
             owner_frame,
             scheduler,
             wake,
@@ -172,8 +173,12 @@ impl UiRuntime {
         // The frame-time origin reads the ui_runtime's clock, so a manual clock's
         // frame timestamps measure from the same timeline they advance on.
         let start = flui_foundation::MonotonicClock::now(&clock);
+        if let Some(snapshot) = &preferences {
+            super::preferences::publish(&presentation, snapshot);
+        }
         Ok(Self {
             id: ui_runtime_id,
+            preferences: RefCell::new(preferences),
             owner_frame,
             interaction_lane,
             global_key_scope,

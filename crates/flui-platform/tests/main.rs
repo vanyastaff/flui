@@ -25,10 +25,14 @@ mod contract;
 mod file_store;
 #[path = "input_vocabulary.rs"]
 mod input_vocabulary;
+#[path = "preferences.rs"]
+mod preferences;
 #[path = "text_input_mapping.rs"]
 mod text_input_mapping;
 #[path = "window_callback_unwind.rs"]
 mod window_callback_unwind;
+#[path = "window_installation.rs"]
+mod window_installation;
 
 /// Runs every case even after one fails, then panics listing the failing case names.
 fn run_table(table: &str, cases: &[(&str, fn())]) {

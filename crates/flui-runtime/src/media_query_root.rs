@@ -14,7 +14,7 @@ use flui_widgets::{MediaQuery, MediaQueryData};
 /// element reads it during build. Deliberately `!Send` (`Rc`/`RefCell`):
 /// every write side runs on the UI runtime's owner thread.
 #[derive(Default)]
-pub struct MediaQuerySource {
+pub(crate) struct MediaQuerySource {
     data: RefCell<MediaQueryData>,
     rebuild: RefCell<Option<(u64, RebuildHandle)>>,
     generation: Cell<u64>,
@@ -35,7 +35,7 @@ impl MediaQuerySource {
     /// A mutation before the root wrapper has mounted (bootstrap ordering)
     /// just updates the cell — the first build reads the fresh value, so
     /// the missing handle loses nothing.
-    pub fn update(&self, mutate: impl FnOnce(&mut MediaQueryData)) {
+    pub(crate) fn update(&self, mutate: impl FnOnce(&mut MediaQueryData)) {
         let changed = {
             let mut data = self.data.borrow_mut();
             let before = data.clone();
@@ -117,11 +117,9 @@ impl Drop for MediaQueryRegistration {
 
 /// Publishes one presentation's [`MediaQuerySource`] as the root `MediaQuery`.
 ///
-/// Currently installed from the `primary()` attach path only (`UiRuntime::
-/// attach_root_widget_entered` and its sized variant), so a non-primary
-/// presentation's source is written by the addressed arms and not yet read —
-/// see `docs/BETA.md` § "iOS safe-area layout" for why that split is stated
-/// rather than hidden.
+/// Installed by the primary root attach paths and the addressed sized attach
+/// used by headless multi-window consumers. Each wrapper publishes only its
+/// own presentation's source; no caller outside the runtime mutates that cell.
 #[derive(Clone)]
 pub(crate) struct MediaQueryRoot {
     source: Rc<MediaQuerySource>,

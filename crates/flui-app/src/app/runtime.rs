@@ -20,7 +20,7 @@
 //!
 //! `AppRuntime` absorbs the transitional `RuntimeHost`'s fields (UI runtime slot,
 //! queue, draining flag, owner thread, address cache, window registry,
-//! surface applier) plus the loop-scoped
+//! native frame drivers) plus the loop-scoped
 //! `OwnerPlatform` capability (formerly a second, separate thread-local) and
 //! [`SharedEngineServices`]. The single-threaded dispatch machinery that
 //! operates on this struct — `install_platform_ui_runtime`,
@@ -32,17 +32,13 @@
 
 use std::sync::atomic::Ordering;
 
-use flui_foundation::{PresentationId, UiRuntimeId};
-use flui_scheduler::UpdateScheduler;
-
 use std::cell::{Cell, OnceCell, RefCell};
-use std::collections::{HashSet, VecDeque};
+use std::collections::HashSet;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::thread::ThreadId;
 
-use flui_foundation::PresentationAddress;
 use flui_painting::{FontCollection, HostFontFeed};
 use flui_platform::OwnerPlatform;
 #[cfg(target_os = "android")]
@@ -55,9 +51,7 @@ use parking_lot::{Mutex, RwLock};
 use super::lifecycle::{
     ServiceDefinition, ServiceRegistry, ServiceShutdownReport, ServiceStartError,
 };
-use super::runner::{FontRegistrationError, PresentationDispatcher, RuntimeTask, SurfaceApplier};
-use super::ui_runtime::UiRuntime;
-use super::window_registry::{PreparedWindowRegistration, RegistryError, WindowRegistry};
+use super::runner::{FontRegistrationError, InstalledHost};
 #[cfg(not(target_arch = "wasm32"))]
 use flui_runtime::execution::SpawnError;
 use flui_runtime::execution::{ExecutionServices, HostExecutors};
@@ -158,159 +152,6 @@ fn font_digest(font_bytes: &[u8]) -> FontDigest {
 // ============================================================================
 // Multi-ui_runtime hosting (issue #555)
 // ============================================================================
-
-/// One UI runtime's dispatch-adjacent state, keyed by [`UiRuntimeId`] in
-/// [`AppRuntime`]'s [`RuntimeRegistry`]. Work admission and ordering belong to
-/// the host-wide FIFO; a slot retains only its runtime and native attachments.
-pub(super) struct RuntimeSlot {
-    /// `None` while this UI runtime is checked OUT of the registry for
-    /// [`dispatch_platform_ui_runtime`](super::runner). Membership stays in place
-    /// so reentrant work can target it through the host-wide FIFO.
-    pub(super) ui_runtime: Option<UiRuntime>,
-    /// This UI runtime's routable address — the per-slot replacement for the
-    /// single `AppRuntime.address: Option<PresentationAddress>` this type
-    /// used to be.
-    pub(super) address: PresentationAddress,
-    /// This UI runtime's own registration-lifetime renderer-surface applier for a
-    /// `Resized` event — never shared with a sibling UI runtime's applier, so a
-    /// resize addressed to one window can never resize another's surface.
-    pub(super) surface_applier: Option<SurfaceApplier>,
-    /// The presentation whose window owns the surface `surface_applier`
-    /// resizes: the UI runtime's primary when the applier was installed. A
-    /// `Resized` for any other presentation of this UI runtime (a
-    /// `WindowPolicy::Shared` secondary) must not reach that surface until
-    /// sinks are per-presentation (#559).
-    pub(super) surface_owner: Option<PresentationId>,
-}
-
-/// The [`UiRuntimeId`]-keyed, insertion-ordered UI runtime registry `AppRuntime` hosts
-/// — the multi-UI runtime replacement for the single `Option<UiRuntime>` slot (plus
-/// its four sibling flat fields) this type used to be.
-///
-/// Insertion order matters: hot-restart's [`super::runner`]
-/// `for_each_installed_ui_runtime` and the exit-policy drain both visit UI runtimes in
-/// the order they were installed, i.e. mount order.
-///
-/// Storage is a linear-scan `Vec`, not a hash map: the number of live UI runtimes
-/// is the number of open top-level windows, small enough that O(n) lookup is
-/// not a real cost, and a `Vec` gives insertion order for free with no extra
-/// bookkeeping — the same reasoning `WindowRegistry` already applies to its
-/// own `Vec<(WindowId, PresentationAddress)>` storage.
-#[derive(Default)]
-pub(super) struct RuntimeRegistry {
-    slots: Vec<(UiRuntimeId, RuntimeSlot)>,
-}
-
-impl RuntimeRegistry {
-    pub(super) const fn new() -> Self {
-        Self { slots: Vec::new() }
-    }
-
-    pub(super) fn is_empty(&self) -> bool {
-        self.slots.is_empty()
-    }
-
-    /// Read a slot without changing its checkout state. Used for scheduler
-    /// snapshots and capturing presentation assembly capabilities.
-    pub(super) fn get(&self, id: &UiRuntimeId) -> Option<&RuntimeSlot> {
-        self.slots
-            .iter()
-            .find(|(slot_id, _)| slot_id == id)
-            .map(|(_, slot)| slot)
-    }
-
-    pub(super) fn get_mut(&mut self, id: &UiRuntimeId) -> Option<&mut RuntimeSlot> {
-        self.slots
-            .iter_mut()
-            .find(|(slot_id, _)| slot_id == id)
-            .map(|(_, slot)| slot)
-    }
-
-    pub(super) fn contains_key(&self, id: &UiRuntimeId) -> bool {
-        self.slots.iter().any(|(slot_id, _)| slot_id == id)
-    }
-
-    /// Inserts `slot` at `id`, appending at the end of insertion order.
-    ///
-    /// `id` must not already be present: `next_identity` never repeats a
-    /// `UiRuntimeId`, and every removal path (`remove`/`clear`) drops the old
-    /// entry before a replacement is ever inserted, so a collision here
-    /// means a stale id was reused — a bug this debug_assert catches instead
-    /// of silently shadowing a live ui_runtime.
-    pub(super) fn insert(&mut self, id: UiRuntimeId, slot: RuntimeSlot) {
-        debug_assert!(
-            !self.contains_key(&id),
-            "BUG: RuntimeRegistry::insert called for an id already present -- \
-             next_identity never repeats a UiRuntimeId, so this means a stale id was reused"
-        );
-        self.slots.push((id, slot));
-    }
-
-    /// Removes and returns the slot at `id`, if present.
-    pub(super) fn remove(&mut self, id: &UiRuntimeId) -> Option<RuntimeSlot> {
-        let index = self.slots.iter().position(|(slot_id, _)| slot_id == id)?;
-        Some(self.slots.remove(index).1)
-    }
-
-    /// Removes and returns every slot, in insertion order — the
-    /// multi-UI runtime generalization of `mem::take`-ing the old single
-    /// `Option` slot (`install_platform_ui_runtime`'s reinstall-without-teardown
-    /// path, and `teardown_platform_ui_runtime`'s full loop-exit teardown, both
-    /// use this).
-    pub(super) fn clear(&mut self) -> Vec<(UiRuntimeId, RuntimeSlot)> {
-        std::mem::take(&mut self.slots)
-    }
-
-    pub(super) fn iter(&self) -> impl Iterator<Item = &(UiRuntimeId, RuntimeSlot)> {
-        self.slots.iter()
-    }
-
-    /// Every installed `UiRuntimeId`, in insertion (mount) order — the read
-    /// `for_each_installed_ui_runtime` (`super::runner`) snapshots before it
-    /// starts checking UI runtimes out one at a time.
-    #[cfg(any(
-        test,
-        all(
-            not(target_os = "android"),
-            not(target_os = "ios"),
-            not(target_arch = "wasm32")
-        )
-    ))]
-    pub(super) fn keys(&self) -> Vec<UiRuntimeId> {
-        self.slots.iter().map(|(id, _)| *id).collect()
-    }
-}
-
-/// A UI runtime-registry install/uninstall requested while a mutation must defer
-/// (a dispatch or an all-UI runtimes iteration is in flight on this thread — see
-/// [`AppRuntime::request_ui_runtime_install`]/[`AppRuntime::request_ui_runtime_uninstall`]).
-/// Applied in request order once the deferring condition clears. Private:
-/// external callers (`super::runner`) go through the typed
-/// `request_ui_runtime_install`/`request_ui_runtime_uninstall` methods, never
-/// construct this enum directly — keeping the window-registration step
-/// (see [`AppRuntime::apply_install`]) bundled with the registry insert
-/// atomically, instead of requiring every call site to remember both.
-enum RuntimeMapMutation {
-    /// Add a newly-constructed UI runtime to the registry (never displaces a
-    /// sibling — see `install_ui_runtime_alongside` in `super::runner`), plus the
-    /// prepared native identity for its `WindowRegistry` mapping. Boxed: `RuntimeSlot`
-    /// owns a whole `UiRuntime`, over a kilobyte, next to `Uninstall`'s bare
-    /// `UiRuntimeId` -- boxing keeps this enum (and every `Vec<RuntimeMapMutation>`
-    /// queueing it) from paying that size for every entry regardless of
-    /// variant.
-    #[cfg_attr(
-        not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
-        expect(
-            dead_code,
-            reason = "constructed only by request_ui_runtime_install, whose one production caller \
-                      (runner.rs::install_ui_runtime_alongside) is desktop-only"
-        )
-    )]
-    Install(UiRuntimeId, Box<RuntimeSlot>, PreparedWindowRegistration),
-    /// Remove one UI runtime from the registry (a window closing while siblings
-    /// stay open — see `request_ui_runtime_uninstall` in `super::runner`).
-    Uninstall(UiRuntimeId),
-}
 
 /// Governs when the platform loop should exit once every hosted UI runtime's
 /// window has closed — the embedder-facing policy knob for the "new
@@ -456,133 +297,25 @@ pub(super) enum QuitNotification {
 /// The loop-scoped composition root: platform event-loop demux, the single
 /// UI runtime slot, and the once-resolved [`SharedEngineServices`].
 ///
-/// Absorbs the former `RuntimeHost` (UI runtime slot, queue, draining flag, owner
-/// thread, address cache, window registry, surface applier)
-/// wholesale, plus the loop-scoped `OwnerPlatform` capability (formerly the
-/// separate `OWNER_PLATFORM_HOST` thread-local) and `services`. One struct,
-/// one thread-local slot (`runner.rs`'s `APP_RUNTIME`) — the same two
-/// invariants that justified two separate TLS cells before still hold as two
-/// fields on one struct: `teardown_platform_ui_runtime` clears the UI runtime-facing
-/// fields and *never* `owner_platform` (hot-restart hosts a fresh UI runtime on
-/// the same loop); `OwnerHostClearGuard` clears only `owner_platform` on
-/// unwind.
-///
-/// # Design-for-N
-///
-/// The UI runtime-facing API is `UiRuntimeId`-keyed: `ui_runtimes` is [`RuntimeRegistry`],
-/// an insertion-ordered map of any number of hosted UI runtimes (issue #555) —
-/// the UI runtime's `next_identity` (`flui_runtime`) already mints from a shape that never needed to
-/// change for this to land.
+/// Holds loop-scoped platform capabilities and services plus the current
+/// installed host. OwnerHost owns runtime membership, delivery and checkout;
+/// active callbacks retain their installed host independently of this TLS slot.
+/// Runtime replacement preserves the platform loop and its services.
 pub(crate) struct AppRuntime {
-    /// Native frame resources; logical runtime membership stays independent.
-    pub(super) frame_drivers: super::runner::FrameDrivers,
-    pub(super) native_retirement: super::runner::NativeRetirement,
-    /// Every hosted UI runtime, keyed by `UiRuntimeId`, in mount (insertion) order.
-    pub(super) ui_runtimes: RuntimeRegistry,
-    /// Owner-local work accepted while another UI runtime callback is running.
-    ///
-    /// This is one queue for the whole loop, rather than one queue per UI runtime:
-    /// reentrant A -> B -> A dispatch must run after the current callback in
-    /// exactly that admission order. Entries retain their complete stamped
-    /// dispatcher so stale ui_runtime/presentation admission is checked again
-    /// when the turn reaches the front of the queue.
-    pub(super) owner_turn_queue: VecDeque<(PresentationDispatcher, RuntimeTask)>,
-    /// True while the outermost [`dispatch_platform_ui_runtime`](super::runner)
-    /// invocation owns the queue drain. Reentrant dispatch only appends and
-    /// returns; it never recursively checks out a sibling UI runtime.
-    pub(super) owner_turn_draining: bool,
-    /// Sequence of the one continuation opportunity currently requested for
-    /// carried owner work. The sequence lets a failed, synchronously
-    /// reentrant actuator clear only its own reservation.
-    pub(super) owner_turn_continuation: Option<u64>,
-    /// The last attempt to post a continuation failed. A fresh native root
-    /// must still run synchronously instead of joining the carried backlog;
-    /// its tail retries the post.
-    pub(super) owner_turn_continuation_failed: bool,
-    /// Remaining logical operations in the native callback that consumed a
-    /// continuation. `None` means this callback is not servicing carried
-    /// owner work.
-    pub(super) owner_turn_callback_budget: Option<usize>,
-    /// True from the outermost native callback entry until its completion
-    /// work has finished. Some platform adapters (notably the web window)
-    /// can synchronously invoke a frame callback from `request_redraw`, so a
-    /// nested entry is another root of the current physical callback, not a
-    /// second opportunity that may consume or finish its budget.
-    pub(super) owner_turn_callback_active: bool,
-    /// Monotonic source for [`Self::owner_turn_continuation`].
-    pub(super) owner_turn_next_sequence: u64,
-    /// Host-specific continuation actuator. It is owner-local because
-    /// `AppRuntime` is owner-affine; `true` means an opportunity was posted.
+    /// One strong logical/native owner, retained by active callback completion.
+    pub(super) installed_host: InstalledHost,
     pub(super) owner_turn_wake: Option<Rc<dyn Fn() -> bool>>,
-    /// Addresses whose terminal close has been admitted but may still be
-    /// waiting in a bounded batch. Later work cannot jump that barrier.
-    pub(super) closing_presentations: HashSet<PresentationAddress>,
     /// The thread that installed the first UI runtime hosted here; every dispatch
     /// checks against this before touching the registry. Loop-scoped, not
     /// per-UI runtime: every UI runtime this `AppRuntime` ever hosts lives on the same
     /// owner thread (`APP_RUNTIME` is thread-local), so one shared value is
     /// exact, not an approximation of a per-UI runtime concept.
     pub(super) owner_thread: Option<ThreadId>,
-    /// The sole native-window-to-presentation mapping authority (ADR-0037
-    /// §2), already `UiRuntimeId`-keyed and multi-window-shaped — see its own
-    /// module doc.
-    pub(super) registry: WindowRegistry,
-    /// Per-presentation close-request handlers (issue #558) — the seam by
-    /// which an application vetoes a window close. `Arc`, not inline: each
-    /// window's own `on_should_close` closure holds a clone and answers
-    /// without re-entering this thread-local at all, which is what lets it
-    /// answer while a UI runtime is checked out for dispatch. See
-    /// [`CloseRequestRouter`](super::close_request::CloseRequestRouter)'s
-    /// own doc.
-    close_requests: Arc<super::close_request::CloseRequestRouter>,
     /// The loop-scoped owner-thread platform capability (ADR-0039 §6).
     /// Deliberately *not* cleared by UI runtime teardown — the loop may host
     /// another UI runtime before it exits (hot-restart does exactly this).
     pub(super) owner_platform: Option<std::rc::Rc<OwnerPlatform>>,
     pub(super) owner_install_generation: u64,
-    /// A clone of the currently-dispatched UI runtime's scheduler, held ONLY
-    /// while `dispatch_platform_ui_runtime` (in `runner.rs`) has taken that
-    /// UI runtime's slot out of `ui_runtimes` above for the duration of a queued task.
-    /// Without this, [`Self::installed_ui_runtime_phase`] (`with_owner_platform`'s
-    /// fence (c)) reads `None` for the UI runtime's entire dispatched extent —
-    /// not just when no UI runtime is installed at all — because
-    /// `dispatch_platform_ui_runtime` checks the UI runtime's `UiRuntime` OUT of its slot
-    /// before running any task, including the frame pump that drives the
-    /// scheduler through `PersistentCallbacks`. That makes the fence blind
-    /// exactly when a frame phase is actually running, which is the one case
-    /// the fence exists to catch. `UpdateScheduler` is a single-`Arc` handle (see
-    /// `flui-scheduler`'s `UpdateScheduler`/`SchedulerInner` split), so cloning it
-    /// here to survive the checkout is cheap — an `Arc::clone`, not a new
-    /// scheduler. Set at checkout, cleared at restore
-    /// (`dispatch_platform_ui_runtime`), in both cases inside the same
-    /// `catch_unwind`-guarded block that restores the UI runtime's slot itself, so
-    /// an unwinding dispatched task leaves this `None` exactly as reliably as
-    /// it leaves the slot restored.
-    ///
-    /// Stays single-slot on purpose: dispatch is
-    /// single-threaded and sequential, so at most one UI runtime is EVER checked
-    /// out on this thread at a given instant — [`RuntimeMapMutation`]'s
-    /// defer-to-idle discipline exists precisely so no second, nested
-    /// dispatch for a DIFFERENT UI runtime is ever attempted while this is
-    /// `Some`; `dispatch_platform_ui_runtime` debug-asserts that invariant at its
-    /// one checkout site.
-    pub(super) dispatched_scheduler: Option<UpdateScheduler>,
-    /// The identity companion to `dispatched_scheduler`: which UI runtime
-    /// is currently checked out. Reentrant work for any runtime stays queued.
-    /// Also set (alongside `dispatched_scheduler`) for the UI runtime
-    /// `for_each_installed_ui_runtime` currently has checked out of the registry
-    /// mid-visit — from fence (c)'s perspective a visited UI runtime IS
-    /// dispatched: its own scheduler phase must still be observable, not
-    /// blind, for the whole time it sits outside `ui_runtimes`.
-    pub(super) dispatched_ui_runtime_id: Option<UiRuntimeId>,
-    /// Set for the duration of `for_each_installed_ui_runtime`'s (`runner.rs`)
-    /// hot-restart-shaped visit over every hosted UI runtime. A UI runtime-map
-    /// mutation requested while this is `true` defers exactly like one
-    /// requested while `dispatched_ui_runtime_id` is `Some` — see
-    /// [`Self::request_ui_runtime_install`]/[`Self::request_ui_runtime_uninstall`] —
-    /// so a mutation triggered by a callback running mid-visit never
-    /// changes the set of UI runtimes that same visit is still walking.
-    pub(super) iterating_all_ui_runtimes: bool,
     #[cfg(all(
         not(target_os = "android"),
         not(target_os = "ios"),
@@ -620,11 +353,6 @@ pub(crate) struct AppRuntime {
     /// Accepted loop-owned window requests, including currently polled/installing entries.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) pending_window_reservations: Arc<std::sync::atomic::AtomicUsize>,
-    /// Runtime-map mutations requested while
-    /// [`Self::request_ui_runtime_install`]/[`Self::request_ui_runtime_uninstall`]
-    /// decided they must defer. Applied, in request order, by
-    /// [`Self::drain_pending_ui_runtime_mutations`].
-    pending_ui_runtime_mutations: Vec<RuntimeMapMutation>,
     /// Process-level engine services. Deliberately **not** resolved in
     /// [`AppRuntime::new`] -- see [`AppRuntime::ensure_services`] for why.
     services: OnceCell<SharedEngineServices>,
@@ -720,30 +448,14 @@ impl AppRuntime {
     /// (the `OnceCell`) staying unresolved is what that contract depends on,
     /// and this change does not touch it.
     pub(super) fn new() -> Self {
-        let native_retirement = super::runner::NativeRetirement::default();
         Self {
-            ui_runtimes: RuntimeRegistry::new(),
-            frame_drivers: super::runner::FrameDrivers::new(native_retirement.clone()),
-            native_retirement,
-            owner_turn_queue: VecDeque::new(),
-            owner_turn_draining: false,
-            owner_turn_continuation: None,
-            owner_turn_continuation_failed: false,
-            owner_turn_callback_budget: None,
-            owner_turn_callback_active: false,
-            owner_turn_next_sequence: 0,
+            installed_host: InstalledHost::new(),
             owner_turn_wake: None,
-            closing_presentations: HashSet::new(),
             owner_thread: None,
-            registry: WindowRegistry::new(),
-            close_requests: Arc::new(super::close_request::CloseRequestRouter::new()),
             owner_platform: None,
             owner_install_generation: 0,
-            dispatched_scheduler: None,
-            dispatched_ui_runtime_id: None,
             #[cfg(not(target_arch = "wasm32"))]
             pending_window_reservations: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-            iterating_all_ui_runtimes: false,
             #[cfg(all(
                 not(target_os = "android"),
                 not(target_os = "ios"),
@@ -778,7 +490,6 @@ impl AppRuntime {
                 not(target_arch = "wasm32")
             ))]
             main_host_lifecycle: flui_scheduler::AppLifecycleState::Detached,
-            pending_ui_runtime_mutations: Vec::new(),
             services: OnceCell::new(),
             fonts: RefCell::new(FontRegistrations::default()),
             fonts_announced: Cell::new(0),
@@ -1081,84 +792,17 @@ impl AppRuntime {
         }
     }
 
-    /// True if `phase` is one of the phases `with_owner_platform`'s fence (c)
-    /// forbids: a frame transaction genuinely in flight, as opposed to
-    /// `Idle`/`PostFrameCallbacks`, both of which are legitimate times to
-    /// acquire owner-platform capability (ADR-0021-style post-frame work).
-    // Reachable only from `with_owner_platform`'s `#[cfg(debug_assertions)]`
-    // fence, so in a release build both helpers are dead. They stay compiled
-    // in both profiles (a future release-profile caller must not find them
-    // missing) and the attribute states why the lint is expected there.
+    /// Observe the active lease, or the strongest resident scheduler phase,
+    /// without borrowing any runtime. The platform capability fence uses this.
     #[cfg_attr(
         not(debug_assertions),
-        expect(
-            dead_code,
-            reason = "only the debug-only owner-platform fence calls this"
-        )
-    )]
-    fn is_frame_transaction_phase(phase: flui_scheduler::SchedulerPhase) -> bool {
-        matches!(
-            phase,
-            flui_scheduler::SchedulerPhase::TransientCallbacks
-                | flui_scheduler::SchedulerPhase::MidFrameMicrotasks
-                | flui_scheduler::SchedulerPhase::PersistentCallbacks
-        )
-    }
-
-    /// The installed UI runtime's scheduler phase, or `None` if no UI runtime is
-    /// installed on this thread AND no UI runtime is currently checked out for
-    /// dispatch either — the replacement for `with_owner_platform`'s fence
-    /// (c), formerly a bare `UpdateScheduler::instance().phase()` read.
-    ///
-    /// **Design-for-N (issue #555): iterates every resident slot in
-    /// `ui_runtimes`**, rather than assuming a single slot is "the" UI runtime that
-    /// matters — but checks [`Self::dispatched_scheduler`] FIRST: dispatch is
-    /// single-threaded and sequential, so whenever a UI runtime is checked out for
-    /// `dispatch_platform_ui_runtime` (the entire extent of a queued task,
-    /// including the frame pump that drives `PersistentCallbacks`), every
-    /// OTHER resident UI runtime is necessarily `Idle`/`PostFrameCallbacks` (no
-    /// two UI runtimes ever run their frame pump concurrently on one thread) —
-    /// reading `dispatched_scheduler` first is therefore both sufficient and
-    /// exact for that case, not merely a fallback. Only once nothing is
-    /// checked out does this fall through to scanning `ui_runtimes` itself, so an
-    /// addressed probe (this dispatch's own UI runtime) and the aggregate fence
-    /// both stay correct without duplicating the forbidden-phase list.
-    /// Single-pass, no intermediate allocation: returns the first FORBIDDEN
-    /// phase found, short-circuiting the scan; if none is forbidden, returns
-    /// the first UI runtime's OBSERVED phase honestly (never claimed to be
-    /// specifically `Idle` — a fully quiescent UI runtime can legitimately sit in
-    /// `PostFrameCallbacks` just as validly, and this reads back whichever
-    /// one it actually is) rather than `None`, matching this function's
-    /// pre-registry single-slot behavior for the common one-UI runtime case (a
-    /// UI runtime being installed reads back its own real phase, not a
-    /// vacuous "nothing installed" `None`).
-    // Reachable only from `with_owner_platform`'s `#[cfg(debug_assertions)]`
-    // fence, so in a release build both helpers are dead. They stay compiled
-    // in both profiles (a future release-profile caller must not find them
-    // missing) and the attribute states why the lint is expected there.
-    #[cfg_attr(
-        not(debug_assertions),
-        expect(
-            dead_code,
-            reason = "only the debug-only owner-platform fence calls this"
-        )
+        expect(dead_code, reason = "only the debug platform fence observes phase")
     )]
     pub(super) fn installed_ui_runtime_phase(&self) -> Option<flui_scheduler::SchedulerPhase> {
-        if let Some(scheduler) = self.dispatched_scheduler.as_ref() {
-            return Some(scheduler.phase());
-        }
-        let mut first_observed = None;
-        for (_, slot) in self.ui_runtimes.iter() {
-            let Some(ui_runtime) = slot.ui_runtime.as_ref() else {
-                continue;
-            };
-            let phase = ui_runtime.scheduler().phase();
-            if Self::is_frame_transaction_phase(phase) {
-                return Some(phase);
-            }
-            first_observed.get_or_insert(phase);
-        }
-        first_observed
+        self.installed_host
+            .logical()
+            .phase()
+            .expect("BUG: platform phase read during pure publication")
     }
 
     /// The earliest wall-clock instant this loop's platform event loop
@@ -1185,248 +829,20 @@ impl AppRuntime {
     /// same UI runtime frame path that the wake re-enters.
     #[must_use]
     pub(super) fn next_wake(&self) -> Option<web_time::Instant> {
-        self.ui_runtimes
-            .iter()
-            .filter_map(|(_, slot)| slot.ui_runtime.as_ref())
-            .filter_map(super::ui_runtime::UiRuntime::next_wake)
-            .min()
+        self.installed_host
+            .logical()
+            .next_wake()
+            .expect("BUG: wake deadline read before owner checkout returned")
     }
 
-    /// The un-deferred application of an `Install` mutation: registers
-    /// a prepared native identity in the `WindowRegistry` first, strictly (never replacing an
-    /// existing mapping — an id collision is refused, not silently
-    /// re-routed onto a sibling UI runtime's window), and only inserts `slot`
-    /// into `ui_runtimes` once that registration succeeds. Preparation already
-    /// read the window identity outside app borrows; publication calls no window
-    /// method. `WindowId` stays inside the registry module (ADR-0037 §2).
-    ///
-    /// On `Err`, hands `slot` BACK rather than dropping it here: this method
-    /// is always called while some caller's `APP_RUNTIME` `RefCell` borrow is
-    /// still live, and `slot` owns a whole `UiRuntime` whose destructors may
-    /// re-enter platform/framework code — the same reason
-    /// `install_platform_ui_runtime`/`teardown_platform_ui_runtime` never drop a
-    /// UI runtime-owning value while their own TLS borrow is held. Every caller of
-    /// this method routes the returned slot through its own `removed`-style
-    /// return value instead, so the actual drop happens only once that
-    /// borrow has released.
-    fn apply_install(
-        &mut self,
-        id: UiRuntimeId,
-        slot: RuntimeSlot,
-        registration: PreparedWindowRegistration,
-    ) -> Result<(), (RegistryError, Box<RuntimeSlot>)> {
-        if let Err(error) = self.registry.try_register(registration, slot.address) {
-            return Err((error, Box::new(slot)));
-        }
-        self.ui_runtimes.insert(id, slot);
-        Ok(())
-    }
-
-    /// The un-deferred application of an `Uninstall` mutation.
-    ///
-    /// Registry removal runs first, matching `window_registry.rs`'s
-    /// module-doc invariant and `teardown_platform_ui_runtime`'s own ordering:
-    /// stop new routing before the returned `RuntimeSlot`'s queued
-    /// old-generation events are ever dropped (whenever the caller
-    /// eventually drops it — see this module's TLS-borrow-reentrancy
-    /// discipline for why that drop happens outside this function, not
-    /// inside it).
-    fn apply_uninstall(&mut self, id: UiRuntimeId) -> Option<RuntimeSlot> {
-        self.frame_drivers.retire_runtime(id);
-        self.registry.remove_ui_runtime(id);
-        self.native_retirement
-            .close_handlers(self.close_requests.take_ui_runtime(id));
-        self.ui_runtimes.remove(&id)
-    }
-
-    /// A clone of this loop's close-request router (issue #558), for the
-    /// bootstrap that registers a window's handler and for the
-    /// `on_should_close` closure that consults it.
-    ///
-    /// Handing out an `Arc` rather than a borrow is the point: the
-    /// consulting closure must be able to answer a platform close request
-    /// without taking a borrow on this thread-local, since a close request
-    /// can arrive while a UI runtime is checked out for dispatch.
     pub(super) fn close_requests(&self) -> Arc<super::close_request::CloseRequestRouter> {
-        Arc::clone(&self.close_requests)
+        self.installed_host.native().close_requests()
     }
 
-    /// Requests installing a newly-constructed UI runtime, registering `window`'s
-    /// id and inserting `slot` into the registry TOGETHER, atomically from
-    /// every caller's perspective: either both happen now, or both are
-    /// queued as one [`RuntimeMapMutation::Install`] entry and both happen
-    /// together once the queue drains. This closes the gap a two-step
-    /// "register the window now, defer the UI runtime insert" sequence would
-    /// otherwise leave open — a platform event addressed to the new
-    /// window's id arriving in that gap would find a `WindowRegistry` entry
-    /// but no matching `ui_runtimes` entry, and `dispatch_platform_ui_runtime` would
-    /// misreport it as `StaleRuntime` ("a newer UI runtime replaced the one it was
-    /// dispatched for") instead of "this UI runtime's install has not landed yet".
-    ///
-    /// Applied immediately unless a dispatch (`dispatched_ui_runtime_id` is
-    /// `Some`) or an all-UI runtimes iteration (`iterating_all_ui_runtimes`) is
-    /// currently in flight on this thread, in which case it queues instead —
-    /// the mechanism behind two contracts: an install requested from inside a
-    /// dispatched frame callback never nests into a second, concurrent
-    /// dispatch (it lands once the outer dispatch's restore completes,
-    /// `dispatch_platform_ui_runtime`'s tail), and a mutation requested
-    /// mid-hot-restart-visit never changes the set of UI runtimes
-    /// `for_each_installed_ui_runtime` is still walking (its own tail).
-    ///
-    /// `Err` only when applied immediately AND the window's id already maps
-    /// to a live entry — deferred installs cannot fail synchronously (the
-    /// caller has already returned by the time they apply); see
-    /// [`Self::drain_pending_ui_runtime_mutations`] for how that case is handled
-    /// instead (traced and dropped, never silently re-routed). On that
-    /// immediate `Err`, hands `slot` back inside the error (see
-    /// [`Self::apply_install`]'s own doc for why) — the caller (always
-    /// itself inside a live `APP_RUNTIME` borrow) must drop it only after
-    /// that borrow releases.
-    #[cfg_attr(
-        not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
-        expect(
-            dead_code,
-            reason = "runner.rs::install_ui_runtime_alongside (its one production caller) is \
-                      desktop-only -- android/wasm32 have no caller outside this crate's own tests"
-        )
-    )]
-    pub(super) fn request_ui_runtime_install(
-        &mut self,
-        id: UiRuntimeId,
-        slot: RuntimeSlot,
-        registration: PreparedWindowRegistration,
-    ) -> Result<(), (RegistryError, Box<RuntimeSlot>)> {
-        if self.dispatched_ui_runtime_id.is_some() || self.iterating_all_ui_runtimes {
-            self.pending_ui_runtime_mutations
-                .push(RuntimeMapMutation::Install(
-                    id,
-                    Box::new(slot),
-                    registration,
-                ));
-            return Ok(());
-        }
-        self.apply_install(id, slot, registration)
-    }
-
-    /// Requests uninstalling one UI runtime — a single window closing while
-    /// siblings stay open. Same defer-to-idle discipline as
-    /// [`Self::request_ui_runtime_install`]; see that method's doc for why.
-    ///
-    /// Returns any [`RuntimeSlot`] an IMMEDIATE uninstall removed, so the
-    /// caller can drop it (and the `UiRuntime` it owns) only after releasing
-    /// whatever `APP_RUNTIME` borrow is live — the same discipline
-    /// `install_platform_ui_runtime`/`teardown_platform_ui_runtime` already follow for
-    /// every other UI runtime-owning drop in this module.
-    ///
-    /// Production caller: `dispatch_platform_ui_runtime`'s `RuntimeTask::
-    /// ClosePresentation` handling (`runner.rs`), when the presentation
-    /// being closed is the UI runtime's only one — closing a UI runtime's sole
-    /// presentation IS closing the UI runtime, so that dispatch handling routes
-    /// here instead of ever leaving a live UI runtime with an empty
-    /// `PresentationForest`.
-    pub(super) fn request_ui_runtime_uninstall(&mut self, id: UiRuntimeId) -> Option<RuntimeSlot> {
-        if self.dispatched_ui_runtime_id.is_some() || self.iterating_all_ui_runtimes {
-            self.pending_ui_runtime_mutations
-                .push(RuntimeMapMutation::Uninstall(id));
-            return None;
-        }
-        self.apply_uninstall(id)
-    }
-
-    /// Applies every UI runtime-map mutation deferred while a dispatch or an
-    /// all-UI runtimes iteration was in flight, in request order. Called once the
-    /// deferring condition clears: the tail of `dispatch_platform_ui_runtime` and
-    /// the tail of `for_each_installed_ui_runtime` (both `runner.rs`), and
-    /// [`Self::should_exit`] (the drain-before-decide rule).
-    ///
-    /// **Early-returns (drains nothing) while `dispatched_ui_runtime_id.is_some()
-    /// || iterating_all_ui_runtimes` is still true** — a NESTED call reached
-    /// through one of those three call sites (e.g. a dispatch run from
-    /// inside a `for_each_installed_ui_runtime` visit, which that function's own
-    /// doc says is safe to attempt) must not apply a mutation an OUTER,
-    /// still-in-flight operation deferred: draining it early would remove a
-    /// UI runtime's slot while that UI runtime might still be the one checked out for
-    /// the outer visit, and the outer visit's own restore step
-    /// (`ui_runtime_slot.ui_runtime = Some(ui_runtime)` finding no slot to write into)
-    /// would then silently drop a live, un-torn-down `UiRuntime` instead of
-    /// restoring it. All three legitimate call sites clear their OWN flag
-    /// before calling this, so the guard only ever blocks a genuinely nested
-    /// caller, never the outer operation whose completion is supposed to
-    /// trigger the drain.
-    ///
-    /// Returns every removed [`RuntimeSlot`] — both from a deferred
-    /// `Uninstall`, AND from a deferred `Install` that collided on its
-    /// window id — for the caller to drop outside the live `APP_RUNTIME`
-    /// borrow — see [`Self::apply_install`]'s own doc for why that
-    /// discipline matters here: this method runs inside every one of its
-    /// three callers' live `RefCell` borrow, so it must never drop a
-    /// UI runtime-owning value itself.
-    pub(super) fn drain_pending_ui_runtime_mutations(&mut self) -> Vec<RuntimeSlot> {
-        if self.dispatched_ui_runtime_id.is_some() || self.iterating_all_ui_runtimes {
-            return Vec::new();
-        }
-        let pending = std::mem::take(&mut self.pending_ui_runtime_mutations);
-        let mut removed = Vec::new();
-        for mutation in pending {
-            match mutation {
-                RuntimeMapMutation::Install(id, slot, registration) => {
-                    if let Err((error, slot)) = self.apply_install(id, *slot, registration) {
-                        // The collided slot is routed through `removed`, the
-                        // SAME bucket a rejected/removed `Uninstall` slot
-                        // uses below -- never dropped here, inside this
-                        // method's live borrow.
-                        tracing::error!(
-                            ?id,
-                            ?error,
-                            "dropping a deferred ui_runtime install: its window id collided with an \
-                             already-registered mapping"
-                        );
-                        removed.push(*slot);
-                    }
-                }
-                RuntimeMapMutation::Uninstall(id) => {
-                    if let Some(slot) = self.apply_uninstall(id) {
-                        removed.push(slot);
-                    }
-                }
-            }
-        }
-        removed
-    }
-
-    /// Teardown-only introspection: whether any UI runtime-map mutation is still
-    /// waiting to be applied. Should always be `false` by the time
-    /// `teardown_platform_ui_runtime` (full loop-exit teardown) runs: both
-    /// `dispatch_platform_ui_runtime` and `for_each_installed_ui_runtime` drain
-    /// unconditionally in their own tails (panic or not), so nothing should
-    /// ever still be queued once every in-flight dispatch/iteration has
-    /// completed. `teardown_platform_ui_runtime` asserts this rather than
-    /// silently dropping a still-pending mutation (and the `UiRuntime` an
-    /// `Install` mutation might still be holding) unnoticed.
-    ///
-    /// `cfg`-gated to match that one caller exactly: `teardown_platform_ui_runtime`
-    /// is `#[cfg(not(target_arch = "wasm32"))]`
-    /// (the web host never tears down at all — see that function's own
-    /// module doc), so on wasm32 this method has no caller at all and must
-    /// not compile there either, or it is dead code under `wasm-check`'s
-    /// deny-warnings build.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(super) fn has_pending_ui_runtime_mutations(&self) -> bool {
-        !self.pending_ui_runtime_mutations.is_empty()
-    }
-
-    /// Whether the loop should exit under `policy`, given the UI runtimes
-    /// currently hosted, plus any [`RuntimeSlot`]s a deferred mutation just
-    /// removed (drop these outside the `APP_RUNTIME` borrow, same as every
-    /// other UI runtime-owning drop in this module).
-    ///
-    /// **Drain-before-decide:** calls
-    /// [`Self::drain_pending_ui_runtime_mutations`] BEFORE checking `policy` — a
-    /// queued install (e.g. a splash screen's dispose callback requesting the
-    /// main window) is applied first, so it vetoes exit instead of racing the
-    /// empty-registry check. Without that ordering, a splash-close and a
-    /// main-window-open landing in the same idle tick could observe "no
-    /// UI runtimes installed" and exit before the queued install ever lands.
+    /// Decide automatic exit from published membership and outstanding installs.
+    /// Pending window reservations and keep-alive services also veto exit.
+    /// Retirement and user destruction happen in the installed host before the
+    /// platform requests reevaluation, outside this AppRuntime borrow.
     #[cfg_attr(
         not(any(
             test,
@@ -1442,9 +858,11 @@ impl AppRuntime {
                       desktop-only -- android/wasm32 have no caller outside this crate's own tests"
         )
     )]
-    pub(super) fn should_exit(&mut self, policy: ExitPolicy) -> (bool, Vec<RuntimeSlot>) {
-        let removed = self.drain_pending_ui_runtime_mutations();
-        let exit = match policy {
+    pub(super) fn should_exit(&mut self, policy: ExitPolicy) -> bool {
+        if self.installed_host.has_pending_installs() {
+            return false;
+        }
+        match policy {
             ExitPolicy::ExplicitQuit => false,
             // A running service that declared `ServiceLifetime::KeepsAppAlive`
             // (issue #558) vetoes exit the same way a queued install does:
@@ -1455,7 +873,7 @@ impl AppRuntime {
             // exits anyway.
             #[cfg(not(target_arch = "wasm32"))]
             ExitPolicy::OnLastWindowClosed => {
-                self.ui_runtimes.is_empty()
+                self.installed_host.logical().runtime_count() == 0
                     && self
                         .pending_window_reservations
                         .load(std::sync::atomic::Ordering::Acquire)
@@ -1463,9 +881,8 @@ impl AppRuntime {
                     && !self.service_registry.keeps_app_alive()
             }
             #[cfg(target_arch = "wasm32")]
-            ExitPolicy::OnLastWindowClosed => self.ui_runtimes.is_empty(),
-        };
-        (exit, removed)
+            ExitPolicy::OnLastWindowClosed => self.installed_host.logical().runtime_count() == 0,
+        }
     }
 
     // ========================================================================
@@ -1643,8 +1060,13 @@ impl AppRuntime {
     /// Install the platform's clipboard capability. See `AppBinding`'s
     /// former doc (now this field's) for why this is a plain slot rather
     /// than a new `Platform` surface.
-    pub(super) fn set_platform_clipboard(&self, clipboard: Arc<dyn Clipboard>) {
-        let _prev = self.platform_clipboard.lock().replace(clipboard);
+    /// Returns the displaced capability for retirement outside the caller's
+    /// composition-root borrow as well as this slot's lock.
+    pub(super) fn set_platform_clipboard(
+        &self,
+        clipboard: Arc<dyn Clipboard>,
+    ) -> Option<Arc<dyn Clipboard>> {
+        self.platform_clipboard.lock().replace(clipboard)
     }
 
     /// The explicit, deterministic teardown clear — the first of the two
@@ -1942,8 +1364,7 @@ mod service_lifecycle_wiring_tests {
                 },
             ))
             .expect("service must start");
-        let (exit, removed) = runtime.should_exit(ExitPolicy::OnLastWindowClosed);
-        drop(removed);
+        let exit = runtime.should_exit(ExitPolicy::OnLastWindowClosed);
         assert!(
             exit,
             "no ui_runtimes + only editor-like services: the loop must exit"
@@ -1980,8 +1401,7 @@ mod service_lifecycle_wiring_tests {
             ))
             .expect("service must start");
         deterministic.run_until_idle();
-        let (exit, removed) = runtime.should_exit(ExitPolicy::OnLastWindowClosed);
-        drop(removed);
+        let exit = runtime.should_exit(ExitPolicy::OnLastWindowClosed);
         assert!(
             !exit,
             "a running keep-alive service must veto exit after the last window closes"
@@ -1995,8 +1415,7 @@ mod service_lifecycle_wiring_tests {
             .expect("the parked service stored its waker")
             .wake();
         deterministic.run_until_idle();
-        let (exit, removed) = runtime.should_exit(ExitPolicy::OnLastWindowClosed);
-        drop(removed);
+        let exit = runtime.should_exit(ExitPolicy::OnLastWindowClosed);
         assert!(
             exit,
             "a completed keep-alive service must not hold the loop"

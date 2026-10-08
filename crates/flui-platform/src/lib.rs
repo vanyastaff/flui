@@ -173,6 +173,10 @@ pub mod config;
 /// The data-transfer transport (ADR-0038), defined in `flui-platform-api`
 /// and re-exported here at its old path.
 pub use flui_platform_api::data_transfer;
+pub use flui_platform_api::{
+    DurationScale, GesturePreferences, InvalidPreference, MotionPreference, SystemPreferences,
+    WheelPreferences, WheelStep,
+};
 pub mod error;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod executor;
@@ -182,7 +186,11 @@ mod redraw_poll;
 pub mod shared;
 #[cfg(feature = "storage")]
 pub mod storage;
-#[cfg(all(test, feature = "storage", not(target_arch = "wasm32")))]
+#[cfg(all(
+    test,
+    any(feature = "storage", target_os = "windows"),
+    not(target_arch = "wasm32")
+))]
 mod table_test;
 pub mod task;
 pub mod traits;

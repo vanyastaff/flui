@@ -132,6 +132,28 @@ enum PendingMove {
     },
 }
 
+impl PendingMove {
+    fn prepend_history(&mut self, older: &mut Self) {
+        let (newer, older) = match (self, older) {
+            (
+                Self::Contact {
+                    event: newer,
+                    sequence,
+                },
+                Self::Contact {
+                    event: older,
+                    sequence: old_sequence,
+                },
+            ) if sequence == old_sequence => (newer, older),
+            (Self::Hover { event: newer, .. }, Self::Hover { event: older, .. }) => (newer, older),
+            _ => return,
+        };
+        if let (PointerEvent::Move(newer), PointerEvent::Move(older)) = (newer, older) {
+            crate::processing::prepend_motion_history(newer, older);
+        }
+    }
+}
+
 /// Exact slot for a direct/coalesced move in the canonical pending map.
 ///
 /// `pending: Some` is queued; a flush takes the payload and leaves
@@ -169,6 +191,11 @@ struct ResamplerSnapshot {
     sequence: PointerSequence,
     token: Option<ResolvedRouteToken>,
     resampler: PointerEventResampler,
+}
+
+enum MotionFlush {
+    Frame(Option<(web_time::Instant, web_time::Instant)>),
+    BeforeInput,
 }
 
 /// A resampling policy change was requested while contact sequences were
@@ -286,8 +313,10 @@ const fn px_f32(v: f64) -> f64 {
 /// # Event Coalescing
 ///
 /// Desktop platforms can generate 100+ mouse move events per second.
-/// GestureBinding coalesces these by storing only the latest move event
-/// per pointer. Call `flush_pending_moves()` once per frame to process
+/// GestureBinding coalesces these into the latest move event with bounded
+/// measured history from earlier pending moves of the same contact or hover.
+/// Predictions belong only to the newest observation.
+/// Call `flush_pending_moves()` once per frame to process
 /// the coalesced events.
 ///
 /// # Thread affinity
@@ -587,7 +616,18 @@ impl GestureBinding {
             .is_resampling_enabled()
             .then(|| self.sampling_clock.get().tick())
             .flatten();
-        self.flush_pending_moves_kernel(sample_window)
+        self.flush_pending_moves_kernel(MotionFlush::Frame(sample_window))
+    }
+
+    /// Deliver already accepted motion before another input operation observes
+    /// this presentation. Unlike a frame sample, this drains the accepted prefix
+    /// without waiting for a sampling interval or ending any pointer contact.
+    /// Reentrant motion belongs to the next batch. Returns the delivered count.
+    pub fn flush_pending_input(&self) -> usize {
+        if self.closed.get() {
+            return 0;
+        }
+        self.flush_pending_moves_kernel(MotionFlush::BeforeInput)
     }
 
     /// Flush pending moves with an explicit sampling window.
@@ -612,13 +652,11 @@ impl GestureBinding {
         if self.closed.get() {
             return Ok(0);
         }
-        Ok(self.flush_pending_moves_kernel(Some((sample_time, next_sample_time))))
+        Ok(self
+            .flush_pending_moves_kernel(MotionFlush::Frame(Some((sample_time, next_sample_time)))))
     }
 
-    fn flush_pending_moves_kernel(
-        &self,
-        sample_window: Option<(web_time::Instant, web_time::Instant)>,
-    ) -> usize {
+    fn flush_pending_moves_kernel(&self, mode: MotionFlush) -> usize {
         if self.tearing_down_all_pointers.get() || !self.tearing_down_pointers.borrow().is_empty() {
             return 0;
         }
@@ -648,11 +686,44 @@ impl GestureBinding {
         let mut count = 0;
         let mut first_panic = None;
 
+        if matches!(mode, MotionFlush::BeforeInput) {
+            // Freeze all resamplers before the first callback, so callback A
+            // cannot make newly enqueued motion for B part of this prefix.
+            let snapshots: SmallVec<[(ResamplerSnapshot, SmallVec<[PointerEvent; 4]>); 4]> = self
+                .hit_tests
+                .iter()
+                .filter(|cached| cached.resampler.is_tracked())
+                .map(|cached| {
+                    let snapshot = ResamplerSnapshot {
+                        pointer_id: *cached.key(),
+                        sequence: cached.sequence,
+                        token: cached.token,
+                        resampler: cached.resampler.clone(),
+                    };
+                    let events = snapshot.resampler.take_pending_events();
+                    (snapshot, events)
+                })
+                .collect();
+            for (snapshot, events) in snapshots {
+                for event in events {
+                    if self.is_current_sequence(snapshot.pointer_id, snapshot.sequence) {
+                        let delivered = self.dispatch_event(&event, snapshot.token);
+                        RoutePanic::preserve_first(
+                            &mut first_panic,
+                            delivered,
+                            "pending input motion",
+                        );
+                        count += 1;
+                    }
+                }
+            }
+        }
+
         // A resampled contact has exactly one queue: the resampler owned by
         // its cached Down route. Snapshot route capabilities before callbacks
         // so no DashMap guard crosses executable user code.
         if self.is_resampling_enabled()
-            && let Some((sample_time, next_sample_time)) = sample_window
+            && let MotionFlush::Frame(Some((sample_time, next_sample_time))) = mode
         {
             let samples: SmallVec<[ResamplerSnapshot; 4]> = self
                 .hit_tests
@@ -1320,8 +1391,20 @@ impl GestureBinding {
 
     fn queue_pending_move(&self, pointer_id: PointerId, pending: PendingMove) {
         let generation = self.allocate_pending_move_generation();
-        self.pending_moves
+        let mut replaced = self
+            .pending_moves
             .insert(pointer_id, PendingMoveState::queued(generation, pending));
+        if let Some(older) = replaced.as_mut().and_then(|state| state.pending.as_mut()) {
+            let mut entry = self
+                .pending_moves
+                .get_mut(&pointer_id)
+                .expect("BUG: pending move was just inserted without callbacks");
+            if let Some(newer) = entry.pending.as_mut() {
+                newer.prepend_history(older);
+            }
+        }
+        // Retire a replaced hover hit path only after releasing the map guard.
+        drop(replaced);
     }
 
     fn is_pending_move_in_flight(

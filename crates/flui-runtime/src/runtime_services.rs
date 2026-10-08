@@ -26,6 +26,7 @@ pub struct RuntimeHostServices<'a> {
     pub(crate) storage: Option<Arc<dyn Storage>>,
     pub(crate) fonts: &'a FontCollection,
     pub(crate) clock: ClockSource,
+    pub(crate) preferences: Option<crate::owner::SystemPreferencesSnapshot>,
 }
 
 impl fmt::Debug for RuntimeHostServices<'_> {
@@ -70,6 +71,7 @@ impl<'a> RuntimeHostServices<'a> {
             storage: None,
             fonts,
             clock,
+            preferences: None,
         }
     }
 
@@ -78,6 +80,18 @@ impl<'a> RuntimeHostServices<'a> {
     #[must_use]
     pub fn with_storage(mut self, storage: Arc<dyn Storage>) -> Self {
         self.storage = Some(storage);
+        self
+    }
+
+    /// Seed this runtime from the same host's latest accepted observation.
+    /// First root construction observes this revision; queued older revisions
+    /// cannot replace it after the runtime is installed.
+    #[must_use]
+    pub fn with_preferences(
+        mut self,
+        preferences: crate::owner::SystemPreferencesSnapshot,
+    ) -> Self {
+        self.preferences = Some(preferences);
         self
     }
 }
@@ -89,6 +103,7 @@ impl<'a> RuntimeHostServices<'a> {
 /// tasks (ADR-0136 §2). Resolved once, here, so the UI runtime's own source reaches
 /// no process-global scheduler.
 pub(crate) struct RuntimeServices {
+    pub(crate) preferences: Option<crate::owner::SystemPreferencesSnapshot>,
     pub(crate) owner_frame: OwnerFrame,
     pub(crate) scheduler: UpdateScheduler,
     /// The platform wake the UI runtime's scheduler, presentations and command
@@ -128,6 +143,7 @@ impl RuntimeServices {
             storage,
             fonts,
             clock,
+            preferences,
         } = host;
         let scheduler = UpdateScheduler::new();
         Self {
@@ -139,6 +155,7 @@ impl RuntimeServices {
             clipboard,
             storage,
             clock,
+            preferences,
             text: TextContextHandle::new(TextContext::new(fonts)),
         }
     }

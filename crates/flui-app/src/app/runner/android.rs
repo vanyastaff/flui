@@ -11,8 +11,7 @@ use super::host::{
 };
 use super::owner_dispatch::{
     RuntimeEvent, RuntimeTask, dispatch_platform_ui_runtime, install_input_wiring,
-    install_platform_ui_runtime, install_single_window_terminal_wiring, install_surface_applier,
-    teardown_platform_ui_runtime,
+    prepare_platform_ui_runtime, teardown_platform_ui_runtime,
 };
 use super::surface_lifecycle::{
     SurfaceLifecycleOutcome, SurfaceRecreationRetry, report_surface_settlement,
@@ -229,7 +228,8 @@ where
             tracing::error!("Root widget attach failed: {:?}", e);
             return Err(anyhow::anyhow!(e).context("Root widget attach failed"));
         }
-        let owner_dispatch = install_platform_ui_runtime(ui_runtime, &window);
+        let mut installation = prepare_platform_ui_runtime(ui_runtime, Arc::clone(&window));
+        let owner_dispatch = installation.dispatcher();
 
         // 3b. Start config-declared application services (issue #558) —
         // same wiring and same failure contract as the desktop bootstrap:
@@ -264,37 +264,22 @@ where
             phys_size.height as u32,
         )));
 
-        // Install the registration-lifetime surface applier alongside the
-        // ui_runtime (cleared together at teardown) — see the desktop bootstrap's
-        // matching comment for the take/call/restore protocol this feeds.
-        {
-            let resize_hook = lane.lock().resize_hook();
-            install_surface_applier(
-                owner_dispatch.address.ui_runtime_id,
-                move |size, scale_factor| {
-                    let w = (size.width * scale_factor) as u32;
-                    let h = (size.height * scale_factor) as u32;
-                    resize_hook.apply(w, h);
-                },
-            );
-        }
-
         // 5. Register input callback -> entered ui_runtime input dispatch
         install_input_wiring(owner_dispatch, window.as_ref());
 
-        let frame = super::frame_driver::install_frame_driver(
-            owner_dispatch,
-            super::frame_driver::FrameDriver::Android(AndroidFrameDriver {
+        let frame = installation.frame_driver(super::frame_driver::FrameDriver::Android(
+            AndroidFrameDriver {
                 lane: Arc::clone(&lane),
                 hot_reload,
                 device_recovery_backoff,
                 surface_recreation_retry,
-            }),
-        )?;
+            },
+        ))?;
         let binding = frame.binding;
         window.on_request_frame(Box::new(move || {
-            let _owner_callback = super::owner_dispatch::begin_owner_callback();
-            let _ = dispatch_platform_ui_runtime(owner_dispatch, RuntimeTask::Frame(binding));
+            super::owner_dispatch::with_owner_callback(|_| {
+                let _ = dispatch_platform_ui_runtime(owner_dispatch, RuntimeTask::Frame(binding));
+            });
         }));
 
         // 7. Register resize callback -> typed Resized event; the applier
@@ -313,7 +298,7 @@ where
 
         // Native close and quit both revoke this binding before observers run.
         owner_platform_installed(|owner| {
-            install_single_window_terminal_wiring(&window, &owner.shared(), owner_dispatch);
+            installation.terminal_callbacks(&owner.shared());
         });
 
         // Window active status. On Android this one callback conflates real
@@ -334,10 +319,7 @@ where
             } else {
                 AppLifecycleState::Paused
             };
-            let _ = dispatch_platform_ui_runtime(
-                owner_dispatch,
-                RuntimeTask::Event(RuntimeEvent::Lifecycle(target)),
-            );
+            let _ = owner_dispatch.runtime().lifecycle(target);
         }));
 
         // 8b. Surface availability (issue #1146): the release that has to
@@ -452,6 +434,10 @@ where
         // `dispatch_platform_ui_runtime`; if the slot were still empty at that
         // point, anything resolving it during that frame would silently
         // no-op instead of waking the loop.
+        installation.observe(flui_runtime::owner::WindowObservation::Metrics {
+            size: window.logical_size(),
+            scale_factor: window.scale_factor(),
+        });
         APP_RUNTIME.with(|slot| slot.borrow().set_redraw_window(window));
 
         // Mark lifecycle as started (Resumed). Routed through dispatch --
@@ -461,13 +447,10 @@ where
             owner_dispatch.owner_thread,
             "android bootstrap must run on the ui_runtime's owner thread"
         );
-        let _ = dispatch_platform_ui_runtime(
-            owner_dispatch,
-            RuntimeTask::Event(RuntimeEvent::Lifecycle(AppLifecycleState::Resumed)),
-        );
-
-        // 10. Request initial redraw, now that the window is stored.
-        wake();
+        installation.lifecycle(AppLifecycleState::Resumed);
+        installation.submit().outcome().expect(
+            "BUG: the fresh Android host completes its initial installation synchronously",
+        )?;
 
         tracing::info!("Android platform initialized with callbacks");
         Ok(())
@@ -505,6 +488,13 @@ pub(super) struct AndroidFrameDriver {
 }
 
 impl AndroidFrameDriver {
+    pub(super) fn resize(&mut self, size: flui_foundation::geometry::Size<f64>, scale_factor: f64) {
+        let resize = self.lane.lock().resize_hook();
+        resize.apply(
+            (size.width * scale_factor) as u32,
+            (size.height * scale_factor) as u32,
+        );
+    }
     pub(super) fn wake(&mut self, ui_runtime: &mut crate::app::ui_runtime::UiRuntime) {
         let lane_frame = &self.lane;
         let hot_reload_frame = &self.hot_reload;

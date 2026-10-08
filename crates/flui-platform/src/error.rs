@@ -45,6 +45,16 @@ pub type BootstrapError = Box<dyn std::error::Error + Send + Sync + 'static>;
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum PlatformError {
+    /// A preference observation is already running or waiting for its retry.
+    /// No replacement observation is available yet; preserve accepted values.
+    #[error("system preference observation is deferred")]
+    PreferencesDeferred,
+    /// The system-preference source could not complete an observation.
+    #[error("could not read system preferences: {message}")]
+    Preferences {
+        /// What failed, without exposing a native error type.
+        message: String,
+    },
     /// Platform initialization failed: no backend is available for this
     /// target/configuration, or the backend's own OS-level setup (COM,
     /// NSApplication, …) failed.

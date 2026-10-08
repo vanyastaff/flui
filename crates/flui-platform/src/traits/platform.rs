@@ -278,6 +278,21 @@ pub trait Platform: Send + Sync + 'static {
     /// Get the currently active (focused) window ID
     fn active_window(&self) -> Option<WindowId>;
 
+    /// Read system preferences independently of any user window.
+    ///
+    /// Call on the platform owner thread. Backends without an observation
+    /// mechanism return unknown fields, leaving fallback policy to consumers.
+    /// Windows keeps native subscriptions for this host's lifetime and schedules
+    /// an owner wake when a read is needed. A wake can combine other owner work;
+    /// it is not itself a preference snapshot.
+    ///
+    /// # Errors
+    /// Reports a failed native read or an unavailable owner. An error is not an
+    /// observation that a setting has been disabled.
+    fn preferences(&self) -> Result<flui_platform_api::SystemPreferences, PlatformError> {
+        Ok(flui_platform_api::SystemPreferences::default())
+    }
+
     // ==================== Display Management ====================
 
     /// Get all available displays (monitors)

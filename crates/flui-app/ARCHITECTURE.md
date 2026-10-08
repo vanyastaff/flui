@@ -9,6 +9,91 @@ the dispatch layer moves there too.
 
 ## Invariants
 
+- **Native owner replacement establishes the logical host before construction.**
+  The shared runtime builder seeds accepted preferences before mounting a root;
+  Android/web preparation retains that host through publication.
+  `bootstrap_keeps_the_host_that_seeded_the_first_build` exercises the builder,
+  first rendered consumer and publication. `a_replacement_platform_starts_a_new_preference_owner`
+  verifies that the old source closes and its values do not enter the next build.
+  Outgoing hooks, clipboard and owner resources retire after the replacement is
+  visible and outside the composition-root borrow. `platform_replacement_contains_reentrant_retirement`
+  covers reentrant updates, single/competing destructor failures and the usable
+  replacement after containment. Installation samples the native owner outside
+  the composition-root borrow, checking both native and logical owner identity
+  before accepting its result. Obsolete values and errors are discarded.
+  `obsolete_native_observation_cannot_update_a_replacement_host` injects replacement
+  during a getter; `windows_bootstrap_accepts_preferences_before_the_first_window`
+  runs the real native source and observes text scale in the first build without
+  changing OS settings. Read failure leaves observations unknown and does not
+  skip outgoing resource retirement. Desktop owner wakes refresh through the
+  same identity-fenced path before window completions; source caches avoid native
+  reads when no invalidation is pending. `owner_wake_refreshes_installed_preference_consumers`
+  drives the registered headless owner hook and verifies the retained widget's
+  next rendered scale. This is delivery evidence, not an actual OS settings change.
+  Windows retries native read failures through its window-independent loop wait;
+  deferred reads retain the accepted snapshot without another failure diagnostic.
+  `deferred_native_reads_preserve_accepted_preferences` checks the next build and
+  subsequent successful refresh through the app builder.
+  Mobile live refresh and end-to-end OS-generated change acceptance remain pending.
+
+- **Admission is not window readiness.** A desktop rendered installation publishes its
+  native driver and logical membership together, then applies initial facts
+  through the runtime owner before reporting success. The main-window request
+  waits for that receipt; secondary completion retains its loop-liveness
+  reservation through initialization. `main_window_waits_for_deferred_runtime_publication`
+  and `secondary_installation_contract` cover delayed publication, early native
+  closure and initialization failure. Refused or failed secondary installation
+  releases its reservation and leaves no registered presentation.
+  Dropping a pending installation receipt cancels publication independently of
+  native close delivery. Session installation retains its native acknowledgement
+  until the receipt succeeds; a reconnect replaces that acknowledgement without
+  rebuilding the logical runtime. Only ready sessions receive background work.
+  `session_installation_contract` exercises these rules through the headless host,
+  including abandonment without a native close callback. It does not establish
+  UIKit attachment or simulator behavior.
+  Unpublished native drivers and close handlers retire independently on
+  abandonment or deferred cancellation. Competing destructor failures preserve
+  the first failure; an existing unwind stays authoritative.
+  `unpublished_window_retires_native_resources_independently` covers these paths
+  and subsequent frame delivery. Containment does not rescue multiple panicking
+  destructors within one opaque driver or handler aggregate.
+  Native window closure is owned throughout preparation, pending publication and
+  initialization. Only successful initialization releases that obligation;
+  dropping an unfinished installation closes its retained window, even when a
+  caller still holds another native handle.
+  `unfinished_installation_closes_its_native_window` covers pre-submit abandonment
+  and deferred receipt cancellation through real headless close callbacks.
+  Development-agent notification belongs to the installation, not the frame
+  driver. Native initialization may synchronously close the window or tear down
+  the host; joint membership and native closure are rechecked before handing the
+  agent its window and again after the hook before reporting readiness.
+  `agent_notification_follows_live_native_initialization` covers native close,
+  teardown, initialization failure, closure from the hook and subsequent frame
+  delivery through the private native-initialization seam. It does not establish
+  operating-system activation behavior.
+
+- **Quit is a closed operation.** The host stops installed runtimes in mount
+  order and restores each checkout before continuing. A failing lifecycle
+  listener cannot skip a sibling; reentrant work waits until notifications
+  finish. `panicking_stop_notifies_siblings_and_restores_runtime_delivery`
+  covers individual and competing listener failures and subsequent delivery.
+
+- **Recovery does not start new windows.** Owner completion still retires native
+  resources and settles terminal notifications after a failure, but leaves
+  new main/secondary installation work for a healthy owner opportunity.
+  An already-published secondary installation still settles its receipt and
+  releases its loop-liveness reservation during recovery.
+  `owner_failure_defers_new_window_work_until_recovery` asserts the original
+  failure, no premature installer call, and delivery of the retained request.
+
+- **Native roots preserve accepted event order.** A fresh input or window event
+  joins the existing owner FIFO, including when a continuation has been posted
+  or failed. A physical callback spends its shared budget on that FIFO; it cannot
+  prioritize a new key over older metrics, lifecycle or input. A keyboard reply
+  unavailable before the native callback returns suppresses native default
+  handling. `native_keyboard_cannot_overtake_queued_window_changes_and_keys`
+  exercises the installed input callback and surface-metrics application;
+  `carried_work_shares_one_callback_budget_across_runtimes` pins bounded progress.
 - **Prepare windows before publishing membership.** Native identity reads and
   presentation assembly run outside `APP_RUNTIME` borrows. Assembly can reenter
   the host, so shared installation revalidates the exact authorizing presentation
@@ -23,6 +108,21 @@ the dispatch layer moves there too.
   and `DirectSink` (the web runner). `DirectSink` alone maps `EngineError`s to
   `SubmitVerdict`s for the web runner; the UI runtime's own tests script verdicts
   and never reach it.
+- **Resize uses the installed driver's lifetime.** Addressed resize checks out
+  the same native driver as frame delivery. Its strong lease restores the exact
+  registration or retires it after reentrant teardown, without consulting TLS.
+  A sibling presentation cannot resize that driver's surface. Desktop, Android
+  and iOS clone the raster resize hook under the lane guard and apply it after
+  releasing the guard; web preserves canvas rounding at fractional DPR.
+  `resize_uses_the_installed_driver_lease_through_failure_and_teardown` pins
+  retry, reentrant teardown, competing resource failure and subsequent delivery.
+- **Native operations retain their owning registry.** `NativeBindings` owns window
+  routes, frame drivers and close-request registrations. Frame and resize hold it
+  through lease return, even when callbacks release the last external handle.
+  Final release withdraws routes and retires resources independently, preserving
+  the first failure. An outliving close-request router retains no old handlers.
+  `native_operation_retains_owners_after_the_last_external_handle_is_released`
+  covers normal release and competing operation, driver and handler failures.
 - **Transient render failure retains demand.** Both sinks distinguish `Retry`
   from terminal `Failed` and device recovery. The raster completion publishes
   retry debt reliably even when telemetry acks are full; the UI runtime retains epochs
@@ -45,7 +145,7 @@ the dispatch layer moves there too.
   binding refusal, reentrant teardown, competing failures and close-time
   publication through a private driver seam without requiring a native GPU.
   Android and web register native close and platform quit through
-  `install_single_window_terminal_wiring`; the same table invokes both callbacks
+  `WindowInstall::terminal_callbacks`; the same table invokes both callbacks
   through the headless platform and refuses publication after either terminal
   notification. This tests callback wiring, not native GPU destruction or browser
   execution.
@@ -58,9 +158,11 @@ the dispatch layer moves there too.
   scene. `retiring_a_handler_preserves_its_reentrant_registration` pins that a
   handler installed during an outgoing capture's destruction remains registered.
 - **Owner events describe observations, not executable callbacks.**
-  `RuntimeTask::Event(RuntimeEvent)` carries native input/lifecycle/metrics and
-  host font or surface-restoration notifications through the same addressed
-  FIFO. `FontsChanged` invalidates all presentations; `PrimarySurfaceRestored`
+  `RuntimeTask::Event(RuntimeEvent)` carries presentation input and window state.
+  `RuntimeDispatcher` carries fonts, host lifecycle and background work by
+  `UiRuntimeId`; closing its original window does not revoke runtime authority.
+  Both use one FIFO and physical callback budget. `FontsChanged` invalidates all
+  presentations; `PrimarySurfaceRestored`
   requests a full repaint of the primary, which owns the current UI runtime sink.
   Native surface callbacks release their raster-lane guard before dispatch.
   `TestCallback` exists only under `cfg(test)` for private failure injection.
@@ -69,6 +171,9 @@ the dispatch layer moves there too.
   `owner_dispatch_matrix` pins font registration fan-out/reentry and
   `recovered_surface_notification_resubmits_the_scene` pins a real scene
   submission after an idle frame, rather than a dirty-flag change.
+  `font_notification_survives_the_primary_window_closing_before_delivery`
+  separates font invalidation from redraw caused by close. Background polling
+  also survives primary close and rejects a replaced runtime incarnation.
 - **Device recovery brackets the pump.** On desktop, Android and iOS,
   `pump_with_device_recovery` runs its pre-frame recovery attempt before the
   pump's begin frame and its post-frame attempt after the post-frame
@@ -81,11 +186,11 @@ the dispatch layer moves there too.
   microtasks, the async poll and post-frame callbacks run under it. That is
   safe because nothing in those phases reaches a lane lock on the owner
   thread synchronously. The other lane lock sites are the frame wake's own
-  `try_lock` (which skips a frame rather than wait), the resize hook's
-  construction at bootstrap, and the surface-status callbacks on Android and
+  `try_lock` (which skips a frame rather than wait), the addressed resize driver's
+  short acquisition of its resize hook, and the surface-status callbacks on Android and
   iOS, which the platform delivers as their own event, never from inside a
   UI runtime frame; a same-UI runtime dispatch a callback makes is queued, not run
-  inline. On web, the renderer slot's other users are the surface applier
+  inline. On web, the renderer slot's other users are the driver's resize operation
   (run from a queued `Resized` dispatch) and the recovery future (spawned,
   so it runs after the frame callback returns). A new lane lock site
   reachable from user code inside a frame must be a `try_lock` or live
@@ -129,8 +234,8 @@ the dispatch layer moves there too.
 Desktop primary and secondary windows and UIKit submit their initial execution,
 focus and visibility as one `WindowSnapshot` event after registering callbacks.
 The queue entry supplies its exact presentation incarnation; the payload cannot
-capture a different target. Android host lifecycle callbacks use the existing
-`Lifecycle` event. These paths no longer allocate arbitrary UI runtime closures.
+capture a different target. Android host lifecycle callbacks use runtime-scoped
+`RuntimeDispatcher::lifecycle`. These paths carry closed operations.
 
 Snapshots and lifecycle transitions stay lossless and ordered. A suspended or
 unfocused observation can cancel pointer sequences and notify lifecycle listeners;
@@ -200,16 +305,15 @@ required. Scene migration and background owner waking remain explicit follow-ups
 
 ### UIKit process and session ownership
 
-The owner-only background turn is a typed `BackgroundPump`, not a captured
-callback: drain the addressed UI runtime's owner inbox, then poll its async driver
+The owner-only background turn drains the addressed UI runtime's owner inbox,
+then polls its async driver
 without a frame. Poll-generated commands remain for the next owner opportunity.
-It uses the existing exact-address close fence and finite FIFO budget; nested
+It uses runtime incarnation authority and the shared finite FIFO budget; nested
 wakes enqueue rather than recursively poll. Background operations remain lossless
-and are not coalesced across other operations. This adds no public scheduling
-contract or driver registry; renderer-capturing frame callbacks still require
-registration-owned drivers before the owner host can move into the runtime.
-The dispatcher tests exercise inbox ordering, async polling and reentrant close
-admission through this same production operation.
+and are not coalesced across other operations. Closing one presentation preserves
+background work for the surviving runtime; removing the runtime revokes it.
+`background_owner_pump_drains_before_polling_without_a_frame` exercises inbox
+ordering, async polling after primary close and refusal after runtime replacement.
 
 The UIKit runner starts services, execution pools and its development watcher
 once per process. Its private session controller installs a real UI runtime only for

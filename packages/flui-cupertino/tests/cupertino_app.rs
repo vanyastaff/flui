@@ -37,6 +37,8 @@ struct Observed {
     brightness: Brightness,
     published_primary: CupertinoColor,
     label_resolved_here: Color,
+    text_color: Option<Color>,
+    action_color: Option<Color>,
 }
 
 #[derive(Clone, Debug, StatelessView)]
@@ -50,6 +52,11 @@ impl StatelessView for Probe {
             brightness: CupertinoTheme::brightness_of(ctx),
             published_primary: CupertinoTheme::of(ctx).primary_color(),
             label_resolved_here: CupertinoColor::Dynamic(CupertinoColors::LABEL).resolve(ctx),
+            text_color: CupertinoTheme::of(ctx).text_theme().text_style().color,
+            action_color: CupertinoTheme::of(ctx)
+                .text_theme()
+                .action_text_style()
+                .color,
         });
         SizedBox::shrink()
     }
@@ -183,4 +190,50 @@ pub fn a_live_brightness_republish_re_resolves_the_theme() {
         CupertinoColor::Static(SYSTEM_BLUE_DARK),
         "a live platform-brightness change must re-materialize the published theme"
     );
+}
+
+pub fn explicit_app_brightness_applies_to_live_contrast_colors() {
+    let source = Rc::new(BrightnessSource::default());
+    let (probe, captured) = probe();
+    let mut tree = lay_out(
+        BrightnessRoot {
+            source: Rc::clone(&source),
+            child: CupertinoApp::new(probe)
+                .theme(CupertinoThemeData::default().with_brightness(Brightness::Dark))
+                .boxed(),
+        },
+        loose(800.0),
+    );
+    assert_eq!(
+        observed(&captured).published_primary,
+        CupertinoColor::Static(SYSTEM_BLUE_DARK)
+    );
+    for contrast in [true, false] {
+        source.data.borrow_mut().high_contrast = contrast;
+        source.set_brightness(Brightness::Light);
+        tree.tick();
+        let seen = observed(&captured);
+        assert_eq!(seen.brightness, Brightness::Dark);
+        assert_eq!(
+            seen.text_color,
+            Some(Color::rgb(255, 255, 255)),
+            "text roles use explicit dark brightness"
+        );
+        assert_eq!(
+            seen.action_color,
+            Some(if contrast {
+                Color::rgb(64, 156, 255)
+            } else {
+                SYSTEM_BLUE_DARK
+            })
+        );
+        assert_eq!(
+            seen.published_primary,
+            CupertinoColor::Static(if contrast {
+                Color::rgb(64, 156, 255)
+            } else {
+                SYSTEM_BLUE_DARK
+            })
+        );
+    }
 }

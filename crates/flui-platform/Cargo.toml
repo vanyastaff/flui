@@ -93,6 +93,9 @@ static_assertions = { workspace = true }
 # Windows platform
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { workspace = true, features = [
+    "Foundation",
+    "UI_ViewManagement",
+    "Win32_System_WinRT",
     "Win32_Foundation",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
@@ -108,6 +111,7 @@ windows = { workspace = true, features = [
     "Win32_System_Memory",
     "Win32_System_Ole",
     "Win32_System_Threading",
+    "Win32_Security",
     # TSF: the thread manager, document managers and the `ITextStoreACP`
     # text store (ADR-0090 §3). `Win32_UI_Input_Ime` (IMM32) stays off: the
     # text services are the only IME path. `Variant` is required by the

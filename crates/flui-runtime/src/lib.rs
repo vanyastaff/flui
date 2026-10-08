@@ -23,8 +23,6 @@
 //!   derivation;
 //! - [`frame_failure`]: what a contained frame failure reports and how the
 //!   application's handler disposes of it;
-//! - [`media_query_root`]: the `MediaQuery` a UI runtime installs above each root
-//!   widget;
 //! - [`renderer_binding`]: the per-presentation rendering binding over a
 //!   pipeline owner;
 //! - [`epoch`]: the tree revision a presentation's frames advance and whether
@@ -56,7 +54,8 @@ pub mod execution;
 pub mod frame_failure;
 pub mod held_input;
 pub mod lifecycle_state;
-pub mod media_query_root;
+mod media_query_root;
+pub mod owner;
 pub mod performance_stats;
 pub mod presentation;
 mod presentation_forest;

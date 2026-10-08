@@ -11,6 +11,21 @@ host.
 
 ## Invariants
 
+- **Preference projection is updated with the accepted snapshot.** Root media
+  publication derives text scale and contrast together. Unknown contrast uses
+  normal contrast without altering the raw host observation. The mounted row
+  `resize_and_surface_restore_reach_the_product_frame` checks contrast changes,
+  unknown fallback and the seed seen by a later runtime's first build.
+
+- **Rebuild delivery is assembled before mount.** Every presentation connects
+  its build owner and widgets binding to the scheduler and its own weak window
+  before creating elements. Rebuild handles capture that hook when mounted;
+  installing it later in a runner leaves existing handles without a wake.
+  `preference_fanout_survives_a_failing_runtime` observes the wake before driving
+  a frame, and covers competing wake/completion failures, sibling delivery and
+  the next preference update. `queued_state_bursts_coalesce_between_observing_frames`
+  pins preference snapshots on opposite sides of a queued frame boundary.
+
 - **Assembly is separate from publication.** `UiRuntime::presentation_factory`
   captures the capabilities for assembling another presentation without keeping
   the runtime borrowed. Its scheduler reference is weak; assembly temporarily
@@ -38,7 +53,7 @@ host.
   `OwnerHost` is `!Send + !Sync` and owns only the UI runtime registry, one
   host-wide FIFO of typed operations carrying `PresentationAddress`, UI runtime
   checkout/restore state and deferred UI runtime-map mutations. It owns no TLS,
-  native-window registry, platform capability, surface applier, engine/raster
+  native-window registry, platform capability, native resize driver, engine/raster
   object, application service or execution-pool lifetime. `flui-app`'s sole
   `APP_RUNTIME` trampoline contains it beside those host-only owners.
 - **Owner work is non-reentrant across UI runtimes.** A reentrant operation for any
@@ -70,6 +85,27 @@ host.
   cross-thread path; an owner-local dispatcher is `!Send` and appends to the
   same FIFO. Operation-specific admission distinguishes lossless transitions,
   latest-value state and edge-coalesced wakes.
+- **Pending window state batches stop at observable operations.** Adjacent metrics,
+  safe-area and brightness updates for one exact presentation retain the latest
+  values together. Input, frames, lifecycle, close and another presentation's work
+  terminate the batch. Size and DPI are one value, and native resize precedes the
+  media-query update. No executing operation is replaced or delayed to collect a
+  batch. `queued_state_bursts_coalesce_between_observing_frames` and
+  `pending_metrics_do_not_cross_ordered_operations` pin this owner-admission policy;
+  pointer-motion sampling remains the interaction layer's responsibility.
+  A failed native resize leaves its size/DPI pair unpublished but does not discard
+  the batch's accepted safe-area and appearance values. State publication and
+  redraw settlement preserve the first failure across competing wake and owner
+  completion failures. `resize_failure_preserves_other_batched_window_state`
+  reads those values through a mounted `MediaQuery` consumer, then renders a
+  subsequent successful resize.
+- **Inherited window data is runtime-owned.** Hosts do not obtain the mutable
+  `MediaQuerySource`. A direct `set_device_pixel_ratio_for` updates both render
+  scale and inherited data; the native resize batch uses an internal render-only
+  step before publishing the complete accepted size/DPI/appearance batch.
+  `resize_and_surface_restore_reach_the_product_frame` reads the new ratio from
+  a mounted consumer after either entry. The headless host uses that same direct
+  scale entry without separately repairing the inherited state.
 - **Every entry composes every presentation.** `UiRuntime::enter` activates a
   `GlobalKey` registry composite over all the UI runtime's presentations for the
   whole dynamic extent of the call, closing included. A binding whose own

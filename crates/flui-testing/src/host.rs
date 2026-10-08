@@ -827,9 +827,6 @@ impl HeadlessHost {
         }
         self.ui_runtime.enter(|ui_runtime| {
             ui_runtime.set_device_pixel_ratio_for(window.0, scale_factor);
-            if let Some(source) = ui_runtime.media_query_for(window.0) {
-                source.update(|data| data.device_pixel_ratio = scale_factor);
-            }
             ui_runtime.request_redraw();
         });
     }

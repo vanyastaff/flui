@@ -26,9 +26,12 @@ mod fonts;
 mod frame_driver;
 mod frame_pacing;
 mod host;
+mod installed_host;
 #[cfg(target_os = "ios")]
 pub(super) mod ios;
+mod native_bindings;
 mod native_retirement;
+mod window_install;
 
 mod owner_dispatch;
 // Unconditional, like `device_recovery` above: the backoff's trait and
@@ -58,12 +61,10 @@ pub use android::{run_app_android, run_app_android_with_config};
 ))]
 use desktop::run_desktop;
 pub use fonts::{FontRegistrationError, register_font};
-pub(in crate::app) use frame_driver::FrameDrivers;
 pub(crate) use host::{OwnerHostClearGuard, install_owner_platform, with_owner_platform};
+pub(in crate::app) use installed_host::InstalledHost;
 #[cfg(target_os = "ios")]
 pub use ios::{run_app_ios, run_app_ios_with_config};
-pub(in crate::app) use native_retirement::NativeRetirement;
-pub(in crate::app) use owner_dispatch::{PresentationDispatcher, RuntimeTask, SurfaceApplier};
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
@@ -103,66 +104,6 @@ fn text_store_host_of(
     window: &std::sync::Arc<dyn flui_platform::traits::HostWindow>,
 ) -> Option<std::rc::Rc<dyn flui_platform_api::TextStoreHost>> {
     host::with_owner_platform(|owner| owner.text_store_host(window)).flatten()
-}
-
-/// Wire one presentation into the close-request seam (issue #558):
-/// register it with this loop's router, then install the
-/// `on_should_close` callback that consults the router when the platform
-/// asks whether the window may close.
-///
-/// The single implementation every window this crate opens goes through —
-/// `run_desktop`'s primary and `open_secondary_window`'s new window under
-/// either [`WindowPolicy`](crate::WindowPolicy) — and the one a test drives
-/// too, rather than each site (or a test harness) hand-rolling the same two
-/// steps and drifting.
-///
-/// Registration is unconditional, whether or not `handler` is `Some`: the
-/// entry is also what makes the window closable through
-/// [`request_presentation_close`], which is how an application finishes a
-/// close it kept open.
-///
-/// The router is cloned into the callback rather than resolved from
-/// `APP_RUNTIME` at fire time. That is load-bearing: a close request can
-/// arrive while this UI runtime is checked out for dispatch, and a router
-/// reached through the thread-local would then have to fail closed on a
-/// bookkeeping detail the application never asked about.
-///
-/// This is the FIRST of the two vetoes a close passes, and the ordering is
-/// causal rather than chosen — see
-/// [`CloseRequestRouter::consult`](crate::app::close_request::CloseRequestRouter::consult)'s
-/// own doc.
-#[cfg_attr(
-    not(any(
-        test,
-        all(
-            not(target_os = "android"),
-            not(target_os = "ios"),
-            not(target_arch = "wasm32")
-        )
-    )),
-    expect(
-        dead_code,
-        reason = "its production callers (run_desktop, open_secondary_window) are desktop-only \
-                  -- android/wasm32 have no close-request wiring yet"
-    )
-)]
-pub(crate) fn install_close_request_wiring(
-    address: flui_foundation::PresentationAddress,
-    window: &std::sync::Arc<dyn flui_platform::traits::PlatformWindow>,
-    handler: Option<crate::app::close_request::CloseRequestHandler>,
-) {
-    use crate::app::close_request::CloseResponse;
-
-    let router = host::APP_RUNTIME.with(|slot| slot.borrow().close_requests());
-    let previous = router.register(address, window, handler);
-
-    let consulting = std::sync::Arc::clone(&router);
-    window.on_should_close(Box::new(move || {
-        let response = consulting.consult(address, crate::app::close_request::CloseReason::User);
-        tracing::debug!(?address, ?response, "window close requested");
-        matches!(response, CloseResponse::Close)
-    }));
-    drop(previous);
 }
 
 /// Close the window at `address` programmatically, bypassing its

@@ -31,7 +31,9 @@ PresentationState (per-window, private to flui-app)
 AppRuntime (loop-scoped composition root)
     ├── SharedEngineServices        — painting/accessibility, resolved once per owner thread
     ├── frame-wake + platform clipboard
-    └── RuntimeRegistry               — any number of UiRuntimeId-keyed UI runtimes
+    └── InstalledHost
+        ├── OwnerHost (flui-runtime) — runtime membership and ordered logical delivery
+        └── NativeBindings          — windows, frame drivers and close handlers
 ```
 
 - **Entry points** — `run_app` / `run_app_with_config` bootstrap a platform

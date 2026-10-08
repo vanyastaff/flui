@@ -91,8 +91,8 @@ impl StatelessView for FailingSizeReader {
 /// Stops parent-driven rebuilds so only dependency notifications reach the
 /// leaves.
 #[derive(Clone)]
-struct StaticChild {
-    inner: BoxedView,
+pub(crate) struct StaticChild {
+    pub(crate) inner: BoxedView,
 }
 
 impl View for StaticChild {
@@ -178,6 +178,49 @@ pub(crate) fn a_size_only_change_rebuilds_size_and_whole_readers_only() {
         [2, 1, 2, 1],
         "size changed: the size reader and the whole-of reader rebuild; \
          the text-scale reader and the non-dependent do not"
+    );
+}
+
+/// Provider updates must reach retained text through its inherited dependency.
+pub(crate) fn a_text_scale_change_relayouts_a_preserved_text_subtree() {
+    use flui_painting::typography::TextStyle;
+    use flui_view::ViewExt;
+    use flui_widgets::Text;
+
+    let child = || StaticChild {
+        inner: Text::new("retained paragraph")
+            .style(TextStyle::default().with_font_size(16.0))
+            .boxed(),
+    };
+    let mut laid = lay_out(MediaQuery::new(data(800.0, 1.0), child()), loose(4000.0));
+    let original = laid.size(laid.root());
+    laid.pump_widget(MediaQuery::new(data(800.0, 2.0), child()));
+    let enlarged = laid.size(laid.root());
+    assert!(
+        enlarged.height > original.height * 1.5,
+        "a scale update must re-layout retained text: original={original:?}, enlarged={enlarged:?}"
+    );
+    laid.pump_widget(MediaQuery::new(data(800.0, 1.0), child()));
+    assert_eq!(
+        laid.size(laid.root()),
+        original,
+        "restoring the preference must resolve from the original authored size"
+    );
+
+    let overridden_child = || StaticChild {
+        inner: MediaQuery::new(data(800.0, 1.5), child()).boxed(),
+    };
+    let mut overridden = lay_out(
+        MediaQuery::new(data(800.0, 1.0), overridden_child()),
+        loose(4000.0),
+    );
+    let override_size = overridden.size(overridden.root());
+    assert!(override_size.height > original.height);
+    overridden.pump_widget(MediaQuery::new(data(800.0, 2.0), overridden_child()));
+    assert_eq!(
+        overridden.size(overridden.root()),
+        override_size,
+        "an outer preference update must preserve the subtree's explicit sizing"
     );
 }
 

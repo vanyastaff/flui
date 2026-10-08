@@ -7,7 +7,7 @@ use super::host::{
 };
 use super::owner_dispatch::{
     RuntimeEvent, RuntimeTask, dispatch_platform_ui_runtime, install_input_wiring,
-    install_platform_ui_runtime, install_single_window_terminal_wiring, install_surface_applier,
+    prepare_platform_ui_runtime,
 };
 use crate::app::AppConfig;
 
@@ -117,71 +117,22 @@ where
             tracing::error!("Root widget attach failed: {:?}", e);
             return Err(anyhow::anyhow!(e).context("Root widget attach failed"));
         }
-        let owner_dispatch = install_platform_ui_runtime(ui_runtime, &window);
-
-        // Install the registration-lifetime surface applier alongside the
-        // ui_runtime (cleared together at teardown) — see the desktop bootstrap's
-        // matching comment for the take/call/restore protocol this feeds.
-        {
-            let renderer_resize = Arc::clone(&renderer);
-            install_surface_applier(
-                owner_dispatch.address.ui_runtime_id,
-                move |size, scale_factor| {
-                    if let Some(renderer) = renderer_resize.lock().as_mut() {
-                        // Rounded like the backend's `physical_size` and
-                        // the canvas backing store it sets, so all three
-                        // agree at fractional device pixel ratios.
-                        let width = (size.width * scale_factor).round() as u32;
-                        let height = (size.height * scale_factor).round() as u32;
-                        renderer.resize(width, height);
-                    }
-                },
-            );
-        }
+        let mut installation = prepare_platform_ui_runtime(ui_runtime, Arc::clone(&window));
+        let owner_dispatch = installation.dispatcher();
 
         // 4. Register input callback
         install_input_wiring(owner_dispatch, window.as_ref());
 
-        let frame = super::frame_driver::install_frame_driver(
-            owner_dispatch,
-            super::frame_driver::FrameDriver::Web(WebFrameDriver {
+        let frame =
+            installation.frame_driver(super::frame_driver::FrameDriver::Web(WebFrameDriver {
                 renderer: Arc::clone(&renderer),
-            }),
-        )?;
+                window: Arc::clone(&window),
+            }))?;
         let binding = frame.binding;
-        let initialization_authority = frame.liveness;
-        let renderer_init = Arc::clone(&renderer);
-        let renderer_window = Arc::clone(&window);
-        let phys_size = window.physical_size();
-        wasm_bindgen_futures::spawn_local(async move {
-            if !initialization_authority.is_live() {
-                return;
-            }
-            // The future keeps the native target alive without granting it
-            // authority to publish into a retired registration.
-            let mut renderer = match Renderer::new(Arc::clone(&renderer_window)).await {
-                Ok(renderer) => renderer,
-                Err(error) => {
-                    tracing::error!(%error, "GPU initialization failed");
-                    return;
-                }
-            };
-            if !initialization_authority.is_live() {
-                return;
-            }
-            renderer.resize(phys_size.width as u32, phys_size.height as u32);
-            match initialization_authority.publish(&renderer_init, renderer) {
-                Ok(previous) => drop(previous),
-                Err(renderer) => {
-                    drop(renderer);
-                    return;
-                }
-            }
-            tracing::info!("WebGPU renderer initialized");
-        });
         window.on_request_frame(Box::new(move || {
-            let _owner_callback = super::owner_dispatch::begin_owner_callback();
-            let _ = dispatch_platform_ui_runtime(owner_dispatch, RuntimeTask::Frame(binding));
+            super::owner_dispatch::with_owner_callback(|_| {
+                let _ = dispatch_platform_ui_runtime(owner_dispatch, RuntimeTask::Frame(binding));
+            });
         }));
 
         window.on_resize(Box::new(move |size, scale_factor| {
@@ -193,7 +144,7 @@ where
 
         // 6. Terminal callbacks close the binding before lifecycle observers.
         owner_platform_installed(|owner| {
-            install_single_window_terminal_wiring(&window, &owner.shared(), owner_dispatch);
+            installation.terminal_callbacks(&owner.shared());
         });
 
         // No `on_visibility_status_change` registration on web (yet): there is
@@ -220,6 +171,10 @@ where
         // marking the lifecycle Resumed, which can synchronously run the
         // first frame through `dispatch_platform_ui_runtime`; anything resolving
         // the slot during that frame must not see it empty.
+        installation.observe(flui_runtime::owner::WindowObservation::Metrics {
+            size: window.logical_size(),
+            scale_factor: window.scale_factor(),
+        });
         APP_RUNTIME.with(|slot| slot.borrow().set_redraw_window(window));
 
         debug_assert_eq!(
@@ -228,10 +183,11 @@ where
             "web bootstrap must run on the ui_runtime's owner thread"
         );
         // Routed through dispatch -- see `run_desktop`'s matching comment.
-        let _ = dispatch_platform_ui_runtime(
-            owner_dispatch,
-            RuntimeTask::Event(RuntimeEvent::Lifecycle(AppLifecycleState::Resumed)),
-        );
+        installation.lifecycle(AppLifecycleState::Resumed);
+        installation
+            .submit()
+            .outcome()
+            .expect("BUG: the fresh web host completes its initial installation synchronously")?;
 
         tracing::info!("Web platform initialized with callbacks");
         Ok(())
@@ -263,9 +219,51 @@ where
 
 pub(super) struct WebFrameDriver {
     renderer: std::sync::Arc<parking_lot::Mutex<Option<flui_engine::Renderer>>>,
+    window: std::sync::Arc<dyn flui_platform::traits::PlatformWindow>,
 }
 
 impl WebFrameDriver {
+    pub(super) fn installed(&mut self, authority: super::frame_driver::FrameLiveness) {
+        use std::sync::Arc;
+        let renderer_slot = Arc::clone(&self.renderer);
+        let window = Arc::clone(&self.window);
+        wasm_bindgen_futures::spawn_local(async move {
+            if !authority.is_live() {
+                return;
+            }
+            let mut renderer = match flui_engine::Renderer::new(Arc::clone(&window)).await {
+                Ok(renderer) => renderer,
+                Err(error) => {
+                    tracing::error!(%error, "GPU initialization failed");
+                    return;
+                }
+            };
+            if !authority.is_live() {
+                return;
+            }
+            // Adapter initialization may span many native resizes.
+            let size = window.physical_size();
+            renderer.resize(size.width as u32, size.height as u32);
+            match authority.publish(&renderer_slot, renderer) {
+                Ok(previous) => drop(previous),
+                Err(renderer) => {
+                    drop(renderer);
+                    return;
+                }
+            }
+            window.request_redraw();
+            tracing::info!("WebGPU renderer initialized");
+        });
+    }
+    pub(super) fn resize(&mut self, size: flui_foundation::geometry::Size<f64>, scale_factor: f64) {
+        if let Some(renderer) = self.renderer.lock().as_mut() {
+            // Match the browser canvas backing store at fractional DPR.
+            renderer.resize(
+                (size.width * scale_factor).round() as u32,
+                (size.height * scale_factor).round() as u32,
+            );
+        }
+    }
     pub(super) fn wake(
         &mut self,
         ui_runtime: &mut crate::app::ui_runtime::UiRuntime,

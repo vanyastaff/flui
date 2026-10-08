@@ -78,6 +78,18 @@ impl RenderParagraph {
         self
     }
 
+    /// Updates accessibility sizing and invalidates paragraph geometry.
+    pub fn set_text_scale_factor(&mut self, factor: f64) -> flui_rendering::RenderUpdateImpact {
+        let previous = self.painter.text_scale_factor();
+        self.painter.set_text_scale_factor(factor);
+        if self.painter.text_scale_factor() == previous {
+            flui_rendering::RenderUpdateImpact::NONE
+        } else {
+            flui_rendering::RenderUpdateImpact::LAYOUT
+                | flui_rendering::RenderUpdateImpact::SEMANTICS
+        }
+    }
+
     /// Disables line wrapping (builder form) — the text lays out at unbounded
     /// width and may overflow the box.
     #[must_use]

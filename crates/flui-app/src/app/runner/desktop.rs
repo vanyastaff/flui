@@ -20,14 +20,14 @@ use super::host::{
 };
 use super::owner_dispatch::{
     PresentationDispatcher, RuntimeEvent, RuntimeTask, close_this_window,
-    dispatch_platform_ui_runtime, install_input_wiring, install_surface_applier,
-    install_ui_runtime_alongside,
+    dispatch_platform_ui_runtime, install_input_wiring, prepare_ui_runtime_alongside,
 };
 use crate::app::AppConfig;
 
 pub(super) struct RenderedMain {
     pub(super) window: Arc<dyn PlatformWindow>,
     pub(super) address: flui_foundation::PresentationAddress,
+    pub(super) installation: super::installed_host::Installation,
 }
 
 struct InstallRollback {
@@ -126,9 +126,7 @@ where
         Ok(ui_runtime) => ui_runtime,
         Err(e) => {
             tracing::error!(error = %e, "UiRuntime construction failed");
-            return Err(crate::app::AppWindowError::Mount {
-                source: Arc::new(e),
-            });
+            return Err(e);
         }
     };
 
@@ -162,45 +160,6 @@ where
         .as_ref()
         .and_then(|agent| agent.vend(&ui_runtime, ui_runtime.presentation_id()));
 
-    // 3b. Wire the wake chain (E0a).
-    //
-    // `on_need_frame` fires whenever `handle_build_scheduled` determines a new
-    // frame is required (e.g. after setState).  The closure calls `wake`
-    // which sets `needs_redraw` atomically AND calls `PlatformWindow::
-    // request_redraw()` so the winit event loop wakes from idle.
-    //
-    // Deadlock analysis:
-    // * `wake` acquires only the loop-scoped redraw-window leaf Mutex.
-    // * The closure is called from `handle_build_scheduled`, which holds no
-    //   `inner`/`widgets` lock (see `WidgetsBinding::handle_build_scheduled`
-    //   doc).
-    // * `on_need_frame` itself is a separate `RwLock` on `WidgetsBinding`,
-    //   never held across any `inner` critical section.
-    // Therefore: no lock ordering conflict.
-    {
-        let widgets = ui_runtime.widgets();
-        let wake = Arc::clone(&wake);
-        widgets.set_on_need_frame(move || wake());
-    }
-
-    // Wire `on_build_scheduled` on the BuildOwner so a dirty-element
-    // registration (e.g. from setState inside an element build) wakes the
-    // platform loop. The callback fires from inside `schedule_build_for`,
-    // which runs during a build while the ui_runtime's `widgets` write lock is
-    // held — so it must NOT re-lock `widgets`. It calls `wake`
-    // directly (the same effect as the `on_need_frame` callback above),
-    // which touches only the loop-scoped redraw-window leaf lock. The
-    // callback must not re-enter widget state while `BuildOwner` is
-    // scheduling; ui_runtime entry is reserved for the outer event/frame
-    // dispatch boundary.
-    {
-        let widgets = ui_runtime.widgets();
-        widgets.with_build_owner_mut(|build_owner| {
-            let wake = Arc::clone(&wake);
-            build_owner.set_on_build_scheduled(move || wake());
-        });
-    }
-
     // 3c. Construct the per-window owner and its bounded command inbox.
     // The wake is the existing chain: `wake_frame` sets
     // `needs_redraw` and queues a `RedrawRequested`, so a command sent to an
@@ -211,11 +170,8 @@ where
         inbox_capacity = ui_runtime.command_sender().capacity(),
         "UiRuntime constructed"
     );
-    let owner_dispatch = install_ui_runtime_alongside(ui_runtime, &window).map_err(|error| {
-        crate::app::AppWindowError::Mount {
-            source: Arc::new(error),
-        }
-    })?;
+    let mut installation = prepare_ui_runtime_alongside(ui_runtime, Arc::clone(&window));
+    let owner_dispatch = installation.dispatcher();
     rollback.dispatcher = Some(owner_dispatch);
 
     // 3c1. Wire this presentation into the close-request seam (issue
@@ -223,11 +179,7 @@ where
     // plus the entry that makes the window closable programmatically
     // afterwards. One shared implementation with
     // `open_secondary_window`'s window — see that function's own doc.
-    crate::app::runner::install_close_request_wiring(
-        owner_dispatch.address,
-        &window,
-        config.close_request_handler.clone(),
-    );
+    installation.close_requests(config.close_request_handler.clone());
 
     // 3c2. The frame-pacing fallback (ADR-0058): a non-blocking bound on
     // ticker-driven wakes that present nothing, anchored to this
@@ -273,10 +225,10 @@ where
             // needs live `APP_RUNTIME` state no pure function can carry.
             let frames_enabled = APP_RUNTIME.with(|slot| {
                 slot.borrow()
-                    .ui_runtimes
-                    .get(&ui_runtime_id)
-                    .and_then(|ui_runtime_slot| ui_runtime_slot.ui_runtime.as_ref())
-                    .is_some_and(|ui_runtime| ui_runtime.scheduler().frames_enabled())
+                    .installed_host
+                    .logical()
+                    .runtime_status(ui_runtime_id)
+                    .is_ok_and(|status| status.frames_enabled)
             });
             // Both secondary sources fold through the same
             // frames-enabled gate: a deferred ticker wake is worth
@@ -318,44 +270,25 @@ where
         phys_size.height as u32,
     )));
 
-    // Install the registration-lifetime surface applier alongside the
-    // ui_runtime (cleared together at teardown): a `Resized` event takes it
-    // out of the TLS slot, calls it, and restores it (see
-    // `RuntimeEvent::run`'s `Resized` arm) rather than capturing the
-    // lane inside the event payload itself. The hook mints the frame
-    // stamp's next `SurfaceGeneration` and records the platform's new
-    // size as layout's authority; the backend surface itself is
-    // reconfigured by the lane's next pump, before the next render.
-    {
-        let resize_hook = lane.lock().resize_hook();
-        install_surface_applier(
-            owner_dispatch.address.ui_runtime_id,
-            move |size, scale_factor| {
-                let w = (size.width * scale_factor) as u32;
-                let h = (size.height * scale_factor) as u32;
-                resize_hook.apply(w, h);
-            },
-        );
-    }
-
     // 5. Register input callback -> entered ui_runtime input dispatch
     install_input_wiring(owner_dispatch, window.as_ref());
 
     // Install frame resources once; native deliveries carry only their binding.
-    let frame = super::frame_driver::install_frame_driver(
-        owner_dispatch,
-        super::frame_driver::FrameDriver::Desktop(DesktopFrameDriver {
-            lane: Arc::clone(&lane),
-            worker_reload,
-            device_recovery_backoff,
-            fallback: Arc::clone(&fallback),
-            first_reveal: Arc::clone(&first_reveal),
-            reveal_window: Arc::downgrade(&window),
-        }),
-    )
-    .map_err(|error| crate::app::AppWindowError::Mount {
-        source: Arc::new(error),
-    })?;
+    installation.dev_agent(config.dev_agent.clone().zip(agent_window));
+    let frame = installation
+        .frame_driver(super::frame_driver::FrameDriver::Desktop(
+            DesktopFrameDriver {
+                lane: Arc::clone(&lane),
+                worker_reload,
+                device_recovery_backoff,
+                fallback: Arc::clone(&fallback),
+                first_reveal: Arc::clone(&first_reveal),
+                reveal_window: Arc::downgrade(&window),
+            },
+        ))
+        .map_err(|error| crate::app::AppWindowError::Mount {
+            source: Arc::new(error),
+        })?;
     let binding = frame.binding;
     window.on_request_frame(Box::new(move || {
         let _ = dispatch_platform_ui_runtime(owner_dispatch, RuntimeTask::Frame(binding));
@@ -410,7 +343,7 @@ where
     // `Platform::run` actually returns, for the clipboard/redraw-window
     // cleanup no per-window close performs.
     let closing_window_id = window.id();
-    window.on_close(Box::new(move || {
+    installation.on_close(move || {
         tracing::info!("Window closed");
         super::main_window::main_window_closing(owner_dispatch.address);
         let closed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -433,7 +366,7 @@ where
         if let Err(payload) = closed {
             std::panic::resume_unwind(payload);
         }
-    }));
+    });
 
     // No `on_should_close` registration here: step 3c1 above installed
     // it, together with the router entry it consults, so the two can
@@ -468,14 +401,11 @@ where
     let execution = window.execution_state();
     let focused = window.is_focused();
     let visible = window.is_visible();
-    let _ = dispatch_platform_ui_runtime(
-        owner_dispatch,
-        RuntimeTask::Event(RuntimeEvent::WindowSnapshot {
-            execution,
-            focused,
-            visible,
-        }),
-    );
+    installation.observe(flui_runtime::owner::WindowObservation::Snapshot {
+        execution,
+        focused,
+        visible,
+    });
 
     window.on_hover_status_change(Box::new(move |is_hovered| {
         let _ = dispatch_platform_ui_runtime(
@@ -498,21 +428,22 @@ where
     }));
     // Seed the initial brightness — a user on a dark desktop must not
     // start light until the first live theme flip.
-    let _ = dispatch_platform_ui_runtime(
-        owner_dispatch,
-        RuntimeTask::Event(RuntimeEvent::AppearanceChanged(window.appearance())),
-    );
+    installation.observe(flui_runtime::owner::WindowObservation::Brightness(
+        match window.appearance() {
+            flui_platform::WindowAppearance::Dark
+            | flui_platform::WindowAppearance::VibrantDark => flui_platform_api::Brightness::Dark,
+            flui_platform::WindowAppearance::Light
+            | flui_platform::WindowAppearance::VibrantLight => flui_platform_api::Brightness::Light,
+        },
+    ));
     // Seed the initial size and device-pixel ratio the same way: the
     // source must not sit on defaults until the first live resize —
     // on the web backend no resize observer exists, so a default
     // would be permanent there.
-    let _ = dispatch_platform_ui_runtime(
-        owner_dispatch,
-        RuntimeTask::Event(RuntimeEvent::Resized {
-            size: window.logical_size(),
-            scale_factor: window.scale_factor(),
-        }),
-    );
+    installation.observe(flui_runtime::owner::WindowObservation::Metrics {
+        size: window.logical_size(),
+        scale_factor: window.scale_factor(),
+    });
 
     // 9. Store the window in AppRuntime's redraw-poke slot — BEFORE
     // marking the lifecycle Resumed or requesting the initial redraw.
@@ -531,29 +462,16 @@ where
         owner_dispatch.owner_thread,
         "desktop bootstrap must run on the ui_runtime's owner thread"
     );
-    let _ = dispatch_platform_ui_runtime(
-        owner_dispatch,
-        RuntimeTask::Event(RuntimeEvent::Lifecycle(host_lifecycle)),
-    );
+    installation.lifecycle(host_lifecycle);
 
-    // 10. Request initial redraw, now that the window is stored.
-    // `wake` (not a direct `request_redraw()` on the window): it clones
-    // the window out from under the redraw-poke slot's lock before
-    // calling through, so a backend whose `request_redraw` re-enters
-    // this runtime synchronously (headless, in this crate's own tests)
-    // cannot deadlock on that same lock — the same clone-then-call
-    // discipline used by direct platform capabilities.
-    wake();
-
-    super::host::with_owner_platform(|owner| owner.activate(false));
-    tracing::info!("Desktop platform initialized with callbacks");
-    if let (Some(agent), Some(window)) = (config.dev_agent.as_ref(), agent_window) {
-        agent.window_opened(window);
-    }
+    // Publication applies the initial observations before waking or announcing
+    // the window. Reentrant callers retain the pending completion receipt.
+    let installation = installation.submit();
     rollback.committed = true;
     Ok(RenderedMain {
         window,
         address: owner_dispatch.address,
+        installation,
     })
 }
 
@@ -579,6 +497,17 @@ pub(super) struct DesktopFrameDriver {
 }
 
 impl DesktopFrameDriver {
+    pub(super) fn installed() {
+        super::host::with_owner_platform(|owner| owner.activate(false));
+        tracing::info!("Desktop platform initialized with callbacks");
+    }
+    pub(super) fn resize(&mut self, size: flui_foundation::geometry::Size<f64>, scale_factor: f64) {
+        let resize = self.lane.lock().resize_hook();
+        resize.apply(
+            (size.width * scale_factor) as u32,
+            (size.height * scale_factor) as u32,
+        );
+    }
     pub(super) fn wake(&mut self, ui_runtime: &mut crate::app::ui_runtime::UiRuntime) {
         let lane_frame = &self.lane;
         let worker_reload_frame = &self.worker_reload;

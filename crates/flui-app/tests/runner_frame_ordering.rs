@@ -17,10 +17,8 @@
 //! pump's command drain and frame clock; either turns this test red. It is a
 //! regression guard, not a proof of the mobile bodies' runtime behavior.
 
-/// Every source file of the `app/runner/` module, so the scans below cover
-/// the whole runner regardless of which file a frame site lives in — a
-/// fifth frame site added anywhere in the module is counted, not just one
-/// appearing next to the existing four.
+/// Backend frame producers and the runtime owner-operation executor. The iOS
+/// background wake reaches the latter through its typed runtime dispatcher.
 const RUNNER_SOURCES: &[&str] = &[
     include_str!("../src/app/runner/mod.rs"),
     include_str!("../src/app/runner/android.rs"),
@@ -32,6 +30,9 @@ const RUNNER_SOURCES: &[&str] = &[
     include_str!("../src/app/runner/frame_driver.rs"),
     include_str!("../src/app/runner/host.rs"),
     include_str!("../src/app/runner/owner_dispatch.rs"),
+    include_str!("../src/app/runner/installed_host.rs"),
+    include_str!("../src/app/runner/native_bindings.rs"),
+    include_str!("../../flui-runtime/src/owner/runtime_dispatch.rs"),
     include_str!("../src/app/runner/secondary_window.rs"),
     include_str!("../src/app/runner/web.rs"),
 ];
@@ -165,7 +166,7 @@ fn every_runner_frame_site_drives_the_ui_runtime_pump() {
 }
 
 /// Every background wake — each `WakeAction::PumpAsync` arm (desktop,
-/// Android, iOS, web) and iOS's owner turn — must pump the async driver
+/// Android, iOS, web) and the runtime owner turn used by iOS — must pump the async driver
 /// through `UiRuntime::pump_background`, which clears the `frame_scheduled`
 /// latch before polling; this pins that every arm reaches it. An arm that
 /// skips it silently stops a spawned future from advancing while the app is
