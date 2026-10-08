@@ -131,7 +131,6 @@ pub struct AndroidPlatform {
     capabilities: MobileCapabilities,
     input_state: Mutex<input::AndroidInputState>,
     owner_signal: Arc<OwnerSignal>,
-    preferences: Mutex<Option<crate::SystemPreferences>>,
     scroll_factors: Mutex<crate::shared::android_scroll::FactorCache>,
     preference_admission: crate::shared::preference_read::ReadAdmission,
 }
@@ -168,7 +167,6 @@ impl AndroidPlatform {
             capabilities: MobileCapabilities::android(),
             input_state: Mutex::new(input::AndroidInputState::default()),
             owner_signal,
-            preferences: Mutex::new(None),
             scroll_factors: Mutex::new(crate::shared::android_scroll::FactorCache::default()),
             preference_admission: crate::shared::preference_read::ReadAdmission::default(),
         }
@@ -190,19 +188,14 @@ impl AndroidPlatform {
                 message: "Android preferences require the activity owner thread".into(),
             });
         }
-        let attempt = self.preference_admission.begin(web_time::Instant::now())?;
-        let current =
-            preferences::sample(&self.app).map_err(|error| PlatformError::Preferences {
-                message: error.to_string(),
-            })?;
-        let changed = {
-            let mut accepted = self.preferences.lock();
-            let changed = accepted.as_ref() != Some(&current);
-            *accepted = Some(current.clone());
-            changed
-        };
-        attempt.accept();
-        if changed {
+        let (current, needs_delivery) =
+            self.preference_admission
+                .read_observation(web_time::Instant::now(), || {
+                    preferences::sample(&self.app).map_err(|error| PlatformError::Preferences {
+                        message: error.to_string(),
+                    })
+                })?;
+        if needs_delivery {
             let _ = self.owner_signal.wake();
         }
         Ok(current)

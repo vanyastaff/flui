@@ -164,8 +164,7 @@ impl MacOSPlatform {
 
             let loop_control =
                 super::loop_control::LoopControl::new(Arc::clone(&windows), Arc::clone(&handlers));
-            let preferences =
-                super::preferences::PreferenceSource::new(&loop_control.owner_signal)?;
+            let preferences = super::preferences::PreferenceSource::new(&loop_control.owner_signal);
             let platform = Self {
                 loop_control,
                 preferences,

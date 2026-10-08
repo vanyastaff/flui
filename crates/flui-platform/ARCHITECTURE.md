@@ -181,6 +181,16 @@ changes before subsequent input. AppKit timer captures hold only a weak source;
 owner closure or source retirement makes queued work inert. Its next attempt is
 armed before native work and contained diagnostics. Errors preserve the accepted
 observation and the next refresh attempt.
+AppKit installs this sampler before its first native getter. A cold source has
+no accepted observation; an initial query error cannot abort platform bootstrap,
+publish a fabricated default, or discard its retry. The shared production read
+path's `cold_native_observation_recovers_without_forged_defaults` covers failed
+initial observation, deferred retry, first successful publication and recovery
+without a stale-success response. This portable seam does not execute AppKit's
+native constructor or its GCD timer.
+Successful recovery requests owner delivery even when the comparison value is
+unchanged: a prior failed consumer read must not strand the accepted observation.
+Healthy unchanged observations remain quiet.
 Failed or unwinding native reads restore a 500ms admission deadline; unrelated
 owner wakes cannot repeat the getter early. Reentrant reads return
 `PreferencesDeferred` before native work, and foreign calls do not affect that

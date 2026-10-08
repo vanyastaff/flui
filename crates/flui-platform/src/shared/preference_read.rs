@@ -9,6 +9,7 @@ const RETRY_INTERVAL: Duration = Duration::from_millis(500);
 #[derive(Default)]
 pub(crate) struct ReadAdmission {
     state: Mutex<State>,
+    accepted: Mutex<Option<crate::SystemPreferences>>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -20,6 +21,29 @@ enum State {
 }
 
 impl ReadAdmission {
+    /// Read and commit a native observation before outgoing notification. A
+    /// cold source has no accepted value; errors never manufacture one or return
+    /// an older accepted value as a successful refresh. The returned flag
+    /// requests owner delivery after either a changed observation or a recovered
+    /// read obligation; healthy unchanged reads remain quiet.
+    pub(crate) fn read_observation(
+        &self,
+        now: web_time::Instant,
+        sample: impl FnOnce() -> Result<crate::SystemPreferences, PlatformError>,
+    ) -> Result<(crate::SystemPreferences, bool), PlatformError> {
+        let attempt = self.begin(now)?;
+        let recovering = attempt.recovering;
+        let current = sample()?;
+        let changed = {
+            let mut accepted = self.accepted.lock();
+            let changed = accepted.as_ref() != Some(&current);
+            *accepted = Some(current.clone());
+            changed
+        };
+        attempt.accept();
+        Ok((current, changed || recovering))
+    }
+
     pub(crate) fn begin(&self, now: web_time::Instant) -> Result<ReadAttempt<'_>, PlatformError> {
         let mut state = self.state.lock();
         match *state {
@@ -29,11 +53,13 @@ impl ReadAdmission {
             }
             State::Ready | State::RetryAt(_) => {}
         }
+        let recovering = matches!(*state, State::RetryAt(_));
         *state = State::Reading;
         Ok(ReadAttempt {
             admission: self,
             now,
             accepted: false,
+            recovering,
         })
     }
 }
@@ -42,6 +68,7 @@ pub(crate) struct ReadAttempt<'a> {
     admission: &'a ReadAdmission,
     now: web_time::Instant,
     accepted: bool,
+    recovering: bool,
 }
 
 impl ReadAttempt<'_> {
@@ -65,6 +92,66 @@ impl Drop for ReadAttempt<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cold_native_observation_recovers_without_forged_defaults() {
+        let now = web_time::Instant::now();
+        let cold = ReadAdmission::default();
+        let (_, needs_delivery) = cold
+            .read_observation(now, || Ok(crate::SystemPreferences::default()))
+            .expect("first legitimate unknown observation");
+        assert!(
+            needs_delivery,
+            "an unknown observation is accepted only after the first successful query"
+        );
+        let reader = ReadAdmission::default();
+        let failed = reader.read_observation(now, || {
+            Err(PlatformError::Preferences {
+                message: "initial getter failure".into(),
+            })
+        });
+        assert!(matches!(failed, Err(PlatformError::Preferences { .. })));
+        assert!(matches!(
+            reader.read_observation(now, || panic!("early native retry")),
+            Err(PlatformError::PreferencesDeferred)
+        ));
+        let observation = crate::SystemPreferences::default().with_gestures(
+            crate::GesturePreferences::default()
+                .with_double_click_interval(Duration::from_millis(700)),
+        );
+        let (accepted, needs_delivery) = reader
+            .read_observation(now + RETRY_INTERVAL, || Ok(observation.clone()))
+            .expect("first accepted native observation");
+        assert_eq!(accepted, observation);
+        assert!(
+            needs_delivery,
+            "cold source must notify its first accepted observation"
+        );
+        let failed = reader.read_observation(now + RETRY_INTERVAL, || {
+            Err(PlatformError::Preferences {
+                message: "later getter failure".into(),
+            })
+        });
+        assert!(
+            matches!(failed, Err(PlatformError::Preferences { .. })),
+            "failure cannot publish a stale success"
+        );
+        let (accepted, needs_delivery) = reader
+            .read_observation(now + RETRY_INTERVAL * 2, || Ok(observation.clone()))
+            .expect("recovered native observation");
+        assert_eq!(accepted, observation);
+        assert!(
+            needs_delivery,
+            "successful recovery must retry owner delivery even for an unchanged observation"
+        );
+        let (_, needs_delivery) = reader
+            .read_observation(now + RETRY_INTERVAL * 2, || Ok(observation))
+            .expect("healthy unchanged observation");
+        assert!(
+            !needs_delivery,
+            "healthy unchanged observations remain quiet"
+        );
+    }
 
     #[test]
     fn bounded_native_read_admission() {

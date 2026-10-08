@@ -13,7 +13,6 @@ use std::{
 
 use objc2::MainThreadMarker;
 use objc2_app_kit::NSEvent;
-use parking_lot::Mutex;
 
 use crate::{
     GesturePreferences, PlatformError, SystemPreferences,
@@ -23,20 +22,25 @@ use crate::{
 const SAMPLE_INTERVAL: Duration = Duration::from_millis(500);
 
 pub(super) struct PreferenceSource {
-    accepted: Mutex<SystemPreferences>,
     signal: Weak<OwnerSignal>,
     admission: crate::shared::preference_read::ReadAdmission,
 }
 
 impl PreferenceSource {
-    pub(super) fn new(signal: &Arc<OwnerSignal>) -> Result<Arc<Self>, PlatformError> {
+    pub(super) fn new(signal: &Arc<OwnerSignal>) -> Arc<Self> {
         let source = Arc::new(Self {
-            accepted: Mutex::new(sample()?),
             signal: Arc::downgrade(signal),
             admission: crate::shared::preference_read::ReadAdmission::default(),
         });
+        // Registration precedes the first getter: even a cold read failure or
+        // contained panic leaves the live source and its next attempt intact.
         Self::schedule(&source);
-        Ok(source)
+        contain_owner_callback(|| {
+            if let Err(error) = source.read() {
+                tracing::warn!(%error, "initial AppKit preference query failed");
+            }
+        });
+        source
     }
 
     pub(super) fn read(&self) -> Result<SystemPreferences, PlatformError> {
@@ -54,16 +58,10 @@ impl PreferenceSource {
                 message: "the AppKit preference owner has stopped".into(),
             });
         }
-        let attempt = self.admission.begin(web_time::Instant::now())?;
-        let current = sample()?;
-        let changed = {
-            let mut accepted = self.accepted.lock();
-            let changed = *accepted != current;
-            *accepted = current.clone();
-            changed
-        };
-        attempt.accept();
-        if changed && let Some(signal) = self.signal.upgrade() {
+        let (current, needs_delivery) = self
+            .admission
+            .read_observation(web_time::Instant::now(), sample)?;
+        if needs_delivery && let Some(signal) = self.signal.upgrade() {
             // Publication precedes admission. OwnerSignal retains delivery
             // debt when the hook has not been installed yet.
             let _ = signal.wake();
