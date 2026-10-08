@@ -373,8 +373,7 @@ impl Listener {
                     PointerEvent::Down(_) => &on_down,
                     PointerEvent::Up(_) => &on_up,
                     PointerEvent::Move(update) if update.buttons.is_empty() => &on_hover,
-                    PointerEvent::Move(_) => &on_move,
-                    PointerEvent::ButtonChange(_) => &on_move,
+                    PointerEvent::Move(_) | PointerEvent::ButtonChange(_) => &on_move,
                     PointerEvent::Cancel(_) => &on_cancel,
                     PointerEvent::Scroll(_) => &on_signal,
                     PointerEvent::PanZoom(pan_zoom) => {

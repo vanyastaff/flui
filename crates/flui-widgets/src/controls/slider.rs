@@ -151,7 +151,7 @@ impl Live {
         if !self.pointer_usable() || !self.admits_context(cx) || !x.is_finite() {
             return;
         }
-        let _ = self.request_focus(cx);
+        self.request_focus(cx);
         // Focus notification may update this control or close its focus manager.
         if !self.pointer_usable() || !self.admits_context(cx) || !self.focus.is_attached() {
             return;

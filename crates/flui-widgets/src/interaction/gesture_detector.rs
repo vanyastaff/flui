@@ -1123,7 +1123,7 @@ impl ViewState<GestureDetector> for GestureDetectorState {
         let long_press = {
             let slot = Rc::clone(&self.long_press_slot);
             let writer = writer.clone();
-            LongPressGestureRecognizer::builder(arena.clone())
+            LongPressGestureRecognizer::builder(arena)
                 .settings(settings.clone())
                 .on_long_press(move || {
                     let handler = slot.borrow().clone();
@@ -1138,9 +1138,9 @@ impl ViewState<GestureDetector> for GestureDetectorState {
             let slot = Rc::clone(&self.double_tap_slot);
             let down_slot = Rc::clone(&self.double_tap_down_slot);
             let tap_writer = writer.clone();
-            let down_writer = writer.clone();
+            let down_writer = writer;
             DoubleTapGestureRecognizer::builder(double_tap_arena)
-                .settings(settings.clone())
+                .settings(settings)
                 .on_double_tap(move |_details| {
                     let handler = slot.borrow().clone();
                     if let Some(handler) = handler {
