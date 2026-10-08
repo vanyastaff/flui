@@ -159,6 +159,8 @@ fn bench_add_position(c: &mut Criterion) {
             for (t, p) in &samples {
                 tracker.add_position(*t, *p);
             }
+            // Count observes only occupancy; also make the stored samples observable.
+            black_box(&tracker);
             black_box(tracker.sample_count())
         });
     });
