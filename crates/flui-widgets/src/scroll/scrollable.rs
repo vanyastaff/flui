@@ -960,28 +960,20 @@ impl ViewState<Scrollable> for ScrollableState {
                     // direction the scroll offset increases when the finger
                     // moves the opposite way, so we negate; for a reversed one
                     // (`up`/`left`) the two negations cancel.
-                    let raw_velocity =
+                    let admitted_velocity =
                         if details.reason == flui_interaction::GestureEndReason::Cancelled {
                             0.0
                         } else {
                             match scroll_direction {
-                                Axis::Vertical => details.velocity.pixels_per_second.dy,
-                                Axis::Horizontal => details.velocity.pixels_per_second.dx,
+                                Axis::Vertical => details.fling_velocity().pixels_per_second.dy,
+                                Axis::Horizontal => details.fling_velocity().pixels_per_second.dx,
                             }
                         };
                     let fling_velocity_px_per_sec = if axis_direction.is_reversed() {
-                        raw_velocity
+                        admitted_velocity
                     } else {
-                        -raw_velocity
+                        -admitted_velocity
                     };
-                    // Cap the fling at the default gesture settings' maximum
-                    // fling velocity, keeping its sign; an unbounded velocity drives
-                    // `UnderdampedSolution` to `f64::INFINITY` for any t > 0.
-                    // NaN becomes zero, so physics still springs back when
-                    // the position is past a boundary.
-                    let fling_velocity_px_per_sec = flui_interaction::GestureSettings::default()
-                        .clamp_fling_velocity(fling_velocity_px_per_sec);
-
                     if !endpoint_fling.start(
                         fling_velocity_px_per_sec,
                         presentation_device_pixel_ratio(pipeline_fling.as_ref()),

@@ -2225,6 +2225,21 @@ diagnostic contract rather than implying frame-pump propagation.
 
 ### Accepted gesture cancellation does not commit a release action
 
+`Scrollable`, `RefreshIndicator` and `Dismissible` consume the admitted terminal
+impulse from `DragEndDetails::fling_velocity()` (ADR-0172). Axis selection and
+scroll reversal preserve its sign. The recognizer applies the contact's captured
+minimum and maximum before release; these consumers do not replace that policy
+with a framework default. Scroll physics and dismissal direction/threshold
+rules remain independently authored. Raw measured velocity remains available to
+application callbacks.
+
+`terminal_scroll_motion_uses_the_admitted_fling_profile` and
+`terminal_refresh_motion_uses_the_admitted_fling_profile` observe bounded coast,
+below-minimum rest and fresh-contact recovery after a live profile change.
+`dismissal_release_uses_its_captured_fling_profile` and
+`vertical_dismissal_release_uses_its_captured_fling_profile` preserve dismissal
+thresholds and the active contact's impulse on both axes.
+
 Accepted drag cancellation still reaches `on_end`, carrying
 `GestureEndReason::Cancelled`; normal release carries `Completed` (ADR-0112).
 Pre-acceptance rejection remains `on_cancel`. Recognizers clear their contact

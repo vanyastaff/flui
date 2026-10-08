@@ -288,6 +288,8 @@ fn scroll_physics_and_activity() {
     run_cases(
         "scroll_physics_and_activity",
         &[
+            ("scroll::terminal_scroll_motion_uses_the_admitted_fling_profile", crate::scroll::terminal_scroll_motion_uses_the_admitted_fling_profile as fn()),
+            ("scroll::terminal_refresh_motion_uses_the_admitted_fling_profile", crate::scroll::terminal_refresh_motion_uses_the_admitted_fling_profile),
             ("scroll::nested_fling_hands_remaining_velocity_to_matching_parent_axes", crate::scroll::nested_fling_hands_remaining_velocity_to_matching_parent_axes as fn()),
             ("scroll::nested_fling_same_controller_rebuild_preserves_accepted_handoff", crate::scroll::nested_fling_same_controller_rebuild_preserves_accepted_handoff),
             ("scroll::nested_fling_parent_boundary_policy_receives_presentation_pixel_ratio", crate::scroll::nested_fling_parent_boundary_policy_receives_presentation_pixel_ratio),
@@ -504,6 +506,8 @@ fn animation_and_visibility() {
     run_cases(
         "animation_and_visibility",
         &[
+            ("dismissible::dismissal_release_uses_its_captured_fling_profile", crate::dismissible::dismissal_release_uses_its_captured_fling_profile as fn()),
+            ("dismissible::vertical_dismissal_release_uses_its_captured_fling_profile", crate::dismissible::vertical_dismissal_release_uses_its_captured_fling_profile),
             ("dismissible::cancelling_a_fully_slid_card_restores_it_without_dismissal", crate::dismissible::cancelling_a_fully_slid_card_restores_it_without_dismissal as fn()),
             ("dismissible::a_cancelled_horizontal_dismiss_restores_the_card", crate::dismissible::a_cancelled_horizontal_dismiss_restores_the_card as fn()),
             ("dismissible::a_cancelled_vertical_dismiss_restores_the_card", crate::dismissible::a_cancelled_vertical_dismiss_restores_the_card as fn()),
