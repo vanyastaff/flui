@@ -731,8 +731,8 @@ fn binding_input_contract_matrix() {
             non_finite_pinch_position_is_refused,
         ),
         (
-            "non_finite_captured_pinch_position_is_refused",
-            non_finite_captured_pinch_position_is_refused,
+            "non_finite_pinch_during_contact_is_refused",
+            non_finite_pinch_during_contact_is_refused,
         ),
         (
             "frame_coalescing_preserves_hardware_history",
@@ -1126,7 +1126,7 @@ enum NonFiniteInput {
     ContactMove,
     Wheel,
     Pinch,
-    CapturedPinch,
+    PinchDuringContact,
 }
 
 fn assert_non_finite_motion_or_signal_is_refused(input: NonFiniteInput) {
@@ -1148,18 +1148,16 @@ fn assert_non_finite_motion_or_signal_is_refused(input: NonFiniteInput) {
             binding
                 .pointer_router()
                 .add_global_handler(Rc::new(move |_| log.set(log.get() + 1)));
-            let pointer = if matches!(input, NonFiniteInput::CapturedPinch) {
-                PointerId::try_from(u64::MAX).expect("synthetic pinch identity")
-            } else {
-                PointerId::new(core::num::NonZeroU64::MIN)
-            };
+            // Native PanZoom uses its own virtual contact identity; it cannot
+            // reuse the live touch contact that is kept captured here.
+            let pointer = PointerId::new(core::num::NonZeroU64::MIN);
             let route = |_| {
                 hits.set(hits.get() + 1);
                 HitTestResult::new()
             };
             let captured = matches!(
                 input,
-                NonFiniteInput::ContactMove | NonFiniteInput::CapturedPinch
+                NonFiniteInput::ContactMove | NonFiniteInput::PinchDuringContact
             );
             if captured {
                 binding.handle_pointer_event(
@@ -1176,7 +1174,7 @@ fn assert_non_finite_motion_or_signal_is_refused(input: NonFiniteInput) {
                     checked_move(pointer, position, PointerKind::Touch)
                 }
                 NonFiniteInput::Wheel => checked_scroll(position, Offset::new(0.0, 10.0)),
-                NonFiniteInput::Pinch | NonFiniteInput::CapturedPinch => {
+                NonFiniteInput::Pinch | NonFiniteInput::PinchDuringContact => {
                     checked_pinch(position, 0.1)
                 }
             };
@@ -1197,10 +1195,12 @@ fn assert_non_finite_motion_or_signal_is_refused(input: NonFiniteInput) {
             binding.flush_pending_moves();
             assert_eq!(deliveries.get(), 1, "healthy input follows refused input");
             if captured {
+                let expected_hits =
+                    usize::from(matches!(input, NonFiniteInput::PinchDuringContact));
                 assert_eq!(
                     hits.get(),
-                    0,
-                    "the admitted contact retains its capture route"
+                    expected_hits,
+                    "native gestures hit-test independently while contact motion retains its route"
                 );
                 binding.handle_pointer_event(
                     &make_up_event_for_id(pointer, Offset::ZERO, PointerKind::Touch)
@@ -1211,6 +1211,11 @@ fn assert_non_finite_motion_or_signal_is_refused(input: NonFiniteInput) {
                     deliveries.get(),
                     2,
                     "the admitted contact still delivers its terminal event"
+                );
+                assert_eq!(
+                    hits.get(),
+                    expected_hits,
+                    "touch Up retains its captured route"
                 );
             } else {
                 assert_eq!(hits.get(), 1, "healthy input performs a fresh hit test");
@@ -1231,8 +1236,8 @@ fn non_finite_wheel_position_is_refused() {
 fn non_finite_pinch_position_is_refused() {
     assert_non_finite_motion_or_signal_is_refused(NonFiniteInput::Pinch);
 }
-fn non_finite_captured_pinch_position_is_refused() {
-    assert_non_finite_motion_or_signal_is_refused(NonFiniteInput::CapturedPinch);
+fn non_finite_pinch_during_contact_is_refused() {
+    assert_non_finite_motion_or_signal_is_refused(NonFiniteInput::PinchDuringContact);
 }
 
 fn hardware_trace_event(
@@ -1799,7 +1804,7 @@ fn assert_signal_claim_delivery(route: SignalRoute, competing: bool) {
                 make_pinch_gesture_event(Offset::ZERO, 0.1).expect("finite input")
             }
         };
-        let pointer = PointerId::try_from(u64::MAX).expect("synthetic pinch identity");
+        let pointer = PointerId::new(core::num::NonZeroU64::MIN);
         if matches!(route, SignalRoute::CapturedPinch) {
             binding.handle_pointer_event(
                 &make_down_event_for_id(pointer, Offset::ZERO, PointerKind::Touch)
