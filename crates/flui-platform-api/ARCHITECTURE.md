@@ -68,6 +68,16 @@ both admitted boundaries and fallback after extreme observations. Source
 lifecycle, ordered delivery and consumer projection remain under implementation in
 the platform-layer spec; these value tests do not establish those behaviors.
 
+Mouse double-click timing and touch double-tap timing are independent observations.
+`NativeMouseGeometry` keeps full double-click rectangle dimensions separate from
+drag half-extents; `NativeTouchGeometry` retains physical slop and pixel/second
+fling limits with their validated sampling `DevicePixelRatio`. Host observations
+are comparison and invalidation evidence. `PlatformWindow::gesture_geometry`
+queries the consuming presentation's actual coordinate context: `Ok(None)` means
+unsupported, while a failed or invalid query is an error and must preserve the
+consumer's accepted projection. `preferences_contract` covers independent timing,
+per-context projection, zero axes and overflowing division.
+
 ### Platform services are capability traits in a contract crate
 
 Text input, haptics, clipboard and system chrome are typed capability traits

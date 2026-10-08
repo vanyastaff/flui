@@ -133,8 +133,9 @@ pub use pointer::{
     PointerSample, ScrollDelta, ScrollEvent, ScrollPhase, ScrollPrecision, ScrollUnit,
 };
 pub use preferences::{
-    DurationScale, GesturePreferences, InvalidPreference, MotionPreference, SystemPreferences,
-    WheelPreferences, WheelStep,
+    Distance, DurationScale, FlingSpeeds, GestureGeometry, GesturePreferences, InvalidPreference,
+    MotionPreference, NativeMouseGeometry, NativeTouchGeometry, PreferenceQueryError,
+    SystemPreferences, WheelPreferences, WheelStep,
 };
 pub use storage::{
     Storage, StorageError, StorageFuture, StorageName, Stored, StoredVersion, WriteMode,
