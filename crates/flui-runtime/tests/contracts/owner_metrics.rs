@@ -526,72 +526,217 @@ fn wheel_preferences_reach_the_next_mounted_input() {
         EventTime, PlatformInput, SystemPreferences, WheelPreferences, WheelStep,
     };
 
-    let owner = OwnerHost::new();
-    let runtime = crate::owner_publication::runtime();
-    let scroll = flui_widgets::ScrollController::new();
-    runtime
-        .attach_root_widget_with_size(
-            &flui_widgets::Scrollable::new()
-                .controller(scroll.clone())
-                .child(flui_widgets::SizedBox::new(800.0, 5000.0)),
-            800.0,
-            600.0,
-        )
-        .expect("mount scroll consumer");
-    let address = owner
-        .publication(owner.prepare_runtime(runtime))
-        .expect("publish")
-        .commit();
-    let size = Rc::new(Cell::new((800, 600)));
-    let effects = Effects {
-        address,
-        sink: RefCell::new(Sink {
-            size: Rc::clone(&size),
-            submitted: 0,
-        }),
-        size,
-        frame_time: Cell::new(web_time::Instant::now()),
-        trace: RefCell::new(Vec::new()),
-        expects_present: Cell::new(None),
-        owner: owner.clone(),
-        burst: Cell::new(false),
-        native_sizes: RefCell::new(Vec::new()),
-        fail_resize: Cell::new(false),
-        fail_tail: Cell::new(false),
-    };
-    owner
-        .frame_dispatcher(address)
-        .expect("frame")
-        .deliver(&effects)
-        .expect("mount frame");
-    owner
-        .update_preferences(
-            SystemPreferences::default()
-                .with_wheel(WheelPreferences::default().with_vertical(WheelStep::Lines(3))),
-            &effects,
-        )
-        .expect("accept wheel settings");
-    let event = PointerEvent::Scroll(ScrollEvent::new(
-        PointerInfo::new(
-            PointerId::try_from(1_u64).expect("pointer"),
-            PointerKind::Mouse,
-        ),
-        EventTime::from_nanos(1),
-        PointerPosition::try_new(flui_foundation::geometry::Point::new(100.0, 100.0))
-            .expect("point"),
-        ScrollDelta::try_new(ScrollUnit::Detents, 0.0, 1.0).expect("rotation"),
-    ));
-    owner
-        .presentation_dispatcher(address)
-        .expect("input")
-        .input(PlatformInput::Pointer(event), &effects)
-        .expect("wheel input");
-    assert_eq!(
-        scroll.pixels(),
-        159.0,
-        "three authored line distances before another frame"
-    );
-    owner.shutdown(&effects);
+    for authored_gestures in [false, true] {
+        let owner = OwnerHost::new();
+        let runtime = crate::owner_publication::runtime();
+        let scroll = flui_widgets::ScrollController::new();
+        runtime
+            .attach_root_widget_with_size(
+                &NestedWheelScroll {
+                    authored_gestures,
+                    child: flui_widgets::Scrollable::new()
+                        .controller(scroll.clone())
+                        .child(flui_widgets::SizedBox::new(800.0, 5000.0)),
+                },
+                800.0,
+                600.0,
+            )
+            .expect("mount scroll consumer");
+        let address = owner
+            .publication(owner.prepare_runtime(runtime))
+            .expect("publish")
+            .commit();
+        let size = Rc::new(Cell::new((800, 600)));
+        let effects = Effects {
+            address,
+            sink: RefCell::new(Sink {
+                size: Rc::clone(&size),
+                submitted: 0,
+            }),
+            size,
+            frame_time: Cell::new(web_time::Instant::now()),
+            trace: RefCell::new(Vec::new()),
+            expects_present: Cell::new(None),
+            owner: owner.clone(),
+            burst: Cell::new(false),
+            native_sizes: RefCell::new(Vec::new()),
+            fail_resize: Cell::new(false),
+            fail_tail: Cell::new(false),
+        };
+        owner
+            .frame_dispatcher(address)
+            .expect("frame")
+            .deliver(&effects)
+            .expect("mount frame");
+        owner
+            .update_preferences(
+                SystemPreferences::default()
+                    .with_wheel(WheelPreferences::default().with_vertical(WheelStep::Lines(3))),
+                &effects,
+            )
+            .expect("accept wheel settings");
+        let input = owner.presentation_dispatcher(address).expect("input");
+        let dispatch = |unit, distance| {
+            let event = PointerEvent::Scroll(ScrollEvent::new(
+                PointerInfo::new(
+                    PointerId::try_from(1_u64).expect("pointer"),
+                    PointerKind::Mouse,
+                ),
+                EventTime::from_nanos(1),
+                PointerPosition::try_new(flui_foundation::geometry::Point::new(100.0, 100.0))
+                    .expect("point"),
+                ScrollDelta::try_new(unit, 0.0, distance).expect("distance"),
+            ));
+            input
+                .input(PlatformInput::Pointer(event), &effects)
+                .expect("wheel input");
+        };
+        dispatch(ScrollUnit::Detents, 1.0);
+        assert_eq!(
+            scroll.pixels(),
+            159.0,
+            "three authored line distances before another frame"
+        );
+        for (label, preference, unit, distance, expected) in [
+            (
+                "disabled detent",
+                WheelStep::Lines(0),
+                ScrollUnit::Detents,
+                1.0,
+                0.0,
+            ),
+            (
+                "translated lines bypass disable",
+                WheelStep::Lines(0),
+                ScrollUnit::Lines,
+                2.0,
+                106.0,
+            ),
+            (
+                "translated lines bypass counts and page cap",
+                WheelStep::Lines(50),
+                ScrollUnit::Lines,
+                20.0,
+                1060.0,
+            ),
+            (
+                "pixels bypass disable",
+                WheelStep::Lines(0),
+                ScrollUnit::Pixels,
+                19.5,
+                19.5,
+            ),
+            (
+                "translated pages bypass disable",
+                WheelStep::Lines(0),
+                ScrollUnit::Pages,
+                0.5,
+                300.0,
+            ),
+            (
+                "fractional line detent",
+                WheelStep::Lines(4),
+                ScrollUnit::Detents,
+                0.25,
+                53.0,
+            ),
+            (
+                "fractional page detent",
+                WheelStep::Page,
+                ScrollUnit::Detents,
+                0.25,
+                150.0,
+            ),
+            (
+                "large native line count uses page",
+                WheelStep::Lines(50),
+                ScrollUnit::Detents,
+                1.0,
+                600.0,
+            ),
+            (
+                "fractional large native count",
+                WheelStep::Lines(50),
+                ScrollUnit::Detents,
+                0.5,
+                300.0,
+            ),
+            (
+                "overflowing detent product refused",
+                WheelStep::Lines(4),
+                ScrollUnit::Detents,
+                f64::MAX,
+                0.0,
+            ),
+            (
+                "healthy detent after refusal",
+                WheelStep::Lines(4),
+                ScrollUnit::Detents,
+                0.25,
+                53.0,
+            ),
+            (
+                "overflowing translated line product refused",
+                WheelStep::Lines(4),
+                ScrollUnit::Lines,
+                f64::MAX,
+                0.0,
+            ),
+            (
+                "healthy pixels after refusal",
+                WheelStep::Lines(4),
+                ScrollUnit::Pixels,
+                12.0,
+                12.0,
+            ),
+        ] {
+            scroll.jump_to(0.0);
+            owner
+                .update_preferences(
+                    SystemPreferences::default()
+                        .with_wheel(WheelPreferences::default().with_vertical(preference)),
+                    &effects,
+                )
+                .expect("accept next host preference");
+            dispatch(unit, distance);
+            assert_eq!(
+                scroll.pixels(),
+                expected,
+                "{label}; authored gestures={authored_gestures}"
+            );
+        }
+        scroll.jump_to(0.0);
+        owner
+            .update_preferences(SystemPreferences::default(), &effects)
+            .expect("unknown observation");
+        dispatch(ScrollUnit::Detents, 1.0);
+        assert_eq!(
+            scroll.pixels(),
+            53.0,
+            "unknown observation restores the authored fallback"
+        );
+        owner.shutdown(&effects);
+    }
+}
+
+#[derive(Clone, StatelessView)]
+struct NestedWheelScroll {
+    authored_gestures: bool,
+    child: flui_widgets::Scrollable,
+}
+
+impl StatelessView for NestedWheelScroll {
+    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+        let scope = flui_widgets::GestureArenaScope::new(
+            flui_widgets::GestureArenaScope::of(ctx),
+            self.child.clone(),
+        );
+        if self.authored_gestures {
+            scope.settings(flui_interaction::GestureSettings::default())
+        } else {
+            scope
+        }
+    }
 }
 
 #[derive(Clone, StatefulView)]
