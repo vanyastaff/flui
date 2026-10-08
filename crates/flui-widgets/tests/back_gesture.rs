@@ -174,7 +174,8 @@ pub(crate) fn cancelling_a_back_swipe_past_halfway_keeps_the_route() {
 }
 
 pub(crate) fn mounted_back_swipe_reads_retained_admission_settings() {
-    use crate::common::{SettingsScope, lay_out_animated, tight};
+    use crate::common::{lay_out_animated, tight};
+    use crate::gesture_settings::SettingsScope;
     use flui_animation::Vsync;
     use flui_foundation::geometry::Offset;
     use flui_interaction::events::{
@@ -264,7 +265,8 @@ pub(crate) fn replacing_authored_back_swipe_policy_cancels_the_outgoing_contact(
     use std::cell::Cell;
     use std::rc::Rc;
 
-    use crate::common::{ProbeSignals, SettingsScope, SignalProbe, lay_out_animated, tight};
+    use crate::common::{ProbeSignals, SignalProbe, lay_out_animated, tight};
+    use crate::gesture_settings::SettingsScope;
     use flui_animation::Vsync;
     use flui_foundation::geometry::Offset;
     use flui_interaction::events::{
@@ -398,7 +400,8 @@ pub(crate) fn replacing_authored_back_swipe_policy_cancels_the_outgoing_contact(
 }
 
 pub(crate) fn mounted_back_swipe_settle_uses_the_admitted_fling_bound() {
-    use crate::common::{SettingsScope, lay_out_animated, tight};
+    use crate::common::{lay_out_animated, tight};
+    use crate::gesture_settings::SettingsScope;
     use flui_animation::Vsync;
     use flui_foundation::geometry::Point;
     use flui_interaction::{GestureSettings, GestureSettingsSource};

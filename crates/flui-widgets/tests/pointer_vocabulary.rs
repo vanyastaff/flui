@@ -422,7 +422,7 @@ fn viewer_focal_inertia_uses_profile(native: bool) {
     let recorder = Rc::clone(&ends);
     let vsync = Vsync::new();
     let mut laid = lay_out(
-        crate::common::SettingsScope::new(
+        crate::gesture_settings::SettingsScope::new(
             settings.provider(),
             VsyncScope::new(
                 vsync.clone(),

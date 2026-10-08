@@ -955,7 +955,7 @@ pub(crate) fn authored_settings_retire_native_scale_session_before_fresh_admissi
 pub(crate) fn mounted_native_begin_retains_estimator_before_first_claim() {
     use std::{cell::Cell, rc::Rc};
 
-    use crate::common::SettingsScope;
+    use crate::gesture_settings::SettingsScope;
     use flui_foundation::geometry::{Offset, Point};
     use flui_interaction::{GestureSettings, GestureSettingsSource, processing::VelocityEstimator};
     use flui_platform_api::{

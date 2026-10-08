@@ -65,7 +65,7 @@ fn draggable_retains_down_profile_and_refreshes_next_contact() {
     let starts = Rc::new(Cell::new(0));
     let started = starts.clone();
     let laid = lay_out(
-        crate::common::SettingsScope::new(
+        crate::gesture_settings::SettingsScope::new(
             source.provider(),
             GestureDetector::new().on_tap(|_| {}).child(
                 Draggable::new(ColoredBox::new(Color::RED))
@@ -114,7 +114,7 @@ fn draggable_cancels_authored_replacement_before_stale_terminal() {
     let probe = SignalProbe::new(move |ProbeSignals { count, .. }| {
         remembered.set(Some(count));
         let (started, ended, cancelled) = (started.clone(), ended.clone(), cancelled.clone());
-        crate::common::SettingsScope::new(
+        crate::gesture_settings::SettingsScope::new(
             GestureSettings::default()
                 .try_with_touch_slop(profile.get())
                 .expect("finite slop"),
