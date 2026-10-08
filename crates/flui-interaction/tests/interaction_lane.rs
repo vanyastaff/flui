@@ -2125,7 +2125,7 @@ fn assert_signal_claim_retirement(competing: bool, native: bool) {
     #[derive(Clone, Copy)]
     enum Target {
         Wheel(flui_interaction::ScrollTarget),
-        Native(flui_interaction::PanZoomTarget),
+        Native(flui_interaction::routing::PanZoomTarget),
     }
     let entry = |id, target| match target {
         Target::Wheel(target) => HitTestEntry::new(RenderId::new(id)).scroll_target(target),
