@@ -81,7 +81,7 @@ impl Rig {
 
     /// Route events to `recognizer`, optionally for one pointer only. The
     /// returned flag stops delivery (a detector unmounting it).
-    fn attach<R: GestureRecognizer + 'static>(
+    fn attach<R: GestureRecognizer + ?Sized + 'static>(
         &self,
         recognizer: &Rc<R>,
         only: Option<u64>,
@@ -91,7 +91,7 @@ impl Rig {
 
     /// [`attach`](Self::attach), delivering `global(event)` as the root-space
     /// event that accompanies each local one.
-    fn attach_with_global<R: GestureRecognizer + 'static>(
+    fn attach_with_global<R: GestureRecognizer + ?Sized + 'static>(
         &self,
         recognizer: &Rc<R>,
         only: Option<u64>,
@@ -1357,6 +1357,12 @@ fn tap_and_drag_resolves_through_the_shared_arena() {
                 "coalesced start reentry",
                 coalesced_drag_start_reentry_finishes_the_old_generation,
             ),
+            ("long press measured excursion", long_press_measured_excursion),
+            ("double tap measured excursion", double_tap_measured_excursion),
+            ("multi tap measured excursion", multi_tap_measured_excursion),
+            ("multi drag measured excursion", multi_drag_measured_excursion),
+            ("tap drag measured excursion", tap_drag_measured_excursion),
+            ("scale measured excursion", scale_measured_excursion),
             ("tap against a tap", tap_wins_against_a_later_tap_recognizer),
             ("drag against a pan", drag_claims_the_arena_before_starting),
             ("consecutive clicks", consecutive_clicks_count_up_and_reset),
@@ -1390,6 +1396,111 @@ fn tap_and_drag_resolves_through_the_shared_arena() {
         ],
     );
 }
+
+fn queue_excursion(rig: &Rig, coalesced_packet: bool) {
+    let outward = make_move_event_for_id(id(1), Offset::new(200.0, 100.0), PointerKind::Touch)
+        .expect("finite excursion");
+    let mut returned = make_move_event_for_id(id(1), Offset::new(100.0, 100.0), PointerKind::Touch)
+        .expect("finite return");
+    if coalesced_packet {
+        let PointerEvent::Move(outward) = outward else { unreachable!() };
+        let PointerEvent::Move(current) = &mut returned else { unreachable!() };
+        *current = current.clone().with_coalesced(vec![*outward.current()]);
+    } else {
+        rig.send(&outward);
+    }
+    rig.send(&returned);
+    rig.frame();
+}
+
+fn stationary_gesture_measured_excursion(family: &str) {
+    use flui_interaction::{DoubleTapGestureRecognizer, LongPressGestureRecognizer, MultiTapGestureRecognizer};
+    for coalesced_packet in [false, true] {
+        let rig = Rig::new();
+        let recognized = Rc::new(Cell::new(0));
+        let cancelled = Rc::new(Cell::new(0));
+        let (r, c) = (recognized.clone(), cancelled.clone());
+        let owner: Rc<dyn GestureRecognizer> = match family {
+            "long press" => LongPressGestureRecognizer::builder(rig.binding.arena().clone())
+                .on_long_press(move || r.set(r.get() + 1))
+                .on_long_press_cancel(move |_| c.set(c.get() + 1)).build(),
+            "double tap" => DoubleTapGestureRecognizer::builder(rig.binding.arena().clone())
+                .on_double_tap(move |_| r.set(r.get() + 1))
+                .on_double_tap_cancel(move |_| c.set(c.get() + 1)).build(),
+            "multi tap" => MultiTapGestureRecognizer::builder(rig.binding.arena().clone(), 2)
+                .on_multi_tap(move |_| r.set(r.get() + 1))
+                .on_multi_tap_cancel(move |_| c.set(c.get() + 1)).build(),
+            _ => unreachable!(),
+        };
+        rig.attach(&owner, None);
+        rig.down(1, 100.0, 100.0);
+        if family == "multi tap" { rig.down(2, 300.0, 100.0); }
+        queue_excursion(&rig, coalesced_packet);
+        assert_eq!((recognized.get(), cancelled.get()), (0, 1),
+            "{family}: a measured excursion cancels before returning to the origin");
+        rig.up(1, 100.0, 100.0);
+        if family == "multi tap" { rig.up(2, 300.0, 100.0); }
+        rig.advance(1000);
+        rig.binding.arena().poll_deadlines();
+        rig.down(1, 100.0, 100.0);
+        if family == "multi tap" { rig.down(2, 300.0, 100.0); }
+        if family == "long press" {
+            rig.advance(1000);
+            rig.binding.arena().poll_deadlines();
+            rig.frame();
+        }
+        rig.up(1, 100.0, 100.0);
+        if family == "multi tap" { rig.up(2, 300.0, 100.0); }
+        if family == "double tap" {
+            rig.advance(100);
+            rig.down(1, 100.0, 100.0);
+            rig.up(1, 100.0, 100.0);
+        }
+        assert_eq!(recognized.get(), 1, "{family}: a healthy next gesture recovers");
+    }
+}
+
+fn long_press_measured_excursion() { stationary_gesture_measured_excursion("long press"); }
+fn double_tap_measured_excursion() { stationary_gesture_measured_excursion("double tap"); }
+fn multi_tap_measured_excursion() { stationary_gesture_measured_excursion("multi tap"); }
+
+fn moving_gesture_measured_excursion(family: &str) {
+    use flui_interaction::{GestureSettings, MultiDragAxis, MultiDragGestureRecognizer, ScaleStartMode};
+    for coalesced_packet in [false, true] {
+        let rig = Rig::new();
+        let starts = Rc::new(Cell::new(0));
+        let counted = starts.clone();
+        let owner: Rc<dyn GestureRecognizer> = match family {
+            "multi drag" => MultiDragGestureRecognizer::builder(rig.binding.arena().clone(), MultiDragAxis::Free)
+                .on_start(move |_, _| { counted.set(counted.get() + 1); None }).build(),
+            "tap drag" => TapAndDragGestureRecognizer::builder(rig.binding.arena().clone())
+                .on_drag_start(move |_| counted.set(counted.get() + 1)).build(),
+            "scale" => ScaleGestureRecognizer::builder(rig.binding.arena().clone())
+                .start_mode(ScaleStartMode::PanOrScale)
+                .on_start(move |_| counted.set(counted.get() + 1)).build(),
+            _ => unreachable!(),
+        };
+        // Keep real competition alive so a default arena win cannot stand in
+        // for recognizing the measured threshold crossing.
+        let rival = DragGestureRecognizer::builder(rig.binding.arena().clone(), DragAxis::Free)
+            .settings(GestureSettings::default().try_with_pan_slop(1000.0).expect("positive slop"))
+            .build();
+        rig.attach(&owner, None);
+        rig.attach(&rival, None);
+        rig.down(1, 100.0, 100.0);
+        queue_excursion(&rig, coalesced_packet);
+        assert_eq!(starts.get(), 1, "{family}: the excursion claims before Up's arena sweep");
+        rig.up(1, 100.0, 100.0);
+        rig.down(1, 100.0, 100.0);
+        rig.move_to(1, 200.0, 100.0);
+        rig.up(1, 200.0, 100.0);
+        assert_eq!(starts.get(), 2, "{family}: the next contact still starts");
+    }
+}
+
+fn multi_drag_measured_excursion() { moving_gesture_measured_excursion("multi drag"); }
+fn tap_drag_measured_excursion() { moving_gesture_measured_excursion("tap drag"); }
+fn scale_measured_excursion() { moving_gesture_measured_excursion("scale"); }
 
 fn queued_out_and_back_motion_is_a_drag() {
     for coalesced_packet in [false, true] {
