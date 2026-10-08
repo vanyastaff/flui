@@ -405,6 +405,7 @@ impl VelocityTracker {
     /// time-dependent stationary gate, nor the memo cache — which is exactly
     /// what makes the cache in [`Self::estimate_at`] sound. O(N)
     /// where N ≤ `HISTORY_SIZE` (the buffer is bounded at 20 samples).
+    #[inline(never)]
     fn compute_estimate(&self) -> Option<VelocityEstimate> {
         let mut xs = [0.0f64; HISTORY_SIZE];
         let mut ys = [0.0f64; HISTORY_SIZE];
