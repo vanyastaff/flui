@@ -277,7 +277,7 @@ The pointer recovery row observes the resulting disabled button; it does not
 isolate scheduling order because `InkWell` also schedules pressed-state
 updates before invoking the action.
 
-### Drawer cancellation settles without release momentum
+### Drawer release uses admitted gesture policy
 
 Both the closed edge strip and open panel settle from the admitted signed
 horizontal component of `DragEndDetails::fling_velocity()` (ADR-0172), before
@@ -286,6 +286,8 @@ and position-based settling remain independent of the contact's minimum and
 maximum. `drawer_settling_uses_the_captured_fling_profile` and
 `open_drawer_settling_uses_the_captured_fling_profile` observe settled panel
 geometry, retained active policy and fresh-contact recovery.
+
+### Drawer cancellation settles without release momentum
 
 Drawer edge and panel consumers use measured velocity only for
 `GestureEndReason::Completed`. For `Cancelled` they settle with zero velocity,

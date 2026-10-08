@@ -2223,7 +2223,7 @@ equal-edge cancellation, custom physics callback/retirement competition and
 fresh gesture recovery. Pixel listener failures follow the notifier's existing
 diagnostic contract rather than implying frame-pump propagation.
 
-### Accepted gesture cancellation does not commit a release action
+### Terminal inertia uses admitted gesture policy
 
 `Scrollable`, `RefreshIndicator` and `Dismissible` consume the admitted terminal
 impulse from `DragEndDetails::fling_velocity()` (ADR-0172). Axis selection and
@@ -2239,6 +2239,8 @@ below-minimum rest and fresh-contact recovery after a live profile change.
 `dismissal_release_uses_its_captured_fling_profile` and
 `vertical_dismissal_release_uses_its_captured_fling_profile` preserve dismissal
 thresholds and the active contact's impulse on both axes.
+
+### Accepted gesture cancellation does not commit a release action
 
 Accepted drag cancellation still reaches `on_end`, carrying
 `GestureEndReason::Cancelled`; normal release carries `Completed` (ADR-0112).
