@@ -2,7 +2,7 @@
 
 - **Статус:** черновик, редакция 2; исполнение — после утверждения design.md и ADR-0151…0154
 - **Ограниченное утверждение:** LY8/LY9 исполняются вместе по
-  [ADR-0159](../../../adr/ADR-0159-host-owned-system-preferences.md), используя
+  [ADR-0172](../../../adr/ADR-0172-host-owned-system-preferences.md), используя
   текущие имена крейтов и owner-local runtime. Это не утверждает остальные задачи,
   переименование крейтов или шов возможностей. LY8/LY9 пока не завершены.
 - **Дата:** 2026-10-06
@@ -47,7 +47,7 @@ scheduler, а храповик `thread-boundary` не пускает новые 
 - Новый колбэк `Platform::on_preferences_changed` — класс «platform hook» (хуки `Platform`
   остаются `Send` по спеке send-flip), не класс flip; классифицируется в храповике в том же PR.
 - Если к 11-24 посадка шва (LY4) не готова — шов и LY5 целиком уходят в 0.3; на `main`
-  ничего из них нет (R4.10). LY8/LY9 отделены ADR-0159: они используют текущие
+  ничего из них нет (R4.10). LY8/LY9 отделены ADR-0172: они используют текущие
   crate names и owner-local доставку, не ждут clipboard/capability seam.
   P0 от send-flip не зависят.
 
@@ -58,7 +58,7 @@ graph LR
   LY0 --> LY1 & LY2 & LY3
   LY3 --> LY4 --> LY5
   W1["W1: ядро send-flip или no-go"] --> LY4 & LY6 & LY7
-  SP["ADR-0159: host-owned preferences"] --> LY8
+  SP["ADR-0172: host-owned preferences"] --> LY8
   LY8 --> LY9
   NM["naming: cargo xtask rename"] --> LY2 --> LY10 --> LY11
   TI["text-ime T6, teardown T5"] --> LY12
@@ -82,7 +82,7 @@ graph LR
 | **LY5** | P1 | `Application::plugin`/`capability`, `AppRunError::CapabilityConflict` до окна; fixture-пакет вне зависимостей фреймворка на `flui-sdk` + контракте; `flui-sdk` реэкспорт + строка в `tests/surface.rs` | W1, после LY4 | `flui-app/src/app/application.rs`, `flui-sdk/src/lib.rs`, `tests/fixtures/` | `cargo xtask reach` (fixture не видит бэкенд); changelog | конфликт до окна; fixture регистрирует и получает свою возможность | L | 2 |
 | **LY6** | P0 | Haptics из Stable: `PlatformHaptics`, `PlatformWindow::haptics`, `HapticFeedback`, `FakeHaptics`; мёртвые forwarders runtime (`presentation.rs`, `ui_realm/frame_clock.rs`) — с согласия владельца send-flip до W1 или в W1 | W1 (или раньше с согласием) | `flui-platform-api/src/{haptics,haptic_feedback,platform_window,lib}.rs`, `flui-platform/src/platforms/headless/*`, `flui-runtime/src/{presentation.rs, ui_realm/frame_clock.rs}` | `workspace`; changelog (Removed) | существующие | L + T | 1 |
 | **LY7** | P1 | `AppLifecycleState` → контракт `lifecycle`, `#[non_exhaustive]`; scheduler реэкспортирует, политика кадров — его extension-трейт; ребро scheduler → контракт | W1 | `flui-scheduler/src/frame.rs`, `Cargo.toml`; `flui-platform-api/src/lifecycle.rs` | `workspace` (S→C, layer 2→1); changelog | существующие тесты lifecycle без правок путей | L | 2 |
-| **LY8** | P1 | `SystemPreferences` (валидированный снимок), принадлежащий host источник и headless-производитель; `flui-app` засевает runtime и рассылает через typed FIFO; `MediaQuery` (text, contrast, bold, locales, motion); `AccessibilityFeatures` удаляется с миграцией потребителей. Сливается вместе с LY9 и production-потребителями | ADR-0159 | `flui-platform-api/src/preferences.rs`, `flui-platform/src/{traits/platform.rs, platforms/headless/*}`, `flui-app/src/app/{runtime.rs, runner/*}`, `flui-runtime/src/{owner/,media_query_root.rs}`, `flui-widgets/src/media_query.rs`, `flui-semantics/src/accessibility.rs` | `workspace`, `reach`, `globals`, thread-boundary; changelog | начальное значение до пользовательского окна; поздние runtime/presentation; FIFO и failure/recovery; реальный text consumer и revert proof | L | переоценить по полной матрице ниже |
+| **LY8** | P1 | `SystemPreferences` (валидированный снимок), принадлежащий host источник и headless-производитель; `flui-app` засевает runtime и рассылает через typed FIFO; `MediaQuery` (text, contrast, bold, locales, motion); `AccessibilityFeatures` удаляется с миграцией потребителей. Сливается вместе с LY9 и production-потребителями | ADR-0172 | `flui-platform-api/src/preferences.rs`, `flui-platform/src/{traits/platform.rs, platforms/headless/*}`, `flui-app/src/app/{runtime.rs, runner/*}`, `flui-runtime/src/{owner/,media_query_root.rs}`, `flui-widgets/src/media_query.rs`, `flui-semantics/src/accessibility.rs` | `workspace`, `reach`, `globals`, thread-boundary; changelog | начальное значение до пользовательского окна; поздние runtime/presentation; FIFO и failure/recovery; реальный text consumer и revert proof | L | переоценить по полной матрице ниже |
 | **LY9** [P] | P1 | `GestureSettings` через существующий `GestureArenaScope`, lifecycle consumers и active-sequence policy; native producers Windows, Android, AppKit, iOS, web; winit/Linux сохраняет неизвестные поля вместо фиктивных наблюдений | вместе с LY8; consumer — с владельцем interaction | `flui-interaction/src/{settings,binding}.rs`, `flui-widgets/src/`, `flui-platform/src/platforms/{windows,android,web,macos,ios,winit}/` | `cross-typecheck`, `wasm-check`; Windows native execution | реальные double tap, drag, long press, fling, wheel; DPI-проекция; Windows refresh и teardown; overrides; unavailable platforms явно compile-only | L/W/T | переоценить по полной матрице ниже |
 | **LY10** | P0 | **Переименование, шаг 1:** `flui-platform` → `flui-native` по карте LY2, один коммит без ручных правок; включает проверку «отставное имя»; описание PR — инструкция для веток (ниже) | W2a | весь workspace | `workspace`, `reach`, `globals`, `checks`, `check-changed`, `cross-typecheck` | весь набор | L + T | 1 |
 | **LY11** | P0 | **Переименование, шаг 2:** `flui-platform-api` → `flui-platform`, снятие проверки «отставное имя» | W2b | весь workspace | то же | весь набор | L + T | 1 |

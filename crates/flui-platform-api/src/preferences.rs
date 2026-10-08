@@ -1,4 +1,4 @@
-//! Validated observations of system preferences (ADR-0159).
+//! Validated observations of system preferences (ADR-0172).
 //!
 //! Unknown values remain absent. A consumer chooses its fallback and application
 //! policy; constructing this value does not install either one.

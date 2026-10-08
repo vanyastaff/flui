@@ -1,11 +1,11 @@
-# ADR-0159: Host-owned system preferences and ordered runtime delivery
+# ADR-0172: Host-owned system preferences and ordered runtime delivery
 
 - **Status:** Accepted architecture; implementation and consumer acceptance pending.
 - **Date:** 2026-10-08
 - **Supersedes:** [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md) §4 only.
 - **Related:** [ADR-0082](ADR-0082-platform-api-contract-crate.md),
   [ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md),
-  [ADR-0158](ADR-0158-ui-runtime-and-host-vocabulary.md).
+  [ADR-0171](ADR-0171-ui-runtime-and-host-vocabulary.md).
 
 System preferences outlive individual windows and affect independent UI runtimes.
 Reading them through a representative window couples unrelated lifetimes and can

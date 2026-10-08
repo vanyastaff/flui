@@ -87,7 +87,7 @@ captures contain only ref-counted inert state.
 platform's own native receiver and checks owner delivery and teardown. It does not
 change OS preferences or establish actual OS-generated notifications, value-change
 delivery or retry after a failing owner consumer. Those remain
-pending under ADR-0159. The headless row checks that absent observations do not
+pending under ADR-0172. The headless row checks that absent observations do not
 claim OS defaults.
 
 `native_setting_message_replaces_the_cached_observation` strengthens the native

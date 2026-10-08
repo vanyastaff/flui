@@ -1,4 +1,4 @@
-# ADR-0158: UI runtime and host vocabulary
+# ADR-0171: UI runtime and host vocabulary
 
 - **Status:** Accepted
 - **Date:** 2026-10-07

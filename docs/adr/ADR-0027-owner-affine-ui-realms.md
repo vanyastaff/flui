@@ -1,7 +1,7 @@
 # ADR-0027: Owner-affine UI runtimes — a multi-threaded runtime of single-writer ownership domains
 
 - **Status:** Accepted
-- **Superseded-by:** ADR-0158 for terminology only; the ownership and threading
+- **Superseded-by:** ADR-0171 for terminology only; the ownership and threading
   decisions below remain in force.
 - **Date:** 2026-07-11
 - **Absorbs:** ADR-0027 (engine-wide threading architecture)

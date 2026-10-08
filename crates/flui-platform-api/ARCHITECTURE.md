@@ -57,7 +57,7 @@ path.
 ### Preference observations preserve unavailable values and native units
 
 `SystemPreferences` records observations rather than framework fallback values
-(ADR-0159). Text factors are finite and positive; motion observations distinguish
+(ADR-0172). Text factors are finite and positive; motion observations distinguish
 reduced motion from duration scaling. Vertical wheel lines/pages and horizontal
 character counts have separate representations. The `preferences_contract` table
 pins numeric admission, including subnormal scales and both signs of zero. Source

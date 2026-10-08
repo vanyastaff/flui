@@ -2,7 +2,7 @@
 
 - **Status:** Proposed (2026-10-06). Awaiting the owner's approval; nothing in this ADR is
   implemented.
-- **Superseded-by:** [ADR-0159](ADR-0159-host-owned-system-preferences.md) for §4 only;
+- **Superseded-by:** [ADR-0172](ADR-0172-host-owned-system-preferences.md) for §4 only;
   the remaining proposal retains its status. The accepted preference work uses
   the current crate names independently of this proposal's rename and capability work.
 - **Date:** 2026-10-06
@@ -139,7 +139,7 @@ that moves them supersedes ADR-0039 §2.
 
 ### 4. System preferences: one host source, each consumer its own representation
 
-Superseded by [ADR-0159](ADR-0159-host-owned-system-preferences.md). The text below
+Superseded by [ADR-0172](ADR-0172-host-owned-system-preferences.md). The text below
 records the original proposal; source ownership, native units, ordered delivery
 and consumer acceptance now follow that decision.
 
