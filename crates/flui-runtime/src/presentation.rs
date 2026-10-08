@@ -1077,15 +1077,6 @@ impl PresentationState {
     /// window was installed; here it is "the window this presentation was
     /// built with is gone" instead of "no window installed yet", since a
     /// presentation always has one from construction.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "read only by perform_haptic_feedback, itself unreached \
-                      outside tests until a production caller wires haptics \
-                      through a presentation"
-        )
-    )]
     pub(crate) fn with_window<R>(&self, f: impl FnOnce(&dyn PlatformWindow) -> R) -> Option<R> {
         self.window.upgrade().map(|window| f(window.as_ref()))
     }

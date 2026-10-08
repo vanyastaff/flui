@@ -140,6 +140,7 @@ impl RuntimeWork {
     }
 
     pub(super) fn run(self, core: &OwnerCore, runtime: &mut UiRuntime, effects: &dyn OwnerEffects) {
+        let _geometry_turn = runtime.begin_geometry_turn();
         match self {
             Self::Initialize(initial) => runtime.enter(|runtime| {
                 let preferences = core.state.borrow().preferences.current.clone();

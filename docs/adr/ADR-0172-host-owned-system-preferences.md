@@ -95,6 +95,19 @@ therefore affects new sequences without silently changing an active sequence's
 thresholds. Terminal fling policy also comes from that admitted snapshot rather
 than a later settings read or a framework default.
 
+Drag release and scale focal release retain their raw measured velocity for
+callbacks and expose a separate admitted velocity for inertial consumers. Focal
+velocity is measured in logical pixels per second and uses the admitted fling
+range. Scale-change velocity is measured in scale units per second and does not
+acquire a pixel-speed limit.
+
+A native Begin captures the profile when its session is admitted, independently
+of recognizing the first movement. Refused admission, an admitted dormant
+session and recognized delivery are distinct outcomes. A Begin refused while
+the actor owns touch contacts cannot later become a new session from its tail;
+its terminal event clears that refused stream. An Update received without any
+Begin retains the independent relative-step contract.
+
 Velocity estimation is consumer policy, not an observed OS preference. The
 framework uses least squares for absolute pointer-position gestures on every
 platform; authored scopes may select another estimator, and each admitted
