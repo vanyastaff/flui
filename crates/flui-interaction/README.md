@@ -27,8 +27,8 @@ contracts. `PointerId` names a contact, `DeviceId` names hardware, and
 `PointerInfo` carries the reported `PointerKind` and primary role. Samples use
 checked logical positions and monotonic `EventTime`. Missing sensors stay
 absent; a backend must not substitute pressure, orientation or device identity
-that the host did not report. Private backend adapters may still translate an
-upstream event vocabulary; richer native production is a separate migration.
+that the host did not report. Backends produce this vocabulary at the platform
+boundary rather than exposing their private host event types.
 
 ## Gesture recognition
 
@@ -128,8 +128,9 @@ let tap = TapGestureRecognizer::builder(GestureArena::new())
     .build();
 ```
 
-Processing includes bounded velocity estimation, frame resampling, prediction
-and pointer smoothing. Recognizers use event timing anchored to their arena
+Processing includes bounded velocity estimation, frame resampling and explicit
+pointer smoothing filters. Hardware predictions remain separate source samples.
+Recognizers use event timing anchored to their arena
 clock; replayed sample spacing determines the gesture's velocity.
 Gesture scripts and virtual-time replay live in `flui-testing`; the `testing`
 feature here supplies individual synthetic input builders.

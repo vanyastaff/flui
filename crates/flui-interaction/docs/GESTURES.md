@@ -133,6 +133,23 @@ Calculations (`calculate_spans`, `calculate_rotation`):
 Dropping below two pointers ends a started gesture. `ScaleEndDetails` carries
 `focal_point`, `scale`, `rotation` and `velocity` (scale units per second).
 
+The default `ScaleStartMode::Scale` requires two contacts. Choose
+`ScaleStartMode::PanOrScale` explicitly for one-contact pan that continues as
+contacts join or leave:
+
+```rust
+use flui_interaction::{GestureArena, ScaleGestureRecognizer};
+use flui_interaction::recognizers::scale::ScaleStartMode;
+
+let recognizer = ScaleGestureRecognizer::builder(GestureArena::new())
+    .start_mode(ScaleStartMode::PanOrScale)
+    .on_update(|details| {
+        let local_motion = details.focal_point_delta;
+        let global_focal = details.focal_point;
+    })
+    .build();
+```
+
 ### Force press (`force_press.rs`, `ForcePressPhase`)
 
 Mouse pressure and constant synthetic readings do not establish a pressure
@@ -160,15 +177,22 @@ and rotation or divide scales to derive one step. `PanZoomEvent` always reports
 `PointerKind::Trackpad` and keeps its pointer identity, production time,
 logical focal position and modifiers.
 
-`InteractiveViewer` retains the last cumulative transform across rebuilds and
-resets it at the next Start. Its public rows
-`viewer_cumulative_zoom_survives_rebuild_and_resets` and
-`viewer_unstarted_pinch_updates_remain_independent_steps` pin both cumulative
-delivery and its explicit fallback for native sources that only report ticks.
-Existing private backend adapters can emit relative updates without Start.
-The viewer treats each such unstarted update as an independent step; native
-Start/End production and accumulation belong to the platform enrichment work.
-Once Start is delivered, subsequent Update values follow the cumulative contract.
+Native claims receive `PanZoomDispatch`: `local` contains checked receiving-plane
+geometry and `global` retains the original source event. Local cumulative pan
+uses a chord at the Update's current focal; scale and rotation remain unchanged
+(see [HIT_TESTING.md](HIT_TESTING.md)). `ScaleGestureRecognizer::handle_pan_zoom`
+drives the same immutable callbacks used for touch input.
+
+`GestureDetector` admits a native source when enabled scale callbacks accept a
+meaningful Update. `GestureBinding` retains the selected owner until the source
+ends or is cancelled; an enabled descendant cannot steal that session during
+a rebuild. `InteractiveViewer` consumes these callbacks rather than retaining
+a second native actor. Public rows
+`viewer_native_session_reports_one_start_and_one_terminal`,
+`viewer_repeated_native_start_retires_the_previous_generation` and
+`viewer_native_owner_survives_descendant_enable_during_rebuild` pin this lifecycle.
+An Update without Start is an independent compatibility step: the recognizer
+emits start/update/end for that step instead of inventing a continuing source.
 
 ## GestureSettings (`settings.rs`)
 

@@ -63,9 +63,10 @@ both coordinate spaces and distinct sample families.
 
 ## Scroll and pan-zoom dispatch
 
-`EventPropagation` belongs to the two claiming walks: the pointer-signal /
-scroll resolver and the trackpad pan-zoom walk. A handler there may return
-`Stop` to claim the event. Ordinary pointer delivery does not use it.
+`EventPropagation` belongs to scroll and native pan-zoom claims. A handler may
+return `Stop` to claim the event. The binding retains the admitted native source
+owner through its terminal event; later updates use that owner rather than a
+fresh claim walk. Ordinary pointer delivery does not use a propagation result.
 
 Scroll delivery carries `ScrollEvent` with its checked delta unit, precision,
 phase and source metadata. Pixel displacements use the checked local chord
@@ -134,7 +135,12 @@ scope-helper's closure shape does not fit; `with_paint_offset`/
 `with_paint_transform` are correct by construction and should be preferred.
 
 Each entry captures the current (already-inverted) transform. During dispatch
-the event is transformed into that entry's local coordinate space.
+the event is unprojected onto that entry's local `z = 0` plane with
+`Matrix4::unproject_to_plane`. Applying the full inverse to screen depth zero
+would give the wrong point for a tilted plane under perspective. Behind-plane,
+horizon, edge-on and non-finite results refuse traversal or localized delivery.
+Ordinary finite affine arithmetic retains its original evaluation order;
+normalized homogeneous arithmetic handles the remaining admitted range.
 A paint-transform scope without an admitted finite computed inverse returns
 `None` before traversal can publish an entry. Callers map refusal to a subtree
 miss. Raw pushes remain the caller's responsibility (ADR-0113).

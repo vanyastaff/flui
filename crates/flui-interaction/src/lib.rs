@@ -110,7 +110,7 @@
 //! - [`arena`] - Gesture conflict resolution
 //!
 //! ## Input Processing
-//! - [`processing`] - Velocity tracking, prediction, resampling
+//! - [`processing`] - Velocity tracking, resampling and explicit smoothing filters
 //!
 //! ## Testing Utilities
 //! - `testing` - Synthetic event builders (requires `testing` feature). Gesture
