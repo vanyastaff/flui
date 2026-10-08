@@ -64,7 +64,7 @@ Each needs the `testing` feature, which the dev-dependency enables.
 
 | Bench | Cases |
 |---|---|
-| `velocity_tracker_bench` | `VelocityTracker::estimate_at` with 20 and 3 samples and 4 repeated queries; `add_position`; selected Ios and Impulse estimates; standalone `OneEuroFilter2D::filter` |
+| `velocity_tracker_bench` | `VelocityTracker::estimate_at` with 20 and 3 samples and 4 repeated queries; construction plus 20 `add_position` calls; selected Ios and Impulse estimates; standalone `OneEuroFilter2D::filter` |
 | `gesture_arena_bench` | `add` into an empty and a busy (4-member) arena; `sweep` of one member; add + accept with a competitor; add + close + sweep |
 | `tap_detector_bench` | live tap sequences without callbacks and with primary/secondary callbacks; fresh fixtures keep setup and retirement outside measured invocation; `add_pointer` |
 | `pointer_resampler_bench` | owned source-time admission; complete 60/240 Hz source traces sampled at 60 Hz with Up/Cancel flush; measured plus interpolated sample delivery; separate Up/Cancel tail flush; overflow with scalar and saturated history |
@@ -77,6 +77,15 @@ cargo bench -p flui-interaction --bench gesture_arena_bench     # one
 
 The per-bench time targets in each file's module docs are goals; nothing
 checks them.
+
+Velocity estimation fixtures independently check the known linear velocity
+before timing: 1000 px/s for the 20-sample LSQ, Ios and Impulse cases, and
+500 px/s for the 3-sample LSQ case. Ios and Impulse use `PerIteration` batching
+to match the historical fixtures' immediate argument-free queries; LSQ uses
+`SmallInput`. Compare each row before and after with its matching batching.
+Cross-estimator timings include these batching differences. The row named
+`add_position (push)` measures construction plus 20 pushes and a sample-count
+observation, so its result is not an individual push latency.
 
 Resampler traces independently witness a 1000 px/s source trajectory,
 monotonic timestamps, valid timestamp zero, delivered readings and exactly one
