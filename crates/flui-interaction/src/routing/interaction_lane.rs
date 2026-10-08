@@ -7,7 +7,7 @@
 //! pointer sequence.
 
 use std::any::Any;
-use std::cell::{Cell, LazyCell, RefCell};
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::fmt;
 use std::num::NonZeroU64;
@@ -878,9 +878,16 @@ impl LocalLaneInner {
     }
 }
 
+#[cfg_attr(
+    target_os = "android",
+    expect(
+        clippy::missing_const_for_thread_local,
+        reason = "Rust 1.99's OS TLS macro erases the explicit const initializer on ACTIVE_LANES"
+    )
+)]
 thread_local! {
-    static LOCAL_LANES: LazyCell<RefCell<HashMap<LaneId, Weak<LocalLaneInner>>>> =
-        const { LazyCell::new(|| RefCell::new(HashMap::new())) };
+    static LOCAL_LANES: RefCell<HashMap<LaneId, Weak<LocalLaneInner>>> =
+        RefCell::new(HashMap::new());
     static ACTIVE_LANES: RefCell<Vec<LaneTicket>> = const { RefCell::new(Vec::new()) };
 }
 
