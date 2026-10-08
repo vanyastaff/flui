@@ -21,8 +21,8 @@ pub(crate) mod pointer_capture;
 mod pointer_router;
 mod traversal;
 
-pub use traversal::{FocusDirection, FocusTraversalOverrides};
 pub use pointer_capture::{PointerCapture, PointerCaptureError};
+pub use traversal::{FocusDirection, FocusTraversalOverrides};
 
 pub use focus::{FocusChangeCallback, FocusManager};
 pub use focus_scope::{
@@ -31,6 +31,7 @@ pub use focus_scope::{
     FocusTraversalPolicy, FocusTreeError, KeyEventHandler, KeyEventResult, NodeContext,
     ReadingOrderPolicy, RectProvider, ResolvedStep, TraversalDirection, TraversalEdgeBehavior,
 };
+pub(crate) use hit_test::ScrollRoute;
 pub use hit_test::{
     CursorRequest, EventPropagation, HitTestBehavior, HitTestEntry, HitTestResult, RenderId,
     TransformGuard,

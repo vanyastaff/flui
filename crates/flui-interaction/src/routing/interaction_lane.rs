@@ -1717,6 +1717,17 @@ impl InteractionDispatchHandle {
         target: ScrollTarget,
         event: &ScrollEvent,
     ) -> Result<EventPropagation, InteractionDispatchError> {
+        self.invoke_scroll_target_with_claim(target, event, || {})
+    }
+
+    /// Publish a consumed route before retiring its snapshotted captures.
+    /// The hook belongs to the binding, not the consumer callback channel.
+    pub(crate) fn invoke_scroll_target_with_claim(
+        &self,
+        target: ScrollTarget,
+        event: &ScrollEvent,
+        claimed: impl FnOnce(),
+    ) -> Result<EventPropagation, InteractionDispatchError> {
         let lane = self.active_lane()?;
         self.validate_lane(target.lane_id)?;
         let cell = lane
@@ -1730,7 +1741,13 @@ impl InteractionDispatchHandle {
             return Err(InteractionDispatchError::TargetGone);
         }
         let handler = cell.snapshot();
-        Ok(latch.invoke(cell, handler, |handler| handler(event)))
+        Ok(latch.invoke(cell, handler, |handler| {
+            let propagation = handler(event);
+            if propagation.should_stop() {
+                claimed();
+            }
+            propagation
+        }))
     }
 
     /// Register a trackpad pan-zoom claim handler in the active owner lane.

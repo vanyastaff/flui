@@ -52,6 +52,21 @@
 //!    hit test at the device's last-known hover position (the events carry
 //!    no position of their own)
 //!
+//! # Scroll routing
+//!
+//! Scroll observers follow a fresh hit path for every packet. Consumption is
+//! selected by the first handler returning `Stop`, then remains on that exact
+//! target and admitted transform through the sequence, including at an extent
+//! or after the target retires. End/Cancel, device removal and owner lifecycle
+//! withdrawal release selection before callbacks. A phase-less wheel burst
+//! expires after 500 ms without a packet on the presentation's monotonic clock.
+//! Source identity is the native `DeviceId`, or complete `PointerInfo` when the
+//! platform supplies no device. At most 32 sources are admitted; overflow still
+//! reaches fresh observers but cannot start an unlatched consumptive sequence.
+//! `binding_input_contract_matrix` covers first failure, retired captures and
+//! reentrant replacement; `scroll_physics_and_activity` covers nested scrollers
+//! and clock-driven wheel inactivity through the widget consumer.
+//!
 //! # Example
 //!
 //! ```rust
@@ -89,6 +104,7 @@ use crate::events::{
 use crate::routing::pointer_capture::ContactCapture;
 use flui_foundation::MonotonicClock;
 use flui_foundation::geometry::Offset;
+use flui_platform_api::pointer::{DeviceId, ScrollEvent, ScrollPhase};
 use smallvec::SmallVec;
 
 use crate::{
@@ -97,7 +113,7 @@ use crate::{
     processing::{PointerEventResampler, SamplingClock},
     routing::{
         HitTestResult, MouseTracker, PointerMotionKind, PointerRouter, ResolvedRouteToken,
-        RoutePanic, active_dispatch_handle,
+        RoutePanic, ScrollRoute, active_dispatch_handle,
     },
     settings::GestureSettings,
 };
@@ -281,6 +297,33 @@ impl Drop for AllPointerTeardownGuard<'_> {
 /// this generous cap never rejects a legitimate gesture.
 const MAX_SIMULTANEOUS_POINTERS: usize = 32;
 
+/// A phase-less wheel burst ends after owner-clock inactivity, independently
+/// of native timestamps (which may be absent or restart).
+const SCROLL_INACTIVITY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum ScrollSource {
+    Device(DeviceId),
+    Unidentified(PointerInfo),
+}
+
+impl From<PointerInfo> for ScrollSource {
+    fn from(pointer: PointerInfo) -> Self {
+        pointer
+            .device
+            .map_or(Self::Unidentified(pointer), Self::Device)
+    }
+}
+
+/// Rc identity is the admission authority: a reentrant Begin cannot be
+/// overwritten by the Stop or terminal cleanup of an older scroll round.
+/// No user callback or capture is owned by this record.
+struct ScrollSequence {
+    route: Cell<Option<ScrollRoute>>,
+    last_packet: Cell<web_time::Instant>,
+    phase_less: Cell<bool>,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum RefusalPolicy {
     NativeTerminal,
@@ -390,6 +433,9 @@ pub struct GestureBinding {
     /// Down resolves once; move/up events reuse the cached route.
     hit_tests: RefCell<HashMap<PointerId, CachedPointerRoute>>,
 
+    /// First consumptive scroll route per source, bounded like contact routes.
+    scroll_sequences: RefCell<HashMap<ScrollSource, Rc<ScrollSequence>>>,
+
     /// Pending move events for coalescing.
     /// Only the latest move per pointer is kept.
     pending_moves: RefCell<HashMap<PointerId, PendingMoveState>>,
@@ -482,6 +528,7 @@ impl GestureBinding {
             close_mode: crate::__runtime::CloseTombstone::default(),
             capture_wake: RefCell::new(None),
             hit_tests: RefCell::new(HashMap::new()),
+            scroll_sequences: RefCell::new(HashMap::new()),
             pending_moves: RefCell::new(HashMap::new()),
             refused_contacts: RefCell::new(RefusedContacts::default()),
             resampling_enabled: Cell::new(false),
@@ -938,6 +985,7 @@ impl GestureBinding {
     pub(crate) fn close_with_mode(&self, mode: crate::__runtime::CloseMode) {
         let mut failure = crate::__runtime::ClosePanic::for_close(mode, self.close_mode.clone());
         self.closed.set(true);
+        self.scroll_sequences.borrow_mut().clear();
         if !failure.preserving() {
             failure.invoke(|| {
                 if let Some(loss) = self.drain_capture_losses(None) {
@@ -1010,6 +1058,7 @@ impl GestureBinding {
     /// tracker) is untouched: a pointer can keep hovering an unfocused
     /// window.
     pub fn cancel_active_pointers(&self) {
+        self.scroll_sequences.borrow_mut().clear();
         let mut first_panic = self.drain_capture_losses(None);
         *self.refused_contacts.borrow_mut() = RefusedContacts::default();
         let mut pointers: Vec<_> = self
@@ -1153,6 +1202,58 @@ impl GestureBinding {
     // Internal Methods
     // ========================================================================
 
+    fn prepare_scroll_sequence(&self, event: &ScrollEvent) -> Option<Rc<ScrollSequence>> {
+        let now = self.clock.now();
+        let source = ScrollSource::from(event.pointer);
+        let mut sequences = self.scroll_sequences.borrow_mut();
+        sequences.retain(|_, sequence| {
+            !sequence.phase_less.get()
+                || now.saturating_duration_since(sequence.last_packet.get())
+                    < SCROLL_INACTIVITY_TIMEOUT
+        });
+        if matches!(
+            event.phase,
+            Some(ScrollPhase::Ended | ScrollPhase::Cancelled | ScrollPhase::MomentumEnded)
+        ) {
+            // Withdrawal precedes terminal observers and consumer callbacks.
+            return sequences.remove(&source);
+        }
+        if matches!(
+            event.phase,
+            Some(ScrollPhase::Began | ScrollPhase::MomentumBegan)
+        ) {
+            sequences.remove(&source);
+        }
+        if let Some(sequence) = sequences.get(&source) {
+            sequence.last_packet.set(now);
+            sequence.phase_less.set(event.phase.is_none());
+            return Some(Rc::clone(sequence));
+        }
+        if sequences.len() >= MAX_SIMULTANEOUS_POINTERS {
+            // Refuse consumption rather than publish an unlatched gesture.
+            // Its fresh observers still receive the packet.
+            return None;
+        }
+        let sequence = Rc::new(ScrollSequence {
+            route: Cell::new(None),
+            last_packet: Cell::new(now),
+            phase_less: Cell::new(event.phase.is_none()),
+        });
+        sequences.insert(source, Rc::clone(&sequence));
+        Some(sequence)
+    }
+
+    fn is_current_scroll_sequence(
+        &self,
+        pointer: PointerInfo,
+        sequence: &Rc<ScrollSequence>,
+    ) -> bool {
+        self.scroll_sequences
+            .borrow()
+            .get(&ScrollSource::from(pointer))
+            .is_some_and(|current| Rc::ptr_eq(current, sequence))
+    }
+
     fn handle_pointer_event_kernel<F>(&self, event: &PointerEvent, hit_test_fn: F)
     where
         F: FnOnce(Offset<f64>) -> HitTestResult,
@@ -1160,11 +1261,19 @@ impl GestureBinding {
         if self.tearing_down_all_pointers.get() {
             return;
         }
+        if let PointerEvent::Cancel(cancel) = event {
+            self.scroll_sequences
+                .borrow_mut()
+                .remove(&ScrollSource::from(cancel.pointer));
+        }
         let Some(pointer_id) = crate::PointerEventExt::pointer_id(event) else {
             // Device lifecycle has no contact identity. It still reaches
             // global observers without fabricating a per-pointer route.
             let mut first_panic = None;
             if let PointerEvent::DeviceRemoved(device) = event {
+                self.scroll_sequences
+                    .borrow_mut()
+                    .remove(&ScrollSource::Device(device.device));
                 let mut pointers: Vec<_> = self
                     .hit_tests
                     .borrow()
@@ -1514,23 +1623,32 @@ impl GestureBinding {
                 }
             }
             PointerEvent::Scroll(scroll) => {
-                // Two channels, dispatch-then-resolve (the signal is delivered
-                // to the whole hit path, THEN exactly one registrant is
-                // allowed to act): first every listener on the
-                // path observes the raw event, then the leaf-first claim walk
-                // over the path's scroll targets stops at the first handler
-                // that consumes the tick.
+                // Commit source admission (or terminal withdrawal) before
+                // hit testing and observers, which may reenter this binding.
+                let sequence = self.prepare_scroll_sequence(scroll);
                 let position = event
                     .position()
                     .expect("BUG: Scroll carries a checked position");
-                // BOTH channels use a FRESH hit test at the event position:
-                // a signal has no down-capture — it is hit-tested where it
-                // happens, even mid-contact — so a wheel tick during a drag reaches the widgets under
-                // the cursor, not the route captured at Down.
+                // Raw observers always follow the current focal point. Only
+                // the consumptive channel stays with the first scroll claimant.
                 let fresh_result = hit_test_fn(position);
                 let mut first_panic = self.dispatch_ephemeral(event, &fresh_result);
                 let claim = RoutePanic::capture(|| {
-                    let claimed = fresh_result.dispatch_scroll(scroll);
+                    let claimed = sequence.as_ref().is_some_and(|sequence| {
+                        if let Some(route) = sequence.route.get() {
+                            // A gone target stays inert until the sequence ends;
+                            // it never hands this gesture to a new hit path.
+                            route.dispatch(scroll, || {})
+                        } else if self.is_current_scroll_sequence(scroll.pointer, sequence) {
+                            fresh_result.dispatch_scroll_with_claim(scroll, |route| {
+                                if self.is_current_scroll_sequence(scroll.pointer, sequence) {
+                                    sequence.route.set(Some(route));
+                                }
+                            })
+                        } else {
+                            false
+                        }
+                    });
                     tracing::trace!(
                         claimed,
                         scroll_targets = fresh_result.entries_with_scroll_targets().count(),
@@ -1993,6 +2111,7 @@ impl GestureBinding {
 
     /// Detach and clean every interrupted pointer transaction.
     fn clear_all_pointer_state_capturing_panic(&self) -> Option<RoutePanic> {
+        self.scroll_sequences.borrow_mut().clear();
         let mut first_panic = self.drain_capture_losses(None);
         *self.refused_contacts.borrow_mut() = RefusedContacts::default();
         let mut cached_routes: Vec<_> = self.hit_tests.borrow_mut().drain().collect();

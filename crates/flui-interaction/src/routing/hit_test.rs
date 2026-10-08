@@ -60,6 +60,50 @@ impl EventPropagation {
     }
 }
 
+/// An exact selected scroll consumer and its admitted global-to-local transform.
+/// This holds data only; unregistering a target does not retain its callbacks.
+#[derive(Clone, Copy)]
+pub(crate) struct ScrollRoute {
+    target: ScrollTarget,
+    transform: Option<Matrix4>,
+}
+
+impl ScrollRoute {
+    pub(crate) fn dispatch(self, event: &ScrollEvent, claimed: impl FnOnce()) -> bool {
+        let local_event = if let Some(transform) = self.transform {
+            if !transform.is_invertible() {
+                return false;
+            }
+            let Some(local) = transform_scroll_event(event, &transform) else {
+                return false;
+            };
+            local
+        } else {
+            *event
+        };
+        let handle = match active_dispatch_handle() {
+            Ok(handle) => handle,
+            Err(error) => {
+                tracing::debug!(
+                    ?error,
+                    "scroll dispatch skipped without an active owner lane"
+                );
+                return false;
+            }
+        };
+        match handle.invoke_scroll_target_with_claim(self.target, &local_event, claimed) {
+            Ok(propagation) => propagation.should_stop(),
+            Err(error) => {
+                tracing::debug!(
+                    ?error,
+                    "scroll target unavailable during owner-lane dispatch"
+                );
+                false
+            }
+        }
+    }
+}
+
 // ============================================================================
 // HIT TEST BEHAVIOR
 // ============================================================================
@@ -655,48 +699,22 @@ impl HitTestResult {
 
     /// Dispatches a scroll event to all entries.
     pub fn dispatch_scroll(&self, event: &ScrollEvent) -> bool {
-        let handle = match active_dispatch_handle() {
-            Ok(handle) => handle,
-            Err(error) => {
-                tracing::debug!(
-                    ?error,
-                    "scroll dispatch skipped without an active owner lane"
-                );
-                return false;
-            }
-        };
+        self.dispatch_scroll_with_claim(event, |_| {})
+    }
+
+    pub(crate) fn dispatch_scroll_with_claim(
+        &self,
+        event: &ScrollEvent,
+        mut claimed: impl FnMut(ScrollRoute),
+    ) -> bool {
         for entry in &self.path {
             if let Some(target) = entry.scroll_target {
-                let local_event = if let Some(ref transform) = entry.transform {
-                    // `transform` is already global-to-local (see
-                    // `HitTestEntry::transform`'s doc) -- apply it directly.
-                    // `is_invertible` is a well-formedness probe -- it skips
-                    // computing (and discarding) the inverse itself: a
-                    // degenerate ancestor transform makes the composed
-                    // `transform` itself singular, and such an entry must
-                    // still skip delivery rather than report a bogus point
-                    // (unchanged pre-existing behavior).
-                    if transform.is_invertible() {
-                        let Some(local) = transform_scroll_event(event, transform) else {
-                            continue;
-                        };
-                        local
-                    } else {
-                        continue;
-                    }
-                } else {
-                    *event
+                let route = ScrollRoute {
+                    target,
+                    transform: entry.transform,
                 };
-
-                match handle.invoke_scroll_target(target, &local_event) {
-                    Ok(propagation) if propagation.should_stop() => return true,
-                    Ok(_) => {}
-                    Err(error) => {
-                        tracing::debug!(
-                            ?error,
-                            "scroll target unavailable during owner-lane dispatch"
-                        );
-                    }
+                if route.dispatch(event, || claimed(route)) {
+                    return true;
                 }
             }
         }
