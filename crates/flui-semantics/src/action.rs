@@ -118,7 +118,7 @@ pub enum ActionArgs {
 ///
 /// The target uses the same stable [`AccessibilityNodeId`] exported in a
 /// [`SemanticsSnapshot`](crate::SemanticsSnapshot), never the rebuild-local
-/// [`SemanticsId`](crate::SemanticsId). The presentation/realm target is
+/// [`SemanticsId`](crate::SemanticsId). The presentation/ui_runtime target is
 /// structural: an adapter receives the command capability for the
 /// presentation whose snapshot it exposes, so a raw process-global view ID is
 /// neither stored here nor resolved through a singleton.

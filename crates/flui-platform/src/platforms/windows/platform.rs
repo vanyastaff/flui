@@ -27,19 +27,18 @@ use windows::{
             WindowsAndMessaging::{
                 CS_HREDRAW, CS_OWNDC, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow,
                 DispatchMessageW, GWLP_USERDATA, GetClassNameW, GetClientRect, GetForegroundWindow,
-                GetMessageW, GetWindowLongPtrW, GetWindowThreadProcessId, HICON, HTCLIENT,
-                HWND_MESSAGE, IDC_ARROW, IsWindowVisible, MSG, MWMO_INPUTAVAILABLE,
-                MsgWaitForMultipleObjectsEx, PEEK_MESSAGE_REMOVE_TYPE, PM_QS_POSTMESSAGE,
-                PM_REMOVE, PeekMessageW, PostMessageW, PostQuitMessage, QS_ALLINPUT,
-                RegisterClassW, SC_KEYMENU, SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOZORDER,
-                SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, TranslateMessage,
-                WINDOW_EX_STYLE, WINDOW_STYLE, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_CREATE,
-                WM_DEADCHAR, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_INPUTLANGCHANGE,
-                WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
-                WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_PAINT,
-                WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETTINGCHANGE,
-                WM_SHOWWINDOW, WM_SIZE, WM_SYSCHAR, WM_SYSCOMMAND, WM_SYSDEADCHAR, WM_SYSKEYDOWN,
-                WM_SYSKEYUP, WNDCLASSW,
+                GetWindowLongPtrW, GetWindowThreadProcessId, HICON, HTCLIENT, HWND_MESSAGE,
+                IDC_ARROW, IsWindowVisible, MSG, MWMO_INPUTAVAILABLE, MsgWaitForMultipleObjectsEx,
+                PEEK_MESSAGE_REMOVE_TYPE, PM_QS_POSTMESSAGE, PM_REMOVE, PeekMessageW, PostMessageW,
+                PostQuitMessage, QS_ALLINPUT, RegisterClassW, SC_KEYMENU, SW_SHOWNORMAL,
+                SWP_NOACTIVATE, SWP_NOZORDER, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos,
+                TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CAPTURECHANGED, WM_CHAR,
+                WM_CLOSE, WM_CREATE, WM_DEADCHAR, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND,
+                WM_INPUTLANGCHANGE, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN,
+                WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
+                WM_MOUSEWHEEL, WM_MOVE, WM_PAINT, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP,
+                WM_SETCURSOR, WM_SETFOCUS, WM_SETTINGCHANGE, WM_SHOWWINDOW, WM_SIZE, WM_SYSCHAR,
+                WM_SYSCOMMAND, WM_SYSDEADCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP, WNDCLASSW,
             },
         },
     },
@@ -89,6 +88,10 @@ impl Drop for DeadlineQuery {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "platform/preference_retry_tests.rs"]
+mod preference_retry_tests;
 
 /// The last deadline the loop delivered. The hook answers with an instant
 /// only, so the same `(hook, instant)` pair is either work no frame has had
@@ -812,6 +815,12 @@ impl WindowsPlatform {
             Self::register_window_class()?;
         }
 
+        // Build owner resources first so any later native creation failure
+        // retires its preference subscriptions and receiver through the guard.
+        let windows = Arc::new(Mutex::new(HashMap::new()));
+        let owner_control =
+            super::owner_control::OwnerControl::new(owner_identity, Arc::downgrade(&windows))?;
+
         // SAFETY: `GetModuleHandleW(None)` queries the current process
         // image, no pointer arguments. `CreateWindowExW` here creates the
         // message-only window with `HWND_MESSAGE` as parent and constant
@@ -849,12 +858,8 @@ impl WindowsPlatform {
 
         tracing::info!("Windows platform initialized with Tokio executors");
 
-        let windows = Arc::new(Mutex::new(HashMap::new()));
         let platform = Self {
-            owner_control: super::owner_control::OwnerControl::new(
-                owner_identity,
-                Arc::downgrade(&windows),
-            )?,
+            owner_control,
             message_window,
             windows,
             background_executor,
@@ -1040,7 +1045,11 @@ impl WindowsPlatform {
                 WM_CREATE => {
                     // SAFETY: this is the just-created owner-thread HWND. Windows
                     // owns notification delivery until its destruction.
-                    if let Err(error) = windows::Win32::UI::Controls::RegisterPointerDeviceNotifications(hwnd, false) {
+                    if let Err(error) =
+                        windows::Win32::UI::Controls::RegisterPointerDeviceNotifications(
+                            hwnd, false,
+                        )
+                    {
                         tracing::warn!(%error, "pointer device notifications unavailable");
                     }
                     tracing::debug!("WM_CREATE for HWND {:?}", hwnd);
@@ -1586,8 +1595,13 @@ impl WindowsPlatform {
                     DefWindowProcW(hwnd, msg, wparam, lparam)
                 }
 
-                WM_LBUTTONDOWN | WM_LBUTTONUP | WM_RBUTTONDOWN | WM_RBUTTONUP | WM_MBUTTONDOWN
-                | WM_MBUTTONUP | windows::Win32::UI::WindowsAndMessaging::WM_XBUTTONDOWN
+                WM_LBUTTONDOWN
+                | WM_LBUTTONUP
+                | WM_RBUTTONDOWN
+                | WM_RBUTTONUP
+                | WM_MBUTTONDOWN
+                | WM_MBUTTONUP
+                | windows::Win32::UI::WindowsAndMessaging::WM_XBUTTONDOWN
                 | windows::Win32::UI::WindowsAndMessaging::WM_XBUTTONUP => {
                     use super::events::{
                         button_message, capture_on_press, mouse_button_event, release_capture_after,
@@ -1619,7 +1633,11 @@ impl WindowsPlatform {
                             ctx.callbacks.dispatch_input(event);
                         }
                     }
-                    LRESULT(isize::from(matches!(msg, windows::Win32::UI::WindowsAndMessaging::WM_XBUTTONDOWN | windows::Win32::UI::WindowsAndMessaging::WM_XBUTTONUP)))
+                    LRESULT(isize::from(matches!(
+                        msg,
+                        windows::Win32::UI::WindowsAndMessaging::WM_XBUTTONDOWN
+                            | windows::Win32::UI::WindowsAndMessaging::WM_XBUTTONUP
+                    )))
                 }
 
                 windows::Win32::UI::WindowsAndMessaging::WM_POINTERDOWN
@@ -1629,10 +1647,19 @@ impl WindowsPlatform {
                 | windows::Win32::UI::WindowsAndMessaging::WM_POINTERLEAVE
                 | windows::Win32::UI::WindowsAndMessaging::WM_POINTERCAPTURECHANGED => {
                     if let Some(ctx) = ctx {
-                        let events = super::events::native_pointer_input(hwnd, msg, (wparam.0 & 0xffff) as u32, ctx.scale_factor.get(), &ctx.message_clock, &ctx.pointer_registry);
+                        let events = super::events::native_pointer_input(
+                            hwnd,
+                            msg,
+                            (wparam.0 & 0xffff) as u32,
+                            ctx.scale_factor.get(),
+                            &ctx.message_clock,
+                            &ctx.pointer_registry,
+                        );
                         for event in events {
                             let deliver = ctx.pointer_registry.borrow().delivers(&event);
-                            if deliver { ctx.callbacks.dispatch_input(event); }
+                            if deliver {
+                                ctx.callbacks.dispatch_input(event);
+                            }
                         }
                     }
                     // Consume the native route: DefWindowProc would promote it
@@ -1642,17 +1669,38 @@ impl WindowsPlatform {
 
                 windows::Win32::UI::WindowsAndMessaging::WM_POINTERDEVICECHANGE => {
                     if let Some(ctx) = ctx
-                        && let Ok(device) = flui_platform_api::pointer::DeviceId::try_from(lparam.0 as usize as u64)
+                        && let Ok(device) =
+                            flui_platform_api::pointer::DeviceId::try_from(lparam.0 as usize as u64)
                     {
-                        let time = flui_platform_api::EventTime::from_nanos(ctx.message_clock.message_time());
-                        let events = if wparam.0 == windows::Win32::UI::WindowsAndMessaging::PDC_REMOVAL as usize {
-                            ctx.pointer_registry.borrow_mut().remove_device(device, time)
-                        } else if wparam.0 == windows::Win32::UI::WindowsAndMessaging::PDC_ARRIVAL as usize {
-                            if let Some(kind) = super::events::native_device_kind(windows::Win32::Foundation::HANDLE(lparam.0 as *mut core::ffi::c_void)) {
-                                ctx.pointer_registry.borrow_mut().add_device(device, kind, time)
-                            } else { Vec::new() }
-                        } else { Vec::new() };
-                        for event in events { ctx.callbacks.dispatch_input(event); }
+                        let time = flui_platform_api::EventTime::from_nanos(
+                            ctx.message_clock.message_time(),
+                        );
+                        let events = if wparam.0
+                            == windows::Win32::UI::WindowsAndMessaging::PDC_REMOVAL as usize
+                        {
+                            ctx.pointer_registry
+                                .borrow_mut()
+                                .remove_device(device, time)
+                        } else if wparam.0
+                            == windows::Win32::UI::WindowsAndMessaging::PDC_ARRIVAL as usize
+                        {
+                            if let Some(kind) = super::events::native_device_kind(
+                                windows::Win32::Foundation::HANDLE(
+                                    lparam.0 as *mut core::ffi::c_void,
+                                ),
+                            ) {
+                                ctx.pointer_registry
+                                    .borrow_mut()
+                                    .add_device(device, kind, time)
+                            } else {
+                                Vec::new()
+                            }
+                        } else {
+                            Vec::new()
+                        };
+                        for event in events {
+                            ctx.callbacks.dispatch_input(event);
+                        }
                     }
                     LRESULT(0)
                 }
@@ -1910,25 +1958,25 @@ impl WindowsPlatform {
         let mut delivered: Option<DeadlineDelivery> = None;
         // Shared with every window this platform opens; without an owner
         // there are no windows, so the count never moves.
-        let frames = self
-            .owner_control
-            .shares("run message loop")
-            .ok()
-            .map(|shares| shares.frames);
+        let shares = self.owner_control.shares("run message loop").ok();
+        let frames = shares.as_ref().map(|shares| Rc::clone(&shares.frames));
+        let preferences = shares.map(|shares| shares.preferences);
+        let fallback = Arc::clone(&self.owner_control.wake);
+        let wait_handles = [fallback.handle()];
         let frame_count = || frames.as_ref().map_or(0, |frames| frames.get());
 
         // SAFETY: `msg` is a stack-local, default-initialized `MSG` that
         // outlives every call here. `&raw mut msg` is the only pointer
-        // `PeekMessageW`/`GetMessageW` write through, and `TranslateMessage`/
-        // `DispatchMessageW` read `&raw const msg` only after one of them
+        // `PeekMessageW` writes through, and `TranslateMessage`/
+        // `DispatchMessageW` read `&raw const msg` only after the peek
         // reported a filled message. No pointer into `msg` is held across a
         // call, so the re-entrancy below cannot alias it.
-        // `MsgWaitForMultipleObjectsEx` is passed no handle array (`None`,
-        // zero handles), so it reads no caller memory and only waits on this
-        // thread's queue. The loop runs on the thread that created this
+        // `wait_handles` and its strong OwnedHandle owner outlive every native
+        // wait, including reentrant shutdown; no handle closes while waiting.
+        // The loop runs on the thread that created this
         // platform's windows, so every peek, wait and dispatch addresses that
-        // thread's queue, and `DispatchMessageW` (like `PeekMessageW` and
-        // `GetMessageW`, which deliver sent messages) re-enters `window_proc`
+        // thread's queue, and `DispatchMessageW` (like `PeekMessageW`, which
+        // delivers sent messages) re-enters `window_proc`
         // on it. The deadline hook is safe code, called with no borrow of
         // `msg` and no platform lock held, so it may re-enter the platform
         // (close windows, replace itself, request quit) without violating
@@ -1937,6 +1985,9 @@ impl WindowsPlatform {
             let mut msg = MSG::default();
 
             loop {
+                if let Some(source) = &preferences {
+                    source.retry_if_due();
+                }
                 // An admitted due wake is delivery debt. Actuate it before
                 // querying user code, which may abandon a late deadline.
                 if armed
@@ -2013,45 +2064,42 @@ impl WindowsPlatform {
                     }
                 };
 
-                if let Some(arm) = &armed {
-                    let remaining = arm
-                        .deadline
-                        .saturating_duration_since(web_time::Instant::now());
+                let next_deadline = armed
+                    .as_ref()
+                    .map(|arm| arm.deadline)
+                    .into_iter()
+                    .chain(
+                        preferences
+                            .as_ref()
+                            .and_then(|source| source.retry_deadline()),
+                    )
+                    .min();
+                let timeout = next_deadline.map_or(u32::MAX, |deadline| {
+                    let remaining = deadline.saturating_duration_since(web_time::Instant::now());
                     // Round upwards so a submillisecond deadline cannot spin;
                     // reserve Win32's INFINITE value for an actual idle wait.
                     let milliseconds = remaining.as_nanos().saturating_add(999_999) / 1_000_000;
-                    let timeout = u32::try_from(milliseconds.min(u128::from(u32::MAX - 1)))
-                        .expect("BUG: a bounded native timeout fits u32");
-                    let outcome = MsgWaitForMultipleObjectsEx(
-                        None,
-                        timeout,
-                        QS_ALLINPUT,
-                        MWMO_INPUTAVAILABLE,
-                    );
-                    if outcome == WAIT_FAILED {
-                        return Err(PlatformError::EventLoop {
-                            message: windows::core::Error::from_thread().to_string(),
-                        });
-                    }
-                    if outcome != WAIT_TIMEOUT && outcome != WAIT_OBJECT_0 {
-                        return Err(PlatformError::EventLoop {
-                            message: format!("unexpected Win32 message wait result: {}", outcome.0),
-                        });
-                    }
-                    continue;
-                }
-
-                let result = GetMessageW(&raw mut msg, None, 0, 0).0;
-                if result == 0 {
-                    break;
-                }
-                if result == -1 {
+                    u32::try_from(milliseconds.min(u128::from(u32::MAX - 1)))
+                        .expect("BUG: a bounded native timeout fits u32")
+                });
+                let outcome = MsgWaitForMultipleObjectsEx(
+                    Some(&wait_handles),
+                    timeout,
+                    QS_ALLINPUT,
+                    MWMO_INPUTAVAILABLE,
+                );
+                if outcome == WAIT_FAILED {
                     return Err(PlatformError::EventLoop {
                         message: windows::core::Error::from_thread().to_string(),
                     });
                 }
-                let _ = TranslateMessage(&raw const msg);
-                DispatchMessageW(&raw const msg);
+                if outcome == WAIT_OBJECT_0 {
+                    self.owner_control.drive_fallback();
+                } else if outcome != WAIT_TIMEOUT && outcome.0 != WAIT_OBJECT_0.0 + 1 {
+                    return Err(PlatformError::EventLoop {
+                        message: format!("unexpected Win32 message wait result: {}", outcome.0),
+                    });
+                }
             }
 
             tracing::info!("Message loop exited with code: {}", msg.wParam.0);
@@ -2323,6 +2371,16 @@ impl Platform for WindowsPlatform {
 
     fn name(&self) -> &'static str {
         "Windows"
+    }
+
+    fn preferences(&self) -> Result<flui_platform_api::SystemPreferences, PlatformError> {
+        self.owner_control
+            .shares("read system preferences")
+            .map_err(|reason| PlatformError::Preferences {
+                message: format!("platform owner is unavailable: {reason:?}"),
+            })?
+            .preferences
+            .sample()
     }
 
     // ==================== Callbacks ====================

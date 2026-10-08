@@ -60,8 +60,7 @@ proptest = { workspace = true }
 # Criterion — hot-path regression guards. Benches cover VelocityTracker
 # (per-pointer-move), GestureArena (per-pointer-up), TapGestureRecognizer
 # (per-pointer-event), PointerEventResampler (per-raw-input), and
-# InteractionLane route resolution/invocation. Each follows the workspace
-# benchmark template at `rust-studio/.../templates/benchmark-report.md`.
+# InteractionLane route resolution/invocation.
 criterion = { workspace = true }
 # Bench fixtures use the `make_*_event` test helpers which are gated
 # behind the `testing` feature (they're not part of the release API).

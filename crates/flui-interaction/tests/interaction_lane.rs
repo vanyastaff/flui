@@ -238,7 +238,7 @@ fn capture_release_refuses_only_its_own_device_tail() {
             .dispatch_handle()
             .register_pointer(move |dispatch| match dispatch.global {
                 PointerEvent::Down(_) => {
-                    *store.borrow_mut() = Some(dispatch.capture().expect("real Down"))
+                    *store.borrow_mut() = Some(dispatch.capture().expect("real Down"));
                 }
                 PointerEvent::Move(motion) => observed.borrow_mut().push(motion.pointer.device),
                 _ => {}
@@ -358,7 +358,7 @@ fn assert_capture_wake_failure(active_unwind: bool) {
             .dispatch_handle()
             .register_pointer(move |dispatch| match dispatch.global {
                 PointerEvent::Down(_) => {
-                    *store.borrow_mut() = Some(dispatch.capture().expect("real Down"))
+                    *store.borrow_mut() = Some(dispatch.capture().expect("real Down"));
                 }
                 PointerEvent::Cancel(cancel) => {
                     assert_eq!(
@@ -483,9 +483,10 @@ fn assert_capture_route(case: CaptureCase) {
                         _ => "other",
                     },
                 ));
-                if fails && matches!(dispatch.global, PointerEvent::Cancel(_)) {
-                    panic!("first capture loss failure");
-                }
+                assert!(
+                    !(fails && matches!(dispatch.global, PointerEvent::Cancel(_))),
+                    "first capture loss failure"
+                );
                 if case != CaptureCase::Implicit && matches!(dispatch.global, PointerEvent::Down(_))
                 {
                     let token = dispatch.capture().expect("real Down target can capture");
@@ -975,9 +976,10 @@ fn assert_hover_path_retirement(callback_fails: bool, failing_metadata: usize) {
     impl Drop for MetadataCapture {
         fn drop(&mut self) {
             self.drops.fetch_add(1, Ordering::SeqCst);
-            if self.panic_on_drop {
-                panic!("later hover metadata retirement failure");
-            }
+            assert!(
+                !self.panic_on_drop,
+                "later hover metadata retirement failure"
+            );
         }
     }
     let lane = InteractionLane::try_new().expect("owner lane");
@@ -1012,9 +1014,7 @@ fn assert_hover_path_retirement(callback_fails: bool, failing_metadata: usize) {
                 // retirement is safe before failure because that path still owns it.
                 let released = owner.borrow_mut().drain(..).collect::<Vec<_>>();
                 drop(released);
-                if callback_fails {
-                    panic!("first hover callback failure");
-                }
+                assert!(!callback_fails, "first hover callback failure");
             }
         }));
     let movement =
@@ -1179,9 +1179,7 @@ fn assert_queued_hover_retirement(mismatch: bool, failing_metadata: usize) {
     impl Drop for Metadata {
         fn drop(&mut self) {
             self.drops.fetch_add(1, Ordering::SeqCst);
-            if self.fails {
-                panic!("queued hover metadata retirement failure");
-            }
+            assert!(!self.fails, "queued hover metadata retirement failure");
         }
     }
     let packet = |x: f64, changed: bool| {
@@ -1383,18 +1381,14 @@ fn assert_lifecycle_snapshot_preserves_replacement(device_removed: bool, competi
                     &contact_event(second, new_device, false, 20_000_000),
                     |_| HitTestResult::new(),
                 );
-                if competing {
-                    panic!("first lifecycle cancellation failure");
-                }
+                assert!(!competing, "first lifecycle cancellation failure");
             }
             PointerEvent::Cancel(data) if data.pointer.id == second && did_replace.get() => {
                 cancels.set(cancels.get() + 1);
             }
             PointerEvent::Cancel(data) if data.pointer.id == third => {
                 later.set(later.get() + 1);
-                if competing {
-                    panic!("later lifecycle cancellation second failure");
-                }
+                assert!(!competing, "later lifecycle cancellation second failure");
             }
             PointerEvent::Up(data) if data.pointer.id == second && did_replace.get() => {
                 ups.set(ups.get() + 1);
@@ -1657,10 +1651,10 @@ fn hardware_trace_event(
     use flui_interaction::events::PointerEvent;
     match &mut event {
         PointerEvent::Down(data) => {
-            data.sample.time = flui_platform_api::EventTime::from_nanos(nanos)
+            data.sample.time = flui_platform_api::EventTime::from_nanos(nanos);
         }
         PointerEvent::Up(data) => {
-            data.sample.time = flui_platform_api::EventTime::from_nanos(nanos)
+            data.sample.time = flui_platform_api::EventTime::from_nanos(nanos);
         }
         PointerEvent::Move(data) => {
             let mut sample = *data.current();
@@ -2186,9 +2180,7 @@ fn assert_signal_claim_delivery(route: SignalRoute, competing: bool) {
         let fail = Rc::clone(&failing);
         let claim = move || {
             calls.set(calls.get() + 1);
-            if competing && fail.get() {
-                panic!("claim handler second failure");
-            }
+            assert!(!(competing && fail.get()), "claim handler second failure");
             EventPropagation::Stop
         };
         let entry = match route {
@@ -2223,7 +2215,7 @@ fn assert_signal_claim_delivery(route: SignalRoute, competing: bool) {
             );
         }
         let failure = catch_unwind(AssertUnwindSafe(|| {
-            binding.handle_pointer_event(&signal, |_| path.clone())
+            binding.handle_pointer_event(&signal, |_| path.clone());
         }))
         .expect_err("pointer listener failure propagates");
         assert_eq!(
@@ -2637,9 +2629,7 @@ fn assert_signal_claim_retirement(competing: bool, native: bool) {
         slot.set(Some(selected));
         let observer = handle
             .register_pointer(move |_| {
-                if competing {
-                    panic!("scroll observer first failure");
-                }
+                assert!(!competing, "scroll observer first failure");
             })
             .expect("observer");
         let mut selected_path = HitTestResult::new();
@@ -2835,9 +2825,10 @@ fn assert_signal_lease(case: ScrollLeaseCase, native: bool) {
                         .expect("binding")
                         .handle_pointer_event(&packet(ScrollPhase::Began), |_| replacement.clone());
                 }
-                if case == ScrollLeaseCase::Competing && fail.get() {
-                    panic!("fresh scroll observer first failure");
-                }
+                assert!(
+                    !(case == ScrollLeaseCase::Competing && fail.get()),
+                    "fresh scroll observer first failure"
+                );
             })
             .expect("fresh observer");
         fresh_path.add(hit_entry(observer));
@@ -2852,9 +2843,7 @@ fn assert_signal_lease(case: ScrollLeaseCase, native: bool) {
                     .expect("binding")
                     .handle_pointer_event(&packet(ScrollPhase::Began), |_| replacement.clone());
             }
-            if fail.get() {
-                panic!("selected scroll consumer failure");
-            }
+            assert!(!fail.get(), "selected scroll consumer failure");
             EventPropagation::Stop
         };
         let selected = if native {
@@ -3023,7 +3012,7 @@ assert_impl_all!(PointerTarget: Copy, Send, Sync);
 assert_impl_all!(MouseRegionTarget: Copy, Send, Sync);
 assert_impl_all!(ResolvedRouteToken: Copy, Send, Sync);
 
-// Lane capability matrix: least-privilege handle and realm recreation.
+// Lane capability matrix: least-privilege handle and ui_runtime recreation.
 #[test]
 fn lane_capability_matrix() {
     let cases: &[(&str, fn())] = &[
@@ -3032,8 +3021,8 @@ fn lane_capability_matrix() {
             lane_mints_a_send_safe_least_privilege_handle,
         ),
         (
-            "realm_recreation_rejects_every_old_capability",
-            realm_recreation_rejects_every_old_capability,
+            "ui_runtime_recreation_rejects_every_old_capability",
+            ui_runtime_recreation_rejects_every_old_capability,
         ),
     ];
     for &(name, case) in cases {
@@ -3050,7 +3039,7 @@ fn lane_mints_a_send_safe_least_privilege_handle() {
     assert_eq!(format!("{handle:?}"), "InteractionDispatchHandle { .. }");
 }
 
-fn realm_recreation_rejects_every_old_capability() {
+fn ui_runtime_recreation_rejects_every_old_capability() {
     let old_lane = InteractionLane::try_new().expect("old lane");
     let old_handle = old_lane.dispatch_handle();
     let (old_target, old_route) = old_lane.enter(|| {
@@ -3073,11 +3062,11 @@ fn realm_recreation_rejects_every_old_capability() {
     replacement_lane.enter(|| {
         assert_eq!(
             replacement_handle.unregister_pointer(old_target),
-            Err(InteractionDispatchError::WrongRealm)
+            Err(InteractionDispatchError::WrongRuntime)
         );
         assert_eq!(
             replacement_handle.release_route(old_route),
-            Err(InteractionDispatchError::WrongRealm)
+            Err(InteractionDispatchError::WrongRuntime)
         );
     });
 }
@@ -3086,8 +3075,8 @@ fn realm_recreation_rejects_every_old_capability() {
 // Fresh hit test — the capability a drag needs to discover targets it has moved
 // over, which a replayed pointer-down route can never see.
 //
-// The handle pairs a realm ticket with ONE presentation's probe: identity is
-// realm-wide, the tree is not, and a realm may host several presentations each
+// The handle pairs a ui_runtime ticket with ONE presentation's probe: identity is
+// ui_runtime-wide, the tree is not, and a ui_runtime may host several presentations each
 // with its own render tree.
 // ---------------------------------------------------------------------------
 
@@ -4738,7 +4727,7 @@ fn non_pointer_invocation_retains_its_snapshot_across_a_reentrant_close() {
             "{kind}: the capture is retained, not destroyed by the unwind"
         );
         assert_eq!(
-            owner.check_realm(),
+            owner.check_ui_runtime(),
             Err(InteractionDispatchError::OwnerGone),
             "{kind}: the reentrant close took effect"
         );
@@ -4746,16 +4735,16 @@ fn non_pointer_invocation_retains_its_snapshot_across_a_reentrant_close() {
 }
 
 /// A presentation-scoped handle mutates only the targets its own owner
-/// registered; a sibling presentation sharing the realm is refused.
+/// registered; a sibling presentation sharing the UI runtime is refused.
 #[test]
 fn scoped_handle_cannot_mutate_a_sibling_owners_targets() {
     use flui_interaction::__runtime::presentation_dispatch;
     use flui_interaction::routing::MouseRegionCallbacks;
 
     let lane = InteractionLane::try_new().expect("lane");
-    let realm = lane.dispatch_handle();
-    let owner = presentation_dispatch(&realm);
-    let sibling = presentation_dispatch(&realm);
+    let ui_runtime = lane.dispatch_handle();
+    let owner = presentation_dispatch(&ui_runtime);
+    let sibling = presentation_dispatch(&ui_runtime);
     lane.enter(|| {
         let pointer = owner.register_pointer(|_| {}).expect("pointer target");
         let scroll = owner

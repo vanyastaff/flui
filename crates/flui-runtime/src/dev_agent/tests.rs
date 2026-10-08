@@ -4,7 +4,7 @@
 //! while no hook is attached, while it does not serve, or once it has let go
 //! of its windows; a deferred detach whose panic payload panics on drop, and
 //! a hook whose `Drop` panics when the last host clone goes, unwinding or
-//! not. After every failure the realm still frames and
+//! not. After every failure the UI runtime still frames and
 //! later publishes do nothing.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -126,47 +126,54 @@ fn host(panic_in: PanicIn, panic_on_drop: bool) -> (DevAgentHost, Arc<Record>) {
     (host, record)
 }
 
-/// A realm with a root mounted and one frame committed.
-fn realm() -> (UiRealm, ScriptedSink) {
-    let realm = UiRealm::for_test();
-    realm
-        .attach_root_widget_to_for_test(realm.presentation_id(), &flui_widgets::Text::new("root"))
+/// A UI runtime with a root mounted and one frame committed.
+fn ui_runtime() -> (UiRuntime, ScriptedSink) {
+    let ui_runtime = UiRuntime::for_test();
+    ui_runtime
+        .attach_root_widget_to_for_test(
+            ui_runtime.presentation_id(),
+            &flui_widgets::Text::new("root"),
+        )
         .expect("the root attaches");
     let mut sink = ScriptedSink::always_presents();
-    frame(&realm, &mut sink);
-    (realm, sink)
+    frame(&ui_runtime, &mut sink);
+    (ui_runtime, sink)
 }
 
-fn frame(realm: &UiRealm, sink: &mut ScriptedSink) {
+fn frame(ui_runtime: &UiRuntime, sink: &mut ScriptedSink) {
     let now = flui_scheduler::Instant::now();
-    let _presented = realm.drive_frame(now, flui_scheduler::IdleDeadline::far_future(now), || {
-        realm.render_frame(sink)
-    });
+    let _presented =
+        ui_runtime.drive_frame(now, flui_scheduler::IdleDeadline::far_future(now), || {
+            ui_runtime.render_frame(sink)
+        });
 }
 
-/// Frames once more and says whether the realm collected semantics.
-fn collects_semantics(realm: &UiRealm, sink: &mut ScriptedSink) -> bool {
-    realm.request_redraw();
-    frame(realm, sink);
-    realm
+/// Frames once more and says whether the UI runtime collected semantics.
+fn collects_semantics(ui_runtime: &UiRuntime, sink: &mut ScriptedSink) -> bool {
+    ui_runtime.request_redraw();
+    frame(ui_runtime, sink);
+    ui_runtime
         .pipeline_for_test()
         .with(|pipeline| pipeline.semantics_owner().is_some())
 }
 
 fn a_hook_panicking_in_attach_is_dropped_and_nothing_is_vended() {
-    let (realm, mut sink) = realm();
+    let (ui_runtime, mut sink) = ui_runtime();
     let (host, record) = host(PanicIn::Attach, false);
     assert!(
         host.attach().is_none(),
         "a panicking attach attaches nothing"
     );
-    host.publish(&realm, realm.presentation_id());
+    host.publish(&ui_runtime, ui_runtime.presentation_id());
     assert_eq!(
         record.counts(),
         (1, 0, 0, 1),
         "dropped, never handed a window"
     );
-    assert!(!collects_semantics(&realm, &mut sink), "no semantics work");
+    assert!(
+        !collects_semantics(&ui_runtime, &mut sink),
+        "no semantics work"
+    );
     assert!(
         host.attach().is_none(),
         "a dropped hook never attaches again"
@@ -174,18 +181,24 @@ fn a_hook_panicking_in_attach_is_dropped_and_nothing_is_vended() {
 }
 
 fn a_hook_that_does_not_serve_is_not_attached_and_costs_nothing() {
-    let (realm, mut sink) = realm();
+    let (ui_runtime, mut sink) = ui_runtime();
     let (host, record) = host(PanicIn::Inert, false);
     assert!(host.attach().is_none(), "an inert hook attaches nothing");
     assert!(!host.is_attached());
-    assert!(host.vend(&realm, realm.presentation_id()).is_none());
-    host.publish(&realm, realm.presentation_id());
+    assert!(
+        host.vend(&ui_runtime, ui_runtime.presentation_id())
+            .is_none()
+    );
+    host.publish(&ui_runtime, ui_runtime.presentation_id());
     assert_eq!(
         record.counts(),
         (1, 0, 0, 0),
         "asked once, handed nothing, never detached, kept"
     );
-    assert!(!collects_semantics(&realm, &mut sink), "no semantics work");
+    assert!(
+        !collects_semantics(&ui_runtime, &mut sink),
+        "no semantics work"
+    );
     assert!(
         host.attach().is_none(),
         "the next loop asks again and is answered the same"
@@ -194,12 +207,12 @@ fn a_hook_that_does_not_serve_is_not_attached_and_costs_nothing() {
 }
 
 fn a_hook_panicking_in_window_opened_is_dropped_with_the_window() {
-    let (realm, mut sink) = realm();
+    let (ui_runtime, mut sink) = ui_runtime();
     let (host, record) = host(PanicIn::WindowOpened, false);
     let attachment = host.attach().expect("attach succeeds");
-    host.publish(&realm, realm.presentation_id());
+    host.publish(&ui_runtime, ui_runtime.presentation_id());
     assert_eq!(record.counts(), (1, 0, 1, 1), "the hook is dropped");
-    host.publish(&realm, realm.presentation_id());
+    host.publish(&ui_runtime, ui_runtime.presentation_id());
     drop(attachment);
     assert_eq!(
         record.counts(),
@@ -207,42 +220,42 @@ fn a_hook_panicking_in_window_opened_is_dropped_with_the_window() {
         "a later publish and the loop's end call nothing"
     );
     assert!(
-        !collects_semantics(&realm, &mut sink),
+        !collects_semantics(&ui_runtime, &mut sink),
         "the window went with the hook, and its semantics work with it"
     );
 }
 
 fn a_hook_panicking_in_detach_is_contained() {
-    let (realm, mut sink) = realm();
+    let (ui_runtime, mut sink) = ui_runtime();
     let (host, record) = host(PanicIn::Detach, false);
     let attachment = host.attach().expect("attach succeeds");
-    host.publish(&realm, realm.presentation_id());
+    host.publish(&ui_runtime, ui_runtime.presentation_id());
     drop(attachment);
     assert_eq!(record.counts(), (1, 1, 1, 1), "detached once, then dropped");
     assert!(
         host.attach().is_none(),
         "a dropped hook never attaches again"
     );
-    frame(&realm, &mut sink);
+    frame(&ui_runtime, &mut sink);
 }
 
 fn a_hook_whose_drop_panics_too_is_contained() {
-    let (realm, mut sink) = realm();
+    let (ui_runtime, mut sink) = ui_runtime();
     let (host, record) = host(PanicIn::WindowOpened, true);
     let _attachment = host.attach().expect("attach succeeds");
-    host.publish(&realm, realm.presentation_id());
+    host.publish(&ui_runtime, ui_runtime.presentation_id());
     assert_eq!(record.counts(), (1, 0, 1, 1));
-    host.publish(&realm, realm.presentation_id());
+    host.publish(&ui_runtime, ui_runtime.presentation_id());
     assert_eq!(record.counts(), (1, 0, 1, 1));
-    frame(&realm, &mut sink);
+    frame(&ui_runtime, &mut sink);
 }
 
 fn a_deferred_detach_panicking_with_a_panicking_payload_is_contained() {
-    let (realm, mut sink) = realm();
+    let (ui_runtime, mut sink) = ui_runtime();
     let (host, record) = host(PanicIn::DetachWithPanickingPayload, false);
     let attachment = host.attach().expect("attach succeeds");
     RELEASE.set(Some(attachment));
-    host.publish(&realm, realm.presentation_id());
+    host.publish(&ui_runtime, ui_runtime.presentation_id());
     assert_eq!(
         record.counts(),
         (1, 1, 1, 1),
@@ -252,13 +265,16 @@ fn a_deferred_detach_panicking_with_a_panicking_payload_is_contained() {
         host.attach().is_none(),
         "a dropped hook never attaches again"
     );
-    host.publish(&realm, realm.presentation_id());
+    host.publish(&ui_runtime, ui_runtime.presentation_id());
     assert_eq!(
         record.counts(),
         (1, 1, 1, 1),
         "a later publish calls nothing"
     );
-    assert!(!collects_semantics(&realm, &mut sink), "no semantics work");
+    assert!(
+        !collects_semantics(&ui_runtime, &mut sink),
+        "no semantics work"
+    );
 }
 
 fn a_hook_whose_drop_panics_is_contained_when_the_last_host_goes() {
@@ -289,11 +305,11 @@ fn a_hook_whose_drop_panics_is_contained_when_the_last_host_goes() {
 }
 
 fn a_nested_call_finds_the_hook_lent_and_does_nothing() {
-    let (realm, _sink) = realm();
+    let (ui_runtime, _sink) = ui_runtime();
     let (host, record) = host(PanicIn::Nowhere, false);
     let _attachment = host.attach().expect("attach succeeds");
     *record.reenter.lock() = Some(host.clone());
-    host.publish(&realm, realm.presentation_id());
+    host.publish(&ui_runtime, ui_runtime.presentation_id());
     assert_eq!(
         record.counts(),
         (1, 0, 1, 0),
@@ -312,16 +328,16 @@ fn a_second_attach_while_attached_is_refused() {
 }
 
 fn a_new_loop_attaches_and_publishes_again() {
-    let (realm, _sink) = realm();
+    let (ui_runtime, _sink) = ui_runtime();
     let (host, record) = host(PanicIn::Nowhere, false);
     drop(host.attach().expect("the first loop attaches"));
     let _second = host.attach().expect("the next loop attaches");
-    host.publish(&realm, realm.presentation_id());
+    host.publish(&ui_runtime, ui_runtime.presentation_id());
     assert_eq!(record.counts(), (2, 1, 1, 0));
     let window = record.windows.lock()[0].clone();
     assert_eq!(
         window.id().get(),
-        realm.presentation_id().as_u64(),
+        ui_runtime.presentation_id().as_u64(),
         "the handle is the presentation's"
     );
     assert!(
@@ -331,46 +347,55 @@ fn a_new_loop_attaches_and_publishes_again() {
 }
 
 fn detaching_the_hook_ends_its_windows_semantics_work() {
-    let (realm, mut sink) = realm();
+    let (ui_runtime, mut sink) = ui_runtime();
     let (host, record) = host(PanicIn::Nowhere, false);
     let attachment = host.attach().expect("attach succeeds");
-    host.publish(&realm, realm.presentation_id());
+    host.publish(&ui_runtime, ui_runtime.presentation_id());
     assert!(
-        collects_semantics(&realm, &mut sink),
+        collects_semantics(&ui_runtime, &mut sink),
         "a handed-over window is read"
     );
     drop(attachment);
     assert_eq!(record.counts(), (1, 1, 1, 0));
     assert!(
-        !collects_semantics(&realm, &mut sink),
+        !collects_semantics(&ui_runtime, &mut sink),
         "the hook let go of its windows at detach"
     );
     let second = host.attach().expect("the next loop attaches");
-    host.publish(&realm, realm.presentation_id());
+    host.publish(&ui_runtime, ui_runtime.presentation_id());
     assert!(
-        collects_semantics(&realm, &mut sink),
+        collects_semantics(&ui_runtime, &mut sink),
         "the next loop's window is read again"
     );
     drop(second);
 }
 
 fn nothing_is_vended_while_no_hook_is_attached() {
-    let (realm, mut sink) = realm();
+    let (ui_runtime, mut sink) = ui_runtime();
     let (host, record) = host(PanicIn::Nowhere, false);
-    assert!(host.vend(&realm, realm.presentation_id()).is_none());
-    host.publish(&realm, realm.presentation_id());
+    assert!(
+        host.vend(&ui_runtime, ui_runtime.presentation_id())
+            .is_none()
+    );
+    host.publish(&ui_runtime, ui_runtime.presentation_id());
     assert_eq!(record.counts(), (0, 0, 0, 0));
-    assert!(!collects_semantics(&realm, &mut sink), "no semantics work");
+    assert!(
+        !collects_semantics(&ui_runtime, &mut sink),
+        "no semantics work"
+    );
 
     let attachment = host.attach().expect("attach succeeds");
     drop(attachment);
-    host.publish(&realm, realm.presentation_id());
+    host.publish(&ui_runtime, ui_runtime.presentation_id());
     assert_eq!(
         record.counts(),
         (1, 1, 0, 0),
         "nothing after the loop ended"
     );
-    assert!(!collects_semantics(&realm, &mut sink), "no semantics work");
+    assert!(
+        !collects_semantics(&ui_runtime, &mut sink),
+        "no semantics work"
+    );
 }
 
 #[test]

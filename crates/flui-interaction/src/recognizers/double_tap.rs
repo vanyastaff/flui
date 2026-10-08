@@ -10,9 +10,10 @@ use crate::{
     events::{PointerEvent, PointerEventExt, PointerKind},
     ids::PointerId,
     routing::{PointerDispatch, RoutePanic},
-    settings::GestureSettings,
+    settings::{GestureSettings, GestureSettingsProvider},
 };
 use flui_foundation::geometry::Offset;
+use flui_platform_api::pointer::DeviceId;
 use std::{
     cell::RefCell,
     rc::{Rc, Weak},
@@ -50,7 +51,7 @@ impl Drop for DoubleTapCallbacks {
 #[must_use]
 pub struct DoubleTapGestureRecognizerBuilder {
     arena: GestureArena,
-    settings: GestureSettings,
+    settings: GestureSettingsProvider,
     callbacks: DoubleTapCallbacks,
 }
 impl std::fmt::Debug for DoubleTapGestureRecognizerBuilder {
@@ -62,8 +63,8 @@ impl std::fmt::Debug for DoubleTapGestureRecognizerBuilder {
 }
 impl DoubleTapGestureRecognizerBuilder {
     /// Freeze gesture settings for contacts admitted by this recognizer.
-    pub fn settings(mut self, settings: GestureSettings) -> Self {
-        self.settings = settings;
+    pub fn settings(mut self, settings: impl Into<GestureSettingsProvider>) -> Self {
+        self.settings = settings.into();
         self
     }
     /// Register a callback before building the recognizer.
@@ -100,12 +101,16 @@ impl DoubleTapGestureRecognizerBuilder {
 #[derive(Debug, Clone)]
 enum DoubleTapState {
     Ready,
-    FirstDown,
+    FirstDown {
+        down_time: Option<Instant>,
+        device: Option<DeviceId>,
+    },
     Waiting {
         details: DoubleTapDetails,
         first_up: Instant,
         deadline: Option<Instant>,
-        settings: GestureSettings,
+        settings: Box<GestureSettings>,
+        device: Option<DeviceId>,
     },
     SecondDown,
 }
@@ -114,7 +119,7 @@ pub struct DoubleTapGestureRecognizer {
     contact: PrimaryContact,
     gesture: RefCell<DoubleTapState>,
     first_entry: RefCell<Option<GestureArenaEntry>>,
-    settings: GestureSettings,
+    settings: GestureSettingsProvider,
     callbacks: DoubleTapCallbacks,
 }
 impl std::fmt::Debug for DoubleTapGestureRecognizer {
@@ -129,7 +134,7 @@ impl DoubleTapGestureRecognizer {
     pub fn builder(arena: GestureArena) -> DoubleTapGestureRecognizerBuilder {
         DoubleTapGestureRecognizerBuilder {
             arena,
-            settings: GestureSettings::default(),
+            settings: GestureSettingsProvider::default(),
             callbacks: DoubleTapCallbacks::default(),
         }
     }
@@ -233,22 +238,24 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
         if !is_primary_down(dispatch.local) {
             return;
         }
-        let PointerEvent::Down(_) = dispatch.local else {
+        let PointerEvent::Down(data) = dispatch.local else {
             return;
         };
         let Some(position) = dispatch.local.position() else {
             return;
         };
         let state = self.gesture.borrow().clone();
+        let mut admitted_settings = self.settings.snapshot();
         let mut failure = None;
         let mut second = false;
         match state {
-            DoubleTapState::FirstDown | DoubleTapState::SecondDown => return,
+            DoubleTapState::FirstDown { .. } | DoubleTapState::SecondDown => return,
             DoubleTapState::Waiting {
                 details,
                 first_up,
                 deadline,
                 settings,
+                device,
             } => {
                 let Some(waiting_contact) = self.contact.current() else {
                     return;
@@ -257,10 +264,11 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
                 if !self.contact.is_current(waiting_contact.id) {
                     return;
                 }
-                let distance = (position - details.local_position).distance();
-                if deadline.is_some_and(|deadline| now >= deadline)
-                    || !distance.is_finite()
-                    || distance > settings.double_tap_slop()
+                if details.kind != data.pointer.kind
+                    || device != data.pointer.device
+                    || deadline.is_some_and(|deadline| now >= deadline)
+                    || settings
+                        .exceeds_double_tap_slop(details.kind, position - details.local_position)
                 {
                     failure = RoutePanic::capture(|| self.retire_attempt(details, false));
                 } else if now.saturating_duration_since(first_up) < Duration::from_millis(40) {
@@ -273,17 +281,24 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
                         self.contact.finish();
                     });
                     second = true;
+                    admitted_settings = *settings;
                 }
             }
             DoubleTapState::Ready => {}
         }
+        let down_time = (!second && admitted_settings.double_tap_uses_down_time(data.pointer.kind))
+            .then(|| self.contact.now());
         // Cleanup callbacks may have admitted a replacement contact.
-        if self.contact.current().is_none() && self.contact.begin(dispatch, &self.settings).is_ok()
+        if self.contact.current().is_none()
+            && self.contact.begin(dispatch, &admitted_settings).is_ok()
         {
             *self.gesture.borrow_mut() = if second {
                 DoubleTapState::SecondDown
             } else {
-                DoubleTapState::FirstDown
+                DoubleTapState::FirstDown {
+                    down_time,
+                    device: data.pointer.device,
+                }
             };
             if second {
                 let candidate = RoutePanic::capture(|| {
@@ -319,16 +334,16 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
             PointerEvent::Move(_) => {
                 if matches!(
                     state,
-                    DoubleTapState::FirstDown | DoubleTapState::SecondDown
+                    DoubleTapState::FirstDown { .. } | DoubleTapState::SecondDown
                 ) && measured_positions(dispatch.local).any(|position| {
                     let delta = position - contact.local;
-                    delta.dx.hypot(delta.dy) > contact.settings.hit_slop(contact.kind)
+                    contact.settings.exceeds_hit_slop(contact.kind, delta)
                 }) {
                     self.retire_attempt(details, true);
                 }
             }
             PointerEvent::Up(_) => match state {
-                DoubleTapState::FirstDown => {
+                DoubleTapState::FirstDown { down_time, device } => {
                     let first_up = self.contact.now();
                     if !self.contact.is_current(contact.id) {
                         return;
@@ -338,15 +353,22 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
                         entry.hold();
                     }
                     *self.first_entry.borrow_mut() = entry;
-                    let deadline = self
-                        .contact
-                        .arm_deadline(contact.settings.double_tap_timeout());
+                    let elapsed = down_time.map_or(Duration::ZERO, |down| {
+                        first_up.saturating_duration_since(down)
+                    });
+                    let remaining = contact
+                        .settings
+                        .double_tap_timeout_for(contact.kind)
+                        .checked_sub(elapsed)
+                        .unwrap_or(Duration::ZERO);
+                    let deadline = self.contact.arm_deadline(remaining);
                     if self.contact.is_current(contact.id) {
                         *self.gesture.borrow_mut() = DoubleTapState::Waiting {
                             details,
                             first_up,
                             deadline,
-                            settings: contact.settings,
+                            settings: Box::new(contact.settings),
+                            device,
                         };
                     }
                 }

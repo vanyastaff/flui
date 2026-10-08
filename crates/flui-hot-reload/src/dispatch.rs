@@ -47,7 +47,7 @@ impl Drop for PendingRebuildHook {
 ///
 /// Dropping a registration removes its hook only when it is still current.
 /// Replacing registration A with B therefore makes a late `drop(A)` harmless.
-/// A request that already cloned A may still run; the host-side stamped realm
+/// A request that already cloned A may still run; the host-side stamped UI runtime
 /// dispatcher is responsible for rejecting that stale incarnation.
 #[derive(Debug)]
 #[must_use = "retain this registration for as long as rebuild requests should be routed"]
@@ -78,7 +78,7 @@ impl Drop for RebuildHookRegistration {
 /// Install or replace the host hook that schedules a widget rebuild.
 ///
 /// The returned guard must be retained for exactly the lifetime of the host
-/// realm and dropped before that realm is torn down. Replacement is atomic
+/// UI runtime and dropped before that UI runtime is torn down. Replacement is atomic
 /// with respect to [`request_rebuild`]: callers observe either the old or the
 /// new owned closure, never a partially-updated registration.
 ///

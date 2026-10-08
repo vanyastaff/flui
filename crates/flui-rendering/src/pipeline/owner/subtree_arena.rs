@@ -220,7 +220,7 @@ pub(super) struct SubtreeArena<'tree> {
     /// again.  Also gates the success sink below so a skip's stand-in
     /// `Ok` is never mistaken for a recovery.
     layout_poison: &'tree LayoutPoison,
-    /// The realm's text context, lent to each node the walk lays out or
+    /// The UI runtime's text context, lent to each node the walk lays out or
     /// measures: box leaves, box parents, and box intrinsic queries, whether
     /// a box or a sliver parent asked for them. Each loan records the node
     /// it was made for.

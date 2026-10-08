@@ -332,7 +332,7 @@ impl<T> Drop for ClaimSlot<T> {
 /// request on drop.
 ///
 /// Dropping a `ClaimHandle` before claiming its value is the deliberate
-/// cancellation path (a dying realm, a finished worker) — it is not an
+/// cancellation path (a dying UI runtime, a finished worker) — it is not an
 /// error, but it does transition the slot to `Abandoned` and wake the
 /// owner so the owner can unwind promptly rather than leak.
 #[must_use = "dropping a ClaimHandle before claiming abandons the request; \

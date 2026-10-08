@@ -268,7 +268,7 @@ impl PlatformWindow for WinitWindow {
         // close itself — `on_close`, map removal, callback clear, exit
         // policy — is the owner's (see `close_lane`): running `on_close`
         // here would fire it on the caller's thread, where an embedder's
-        // owner-affine close handling (`flui-app` rejects realm dispatch
+        // owner-affine close handling (`flui-app` rejects ui_runtime dispatch
         // off its owner thread) would silently refuse it, and skipping the
         // map removal is precisely issue #919 — a hidden window that the
         // exit policy still counts, so the process never exits.

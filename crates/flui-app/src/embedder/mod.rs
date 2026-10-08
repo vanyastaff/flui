@@ -3,10 +3,10 @@
 //! # Architecture
 //!
 //! ```text
-//! Platform callbacks → entered UiRealm
-//!   ├── UiRealm::GestureBinding (pointer events + hit testing)
-//!   ├── UiRealm::FocusManager (keyboard events)
-//!   ├── UiRealm::WidgetsBinding (build phase)
+//! Platform callbacks → entered UiRuntime
+//!   ├── UiRuntime::GestureBinding (pointer events + hit testing)
+//!   ├── UiRuntime::FocusManager (keyboard events)
+//!   ├── UiRuntime::WidgetsBinding (build phase)
 //!   ├── PresentationState::PipelineOwner (layout/paint)
 //!   └── Renderer (GPU rendering, owned by runner callback)
 //! ```

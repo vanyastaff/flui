@@ -27,7 +27,7 @@ ADR is the place to argue with it.
 ## 1. Summary
 
 **Positioning.** The owner set the product promise on 2026-09-25: FLUI is a UI runtime that
-people and agents can trust. Frames are deterministic, realms hold their state without process
+people and agents can trust. Frames are deterministic, UI runtimes hold their state without process
 globals, one protocol serves tests, devtools and agents, and generative UI arrives through A2UI.
 The declarative widget model (views, elements, render objects, the lifecycle) stays as the familiar shape a
 developer recognises; it is not the headline promise. Notes is the beta hero application, and
@@ -54,7 +54,7 @@ then narrowed it. The target is:
    ([ADR-0083](../docs/adr/ADR-0083-one-frame-transaction-in-flui-runtime.md)). Today
    `flui-testing` has its own frame driver (`HeadlessBinding::pump_frame`,
    `crates/flui-testing/src/lib.rs:955`).
-4. **Signals are the realm's graph.** The graph is realm-owned, read through a read-only
+4. **Signals are the UI runtime's graph.** The graph is UI runtime-owned, read through a read-only
    `ReadScope`, and written only through an `EventCx` that a `WriterSource` opens
    ([ADR-0085](../docs/adr/ADR-0085-reactive-core-placement-and-phase-subscribers.md),
    [ADR-0086](../docs/adr/ADR-0086-signal-writes-through-event-context.md)). The graph stays in
@@ -75,11 +75,11 @@ then narrowed it. The target is:
    acquire both through one door, `cx.capability::<C>()`, in `init_state` as before
    ([ADR-0084](../docs/adr/ADR-0084-open-capability-seam-and-plugins.md)).
 9. **No process-global state, gated.** One named trampoline cell for OS callbacks; everything else is
-   realm-owned or passed explicitly, and a scan with an allowlist that can only shrink enforces it
+   UI runtime-owned or passed explicitly, and a scan with an allowlist that can only shrink enforces it
    ([ADR-0097](../docs/adr/ADR-0097-no-process-global-state-gate.md)).
-10. **Text per realm over Parley** ([ADR-0092](../docs/adr/ADR-0092-per-realm-text-over-parley.md)),
+10. **Text per UI runtime over Parley** ([ADR-0092](../docs/adr/ADR-0092-per-realm-text-over-parley.md)),
     **IME as a pull text store** ([ADR-0090](../docs/adr/ADR-0090-ime-pull-text-store-contract.md)),
-    **one owner thread with isolated realms and one raster thread per GPU context**
+    **one owner thread with isolated UI runtimes and one raster thread per GPU context**
     ([ADR-0091](../docs/adr/ADR-0091-one-owner-thread-isolated-realms-raster-thread.md)),
     **Router first** ([ADR-0093](../docs/adr/ADR-0093-router-is-the-primary-navigation-api.md)),
     **hot reload through Subsecond** ([ADR-0094](../docs/adr/ADR-0094-hot-reload-through-subsecond.md)).
@@ -90,7 +90,7 @@ What this architecture deliberately does **not** do:
   into app); a crate goes only when its types have owners, as ADR-0098 gave geometry and the
   value types;
 - create `flui-text` before a post-Parley measurement;
-- lay out in parallel inside a realm;
+- lay out in parallel inside a UI runtime;
 - delete `HeadlessRenderer`, `StateCell`, the CLI's `test`/`analyze`, or the current hot-reload path
   before their replacement passes the same tests;
 - move the OS backends into `flui-app`.
@@ -115,7 +115,7 @@ because a principle with no enforcer is a wish.
 | P8 | A crate costs money. A new crate needs an ADR that names its second consumer, or the compile or semver seam it buys. | ADR review; `cargo xtask workspace`. |
 | P9 | A seam exists only when a second implementation passes its conformance kit. Unwired `pub` surface is removed in the next minor. | Conformance kits; the public-API closure check. |
 | P10 | No Stable signature carries an upstream type whose major moves faster than FLUI's Stable cycle. The only named exception is raw-window-handle, through its handle traits. serde and cursor-icon are allowed as 1.x crates. | `cargo xtask api-closure` over rustdoc JSON ([ADR-0089](../docs/adr/ADR-0089-upstream-types-in-stable-signatures.md)). |
-| S2 | Thread affinity is a type. Realm state is `!Send` and lock-free; `Send` appears only at lane boundaries (`Scene`, mailboxes, window-handle proxies, `SignalSender`, IO results). | `static_assertions::assert_not_impl_any!`; clippy `disallowed_types` in frame-path crates. |
+| S2 | Thread affinity is a type. Runtime state is `!Send` and lock-free; `Send` appears only at lane boundaries (`Scene`, mailboxes, window-handle proxies, `SignalSender`, IO results). | `static_assertions::assert_not_impl_any!`; clippy `disallowed_types` in frame-path crates. |
 
 The existing rule "make rules types, not reviews" (ADR-0078) still decides the enforcer: a type
 first, a clippy lint second, an `xtask` scan with `--self-test` last.
@@ -198,10 +198,10 @@ Rules:
   edges are seeded as exceptions until it moves.
 - **The crate count is not a goal.** It is a reported fact of the tier table.
 
-**Why the runtime sits above `flui-widgets`.** The realm composes widget-level roots: its
+**Why the runtime sits above `flui-widgets`.** The UI runtime composes widget-level roots: its
 attach code imports `FocusRoot`, `GestureArenaScope` and `VsyncScope` from `flui_widgets`
-(`crates/flui-runtime/src/ui_realm/attach.rs:6`), and the command channel carries
-`NavigatorCommand` (`crates/flui-runtime/src/ui_realm/commands.rs:8,91`). The realm moved above
+(`crates/flui-runtime/src/ui_runtime/attach.rs:6`), and the command channel carries
+`NavigatorCommand` (`crates/flui-runtime/src/ui_runtime/commands.rs:8,91`). The UI runtime moved above
 widgets with no preparatory moves. `NavigatorCommand` later becomes a design-neutral navigation
 intent (§10.4).
 
@@ -241,7 +241,7 @@ inline test modules are large.
 | flui-tree | 2, 6.9k | — | **Deleted 2026-09-26** (ADR-0081); markers merged into foundation | The `TreeRead`/`TreeNav`/`TreeWrite` traits had eight implementations, all on the layer, render and semantics trees, and no generic consumer; the call sites became inherent methods on those trees. |
 | flui-platform | 3, 46.3k | H / internal | **Split**: contracts to `flui-platform-api`, backends stay | Its only production import below the app is `crates/flui-interaction/src/text_input.rs:27`. Delete the no-op `desktop = ["dep:winit"]` feature (`crates/flui-platform/Cargo.toml:303`, zero `feature = "desktop"` sites in `src/`) and `LinuxPlatform` (`crates/flui-platform/src/platforms/linux/mod.rs:108`, whose methods are `unimplemented!`). `PlatformAccessibility` lives in `flui_semantics::platform` (internal, tier S), re-exported at `flui_platform::traits`, and never in `flui-platform-api`; that edge is why the crate sits at layer 3 ([ADR-0082](../docs/adr/ADR-0082-platform-api-contract-crate.md) §2, amended). |
 | flui-scheduler | 2, 20.6k | S / internal | Keep, lighten | An owner-local core with a `Send` waker instead of the mutexes inside the scheduler. `AsyncDriver` and `Spawner` stay here as `!Send` types. `TIME_DILATION` (`crates/flui-scheduler/src/config.rs:43`) becomes a property of each presentation's clock. |
-| flui-painting | 2, 7.0k | S / internal | Keep | The process `FONT_SYSTEM` was replaced by an injected per-realm `TextContext`; it is gone since ADR-0092 §10 step 6a ([ADR-0092](../docs/adr/ADR-0092-per-realm-text-over-parley.md)). |
+| flui-painting | 2, 7.0k | S / internal | Keep | The process `FONT_SYSTEM` was replaced by an injected per-UI runtime `TextContext`; it is gone since ADR-0092 §10 step 6a ([ADR-0092](../docs/adr/ADR-0092-per-realm-text-over-parley.md)). |
 | flui-interaction | 2, 40.3k | S / internal | Keep | Depends on `flui-platform-api` instead of `flui-platform`. The gesture arena keeps its shape ([ADR-0086](../docs/adr/ADR-0086-signal-writes-through-event-context.md)). |
 | flui-assets | 2, 5.1k | S / internal | Keep, detach from the runtime | Delete its own tokio runtime (`BridgeRuntime`, `crates/flui-assets/src/registry/bridge.rs`); `AssetRegistry::global()` is already deleted. |
 | flui-log | 2, 3.7k | S / internal | Keep | Linked only by composition roots; merging it into the app closes no exit criterion. |
@@ -253,12 +253,12 @@ inline test modules are large.
 | flui-engine | 4, 72.5k | R / internal | Keep, narrow | The wgpu backend of the raster contract. Remove `pub use ::wgpu` (`crates/flui-engine/src/lib.rs:229`) from every Stable-reachable path; GPU interop moves to `flui_sdk::gpu`. `RasterOwner` stays here in H0. |
 | flui-view | 5, 52.7k | K / internal | Keep, cut | The element protocol stops depending on objects and animation; `ElementBuildContext` (`crates/flui-view/src/context/element_build_context.rs:39`) is deleted; `BuildContext::reactive()` (`build_context.rs:132`) is deleted when signal writes move to `EventCx`; `WidgetsBinding` moves into the runtime. |
 | flui-widgets | 6, 82.1k | K / internal | **One crate**, module-DAG gate | The 2026-09-23 decision stands. `cargo xtask module-dag -p flui-widgets` enforces import direction between modules. Raw primitives move down from Material; Router and Form arrive; `__private` (`crates/flui-widgets/src/lib.rs:75`) goes. The harness-reaching tests of the 22 `src/` files that used `crate::testing` moved to `tests/`; `__test_access` is temporary ([ADR-0083](../docs/adr/ADR-0083-one-frame-transaction-in-flui-runtime.md) §4). |
-| flui-testing | 6, 3.7k | K / internal (dev) | **Move above the runtime** | Drives `UiRealm::pump` directly under a manual clock; it does not reproduce the production `OwnerHost` or event-loop topology. Absorbs `flui_widgets::testing`; the optional `flui-widgets → flui-testing` edge (`crates/flui-widgets/Cargo.toml:89`) is removed. |
+| flui-testing | 6, 3.7k | K / internal (dev) | **Move above the runtime** | Drives `UiRuntime::pump` directly under a manual clock; it does not reproduce the production `OwnerHost` or event-loop topology. Absorbs `flui_widgets::testing`; the optional `flui-widgets → flui-testing` edge (`crates/flui-widgets/Cargo.toml:89`) is removed. |
 | flui-hot-reload | 6, 2.9k | pkg / official | **Rewrite over Subsecond** as an official package | The dlopen design carries a documented residual risk; the three-crate template and its examples go only after the Subsecond spike ([ADR-0094](../docs/adr/ADR-0094-hot-reload-through-subsecond.md)). It links the `windows` crate directly today (`crates/flui-hot-reload/Cargo.toml:47`), which the package reach set forbids; the rewrite removes it. |
 | flui-material | 7, 26.9k | pkg / official | Official package on `flui-sdk` | Done: `packages/flui-material` builds on `flui-sdk` alone (its normal dependencies are `flui-sdk` and `tracing`, held to the SDK by the kind rule of `cargo xtask workspace`). Still to come: `flui_material::prelude`. |
 | flui-cupertino | 7, 4.3k | pkg / official | Official package on `flui-sdk` | `packages/flui-cupertino` builds on `flui-sdk` alone, pinned by the same test; gains focus and keyboard activation from the Raw primitives. |
 | flui-localizations | 8, 0.3k | — | **Deleted 2026-09-26** (ADR-0081) | 281 lines in a layer of its own, with no translated strings. The RTL table and delegate moved to `flui_widgets::localization`; nothing went to the packages; ICU4X goes to `flui-i18n` (H1). |
-| flui-app | 9, 52.1k | H / internal | **Shrink to runners** | Realm, frame, lanes, semantics host and retained input move to `flui-runtime`. Keeps the sole trampoline cell `APP_RUNTIME`, which contains an ordinary `!Send + !Sync` `OwnerHost` beside platform-only state. Native-window mapping, surface application, owner-platform access, raster/engine ownership, services and execution-pool lifetime stay here. `realm_dispatch.rs` is split by ownership, not moved wholesale. |
+| flui-app | 9, 52.1k | H / internal | **Shrink to runners** | Runtime, frame, lanes, semantics host and retained input move to `flui-runtime`. Keeps the sole trampoline cell `APP_RUNTIME`, which contains an ordinary `!Send + !Sync` `OwnerHost` beside platform-only state. Native-window mapping, surface application, owner-platform access, raster/engine ownership, services and execution-pool lifetime stay here. `owner_dispatch.rs` is split by ownership, not moved wholesale. |
 | flui-cli | 9, 18.6k | H / tool | Keep, own version | `mcp`, `devtools`, `test --golden --accept` with per-test NDJSON, `catalog`; absorbs the former web-server tool. |
 | flui-devtools | 9, 2.5k | pkg / official | Official package | The in-process protocol server. It does not merge with `flui-protocol`: schema and server stay apart. |
 
@@ -437,7 +437,7 @@ packages, same run).
 
 ### 8.1 Trees and identity
 
-- The five trees stay. `ElementId`, `RenderId` and `RealmId` are already generational
+- The five trees stay. `ElementId`, `RenderId` and `UiRuntimeId` are already generational
   (`crates/flui-foundation/src/id.rs:10,723,740`). `LayerId` and `SemanticsId` (`id.rs:674,680`) are plain
   reused slab indices; the module itself names them as the next generational candidates
   (`id.rs:766`). They become generational before caches and agent handles key on them.
@@ -463,28 +463,28 @@ packages, same run).
   whenever a nested one is dirty, so their `Arc`s change on most frames; the test is a
   paint-certified `ContentToken` on the boundary stamp (ADR-0087 §3 as amended).
 
-### 8.2 Realms and threads
+### 8.2 Runtimes and threads
 
 ```text
 App (flui-app runners) ── one OS-trampoline host cell (P3's named exception)
  ├─ platform host state: WindowRegistry, OwnerPlatform, surface/raster ownership, services
  └─ OwnerHost (flui-runtime; ordinary !Send + !Sync value, not another TLS)
-     ├─ host-wide addressed FIFO, checkout state, deferred realm-map mutations
-     └─ Realm (!Send): reactive graph, GlobalKey scope, capability registry, focus coordinator,
+     ├─ host-wide addressed FIFO, checkout state, deferred UI runtime-map mutations
+     └─ Runtime (!Send): reactive graph, GlobalKey scope, capability registry, focus coordinator,
          │             scheduler core, Spawner, TextContext, image-cache handle, observer
          └─ Presentation × N: element tree + BuildOwner, PipelineOwner, frame clock (demand mask),
                               vsync, semantics host → frame sink
 ```
 
-- **One owner thread per process hosts N isolated realms, through H2**
+- **One owner thread per process hosts N isolated UI runtimes, through H2**
   ([ADR-0091](../docs/adr/ADR-0091-one-owner-thread-isolated-realms-raster-thread.md), amending
-  ADR-0027). Realms are isolated, not concurrent: today one `thread_local!` `APP_RUNTIME` hosts all
+  ADR-0027). Runtimes are isolated, not concurrent: today one `thread_local!` `APP_RUNTIME` hosts all
   of them (`crates/flui-app/src/app/runner/host.rs:25-47`), and ADR-0027's verdict that "multiple
-  realms may execute concurrently" overstates the code. Per-realm owner threads on Win32 and
+  UI runtimes may execute concurrently" overstates the code. Per-UI runtime owner threads on Win32 and
   Linux are an H2 spike behind an `OwnerExecutor` trait.
 - **The host narrows TLS to one cell; it does not remove it.** While platform callbacks require
   `Send` (for example `set_exit_policy_hook(&self, hook: Box<dyn Fn() -> bool + Send>)`,
-  `crates/flui-platform/src/traits/platform.rs:158`), the `!Send` realm lives in owner TLS; the
+  `crates/flui-platform/src/traits/platform.rs:158`), the `!Send` UI runtime lives in owner TLS; the
   host module says so itself (`host.rs:32-36`). Removing `Send` from those callbacks is per-backend
   work after the contract crate exists
   ([ADR-0082](../docs/adr/ADR-0082-platform-api-contract-crate.md) §4). Win32 has done step one:
@@ -493,35 +493,35 @@ App (flui-app runners) ── one OS-trampoline host cell (P3's named exception)
   done the same and registration goes through owner-proof types. The AppKit and Win32
   trampolines keep reaching one cell for good; that is the recorded exception class
   ([ADR-0097](../docs/adr/ADR-0097-no-process-global-state-gate.md)).
-- **Owner work has one FIFO across realms.** The previous dispatcher rejected a synchronous
-  dispatch to realm B while realm A was checked out, so an A callback closing B's native window
+- **Owner work has one FIFO across UI runtimes.** The previous dispatcher rejected a synchronous
+  dispatch to UI runtime B while UI runtime A was checked out, so an A callback closing B's native window
   could lose B's UI close. The transitional dispatcher now serializes reentrant A/B/A work over
   one host-wide queue, with a stale-target recheck before execution and panic-safe checkout
   restoration. It still inherits the old unbounded drain-until-empty policy. Before `OwnerHost`
   moves, owner turns become bounded batches with one coalesced continuation wake, and the private
-  `RealmTask::Frame`/`Pump` closure escape hatches become typed operations or explicit methods.
-- **The owner host is realm-neutral, not a fourth physical owner.** It owns the realm registry,
-  addressed FIFO, checkout bookkeeping and deferred realm-map mutations. `flui-app` retains the
+  `RuntimeTask::Frame`/`Pump` closure escape hatches become typed operations or explicit methods.
+- **The owner host is UI runtime-neutral, not a fourth physical owner.** It owns the UI runtime registry,
+  addressed FIFO, checkout bookkeeping and deferred UI runtime-map mutations. `flui-app` retains the
   `WindowId → PresentationAddress` authority, native event normalization, surface appliers,
   close admission and the application/platform/raster service tails. Cross-thread producers use
   a bounded typed ingress and wake the owner; owner-local callbacks use a `!Send` dispatcher into
   the same FIFO. Admission policy is operation-specific: lossless transitions are never silently
   coalesced, state reports may be latest-value, and wake requests are edge-coalesced.
-- **No parallel layout inside a realm**, and that is written down. What rules it out today is
+- **No parallel layout inside a UI runtime**, and that is written down. What rules it out today is
   `PipelineCell`, not the render-object types.
 
 ### 8.3 One frame transaction
 
-`UiRealm::pump(&mut self, clock: &mut dyn FrameClockSource, sink: &mut dyn FrameSink) -> FrameOutcome`
+`UiRuntime::pump(&mut self, clock: &mut dyn FrameClockSource, sink: &mut dyn FrameSink) -> FrameOutcome`
 fixes the order: apply commands → begin frame (transient callbacks, so tickers advance, then
 microtasks) → draw frame (persistent callbacks) → drain build → effects (the ADR-0075 slot) →
 layout → compositing → paint (retained layers) → semantics (incremental) → layer diff → damage →
 `SceneSnapshot` → end frame (post-frame callbacks). The clock is read once: its timestamp is the
-scheduler's frame time and the time the realm's `Vsync` controllers tick at (a scheduler `Ticker`
+scheduler's frame time and the time the UI runtime's `Vsync` controllers tick at (a scheduler `Ticker`
 still reads the wall clock; `flui-scheduler`'s `ARCHITECTURE.md` records why). The runner's per-backend wake gate decides
 whether a wake becomes a pump at all (ADR-0058), and a wake with frames disabled runs
-`UiRealm::pump_background` instead. `flui-app` drives the pump with platform clocks and the
-raster lane, and `flui-testing` is to drive `UiRealm::pump` directly with a manual clock and a
+`UiRuntime::pump_background` instead. `flui-app` drives the pump with platform clocks and the
+raster lane, and `flui-testing` is to drive `UiRuntime::pump` directly with a manual clock and a
 headless or CPU sink — it needs the product transaction, not the production `OwnerHost`
 ([ADR-0083](../docs/adr/ADR-0083-one-frame-transaction-in-flui-runtime.md), which amends
 ADR-0037 §12: one production consumer plus the test driver).
@@ -533,7 +533,7 @@ through `pub(crate)`, a sealed token or a capability type. A syn scan with `--se
 fallback if no type works. Banning `pub fn pump_frame` would not be enough: a rename defeats it,
 and `HeadlessBinding::pump_frame` already reaches the scheduler through `drive_frame`
 (`crates/flui-testing/src/lib.rs:1017`). Per-presentation failure containment (ADR-0048,
-`draw_frame_entered` at `crates/flui-runtime/src/ui_realm/frame.rs:74`) moved with the transaction.
+`draw_frame_entered` at `crates/flui-runtime/src/ui_runtime/frame.rs:74`) moved with the transaction.
 
 ### 8.4 Scheduling and demand
 
@@ -567,10 +567,10 @@ The known entries, each with its exit:
 | Global | Where | Exit |
 |---|---|---|
 | `APP_RUNTIME` | `crates/flui-app/src/app/runner/host.rs:46` | Stays: the one named trampoline cell. |
-| `FONT_SYSTEM` | flui-painting's `text_layout/layout.rs:124` | Per-realm `TextContext` ([ADR-0092](../docs/adr/ADR-0092-per-realm-text-over-parley.md)); gone since ADR-0092 §10 step 6a. |
+| `FONT_SYSTEM` | flui-painting's `text_layout/layout.rs:124` | Per-UI runtime `TextContext` ([ADR-0092](../docs/adr/ADR-0092-per-realm-text-over-parley.md)); gone since ADR-0092 §10 step 6a. |
 | `TIME_DILATION` | `crates/flui-scheduler/src/config.rs:43` | Presentation clock property ([ADR-0097](../docs/adr/ADR-0097-no-process-global-state-gate.md)). |
 | `REQUEST_REBUILD` | `crates/flui-hot-reload/src/dispatch.rs:24` | Subsecond runtime hook ([ADR-0094](../docs/adr/ADR-0094-hot-reload-through-subsecond.md)). |
-| `REGISTRY_STACK` | `crates/flui-view/src/key/registry.rs:204` | Realm-owned GlobalKey scope ([ADR-0094](../docs/adr/ADR-0094-hot-reload-through-subsecond.md) removes its `ManuallyDrop` form). |
+| `REGISTRY_STACK` | `crates/flui-view/src/key/registry.rs:204` | Runtime-owned GlobalKey scope ([ADR-0094](../docs/adr/ADR-0094-hot-reload-through-subsecond.md) removes its `ManuallyDrop` form). |
 | `NAVIGATOR_COMMAND_TARGETS` | `crates/flui-widgets/src/navigator/navigator.rs:91` | Router handle from `init_state` ([ADR-0093](../docs/adr/ADR-0093-router-is-the-primary-navigation-api.md)). |
 
 The list above is not the allowlist. The allowlist is the `[package.metadata.flui] globals` key
@@ -586,15 +586,15 @@ seed it.
 [ADR-0086](../docs/adr/ADR-0086-signal-writes-through-event-context.md) amend ADR-0074; owner
 decisions 5 and 7.
 
-- **The instance belongs to the realm.** The graph is a field of each presentation's
+- **The instance belongs to the UI runtime.** The graph is a field of each presentation's
   `BuildOwner` (`crates/flui-view/src/owner/build_owner.rs:444`, exposed at `:973`).
   `UiCommand::SignalWrite` used to apply to the primary presentation's graph, a conformance
-  defect against ADR-0074, which already says "realm-scoped". It now carries its target slot and
+  defect against ADR-0074, which already says "UI runtime-scoped". It now carries its target slot and
   is routed by `SignalSlot::graph` to the presentation whose graph minted it
-  (`UiRealm::signal_graph_for` in `crates/flui-runtime/src/ui_realm/presentations.rs`); a write
-  no presentation of the realm owns is dropped and counted as stale. The multi-window test that
+  (`UiRuntime::signal_graph_for` in `crates/flui-runtime/src/ui_runtime/presentations.rs`); a write
+  no presentation of the UI runtime owns is dropped and counted as stale. The multi-window test that
   failed with `ForeignGraph` before the fix is
-  `crates/flui-runtime/src/ui_realm/tests/signal_write_routing.rs`. This landed before the
+  `crates/flui-runtime/src/ui_runtime/tests/signal_write_routing.rs`. This landed before the
   write-signature change.
 - **Reads go through `ReadScope`.** The read contract (`Signal<T>`, `SignalSlot`, `SignalError`,
   `ReadGraph`, `ReaderSink`, `ScopeRef`, `ReadScope`) lives in `flui_foundation::read_scope`.
@@ -615,7 +615,7 @@ decisions 5 and 7.
      defer writes during layout and paint, like `WrittenDuringBuild`, and writes that mark
      `Layout`/`Paint` readers. The same step brings what step 1 left for its first production
      caller: a one-method `RebuildSink` instead of `ExternalBuildScheduler`; two non-`Clone`
-     drivers the realm mints, an `ElementDriver` for `BuildOwner` and a `RenderDriver` that
+     drivers the UI runtime mints, an `ElementDriver` for `BuildOwner` and a `RenderDriver` that
      `PipelineOwner` reaches through a trait `flui-rendering` declares, which then mint the
      sinks; and `ScopeRef::detached` with `SignalError::NoGraph`.
   3. The first render subscriber, with no move: a render-object field read in paint through
@@ -629,7 +629,7 @@ decisions 5 and 7.
   ([ADR-0085](../docs/adr/ADR-0085-reactive-core-placement-and-phase-subscribers.md) §6).
 - **Writes go through `EventCx`.** Framework-issued event callbacks receive `&mut EventCx<'_>`,
   borrowed and created per dispatch, which derefs to `Writer`. A `WriterSource`, acquired from
-  `LifecycleContext`, `!Send` and realm-bound (bound to one presentation until the realm core
+  `LifecycleContext`, `!Send` and UI runtime-bound (bound to one presentation until the UI runtime core
   lands, [ADR-0086](../docs/adr/ADR-0086-signal-writes-through-event-context.md) §3), is the
   only way to open one, for catalog widgets, third-party widgets and the internal continuation
   path alike. `Signal::set/update` take the writer, so a write from `build` fails to compile.
@@ -648,7 +648,7 @@ decisions 5 and 7.
     crates/flui-widgets/src packages/flui-material/src packages/flui-cupertino/src | wc -l`).
   - `StateCell` and `RebuildHandle` stay a guarded runtime tier and move to `flui::state::low`.
   - A `callback(|cx| ..)` helper ships with the signature change (closures otherwise hit a
-    higher-ranked lifetime error). A rollback trigger to "guard plus realm from the handle" is
+    higher-ranked lifetime error). A rollback trigger to "guard plus UI runtime from the handle" is
     written down before the codemod starts.
 - **Creation stays in `init_state`** (the ADR-0074 idiom; `cx.signal(v)` through
   `BuildContextExt`, `build_context.rs:569`). No `create(cx)` hook is added.
@@ -711,7 +711,7 @@ and ADR-0068; decisions D5 and D6.
 [ADR-0092](../docs/adr/ADR-0092-per-realm-text-over-parley.md) supersedes ADR-0077 and, on
 acceptance, ADR-0016 and ADR-0059; decision D12.
 
-- One font `Collection { shared: true }`, immutable after load, and a lock-free per-realm
+- One font `Collection { shared: true }`, immutable after load, and a lock-free per-UI runtime
   `FontContext`/`LayoutContext` replace `static FONT_SYSTEM: OnceLock<Arc<Mutex<FontState>>>`
   (flui-painting's `text_layout/layout.rs:124`).
 - The display list carries **neutral shaped runs** (font blob id, glyph id, size, variations,
@@ -721,7 +721,7 @@ acceptance, ADR-0016 and ADR-0059; decision D12.
   (flui-painting's `text_layout/glyphs.rs:23`, until ADR-0092 §10 step 4 removed it).
 - The atlas lives on the `GpuContext` and rasterisation happens on the raster side.
 - ICU4X is the one Unicode source. The system font scan is asynchronous: bundled fonts are
-  available in the first frame, system fonts arrive as a realm event.
+  available in the first frame, system fonts arrive as a UI runtime event.
 - One shaper on every platform; only rasterisation and hinting may vary.
 - ADR-0077's precondition is a gate: a Parley glyph accepted by the existing atlas with a stable
   key. The gate is met (swash rasterizes; 2026-09-26); ADR-0092 stays Proposed until the migration
@@ -829,9 +829,9 @@ push-only shape; decision D10, owner decision 8.
 
 - On by default: the Windows and macOS adapters are unconditional, AT-SPI is on and removable;
   `accesskit_android` and `accesskit_ios` arrive in H1; a `tree_id` per window.
-- Enabling is a realm capability: a ref-counted semantics handle shared by assistive technology,
+- Enabling is a UI runtime capability: a ref-counted semantics handle shared by assistive technology,
   agents and devtools. A presentation collects semantics while its platform has asked for them
-  or any handle is held (`SemanticsHost::semantics_enabled`); `UiRealm::semantics_agent` takes
+  or any handle is held (`SemanticsHost::semantics_enabled`); `UiRuntime::semantics_agent` takes
   a handle for as long as any clone of the agent lives, so an agent reads the tree without a
   screen reader running, and collection stops when the last agent drops.
 - **FLUI owns its vocabulary.** `SemanticsRole` (33 roles plus flags) and `SemanticsAction` become
@@ -871,7 +871,7 @@ speaks stdio.
 | H0 | Agent and devtools protocol | `flui-protocol` over MCP | UIA backend + in-process backend | normalised outline projection matches on both |
 | H0 | Catalog as data | `#[derive(Catalog)]` | Raw primitives + Material components of Notes | examples as tests, schema round-trip |
 | H0 | IME text store | `flui-platform-api` text-store trait | built-in text field + third-party fields | the public text-store kit (§11.2) |
-| H1 | `PlatformCapability` | `flui-platform-api` + the realm's registry | core-required clipboard (wired for text fields in B1); optional haptics and file dialogs | headless fake + typed `Unsupported` |
+| H1 | `PlatformCapability` | `flui-platform-api` + the UI runtime's registry | core-required clipboard (wired for text fields in B1); optional haptics and file dialogs | headless fake + typed `Unsupported` |
 | H1 | Themes as data | serde token maps in `flui_sdk` + `InheritedView` + field masks | Material + Cupertino | round-trip |
 | H1 | Generative UI | `flui-a2ui` (official, Evolving): catalogs are values the app passes (`App::catalog(flui_material::catalog())`), no LLM client in core | — | catalog negotiation tests |
 | H1 spike → H2 | External GPU content | `Layer::External` + a texture-registry capability on `GpuContext` + a `Presenter` trait | swapchain + OS compositor | readback through the real app path |
@@ -902,15 +902,15 @@ feature, re-pinned to the current wgpu major on every train; it is never part of
 Each horizon adds implementations behind contracts that a second implementation proved earlier.
 
 - **H0** builds the contracts and their second implementations: tiers and reach facts,
-  platform-api, the runtime transaction, the realm graph, the raster contract with a CPU backend,
+  platform-api, the runtime transaction, the UI runtime graph, the raster contract with a CPU backend,
   the protocol with two backends, the text-store kit.
 - **H1** adds mobile hosts as runners of the same runtime, plugins over platform-api, and WebGL2
   through the same wgpu path; no core contract changes shape. Before that claim holds, iOS must
-  host realms through the same `AppRuntime` path as desktop, and Android and web must install the
+  host UI runtimes through the same `AppRuntime` path as desktop, and Android and web must install the
   exit-policy hook (see [research findings](research-findings.md)).
 - **H2** switches the raster lane to its threaded mode on the platforms that allow it, puts caches
   on the existing layer identity, uses the CPU backend as the fallback, adds render subscribers
-  where measured, and spikes per-realm owner threads behind `OwnerExecutor`.
+  where measured, and spikes per-UI runtime owner threads behind `OwnerExecutor`.
 - **H3** freezes the measured closure of the three Stable crates, and `cargo-semver-checks` moves
   from advisory to gating. `flui-sdk` items graduate by rule, not by vote.
 - **H4** runs on badges, the minting seam and `Host`.
@@ -1150,7 +1150,7 @@ every pull request; wall time is a nightly trend per OS.
 | Raster ∝ damage | always `Full` (`raster_lane.rs:291`) | differ + conditional retained target |
 | Idle = 0 frames | several demand carriers, one loop-wide redraw flag (`runtime.rs:727`) | one demand mask per presentation |
 | No per-node locks | `ChildManagerRegistry = Arc<Mutex<HashMap<.., Arc<Mutex<dyn ChildManager>>>>>` (`crates/flui-view/src/element/child_manager.rs:56`) | the `!Send` flip, owner-local state |
-| A glyph miss does not stall the UI | one process-wide font mutex (`layout.rs:124`) | per-realm text, rasterisation on the raster side |
+| A glyph miss does not stall the UI | one process-wide font mutex (`layout.rs:124`) | per-UI runtime text, rasterisation on the raster side |
 
 **Budgets:**
 
@@ -1215,7 +1215,7 @@ does not cover each gate they add.
 | Unsafe in named islands | per-module ledger; `undocumented_unsafe_blocks` switched on module by module; Miri on the subtree arena; a live-run record for unexecuted backends | backends CI does not execute |
 | Panics are classified | a lint: an `expect`/`panic!` literal starts with `BUG:` or names its `try_` twin; `guarded_call(node, phase, f)` also wraps hit-test, intrinsics and semantics | — |
 | Eq and Hash agree | property tests | float geometry values implement neither `Eq` nor `Hash`; float-keyed caches use `flui_foundation::geometry::canonical_bits`, and `Color` normalises at construction ([ADR-0098](../docs/adr/ADR-0098-owned-f64-geometry-values.md) §4) |
-| Determinism | realm-scoped IDs for anything serialised; per-realm fonts; a seeded executor in `#[flui::test]` | static ID counters (whether they reach snapshots is unverified) |
+| Determinism | UI runtime-scoped IDs for anything serialised; per-UI runtime fonts; a seeded executor in `#[flui::test]` | static ID counters (whether they reach snapshots is unverified) |
 | Devtools is not an attack surface | debug builds only; named pipe or Unix socket with a launch token; `flui mcp` over stdio | — |
 | Docs do not lie | ADR front-matter validation; process-marker scan | free text |
 | Dependencies | `multiple-versions = "warn"` with justified skips, ratchet | `multiple-versions = "allow"` (`deny.toml:103`) |
@@ -1240,7 +1240,7 @@ records the criterion; the
 through Subsecond behind a `DevReloadHook` the runtime exposes. The hook is called at the element
 seam, for each framework call into a user `View` or `ViewState` method, not once per frame: a
 patch reaches only calls the hook wraps. A logic edit keeps state; an edit to a `View` or
-`ViewState` type restarts the realm, detected by a derive-generated structural hash over both.
+`ViewState` type restarts the UI runtime, detected by a derive-generated structural hash over both.
 Core names no reload package: the `flui-app → flui-hot-reload` edge and the facade's
 `hot-reload` feature go. The dlopen path, its three-crate template and `--scene` are deleted only
 after a Subsecond spike passes on Windows, macOS and Android, and only after the globals it
@@ -1315,7 +1315,7 @@ The full index, with each decision's alternatives, is [decisions.md](decisions.m
 | D5 raster contract, D6 damage | [ADR-0087](../docs/adr/ADR-0087-raster-contract-and-cpu-backend.md) |
 | D7 packages in this workspace (owner decision 1) | [ADR-0088](../docs/adr/ADR-0088-official-packages-sdk-and-facade.md) |
 | D8 stability kinds, D11 `__runtime` | [ADR-0081](../docs/adr/ADR-0081-workspace-tiers-and-reach-facts.md) |
-| D9 realms and threads, D13 raster lane | [ADR-0091](../docs/adr/ADR-0091-one-owner-thread-isolated-realms-raster-thread.md) |
+| D9 UI runtimes and threads, D13 raster lane | [ADR-0091](../docs/adr/ADR-0091-one-owner-thread-isolated-realms-raster-thread.md) |
 | D10 IME (owner decision 8) | [ADR-0090](../docs/adr/ADR-0090-ime-pull-text-store-contract.md) |
 | D12 text | [ADR-0092](../docs/adr/ADR-0092-per-realm-text-over-parley.md) |
 | D14 navigation | [ADR-0093](../docs/adr/ADR-0093-router-is-the-primary-navigation-api.md) |

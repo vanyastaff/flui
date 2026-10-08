@@ -6,7 +6,7 @@ use flui_foundation::geometry::EdgeInsets;
 use flui_view::prelude::StatelessView;
 use flui_view::{BoxedView, BuildContext, IntoView, ViewExt};
 
-use crate::app::MediaQuery;
+use crate::MediaQuery;
 use crate::layout::Padding;
 
 /// Insets its child with sufficient padding to avoid operating-system

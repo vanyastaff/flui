@@ -18,9 +18,9 @@
 //! go there. They stay in the owner's interaction lane as one table per node,
 //! and the configuration advertises each action through one `Send + Sync`
 //! handler that holds only the lane's ticket. Invoking it resolves the ticket
-//! on the owner thread, inside the realm, and runs the closure there.
+//! on the owner thread, inside the UI runtime, and runs the closure there.
 //!
-//! An action invoked outside its realm — no interaction lane active on the
+//! An action invoked outside its UI runtime — no interaction lane active on the
 //! calling thread — has no owner to run in and is dropped with a warning. A
 //! [`Semantics`] mounted without an owner lane (a detached render-object
 //! context) advertises none of these actions, so no platform sees a control
@@ -131,7 +131,7 @@ struct SemanticsActionCell {
 /// names.
 ///
 /// Reached through the `Send + Sync` handler the configuration advertises,
-/// which the semantics owner invokes on the owner thread while the realm is
+/// which the semantics owner invokes on the owner thread while the UI runtime is
 /// entered. Every failure is a dropped action, never a panic: the platform
 /// asked for something the tree can no longer do.
 fn deliver(target: LocalPayloadTarget, action: SemanticsAction, arguments: Option<ActionArgs>) {
@@ -142,7 +142,7 @@ fn deliver(target: LocalPayloadTarget, action: SemanticsAction, arguments: Optio
                 ?error,
                 ?action,
                 "a semantics action was dropped: its handler is owner-local and runs only \
-                 inside its realm"
+                 inside its ui_runtime"
             );
             return;
         }

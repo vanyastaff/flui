@@ -18,7 +18,7 @@
 //!         │
 //!         ▼
 //! ┌─────────────────────┐
-//! │   GestureBinding    │ (owned by UiRealm/HeadlessBinding)
+//! │   GestureBinding    │ (owned by UiRuntime/HeadlessBinding)
 //! │  ┌───────────────┐  │
 //! │  │ Hit Test Cache│  │  (RefCell<HashMap<PointerId, CachedPointerRoute>>)
 //! │  └───────────────┘  │
@@ -449,7 +449,7 @@ impl RefusedContacts {
 /// # Ownership
 ///
 /// A UI runtime owns one `GestureBinding`. Prefer accessing the binding through
-/// the active `HeadlessBinding` / `UiRealm`; process-global gesture ownership is
+/// the active `HeadlessBinding` / `UiRuntime`; process-global gesture ownership is
 /// intentionally not part of ADR-0027.
 ///
 /// # Event Coalescing
@@ -537,7 +537,7 @@ impl GestureBinding {
     /// Create a new GestureBinding with default settings.
     ///
     /// `GestureBinding` is owner-local; prefer using the binding owned by the
-    /// active UI runtime (`HeadlessBinding`/`UiRealm`) over a process global.
+    /// active UI runtime (`HeadlessBinding`/`UiRuntime`) over a process global.
     pub fn new() -> Self {
         Self::with_settings_and_clock(
             GestureSettings::default(),
@@ -2284,7 +2284,7 @@ impl GestureBinding {
     ///
     /// Returns `None` when the path carries no pointer targets, or when the
     /// typed lane boundary rejects the resolution (no active lane, wrong
-    /// realm) — the failure is traced, never a panic, and the pointer router
+    /// UI runtime) — the failure is traced, never a panic, and the pointer router
     /// still routes the sequence.
     fn resolve_route(result: &HitTestResult) -> Option<ResolvedRouteToken> {
         if !result.iter().any(|entry| entry.pointer_target.is_some()) {
@@ -3246,6 +3246,7 @@ mod tests {
             assert_eq!(binding.active_resampler_count(), 0);
             assert_eq!(binding.pending_move_count(), 0);
             assert!(binding.arena().is_empty());
+            drop(members);
         });
     }
 

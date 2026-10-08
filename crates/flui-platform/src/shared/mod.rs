@@ -16,9 +16,13 @@ pub(crate) mod accessibility_bridge;
 pub(crate) mod clipboard_lock;
 // `pub` for the same off-target-consumed reason as `hwnd_affinity` below
 // (consumers: the winit, Win32, and AppKit event-conversion backends).
+#[cfg(any(target_os = "android", test))]
+pub(crate) mod android_scroll;
 pub mod events;
 mod handlers;
 pub(crate) mod owner_signal;
+#[cfg(any(target_os = "android", target_os = "macos", test))]
+pub(crate) mod preference_read;
 // `pub`, not `pub(crate)`, for the same reason `keys`/`keys_macos` are:
 // these cfg-free rule modules are consumed only by one target's backend
 // (here Win32), so on every other target a crate-private visibility flags
@@ -26,7 +30,13 @@ pub(crate) mod owner_signal;
 // module warning-free everywhere. (`accessibility_bridge` can afford
 // `pub(crate)` only because Linux production code consumes it too.)
 pub mod hwnd_affinity;
-#[cfg(any(feature = "winit-backend", target_os = "android"))]
+#[cfg(any(
+    target_os = "android",
+    all(
+        feature = "winit-backend",
+        any(target_os = "windows", target_os = "macos", target_os = "linux")
+    )
+))]
 pub(crate) mod keyboard_adapter;
 pub mod keys;
 pub mod keys_macos;
@@ -38,6 +48,8 @@ pub mod text_geometry;
 // `pub` for the same Linux-tested/off-target-consumed reason as
 // `hwnd_affinity` above (consumers: the Win32 and AppKit backends).
 pub mod visibility;
+// UIKit consumes this acknowledgement; its transport contract runs on every host.
+pub mod window_installation;
 
 #[cfg(target_os = "ios")]
 pub(crate) use handlers::LifecycleEvent;

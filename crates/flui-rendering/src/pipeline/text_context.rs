@@ -1,6 +1,6 @@
-//! The realm's text context, lent to layout (ADR-0092 §10 step 3).
+//! The UI runtime's text context, lent to layout (ADR-0092 §10 step 3).
 //!
-//! A realm owns one [`TextContext`] over the app's font collection and every
+//! A UI runtime owns one [`TextContext`] over the app's font collection and every
 //! presentation's [`PipelineOwner`](super::PipelineOwner) holds a
 //! [`TextContextHandle`] to it. Layout, intrinsic, dry-layout and
 //! dry-baseline contexts lend it to a render object as a [`TextCx`], a scoped
@@ -11,7 +11,7 @@
 //! crate can borrow, so a direct `RenderObject` implementation cannot hold a
 //! loan across a child query either.
 //!
-//! The one `RefCell` sits between the realm and its pipelines, not on a
+//! The one `RefCell` sits between the UI runtime and its pipelines, not on a
 //! render object: it is borrowed once per measurement, on the owner thread,
 //! and a second borrow at the same time is a bug (`BUG:` panic), not a
 //! contended lock. A presentation's layout never drives another's
@@ -32,9 +32,9 @@ use flui_foundation::RenderId;
 use flui_painting::{FontCollection, TextContext};
 use rustc_hash::FxHashSet;
 
-/// A realm's text context, shared with each presentation's pipeline.
+/// A UI runtime's text context, shared with each presentation's pipeline.
 ///
-/// Cloning shares the context. `!Send`, like the realm and pipeline owners
+/// Cloning shares the context. `!Send`, like the UI runtime and pipeline owners
 /// that hold it. A render object measures through the [`TextCx`] its layout
 /// context lends; `ptr_eq` and `with`, under the `testing` feature, let a
 /// test compare handles and inspect the context.
@@ -49,9 +49,9 @@ impl TextContextHandle {
     }
 
     /// A context over a font collection of its own, holding only the bundled
-    /// faces, for a pipeline that is a realm by itself: a hot-reload plugin
-    /// image, or a test with no app behind it. A realm's presentations share
-    /// the context the realm builds over the app's collection instead, so a
+    /// faces, for a pipeline that is a UI runtime by itself: a hot-reload plugin
+    /// image, or a test with no app behind it. A UI runtime's presentations share
+    /// the context the UI runtime builds over the app's collection instead, so a
     /// face the app registers reaches their layout.
     #[must_use]
     pub fn standalone() -> Self {
@@ -80,7 +80,7 @@ impl TextContextHandle {
     /// # Panics
     ///
     /// If the context is already lent, which only a measurement that
-    /// re-enters another on the same realm could cause.
+    /// re-enters another on the same UI runtime could cause.
     #[cfg(any(test, feature = "testing"))]
     pub fn with<R>(&self, f: impl FnOnce(&mut TextContext) -> R) -> R {
         f(&mut lend(TextSource::unrecorded(&self.0)))
@@ -202,7 +202,7 @@ impl<'a> TextLender<'a> {
     }
 }
 
-/// The realm's text context as a layout or query walk carries it to a node.
+/// The UI runtime's text context as a layout or query walk carries it to a node.
 ///
 /// Opaque outside this crate: a render object passes it on (to a context it
 /// builds) but cannot borrow it. The borrow happens only inside a context's
@@ -255,7 +255,7 @@ impl fmt::Debug for TextSource<'_> {
     }
 }
 
-/// The realm's text context lent to one measurement.
+/// The UI runtime's text context lent to one measurement.
 ///
 /// Dereferences to `&mut TextContext`, so a render object passes
 /// `&mut ctx.text()` straight to `TextPainter`.
@@ -281,7 +281,7 @@ impl fmt::Debug for TextCx<'_> {
     }
 }
 
-/// Borrows the realm's context for one measurement, and records the node it
+/// Borrows the UI runtime's context for one measurement, and records the node it
 /// is lent to.
 #[expect(
     clippy::expect_used,
@@ -295,7 +295,7 @@ pub(crate) fn lend(source: TextSource<'_>) -> TextCx<'_> {
         source
             .cell()
             .try_borrow_mut()
-            .expect("BUG: the realm's text context is lent to one measurement at a time"),
+            .expect("BUG: the ui_runtime's text context is lent to one measurement at a time"),
     )
 }
 

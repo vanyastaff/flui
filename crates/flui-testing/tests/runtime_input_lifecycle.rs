@@ -17,19 +17,19 @@ use flui_platform_api::{PlatformInput, PlatformWindow, WindowExecutionState};
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_runtime::sink::SubmitVerdict;
 use flui_runtime::testing::{ScriptedSink, TestWindow};
-use flui_runtime::ui_realm::UiRealm;
+use flui_runtime::ui_runtime::UiRuntime;
 use flui_scheduler::AppLifecycleState;
 use flui_view::prelude::*;
 use flui_widgets::{Align, GestureDetector, Listener, MouseRegion, SizedBox};
 
-fn pump(realm: &mut UiRealm) {
+fn pump(realm: &mut UiRuntime) {
     let _ = realm.pump(
         &mut ManualClock::default(),
         &mut ScriptedSink::always_presents(),
     );
 }
 
-fn pump_uncommitted(realm: &mut UiRealm) {
+fn pump_uncommitted(realm: &mut UiRuntime) {
     let outcome = realm.pump(
         &mut ManualClock::default(),
         &mut ScriptedSink::single_shot(SubmitVerdict::Retry),
@@ -40,13 +40,13 @@ fn pump_uncommitted(realm: &mut UiRealm) {
     );
 }
 
-fn dispatch(realm: &UiRealm, id: PresentationId, event: PointerEvent) {
+fn dispatch(realm: &UiRuntime, id: PresentationId, event: PointerEvent) {
     realm.enter(|realm| {
         realm.handle_input_addressed(id, PlatformInput::Pointer(event));
     });
 }
 
-fn install_secondary(realm: &mut UiRealm) -> PresentationId {
+fn install_secondary(realm: &mut UiRuntime) -> PresentationId {
     let window: Arc<dyn PlatformWindow> = Arc::new(TestWindow::new().focused(false));
     let presentation = realm.assemble_presentation(window);
     realm.install_presentation(presentation)
@@ -56,7 +56,7 @@ fn hover() -> PointerEvent {
     let mut event =
         make_move_event(Offset::new(8.0, 9.0), PointerKind::Mouse).expect("finite test position");
     if let PointerEvent::Move(update) = &mut event {
-        update.buttons = Default::default();
+        update.buttons = flui_platform_api::pointer::PointerButtons::default();
     }
     event
 }
@@ -77,7 +77,7 @@ pub(crate) fn runtime_keyboard_barrier_preserves_scale_contacts_and_continuity()
     use flui_runtime::presentation::PointerResampling;
 
     for policy in [PointerResampling::Disabled, PointerResampling::FrameAligned] {
-        let mut realm = UiRealm::for_test();
+        let mut realm = UiRuntime::for_test();
         let primary = realm.presentation_id();
         realm
             .set_pointer_resampling(primary, policy)
@@ -121,7 +121,7 @@ pub(crate) fn runtime_keyboard_barrier_preserves_scale_contacts_and_continuity()
                     primary,
                     PlatformInput::Keyboard(KeyEventBuilder::new(Code::F4).build()),
                 );
-            })
+            });
         };
         for (left, right, expected) in [(50.0, 350.0, 1.5), (25.0, 375.0, 1.75)] {
             for (id, x) in [(one, left), (two, right)] {
@@ -164,13 +164,13 @@ pub(crate) fn keyboard_motion_barrier_uses_resolved_focus_owner_during_reentrant
     use flui_widgets::Focus;
     use std::rc::Weak;
 
-    let mut realm = UiRealm::for_test();
+    let mut realm = UiRuntime::for_test();
     let primary = realm.presentation_id();
     let secondary = install_secondary(&mut realm);
     realm
         .set_pointer_resampling(secondary, PointerResampling::FrameAligned)
         .expect("policy");
-    let owner = Rc::new(RefCell::new(Weak::<UiRealm>::new()));
+    let owner = Rc::new(RefCell::new(Weak::<UiRuntime>::new()));
     let changing_owner = Rc::clone(&owner);
     let state = Rc::new(Cell::new(0.0));
     let moved = Rc::clone(&state);
@@ -241,7 +241,7 @@ pub(crate) fn keyboard_motion_barrier_uses_resolved_focus_owner_during_reentrant
                 primary,
                 PlatformInput::Keyboard(KeyEventBuilder::new(Code::F4).build()),
             );
-        })
+        });
     };
     key();
     assert_eq!(
@@ -267,7 +267,7 @@ fn assert_ime_motion_order(fail: bool) {
     use flui_widgets::{EditableText, TextEditingController};
 
     let window = flui_testing::HeadlessWindow::new(100, 40).with_text_input();
-    let mut realm = UiRealm::for_test_with_text_input(window.text_input());
+    let mut realm = UiRuntime::for_test_with_text_input(window.text_input());
     let primary = realm.presentation_id();
     realm
         .set_pointer_resampling(primary, PointerResampling::FrameAligned)
@@ -377,12 +377,12 @@ pub(crate) fn keyboard_coalesced_prefix_survives_reentrant_capture_release() {
     use flui_platform_api::keyboard::Code;
     use std::rc::Weak;
 
-    let mut realm = UiRealm::for_test();
+    let mut realm = UiRuntime::for_test();
     let primary = realm.presentation_id();
     let one = PointerId::try_from(1_u64).expect("contact");
     let two = PointerId::try_from(2_u64).expect("contact");
     let unrelated = PointerId::try_from(3_u64).expect("hover");
-    let owner = Rc::new(RefCell::new(Weak::<UiRealm>::new()));
+    let owner = Rc::new(RefCell::new(Weak::<UiRuntime>::new()));
     let input_owner = Rc::clone(&owner);
     let token = Rc::new(RefCell::new(None));
     let captured = Rc::clone(&token);
@@ -433,7 +433,7 @@ pub(crate) fn keyboard_coalesced_prefix_survives_reentrant_capture_release() {
                         )
                         .expect("hover");
                         if let PointerEvent::Move(event) = &mut hover {
-                            event.buttons = Default::default();
+                            event.buttons = flui_platform_api::pointer::PointerButtons::default();
                         }
                         dispatch(&realm, primary, hover);
                     }
@@ -517,7 +517,7 @@ fn assert_keyboard_contact_prefix(fail: bool, reenter: bool, resampling: bool) {
     use flui_runtime::presentation::PointerResampling;
     use std::rc::Weak;
 
-    let mut realm = UiRealm::for_test();
+    let mut realm = UiRuntime::for_test();
     let primary = realm.presentation_id();
     realm
         .set_pointer_resampling(
@@ -533,7 +533,7 @@ fn assert_keyboard_contact_prefix(fail: bool, reenter: bool, resampling: bool) {
     let two = PointerId::try_from(2_u64).expect("contact");
     let positions = Rc::new(RefCell::new(Vec::new()));
     let log = Rc::clone(&positions);
-    let owner = Rc::new(RefCell::new(Weak::<UiRealm>::new()));
+    let owner = Rc::new(RefCell::new(Weak::<UiRuntime>::new()));
     let callback_owner = Rc::clone(&owner);
     let first = Cell::new(true);
     realm
@@ -598,7 +598,7 @@ fn assert_keyboard_contact_prefix(fail: bool, reenter: bool, resampling: bool) {
                 primary,
                 PlatformInput::Keyboard(KeyEventBuilder::new(Code::F4).build()),
             );
-        })
+        });
     };
     let outcome = catch_unwind(AssertUnwindSafe(key));
     if fail {
@@ -681,7 +681,7 @@ fn assert_motion_keyboard_order(
     use flui_platform_api::keyboard::Code;
     use flui_runtime::presentation::PointerResampling;
 
-    let mut realm = UiRealm::for_test();
+    let mut realm = UiRuntime::for_test();
     let primary = realm.presentation_id();
     realm
         .set_pointer_resampling(
@@ -790,7 +790,7 @@ fn assert_motion_keyboard_order(
 }
 
 pub(crate) fn a_secondary_contact_move_is_delivered_by_the_next_frame() {
-    let mut realm = UiRealm::for_test();
+    let mut realm = UiRuntime::for_test();
     let secondary = install_secondary(&mut realm);
     let moves = Rc::new(Cell::new(0));
     let seen = moves.clone();
@@ -841,7 +841,7 @@ pub(crate) fn held_replay_preserves_hardware_history_and_drag_velocity() {
     }
 
     for held in [false, true, false] {
-        let mut realm = UiRealm::for_test();
+        let mut realm = UiRuntime::for_test();
         let primary = realm.presentation_id();
         let motions = Rc::new(RefCell::new(Vec::<PointerMove>::new()));
         let observed = Rc::clone(&motions);
@@ -999,7 +999,7 @@ impl GestureArenaMember for AcceptLog {
 }
 
 pub(crate) fn a_secondary_deferred_arena_verdict_is_delivered_by_the_next_frame() {
-    let mut realm = UiRealm::for_test();
+    let mut realm = UiRuntime::for_test();
     let secondary = install_secondary(&mut realm);
     let accepted = Rc::new(Cell::new(0));
     let member = Rc::new(AcceptLog(accepted.clone()));
@@ -1023,7 +1023,7 @@ pub(crate) fn a_secondary_deferred_arena_verdict_is_delivered_by_the_next_frame(
 }
 
 fn queued_hover_after_transition(paused: bool, held: bool) {
-    let mut realm = UiRealm::for_test();
+    let mut realm = UiRuntime::for_test();
     let primary = realm.presentation_id();
     let hovers = Rc::new(Cell::new(0));
     let seen = hovers.clone();
@@ -1077,7 +1077,7 @@ pub(crate) fn host_pause_discards_a_hover_held_before_the_first_commit() {
 }
 
 pub(crate) fn host_pause_keeps_a_completed_held_tap_for_the_first_commit() {
-    let mut realm = UiRealm::for_test();
+    let mut realm = UiRuntime::for_test();
     let primary = realm.presentation_id();
     let downs = Rc::new(Cell::new(0));
     let ups = Rc::new(Cell::new(0));
@@ -1138,7 +1138,7 @@ fn motion_probe(count: Rc<Cell<usize>>, fail: Rc<Cell<bool>>, message: &'static 
 }
 
 fn failing_frame_motion_still_delivers_the_sibling(secondary_panics: bool) {
-    let mut realm = UiRealm::for_test();
+    let mut realm = UiRuntime::for_test();
     let primary = realm.presentation_id();
     let counts = [Rc::new(Cell::new(0)), Rc::new(Cell::new(0))];
     let failures = [Rc::new(Cell::new(false)), Rc::new(Cell::new(false))];
@@ -1258,7 +1258,7 @@ impl tracing::Subscriber for PauseDiagnosticPanic {
 }
 
 fn pause_diagnostic_failure_still_drains_motion(cancel_panics: bool) {
-    let mut realm = UiRealm::for_test();
+    let mut realm = UiRuntime::for_test();
     let primary = realm.presentation_id();
     let hovers = Rc::new(Cell::new(0));
     let cancels = Rc::new(Cell::new(0));
@@ -1300,7 +1300,7 @@ fn pause_diagnostic_failure_still_drains_motion(cancel_panics: bool) {
     )
     .expect("finite test position");
     if let PointerEvent::Move(update) = &mut motion {
-        update.buttons = Default::default();
+        update.buttons = flui_platform_api::pointer::PointerButtons::default();
     }
     dispatch(&realm, primary, motion.clone());
     assert_eq!(hovers.get(), 0, "the mouse move is still queued");
@@ -1376,7 +1376,7 @@ impl StatelessView for ShrinkingHoverRegion {
 }
 
 pub(crate) fn a_secondary_layout_refreshes_its_stationary_hover() {
-    let mut realm = UiRealm::for_test();
+    let mut realm = UiRuntime::for_test();
     let secondary = install_secondary(&mut realm);
     let graph = realm
         .presentation_widgets_for_test(secondary)

@@ -1,11 +1,11 @@
 //! The flush registry: the latest bytes of every persisted document, kept by
-//! the host outside every realm and written to storage from there.
+//! the host outside every UI runtime and written to storage from there.
 //!
 //! A document publishes its encoded bytes here on the owner thread, through
 //! its own [`FlushPublisher`]; the host writes them through its [`Storage`]
 //! on the IO pool, one write in flight per name, the latest bytes winning.
-//! Because the registry lives outside the realm, the host can still write
-//! what was published when the realm is gone or busy: at the end of the
+//! Because the registry lives outside the UI runtime, the host can still write
+//! what was published when the UI runtime is gone or busy: at the end of the
 //! application and when the session ends, without running any application
 //! code.
 //!

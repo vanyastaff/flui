@@ -44,7 +44,7 @@
 //! filled. Optional event streams ([`service_events`]) are the opposite
 //! trade by design: bounded, latest-wins, lossy, and **pull-only** — a
 //! publisher can never wake, mutate, or revive UI state, which is what
-//! makes a late service result after realm teardown structurally inert
+//! makes a late service result after UI runtime teardown structurally inert
 //! ([`PublishError::OwnerGone`]).
 //!
 //! # Not in this slice (stated, not silently assumed)
@@ -778,7 +778,7 @@ pub enum PublishError {
     /// The [`ServiceEvents`] receiver was dropped — the owner is gone and
     /// the event has nowhere to go. This is the mechanism that makes a
     /// late service result after teardown inert: publishing into a dead
-    /// owner is an `Err`, never a wake, a queue, or a revived realm.
+    /// owner is an `Err`, never a wake, a queue, or a revived ui_runtime.
     #[error("the event receiver was dropped; the owning side is gone")]
     OwnerGone,
 }
@@ -1171,7 +1171,7 @@ impl ServiceSlot {
 /// evidence).
 ///
 /// Loop-scoped like `ExecutionServices` itself: hot-restart reinstalls a
-/// realm without touching running services; only full loop-exit teardown
+/// UI runtime without touching running services; only full loop-exit teardown
 /// shuts them down.
 pub(crate) struct ServiceRegistry {
     accepting: bool,
@@ -1353,7 +1353,7 @@ impl ServiceRegistry {
     }
 
     /// Reopen admission after a prior loop's [`Self::shutdown`] closed it
-    /// — called at realm install, the same known point that re-resolves
+    /// — called at UI runtime install, the same known point that re-resolves
     /// the execution services for a second loop on this thread. A no-op
     /// when admission is already open; never touches running services.
     pub(crate) fn reopen(&mut self) {

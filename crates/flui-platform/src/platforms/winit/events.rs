@@ -1513,7 +1513,9 @@ mod pointer_translation_tests {
                 panic!("{name}: expected native touch Down")
             };
             assert_eq!(
-                down.sample.pressure.map(flui_platform_api::pointer::Pressure::get),
+                down.sample
+                    .pressure
+                    .map(flui_platform_api::pointer::Pressure::get),
                 expected,
                 "{name}"
             );

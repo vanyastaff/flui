@@ -425,8 +425,10 @@ pub struct DraggableState<T: Clone + Send + Sync + 'static> {
     /// `on_start` at drag-start time. Owner-local (`Rc<RefCell<_>>`), like
     /// [`DragConfig`]; see [`FeedbackConfig`] for why the two are separate.
     feedback_config: Rc<RefCell<FeedbackConfig>>,
-    /// Built once in `init_state` against the presentation arena.
+    /// The current admission owner; authored policy replacement cancels the old one.
     recognizer: Option<Rc<MultiDragGestureRecognizer>>,
+    settings: Option<flui_interaction::GestureSettingsProvider>,
+    attachment: Rc<super::recognizer_attachment::RecognizerAttachment<MultiDragGestureRecognizer>>,
     /// Ties this state to `Draggable<T>` even though no field stores a `T`
     /// directly (see [`DragConfig`]'s docs on why the session drops it).
     _data: std::marker::PhantomData<T>,
@@ -800,11 +802,11 @@ fn localize(global: Offset<f64>, transform: Option<&Matrix4>) -> Offset<f64> {
 /// makes the innermost of a set of nested targets win.
 ///
 /// A target tags its node with a lane ticket, resolved here to its
-/// owner-local slot; this runs inside pointer dispatch, where the realm's
+/// owner-local slot; this runs inside pointer dispatch, where the UI runtime's
 /// lane is active. A ticket that no longer resolves because its target
 /// unmounted since the hit test is skipped, as a foreign payload is. Any
-/// other lane error means the question could not be asked at all (no realm
-/// entered, or another realm's), so the answer is `None`, not an empty list:
+/// other lane error means the question could not be asked at all (no UI runtime
+/// entered, or another UI runtime's), so the answer is `None`, not an empty list:
 /// see [`DragSession::discover`].
 fn drag_targets_on(
     path: &[HitTestEntry],
@@ -1253,27 +1255,22 @@ impl<T: Clone + Send + Sync + 'static> StatefulView for Draggable<T> {
             feedback_entry: Rc::new(RefCell::new(None)),
             feedback_config: Rc::new(RefCell::new(FeedbackConfig::from_view(self))),
             recognizer: None,
+            settings: None,
+            attachment: Rc::new(super::recognizer_attachment::RecognizerAttachment::default()),
             _data: std::marker::PhantomData,
         }
     }
 }
 
-impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableState<T> {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+impl<T: Clone + Send + Sync + 'static> DraggableState<T> {
+    fn build_recognizer(
+        &self,
+        ctx: &dyn LifecycleContext,
+        settings: flui_interaction::GestureSettingsProvider,
+    ) -> Rc<MultiDragGestureRecognizer> {
         let arena = GestureArenaScope::of(ctx);
         let rebuild = ctx.rebuild_handle();
         let writer = ctx.writer_source();
-
-        // The *initial* resolution, not just re-resolution: `depend_on`
-        // (which `Overlay::maybe_of` calls) only registers this element as a
-        // dependent — it does not, by itself, guarantee `did_change_dependencies`
-        // fires on first mount with no prior dependency to notify about. Same
-        // two-call shape `FocusScopeState` uses for `enclosing_focus_parent`
-        // (`interaction/focus.rs`): resolve here for the first value, and
-        // again in `did_change_dependencies` for later changes.
-        let _prev = std::mem::replace(&mut *self.overlay.lock(), Overlay::maybe_of(ctx));
-        let _prev = std::mem::replace(&mut *self.hit_test.borrow_mut(), ctx.hit_test_handle());
-        let _prev = std::mem::replace(&mut *self.pipeline.borrow_mut(), ctx.pipeline_owner());
 
         let active_count = Arc::clone(&self.active_count);
         let config = Rc::clone(&self.config);
@@ -1349,11 +1346,23 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
             }) as Rc<dyn MultiDragHandle>)
         };
 
-        self.recognizer = Some(
-            MultiDragGestureRecognizer::builder(arena, MultiDragAxis::Free)
-                .on_start(on_start)
-                .build(),
-        );
+        MultiDragGestureRecognizer::builder(arena, MultiDragAxis::Free)
+            .settings(settings)
+            .on_start(on_start)
+            .build()
+    }
+}
+
+impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableState<T> {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        let _prev = std::mem::replace(&mut *self.overlay.lock(), Overlay::maybe_of(ctx));
+        let _prev = std::mem::replace(&mut *self.hit_test.borrow_mut(), ctx.hit_test_handle());
+        let _prev = std::mem::replace(&mut *self.pipeline.borrow_mut(), ctx.pipeline_owner());
+        let settings = GestureArenaScope::settings_of(ctx);
+        let recognizer = self.build_recognizer(ctx, settings.clone());
+        self.settings = Some(settings);
+        self.attachment.attach(&recognizer);
+        self.recognizer = Some(recognizer);
     }
 
     /// Re-resolves everything this widget reads from its `BuildContext`: the
@@ -1369,6 +1378,16 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
         let _prev = std::mem::replace(&mut *self.overlay.lock(), Overlay::maybe_of(ctx));
         let _prev = std::mem::replace(&mut *self.hit_test.borrow_mut(), ctx.hit_test_handle());
         let _prev = std::mem::replace(&mut *self.pipeline.borrow_mut(), ctx.pipeline_owner());
+        let settings = GestureArenaScope::settings_of(ctx);
+        if self.settings.as_ref() != Some(&settings) {
+            let incoming = self.build_recognizer(ctx, settings.clone());
+            self.settings = Some(settings);
+            self.attachment.attach(&incoming);
+            let outgoing = self.recognizer.replace(incoming);
+            if let Some(outgoing) = outgoing {
+                outgoing.cancel();
+            }
+        }
     }
 
     fn build(&self, view: &Draggable<T>, _ctx: &dyn BuildContext) -> impl IntoView {
@@ -1378,10 +1397,6 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
             FeedbackConfig::from_view(view),
         );
 
-        let recognizer = self
-            .recognizer
-            .clone()
-            .expect("BUG: init_state must build the recognizer before the first build");
         let max = view.max_simultaneous_drags;
         let active_count = Arc::clone(&self.active_count);
 
@@ -1392,7 +1407,7 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
             // that way; the global half is what lets a recogniser report a
             // global position at all, since dispatch rewrote it away before
             // any handler here runs.
-            .recognizer_when(&recognizer, move |_| {
+            .recognizer_when(&self.attachment, move |_| {
                 max.is_none_or(|max| active_count.load(Ordering::Acquire) < max)
             });
 
@@ -1451,6 +1466,7 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
     /// their writes land); a callback that panics there must not leave the
     /// overlay entry behind.
     fn dispose(&mut self) {
+        self.attachment.clear();
         let stale = self.feedback_entry.borrow_mut().take();
         if let Some(entry) = stale {
             entry.remove();

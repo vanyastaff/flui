@@ -27,7 +27,7 @@
 //!   ends; when it answers that it does not, nothing else is called for that
 //!   loop. A hook is never attached twice without a detach between.
 //! - [`DevAgentHook::window_opened`] runs on the owner thread once a window's
-//!   realm is installed, and only between `attach` and `detach`. A window
+//!   UI runtime is installed, and only between `attach` and `detach`. A window
 //!   whose installation fails is never handed over.
 //! - A hook that panics in any method is dropped and never called again;
 //!   the window being opened opens without it.

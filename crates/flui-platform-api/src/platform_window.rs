@@ -11,12 +11,12 @@ use std::{any::Any, sync::Arc};
 use cursor_icon::CursorIcon;
 use flui_foundation::geometry::{Bounds, Point, Size};
 
+use crate::keyboard::Modifiers;
 use crate::{
     CursorError, DispatchEventResult, PlatformDisplay, PlatformHaptics, PlatformInput,
     PlatformTextInput, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
     WindowExecutionState, WindowId, WindowShowError,
 };
-use crate::keyboard::Modifiers;
 
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
@@ -158,7 +158,7 @@ pub trait PlatformWindow: Send + Sync {
     ///
     /// A window that cannot state its identity cannot be demultiplexed
     /// (ADR-0037 §2): the identity is what lets the demux boundary look up
-    /// which `(RealmId, PresentationId)` a native event belongs to. Every
+    /// which `(UiRuntimeId, PresentationId)` a native event belongs to. Every
     /// implementor must return a real, stable-for-the-window's-lifetime
     /// value — never a shared sentinel that would make two different
     /// windows compare equal.
@@ -172,6 +172,22 @@ pub trait PlatformWindow: Send + Sync {
 
     /// Get the scale factor (DPI scaling)
     fn scale_factor(&self) -> f64;
+
+    /// Query gesture geometry for this presentation's native coordinate context.
+    ///
+    /// Call on the platform owner thread after accepting system-preference or DPI
+    /// changes. This query shares the host's observation lifetime; it installs no
+    /// additional native subscription. `Ok(None)` means unsupported geometry.
+    ///
+    /// # Errors
+    /// A closed owner, wrong thread, native failure or invalid projection fails
+    /// the query. Preserve the last accepted projection and arrange a bounded
+    /// retry instead of replacing it with unknown values.
+    fn gesture_geometry(
+        &self,
+    ) -> Result<Option<crate::GestureGeometry>, crate::PreferenceQueryError> {
+        Ok(None)
+    }
 
     /// Request that this window produce a frame.
     ///

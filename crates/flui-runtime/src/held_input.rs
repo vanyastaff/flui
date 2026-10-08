@@ -257,8 +257,7 @@ impl HeldPointerQueue {
                 continue;
             }
             let queued_start = self.events.iter().rposition(|event| {
-                matches!(event, PointerEvent::Down(_))
-                    && event.pointer_id() == Some(pointer_id)
+                matches!(event, PointerEvent::Down(_)) && event.pointer_id() == Some(pointer_id)
             });
             let start = queued_start.unwrap_or(0);
             let before = self.events.len();
@@ -267,7 +266,8 @@ impl HeldPointerQueue {
                 .enumerate()
                 .filter_map(|(index, event)| {
                     let belongs_to_open_epoch = index >= start
-                        && flui_interaction::PointerEventExt::pointer_id(&event) == Some(pointer_id);
+                        && flui_interaction::PointerEventExt::pointer_id(&event)
+                            == Some(pointer_id);
                     (!belongs_to_open_epoch).then_some(event)
                 })
                 .collect();
@@ -1243,7 +1243,7 @@ mod tests {
         }
 
         assert!(queue.borrow().is_empty());
-        assert!(drain(&queue).is_empty());
+        assert_eq!(drain(&queue), [] as [flui_interaction::PointerEvent; 0]);
     }
 
     fn dropping_open_sequences_mid_replay_keeps_only_complete_epochs() {

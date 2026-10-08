@@ -168,7 +168,7 @@ pub(crate) fn viewer_native_owner_survives_descendant_enable_during_rebuild() {
                     .pan_enabled(false)
                     .boundary_margin(EdgeInsets::all(1000.0))
                     .on_interaction_end(move |_, details| {
-                        inner_log.borrow_mut().push(details.reason)
+                        inner_log.borrow_mut().push(details.reason);
                     })
                     .child(SizedBox::new(200.0, 200.0)),
             )
@@ -398,6 +398,157 @@ pub(crate) fn viewer_extreme_finite_pan_preserves_the_boundary_result() {
     laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::End));
 }
 
+/// Focal inertia retains the admitted profile while raw reporting stays intact.
+pub(crate) fn viewer_touch_focal_inertia_uses_the_admitted_profile() {
+    viewer_focal_inertia_uses_profile(false);
+}
+
+pub(crate) fn viewer_native_focal_inertia_uses_the_admitted_profile() {
+    viewer_focal_inertia_uses_profile(true);
+}
+
+fn viewer_focal_inertia_uses_profile(native: bool) {
+    use flui_animation::Vsync;
+    use flui_widgets::{InteractiveViewer, TransformationController, VsyncScope};
+    use std::time::Duration;
+    let profile = |min, max| {
+        flui_interaction::GestureSettings::default()
+            .try_with_fling_velocity(min, max)
+            .expect("valid focal fling range")
+    };
+    let settings = flui_interaction::settings::GestureSettingsSource::new(profile(5000.0, 5000.0));
+    let controller = TransformationController::new();
+    let ends = Rc::new(RefCell::new(Vec::new()));
+    let recorder = Rc::clone(&ends);
+    let vsync = Vsync::new();
+    let mut laid = lay_out(
+        crate::common::SettingsScope::new(
+            settings.provider(),
+            VsyncScope::new(
+                vsync.clone(),
+                InteractiveViewer::new()
+                    .controller(controller.clone())
+                    .boundary_margin(EdgeInsets::all(1000.0))
+                    .on_interaction_end(move |_, details| recorder.borrow_mut().push(details))
+                    .child(SizedBox::new(200.0, 200.0)),
+            ),
+        ),
+        tight(200.0, 200.0),
+    );
+    laid.adopt_vsync(vsync);
+    for attempt in 0..3 {
+        let info = PointerInfo::new(
+            PointerId::try_from(100_u64 + attempt).expect("contact identity"),
+            if native {
+                PointerKind::Mouse
+            } else {
+                PointerKind::Touch
+            },
+        );
+        let held = PointerButtons::NONE.with(PointerButton::PRIMARY);
+        let base = attempt * 1000;
+        let sample = |millis, x| {
+            PointerSample::new(
+                EventTime::from_nanos((base + millis) * 1_000_000),
+                position(x, 100.0),
+            )
+        };
+        let native_packet = |millis, phase| {
+            PointerEvent::PanZoom(PanZoomEvent::new(
+                info,
+                EventTime::from_nanos((base + millis) * 1_000_000),
+                position(50.0, 100.0),
+                phase,
+            ))
+        };
+        let start = if native {
+            native_packet(0, PanZoomPhase::Start)
+        } else {
+            PointerEvent::Down(PointerPress::new(
+                info,
+                PointerButton::PRIMARY,
+                held,
+                sample(0, 20.0),
+            ))
+        };
+        laid.dispatch_pointer_event(&start);
+        for (millis, distance) in [(10, 20.0), (20, 40.0), (30, 60.0), (40, 80.0)] {
+            let movement = if native {
+                native_packet(
+                    millis,
+                    PanZoomPhase::Update(
+                        PanZoomTransform::try_new(Offset::new(distance, 0.0), 1.0, 0.0)
+                            .expect("finite focal pan"),
+                    ),
+                )
+            } else {
+                PointerEvent::Move(PointerMove::new(
+                    info,
+                    held,
+                    sample(millis, 20.0 + distance),
+                ))
+            };
+            laid.dispatch_pointer_event(&movement);
+            laid.pump_for(Duration::from_millis(10));
+        }
+        if attempt == 0 {
+            settings.replace(profile(50.0, 100.0));
+        }
+        if attempt == 1 {
+            settings.replace(profile(50.0, 600.0));
+        }
+        let end = if native {
+            native_packet(41, PanZoomPhase::End)
+        } else {
+            PointerEvent::Up(PointerRelease::new(
+                info,
+                PointerButton::PRIMARY,
+                PointerButtons::NONE,
+                sample(41, 100.0),
+            ))
+        };
+        laid.dispatch_pointer_event(&end);
+        let before = controller.value().transform_point(0.0, 0.0).0;
+        laid.pump_for(Duration::from_millis(16));
+        laid.pump_for(Duration::from_millis(16));
+        let coast = controller.value().transform_point(0.0, 0.0).0 - before;
+        let log = ends.borrow();
+        assert_eq!(
+            log.len(),
+            usize::try_from(attempt + 1).expect("three sessions"),
+            "each session reports raw terminal measurement"
+        );
+        assert!(
+            log.last()
+                .expect("terminal callback")
+                .velocity
+                .pixels_per_second
+                .dx
+                > 1000.0,
+            "raw focal measurement remains available when inertia is filtered"
+        );
+        assert_eq!(
+            log.last().expect("terminal callback").scale_velocity,
+            0.0,
+            "pure pan has no dimensionless scale velocity"
+        );
+        match attempt {
+            0 => assert_eq!(
+                coast, 0.0,
+                "native={native}: first admitted minimum blocks inertia despite source restoration before terminal"
+            ),
+            1 => assert!(
+                coast > 0.0 && coast < 4.0,
+                "native={native}: captured max100 caps focal inertia despite source600, coast {coast}"
+            ),
+            _ => assert!(
+                coast > 4.0 && coast < 20.0,
+                "native={native}: new max600 admission recovers, coast {coast}"
+            ),
+        }
+    }
+}
+
 /// The real presentation ticks the release velocity and new input retires it.
 pub(crate) fn viewer_focal_fling_advances_then_stops_on_new_input() {
     use flui_animation::Vsync;
@@ -541,9 +692,14 @@ pub(crate) fn viewer_focal_fling_rebuild_preserves_or_retires_geometry() {
         laid.pump_for(Duration::from_millis(16));
         laid.pump_for(Duration::from_millis(16));
         assert_eq!(
-            controller.value(), stopped,
+            controller.value(),
+            stopped,
             "changing {} retires the immutable fling limits",
-            if change_viewport { "the viewport" } else { "the boundary" }
+            if change_viewport {
+                "the viewport"
+            } else {
+                "the boundary"
+            }
         );
     }
 }
@@ -740,8 +896,7 @@ pub(crate) fn page_scroll_resolves_against_the_actual_viewport() {
     use flui_foundation::geometry::Matrix4;
     use flui_widgets::Transform;
     let perspective = Matrix4::from([
-        1.0, 0.0, 0.0, -0.005, 0.0, 1.0, 0.0, 0.0,
-        0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+        1.0, 0.0, 0.0, -0.005, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
     ]);
     for (transform, focal) in [
         (Matrix4::scaling(2.0, 2.0, 1.0), position(20.0, 20.0)),
@@ -764,12 +919,128 @@ pub(crate) fn page_scroll_resolves_against_the_actual_viewport() {
             );
             assert_eq!(controller.position().viewport_dimension(), 275.0);
             let scroll = ScrollEvent::new(
-                mouse(), EventTime::from_nanos(61), focal,
+                mouse(),
+                EventTime::from_nanos(61),
+                focal,
                 ScrollDelta::try_new(unit, 0.0, 0.5).expect("finite counts"),
-            ).with_precision(ScrollPrecision::Precise);
+            )
+            .with_precision(ScrollPrecision::Precise);
             laid.dispatch_pointer_event(&PointerEvent::Scroll(scroll));
-            assert!((controller.pixels() - expected).abs() < 1e-9,
-                "transformed {unit:?} resolves in actual scrollable: {} != {expected}", controller.pixels());
+            assert!(
+                (controller.pixels() - expected).abs() < 1e-9,
+                "transformed {unit:?} resolves in actual scrollable: {} != {expected}",
+                controller.pixels()
+            );
+        }
+    }
+}
+
+#[derive(Clone, flui_view::prelude::StatelessView)]
+struct ZoomWheelPreferences {
+    child: flui_view::BoxedView,
+    count: u32,
+}
+
+impl flui_view::StatelessView for ZoomWheelPreferences {
+    fn build(&self, ctx: &dyn flui_view::BuildContext) -> impl flui_view::IntoView {
+        flui_widgets::GestureArenaScope::new(
+            flui_widgets::GestureArenaScope::of(ctx),
+            self.child.clone(),
+        )
+        .wheel_preferences(
+            flui_platform_api::WheelPreferences::default()
+                .with_vertical(flui_platform_api::WheelStep::Lines(self.count)),
+        )
+    }
+}
+
+pub(crate) fn viewer_raw_detents_zoom_without_stealing_plain_scrolls() {
+    use flui_widgets::{InteractiveViewer, TransformationController, WheelScaleGate};
+
+    // Raw Win32 rotation retains the authored zoom step. Normalized lines are
+    // a control, and fractions remain fractions under the authored divisor.
+    for unit in [ScrollUnit::Lines, ScrollUnit::Detents] {
+        for (factor, count) in [(100.0, 0), (200.0, 3)] {
+            let transform = TransformationController::new();
+            let scroll = ScrollController::new();
+            let scales = Rc::new(RefCell::new(Vec::new()));
+            let updates = scales.clone();
+            let content = Scrollable::new().controller(scroll.clone()).child(
+                SizedBox::new(300.0, 1000.0).child(
+                    InteractiveViewer::new()
+                        .controller(transform.clone())
+                        .wheel_scale_gate(WheelScaleGate::CtrlWheel)
+                        .scale_factor(factor)
+                        .boundary_margin(EdgeInsets::all(1000.0))
+                        .on_interaction_update(move |_, details| {
+                            updates.borrow_mut().push(details.scale);
+                        })
+                        .child(SizedBox::new(300.0, 1000.0)),
+                ),
+            );
+            let mut laid = lay_out(
+                ZoomWheelPreferences {
+                    child: content.boxed(),
+                    count,
+                },
+                tight(300.0, 300.0),
+            );
+            let packet = |dy, modifiers| {
+                PointerEvent::Scroll(
+                    ScrollEvent::new(
+                        mouse(),
+                        EventTime::from_nanos(60),
+                        position(100.0, 100.0),
+                        ScrollDelta::try_new(unit, 0.0, dy).expect("finite wheel delta"),
+                    )
+                    .with_modifiers(modifiers),
+                )
+            };
+            laid.dispatch_pointer_event(&packet(-1.0, Modifiers::CONTROL));
+            let first = (53.0_f64 / factor).exp();
+            assert_scale(scale_of(&transform), first);
+            assert_eq!(scroll.pixels(), 0.0, "zoom claims {unit:?}");
+            assert_scale(scales.borrow()[0], first);
+
+            laid.dispatch_pointer_event(&packet(-0.25, Modifiers::CONTROL));
+            let second = (66.25_f64 / factor).exp();
+            assert_scale(scale_of(&transform), second);
+            assert_eq!(scroll.pixels(), 0.0, "fractional zoom stays claimed");
+            assert_scale(scales.borrow()[1], (13.25_f64 / factor).exp());
+
+            // A phase-less burst retains its claimant until owner-clock
+            // inactivity. The next chord is a fresh burst on the same source.
+            laid.pump_for(std::time::Duration::from_millis(500));
+            laid.dispatch_pointer_event(&packet(0.25, Modifiers::NONE));
+            let plain_distance = if unit == ScrollUnit::Detents {
+                13.25 * f64::from(count)
+            } else {
+                13.25
+            };
+            assert_eq!(
+                scroll.pixels(),
+                plain_distance,
+                "plain tick follows outer scroll policy"
+            );
+            assert_scale(scale_of(&transform), second);
+            assert_eq!(scales.borrow().len(), 2);
+
+            laid.pump_for(std::time::Duration::from_millis(500));
+            laid.dispatch_pointer_event(&packet(f64::MAX, Modifiers::CONTROL));
+            assert_eq!(
+                scroll.pixels(),
+                plain_distance,
+                "invalid zoom cannot scroll"
+            );
+            assert_scale(scale_of(&transform), second);
+            laid.dispatch_pointer_event(&packet(-0.25, Modifiers::CONTROL));
+            assert_scale(scale_of(&transform), (79.5_f64 / factor).exp());
+            assert_eq!(
+                scroll.pixels(),
+                plain_distance,
+                "healthy zoom recovers claim"
+            );
+            assert_eq!(scales.borrow().len(), 3);
         }
     }
 }

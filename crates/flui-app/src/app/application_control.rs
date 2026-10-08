@@ -48,7 +48,7 @@ pub enum AppWindowError {
         #[source]
         source: Arc<dyn std::error::Error + Send + Sync>,
     },
-    /// Realm construction, registration or root mounting failed.
+    /// Runtime construction, registration or root mounting failed.
     #[error("root mount failed: {source}")]
     Mount {
         /// Original initialization error.

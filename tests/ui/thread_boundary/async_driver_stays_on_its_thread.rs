@@ -1,6 +1,6 @@
-// An `AsyncDriver` reaches its realm's owner-local task store, whose futures
+// An `AsyncDriver` reaches its ui_runtime's owner-local task store, whose futures
 // may hold `Rc` state: it cannot leave the owner thread. A worker reaches the
-// realm through a task's `Waker` or a `FrameWaker` instead.
+// ui_runtime through a task's `Waker` or a `FrameWaker` instead.
 //
 // The `Send + 'static` bound is `std::thread::spawn`'s, stated here so the
 // diagnostic names no std source: without `rust-src` rustc omits std

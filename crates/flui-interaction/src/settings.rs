@@ -19,12 +19,103 @@
 //! assert_eq!(mouse_settings.touch_slop(), 1.0);
 //! ```
 
-use std::time::Duration;
+use std::{cell::RefCell, rc::Rc, time::Duration};
 
-use flui_platform_api::TargetPlatform;
+use flui_foundation::geometry::{Offset, Size};
 use flui_platform_api::pointer::PointerKind;
+use flui_platform_api::{FlingSpeeds, GestureGeometry, GesturePreferences, TargetPlatform};
 
 use crate::processing::VelocityEstimator;
+
+/// Presentation-owned writer of the gesture projection of host preferences.
+///
+/// This capability has one owner. Consumers receive only [`Self::provider`].
+/// Publishing invokes no callbacks and does not schedule frames; each recognizer
+/// copies the current profile when admitting a new gesture.
+#[derive(Debug)]
+pub struct GestureSettingsSource {
+    settings: Rc<RefCell<GestureSettings>>,
+}
+
+impl GestureSettingsSource {
+    /// Seed the presentation's validated gesture profile.
+    #[must_use]
+    pub fn new(settings: GestureSettings) -> Self {
+        Self {
+            settings: Rc::new(RefCell::new(settings)),
+        }
+    }
+
+    /// Grant a read-only owner-local capability to future admissions.
+    #[must_use]
+    pub fn provider(&self) -> GestureSettingsProvider {
+        GestureSettingsProvider {
+            profile: SettingsProfile::Live(self.settings.clone()),
+        }
+    }
+
+    /// Replace the projection, returning whether its effective value changed.
+    pub fn replace(&self, settings: GestureSettings) -> bool {
+        let mut current = self.settings.borrow_mut();
+        if *current == settings {
+            return false;
+        }
+        *current = settings;
+        true
+    }
+}
+
+/// Read-only settings used by new gesture admissions.
+///
+/// A fixed authored profile remains independent of host updates. A live provider
+/// shares one presentation's projection, retains its last value if the writer
+/// retires, and cannot cross threads. Equality compares fixed values or the exact
+/// live source identity, so publication does not replace an existing consumer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GestureSettingsProvider {
+    profile: SettingsProfile,
+}
+
+#[derive(Debug, Clone)]
+enum SettingsProfile {
+    Fixed(Rc<GestureSettings>),
+    Live(Rc<RefCell<GestureSettings>>),
+}
+
+impl PartialEq for SettingsProfile {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Fixed(left), Self::Fixed(right)) => left == right,
+            (Self::Live(left), Self::Live(right)) => Rc::ptr_eq(left, right),
+            _ => false,
+        }
+    }
+}
+
+impl GestureSettingsProvider {
+    /// Copy a profile without retaining a source borrow during user code.
+    #[must_use]
+    pub fn snapshot(&self) -> GestureSettings {
+        match &self.profile {
+            SettingsProfile::Fixed(settings) => settings.as_ref().clone(),
+            SettingsProfile::Live(settings) => settings.borrow().clone(),
+        }
+    }
+}
+
+impl From<GestureSettings> for GestureSettingsProvider {
+    fn from(settings: GestureSettings) -> Self {
+        Self {
+            profile: SettingsProfile::Fixed(Rc::new(settings)),
+        }
+    }
+}
+
+impl Default for GestureSettingsProvider {
+    fn default() -> Self {
+        GestureSettings::default().into()
+    }
+}
 
 /// Default touch slop for touch devices (18 logical pixels).
 ///
@@ -178,6 +269,27 @@ pub struct GestureSettings {
 
     /// Release-velocity policy captured when a gesture sequence begins.
     velocity_estimator: VelocityEstimator,
+    native: NativeSettings,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+struct NativeSettings {
+    mouse_interval: Option<Duration>,
+    touch_interval: Option<Duration>,
+    mouse_drag: Option<Size>,
+    mouse_double_click: Option<Size>,
+    touch: Option<TouchSlops>,
+    touch_double_tap: Option<f64>,
+    touch_fling: Option<FlingSpeeds>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct TouchSlops {
+    hit: f64,
+    pan: f64,
+    horizontal: f64,
+    vertical: f64,
+    span: f64,
 }
 
 impl Default for GestureSettings {
@@ -190,6 +302,20 @@ impl Default for GestureSettings {
 #[derive(Debug, Clone, Copy, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum GestureSettingsError {
+    /// A baseline ratio and native distance have no finite representation.
+    #[error(
+        "native gesture setting `{field}` cannot represent baseline ratio {tier}/{hit} at {observed}"
+    )]
+    UnrepresentableProjection {
+        /// Derived tier that could not be represented.
+        field: &'static str,
+        /// Authored tier distance.
+        tier: f64,
+        /// Authored hit distance.
+        hit: f64,
+        /// Observed native hit distance.
+        observed: f64,
+    },
     /// A slop, ratio or velocity was NaN, infinite or negative.
     #[error("gesture setting `{field}` must be finite and not negative, got {value}")]
     InvalidValue {
@@ -228,7 +354,197 @@ fn checked_fling_range(min: f64, max: f64) -> Result<(f64, f64), GestureSettings
     Ok((min, max))
 }
 
+fn project_tier(
+    field: &'static str,
+    tier: f64,
+    hit: f64,
+    observed: f64,
+) -> Result<f64, GestureSettingsError> {
+    if hit == 0.0 {
+        return Ok(tier);
+    }
+    if observed == 0.0 || tier == 0.0 {
+        return Ok(0.0);
+    }
+    let candidates = [
+        (observed / hit) * tier,
+        (tier / hit) * observed,
+        (observed * tier) / hit,
+    ];
+    if let Some(value) = candidates
+        .into_iter()
+        .find(|value| value.is_finite() && *value > 0.0)
+    {
+        return Ok(value);
+    }
+    Err(GestureSettingsError::UnrepresentableProjection {
+        field,
+        tier,
+        hit,
+        observed,
+    })
+}
+
+fn exceeds_tolerance(delta: Offset<f64>, rectangle: Option<Size>, distance: f64) -> bool {
+    if !delta.is_finite() {
+        return true;
+    }
+    rectangle.map_or_else(
+        || delta.dx.hypot(delta.dy) > distance,
+        |area| delta.dx.abs() > area.width || delta.dy.abs() > area.height,
+    )
+}
+
 impl GestureSettings {
+    /// Resolve accepted host timing and exact presentation geometry over a baseline.
+    ///
+    /// Missing observations restore baseline fields. Raw native host geometry is
+    /// comparison-only: callers pass the exact presentation's logical geometry.
+    /// `None` means an accepted unsupported/unknown query, not a failed query.
+    /// Touch pan and span tiers retain their authored ratio to hit slop; a zero
+    /// baseline hit distance keeps the authored derived tiers unchanged.
+    ///
+    /// # Errors
+    /// Returns [`GestureSettingsError::UnrepresentableProjection`] if a derived
+    /// touch distance cannot be represented as a finite nonnegative value.
+    pub fn resolve_preferences(
+        baseline: &Self,
+        preferences: &GesturePreferences,
+        geometry: Option<&GestureGeometry>,
+    ) -> Result<Self, GestureSettingsError> {
+        let mut settings = baseline.clone();
+        if let Some(timeout) = preferences.long_press_timeout() {
+            settings.long_press_timeout = timeout;
+        }
+        if let Some(timeout) = preferences.double_click_interval() {
+            settings.native.mouse_interval = Some(timeout);
+        }
+        if let Some(timeout) = preferences.double_tap_interval() {
+            settings.native.touch_interval = Some(timeout);
+        }
+        if let Some(geometry) = geometry {
+            if let Some(area) = geometry.mouse_double_click_area() {
+                settings.native.mouse_double_click =
+                    Some(Size::new(area.width / 2.0, area.height / 2.0));
+            }
+            if let Some(tolerance) = geometry.mouse_drag_tolerance() {
+                settings.native.mouse_drag = Some(tolerance);
+            }
+            if let Some(slop) = geometry.touch_slop() {
+                let hit = baseline.hit_slop(PointerKind::Touch);
+                let observed = slop.get();
+                settings.native.touch = Some(TouchSlops {
+                    hit: observed,
+                    pan: project_tier(
+                        "pan_slop",
+                        baseline.pan_slop_for(PointerKind::Touch),
+                        hit,
+                        observed,
+                    )?,
+                    horizontal: project_tier(
+                        "pan_slop_horizontal",
+                        baseline.pan_slop_horizontal_for(PointerKind::Touch),
+                        hit,
+                        observed,
+                    )?,
+                    vertical: project_tier(
+                        "pan_slop_vertical",
+                        baseline.pan_slop_vertical_for(PointerKind::Touch),
+                        hit,
+                        observed,
+                    )?,
+                    span: project_tier(
+                        "span_slop",
+                        baseline.span_slop_for(PointerKind::Touch),
+                        hit,
+                        observed,
+                    )?,
+                });
+            }
+            if let Some(slop) = geometry.touch_double_tap_slop() {
+                settings.native.touch_double_tap = Some(slop.get());
+            }
+            if let Some(speeds) = geometry.fling_speeds() {
+                settings.native.touch_fling = Some(speeds);
+            }
+        }
+        Ok(settings)
+    }
+
+    /// Whether a displacement exceeds the admitted device's tap/hold tolerance.
+    /// Mouse native tolerances are closed axis rectangles, never radial estimates.
+    #[must_use]
+    pub fn exceeds_hit_slop(&self, kind: PointerKind, delta: Offset<f64>) -> bool {
+        exceeds_tolerance(delta, self.mouse_drag(kind), self.hit_slop(kind))
+    }
+
+    /// Whether free-plane movement exceeds the admitted pan tolerance.
+    #[must_use]
+    pub fn exceeds_pan_slop_for(&self, kind: PointerKind, delta: Offset<f64>) -> bool {
+        exceeds_tolerance(delta, self.mouse_drag(kind), self.pan_slop_for(kind))
+    }
+
+    /// Whether the next contact lies outside its candidate's double-tap tolerance.
+    #[must_use]
+    pub fn exceeds_double_tap_slop(&self, kind: PointerKind, delta: Offset<f64>) -> bool {
+        let rectangle = (kind == PointerKind::Mouse)
+            .then_some(self.native.mouse_double_click)
+            .flatten();
+        let distance = if kind == PointerKind::Touch {
+            self.native.touch_double_tap.unwrap_or(self.double_tap_slop)
+        } else {
+            self.double_tap_slop
+        };
+        exceeds_tolerance(delta, rectangle, distance)
+    }
+
+    fn mouse_drag(&self, kind: PointerKind) -> Option<Size> {
+        if kind == PointerKind::Mouse {
+            self.native.mouse_drag
+        } else {
+            None
+        }
+    }
+
+    /// Per-kind double-tap interval, distinct from an authored universal timeout.
+    #[must_use]
+    pub fn double_tap_timeout_for(&self, kind: PointerKind) -> Duration {
+        match kind {
+            PointerKind::Mouse => self
+                .native
+                .mouse_interval
+                .unwrap_or(self.double_tap_timeout),
+            PointerKind::Touch => self
+                .native
+                .touch_interval
+                .unwrap_or(self.double_tap_timeout),
+            _ => self.double_tap_timeout,
+        }
+    }
+
+    pub(crate) fn double_tap_uses_down_time(&self, kind: PointerKind) -> bool {
+        kind == PointerKind::Mouse && self.native.mouse_interval.is_some()
+    }
+
+    pub(crate) fn resolve_fling_velocity(
+        &self,
+        kind: PointerKind,
+        velocity: crate::Velocity,
+    ) -> crate::Velocity {
+        let (min, max) = if kind == PointerKind::Touch {
+            self.native.touch_fling.map_or(
+                (self.min_fling_velocity, self.max_fling_velocity),
+                |speeds| (speeds.min(), speeds.max()),
+            )
+        } else {
+            (self.min_fling_velocity, self.max_fling_velocity)
+        };
+        if velocity.magnitude() < min {
+            crate::Velocity::ZERO
+        } else {
+            velocity.clamp_magnitude(0.0, max)
+        }
+    }
     /// Create settings with custom values.
     ///
     /// The per-axis pan slops start equal to `pan_slop`.
@@ -264,6 +580,7 @@ impl GestureSettings {
             min_fling_velocity,
             max_fling_velocity,
             velocity_estimator: VelocityEstimator::LeastSquares,
+            native: NativeSettings::default(),
         })
     }
 
@@ -283,6 +600,7 @@ impl GestureSettings {
             min_fling_velocity: DEFAULT_MIN_FLING_VELOCITY,
             max_fling_velocity: DEFAULT_MAX_FLING_VELOCITY,
             velocity_estimator: VelocityEstimator::LeastSquares,
+            native: NativeSettings::default(),
         }
     }
 
@@ -306,6 +624,7 @@ impl GestureSettings {
             min_fling_velocity: DEFAULT_MIN_FLING_VELOCITY,
             max_fling_velocity: DEFAULT_MAX_FLING_VELOCITY,
             velocity_estimator: VelocityEstimator::LeastSquares,
+            native: NativeSettings::default(),
         }
     }
 
@@ -375,6 +694,7 @@ impl GestureSettings {
             min_fling_velocity: 50.0,
             max_fling_velocity: 8000.0,
             velocity_estimator: VelocityEstimator::LeastSquares,
+            native: NativeSettings::default(),
         }
     }
 
@@ -398,6 +718,7 @@ impl GestureSettings {
             min_fling_velocity: 50.0,
             max_fling_velocity: 8000.0,
             velocity_estimator: VelocityEstimator::LeastSquares,
+            native: NativeSettings::default(),
         }
     }
 
@@ -417,6 +738,7 @@ impl GestureSettings {
             min_fling_velocity: DEFAULT_MIN_FLING_VELOCITY,
             max_fling_velocity: DEFAULT_MAX_FLING_VELOCITY,
             velocity_estimator: VelocityEstimator::LeastSquares,
+            native: NativeSettings::default(),
         }
     }
 
@@ -475,25 +797,21 @@ impl GestureSettings {
     /// The hit slop for `kind` — how far a pointer of that kind may drift
     /// before a gesture is rejected.
     ///
-    /// [`PointerKind::Mouse`] is precise, so it gets a fixed small constant
-    /// that no profile customises. Every other kind — `Pen` (tip or eraser),
-    /// `Touch`, `Trackpad` and `Unknown` — resolves through this settings object's touch tier.
-    /// **A pen is not precise under this rule**: that is deliberate (a
-    /// stylus gets the touch tier), not an omission.
-    ///
-    /// **Read this rather than `touch_slop()` wherever a recognizer checks
-    /// drift against the hit slop.** The rule was implemented separately in two
-    /// recognizers before this existed, and a third copy would have been the
-    /// point where they drifted: no *built-in* profile makes the two tiers
-    /// coincide (a caller can of course build one with
-    /// [`Self::try_with_touch_slop`]), so a recognizer that forgets the
-    /// distinction looks fine in a default-profile test and is wrong on every
-    /// shipped platform.
+    /// Touch uses its observed logical hit distance when available. Pen,
+    /// trackpad and unknown input retain the authored touch tier. Mouse returns
+    /// its scalar fallback; its observed axis rectangle cannot be expressed as
+    /// one distance. Recognizers compare movement through
+    /// [`Self::exceeds_hit_slop`] to preserve that rectangle.
     #[inline]
     #[must_use]
     pub fn hit_slop(&self, kind: PointerKind) -> f64 {
         match kind {
             PointerKind::Mouse => DEFAULT_MOUSE_SLOP,
+            PointerKind::Touch => self
+                .native
+                .touch
+                .as_ref()
+                .map_or(self.touch_slop, |slops| slops.hit),
             _ => self.touch_slop(),
         }
     }
@@ -513,6 +831,11 @@ impl GestureSettings {
     pub fn pan_slop_for(&self, kind: PointerKind) -> f64 {
         match kind {
             PointerKind::Mouse => DEFAULT_MOUSE_PAN_SLOP,
+            PointerKind::Touch => self
+                .native
+                .touch
+                .as_ref()
+                .map_or(self.pan_slop, |slops| slops.pan),
             _ => self.pan_slop(),
         }
     }
@@ -527,12 +850,46 @@ impl GestureSettings {
         self.pan_slop_vertical
     }
 
+    /// Vertical pan distance, using the native mouse rectangle's vertical axis.
+    #[must_use]
+    pub fn pan_slop_vertical_for(&self, kind: PointerKind) -> f64 {
+        match kind {
+            PointerKind::Mouse => self
+                .native
+                .mouse_drag
+                .map_or(DEFAULT_MOUSE_SLOP, |area| area.height),
+            PointerKind::Touch => self
+                .native
+                .touch
+                .as_ref()
+                .map_or(self.pan_slop_vertical, |slops| slops.vertical),
+            _ => self.pan_slop_vertical,
+        }
+    }
+
     /// Get the horizontal-only pan slop (per-axis tolerance).
     ///
     /// See [`Self::pan_slop_vertical`] — same rationale, horizontal axis.
     #[inline]
     pub fn pan_slop_horizontal(&self) -> f64 {
         self.pan_slop_horizontal
+    }
+
+    /// Horizontal pan distance, using the native mouse rectangle's horizontal axis.
+    #[must_use]
+    pub fn pan_slop_horizontal_for(&self, kind: PointerKind) -> f64 {
+        match kind {
+            PointerKind::Mouse => self
+                .native
+                .mouse_drag
+                .map_or(DEFAULT_MOUSE_SLOP, |area| area.width),
+            PointerKind::Touch => self
+                .native
+                .touch
+                .as_ref()
+                .map_or(self.pan_slop_horizontal, |slops| slops.horizontal),
+            _ => self.pan_slop_horizontal,
+        }
     }
 
     /// Get the scale slop (minimum scale change to start scaling).
@@ -544,12 +901,12 @@ impl GestureSettings {
         self.scale_slop
     }
 
-    /// The span slop for `kind` — how far the *distance between two pointers*
-    /// must change, in logical pixels, before a scale is recognised.
+    /// The span slop for `kind` — how far the mean distance of the contacts from
+    /// their focal point must change, in logical pixels, before a scale is recognised.
     ///
-    /// Like [`Self::hit_slop`], it special-cases exactly the mouse as
-    /// precise; unlike it, it reads no settings at all, so neither arm here
-    /// is configurable.
+    /// Mouse retains its precise scalar tier. An observed touch hit distance
+    /// scales the baseline touch span tier by the same ratio as the other touch
+    /// distances. Other kinds retain their baseline tier.
     ///
     /// Distinct from [`Self::scale_slop`], which is a dimensionless ratio. The
     /// two are separate acceptance criteria, not two spellings of one: a pinch
@@ -560,6 +917,11 @@ impl GestureSettings {
     pub fn span_slop_for(&self, kind: PointerKind) -> f64 {
         match kind {
             PointerKind::Mouse => DEFAULT_MOUSE_SPAN_SLOP,
+            PointerKind::Touch => self
+                .native
+                .touch
+                .as_ref()
+                .map_or(DEFAULT_SPAN_SLOP, |slops| slops.span),
             _ => DEFAULT_SPAN_SLOP,
         }
     }
@@ -608,6 +970,7 @@ impl GestureSettings {
     #[inline]
     pub fn try_with_touch_slop(mut self, slop: f64) -> Result<Self, GestureSettingsError> {
         self.touch_slop = checked("touch_slop", slop)?;
+        self.native.touch = None;
         Ok(self)
     }
 
@@ -620,6 +983,7 @@ impl GestureSettings {
     #[inline]
     pub fn try_with_pan_slop(mut self, slop: f64) -> Result<Self, GestureSettingsError> {
         self.pan_slop = checked("pan_slop", slop)?;
+        self.native.touch = None;
         Ok(self)
     }
 
@@ -636,6 +1000,7 @@ impl GestureSettings {
     #[inline]
     pub fn try_with_pan_slop_vertical(mut self, slop: f64) -> Result<Self, GestureSettingsError> {
         self.pan_slop_vertical = checked("pan_slop_vertical", slop)?;
+        self.native.touch = None;
         Ok(self)
     }
 
@@ -651,6 +1016,7 @@ impl GestureSettings {
     #[inline]
     pub fn try_with_pan_slop_horizontal(mut self, slop: f64) -> Result<Self, GestureSettingsError> {
         self.pan_slop_horizontal = checked("pan_slop_horizontal", slop)?;
+        self.native.touch = None;
         Ok(self)
     }
 
@@ -675,6 +1041,8 @@ impl GestureSettings {
     #[inline]
     pub fn try_with_double_tap_slop(mut self, slop: f64) -> Result<Self, GestureSettingsError> {
         self.double_tap_slop = checked("double_tap_slop", slop)?;
+        self.native.mouse_double_click = None;
+        self.native.touch_double_tap = None;
         Ok(self)
     }
 
@@ -682,6 +1050,8 @@ impl GestureSettings {
     #[inline]
     pub fn with_double_tap_timeout(mut self, timeout: Duration) -> Self {
         self.double_tap_timeout = timeout;
+        self.native.mouse_interval = None;
+        self.native.touch_interval = None;
         self
     }
 
@@ -706,6 +1076,7 @@ impl GestureSettings {
         max: f64,
     ) -> Result<Self, GestureSettingsError> {
         (self.min_fling_velocity, self.max_fling_velocity) = checked_fling_range(min, max)?;
+        self.native.touch_fling = None;
         Ok(self)
     }
 

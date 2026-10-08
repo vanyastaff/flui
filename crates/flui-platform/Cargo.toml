@@ -93,6 +93,9 @@ arboard = { workspace = true, optional = true }
 # Windows platform
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { workspace = true, features = [
+    "Foundation",
+    "UI_ViewManagement",
+    "Win32_System_WinRT",
     "Win32_Foundation",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Input_Pointer",
@@ -109,6 +112,7 @@ windows = { workspace = true, features = [
     "Win32_System_Memory",
     "Win32_System_Ole",
     "Win32_System_Threading",
+    "Win32_Security",
     "Win32_System_SystemInformation",
     # TSF: the thread manager, document managers and the `ITextStoreACP`
     # text store (ADR-0090 §3). `Win32_UI_Input_Ime` (IMM32) stays off: the
@@ -342,7 +346,13 @@ a11y = ["dep:accesskit_unix", "dep:accesskit_windows", "dep:accesskit_macos"]
 
 # winit fallback backend — primary on Linux until native Wayland/X11 lands
 # (roadmap Cross.P); optional on Windows/macOS.
-winit-backend = ["dep:winit", "dep:arboard", "dep:crossbeam-channel", "dep:ui-events-winit", "dep:keyboard-types"]
+winit-backend = [
+    "dep:winit",
+    "dep:arboard",
+    "dep:crossbeam-channel",
+    "dep:ui-events-winit",
+    "dep:keyboard-types",
+]
 
 # Web platform
 # Honest note (verified 2026-08-04): no-op selector — zero

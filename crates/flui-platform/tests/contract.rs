@@ -500,26 +500,51 @@ mod native_windows {
     struct ClosePointerTarget(Arc<dyn HostWindow>);
 
     impl Drop for ClosePointerTarget {
-        fn drop(&mut self) { self.0.close(); }
+        fn drop(&mut self) {
+            self.0.close();
+        }
     }
 
-    #[expect(unsafe_code, reason = "keeps only the ephemeral injected-input target above unrelated host windows")]
-    fn open_pointer_target(platform: &WindowsPlatform) -> Option<(Arc<dyn HostWindow>, ClosePointerTarget)> {
-        use windows::Win32::UI::WindowsAndMessaging::{HWND_TOPMOST, SetForegroundWindow, GetForegroundWindow};
+    #[expect(
+        unsafe_code,
+        reason = "keeps only the ephemeral injected-input target above unrelated host windows"
+    )]
+    fn open_pointer_target(
+        platform: &WindowsPlatform,
+    ) -> Option<(Arc<dyn HostWindow>, ClosePointerTarget)> {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GetForegroundWindow, HWND_TOPMOST, SetForegroundWindow,
+        };
         let window = open_shown(platform);
         let close = ClosePointerTarget(Arc::clone(&window));
         // SAFETY: the fixture's exact live owner-thread HWND. It is destroyed
         // by the RAII owner on success, early refusal, or assertion unwind;
         // no pre-existing host window's z-order or style is changed.
-        unsafe { SetWindowPos(hwnd_of(&window), Some(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE) }.expect("keep ephemeral pointer target above host windows");
+        unsafe {
+            SetWindowPos(
+                hwnd_of(&window),
+                Some(HWND_TOPMOST),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE,
+            )
+        }
+        .expect("keep ephemeral pointer target above host windows");
         // SAFETY: only this fixture's live HWND is activated; its RAII owner
         // destroys it on failure as well. Pump activation before real input
         // so a first contact cannot be consumed merely to activate the target.
         let _ = unsafe { SetForegroundWindow(hwnd_of(&window)) };
-        for _ in 0..25 { pump_pointer_thread(); std::thread::sleep(Duration::from_millis(2)); }
+        for _ in 0..25 {
+            pump_pointer_thread();
+            std::thread::sleep(Duration::from_millis(2));
+        }
         // SAFETY: observes desktop activation without retaining a native handle.
         if unsafe { GetForegroundWindow() } != hwnd_of(&window) {
-            eprintln!("CANNOT_VERIFY native input: host foreground policy refused activation of the owned ephemeral target");
+            eprintln!(
+                "CANNOT_VERIFY native input: host foreground policy refused activation of the owned ephemeral target"
+            );
             return None;
         }
         Some((window, close))
@@ -2594,13 +2619,27 @@ mod native_windows {
         window.close();
     }
 
-    #[expect(unsafe_code, reason = "real native pointer injection into an ephemeral shown test window")]
+    #[expect(
+        unsafe_code,
+        reason = "real native pointer injection into an ephemeral shown test window"
+    )]
     fn synthetic_touch_and_pen_reach_native_pointer_dispatch() {
         use flui_platform_api::pointer::{PenTool, PointerEvent, PointerKind};
         use windows::Win32::UI::{
-            Controls::{CreateSyntheticPointerDevice, DestroySyntheticPointerDevice, HSYNTHETICPOINTERDEVICE, POINTER_FEEDBACK_NONE, POINTER_TYPE_INFO, POINTER_TYPE_INFO_0},
-            Input::Pointer::{InjectSyntheticPointerInput, POINTER_INFO, POINTER_PEN_INFO, POINTER_TOUCH_INFO, POINTER_FLAG_DOWN, POINTER_FLAG_INCONTACT, POINTER_FLAG_INRANGE, POINTER_FLAG_UPDATE, POINTER_FLAG_UP},
-            WindowsAndMessaging::{PT_PEN, PT_TOUCH, PEN_MASK_PRESSURE, PEN_MASK_ROTATION, PEN_MASK_TILT_X, PEN_MASK_TILT_Y, TOUCH_MASK_CONTACTAREA, TOUCH_MASK_PRESSURE, WindowFromPoint},
+            Controls::{
+                CreateSyntheticPointerDevice, DestroySyntheticPointerDevice,
+                HSYNTHETICPOINTERDEVICE, POINTER_FEEDBACK_NONE, POINTER_TYPE_INFO,
+                POINTER_TYPE_INFO_0,
+            },
+            Input::Pointer::{
+                InjectSyntheticPointerInput, POINTER_FLAG_DOWN, POINTER_FLAG_INCONTACT,
+                POINTER_FLAG_INRANGE, POINTER_FLAG_UP, POINTER_FLAG_UPDATE, POINTER_INFO,
+                POINTER_PEN_INFO, POINTER_TOUCH_INFO,
+            },
+            WindowsAndMessaging::{
+                PEN_MASK_PRESSURE, PEN_MASK_ROTATION, PEN_MASK_TILT_X, PEN_MASK_TILT_Y, PT_PEN,
+                PT_TOUCH, TOUCH_MASK_CONTACTAREA, TOUCH_MASK_PRESSURE, WindowFromPoint,
+            },
         };
         struct Device(HSYNTHETICPOINTERDEVICE);
         impl Drop for Device {
@@ -2612,10 +2651,15 @@ mod native_windows {
         fn unsupported_host(error: &windows::core::Error) -> bool {
             // Explicit host capability/permission refusals. Invalid arguments
             // and sequencing failures are fixture defects, not coverage skips.
-            matches!(error.code().0 as u32, 0x8007_0005 | 0x8007_0032 | 0x8007_0078 | 0x8000_4001)
+            matches!(
+                error.code().0 as u32,
+                0x8007_0005 | 0x8007_0032 | 0x8007_0078 | 0x8000_4001
+            )
         }
         let platform = WindowsPlatform::new().expect("native Windows platform");
-        let Some((window, _close)) = open_pointer_target(&platform) else { return; };
+        let Some((window, _close)) = open_pointer_target(&platform) else {
+            return;
+        };
         let hwnd = hwnd_of(&window);
         pump_pointer_thread();
         let mut target = POINT { x: 40, y: 40 };
@@ -2623,28 +2667,49 @@ mod native_windows {
         assert!(unsafe { ClientToScreen(hwnd, &raw mut target) }.as_bool());
         // Injection uses actual hit testing, never hwndTarget as an override.
         if unsafe { WindowFromPoint(target) } != hwnd {
-            eprintln!("CANNOT_VERIFY synthetic pointer delivery: shown target is occluded or the desktop is unavailable");
+            eprintln!(
+                "CANNOT_VERIFY synthetic pointer delivery: shown target is occluded or the desktop is unavailable"
+            );
             window.close();
             return;
         }
         let events = record_pointer(&window);
-        for (native_kind, expected_kind) in [(PT_TOUCH, PointerKind::Touch), (PT_PEN, PointerKind::Pen { tool: PenTool::Tip })] {
+        for (native_kind, expected_kind) in [
+            (PT_TOUCH, PointerKind::Touch),
+            (PT_PEN, PointerKind::Pen { tool: PenTool::Tip }),
+        ] {
             // SAFETY: one ephemeral synthetic device, no borrowed native resources.
-            let device = match unsafe { CreateSyntheticPointerDevice(native_kind, 1, POINTER_FEEDBACK_NONE) } {
+            let device = match unsafe {
+                CreateSyntheticPointerDevice(native_kind, 1, POINTER_FEEDBACK_NONE)
+            } {
                 Ok(device) => Device(device),
                 Err(error) => {
-                    assert!(unsupported_host(&error), "CreateSyntheticPointerDevice failed unexpectedly: {error}");
-                    eprintln!("CANNOT_VERIFY synthetic {expected_kind:?}: CreateSyntheticPointerDevice refused: {error}");
+                    assert!(
+                        unsupported_host(&error),
+                        "CreateSyntheticPointerDevice failed unexpectedly: {error}"
+                    );
+                    eprintln!(
+                        "CANNOT_VERIFY synthetic {expected_kind:?}: CreateSyntheticPointerDevice refused: {error}"
+                    );
                     continue;
                 }
             };
             events.lock().expect("pointer log").clear();
             let mut supported = true;
             for (flags, pressure) in [
-                (POINTER_FLAG_DOWN | POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT, 512),
-                (POINTER_FLAG_UPDATE | POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT, 768),
+                (
+                    POINTER_FLAG_DOWN | POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT,
+                    512,
+                ),
+                (
+                    POINTER_FLAG_UPDATE | POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT,
+                    768,
+                ),
                 (POINTER_FLAG_UP, 0),
-                (POINTER_FLAG_DOWN | POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT, 512),
+                (
+                    POINTER_FLAG_DOWN | POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT,
+                    512,
+                ),
                 (POINTER_FLAG_UP, 0),
             ] {
                 let mut current_origin = POINT { x: 40, y: 40 };
@@ -2652,26 +2717,79 @@ mod native_windows {
                 // or fabricate the native injected target.
                 unsafe {
                     assert!(ClientToScreen(hwnd, &raw mut current_origin).as_bool());
-                    assert_eq!((current_origin.x, current_origin.y), (target.x, target.y), "owned target must not move during injection");
-                    assert_eq!(WindowFromPoint(target), hwnd, "native injection must still hit the owned target");
-                    assert_eq!(windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow(), hwnd, "owned target must remain foreground during injection");
+                    assert_eq!(
+                        (current_origin.x, current_origin.y),
+                        (target.x, target.y),
+                        "owned target must not move during injection"
+                    );
+                    assert_eq!(
+                        WindowFromPoint(target),
+                        hwnd,
+                        "native injection must still hit the owned target"
+                    );
+                    assert_eq!(
+                        windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow(),
+                        hwnd,
+                        "owned target must remain foreground during injection"
+                    );
                 }
-                let info = POINTER_INFO { pointerType: native_kind, pointerId: 1, pointerFlags: flags, ptPixelLocation: target, ptPixelLocationRaw: target, ..Default::default() };
+                let info = POINTER_INFO {
+                    pointerType: native_kind,
+                    pointerId: 1,
+                    pointerFlags: flags,
+                    ptPixelLocation: target,
+                    ptPixelLocationRaw: target,
+                    ..Default::default()
+                };
                 let packet = if native_kind == PT_TOUCH {
-                    let contact = RECT { left: target.x - 10, top: target.y - 15, right: target.x + 10, bottom: target.y + 15 };
-                    POINTER_TYPE_INFO { r#type: native_kind, Anonymous: POINTER_TYPE_INFO_0 { touchInfo: POINTER_TOUCH_INFO {
-                        pointerInfo: info, touchMask: TOUCH_MASK_CONTACTAREA | TOUCH_MASK_PRESSURE, pressure, rcContact: contact, rcContactRaw: contact, ..Default::default()
-                    } } }
+                    let contact = RECT {
+                        left: target.x - 10,
+                        top: target.y - 15,
+                        right: target.x + 10,
+                        bottom: target.y + 15,
+                    };
+                    POINTER_TYPE_INFO {
+                        r#type: native_kind,
+                        Anonymous: POINTER_TYPE_INFO_0 {
+                            touchInfo: POINTER_TOUCH_INFO {
+                                pointerInfo: info,
+                                touchMask: TOUCH_MASK_CONTACTAREA | TOUCH_MASK_PRESSURE,
+                                pressure,
+                                rcContact: contact,
+                                rcContactRaw: contact,
+                                ..Default::default()
+                            },
+                        },
+                    }
                 } else {
-                    POINTER_TYPE_INFO { r#type: native_kind, Anonymous: POINTER_TYPE_INFO_0 { penInfo: POINTER_PEN_INFO {
-                        pointerInfo: info, penMask: PEN_MASK_PRESSURE | PEN_MASK_ROTATION | PEN_MASK_TILT_X | PEN_MASK_TILT_Y, pressure, rotation: 180, tiltX: 45, tiltY: 0, ..Default::default()
-                    } } }
+                    POINTER_TYPE_INFO {
+                        r#type: native_kind,
+                        Anonymous: POINTER_TYPE_INFO_0 {
+                            penInfo: POINTER_PEN_INFO {
+                                pointerInfo: info,
+                                penMask: PEN_MASK_PRESSURE
+                                    | PEN_MASK_ROTATION
+                                    | PEN_MASK_TILT_X
+                                    | PEN_MASK_TILT_Y,
+                                pressure,
+                                rotation: 180,
+                                tiltX: 45,
+                                tiltY: 0,
+                                ..Default::default()
+                            },
+                        },
+                    }
                 };
                 // SAFETY: initialized union arm matches type and device; the
                 // packet slice remains alive for the synchronous native copy.
                 if let Err(error) = unsafe { InjectSyntheticPointerInput(device.0, &[packet]) } {
-                    assert!(unsupported_host(&error), "InjectSyntheticPointerInput failed unexpectedly: {error}");
-                    eprintln!("CANNOT_VERIFY synthetic {expected_kind:?}: InjectSyntheticPointerInput refused: {error}");
+                    assert!(
+                        unsupported_host(&error),
+                        "InjectSyntheticPointerInput failed unexpectedly: {error}"
+                    );
+                    eprintln!(
+                        "CANNOT_VERIFY synthetic {expected_kind:?}: InjectSyntheticPointerInput refused: {error}"
+                    );
                     supported = false;
                     break;
                 }
@@ -2681,63 +2799,146 @@ mod native_windows {
                     std::thread::sleep(Duration::from_millis(2));
                 }
                 // SAFETY: read the actual hit target after native queue pumping.
-                assert_eq!(unsafe { WindowFromPoint(target) }, hwnd, "owned target must remain hit-testable after native dispatch");
+                assert_eq!(
+                    unsafe { WindowFromPoint(target) },
+                    hwnd,
+                    "owned target must remain hit-testable after native dispatch"
+                );
             }
-            if !supported { continue; }
+            if !supported {
+                continue;
+            }
             let log = events.lock().expect("pointer log");
-            let downs: Vec<_> = log.iter().filter_map(|event| if let PointerEvent::Down(press) = event { (press.pointer.kind == expected_kind).then_some(press) } else { None }).collect();
+            let downs: Vec<_> = log
+                .iter()
+                .filter_map(|event| {
+                    if let PointerEvent::Down(press) = event {
+                        (press.pointer.kind == expected_kind).then_some(press)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
             // Successful injection with no producer delivery is a regression,
             // not an unsupported-platform skip.
             assert_eq!(downs.len(), 2, "{expected_kind:?}: {log:?}");
-            let ups: Vec<_> = log.iter().filter_map(|event| if let PointerEvent::Up(release) = event { (release.pointer.kind == expected_kind).then_some(release) } else { None }).collect();
+            let ups: Vec<_> = log
+                .iter()
+                .filter_map(|event| {
+                    if let PointerEvent::Up(release) = event {
+                        (release.pointer.kind == expected_kind).then_some(release)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
             assert_eq!(ups.len(), 2, "{expected_kind:?}: {log:?}");
-            assert!(!log.iter().any(|event| match event {
-                PointerEvent::ButtonChange(flui_platform_api::pointer::ButtonChange::Pressed(press)) => press.pointer.kind == expected_kind,
-                PointerEvent::ButtonChange(flui_platform_api::pointer::ButtonChange::Released(release)) => release.pointer.kind == expected_kind,
-                _ => false,
-            }), "single-button injection must not invent another press on ENTER: {log:?}");
+            assert!(
+                !log.iter().any(|event| match event {
+                    PointerEvent::ButtonChange(
+                        flui_platform_api::pointer::ButtonChange::Pressed(press),
+                    ) => press.pointer.kind == expected_kind,
+                    PointerEvent::ButtonChange(
+                        flui_platform_api::pointer::ButtonChange::Released(release),
+                    ) => release.pointer.kind == expected_kind,
+                    _ => false,
+                }),
+                "single-button injection must not invent another press on ENTER: {log:?}"
+            );
             for (down, up) in downs.iter().zip(&ups) {
                 assert_eq!(down.pointer.kind, expected_kind);
-                assert!(down.pointer.device.is_some(), "native source handle retained");
+                assert!(
+                    down.pointer.device.is_some(),
+                    "native source handle retained"
+                );
                 assert_eq!(down.pointer, up.pointer);
-                assert!(up.sample.time >= down.sample.time, "native terminal sample cannot predate its admitted press: down={:?} up={:?}", down.sample.time, up.sample.time);
-                assert_eq!(down.sample.pressure.map(flui_platform_api::pointer::Pressure::get), Some(0.5));
+                assert!(
+                    up.sample.time >= down.sample.time,
+                    "native terminal sample cannot predate its admitted press: down={:?} up={:?}",
+                    down.sample.time,
+                    up.sample.time
+                );
+                assert_eq!(
+                    down.sample
+                        .pressure
+                        .map(flui_platform_api::pointer::Pressure::get),
+                    Some(0.5)
+                );
                 let point = down.sample.position.get();
-                assert_eq!((point.x, point.y), (40.0 / window.scale_factor(), 40.0 / window.scale_factor()));
+                assert_eq!(
+                    (point.x, point.y),
+                    (40.0 / window.scale_factor(), 40.0 / window.scale_factor())
+                );
             }
-            assert_ne!(downs[0].pointer.id, downs[1].pointer.id, "fresh admission after Up");
+            assert_ne!(
+                downs[0].pointer.id, downs[1].pointer.id,
+                "fresh admission after Up"
+            );
             assert!(log.iter().any(|event| matches!(event, PointerEvent::Move(movement) if movement.current().pressure.map(flui_platform_api::pointer::Pressure::get) == Some(0.75))), "actual update sensor reading: {log:?}");
             if native_kind == PT_TOUCH {
-                let contact = downs[0].sample.contact_size.expect("injected contact area").get();
-                assert_eq!((contact.width, contact.height), (20.0 / window.scale_factor(), 30.0 / window.scale_factor()));
+                let contact = downs[0]
+                    .sample
+                    .contact_size
+                    .expect("injected contact area")
+                    .get();
+                assert_eq!(
+                    (contact.width, contact.height),
+                    (20.0 / window.scale_factor(), 30.0 / window.scale_factor())
+                );
             } else {
-                let orientation = downs[0].sample.orientation.expect("reported both tilt axes");
-                assert!((orientation.altitude().expect("altitude") - std::f64::consts::FRAC_PI_4).abs() < 1e-12);
+                let orientation = downs[0]
+                    .sample
+                    .orientation
+                    .expect("reported both tilt axes");
+                assert!(
+                    (orientation.altitude().expect("altitude") - std::f64::consts::FRAC_PI_4).abs()
+                        < 1e-12
+                );
                 assert_eq!(orientation.azimuth(), Some(0.0));
-                assert!((downs[0].sample.twist.expect("rotation").radians() - std::f64::consts::PI).abs() < 1e-12);
+                assert!(
+                    (downs[0].sample.twist.expect("rotation").radians() - std::f64::consts::PI)
+                        .abs()
+                        < 1e-12
+                );
             }
         }
         window.close();
     }
 
-
-    #[expect(unsafe_code, reason = "drains actual native pointer broker messages on the child window's owner thread")]
+    #[expect(
+        unsafe_code,
+        reason = "drains actual native pointer broker messages on the child window's owner thread"
+    )]
     fn pump_pointer_thread() {
         for _ in 0..256 {
             let mut message = MSG::default();
             // SAFETY: this child owns every window on this thread, including
             // the platform's message-only broker. No HWND filter excludes it.
-            if !unsafe { PeekMessageW(&raw mut message, None, 0, 0, PM_REMOVE) }.as_bool() { return; }
+            if !unsafe { PeekMessageW(&raw mut message, None, 0, 0, PM_REMOVE) }.as_bool() {
+                return;
+            }
             // SAFETY: dispatch the actual message retrieved by this thread.
-            unsafe { let _ = TranslateMessage(&raw const message); DispatchMessageW(&raw const message); }
+            unsafe {
+                let _ = TranslateMessage(&raw const message);
+                DispatchMessageW(&raw const message);
+            }
         }
         panic!("native pointer child queue did not drain");
     }
 
-    #[expect(unsafe_code, reason = "real native mouse input directed to an ephemeral hit-tested window with cursor restoration")]
+    #[expect(
+        unsafe_code,
+        reason = "real native mouse input directed to an ephemeral hit-tested window with cursor restoration"
+    )]
     fn native_mouse_wheels_keep_hover_identity_and_signed_units() {
         use flui_platform_api::pointer::{PointerEvent, PointerKind, ScrollUnit};
-        use windows::Win32::UI::{Input::KeyboardAndMouse::{INPUT, INPUT_0, INPUT_MOUSE, MOUSEINPUT, MOUSEEVENTF_WHEEL, MOUSEEVENTF_HWHEEL, SendInput}, WindowsAndMessaging::{GetCursorPos, SetCursorPos, WindowFromPoint}};
+        use windows::Win32::UI::{
+            Input::KeyboardAndMouse::{
+                INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_HWHEEL, MOUSEEVENTF_WHEEL, MOUSEINPUT,
+                SendInput,
+            },
+            WindowsAndMessaging::{GetCursorPos, SetCursorPos, WindowFromPoint},
+        };
         struct Cursor(POINT);
         impl Drop for Cursor {
             fn drop(&mut self) {
@@ -2746,7 +2947,9 @@ mod native_windows {
             }
         }
         let platform = WindowsPlatform::new().expect("native Windows platform");
-        let Some((window, _close)) = open_pointer_target(&platform) else { return; };
+        let Some((window, _close)) = open_pointer_target(&platform) else {
+            return;
+        };
         let hwnd = hwnd_of(&window);
         let mut target = POINT { x: 40, y: 40 };
         let mut original = POINT::default();
@@ -2757,36 +2960,85 @@ mod native_windows {
         }
         let _restore = Cursor(original);
         if unsafe { WindowFromPoint(target) } != hwnd {
-            eprintln!("CANNOT_VERIFY native wheel: shown target is occluded or desktop unavailable");
+            eprintln!(
+                "CANNOT_VERIFY native wheel: shown target is occluded or desktop unavailable"
+            );
             window.close();
             return;
         }
         let events = record_pointer(&window);
         // SAFETY: this point was checked against our shown ephemeral target.
         unsafe { SetCursorPos(target.x, target.y) }.expect("move cursor to owned target");
-        for _ in 0..25 { pump_translated(hwnd); std::thread::sleep(Duration::from_millis(2)); }
-        let hover = events.lock().expect("pointer log").iter().find_map(|event| match event {
-            PointerEvent::Move(movement) if movement.pointer.kind == PointerKind::Mouse => Some(movement.pointer),
-            PointerEvent::Enter(signal) if signal.pointer.kind == PointerKind::Mouse => Some(signal.pointer),
-            _ => None,
-        }).expect("actual native mouse hover identity");
+        for _ in 0..25 {
+            pump_translated(hwnd);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        let hover = events
+            .lock()
+            .expect("pointer log")
+            .iter()
+            .find_map(|event| match event {
+                PointerEvent::Move(movement) if movement.pointer.kind == PointerKind::Mouse => {
+                    Some(movement.pointer)
+                }
+                PointerEvent::Enter(signal) if signal.pointer.kind == PointerKind::Mouse => {
+                    Some(signal.pointer)
+                }
+                _ => None,
+            })
+            .expect("actual native mouse hover identity");
         events.lock().expect("pointer log").clear();
         for flags in [MOUSEEVENTF_WHEEL, MOUSEEVENTF_HWHEEL] {
-            let input = INPUT { r#type: INPUT_MOUSE, Anonymous: INPUT_0 { mi: MOUSEINPUT { mouseData: 120, dwFlags: flags, ..Default::default() } } };
+            let input = INPUT {
+                r#type: INPUT_MOUSE,
+                Anonymous: INPUT_0 {
+                    mi: MOUSEINPUT {
+                        mouseData: 120,
+                        dwFlags: flags,
+                        ..Default::default()
+                    },
+                },
+            };
             // SAFETY: initialized mouse union arm; cursor is over owned target.
-            assert_eq!(unsafe { SendInput(&[input], std::mem::size_of::<INPUT>() as i32) }, 1, "native wheel injection accepted");
-            for _ in 0..25 { pump_translated(hwnd); std::thread::sleep(Duration::from_millis(2)); }
+            assert_eq!(
+                unsafe { SendInput(&[input], std::mem::size_of::<INPUT>() as i32) },
+                1,
+                "native wheel injection accepted"
+            );
+            for _ in 0..25 {
+                pump_translated(hwnd);
+                std::thread::sleep(Duration::from_millis(2));
+            }
         }
         let log = events.lock().expect("pointer log");
-        let scrolls: Vec<_> = log.iter().filter_map(|event| if let PointerEvent::Scroll(scroll) = event { Some(scroll) } else { None }).collect();
-        assert_eq!(scrolls.len(), 2, "exactly one dispatch per native wheel: {log:?}");
+        let scrolls: Vec<_> = log
+            .iter()
+            .filter_map(|event| {
+                if let PointerEvent::Scroll(scroll) = event {
+                    Some(scroll)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(
+            scrolls.len(),
+            2,
+            "exactly one dispatch per native wheel: {log:?}"
+        );
         for (scroll, expected) in scrolls.iter().zip([(0.0, -1.0), (1.0, 0.0)]) {
-            assert_eq!(scroll.pointer, hover, "native wheel retains actual hover metadata");
-            assert_eq!(scroll.delta.unit(), ScrollUnit::Lines);
+            assert_eq!(
+                scroll.pointer, hover,
+                "native wheel retains actual hover metadata"
+            );
+            assert_eq!(scroll.delta.unit(), ScrollUnit::Detents);
             assert_eq!((scroll.delta.x(), scroll.delta.y()), expected);
             assert_eq!(scroll.phase, None, "a wheel tick supplies no gesture phase");
             let point = scroll.position.get();
-            assert_eq!((point.x, point.y), (40.0 / window.scale_factor(), 40.0 / window.scale_factor()));
+            assert_eq!(
+                (point.x, point.y),
+                (40.0 / window.scale_factor(), 40.0 / window.scale_factor())
+            );
         }
         drop(log);
         window.close();
@@ -2880,7 +3132,7 @@ mod native_windows {
                 scroll.pointer, source,
                 "packet classification retains actual source"
             );
-            assert_eq!(scroll.delta.unit(), ScrollUnit::Lines);
+            assert_eq!(scroll.delta.unit(), ScrollUnit::Detents);
             assert_eq!((scroll.delta.x(), scroll.delta.y()), (x, y));
             assert_eq!(
                 scroll.precision, precision,

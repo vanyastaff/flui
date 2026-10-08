@@ -37,7 +37,9 @@ mod measured {
     };
     use flui_sdk::geometry::{EdgeInsets as _, RRect as _, Radius as _};
     use flui_sdk::hooks::FrameSnapshot as _;
-    use flui_sdk::interaction::{DragDownDetails as _, FocusNode as _, GestureEndReason as _};
+    use flui_sdk::interaction::{
+        DragDownDetails as _, FocusNode as _, FocusSubscription as _, GestureEndReason as _,
+    };
     use flui_sdk::painting::Alignment as _;
     use flui_sdk::painting::{
         Border as _, BorderRadius as _, BorderRadiusExt as _, BorderSide as _, BorderStyle as _,
@@ -123,6 +125,8 @@ fn the_re_exports_are_the_facades_types() {
         |x| x;
     let _: fn(flui::interaction::DragDownDetails) -> flui_sdk::interaction::DragDownDetails = |x| x;
     let _: fn(flui::interaction::FocusNode) -> flui_sdk::interaction::FocusNode = |x| x;
+    let _: fn(flui::interaction::FocusSubscription) -> flui_sdk::interaction::FocusSubscription =
+        |x| x;
     let _: fn(flui::painting::Canvas) -> flui_sdk::painting::Canvas = |x| x;
     let _: fn(flui::painting::DrawOp) -> flui_sdk::painting::DrawOp = |x| x;
     let _: fn(flui::platform::Brightness) -> flui_sdk::platform::Brightness = |x| x;
@@ -167,6 +171,7 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_interaction::DragDownDetails;",
         "pub use flui_interaction::GestureEndReason;",
         "pub use flui_interaction::routing::FocusNode;",
+        "pub use flui_interaction::routing::FocusSubscription;",
         "pub use flui_objects::PathClipConfiguration;",
         "pub use flui_objects::RenderPhysicalShape;",
         "pub use flui_objects::TranslationFraction;",

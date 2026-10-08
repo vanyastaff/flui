@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-07-18
-- **Related:** ADR-0027 (realm ownership), ADR-0058 (pacing; the backgrounded pump)
+- **Related:** ADR-0027 (UI runtime ownership), ADR-0058 (pacing; the backgrounded pump)
 
 ## Context
 
@@ -49,10 +49,10 @@ without it a later independent `Waker::wake()` finds the latch already set and n
 loop; clearing *after* instead would erase a task's synchronous self-wake during the pump. How
 the backgrounded pump is paced is ADR-0058's decision.
 
-### 4. Lifecycle facts are per presentation; the realm aggregates
+### 4. Lifecycle facts are per presentation; the UI runtime aggregates
 
 Each presentation owns its native visibility/focus snapshot and its last delivered local
-state. A realm derives the scheduler state from its live presentations: any visible and focused
+state. A UI runtime derives the scheduler state from its live presentations: any visible and focused
 → `Resumed`; otherwise any visible → `Inactive`; otherwise `Hidden`; an empty forest →
 `Detached`. Keyboard routing history does not manufacture native focus.
 
@@ -61,7 +61,7 @@ state. A realm derives the scheduler state from its live presentations: any visi
   resumed, inactive, hidden, paused`) — `Detached` is first, so leaving it is one forward step.
   An unobserved presentation is `None`, and its first notification goes straight to the target,
   as in Flutter's nullable-previous-state branch.
-- Scheduler listeners see the realm aggregate, not the local ladder. A paused or hidden host
+- Scheduler listeners see the UI runtime aggregate, not the local ladder. A paused or hidden host
   cannot transiently enable frames or attach resources while a presentation synchronizes.
 - Local facts and the next ladder step commit before user callbacks; input cancellation
   precedes lifecycle callbacks; binding observers see committed local and aggregate state.
@@ -73,13 +73,13 @@ state. A realm derives the scheduler state from its live presentations: any visi
 - Android maps its single active-status signal to the ladder: `false` walks to `Paused`, `true`
   back to `Resumed`.
 
-### 5. Platform quit reaches every realm
+### 5. Platform quit reaches every UI runtime
 
 A quit belongs to the application loop, not the primary window. The desktop quit callback visits
-every installed realm once, laddering each live presentation to `Detached`. Quit closes
+every installed UI runtime once, laddering each live presentation to `Detached`. Quit closes
 secondary-window admission immediately; notification waits until an active dispatch restores its
 checked-out state; completions and callbacks carry their loop's identity, so one from an earlier
-loop cannot affect a later one. A panicking observer cannot skip sibling realms: the first
+loop cannot affect a later one. A panicking observer cannot skip sibling UI runtimes: the first
 panic resumes after restoration and notification. Window closure and application termination
 stay distinct, as in AppKit's `applicationShouldTerminateAfterLastWindowClosed`.
 
@@ -99,7 +99,7 @@ subscriptions rather than Flutter's `AppLifecycleListener.dispose`.
 - **Async work is polled by the frame loop**, not by an always-running event loop; the
   `PumpAsync` arm is what keeps futures advancing while frames are off.
 - **No retained scene**: resume re-dirties the root instead of re-presenting the last frame.
-- **Lifecycle is per presentation with a realm aggregate**, not one process-wide stream;
+- **Lifecycle is per presentation with a UI runtime aggregate**, not one process-wide stream;
   scheduler listeners see the aggregate.
 
 ## Not implemented

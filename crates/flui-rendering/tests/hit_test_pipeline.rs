@@ -93,54 +93,84 @@ pub(crate) fn perspective_transform_unprojects_to_the_child_plane() {
     // A Y rotation with cos=0.6, sin=0.8, followed by w=1+z/10.
     // On the child plane: screen=(0.6*x, y)/(1-0.08*x).
     let transform = Matrix4::from([
-        0.6, 0.0, -0.8, -0.08, 0.0, 1.0, 0.0, 0.0,
-        0.8, 0.0, 0.6, 0.06, 0.0, 0.0, 0.0, 1.0,
+        0.6, 0.0, -0.8, -0.08, 0.0, 1.0, 0.0, 0.0, 0.8, 0.0, 0.6, 0.06, 0.0, 0.0, 0.0, 1.0,
     ]);
     let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
     let parent = owner.insert(Box::new(RenderTransform::new(transform)) as BoxedRenderObject);
-    let child = owner.insert_child_render_object(parent,
-        Box::new(RenderColoredBox::red(1.5, 10.0))).expect("child insert");
+    let child = owner
+        .insert_child_render_object(parent, Box::new(RenderColoredBox::red(1.5, 10.0)))
+        .expect("child insert");
     let owner = laid_out(owner, parent);
 
     // Local (2,3) is outside the narrow child; inverse(screen_x,screen_y,0)
     // incorrectly gives x=6/7 and therefore admits it.
     let screen = Point::new(10.0 / 7.0, 25.0 / 7.0);
-    let local = owner.global_to_local(child, screen, Some(parent)).expect("visible plane");
-    assert!((local.x - 2.0).abs() < 1e-10 && (local.y - 3.0).abs() < 1e-10,
-        "unprojection must recover the actual child-plane point: {local:?}");
-    assert!(hits(&owner, screen.x, screen.y).is_empty(), "the actual point misses the child");
+    let local = owner
+        .global_to_local(child, screen, Some(parent))
+        .expect("visible plane");
+    assert!(
+        (local.x - 2.0).abs() < 1e-10 && (local.y - 3.0).abs() < 1e-10,
+        "unprojection must recover the actual child-plane point: {local:?}"
+    );
+    assert!(
+        hits(&owner, screen.x, screen.y).is_empty(),
+        "the actual point misses the child"
+    );
     // Local (1,2) remains hittable.
-    assert_eq!(hits(&owner, 0.6 / 0.92, 2.0 / 0.92).first().copied(), Some(child));
+    assert_eq!(
+        hits(&owner, 0.6 / 0.92, 2.0 / 0.92).first().copied(),
+        Some(child)
+    );
 }
 
 pub(crate) fn perspective_transform_refuses_hidden_and_degenerate_planes() {
     use flui_foundation::geometry::{Matrix4, Point};
 
     for (name, transform, screen) in [
-        ("behind camera", Matrix4::from([
-            -1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0,
-            0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, -1.0,
-        ]), Point::new(2.0, 3.0)),
-        ("horizon", Matrix4::from([
-            1.0, 0.0, 0.0, -0.5, 0.0, 1.0, 0.0, 0.0,
-            0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
-        ]), Point::new(-2.0, 3.0)),
-        ("near horizon", Matrix4::from([
-            1.0, 0.0, 0.0, -0.5, 0.0, 1.0, 0.0, 0.0,
-            0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
-        ]), Point::new(-2.0 + f64::EPSILON, 3.0)),
-        ("edge-on plane", Matrix4::from([
-            0.0, 0.0, -1.0, 0.0, 0.0, 1.0, 0.0, 0.0,
-            1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0,
-        ]), Point::new(2.0, 3.0)),
+        (
+            "behind camera",
+            Matrix4::from([
+                -1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, -1.0,
+            ]),
+            Point::new(2.0, 3.0),
+        ),
+        (
+            "horizon",
+            Matrix4::from([
+                1.0, 0.0, 0.0, -0.5, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+            ]),
+            Point::new(-2.0, 3.0),
+        ),
+        (
+            "near horizon",
+            Matrix4::from([
+                1.0, 0.0, 0.0, -0.5, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+            ]),
+            Point::new(-2.0 + f64::EPSILON, 3.0),
+        ),
+        (
+            "edge-on plane",
+            Matrix4::from([
+                0.0, 0.0, -1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+            ]),
+            Point::new(2.0, 3.0),
+        ),
     ] {
         let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
         let parent = owner.insert(Box::new(RenderTransform::new(transform)) as BoxedRenderObject);
-        let child = owner.insert_child_render_object(parent,
-            Box::new(RenderColoredBox::red(10.0, 10.0))).expect("child insert");
+        let child = owner
+            .insert_child_render_object(parent, Box::new(RenderColoredBox::red(10.0, 10.0)))
+            .expect("child insert");
         let owner = laid_out(owner, parent);
-        assert_eq!(owner.global_to_local(child, screen, Some(parent)), None, "{name}");
-        assert!(hits(&owner, screen.x, screen.y).is_empty(), "{name} must not hit a child");
+        assert_eq!(
+            owner.global_to_local(child, screen, Some(parent)),
+            None,
+            "{name}"
+        );
+        assert!(
+            hits(&owner, screen.x, screen.y).is_empty(),
+            "{name} must not hit a child"
+        );
     }
 }
 
@@ -148,13 +178,18 @@ pub(crate) fn plane_unprojection_preserves_admitted_anisotropic_transforms() {
     use flui_foundation::geometry::{Matrix4, Point};
     for z_scale in [1.0, 1e200] {
         let transform = Matrix4::scaling(1e-200, 1.0, z_scale);
-        assert!(transform.try_inverse().is_some(), "checked inversion admits z_scale={z_scale}");
+        assert!(
+            transform.try_inverse().is_some(),
+            "checked inversion admits z_scale={z_scale}"
+        );
         let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
         let parent = owner.insert(Box::new(RenderTransform::new(transform)) as BoxedRenderObject);
-        let child = owner.insert_child_render_object(parent,
-            Box::new(RenderColoredBox::red(10.0, 10.0))).expect("child insert");
+        let child = owner
+            .insert_child_render_object(parent, Box::new(RenderColoredBox::red(10.0, 10.0)))
+            .expect("child insert");
         let owner = laid_out(owner, parent);
-        let local = owner.global_to_local(child, Point::new(2e-200, 3.0), Some(parent))
+        let local = owner
+            .global_to_local(child, Point::new(2e-200, 3.0), Some(parent))
             .expect("finite local quotient must remain deliverable");
         assert!((local.x - 2.0).abs() < 1e-10 && (local.y - 3.0).abs() < 1e-10);
         assert_eq!(hits(&owner, 2e-200, 3.0).first().copied(), Some(child));
@@ -163,52 +198,77 @@ pub(crate) fn plane_unprojection_preserves_admitted_anisotropic_transforms() {
 
 fn tilted_plane_transform() -> flui_foundation::geometry::Matrix4 {
     flui_foundation::geometry::Matrix4::from([
-        0.6, 0.0, -0.8, -0.08, 0.0, 1.0, 0.0, 0.0,
-        0.8, 0.0, 0.6, 0.06, 0.0, 0.0, 0.0, 1.0,
+        0.6, 0.0, -0.8, -0.08, 0.0, 1.0, 0.0, 0.0, 0.8, 0.0, 0.6, 0.06, 0.0, 0.0, 0.0, 1.0,
     ])
 }
 
 pub(crate) fn perspective_container_hits_its_actual_child_plane() {
     let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
-    let parent = owner.insert(Box::new(flui_objects::RenderContainer::new()
-        .with_transform(tilted_plane_transform())) as BoxedRenderObject);
-    let child = owner.insert_child_render_object(parent,
-        Box::new(RenderColoredBox::red(1.5, 10.0))).expect("child insert");
+    let parent = owner.insert(Box::new(
+        flui_objects::RenderContainer::new().with_transform(tilted_plane_transform()),
+    ) as BoxedRenderObject);
+    let child = owner
+        .insert_child_render_object(parent, Box::new(RenderColoredBox::red(1.5, 10.0)))
+        .expect("child insert");
     let owner = laid_out(owner, parent);
-    assert!(hits(&owner, 10.0 / 7.0, 25.0 / 7.0).is_empty(),
-        "local (2,3) misses the narrow container child");
-    assert_eq!(hits(&owner, 0.6 / 0.92, 2.0 / 0.92).first().copied(), Some(child));
+    assert!(
+        hits(&owner, 10.0 / 7.0, 25.0 / 7.0).is_empty(),
+        "local (2,3) misses the narrow container child"
+    );
+    assert_eq!(
+        hits(&owner, 0.6 / 0.92, 2.0 / 0.92).first().copied(),
+        Some(child)
+    );
 }
 
 #[derive(Debug)]
 struct TiltedPlaneFlow;
 
 impl flui_rendering::delegates::FlowDelegate for TiltedPlaneFlow {
-    fn get_size(&self, constraints: flui_rendering::constraints::BoxConstraints) -> flui_foundation::geometry::Size {
+    fn get_size(
+        &self,
+        constraints: flui_rendering::constraints::BoxConstraints,
+    ) -> flui_foundation::geometry::Size {
         constraints.biggest()
     }
-    fn get_constraints_for_child(&self, _index: usize, constraints: flui_rendering::constraints::BoxConstraints)
-        -> flui_rendering::constraints::BoxConstraints {
+    fn get_constraints_for_child(
+        &self,
+        _index: usize,
+        constraints: flui_rendering::constraints::BoxConstraints,
+    ) -> flui_rendering::constraints::BoxConstraints {
         constraints.loosen()
     }
     fn paint_children(&self, context: &mut flui_rendering::delegates::FlowPaintingContext<'_, '_>) {
         context.paint_child(0, tilted_plane_transform());
     }
-    fn should_relayout(&self, _old: &dyn flui_rendering::delegates::FlowDelegate) -> bool { false }
-    fn should_repaint(&self, _old: &dyn flui_rendering::delegates::FlowDelegate) -> bool { false }
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn should_relayout(&self, _old: &dyn flui_rendering::delegates::FlowDelegate) -> bool {
+        false
+    }
+    fn should_repaint(&self, _old: &dyn flui_rendering::delegates::FlowDelegate) -> bool {
+        false
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 pub(crate) fn perspective_flow_hits_its_actual_child_plane() {
     let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
-    let parent = owner.insert(Box::new(flui_objects::RenderFlow::new(
-        std::sync::Arc::new(TiltedPlaneFlow))) as BoxedRenderObject);
-    let child = owner.insert_child_render_object(parent,
-        Box::new(RenderColoredBox::red(1.5, 10.0))).expect("child insert");
+    let parent = owner.insert(Box::new(flui_objects::RenderFlow::new(std::sync::Arc::new(
+        TiltedPlaneFlow,
+    ))) as BoxedRenderObject);
+    let child = owner
+        .insert_child_render_object(parent, Box::new(RenderColoredBox::red(1.5, 10.0)))
+        .expect("child insert");
     let owner = laid_out(owner, parent);
-    assert!(hits(&owner, 10.0 / 7.0, 25.0 / 7.0).is_empty(),
-        "local (2,3) misses the narrow flow child");
-    assert_eq!(hits(&owner, 0.6 / 0.92, 2.0 / 0.92).first().copied(), Some(child));
+    assert!(
+        hits(&owner, 10.0 / 7.0, 25.0 / 7.0).is_empty(),
+        "local (2,3) misses the narrow flow child"
+    );
+    assert_eq!(
+        hits(&owner, 0.6 / 0.92, 2.0 / 0.92).first().copied(),
+        Some(child)
+    );
 }
 
 // ============================================================================

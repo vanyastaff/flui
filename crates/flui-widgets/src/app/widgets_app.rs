@@ -1,6 +1,6 @@
 //! [`WidgetsApp`] — the design-neutral application shell.
 //!
-//! Scoped to what the widget layer owns in FLUI's realm model (ADR-0042 §5,
+//! Scoped to what the widget layer owns in FLUI's UI runtime model (ADR-0042 §5,
 //! ADR-0027). An application using `WidgetsApp` with neither `flui-material`
 //! nor `flui-cupertino` in its dependency graph gets navigation (a typed
 //! [`Router`] through [`WidgetsApp::router`], or a [`Navigator`]),
@@ -12,16 +12,16 @@
 //!
 //! ## What `WidgetsApp` deliberately does NOT own here
 //!
-//! FLUI's realm model (ADR-0027) installs per-presentation infrastructure
-//! at the realm root, so re-owning any of it here would double it up:
+//! FLUI's UI runtime model (ADR-0027) installs per-presentation infrastructure
+//! at the UI runtime root, so re-owning any of it here would double it up:
 //!
-//! - **`MediaQuery`.** The realm publishes the live root `MediaQuery`
+//! - **`MediaQuery`.** The UI runtime publishes the live root `MediaQuery`
 //!   (size / device-pixel-ratio / platform-brightness republish); the shell
 //!   never introduces its own.
-//! - **Focus root and default traversal.** The realm wraps the root in
+//! - **Focus root and default traversal.** The UI runtime wraps the root in
 //!   [`FocusRoot`](crate::FocusRoot), which installs the standard Tab /
 //!   Shift+Tab traversal bindings.
-//! - **Vsync scope and gesture arena.** Realm-installed
+//! - **Vsync scope and gesture arena.** Runtime-installed
 //!   (`VsyncScope`, `GestureArenaScope`).
 //!
 //! ## Deferred (named gaps, not silent ones)
@@ -70,7 +70,7 @@
 //!   later**: the refresh is scheduled through the route entry's rebuild
 //!   handle, and a channel-scheduled mark is processed on the next frame
 //!   pump. The one-frame propagation matches every other
-//!   channel-scheduled republish in this workspace (the realm's root
+//!   channel-scheduled republish in this workspace (the UI runtime's root
 //!   `MediaQuery` included).
 
 use std::cell::RefCell;
@@ -103,7 +103,7 @@ pub type AppBuilder = Rc<dyn Fn(&dyn BuildContext, Option<BoxedView>) -> BoxedVi
 /// A design-neutral application shell: navigator, localizations, and the
 /// app-level builder hook, with no design system attached.
 ///
-/// See the module docs for what the realm owns, what is deferred, and the
+/// See the module docs for what the UI runtime owns, what is deferred, and the
 /// documented limits.
 ///
 /// Composition, outermost first:

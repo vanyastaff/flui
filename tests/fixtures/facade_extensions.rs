@@ -499,10 +499,9 @@ use flui::interaction::{
     ClientToken, Code, DetachOutcome, FocusAttachment, FocusChangeCallback, FocusDetachOutcome,
     FocusManager, FocusNode, FocusNodeChangeCallback, FocusNodeId, FocusNodeRegistration,
     FocusRequestOutcome, FocusScopeNode, FocusTraversalPolicy, FocusTreeError, HitTestEntry,
-    HitTestHandle, HitTestSnapshot, InteractionDispatchError, Key, KeyEvent, KeyEventCallback,
-    KeyEventHandler, KeyEventResult, KeyState, KeyboardEvent, Location, Modifiers, NamedKey,
-    ReadingOrderPolicy, RectProvider, ResolvedStep, TextInputClient, TextInputError,
-    TextInputHandle, TraversalEdgeBehavior,
+    HitTestHandle, HitTestSnapshot, InteractionDispatchError, Key, KeyEvent, KeyEventHandler,
+    KeyEventResult, KeyState, Location, Modifiers, NamedKey, ReadingOrderPolicy, RectProvider,
+    ResolvedStep, TextInputClient, TextInputError, TextInputHandle, TraversalEdgeBehavior,
 };
 
 #[test]
@@ -526,7 +525,6 @@ fn interaction_callback_vocabulary_is_nameable_through_the_facade() {
     nameable::<HitTestEntry>();
     nameable::<HitTestSnapshot>();
     nameable::<InteractionDispatchError>();
-    nameable::<KeyEventCallback>();
     nameable::<KeyEventHandler>();
     nameable::<KeyEventResult>();
     nameable::<ReadingOrderPolicy>();
@@ -537,7 +535,6 @@ fn interaction_callback_vocabulary_is_nameable_through_the_facade() {
     nameable::<Code>();
     nameable::<Key>();
     nameable::<KeyState>();
-    nameable::<KeyboardEvent>();
     nameable::<Location>();
     nameable::<Modifiers>();
     nameable::<NamedKey>();
@@ -594,7 +591,7 @@ fn retained_focus_node_uses_context_capabilities_through_the_facade() {
     let handles = handles.as_ref().expect("init_state capabilities");
     assert!(handles.focus.primary_focus().is_some());
     assert!(handles.hit_test.is_some());
-    // The realm installs its presentation's text-input capability, as on
+    // The ui_runtime installs its presentation's text-input capability, as on
     // screen; the headless window offers no platform input method, so this
     // checks typed capability access, not operating-system text-input behavior.
     assert!(handles.text_input.is_some());

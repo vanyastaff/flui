@@ -48,8 +48,8 @@ Navigator those two records describe:
   build context. The handle is owned and takes no second lock (ADR-0019 §2), which is right,
   but a build-time lookup is the pattern ADR-0078 moved every other capability away from.
 - **A thread-local routing table for commands.** Cross-thread navigation goes through
-  `UiCommand::Navigation(NavigatorCommand)` (`crates/flui-runtime/src/ui_realm/commands.rs:91`,
-  applied in `UiRealm::drain_commands` in the same file). `NavigatorCommand::apply_on_owner` resolves its target through
+  `UiCommand::Navigation(NavigatorCommand)` (`crates/flui-runtime/src/ui_runtime/commands.rs:91`,
+  applied in `UiRuntime::drain_commands` in the same file). `NavigatorCommand::apply_on_owner` resolves its target through
   `thread_local! NAVIGATOR_COMMAND_TARGETS` (`navigator.rs:90-93`, read at `navigator.rs:819`),
   a per-thread map from a process-wide counter (`NEXT_NAVIGATOR_COMMAND_TARGET_ID`,
   `navigator.rs:88`) to `Weak<NavigatorShared>`. The sender is `pub(crate)` and not wired
@@ -195,11 +195,11 @@ From acceptance, `Navigator` and `NavigatorHandle` get no new public items.
 ### 5. The command vocabulary names navigation, not Navigator
 
 `UiCommand::Navigation(NavigatorCommand)` becomes a design-neutral navigation intent (a route
-path to push or replace, or a pop) addressed to a presentation — a realm can host several
+path to push or replace, or a pop) addressed to a presentation — a UI runtime can host several
 (ADR-0043) — and applied to that presentation's URL-owning Router (§2), not to a
 `NavigatorCommandTarget`. An intent for a presentation with no Router is reported, not applied
 elsewhere. `NAVIGATOR_COMMAND_TARGETS` and its counter are deleted; the intent is applied by the
-realm that owns the presentation, so it can never land on the wrong window's navigator. This keeps ADR-0027 §9's closed vocabulary closed and stops the runtime and the
+UI runtime that owns the presentation, so it can never land on the wrong window's navigator. This keeps ADR-0027 §9's closed vocabulary closed and stops the runtime and the
 agent protocol from naming a widget-catalog type.
 
 ### Flutter divergences
@@ -238,7 +238,7 @@ agent protocol from naming a widget-catalog type.
    `RouteKey<T>` carry-over of ADR-0024 §3) and `pop_with<T>`; `RouterHandle::maybe_pop` honours
    `PopScope`, and system back goes to the URL-owning Router.
 6. **Presentation-addressed intents.** `NavigationIntent { presentation, op }` in `flui-runtime`,
-   applied by the realm to that presentation's URL-owning Router (§5); `Platform::on_open_urls`
+   applied by the UI runtime to that presentation's URL-owning Router (§5); `Platform::on_open_urls`
    delivers intents, and the Router gains an `on_unknown` hook. `NAVIGATOR_COMMAND_TARGETS`, the
    `NavigatorCommand*` types and their `globals` entry are deleted.
 7. **Freeze and removal.** The Material and Cupertino router constructors; the named-route doors, `on_generate_route` and the `WidgetsApp` routes table
@@ -331,7 +331,7 @@ Still to land, each with its step:
 - **Overlays are not state** (step 7; step one pins only that a popup leaves the path
   unchanged). Opening a dialog leaves the current path unchanged; popping the
   page that opened it removes the dialog's overlay entry.
-- **Multi-window** (step 6). In one realm with two presentations, a navigation intent addressed to the
+- **Multi-window** (step 6). In one UI runtime with two presentations, a navigation intent addressed to the
   second presentation changes that presentation's Router and not the primary presentation's.
 - **Flutter lifecycle parity** stays pinned by the existing Navigator tests
   (`crates/flui-widgets/tests/navigator.rs`,

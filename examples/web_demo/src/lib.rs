@@ -81,7 +81,7 @@ pub fn start() {
             }
             PlatformInput::Keyboard(ke) => {
                 web_sys::console::log_1(
-                    &format!("Key {:?}: {:?} (code={:?})", ke.state, ke.key, ke.code).into(),
+                    &format!("Key {:?}: {:?} (code={:?})", ke.state(), ke.key, ke.code).into(),
                 );
             }
             PlatformInput::Ime(ime_event) => {

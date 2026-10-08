@@ -33,13 +33,13 @@ members = [
     # K: spine and runtime
     "crates/flui-view",    # View/Element, BuildContext/LifecycleContext, reconciliation, signals
     "crates/flui-widgets", # Widget catalog
-    "crates/flui-runtime", # Frame runtime a realm drives (ADR-0083)
+    "crates/flui-runtime", # Frame runtime a UI runtime drives (ADR-0083)
     "crates/flui-sdk",     # Package-author surface (ADR-0088)
-    "crates/flui-testing", # Headless realm host, widget harness, substrate driver
+    "crates/flui-testing", # Headless UI runtime host, widget harness, substrate driver
 
     # H: hosts
     "crates/flui-platform", # Platform backends: windows, input, IME, clipboard
-    "crates/flui-app",      # Per-window UiRealms and the run loop
+    "crates/flui-app",      # Per-window UiRuntimes and the run loop
     "crates/flui-cli",      # `flui` CLI: create, run, build, doctor, devices
 
     # pkg: official packages, built on flui-sdk alone (ADR-0088)
@@ -202,7 +202,7 @@ parking_lot = "0.12"
 # No `once_cell`: std's `OnceLock`/`LazyLock` replace it, and deny.toml's
 # `[bans.std-replacements]` rejects a manifest that declares it.
 dashmap = "6.1"
-# Bounded typed mailboxes (private render-invalidation channel, UiRealm
+# Bounded typed mailboxes (private render-invalidation channel, UiRuntime
 # owner inbox — bounded queues with typed backpressure only)
 crossbeam-channel = "0.5"
 # Local sockets (a named pipe on Windows, a Unix domain socket elsewhere),
@@ -728,7 +728,7 @@ insta = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 parking_lot.workspace = true
-# tests/thread_boundary_ui.rs: the compile-fail suite for realm-bound handles.
+# tests/thread_boundary_ui.rs: the compile-fail suite for UI runtime-bound handles.
 trybuild = { workspace = true }
 
 # NOTE: flui-material / flui-cupertino moved to [dependencies] above — the
@@ -971,7 +971,7 @@ name = "agent_workflow"
 path = "tests/agent_workflow.rs"
 required-features = ["testing", "material"]
 
-# Realm-bound handles refuse `std::thread::spawn` (compile-fail fixtures under
+# UI-runtime-bound handles refuse `std::thread::spawn` (compile-fail fixtures under
 # `tests/ui/thread_boundary/`). Its own binary, a member of nextest's
 # `trybuild` group, so the slow rustc runs never hold the ordinary suite.
 [[test]]

@@ -77,10 +77,10 @@ fn contact() -> PointerId {
 fn with_time(mut event: PointerEvent, nanos: u64) -> PointerEvent {
     match &mut event {
         PointerEvent::Down(button) => {
-            button.sample.time = flui_platform_api::EventTime::from_nanos(nanos)
+            button.sample.time = flui_platform_api::EventTime::from_nanos(nanos);
         }
         PointerEvent::Up(button) => {
-            button.sample.time = flui_platform_api::EventTime::from_nanos(nanos)
+            button.sample.time = flui_platform_api::EventTime::from_nanos(nanos);
         }
         PointerEvent::Move(update) => {
             let mut sample = *update.current();
@@ -220,7 +220,7 @@ fn huge_coordinates_stay_finite() {
 fn selected_estimators_use_the_sample_clock_and_recover() {
     for (estimator, expected) in [
         (VelocityEstimator::LeastSquares, 500.0),
-        (VelocityEstimator::Impulse, 1589.9257985831982),
+        (VelocityEstimator::Impulse, 1_589.925_798_583_198_2),
         (VelocityEstimator::Ios, 2550.0),
         (VelocityEstimator::Macos, 1950.0),
     ] {
@@ -779,7 +779,9 @@ fn binding_keeps_all_measured_packets_and_only_latest_predictions() {
         EventTime,
         pointer::{PointerButtons, PointerMove, PointerSample},
     };
-    for contact_active in [false, true] {
+    for (contact_active, before_input) in
+        [(false, false), (true, false), (false, true), (true, true)]
+    {
         let binding = GestureBinding::new();
         let observed = Rc::new(RefCell::new(Vec::new()));
         let output = observed.clone();
@@ -818,7 +820,12 @@ fn binding_keeps_all_measured_packets_and_only_latest_predictions() {
             .with_predicted(vec![sample(at + 5)]);
             binding.handle_pointer_event(&PointerEvent::Move(update), |_| HitTestResult::new());
         }
-        assert_eq!(binding.flush_pending_moves(), 1, "one combined observation");
+        let delivered = if before_input {
+            binding.flush_pending_input()
+        } else {
+            binding.flush_pending_moves()
+        };
+        assert_eq!(delivered, 1, "one combined observation");
         let updates = observed.borrow();
         let [update] = updates.as_slice() else {
             panic!("one Move")

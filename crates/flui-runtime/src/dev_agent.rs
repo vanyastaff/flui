@@ -2,7 +2,7 @@
 //!
 //! A [`DevAgentHook`] is user code a development tool supplies; this module
 //! is the only code that calls it, for every host: `flui-app`'s desktop and
-//! iOS runners and `flui-testing`'s headless realm drive the same
+//! iOS runners and `flui-testing`'s headless UI runtime drive the same
 //! [`DevAgentHost`], so the containment below is written and tested once.
 //! It names no transport: the endpoint, its framing and its credentials
 //! belong to the tool.
@@ -11,7 +11,7 @@
 //! before the first window, and keeps the returned [`DevAgentAttachment`]
 //! until the loop ends; dropping it detaches the hook. For each window with
 //! content it [publishes](DevAgentHost::publish) the window, or, when the
-//! realm has to be handed over between vending and publishing, it
+//! UI runtime has to be handed over between vending and publishing, it
 //! [vends](DevAgentHost::vend) the window's [`AgentWindow`] first and
 //! [hands it over](DevAgentHost::window_opened) once the window is
 //! installed. Nothing is vended while the hook is not attached, so a hook
@@ -27,7 +27,7 @@
 //! is dropped — inside its own containment, because its `Drop` may panic too
 //! — and never called again; an [`AgentWindow`] it was being handed is
 //! dropped with it. The panic's payload is forgotten rather than dropped, for
-//! the same reason. The caller continues, and the realm is untouched. A hook
+//! the same reason. The caller continues, and the UI runtime is untouched. A hook
 //! that never panicked is dropped under the same containment when the last
 //! [`DevAgentHost`] clone goes, so a `Drop` that panics never escapes a
 //! host's teardown or turns an unwind into an abort.
@@ -41,7 +41,7 @@ use flui_foundation::PresentationId;
 use flui_view::dev_agent::{AgentWindow, DevAgentHook};
 use parking_lot::Mutex;
 
-use crate::ui_realm::UiRealm;
+use crate::ui_runtime::UiRuntime;
 
 /// A development-agent hook and its attachment state, shared by every clone.
 ///
@@ -140,13 +140,17 @@ impl DevAgentHost {
     }
 
     /// The [`AgentWindow`] for `presentation`, vended only while the hook is
-    /// attached: see [`UiRealm::dev_agent_window`].
+    /// attached: see [`UiRuntime::dev_agent_window`].
     #[must_use]
-    pub fn vend(&self, realm: &UiRealm, presentation: PresentationId) -> Option<AgentWindow> {
+    pub fn vend(
+        &self,
+        ui_runtime: &UiRuntime,
+        presentation: PresentationId,
+    ) -> Option<AgentWindow> {
         if !self.is_attached() {
             return None;
         }
-        realm.dev_agent_window(presentation)
+        ui_runtime.dev_agent_window(presentation)
     }
 
     /// Hand `window` to the hook. Does nothing when the hook is not attached
@@ -160,8 +164,8 @@ impl DevAgentHost {
 
     /// Vend `presentation`'s window and hand it to the hook at once, for a
     /// host whose window is installed by the time it publishes.
-    pub fn publish(&self, realm: &UiRealm, presentation: PresentationId) {
-        if let Some(window) = self.vend(realm, presentation) {
+    pub fn publish(&self, ui_runtime: &UiRuntime, presentation: PresentationId) {
+        if let Some(window) = self.vend(ui_runtime, presentation) {
             self.window_opened(window);
         }
     }

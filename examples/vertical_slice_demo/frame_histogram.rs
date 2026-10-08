@@ -6,7 +6,7 @@
 //! which mounts a free-running [`AnimationController`] (same pattern as
 //! `examples/animated_box_app.rs`) registered with the ambient `VsyncScope` —
 //! so its ticks are paced by the real per-frame `Vsync::tick_all` the
-//! mounted realm drives every frame. Its listener records the wall-clock
+//! mounted UI runtime drives every frame. Its listener records the wall-clock
 //! [`Instant`] delta since the previous tick; every [`WINDOW_SAMPLE_COUNT`]
 //! deltas it sorts the window and logs median/p90/max via `tracing::info!`.
 //!
@@ -42,7 +42,7 @@ const ENABLE_ENV_VAR: &str = "FLUI_FRAME_HISTOGRAM";
 const WINDOW_SAMPLE_COUNT: usize = 300;
 
 /// The controller's own cycle length. Cosmetic: with no other listener
-/// driving the tree, only the *tick cadence* (paced by the realm's per-frame
+/// driving the tree, only the *tick cadence* (paced by the UI runtime's per-frame
 /// `Vsync::tick_all`) is measured, not this value.
 const CONTROLLER_CYCLE: Duration = Duration::from_millis(1400);
 

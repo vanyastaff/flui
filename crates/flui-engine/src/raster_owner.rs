@@ -453,8 +453,8 @@ struct MailboxState {
 /// block or displace the completion signal.
 struct RasterMailbox {
     /// The exact presentation this owner was bound to at construction
-    /// (ADR-0037). Two different realm incarnations can mint an identical
-    /// `PresentationId`, so this is the full `(realm_id, presentation_id)`
+    /// (ADR-0037). Two different UI runtime incarnations can mint an identical
+    /// `PresentationId`, so this is the full `(ui_runtime_id, presentation_id)`
     /// pair, never `PresentationId` alone — [`RasterHandle::submit`]
     /// validates every frame against it and rejects a mismatch instead of
     /// silently accepting a frame addressed to a different presentation.
@@ -567,7 +567,7 @@ impl RasterMailbox {
 /// here.
 ///
 /// Every variant carries the submitting frame's full `address` (never bare
-/// `PresentationId` — two different realms can mint an identical
+/// `PresentationId` — two different UI runtimes can mint an identical
 /// `PresentationId`, so only the full pair is safely distinguishable): the
 /// owner **echoes** the stamp the frame arrived with, it never mints one.
 /// This is the deterministic drop predicate a consumer applies once
@@ -698,11 +698,11 @@ pub enum RasterSubmitError {
     #[error("raster owner dropped; frame submit refused")]
     OwnerGone,
     /// The submitted frame's address does not match the address this owner
-    /// was bound to at construction (ADR-0037). Two different realm
+    /// was bound to at construction (ADR-0037). Two different UI runtime
     /// incarnations can mint an identical `PresentationId` at the same slot,
     /// so a frame addressed to any other presentation — even one that
     /// happens to share this owner's `presentation_id` but not its
-    /// `realm_id` — is never silently accepted.
+    /// `ui_runtime_id` — is never silently accepted.
     #[error("frame address {got:?} does not match this raster owner's bound address {expected:?}")]
     AddressMismatch {
         /// The address this owner was constructed with.
@@ -1718,7 +1718,7 @@ mod tests {
     use std::thread;
 
     use flui_foundation::geometry::Rect;
-    use flui_foundation::{FrameStamp, PresentationId, RealmId};
+    use flui_foundation::{FrameStamp, PresentationId, UiRuntimeId};
     use flui_layer::{CanvasLayer, DamageRegion, Layer, Scene};
 
     use super::*;
@@ -1815,7 +1815,7 @@ mod tests {
     /// below).
     fn test_address() -> PresentationAddress {
         PresentationAddress {
-            realm_id: RealmId::new(1),
+            ui_runtime_id: UiRuntimeId::new(1),
             presentation_id: PresentationId::new(1),
         }
     }
@@ -2317,8 +2317,8 @@ mod tests {
     // -----------------------------------------------------------------------
 
     // -----------------------------------------------------------------------
-    // ADR-0037: two different realm incarnations can mint an identical
-    // PresentationId, so RasterOwner must reject a submit whose realm_id
+    // ADR-0037: two different ui_runtime incarnations can mint an identical
+    // PresentationId, so RasterOwner must reject a submit whose ui_runtime_id
     // does not match, even when presentation_id happens to agree.
     // -----------------------------------------------------------------------
 

@@ -38,17 +38,17 @@ the owner's answers settle the open questions; acceptance still happens ADR by A
 | # | Decision | Status | ADR |
 |---|---|---|---|
 | D1 | `flui-platform-api` is the contract crate; OS backends stay in `flui-platform` | Changed by verification (split into a mechanical move and a per-backend `Send` removal); **accepted in part** (2026-09-26): the capability traits and window/input vocabulary moved; `PlatformWindow`'s move, with `accessibility()` on the host-side `HostWindow` subtrait, is accepted on merge pending the evidence ADR-0082's Verification lists; the per-backend `Send` removal (§4, still Proposed) was revised to require refusing off-owner registration, and Win32 has done its first step | [ADR-0082](../docs/adr/ADR-0082-platform-api-contract-crate.md) |
-| D2 | One frame transaction in `flui-runtime`, above `flui-widgets` | Changed by verification (test modules move; transaction defined by type); owner confirmed it in B0; **accepted in part** (2026-09-26): the crate exists in tier K above `flui-widgets` with the presentation lanes, the realm core follows in later moves | [ADR-0083](../docs/adr/ADR-0083-one-frame-transaction-in-flui-runtime.md) |
-| D3 | An open, typed capability set registered by plugins | Verified (seam shape); registration specified by verification; **changed by the owner** (two classes, core-required and optional, behind one door); a prototype (2026-09-26) confirmed the seam and corrected the provider signature, the registry's lifetime (per realm) and the conflict rules; cursor, text input and accessibility are not widget capabilities | [ADR-0084](../docs/adr/ADR-0084-open-capability-seam-and-plugins.md) |
-| D4 | The reactive graph is realm-owned and read through `ReadScope` | Changed by verification and by owner decision O5; owner confirmed removing the `signals` feature; a prototype (2026-09-26) placed the read contract in `flui-foundation` and withdrew the `flui-reactive` extraction | [ADR-0085](../docs/adr/ADR-0085-reactive-core-placement-and-phase-subscribers.md), [ADR-0086](../docs/adr/ADR-0086-signal-writes-through-event-context.md) |
+| D2 | One frame transaction in `flui-runtime`, above `flui-widgets` | Changed by verification (test modules move; transaction defined by type); owner confirmed it in B0; **accepted in part** (2026-09-26): the crate exists in tier K above `flui-widgets` with the presentation lanes, the UI runtime core follows in later moves | [ADR-0083](../docs/adr/ADR-0083-one-frame-transaction-in-flui-runtime.md) |
+| D3 | An open, typed capability set registered by plugins | Verified (seam shape); registration specified by verification; **changed by the owner** (two classes, core-required and optional, behind one door); a prototype (2026-09-26) confirmed the seam and corrected the provider signature, the registry's lifetime (per UI runtime) and the conflict rules; cursor, text input and accessibility are not widget capabilities | [ADR-0084](../docs/adr/ADR-0084-open-capability-seam-and-plugins.md) |
+| D4 | The reactive graph is UI runtime-owned and read through `ReadScope` | Changed by verification and by owner decision O5; owner confirmed removing the `signals` feature; a prototype (2026-09-26) placed the read contract in `flui-foundation` and withdrew the `flui-reactive` extraction | [ADR-0085](../docs/adr/ADR-0085-reactive-core-placement-and-phase-subscribers.md), [ADR-0086](../docs/adr/ADR-0086-signal-writes-through-event-context.md) |
 | D5 | One raster contract in `flui-layer`; wgpu and CPU backends | Changed by verification (`RasterBackend` moves first; `RasterOwner` stays) | [ADR-0087](../docs/adr/ADR-0087-raster-contract-and-cpu-backend.md) |
 | D6 | Retained layer identity drives damage | Verified; retained target made conditional | [ADR-0087](../docs/adr/ADR-0087-raster-contract-and-cpu-backend.md) |
 | D7 | Where official packages live | Changed by owner decision O1 (one workspace, not a nested one) | [ADR-0088](../docs/adr/ADR-0088-official-packages-sdk-and-facade.md) |
 | D8 | Workspace tiers, stability kinds, "three crates, N items" | Changed by verification and by O2/O3; owner confirmed deleting `flui-tree` and `flui-localizations` (both deleted 2026-09-26); ADR-0081 accepted in part on 2026-09-26 (tiers, order, direction rule, `edge-exceptions`, `tier-kind` declarations), checked beside the layers | [ADR-0081](../docs/adr/ADR-0081-workspace-tiers-and-reach-facts.md), [ADR-0089](../docs/adr/ADR-0089-upstream-types-in-stable-signatures.md) |
-| D9 | One owner thread hosts isolated realms | Verified; the real bar to parallel layout named; **changed by the owner** (`!Send` flip before the first crates.io publication) | [ADR-0091](../docs/adr/ADR-0091-one-owner-thread-isolated-realms-raster-thread.md) |
+| D9 | One owner thread hosts isolated UI runtimes | Verified; the real bar to parallel layout named; **changed by the owner** (`!Send` flip before the first crates.io publication) | [ADR-0091](../docs/adr/ADR-0091-one-owner-thread-isolated-realms-raster-thread.md) |
 | D10 | IME talks to a pull text-store contract | Changed by owner decision O8 (read + edit + asynchronous lock) | [ADR-0090](../docs/adr/ADR-0090-ime-pull-text-store-contract.md) |
 | D11 | `runtime-internals` becomes `#[doc(hidden)] __runtime` | Re-checked; not challenged by verification; scheduled as its own step in the migration plan | [ADR-0081](../docs/adr/ADR-0081-workspace-tiers-and-reach-facts.md) |
-| D12 | Text shapes per realm over Parley | Verified; gate 1 met by a prototype (2026-09-26): swash rasterizes, glifo not adopted; still Proposed | [ADR-0092](../docs/adr/ADR-0092-per-realm-text-over-parley.md) |
+| D12 | Text shapes per UI runtime over Parley | Verified; gate 1 met by a prototype (2026-09-26): swash rasterizes, glifo not adopted; still Proposed | [ADR-0092](../docs/adr/ADR-0092-per-realm-text-over-parley.md) |
 | D13 | One raster thread per `GpuContext` (revision of ADR-0045) | Changed by verification | [ADR-0091](../docs/adr/ADR-0091-one-owner-thread-isolated-realms-raster-thread.md) |
 | D14 | Router is the primary navigation API | Changed by verification (handle from `init_state`); **changed by the owner** (every push URL-addressable, dialogs and overlays excluded) | [ADR-0093](../docs/adr/ADR-0093-router-is-the-primary-navigation-api.md) |
 | D15 | Hot reload through Subsecond behind a runtime hook | Changed by verification (no facade `hot-reload` feature); the Windows spike (2026-09-26) failed (stock dx cannot patch; app-crate statics and thread-locals break); the dlopen path stays until a later spike | [ADR-0094](../docs/adr/ADR-0094-hot-reload-through-subsecond.md) |
@@ -81,7 +81,7 @@ which the review cited but never studied.
 `flui-interaction`'s sources, and it makes winit, tokio and the `windows` crate reachable from
 interaction, rendering, objects, view, widgets and testing. Platform callbacks also require
 `Send` (`crates/flui-platform/src/traits/platform.rs:319` takes `Box<dyn Fn() -> bool + Send>`),
-which is why the `!Send` realm still lives in owner thread-local storage.
+which is why the `!Send` UI runtime still lives in owner thread-local storage.
 
 **Decision.** Split the traits into `flui-platform-api` (tier C, Stable, no OS types); the
 backends stay in `flui-platform` (tier H). Two steps: first move the traits mechanically with a
@@ -102,7 +102,7 @@ the runtime extraction does not wait for it.
 
 **Context.** Tests drive a second frame implementation: `HeadlessBinding::pump_frame`
 (`crates/flui-testing/src/lib.rs:955`) does not go through the production transaction. The
-runtime is spread through `flui-app`, whose `ui_realm` imports widget-layer scopes.
+runtime is spread through `flui-app`, whose `ui_runtime` imports widget-layer scopes.
 
 **Decision.** Extract `flui-runtime` in tier K, **above** `flui-widgets`. `flui-app` drives it
 with the platform clock and raster lane, and `flui-testing` with a virtual clock. The second
@@ -156,7 +156,7 @@ classification rule and how a capability moves between classes; see [A8](#a8-cap
 unchanged and served a capability to a crate outside the workspace; ADR-0084's Context records
 what it showed and what it did not. The revision keeps the seam and corrects the rest: a provider
 takes `&Arc<dyn PlatformWindow>` so a handle can keep a `Weak` window; the registry is a
-parameter of each realm's construction, sharing one table validated by `Application::run` before
+parameter of each UI runtime's construction, sharing one table validated by `Application::run` before
 the platform starts, never an application-wide cell; a plugin over a built-in, two plugins on one
 capability and one plugin registering twice are conflicts, reported in installation order as
 `AppRunError::CapabilityConflict`; core `text_input()` and `accessibility()` return inert objects
@@ -164,16 +164,16 @@ instead of `Option`, and `accessibility()` sits on the backend extension trait o
 Cursor, text input and accessibility are core-required backend methods but not widget
 capabilities: the framework keeps its one route to each.
 
-### D4. The reactive graph is realm-owned
+### D4. The reactive graph is UI runtime-owned
 
-**Context.** ADR-0074 says the graph is realm-scoped. In the code the graph is a field of each
+**Context.** ADR-0074 says the graph is UI runtime-scoped. In the code the graph is a field of each
 presentation's `BuildOwner` (`crates/flui-view/src/owner/build_owner.rs:444`, exposed at `:973`),
 and `UiCommand::SignalWrite` applied to the primary presentation's graph, so a write from
 window B reached window A's graph and failed with `SignalError::ForeignGraph`
 (`crates/flui-view/src/reactive/mod.rs`). Fixed: the command now carries its slot and is routed
 by `SignalSlot::graph` to the owning presentation (ADR-0085 §1).
 
-**Decision.** Each presentation keeps its own graph, owned by the realm with the presentation;
+**Decision.** Each presentation keeps its own graph, owned by the UI runtime with the presentation;
 a cross-thread write is routed to the graph whose id the slot carries, never to the primary
 presentation's. Reads go through a read-only `ReadScope`
 trait that `BuildContext` extends. Readers are typed by frame phase (element, layout, paint).
@@ -281,16 +281,16 @@ SDK became a separate Evolving crate (O2), and the upstream-type rule was restat
 cadence with named exceptions (O3). ADR-0041 is superseded in part: its layer table goes, its
 manifest-as-source rule and `allowed-dependents` mechanism stay.
 
-### D9. One owner thread hosts isolated realms
+### D9. One owner thread hosts isolated UI runtimes
 
-**Context.** ADR-0027 says "realms may execute concurrently"
+**Context.** ADR-0027 says "UI runtimes may execute concurrently"
 (`docs/adr/ADR-0027-owner-affine-ui-realms.md:18`). One thread-local `APP_RUNTIME`
-(`crates/flui-app/src/app/runner/host.rs:25-47`) hosts every realm.
+(`crates/flui-app/src/app/runner/host.rs:25-47`) hosts every UI runtime.
 
-**Decision.** From H0 to H2 one owner thread hosts N isolated realms. Parallel layout inside a
-realm is not a goal. Per-realm owner threads on Win32/Linux are a spike in H2.
+**Decision.** From H0 to H2 one owner thread hosts N isolated UI runtimes. Parallel layout inside a
+UI runtime is not a goal. Per-UI runtime owner threads on Win32/Linux are a spike in H2.
 
-**Alternatives rejected.** Per-realm threads now.
+**Alternatives rejected.** Per-UI runtime threads now.
 
 **Verified.** The single thread-local host was confirmed. Verification corrected the reason
 parallel layout is excluded: it is `PipelineCell = Rc<RefCell<PipelineOwner>>`, not the render
@@ -325,7 +325,7 @@ did not challenge this decision; ADR-0081 §4 owns it. The facade and `flui-sdk`
 `flui-view` as a glob module that shadows `__runtime`, so the seam is not reachable through
 `flui::view` or `flui_sdk::view`.
 
-### D12. Text shapes per realm over Parley
+### D12. Text shapes per UI runtime over Parley
 
 **Context.** Text layout goes through one process-global `static FONT_SYSTEM`
 (flui-painting's `text_layout/layout.rs:124`), and glyph keys are cosmic-text's
@@ -333,8 +333,8 @@ process-global keys (flui-painting's `text_layout/glyphs.rs:23`, until ADR-0092 
 removed them).
 [ADR-0077](../docs/adr/ADR-0077-migrate-to-parley.md) proposed Parley on shaping evidence alone.
 
-**Decision.** One ADR joins the Parley migration and per-realm fonts: a shared, immutable-after-load
-font collection; per-realm contexts without a lock; atlas on the `GpuContext`; rasterization on the
+**Decision.** One ADR joins the Parley migration and per-UI runtime fonts: a shared, immutable-after-load
+font collection; per-UI runtime contexts without a lock; atlas on the `GpuContext`; rasterization on the
 raster side; neutral shaped runs in the display list instead of `Arc<TextLayout>`.
 
 **Alternatives rejected.** A `flui-text` crate before a post-Parley measurement; OS text in
@@ -348,7 +348,7 @@ rasterizes Parley-shaped glyphs into the unmodified atlas with a key on font blo
 is not adopted (slower, experimental, vertical-only hinting, its own atlas). Keys stay stable only
 while a raster-side registry holds each blob, since fontique's shared source cache holds blobs
 weakly. FLUI adds no lock, but fontique locks internally on a local cache miss, shared across
-realms. Two items stay open for the migration: a neutral run that does not carry
+UI runtimes. Two items stay open for the migration: a neutral run that does not carry
 `parley::FontData`, and a door for feeding new faces to the atlas-owned rasterizer. ADR-0092
 stays Proposed (its Context).
 
@@ -752,7 +752,7 @@ how.
 
 #### S1. Positioning
 
-FLUI is a UI runtime trusted by people and agents: deterministic frames, realms without process
+FLUI is a UI runtime trusted by people and agents: deterministic frames, UI runtimes without process
 globals, one protocol shared by tests, devtools and agents
 ([ADR-0095](../docs/adr/ADR-0095-agent-protocol-schema-crate.md)), and generative UI through
 A2UI. The declarative widget model stays as the familiar shape, not the headline promise. Recorded in
@@ -780,7 +780,7 @@ DOM/ARIA mirror, move to H1 as items of their own (#17, confirmed).
 `&mut EventCx<'_>` on framework event callbacks through `WriterSource`, with the pilot and the
 recorded rollback trigger to guard-only (#4). The pilot covers `flui-cupertino` and the `counter`
 and `todo` examples. ADR-0086 records the choice and the lineage: the removed `flui-reactivity`
-crate had a context-free `set` on a process-global runtime, ADR-0074 moved to realm-scoped `Copy`
+crate had a context-free `set` on a process-global runtime, ADR-0074 moved to UI runtime-scoped `Copy`
 handles, and typed writes are the next step on that line. Confirmed, pilot widened.
 
 #### A2. Runtime extraction in B0
@@ -910,8 +910,8 @@ Unchanged: each claim in open-questions item 22 is checked before its ADR is acc
 Re-checking the reports against the worktree found these; the ADRs should state the corrected
 form.
 
-- `crates/flui-app/src/app/runner/realm_dispatch.rs` is 7,149 lines, but the test module starts at
-  line 1692 (`mod realm_dispatch_tests`); production code is about 1,690 lines. The file-length
+- `crates/flui-app/src/app/runner/owner_dispatch.rs` is 7,149 lines, but the test module starts at
+  line 1692 (`mod owner_dispatch_tests`); production code is about 1,690 lines. The file-length
   gate counts production lines only, so the file is already within the limit and needs no move;
   it does not need to be "dissolved" either. The one file over the limit is
   `crates/flui-scheduler/src/scheduler.rs`; its current count is its entry in

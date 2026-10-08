@@ -19,10 +19,10 @@
 //! # No combined binding
 //!
 //! FLUI does not compose these responsibilities into one struct. The frame loop, render pipeline,
-//! and input dispatch live directly on `UiRealm` (`flui_runtime::ui_realm`,
+//! and input dispatch live directly on `UiRuntime` (`flui_runtime::ui_runtime`,
 //! owner-affine, one per window) — there is no separate process-scoped
 //! service host; the retired `AppBinding` and its combined-binding type
-//! alias dissolved into `UiRealm` and the loop-scoped `AppRuntime`
+//! alias dissolved into `UiRuntime` and the loop-scoped `AppRuntime`
 //! (`crate::app::runtime`).
 
 // Re-export bindings from their respective crates
@@ -33,6 +33,6 @@ pub use flui_rendering::{
 };
 pub use flui_scheduler::UpdateScheduler;
 pub use flui_view::WidgetsBinding;
-// The per-presentation rendering binding lives with the realm in the frame
+// The per-presentation rendering binding lives with the ui_runtime in the frame
 // runtime (ADR-0083); its public path stays `flui_app::bindings`.
 pub use flui_runtime::renderer_binding::RenderingBinding;

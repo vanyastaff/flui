@@ -1,5 +1,5 @@
 //! `Persisted<D>` through the public surface: a document opened in
-//! `init_state`, loaded and written through the realm's storage, with a
+//! `init_state`, loaded and written through the UI runtime's storage, with a
 //! `MemoryStorage` standing in for the disk.
 
 use std::cell::RefCell;
@@ -138,7 +138,7 @@ fn stored(revision: u64, body: &str) -> Vec<u8> {
 /// A document loads from storage, a set value is written under the next
 /// revision, and a restart over the same storage loads that value.
 #[test]
-#[ignore = "contract: Persisted loads and writes through the realm's storage"]
+#[ignore = "contract: Persisted loads and writes through the ui_runtime's storage"]
 fn a_loaded_document_round_trips_through_memory_storage() {
     let storage = MemoryStorage::new();
     storage.put(&Note::NAME, stored(7, "first"));

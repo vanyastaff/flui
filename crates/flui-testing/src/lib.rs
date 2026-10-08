@@ -61,34 +61,53 @@
 //! ## Example
 //!
 //! ```
-//! use std::sync::Arc;
-//! use std::sync::atomic::{AtomicBool, Ordering};
+//! use std::{cell::Cell, rc::Rc};
 //! use std::time::Duration;
 //!
 //! use flui_testing::HeadlessBinding;
 //! use flui_interaction::settings::GestureSettings;
 //! use flui_interaction::{GestureRecognizer, LongPressGestureRecognizer, PointerId};
-//! use flui_foundation::geometry::Offset;
+//! use flui_interaction::routing::PointerDispatch;
+//! use flui_foundation::geometry::Point;
+//! use flui_platform_api::EventTime;
+//! use flui_platform_api::pointer::{
+//!     PointerButton, PointerButtons, PointerEvent, PointerInfo, PointerKind,
+//!     PointerPosition, PointerPress, PointerSample,
+//! };
 //!
 //! let mut binding = HeadlessBinding::new();
 //!
-//! let fired = Arc::new(AtomicBool::new(false));
-//! let in_callback = Arc::clone(&fired);
-//! let recognizer = LongPressGestureRecognizer::with_settings(
-//!     binding.arena().clone(),
-//!     GestureSettings::touch_defaults().with_long_press_timeout(Duration::from_millis(500)),
-//! )
-//! .with_on_long_press_start(move |_details| in_callback.store(true, Ordering::SeqCst));
+//! let fired = Rc::new(Cell::new(false));
+//! let in_callback = Rc::clone(&fired);
+//! let recognizer = LongPressGestureRecognizer::builder(binding.arena().clone())
+//!     .settings(
+//!         GestureSettings::touch_defaults().with_long_press_timeout(Duration::from_millis(500)),
+//!     )
+//!     .on_long_press_start(move |_details| in_callback.set(true))
+//!     .build();
 //!
-//! recognizer.add_pointer(PointerId::new(std::num::NonZeroU64::MIN), Offset::new(10.0, 10.0), Offset::new(10.0, 10.0));
+//! let pointer = PointerId::new(std::num::NonZeroU64::MIN);
+//! let sample = PointerSample::new(
+//!     EventTime::from_nanos(0),
+//!     PointerPosition::try_new(Point::new(10.0, 10.0)).expect("finite position"),
+//! );
+//! let down = PointerEvent::Down(PointerPress::new(
+//!     PointerInfo::new(pointer, PointerKind::Touch),
+//!     PointerButton::PRIMARY,
+//!     PointerButtons::NONE,
+//!     sample,
+//! ));
+//! recognizer.add_pointer(PointerDispatch::at_root(&down));
+//! // This bare-recognizer example closes Down admission explicitly.
+//! binding.arena().close(pointer);
 //!
 //! // 300ms of virtual time — the 500ms deadline has not elapsed.
 //! binding.pump_frame(Duration::from_millis(300));
-//! assert!(!fired.load(Ordering::SeqCst));
+//! assert!(!fired.get());
 //!
 //! // Crossing 500ms fires the deadline inside the frame, deterministically.
 //! binding.pump_frame(Duration::from_millis(300));
-//! assert!(fired.load(Ordering::SeqCst));
+//! assert!(fired.get());
 //! ```
 
 // Every public item is documented; keep it that way.
@@ -222,7 +241,7 @@ pub struct HeadlessBinding {
     /// production frame drive runs on its own, likewise dedicated, scheduler.
     scheduler: UpdateScheduler,
     /// The binding's owner-local frame state — post-frame callbacks and async
-    /// tasks — of which the binding is the only strong owner, as a realm is
+    /// tasks — of which the binding is the only strong owner, as a UI runtime is
     /// of its own. Declared after `tree`, so the widgets' own teardown runs
     /// before what is left of their tasks is retired.
     owner_frame: OwnerFrame,
@@ -330,7 +349,7 @@ impl HeadlessBinding {
     }
 
     /// Deliver an observed local lifecycle state to the mounted presentation.
-    /// This test oracle models notification, not native OS transport or realm aggregation.
+    /// This test oracle models notification, not native OS transport or UI runtime aggregation.
     /// # Errors
     /// Returns `LifecycleClosed` after terminal closure.
     pub fn set_lifecycle_state(
@@ -375,7 +394,7 @@ impl HeadlessBinding {
     /// that first `build_scope` already asks for them. `bind_tree` re-installs for
     /// owners bound afterwards.
     ///
-    /// Naming any OTHER binding's `UpdateScheduler` here — a production realm's, say —
+    /// Naming any OTHER binding's `UpdateScheduler` here — a production UI runtime's, say —
     /// would leave every headless post-frame callback undrained: nothing in this
     /// process drives frames for a scheduler this binding does not itself own and
     /// pump.
@@ -410,7 +429,7 @@ impl HeadlessBinding {
     ///
     /// Separate from [`install_build_capabilities`](Self::install_build_capabilities)
     /// only because it needs the render tree, which that method does not
-    /// receive: the capability pairs realm identity (this binding's lane) with
+    /// receive: the capability pairs UI runtime identity (this binding's lane) with
     /// ONE presentation's tree, and a binding may bind a different tree later.
     ///
     /// Without this, `LifecycleContext::hit_test_handle()` answers `None`
@@ -547,7 +566,7 @@ impl HeadlessBinding {
     ) {
         // Widgets spawn into the driver this binding's frame step
         // polls — the binding-local one, never some OTHER binding's or
-        // realm's `UpdateScheduler`. Idempotent: installing it again is a no-op if
+        // ui_runtime's `UpdateScheduler`. Idempotent: installing it again is a no-op if
         // the caller already did. The async driver goes in under either policy:
         // withholding it would change *which* capability is under test.
         let mut build_owner = build_owner;
@@ -556,7 +575,7 @@ impl HeadlessBinding {
             build_owner.set_lifecycle_handle(self.lifecycle.handle());
             // The post-frame capability must name THIS binding's
             // scheduler — the one `pump_frame`'s `drive_frame` drains — never
-            // some other binding's or realm's `UpdateScheduler`, which nothing drives
+            // some other binding's or ui_runtime's `UpdateScheduler`, which nothing drives
             // headlessly.
             build_owner
                 .set_post_frame_handle(flui_scheduler::PostFrameHandle::new(&self.scheduler));
@@ -614,7 +633,7 @@ impl HeadlessBinding {
         self.vsync = vsync;
     }
 
-    /// The realm's reactive graph (ADR-0074): create signals, write them, and
+    /// The UI runtime's reactive graph (ADR-0074): create signals, write them, and
     /// read them back without mounting a widget around them. `None` for a
     /// gesture-only binding (built via [`new`](Self::new) rather than
     /// [`with_tree`](Self::with_tree)): there is no tree, so no graph.
@@ -697,7 +716,7 @@ impl HeadlessBinding {
 
     /// The most recently committed composited layer tree.
     ///
-    /// This is the headless counterpart of the value `UiRealm::draw_frame`
+    /// This is the headless counterpart of the value `UiRuntime::draw_frame`
     /// hands the compositor — the same tree, from the same pipeline step, simply
     /// kept instead of dropped. It answers "what did this frame actually
     /// composite", which the render tree alone cannot: layers are created by
@@ -996,8 +1015,8 @@ impl HeadlessBinding {
     ///    region that appears, moves, or disappears under a **motionless**
     ///    pointer emit enter/exit with no new pointer motion: the mechanism
     ///    production already wires
-    ///    (`UiRealm::render_frame`,
-    ///    `crates/flui-runtime/src/ui_realm/`, driven from inside
+    ///    (`UiRuntime::render_frame`,
+    ///    `crates/flui-runtime/src/ui_runtime/`, driven from inside
     ///    the scheduler's frame closure —
     ///    `crates/flui-app/src/app/runner.rs`) right after layout/paint and
     ///    still inside that same closure, mirrored here against this
@@ -1071,7 +1090,7 @@ impl HeadlessBinding {
             //   -> Idle
             //
             // The desktop / android / wasm runners call the SAME `UpdateScheduler::drive_frame`
-            // on the production realm's own owned scheduler; this binding calls it on
+            // on the production ui_runtime's own owned scheduler; this binding calls it on
             // its binding-local scheduler. A post-frame callback therefore observes THIS
             // frame's committed layout in both, which is what `HeroController` needs.
             //
@@ -1104,8 +1123,8 @@ impl HeadlessBinding {
                 //    slot — i.e. BEFORE `end_frame` drains post-frame
                 //    callbacks below, not after `drive_frame` returns.
                 //    Placement matters: production
-                //    (`UiRealm::render_frame`,
-                //    `crates/flui-runtime/src/ui_realm/`, invoked from
+                //    (`UiRuntime::render_frame`,
+                //    `crates/flui-runtime/src/ui_runtime/`, invoked from
                 //    `crates/flui-app/src/app/runner.rs`) calls
                 //    `update_all_devices` from inside the SAME
                 //    `drive_frame` pipeline closure it runs its own
@@ -1161,7 +1180,7 @@ impl HeadlessBinding {
         // `run_frame_with_layout_builders` is the shared
         // layout<->build fixpoint — it settles every build-during-layout node
         // before paint, then delegates to `PipelineOwner::run_frame`. It is a
-        // plain `run_frame` while the registry is empty. `UiRealm::draw_frame`
+        // plain `run_frame` while the registry is empty. `UiRuntime::draw_frame`
         // calls the SAME helper: a builder that settles headlessly but not on
         // screen would be a silent correctness bug, so neither path may
         // hand-roll the loop.

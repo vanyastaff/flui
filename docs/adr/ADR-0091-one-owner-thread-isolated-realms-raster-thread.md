@@ -1,8 +1,8 @@
-# ADR-0091: One owner thread hosts isolated realms; one raster thread per GpuContext
+# ADR-0091: One owner thread hosts isolated UI runtimes; one raster thread per GpuContext
 
 - **Status:** Proposed
 - **Date:** 2026-09-25
-- **Amends (on acceptance):** [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (the verdict and §1: realms are
+- **Amends (on acceptance):** [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (the verdict and §1: UI runtimes are
   isolated, not concurrent, through H2; §5: one raster thread serves several presentations' raster
   owners), [ADR-0045](ADR-0045-raster-lane.md) (decision 2: one `GpuContext` per application
   instead of GPU services per owner thread, atlases single-owned on the raster thread; the
@@ -22,16 +22,16 @@
 
 ## Context
 
-[ADR-0027](ADR-0027-owner-affine-ui-realms.md)'s verdict says "Multiple realms may execute
+[ADR-0027](ADR-0027-owner-affine-ui-realms.md)'s verdict says "Multiple UI runtimes may execute
 concurrently", and its §1 lets "Win32, Linux and headless … use distinct owner threads". The code
-has one owner thread. A single `thread_local!` `APP_RUNTIME` hosts every realm on desktop,
+has one owner thread. A single `thread_local!` `APP_RUNTIME` hosts every UI runtime on desktop,
 Android and wasm (`crates/flui-app/src/app/runner/host.rs:24-47`), and its own doc says why it
-stays there: "The platform callback surface still requires `Send`, so the `!Send` realm this holds
+stays there: "The platform callback surface still requires `Send`, so the `!Send` UI runtime this holds
 remains in owner TLS". Those callbacks are `Box<dyn Fn() -> bool + Send>` and similar
 (`crates/flui-platform/src/traits/platform.rs:319`). ADR-0027's Open questions call this
 transitional, but the verdict states concurrency as fact.
 
-What rules out parallel layout inside a realm is the pipeline's storage, not the render-object
+What rules out parallel layout inside a UI runtime is the pipeline's storage, not the render-object
 types: `PipelineCell(Rc<RefCell<PipelineOwner>>)` (`crates/flui-rendering/src/pipeline/owner/cell.rs:51`).
 The render-object bounds point the other way — `RenderView::RenderObject` must be `Send + Sync`
 (`crates/flui-view/src/view/render.rs:451`) — although ADR-0027 §9 says render objects are not
@@ -49,8 +49,8 @@ inline:
   raster thread exists.
 - Web renders through `DirectSink`, the pre-mailbox path with no stamping or generation checks
   (`crates/flui-app/src/app/raster_lane.rs:394-406`, constructed at
-  `RealmRaster::render_frame_entered` in the same file, over the realm's
-  `UiRealm::render_frame`), with the renderer in an
+  `RuntimeRaster::render_frame_entered` in the same file, over the UI runtime's
+  `UiRuntime::render_frame`), with the renderer in an
   `Arc<Mutex<Option<Renderer>>>` (`crates/flui-app/src/app/runner/web.rs:85`).
 - Every renderer creates its own `wgpu::Instance`, surface and adapter
   (`crates/flui-engine/src/renderer.rs:1140-1168`), and every painter builds its own glyph atlas
@@ -65,17 +65,17 @@ forbids for per-frame state.
 
 ## Decision
 
-### 1. Realms are isolated, not concurrent, through H2
+### 1. Runtimes are isolated, not concurrent, through H2
 
-One owner thread per process hosts every realm from H0 through H2. Realms keep everything
+One owner thread per process hosts every UI runtime from H0 through H2. Runtimes keep everything
 ADR-0027 gives them — their own scheduler, GlobalKey scope, focus, channels and shutdown — and
 never share mutable state, but they take turns on that one thread. ADR-0027's verdict now reads:
-"Each `UiRealm` has exactly one owner executor and performs its UI transaction serially. Realms
+"Each `UiRuntime` has exactly one owner executor and performs its UI transaction serially. Runtimes
 are isolated from each other; through H2 they share one owner thread." §1's per-platform
-realm-to-thread sentence is replaced by this section.
+UI runtime-to-thread sentence is replaced by this section.
 
-Per-realm owner threads on Win32 and Linux are an H2 spike behind an `OwnerExecutor` trait. Its
-success metric: with one window's realm blocked, another window stays within its frame budget.
+Per-UI runtime owner threads on Win32 and Linux are an H2 spike behind an `OwnerExecutor` trait. Its
+success metric: with one window's UI runtime blocked, another window stays within its frame budget.
 Adopting them needs its own ADR, and needs the platform callbacks to stop requiring `Send`
 ([ADR-0082](ADR-0082-platform-api-contract-crate.md)) and the UI traits to become `!Send` as
 ADR-0027 §9 already requires. That flip — `Listenable: Send + Sync` and `ListenerCallback`
@@ -87,13 +87,13 @@ FLUI crate, together with the callback signature change of
 [ADR-0086](ADR-0086-signal-writes-through-event-context.md), because both change public bounds
 and signatures, and a break after the first publication reaches every downstream crate. The
 owner set this deadline on 2026-09-25; it replaces the earlier "no later than the H3 freeze".
-It is earlier than per-realm owner threads could be adopted, so that older condition holds
+It is earlier than per-UI runtime owner threads could be adopted, so that older condition holds
 automatically. Each callback family that loses `Send` gets its event context in the same change,
 as ADR-0086 requires. No runtime behaviour before H2 depends on the flip; the publication does.
 
-### 2. No parallel layout inside a realm
+### 2. No parallel layout inside a UI runtime
 
-Parallel layout within one realm is not a goal, and the barrier is named: `PipelineCell` is
+Parallel layout within one UI runtime is not a goal, and the barrier is named: `PipelineCell` is
 `Rc<RefCell<…>>`. ADR-0027 §10's four preconditions for revisiting it stand unchanged.
 
 ### 3. One `GpuContext` per application
@@ -152,8 +152,8 @@ first consumer (the external-content spike), not here.
 
 ## Alternatives considered
 
-- **Per-realm owner threads now.** Rejected for H0–H2: the platform callbacks still require
-  `Send`, so the `!Send` realm cannot leave the one TLS cell, and there is no measurement that a
+- **Per-UI runtime owner threads now.** Rejected for H0–H2: the platform callbacks still require
+  `Send`, so the `!Send` UI runtime cannot leave the one TLS cell, and there is no measurement that a
   second owner thread helps a real workload. It remains the H2 spike.
 - **Per-window raster threads with a shared atlas.** Rejected: the shared atlas needs a lock
   touched every frame. Per-window atlases avoid the lock but duplicate residency; the spike

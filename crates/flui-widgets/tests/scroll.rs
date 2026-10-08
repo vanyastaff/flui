@@ -22,6 +22,101 @@ use flui_widgets::{
     ScrollController, Scrollable, Scrollbar, SharedScrollPhysics, SizedBox, VsyncScope,
 };
 
+#[derive(Clone, flui_view::prelude::StatelessView)]
+pub(crate) struct FlingProfile {
+    pub(crate) provider: flui_interaction::settings::GestureSettingsProvider,
+    pub(crate) child: flui_view::BoxedView,
+}
+
+impl flui_view::StatelessView for FlingProfile {
+    fn build(&self, ctx: &dyn flui_view::BuildContext) -> impl IntoView {
+        flui_widgets::GestureArenaScope::new(
+            flui_widgets::GestureArenaScope::of(ctx),
+            self.child.clone(),
+        )
+        .settings(self.provider.clone())
+    }
+}
+
+pub(crate) fn terminal_scroll_motion_uses_the_admitted_fling_profile() {
+    terminal_motion_uses_the_admitted_fling_profile(false);
+}
+
+pub(crate) fn terminal_refresh_motion_uses_the_admitted_fling_profile() {
+    terminal_motion_uses_the_admitted_fling_profile(true);
+}
+
+fn terminal_motion_uses_the_admitted_fling_profile(refresh: bool) {
+    let profile = |min, max| {
+        flui_interaction::GestureSettings::default()
+            .try_with_fling_velocity(min, max)
+            .expect("valid fling range")
+    };
+    let source = flui_interaction::settings::GestureSettingsSource::new(profile(50.0, 300.0));
+    let controller = ScrollController::new();
+    controller.update_dimensions(300.0, 0.0, 4700.0);
+    let child = if refresh {
+        refresh_content(&controller, &RefreshController::new()).boxed()
+    } else {
+        Scrollable::new()
+            .controller(controller.clone())
+            .child(SizedBox::new(300.0, 5000.0))
+            .boxed()
+    };
+    let vsync = Vsync::new();
+    let mut laid = crate::common::lay_out_animated(
+        VsyncScope::new(
+            vsync.clone(),
+            FlingProfile {
+                provider: source.provider(),
+                child,
+            },
+        ),
+        tight(300.0, 300.0),
+        vsync,
+    );
+    controller.set_pixels(500.0);
+    for attempt in 0..4 {
+        laid.dispatch_pointer_down(150.0, 250.0);
+        let step = if attempt == 3 { 200.0 } else { 20.0 };
+        let end = 250.0 - 5.0 * step;
+        for sample in 1..=5 {
+            let y = 250.0 - f64::from(sample) * step;
+            laid.dispatch_pointer_move_after(150.0, y, Duration::from_millis(10));
+        }
+        if attempt == 0 {
+            source.replace(profile(5000.0, 5000.0));
+        }
+        laid.dispatch_pointer_up(150.0, end);
+        let released = controller.pixels();
+        // Anchor the controller's first tick, then observe actual pixels.
+        laid.pump_for(Duration::from_millis(16));
+        laid.pump_for(Duration::from_millis(16));
+        let coast = controller.pixels() - released;
+        if attempt == 1 {
+            assert_eq!(
+                coast, 0.0,
+                "{refresh}: next contact below its admitted minimum does not coast"
+            );
+            source.replace(profile(50.0, 600.0));
+        } else if attempt == 3 {
+            assert!(
+                coast > 200.0 && coast < 250.0,
+                "{refresh}: admitted max15000 determines the coasting distance, coast {coast}"
+            );
+        } else {
+            let bound = if attempt == 0 { 10.0 } else { 20.0 };
+            assert!(
+                coast > 0.0 && coast < bound,
+                "{refresh}: attempt {attempt} uses its captured maximum, coast {coast}"
+            );
+            if attempt == 2 {
+                source.replace(profile(50.0, 15000.0));
+            }
+        }
+    }
+}
+
 // ============================================================================
 // Viewport — Position/Fixed mode switching
 // ============================================================================
@@ -1062,6 +1157,311 @@ fn dispatch_typed_wheel(
     laid.dispatch_pointer_event(&PointerEvent::Scroll(event));
 }
 
+#[derive(Clone, flui_view::prelude::StatelessView)]
+struct AuthoredWheelContent {
+    axis: flui_foundation::geometry::Axis,
+    controller: ScrollController,
+    provider: flui_interaction::WheelPreferencesProvider,
+    distances: flui_widgets::WheelScrollDistances,
+    extent: f64,
+}
+
+impl flui_view::StatelessView for AuthoredWheelContent {
+    fn build(&self, ctx: &dyn flui_view::BuildContext) -> impl IntoView {
+        let arena = flui_widgets::GestureArenaScope::of(ctx);
+        let scroll = Scrollable::new()
+            .scroll_direction(self.axis)
+            .controller(self.controller.clone())
+            .wheel_distances(self.distances)
+            .child(SizedBox::new(self.extent, self.extent));
+        let inner = flui_widgets::GestureArenaScope::new(arena.clone(), scroll)
+            .settings(flui_interaction::GestureSettings::default());
+        flui_widgets::GestureArenaScope::new(arena, inner).wheel_preferences(self.provider.clone())
+    }
+}
+
+fn dispatch_wheel_distance(
+    laid: &LaidOut,
+    unit: flui_platform_api::pointer::ScrollUnit,
+    x: f64,
+    y: f64,
+    modifiers: flui_platform_api::keyboard::Modifiers,
+) {
+    use flui_platform_api::pointer::{
+        PointerEvent, PointerId, PointerInfo, PointerKind, PointerPosition, ScrollDelta,
+        ScrollEvent,
+    };
+    laid.dispatch_pointer_event(&PointerEvent::Scroll(
+        ScrollEvent::new(
+            PointerInfo::new(
+                PointerId::try_from(1_u64).expect("pointer"),
+                PointerKind::Mouse,
+            ),
+            flui_platform_api::EventTime::from_nanos(1),
+            PointerPosition::try_new(flui_foundation::geometry::Point::new(150.0, 100.0))
+                .expect("point"),
+            ScrollDelta::try_new(unit, x, y).expect("finite wheel distance"),
+        )
+        .with_modifiers(modifiers),
+    ));
+}
+
+pub(crate) fn wheel_policy_resolves_authored_axes_and_provider_replacement() {
+    use flui_foundation::geometry::Axis;
+    use flui_interaction::WheelPreferencesSource;
+    use flui_platform_api::{
+        WheelPreferences, WheelStep, keyboard::Modifiers, pointer::ScrollUnit,
+    };
+    use flui_widgets::WheelScrollDistances;
+
+    for axis in [Axis::Vertical, Axis::Horizontal] {
+        let source = WheelPreferencesSource::new(
+            WheelPreferences::default()
+                .with_vertical(WheelStep::Lines(3))
+                .with_horizontal_characters(4),
+        );
+        let scroll = ScrollController::new();
+        let content = AuthoredWheelContent {
+            axis,
+            controller: scroll.clone(),
+            provider: source.provider(),
+            distances: WheelScrollDistances::try_new(20.0, 7.0).expect("authored distances"),
+            extent: 5000.0,
+        };
+        let mut laid = lay_out(content.clone(), tight(300.0, 300.0));
+        for (label, unit, x, y, modifiers, vertical, horizontal) in [
+            (
+                "raw axis counts",
+                ScrollUnit::Detents,
+                1.0,
+                1.0,
+                Modifiers::NONE,
+                60.0,
+                28.0,
+            ),
+            (
+                "fractional raw axis counts",
+                ScrollUnit::Detents,
+                0.25,
+                0.25,
+                Modifiers::NONE,
+                15.0,
+                7.0,
+            ),
+            (
+                "shift chooses receiving axis",
+                ScrollUnit::Detents,
+                0.0,
+                1.0,
+                Modifiers::SHIFT,
+                0.0,
+                28.0,
+            ),
+            (
+                "existing horizontal axis is not shifted again",
+                ScrollUnit::Detents,
+                1.0,
+                1.0,
+                Modifiers::SHIFT,
+                60.0,
+                28.0,
+            ),
+            (
+                "translated lines bypass counts",
+                ScrollUnit::Lines,
+                2.0,
+                2.0,
+                Modifiers::NONE,
+                40.0,
+                40.0,
+            ),
+            (
+                "translated pages use viewport",
+                ScrollUnit::Pages,
+                0.5,
+                0.5,
+                Modifiers::NONE,
+                150.0,
+                150.0,
+            ),
+        ] {
+            scroll.jump_to(0.0);
+            dispatch_wheel_distance(&laid, unit, x, y, modifiers);
+            assert_eq!(
+                scroll.pixels(),
+                if axis == Axis::Vertical {
+                    vertical
+                } else {
+                    horizontal
+                },
+                "{label}: {axis:?}"
+            );
+        }
+        source.replace(
+            WheelPreferences::default()
+                .with_vertical(WheelStep::Lines(0))
+                .with_horizontal_characters(0),
+        );
+        scroll.jump_to(0.0);
+        dispatch_wheel_distance(&laid, ScrollUnit::Detents, 1.0, 1.0, Modifiers::NONE);
+        assert_eq!(scroll.pixels(), 0.0, "zero disables only raw detents");
+        dispatch_wheel_distance(&laid, ScrollUnit::Pixels, 19.0, 17.0, Modifiers::NONE);
+        assert_eq!(
+            scroll.pixels(),
+            if axis == Axis::Vertical { 17.0 } else { 19.0 },
+            "pixel control"
+        );
+
+        // Different live sources begin with identical values. A replacement
+        // must retain the new authority even when the old writer changes later.
+        source.replace(
+            WheelPreferences::default()
+                .with_vertical(WheelStep::Lines(2))
+                .with_horizontal_characters(2),
+        );
+        scroll.jump_to(0.0);
+        dispatch_wheel_distance(&laid, ScrollUnit::Detents, 1.0, 1.0, Modifiers::NONE);
+        assert_eq!(
+            scroll.pixels(),
+            if axis == Axis::Vertical { 40.0 } else { 14.0 }
+        );
+        let replacement = WheelPreferencesSource::new(
+            WheelPreferences::default()
+                .with_vertical(WheelStep::Lines(2))
+                .with_horizontal_characters(2),
+        );
+        let mut replaced = content;
+        replaced.provider = replacement.provider();
+        laid.pump_widget(replaced);
+        source.replace(
+            WheelPreferences::default()
+                .with_vertical(WheelStep::Lines(0))
+                .with_horizontal_characters(0),
+        );
+        replacement.replace(
+            WheelPreferences::default()
+                .with_vertical(WheelStep::Lines(5))
+                .with_horizontal_characters(5),
+        );
+        dispatch_wheel_distance(&laid, ScrollUnit::Detents, 1.0, 1.0, Modifiers::NONE);
+        assert_eq!(
+            scroll.pixels(),
+            if axis == Axis::Vertical { 140.0 } else { 49.0 },
+            "replacement authority stays live in a retained scrollable"
+        );
+    }
+
+    let source = WheelPreferencesSource::new(
+        WheelPreferences::default().with_horizontal_characters(u32::MAX),
+    );
+    let scroll = ScrollController::new();
+    let laid = lay_out(
+        AuthoredWheelContent {
+            axis: Axis::Horizontal,
+            controller: scroll.clone(),
+            provider: source.provider(),
+            distances: WheelScrollDistances::try_new(20.0, 1e-8).expect("positive distances"),
+            extent: 5000.0,
+        },
+        tight(300.0, 300.0),
+    );
+    dispatch_wheel_distance(&laid, ScrollUnit::Detents, 1.0, 0.0, Modifiers::NONE);
+    assert!(
+        (scroll.pixels() - 42.94967295).abs() < 1e-10,
+        "horizontal UINT_MAX remains a character count, not a page sentinel"
+    );
+}
+
+pub(crate) fn wheel_distances_refuse_overflow_and_the_next_packet_recovers() {
+    use flui_foundation::geometry::Axis;
+    use flui_interaction::WheelPreferencesSource;
+    use flui_platform_api::{
+        WheelPreferences, WheelStep, keyboard::Modifiers, pointer::ScrollUnit,
+    };
+    use flui_widgets::{InvalidWheelScrollDistance, WheelScrollDistances};
+
+    for invalid in [0.0, -0.0, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        assert_eq!(
+            WheelScrollDistances::try_new(invalid, 7.0),
+            Err(InvalidWheelScrollDistance::Line)
+        );
+        assert_eq!(
+            WheelScrollDistances::try_new(20.0, invalid),
+            Err(InvalidWheelScrollDistance::Character)
+        );
+    }
+    for axis in [Axis::Vertical, Axis::Horizontal] {
+        let source = WheelPreferencesSource::new(
+            WheelPreferences::default()
+                .with_vertical(WheelStep::Lines(2))
+                .with_horizontal_characters(2),
+        );
+        let scroll = ScrollController::new();
+        let laid = lay_out(
+            AuthoredWheelContent {
+                axis,
+                controller: scroll.clone(),
+                provider: source.provider(),
+                distances: WheelScrollDistances::try_new(f64::MAX, f64::MAX)
+                    .expect("finite authored distances"),
+                extent: 5000.0,
+            },
+            tight(300.0, 300.0),
+        );
+        dispatch_wheel_distance(&laid, ScrollUnit::Detents, 1.0, 1.0, Modifiers::NONE);
+        assert_eq!(
+            scroll.pixels(),
+            0.0,
+            "overflowing native count product is refused before page-like cap"
+        );
+        dispatch_wheel_distance(&laid, ScrollUnit::Lines, 2.0, 2.0, Modifiers::NONE);
+        assert_eq!(
+            scroll.pixels(),
+            0.0,
+            "overflowing translated line product is refused"
+        );
+        dispatch_wheel_distance(&laid, ScrollUnit::Pixels, 9.0, 7.0, Modifiers::NONE);
+        assert_eq!(
+            scroll.pixels(),
+            if axis == Axis::Vertical { 7.0 } else { 9.0 },
+            "pixel recovery bypasses authored distance multipliers"
+        );
+    }
+
+    // A real large content extent admits the first finite packet. A second
+    // finite packet whose destination overflows must not turn into an end jump.
+    let scroll = ScrollController::new();
+    let laid = lay_out(
+        AuthoredWheelContent {
+            axis: Axis::Vertical,
+            controller: scroll.clone(),
+            provider: WheelPreferences::default().into(),
+            distances: WheelScrollDistances::default(),
+            extent: f64::MAX,
+        },
+        tight(300.0, 300.0),
+    );
+    let distance = f64::MAX * 0.75;
+    dispatch_wheel_distance(&laid, ScrollUnit::Pixels, 0.0, distance, Modifiers::NONE);
+    assert_eq!(
+        scroll.pixels(),
+        distance,
+        "finite large content admits meaningful movement"
+    );
+    dispatch_wheel_distance(&laid, ScrollUnit::Pixels, 0.0, distance, Modifiers::NONE);
+    assert_eq!(
+        scroll.pixels(),
+        distance,
+        "overflowing destination is refused rather than clamped"
+    );
+    dispatch_wheel_distance(&laid, ScrollUnit::Pixels, 0.0, -distance, Modifiers::NONE);
+    assert_eq!(
+        scroll.pixels(),
+        0.0,
+        "healthy input recovers after destination refusal"
+    );
+}
+
 pub(crate) fn notched_wheel_accumulates_distance_and_eases_out_in_150ms() {
     use flui_platform_api::pointer::ScrollPrecision::Notched;
     let scroll = ScrollController::new();
@@ -1893,8 +2293,10 @@ pub(crate) fn nested_fling_parent_boundary_policy_receives_presentation_pixel_ra
     use flui_animation::Simulation;
     use flui_platform_api::{
         EventTime, PlatformInput,
-        pointer::{PointerButton, PointerButtons, PointerEvent, PointerId, PointerInfo,
-            PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease, PointerSample},
+        pointer::{
+            PointerButton, PointerButtons, PointerEvent, PointerId, PointerInfo, PointerKind,
+            PointerMove, PointerPosition, PointerPress, PointerRelease, PointerSample,
+        },
     };
     use flui_testing::{HeadlessHost, HeadlessWindow};
     use flui_widgets::{ScrollMetrics, ScrollPhysics};
@@ -1921,10 +2323,7 @@ pub(crate) fn nested_fling_parent_boundary_policy_receives_presentation_pixel_ra
     }
 
     for density_sensitive in [false, true] {
-        let (outer, inner) = (
-            ScrollController::new(),
-            ScrollController::new(),
-        );
+        let (outer, inner) = (ScrollController::new(), ScrollController::new());
         let physics: SharedScrollPhysics = if density_sensitive {
             Arc::new(HighDensityPhysics)
         } else {
@@ -1937,19 +2336,21 @@ pub(crate) fn nested_fling_parent_boundary_policy_receives_presentation_pixel_ra
                 SizedBox::new(300.0, 600.0).boxed(),
                 SizedBox::new(300.0, 200.0)
                     .child(
-                        flui_widgets::Align::new(flui_painting::Alignment::TOP_LEFT)
-                            .child(SizedBox::new(200.0, 200.0).child(
+                        flui_widgets::Align::new(flui_painting::Alignment::TOP_LEFT).child(
+                            SizedBox::new(200.0, 200.0).child(
                                 Scrollable::new()
                                     .controller(inner.clone())
                                     .child(SizedBox::new(300.0, 1000.0)),
-                            )),
+                            ),
+                        ),
                     )
                     .boxed(),
                 SizedBox::new(300.0, 4800.0).boxed(),
             ]));
         let mut host = HeadlessHost::new(HeadlessWindow::new(300, 300));
         host.set_scale_factor(host.primary_window(), 2.0);
-        host.attach(&parent).expect("mount dense nested scroll owner");
+        host.attach(&parent)
+            .expect("mount dense nested scroll owner");
         let _ = host.pump(Duration::ZERO);
         assert_eq!(inner.position().max_scroll_extent(), 800.0);
         for id in 1_u64..=2 {
@@ -1957,29 +2358,45 @@ pub(crate) fn nested_fling_parent_boundary_policy_receives_presentation_pixel_ra
             inner.jump_to(650.0);
             let _ = host.pump(Duration::ZERO);
             let pointer = PointerInfo::new(
-                PointerId::try_from(id).expect("nonzero contact"), PointerKind::Mouse,
+                PointerId::try_from(id).expect("nonzero contact"),
+                PointerKind::Mouse,
             );
             let sample = |y: f64| {
                 PointerSample::new(
-                    EventTime::from_nanos(u64::try_from(host.clock().elapsed().as_nanos())
-                        .expect("fixture clock fits event time")),
+                    EventTime::from_nanos(
+                        u64::try_from(host.clock().elapsed().as_nanos())
+                            .expect("fixture clock fits event time"),
+                    ),
                     PointerPosition::try_new(flui_foundation::geometry::Point::new(100.0, y))
                         .expect("finite authored mouse position"),
                 )
             };
-            host.dispatch(PlatformInput::Pointer(PointerEvent::Down(PointerPress::new(
-                pointer, PointerButton::PRIMARY, PointerButtons::only(PointerButton::PRIMARY),
-                sample(150.0),
-            ))));
+            host.dispatch(PlatformInput::Pointer(PointerEvent::Down(
+                PointerPress::new(
+                    pointer,
+                    PointerButton::PRIMARY,
+                    PointerButtons::only(PointerButton::PRIMARY),
+                    sample(150.0),
+                ),
+            )));
             for y in [120.0, 100.0] {
                 host.clock().advance(Duration::from_millis(8));
-                host.dispatch(PlatformInput::Pointer(PointerEvent::Move(PointerMove::new(
-                    pointer, PointerButtons::only(PointerButton::PRIMARY), sample(y),
-                ))));
+                host.dispatch(PlatformInput::Pointer(PointerEvent::Move(
+                    PointerMove::new(
+                        pointer,
+                        PointerButtons::only(PointerButton::PRIMARY),
+                        sample(y),
+                    ),
+                )));
             }
-            host.dispatch(PlatformInput::Pointer(PointerEvent::Up(PointerRelease::new(
-                pointer, PointerButton::PRIMARY, PointerButtons::NONE, sample(100.0),
-            ))));
+            host.dispatch(PlatformInput::Pointer(PointerEvent::Up(
+                PointerRelease::new(
+                    pointer,
+                    PointerButton::PRIMARY,
+                    PointerButtons::NONE,
+                    sample(100.0),
+                ),
+            )));
             assert_eq!(inner.pixels(), 670.0, "actual child release premise");
             assert_eq!(outer.pixels(), 600.0, "parent has not consumed the drag");
             for _ in 0..15 {
@@ -2157,21 +2574,23 @@ pub(crate) fn nested_fling_failure_keeps_first_panic_and_a_new_gesture_makes_pro
         let first = Arc::new(AtomicBool::new(true));
         let fail = Arc::clone(&first);
         let first_id = listenable.add_listener(Arc::new(move || {
-            if fail.swap(false, Ordering::SeqCst) {
-                panic!("first parent handoff notification");
-            }
+            assert!(
+                !fail.swap(false, Ordering::SeqCst),
+                "first parent handoff notification"
+            );
         }));
         let second = Arc::new(AtomicBool::new(competing));
         let fail = Arc::clone(&second);
         let second_id = listenable.add_listener(Arc::new(move || {
-            if fail.swap(false, Ordering::SeqCst) {
-                panic!("second parent handoff notification");
-            }
+            assert!(
+                !fail.swap(false, Ordering::SeqCst),
+                "second parent handoff notification"
+            );
         }));
         release_inner_fling(&laid, Vertical, false);
         let ((), log) = flui_testing::log_capture::capture(|| {
             for _ in 0..15 {
-                laid.pump_for(Duration::from_millis(16))
+                laid.pump_for(Duration::from_millis(16));
             }
         });
         let expected = if competing {
@@ -2693,17 +3112,19 @@ pub(crate) fn show_on_screen_failure_continues_live_ancestors_and_fresh_requests
         let failed = Arc::clone(&first);
         let inner_listenable = inner.as_listenable();
         let first_id = inner_listenable.add_listener(Arc::new(move || {
-            if failed.swap(false, Ordering::SeqCst) {
-                panic!("first inner reveal notification");
-            }
+            assert!(
+                !failed.swap(false, Ordering::SeqCst),
+                "first inner reveal notification"
+            );
         }));
         let second = Arc::new(AtomicBool::new(competing));
         let failed = Arc::clone(&second);
         let outer_listenable = outer.as_listenable();
         let second_id = outer_listenable.add_listener(Arc::new(move || {
-            if failed.swap(false, Ordering::SeqCst) {
-                panic!("second outer reveal notification");
-            }
+            assert!(
+                !failed.swap(false, Ordering::SeqCst),
+                "second outer reveal notification"
+            );
         }));
         let ((), log) = flui_testing::log_capture::capture(|| {
             request_reveal_target(&laid);
@@ -2977,9 +3398,10 @@ pub(crate) fn nested_fling_custom_physics_failure_and_retirement_preserve_first_
     }
     impl Drop for RetiringSimulation {
         fn drop(&mut self) {
-            if self.fail_drop.swap(false, Ordering::SeqCst) {
-                panic!("custom parent simulation retirement failure");
-            }
+            assert!(
+                !self.fail_drop.swap(false, Ordering::SeqCst),
+                "custom parent simulation retirement failure"
+            );
         }
     }
     #[derive(Debug)]
@@ -3003,9 +3425,10 @@ pub(crate) fn nested_fling_custom_physics_failure_and_retirement_preserve_first_
             }))
         }
         fn boundary_velocity(&self, metrics: &ScrollMetrics, velocity: f64) -> Option<f64> {
-            if self.fail_boundary.swap(false, Ordering::SeqCst) {
-                panic!("custom parent boundary failure");
-            }
+            assert!(
+                !self.fail_boundary.swap(false, Ordering::SeqCst),
+                "custom parent boundary failure"
+            );
             ClampingScrollPhysics::new().boundary_velocity(metrics, velocity)
         }
     }

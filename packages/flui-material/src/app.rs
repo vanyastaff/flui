@@ -15,7 +15,7 @@
 //! in, outermost first:
 //!
 //! 1. [`Theme`] — publishing the [`ThemeData`] resolved by
-//!    [`ThemeMode`] × ambient platform brightness.
+//!    [`ThemeMode`] × ambient platform brightness and contrast preference.
 //! 2. [`ScaffoldMessenger`] — so `Scaffold`s anywhere below share one
 //!    snack-bar rail.
 //! 3. The caller's [`builder`](MaterialApp::builder) hook, run from its own
@@ -24,9 +24,6 @@
 //!
 //! ## Deferred (named gaps, not silent ones)
 //!
-//! - **High-contrast themes** (`highContrastTheme` / `highContrastDarkTheme`)
-//!   — FLUI's `MediaQueryData` has no `high_contrast` field yet; the two
-//!   slots land with it.
 //! - **`AnimatedTheme`** — a theme change is a jump cut, not a 200ms
 //!   animated lerp; the animation duration/curve/style settings defer
 //!   with it (`flui-material`'s `AGENTS.md` already names lerp as deferred).
@@ -46,7 +43,7 @@
 //!
 //! - With **no `MediaQuery` ancestor**, [`ThemeMode::System`] resolves against
 //!   `MediaQueryData::default()`'s brightness (light) rather than failing.
-//!   Under `run_app` the realm always installs the live
+//!   Under `run_app` the UI runtime always installs the live
 //!   root `MediaQuery`, so this path is reachable only from embedders and
 //!   harnesses that bypass it — and a panic inside `build` would surface as
 //!   a silently-childless subtree (the framework's build-error boundary),
@@ -81,10 +78,12 @@ pub enum ThemeMode {
     /// `MediaQueryData::platform_brightness`.
     #[default]
     System,
-    /// Always use [`MaterialApp::theme`], regardless of the platform signal.
+    /// Select the light palette, regardless of platform brightness. Contrast
+    /// still follows the ambient preference.
     Light,
-    /// Always use [`MaterialApp::dark_theme`] (falling back to
-    /// [`MaterialApp::theme`] when no dark theme is provided).
+    /// Select the dark palette, regardless of platform brightness. Contrast
+    /// still follows the ambient preference; absent dark palettes fall back to
+    /// [`MaterialApp::theme`].
     Dark,
 }
 
@@ -122,23 +121,30 @@ fn error_text_style() -> TextStyle {
     }
 }
 
-/// Picks the theme, without high-contrast branches (see the module docs):
-/// dark when the mode says dark, or when the mode is system and the ambient
-/// platform brightness is dark; otherwise (or when no dark theme is provided)
-/// fall back to `theme`, and finally to `ThemeData::default()` — the M3 light
-/// baseline.
+/// Brightness selects a palette family; contrast selects an authored variant
+/// within that family. Missing contrast variants retain ordinary selection.
 fn resolve_theme(
     mode: ThemeMode,
     theme: Option<&ThemeData>,
     dark_theme: Option<&ThemeData>,
+    high_contrast_theme: Option<&ThemeData>,
+    high_contrast_dark_theme: Option<&ThemeData>,
     ctx: &dyn BuildContext,
 ) -> ThemeData {
-    let platform_brightness = MediaQuery::maybe_of(ctx).map_or_else(
-        // Documented fallback (module docs): no ancestor resolves as light.
-        || flui_sdk::widgets::MediaQueryData::default().platform_brightness,
-        |data| data.platform_brightness,
-    );
-    let use_dark = mode.is_dark() || (mode.is_system() && platform_brightness == Brightness::Dark);
+    let use_dark = mode.is_dark()
+        || (mode.is_system()
+            && MediaQuery::platform_brightness_of(ctx).unwrap_or(Brightness::Light)
+                == Brightness::Dark);
+    let contrast = if use_dark {
+        high_contrast_dark_theme
+    } else {
+        high_contrast_theme
+    };
+    if let Some(contrast) = contrast
+        && MediaQuery::high_contrast_of(ctx).unwrap_or(false)
+    {
+        return contrast.clone();
+    }
     if use_dark && let Some(dark) = dark_theme {
         return dark.clone();
     }
@@ -173,6 +179,8 @@ pub struct MaterialApp {
     user_builder: Option<AppBuilder>,
     theme: Option<ThemeData>,
     dark_theme: Option<ThemeData>,
+    high_contrast_theme: Option<ThemeData>,
+    high_contrast_dark_theme: Option<ThemeData>,
     theme_mode: ThemeMode,
     locale: Option<Locale>,
     supported_locales: Vec<Locale>,
@@ -199,6 +207,8 @@ impl MaterialApp {
             user_builder: None,
             theme: None,
             dark_theme: None,
+            high_contrast_theme: None,
+            high_contrast_dark_theme: None,
             theme_mode: ThemeMode::System,
             locale: None,
             supported_locales: vec![Locale::en_us()],
@@ -243,6 +253,23 @@ impl MaterialApp {
     #[must_use]
     pub fn dark_theme(mut self, theme: ThemeData) -> Self {
         self.dark_theme = Some(theme);
+        self
+    }
+
+    /// Light palette used when high contrast is requested. Without it, light
+    /// selection uses [`theme`](Self::theme), then the default theme.
+    #[must_use]
+    pub fn high_contrast_theme(mut self, theme: ThemeData) -> Self {
+        self.high_contrast_theme = Some(theme);
+        self
+    }
+
+    /// Dark palette used when high contrast is requested. Without it, dark
+    /// selection uses [`dark_theme`](Self::dark_theme), then [`theme`](Self::theme),
+    /// then the default theme. The light high-contrast slot is not a dark fallback.
+    #[must_use]
+    pub fn high_contrast_dark_theme(mut self, theme: ThemeData) -> Self {
+        self.high_contrast_dark_theme = Some(theme);
         self
     }
 
@@ -323,17 +350,23 @@ impl StatelessView for MaterialApp {
         // The Material builder, handed to `WidgetsApp` as its
         // builder: resolves the theme against the ambient MediaQuery *at the
         // builder's own altitude* (below `Localizations`, above routing) and
-        // wraps the routing subtree in the Material bands. `MediaQuery::
-        // maybe_of` registers a dependency from the builder's element, so a
-        // platform-brightness republish re-runs this closure and re-resolves
-        // `ThemeMode::System` — the live path the realm's root MediaQuery
-        // feeds.
+        // wraps the routing subtree in the Material bands. Field-specific
+        // dependencies rerun this closure when the selected palette changes.
         let theme = self.theme.clone();
         let dark_theme = self.dark_theme.clone();
+        let high_contrast_theme = self.high_contrast_theme.clone();
+        let high_contrast_dark_theme = self.high_contrast_dark_theme.clone();
         let mode = self.theme_mode;
         let user_builder = self.user_builder.clone();
         let material_builder = move |ctx: &dyn BuildContext, child: Option<BoxedView>| {
-            let resolved = resolve_theme(mode, theme.as_ref(), dark_theme.as_ref(), ctx);
+            let resolved = resolve_theme(
+                mode,
+                theme.as_ref(),
+                dark_theme.as_ref(),
+                high_contrast_theme.as_ref(),
+                high_contrast_dark_theme.as_ref(),
+                ctx,
+            );
             let inner: BoxedView = match &user_builder {
                 // The nested-builder trick: the caller's builder runs from
                 // its own element BELOW the Theme published here, so

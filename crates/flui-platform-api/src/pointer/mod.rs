@@ -487,13 +487,41 @@ impl PointerMove {
         if self.pointer != older.pointer {
             return Err(MismatchedPointerInfo);
         }
-        let mut samples = older.coalesced.clone();
-        samples.push(older.current);
-        samples.extend_from_slice(&self.coalesced);
-        samples.retain(|sample| sample.time <= self.current.time && *sample != self.current);
-        samples.sort_by_key(|sample| sample.time);
-        self.coalesced = samples;
+        self.merge_checked_history(older.coalesced.clone(), older.current);
         Ok(())
+    }
+
+    /// Transfer an earlier movement's measured history into this dispatch.
+    ///
+    /// Like [`try_coalesce`](Self::try_coalesce), the complete pointer identity
+    /// must match and this dispatch retains its current reading, predictions,
+    /// buttons and modifiers. Refusal leaves both movements unchanged. Success
+    /// empties `older`'s measured history and reuses its storage; `older` retains
+    /// its current reading, predictions and dispatch metadata. This operation
+    /// lets bounded queues transfer ownership before retiring the older packet.
+    pub fn try_coalesce_from(&mut self, older: &mut Self) -> Result<(), MismatchedPointerInfo> {
+        if self.pointer != older.pointer {
+            return Err(MismatchedPointerInfo);
+        }
+        self.merge_checked_history(std::mem::take(&mut older.coalesced), older.current);
+        Ok(())
+    }
+
+    fn merge_checked_history(&mut self, mut samples: Vec<PointerSample>, older: PointerSample) {
+        // Checked histories end at their own current reading. These boundaries
+        // prove the concatenation is ordered and excludes this current reading.
+        let ordered = older.time < self.current.time
+            && self
+                .coalesced
+                .first()
+                .is_none_or(|sample| sample.time >= older.time);
+        samples.push(older);
+        samples.extend_from_slice(&self.coalesced);
+        if !ordered {
+            samples.retain(|sample| sample.time <= self.current.time && *sample != self.current);
+            samples.sort_by_key(|sample| sample.time);
+        }
+        self.coalesced = samples;
     }
 
     /// The latest reading.
@@ -508,6 +536,17 @@ impl PointerMove {
     #[must_use]
     pub fn coalesced(&self) -> &[PointerSample] {
         &self.coalesced
+    }
+
+    /// Retain at most `maximum` latest measured historical readings in place.
+    ///
+    /// A bounded coalescing queue can retire its oldest readings without
+    /// copying or revalidating the already-checked chronological history.
+    /// Zero removes all historical readings. The current sample, predictions
+    /// and dispatch metadata remain unchanged.
+    pub fn retain_latest_coalesced(&mut self, maximum: usize) {
+        let excess = self.coalesced.len().saturating_sub(maximum);
+        drop(self.coalesced.drain(..excess));
     }
 
     /// Readings the platform predicts after [`current`](Self::current), oldest first.

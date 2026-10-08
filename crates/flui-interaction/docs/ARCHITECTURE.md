@@ -15,7 +15,7 @@ Crate-level design notes for `flui_interaction`: subsystems, ownership, mapping 
 
 ## Ownership and synchronization
 
-The synchronous pointer pipeline belongs to one `UiRealm`. `GestureBinding`,
+The synchronous pointer pipeline belongs to one `UiRuntime`. `GestureBinding`,
 `GestureArena`, recognizers, pointer routes, and executable callbacks are
 intentionally `!Send + !Sync`; callbacks may capture `Rc` widget state.
 Strong `Rc` ownership belongs to widget state. Arena membership and cached
@@ -47,6 +47,18 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   A second target trait or generic dispatcher would duplicate this ownership
   boundary without providing a producer. `transformed_entry_receives_local_samples_and_deltas`
   pins dispatch through the actual lane, including local geometry.
+- **Exact root identity borrows complete pointer readings.**
+  `HitTestResult::add` composes an identity for targets in root space. Resolving
+  that exact matrix as an unlocalized route keeps measured and predicted
+  histories borrowed and preserves source metadata. A near-identity matrix
+  still follows checked localization; a tolerance would erase authored motion.
+  Transform classification borrows the optional matrix until a nonidentity
+  transform is admitted. Only that branch needs an owned matrix in the cached
+  route; inspecting absence or exact identity does not require copying the
+  whole optional payload first.
+  `resolved_route_move_invocation_allocates_no_heap_after_setup` covers real
+  identity, translated and near-identity hit paths, complete sample families
+  and their allocation contracts.
 - **Explicit capture belongs to one admitted Down generation (ADR-0164).**
   A real target's `PointerDispatch::capture` returns a non-Clone weak token.
   The first claimant selects later target delivery while the original Down
@@ -118,6 +130,18 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   recovery and cancellation from a coalesced start callback.
   `resampler_interpolates_on_event_time_and_never_drops_terminals` pins preservation
   of three packets' six measured readings and only the newest prediction family.
+- **Resampler delivery preserves owned history storage.** An unchanged event
+  timestamp reuses its measured and predicted vectors; raising a timestamp still
+  uses the checked builders to exclude predictions preceding the new current
+  reading. Saturated queues retain at most 100 historical readings per move in
+  place after canonical coalescing validates full pointer identity. Coalescing
+  transfers the retiring packet's history storage; checked chronological
+  boundaries avoid re-sorting, while overlapping timestamps retain canonical
+  filtering and stable ordering. The
+  counting-allocator family
+  `resolved_route_move_invocation_allocates_no_heap_after_setup` pins owning
+  Sample/Stop delivery, raised-time filtering and saturated admission with 199
+  delivered measured readings plus the newest predictions.
 - **`TapButton` is a typed enum, not integer button constants.** `TapButton` (`src/recognizers/tap.rs`) maps pointer buttons explicitly through `from_pointer_button`, so the type system enforces the choice. It is `#[non_exhaustive]` so a future fourth button slot can be added without breaking downstream.
 - **Weak arena membership.** The inline-four member list stores weak identities,
   not lifetime ownership. Dead members withdraw; queued verdicts recheck
@@ -150,6 +174,36 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   exact contact identity again. `tap_and_drag_resolves_through_the_shared_arena`
   pins 39/40 ms admission, both mouse and touch, a held first contact and reused-ID
   recovery; `tap_builder_lifecycle_contract` pins cancellation and later reuse.
+- **Gesture settings belong to the admitted sequence.** A presentation has one
+  `GestureSettingsSource` producer and supplies readonly owner-local providers.
+  Authored `GestureSettings` remain fixed. New contacts observe the provider;
+  active contacts, drag handoff groups, scale sessions and consecutive-tap
+  candidates retain their admitted policy. Publishing a replacement invokes no
+  callback and requests no frame. `admitted_gesture_settings_contract` exercises
+  retained, next-contact and restored controls through gesture callbacks.
+  Exact presentation geometry keeps mouse rectangles per axis; observed touch
+  distances preserve authored hit-to-pan and hit-to-span ratios. A zero baseline
+  hit tier keeps its authored dependent tiers, while an unrepresentable derived
+  tier returns a recoverable error. Native mouse click timing begins at the
+  first Down; authored and touch intervals begin at the first Up. The independent
+  40 ms bounce guard remains measured from the first Up.
+  Consecutive contacts must share pointer kind and typed device identity;
+  two absent device identities use kind-local matching, while a known device
+  cannot match an unknown one. Ordinary successive touch contacts may use
+  different pointer IDs. Measured history counts toward drift; predictions do
+  not. Raw terminal velocity preserves finite measured components independently
+  of the admitted fling bounds. An unrepresentable component estimate is refused
+  as zero. Free-drag terminal scalar magnitude alone uses `f64::MAX` when its norm
+  cannot be represented; the finite raw vector and derived directional fling
+  remain available separately.
+  `DragEndDetails::fling_velocity` and `ScaleEndDetails::focal_fling_velocity`
+  apply the admitted pixel-speed bounds once at terminal delivery. Scale's
+  dimensionless velocity remains independent of those bounds. Native scale
+  stages its profile at Begin without claiming delivery or invoking callbacks;
+  `PanZoomDisposition` distinguishes that admission from a refused Begin and
+  from recognized handling. The mounting owner keeps a refused native session
+  refused until its terminal event, while an Update without Begin remains an
+  independent relative step.
 - **Focus scope identity is explicit.** A `FocusScopeNode` owns an inner `FocusNode`, and that backing node carries a `Weak<FocusScopeNode>` owner link. This keeps enclosing-scope lookup, focused-child history, and `FocusManager::focus_next` / `focus_previous` rooted in the same tree instead of relying on a parallel manager structure. `descendants_are_focusable=false` gates descendant requests; a true-to-false transition evicts focus held by the node or its subtree while leaving the node eligible for a later explicit request. FLUI clears primary focus to `None` rather than selecting a previously focused child.
 - **`processing::lsq_solver` is crate-internal.** `VelocityTracker` is its only user; the resampler interpolates linearly and does not fit a polynomial.
 - **Observability is crate-public.** `pub mod observability` exports stable `GestureEvent` spellings, component-name constants, and `pointer_event_kind`. `flui-app` configures a generic subscriber; gesture-specific devtools consumption requires its own integration. `stable_recognizer_observability_kinds_reach_the_subscriber` pins admission and dispatch fields through public recognizer calls.

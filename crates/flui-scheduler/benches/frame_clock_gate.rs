@@ -1,7 +1,7 @@
 //! Criterion benchmark: the per-presentation segment gate, before vs. after
 //! issue #556's `FrameClock` replacement.
 //!
-//! Before: `UiRealm::draw_frame_entered` read
+//! Before: `UiRuntime::draw_frame_entered` read
 //! `take_redraw_pending() || has_pending_work()` directly. After: the same
 //! union is marked as `Dirty` demand and `FrameClock::poll` decides. The
 //! gate runs once per presentation per pump, so its marginal cost matters at
@@ -40,7 +40,7 @@ impl OldGate {
         }
     }
 
-    /// The exact shape `UiRealm::draw_frame_entered` read before #556:
+    /// The exact shape `UiRuntime::draw_frame_entered` read before #556:
     /// `let woken = presentation.take_redraw_pending(); if !(woken ||
     /// presentation.has_pending_work()) { continue; }`.
     fn should_run_segment(&self) -> bool {
@@ -88,7 +88,7 @@ fn segment_gate_idle(c: &mut Criterion) {
 
     let clock = FrameClock::new();
     group.bench_function("clock_poll", |b| {
-        // Nothing marks demand this pump -- mirrors the realm's own guard
+        // Nothing marks demand this pump -- mirrors the ui_runtime's own guard
         // never firing when neither input is true.
         b.iter(|| black_box(clock.poll(clock.now()).is_produce()));
     });

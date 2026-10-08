@@ -762,7 +762,6 @@ impl MouseTracker {
         }
         failure.finish();
     }
-
 }
 
 impl Default for MouseTracker {

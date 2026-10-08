@@ -88,7 +88,7 @@ borrowed-safe `create_surface(&W)` that #1043 names, sound only by GPUI's owners
      `vkDeviceWaitIdle`/`vkDestroySurfaceKHR` on a device that may be the panic's cause), and a
      second panic aborts the process instead of letting the glue finish the activity. winit's
      clear is likewise reached only on returning routes. The structural fix is the raster lane
-     owned by the realm and dropped by `teardown_platform_realm` (ADR-0045, #559).
+     owned by the UI runtime and dropped by `teardown_platform_ui_runtime` (ADR-0045, #559).
    - Win32, AppKit and Android changes are type-checked by `cross-typecheck`, not executed on the
      development host.
 6. **The renderer releases its surface on a signal and rebuilds unconditionally when a window

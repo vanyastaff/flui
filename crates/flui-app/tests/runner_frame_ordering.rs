@@ -1,4 +1,4 @@
-//! Every runner path drives the ONE frame transaction, `UiRealm::pump`.
+//! Every runner path drives the ONE frame transaction, `UiRuntime::pump`.
 //!
 //! # Why a source scan, and what it is *not* evidence of
 //!
@@ -17,10 +17,8 @@
 //! pump's command drain and frame clock; either turns this test red. It is a
 //! regression guard, not a proof of the mobile bodies' runtime behavior.
 
-/// Every source file of the `app/runner/` module, so the scans below cover
-/// the whole runner regardless of which file a frame site lives in — a
-/// fifth frame site added anywhere in the module is counted, not just one
-/// appearing next to the existing four.
+/// Backend frame producers and the runtime owner-operation executor. The iOS
+/// background wake reaches the latter through its typed runtime dispatcher.
 const RUNNER_SOURCES: &[&str] = &[
     include_str!("../src/app/runner/mod.rs"),
     include_str!("../src/app/runner/android.rs"),
@@ -29,8 +27,12 @@ const RUNNER_SOURCES: &[&str] = &[
     include_str!("../src/app/runner/main_window.rs"),
     include_str!("../src/app/runner/device_recovery.rs"),
     include_str!("../src/app/runner/frame_pacing.rs"),
+    include_str!("../src/app/runner/frame_driver.rs"),
     include_str!("../src/app/runner/host.rs"),
-    include_str!("../src/app/runner/realm_dispatch.rs"),
+    include_str!("../src/app/runner/owner_dispatch.rs"),
+    include_str!("../src/app/runner/installed_host.rs"),
+    include_str!("../src/app/runner/native_bindings.rs"),
+    include_str!("../../flui-runtime/src/owner/runtime_dispatch.rs"),
     include_str!("../src/app/runner/secondary_window.rs"),
     include_str!("../src/app/runner/web.rs"),
 ];
@@ -112,11 +114,11 @@ fn production_lines(source: &str) -> Vec<&str> {
     lines
 }
 
-/// The `app/runner/` module reaches a frame only through `UiRealm::pump`.
+/// The `app/runner/` module reaches a frame only through `UiRuntime::pump`.
 ///
 /// Red-check: change any site back to `scheduler.drive_frame(...)`
 /// around `render_frame`, or to `handle_begin_frame` + `handle_draw_frame`.
-fn every_runner_frame_site_drives_the_realm_pump() {
+fn every_runner_frame_site_drives_the_ui_runtime_pump() {
     let code_lines: Vec<&str> = RUNNER_SOURCES
         .iter()
         .flat_map(|source| production_lines(source))
@@ -133,9 +135,9 @@ fn every_runner_frame_site_drives_the_realm_pump() {
         assert!(
             !code_lines.iter().any(|l| l.contains(banned)),
             "the app/runner/ module calls `{banned}` directly in production code; every frame \
-             site must go through `UiRealm::pump` (apply commands → begin → persistent → \
+             site must go through `UiRuntime::pump` (apply commands → begin → persistent → \
              pipeline → post-frame → idle) and every background wake through \
-             `UiRealm::pump_background`"
+             `UiRuntime::pump_background`"
         );
     }
 
@@ -164,13 +166,13 @@ fn every_runner_frame_site_drives_the_realm_pump() {
 }
 
 /// Every background wake — each `WakeAction::PumpAsync` arm (desktop,
-/// Android, iOS, web) and iOS's owner turn — must pump the async driver
-/// through `UiRealm::pump_background`, which clears the `frame_scheduled`
+/// Android, iOS, web) and the runtime owner turn used by iOS — must pump the async driver
+/// through `UiRuntime::pump_background`, which clears the `frame_scheduled`
 /// latch before polling; this pins that every arm reaches it. An arm that
 /// skips it silently stops a spawned future from advancing while the app is
 /// backgrounded.
 ///
-/// Red-check: delete the `realm.pump_background();` call from the desktop
+/// Red-check: delete the `ui_runtime.pump_background();` call from the desktop
 /// `PumpAsync` arm and this fails (found 4, not 5).
 fn every_background_wake_calls_pump_background() {
     let code_lines: Vec<&str> = RUNNER_SOURCES
@@ -239,8 +241,8 @@ fn runner_frame_ordering_scan() {
         "runner_frame_ordering_scan",
         &[
             (
-                "every_runner_frame_site_drives_the_realm_pump",
-                every_runner_frame_site_drives_the_realm_pump as fn(),
+                "every_runner_frame_site_drives_the_ui_runtime_pump",
+                every_runner_frame_site_drives_the_ui_runtime_pump as fn(),
             ),
             (
                 "every_background_wake_calls_pump_background",

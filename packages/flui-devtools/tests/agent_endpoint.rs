@@ -1,7 +1,7 @@
-//! The development agent endpoint end to end: a headless realm hosts the
+//! The development agent endpoint end to end: a headless UI runtime hosts the
 //! counter, the server serves it over a real named pipe or Unix socket, and a
 //! client thread speaks raw newline-delimited JSON while the test thread, the
-//! realm's owner, pumps frames.
+//! UI runtime's owner, pumps frames.
 
 // A target without local sockets (wasm32) has no endpoint to test.
 #![cfg(any(unix, windows))]
@@ -337,7 +337,7 @@ enum Command {
     /// Stop pumping. Acknowledged once no pump is in flight.
     Pause,
     Resume,
-    /// Drop the realm: its window closes.
+    /// Drop the UI runtime: its window closes.
     CloseWindow,
     /// Drop the agent: the hook detaches.
     Detach,
@@ -356,7 +356,7 @@ impl OwnerHandle {
 
 struct Owner {
     agent: Option<HeadlessDevAgent>,
-    realm: Option<HeadlessHost>,
+    ui_runtime: Option<HeadlessHost>,
     presses: Arc<AtomicU32>,
 }
 
@@ -364,15 +364,15 @@ impl Owner {
     fn new(server: AgentServer) -> Self {
         let agent = HeadlessDevAgent::attach(server);
         let presses = Arc::new(AtomicU32::new(0));
-        let realm = HeadlessHost::new(HeadlessWindow::new(400, 300)).with_dev_agent(&agent);
-        realm
+        let ui_runtime = HeadlessHost::new(HeadlessWindow::new(400, 300)).with_dev_agent(&agent);
+        ui_runtime
             .attach(&Counter {
                 presses: Arc::clone(&presses),
             })
             .expect("the counter attaches");
         Self {
             agent: Some(agent),
-            realm: Some(realm),
+            ui_runtime: Some(ui_runtime),
             presses,
         }
     }
@@ -395,13 +395,13 @@ impl Owner {
                     match command {
                         Command::Pause => pumping = false,
                         Command::Resume => pumping = true,
-                        Command::CloseWindow => drop(self.realm.take()),
+                        Command::CloseWindow => drop(self.ui_runtime.take()),
                         Command::Detach => drop(self.agent.take()),
                     }
                     let _ = done.send(());
                 }
-                if pumping && let Some(realm) = self.realm.as_mut() {
-                    let _ = realm.pump(Duration::from_millis(16));
+                if pumping && let Some(ui_runtime) = self.ui_runtime.as_mut() {
+                    let _ = ui_runtime.pump(Duration::from_millis(16));
                 }
                 std::thread::sleep(Duration::from_millis(2));
             }
@@ -589,10 +589,10 @@ fn detach_closes_the_endpoint() {
             "the socket file is removed"
         );
     });
-    let realm = owner.realm.as_mut().expect("the realm is open");
-    let _ = realm.pump(Duration::from_millis(16));
+    let ui_runtime = owner.ui_runtime.as_mut().expect("the ui_runtime is open");
+    let _ = ui_runtime.pump(Duration::from_millis(16));
     assert!(
-        !realm.collects_semantics(),
+        !ui_runtime.collects_semantics(),
         "the detached server let go of the window's semantics work"
     );
 }
@@ -649,7 +649,7 @@ fn a_client_that_stops_reading_does_not_hold_up_detach() {
     });
 }
 
-fn a_bind_failure_leaves_the_realm_running() {
+fn a_bind_failure_leaves_the_ui_runtime_running() {
     // The endpoint is taken by another server, serving no window.
     let address = Address::new();
     let first = HeadlessDevAgent::attach(AgentServer::new(address.endpoint()));
@@ -670,11 +670,11 @@ fn a_bind_failure_leaves_the_realm_running() {
             .is_some_and(HeadlessDevAgent::is_attached),
         "a server that could not bind is not attached"
     );
-    let realm = owner.realm.as_mut().expect("the realm is open");
-    let _ = realm.pump(Duration::from_millis(16));
+    let ui_runtime = owner.ui_runtime.as_mut().expect("the ui_runtime is open");
+    let _ = ui_runtime.pump(Duration::from_millis(16));
     assert!(
-        !realm.collects_semantics(),
-        "a server that serves nothing costs the realm no semantics work"
+        !ui_runtime.collects_semantics(),
+        "a server that serves nothing costs the ui_runtime no semantics work"
     );
     drop(first);
 
@@ -689,9 +689,12 @@ fn a_bind_failure_leaves_the_realm_running() {
             .as_ref()
             .is_some_and(HeadlessDevAgent::is_attached)
     );
-    let realm = owner.realm.as_mut().expect("the realm is open");
-    let _ = realm.pump(Duration::from_millis(16));
-    assert!(!realm.collects_semantics(), "an inert server costs nothing");
+    let ui_runtime = owner.ui_runtime.as_mut().expect("the ui_runtime is open");
+    let _ = ui_runtime.pump(Duration::from_millis(16));
+    assert!(
+        !ui_runtime.collects_semantics(),
+        "an inert server costs nothing"
+    );
 
     // A socket in a directory others can enter is refused.
     #[cfg(unix)]
@@ -705,8 +708,8 @@ fn a_bind_failure_leaves_the_realm_running() {
         let mut owner = Owner::new(AgentServer::new(AgentEndpoint::new(at.clone(), TOKEN)));
         assert!(!path.exists(), "the refused socket is removed");
         assert!(connect(&at).is_err());
-        let realm = owner.realm.as_mut().expect("the realm is open");
-        let _ = realm.pump(Duration::from_millis(16));
+        let ui_runtime = owner.ui_runtime.as_mut().expect("the ui_runtime is open");
+        let _ = ui_runtime.pump(Duration::from_millis(16));
     }
 }
 
@@ -728,7 +731,7 @@ fn traces_carry_no_labels_or_values() {
         .with(
             Targets::new()
                 .with_target("flui_devtools", LevelFilter::TRACE)
-                .with_target("flui_runtime::ui_realm::agent", LevelFilter::TRACE),
+                .with_target("flui_runtime::ui_runtime::agent", LevelFilter::TRACE),
         );
     tracing::subscriber::set_global_default(subscriber)
         .expect("this binary installs no other global subscriber");
@@ -857,8 +860,8 @@ fn the_endpoint_contains_every_failure() {
             a_client_that_stops_reading_does_not_hold_up_detach,
         ),
         (
-            "a_bind_failure_leaves_the_realm_running",
-            a_bind_failure_leaves_the_realm_running,
+            "a_bind_failure_leaves_the_ui_runtime_running",
+            a_bind_failure_leaves_the_ui_runtime_running,
         ),
         (
             "traces_carry_no_labels_or_values",

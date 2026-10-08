@@ -85,12 +85,8 @@ fn assert_button_contacts(move_panics: bool, edge_panics: bool, resampling: bool
                 let failing_move = move_panics && record.0 == "move" && record.1 == 10_000_000;
                 let failing_edge = edge_panics && record.0 == "press" && record.1 == 20_000_000;
                 log.borrow_mut().push(record);
-                if failing_move {
-                    panic!("older movement failure");
-                }
-                if failing_edge {
-                    panic!("later button failure");
-                }
+                assert!(!failing_move, "older movement failure");
+                assert!(!failing_edge, "later button failure");
             })
             .expect("register listener route");
         let route = |_| {
@@ -147,7 +143,7 @@ fn assert_button_contacts(move_panics: bool, edge_panics: bool, resampling: bool
                         sample(20),
                     ))),
                     route,
-                )
+                );
             }));
             if move_panics && base == 0 {
                 let payload = edge

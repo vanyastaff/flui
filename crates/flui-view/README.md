@@ -142,9 +142,9 @@ preserve state across inactive retake and active-to-active reparent paths.
 - `seq/` - `ViewSeq` tuple and `Vec` implementations.
 - `macros/` - `column!` and `row!`.
 - `key/` - `ObjectKey`, `GlobalKey`, and the lookup handle `GlobalKey` reads,
-  which belongs to one binding and is active only while its realm is entered.
+  which belongs to one binding and is active only while its UI runtime is entered.
 - `binding.rs` and `owner/` - `WidgetsBinding` (build-frame coordination for
-  one realm), `BuildOwner`, the per-tree global-key registry, and split-borrow
+  one UI runtime), `BuildOwner`, the per-tree global-key registry, and split-borrow
   owner handles.
 
 ## Verification

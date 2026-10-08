@@ -1,17 +1,17 @@
-# ADR-0092: Text shapes per realm over Parley and crosses the display list as neutral shaped runs
+# ADR-0092: Text shapes per UI runtime over Parley and crosses the display list as neutral shaped runs
 
 - **Status:** Accepted. Every gate (§8) is met: gate 1 by a prototype on 2026-09-26, gates 2, 6
   and 7 on 2026-09-30 (see Context). Every step of §10 landed. Two things this record leaves to
   others: the bidi base direction (Parley 0.11.1 takes it from the first strong character;
   flui-painting mapping decision 12), and how a hot-reload plugin's font bytes cross its FFI
-  boundary ([ADR-0094](ADR-0094-hot-reload-through-subsecond.md)). Each realm owns a
+  boundary ([ADR-0094](ADR-0094-hot-reload-through-subsecond.md)). Each UI runtime owns a
   `TextContext` over the app's one `FontCollection` (one per owner thread, which is one per
   process while [ADR-0091](ADR-0091-one-owner-thread-isolated-realms-raster-thread.md) fixes one
   owner thread), lent to every pipeline; Parley measures, paint draws the runs of the layout
   that measured (`DrawOp::Paragraph` carries a `ShapedParagraph`, the engine's atlas rasterizes
   through `SwashRasterizer`), and carets, selection boxes, hit-testing, line metrics and word
   boundaries read that same layout. The performance overlay's labels are shaped through the
-  realm's `TextContext`, so the engine shapes no text. A face registered on the collection
+  UI runtime's `TextContext`, so the engine shapes no text. A face registered on the collection
   reaches measurement, paint and carets together at each pipeline's next frame (§2). The app's
   shared engine services build the collection with the bundled faces and hand the host's to a
   feed on a thread of its own, which scans the host once with fontdb (`HostFonts::scan`) and
@@ -26,9 +26,9 @@
   `GlyphImage` representation and admission only; the raster trait, font identity,
   registry ownership and shaping decisions remain in force.
 - **Revised:** 2026-09-26 (rasterization prototype; see Context); 2026-09-29 (§10 step 3
-  split into 3a and 3b; the realm lends its context through a shared handle; Parley
+  split into 3a and 3b; the UI runtime lends its context through a shared handle; Parley
   measurement behind `parley-layout`; a pipeline is built with its context, and the hot-reload
-  plugin image is a realm of its own for text); 2026-09-30 (§7: the host's faces come from the
+  plugin image is a UI runtime of its own for text); 2026-09-30 (§7: the host's faces come from the
   process font system's discovery, with one family rule and one fallback order for both
   shapers; §10 step 3c; §10 step 4 split into 4a and 4b, and 4a's face-agreement gate
   decided: host faces first; then 4a and 4b land together, §4's blob table is per paragraph,
@@ -47,7 +47,7 @@
 - **Supersedes:** [ADR-0016](ADR-0016-unified-font-system-registration.md),
   [ADR-0059](ADR-0059-flui-stays-on-cosmic-text.md)
 - **Amends:** [ADR-0065](ADR-0065-painting-owns-shaping-text-crosses-the-display-list-shaped.md)
-  (Part 1: the process-wide font doors become a per-realm context; Part 2: the `Paragraph`
+  (Part 1: the process-wide font doors become a per-UI runtime context; Part 2: the `Paragraph`
   payload), [ADR-0066](ADR-0066-display-list-command-representation.md) (`DrawOp::Paragraph`),
   [ADR-0067](ADR-0067-engine-owned-glyph-atlas.md) (`GlyphKey`, the rasterization door, where the
   atlas lives; the atlas's key type becomes a `GlyphRasterizer` parameter)
@@ -57,7 +57,7 @@
   thread and the `GpuContext` atlas), [ADR-0097](ADR-0097-no-process-global-state-gate.md)
   (`FONT_SYSTEM` left the allowlist at §10 step 6a)
 - **Refs:** decision D12 in the [decision index](../../design/decisions.md); roadmap exit B1
-  (per-realm fonts)
+  (per-UI runtime fonts)
 
 ## Context
 
@@ -67,7 +67,7 @@ numbers below are of that tree; §10 step 6a removed `text_layout/layout.rs`).
 - `static FONT_SYSTEM: OnceLock<Arc<Mutex<FontState>>>`
   (flui-painting's `text_layout/layout.rs:124`, a `parking_lot::Mutex`, `:18`) holds
   the cosmic-text `FontSystem`, its scaler and a database generation. Every measurement on every
-  realm and every glyph rasterization takes that lock: `SharedFontSystem::rasterize` locks it and
+  UI runtime and every glyph rasterization takes that lock: `SharedFontSystem::rasterize` locks it and
   rasterizes with the scaler kept beside the database (`layout.rs:347-366`).
 - Its initializer scans the host's fonts synchronously (`FontSystem::new()`, `layout.rs:147`),
   then rebuilds the system around FLUI's emoji-forbidding fallback (`layout.rs:161-164`,
@@ -87,7 +87,7 @@ numbers below are of that tree; §10 step 6a removed `text_layout/layout.rs`).
   resolver rebuilds on the new generation (`font_resolve.rs:641-662`), but nothing marks text
   render objects for layout. [ADR-0065](ADR-0065-painting-owns-shaping-text-crosses-the-display-list-shaped.md)
   records this as a named gap and defers "a `FontContext` handle threaded through layout" until a
-  second font source or closing the ambient-reach ratchet becomes a requirement. Per-realm fonts
+  second font source or closing the ambient-reach ratchet becomes a requirement. Per-UI runtime fonts
   (roadmap B1) and the no-process-global-state gate
   ([ADR-0097](ADR-0097-no-process-global-state-gate.md)) are both of those triggers.
 - Unicode data comes from three places: cosmic-text's own dependencies, `unicode-segmentation`
@@ -113,8 +113,8 @@ feature in `flui-painting` and `flui-engine`. It is not merged.
 
 - **Versions.** Parley 0.11.1, swash 0.2.10, skrifa 0.44, vello_cpu 0.2.0. swash and glifo share
   skrifa 0.44; the skrifa 0.40 duplicate in today's tree leaves with cosmic-text.
-- **Shape.** A per-realm `ParleyText` over fontique's shared `Collection` and
-  `SourceCache::new_shared`; `fork()` gives a second realm a context over the same fonts. The
+- **Shape.** A per-UI runtime `ParleyText` over fontique's shared `Collection` and
+  `SourceCache::new_shared`; `fork()` gives a second UI runtime a context over the same fonts. The
   atlas became `GlyphAtlas<R: GlyphRasterizer = SharedFontSystem>`. Pages, packing, eviction,
   growth, upload and the `GlyphImage` format are unmodified; only the key type became a
   parameter. Gate 1 said "accepts unmodified"; the key change is the one §5 already names.
@@ -129,14 +129,14 @@ feature in `flui-painting` and `flui-engine`. It is not merged.
 - **Gate substitution.** Gate 1 asked for glifo against hand-written skrifa-outline-to-atlas
   glue. The prototype used swash (skrifa outlines plus zeno, as a library) as that stand-in. The
   gate is recorded as met with that substitution.
-- **Key stability.** Keys are equal across re-shaping and across forked realms. They survive
+- **Key stability.** Keys are equal across re-shaping and across forked UI runtimes. They survive
   source-cache prunes only while the raster-side registry holds the blob: fontique's shared
   `SourceCache` holds `WeakBlob`s, so an unheld blob reloads under a new id (0 became 1 in the
   prototype) and every key for that font changes.
 - **Locks.** FLUI adds no lock. fontique's shared mode takes internal mutexes on local cache
   misses: `Collection::family` locks `system.fonts` (fontique `collection/mod.rs:326`) and
   `SourceCache::get` locks the shared cache (fontique `source_cache.rs:104`); those locks are
-  shared across forked realms. Gate 1 only requires the rasterizer to run outside shaping, which
+  shared across forked UI runtimes. Gate 1 only requires the rasterizer to run outside shaping, which
   holds: both rasterizers are `Send`, own their state behind `&mut`, and share no lock with
   `ParleyText`. The thread test shows `Send` and execution, not that the two threads overlapped.
 - **Globals.** `FONT_SYSTEM` is never built on the Parley path. This is asserted per nextest
@@ -279,20 +279,20 @@ The application owns one fontique `Collection` with `shared: true`, wrapped as
 offers `register_font` and no removal, so the rule is the API's, not a convention. It lives in
 the host's (`flui-app`'s) shared engine services (`SharedEngineServices`, one per owner thread,
 which is one per app while ADR-0091 fixes a single owner thread), held in the host's granted
-ADR-0097 trampoline cell with no global of its own, and reaches each realm only through
-`UiRealm::new`. Registering a font adds it to the collection and raises the collection's
-generation: that generation is the font-collection-changed event. The app notifies every realm it owns (`UiRealm::fonts_changed`,
-on each realm's owner turn), and at the next frame each pipeline marks for layout and paint every
-render object that measured through the realm's context since the last change — closing
+ADR-0097 trampoline cell with no global of its own, and reaches each UI runtime only through
+`UiRuntime::new`. Registering a font adds it to the collection and raises the collection's
+generation: that generation is the font-collection-changed event. The app notifies every UI runtime it owns (`UiRuntime::fonts_changed`,
+on each UI runtime's owner turn), and at the next frame each pipeline marks for layout and paint every
+render object that measured through the UI runtime's context since the last change — closing
 ADR-0065's named gap. The pipeline finds those objects by their loans of the context, so a render
 object that measures text needs no code of its own to be re-laid out.
 
-### 3. Per-realm contexts with no FLUI lock
+### 3. Per-UI runtime contexts with no FLUI lock
 
-Each realm owns a `flui_painting::TextContext`: a Parley `FontContext` and `LayoutContext` over a
+Each UI runtime owns a `flui_painting::TextContext`: a Parley `FontContext` and `LayoutContext` over a
 clone of the collection, as owner-thread state, used through `&mut` and reached through the
-layout context explicitly — the handle ADR-0065 deferred. Layout on one realm never waits on
-another realm's shaping. FLUI's frame path takes no lock of its own; clippy `disallowed_types`
+layout context explicitly — the handle ADR-0065 deferred. Layout on one UI runtime never waits on
+another UI runtime's shaping. FLUI's frame path takes no lock of its own; clippy `disallowed_types`
 rejects a `Mutex` or `RwLock` in `flui-painting`, with no `#[expect]`ed site since §10 step 6a.
 
 fontique 0.11.1, read with `system` off and every face registered from memory, which is how FLUI
@@ -309,10 +309,10 @@ builds the collection:
   covers the bundled and registered faces. A host face fed by path (§7) is a `Path` source,
   which takes the shared source cache's lock on a cache miss (`source_cache.rs`).
 
-So the one lock left is one shared-mutex acquisition per realm on its first query after a
+So the one lock left is one shared-mutex acquisition per UI runtime on its first query after a
 registration; a frame with no registration behind it takes none. While the host feed runs off
 the owner thread (§7), each file it adds is one registration: it moves fontique's version, so a
-realm's next query re-reads the data, and a query that comes while a file is being added waits
+UI runtime's next query re-reads the data, and a query that comes while a file is being added waits
 for that one file's registration, never for the whole feed. That is a reading of fontique's
 code, not a measurement.
 
@@ -400,7 +400,7 @@ through fontdb's pure-Rust parser where there is one. `FontCollection::with_host
 the scan's sources (file paths, in-memory fonts, family names), its generic families and its
 fallback lists, and reads the files into the collection. fontique's `system` feature is not
 used: it reaches `windows`, which tier S forbids. The collection is fed once per app, in the
-host's shared engine services; realms only clone it.
+host's shared engine services; UI runtimes only clone it.
 
 Measurement and paint read one layout, so one set of rules picks a face:
 
@@ -426,17 +426,17 @@ app's shared engine services build the collection with the bundled faces
 (`flui-host-fonts`) scans the host and runs the feed (`HostFontFeed::run`). The feed adds one
 file per registration, so fontique's lock is held for one file at a time, and each source is
 first read on a scratch collection inside `catch_unwind`: a source that panics or holds no
-family is skipped, since a panic under fontique's lock would poison it and every realm's next
+family is skipped, since a panic under fontique's lock would poison it and every UI runtime's next
 query would panic. The registration reads a path source again, so the guard covers a file that
 panics on every read, not one replaced between the trial and the registration. When the feed
 ends, the collection's generation rises once if the feed added a source, bound a generic or
 reordered a fallback list, and also if the feed unwound; a feed that changed nothing leaves it
-alone, so no realm lays its text out again for nothing. The feed then wakes the owner, and the
-owner's next turn tells every realm, as after a registration (§2): text measured before lays
+alone, so no UI runtime lays its text out again for nothing. The feed then wakes the owner, and the
+owner's next turn tells every UI runtime, as after a registration (§2): text measured before lays
 out again in the host's faces. The thread is the app's own, not a job on the runtime's compute
 lane or the host's executors: a lane may refuse a job and drop it, and the feed must run
 exactly once, so a refusal would need a way to hand the feed back. The thread is detached; one
-still feeding when the loop exits only adds faces to a collection no realm reads any more and
+still feeding when the loop exits only adds faces to a collection no UI runtime reads any more and
 sets a redraw flag no loop polls. An app family
 registered while the feed runs may end up with the host's faces of the same name too,
 depending on which comes first; that is accepted. Without `bundled-fonts` the collection would
@@ -506,17 +506,17 @@ that wires what it adds.
    host complex script, at 13/18/32 px across all four x bins. Rasterizing one key twice gives
    equal images (gate 8, first half). `cargo xtask globals` is unchanged; `cargo xtask deps` and
    `cargo xtask reach` are green.
-2. **Per-realm text context**, in two halves that land separately: 2a in `flui-painting`
+2. **Per-UI runtime text context**, in two halves that land separately: 2a in `flui-painting`
    (the types, the lint and their tests), 2b in the runtime (the bullet on shared engine
-   services and `UiRealm::new`). 2a and 2b have landed.
+   services and `UiRuntime::new`). 2a and 2b have landed.
    - `flui_painting::FontCollection` wraps the shared fontique `Collection` (no host scan; with
      `bundled-fonts`, the bundled faces registered and the generic families bound to Roboto) and
      offers `register_font` and no removal. `TextContext`, built from it, owns Parley's
      `FontContext` and `LayoutContext` and shapes a paragraph through `&mut`. Both types exist in
-     every build, so a realm's constructor has one signature with or without `parley`; shaping
+     every build, so a UI runtime's constructor has one signature with or without `parley`; shaping
      and registration sat behind the `parley` feature until step 4a folded it.
-   - (2b) The runtime's shared engine services hold the collection, and each realm owns a
-     `TextContext` built from the collection passed to `UiRealm::new`.
+   - (2b) The runtime's shared engine services hold the collection, and each UI runtime owns a
+     `TextContext` built from the collection passed to `UiRuntime::new`.
    - The cosmic-text path is unchanged, and `FONT_SYSTEM` and `shared_font_system()` stay until
      step 6: this step adds the Parley path beside it rather than routing cosmic-text through a
      new handle, so the handle's shape is Parley's from the start.
@@ -525,27 +525,27 @@ that wires what it adds.
    - *Acceptance (2a):* two contexts over one collection shape on two threads whose intervals
      overlap, with equal metrics; a face registered after both contexts exist shapes in each;
      the Parley path never builds `FONT_SYSTEM`; `cargo xtask globals` is unchanged.
-   - *Acceptance (2b):* two realms built over one collection each hold one context over it
-     (`FontCollection::ptr_eq`, and a holder count of one per realm), a realm releases its
-     context when it drops, a second presentation adds none, and the realms a runner builds get
-     the runtime's collection (every runner site builds its realm through flui-app's one
-     `build_runtime_realm`). That a face registered on the collection shapes in every context
-     built from it is 2a's `a_face_registered_after_the_fork_shapes_in_every_realm`; with the
-     realms' contexts proven to be built from that same collection, it is not repeated at the
+   - *Acceptance (2b):* two UI runtimes built over one collection each hold one context over it
+     (`FontCollection::ptr_eq`, and a holder count of one per UI runtime), a UI runtime releases its
+     context when it drops, a second presentation adds none, and the UI runtimes a runner builds get
+     the runtime's collection (every runner site builds its UI runtime through flui-app's one
+     `build_ui_runtime`). That a face registered on the collection shapes in every context
+     built from it is 2a's `a_face_registered_after_the_fork_shapes_in_every_ui_runtime`; with the
+     UI runtimes' contexts proven to be built from that same collection, it is not repeated at the
      runtime level, which would need `parley` on the runtime's test build.
-3. **Layout reaches the realm's text context; registration re-lays out text.** Two halves that
+3. **Layout reaches the UI runtime's text context; registration re-lays out text.** Two halves that
    land separately. 3a and 3b have landed. A third part, 3c, feeds the host's faces into the
    collection (§7); it has landed.
-   - (3a) The realm lends its `TextContext` to each presentation's layout, and the box layout,
+   - (3a) The UI runtime lends its `TextContext` to each presentation's layout, and the box layout,
      intrinsics, dry-layout and dry-baseline contexts expose it (`ctx.text()`, a scoped
      `&mut TextContext`). Every `TextPainter` measuring method takes `&mut TextContext`, and
      `RenderParagraph` and `RenderEditable` pass the lent one.
-   - (3a) How the realm lends it: a shared handle, `TextContextHandle`
-     (`Rc<RefCell<TextContext>>`), held by the realm and cloned into every presentation's
-     `PipelineOwner` when the presentation is assembled (`RealmCapabilities::text`, a required
+   - (3a) How the UI runtime lends it: a shared handle, `TextContextHandle`
+     (`Rc<RefCell<TextContext>>`), held by the UI runtime and cloned into every presentation's
+     `PipelineOwner` when the presentation is assembled (`RuntimeCapabilities::text`, a required
      field). Threading `&mut TextContext` down would change `run_frame`, `run_layout` and every
      binding and harness that drives them, while `pump` and `render_frame` take `&self`. The
-     realm and the pipeline owners are already `!Send`; a typed render object sees only the
+     UI runtime and the pipeline owners are already `!Send`; a typed render object sees only the
      scoped borrow, taken from `&mut` context, so it cannot hold two loans or lay out a child
      while it holds one. The raw `RenderObject` methods and the erased layout context carry the
      context as `TextSource`, an opaque token only flui-rendering can borrow, so a direct
@@ -557,11 +557,11 @@ that wires what it adds.
      Under `parley-layout` size, baselines and intrinsics came from Parley while glyphs and
      carets still came from cosmic-text, until step 4a (flui-painting `ARCHITECTURE.md`,
      mapping decisions 14 and 15).
-   - (3b) Registering raises a font-collection-changed event on every realm, which marks
+   - (3b) Registering raises a font-collection-changed event on every UI runtime, which marks
      text render objects for layout (ADR-0065's named gap). The app's door is
      `flui::register_font` (`flui_app::register_font`): it registers on the app's collection,
      whose `register_font` also loads the face into the process font system the collection was
-     fed from, and dispatches `UiRealm::fonts_changed` to every realm, which requests a frame
+     fed from, and dispatches `UiRuntime::fonts_changed` to every UI runtime, which requests a frame
      for each presentation. Each `PipelineOwner` records, per loan of the context, the node the
      loan was made for, and its drain before each frame compares the collection's generation
      with the last one it applied: on a change it marks every recorded node for layout and
@@ -569,7 +569,7 @@ that wires what it adds.
      remains, and reaches carets alone). This meets the precondition step 4's move of
      measurement waits on: a face registered after start reaches measurement, paint and carets
      alike. The app's fonts belong to the
-     thread that runs it: a registration made before that thread builds its first realm is
+     thread that runs it: a registration made before that thread builds its first UI runtime is
      checked (`FontCollection::check_font`) and held, and lands on both sides when the
      collection is built, so a call on a thread that never runs the app changes neither side.
      The collection judges bytes before the caret side (the process font system) loads them, so
@@ -578,25 +578,25 @@ that wires what it adds.
      `new_with_capacity` take a `TextContextHandle`, `PipelineOwner` has no `Default`, and a
      layout, intrinsic or dry-query context takes a `TextSource`, so no path builds a context
      of its own. A presentation's pipeline is built inside `PresentationState::new` from
-     `RealmCapabilities::text`. A frame driver that moves the owner out of its slot for a
+     `RuntimeCapabilities::text`. A frame driver that moves the owner out of its slot for a
      typestate transition uses `PipelineOwner::take_idle`, whose placeholder shares the
-     context. A pipeline with no realm behind it passes `TextContextHandle::standalone`, a
+     context. A pipeline with no UI runtime behind it passes `TextContextHandle::standalone`, a
      context over a collection of its own holding the bundled faces.
    - (3b) The hot-reload plugin pipeline (`flui-hot-reload`'s `pipeline.rs`) is one such
-     pipeline: `app_plugin!` mounts it with a standalone context, not the host realm's. The
+     pipeline: `app_plugin!` mounts it with a standalone context, not the host UI runtime's. The
      plugin is a `dlopen`ed image the host reaches only through `flui_app_build(width,
      height)`, which has no parameter that could carry the host's handle, and `abi_token` covers
      only the `Scene` and `LayerTree` layouts, so nothing would check that the two images agree
-     on `TextContext`'s layout if one were passed. The plugin image is therefore a realm of its
+     on `TextContext`'s layout if one were passed. The plugin image is therefore a UI runtime of its
      own for text, and faces the host app registers do
      not reach it; carrying font bytes across the FFI into the plugin's collection is a
      follow-up, or goes with ADR-0094's replacement of the `dlopen` path.
-   - *Acceptance (3a):* two realms over two collections measure through their own contexts, and
+   - *Acceptance (3a):* two UI runtimes over two collections measure through their own contexts, and
      a frame on one lends nothing of the other's; every presentation's pipeline holds the
-     realm's handle; a painter measures through the context it is given, and a registration on
+     UI runtime's handle; a painter measures through the context it is given, and a registration on
      that collection invalidates its cache; Parley's metrics on the bundled Roboto round to
      today's baselines; a layout that panics while holding the context releases it.
-   - *Acceptance (3b):* a two-realm test: a font registered on the collection both realms were
+   - *Acceptance (3b):* a two-UI runtime test: a font registered on the collection both UI runtimes were
      built over re-lays out text in both at their next frame, measured and painted in the new
      face (`font_registration_matrix`, flui-runtime). Test bootstraps construct the collection.
    - *Acceptance (3b, pipelines):* a pipeline constructor without a context does not compile; an
@@ -621,7 +621,7 @@ that wires what it adds.
      with the sans-serif family last; a family spelled in another case than the fonts name it
      resolves alike on both sides; on a bundled-only collection a glyph the named family lacks
      measures in Roboto;
-     the runtime feeds once per app, not per realm; a font file that cannot be read is skipped
+     the runtime feeds once per app, not per UI runtime; a font file that cannot be read is skipped
      and the feed completes. `cargo xtask globals` is unchanged.
 4. **Parley measures by default (4a); neutral shaped runs on the display list (4b).** Two
    halves, planned to land separately as step 3's did; the owner decided on 2026-09-30 that
@@ -674,8 +674,8 @@ that wires what it adds.
    - *Acceptance (4a):* measurement is Parley's in the default build, at the painter
      (`text_context_contract`, and a face registered on the collection reaches measurement,
      paint and carets at the next layout,
-     `a_face_registered_on_the_collection_reaches_measurement_paint_and_carets`) and at the realm (a face registered on one realm's collection sizes
-     that realm's paragraph); measured and painted metrics agree on the bundled Roboto, named,
+     `a_face_registered_on_the_collection_reaches_measurement_paint_and_carets`) and at the UI runtime (a face registered on one UI runtime's collection sizes
+     that UI runtime's paragraph); measured and painted metrics agree on the bundled Roboto, named,
      as the default family and as the monospace generic, regular and bold, and a host face named
      "Roboto", "Material Icons" or "CupertinoIcons" does not replace the bundled one; on the host's faces they agree for every row of
      `measured_width_equals_painted_width_on_host_faces`, a family the host names exactly among
@@ -692,7 +692,7 @@ that wires what it adds.
      parameter is gone. Recording a paragraph registers each run's face in the rasterizer's
      registry and places the run's glyphs; the engine no longer takes `FONT_SYSTEM`'s lock to
      rasterize. `WgpuPainter::draw_text` is gone. The performance overlay's labels are shaped
-     through the realm's `TextContext` at scene assembly: `PerformanceOverlayLayer::record`
+     through the UI runtime's `TextContext` at scene assembly: `PerformanceOverlayLayer::record`
      composes them into the display list the layer carries, and the engine clips it to the
      overlay's bounds and replays it, rasterizing the labels like any other paragraph.
    - (4b) The cosmic-text paint path is removed: `TextLayout::placed_glyphs` and its ink
@@ -782,7 +782,7 @@ that wires what it adds.
      a host copy of a bundled family is never fed and a bound generic never rebound
      (`a_host_copy_of_a_bundled_family_is_not_fed`,
      `a_missing_path_is_skipped_and_the_feed_completes`); the app's collection is the host-fed
-     one (`the_runtime_launches_one_host_feed_for_every_realm`); the demo snapshots and the perf
+     one (`the_runtime_launches_one_host_feed_for_every_ui_runtime`); the demo snapshots and the perf
      counts are unchanged without the pin; `cargo xtask deps`, `reach`, `globals` and the wasm32
      lane are green; §§1–5 are accepted and the back-links in Consequences are written.
    - (6b) Landed. The feed moves off the owner thread: the first frame renders with the bundled
@@ -790,7 +790,7 @@ that wires what it adds.
      `FontCollection::with_host_feed` returns the bundled collection and a `HostFontFeed`; the
      app's shared engine services launch it on a `flui-host-fonts` thread once the fonts the app
      registered before the start are in, and every top-level owner turn
-     (`dispatch_platform_realm`) tells every realm when the generation moved since the last
+     (`dispatch_platform_ui_runtime`) tells every UI runtime when the generation moved since the last
      notice, which is also how a registration is announced. The feed registers one file at a
      time, reads each source on a scratch collection first and raises the generation once if it
      changed the collection, and on unwind (§7).
@@ -803,9 +803,9 @@ that wires what it adds.
      `a_family_held_before_the_feed_is_not_fed_again`,
      `a_feed_that_adds_nothing_leaves_the_generation_alone`) and
      `a_source_that_panics_is_skipped_and_the_collection_stays_usable`, flui-app's
-     `font_collection_contract` (`the_runtime_launches_one_host_feed_for_every_realm`,
+     `font_collection_contract` (`the_runtime_launches_one_host_feed_for_every_ui_runtime`,
      `the_host_feed_runs_off_the_owner_thread_and_wakes_once`) and the row
-     `a_landed_host_feed_wakes_every_realm_window` of `realm_dispatch_matrix`.
+     `a_landed_host_feed_wakes_every_ui_runtime_window` of `owner_dispatch_matrix`.
    - (6c) Landed. The editor's grapheme and word steps in `flui-widgets` (`controller.rs`,
      `editable_text.rs`, `text_store.rs`) move to the ICU4X boundaries in flui-painting, and
      `flui-widgets` drops its direct `unicode-segmentation` dependency, which completes §6.
@@ -824,12 +824,12 @@ that wires what it adds.
 
 ## Alternatives considered
 
-- **Stay on cosmic-text with per-realm `FontSystem`s.** Rejected as the target: each realm would
+- **Stay on cosmic-text with per-UI runtime `FontSystem`s.** Rejected as the target: each UI runtime would
   scan and hold its own database, and the shaping and memory gap ADR-0077 measured stands. Gate 1
   is met, so this is no longer the fallback path; it returns only if a migration gate fails
   (below).
 - **glifo as the rasterizer.** Not adopted now (§5).
-- **A per-realm mutable collection.** Rejected: every realm would load the same faces, and a
+- **A per-UI runtime mutable collection.** Rejected: every UI runtime would load the same faces, and a
   shared glyph atlas could not key on them.
 - **OS text stacks in production (DirectWrite, Core Text).** Rejected: layout would differ by
   platform. Only rasterization and hinting may vary (§5).
@@ -880,26 +880,26 @@ The gate 1 prototype exists on `spike/parley_atlas` (not merged). Everything bel
   recorded (`crates/flui-painting/tests/support/raster_recorded.rs`, 1,188 bitmaps).
 - The gate 1 prototype and its oracle glyph tests, with the glifo/skrifa choice recorded.
 - `FontCollection` and `TextContext` exist, with `crates/flui-painting/tests/text_context.rs`:
-  `two_realms_shape_in_parallel` (two contexts over one collection shape on two threads whose
-  intervals overlap, with equal metrics) and `a_face_registered_after_the_fork_shapes_in_every_realm`
+  `two_ui_runtimes_shape_in_parallel` (two contexts over one collection shape on two threads whose
+  intervals overlap, with equal metrics) and `a_face_registered_after_the_fork_shapes_in_every_ui_runtime`
   (fails when the collection is not shared). No process font system exists to build since
   §10 step 6a, which `cargo xtask globals` makes structural.
 - FLUI's text path names no `Mutex` or `RwLock`: clippy `disallowed_types` in
   `crates/flui-painting/clippy.toml`, with no `#[expect]`ed site since §10 step 6a. fontique's
   own locks are outside that check (§3).
-- Realm tests (§10 step 2b), in `crates/flui-runtime/src/ui_realm/tests/text_context.rs`:
-  `two_realms_hold_contexts_over_the_one_collection_they_were_given`,
-  `dropping_a_realm_releases_its_text_context` and `a_second_presentation_adds_no_text_context`;
+- Runtime tests (§10 step 2b), in `crates/flui-runtime/src/ui_runtime/tests/text_context.rs`:
+  `two_ui_runtimes_hold_contexts_over_the_one_collection_they_were_given`,
+  `dropping_a_ui_runtime_releases_its_text_context` and `a_second_presentation_adds_no_text_context`;
   in flui-app, `isolated_windows_shape_over_the_runtimes_font_collection` (through
-  `build_runtime_realm`, the one call every runner site builds its realm with) and the rows of
-  `font_collection_contract`: `the_runtime_launches_one_host_feed_for_every_realm` (repeated
+  `build_ui_runtime`, the one call every runner site builds its UI runtime with) and the rows of
+  `font_collection_contract`: `the_runtime_launches_one_host_feed_for_every_ui_runtime` (repeated
   calls on one runtime return the collection the services own, one feed is launched for it,
   and it is host-fed once that feed runs, `testing::host_fed`) and
   `two_runtimes_hold_different_collections`.
-- Layout measures through the realm's context (§10 step 3a): in
-  `crates/flui-runtime/src/ui_realm/tests/text_context.rs`,
-  `two_realms_measure_text_through_their_own_contexts` and
-  `every_presentation_pipeline_holds_the_realms_text_context`; in
+- Layout measures through the UI runtime's context (§10 step 3a): in
+  `crates/flui-runtime/src/ui_runtime/tests/text_context.rs`,
+  `two_ui_runtimes_measure_text_through_their_own_contexts` and
+  `every_presentation_pipeline_holds_the_ui_runtimes_text_context`; in
   `crates/flui-painting/tests/text_painter_unit.rs`,
   `measurement_follows_the_context_it_is_given` and
   `a_registration_on_the_collection_invalidates_the_painter_cache`; in
@@ -923,17 +923,17 @@ The gate 1 prototype exists on `spike/parley_atlas` (not merged). Everything bel
   `a_glyph_the_named_family_lacks_measures_in_roboto_on_the_bundled_collection`; the row
   `a_style_resolves_by_the_family_rule` of `family_resolution` (`context.rs`);
   `a_missing_path_is_skipped_and_the_feed_completes` (`context.rs`); in
-  flui-app, `the_runtime_launches_one_host_feed_for_every_realm` (`runtime.rs`).
+  flui-app, `the_runtime_launches_one_host_feed_for_every_ui_runtime` (`runtime.rs`).
 - Registration re-lays out text (§10 step 3b): in flui-runtime's `font_registration_matrix`,
-  `a_face_registered_after_start_re_lays_out_text_in_every_realm_on_the_next_frame`,
-  `a_face_registered_before_the_realm_is_built_measures_on_its_first_frame` and
+  `a_face_registered_after_start_re_lays_out_text_in_every_ui_runtime_on_the_next_frame`,
+  `a_face_registered_before_the_ui_runtime_is_built_measures_on_its_first_frame` and
   `a_font_change_notice_requests_a_redraw_for_every_presentation`; flui-rendering's
   `font_change_contract` (`tests/text_context.rs`); flui-painting's `registration_contract`
-  (`context.rs`); in flui-app's `realm_dispatch_matrix`,
-  `a_registration_notifies_every_realm_window`,
+  (`context.rs`); in flui-app's `owner_dispatch_matrix`,
+  `a_registration_notifies_every_ui_runtime_window`,
   `a_duplicate_registration_is_refused_and_notifies_nothing`,
   `bytes_with_no_face_are_refused_and_notify_nothing` and
-  `a_registration_from_inside_a_realm_task_reaches_that_realm_after_it_returns`.
+  `a_registration_from_inside_a_realm_task_reaches_that_ui_runtime_after_it_returns`.
 - A registry test: a source-cache prune while the registry holds the blob keeps keys equal, and
   an arm without the registry shows the keys change
   (`a_held_blob_keeps_its_keys_across_a_prune`, `crates/flui-painting/src/text_layout/context.rs`).
@@ -960,12 +960,12 @@ The gate 1 prototype exists on `spike/parley_atlas` (not merged). Everything bel
   `host_feed_contract` (`tests/font_registration.rs`) and
   `a_source_that_panics_is_skipped_and_the_collection_stays_usable` (`context.rs`); in
   flui-app, `the_host_feed_runs_off_the_owner_thread_and_wakes_once` (`runtime.rs`) and
-  `a_landed_host_feed_wakes_every_realm_window` (`realm_dispatch_matrix`).
+  `a_landed_host_feed_wakes_every_ui_runtime_window` (`owner_dispatch_matrix`).
 - Parley measures in the default build (§10 step 4a): the rows of `text_context_contract`
   (`crates/flui-painting/tests/main.rs`); in `crates/flui-painting/tests/font_registration.rs`,
   `a_face_registered_on_the_collection_reaches_measurement_paint_and_carets`; in
-  `crates/flui-runtime/src/ui_realm/tests/text_context.rs`,
-  `a_realm_measures_text_with_the_faces_of_its_own_collection`; the default-family, monospace
+  `crates/flui-runtime/src/ui_runtime/tests/text_context.rs`,
+  `a_ui_runtime_measures_text_with_the_faces_of_its_own_collection`; the default-family, monospace
   and bold rows of `parley_metrics_round_to_todays_baseline`, which fail if any of them
   measures in a face other than the bundled Roboto Regular;
   `a_host_copy_of_a_bundled_family_is_not_fed` (`crates/flui-painting/src/text_layout/context.rs`); every row

@@ -541,9 +541,13 @@ impl Matrix4 {
                     return Some((local_x, local_y));
                 }
             }
-            let plane = [self.m[0], self.m[1], self.m[3], self.m[4], self.m[5],
-                self.m[7], self.m[12], self.m[13], self.m[15]];
-            let scale = plane.iter().fold(0.0_f64, |scale, value| scale.max(value.abs()));
+            let plane = [
+                self.m[0], self.m[1], self.m[3], self.m[4], self.m[5], self.m[7], self.m[12],
+                self.m[13], self.m[15],
+            ];
+            let scale = plane
+                .iter()
+                .fold(0.0_f64, |scale, value| scale.max(value.abs()));
             if scale == 0.0 {
                 return None;
             }
@@ -557,7 +561,10 @@ impl Matrix4 {
             let local_y = (yx * sx + yy * sy + ty * sw) / weight;
             return (local_x.is_finite() && local_y.is_finite()).then_some((local_x, local_y));
         }
-        let matrix_scale = self.m.iter().fold(0.0_f64, |scale, value| scale.max(value.abs()));
+        let matrix_scale = self
+            .m
+            .iter()
+            .fold(0.0_f64, |scale, value| scale.max(value.abs()));
         if matrix_scale == 0.0 {
             return None;
         }

@@ -1,4 +1,4 @@
-//! ADR-0074 §8 go/no-go: `setState` (variant **A**) against realm-scoped
+//! ADR-0074 §8 go/no-go: `setState` (variant **A**) against UI runtime-scoped
 //! signals (variant **B**) on the **same widget tree**, in one file.
 //!
 //! For every scenario both variants mount the identical tree shape (a `Column`

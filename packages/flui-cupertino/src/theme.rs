@@ -20,7 +20,7 @@ use flui_sdk::view::prelude::*;
 use flui_sdk::view::{BoxedView, InheritedView, impl_inherited_view};
 use flui_sdk::widgets::{InheritedTheme, MediaQuery};
 
-use crate::colors::{CupertinoColor, CupertinoColors, CupertinoDynamicColor};
+use crate::colors::{ColorResolver, CupertinoColor, CupertinoColors, CupertinoDynamicColor};
 use crate::text_theme::CupertinoTextThemeData;
 
 /// The default bar background — `0xF0F9F9F9` / `0xF01D1D1D` (navigation-bar
@@ -181,18 +181,19 @@ impl CupertinoThemeData {
     /// explicitly set" round-tripping this crate has no consumer for yet.
     #[must_use]
     pub fn resolve_from(&self, ctx: &dyn BuildContext) -> Self {
+        let colors = ColorResolver::new(ctx, self.brightness);
         Self {
             brightness: self.brightness,
-            primary_color: Some(CupertinoColor::Static(self.primary_color().resolve(ctx))),
+            primary_color: Some(CupertinoColor::Static(colors.resolve(self.primary_color()))),
             primary_contrasting_color: Some(CupertinoColor::Static(
-                self.primary_contrasting_color().resolve(ctx),
+                colors.resolve(self.primary_contrasting_color()),
             )),
-            text_theme: Some(self.text_theme().resolve_from(ctx)),
+            text_theme: Some(self.text_theme().resolve_colors(&colors)),
             bar_background_color: Some(CupertinoColor::Static(
-                self.bar_background_color().resolve(ctx),
+                colors.resolve(self.bar_background_color()),
             )),
             scaffold_background_color: Some(CupertinoColor::Static(
-                self.scaffold_background_color().resolve(ctx),
+                colors.resolve(self.scaffold_background_color()),
             )),
         }
     }
@@ -245,7 +246,7 @@ impl CupertinoTheme {
     pub fn maybe_brightness_of(ctx: &dyn BuildContext) -> Option<Brightness> {
         match ctx.depend_on::<Self, _>(|theme| theme.data.brightness) {
             Some(Some(brightness)) => Some(brightness),
-            _ => MediaQuery::maybe_of(ctx).map(|data| data.platform_brightness),
+            _ => MediaQuery::platform_brightness_of(ctx),
         }
     }
 

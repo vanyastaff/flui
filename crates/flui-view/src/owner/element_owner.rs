@@ -158,7 +158,7 @@ pub struct ElementOwner<'a> {
 
     /// Sparse reverse index for inherited dependency ownership.
     pub(crate) inherited_dependencies: &'a mut InheritedDependencies,
-    /// The realm's reactive graph (ADR-0074), for build-time reader
+    /// The UI runtime's reactive graph (ADR-0074), for build-time reader
     /// registration and unmount-time release.
     pub(crate) reactive: &'a crate::reactive::Reactive,
 
@@ -175,7 +175,7 @@ pub struct ElementOwner<'a> {
     /// callback to push onto from outside a frame.
     pub(crate) external_inbox: &'a Arc<ExternalBuildInbox>,
 
-    /// The realm's tree-observer slot (ADR-0040), threaded to the tree
+    /// The UI runtime's tree-observer slot (ADR-0040), threaded to the tree
     /// primitives so mount/move/unmount facts are emitted at their funnels.
     /// `&mut` is load-bearing: the panic-detach policy clears the slot from
     /// inside the emission helper.
@@ -262,7 +262,7 @@ pub struct ElementOwner<'a> {
     /// `BuildCtx` the same way `text_input_handle` is.
     pub(crate) clipboard_handle: &'a Option<flui_interaction::ClipboardHandle>,
 
-    /// The realm's byte storage, threaded into every `BuildCtx` the same way
+    /// The UI runtime's byte storage, threaded into every `BuildCtx` the same way
     /// `clipboard_handle` is.
     pub(crate) storage: &'a Option<std::sync::Arc<dyn flui_platform_api::Storage>>,
 

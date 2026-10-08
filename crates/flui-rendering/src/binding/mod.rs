@@ -69,7 +69,7 @@ use crate::{
 /// gating step 6 on [`send_frames_to_engine`](Self::send_frames_to_engine)
 /// is the implementer's job, not a trait default — see that method's
 /// doc for why. The production incarnation is
-/// `UiRealm::render_frame_entered` (`flui-app`; there is no `AppBinding`
+/// `UiRuntime::render_frame_entered` (`flui-app`; there is no `AppBinding`
 /// any more — that type was retired), which consults
 /// `RenderingBinding::send_frames_to_engine` before presenting.
 pub trait RendererBinding {

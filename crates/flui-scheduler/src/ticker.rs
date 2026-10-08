@@ -393,7 +393,7 @@ pub struct Ticker {
     /// scheduler's OWN transient-callback queue (`schedule_tick_if_active`),
     /// so a strong capture here would form
     /// `UpdateScheduler → queue → closure → UpdateScheduler`, a permanent leak the
-    /// instant a realm could otherwise drop its scheduler. Every
+    /// instant a UI runtime could otherwise drop its scheduler. Every
     /// schedule/cancel site upgrades-or-returns: once the backing scheduler
     /// is gone there is no queue left to register with or cancel from, so a
     /// failed upgrade is silently done, matching [`Self::disposed`]'s own
@@ -1078,7 +1078,7 @@ impl Ticker {
             return;
         }
         // Upgrade to register the next frame's callback. A failed upgrade means the
-        // realm tore down between this tick firing and now; nothing is left
+        // ui_runtime tore down between this tick firing and now; nothing is left
         // to reschedule against.
         let Some(strong) = scheduler.upgrade() else {
             return;

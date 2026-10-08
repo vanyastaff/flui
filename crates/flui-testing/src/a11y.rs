@@ -435,10 +435,10 @@ pub enum InvokeActionError {
 /// adapter would.
 ///
 /// Crate-private: a widget's action handlers are owner-local and run only
-/// inside its realm, so the public entry points are
+/// inside its UI runtime, so the public entry points are
 /// [`LaidOut::invoke_semantics_action`](crate::widgets::LaidOut::invoke_semantics_action)
 /// and [`Harness::invoke_semantics_action`](crate::widgets::harness::Harness::invoke_semantics_action),
-/// which enter the realm around this.
+/// which enter the UI runtime around this.
 ///
 /// The write half of this module: [`A11yTree::nodes`] and
 /// [`A11yNode::supports_action`] say what the tree *advertises*, and this says

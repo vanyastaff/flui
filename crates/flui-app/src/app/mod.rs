@@ -2,7 +2,7 @@
 //!
 //! This module contains the core application infrastructure:
 //! - `AppRuntime` (`runtime.rs`) - the loop-scoped composition root
-//! - `UiRealm` - Owns one owner-affine widget session (build/render/gesture
+//! - `UiRuntime` - Owns one owner-affine widget session (build/render/gesture
 //!   state, the frame pipeline, and the per-presentation semantics/haptics/
 //!   clipboard surfaces retired from the former `AppBinding`)
 //! - `AppConfig` - Application configuration
@@ -23,10 +23,10 @@ pub mod runner;
 pub(crate) mod runtime;
 pub(crate) mod storage_host;
 pub(crate) mod window_registry;
-// The realm core lives in the frame runtime (ADR-0083); these aliases keep
+// The ui_runtime core lives in the frame runtime (ADR-0083); these aliases keep
 // its `crate::app::…` paths for the runners and the dispatch layer that
 // drive it from here.
-pub(crate) use flui_runtime::{lifecycle_state, presentation, ui_realm};
+pub(crate) use flui_runtime::{lifecycle_state, presentation, ui_runtime};
 #[cfg(test)]
 pub(crate) mod window_test_support;
 

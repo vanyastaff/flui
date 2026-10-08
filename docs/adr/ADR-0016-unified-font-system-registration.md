@@ -1,7 +1,7 @@
 # ADR-0016: One shared `FontSystem` for layout and render
 
 - **Status:** Superseded by ADR-0092 (2026-09-30), which absorbs ADR-0077: one font
-  collection shared by per-realm contexts replaced the shared `FontSystem`, and the
+  collection shared by per-UI runtime contexts replaced the shared `FontSystem`, and the
   process-wide font system is gone
 - **Date:** 2026-07-02
 - **Superseded by:** [ADR-0092](ADR-0092-per-realm-text-over-parley.md), which absorbs ADR-0077
@@ -44,7 +44,7 @@ order — the measure/paint mismatch is excluded by construction rather than by
 keeping two databases in sync.
 
 **No longer holds for measurement or paint (ADR-0092 §10 step 4).** Layout
-measures on Parley over the realm's `FontCollection` and paint draws the runs of
+measures on Parley over the UI runtime's `FontCollection` and paint draws the runs of
 that layout, rasterized by the engine's `SwashRasterizer` from the faces the
 runs carry, and since step 5 carets and selection read that same layout: this
 font system shapes nothing and the engine reads no glyphs through it. It is
@@ -57,12 +57,12 @@ this record stands until ADR-0092 supersedes it.
 
 Today the font system is a process-wide static (`FONT_SYSTEM` in
 `flui-painting`'s `text_layout`), eagerly constructed by
-`SharedEngineServices::resolve()` at realm install and read ambiently on layout
+`SharedEngineServices::resolve()` at UI runtime install and read ambiently on layout
 paths. Apps register through the app's `FontCollection` (`flui::register_font`),
-which measures, paints and places carets with the face; every realm lays out
+which measures, paints and places carets with the face; every UI runtime lays out
 again, on its next frame, the text it measured before the face existed
 (ADR-0092 §2). Nothing adds a face to this font system after it is built.
-The target is a font system per realm rather than a
+The target is a font system per UI runtime rather than a
 process global; ADR-0077 records that together with the move to parley, and
 supersedes this record when accepted. The part that carries over unchanged is
 the decision above: one font source for measuring and painting.

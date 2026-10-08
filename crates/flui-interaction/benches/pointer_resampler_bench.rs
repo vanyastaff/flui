@@ -85,9 +85,7 @@ fn terminal(kind: Terminal, nanos: u64, x: f64) -> PointerEvent {
 }
 
 fn event_nanos(event: &PointerEvent) -> u64 {
-    event.time()
-        .expect("fixture event time")
-        .as_nanos()
+    event.time().expect("fixture event time").as_nanos()
 }
 
 /// Consume both the source clock and the delivered value, not merely callback count.
@@ -295,7 +293,7 @@ fn sample_fixture(kind: Terminal) -> Fixture {
 
 fn sample_frame(fixture: &Fixture, emit: impl FnMut(PointerEvent)) {
     fixture.resampler.sample(
-        fixture.base + Duration::from_nanos(15_500_000),
+        fixture.base + Duration::from_micros(15_500),
         fixture.base + Duration::from_nanos(32_166_667),
         emit,
     );

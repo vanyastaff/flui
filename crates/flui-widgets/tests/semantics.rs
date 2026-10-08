@@ -485,11 +485,11 @@ pub(crate) fn a_refused_write_in_an_action_handler_is_reported_not_panicked() {
     assert_eq!(probe.value(), Ok(1), "the next action still wrote");
 }
 
-/// A handler is owner-local, so an action invoked with no realm entered — a
+/// A handler is owner-local, so an action invoked with no UI runtime entered — a
 /// caller holding a `SemanticsActionInvocation` outside the owner's
 /// dispatch — has nowhere to run it: the action is dropped with a warning,
 /// and nothing panics.
-pub(crate) fn an_action_invoked_outside_its_realm_is_dropped_with_a_warning() {
+pub(crate) fn an_action_invoked_outside_its_ui_runtime_is_dropped_with_a_warning() {
     let activations = Rc::new(Cell::new(0_u32));
     let counted = Rc::clone(&activations);
     let (laid, _tree, node_id) = pump_labelled(
@@ -518,8 +518,12 @@ pub(crate) fn an_action_invoked_outside_its_realm_is_dropped_with_a_warning() {
     );
 
     laid.invoke_semantics_action(request(Action::Click, node_id, None))
-        .expect("the same node resolves inside its realm");
-    assert_eq!(activations.get(), 1, "inside the realm the handler runs");
+        .expect("the same node resolves inside its ui_runtime");
+    assert_eq!(
+        activations.get(),
+        1,
+        "inside the ui_runtime the handler runs"
+    );
 }
 
 /// A rebuild that hands the node a fresh closure — the ordinary case, a
@@ -552,7 +556,7 @@ pub(crate) fn rebuilding_with_fresh_handlers_keeps_the_configuration_and_runs_th
 
 /// Unmounting a node releases its action table from the owner lane, so the
 /// state a handler captures is dropped with the node rather than kept until
-/// the realm closes. The action is delivered through `Harness`, whose realm
+/// the UI runtime closes. The action is delivered through `Harness`, whose UI runtime
 /// entry is what lets the handler run at all.
 pub(crate) fn unmounting_a_node_releases_its_action_table() {
     let captured = Rc::new(());
@@ -575,7 +579,11 @@ pub(crate) fn unmounting_a_node_releases_its_action_table() {
     harness
         .invoke_semantics_action(request(Action::Click, labelled_node(&tree), None))
         .expect("a click on a node advertising one must resolve");
-    assert_eq!(activations.get(), 1, "the handler ran inside the realm");
+    assert_eq!(
+        activations.get(),
+        1,
+        "the handler ran inside the ui_runtime"
+    );
 
     harness.swap_root(SizedBox::shrink());
     assert!(

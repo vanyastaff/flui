@@ -469,21 +469,21 @@ is a sanctioned divergence point): the pipeline carrier no longer bypasses
 (`flui-rendering/src/pipeline/notifier.rs`), which still invokes the
 closure a presentation registers via `owner.set_on_need_visual_update`
 (`flui-runtime/src/presentation.rs`) — but that closure no longer calls
-the realm's shared `visual_wake()` and no longer pokes
+the UI runtime's shared `visual_wake()` and no longer pokes
 `window.request_redraw()` unconditionally. It now captures a
 `WeakUpdateScheduler` (as `RenderingBinding` holds its scheduler)
 and calls `scheduler.ensure_visual_update()`; only when that
 returns `true` (phase gate passed AND frames enabled) does it poke
 `window.request_redraw()`.
 
-The realm's `wake` was already registered as the scheduler's
-`on_frame_scheduled` hook (`ui_realm/`), so the `frame_scheduled`
+The UI runtime's `wake` was already registered as the scheduler's
+`on_frame_scheduled` hook (`ui_runtime/`), so the `frame_scheduled`
 false→true edge fires the platform wake exactly as before — routing the
 pipeline carrier through `ensure_visual_update` makes the scheduler's
 `frame_scheduled` flag the single carrier, and the presentation closure
 keeps only the per-window `request_redraw()` poke. The runner's
 `wake_action` (`flui-app/src/app/runner/frame_pacing.rs`) still ORs its
-two parameters, but `realm.needs_redraw()` (the old pipeline carrier) is
+two parameters, but `UI runtime.needs_redraw()` (the old pipeline carrier) is
 no longer set by this closure; the scheduler's `frame_scheduled` flag is
 now the one latch both a pipeline mark and every other demand source flip.
 
@@ -491,7 +491,7 @@ now the one latch both a pipeline mark and every other demand source flip.
 `ensure_visual_update` returns `true` iff the phase gate passed AND frames
 are enabled, not iff the demand flipped `frame_scheduled`. The per-window
 poke must fire even when a frame is already scheduled — a multi-window
-realm that dirties window B after window A, both from Idle, still expects
+UI runtime that dirties window B after window A, both from Idle, still expects
 B's window poked, so the closure must not gate the poke on the coalescing
 edge.
 
@@ -732,8 +732,8 @@ auto-tick registrations).
 **Consequence:** anchoring on the first frame's timestamp would give every
 ticker in a frame the same instant and let a test's fake clock drive them.
 Here a host that
-drives frames on a virtual clock (`flui-runtime`'s `UiRealm::pump` with a
-`ManualClock`) moves the frame timestamp, the realm's `Vsync` controllers and
+drives frames on a virtual clock (`flui-runtime`'s `UiRuntime::pump` with a
+`ManualClock`) moves the frame timestamp, the UI runtime's `Vsync` controllers and
 the scheduler's frame timing, but not an `AnimationController` built on the
 scheduler: that one advances only as real time passes.
 
@@ -1007,8 +1007,8 @@ and a next independent frame through the consumer API.
 strong `UpdateScheduler` handle defers `Drop for SchedulerInner`, the same as
 any other `Arc`. A task on an external executor that owns a clone does not
 hang — dropping the executor drops the task, the clone, then the scheduler.
-A task on the realm's own `OwnerFrame` that captured a clone holds the
-scheduler until the realm retires the owner frame at teardown; the owner
+A task on the UI runtime's own `OwnerFrame` that captured a clone holds the
+scheduler until the UI runtime retires the owner frame at teardown; the owner
 frame is not part of the scheduler, so that is no longer a self-cycle.
 
 **Ordering: the same issue also closed a `finish_async_pump` wake-loss hazard,
@@ -1044,7 +1044,7 @@ race instance. No single-threaded test can redden a regression from
 it, and none exists in this crate yet.
 
 **Outcome and teardown:** a bare completion signal would carry no outcome,
-successful or otherwise, and no teardown sentinel. FLUI's per-realm
+successful or otherwise, and no teardown sentinel. FLUI's per-UI runtime
 `UpdateScheduler` can be dropped mid-flight, so `end_of_frame` needs an
 answer for that case.
 
@@ -1224,10 +1224,10 @@ different registrants racing a resolution is not a contract. This removes the
 wasm special case entirely — there is no blocking path left to fail on a
 target with no thread to park.
 
-### The realm owns its async tasks: `OwnerFrame` holds them, `AsyncDriver` is `Weak`
+### The UI runtime owns its async tasks: `OwnerFrame` holds them, `AsyncDriver` is `Weak`
 
-**Rule:** a realm's async tasks and owner-local post-frame callbacks live in
-its `OwnerFrame` (ADR-0136 §2), of which the realm (`UiRealm`) and the
+**Rule:** a UI runtime's async tasks and owner-local post-frame callbacks live in
+its `OwnerFrame` (ADR-0136 §2), of which the UI runtime (`UiRuntime`) and the
 headless binding are the only strong owners. Futures are not `Send`: they
 are created, polled and dropped on the owner thread. Widgets reach the tasks
 through `AsyncDriver`, a `Weak` handle, so a leaked handle keeps nothing alive
@@ -1240,20 +1240,20 @@ is neither polled nor drained.
 **Teardown order:** `OwnerFrame::retire` closes both admission lanes, detaches their
 ownership and disables every task waker and the frame hook before user destruction.
 It drops the post-frame queue, then the
-tasks, each under its own catch, keeping the first panic; the realm calls it
+tasks, each under its own catch, keeping the first panic; the UI runtime calls it
 after closing its presentations and before resuming any earlier failure.
 During an existing unwind the values are retained instead, the same limit
 `TaskToken`'s `Drop` states.
 
 **Tests:** `owner_local_task_matrix` in
 `crates/flui-testing/tests/async_driver.rs` (`owner_local_future_completes_after_a_worker_wake`,
-`late_completion_after_realm_drop_drops_captures_on_the_owner`,
-`a_leaked_async_driver_holds_no_task_after_the_realm`);
+`late_completion_after_ui_runtime_drop_drops_captures_on_the_owner`,
+`a_leaked_async_driver_holds_no_task_after_the_ui_runtime`);
 `retirement_drops_every_task_and_keeps_the_first_panic` and
 `retirement_drops_queued_callbacks_and_closes_the_queue` here;
 `async_driver_unwind_matrix` covers reentrant callback destruction, sibling wakes,
 eager-poll retirement and foreign-owner rejection without consuming frame demand;
-`frame_waker_wakes_the_realm_from_a_worker` in `flui-runtime`.
+`frame_waker_wakes_the_ui_runtime_from_a_worker` in `flui-runtime`.
 
 ### `AsyncDriver` indexes ready tasks instead of scanning every resident one
 

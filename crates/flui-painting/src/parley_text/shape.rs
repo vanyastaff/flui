@@ -1,4 +1,4 @@
-//! Shaping a paragraph on a realm's [`TextContext`] (ADR-0092 §1).
+//! Shaping a paragraph on a UI runtime's [`TextContext`] (ADR-0092 §1).
 //!
 //! One ranged builder per paragraph: the defaults first, then each span's
 //! style over its byte range. The result answers the paragraph's metrics,

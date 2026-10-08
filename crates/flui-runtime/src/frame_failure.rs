@@ -92,7 +92,7 @@ impl Default for FrameFailureDetail {
 }
 
 /// The text a caught panic `payload` reports as under `detail`: for a host
-/// that contains a panic outside the realm's frame (a window installer, say)
+/// that contains a panic outside the UI runtime's frame (a window installer, say)
 /// and must apply the same retention policy.
 ///
 /// A free function rather than a method so it stays off the surface of
@@ -238,7 +238,7 @@ pub enum SegmentPhase {
 pub enum FrameFailureKind {
     /// A panic escaped the presentation's complete
     /// Build/Finalize/Pipeline/Tail/Scene segment and was caught at the
-    /// realm's frame-transaction boundary — the last-resort seam, reached
+    /// UI runtime's frame-transaction boundary — the last-resort seam, reached
     /// only when every narrower containment layer (build-phase `ErrorView`
     /// substitution, the pipeline's `RenderError::Poisoned` wrapper) did not
     /// apply, such as framework bookkeeping outside bounded child windows or
@@ -268,7 +268,7 @@ pub enum FrameFailureKind {
     /// failed node's dirty state is retained by the pipeline for the
     /// armed retry.
     Pipeline {
-        /// The pipeline's own typed error. The realm applies
+        /// The pipeline's own typed error. The UI runtime applies
         /// [`FrameFailureDetail`] only when formatting this error for
         /// `tracing`; a registered handler retains the typed value. Its
         /// fields and `Debug` output may contain sensitive text, so handler
@@ -287,17 +287,17 @@ pub enum FrameFailureKind {
         view_type_id: TypeId,
         /// The lifecycle hook that panicked.
         hook: LifecycleHook,
-        /// The recovered string payload after applying the realm policy.
+        /// The recovered string payload after applying the UI runtime policy.
         /// A non-string payload is [`PanicText::Redacted`] under every policy;
         /// the lower-level synthesized diagnostic fallback is not forwarded.
         message: PanicText,
         /// Classification computed from the raw payload at the recovery seam.
         internal_invariant: bool,
     },
-    /// An application callback run on the realm's owner turn panicked
+    /// An application callback run on the UI runtime's owner turn panicked
     /// outside any frame: an input or gesture handler, a post-frame
     /// callback, a lifecycle observer, a command. The panic was contained at
-    /// that callback's own boundary; the realm keeps running and its next
+    /// that callback's own boundary; the UI runtime keeps running and its next
     /// frame builds.
     #[non_exhaustive]
     CallbackPanic {
@@ -332,7 +332,7 @@ impl FrameFailureKind {
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct FrameFailureReport {
-    /// Ownership identity: which realm incarnation and which presentation
+    /// Ownership identity: which UI runtime incarnation and which presentation
     /// within it produced this frame-attempt report.
     pub address: PresentationAddress,
     /// The terminal failure or contained recovery that produced this report.
@@ -356,7 +356,7 @@ pub struct FrameFailureReport {
 /// one contained report for each, in recovery order. Keep it lightweight and
 /// re-entrancy-free: record/forward the report and return — do not call
 /// back into FLUI APIs (opening windows, attaching widgets) from inside
-/// the handler; the realm that produced the report is mid-frame.
+/// the handler; the UI runtime that produced the report is mid-frame.
 /// Embedders that forward repeated deterministic recoveries own any desired
 /// deduplication or throttling.
 ///

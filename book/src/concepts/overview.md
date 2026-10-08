@@ -31,7 +31,7 @@ needs without recreating the entire pipeline.
 - [Lifecycle](lifecycle.md) — the states an `Element` moves through.
 - [Layout: constraints down, sizes up](layout.md) — the layout protocol.
 - [State: signals, local state, and shared data](state.md) — state handles, inherited data,
-  notifiers and realm-scoped signals.
+  notifiers and presentation-scoped signals.
 
 ## From an interaction to a frame
 

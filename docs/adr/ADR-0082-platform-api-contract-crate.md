@@ -11,7 +11,7 @@
   precondition for step two, and the order of the headless and Win32 backends. Win32 has
   completed step one. §2 was amended on 2026-09-26: `PlatformAccessibility` moves to
   `flui-semantics` and `flui-platform` moves from layer 2 to layer 3; that placement is accepted
-  on merge of the realm-core move (ADR-0083 move 4), which ships it.
+  on merge of the UI runtime-core move (ADR-0083 move 4), which ships it.
 - **Date:** 2026-09-25
 - **Amends (on acceptance):** [ADR-0030](ADR-0030-platform-text-input-ime-capability.md) §2,
   [ADR-0031](ADR-0031-platform-haptics-capability-and-system-chrome-deferral.md) §1–§3,
@@ -69,7 +69,7 @@ keep:
   forwarding registrations (`traits/owner.rs:95,258-307`) carry the same bound. Delivery is on
   the owner thread by construction (ADR-0039 §2), so the bound only forces callers to be `Send`.
   The runner's own comment names the consequence: "the platform callback surface still requires
-  `Send`, so the `!Send` realm this holds remains in owner TLS"
+  `Send`, so the `!Send` UI runtime this holds remains in owner TLS"
   (`crates/flui-app/src/app/runner/host.rs:32-34`).
 - `PlatformWindow` names winit under a feature (`fn as_winit(&self) -> Option<&Arc<Window>>`,
   `window.rs:679-683`) and returns `PlatformAccessibility`, which speaks AccessKit
@@ -121,9 +121,9 @@ AccessKit's). Only composition
 roots depend on it: `flui-app`, and tests that drive a backend.
 
 `PlatformAccessibility` has two consumers in `flui-app`, not one: the runner reads the bridge from
-`HostWindow::accessibility` when a window opens, and the realm core (`PresentationWindow`, and
+`HostWindow::accessibility` when a window opens, and the UI runtime core (`PresentationWindow`, and
 `PresentationState`, which wires and withdraws the bridge) holds it. It is the one
-`flui_platform` name the realm core's production code still uses, so moving the realm core into
+`flui_platform` name the UI runtime core's production code still uses, so moving the UI runtime core into
 `flui-runtime` (ADR-0083) has to amend this section first: either a runtime-owned accessibility
 port, typed through `flui_semantics`, that a host adapter implements over
 `Arc<dyn PlatformAccessibility>`, or `PlatformAccessibility` itself moved to a crate at tier S
@@ -176,7 +176,7 @@ without `accessibility()`, which becomes a method of a backend-side extension tr
 `WindowOpen::Ready`/`try_ready` and `PendingWindow` return `Arc<dyn HostWindow>`, which upcasts
 to `Arc<dyn PlatformWindow>`, and `dyn HostWindow` repeats the raw-handle impls so an
 `open_window` result stays a renderer target. The runner reads the bridge once, when it turns an
-open result into a realm, and hands the realm the window with its bridge beside it; production
+open result into a UI runtime, and hands the UI runtime the window with its bridge beside it; production
 code has no implicit conversion from a bare window, so dropping the bridge takes an explicit
 `None` rather than a `.into()`. The
 contract crate gains `cursor-icon` (re-exported as `CursorIcon`) and `raw-window-handle`, both
@@ -234,7 +234,7 @@ pattern) cannot express "`!Send` on Windows" while headless still stores `Send` 
 
 A backend whose storage cannot be made owner-local keeps a `Send` adapter and blocks step 2; that
 is the rollback, per backend. When step 2 lands, the runtime's owner host can hold the `!Send`
-realm without reaching it from a `Send` closure, and the thread-local cell narrows to the single
+UI runtime without reaching it from a `Send` closure, and the thread-local cell narrows to the single
 trampoline cell of ADR-0083 and ADR-0097.
 
 **Win32, step 1.** Window callbacks live by value in the window's `WindowContext`, and the

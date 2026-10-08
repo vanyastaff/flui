@@ -4,7 +4,7 @@
 //! the way [`RenderImage`](crate::RenderImage) wraps a leaf: the render
 //! object owns a painter, drives its layout from box constraints, and
 //! forwards intrinsics / baseline / paint to it. Every measurement goes
-//! through the realm's text context, lent by the layout, intrinsics and dry
+//! through the UI runtime's text context, lent by the layout, intrinsics and dry
 //! contexts as `ctx.text()` (ADR-0092 §10 step 3). It covers
 //! the renderable core of a paragraph: layout, dry layout, the four
 //! intrinsics, baseline, and paint — with soft wrap, `max_lines`, and
@@ -76,6 +76,18 @@ impl RenderParagraph {
     pub fn with_text_scale_factor(mut self, factor: f64) -> Self {
         self.painter.set_text_scale_factor(factor);
         self
+    }
+
+    /// Updates accessibility sizing and invalidates paragraph geometry.
+    pub fn set_text_scale_factor(&mut self, factor: f64) -> flui_rendering::RenderUpdateImpact {
+        let previous = self.painter.text_scale_factor();
+        self.painter.set_text_scale_factor(factor);
+        if self.painter.text_scale_factor() == previous {
+            flui_rendering::RenderUpdateImpact::NONE
+        } else {
+            flui_rendering::RenderUpdateImpact::LAYOUT
+                | flui_rendering::RenderUpdateImpact::SEMANTICS
+        }
     }
 
     /// Disables line wrapping (builder form) — the text lays out at unbounded

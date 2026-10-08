@@ -338,7 +338,7 @@ fn refresh_hit_test_failure_precedes_a_competing_callback_failure() {
                 assert!(position != pen_at, "probe failure first");
                 HitTestResult::new()
             });
-        })
+        });
     }))
     .expect_err("the probe failure resumes after delivering the committed exit");
     assert_eq!(payload.downcast_ref::<&str>(), Some(&"probe failure first"));
@@ -351,7 +351,7 @@ fn refresh_hit_test_failure_precedes_a_competing_callback_failure() {
             } else {
                 HitTestResult::new()
             }
-        })
+        });
     });
     assert_eq!(
         enters.get(),
@@ -518,7 +518,7 @@ fn assert_region_retirement_recovery(competing: bool) {
                 PointerMotionKind::Hover,
                 &HitTestResult::new(),
             );
-        })
+        });
     }))
     .expect_err("first capture failure resumes");
     assert_eq!(
@@ -746,11 +746,7 @@ fn scroll_delta_is_localized_as_a_vector() {
         ScrollUnit::Lines,
         "line delta stays lines"
     );
-    assert_close(
-        (lines.delta.x(), lines.delta.y()),
-        (4.0, 0.0),
-        "line delta",
-    );
+    assert_close((lines.delta.x(), lines.delta.y()), (4.0, 0.0), "line delta");
 }
 
 fn scroll_target_delta_is_localized_as_a_vector() {
@@ -801,33 +797,54 @@ fn scroll_target_delta_is_localized_as_a_vector() {
 
 fn perspective_vectors_follow_the_current_focal_and_preserve_counts() {
     use flui_foundation::geometry::Point;
-    use flui_platform_api::{EventTime, pointer::{ScrollPhase, ScrollPrecision}};
+    use flui_platform_api::{
+        EventTime,
+        pointer::{ScrollPhase, ScrollPrecision},
+    };
 
     // Forward projection is (x, y) / (1 - x/2). Thus screen (0,2)
     // is local (0,2), and screen (1,2) is local (2/3,4/3).
     let forward = Matrix4::from([
-        1.0, 0.0, 0.0, -0.5, 0.0, 1.0, 0.0, 0.0,
-        0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+        1.0, 0.0, 0.0, -0.5, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
     ]);
-    let pointer = PointerInfo::new(PointerId::new(std::num::NonZeroU64::MIN), PointerKind::Mouse);
+    let pointer = PointerInfo::new(
+        PointerId::new(std::num::NonZeroU64::MIN),
+        PointerKind::Mouse,
+    );
     let position = |x, y| PointerPosition::try_new(Point::new(x, y)).expect("finite focal");
-    let scroll = |unit, x, dx| PointerEvent::Scroll(
-        ScrollEvent::new(pointer, EventTime::from_nanos(77), position(x, 2.0),
-            ScrollDelta::try_new(unit, dx, 0.0).expect("finite delta"))
+    let scroll = |unit, x, dx| {
+        PointerEvent::Scroll(
+            ScrollEvent::new(
+                pointer,
+                EventTime::from_nanos(77),
+                position(x, 2.0),
+                ScrollDelta::try_new(unit, dx, 0.0).expect("finite delta"),
+            )
             .with_precision(ScrollPrecision::Precise)
             .with_phase(ScrollPhase::MomentumChanged)
             .with_modifiers(Modifiers::SHIFT),
-    );
-    let pan = |x, dx| PointerEvent::PanZoom(PanZoomEvent::new(
-        pointer, EventTime::from_nanos(78), position(x, 2.0),
-        PanZoomPhase::Update(PanZoomTransform::try_new(Offset::new(dx, 0.0), 1.25, 0.3)
-            .expect("finite cumulative transform")),
-    ).with_modifiers(Modifiers::CONTROL));
+        )
+    };
+    let pan = |x, dx| {
+        PointerEvent::PanZoom(
+            PanZoomEvent::new(
+                pointer,
+                EventTime::from_nanos(78),
+                position(x, 2.0),
+                PanZoomPhase::Update(
+                    PanZoomTransform::try_new(Offset::new(dx, 0.0), 1.25, 0.3)
+                        .expect("finite cumulative transform"),
+                ),
+            )
+            .with_modifiers(Modifiers::CONTROL),
+        )
+    };
     let events = [
         scroll(ScrollUnit::Pixels, 0.0, 1.0),
         scroll(ScrollUnit::Lines, 0.0, -2.0),
         scroll(ScrollUnit::Pages, 0.0, -3.0),
-        pan(0.0, 1.0), pan(2.0, 1.0),
+        pan(0.0, 1.0),
+        pan(2.0, 1.0),
     ];
     let lane = InteractionLane::try_new().expect("lane");
     let handle = lane.dispatch_handle();
@@ -835,50 +852,100 @@ fn perspective_vectors_follow_the_current_focal_and_preserve_counts() {
     let claimed = Rc::new(RefCell::new(Vec::new()));
     lane.enter(|| {
         let sink = seen.clone();
-        let target = handle.register_pointer(move |dispatch| {
-            sink.borrow_mut().push((dispatch.local.clone(), dispatch.global.clone()));
-        }).expect("pointer target");
+        let target = handle
+            .register_pointer(move |dispatch| {
+                sink.borrow_mut()
+                    .push((dispatch.local.clone(), dispatch.global.clone()));
+            })
+            .expect("pointer target");
         let sink = claimed.clone();
-        let claim = handle.register_scroll(move |event| {
-            sink.borrow_mut().push(*event);
-            EventPropagation::Continue
-        }).expect("scroll claim");
+        let claim = handle
+            .register_scroll(move |event| {
+                sink.borrow_mut().push(*event);
+                EventPropagation::Continue
+            })
+            .expect("scroll claim");
         let mut result = HitTestResult::new();
-        result.with_paint_transform(forward, |result| {
-            result.add(HitTestEntry::new(RenderId::new(1)).pointer_target(target).scroll_target(claim));
-        }).expect("invertible projective plane");
+        result
+            .with_paint_transform(forward, |result| {
+                result.add(
+                    HitTestEntry::new(RenderId::new(1))
+                        .pointer_target(target)
+                        .scroll_target(claim),
+                );
+            })
+            .expect("invertible projective plane");
         for event in &events {
             result.dispatch(event);
-            if let PointerEvent::Scroll(scroll) = event { result.dispatch_scroll(scroll); }
+            if let PointerEvent::Scroll(scroll) = event {
+                result.dispatch_scroll(scroll);
+            }
         }
         // The focal is admitted; only the metric endpoint is on/beyond the
         // horizon, or overflows during finite-input endpoint addition.
-        for (x, dx) in [(0.0, -2.0), (0.0, -3.0), (0.0, -2.0 + f64::EPSILON), (f64::MAX, f64::MAX)] {
+        for (x, dx) in [
+            (0.0, -2.0),
+            (0.0, -3.0),
+            (0.0, -2.0 + f64::EPSILON),
+            (f64::MAX, f64::MAX),
+        ] {
             for event in [scroll(ScrollUnit::Pixels, x, dx), pan(x, dx)] {
                 result.dispatch(&event);
-                if let PointerEvent::Scroll(scroll) = event { result.dispatch_scroll(&scroll); }
+                if let PointerEvent::Scroll(scroll) = event {
+                    result.dispatch_scroll(&scroll);
+                }
             }
         }
     });
     let seen = seen.borrow();
-    assert_eq!(seen.len(), events.len(), "invalid metric endpoints are refused");
-    assert_eq!(claimed.borrow().len(), 3, "claims share checked localization");
+    assert_eq!(
+        seen.len(),
+        events.len(),
+        "invalid metric endpoints are refused"
+    );
+    assert_eq!(
+        claimed.borrow().len(),
+        3,
+        "claims share checked localization"
+    );
     for (index, (local, global)) in seen.iter().enumerate() {
         assert_eq!(global, &events[index], "source provenance");
         match (local, global) {
             (PointerEvent::Scroll(local), PointerEvent::Scroll(global)) => {
-                let expected = if index == 0 { (2.0/3.0, -2.0/3.0) } else { (global.delta.x(), global.delta.y()) };
-                assert_close((local.delta.x(), local.delta.y()), expected, "anchored pixels or source counts");
+                let expected = if index == 0 {
+                    (2.0 / 3.0, -2.0 / 3.0)
+                } else {
+                    (global.delta.x(), global.delta.y())
+                };
+                assert_close(
+                    (local.delta.x(), local.delta.y()),
+                    expected,
+                    "anchored pixels or source counts",
+                );
                 let mut metadata = *local;
                 metadata.position = global.position;
                 metadata.delta = global.delta;
                 assert_eq!(&metadata, global, "scroll metadata");
-                assert_eq!(claimed.borrow()[index], *local, "claim and pointer localization agree");
+                assert_eq!(
+                    claimed.borrow()[index],
+                    *local,
+                    "claim and pointer localization agree"
+                );
             }
             (PointerEvent::PanZoom(local), PointerEvent::PanZoom(global)) => {
-                let PanZoomPhase::Update(value) = local.phase else { panic!("update"); };
-                let expected = if index == 3 { (2.0/3.0, -2.0/3.0) } else { (1.0/5.0, -1.0/5.0) };
-                assert_close((value.pan().dx, value.pan().dy), expected, "current-focal cumulative pan");
+                let PanZoomPhase::Update(value) = local.phase else {
+                    panic!("update");
+                };
+                let expected = if index == 3 {
+                    (2.0 / 3.0, -2.0 / 3.0)
+                } else {
+                    (1.0 / 5.0, -1.0 / 5.0)
+                };
+                assert_close(
+                    (value.pan().dx, value.pan().dy),
+                    expected,
+                    "current-focal cumulative pan",
+                );
                 let mut metadata = *local;
                 metadata.position = global.position;
                 metadata.phase = global.phase;
@@ -988,7 +1055,10 @@ fn transformed_entry_receives_local_samples_and_deltas() {
         "localization",
         &[
             ("move samples localized", move_samples_are_localized),
-            ("perspective vectors and symbolic counts", perspective_vectors_follow_the_current_focal_and_preserve_counts),
+            (
+                "perspective vectors and symbolic counts",
+                perspective_vectors_follow_the_current_focal_and_preserve_counts,
+            ),
             (
                 "scroll delta localized",
                 scroll_delta_is_localized_as_a_vector,

@@ -3,7 +3,10 @@
 use flui_objects::RenderParagraph;
 use flui_painting::typography::{InlineSpan, TextAlign, TextDirection};
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{RenderView, impl_render_view};
+use flui_view::element::ElementKind;
+use flui_view::{BuildContext, IntoView, RenderView, StatelessView, View, impl_render_view};
+
+use crate::MediaQuery;
 
 /// Displays a tree of styled [`InlineSpan`]s (most commonly a
 /// [`TextSpan`](flui_painting::typography::TextSpan)) in a single paragraph.
@@ -13,6 +16,8 @@ use flui_view::{RenderView, impl_render_view};
 /// applies one style to a flat string, `RichText` accepts a span tree where
 /// each node carries its own style, letting a sentence mix e.g. bold and
 /// colored words without splitting it across multiple widgets.
+/// Text sizing follows the nearest [`MediaQuery`]; changes invalidate paragraph
+/// layout without modifying the authored span styles.
 ///
 /// # Examples
 ///
@@ -67,15 +72,32 @@ impl RichText {
         self.max_lines = Some(max_lines);
         self
     }
+}
 
-    fn build_render_object(&self) -> RenderParagraph {
-        RenderParagraph::new(self.text.clone(), self.direction)
-            .with_text_align(self.align)
-            .with_max_lines(self.max_lines)
+impl View for RichText {
+    fn create_element(&self) -> ElementKind {
+        ElementKind::stateless(self)
     }
 }
 
-impl RenderView for RichText {
+impl StatelessView for RichText {
+    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+        ResolvedParagraph {
+            authored: self.clone(),
+            text_scale_factor: MediaQuery::text_scale_factor_of(ctx).unwrap_or(1.0),
+        }
+    }
+}
+
+/// The inherited dependency belongs to the widget build; the render object
+/// receives values and keeps the authored span tree unchanged.
+#[derive(Clone, Debug)]
+struct ResolvedParagraph {
+    authored: RichText,
+    text_scale_factor: f64,
+}
+
+impl RenderView for ResolvedParagraph {
     type Protocol = BoxProtocol;
     type RenderObject = RenderParagraph;
 
@@ -83,7 +105,10 @@ impl RenderView for RichText {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
     ) -> Self::RenderObject {
-        self.build_render_object()
+        RenderParagraph::new(self.authored.text.clone(), self.authored.direction)
+            .with_text_align(self.authored.align)
+            .with_max_lines(self.authored.max_lines)
+            .with_text_scale_factor(self.text_scale_factor)
     }
 
     fn update_render_object(
@@ -91,11 +116,12 @@ impl RenderView for RichText {
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
     ) -> flui_rendering::RenderUpdateImpact {
-        render_object.set_text(self.text.clone())
-            | render_object.set_text_align(self.align)
-            | render_object.set_text_direction(self.direction)
-            | render_object.set_max_lines(self.max_lines)
+        render_object.set_text(self.authored.text.clone())
+            | render_object.set_text_align(self.authored.align)
+            | render_object.set_text_direction(self.authored.direction)
+            | render_object.set_max_lines(self.authored.max_lines)
+            | render_object.set_text_scale_factor(self.text_scale_factor)
     }
 }
 
-impl_render_view!(RichText);
+impl_render_view!(ResolvedParagraph);

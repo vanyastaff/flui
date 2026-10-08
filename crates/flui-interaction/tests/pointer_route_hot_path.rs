@@ -8,10 +8,12 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_foundation::geometry::Point;
-use flui_interaction::events::{PointerKind, make_move_event};
+use flui_interaction::events::{PointerEventExt, PointerKind, make_move_event};
 use flui_interaction::{HitTestEntry, InteractionLane, Offset, PointerTarget, RenderId};
-use flui_platform_api::EventTime;
-use flui_platform_api::pointer::{PointerEvent, PointerMove, PointerPosition, PointerSample, Pressure};
+use flui_platform_api::pointer::{
+    DeviceId, PointerEvent, PointerMove, PointerPosition, PointerRole, PointerSample, Pressure,
+};
+use flui_platform_api::{EventTime, Modifiers};
 
 static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
 
@@ -112,12 +114,226 @@ fn resolved_route_move_invocation_allocates_no_heap_after_setup() {
     // Keep every counting case in this one test: a global allocator counter
     // must not race a sibling test in the same Rust test process.
     for target_count in [1_usize, 4, 16] {
-        for translated in [false, true] {
+        for shape in [
+            RouteShape::Global,
+            RouteShape::Identity,
+            RouteShape::Translated,
+            RouteShape::NearIdentity,
+        ] {
             for history in [false, true] {
-                measure_route_shape(target_count, translated, history);
+                measure_route_shape(target_count, shape, history);
             }
         }
     }
+    for stop in [false, true] {
+        measure_resampler_delivery(stop);
+    }
+    resampler_raised_timestamp_keeps_checked_history_policy();
+    saturated_resampler_admission_reuses_bounded_history_storage();
+}
+
+fn resampler_packets(down_time: u64) -> [PointerEvent; 3] {
+    use flui_platform_api::pointer::{
+        PointerButton, PointerButtons, PointerInfo, PointerPress, PointerRelease,
+    };
+    let pointer = PointerInfo::new(
+        flui_platform_api::pointer::PointerId::new(core::num::NonZeroU64::MIN),
+        PointerKind::Mouse,
+    )
+    .with_device(DeviceId::try_from(7_u64).expect("source device"))
+    .with_role(PointerRole::Additional);
+    let buttons = PointerButtons::only(PointerButton::PRIMARY);
+    [
+        PointerEvent::Down(PointerPress::new(
+            pointer,
+            PointerButton::PRIMARY,
+            buttons,
+            route_sample(down_time, 0.0, 0.0),
+        )),
+        PointerEvent::Move(
+            PointerMove::new(pointer, buttons, route_sample(3_000_000, 30.0, 50.0))
+                .with_modifiers(Modifiers::SHIFT)
+                .with_coalesced(vec![
+                    route_sample(1_000_000, 10.0, 20.0),
+                    route_sample(2_000_000, 20.0, 30.0),
+                ])
+                .with_predicted(vec![route_sample(4_000_000, 40.0, 60.0)]),
+        ),
+        PointerEvent::Up(PointerRelease::new(
+            pointer,
+            PointerButton::PRIMARY,
+            PointerButtons::NONE,
+            route_sample(down_time.max(5_000_000), 30.0, 50.0),
+        )),
+    ]
+}
+
+fn measure_resampler_delivery(stop: bool) {
+    use flui_interaction::processing::PointerEventResampler;
+    use web_time::{Duration, Instant};
+    let packets = resampler_packets(0);
+    let resampler = PointerEventResampler::new(packets[0].pointer_id().expect("contact identity"));
+    let base = Instant::now();
+    for (packet, millis) in packets.iter().zip([0, 3, 5]) {
+        resampler.add_event_at(packet.clone(), base + Duration::from_millis(millis));
+    }
+    let mut deliveries = 0;
+    let mut consume = |packet| {
+        assert_eq!(
+            packet, packets[deliveries],
+            "owned delivery preserves every source field"
+        );
+        deliveries += 1;
+    };
+    ALLOCATIONS.store(0, Ordering::Relaxed);
+    if stop {
+        resampler.stop(&mut consume);
+    } else {
+        resampler.sample(
+            base + Duration::from_millis(3),
+            base + Duration::from_millis(4),
+            &mut consume,
+        );
+    }
+    let allocations = ALLOCATIONS.load(Ordering::Relaxed);
+    assert_eq!(
+        allocations, 0,
+        "unchanged-time measured history delivery reuses owned storage: stop={stop}"
+    );
+    if !stop {
+        resampler.stop(&mut consume);
+    }
+    assert_eq!(
+        deliveries, 3,
+        "the complete accepted sequence remains deliverable"
+    );
+    assert!(!resampler.has_pending_events());
+}
+
+fn resampler_raised_timestamp_keeps_checked_history_policy() {
+    use flui_interaction::processing::PointerEventResampler;
+    use web_time::{Duration, Instant};
+    let mut packets = resampler_packets(10_000_000);
+    let resampler = PointerEventResampler::new(packets[0].pointer_id().expect("contact identity"));
+    let base = Instant::now();
+    for (packet, millis) in packets.iter().zip([0, 1, 2]) {
+        resampler.add_event_at(packet.clone(), base + Duration::from_millis(millis));
+    }
+    let PointerEvent::Move(movement) = &packets[1] else {
+        panic!("Move fixture")
+    };
+    let mut current = *movement.current();
+    current.time = EventTime::from_nanos(10_000_000);
+    packets[1] = PointerEvent::Move(
+        PointerMove::new(movement.pointer, movement.buttons, current)
+            .with_modifiers(movement.modifiers)
+            .with_coalesced(movement.coalesced().to_vec()),
+    );
+    let mut deliveries = 0;
+    resampler.stop(|packet| {
+        assert_eq!(
+            packet, packets[deliveries],
+            "raised time revalidates predictions while preserving measured history"
+        );
+        deliveries += 1;
+    });
+    assert_eq!(deliveries, 3);
+}
+
+fn saturated_resampler_admission_reuses_bounded_history_storage() {
+    use flui_interaction::processing::PointerEventResampler;
+    use flui_platform_api::pointer::{PointerButton, PointerButtons, PointerRelease};
+    use web_time::{Duration, Instant};
+    let [down, PointerEvent::Move(base_move), _] = resampler_packets(0) else {
+        panic!("measured Move fixture")
+    };
+    let pointer = base_move.pointer;
+    let buttons = base_move.buttons;
+    let movement = |millis: u64| {
+        PointerEvent::Move(
+            PointerMove::new(
+                pointer,
+                buttons,
+                route_sample(millis * 1_000_000, millis as f64, 50.0),
+            )
+            .with_modifiers(Modifiers::SHIFT)
+            .with_predicted(vec![route_sample(
+                (millis + 1) * 1_000_000,
+                (millis + 1) as f64,
+                50.0,
+            )]),
+        )
+    };
+    let resampler = PointerEventResampler::new(pointer.id);
+    let base = Instant::now();
+    resampler.add_event_at(down.clone(), base);
+    for millis in 1..=300 {
+        resampler.add_event_at(movement(millis), base + Duration::from_millis(millis));
+    }
+    let last = movement(301);
+    ALLOCATIONS.store(0, Ordering::Relaxed);
+    resampler.add_event_at(last, base + Duration::from_millis(301));
+    let allocations = ALLOCATIONS.load(Ordering::Relaxed);
+    // The queue retires the older packet, so its checked history storage can
+    // transfer to the newer packet. At most one growth allocation is needed.
+    assert!(
+        allocations <= 1,
+        "saturated admission transfers existing history storage: {allocations}"
+    );
+    let up = PointerEvent::Up(PointerRelease::new(
+        pointer,
+        PointerButton::PRIMARY,
+        PointerButtons::NONE,
+        route_sample(302_000_000, 301.0, 50.0),
+    ));
+    resampler.add_event_at(up.clone(), base + Duration::from_millis(302));
+    let (mut downs, mut moves, mut readings, mut ups) = (0, 0, 0, 0);
+    let mut previous = 0;
+    resampler.stop(|event| match event {
+        PointerEvent::Down(_) => {
+            assert_eq!(event, down);
+            downs += 1;
+        }
+        PointerEvent::Move(movement) => {
+            assert_eq!(movement.pointer, pointer);
+            assert_eq!(movement.buttons, buttons);
+            assert_eq!(movement.modifiers, Modifiers::SHIFT);
+            for sample in movement
+                .coalesced()
+                .iter()
+                .chain(std::iter::once(movement.current()))
+            {
+                let millis = sample.time.as_nanos() / 1_000_000;
+                assert!(
+                    millis > previous,
+                    "retained measured readings stay chronological"
+                );
+                assert_eq!(
+                    *sample,
+                    route_sample(millis * 1_000_000, millis as f64, 50.0)
+                );
+                previous = millis;
+                readings += 1;
+            }
+            let millis = movement.current().time.as_nanos() / 1_000_000;
+            assert_eq!(
+                movement.predicted(),
+                &[route_sample(
+                    (millis + 1) * 1_000_000,
+                    (millis + 1) as f64,
+                    50.0
+                )]
+            );
+            moves += 1;
+        }
+        PointerEvent::Up(_) => {
+            assert_eq!(event, up);
+            ups += 1;
+        }
+        _ => panic!("unexpected accepted sequence event"),
+    });
+    assert_eq!((downs, moves, readings, ups), (1, 99, 199, 1));
+    assert_eq!(previous, 301, "latest accepted reading remains deliverable");
 }
 
 fn route_sample(time: u64, x: f64, y: f64) -> PointerSample {
@@ -128,7 +344,21 @@ fn route_sample(time: u64, x: f64, y: f64) -> PointerSample {
     .with_pressure(Pressure::try_new(0.65).expect("valid fixture pressure"))
 }
 
-fn measure_route_shape(target_count: usize, translated: bool, history: bool) {
+#[derive(Clone, Copy, Debug)]
+enum RouteShape {
+    Global,
+    Identity,
+    Translated,
+    NearIdentity,
+}
+
+fn measure_route_shape(target_count: usize, shape: RouteShape, history: bool) {
+    let translated = matches!(shape, RouteShape::Translated | RouteShape::NearIdentity);
+    let (dx, dy) = match shape {
+        RouteShape::Translated => (10.0, 20.0),
+        RouteShape::NearIdentity => (0.000_001, -0.000_002),
+        RouteShape::Global | RouteShape::Identity => (0.0, 0.0),
+    };
     let lane = InteractionLane::try_new().expect("lane");
     let handle = lane.dispatch_handle();
     let deliveries = Rc::new(Cell::new(0));
@@ -138,10 +368,13 @@ fn measure_route_shape(target_count: usize, translated: bool, history: bool) {
         panic!("move fixture")
     };
     let mut movement = PointerMove::new(
-        base.pointer,
+        base.pointer
+            .with_device(DeviceId::try_from(7_u64).expect("source device"))
+            .with_role(PointerRole::Additional),
         base.buttons,
         route_sample(3_000_000, 30.0, 50.0),
-    );
+    )
+    .with_modifiers(Modifiers::SHIFT);
     if history {
         movement = movement
             .with_coalesced(vec![
@@ -168,7 +401,6 @@ fn measure_route_shape(target_count: usize, translated: bool, history: bool) {
                     original.position = global.position;
                     assert_eq!(original, *global, "localization preserves every source sample field except position");
                 }
-                let (dx, dy) = if translated { (10.0, 20.0) } else { (0.0, 0.0) };
                 assert_eq!(global.current().position.get(), Point::new(30.0, 50.0));
                 assert_eq!(local.current().position.get(), Point::new(30.0 - dx, 50.0 - dy));
                 assert_eq!(local.current().time.as_nanos(), 3_000_000);
@@ -193,11 +425,17 @@ fn measure_route_shape(target_count: usize, translated: bool, history: bool) {
         }).collect();
         let mut path: Vec<_> = targets.iter().enumerate()
             .map(|(index, target)| hit_entry(index, *target)).collect();
-        if translated {
+        if !matches!(shape, RouteShape::Global) {
             let mut result = flui_interaction::HitTestResult::new();
-            result.with_paint_offset(Offset::new(10.0, 20.0), |result| {
+            if translated {
+                result.with_paint_offset(Offset::new(dx, dy), |result| {
+                    for entry in path.drain(..) { result.add(entry); }
+                }).expect("finite offset");
+            } else {
+                // The real hit-test producer installs the root's composed
+                // identity rather than leaving these entries untransformed.
                 for entry in path.drain(..) { result.add(entry); }
-            }).expect("finite offset");
+            }
             path = result.path().to_vec();
         }
         let route = handle.resolve_pointer_route(&path).expect("resolve route").token();
@@ -208,13 +446,13 @@ fn measure_route_shape(target_count: usize, translated: bool, history: bool) {
         assert!(result.is_none());
         assert_eq!(deliveries.get(), target_count * 2);
         if !history || !translated {
-            assert_eq!(allocations, 0, "scalar cached delivery allocates no heap after setup");
+            assert_eq!(allocations, 0, "scalar and identity cached delivery borrow every source history after setup: shape={shape:?}, targets={target_count}, history={history}");
         } else {
             assert!(allocations <= target_count * 2, "translated measured and predicted histories need at most one owned allocation each per target: targets={target_count}, allocations={allocations}");
         }
         // Localizing nonempty measured and predicted histories requires owned
         // storage; global-only delivery continues to borrow the source event.
-        println!("cached Move: targets={target_count}, translated={translated}, history={history}, allocations={allocations}");
+        println!("cached Move: targets={target_count}, shape={shape:?}, history={history}, allocations={allocations}");
         handle.release_route(route).expect("release route");
     });
 }

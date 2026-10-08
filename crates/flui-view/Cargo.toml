@@ -88,7 +88,7 @@ tracing-subscriber = { workspace = true }
 static_assertions = { workspace = true }
 # Serialize legacy fixtures that install the
 # thread-local fallback GlobalKey registry via `test_only_set_global_key_registry`.
-# The adapter is isolated from the production realm-activation stack, but the
+# The adapter is isolated from the production UI runtime-activation stack, but the
 # fixture tests still share assumptions about explicit install/clear pairing.
 serial_test = "4"
 # trybuild drives the `tests/ui/` compile-fail corpus: the column! 17-children
@@ -113,7 +113,7 @@ default = []
 # test crates flip this to install the collector. Pulls in the
 # optional `tracing-subscriber` dep at build time.
 test-utils = ["dep:tracing-subscriber"]
-# Accepted and ignored: realm-scoped signals are always compiled (ADR-0085 §5).
+# Accepted and ignored: UI runtime-scoped signals are always compiled (ADR-0085 §5).
 # It stays only because CI's `test-features` job still passes
 # `--features flui-view/signals`; it goes with that step.
 signals = []
@@ -173,5 +173,5 @@ globals = [
     { item = "owner::global_key_scope::OwnerTag::fresh::NEXT", grant = "ADR-0097", class = "counter", reason = "Owner claim identities, advanced by try_update with a permanent exhaustion sentinel" },
     { item = "key::registry::REGISTRY_STACK", exit = "ADR-0094", reason = "the owner thread's GlobalKey registry stack, `ManuallyDrop` for a hot-reload cdylib" },
     { item = "key::registry::TEST_REGISTRY", exit = "ADR-0094", reason = "the fixture registry lane beside the stack, `ManuallyDrop` for a hot-reload cdylib" },
-    { item = "view::error::ERROR_VIEW_BUILDER", exit = "ADR-0097", reason = "the process-wide error view builder; it becomes realm configuration" },
+    { item = "view::error::ERROR_VIEW_BUILDER", exit = "ADR-0097", reason = "the process-wide error view builder; it becomes UI runtime configuration" },
 ]

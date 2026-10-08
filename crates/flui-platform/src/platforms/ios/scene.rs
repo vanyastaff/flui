@@ -16,8 +16,9 @@ impl IOSSceneSessionId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IOSSceneAttachmentId(pub(super) u64);
 
-/// Owner-thread session notification. Connection acknowledges initial renderer
-/// and tree installation; reconnect keeps the previously installed logical UI.
+/// Owner-thread session notification. A connection carries explicit completion
+/// authority for renderer and tree installation; returning from the handler does
+/// not publish the attachment. Reconnect keeps the previously installed logical UI.
 pub enum IOSSceneEvent {
     /// A native attachment is ready for installation, with display ticks paused.
     Connected {
@@ -29,6 +30,9 @@ pub enum IOSSceneEvent {
         window: Arc<dyn HostWindow>,
         /// Whether this session already installed its application tree.
         reconnect: bool,
+        /// Complete only after logical state and native drivers are installed.
+        /// Until then the attachment remains unpublished; dropping this aborts it.
+        installation: crate::shared::window_installation::WindowInstallation,
     },
     /// Reversible loss of a native attachment; retain logical application state.
     Disconnected {

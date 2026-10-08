@@ -1865,7 +1865,7 @@ impl ViewState<EditableText> for EditableTextState {
         self.record_action_chain(ctx);
     }
 
-    fn build(&self, view: &EditableText, _ctx: &dyn BuildContext) -> impl IntoView {
+    fn build(&self, view: &EditableText, ctx: &dyn BuildContext) -> impl IntoView {
         let controller = Rc::clone(&self.controller);
         let focus_node = Rc::clone(&self.focus_node);
         let semantics_actions = FieldSemanticsActions {
@@ -1877,6 +1877,7 @@ impl ViewState<EditableText> for EditableTextState {
         };
         let enabled = view.enabled;
         let appearance = FieldAppearance {
+            text_scale_factor: crate::MediaQuery::text_scale_factor_of(ctx).unwrap_or(1.0),
             caret_height: view.caret_height,
             caret_color: view.caret_color,
             selection_color: view.selection_color,
@@ -2445,6 +2446,7 @@ fn build_key_handler(
 #[derive(Clone, Debug)]
 struct EditableTextRenderView {
     text: String,
+    text_scale_factor: f64,
     caret_byte_offset: usize,
     show_caret: bool,
     /// The IME composing region to underline, gated on `enabled &&
@@ -2469,6 +2471,7 @@ impl EditableTextRenderView {
             span = span.with_style(style);
         }
         RenderEditable::new(span, TextDirection::Ltr)
+            .with_text_scale_factor(self.text_scale_factor)
             .with_caret_byte_offset(self.caret_byte_offset)
             .with_show_caret(self.show_caret)
             .with_caret_width(2.0)
@@ -2501,6 +2504,7 @@ impl RenderView for EditableTextRenderView {
             span = span.with_style(style);
         }
         let mut impact = render_object.set_text(span);
+        impact |= render_object.set_text_scale_factor(self.text_scale_factor);
         impact |= render_object.set_caret_byte_offset(self.caret_byte_offset);
         impact |= render_object.set_show_caret(self.show_caret);
         impact |= render_object.set_caret_size(2.0, self.caret_height);
@@ -2532,6 +2536,7 @@ impl_render_view!(EditableTextRenderView);
 /// height belonged.
 #[derive(Clone, Debug)]
 struct FieldAppearance {
+    text_scale_factor: f64,
     caret_height: f64,
     caret_color: Color,
     selection_color: Color,
@@ -2602,6 +2607,7 @@ fn build_field_view(
         inner_anchor,
         EditableTextRenderView {
             text,
+            text_scale_factor: appearance.text_scale_factor,
             caret_byte_offset,
             show_caret: focused && !controller.caret_hidden_by_ime(),
             // Composing-region underline gated on the same `focused` check

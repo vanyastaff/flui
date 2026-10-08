@@ -65,19 +65,22 @@ pub mod tap_and_drag;
 
 // Re-export concrete recognizers
 pub use contact::{ArenaMembership, BeginContactError, ContactId, ContactSnapshot, PrimaryContact};
-pub use double_tap::{DoubleTapDetails, DoubleTapGestureRecognizer, DoubleTapGestureRecognizerBuilder};
+pub use double_tap::{
+    DoubleTapDetails, DoubleTapGestureRecognizer, DoubleTapGestureRecognizerBuilder,
+};
 pub use drag::{
     DragCancelCallback, DragDownCallback, DragDownDetails, DragEndCallback, DragEndDetails,
-    DragGestureRecognizer, DragGestureRecognizerBuilder, DragPointerStrategy, DragStartCallback, DragStartDetails, DragUpdateCallback,
-    DragUpdateDetails, GestureEndReason,
+    DragGestureRecognizer, DragGestureRecognizerBuilder, DragPointerStrategy, DragStartCallback,
+    DragStartDetails, DragUpdateCallback, DragUpdateDetails, GestureEndReason,
 };
 pub use eager::{EagerGestureRecognizer, EagerGestureRecognizerBuilder};
 pub use force_press::{ForcePressGestureRecognizer, ForcePressGestureRecognizerBuilder};
 pub use long_press::{LongPressGestureRecognizer, LongPressGestureRecognizerBuilder};
 pub use multi_tap::{MultiTapGestureRecognizer, MultiTapGestureRecognizerBuilder};
 pub use multidrag::{
-    MultiDragAxis, MultiDragEndDetails, MultiDragGestureRecognizer, MultiDragGestureRecognizerBuilder, MultiDragHandle,
-    MultiDragStartCallback, MultiDragUpdateDetails,
+    MultiDragAxis, MultiDragEndDetails, MultiDragGestureRecognizer,
+    MultiDragGestureRecognizerBuilder, MultiDragHandle, MultiDragStartCallback,
+    MultiDragUpdateDetails,
 };
 pub use recognizer::{
     CancelOutcome, GestureRecognizer, GestureRecognizerState, cancel_all, constants,
@@ -86,7 +89,8 @@ pub use scale::{ScaleGestureRecognizer, ScaleGestureRecognizerBuilder};
 pub use set::RecognizerSet;
 pub use tap::{TapGestureRecognizer, TapGestureRecognizerBuilder};
 pub use tap_and_drag::{
-    TapAndDragGestureRecognizer, TapAndDragGestureRecognizerBuilder, TapDragDownCallback, TapDragDownDetails, TapDragEndCallback,
-    TapDragEndDetails, TapDragStartCallback, TapDragStartDetails, TapDragUpCallback,
-    TapDragUpDetails, TapDragUpdateCallback, TapDragUpdateDetails,
+    TapAndDragGestureRecognizer, TapAndDragGestureRecognizerBuilder, TapDragDownCallback,
+    TapDragDownDetails, TapDragEndCallback, TapDragEndDetails, TapDragStartCallback,
+    TapDragStartDetails, TapDragUpCallback, TapDragUpDetails, TapDragUpdateCallback,
+    TapDragUpdateDetails,
 };

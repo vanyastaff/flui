@@ -49,7 +49,7 @@ variant; `value()` returns it back.
 
 An app registers a font as bytes through `flui::register_font`, which loads the face into the
 app's `FontCollection`. Measurement, paint and carets all read the layout shaped on that
-collection, so the face is visible to all three from the next shape onward, and every realm lays
+collection, so the face is visible to all three from the next shape onward, and every UI runtime lays
 its text out again on its next frame:
 
 ```rust

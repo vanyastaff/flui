@@ -1,4 +1,4 @@
-# ADR-0085: The reactive graph is realm-owned and stays in `flui-view`; reads go through a `ReadScope` contract in `flui-foundation`
+# ADR-0085: The reactive graph is UI runtime-owned and stays in `flui-view`; reads go through a `ReadScope` contract in `flui-foundation`
 
 - **Status:** Proposed. §1, §2 and §5 ship ahead of acceptance, as ADR-0074's `Amended-by`
   line records; §3, §4 and §6 steps 2–3 are not implemented.
@@ -14,7 +14,7 @@
   `BuildOwner`", "reachable as `cx.reactive()`"), §5.2 (reads take `&dyn BuildContext`; now any
   `&S` where `S: ReadScope`), and the `signals` feature named in its Status line
 - **Related:** [ADR-0013](ADR-0013-render-object-attach-self-dirty-handle.md) (the self-dirty
-  handle a render-phase subscriber uses), [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (realm
+  handle a render-phase subscriber uses), [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (UI runtime
   ownership), [ADR-0043](ADR-0043-presentation-bundled-trees-and-realm-globalkey-scope.md)
   (one `BuildOwner` per presentation), [ADR-0075](ADR-0075-derived-state-and-effects.md)
   (derived values and effects on the same graph),
@@ -54,13 +54,13 @@ which is `Clone` (`mod.rs:160-164`) and exposes `set`/`update` (`mod.rs:774`, `:
 that calls `cx.reactive()` and writes is refused only at run time (`WrittenDuringBuild`,
 `mod.rs:578`).
 
-### The graph is per presentation, not per realm
+### The graph is per presentation, not per UI runtime
 
-ADR-0074 §4 says "a realm-owned reactive graph" and §5.1 says it "lives beside `BuildOwner`,
-dropped with the realm". In the code the graph is a field of `BuildOwner`
+ADR-0074 §4 says "a UI runtime-owned reactive graph" and §5.1 says it "lives beside `BuildOwner`,
+dropped with the UI runtime". In the code the graph is a field of `BuildOwner`
 (`crates/flui-view/src/owner/build_owner.rs:443-444`), constructed with it (`:721-722`) and
 exposed by `pub fn reactive` (`:972-974`). ADR-0043 gives every presentation its own
-`BuildOwner`, so a realm with two windows has two graphs, each with its own process-unique id
+`BuildOwner`, so a UI runtime with two windows has two graphs, each with its own process-unique id
 (`static NEXT_GRAPH_ID`, `mod.rs:72`).
 
 Until §1 shipped, the cross-thread write path picked one of them without looking at the slot:
@@ -145,17 +145,17 @@ Branch `spike/readscope`, commits `28ed25536` (variant A, reads take `&dyn ReadS
 
 ## Decision
 
-### 1. Graphs are realm-owned; writes are routed by the slot
+### 1. Graphs are UI runtime-owned; writes are routed by the slot
 
 Each presentation keeps its own graph, as today (one `BuildOwner` and one `PipelineOwner` per
-presentation, ADR-0043), and the realm owns every presentation, so every graph is realm-owned and
-dropped with its realm. A write is routed by the slot, never by "the primary presentation": the
-command applies to the graph in this realm whose id equals `SignalSlot::graph`. A slot whose
-graph no presentation of this realm owns (its presentation closed, or it was minted by another
-realm; process-unique graph ids cannot tell the two apart) is dropped without running the
+presentation, ADR-0043), and the UI runtime owns every presentation, so every graph is UI runtime-owned and
+dropped with its UI runtime. A write is routed by the slot, never by "the primary presentation": the
+command applies to the graph in this UI runtime whose id equals `SignalSlot::graph`. A slot whose
+graph no presentation of this UI runtime owns (its presentation closed, or it was minted by another
+UI runtime; process-unique graph ids cannot tell the two apart) is dropped without running the
 write, counted as stale by the drain and logged as a `warn` on `flui::signals`; the writer is
 not told until ADR-0086 gives writes a return path. Merging the per-presentation graphs into
-one graph per realm is not decided here; it would need its own scheduled step and a reason a
+one graph per UI runtime is not decided here; it would need its own scheduled step and a reason a
 cross-window read needs it.
 
 The command carries its routing key: `UiCommand::SignalWrite { target: SignalSlot, apply }`,
@@ -260,7 +260,7 @@ pub struct SignalSender<T: 'static>; // Send + Sync; attach() -> Signal<T>; slot
 
 ### 3. Two non-`Clone` drivers, one per phase family
 
-For each presentation, the realm mints exactly two drivers from that presentation's graph:
+For each presentation, the UI runtime mints exactly two drivers from that presentation's graph:
 
 - `ElementDriver`, held by `BuildOwner`: begin/end element build, register an element reader,
   release an element's slots, set the rebuild sink.
@@ -437,7 +437,7 @@ foundation contract stays, because production element reads use it.
 
 - ADR-0074's placement sentence, its `cx.reactive()` read path and its feature gate are replaced
   by this record; its semantics, guard and measurement stand. `docs/FOUNDATIONS.md` C1 (line 91)
-  loses "`flui-view` feature `signals`" and says "the realm-owned graph" in the same change as §5;
+  loses "`flui-view` feature `signals`" and says "the UI runtime-owned graph" in the same change as §5;
   its sentence "The catalog crates … never take a dependency on a signals crate" stays true,
   because there is no signals crate (§6).
 - **Breaks.** `Signal::get(cx)` call sites keep compiling. Helpers that take `&dyn BuildContext`
@@ -481,8 +481,8 @@ foundation contract stays, because production element reads use it.
 What exists:
 
 - §1: `a_write_to_a_secondary_presentations_signal_rebuilds_its_reader` in
-  `crates/flui-runtime/src/ui_realm/tests/signal_write_routing.rs` writes, through
-  `UiCommand::SignalWrite`, a signal minted by the second presentation of a realm and asserts
+  `crates/flui-runtime/src/ui_runtime/tests/signal_write_routing.rs` writes, through
+  `UiCommand::SignalWrite`, a signal minted by the second presentation of a UI runtime and asserts
   that its reader rebuilds and the primary's does not. It failed with `ForeignGraph` on the
   primary-only routing. Its siblings pin the dropped-and-counted case for a closed presentation
   and for a foreign graph, and the owning presentation's frame request.

@@ -15,8 +15,8 @@
 
 ## Context
 
-A platform capability reaches a widget through named fields today: `RealmHostServices` →
-`RealmServices` → the presentation's capabilities → `BuildOwner` → `BuildCapabilities` →
+A platform capability reaches a widget through named fields today: `RuntimeHostServices` →
+`RuntimeServices` → the presentation's capabilities → `BuildOwner` → `BuildCapabilities` →
 `LifecycleContext` → the widget, with the producer in `flui-app`. Adding one edits flui-runtime,
 flui-view and flui-app. A package built on `flui-sdk` cannot add one: `LifecycleContext` is
 sealed and ADR-0078 closes its method set.
@@ -40,8 +40,8 @@ not the `Send + Sync` backend trait object.
 - A *framework* capability (rebuild, focus, post-frame, close guard, lifecycle handle,
   text-input route, flush registry) stays a method on `LifecycleContext`. A *platform*
   capability is reached only through `cx.capability::<C>()`.
-- Providers are registered in a per-realm registry passed to the realm's constructor; never a
-  static or thread-local. The registry is an owner-thread value: realms live on the owner thread
+- Providers are registered in a per-UI runtime registry passed to the UI runtime's constructor; never a
+  static or thread-local. The registry is an owner-thread value: UI runtimes live on the owner thread
   whether or not the owner-thread flip lands.
 - Precedence: application override, then built-in, then a single plugin. Two plugins for one
   capability, or two capabilities sharing a `NAME`, fail `Application::run` with
@@ -143,7 +143,7 @@ unwired. The landing contains the contract types, the registry, the built-in pro
 through the seam, and the removal of `clipboard_handle`. Tests:
 
 - copy and paste through the headless provider;
-- a realm with no provider answers `NotRegistered`, not a panic;
+- a UI runtime with no provider answers `NotRegistered`, not a panic;
 - a provider answering `NotOnThisPlatform` reaches the widget unchanged;
 - two plugins for the clipboard, and two capabilities with one `NAME`, fail before a window
   opens;

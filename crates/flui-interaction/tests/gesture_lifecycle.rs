@@ -133,10 +133,10 @@ fn motion(pointer: PointerId, position: Offset<f64>, kind: PointerKind) -> Point
 fn stamped(mut event: PointerEvent, nanos: u64) -> PointerEvent {
     match &mut event {
         PointerEvent::Down(data) => {
-            data.sample.time = flui_platform_api::EventTime::from_nanos(nanos)
+            data.sample.time = flui_platform_api::EventTime::from_nanos(nanos);
         }
         PointerEvent::Up(data) => {
-            data.sample.time = flui_platform_api::EventTime::from_nanos(nanos)
+            data.sample.time = flui_platform_api::EventTime::from_nanos(nanos);
         }
         PointerEvent::Move(data) => {
             let mut sample = *data.current();
@@ -1058,7 +1058,7 @@ fn selected_velocity_cases(family: &str) {
 
     for (estimator, expected) in [
         (VelocityEstimator::LeastSquares, 500.0),
-        (VelocityEstimator::Impulse, 1589.9257985831982),
+        (VelocityEstimator::Impulse, 1_589.925_798_583_198_2),
         (VelocityEstimator::Ios, 2550.0),
         (VelocityEstimator::Macos, 1950.0),
     ] {
@@ -1716,7 +1716,7 @@ fn composition_preserves_first_callback_failure_and_recovers() {
     arena.close(pointer);
     fallback_entry.resolve(GestureDisposition::Accepted);
     let failure = catch_unwind(AssertUnwindSafe(|| {
-        preferred_entry.resolve(GestureDisposition::Rejected)
+        preferred_entry.resolve(GestureDisposition::Rejected);
     }))
     .expect_err("preferred callback fails");
     assert_eq!(
@@ -2403,4 +2403,5 @@ fn arena_polls_pointer_deadlines_in_identity_order() {
     }
     assert!(arena.is_empty());
     assert!(!arena.has_pending_deadlines());
+    drop(rivals);
 }

@@ -1,4 +1,4 @@
-//! Per-realm text contexts over one shared font collection (ADR-0092 §2–§3).
+//! Per-UI runtime text contexts over one shared font collection (ADR-0092 §2–§3).
 //!
 //! Two contexts built from one [`FontCollection`] shape on separate threads
 //! and see a face registered after they were built.
@@ -53,12 +53,12 @@ fn key(metrics: &TextLayoutResult) -> (f32, f32, usize, f32, f32) {
 const fn assert_send<T: Send>() {}
 const _: () = assert_send::<TextContext>();
 
-/// Two realms' contexts, each moved to its own thread, agree with the
+/// Two UI runtimes' contexts, each moved to its own thread, agree with the
 /// reference layout over repeated shaping. The barrier releases both workers
 /// together, but the OS may schedule one to completion before the other runs.
 /// Absence of a FLUI lock is enforced by the API and disallowed-types lint;
 /// wall-clock overlap cannot prove that contract.
-pub(crate) fn two_realms_shape_in_parallel() {
+pub(crate) fn two_ui_runtimes_shape_in_parallel() {
     const SHAPES: usize = 200;
     let fonts = FontCollection::new();
     let mut a = TextContext::new(&fonts);
@@ -94,7 +94,7 @@ pub(crate) fn two_realms_shape_in_parallel() {
 /// in both. The probe face maps only the space and `A`, each one em wide, so
 /// four `A`s in it are exactly four em; Roboto, the fallback a context that
 /// never saw the face shapes with, draws a narrower `A`.
-pub(crate) fn a_face_registered_after_the_fork_shapes_in_every_realm() {
+pub(crate) fn a_face_registered_after_the_fork_shapes_in_every_ui_runtime() {
     const SIZE: f32 = 20.0;
     let fonts = FontCollection::new();
     let mut a = TextContext::new(&fonts);
@@ -124,7 +124,7 @@ pub(crate) fn a_face_registered_after_the_fork_shapes_in_every_realm() {
         let after = width(context);
         assert!(
             (after - f64::from(4.0 * SIZE)).abs() < 0.01,
-            "realm {name}: four one-em `A`s are {} px wide, got {after}",
+            "ui_runtime {name}: four one-em `A`s are {} px wide, got {after}",
             4.0 * SIZE
         );
     }

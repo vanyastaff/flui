@@ -17,7 +17,7 @@
 //!
 //! # Usage
 //!
-//! For most applications, use `UiRealm` instead ([`crate::ui_realm`]),
+//! For most applications, use `UiRuntime` instead ([`crate::ui_runtime`]),
 //! which owns this binding plus widgets support per window. Use
 //! `RenderingBinding` directly only when working with the rendering
 //! layer without widgets.
@@ -121,7 +121,7 @@ pub(crate) fn redirty_pipeline_root(pipeline_owner: &PipelineCell) {
 /// Concrete binding for applications using the Rendering framework directly.
 ///
 /// This is the glue that binds the framework to the FLUI engine.
-/// For widget-based applications, use `UiRealm` instead.
+/// For widget-based applications, use `UiRuntime` instead.
 ///
 /// # Responsibilities
 ///
@@ -139,7 +139,7 @@ pub(crate) fn redirty_pipeline_root(pipeline_owner: &PipelineCell) {
 /// `PipelineCell`'s `Rc<RefCell<_>>`): a `PipelineOwner` belongs to exactly
 /// one presentation on exactly one thread. Non-pipeline internal state
 /// still uses `RwLock`/`Arc` for the same-thread checkout discipline
-/// this binding shares with the rest of the realm.
+/// this binding shares with the rest of the UI runtime.
 ///
 /// This is enforced at compile time, not by convention -- pinned by
 /// `assert_not_impl_any!(PipelineCell: Send, Sync)` and
@@ -160,7 +160,7 @@ pub(crate) fn redirty_pipeline_root(pipeline_owner: &PipelineCell) {
 /// });
 /// ```
 pub struct RenderingBinding {
-    /// Root of the PipelineOwner tree (shared with the owning `UiRealm`'s
+    /// Root of the PipelineOwner tree (shared with the owning `UiRuntime`'s
     /// presentation).
     root_pipeline_owner: PipelineCell,
 
@@ -179,17 +179,17 @@ pub struct RenderingBinding {
     /// Whether the first frame has been sent.
     first_frame_sent: AtomicBool,
 
-    /// The owning realm's scheduler, weak: `request_visual_update`'s
+    /// The owning UI runtime's scheduler, weak: `request_visual_update`'s
     /// device-metrics force-frame path needs to schedule a frame, but this
-    /// binding must not keep a dead realm's scheduler alive (it is a plain
-    /// field on `UiRealm`, not the other way around).
+    /// binding must not keep a dead UI runtime's scheduler alive (it is a plain
+    /// field on `UiRuntime`, not the other way around).
     scheduler: WeakUpdateScheduler,
 
     /// Keeps `scheduler`'s backing `UpdateScheduler` alive — but ONLY for the
     /// standalone constructor path ([`Self::new`]), which owns
     /// no external scheduler for anything else to keep alive. `None` for
     /// every [`Self::new_with_pipeline`] caller (production: the owning
-    /// `UiRealm` holds the real strong root, per `scheduler`'s own doc).
+    /// `UiRuntime` holds the real strong root, per `scheduler`'s own doc).
     ///
     /// Without this field, `Self::new` passed a bare `&UpdateScheduler::new()`
     /// into `new_with_pipeline`, which only stores the *downgraded*
@@ -223,7 +223,7 @@ impl RenderingBinding {
     /// text through `text`, and a fresh `UpdateScheduler` it owns for its own
     /// lifetime — test/standalone use only. Production always goes through
     /// [`new_with_pipeline`](Self::new_with_pipeline) with the owning
-    /// realm's own scheduler.
+    /// UI runtime's own scheduler.
     ///
     /// The constructed `UpdateScheduler` is kept alive internally (in this crate's
     /// private `standalone_scheduler` field) for exactly as long as this
@@ -231,7 +231,7 @@ impl RenderingBinding {
     /// genuinely schedules a frame on it rather than silently failing an
     /// upgrade against an already-dead weak (see that field's doc for the
     /// bug this fixes). Nothing pumps this scheduler's frame loop
-    /// automatically — there is no realm behind a standalone binding — so a
+    /// automatically — there is no UI runtime behind a standalone binding — so a
     /// scheduled callback sits queued, harmlessly, until the binding drops;
     /// a caller that wants it to actually fire must drive the scheduler
     /// itself.
@@ -250,7 +250,7 @@ impl RenderingBinding {
     /// `standalone_scheduler`'s field doc for the dead-weak-reference bug
     /// this avoids) — for `PresentationState::new_for_test`, which must
     /// share its exact caller-supplied pipeline with its renderer but has no
-    /// realm above it to supply a live `&UpdateScheduler`.
+    /// UI runtime above it to supply a live `&UpdateScheduler`.
     #[cfg(test)]
     pub(crate) fn new_for_test_with_pipeline(pipeline_owner: PipelineCell) -> Self {
         let scheduler = UpdateScheduler::new();
@@ -262,7 +262,7 @@ impl RenderingBinding {
     /// Creates a new rendering binding with a shared PipelineOwner, wired to
     /// `scheduler` for its (rare) device-metrics force-frame path.
     ///
-    /// This allows the owning `UiRealm` to pass in the same
+    /// This allows the owning `UiRuntime` to pass in the same
     /// [`PipelineCell`] that elements use, ensuring a single PipelineOwner
     /// instance at runtime, and its OWN scheduler — never a process-global
     /// one.
@@ -290,14 +290,14 @@ impl RenderingBinding {
     /// calls once, right before building the value (there is nothing yet to
     /// take `&self` of).
     fn init_instances() {
-        // Gesture state is owned by the entered `UiRealm`, which is the
+        // Gesture state is owned by the entered `UiRuntime`, which is the
         // authoritative instance driving input and frame-time coalescing for
         // its current presentation. This rendering binding deliberately does
         // not initialize a second gesture singleton with a disconnected arena.
         //
         // Painting has no binding at all: the app's font collection, fed from
         // one host scan, is built by `AppRuntime`'s `SharedEngineServices`
-        // at realm install (`app/runtime.rs`), and nothing about painting is
+        // at ui_runtime install (`app/runtime.rs`), and nothing about painting is
         // process-wide.
         //
         // Semantics enablement is per-presentation now (`SemanticsHost`,
@@ -318,17 +318,17 @@ impl RenderingBinding {
     // plus a default `draw_frame()` gate that no real embedder overrode.
     // Both were deleted — see AGENTS.md's port-methodology note against
     // reintroducing a second copy of this state. Every consumer (the
-    // `RendererBinding` trait impl below and `UiRealm::defer_first_frame`
+    // `RendererBinding` trait impl below and `UiRuntime::defer_first_frame`
     // / `allow_first_frame` / `send_frames_to_engine` in
-    // `crates/flui-runtime/src/ui_realm/`, which the production
+    // `crates/flui-runtime/src/ui_runtime/`, which the production
     // `render_frame` path actually calls) forwards to this struct.
     //
     // # First-frame gate
     //
     // `send_frames_to_engine` is `first_frame_sent || deferred_count == 0`.
     // Layout/compositing-bits/paint always run; only the composite-to-engine
-    // step is gated. The production split lives in `UiRealm::
-    // render_frame` (`crates/flui-runtime/src/ui_realm/`): the
+    // step is gated. The production split lives in `UiRuntime::
+    // render_frame` (`crates/flui-runtime/src/ui_runtime/`): the
     // build/layout/paint pipeline always runs in `draw_frame_entered`, and
     // only the GPU `render_scene` (present) call is gated on
     // `send_frames_to_engine`. `run_frame` does not yet gate its own
@@ -409,7 +409,7 @@ impl RenderingBinding {
     /// first-frame-deferral module note above): a frame with nothing dirty
     /// produces `FramePaintOutcome::Idle`, not a repeat of the last
     /// `Scene`. Two callers hit this exact problem — [`allow_first_frame`]
-    /// (a deferred frame becoming presentable) and the realm's own
+    /// (a deferred frame becoming presentable) and the UI runtime's own
     /// scheduler's frames-disabled→enable re-enable edge (see `ADR-0035`
     /// and `emit_lifecycle_transition`'s doc in `runner.rs`), which has no
     /// retained scene to re-present either — so the shared logic lives
@@ -467,7 +467,7 @@ impl RenderingBinding {
     ///
     /// This is a convenience for using `RenderingBinding` directly,
     /// without `WidgetsBinding` (see the module doc). The production
-    /// frame path (`UiRealm::render_frame_entered`) does **not** call
+    /// frame path (`UiRuntime::render_frame_entered`) does **not** call
     /// this method — it drives the shared pipeline through
     /// `WidgetsBinding::run_frame_with_layout_builders` instead (the
     /// build-during-layout fixpoint this method does not need to settle)
@@ -548,7 +548,7 @@ impl RendererBinding for RenderingBinding {
     // ---- formerly PipelineManifold ----
 
     fn request_visual_update(&self) {
-        // Upgrade-or-skip: if the owning realm's scheduler is already gone,
+        // Upgrade-or-skip: if the owning ui_runtime's scheduler is already gone,
         // there is no frame left to schedule.
         //
         // Routes through the scheduler's gated pair (`ensure_visual_update`

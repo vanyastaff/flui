@@ -130,11 +130,6 @@ class = "wave"
 count = 1
 
 [[allow]]
-path = "crates/flui-interaction/src/lib.rs"
-class = "wave"
-count = 1
-
-[[allow]]
 path = "crates/flui-macros/src/lib.rs"
 class = "wave"
 count = 1

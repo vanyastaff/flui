@@ -34,7 +34,7 @@ upstream defects are worked around there, not waited on. That layer carries
 over to parley unchanged; it is the part of this decision that is not a bet.
 
 Since ADR-0092 §10 step 4, this resolution chooses the family of the caret
-layout only. Measurement and paint resolve families on Parley over the realm's
+layout only. Measurement and paint resolve families on Parley over the UI runtime's
 `FontCollection`, by the same rule over the families it holds, which since step
 3c are the process font system's own (flui-painting `ARCHITECTURE.md`, mapping
 decisions 15, 16 and 17).

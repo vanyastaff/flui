@@ -41,7 +41,7 @@ Reference: Flutter `widgets/focus_scope.dart` (`Focus`, `FocusScope`, `_FocusSta
   focus listener; `did_change_dependencies` reparents through `FocusScopeNode::adopt_node`,
   which keeps primary focus across the move; `dispose` removes the listener and detaches (an
   external node is left to its owner). The manager comes from the lifecycle context
-  (ADR-0078), one per realm.
+  (ADR-0078), one per UI runtime.
 - The node layer gained two primitives for this: `remove_listener(ListenerId)` and
   `adopt_node` (reparent without dropping focus).
 - `ModalRoute` creates a scope, wraps its page in `FocusScope::with_external_node`, makes the

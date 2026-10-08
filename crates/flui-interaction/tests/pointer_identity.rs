@@ -267,7 +267,7 @@ fn metadata_boundary_reentry_does_not_restore_a_stale_newer_packet() {
         let replacement = handle
             .register_pointer(move |dispatch| {
                 log.borrow_mut()
-                    .push(("replacement", dispatch.local.clone()))
+                    .push(("replacement", dispatch.local.clone()));
             })
             .expect("replacement target");
         let mut replacement_path = HitTestResult::new();

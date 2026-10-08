@@ -11,10 +11,10 @@
 //!   -> IOSPlatform::new()
 //!   -> Platform::run()                 [UIApplicationMain]
 //!     -> AppDelegate.didFinishLaunching    -> on_ready(): process services / scene registration
-//!     -> SceneDelegate connection          -> session realm / native attachment
+//!     -> SceneDelegate connection          -> session UI runtime / native attachment
 //!     -> scene active / inactive            -> focus observations
 //!     -> scene background / foreground      -> execution, visibility, surface
-//!     -> scene disconnect                   -> retained realm, detached native attachment
+//!     -> scene disconnect                   -> retained UI runtime, detached native attachment
 //!     -> CADisplayLink tick                -> dispatch_request_frame()
 //! ```
 //!

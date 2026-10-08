@@ -60,14 +60,14 @@ flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev", features 
 # `GestureArenaScope`), and the concrete render objects its probes downcast.
 flui-widgets = { path = "../flui-widgets", version = "=0.2.0-dev" }
 flui-objects = { workspace = true }
-# `HeadlessHost` hosts a `UiRealm` and drives its frame transaction
-# (`UiRealm::pump`, ADR-0083 §4). The runtime admits this crate as a normal
-# dependent beside the host. `test-support` exposes the test-only realm hooks
-# the harness reads (`UiRealm::active_text_store`).
+# `HeadlessHost` hosts a `UiRuntime` and drives its frame transaction
+# (`UiRuntime::pump`, ADR-0083 §4). The runtime admits this crate as a normal
+# dependent beside the host. `test-support` exposes the test-only UI runtime hooks
+# the harness reads (`UiRuntime::active_text_store`).
 flui-runtime = { path = "../flui-runtime", version = "=0.2.0-dev", features = ["test-support"] }
 # The widget harness's recording IME double.
 parking_lot = { workspace = true }
-# The font collection a headless realm shapes on (bundled faces only, so text
+# The font collection a headless UI runtime shapes on (bundled faces only, so text
 # measures alike on every host) and the painting values the widget harness
 # reads.
 flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
@@ -75,7 +75,7 @@ flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
 # restart-aware via the controller's `run_generation` counter.
 flui-animation = { path = "../flui-animation", version = "=0.2.0-dev" }
 # The frame phases and the binding's `OwnerFrame`. `pump_frame` runs the SAME
-# `UpdateScheduler::drive_frame` a realm's pump runs, whose begin frame polls the
+# `UpdateScheduler::drive_frame` a UI runtime's pump runs, whose begin frame polls the
 # owner-local tasks in the same slot — between the vsync tick and `build_scope`.
 # `testing` exposes the scheduler's test probes (`AsyncDriver::set_request_frame`,
 # `is_unlocked`) to every test that links this crate, the scheduler's own

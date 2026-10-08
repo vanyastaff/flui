@@ -66,7 +66,7 @@ The default prior-work backlog window is checked before opening the scope. Its
 derives from prepared object and CPU metadata budgets. Submission bookkeeping is
 charged through completion. Native admission first polls nonblockingly so rejected
 frames cannot starve completion callbacks; browser progress uses its event loop.
-Recoverable failure publishes reliable retry debt to the application and realm
+Recoverable failure publishes reliable retry debt to the application and UI runtime
 (ADR-0101), while an impossible frame footprint remains a terminal error.
 `examples/embedded_gpu_scene.rs` exercises the public lifecycle with an external
 GPU texture, a depth-tested producer pass and foreground 2D drawing on the same
@@ -713,7 +713,7 @@ The engine names no shaper and depends on none: no cosmic-text, Parley,
 fontique, skrifa or swash type or crate, and no text context, font collection
 or paragraph spec either (`the_engine_does_not_shape`). The performance
 overlay's labels arrive shaped: the layer carries a display list recorded
-through the realm's text context, which the engine clips to the overlay's
+through the UI runtime's text context, which the engine clips to the overlay's
 bounds and replays (`performance_overlay_labels_read_back`). `etagere` stays
 behind `glyph_atlas.rs` the way `lyon` stays behind `tessellator.rs`.
 
@@ -722,7 +722,7 @@ hashes `R::Key` and owns `R`, taking it by `&mut` on a miss and on a grow. The
 painter's is a `TextAtlas`, `GlyphAtlas<SwashRasterizer>`: the rasterizer owns
 the registry of every face a paragraph drawn through it named, so a key stays
 valid while the atlas lives, and rasterization takes no lock and shares no
-font state with any realm. `Renderer::render_plugin_scene` selects a plugin
+font state with any UI runtime. `Renderer::render_plugin_scene` selects a plugin
 font source; the first scene from a hook and every successful image reload
 request a reset. Switching ordinary ↔ plugin sources also replaces the complete
 `TextAtlas` between frames, including its registry and bitmap entries. Blob ids

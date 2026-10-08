@@ -103,6 +103,129 @@ release occurs outside the canvas. Its README describes execution. These are
 browser smoke contracts, not automatically executed CI tests; a wasm compile
 does not prove that they pass. Browser touch-action policy remains page-owned.
 
+### Windows preferences have a window-independent owner lifetime
+
+`Platform::preferences` reads text scale, animation preference, high contrast,
+double-click interval and discrete wheel distances before any user window exists.
+Unknown observations remain absent. The owner context holds one WinRT STA entry,
+native interfaces and subscriptions. Foreign reads are refused. Direct
+`RoActivateInstance` avoids generated process-wide factory caching: recreating a
+host after its apartment ended reproduced a stale-factory access violation with
+`UISettings::new`. `windows_reads_preferences_before_a_user_window_exists` in
+`preferences_contract` exercises successive host lifetimes, refusal, repeated
+native reads and subsequent native window creation.
+
+The same source samples mouse rectangle/drag metrics at an explicit 96-DPI
+bootstrap context without user windows. Those raw observations only invalidate
+consumers. Each presentation queries `GetDpiForWindow` and
+`GetSystemMetricsForDpi` for its live HWND; scaling a representative window's
+metrics cannot reproduce this query. Full double-click dimensions and drag
+half-extents remain distinct, and legitimate zero axes are retained. The public
+native row compares the projection with independent Win32 reads and checks
+foreign-thread and closed-window refusal.
+
+The source's hidden top-level HWND receives setting broadcasts outside user-window
+membership and exit policy. WinRT text-scale and animation observers and the HWND
+mark a refresh obligation and wake the owner; they never invoke runtime code.
+Registering a new owner hook also wakes it if a refresh remains pending. Reads
+clear the prior obligation before sampling so an invalidation during a read is
+retained; error or unwind restores the obligation. A clean source reuses its last
+observation. Reentrant reads are refused while native getters run, including when
+an older cached observation exists; a failed refresh is returned as an error,
+never as a successful stale observation. The private getter-injection table
+`native_preference_read_recovery` covers cache reuse, in-read invalidation,
+reentrant refusal and recovery after errors and panic. This private seam injects
+failures that the public OS getters cannot deterministically produce.
+An unfinished read also arms a 100ms source retry deadline. The source
+admits failed-read attempts no more often than that interval even when
+unrelated wakes arrive. Early and reentrant reads return `PreferencesDeferred`,
+which publishes no observation. A retry wake does not postpone the read's
+eligibility; healthy changes are not delayed. The deterministic row
+`unrelated_wakes_do_not_repeat_failed_native_reads` covers this admission boundary.
+The native message loop includes the retry in its timed wait independently of frame deadlines and wakes
+the owner when due. It rearms before posting and disarms after a clean read;
+shutdown excludes the deadline. `preference_failure_retries_without_a_user_window`
+injects native-getter errors and panic, runs the actual Win32 loop without user
+windows, and checks recovery followed by quiet idle.
+Shutdown closes notification admission before removing subscriptions, whose
+captures contain only ref-counted inert state.
+
+`setting_messages_wake_the_owner_without_a_user_window` sends a message to the
+platform's own native receiver and checks owner delivery and teardown. It does not
+change OS preferences or establish actual OS-generated notifications, value-change
+delivery or retry after a failing owner consumer. Those remain
+pending under ADR-0172. The headless row checks that absent observations do not
+claim OS defaults.
+
+`native_setting_message_replaces_the_cached_observation` strengthens the native
+message proof: a private getter seeds a distinguishable cached scale, then a
+message to that exact receiver must cause a real OS read on the registered owner
+callback. Removing only invalidation leaves the stale value and fails the test.
+The OS configuration is never changed; this proves message-to-observation delivery,
+not an actual OS preference change or a rendered native application's update.
+
+### Native gesture sampling follows public API refresh limits
+
+AppKit observes `NSEvent::doubleClickInterval` on the application owner lane.
+Android observes public `ViewConfiguration` timeouts and physical touch/fling
+metrics using the Activity context and its resource density; its presentation
+query samples that context again. Neither backend invents unsupported mouse or
+touch geometry. iOS and web retain unknown numeric gesture observations.
+
+Neither verified public API provides a complete external-setting notification
+for these observations. The host therefore attempts a refresh every 500ms while
+its owner loop can run, including without user windows. This is a sampling
+cadence, not an immediate OS notification or a bound on a blocked owner's latency.
+Android also invalidates on `ConfigChanged` and delivers accepted configuration
+changes before subsequent input. AppKit timer captures hold only a weak source;
+owner closure or source retirement makes queued work inert. Its next attempt is
+armed before native work and contained diagnostics. Errors preserve the accepted
+observation and the next refresh attempt.
+AppKit installs this sampler before its first native getter. A cold source has
+no accepted observation; an initial query error cannot abort platform bootstrap,
+publish a fabricated default, or discard its retry. The shared production read
+path's `cold_native_observation_recovers_without_forged_defaults` covers failed
+initial observation, deferred retry, first successful publication and recovery
+without a stale-success response. This portable seam does not execute AppKit's
+native constructor or its GCD timer.
+Successful recovery requests owner delivery even when the comparison value is
+unchanged: a prior failed consumer read must not strand the accepted observation.
+Healthy unchanged observations remain quiet.
+Failed or unwinding native reads restore a 500ms admission deadline; unrelated
+owner wakes cannot repeat the getter early. Reentrant reads return
+`PreferencesDeferred` before native work, and foreign calls do not affect that
+admission. `bounded_native_read_admission` exercises this portable production
+guard through failure, competing admission and recovery after unwind.
+
+Android API26 public horizontal/vertical scroll factors normalize fractional
+axis values to logical pixel deltas exactly once. API21–25 resolve the public
+`listPreferredItemHeight` theme attribute through the Activity's display metrics,
+without hidden API reflection; this is the public
+[AndroidX compatibility path](https://android.googlesource.com/platform/frameworks/support/+/34ede8799a022385ca94a1bc111f978ac2e65f45/core/core/src/main/java/androidx/core/view/ViewConfigurationCompat.java).
+These pixel packets bypass discrete wheel preferences. A failed refresh keeps
+the accepted logical factors; when no factor was ever observed, an explicit
+authored compatibility policy treats each axis unit as one line. That fallback
+does not claim an OS factor. `android_axis_factor_policy` runs the actual portable
+cache/normalization seam and covers API selection, fractional values, failed
+refresh, recovery and invalid projection. It does not prove execution on an
+Android device. The AppKit/Android native sources require device validation in
+addition to cross-target type checking.
+
+### Native Win32 owner delivery survives message-post refusal
+
+Owner turns ordinarily use the internal HWND's posted message, including inside
+native modal loops. If posting fails, the transport signals an unnamed auto-reset
+kernel event. The FLUI message loop waits on that event alongside its message queue
+and frame/source deadlines, including an infinite idle wait without user windows.
+Both paths drive the same owner-turn slot and quit policy. A strong `OwnedHandle`
+owner spans every wait; closing admission prevents a retired proxy from posting.
+The event contains no callback or UI state and requires no polling thread.
+`failed_native_posts_still_deliver_owner_turns_and_quit` injects physical post
+refusal and verifies worker admission, reentrant continuation and quit through
+the actual native loop. If both the post and kernel signal fail, the caller still
+receives an error and OwnerSignal retains its debt. A third-party modal loop does
+not wait on this private event; fallback delivery resumes when FLUI regains its loop.
+
 ### Native Win32 delivers admitted idle deadlines through live window paints
 
 The owner loop keeps admitted deadline delivery separate from the next hook
@@ -295,7 +418,7 @@ immediately instead of hanging while trying to re-enter the same mutex.
 ### Standalone AppKit stops its loop and returns through Rust cleanup
 
 The existing `Platform` exit-policy hook remains the boundary: `flui-app`
-owns realm/service policy; `flui-platform` owns window bookkeeping and native
+owns UI runtime/service policy; `flui-platform` owns window bookkeeping and native
 loop actuation. AppKit now implements both policy installation and coalesced,
 any-thread re-evaluation. Close callbacks finish before the deferred owner turn
 consults the hook. Hooks run outside locks, and both loop phase and window count
@@ -894,9 +1017,9 @@ gpui), and the macOS module's own header already commits to migrating there.
 
 **Why `applicationWillTerminate:`.** `UIApplicationMain` never returns, so
 there is no "after `Platform::run`" for the runner to use — the desktop and
-Android runners call `teardown_platform_realm()` there. Without a deliberate
+Android runners call `teardown_platform_ui_runtime()` there. Without a deliberate
 choice the framework never receives its loop-exit signal on iOS and leaks every
-realm, service pool and the clipboard for the process's life. That delegate
+UI runtime, service pool and the clipboard for the process's life. That delegate
 method is the only pre-exit notification iOS sends, so the platform fires its
 quit handler from it and the runner runs the teardown.
 
@@ -997,7 +1120,7 @@ provides `HeadlessOwnerTurns`, an owner-local driver and one-shot posting failur
 injection for deterministic app recovery tests. Successful headless run return
 leaves the retained logical owner alive; failed bootstrap, quit and destruction
 close it. The app uses this transport for pending-window completion without a
-window or realm frame. It is not a generic closure executor.
+window or UI runtime frame. It is not a generic closure executor.
 
 Run the live macOS oracle with a GUI session:
 

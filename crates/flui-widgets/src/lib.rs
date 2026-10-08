@@ -100,6 +100,7 @@ pub mod image;
 pub mod interaction;
 pub mod layout;
 pub mod localization;
+mod media_query;
 
 /// `Navigator` and routing — see `docs/adr/ADR-0019-navigator-routing-seam.md`. The
 /// route stack, its lifecycle, the flush algorithm and the result channel are
@@ -132,14 +133,15 @@ pub mod wrap;
 // Flat re-exports — `flui_widgets::Padding`, one import path for every widget.
 // ============================================================================
 
-// Application-scoped inherited widgets: ambient screen data, and the
+// Application composition and the
 // `InheritedTheme` trait a theme widget (e.g. `flui_material::Theme`)
 // implements. The Material `Theme`/`ThemeData` widget itself lives in
 // `flui-material` — see `app` module docs.
 pub use app::{
-    AppBuilder, AppForm, InheritedTheme, MediaQuery, MediaQueryData, NavigatorForm, RouterForm,
-    SafeArea, WidgetsApp, WidgetsAppState,
+    AppBuilder, AppForm, InheritedTheme, NavigatorForm, RouterForm, SafeArea, WidgetsApp,
+    WidgetsAppState,
 };
+pub use media_query::{MediaQuery, MediaQueryData};
 // `Brightness` is the value type `MediaQueryData` (and any theme's
 // brightness field) uses; re-exported here so callers need only
 // `use flui_widgets::Brightness`.
@@ -243,15 +245,16 @@ pub use router::{
     Routable, RouteParseError, RoutePath, Router, RouterError, RouterHandle, RouterState,
 };
 pub use scroll::{
-    BouncingScrollPhysics, ClampingScrollPhysics, CustomScrollView, GridView, ListView,
-    OverScrollHeaderStretchConfiguration, PageController, PageScrollPhysics, PageView,
-    PageViewState, RefreshController, RefreshIndicator, RefreshIndicatorState, ScrollController,
-    ScrollMetrics, ScrollPhysics, Scrollable, Scrollbar, SharedScrollPhysics,
-    ShrinkWrappingViewport, SingleChildScrollView, SliverChildBuilderDelegate, SliverFillRemaining,
-    SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable, SliverFillViewport,
-    SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList, SliverMainAxisGroup,
-    SliverOffstage, SliverOpacity, SliverPadding, SliverPersistentHeader,
+    BouncingScrollPhysics, ClampingScrollPhysics, CustomScrollView, GridView,
+    InvalidWheelScrollDistance, ListView, OverScrollHeaderStretchConfiguration, PageController,
+    PageScrollPhysics, PageView, PageViewState, RefreshController, RefreshIndicator,
+    RefreshIndicatorState, ScrollController, ScrollMetrics, ScrollPhysics, Scrollable, Scrollbar,
+    SharedScrollPhysics, ShrinkWrappingViewport, SingleChildScrollView, SliverChildBuilderDelegate,
+    SliverFillRemaining, SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable,
+    SliverFillViewport, SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList,
+    SliverMainAxisGroup, SliverOffstage, SliverOpacity, SliverPadding, SliverPersistentHeader,
     SliverPersistentHeaderDelegate, SliverToBoxAdapter, StretchTriggerSignal, Viewport,
+    WheelScrollDistances,
 };
 pub use scroll::{FloatingHeaderSnapConfiguration, ScrollPositionScope};
 pub use semantics::{ExcludeSemantics, IndexedSemantics, MergeSemantics, Semantics};

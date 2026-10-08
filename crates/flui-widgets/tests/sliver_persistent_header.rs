@@ -218,13 +218,42 @@ pub(crate) fn a_floating_snap_header_snaps_fully_open_when_a_startward_scroll_en
     // content = Forward), released without fling velocity: the release is
     // what must trigger the snap.
     laid.dispatch_pointer_down(150.0, 100.0);
-    laid.dispatch_pointer_move(150.0, 170.0); // 70px down: slop + pan_start
+    // The sole pan member wins the closed arena at Down. Both moves are
+    // accepted updates, so their full displacement reaches the scroll offset.
+    laid.dispatch_pointer_move(150.0, 170.0);
+    laid.tick();
+    assert_eq!(
+        controller.pixels(),
+        130.0,
+        "premise: the sole accepted pan delivers the first 70px update"
+    );
     laid.dispatch_pointer_move(150.0, 175.0); // small further drag
+    laid.tick();
+    assert_eq!(
+        controller.pixels(),
+        125.0,
+        "premise: the accepted drag moves toward the start"
+    );
+    assert!(
+        controller.position().is_scrolling(),
+        "premise: the drag is active"
+    );
+    assert_eq!(
+        controller.position().user_scroll_direction(),
+        flui_rendering::view::ScrollDirection::Forward,
+        "premise: the snap listener has a startward user direction"
+    );
+    // Hardware timestamps follow the virtual clock. A stationary gap makes
+    // this a release without a fling, rather than two rapid samples at Up.
+    laid.pump_for(Duration::from_millis(100));
     laid.dispatch_pointer_up(150.0, 175.0);
+    assert!(
+        !controller.position().is_scrolling(),
+        "premise: the stationary release ends scrolling"
+    );
 
-    // Drive frames: whatever the release produced (immediate end or a brief
-    // ballistic run), the snap animation must then expand the header to
-    // fully revealed. Bounded so a never-snapping regression fails loudly.
+    // Drive the snap after the idle release until the header is fully
+    // revealed. Bounded so a never-snapping regression fails loudly.
     let mut frames = 0;
     while builds.borrow().last().map(|(shrink, _)| *shrink) != Some(0.0) && frames < 2_000 {
         laid.pump_for(Duration::from_millis(16));

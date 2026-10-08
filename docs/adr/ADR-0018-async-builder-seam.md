@@ -48,7 +48,7 @@ the same channel.
 and task bounds in D3 and D5; other decisions remain in force.
 
 The ownership and task bounds in this section are superseded by
-[ADR-0136 §2](ADR-0136-owner-local-ui-surfaces.md): the realm's `OwnerFrame` holds
+[ADR-0136 §2](ADR-0136-owner-local-ui-surfaces.md): the UI runtime's `OwnerFrame` holds
 the owner-local futures, `AsyncDriver` is a weak handle, and only wake capabilities
 cross threads. Begin-frame polling and inline eager subscription keep the order below.
 

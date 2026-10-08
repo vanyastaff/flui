@@ -1,17 +1,17 @@
-//! Test doubles for driving a realm with no platform backend and no GPU.
+//! Test doubles for driving a UI runtime with no platform backend and no GPU.
 //!
 //! Compiled for this crate's own tests and, through the `test-support`
 //! feature, for `flui-app`'s, which enables it on its dev edge only.
 //!
-//! - [`TestWindow`]: a [`PlatformWindow`] value with every knob the realm
+//! - [`TestWindow`]: a [`PlatformWindow`] value with every knob the UI runtime
 //!   tests vary (id, scale factor, sizes, focus, visibility, an injected
-//!   text-input capability) and recorders for what the realm asked of it
+//!   text-input capability) and recorders for what the UI runtime asked of it
 //!   (redraws, pre-present notifications, the cursor).
 //! - [`ScriptedSink`]: a [`FrameSink`] whose submit verdicts a test scripts.
 //!
 //! Neither the window nor the sink is `flui_platform`'s `MockWindow` or a raster backend: those are
 //! minted by a live headless platform or a GPU device, and a state-level
-//! realm test wants a value with no platform or device ceremony. A test that
+//! UI runtime test wants a value with no platform or device ceremony. A test that
 //! needs the real headless window's capabilities opens one from
 //! `flui_platform::headless_platform()` (a dev dependency here).
 
@@ -257,11 +257,11 @@ impl PlatformWindow for TestWindow {
 /// index and submitted scene in, the verdict out.
 type SubmitScript = Box<dyn FnMut(u32, &Scene) -> SubmitVerdict + Send>;
 
-/// Closure-configurable [`FrameSink`] double: the headless sink a realm's
+/// Closure-configurable [`FrameSink`] double: the headless sink a UI runtime's
 /// frame transaction is tested against.
 ///
-/// It scripts [`SubmitVerdict`]s, the realm-side classification every host
-/// sink produces, so a test pins the realm's handling of each verdict. How a
+/// It scripts [`SubmitVerdict`]s, the UI runtime-side classification every host
+/// sink produces, so a test pins the UI runtime's handling of each verdict. How a
 /// host maps its own backend outcomes onto verdicts is that host's test.
 ///
 /// Construct through [`always_presents`], [`single_shot`],
@@ -280,7 +280,7 @@ pub struct ScriptedSink {
     /// its own state.
     script: SubmitScript,
     /// How many times `submit` ran — the "did the scene actually leave the
-    /// realm" oracle most tests assert on.
+    /// UI runtime" oracle most tests assert on.
     pub submit_calls: u32,
     /// What `surface_size` reports.
     size: (u32, u32),
@@ -314,7 +314,7 @@ impl ScriptedSink {
     /// Exactly one submit is allowed; it returns `verdict`.
     ///
     /// A second submit panics: single-frame tests script one outcome and
-    /// rely on the panic to catch a frame that unexpectedly leaves the realm
+    /// rely on the panic to catch a frame that unexpectedly leaves the UI runtime
     /// twice.
     #[must_use]
     pub fn single_shot(verdict: SubmitVerdict) -> Self {

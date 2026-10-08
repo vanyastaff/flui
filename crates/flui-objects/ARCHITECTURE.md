@@ -158,14 +158,14 @@ real element tree and checks preserved render IDs and child state.
 
 `RenderParagraph` and `RenderEditable` pass `&mut ctx.text()` to every
 `TextPainter` measurement: `perform_layout`, the four intrinsics,
-`compute_dry_layout` and `compute_dry_baseline`. The context is the realm's
+`compute_dry_layout` and `compute_dry_baseline`. The context is the UI runtime's
 `TextContext`, lent by the pipeline (flui-rendering's "Layout contexts lend the
-realm's text context"), so a paragraph measures with its own realm's fonts
+UI runtime's text context"), so a paragraph measures with its own UI runtime's fonts
 rather than an ambient collection (ADR-0092 §10 step 3; flui-painting mapping decision 14), and
 paints the runs of the layout that measured (step 4). Every
 `harness_*` test for both objects runs through the lent context. flui-runtime's
-`two_realms_measure_text_through_their_own_contexts` shows the loan reaches a
-realm's context through a mounted `Text`.
+`two_ui_runtimes_measure_text_through_their_own_contexts` shows the loan reaches a
+UI runtime's context through a mounted `Text`.
 
 ---
 
@@ -205,7 +205,7 @@ selection through the viewport, including RTL and obscured text.
 
 ## Thread safety
 
-No locks. Catalog objects are mutated on the UI realm's layout/paint thread
+No locks. Catalog objects are mutated on the UI runtime's layout/paint thread
 through `PipelineOwner`; they hold no shared mutable state of their own.
 
 ---

@@ -117,7 +117,7 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// Unique identifier for this pipeline owner.
     id: u64,
 
-    /// The realm's text context, lent to every measurement in this
+    /// The UI runtime's text context, lent to every measurement in this
     /// pipeline's layout, intrinsic and dry queries (ADR-0092 §10 step 3).
     /// A constructor argument: no pipeline exists without one.
     text: crate::pipeline::TextContextHandle,

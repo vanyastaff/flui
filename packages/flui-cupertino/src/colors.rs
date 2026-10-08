@@ -4,6 +4,7 @@
 use flui_sdk::painting::Color;
 use flui_sdk::platform::Brightness;
 use flui_sdk::view::prelude::BuildContext;
+use flui_sdk::widgets::MediaQuery;
 
 // =============================================================================
 // CupertinoColor — a literal color or a dynamic one
@@ -25,8 +26,8 @@ use flui_sdk::view::prelude::BuildContext;
 pub enum CupertinoColor {
     /// Already a concrete color — `resolve` returns it unchanged.
     Static(Color),
-    /// A dynamic color — `resolve` looks up brightness (and, in a future
-    /// increment, contrast/elevation) from the ambient context.
+    /// A dynamic color — `resolve` looks up brightness and contrast from the
+    /// ambient context. Interface elevation remains at its base value.
     Dynamic(CupertinoDynamicColor),
 }
 
@@ -36,10 +37,7 @@ impl CupertinoColor {
     /// [`CupertinoDynamicColor::resolve_from`].
     #[must_use]
     pub fn resolve(&self, ctx: &dyn BuildContext) -> Color {
-        match self {
-            Self::Static(color) => *color,
-            Self::Dynamic(dynamic) => dynamic.resolve_from(ctx),
-        }
+        ColorResolver::new(ctx, None).resolve(*self)
     }
 }
 
@@ -59,25 +57,21 @@ impl From<CupertinoDynamicColor> for CupertinoColor {
 // CupertinoDynamicColor
 // =============================================================================
 
-/// A color that adapts to the ambient brightness (and, in the full iOS model,
-/// also contrast and interface elevation — see the "Resolution scope" section
-/// below) of the [`BuildContext`] it is resolved against.
+/// A color that adapts to the ambient brightness and contrast of the
+/// [`BuildContext`] it is resolved against.
 ///
 /// The data is the full 8-variant struct: light/dark, each at normal or high
 /// contrast, each at base or elevated interface level.
 ///
-/// ## Resolution scope (named V1 reduction)
+/// ## Resolution scope
 ///
-/// [`resolve_from`](Self::resolve_from) fully resolves the **brightness**
-/// axis only: `CupertinoTheme`'s ambient `brightness` field,
+/// [`resolve_from`](Self::resolve_from) resolves brightness from
+/// `CupertinoTheme`'s ambient `brightness` field,
 /// falling back to `MediaQuery::platform_brightness` when no `CupertinoTheme`
-/// ancestor sets one. The **contrast** and **interface-elevation** axes are
-/// stored — every variant value below is carried, so a future
-/// increment can wire them up without touching this table — but resolution
-/// always treats them as "normal contrast, base elevation" (`highContrast:
-/// false`, `elevated: false`), because FLUI's `MediaQueryData` has no
-/// `high_contrast` field yet and there is no `CupertinoUserInterfaceLevel`
-/// ambient. Named seam, not a silent gap.
+/// ancestor sets one. Contrast follows [`MediaQuery::high_contrast_of`],
+/// defaulting to normal contrast without an ancestor. Explicit theme brightness
+/// does not mask the contrast preference. Interface elevation remains at base
+/// elevation because no interface-level ambient is implemented yet.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CupertinoDynamicColor {
     /// Light mode, normal contrast, base elevation.
@@ -165,20 +159,11 @@ impl CupertinoDynamicColor {
     }
 
     /// Resolves this dynamic color against `ctx`, per the "Resolution scope"
-    /// section on the type doc: brightness fully resolved, contrast and
-    /// elevation always resolved as their base variant.
+    /// section on the type doc: brightness and contrast resolved, elevation
+    /// at its base variant. Only fields that affect the color are dependencies.
     #[must_use]
     pub fn resolve_from(&self, ctx: &dyn BuildContext) -> Color {
-        let brightness = if self.is_platform_brightness_dependent() {
-            crate::theme::CupertinoTheme::maybe_brightness_of(ctx).unwrap_or(Brightness::Light)
-        } else {
-            Brightness::Light
-        };
-
-        match brightness {
-            Brightness::Light => self.color,
-            Brightness::Dark => self.dark_color,
-        }
+        ColorResolver::new(ctx, None).dynamic(*self)
     }
 
     /// Resolves `resolvable` by calling [`CupertinoColor::resolve`] — a
@@ -202,6 +187,49 @@ impl CupertinoDynamicColor {
     }
 }
 
+/// Shares precedence and selective inherited reads between standalone colors,
+/// theme materialization and text roles. A theme being resolved need not already
+/// be installed as an ancestor for its explicit brightness to take effect.
+pub(crate) struct ColorResolver<'a> {
+    context: &'a dyn BuildContext,
+    brightness: Option<Brightness>,
+}
+
+impl<'a> ColorResolver<'a> {
+    pub(crate) fn new(context: &'a dyn BuildContext, brightness: Option<Brightness>) -> Self {
+        Self {
+            context,
+            brightness,
+        }
+    }
+
+    pub(crate) fn resolve(&self, color: CupertinoColor) -> Color {
+        match color {
+            CupertinoColor::Static(color) => color,
+            CupertinoColor::Dynamic(color) => self.dynamic(color),
+        }
+    }
+
+    pub(crate) fn dynamic(&self, color: CupertinoDynamicColor) -> Color {
+        let brightness = if color.is_platform_brightness_dependent() {
+            self.brightness
+                .or_else(|| crate::theme::CupertinoTheme::maybe_brightness_of(self.context))
+                .unwrap_or(Brightness::Light)
+        } else {
+            Brightness::Light
+        };
+        let (normal, contrast) = match brightness {
+            Brightness::Light => (color.color, color.high_contrast_color),
+            Brightness::Dark => (color.dark_color, color.dark_high_contrast_color),
+        };
+        if normal != contrast && MediaQuery::high_contrast_of(self.context).unwrap_or(false) {
+            contrast
+        } else {
+            normal
+        }
+    }
+}
+
 // =============================================================================
 // CupertinoColors — the named palette
 // =============================================================================
@@ -211,10 +239,8 @@ impl CupertinoDynamicColor {
 /// ([`crate::theme`]'s defaults, [`crate::text_theme`]'s label/action colors,
 /// [`crate::button`]'s fill/disabled/foreground colors).
 ///
-/// Every value below is pinned by a const-table test (`tests/colors.rs`)
-/// asserting the exact ARGB channels, including the dark-mode `SYSTEM_BLUE`
-/// variant — `(10, 132, 255)`, not the visually similar `(9, 132, 255)` a
-/// from-memory value would be one digit away from.
+/// Mounted resolution is exercised in `tests/colors.rs`; application-level
+/// publication of the blue variants is exercised in `tests/cupertino_app.rs`.
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct CupertinoColors;

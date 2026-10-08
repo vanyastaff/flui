@@ -214,7 +214,7 @@ stamped with the pre-resize generation and requires it rejected.
 The raster side never calls `PlatformWindow::request_redraw`. Its wake hook pushes onto a channel
 and pokes a relay; the platform's event-loop waker drains it on the owner thread. Either ground is
 sufficient: a raster-thread call would falsify `MacOSWindow`'s `unsafe impl Send` precondition
-(decision 1's rule), and the wake hook is `Send + Sync`-bound while realm state is `!Send`, so
+(decision 1's rule), and the wake hook is `Send + Sync`-bound while UI runtime state is `!Send`, so
 capturing owner state in it does not compile.
 
 The relay is a new verb on ADR-0039 §3's `PlatformProxy` lane, not a second wake path. Only winit
@@ -259,7 +259,7 @@ owner and `submit` returns `OwnerGone` (corroborated by `JoinHandle::is_finished
 waits on the one-shot with a deadline. On timeout it detaches with a loud error, and **the window is
 quarantined, not closed**: the presentation leaves the runtime and its
 `(JoinHandle, Arc<dyn PlatformWindow>)` moves into a process-lifetime quarantine; `close()` is never
-called on it and the OS reclaims both at exit. `ExitPolicy::OnLastWindowClosed` keys on realm slots,
+called on it and the OS reclaims both at exit. `ExitPolicy::OnLastWindowClosed` keys on UI runtime slots,
 so exit is unaffected. A best-effort `minimize()` is cosmetic.
 
 Why quarantine is the only sound outcome: a wedged thread is typically blocked inside

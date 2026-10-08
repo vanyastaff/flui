@@ -164,7 +164,7 @@ fractional ratios ([flutter#151065](https://github.com/flutter/flutter/issues/15
   axis-aligned scale. Under rotation, skew or perspective, content is antialiased and not
   snapped.
 - **Border and stroke widths are resolved to whole device pixels during layout**, using the
-  realm's `DevicePixelRatio`. Firefox and GPUI do the same.
+  UI runtime's `DevicePixelRatio`. Firefox and GPUI do the same.
   - A width in (0, 1] device px becomes 1; anything wider takes the floor. A non-zero width
     therefore never disappears.
   - The content inset and the painted border agree exactly, because both use the resolved width.

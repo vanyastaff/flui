@@ -23,7 +23,7 @@ pub(crate) fn interaction_targets_are_isolated_between_headless_bindings() {
     second.enter_owner_scope(|| {
         assert!(matches!(
             second_handle.replace_pointer(target, |_| {}),
-            Err(InteractionDispatchError::WrongRealm)
+            Err(InteractionDispatchError::WrongRuntime)
         ));
     });
 }

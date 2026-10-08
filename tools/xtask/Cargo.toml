@@ -50,6 +50,11 @@ keyboard-types.workspace = true
 [lints]
 workspace = true
 
+# The key-vocabulary generator reads keyboard-types source files through Cargo
+# metadata instead of importing its Rust types. It remains a pinned input.
+[package.metadata.cargo-shear]
+ignored = ["keyboard-types"]
+
 [package.metadata.flui]
 tier-kind = "tool"
 # Repository automation, a host tool.

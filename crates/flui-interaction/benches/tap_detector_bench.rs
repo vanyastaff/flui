@@ -144,7 +144,7 @@ fn bench_admission(c: &mut Criterion) {
             |fixture| {
                 fixture
                     .recognizer
-                    .add_pointer(PointerDispatch::at_root(black_box(&down)))
+                    .add_pointer(PointerDispatch::at_root(black_box(&down)));
             },
             BatchSize::SmallInput,
         );

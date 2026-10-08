@@ -231,7 +231,7 @@ impl RecoveredAt {
 /// from, recorded so it can be forwarded as a frame-failure report
 /// instead of vanishing into `tracing` alone.
 ///
-/// `#[non_exhaustive]`: the realm maps this into a `FrameFailureKind`
+/// `#[non_exhaustive]`: the UI runtime maps this into a `FrameFailureKind`
 /// variant that is expected to grow further fields without this type's
 /// existing ones changing shape underneath it.
 #[non_exhaustive]

@@ -168,6 +168,9 @@ fn raise_time(event: &mut PointerEvent, floor: u64) -> u64 {
         PointerEvent::Down(button) => &mut button.sample.time,
         PointerEvent::Up(button) => &mut button.sample.time,
         PointerEvent::Move(update) => {
+            if update.current().time.as_nanos() >= floor {
+                return update.current().time.as_nanos();
+            }
             let mut sample = *update.current();
             sample.time = EventTime::from_nanos(sample.time.as_nanos().max(floor));
             *update = measured_move(update, sample);
@@ -261,17 +264,14 @@ impl ResamplerInner {
             .get_disjoint_mut([index, index + 1])
             .expect("BUG: adjacent queue entries exist");
         if let (PointerEvent::Move(older), PointerEvent::Move(newer)) =
-            (&older.event, &mut newer.event)
+            (&mut older.event, &mut newer.event)
         {
-            if newer.try_coalesce(older).is_err() {
+            if newer.try_coalesce_from(older).is_err() {
                 return false;
             }
             // Keep the newest samples only, so a queue that is never sampled
             // cannot grow without bound through the history either.
-            let history = newer.coalesced();
-            let excess = history.len().saturating_sub(MAX_COALESCED_HISTORY);
-            let bounded = history[excess..].to_vec();
-            *newer = newer.clone().with_coalesced(bounded);
+            newer.retain_latest_coalesced(MAX_COALESCED_HISTORY);
         }
         self.event_queue.remove(index);
         true

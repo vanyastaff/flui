@@ -23,13 +23,16 @@ mod android_exit_path;
 mod contract;
 #[path = "file_store.rs"]
 mod file_store;
+#[path = "preferences.rs"]
+mod preferences;
 #[path = "text_input_mapping.rs"]
 mod text_input_mapping;
 #[path = "window_callback_unwind.rs"]
 mod window_callback_unwind;
+#[path = "window_installation.rs"]
+mod window_installation;
 
 /// Runs every case even after one fails, then panics listing the failing case names.
-#[cfg(feature = "storage")]
 fn run_table(table: &str, cases: &[(&str, fn())]) {
     let failed: Vec<&str> = cases
         .iter()

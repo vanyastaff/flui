@@ -18,9 +18,9 @@ The application delegate runs `on_ready` once. A registered, fallible scene
 consumer receives the session identity, attachment identity and exact logical
 window on connection. Registration precedes scene admission. The runner owns
 process services, watcher and root configuration; each accepted session owns a
-realm/tree/render lane. Disconnect retains that realm and reports reversible
+UI runtime/tree/render lane. Disconnect retains that UI runtime and reports reversible
 `Detached`. Reconnect attaches the same logical window and retained tree to a
-new native container. Terminal discard/close disposes the realm; a subsequent
+new native container. Terminal discard/close disposes the UI runtime; a subsequent
 session installs a fresh tree from the retained root configuration. Explicit close
 and OS discard retain terminal persistent identities for the process lifetime;
 a delayed reconnect cannot resurrect them even if UIKit refuses destruction.
@@ -32,7 +32,7 @@ The initial implementation admits one logical session at a time. Other sessions
 are rejected before constructing their UI; this is not a claim of complete
 multiwindow support. Native window publication follows successful consumer
 installation and another admission check. Close, discard and quit during setup
-cancel publication. Provisional registered realms are cleaned up on failure.
+cancel publication. Provisional registered UI runtimes are cleaned up on failure.
 
 A stable `FluiView` belongs to the logical session. `UIWindow` and its controller
 belong to an attachment. Disconnect releases the GPU surface before detaching
@@ -71,7 +71,7 @@ protect a later invocation by UIKit.
 ## Mapping decisions
 
 Apple's process/session/attachment distinction owns native lifetime. FLUI retains
-its Rust realm and three-tree across a reversible disconnect rather than rerunning
+its Rust UI runtime and three-tree across a reversible disconnect rather than rerunning
 the process bootstrap. The execution/focus/visibility protocol remains ADR-0072;
 scene ownership introduces no second lifecycle reducer. `Running` means OS
 execution eligibility, not a successful GPU surface restoration. An existing

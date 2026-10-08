@@ -18,6 +18,7 @@ mod com_apartment;
 mod display;
 mod events;
 mod platform;
+mod preferences;
 mod text_services;
 mod util;
 mod window;

@@ -43,6 +43,7 @@
 //! needs a window has nothing to build a surface from before it.
 
 pub mod input;
+mod preferences;
 pub mod window;
 
 use std::{
@@ -63,7 +64,7 @@ use crate::{
     data_transfer::{DataTransferSource, NullDataTransferSource},
     error::{BootstrapError, PlatformError},
     redraw_poll::RedrawPoll,
-    shared::PlatformHandlers,
+    shared::{PlatformHandlers, owner_signal::OwnerSignal},
     traits::{
         Clipboard, DisplayId, MobileCapabilities, OpenWindowError, OwnerPlatform, Platform,
         PlatformCapabilities, PlatformDisplay, PlatformExecutor, PlatformReadyCallback,
@@ -129,6 +130,9 @@ pub struct AndroidPlatform {
     clipboard: Arc<MockClipboard>,
     capabilities: MobileCapabilities,
     input_state: Mutex<input::AndroidInputState>,
+    owner_signal: Arc<OwnerSignal>,
+    scroll_factors: Mutex<crate::shared::android_scroll::FactorCache>,
+    preference_admission: crate::shared::preference_read::ReadAdmission,
 }
 
 // Opaque on purpose, matching `HeadlessPlatform` and `WinitPlatform`. A
@@ -147,6 +151,11 @@ impl AndroidPlatform {
     /// Create a new Android platform from the `AndroidApp` provided by
     /// `android_main()`
     pub fn new(app: AndroidApp) -> Self {
+        let waker = app.create_waker();
+        let owner_signal = OwnerSignal::new(Arc::new(move || {
+            waker.wake();
+            Ok(())
+        }));
         Self {
             app,
             handlers: Arc::new(Mutex::new(PlatformHandlers::new())),
@@ -157,12 +166,47 @@ impl AndroidPlatform {
             clipboard: Arc::new(MockClipboard::new()),
             capabilities: MobileCapabilities::android(),
             input_state: Mutex::new(input::AndroidInputState::default()),
+            owner_signal,
+            scroll_factors: Mutex::new(crate::shared::android_scroll::FactorCache::default()),
+            preference_admission: crate::shared::preference_read::ReadAdmission::default(),
         }
     }
 
     /// Get the underlying `AndroidApp`
     pub fn app(&self) -> &AndroidApp {
         &self.app
+    }
+
+    fn refresh_preferences(&self) -> Result<crate::SystemPreferences, PlatformError> {
+        if !self.owner_signal.accepting() {
+            return Err(PlatformError::Preferences {
+                message: "the Android preference owner has stopped".into(),
+            });
+        }
+        if self.owner_signal.owner() != std::thread::current().id() {
+            return Err(PlatformError::Preferences {
+                message: "Android preferences require the activity owner thread".into(),
+            });
+        }
+        let (current, needs_delivery) =
+            self.preference_admission
+                .read_observation(web_time::Instant::now(), || {
+                    preferences::sample(&self.app).map_err(|error| PlatformError::Preferences {
+                        message: error.to_string(),
+                    })
+                })?;
+        if needs_delivery {
+            let _ = self.owner_signal.wake();
+        }
+        Ok(current)
+    }
+
+    fn refresh_scroll_factors(&self) {
+        // Query outside the owner-local cache guard. A failed refresh keeps
+        // accepted logical factors; only the never-observed case uses authored
+        // line normalization for compatibility with supported API21 devices.
+        let reading = preferences::scroll_factors(&self.app).ok();
+        self.scroll_factors.lock().observe(reading);
     }
 
     fn cancel_input_contacts(&self, reason: flui_platform_api::pointer::CancelReason) {
@@ -199,6 +243,7 @@ impl AndroidPlatform {
         drop(window_guard);
 
         let scale_factor = window.scale_factor();
+        let scroll_policy = self.scroll_factors.lock().policy();
         let callbacks = window.callbacks();
 
         match self.app.input_events_iter() {
@@ -213,6 +258,7 @@ impl AndroidPlatform {
                             let events = self.input_state.lock().convert_motion_event(
                                 motion,
                                 scale_factor,
+                                scroll_policy,
                                 device,
                             );
                             // The one place a touch is visible between the
@@ -295,6 +341,10 @@ impl AndroidPlatform {
 }
 
 impl Platform for AndroidPlatform {
+    fn preferences(&self) -> Result<crate::SystemPreferences, PlatformError> {
+        self.refresh_preferences()
+    }
+
     fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
         self.background_executor.clone()
     }
@@ -307,6 +357,14 @@ impl Platform for AndroidPlatform {
         // this loop reads through the same `Arc` for its whole lifetime
         // instead of the original `Box`.
         let platform = Arc::new(*self);
+        platform.owner_signal.bind_owner();
+        platform
+            .owner_signal
+            .start()
+            .map_err(|error| PlatformError::Preferences {
+                message: error.to_string(),
+            })?;
+        let mut next_preference_sample = web_time::Instant::now();
 
         let mut on_ready = Some(on_ready);
         platform.execution_resumed.store(false, Ordering::SeqCst);
@@ -326,6 +384,21 @@ impl Platform for AndroidPlatform {
         loop {
             if !platform.running.load(Ordering::Relaxed) {
                 break;
+            }
+
+            // Public ViewConfiguration getters have no complete public change
+            // notification. Bound refresh to 500ms, independently of a surface.
+            let now = web_time::Instant::now();
+            if now >= next_preference_sample {
+                platform.refresh_scroll_factors();
+                if let Err(error) = platform.refresh_preferences() {
+                    tracing::warn!(%error, "Android preference query failed");
+                }
+                next_preference_sample = now + Duration::from_millis(500);
+            }
+            if platform.owner_signal.drive() {
+                platform.running.store(false, Ordering::Relaxed);
+                continue;
             }
 
             // Wall-clock wake (mirrors the winit backend's `about_to_wait`):
@@ -485,6 +558,15 @@ impl Platform for AndroidPlatform {
                         }
                         MainEvent::ConfigChanged { .. } => {
                             tracing::debug!("Android: Config changed");
+                            platform.refresh_scroll_factors();
+                            if let Err(error) = platform.refresh_preferences() {
+                                tracing::warn!(%error, "Android configuration query failed");
+                            }
+                            next_preference_sample = web_time::Instant::now() + Duration::from_millis(500);
+                            let window = platform.window.lock().clone();
+                            if let Some(window) = window {
+                                window.callbacks().dispatch_resize(window.logical_size(), window.scale_factor());
+                            }
                         }
                         MainEvent::LowMemory => {
                             tracing::warn!("Android: Low memory warning");
@@ -508,8 +590,10 @@ impl Platform for AndroidPlatform {
             // always `Ready`.
             if should_call_ready && let Some(ready) = on_ready.take() {
                 let owner_platform = Arc::clone(&platform) as Arc<dyn Platform>;
-                let hooks: Arc<dyn OwnerHooks> =
-                    Arc::new(DirectOwnerHooks::new(Arc::clone(&owner_platform)));
+                let hooks: Arc<dyn OwnerHooks> = Arc::new(DirectOwnerHooks::with_signal(
+                    Arc::clone(&owner_platform),
+                    Arc::clone(&platform.owner_signal),
+                ));
                 if let Err(error) = ready(OwnerPlatform::new(owner_platform, hooks)) {
                     tracing::error!(%error, "on_ready bootstrap failed; stopping the event loop");
                     bootstrap_error = Some(error);
@@ -521,6 +605,12 @@ impl Platform for AndroidPlatform {
             }
 
             // Process input events (touch, key) and dispatch through callbacks
+            // Install accepted preference/configuration changes before the
+            // first input packet translated in the new context.
+            if platform.owner_signal.drive() {
+                platform.running.store(false, Ordering::Relaxed);
+                continue;
+            }
             let resumed = platform.execution_resumed.load(Ordering::SeqCst);
             if resumed {
                 platform.process_input_events();
@@ -538,6 +628,7 @@ impl Platform for AndroidPlatform {
         }
 
         platform.execution_resumed.store(false, Ordering::SeqCst);
+        platform.owner_signal.close();
 
         // The loop's one exit, reached by its three returning routes: a
         // `MainEvent::Destroy`, a `quit()` from any thread, a bootstrap
@@ -604,6 +695,7 @@ impl Platform for AndroidPlatform {
         tracing::info!("Android: quit requested");
         self.execution_resumed.store(false, Ordering::SeqCst);
         self.running.store(false, Ordering::Relaxed);
+        let _ = self.owner_signal.request_quit();
     }
 
     fn open_window(
@@ -617,9 +709,11 @@ impl Platform for AndroidPlatform {
         let window = Arc::new(AndroidWindow::new(
             self.app.clone(),
             Arc::clone(&self.execution_resumed),
+            Arc::downgrade(&self.owner_signal),
         ));
         let previous = self.window.lock().replace(Arc::clone(&window));
         if let Some(previous) = previous {
+            previous.revoke_geometry();
             for event in cancelled {
                 previous.callbacks().dispatch_input(event);
             }

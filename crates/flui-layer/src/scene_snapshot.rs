@@ -1,7 +1,7 @@
 //! `SceneSnapshot` — the owned per-presentation per-frame raster package.
 //!
 //! Compositing produces one `SceneSnapshot` per window per frame; it is the one
-//! seam a `UiRealm` hands to a raster owner.
+//! seam a `UiRuntime` hands to a raster owner.
 
 use flui_foundation::FrameStamp;
 use flui_foundation::geometry::Rect;

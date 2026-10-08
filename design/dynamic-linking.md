@@ -303,7 +303,7 @@ Reading the worker path turned up two more. Both are **hypotheses that were not 
 
 1. **The old worker image may be unmapped while the host still holds its code.**
    `WorkerReloadDriver::poll` unloads the old image (`crates/flui-hot-reload/src/worker.rs:458`)
-   and loads the new one (`worker.rs:460`); the realm reassembles only afterwards
+   and loads the new one (`worker.rs:460`); the UI runtime reassembles only afterwards
    (`crates/flui-app/src/app/hot_reload.rs:241-243`, reaching `perform_reassemble` at
    `crates/flui-runtime/src/presentation.rs:1377`). The host's element tree still holds views
    and closures built by the old image: `build_counter_ui` returns a `BoxedView`
@@ -331,7 +331,7 @@ It is not worth building for a path that ADR-0094 deletes. The two issues belong
 
 rustc never links a crate twice into one artifact, so a framework dylib holds exactly one copy
 of every process-global static (`FONT_SYSTEM`, `REQUEST_REBUILD`, `REGISTRY_STACK`,
-`TIME_DILATION`, `APP_RUNTIME`). Dynamic linking therefore does not split realm or registry
+`TIME_DILATION`, `APP_RUNTIME`). Dynamic linking therefore does not split UI runtime or registry
 identity, and it does not interact with the globals gate of
 [ADR-0097](../docs/adr/ADR-0097-no-process-global-state-gate.md). For crates linked statically
 beside the dylib (the facade, official packages) this follows from the same rule but was not

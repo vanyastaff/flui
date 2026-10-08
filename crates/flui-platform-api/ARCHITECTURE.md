@@ -43,7 +43,7 @@ path.
   accessibility bridge speaks AccessKit, so `flui-platform`'s
   `HostWindow: PlatformWindow` carries it host-side: `open_window` returns an
   `Arc<dyn HostWindow>`, and the runner reads the bridge once before handing
-  the realm an `Arc<dyn PlatformWindow>`. A `compile_fail` doctest on the
+  the UI runtime an `Arc<dyn PlatformWindow>`. A `compile_fail` doctest on the
   trait, paired with a twin that compiles, pins that the method is gone.
 - **The raw-handle impls live with the trait.** `HasWindowHandle` and
   `HasDisplayHandle` for `dyn PlatformWindow` are here because the orphan rule
@@ -53,6 +53,30 @@ path.
   `WindowHandle`/`DisplayHandle`/`HandleError` (ADR-0089).
 
 ## Mapping decisions
+
+### Preference observations preserve unavailable values and native units
+
+`SystemPreferences` records observations rather than framework fallback values
+(ADR-0172). Text factors use the bounded accessibility range `1/64..=64`;
+motion observations distinguish
+reduced motion from duration scaling. Vertical wheel lines/pages and horizontal
+character counts have separate representations. The `preferences_contract` table
+pins numeric admission, including adjacent rejected boundary values, subnormal
+text factors and both signs of zero. The widget contract
+`media_text_scaling_changes_the_laid_out_text` checks real paragraph layout at
+both admitted boundaries and fallback after extreme observations. Source
+lifecycle, ordered delivery and consumer projection remain under implementation in
+the platform-layer spec; these value tests do not establish those behaviors.
+
+Mouse double-click timing and touch double-tap timing are independent observations.
+`NativeMouseGeometry` keeps full double-click rectangle dimensions separate from
+drag half-extents; `NativeTouchGeometry` retains physical slop and pixel/second
+fling limits with their validated sampling `DevicePixelRatio`. Host observations
+are comparison and invalidation evidence. `PlatformWindow::gesture_geometry`
+queries the consuming presentation's actual coordinate context: `Ok(None)` means
+unsupported, while a failed or invalid query is an error and must preserve the
+consumer's accepted projection. `preferences_contract` covers independent timing,
+per-context projection, zero axes and overflowing division.
 
 ### Platform services are capability traits in a contract crate
 
@@ -117,6 +141,26 @@ the `ui-events` values the backends still build lives in `flui-platform`
 scroll units, button sets, generated key spellings) and `flui-platform`'s
 `input_vocabulary_conversion` (every backend shape, eraser, non-finite
 release, key round trip through `keyboard-types`).
+
+### Bounded measured history retains checked ownership
+
+`PointerMove::retain_latest_coalesced` removes an oldest prefix from its
+already-checked chronological readings without exposing a mutable vector or
+revalidating copied data. `flui-interaction`'s resampler uses it after canonical
+coalescing to enforce its queue's retained-history bound. Zero is a valid bound;
+the current reading, predictions and complete pointer metadata stay unchanged.
+`bounded_coalesced_history_keeps_latest_readings_and_predictions` in
+`input_vocabulary_contract` pins zero, one and multiple retained readings,
+including distinct sensor readings sharing a coarse timestamp.
+
+`PointerMove::try_coalesce_from` transfers the retiring movement's checked
+history storage to the receiving dispatch; only the older history becomes empty.
+The borrowed `try_coalesce` operation keeps its source intact. Both refuse a
+complete pointer-identity mismatch before any mutation. Checked history bounds
+allow already chronological concatenation to skip filtering and sorting;
+overlapping or out-of-order packets still use canonical filtering and stable
+sorting. `coalescing_transfers_only_checked_history_ownership` pins ordered,
+overlapping, equal-time sensor and future-reading cases through the public API.
 
 ### Data-transfer delivery shares the foundation claim slot
 

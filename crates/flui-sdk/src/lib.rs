@@ -62,6 +62,7 @@ pub mod interaction {
     pub use flui_interaction::DragDownDetails;
     pub use flui_interaction::GestureEndReason;
     pub use flui_interaction::routing::FocusNode;
+    pub use flui_interaction::routing::FocusSubscription;
 }
 
 /// Custom painting and the paint, style and text values, at the paths `flui::painting` uses.

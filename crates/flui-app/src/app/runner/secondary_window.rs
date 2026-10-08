@@ -23,9 +23,10 @@ use super::host::{APP_RUNTIME, runtime_wake_callback, with_owner_platform};
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
-use super::realm_dispatch::{
-    PlatformToUi, RealmDispatcher, RealmTask, close_this_window, dispatch_platform_realm,
-    install_input_wiring, install_presentation_alongside, install_realm_alongside,
+use super::owner_dispatch::{
+    PresentationDispatcher, RuntimeEvent, RuntimeTask, close_this_window,
+    dispatch_platform_ui_runtime, install_input_wiring, prepare_presentation_alongside,
+    prepare_ui_runtime_alongside,
 };
 #[cfg(all(
     not(target_os = "android"),
@@ -53,7 +54,7 @@ fn native_error(source: flui_platform::OpenWindowError) -> AppWindowError {
     }
 }
 
-/// A realm/presentation install failure, retained whole as
+/// A ui_runtime/presentation install failure, retained whole as
 /// [`AppWindowError::Mount`]'s `source`.
 #[cfg(all(
     not(target_os = "android"),
@@ -85,7 +86,7 @@ use flui_view::View;
 /// Opens an additional top-level window while the platform loop
 /// `run_app`/`run_app_with_config` started is already running — the
 /// embedder-facing seam issue #555's [`WindowPolicy`] governs which
-/// realm/presentation topology the new window becomes. Must be called from
+/// ui_runtime/presentation topology the new window becomes. Must be called from
 /// the owner thread while a loop is live (mirrors `bootstrap_desktop`'s own
 /// `OwnerPlatform` access constraint: reachable only from inside, or after,
 /// `on_ready` — e.g. from a `window.on_input`/`window.on_should_close`
@@ -93,36 +94,36 @@ use flui_view::View;
 ///
 /// # [`WindowPolicy::Isolated`]
 ///
-/// Opens a fully independent second realm: its own `UiRealm`, its own
-/// `GlobalKeyScope`, its own `UpdateScheduler` — installed via
-/// `install_realm_alongside`, never `install_platform_realm`'s displacing
-/// legacy path. `two_realms_via_isolated_policy_share_nothing` pins
+/// Opens a fully independent second ui_runtime: its own `UiRuntime`, its own
+/// `GlobalKeyScope`, its own `UpdateScheduler`, prepared for alongside publication.
+/// `two_ui_runtimes_via_isolated_policy_share_nothing` pins
 /// the "share nothing but `SharedEngineServices`" guarantee this policy
 /// claims. Input/close/should-close/focus/visibility/resize dispatch are
-/// wired and addressed to this new realm exactly like the FIRST window's
+/// wired and addressed to this new UI runtime exactly like the FIRST window's
 /// own dispatch.
 ///
 /// # [`WindowPolicy::Shared`]
 ///
-/// Installs a second PRESENTATION into the FIRST realm hosted on this
-/// thread (via `install_presentation_alongside`) — real forest membership,
+/// Installs a second PRESENTATION into the FIRST UI runtime hosted on this
+/// thread (via `prepare_presentation_alongside`) — real forest membership,
 /// a real `WindowRegistry` mapping, real addressed
 /// input/close/should-close/focus/visibility dispatch.
-/// `one_realm_two_windows_policy_routes_by_presentation` pins that this
-/// really is forest-membership routing, not a second realm in disguise.
+/// `one_ui_runtime_two_windows_policy_routes_by_presentation` pins that this
+/// really is forest-membership routing, not a second UI runtime in disguise.
 ///
 /// # Completion and ownership
 ///
-/// `Ready` installs inline. `Pending` reserves loop liveness before native
-/// creation and is polled on window-independent owner turns. Worker completion
-/// wakes that loop through its stamped `PlatformProxy`; no realm scheduler or
+/// Native creation and owner publication can each defer completion. A reservation
+/// holds loop liveness until both finish. Native `Pending` is polled on
+/// window-independent owner turns. Worker completion
+/// wakes that loop through its stamped `PlatformProxy`; no UI runtime scheduler or
 /// visible window is needed. Unwoken futures are not polled on unrelated turns.
-/// An accepted separate-realm request survives closure of its originating realm.
-/// Shared-realm requests capture the exact target identity at admission and fail
-/// if that realm disappears; they never retarget another realm.
+/// An accepted separate-UI runtime request survives closure of its originating ui_runtime.
+/// Shared-UI runtime requests capture the exact target identity at admission and fail
+/// if that UI runtime disappears; they never retarget another UI runtime.
 ///
 /// Polling and installation run outside runtime borrows. Installation waits for
-/// any active realm checkout to finish. Quit and loop replacement invalidate
+/// any active UI runtime checkout to finish. Quit and loop replacement invalidate
 /// outstanding requests, including a batch currently being polled. Resolved but
 /// uninstalled windows are closed and reservations released on every failure.
 /// Asynchronous creation failures are traced. A failed physical wake releases
@@ -140,7 +141,7 @@ use flui_view::View;
 /// # Errors
 ///
 /// Window creation ([`AppWindowError::Native`]) and (`WindowPolicy::Isolated` only)
-/// `UiRealm` construction ([`AppWindowError::Mount`]) surface as `Err`
+/// `UiRuntime` construction ([`AppWindowError::Mount`]) surface as `Err`
 /// exactly like `bootstrap_desktop`'s own first-window failures — this call
 /// does not tear down or exit the loop on failure, unlike a first-window
 /// bootstrap failure (which propagates out of `Platform::run` and ends the
@@ -148,7 +149,7 @@ use flui_view::View;
 /// their app. A call from a thread with no running loop is
 /// [`AppWindowError::NoOwnerLoop`]; one made while the application is
 /// quitting is [`AppWindowError::AdmissionClosed`]; `WindowPolicy::Shared` with no
-/// realm hosted on this thread yet is [`AppWindowError::UnsupportedPolicy`].
+/// UI runtime hosted on this thread yet is [`AppWindowError::UnsupportedPolicy`].
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
@@ -168,17 +169,17 @@ pub fn open_secondary_window(
 /// Must be called from the owner thread while the platform loop is live.
 /// The window becomes a real presentation target: it owns its own render
 /// lane, drives its own frame pump, and accepts input routed to its own
-/// realm — the same contract `run_app`'s primary window satisfies. The
+/// UI runtime — the same contract `run_app`'s primary window satisfies. The
 /// `root` widget is mounted as the new window's root, sharing nothing
 /// widget-visible with any sibling presentation on this host.
 ///
 /// # Policy
 ///
 /// `WindowPolicy::Isolated` is the only policy that admits content:
-/// each such window owns its own `UiRealm`, its own widget tree, its own
+/// each such window owns its own `UiRuntime`, its own widget tree, its own
 /// raster lane. `WindowPolicy::Shared` currently refuses content at
-/// admission with an `Err` — the realm's single-raster-lane contract would
-/// have to be relaxed before a presentation inside one shared realm could
+/// admission with an `Err` — the UI runtime's single-raster-lane contract would
+/// have to be relaxed before a presentation inside one shared UI runtime could
 /// own its own renderer, and that relaxation is deliberately not smuggled
 /// in through this API.
 ///
@@ -221,7 +222,7 @@ where
 struct SecondaryWindowInstallConfig {
     loop_identity: Arc<()>,
     policy: WindowPolicy,
-    shared_with: Option<flui_foundation::RealmId>,
+    shared_with: Option<flui_foundation::UiRuntimeId>,
     reservation: WindowReservation,
     close_request_handler: Option<CloseRequestHandler>,
     frame_failure_detail: FrameFailureDetail,
@@ -237,20 +238,21 @@ struct SecondaryWindowInstallConfig {
 struct PendingCompletion {
     config: SecondaryWindowInstallConfig,
     window: Arc<dyn flui_platform::traits::HostWindow>,
-    /// The install continuation. `None` runs the bare-shell
-    /// [`finish_open_secondary_window`]; `Some` runs the closure, which
-    /// captures everything the content-install path owns (root widget,
-    /// worker reload handle, etc.).
-    ///
-    /// `FnOnce` because a real install consumes the closure's captured
-    /// root exactly once. Boxed so `PendingCompletion` stays
-    /// non-generic — every caller of the drain loop reads the same type,
-    /// and the generic parameter lives only at the `open_window` call
-    /// site that produced this record.
-    install: Option<SecondaryWindowInstall>,
+    stage: CompletionStage,
 }
 
-/// A window the open path resolved synchronously: its realm dispatcher and
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+enum CompletionStage {
+    Bare,
+    Content(SecondaryWindowInstall),
+    Publishing(super::installed_host::Installation),
+}
+
+/// A window the open path resolved synchronously: its UI runtime dispatcher and
 /// the platform window it drives. `None` from the open functions means the
 /// window was accepted but its creation is deferred to a later owner turn.
 #[cfg(all(
@@ -259,13 +261,11 @@ struct PendingCompletion {
     not(target_arch = "wasm32")
 ))]
 pub(super) type OpenedWindow = (
-    RealmDispatcher,
+    PresentationDispatcher,
     Arc<dyn flui_platform::traits::PlatformWindow>,
 );
 
-/// The boxed install continuation a [`PendingCompletion`] carries: given the
-/// install configuration and the opened window, mount the content and return
-/// the realm dispatcher and the window it now drives.
+/// Owns the generic root until preparation and returns its publication receipt.
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
@@ -273,16 +273,56 @@ pub(super) type OpenedWindow = (
 ))]
 type SecondaryWindowInstall = Box<
     dyn FnOnce(
-        SecondaryWindowInstallConfig,
         Arc<dyn flui_platform::traits::HostWindow>,
-    ) -> Result<
-        (
-            RealmDispatcher,
-            Arc<dyn flui_platform::traits::PlatformWindow>,
-        ),
-        AppWindowError,
-    >,
+    ) -> Result<super::installed_host::Installation, AppWindowError>,
 >;
+
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+impl PendingCompletion {
+    fn advance(self) -> Result<(), AppWindowError> {
+        let Self {
+            config,
+            window,
+            stage,
+        } = self;
+        if !secondary_install_admitted(&config.loop_identity) {
+            return Err(AppWindowError::AdmissionClosed);
+        }
+        let receipt = match stage {
+            CompletionStage::Bare => {
+                return finish_open_secondary_window(config, window).map(|_| ());
+            }
+            CompletionStage::Content(install) => {
+                if !config.reservation.0.begin_install() {
+                    return Err(AppWindowError::AdmissionClosed);
+                }
+                install(Arc::clone(&window))?
+            }
+            CompletionStage::Publishing(receipt) => receipt,
+        };
+        if !secondary_install_admitted(&config.loop_identity) {
+            return Err(AppWindowError::AdmissionClosed);
+        }
+        match receipt.outcome() {
+            None => {
+                PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| {
+                    queue.borrow_mut().push(Self {
+                        config,
+                        window,
+                        stage: CompletionStage::Publishing(receipt),
+                    });
+                });
+                Ok(())
+            }
+            Some(Ok(())) => Ok(()),
+            Some(Err(error)) => Err(mount_error(error)),
+        }
+    }
+}
 
 #[cfg(all(
     not(target_os = "android"),
@@ -458,7 +498,7 @@ thread_local! {
     static PENDING_SECONDARY_WINDOW_OPENS: std::cell::RefCell<Vec<PendingOpen>> =
         const { std::cell::RefCell::new(Vec::new()) };
 
-    /// Resolved windows awaiting installation after realm checkout clears.
+    /// Resolved windows awaiting installation after UI runtime checkout clears.
     /// Polling never installs inline; both policies share this completion path.
     #[cfg(all(
         not(target_os = "android"),
@@ -532,19 +572,9 @@ fn secondary_install_admitted(identity: &Arc<()>) -> bool {
     })
 }
 
-/// Applies every `open_secondary_window` `Pending`-arm completion queued by
-/// [`spawn_pending_secondary_window_completion`]'s own future, in request
-/// order. Call only from a point where this thread's dispatch/hot-restart-
-/// visit checkout state is already clear (`dispatched_realm_id` and
-/// `iterating_all_realms` both settled back to their idle values) — the same
-/// discipline [`crate::app::runtime::AppRuntime::drain_pending_realm_mutations`]
-/// requires of its own callers, and for the identical reason:
-/// `finish_open_secondary_window` calls `install_presentation_alongside`/
-/// `install_realm_alongside`, both of which need to actually apply rather
-/// than defer (`WindowPolicy::Shared`'s `install_presentation_alongside` has no
-/// defer-to-idle queue of its own, so calling this before the checkout
-/// clears would just reproduce the same `DispatchInFlight` refusal one level
-/// up).
+/// Apply queued native-window completions in request order after runtime
+/// checkout returns. Reentrant polling is suppressed until the current batch
+/// finishes; logical/native publication is admitted through the installed host.
 ///
 /// A completion's own failure is traced (`tracing::error!`), never
 /// propagated: by the time this runs there is no synchronous caller left for
@@ -554,7 +584,9 @@ fn secondary_install_admitted(identity: &Arc<()>) -> bool {
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
-pub(super) fn drain_pending_secondary_window_completions() {
+pub(super) fn drain_pending_secondary_window_completions(
+    recovery: flui_runtime::owner::RecoveryState,
+) {
     use std::future::Future;
     if APP_RUNTIME.with(|slot| {
         slot.borrow().quit_notification != crate::app::runtime::QuitNotification::Active
@@ -564,7 +596,11 @@ pub(super) fn drain_pending_secondary_window_completions() {
     }
     if APP_RUNTIME.with(|slot| {
         let state = slot.borrow();
-        state.dispatched_realm_id.is_some() || state.iterating_all_realms
+        state
+            .installed_host
+            .logical()
+            .is_executing()
+            .unwrap_or(true)
     }) || POLLING_PENDING_WINDOWS.with(|active| active.replace(true))
     {
         return;
@@ -594,7 +630,10 @@ pub(super) fn drain_pending_secondary_window_completions() {
             );
             continue;
         }
-        if !request.config.reservation.0.take_ready() {
+        if recovery != flui_runtime::owner::RecoveryState::Healthy
+            || first_panic.is_some()
+            || !request.config.reservation.0.take_ready()
+        {
             PENDING_SECONDARY_WINDOW_OPENS.with(|queue| queue.borrow_mut().push(request));
             continue;
         }
@@ -615,7 +654,7 @@ pub(super) fn drain_pending_secondary_window_completions() {
                     queue.borrow_mut().push(PendingCompletion {
                         config: request.config,
                         window,
-                        install: None,
+                        stage: CompletionStage::Bare,
                     });
                 });
             }
@@ -632,25 +671,40 @@ pub(super) fn drain_pending_secondary_window_completions() {
     let completed =
         PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| std::mem::take(&mut *queue.borrow_mut()));
     for completion in completed {
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            // `Some` — a content-bearing secondary window from
-            // `open_window`'s deferred-install path: the closure owns the
-            // root widget and the worker reload handle. `None` — the bare
-            // shell that predates content support: no root, no renderer,
-            // just the realm install and the platform callbacks.
-            let outcome = match completion.install {
-                Some(install) => install(completion.config, completion.window),
-                None => finish_open_secondary_window(completion.config, completion.window),
-            };
-            if let Err(error) = outcome {
+        // Settling an accepted publication releases its reservation even during
+        // recovery. Starting another installer or polling a future must wait.
+        if (recovery != flui_runtime::owner::RecoveryState::Healthy || first_panic.is_some())
+            && !matches!(completion.stage, CompletionStage::Publishing(_))
+        {
+            PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| queue.borrow_mut().push(completion));
+            continue;
+        }
+        let window = Arc::clone(&completion.window);
+        let result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| completion.advance()));
+        let failed = !matches!(&result, Ok(Ok(())));
+        let error = match result {
+            Ok(Ok(())) => None,
+            Ok(Err(error)) => std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 tracing::error!(%error, "installing resolved secondary window failed");
-            }
-        }));
+            }))
+            .err(),
+            Err(payload) => Some(payload),
+        };
         crate::app::lifecycle_state::preserve_first_lifecycle_panic(
             &mut first_panic,
-            result.err(),
+            error,
             "pending window installation",
         );
+        if failed {
+            let error =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| window.close())).err();
+            crate::app::lifecycle_state::preserve_first_lifecycle_panic(
+                &mut first_panic,
+                error,
+                "failed window close",
+            );
+        }
     }
     if let Some(payload) = first_panic {
         std::panic::resume_unwind(payload);
@@ -662,7 +716,7 @@ pub(super) fn drain_pending_secondary_window_completions() {
 /// (embedders address the window only through dispatched events, never a
 /// held handle); this module's own tests need it to drive a REAL close
 /// (`window.close()`) instead of reaching for the internal
-/// `close_this_window`/`request_realm_uninstall` primitives directly, which
+/// `close_this_window`/`request_ui_runtime_uninstall` primitives directly, which
 /// would prove the primitives work without proving THIS function's own
 /// `on_close` wiring calls them.
 ///
@@ -693,9 +747,13 @@ pub(super) fn open_secondary_window_impl(
     let shared_with = if policy == WindowPolicy::Shared {
         Some(
             APP_RUNTIME
-                .with(|slot| slot.borrow().realms.iter().next().map(|(id, _)| *id))
+                .with(|slot| {
+                    slot.borrow().installed_host.logical().runtime_ids()
+                        .expect("BUG: window admission runs outside pure publication")
+                        .into_iter().next()
+                })
                 .ok_or(AppWindowError::UnsupportedPolicy {
-                    reason: "WindowPolicy::Shared requires a realm already hosted on this thread to \
+                    reason: "WindowPolicy::Shared requires a ui_runtime already hosted on this thread to \
                              share with",
                 })?,
         )
@@ -723,7 +781,7 @@ pub(super) fn open_secondary_window_impl(
     };
 
     match open {
-        WindowOpen::Ready(window) => finish_open_secondary_window(install_config, window).map(Some),
+        WindowOpen::Ready(window) => finish_open_secondary_window(install_config, window),
         WindowOpen::Pending(pending) => {
             spawn_pending_secondary_window_completion(install_config, pending)?;
             Ok(None)
@@ -734,12 +792,12 @@ pub(super) fn open_secondary_window_impl(
 /// The content-bearing companion of [`open_secondary_window_impl`]:
 /// identical admission and reservation protocol, but the resolved window
 /// is routed to a full `install_desktop_window`-style mount instead of
-/// the bare-shell `finish_open_secondary_window` — the realm owns a widget
+/// the bare-shell `finish_open_secondary_window` — the UI runtime owns a widget
 /// tree, a GPU raster lane, and a frame pump.
 ///
 /// `WindowPolicy::Shared` is refused at admission, before any window creation
-/// work runs: the realm's raster lane and content renderer are per-realm,
-/// not per-presentation today, so a shared realm presenting N windows
+/// work runs: the UI runtime's raster lane and content renderer are per-UI runtime,
+/// not per-presentation today, so a shared UI runtime presenting N windows
 /// with content would need a lane-per-presentation redesign before this
 /// arm could be honoured.
 #[cfg(all(
@@ -760,7 +818,7 @@ where
     if policy == WindowPolicy::Shared {
         return Err(AppWindowError::UnsupportedPolicy {
             reason: "open_window with content requires WindowPolicy::Isolated; WindowPolicy::Shared \
-                     would imply a lane-per-presentation raster contract the realm does not \
+                     would imply a lane-per-presentation raster contract the ui_runtime does not \
                      provide today",
         });
     }
@@ -780,18 +838,10 @@ where
 
     match open {
         WindowOpen::Ready(window) => {
-            // The install consumes nothing from this function's stack, so
-            // the closure's captured values are the whole state: the
-            // `RealmSlot` install is deferred past whatever
-            // `dispatch_platform_realm` currently owns the realm checkout
-            // (this function may itself run inside one — e.g. a widget
-            // `on_pressed`), and the deferred completion drains after the
-            // dispatch loop on the realm's own turn. Routing through
-            // `PENDING_SECONDARY_WINDOW_COMPLETIONS` is what lets
-            // `install_desktop_window`'s internals — which run
-            // `install_realm_alongside` synchronously against the
-            // registry — observe an idle checkout rather than one held by
-            // the caller's own dispatch.
+            // Preparation consumes the captured root once. The completion then
+            // retains the native window and liveness reservation until the
+            // owner's publication receipt settles, including when this request
+            // originates inside a widget callback.
             let install_config = SecondaryWindowInstallConfig {
                 loop_identity: Arc::clone(&loop_identity),
                 policy,
@@ -808,8 +858,7 @@ where
                 queue.borrow_mut().push(PendingCompletion {
                     config: install_config,
                     window: Arc::clone(&window),
-                    install: Some(Box::new(move |install_slot, window| {
-                        let _ = install_slot; // fields already captured separately
+                    stage: CompletionStage::Content(Box::new(move |window| {
                         super::desktop::install_desktop_window(
                             root,
                             &config_for_install,
@@ -817,15 +866,7 @@ where
                             Arc::clone(&window),
                             host,
                         )
-                        .map(|rendered| {
-                            (
-                                RealmDispatcher {
-                                    owner_thread: std::thread::current().id(),
-                                    address: rendered.address,
-                                },
-                                window as Arc<dyn flui_platform::traits::PlatformWindow>,
-                            )
-                        })
+                        .map(|rendered| rendered.installation)
                     })),
                 });
             });
@@ -836,7 +877,7 @@ where
             // but an idle loop with no other work would never reach one.
             // Poking the runtime's wake handle is the ordinary "I just
             // queued background work" signal and matches what
-            // `UiRealm::request_redraw` already does from
+            // `UiRuntime::request_redraw` already does from
             // `request_redraw_for`.
             with_owner_platform(|owner| owner.proxy().wake());
             Ok(None)
@@ -849,7 +890,7 @@ where
 }
 
 /// Registers a loop-owned pending request and requests its first owner poll.
-/// No realm or frame is required. Synchronous posting failure returns an error
+/// No UI runtime or frame is required. Synchronous posting failure returns an error
 /// and removes the request; later errors are traced because the accepting caller
 /// has already returned. A future resident controller may expose completion to
 /// callers, but this existing public entry point remains fire-and-report.
@@ -894,7 +935,7 @@ fn spawn_pending_secondary_window_completion(
 }
 
 /// [`open_secondary_window_impl`]'s shared completion path — installs the
-/// realm/presentation topology [`WindowPolicy`] governs and wires every
+/// ui_runtime/presentation topology [`WindowPolicy`] governs and wires every
 /// per-window callback, for a `window` that already exists (whether
 /// obtained synchronously, `WindowOpen::Ready`, or asynchronously through
 /// [`spawn_pending_secondary_window_completion`]'s own `Pending` resolution)
@@ -908,13 +949,7 @@ fn spawn_pending_secondary_window_completion(
 fn finish_open_secondary_window(
     config: SecondaryWindowInstallConfig,
     host: Arc<dyn flui_platform::traits::HostWindow>,
-) -> Result<
-    (
-        RealmDispatcher,
-        Arc<dyn flui_platform::traits::PlatformWindow>,
-    ),
-    AppWindowError,
-> {
+) -> Result<Option<OpenedWindow>, AppWindowError> {
     let window: Arc<dyn flui_platform::traits::PlatformWindow> = Arc::clone(&host) as _;
     struct Uninstalled(Option<Arc<dyn flui_platform::PlatformWindow>>);
     impl Drop for Uninstalled {
@@ -932,68 +967,59 @@ fn finish_open_secondary_window(
         return Err(AppWindowError::AdmissionClosed);
     }
 
-    let SecondaryWindowInstallConfig {
-        loop_identity: _,
-        policy,
-        shared_with,
-        reservation: _reservation,
-        close_request_handler,
-        frame_failure_detail,
-        pointer_resampling,
-    } = config;
-
-    let realm_dispatch = match policy {
-        WindowPolicy::Shared => {
-            // Failure detail is realm-scoped. A secondary presentation
-            // inherits the already-hosted realm's policy; its window config
-            // must not mutate that policy for existing siblings.
-            let shared_with = APP_RUNTIME
+    let policy = config.policy;
+    let shared_with = config.shared_with;
+    let mut installation =
+        match policy {
+            WindowPolicy::Shared => {
+                // Failure detail is ui_runtime-scoped. A secondary presentation
+                // inherits the already-hosted ui_runtime's policy; its window config
+                // must not mutate that policy for existing siblings.
+                let shared_with = APP_RUNTIME
                 .with(|slot| {
                     let state = slot.borrow();
-                    let realm_id = shared_with?;
-                    let realm = state.realms.get(&realm_id)?.realm.as_ref()?;
-                    Some(RealmDispatcher {
+                    let ui_runtime_id = shared_with?;
+                    let status = state.installed_host.logical().runtime_status(ui_runtime_id).ok()?;
+                    Some(PresentationDispatcher {
                         owner_thread: state.owner_thread?,
-                        address: flui_foundation::PresentationAddress {
-                            realm_id,
-                            presentation_id: realm.presentation_id(),
-                        },
+                        address: status.primary,
                     })
                 })
                 .ok_or(AppWindowError::UnsupportedPolicy {
-                    reason: "WindowPolicy::Shared requires an already-hosted realm to share \
+                    reason: "WindowPolicy::Shared requires an already-hosted ui_runtime to share \
                              with; none is installed on this thread",
                 })?;
-            install_presentation_alongside(
-                shared_with,
-                super::presentation_window(Arc::clone(&host))
-                    .with_pointer_resampling(pointer_resampling),
-            )
-            .map_err(mount_error)?
-        }
-        WindowPolicy::Isolated => {
-            let scale_factor = window.scale_factor();
-            let wake = runtime_wake_callback();
-            let ui_realm = super::host::build_runtime_realm(
-                &wake,
-                super::presentation_window(Arc::clone(&host))
-                    .with_pointer_resampling(pointer_resampling),
-                scale_factor,
-            )
-            .map_err(mount_error)?;
-            ui_realm.set_frame_failure_detail(frame_failure_detail);
-            // No frame-failure handler is installed here. Under
-            // `open_secondary_window`'s current contract this realm has no
-            // root widget or renderer, so secondary handler ownership is
-            // blocked on the documented secondary-window rendering contract.
-            install_realm_alongside(ui_realm, &window).map_err(mount_error)?
-        }
-    };
+                prepare_presentation_alongside(
+                    shared_with,
+                    super::presentation_window(Arc::clone(&host))
+                        .with_pointer_resampling(config.pointer_resampling),
+                )
+                .map_err(mount_error)?
+            }
+            WindowPolicy::Isolated => {
+                let scale_factor = window.scale_factor();
+                let wake = runtime_wake_callback();
+                let ui_runtime = super::host::build_ui_runtime(
+                    &wake,
+                    super::presentation_window(Arc::clone(&host))
+                        .with_pointer_resampling(config.pointer_resampling),
+                    scale_factor,
+                )
+                .map_err(mount_error)?;
+                ui_runtime.set_frame_failure_detail(config.frame_failure_detail);
+                // No frame-failure handler is installed here. Under
+                // `open_secondary_window`'s current contract this ui_runtime has no
+                // root widget or renderer, so secondary handler ownership is
+                // blocked on the documented secondary-window rendering contract.
+                prepare_ui_runtime_alongside(ui_runtime, Arc::clone(&window))
+            }
+        };
+    let owner_dispatch = installation.dispatcher();
 
     tracing::warn!(
         ?policy,
-        ?realm_dispatch,
-        "open_secondary_window: installed a live, addressed window with no widget content and no \
+        ?owner_dispatch,
+        "open_secondary_window: preparing an addressed window with no widget content and no \
          renderer -- see this function's own doc for the two named, scoped-out gaps"
     );
 
@@ -1005,74 +1031,297 @@ fn finish_open_secondary_window(
     // for exactly one window per process, and a window's answer is
     // addressed to its OWN presentation, so it can never affect a
     // sibling's.
-    super::install_close_request_wiring(realm_dispatch.address, &window, close_request_handler);
+    installation.close_requests(config.close_request_handler.clone());
 
-    install_input_wiring(realm_dispatch, window.as_ref());
+    install_input_wiring(owner_dispatch, window.as_ref());
 
     window.on_resize(Box::new(move |size, scale_factor| {
-        let _ = dispatch_platform_realm(
-            realm_dispatch,
-            RealmTask::Event(PlatformToUi::Resized { size, scale_factor }),
+        let _ = dispatch_platform_ui_runtime(
+            owner_dispatch,
+            RuntimeTask::Event(RuntimeEvent::Resized { size, scale_factor }),
         );
     }));
 
     // Window close -> close THIS window's own presentation, exactly like
     // `run_desktop`'s primary window (see `close_this_window`'s own doc):
     // `WindowPolicy::Isolated` reduces to a full uninstall of this new, independent
-    // realm (its sole presentation); `WindowPolicy::Shared` removes just this
-    // presentation from the shared realm's forest while the primary (and
+    // ui_runtime (its sole presentation); `WindowPolicy::Shared` removes just this
+    // presentation from the shared ui_runtime's forest while the primary (and
     // any other sibling) survives untouched -- never a blind
-    // `request_realm_uninstall`, which would tear down the WHOLE shared
-    // realm out from under a still-open sibling window.
+    // `request_ui_runtime_uninstall`, which would tear down the WHOLE shared
+    // ui_runtime out from under a still-open sibling window.
     //
     // No `on_quit` registration here — that is a single platform-level
     // callback slot the FIRST window's bootstrap already owns
     // (`Platform::on_quit`/`SharedPlatform::on_quit` replace, never stack);
     // registering a second one here would silently steal the first window's
     // Detached-lifecycle notification on process quit instead of adding to
-    // it. The loop-owned quit callback visits every installed realm once,
-    // including this window's realm, after any active dispatch restores it.
-    window.on_close(Box::new(move || {
-        tracing::info!(?realm_dispatch, "Secondary window closed");
-        close_this_window(realm_dispatch);
-    }));
-    // No `on_should_close` registration here: `install_close_request_wiring`
-    // above installed it, together with the router entry it consults.
+    // it. The loop-owned quit callback visits every installed ui_runtime once,
+    // including this window's ui_runtime, after any active dispatch restores it.
+    installation.on_close(move || {
+        tracing::info!(?owner_dispatch, "Secondary window closed");
+        close_this_window(owner_dispatch);
+    });
+    // The prepared close-request wiring publishes its router entry with the window.
     window.on_active_status_change(Box::new(move |focused| {
-        let _ = dispatch_platform_realm(
-            realm_dispatch,
-            RealmTask::Event(PlatformToUi::WindowFocus(focused)),
+        let _ = dispatch_platform_ui_runtime(
+            owner_dispatch,
+            RuntimeTask::Event(RuntimeEvent::WindowFocus(focused)),
         );
     }));
     window.on_execution_state_change(Box::new(move |state| {
-        let _ = dispatch_platform_realm(
-            realm_dispatch,
-            RealmTask::Event(PlatformToUi::WindowExecution(state)),
+        let _ = dispatch_platform_ui_runtime(
+            owner_dispatch,
+            RuntimeTask::Event(RuntimeEvent::WindowExecution(state)),
         );
     }));
     window.on_visibility_status_change(Box::new(move |visible| {
-        let _ = dispatch_platform_realm(
-            realm_dispatch,
-            RealmTask::Event(PlatformToUi::WindowVisibility(visible)),
+        let _ = dispatch_platform_ui_runtime(
+            owner_dispatch,
+            RuntimeTask::Event(RuntimeEvent::WindowVisibility(visible)),
         );
     }));
     let execution = window.execution_state();
     let focused = window.is_focused();
     let visible = window.is_visible();
-    let _ = dispatch_platform_realm(
-        realm_dispatch,
-        RealmTask::Event(PlatformToUi::WindowSnapshot {
-            execution,
-            focused,
-            visible,
-        }),
-    );
-
-    let _ = dispatch_platform_realm(
-        realm_dispatch,
-        RealmTask::Event(PlatformToUi::SynchronizeLifecycle),
-    );
-
+    installation.observe(flui_runtime::owner::WindowObservation::Snapshot {
+        execution,
+        focused,
+        visible,
+    });
+    let receipt = installation.submit();
+    match receipt.outcome() {
+        Some(Err(error)) => return Err(mount_error(error)),
+        Some(Ok(())) => {}
+        None => {
+            PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| {
+                queue.borrow_mut().push(PendingCompletion {
+                    config,
+                    window: host,
+                    stage: CompletionStage::Publishing(receipt),
+                });
+            });
+            uninstalled.0 = None;
+            return Ok(None);
+        }
+    }
     uninstalled.0 = None;
-    Ok((realm_dispatch, window))
+    Ok(Some((owner_dispatch, window)))
+}
+
+#[cfg(all(
+    test,
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+mod tests {
+    use super::*;
+    use flui_platform::{HeadlessPlatform, Platform};
+    use flui_runtime::{owner::WindowObservation, ui_runtime::UiRuntime};
+    use std::{cell::Cell, rc::Rc, sync::atomic::Ordering};
+
+    // Inject a renderer through the same completion transport without requiring
+    // a GPU. Initial metrics exercise the installed native driver, not a mock queue.
+    fn rendered_secondary_retains_reservation_through_initialization() {
+        installation_case(InstallCase::Ready);
+    }
+
+    fn rendered_secondary_closed_before_publication_releases_reservation() {
+        installation_case(InstallCase::Closed);
+    }
+
+    fn rendered_secondary_initialization_failure_retires_membership() {
+        installation_case(InstallCase::InitializationPanic);
+    }
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum InstallCase {
+        Ready,
+        Closed,
+        InitializationPanic,
+    }
+
+    fn installation_case(case: InstallCase) {
+        let _clear = super::super::host::OwnerHostClearGuard::arm();
+        Box::new(HeadlessPlatform::new())
+            .run(Box::new(move |owner| {
+                let window = owner
+                    .open_window(flui_platform::WindowOptions::default())
+                    .expect("native window");
+                let flui_platform::WindowOpen::Ready(window) = window else {
+                    panic!("headless ready window")
+                };
+                super::super::host::install_owner_platform(owner).expect("install owner");
+                let outer = super::super::owner_dispatch::install_platform_ui_runtime(
+                    UiRuntime::for_test(),
+                    &crate::app::window_test_support::headless_test_window(),
+                );
+                let count =
+                    APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().pending_window_reservations));
+                let during = Rc::new(Cell::new(None));
+                let observed = Rc::clone(&during);
+                let retained = Arc::clone(&count);
+                let address = Rc::new(Cell::new(None));
+                let installed_address = Rc::clone(&address);
+                let config = SecondaryWindowInstallConfig {
+                    loop_identity: APP_RUNTIME
+                        .with(|slot| Arc::clone(&slot.borrow().loop_identity)),
+                    policy: WindowPolicy::Isolated,
+                    shared_with: None,
+                    reservation: reserve_window().expect("reserve window"),
+                    close_request_handler: None,
+                    frame_failure_detail: AppConfig::new().frame_failure_detail,
+                    pointer_resampling: AppConfig::new().pointer_resampling,
+                };
+                PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| {
+                    queue.borrow_mut().push(PendingCompletion {
+                        config,
+                        window,
+                        stage: CompletionStage::Content(Box::new(move |window| {
+                            let runtime = UiRuntime::for_test();
+                            runtime
+                                .attach_root_widget(&flui_widgets::SizedBox::new(20.0, 30.0))
+                                .expect("root");
+                            let window: Arc<dyn flui_platform::traits::PlatformWindow> = window;
+                            let mut prepared =
+                                super::super::owner_dispatch::prepare_ui_runtime_alongside(
+                                    runtime,
+                                    Arc::clone(&window),
+                                );
+                            installed_address.set(Some(prepared.dispatcher().address));
+                            prepared
+                                .frame_driver(super::super::frame_driver::FrameDriver::Test(
+                                    super::super::frame_driver::TestFrameDriver {
+                                        installed: None,
+                                        sink: flui_runtime::testing::ScriptedSink::new(|_, _| {
+                                            flui_runtime::sink::SubmitVerdict::Presented
+                                        }),
+                                        prelude: None,
+                                        resize: Some(Box::new(move |_, _| {
+                                            observed.set(Some(retained.load(Ordering::Acquire)));
+                                            assert!(
+                                                case != InstallCase::InitializationPanic,
+                                                "initial metrics failure"
+                                            );
+                                        })),
+                                    },
+                                ))
+                                .expect("driver");
+                            prepared.observe(WindowObservation::Metrics {
+                                size: flui_foundation::geometry::Size::new(20.0, 30.0),
+                                scale_factor: 1.0,
+                            });
+                            let receipt = prepared.submit();
+                            assert!(
+                                receipt.outcome().is_none(),
+                                "publication is queued in the completion tail"
+                            );
+                            if case == InstallCase::Closed {
+                                window.close();
+                            }
+                            Ok(receipt)
+                        })),
+                    });
+                });
+                let delivery = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    dispatch_platform_ui_runtime(
+                        outer,
+                        RuntimeTask::TestCallback(Box::new(|_| {})),
+                    )
+                    .expect("drain publication");
+                }));
+                assert_eq!(
+                    delivery.is_err(),
+                    case == InstallCase::InitializationPanic,
+                    "initialization preserves its failure"
+                );
+                assert_eq!(
+                    during.get(),
+                    if case == InstallCase::Closed {
+                        None
+                    } else {
+                        Some(1)
+                    },
+                    "loop liveness survives until initial native observations complete"
+                );
+                assert_eq!(
+                    count.load(Ordering::Acquire),
+                    0,
+                    "completion releases its reservation"
+                );
+                let registered = APP_RUNTIME.with(|slot| {
+                    slot.borrow()
+                        .installed_host
+                        .native()
+                        .contains_address(address.get().expect("prepared address"))
+                });
+                assert_eq!(
+                    registered,
+                    case == InstallCase::Ready,
+                    "only a completed installation retains membership"
+                );
+                Ok(())
+            }))
+            .expect("headless run");
+    }
+
+    #[test]
+    fn secondary_installation_contract() {
+        crate::table_test::run_table(
+            "secondary_installation_contract",
+            &[
+                (
+                    "bare_secondary_reports_pending_during_owner_delivery",
+                    bare_secondary_reports_pending_during_owner_delivery as fn(),
+                ),
+                (
+                    "rendered_secondary_retains_reservation_through_initialization",
+                    rendered_secondary_retains_reservation_through_initialization as fn(),
+                ),
+                (
+                    "rendered_secondary_closed_before_publication_releases_reservation",
+                    rendered_secondary_closed_before_publication_releases_reservation as fn(),
+                ),
+                (
+                    "rendered_secondary_initialization_failure_retires_membership",
+                    rendered_secondary_initialization_failure_retires_membership as fn(),
+                ),
+            ],
+        );
+    }
+
+    fn bare_secondary_reports_pending_during_owner_delivery() {
+        for policy in [WindowPolicy::Isolated, WindowPolicy::Shared] {
+            let _clear = super::super::host::OwnerHostClearGuard::arm();
+            Box::new(HeadlessPlatform::new())
+                .run(Box::new(move |owner| {
+                    super::super::host::install_owner_platform(owner).expect("owner");
+                    let outer = super::super::owner_dispatch::install_platform_ui_runtime(
+                        UiRuntime::for_test(),
+                        &crate::app::window_test_support::headless_test_window(),
+                    );
+                    dispatch_platform_ui_runtime(
+                        outer,
+                        RuntimeTask::TestCallback(Box::new(move |_| {
+                            let opened = open_secondary_window_impl(AppConfig::new(), policy)
+                                .expect("admit secondary");
+                            assert!(
+                                opened.is_none(),
+                                "{policy:?}: queued publication cannot return a ready window"
+                            );
+                        })),
+                    )
+                    .expect("finish publication");
+                    let pending = APP_RUNTIME.with(|slot| {
+                        slot.borrow()
+                            .pending_window_reservations
+                            .load(Ordering::Acquire)
+                    });
+                    assert_eq!(pending, 0, "publication completion releases reservation");
+                    Ok(())
+                }))
+                .expect("headless run");
+        }
+    }
 }

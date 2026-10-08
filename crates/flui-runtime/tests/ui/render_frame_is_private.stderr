@@ -4,7 +4,7 @@ error[E0624]: method `render_frame` is private
 5 |     realm.render_frame(sink)
   |           ^^^^^^^^^^^^ private method
   |
- ::: src/ui_realm/frame.rs
+ ::: src/ui_runtime/frame.rs
   |
   |     pub(crate) fn render_frame<S: crate::sink::FrameSink + ?Sized>(&self, sink: &mut S) -> bool {
   |     ------------------------------------------------------------------------------------------- private method defined here

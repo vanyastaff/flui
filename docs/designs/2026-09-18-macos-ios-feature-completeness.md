@@ -57,7 +57,7 @@ These are done and verified; recorded here so the design below builds on them.
   (ADR-0016's "lowest owner loads the baseline", completed; see that ADR's
   2026-09-18 amendment). Verified end-to-end on an iOS-Simulator: the counter
   renders its first frame, and two consecutive worker edits each re-staged the
-  dylib and reassembled the realm with zero panics. Still Simulator-only: a
+  dylib and reassembled the UI runtime with zero panics. Still Simulator-only: a
   production App Store build has no mutable dylib to load, so the worker field
   stays `None` and the capability is inert.
 
@@ -74,8 +74,8 @@ rather than discovering the shape is wrong.
 **Today.** `PresentationState::apply_hot_reload(HotRestart)` logs "not
 implemented" and degrades to `reassemble`.
 
-**What it needs.** The realm does not retain the root view it was mounted with
-(`UiRealm::attach_root_widget*` consumes it), so there is nothing to remount.
+**What it needs.** The UI runtime does not retain the root view it was mounted with
+(`UiRuntime::attach_root_widget*` consumes it), so there is nothing to remount.
 A remount must: `detach_root_widget()` (running every `State::dispose`), then
 re-attach the SAME root configuration with fresh state.
 
@@ -84,7 +84,7 @@ the `PresentationState` at attach time, and add
 `PresentationState::remount_root()`. `attach_root_widget` already has the
 `attach_root_widget_with_size` split to reuse.
 
-**Why deferred.** It changes what the realm retains for the whole process's
+**Why deferred.** It changes what the UI runtime retains for the whole process's
 life, and the retention interacts with `GlobalKeyScope` reclamation
 (ADR-0043). It is a design item, not a wiring one.
 
@@ -150,7 +150,7 @@ one producer per press (ADR-0069), composition state in `RefCell` on the view.
 
 **Today.** `PlatformHaptics` exists with only a headless `FakeHaptics`; the
 per-window accessor `PlatformWindow::haptics()` returns `None` on both Apple
-backends. `UiRealm::perform_haptic_feedback` is the wire, currently uncalled.
+backends. `UiRuntime::perform_haptic_feedback` is the wire, currently uncalled.
 
 **Seam.** macOS `NSHapticFeedbackManager`, iOS `UIImpactFeedbackGenerator`,
 each returned from `haptics()`. No trait change.

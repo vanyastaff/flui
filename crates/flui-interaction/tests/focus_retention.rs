@@ -130,6 +130,7 @@ fn geometric_focus_navigation_pins_ranking_and_admission() {
         );
         let target = expected.map_or(&source_node, |index| &nodes[index]);
         assert!(target.has_primary_focus(), "{name}");
+        drop(attachments);
     }
 }
 
@@ -299,10 +300,8 @@ fn directional_provider_failure_preserves_first_failure_and_recovery() {
                 Some(Rect::new(0.0, 0.0, 10.0, 10.0))
             }));
             let _ = nodes[0].request_focus();
-            let payload = catch_unwind(AssertUnwindSafe(|| {
-                navigate(&manager)
-            }))
-            .expect_err("failure propagates");
+            let payload = catch_unwind(AssertUnwindSafe(|| navigate(&manager)))
+                .expect_err("failure propagates");
             assert_eq!(
                 flui_foundation::panic::payload_text(payload.as_ref()),
                 Some(if provider_fails {
@@ -890,6 +889,7 @@ fn assert_focus_notification_recovery(node_panics: bool, manager_panics: usize) 
         ],
         "the next focus transition publishes normally after containment"
     );
+    drop(subscriptions);
     drop(attachment);
 }
 
@@ -1072,7 +1072,7 @@ fn assert_queued_diagnostic_recovery(earlier_failure: bool) {
     let last_probe = Rc::downgrade(&last);
     let first_id = first.id();
     manager.add_listener(Rc::new(move |_, new| {
-        if !new.as_ref().is_some_and(|node| node.id() == first_id) {
+        if new.as_ref().is_none_or(|node| node.id() != first_id) {
             return;
         }
         let Some((queued, attachment)) = queued_owner.borrow_mut().take() else {
@@ -1166,7 +1166,7 @@ fn assert_queued_retirement_recovery(earlier_failure: bool) {
     let last_probe = Rc::downgrade(&last);
     let first_id = first.id();
     manager.add_listener(Rc::new(move |_, new| {
-        if !new.as_ref().is_some_and(|node| node.id() == first_id) {
+        if new.as_ref().is_none_or(|node| node.id() != first_id) {
             return;
         }
         let Some((queued, attachment)) = queued_owner.borrow_mut().take() else {

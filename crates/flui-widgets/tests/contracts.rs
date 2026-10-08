@@ -44,7 +44,7 @@ fn callback_failure_containment() {
             ("raw_button::a_refused_write_in_a_press_is_reported_not_panicked", crate::raw_button::a_refused_write_in_a_press_is_reported_not_panicked),
             ("draggable_events::a_refused_write_in_a_target_callback_is_reported_not_panicked", crate::draggable_events::a_refused_write_in_a_target_callback_is_reported_not_panicked),
             ("semantics::a_refused_write_in_an_action_handler_is_reported_not_panicked", crate::semantics::a_refused_write_in_an_action_handler_is_reported_not_panicked),
-            ("semantics::an_action_invoked_outside_its_realm_is_dropped_with_a_warning", crate::semantics::an_action_invoked_outside_its_realm_is_dropped_with_a_warning),
+            ("semantics::an_action_invoked_outside_its_ui_runtime_is_dropped_with_a_warning", crate::semantics::an_action_invoked_outside_its_ui_runtime_is_dropped_with_a_warning),
             ("text_field_widget::raw_text_field_callbacks_write_through_the_forwarded_cx", crate::text_field_widget::raw_text_field_callbacks_write_through_the_forwarded_cx),
             ("form::a_panicking_reset_callback_does_not_disable_later_form_validation", crate::form::a_panicking_reset_callback_does_not_disable_later_form_validation),
             ("form::a_form_handle_refuses_a_second_simultaneous_mount_before_mutating_the_first", crate::form::a_form_handle_refuses_a_second_simultaneous_mount_before_mutating_the_first),
@@ -75,6 +75,7 @@ fn reactivity_and_dependencies() {
             ("draggable_events::a_drag_leaving_a_target_writes_through_on_leave_and_on_move", crate::draggable_events::a_drag_leaving_a_target_writes_through_on_leave_and_on_move),
             ("semantics::an_action_handler_writes_a_signal_and_rebuilds_its_reader", crate::semantics::an_action_handler_writes_a_signal_and_rebuilds_its_reader),
             ("media_query_fields::a_size_only_change_rebuilds_size_and_whole_readers_only", crate::media_query_fields::a_size_only_change_rebuilds_size_and_whole_readers_only),
+            ("media_query_fields::a_text_scale_change_relayouts_a_preserved_text_subtree", crate::media_query_fields::a_text_scale_change_relayouts_a_preserved_text_subtree),
             ("directionality_dependency::a_start_aligned_column_depends_on_directionality", crate::directionality_dependency::a_start_aligned_column_depends_on_directionality),
             ("localizations::the_global_delegate_makes_an_rtl_locale_subtree_rtl", crate::localizations::the_global_delegate_makes_an_rtl_locale_subtree_rtl),
             ("hot_reload_state::perform_reassemble_rebuilds_in_place_and_preserves_state", crate::hot_reload_state::perform_reassemble_rebuilds_in_place_and_preserves_state),
@@ -89,6 +90,7 @@ fn text_editing() {
     run_cases(
         "text_editing",
         &[
+            ("editable_text::inherited_text_sizing_updates_editable_glyphs_and_caret", crate::editable_text::inherited_text_sizing_updates_editable_glyphs_and_caret),
             ("editable_text::native_actions::queued_focus_and_text_reach_the_current_field_and_event_context", crate::editable_text::native_actions::queued_focus_and_text_reach_the_current_field_and_event_context),
             ("editable_text::native_actions::native_actions_follow_the_replacement_controller_and_focus_node", crate::editable_text::native_actions::native_actions_follow_the_replacement_controller_and_focus_node),
             ("editable_text::native_actions::disabled_unmounted_and_closed_fields_refuse_native_actions", crate::editable_text::native_actions::disabled_unmounted_and_closed_fields_refuse_native_actions),
@@ -134,6 +136,7 @@ fn text_editing() {
             ("text_field::focused_character_key_inserts_into_controller", crate::text_field::focused_character_key_inserts_into_controller),
             ("text_field::unfocused_field_does_not_receive_key_events", crate::text_field::unfocused_field_does_not_receive_key_events),
             ("text::an_enclosing_default_text_style_styles_a_bare_run", crate::text::an_enclosing_default_text_style_styles_a_bare_run),
+            ("text::media_text_scaling_changes_the_laid_out_text", crate::text::media_text_scaling_changes_the_laid_out_text),
         ],
     );
 }
@@ -162,6 +165,8 @@ fn pointer_and_gesture_recognition() {
     run_cases(
         "pointer_and_gesture_recognition",
         &[
+            ("pointer_vocabulary::viewer_touch_focal_inertia_uses_the_admitted_profile", crate::pointer_vocabulary::viewer_touch_focal_inertia_uses_the_admitted_profile as fn()),
+            ("pointer_vocabulary::viewer_native_focal_inertia_uses_the_admitted_profile", crate::pointer_vocabulary::viewer_native_focal_inertia_uses_the_admitted_profile),
             ("pointer_vocabulary::viewer_focal_fling_rebuild_preserves_or_retires_geometry", crate::pointer_vocabulary::viewer_focal_fling_rebuild_preserves_or_retires_geometry as fn()),
             ("pointer_vocabulary::viewer_repeated_native_start_retires_the_previous_generation", crate::pointer_vocabulary::viewer_repeated_native_start_retires_the_previous_generation as fn()),
             ("pointer_vocabulary::viewer_native_owner_survives_descendant_enable_during_rebuild", crate::pointer_vocabulary::viewer_native_owner_survives_descendant_enable_during_rebuild),
@@ -179,6 +184,7 @@ fn pointer_and_gesture_recognition() {
             ("pointer_vocabulary::scroll_claim_preserves_owned_source_units_and_phase", crate::pointer_vocabulary::scroll_claim_preserves_owned_source_units_and_phase as fn()),
             ("pointer_vocabulary::pointer_delivery_preserves_source_and_sample_families", crate::pointer_vocabulary::pointer_delivery_preserves_source_and_sample_families),
             ("pointer_vocabulary::page_scroll_resolves_against_the_actual_viewport", crate::pointer_vocabulary::page_scroll_resolves_against_the_actual_viewport),
+            ("pointer_vocabulary::viewer_raw_detents_zoom_without_stealing_plain_scrolls", crate::pointer_vocabulary::viewer_raw_detents_zoom_without_stealing_plain_scrolls),
             ("pointer_vocabulary::viewer_page_zoom_resolves_against_the_actual_viewport", crate::pointer_vocabulary::viewer_page_zoom_resolves_against_the_actual_viewport),
             ("pointer_vocabulary::viewer_cumulative_zoom_survives_rebuild_and_resets", crate::pointer_vocabulary::viewer_cumulative_zoom_survives_rebuild_and_resets),
             ("pointer_vocabulary::viewer_unstarted_pinch_updates_remain_independent_steps", crate::pointer_vocabulary::viewer_unstarted_pinch_updates_remain_independent_steps),
@@ -186,6 +192,11 @@ fn pointer_and_gesture_recognition() {
             ("pointer_vocabulary::viewer_page_overflow_and_empty_viewport_recover", crate::pointer_vocabulary::viewer_page_overflow_and_empty_viewport_recover),
             ("gesture_detector::clearing_pan_callbacks_mid_drag_still_finishes_the_drag", crate::gesture_detector::clearing_pan_callbacks_mid_drag_still_finishes_the_drag as fn()),
             ("gesture_detector::mounted_drag_policy_replaces_targets_before_cancellation_and_recovers", crate::gesture_detector::mounted_drag_policy_replaces_targets_before_cancellation_and_recovers),
+            ("gesture_detector::authored_settings_replace_active_owners_and_preserve_equal_profiles", crate::gesture_detector::authored_settings_replace_active_owners_and_preserve_equal_profiles),
+            ("gesture_detector::authored_settings_retire_tap_candidates_and_deadlines", crate::gesture_detector::authored_settings_retire_tap_candidates_and_deadlines),
+            ("gesture_detector::authored_settings_retire_native_scale_session_before_fresh_admission", crate::gesture_detector::authored_settings_retire_native_scale_session_before_fresh_admission),
+            ("gesture_detector::mounted_native_begin_retains_estimator_before_first_claim", crate::gesture_detector::mounted_native_begin_retains_estimator_before_first_claim),
+            ("gesture_detector::mounted_native_begin_refused_by_touch_cannot_claim_after_touch_terminal", crate::gesture_detector::mounted_native_begin_refused_by_touch_cannot_claim_after_touch_terminal),
             ("gesture_detector::scoped_settings_control_touch_recognition_thresholds", crate::gesture_detector::scoped_settings_control_touch_recognition_thresholds),
             ("gesture_detector::scoped_settings_control_gesture_deadlines", crate::gesture_detector::scoped_settings_control_gesture_deadlines),
             ("gesture_detector::scoped_estimator_controls_delivered_drag_velocity", crate::gesture_detector::scoped_estimator_controls_delivered_drag_velocity),
@@ -203,6 +214,7 @@ fn pointer_and_gesture_recognition() {
             ("listener::listener_raw_observer_panic_still_delivers_the_recognizer_event", crate::listener::listener_raw_observer_panic_still_delivers_the_recognizer_event),
             ("listener::custom_recognizer_competes_through_a_listener", crate::listener::custom_recognizer_competes_through_a_listener),
             ("draggable_events::unmounting_a_target_releases_its_slot", crate::draggable_events::unmounting_a_target_releases_its_slot),
+            ("draggable_events::draggable_reads_admission_profiles_and_retires_authored_owners", crate::draggable_events::draggable_reads_admission_profiles_and_retires_authored_owners),
             ("back_gesture::release_matrix_fling_and_slow_release", crate::back_gesture::release_matrix_fling_and_slow_release),
             ("page_route::back_gesture_edge_drag_normalizes_against_the_routes_real_width_not_the_hit_strip", crate::page_route::back_gesture_edge_drag_normalizes_against_the_routes_real_width_not_the_hit_strip),
         ],
@@ -281,6 +293,8 @@ fn scroll_physics_and_activity() {
     run_cases(
         "scroll_physics_and_activity",
         &[
+            ("scroll::terminal_scroll_motion_uses_the_admitted_fling_profile", crate::scroll::terminal_scroll_motion_uses_the_admitted_fling_profile as fn()),
+            ("scroll::terminal_refresh_motion_uses_the_admitted_fling_profile", crate::scroll::terminal_refresh_motion_uses_the_admitted_fling_profile),
             ("scroll::nested_fling_hands_remaining_velocity_to_matching_parent_axes", crate::scroll::nested_fling_hands_remaining_velocity_to_matching_parent_axes as fn()),
             ("scroll::nested_fling_same_controller_rebuild_preserves_accepted_handoff", crate::scroll::nested_fling_same_controller_rebuild_preserves_accepted_handoff),
             ("scroll::nested_fling_parent_boundary_policy_receives_presentation_pixel_ratio", crate::scroll::nested_fling_parent_boundary_policy_receives_presentation_pixel_ratio),
@@ -327,6 +341,14 @@ fn scroll_physics_and_activity() {
             (
                 "scroll::shift_wheel_scrolls_the_horizontal_axis",
                 crate::scroll::shift_wheel_scrolls_the_horizontal_axis as fn(),
+            ),
+            (
+                "scroll::wheel_policy_resolves_authored_axes_and_provider_replacement",
+                crate::scroll::wheel_policy_resolves_authored_axes_and_provider_replacement as fn(),
+            ),
+            (
+                "scroll::wheel_distances_refuse_overflow_and_the_next_packet_recovers",
+                crate::scroll::wheel_distances_refuse_overflow_and_the_next_packet_recovers as fn(),
             ),
             (
                 "scroll::a_wheel_tick_over_nested_scrollables_moves_only_the_inner",
@@ -398,6 +420,9 @@ fn navigator_and_overlay() {
         "navigator_and_overlay",
         &[
             ("back_gesture::cancelling_a_back_swipe_past_halfway_keeps_the_route", crate::back_gesture::cancelling_a_back_swipe_past_halfway_keeps_the_route as fn()),
+            ("back_gesture::mounted_back_swipe_reads_retained_admission_settings", crate::back_gesture::mounted_back_swipe_reads_retained_admission_settings),
+            ("back_gesture::replacing_authored_back_swipe_policy_cancels_the_outgoing_contact", crate::back_gesture::replacing_authored_back_swipe_policy_cancels_the_outgoing_contact),
+            ("back_gesture::mounted_back_swipe_settle_uses_the_admitted_fling_bound", crate::back_gesture::mounted_back_swipe_settle_uses_the_admitted_fling_bound),
             ("navigator::local_history::an_entry_pops_before_the_route_and_observers_stay_silent", crate::navigator::local_history::an_entry_pops_before_the_route_and_observers_stay_silent as fn()),
             ("navigator::navigator_pop_removes_top_route_and_completes_result", crate::navigator::navigator_pop_removes_top_route_and_completes_result),
             ("navigator::navigator_push_builds_new_route_and_rearranges_overlay", crate::navigator::navigator_push_builds_new_route_and_rearranges_overlay),
@@ -489,6 +514,8 @@ fn animation_and_visibility() {
     run_cases(
         "animation_and_visibility",
         &[
+            ("dismissible::dismissal_release_uses_its_captured_fling_profile", crate::dismissible::dismissal_release_uses_its_captured_fling_profile as fn()),
+            ("dismissible::vertical_dismissal_release_uses_its_captured_fling_profile", crate::dismissible::vertical_dismissal_release_uses_its_captured_fling_profile),
             ("dismissible::cancelling_a_fully_slid_card_restores_it_without_dismissal", crate::dismissible::cancelling_a_fully_slid_card_restores_it_without_dismissal as fn()),
             ("dismissible::a_cancelled_horizontal_dismiss_restores_the_card", crate::dismissible::a_cancelled_horizontal_dismiss_restores_the_card as fn()),
             ("dismissible::a_cancelled_vertical_dismiss_restores_the_card", crate::dismissible::a_cancelled_vertical_dismiss_restores_the_card as fn()),

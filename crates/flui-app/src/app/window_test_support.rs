@@ -1,7 +1,7 @@
 //! Window test doubles for flui-app's test modules.
 //!
 //! The state-level [`TestWindow`] double is the frame runtime's
-//! (`flui_runtime::testing`), shared with the realm tests there. What stays
+//! (`flui_runtime::testing`), shared with the UI runtime tests there. What stays
 //! here is what names a `flui-platform` type: [`HostedTestWindow`], a
 //! `TestWindow` offered as a [`HostWindow`] the way an `open_window` reply
 //! is, and the real headless windows for tests that exercise the platform's

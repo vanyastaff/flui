@@ -7,26 +7,26 @@ use crate::app::runtime::{AppRuntime, ExitPolicy};
 /// A fresh clone of the loop-scoped platform wake capability — see
 /// `AppRuntime::frame_wake_callback`'s doc. `APP_RUNTIME` must not be
 /// currently mutably borrowed when this is called (it takes a shared
-/// borrow); every call site here is either before a realm is installed or
+/// borrow); every call site here is either before a UI runtime is installed or
 /// after one has been taken out of the slot for dispatch.
 pub(super) fn runtime_wake_callback() -> Arc<dyn Fn() + Send + Sync> {
     APP_RUNTIME.with(|slot| slot.borrow().frame_wake_callback())
 }
 
-/// The platform clipboard for [`crate::app::ui_realm::UiRealm::new`]'s
+/// The platform clipboard for [`crate::app::ui_runtime::UiRuntime::new`]'s
 /// `clipboard` parameter. Same borrow rule as [`runtime_wake_callback`].
 ///
 /// # Panics
 ///
 /// If no platform clipboard is installed: [`install_owner_platform`] installs
-/// it, and every runner calls that before it builds any realm.
+/// it, and every runner calls that before it builds any ui_runtime.
 pub(super) fn runtime_clipboard() -> Arc<dyn flui_platform::traits::Clipboard> {
     APP_RUNTIME
         .with(|slot| slot.borrow().clipboard())
-        .expect("BUG: the runner installs the platform clipboard before it builds a realm")
+        .expect("BUG: the runner installs the platform clipboard before it builds a ui_runtime")
 }
 
-/// The app's font collection for [`crate::app::ui_realm::UiRealm::new`]'s
+/// The app's font collection for [`crate::app::ui_runtime::UiRuntime::new`]'s
 /// `fonts` parameter (ADR-0092 §2). Same borrow rule as
 /// [`runtime_wake_callback`]. The first call on a thread resolves the shared
 /// engine services.
@@ -41,18 +41,70 @@ pub(super) fn runtime_storage() -> Option<Arc<dyn flui_platform_api::Storage>> {
     APP_RUNTIME.with(|slot| slot.borrow().host_storage())
 }
 
-/// Builds a runner's realm over the runtime's shared services: `wake`, the
+/// Shared host services cannot depend on a desktop window-request error.
+#[derive(Debug, thiserror::Error)]
+pub(super) enum HostServicesError {
+    #[error(transparent)]
+    Preferences(#[from] flui_platform::PlatformError),
+    #[error(transparent)]
+    Owner(#[from] flui_runtime::owner::DispatchError),
+    #[error(transparent)]
+    Runtime(#[from] crate::app::ui_runtime::UiRuntimeError),
+}
+
+pub(super) fn refresh_preferences_with(
+    read: impl FnOnce(
+        &flui_platform::OwnerPlatform,
+    ) -> Result<flui_platform_api::SystemPreferences, flui_platform::PlatformError>,
+) -> Result<(), HostServicesError> {
+    let (owner, host) = APP_RUNTIME.with(|slot| {
+        let state = slot.borrow();
+        (state.owner_platform.clone(), state.installed_host.clone())
+    });
+    let Some(owner) = owner else {
+        return Ok(());
+    };
+    let observation = read(&owner);
+    // Native getters may pump messages, replacing either side of this pair.
+    // Discard obsolete errors as well as values before touching the new host.
+    let current = APP_RUNTIME.with(|slot| {
+        let state = slot.borrow();
+        state
+            .owner_platform
+            .as_ref()
+            .is_some_and(|current| Rc::ptr_eq(current, &owner))
+            && state.installed_host.same_host(&host)
+    });
+    if !current {
+        return Ok(());
+    }
+    if matches!(
+        observation,
+        Err(flui_platform::PlatformError::PreferencesDeferred)
+    ) {
+        // A deferred read publishes nothing. The source retains its retry;
+        // unrelated owner wakes must not flood diagnostics during backoff.
+        return Ok(());
+    }
+    let values = observation?;
+    host.logical().update_preferences(values, host.effects())?;
+    Ok(())
+}
+
+/// Builds a runner's UI runtime over the runtime's shared services: `wake`, the
 /// loop's `needs_redraw` flag, the platform clipboard, the app's font
 /// collection and the host's byte storage. Every runner site and secondary
-/// window builds its realm through this one call, so a realm cannot be
+/// window builds its UI runtime through this one call, so a UI runtime cannot be
 /// handed a stand-in for any of them.
-pub(super) fn build_runtime_realm(
+pub(super) fn build_ui_runtime(
     wake: &Arc<dyn Fn() + Send + Sync>,
     window: impl Into<crate::app::presentation::PresentationWindow>,
     scale_factor: f64,
-) -> Result<crate::app::ui_realm::UiRealm, crate::app::ui_realm::UiRealmError> {
+) -> Result<crate::app::ui_runtime::UiRuntime, HostServicesError> {
+    let preferences =
+        APP_RUNTIME.with(|slot| slot.borrow().installed_host.logical().preferences())?;
     let fonts = runtime_font_collection();
-    let mut host = crate::app::ui_realm::RealmHostServices::new(
+    let mut host = crate::app::ui_runtime::RuntimeHostServices::new(
         Arc::clone(wake),
         runtime_needs_redraw_handle(),
         runtime_clipboard(),
@@ -62,10 +114,17 @@ pub(super) fn build_runtime_realm(
     if let Some(storage) = runtime_storage() {
         host = host.with_storage(storage);
     }
-    crate::app::ui_realm::UiRealm::new(window, scale_factor, host)
+    if let Some(preferences) = preferences {
+        host = host.with_preferences(preferences);
+    }
+    Ok(crate::app::ui_runtime::UiRuntime::new(
+        window,
+        scale_factor,
+        host,
+    )?)
 }
 
-/// A clone of the loop-scoped `needs_redraw` flag, for [`crate::app::ui_realm::UiRealm::new`]'s
+/// A clone of the loop-scoped `needs_redraw` flag, for [`crate::app::ui_runtime::UiRuntime::new`]'s
 /// `needs_redraw` parameter.
 pub(super) fn runtime_needs_redraw_handle() -> Arc<AtomicBool> {
     APP_RUNTIME.with(|slot| slot.borrow().needs_redraw_handle())
@@ -78,12 +137,12 @@ pub(super) fn runtime_needs_redraw_handle() -> Arc<AtomicBool> {
 thread_local! {
     /// The one loop-scoped composition root, shared by desktop, Android, and
     /// wasm. Absorbs what were, before the `AppRuntime` skeleton existed, two
-    /// separate thread-locals: the transitional realm host (realm slot, queue,
+    /// separate thread-locals: the transitional UI runtime host (UI runtime slot, queue,
     /// draining, owner thread, address cache, window registry, surface
     /// applier) and the loop-scoped `OwnerPlatform` host —
     /// see [`AppRuntime`]'s own module doc for why one struct correctly
     /// carries both invariants. The platform callback surface still
-    /// requires `Send`, so the `!Send` realm this holds remains in owner TLS
+    /// requires `Send`, so the `!Send` UI runtime this holds remains in owner TLS
     /// until that seam is retired (ADR-0027 follow-up 5); access is only
     /// through the stamped FIFO dispatcher below and the fenced
     /// `with_owner_platform` accessor.
@@ -93,10 +152,10 @@ thread_local! {
     /// any reason, including `OwnerHostClearGuard::drop` firing during an
     /// unwind on a thread that never reached platform init -- can never
     /// itself trigger singleton construction or full system-font
-    /// enumeration. Real service resolution happens only when a realm is
-    /// built or installed: `build_runtime_realm`, which every runner calls
-    /// to build its realm, or the explicit `ensure_services` call in
-    /// `install_platform_realm` below.
+    /// enumeration. Real service resolution happens only when a UI runtime is
+    /// built or installed: `build_ui_runtime`, which every runner calls
+    /// to build its UI runtime, or the explicit `ensure_services` call in
+    /// the prepared installation entry points.
     pub(super) static APP_RUNTIME: std::cell::RefCell<AppRuntime> =
         std::cell::RefCell::new(AppRuntime::new());
 }
@@ -108,11 +167,11 @@ thread_local! {
 ///
 /// Deliberately does NOT resolve `SharedEngineServices`: `run_direct`
 /// installs an owner platform and opens a window but never installs a
-/// `UiRealm` (no widget tree, no painting/semantics/scheduler singleton
+/// `UiRuntime` (no widget tree, no painting/semantics/scheduler singleton
 /// reach at all), so resolving here would pay for singleton construction
 /// and full system-font enumeration on a path that can never consume
-/// either. `install_platform_realm` is the one call site that resolves —
-/// every realm-hosting backend goes through it, `run_direct` never does.
+/// either. UI runtime construction and prepared installation resolve these
+/// services; merely installing the platform owner does not.
 #[cfg_attr(
     any(target_os = "android", target_os = "ios", target_arch = "wasm32"),
     expect(
@@ -150,9 +209,46 @@ pub(crate) fn install_owner_platform(
             if APP_RUNTIME
                 .with(|slot| Arc::ptr_eq(&slot.borrow().loop_identity, &installed_identity))
             {
-                let _owner_callback = super::realm_dispatch::begin_owner_callback();
-                super::secondary_window::drain_pending_secondary_window_completions();
-                super::main_window::drive_main_window();
+                let host = APP_RUNTIME.with(|slot| slot.borrow().installed_host.clone());
+                super::owner_dispatch::with_owner_callback(|_| {
+                    let current = || {
+                        APP_RUNTIME.with(|slot| {
+                            let state = slot.borrow();
+                            Arc::ptr_eq(&state.loop_identity, &installed_identity)
+                                && state.installed_host.same_host(&host)
+                        })
+                    };
+                    if !current() {
+                        return;
+                    }
+                    let mut first = None;
+                    super::installed_host::contain(&mut first, || {
+                        if let Err(error) =
+                            refresh_preferences_with(flui_platform::OwnerPlatform::preferences)
+                        {
+                            tracing::warn!(%error, "system preference refresh failed");
+                        }
+                    });
+                    if current() {
+                        let recovery = if first.is_some() {
+                            flui_runtime::owner::RecoveryState::PreservingFailure
+                        } else {
+                            flui_runtime::owner::RecoveryState::Healthy
+                        };
+                        super::installed_host::contain(&mut first, || {
+                            super::secondary_window::drain_pending_secondary_window_completions(
+                                recovery,
+                            );
+                        });
+                        if first.is_none() && current() {
+                            super::installed_host::contain(
+                                &mut first,
+                                super::main_window::drive_main_window,
+                            );
+                        }
+                    }
+                    super::installed_host::finish(first);
+                });
             }
         }))?;
         identity
@@ -164,31 +260,52 @@ pub(crate) fn install_owner_platform(
     ))]
     super::main_window::shutdown_main_window();
     // The platform clipboard (ADR-0038 §9) is installed with the owner, so
-    // every realm a runner builds afterwards finds it (`runtime_clipboard`).
+    // every ui_runtime a runner builds afterwards finds it (`runtime_clipboard`).
     let clipboard = owner.shared().clipboard();
-    let (previous, previous_owner_turn_wake) = APP_RUNTIME.with(|slot| {
-        let mut state = slot.borrow_mut();
-        state.owner_install_generation = state
-            .owner_install_generation
-            .checked_add(1)
-            .expect("BUG: owner install generation exhausted");
-        state.set_platform_clipboard(clipboard);
-        let previous_owner_turn_wake = state.owner_turn_wake.replace(owner_turn_wake);
-        let previous = state.owner_platform.replace(std::rc::Rc::new(owner));
-        #[cfg(all(
-            not(target_os = "android"),
-            not(target_os = "ios"),
-            not(target_arch = "wasm32")
-        ))]
-        {
-            state.quit_notification = crate::app::runtime::QuitNotification::Active;
-            state.loop_identity = identity;
-            state.pending_window_reservations = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (previous, previous_owner_turn_wake, previous_host, previous_clipboard) =
+        APP_RUNTIME.with(|slot| {
+            let mut state = slot.borrow_mut();
+            state.owner_install_generation = state
+                .owner_install_generation
+                .checked_add(1)
+                .expect("BUG: owner install generation exhausted");
+            let previous_clipboard = state.set_platform_clipboard(clipboard);
+            let previous_host =
+                std::mem::replace(&mut state.installed_host, super::InstalledHost::new());
+            let previous_owner_turn_wake = state.owner_turn_wake.replace(owner_turn_wake);
+            let previous = state.owner_platform.replace(std::rc::Rc::new(owner));
+            #[cfg(all(
+                not(target_os = "android"),
+                not(target_os = "ios"),
+                not(target_arch = "wasm32")
+            ))]
+            {
+                state.quit_notification = crate::app::runtime::QuitNotification::Active;
+                state.loop_identity = identity;
+                state.pending_window_reservations =
+                    Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            }
+            (
+                previous,
+                previous_owner_turn_wake,
+                previous_host,
+                previous_clipboard,
+            )
+        });
+    // Publish the new incarnation before retiring old callbacks and native
+    // resources. No outgoing destructor runs under the composition-root borrow.
+    let mut first = None;
+    super::installed_host::contain(&mut first, || {
+        if let Err(error) = refresh_preferences_with(flui_platform::OwnerPlatform::preferences) {
+            tracing::warn!(%error, "initial system preference observation failed");
         }
-        (previous, previous_owner_turn_wake)
     });
-    drop(previous);
-    drop(previous_owner_turn_wake);
+    super::installed_host::contain(&mut first, || previous_host.shutdown());
+    super::installed_host::contain(&mut first, || drop(previous_host));
+    super::installed_host::contain(&mut first, || drop(previous_owner_turn_wake));
+    super::installed_host::contain(&mut first, || drop(previous_clipboard));
+    super::installed_host::contain(&mut first, || drop(previous));
+    super::installed_host::finish(first);
     Ok(())
 }
 
@@ -233,17 +350,9 @@ pub(crate) fn install_owner_platform(
 pub(super) fn install_exit_policy_hook(policy: ExitPolicy) {
     let shared = with_owner_platform(|owner| {
         owner.shared().set_exit_policy_hook(Box::new(move || {
-            let (should_exit, removed) =
-                APP_RUNTIME.with(|slot| slot.borrow_mut().should_exit(policy));
-            drop(removed);
-            if !should_exit {
-                return false;
-            }
-            // Destructors may admit new windows. Recheck after all removed
-            // realms have dropped, then fence the same ingress as senders.
-            let (should_exit, removed) =
-                APP_RUNTIME.with(|slot| slot.borrow_mut().should_exit(policy));
-            drop(removed);
+            // Retirement completes in the installed host before requesting this
+            // policy check. Pending publications also veto automatic exit.
+            let should_exit = APP_RUNTIME.with(|slot| slot.borrow_mut().should_exit(policy));
             #[cfg(all(
                 not(target_os = "android"),
                 not(target_os = "ios"),
@@ -309,7 +418,7 @@ pub(super) fn install_platform_quit_hook() {
             }
             super::main_window::shutdown_main_window();
             tracing::info!("Platform quit");
-            super::realm_dispatch::request_quit_notification();
+            super::owner_dispatch::request_quit_notification();
         }));
     });
 }
@@ -330,7 +439,7 @@ pub(super) fn install_platform_quit_hook() {
 /// needing to know what produces it — `bootstrap_desktop` passes a closure
 /// over its own `DeviceRecoveryBackoff`, so a device stuck retrying under
 /// backoff still gets `ControlFlow::WaitUntil`'s efficient wait instead of
-/// this hook silently only ever answering the realm's own deadline. Kept
+/// this hook silently only ever answering the UI runtime's own deadline. Kept
 /// generic (not `DeviceRecoveryBackoff`-typed) so this function's own `cfg`
 /// gate can stay as broad as it already is (`not(ios)`, wider than that
 /// type's `not(ios), not(wasm32)`) without needing a matching narrow gate
@@ -343,7 +452,7 @@ pub(super) fn install_platform_quit_hook() {
 /// host re-entry" rule. Read-only (`AppRuntime::next_wake` takes `&self`),
 /// unlike `install_exit_policy_hook`'s `&mut self` — no deferred-mutation
 /// drain needed here, since computing a wake deadline never touches the
-/// realm registry itself.
+/// UI runtime registry itself.
 #[cfg_attr(
     not(any(
         test,
@@ -371,8 +480,8 @@ pub(super) fn install_wake_deadline_hook(
 ) {
     with_owner_platform(|owner| {
         owner.shared().set_wake_deadline_hook(Box::new(move || {
-            let realm_deadline = APP_RUNTIME.with(|slot| slot.borrow().next_wake());
-            merge_wake_deadlines(realm_deadline, secondary_deadline())
+            let ui_runtime_deadline = APP_RUNTIME.with(|slot| slot.borrow().next_wake());
+            merge_wake_deadlines(ui_runtime_deadline, secondary_deadline())
         }));
     });
 }
@@ -380,13 +489,13 @@ pub(super) fn install_wake_deadline_hook(
 /// The earlier of two optional wake deadlines, treating `None` as "no
 /// opinion" rather than as a value that could win a `min` against a real
 /// deadline — the same fold `AppRuntime::next_wake` (`runtime.rs`) itself
-/// uses across realms, pulled out here as its own named, unit-tested
+/// uses across UI runtimes, pulled out here as its own named, unit-tested
 /// function because it is exactly what [`install_wake_deadline_hook`]'s
 /// entire non-blocking desktop design now rests on: this whole module's
 /// device-recovery deadline reaches the platform's `ControlFlow::WaitUntil`
-/// only through this fold correctly picking the earlier of the realm's own
+/// only through this fold correctly picking the earlier of the UI runtime's own
 /// deadline and the secondary (device-recovery) one, and correctly leaving
-/// the realm's deadline untouched when the secondary source has nothing
+/// the UI runtime's deadline untouched when the secondary source has nothing
 /// pending.
 pub(super) fn merge_wake_deadlines(
     a: Option<web_time::Instant>,
@@ -412,7 +521,7 @@ pub(super) fn merge_wake_deadlines(
 /// deadline — reporting it anyway hands `about_to_wait` the SAME past
 /// instant on every idle iteration once it comes due, which is
 /// `WinitApp::new_events`'s own named `WaitUntil(past)` busy-spin, forced by
-/// this hook instead of a stale realm deadline. The deadline is not lost by
+/// this hook instead of a stale UI runtime deadline. The deadline is not lost by
 /// staying unreported while disabled: presentation lifecycle reconciliation
 /// redirties the restored root and wakes the loop through the ordinary
 /// `needs_redraw` channel, which
@@ -450,20 +559,20 @@ pub(super) fn desktop_secondary_wake_deadline(
 ///     `build`/`perform_layout`/`paint`/composite bodies. This is a free
 ///     function, not a `LifecycleContext` method, so no type withholds it
 ///     from a frame phase; (c) is the check.
-/// (c) **Runtime backstop.** `debug_assert!`s that the installed realm's own
-///     scheduler (`AppRuntime::installed_realm_phase`) is not inside the
+/// (c) **Runtime backstop.** `debug_assert!`s that the installed UI runtime's own
+///     scheduler (`AppRuntime::installed_ui_runtime_phase`) is not inside the
 ///     frame transaction. "Not inside a frame phase" per the ADR means
 ///     `TransientCallbacks`/`MidFrameMicrotasks`/`PersistentCallbacks` are
 ///     forbidden; `Idle` and `PostFrameCallbacks` are allowed (legitimate
-///     ADR-0021-style post-frame work); `None` (truly no realm installed,
-///     and none currently dispatched — see `AppRuntime::dispatched_scheduler`)
-///     holds vacuously. `installed_realm_phase` reads through to the
-///     checked-out realm's scheduler for the entire extent of a
-///     `dispatch_platform_realm` call, not only the resident-realm case, so
+///     ADR-0021-style post-frame work); `None` (truly no UI runtime installed,
+///     and none currently dispatched — see `OwnerHost::phase`)
+///     holds vacuously. `installed_ui_runtime_phase` reads through to the
+///     checked-out UI runtime's scheduler for the entire extent of a
+///     `dispatch_platform_ui_runtime` call, not only the resident-UI runtime case, so
 ///     this fence is load-bearing during a real dispatched production frame,
-///     not merely when the realm sits untouched in the slot. This fence is
+///     not merely when the UI runtime sits untouched in the slot. This fence is
 ///     still **vacuous on binding-local frame paths**: headless/test
-///     bindings drive their own binding-local `UpdateScheduler`, never a realm
+///     bindings drive their own binding-local `UpdateScheduler`, never a UI runtime
 ///     installed into `APP_RUNTIME`, so fences (a) and (b) are the
 ///     load-bearing ones there — stated here, not hidden.
 ///
@@ -513,10 +622,10 @@ pub(crate) fn with_owner_platform<R>(
     {
         // A sequential, separate `.with()` borrow -- released before the
         // real one below opens -- so this never re-enters the same
-        // `RefCell`. `None` (no realm installed on this thread) is vacuous
-        // but truthful: no realm means no frame transaction can be in
+        // `RefCell`. `None` (no ui_runtime installed on this thread) is vacuous
+        // but truthful: no ui_runtime means no frame transaction can be in
         // flight here, so the asserted property holds trivially.
-        let phase = APP_RUNTIME.with(|slot| slot.borrow().installed_realm_phase());
+        let phase = APP_RUNTIME.with(|slot| slot.borrow().installed_ui_runtime_phase());
         debug_assert!(
             !matches!(
                 phase,
@@ -526,7 +635,7 @@ pub(crate) fn with_owner_platform<R>(
                         | flui_scheduler::SchedulerPhase::PersistentCallbacks
                 )
             ),
-            "BUG: with_owner_platform called while the installed realm's scheduler is inside \
+            "BUG: with_owner_platform called while the installed ui_runtime's scheduler is inside \
              the frame transaction (phase {phase:?}) -- owner_platform must \
              not be acquired from build/layout/paint (ADR-0039 §6)"
         );
@@ -587,10 +696,6 @@ impl Drop for OwnerHostClearGuard {
         let (removed, owner_turn_wake, storage) = APP_RUNTIME.with(|slot| {
             let mut runtime = slot.borrow_mut();
             if runtime.owner_install_generation == self.expected_generation {
-                runtime.owner_turn_continuation = None;
-                runtime.owner_turn_continuation_failed = false;
-                runtime.owner_turn_callback_budget = None;
-                runtime.owner_turn_callback_active = false;
                 (
                     runtime.owner_platform.take(),
                     runtime.owner_turn_wake.take(),

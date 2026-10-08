@@ -36,6 +36,6 @@ struct in `crates/`.
 
 ## State outside the table
 
-Flutter has no built-in equivalent of FLUI's realm-scoped signals: `Signal<T>` (ADR-0074) is a
+Flutter has no built-in equivalent of FLUI's presentation-scoped signals: `Signal<T>` (ADR-0074) is a
 `Copy` handle created with `ctx.signal(value)` in `init_state`, read in `build`, and written from an
 event callback. See [State](concepts/state.md) for it and the other ways state enters the tree.

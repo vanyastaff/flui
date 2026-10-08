@@ -10,7 +10,7 @@ use crate::{
     events::{PointerEvent, PointerEventExt, PointerKind},
     ids::PointerId,
     routing::{PointerDispatch, RoutePanic},
-    settings::GestureSettings,
+    settings::GestureSettingsProvider,
 };
 use flui_foundation::geometry::Offset;
 use std::{
@@ -103,19 +103,19 @@ pub struct LongPressGestureRecognizer {
     contact: PrimaryContact,
     callbacks: LongPressCallbacks,
     state: RefCell<LongPressState>,
-    settings: GestureSettings,
+    settings: GestureSettingsProvider,
 }
 /// Immutable press policy and callbacks, consumed to create one owner.
 #[must_use]
 pub struct LongPressGestureRecognizerBuilder {
     arena: GestureArena,
     callbacks: LongPressCallbacks,
-    settings: GestureSettings,
+    settings: GestureSettingsProvider,
 }
 impl LongPressGestureRecognizerBuilder {
     /// Freeze device-specific gesture policy for contact admission.
-    pub fn settings(mut self, settings: GestureSettings) -> Self {
-        self.settings = settings;
+    pub fn settings(mut self, settings: impl Into<GestureSettingsProvider>) -> Self {
+        self.settings = settings.into();
         self
     }
     /// Called immediately after contact admission.
@@ -179,7 +179,7 @@ impl LongPressGestureRecognizer {
         LongPressGestureRecognizerBuilder {
             arena,
             callbacks: LongPressCallbacks::default(),
-            settings: GestureSettings::default(),
+            settings: GestureSettingsProvider::default(),
         }
     }
     fn details(&self, kind: PointerKind) -> LongPressDetails {
@@ -253,7 +253,8 @@ impl GestureRecognizer for LongPressGestureRecognizer {
         if !is_primary_down(down.local) {
             return;
         }
-        let Ok(id) = self.contact.begin(down, &self.settings) else {
+        let settings = self.settings.snapshot();
+        let Ok(id) = self.contact.begin(down, &settings) else {
             return;
         };
         let Some(contact) = self.contact.current().filter(|contact| contact.id == id) else {
@@ -312,7 +313,7 @@ impl GestureRecognizer for LongPressGestureRecognizer {
                 if phase == LongPressPhase::Possible
                     && measured_positions(dispatch.local).any(|position| {
                         let delta = position - contact.local;
-                        delta.dx.hypot(delta.dy) > contact.settings.hit_slop(contact.kind)
+                        contact.settings.exceeds_hit_slop(contact.kind, delta)
                     })
                 {
                     self.cancel();

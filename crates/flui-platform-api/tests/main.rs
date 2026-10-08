@@ -6,6 +6,9 @@ mod composition_ledger;
 #[path = "input_vocabulary.rs"]
 mod input_vocabulary;
 
+#[path = "preferences.rs"]
+mod preferences;
+
 #[path = "lock_gate.rs"]
 mod lock_gate;
 

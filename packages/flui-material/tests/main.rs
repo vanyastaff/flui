@@ -222,6 +222,10 @@ fn text_input_contracts() {
             text_field::error_line_sits_below_the_indicator_outside_the_tap_target,
         ),
         (
+            "text_field::replacing and unmounting the field withdraws its node subscription",
+            text_field::replacing_and_unmounting_the_field_withdraws_its_node_subscription,
+        ),
+        (
             "text_form_field::validator error reaches the input decorator error line",
             text_form_field::validator_error_reaches_the_input_decorator_error_line,
         ),
@@ -232,6 +236,8 @@ fn text_input_contracts() {
 #[test]
 fn overlay_contracts() {
     common::run_cases(&[
+        ("drawer::drawer_settling_uses_the_captured_fling_profile", drawer::drawer_settling_uses_the_captured_fling_profile),
+        ("drawer::open_drawer_settling_uses_the_captured_fling_profile", drawer::open_drawer_settling_uses_the_captured_fling_profile),
         (
             "snack_bar::a completion panic still advances the accepted snack bar queue",
             snack_bar::a_completion_panic_still_advances_the_accepted_snack_bar_queue,
@@ -374,6 +380,10 @@ fn surface_contracts() {
 #[test]
 fn theme_and_app_contracts() {
     common::run_cases(&[
+        (
+            "material_app::contrast selects authored themes in a retained app",
+            material_app::contrast_selects_authored_themes_in_a_retained_app,
+        ),
         (
             "theme::theme of panicking accessor returns ancestor theme data",
             theme::theme_of_panicking_accessor_returns_ancestor_theme_data,

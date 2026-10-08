@@ -1,4 +1,4 @@
-//! WidgetsBinding - owner-local binding for one UI realm.
+//! WidgetsBinding - owner-local binding for one UI ui_runtime.
 //!
 //! This module provides the binding that coordinates:
 //! - BuildOwner for managing element rebuilds
@@ -8,7 +8,7 @@
 //! # Architecture
 //!
 //! ```text
-//! WidgetsBinding (owned by UiRealm / headless harness / plugin pipeline)
+//! WidgetsBinding (owned by UiRuntime / headless harness / plugin pipeline)
 //!   ├── build_owner: BuildOwner     (manages dirty elements)
 //!   ├── element_tree: ElementTree   (stores elements)
 //!   ├── root_element: ElementId     (root of element tree)
@@ -20,7 +20,7 @@
 //! ```rust,ignore
 //! use flui_view::WidgetsBinding;
 //!
-//! // The UiRealm owns the binding; construct it directly.
+//! // The UiRuntime owns the binding; construct it directly.
 //! let binding = WidgetsBinding::new();
 //!
 //! // Attach root widget
@@ -333,7 +333,7 @@ pub use flui_scheduler::AppLifecycleState;
 ///
 /// # Ownership
 ///
-/// Not a singleton: the binding is owned by its `UiRealm` (one per UI
+/// Not a singleton: the binding is owned by its `UiRuntime` (one per UI
 /// session; `HeadlessBinding` owns its own for tests). Construct via
 /// [`WidgetsBinding::new`]:
 ///
@@ -355,7 +355,7 @@ pub struct WidgetsBinding {
     inner: Arc<RwLock<WidgetsBindingInner>>,
 
     /// This binding's GlobalKey lookup handle. It is activated by the owning
-    /// `UiRealm` for the dynamic extent of each realm entry.
+    /// `UiRuntime` for the dynamic extent of each UI runtime entry.
     pub(crate) global_key_registry: crate::key::registry::GlobalKeyRegistryHandle,
 
     /// Callback when a frame is needed.
@@ -501,7 +501,7 @@ struct WidgetsBindingInner {
     root_element: Option<ElementId>,
 
     /// Owner-local handle to the render tree's `PipelineOwner`.
-    /// This is set by the application binding (`flui-app`'s `UiRealm`)
+    /// This is set by the application binding (`flui-app`'s `UiRuntime`)
     /// and propagated to elements during mounting.
     pipeline_owner: Option<PipelineCell>,
 
@@ -560,7 +560,7 @@ impl WidgetsBinding {
     /// captured the `WidgetsBinding::instance()` singleton lazily, so
     /// production lookups resolved against an empty tree the moment a
     /// non-singleton binding drove the frames.) The owning runtime activates
-    /// the handle only while entering this realm.
+    /// the handle only while entering this UI runtime.
     pub fn new() -> Self {
         Self::with_focus_manager(FocusManager::new())
     }
@@ -663,7 +663,7 @@ impl WidgetsBinding {
     /// Set the [`PipelineCell`] for render tree management.
     ///
     /// This should be called by the application binding (`flui-app`'s
-    /// `UiRealm`) before attaching the root widget. The pipeline cell will
+    /// `UiRuntime`) before attaching the root widget. The pipeline cell will
     /// be propagated to elements during mounting so they can create their
     /// RenderObjects.
     pub fn set_pipeline_owner(&self, owner: PipelineCell) {
@@ -710,7 +710,7 @@ impl WidgetsBinding {
     /// [`Self::draw_frame`] discards the stale records with an aggregate
     /// warning. `flui-testing`'s `HeadlessBinding::build_owner_mut` reaches
     /// the same underlying `BuildOwner::take_recovered_panics` directly for
-    /// tests that want the drain without a realm in the loop.
+    /// tests that want the drain without a UI runtime in the loop.
     ///
     /// # Examples
     ///
@@ -728,7 +728,7 @@ impl WidgetsBinding {
 
     /// Atomic seeded observer install (ADR-0040 §3): under ONE `inner`
     /// write guard, replay the current tree into `observer`
-    /// (`ElementTree::replay_mounts`), then install it as the realm's
+    /// (`ElementTree::replay_mounts`), then install it as the UI runtime's
     /// observer. Every frame drive also holds the `inner` write lock, so no
     /// tree mutation can interleave between replay and install — the
     /// consumer's baseline is exact.
@@ -1276,7 +1276,7 @@ impl WidgetsBinding {
     /// `PipelineOwner::run_frame` releases its write-lock so no `NodePtr`
     /// alias is live.
     ///
-    /// `UiRealm::draw_frame` (`flui-app`) calls this method after the
+    /// `UiRuntime::draw_frame` (`flui-app`) calls this method after the
     /// `run_frame` write-guard drops, passing the same shared `PipelineOwner`
     /// that `run_frame` used. The lock order is `widgets → pipeline`: the
     /// `widgets` write-lock (`WidgetsBinding::inner`) is held here; the brief
@@ -1300,7 +1300,7 @@ impl WidgetsBinding {
     ///
     /// This call site is the **production↔headless convergence point** for the
     /// post-`run_frame` pipeline tail steps. `HeadlessBinding::pump_frame`
-    /// step 6 and `UiRealm::draw_frame` (via this method) now execute the
+    /// step 6 and `UiRuntime::draw_frame` (via this method) now execute the
     /// same code path. Future gap-#2 work (production Vsync / implicit-animation
     /// tick) will land at the same `draw_frame` call site immediately after this
     /// call, keeping both bindings in sync.
@@ -1321,7 +1321,7 @@ impl WidgetsBinding {
     /// run, because `build_scope` mounts render objects through that same lock.
     ///
     /// This is the second production↔headless convergence point:
-    /// `UiRealm::draw_frame` reaches the shared fixpoint through here, and
+    /// `UiRuntime::draw_frame` reaches the shared fixpoint through here, and
     /// `HeadlessBinding::pump_frame` calls
     /// `BuildOwner::run_frame_with_layout_builders` directly (it owns its
     /// `BuildOwner` and `ElementTree` without a lock). Both end up in the same
@@ -1501,9 +1501,9 @@ impl WidgetsBinding {
     // binding could drift from the real one and never actually gated
     // anything reachable from the production frame path. It has been
     // removed — the single canonical counter lives on the renderer binding
-    // (`crates/flui-app/src/bindings/renderer_binding.rs`), forwarded through `UiRealm::defer_first_frame`
+    // (`crates/flui-app/src/bindings/renderer_binding.rs`), forwarded through `UiRuntime::defer_first_frame`
     // / `allow_first_frame` / `send_frames_to_engine`, and consulted by
-    // `UiRealm::render_frame_entered`.
+    // `UiRuntime::render_frame_entered`.
 
     /// Whether the binding is ready to produce frames.
     pub fn is_ready_to_produce_frames(&self) -> bool {
@@ -1764,7 +1764,7 @@ mod tests {
     }
 
     fn binding_is_not_a_singleton_two_instances_are_independent() {
-        // The binding is realm-owned; two bindings are two
+        // The binding is ui_runtime-owned; two bindings are two
         // independent trees (HeadlessBinding's "many can exist" contract,
         // now true of the widgets binding itself).
         let binding1 = WidgetsBinding::new();
