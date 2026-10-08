@@ -2096,7 +2096,11 @@ pub(crate) fn nested_fling_skips_saturated_parent_and_reentrant_jump_retires_tra
     inner.jump_to(650.0);
     laid.tick();
     release_inner_fling(&laid, flui_foundation::geometry::Axis::Vertical, false);
-    assert_eq!(inner.pixels(), 670.0, "leaf claimed the post-threshold move");
+    assert_eq!(
+        inner.pixels(),
+        670.0,
+        "leaf claimed the post-threshold move"
+    );
     for _ in 0..15 {
         laid.pump_for(Duration::from_millis(16));
     }
@@ -2159,7 +2163,10 @@ fn reveal_target_content(axis: flui_foundation::geometry::Axis) -> flui_view::Bo
     reveal_target_content_at(axis, 600.0)
 }
 
-fn reveal_target_content_at(axis: flui_foundation::geometry::Axis, before: f64) -> flui_view::BoxedView {
+fn reveal_target_content_at(
+    axis: flui_foundation::geometry::Axis,
+    before: f64,
+) -> flui_view::BoxedView {
     use flui_foundation::geometry::Axis;
     let target = flui_widgets::Semantics::new()
         .container(true)
@@ -2190,6 +2197,10 @@ fn request_reveal_target(laid: &LaidOut) {
         .find_by_label("reveal target")
         .expect("offscreen target remains addressable");
     let advertised = target.supports_action(Action::ScrollIntoView);
+    assert!(
+        !target.raw().is_hidden(),
+        "an offered offscreen target must survive native hidden-subtree filtering"
+    );
     laid.invoke_semantics_action(ActionRequest {
         action: Action::ScrollIntoView,
         target_tree: TreeId::ROOT,
@@ -2205,7 +2216,9 @@ fn request_reveal_target(laid: &LaidOut) {
 
 fn assert_reveal_label_fixture_is_visible(axis: flui_foundation::geometry::Axis) {
     let mut visible = lay_out(
-        Scrollable::new().scroll_direction(axis).child(reveal_target_content_at(axis, 0.0)),
+        Scrollable::new()
+            .scroll_direction(axis)
+            .child(reveal_target_content_at(axis, 0.0)),
         tight(200.0, 200.0),
     );
     visible.enable_semantics();
@@ -2346,4 +2359,134 @@ pub(crate) fn show_on_screen_walks_nested_axes_and_replacement_uses_current_geom
         assert_eq!(outer.pixels(), 600.0);
         assert_reveal_target_visible(&laid);
     }
+}
+
+fn nested_reveal_content(outer: &ScrollController, inner: &ScrollController) -> Scrollable {
+    Scrollable::new()
+        .controller(outer.clone())
+        .child(flui_widgets::Column::new(vec![
+            SizedBox::new(200.0, 600.0).boxed(),
+            SizedBox::new(200.0, 200.0)
+                .child(
+                    Scrollable::new()
+                        .controller(inner.clone())
+                        .child(reveal_target_content(
+                            flui_foundation::geometry::Axis::Vertical,
+                        )),
+                )
+                .boxed(),
+            SizedBox::new(200.0, 800.0).boxed(),
+        ]))
+}
+
+pub(crate) fn show_on_screen_failure_continues_live_ancestors_and_fresh_requests_recover() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    for competing in [false, true] {
+        let (outer, inner) = (ScrollController::new(), ScrollController::new());
+        let mut laid = lay_out(nested_reveal_content(&outer, &inner), tight(200.0, 200.0));
+        laid.enable_semantics();
+        laid.tick();
+        let first = Arc::new(AtomicBool::new(true));
+        let failed = Arc::clone(&first);
+        let inner_listenable = inner.as_listenable();
+        let first_id = inner_listenable.add_listener(Arc::new(move || {
+            if failed.swap(false, Ordering::SeqCst) {
+                panic!("first inner reveal notification");
+            }
+        }));
+        let second = Arc::new(AtomicBool::new(competing));
+        let failed = Arc::clone(&second);
+        let outer_listenable = outer.as_listenable();
+        let second_id = outer_listenable.add_listener(Arc::new(move || {
+            if failed.swap(false, Ordering::SeqCst) {
+                panic!("second outer reveal notification");
+            }
+        }));
+        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            request_reveal_target(&laid);
+        }))
+        .expect_err("actual inner reveal must reach its failing pixel listener");
+        let text = failure
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| failure.downcast_ref::<String>().map(String::as_str));
+        assert_eq!(text, Some("first inner reveal notification"));
+        assert!(!first.load(Ordering::SeqCst));
+        assert!(
+            !second.load(Ordering::SeqCst),
+            "live ancestor delivery completed"
+        );
+        assert_eq!(inner.pixels(), 440.0);
+        assert_eq!(
+            outer.pixels(),
+            600.0,
+            "inner failure cannot starve the enclosing viewport"
+        );
+        inner_listenable.remove_listener(first_id);
+        outer_listenable.remove_listener(second_id);
+        inner.jump_to(0.0);
+        outer.jump_to(0.0);
+        laid.tick();
+        request_reveal_target(&laid);
+        laid.tick();
+        assert_eq!(inner.pixels(), 440.0);
+        assert_eq!(outer.pixels(), 600.0);
+        assert_reveal_target_visible(&laid);
+    }
+}
+
+pub(crate) fn show_on_screen_same_pipeline_reentry_keeps_one_reveal_and_recovers() {
+    use flui_semantics::{AccessibilityNodeId, SemanticsAction, SemanticsActionRequest};
+    use std::sync::Mutex;
+    let (outer, inner) = (ScrollController::new(), ScrollController::new());
+    let mut laid = lay_out(nested_reveal_content(&outer, &inner), tight(200.0, 200.0));
+    laid.enable_semantics();
+    laid.tick();
+    let tree = laid.a11y_tree().expect("actual tree");
+    let target = tree
+        .find_by_label("reveal target")
+        .expect("addressable target")
+        .id();
+    let invocation = laid
+        .pipeline_owner()
+        .with(|owner| {
+            owner.resolve_semantics_action(SemanticsActionRequest {
+                node_id: AccessibilityNodeId::from_u64(target.0)
+                    .expect("published nonzero identity"),
+                action: SemanticsAction::ShowOnScreen,
+                arguments: None,
+            })
+        })
+        .expect("actual automatic ancestor reveal");
+    let pending = Arc::new(Mutex::new(Some(invocation)));
+    let reentrant = Arc::clone(&pending);
+    let listenable = inner.as_listenable();
+    let listener = listenable.add_listener(Arc::new(move || {
+        let invocation = reentrant.lock().expect("test holder").take();
+        if let Some(invocation) = invocation {
+            invocation.invoke();
+        }
+    }));
+    request_reveal_target(&laid);
+    laid.tick();
+    assert!(
+        pending.lock().expect("test holder").is_none(),
+        "same-pipeline request actually reentered"
+    );
+    assert_eq!(
+        inner.pixels(),
+        440.0,
+        "reentry cannot apply old reveal geometry twice"
+    );
+    assert_eq!(outer.pixels(), 600.0);
+    assert_reveal_target_visible(&laid);
+    listenable.remove_listener(listener);
+    inner.jump_to(0.0);
+    outer.jump_to(0.0);
+    laid.tick();
+    request_reveal_target(&laid);
+    laid.tick();
+    assert_eq!(inner.pixels(), 440.0);
+    assert_eq!(outer.pixels(), 600.0);
+    assert_reveal_target_visible(&laid);
 }
