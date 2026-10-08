@@ -157,7 +157,7 @@ impl GroupOrderSnapshot {
                         group
                             .config
                             .policy
-                            .order(&mut members, group.config.direction)
+                            .order(&mut members, group.config.direction);
                     });
                 }
                 self.order_at(&mut members, depth + 1, cache, failure);
@@ -448,9 +448,15 @@ fn geometry(
     Geometry::from_rect(rect, direction)
 }
 
+/// Cache the provider's result for this input, including unavailable geometry.
+enum GeometrySnapshot {
+    Unqueried,
+    Sampled(Option<Geometry>),
+}
+
 struct SpatialCandidate {
     node: Rc<FocusNode>,
-    geometry: Option<Option<Geometry>>,
+    geometry: GeometrySnapshot,
 }
 
 struct SpatialBoundary {
@@ -480,9 +486,14 @@ fn spatial_target(
         {
             continue;
         }
-        let rect = *candidate
-            .geometry
-            .get_or_insert_with(|| geometry(&candidate.node, search.direction, failure));
+        let rect = match candidate.geometry {
+            GeometrySnapshot::Unqueried => {
+                let rect = geometry(&candidate.node, search.direction, failure);
+                candidate.geometry = GeometrySnapshot::Sampled(rect);
+                rect
+            }
+            GeometrySnapshot::Sampled(rect) => rect,
+        };
         let Some(rect) = rect else {
             continue;
         };
@@ -547,7 +558,7 @@ pub(super) fn directional_step(
         .descendants()
         .map(|node| SpatialCandidate {
             node,
-            geometry: None,
+            geometry: GeometrySnapshot::Unqueried,
         })
         .collect();
     let mut failure = FocusClosePanic::for_rejection(current.traversal_close_mode());
