@@ -1942,7 +1942,7 @@ pub(crate) fn replacing_parent_invalidates_old_fling_handoff_and_next_gesture_re
     use flui_foundation::geometry::Axis::Vertical;
     let (old, new, inner, vsync) = (
         ScrollController::new(),
-        ScrollController::new(),
+        ScrollController::with_initial_scroll_offset(600.0),
         ScrollController::new(),
         Vsync::new(),
     );
@@ -1956,7 +1956,6 @@ pub(crate) fn replacing_parent_invalidates_old_fling_handoff_and_next_gesture_re
     laid.tick();
     release_inner_fling(&laid, Vertical, false);
     assert_eq!(inner.pixels(), 670.0);
-    new.jump_to(600.0);
     laid.pump_widget(nested_fling_content(
         &new, &inner, &vsync, Vertical, Vertical, false, false,
     ));
