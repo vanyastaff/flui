@@ -69,6 +69,13 @@ Native observer handles and callback stacks never enter runtime values.
 
 ## Projection and consumer policy
 
+Motion consumer integration remains pending: Windows observes the setting and
+the host distributes it, but the runtime does not yet apply it to animations.
+The owner retains this observation API for the upcoming animation-policy work;
+that follow-up must wire the policy and demonstrate active-animation updates,
+authored overrides and unknown-value fallback through production consumers.
+Snapshot delivery alone is not reduced-motion support.
+
 Gesture timing, mouse rectangles, touch slop, fling speed and wheel steps retain
 their distinct meanings and units. A double-click rectangle's full width is not
 the same measurement as displacement allowed on either side of an origin.

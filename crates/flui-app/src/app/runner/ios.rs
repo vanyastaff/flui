@@ -364,11 +364,11 @@ where
     // 5. Input -> entered ui_runtime input dispatch.
     install_input_wiring(owner_dispatch, window.as_ref());
 
-    installation.dev_agent(config.dev_agent.clone().zip(agent_window));
+    installation.dev_agent(config.dev_agent.zip(agent_window));
     let frame =
         installation.frame_driver(super::frame_driver::FrameDriver::Ios(IosFrameDriver {
             lane: Arc::clone(&lane),
-            worker_reload: worker_reload.clone(),
+            worker_reload,
             device_recovery_backoff,
             surface_recreation_retry,
         }))?;
@@ -478,7 +478,7 @@ pub(super) struct IosFrameDriver {
 }
 
 impl IosFrameDriver {
-    pub(super) fn installed(&mut self) {
+    pub(super) fn installed() {
         tracing::info!("iOS platform initialized with callbacks");
     }
     pub(super) fn resize(&mut self, size: flui_foundation::geometry::Size<f64>, scale_factor: f64) {

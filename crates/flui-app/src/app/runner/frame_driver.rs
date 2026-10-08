@@ -97,7 +97,7 @@ impl FrameDriver {
             #[cfg(target_os = "android")]
             Self::Android(_) => {}
             #[cfg(target_os = "ios")]
-            Self::Ios(driver) => driver.installed(),
+            Self::Ios(_) => super::ios::IosFrameDriver::installed(),
             #[cfg(target_arch = "wasm32")]
             Self::Web(driver) => driver.installed(FrameLiveness(Rc::downgrade(record))),
             #[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
