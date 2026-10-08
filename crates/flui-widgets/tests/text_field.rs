@@ -130,7 +130,7 @@ pub(crate) fn focused_character_key_inserts_into_controller() {
         Rc::clone(&node),
         make_editable_text_handler(controller.clone()),
     );
-    let _ = guard.request_focus();
+    guard.request_focus();
 
     let event = KeyEventBuilder::new(Code::KeyH)
         .with_key(Key::character("h"))

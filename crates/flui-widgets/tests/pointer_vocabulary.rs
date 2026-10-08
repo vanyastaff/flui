@@ -168,7 +168,7 @@ pub(crate) fn viewer_native_owner_survives_descendant_enable_during_rebuild() {
                     .pan_enabled(false)
                     .boundary_margin(EdgeInsets::all(1000.0))
                     .on_interaction_end(move |_, details| {
-                        inner_log.borrow_mut().push(details.reason)
+                        inner_log.borrow_mut().push(details.reason);
                     })
                     .child(SizedBox::new(200.0, 200.0)),
             )

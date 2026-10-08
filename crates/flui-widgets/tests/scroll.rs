@@ -2174,21 +2174,23 @@ pub(crate) fn nested_fling_failure_keeps_first_panic_and_a_new_gesture_makes_pro
         let first = Arc::new(AtomicBool::new(true));
         let fail = Arc::clone(&first);
         let first_id = listenable.add_listener(Arc::new(move || {
-            if fail.swap(false, Ordering::SeqCst) {
-                panic!("first parent handoff notification");
-            }
+            assert!(
+                !fail.swap(false, Ordering::SeqCst),
+                "first parent handoff notification"
+            );
         }));
         let second = Arc::new(AtomicBool::new(competing));
         let fail = Arc::clone(&second);
         let second_id = listenable.add_listener(Arc::new(move || {
-            if fail.swap(false, Ordering::SeqCst) {
-                panic!("second parent handoff notification");
-            }
+            assert!(
+                !fail.swap(false, Ordering::SeqCst),
+                "second parent handoff notification"
+            );
         }));
         release_inner_fling(&laid, Vertical, false);
         let ((), log) = flui_testing::log_capture::capture(|| {
             for _ in 0..15 {
-                laid.pump_for(Duration::from_millis(16))
+                laid.pump_for(Duration::from_millis(16));
             }
         });
         let expected = if competing {
@@ -2710,17 +2712,19 @@ pub(crate) fn show_on_screen_failure_continues_live_ancestors_and_fresh_requests
         let failed = Arc::clone(&first);
         let inner_listenable = inner.as_listenable();
         let first_id = inner_listenable.add_listener(Arc::new(move || {
-            if failed.swap(false, Ordering::SeqCst) {
-                panic!("first inner reveal notification");
-            }
+            assert!(
+                !failed.swap(false, Ordering::SeqCst),
+                "first inner reveal notification"
+            );
         }));
         let second = Arc::new(AtomicBool::new(competing));
         let failed = Arc::clone(&second);
         let outer_listenable = outer.as_listenable();
         let second_id = outer_listenable.add_listener(Arc::new(move || {
-            if failed.swap(false, Ordering::SeqCst) {
-                panic!("second outer reveal notification");
-            }
+            assert!(
+                !failed.swap(false, Ordering::SeqCst),
+                "second outer reveal notification"
+            );
         }));
         let ((), log) = flui_testing::log_capture::capture(|| {
             request_reveal_target(&laid);
@@ -2994,9 +2998,10 @@ pub(crate) fn nested_fling_custom_physics_failure_and_retirement_preserve_first_
     }
     impl Drop for RetiringSimulation {
         fn drop(&mut self) {
-            if self.fail_drop.swap(false, Ordering::SeqCst) {
-                panic!("custom parent simulation retirement failure");
-            }
+            assert!(
+                !self.fail_drop.swap(false, Ordering::SeqCst),
+                "custom parent simulation retirement failure"
+            );
         }
     }
     #[derive(Debug)]
@@ -3020,9 +3025,10 @@ pub(crate) fn nested_fling_custom_physics_failure_and_retirement_preserve_first_
             }))
         }
         fn boundary_velocity(&self, metrics: &ScrollMetrics, velocity: f64) -> Option<f64> {
-            if self.fail_boundary.swap(false, Ordering::SeqCst) {
-                panic!("custom parent boundary failure");
-            }
+            assert!(
+                !self.fail_boundary.swap(false, Ordering::SeqCst),
+                "custom parent boundary failure"
+            );
             ClampingScrollPhysics::new().boundary_velocity(metrics, velocity)
         }
     }

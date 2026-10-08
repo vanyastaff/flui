@@ -425,9 +425,7 @@ pub(crate) fn listener_raw_observer_panic_still_delivers_the_recognizer_event() 
         Listener::new()
             .behavior(HitTestBehavior::Opaque)
             .on_pointer_down(move |_, _| {
-                if raw.replace(false) {
-                    panic!("raw observer first failure");
-                }
+                assert!(!raw.replace(false), "raw observer first failure");
             })
             .recognizer(&recognizer)
             .child(SizedBox::new(80.0, 80.0)),

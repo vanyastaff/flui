@@ -26,11 +26,11 @@ pub(crate) fn exclusive_drag_callbacks_have_one_arena_winner() {
             .on_pan_start(move |_, _| pan_start.borrow_mut().push("pan start"))
             .on_pan_end(move |_, _| pan_end.borrow_mut().push("pan end"))
             .on_horizontal_drag_start(move |_, _| {
-                horizontal_start.borrow_mut().push("horizontal start")
+                horizontal_start.borrow_mut().push("horizontal start");
             })
             .on_horizontal_drag_end(move |_, _| horizontal_end.borrow_mut().push("horizontal end"))
             .on_horizontal_drag_cancel(move |_| {
-                horizontal_cancel.borrow_mut().push("horizontal cancel")
+                horizontal_cancel.borrow_mut().push("horizontal cancel");
             })
             .child(ColoredBox::new(Color::rgb(10, 20, 30))),
         tight(100.0, 100.0),
@@ -173,7 +173,7 @@ pub(crate) fn scoped_estimator_controls_delivered_drag_velocity() {
     // trace would pass even if the configured strategy were ignored.
     for (estimator, expected) in [
         (VelocityEstimator::LeastSquares, 500.0),
-        (VelocityEstimator::Impulse, 1589.9257985831982),
+        (VelocityEstimator::Impulse, 1_589.925_798_583_198_2),
         (VelocityEstimator::Ios, 2550.0),
         (VelocityEstimator::Macos, 1950.0),
     ] {
@@ -488,7 +488,7 @@ pub(crate) fn mounted_drag_policy_replaces_targets_before_cancellation_and_recov
         let completed = Rc::new(Cell::new(0));
         let updates = Rc::new(std::cell::RefCell::new(Vec::new()));
         let signal = Rc::new(Cell::new(None));
-        let (p, s, c, e, u, remembered) = (
+        let (configured_policy, start_count, cancel_count, end_count, update_log, remembered) = (
             policy.clone(),
             starts.clone(),
             cancelled.clone(),
@@ -499,24 +499,22 @@ pub(crate) fn mounted_drag_policy_replaces_targets_before_cancellation_and_recov
         let fail_once = Rc::new(Cell::new(cancel_panics));
         let probe = SignalProbe::new(move |ProbeSignals { count, .. }| {
             remembered.set(Some(count));
-            let (s, c, e, u, fail) = (
-                s.clone(),
-                c.clone(),
-                e.clone(),
-                u.clone(),
+            let (started, cancelled, ended, updated, fail) = (
+                start_count.clone(),
+                cancel_count.clone(),
+                end_count.clone(),
+                update_log.clone(),
                 fail_once.clone(),
             );
             GestureDetector::new()
-                .drag_pointer_strategy(p.get())
-                .on_pan_start(move |_, _| s.set(s.get() + 1))
-                .on_pan_update(move |_, details| u.borrow_mut().push(details.delta.dy))
+                .drag_pointer_strategy(configured_policy.get())
+                .on_pan_start(move |_, _| started.set(started.get() + 1))
+                .on_pan_update(move |_, details| updated.borrow_mut().push(details.delta.dy))
                 .on_pan_end(move |_, details| match details.reason {
-                    GestureEndReason::Completed => e.set(e.get() + 1),
+                    GestureEndReason::Completed => ended.set(ended.get() + 1),
                     GestureEndReason::Cancelled => {
-                        c.set(c.get() + 1);
-                        if fail.replace(false) {
-                            panic!("drag policy cancellation");
-                        }
+                        cancelled.set(cancelled.get() + 1);
+                        assert!(!fail.replace(false), "drag policy cancellation");
                     }
                 })
                 .child(ColoredBox::new(Color::rgb(10, 20, 30)))
@@ -544,7 +542,7 @@ pub(crate) fn mounted_drag_policy_replaces_targets_before_cancellation_and_recov
         // Lifecycle update failures are recovered by substituting the failed
         // child, so this frame completes. Observe the host's contained report
         // rather than expecting a dropped-frame panic from the pump.
-        let (_, log) = flui_testing::log_capture::capture(|| laid.pump());
+        let ((), log) = flui_testing::log_capture::capture(|| laid.pump());
         let reports: Vec<_> = log
             .records()
             .iter()
