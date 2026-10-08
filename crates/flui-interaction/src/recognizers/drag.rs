@@ -467,9 +467,9 @@ impl DragGestureRecognizer {
     }
     fn reject_contact(&self, pointer: PointerId, id: ContactId) {
         let Some(tracked) = self.current(pointer).filter(|contact| contact.id == id) else { return; };
-        if self.active.get() == Some(id) {
+        if self.active.get() == Some(tracked.id) {
             self.terminate(GestureEndReason::Cancelled, None);
-        } else if let Some(outgoing) = self.remove(pointer, id) {
+        } else if let Some(outgoing) = self.remove(tracked.pointer, tracked.id) {
             outgoing.contact.withdraw();
         }
     }
