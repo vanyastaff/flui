@@ -841,6 +841,10 @@ fn binding_input_contract_matrix() {
             scroll_owner_batch_preserves_reentrant_admission,
         ),
         (
+            "scroll_device_batch_reentry",
+            scroll_device_batch_preserves_reentrant_admission,
+        ),
+        (
             "scroll_first_terminal_delta",
             scroll_first_terminal_delta_remains_deliverable,
         ),
@@ -1868,6 +1872,14 @@ fn scroll_role_metadata_keeps_lease() {
 }
 
 fn scroll_owner_batch_preserves_reentrant_admission() {
+    assert_scroll_owner_batch(false);
+}
+
+fn scroll_device_batch_preserves_reentrant_admission() {
+    assert_scroll_owner_batch(true);
+}
+
+fn assert_scroll_owner_batch(device_removal: bool) {
     use flui_foundation::geometry::Offset;
     use flui_interaction::events::{
         PointerEvent, PointerKind, make_down_event_for_id, make_scroll_event,
@@ -1879,101 +1891,99 @@ fn scroll_owner_batch_preserves_reentrant_admission() {
     };
     use std::{cell::Cell, rc::Rc};
 
-    for device_removal in [false, true] {
-        let lane = InteractionLane::try_new().expect("lane");
-        let handle = lane.dispatch_handle();
-        let binding = Rc::new(GestureBinding::new());
-        let selected_calls = Rc::new(Cell::new(0));
-        let other_calls = Rc::new(Cell::new(0));
-        let device = DeviceId::try_from(1_u64).expect("device");
-        let first_pointer = PointerId::try_from(1_u64).expect("pointer");
-        let packet = move |phase| {
-            let PointerEvent::Scroll(mut scroll) =
-                make_scroll_event(Offset::ZERO, Offset::new(0.0, 10.0)).expect("finite wheel")
-            else {
+    let lane = InteractionLane::try_new().expect("lane");
+    let handle = lane.dispatch_handle();
+    let binding = Rc::new(GestureBinding::new());
+    let selected_calls = Rc::new(Cell::new(0));
+    let other_calls = Rc::new(Cell::new(0));
+    let device = DeviceId::try_from(1_u64).expect("device");
+    let first_pointer = PointerId::try_from(1_u64).expect("pointer");
+    let packet = move |phase| {
+        let PointerEvent::Scroll(mut scroll) =
+            make_scroll_event(Offset::ZERO, Offset::new(0.0, 10.0)).expect("finite wheel")
+        else {
+            unreachable!()
+        };
+        scroll.pointer.id = PointerId::try_from(3_u64).expect("distinct wheel pointer");
+        scroll.pointer = scroll.pointer.with_device(device);
+        scroll.phase = Some(phase);
+        PointerEvent::Scroll(scroll)
+    };
+    lane.enter(|| {
+        let calls = Rc::clone(&selected_calls);
+        let selected = handle
+            .register_scroll(move |_| {
+                calls.set(calls.get() + 1);
+                EventPropagation::Stop
+            })
+            .expect("reentrant consumer");
+        let mut selected_path = HitTestResult::new();
+        selected_path.add(HitTestEntry::new(RenderId::new(1)).scroll_target(selected));
+        let weak = Rc::downgrade(&binding);
+        let observer = handle
+            .register_pointer(move |dispatch| {
+                if let PointerEvent::Cancel(cancel) = dispatch.local
+                    && cancel.pointer.id == first_pointer
+                {
+                    weak.upgrade()
+                        .expect("binding")
+                        .handle_pointer_event(&packet(ScrollPhase::Began), |_| {
+                            selected_path.clone()
+                        });
+                }
+            })
+            .expect("cancel observer");
+        for id in [1_u64, 2] {
+            let PointerEvent::Down(mut press) = make_down_event_for_id(
+                PointerId::try_from(id).expect("pointer"),
+                Offset::ZERO,
+                PointerKind::Touch,
+            )
+            .expect("finite contact") else {
                 unreachable!()
             };
-            scroll.pointer.id = PointerId::try_from(3_u64).expect("distinct wheel pointer");
-            scroll.pointer = scroll.pointer.with_device(device);
-            scroll.phase = Some(phase);
-            PointerEvent::Scroll(scroll)
-        };
-        lane.enter(|| {
-            let calls = Rc::clone(&selected_calls);
-            let selected = handle
-                .register_scroll(move |_| {
-                    calls.set(calls.get() + 1);
-                    EventPropagation::Stop
-                })
-                .expect("reentrant consumer");
-            let mut selected_path = HitTestResult::new();
-            selected_path.add(HitTestEntry::new(RenderId::new(1)).scroll_target(selected));
-            let weak = Rc::downgrade(&binding);
-            let observer = handle
-                .register_pointer(move |dispatch| {
-                    if let PointerEvent::Cancel(cancel) = dispatch.local
-                        && cancel.pointer.id == first_pointer
-                    {
-                        weak.upgrade()
-                            .expect("binding")
-                            .handle_pointer_event(&packet(ScrollPhase::Began), |_| {
-                                selected_path.clone()
-                            });
-                    }
-                })
-                .expect("cancel observer");
-            for id in [1_u64, 2] {
-                let PointerEvent::Down(mut press) = make_down_event_for_id(
-                    PointerId::try_from(id).expect("pointer"),
-                    Offset::ZERO,
-                    PointerKind::Touch,
-                )
-                .expect("finite contact") else {
-                    unreachable!()
-                };
-                press.pointer = press.pointer.with_device(device);
-                binding.handle_pointer_event(&PointerEvent::Down(press), |_| {
-                    let mut path = HitTestResult::new();
-                    path.add(hit_entry(observer));
-                    path
-                });
-            }
-            if device_removal {
-                binding.handle_pointer_event(
-                    &PointerEvent::DeviceRemoved(PointerDeviceChange::new(
-                        device,
-                        PointerKind::Touch,
-                        EventTime::from_nanos(0),
-                    )),
-                    |_| panic!("device removal does not hit-test"),
-                );
-            } else {
-                binding.cancel_active_pointers();
-            }
-            let calls = Rc::clone(&other_calls);
-            let other = handle
-                .register_scroll(move |_| {
-                    calls.set(calls.get() + 1);
-                    EventPropagation::Stop
-                })
-                .expect("other consumer");
-            binding.handle_pointer_event(&packet(ScrollPhase::Changed), |_| {
+            press.pointer = press.pointer.with_device(device);
+            binding.handle_pointer_event(&PointerEvent::Down(press), |_| {
                 let mut path = HitTestResult::new();
-                path.add(HitTestEntry::new(RenderId::new(2)).scroll_target(other));
+                path.add(hit_entry(observer));
                 path
             });
-            assert_eq!(
-                selected_calls.get(),
-                2,
-                "an old cancellation batch cannot withdraw newly admitted scroll work"
+        }
+        if device_removal {
+            binding.handle_pointer_event(
+                &PointerEvent::DeviceRemoved(PointerDeviceChange::new(
+                    device,
+                    PointerKind::Touch,
+                    EventTime::from_nanos(0),
+                )),
+                |_| panic!("device removal does not hit-test"),
             );
-            assert_eq!(
-                other_calls.get(),
-                0,
-                "reentrant source keeps exact consumption authority"
-            );
+        } else {
+            binding.cancel_active_pointers();
+        }
+        let calls = Rc::clone(&other_calls);
+        let other = handle
+            .register_scroll(move |_| {
+                calls.set(calls.get() + 1);
+                EventPropagation::Stop
+            })
+            .expect("other consumer");
+        binding.handle_pointer_event(&packet(ScrollPhase::Changed), |_| {
+            let mut path = HitTestResult::new();
+            path.add(HitTestEntry::new(RenderId::new(2)).scroll_target(other));
+            path
         });
-    }
+        assert_eq!(
+            selected_calls.get(),
+            2,
+            "an old cancellation batch cannot withdraw newly admitted scroll work"
+        );
+        assert_eq!(
+            other_calls.get(),
+            0,
+            "reentrant source keeps exact consumption authority"
+        );
+    });
 }
 
 fn scroll_first_terminal_delta_remains_deliverable() {
