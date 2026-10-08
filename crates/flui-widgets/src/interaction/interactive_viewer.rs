@@ -20,8 +20,9 @@
 //!
 //! The scene point under the moving focal point remains anchored when bounds
 //! permit. Rotation that cannot fit the boundary at the admitted scale is
-//! refused; no extra zoom is invented. Focal release velocity drives a library
-//! friction simulation through the presentation's VsyncScope. New contact or
+//! refused; no extra zoom is invented. Focal release velocity admitted by the
+//! gesture's captured minimum and maximum drives a library friction simulation
+//! through the presentation's VsyncScope. New contact or
 //! accepted wheel input stops it; source cancellation supplies no impulse.
 //! - **`constrained: false`** (an unconstrained child laid out via an
 //!   `OverflowBox`-equivalent, escaping the viewport) is **deferred**. V1
@@ -717,7 +718,7 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
             let anchor_end = anchor.clone();
             let pipeline_end = pipeline_cell.clone();
             let pan_end_details = callback_with(move |cx, details: ScaleEndDetails| {
-                let mut velocity = details.focal_velocity.pixels_per_second;
+                let mut velocity = details.focal_fling_velocity().pixels_per_second;
                 velocity = match pan_axis {
                     PanAxis::Free => velocity,
                     PanAxis::Horizontal => align_to_axis(velocity, Axis::Horizontal),
