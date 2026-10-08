@@ -28,7 +28,8 @@ pub(crate) fn presentation_resampling_uses_the_owner_frame_clock() {
         let seen = Rc::clone(&observed);
         let terminal = Rc::new(Cell::new(0));
         let ends = Rc::clone(&terminal);
-        let view = Listener::new().child(SizedBox::square(200.0))
+        let view = Listener::new()
+            .child(SizedBox::square(200.0))
             .behavior(HitTestBehavior::Opaque)
             .on_pointer_move(move |_, event| {
                 let PointerEvent::Move(event) = event.global else {
@@ -235,6 +236,65 @@ pub(crate) fn listener_capture_retains_one_target_and_drop_delivers_loss() {
         1,
         "terminal invalidates retained capture authority"
     );
+}
+
+pub(crate) fn listener_unmount_retires_capture_without_calling_disposed_callbacks() {
+    use flui_interaction::PointerCapture;
+    use std::cell::RefCell;
+
+    let token = Rc::new(RefCell::new(None::<PointerCapture>));
+    let held = token.clone();
+    let retired_callbacks = Rc::new(Cell::new(0));
+    let moved = retired_callbacks.clone();
+    let cancelled = retired_callbacks.clone();
+    let mut laid = lay_out(
+        Listener::new()
+            .behavior(HitTestBehavior::Opaque)
+            .on_pointer_down(move |_, dispatch| {
+                *held.borrow_mut() = Some(dispatch.capture().expect("mounted Down authority"));
+            })
+            .on_pointer_move(move |_, _| moved.set(moved.get() + 1))
+            .on_pointer_cancel(move |_, _| cancelled.set(cancelled.get() + 1))
+            .child(SizedBox::new(80.0, 80.0)),
+        tight(80.0, 80.0),
+    );
+    laid.dispatch_pointer_down(40.0, 40.0);
+    laid.pump_widget(SizedBox::new(80.0, 80.0));
+    let retired_capture = token
+        .borrow_mut()
+        .take()
+        .expect("capture outlives its widget");
+    drop(retired_capture);
+    laid.dispatch_pointer_move(200.0, 200.0);
+    laid.dispatch_pointer_up(200.0, 200.0);
+    assert_eq!(
+        retired_callbacks.get(),
+        0,
+        "disposed Listener receives no capture tail"
+    );
+
+    let new_contacts = Rc::new(Cell::new(0));
+    let new_down = new_contacts.clone();
+    laid.pump_widget(
+        Listener::new()
+            .behavior(HitTestBehavior::Opaque)
+            .on_pointer_down(move |_, dispatch| {
+                let capture = dispatch
+                    .capture()
+                    .expect("replacement Listener captures fresh contact");
+                new_down.set(new_down.get() + 1);
+                drop(capture);
+            })
+            .child(SizedBox::new(80.0, 80.0)),
+    );
+    laid.dispatch_pointer_down(40.0, 40.0);
+    laid.dispatch_pointer_up(40.0, 40.0);
+    assert_eq!(
+        new_contacts.get(),
+        1,
+        "replacement tree admits a fresh captured contact"
+    );
+    assert_eq!(retired_callbacks.get(), 0);
 }
 
 pub(crate) fn listener_admission_keeps_terminal_delivery_and_weak_ownership() {
