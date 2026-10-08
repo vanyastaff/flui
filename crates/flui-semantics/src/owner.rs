@@ -104,7 +104,7 @@ pub enum SemanticsActionError {
 pub struct SemanticsActionInvocation {
     node_id: AccessibilityNodeId,
     action: SemanticsAction,
-    delivery: ActionDelivery,
+    delivery: Option<ActionDelivery>,
 }
 
 enum ActionDelivery {
@@ -116,6 +116,37 @@ enum ActionDelivery {
         path: Vec<Weak<()>>,
         steps: Vec<(SemanticsActionHandler, ActionArgs)>,
     },
+}
+
+fn retire_reveal_handler(
+    handler: SemanticsActionHandler,
+    first: &mut Option<Box<dyn std::any::Any + Send>>,
+    unwinding: bool,
+) {
+    // User-owned captures are an independent failure boundary, including when
+    // an intentionally dropped snapshot is their last owner.
+    if unwinding || first.is_some() {
+        std::mem::forget(handler);
+    } else if let Err(payload) =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(handler)))
+    {
+        *first = Some(payload);
+    }
+}
+
+impl Drop for SemanticsActionInvocation {
+    fn drop(&mut self) {
+        if let Some(ActionDelivery::Reveal { steps, .. }) = self.delivery.take() {
+            let mut first = None;
+            let unwinding = std::thread::panicking();
+            for (handler, _) in steps {
+                retire_reveal_handler(handler, &mut first, unwinding);
+            }
+            if let Some(payload) = first {
+                std::panic::resume_unwind(payload);
+            }
+        }
+    }
 }
 
 impl std::fmt::Debug for SemanticsActionInvocation {
@@ -147,8 +178,12 @@ impl SemanticsActionInvocation {
     /// Invoke the cloned handler.
     ///
     /// No semantics-tree borrow is held while user code runs.
-    pub fn invoke(self) {
-        match self.delivery {
+    pub fn invoke(mut self) {
+        match self
+            .delivery
+            .take()
+            .expect("BUG: action delivery is consumed once")
+        {
             ActionDelivery::Direct { arguments, handler } => handler(self.action, arguments),
             ActionDelivery::Reveal { path, steps } => {
                 let mut first = None;
@@ -166,16 +201,7 @@ impl SemanticsActionInvocation {
                             }
                         }
                     }
-                    // A failed callback's captures remain owned even when this was
-                    // the last snapshot owner. Healthy retirement runs outside the
-                    // pipeline borrow and is itself a user-code boundary.
-                    if unwinding || first.is_some() {
-                        std::mem::forget(handler);
-                    } else if let Err(payload) =
-                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(handler)))
-                    {
-                        first = Some(payload);
-                    }
+                    retire_reveal_handler(handler, &mut first, unwinding);
                 }
                 if let Some(payload) = first {
                     std::panic::resume_unwind(payload);
@@ -619,7 +645,7 @@ impl SemanticsOwner {
                         return Ok(SemanticsActionInvocation {
                             node_id: request.node_id,
                             action: request.action,
-                            delivery: ActionDelivery::Reveal { path, steps },
+                            delivery: Some(ActionDelivery::Reveal { path, steps }),
                         });
                     }
                     break;
@@ -703,7 +729,7 @@ impl SemanticsOwner {
         Ok(SemanticsActionInvocation {
             node_id: request.node_id,
             action: routed,
-            delivery: ActionDelivery::Direct { arguments, handler },
+            delivery: Some(ActionDelivery::Direct { arguments, handler }),
         })
     }
 
