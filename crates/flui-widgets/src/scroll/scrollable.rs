@@ -83,8 +83,8 @@ use flui_platform_api::{
     keyboard::Modifiers,
     pointer::{ScrollEvent, ScrollPrecision, ScrollUnit},
 };
-use flui_scheduler::PostFrameHandle;
 use flui_rendering::semantics::{ActionArgs, SemanticsAction};
+use flui_scheduler::PostFrameHandle;
 
 use super::scroll_position_scope::ScrollPositionScope;
 
@@ -179,11 +179,26 @@ impl FlingEndpoint {
             } else {
                 -physical_velocity
             };
-            let position = owner.controller.position();
-            let outward = (velocity > 0.0 && position.pixels() >= position.max_scroll_extent())
-                || (velocity < 0.0 && position.pixels() <= position.min_scroll_extent());
-            if owner.axis == self.axis && !outward && owner.start(velocity, device_pixel_ratio) {
-                return;
+            if owner.axis == self.axis {
+                let metrics = ScrollMetrics::from(&owner.controller.position());
+                let generation = owner.fling.run_generation();
+                // Ask the owner's real boundary policy whether motion in this
+                // direction is admitted. Bouncing at an extent remains willing;
+                // a hard clamp at the same extent is skipped.
+                let proposed = metrics.pixels + velocity.signum();
+                let allowed = owner.physics.apply_boundary_conditions(&metrics, proposed);
+                if !owner.alive.load(Ordering::Acquire)
+                    || owner.fling.run_generation() != generation
+                    || owner.controller.pixels() != metrics.pixels
+                {
+                    return;
+                }
+                if allowed.is_finite()
+                    && allowed != metrics.pixels
+                    && owner.start(velocity, device_pixel_ratio)
+                {
+                    return;
+                }
             }
             parent = owner.parent.as_ref().and_then(Weak::upgrade);
         }
