@@ -805,6 +805,14 @@ fn binding_input_contract_matrix() {
         ("scroll_claim_reentry", scroll_claim_reentry_keeps_new_lease),
         ("scroll_focus_loss", scroll_focus_loss_releases_lease),
         (
+            "scroll_claim_retirement",
+            scroll_claim_survives_capture_retirement,
+        ),
+        (
+            "scroll_competing_retirement",
+            scroll_first_failure_survives_capture_retirement,
+        ),
+        (
             "wheel_first_failure_survives_claim_failure",
             wheel_first_failure_survives_claim_failure,
         ),
@@ -1807,6 +1815,114 @@ fn scroll_claim_reentry_keeps_new_lease() {
 }
 fn scroll_focus_loss_releases_lease() {
     assert_scroll_lease(ScrollLeaseCase::FocusLoss);
+}
+
+fn scroll_claim_survives_capture_retirement() {
+    assert_scroll_claim_retirement(false);
+}
+
+fn scroll_first_failure_survives_capture_retirement() {
+    assert_scroll_claim_retirement(true);
+}
+
+fn assert_scroll_claim_retirement(competing: bool) {
+    use flui_foundation::geometry::Offset;
+    use flui_interaction::events::{PointerEvent, make_scroll_event};
+    use flui_interaction::{EventPropagation, GestureBinding, HitTestResult};
+    use flui_platform_api::pointer::ScrollPhase;
+    use std::{
+        cell::Cell,
+        panic::{AssertUnwindSafe, catch_unwind},
+        rc::Rc,
+    };
+
+    struct RetiredCapture;
+    impl Drop for RetiredCapture {
+        fn drop(&mut self) {
+            panic!("consumed scroll capture retirement failure");
+        }
+    }
+    let packet = |phase| {
+        let PointerEvent::Scroll(mut scroll) =
+            make_scroll_event(Offset::ZERO, Offset::new(0.0, 10.0)).expect("finite wheel")
+        else {
+            unreachable!()
+        };
+        scroll.phase = Some(phase);
+        PointerEvent::Scroll(scroll)
+    };
+    let lane = InteractionLane::try_new().expect("lane");
+    let handle = lane.dispatch_handle();
+    let binding = GestureBinding::new();
+    let selected_calls = Rc::new(Cell::new(0));
+    let other_calls = Rc::new(Cell::new(0));
+    lane.enter(|| {
+        let slot = Rc::new(Cell::new(None));
+        let own_slot = Rc::clone(&slot);
+        let own_handle = handle.clone();
+        let calls = Rc::clone(&selected_calls);
+        let capture = RetiredCapture;
+        let selected = handle
+            .register_scroll(move |_| {
+                let _ = &capture;
+                calls.set(calls.get() + 1);
+                own_handle
+                    .unregister_scroll(own_slot.get().expect("published target"))
+                    .expect("withdraw callback ownership");
+                EventPropagation::Stop
+            })
+            .expect("selected target");
+        slot.set(Some(selected));
+        let observer = handle
+            .register_pointer(move |_| {
+                if competing {
+                    panic!("scroll observer first failure");
+                }
+            })
+            .expect("observer");
+        let mut selected_path = HitTestResult::new();
+        selected_path.add(hit_entry(observer));
+        selected_path.add(HitTestEntry::new(RenderId::new(1)).scroll_target(selected));
+        let payload = catch_unwind(AssertUnwindSafe(|| {
+            binding.handle_pointer_event(&packet(ScrollPhase::Began), |_| selected_path.clone());
+        }))
+        .expect_err("capture retirement propagates after consumption");
+        assert_eq!(
+            flui_foundation::panic::payload_text(&*payload),
+            Some(if competing {
+                "scroll observer first failure"
+            } else {
+                "consumed scroll capture retirement failure"
+            })
+        );
+        assert_eq!(
+            selected_calls.get(),
+            1,
+            "accepted claim runs despite earlier observer failure"
+        );
+        let calls = Rc::clone(&other_calls);
+        let other = handle
+            .register_scroll(move |_| {
+                calls.set(calls.get() + 1);
+                EventPropagation::Stop
+            })
+            .expect("healthy target");
+        let mut fresh_path = HitTestResult::new();
+        fresh_path.add(HitTestEntry::new(RenderId::new(2)).scroll_target(other));
+        binding.handle_pointer_event(&packet(ScrollPhase::Changed), |_| fresh_path.clone());
+        assert_eq!(
+            other_calls.get(),
+            0,
+            "consumption stays latched even when its captures retire with a panic"
+        );
+        binding.handle_pointer_event(&packet(ScrollPhase::Ended), |_| fresh_path.clone());
+        binding.handle_pointer_event(&packet(ScrollPhase::Began), |_| fresh_path.clone());
+        assert_eq!(
+            other_calls.get(),
+            1,
+            "next sequence recovers after retirement containment"
+        );
+    });
 }
 
 fn assert_scroll_lease(case: ScrollLeaseCase) {
