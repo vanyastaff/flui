@@ -1755,3 +1755,551 @@ pub(crate) fn refresh_indicator_rebuilds_only_on_a_phase_change() {
     assert!(harness.frame() > 0, "leaving the refreshing phase rebuilds");
     assert_eq!(harness.frame(), 0, "and then settles");
 }
+fn nested_fling_content(
+    outer: &ScrollController,
+    inner: &ScrollController,
+    vsync: &Vsync,
+    outer_axis: flui_foundation::geometry::Axis,
+    inner_axis: flui_foundation::geometry::Axis,
+    inner_reversed: bool,
+    bouncing: bool,
+) -> impl flui_view::View {
+    use flui_foundation::geometry::Axis;
+    let mut child = Scrollable::new()
+        .controller(inner.clone())
+        .scroll_direction(inner_axis)
+        .reverse(inner_reversed)
+        .child(match inner_axis {
+            Axis::Vertical => SizedBox::new(300.0, 1000.0),
+            Axis::Horizontal => SizedBox::new(1000.0, 300.0),
+        });
+    if bouncing {
+        child = child.physics(Arc::new(BouncingScrollPhysics::new()));
+    }
+    let child = flui_widgets::Align::new(flui_painting::Alignment::TOP_LEFT)
+        .child(SizedBox::new(200.0, 200.0).child(child));
+    let content: flui_view::BoxedView = match outer_axis {
+        Axis::Vertical => flui_widgets::Column::new(vec![
+            SizedBox::new(300.0, 600.0).boxed(),
+            SizedBox::new(300.0, 200.0).child(child).boxed(),
+            SizedBox::new(300.0, 4800.0).boxed(),
+        ])
+        .boxed(),
+        Axis::Horizontal => flui_widgets::Row::new(vec![
+            SizedBox::new(600.0, 300.0).boxed(),
+            SizedBox::new(200.0, 300.0).child(child).boxed(),
+            SizedBox::new(4800.0, 300.0).boxed(),
+        ])
+        .boxed(),
+    };
+    VsyncScope::new(
+        vsync.clone(),
+        Scrollable::new()
+            .controller(outer.clone())
+            .scroll_direction(outer_axis)
+            .child(content),
+    )
+}
+
+fn release_inner_fling(laid: &LaidOut, axis: flui_foundation::geometry::Axis, reversed: bool) {
+    use flui_foundation::geometry::Axis;
+    let samples = if reversed {
+        [50.0, 80.0, 100.0]
+    } else {
+        [150.0, 120.0, 100.0]
+    };
+    let at = |main| match axis {
+        Axis::Vertical => (100.0, main),
+        Axis::Horizontal => (main, 100.0),
+    };
+    let (x, y) = at(samples[0]);
+    laid.dispatch_pointer_down(x, y);
+    for main in samples.into_iter().skip(1) {
+        let (x, y) = at(main);
+        laid.dispatch_pointer_move(x, y);
+    }
+    let (x, y) = at(samples[2]);
+    laid.dispatch_pointer_up(x, y);
+}
+
+pub(crate) fn nested_fling_hands_remaining_velocity_to_matching_parent_axes() {
+    use flui_foundation::geometry::Axis::{Horizontal, Vertical};
+    for axis in [Vertical, Horizontal] {
+        let (outer, inner, vsync) = (
+            ScrollController::new(),
+            ScrollController::new(),
+            Vsync::new(),
+        );
+        let mut laid = crate::common::lay_out_animated(
+            nested_fling_content(&outer, &inner, &vsync, axis, axis, false, false),
+            tight(300.0, 300.0),
+            vsync,
+        );
+        outer.jump_to(600.0);
+        inner.jump_to(650.0);
+        laid.tick();
+        release_inner_fling(&laid, axis, false);
+        assert_eq!(
+            inner.pixels(),
+            700.0,
+            "{axis:?}: actual inner drag claimed the gesture"
+        );
+        assert_eq!(
+            outer.pixels(),
+            600.0,
+            "parent does not also consume the drag"
+        );
+        for _ in 0..15 {
+            laid.pump_for(Duration::from_millis(16));
+        }
+        assert_eq!(inner.pixels(), 800.0, "inner hits its real hard extent");
+        assert!(
+            outer.pixels() > 600.0,
+            "{axis:?}: residual fling reaches parent, got {}",
+            outer.pixels()
+        );
+        for _ in 0..500 {
+            laid.pump_for(Duration::from_millis(16));
+        }
+        assert!(
+            !outer.position().is_scrolling(),
+            "parent eventually settles"
+        );
+        assert!(
+            !inner.position().is_scrolling(),
+            "inner retires its transferred motion"
+        );
+    }
+}
+
+pub(crate) fn nested_fling_projects_reversed_child_and_preserves_orthogonal_and_bounce_policy() {
+    use flui_foundation::geometry::Axis::{Horizontal, Vertical};
+    for (outer_axis, reversed, bouncing, transfers) in [
+        (Vertical, true, false, true),
+        (Horizontal, false, false, false),
+        (Vertical, false, true, false),
+    ] {
+        let (outer, inner, vsync) = (
+            ScrollController::new(),
+            ScrollController::new(),
+            Vsync::new(),
+        );
+        let mut laid = crate::common::lay_out_animated(
+            nested_fling_content(
+                &outer, &inner, &vsync, outer_axis, Vertical, reversed, bouncing,
+            ),
+            tight(300.0, 300.0),
+            vsync,
+        );
+        outer.jump_to(600.0);
+        inner.jump_to(650.0);
+        laid.tick();
+        release_inner_fling(&laid, Vertical, reversed);
+        assert_eq!(
+            inner.pixels(),
+            700.0,
+            "premise: real child drag moves toward its end"
+        );
+        for _ in 0..500 {
+            laid.pump_for(Duration::from_millis(16));
+        }
+        assert_eq!(inner.pixels(), 800.0, "child settles at its actual extent");
+        if transfers {
+            assert!(
+                outer.pixels() < 600.0,
+                "reversed child's physical impulse decreases normal parent offset"
+            );
+        } else {
+            assert_eq!(
+                outer.pixels(),
+                600.0,
+                "orthogonal parent or child bounce never receives a fling"
+            );
+        }
+        assert!(!outer.position().is_scrolling());
+        assert!(!inner.position().is_scrolling());
+    }
+}
+
+pub(crate) fn replacing_parent_invalidates_old_fling_handoff_and_next_gesture_recovers() {
+    use flui_foundation::geometry::Axis::Vertical;
+    let (old, new, inner, vsync) = (
+        ScrollController::new(),
+        ScrollController::new(),
+        ScrollController::new(),
+        Vsync::new(),
+    );
+    let mut laid = crate::common::lay_out_animated(
+        nested_fling_content(&old, &inner, &vsync, Vertical, Vertical, false, false),
+        tight(300.0, 300.0),
+        vsync.clone(),
+    );
+    old.jump_to(600.0);
+    inner.jump_to(650.0);
+    laid.tick();
+    release_inner_fling(&laid, Vertical, false);
+    assert_eq!(inner.pixels(), 700.0);
+    new.jump_to(600.0);
+    laid.pump_widget(nested_fling_content(
+        &new, &inner, &vsync, Vertical, Vertical, false, false,
+    ));
+    for _ in 0..15 {
+        laid.pump_for(Duration::from_millis(16));
+    }
+    assert_eq!(
+        old.pixels(),
+        600.0,
+        "retired parent cannot receive a later edge impulse"
+    );
+    assert_eq!(
+        new.pixels(),
+        600.0,
+        "new owner cannot inherit an old accepted handoff"
+    );
+    inner.jump_to(650.0);
+    laid.tick();
+    release_inner_fling(&laid, Vertical, false);
+    for _ in 0..15 {
+        laid.pump_for(Duration::from_millis(16));
+    }
+    assert!(
+        new.pixels() > 600.0,
+        "new gesture resolves the current parent owner"
+    );
+    let retired = new.pixels();
+    laid.pump_widget(SizedBox::new(300.0, 300.0));
+    laid.pump_for(Duration::from_millis(200));
+    assert_eq!(
+        new.pixels(),
+        retired,
+        "unmount retires the transferred trajectory"
+    );
+}
+
+pub(crate) fn nested_fling_failure_keeps_first_panic_and_a_new_gesture_makes_progress() {
+    use flui_foundation::geometry::Axis::Vertical;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    for competing in [false, true] {
+        let (outer, inner, vsync) = (
+            ScrollController::new(),
+            ScrollController::new(),
+            Vsync::new(),
+        );
+        let mut laid = crate::common::lay_out_animated(
+            nested_fling_content(&outer, &inner, &vsync, Vertical, Vertical, false, false),
+            tight(300.0, 300.0),
+            vsync,
+        );
+        outer.jump_to(600.0);
+        inner.jump_to(650.0);
+        laid.tick();
+        let listenable = outer.as_listenable();
+        let first = Arc::new(AtomicBool::new(true));
+        let fail = Arc::clone(&first);
+        let first_id = listenable.add_listener(Arc::new(move || {
+            if fail.swap(false, Ordering::SeqCst) {
+                panic!("first parent handoff notification");
+            }
+        }));
+        let second = Arc::new(AtomicBool::new(competing));
+        let fail = Arc::clone(&second);
+        let second_id = listenable.add_listener(Arc::new(move || {
+            if fail.swap(false, Ordering::SeqCst) {
+                panic!("second parent handoff notification");
+            }
+        }));
+        release_inner_fling(&laid, Vertical, false);
+        let mut failure = None;
+        for _ in 0..15 {
+            if let Err(panic) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                laid.pump_for(Duration::from_millis(16))
+            })) {
+                failure = Some(panic);
+                break;
+            }
+        }
+        let failure =
+            failure.expect("actual parent handoff must reach the failing public listener");
+        let text = failure
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| failure.downcast_ref::<String>().map(String::as_str));
+        assert_eq!(text, Some("first parent handoff notification"));
+        assert!(!first.load(Ordering::SeqCst));
+        assert!(
+            !second.load(Ordering::SeqCst),
+            "competing notification cleanup completed"
+        );
+        listenable.remove_listener(first_id);
+        listenable.remove_listener(second_id);
+        outer.jump_to(600.0);
+        inner.jump_to(650.0);
+        laid.tick();
+        release_inner_fling(&laid, Vertical, false);
+        for _ in 0..15 {
+            laid.pump_for(Duration::from_millis(16));
+        }
+        assert!(
+            outer.pixels() > 600.0,
+            "after containment a fresh gesture still hands off"
+        );
+    }
+}
+
+pub(crate) fn nested_fling_skips_saturated_parent_and_reentrant_jump_retires_transfer() {
+    let (outer, middle, inner, vsync) = (
+        ScrollController::new(),
+        ScrollController::new(),
+        ScrollController::new(),
+        Vsync::new(),
+    );
+    let leaf = Scrollable::new()
+        .controller(inner.clone())
+        .child(SizedBox::new(200.0, 1000.0));
+    let middle_view =
+        Scrollable::new()
+            .controller(middle.clone())
+            .child(flui_widgets::Column::new(vec![
+                SizedBox::new(200.0, 800.0).boxed(),
+                SizedBox::new(200.0, 200.0).child(leaf).boxed(),
+            ]));
+    let outer_view = Scrollable::new()
+        .controller(outer.clone())
+        .child(flui_widgets::Column::new(vec![
+            SizedBox::new(200.0, 600.0).boxed(),
+            SizedBox::new(200.0, 200.0).child(middle_view).boxed(),
+            SizedBox::new(200.0, 4800.0).boxed(),
+        ]));
+    let mut laid = crate::common::lay_out_animated(
+        VsyncScope::new(vsync.clone(), outer_view),
+        tight(200.0, 200.0),
+        vsync,
+    );
+    outer.jump_to(600.0);
+    middle.jump_to(800.0);
+    inner.jump_to(650.0);
+    laid.tick();
+    release_inner_fling(&laid, flui_foundation::geometry::Axis::Vertical, false);
+    assert_eq!(inner.pixels(), 700.0, "leaf claimed the real gesture");
+    for _ in 0..15 {
+        laid.pump_for(Duration::from_millis(16));
+    }
+    assert_eq!(
+        middle.pixels(),
+        800.0,
+        "saturated intermediate ancestor stays clamped"
+    );
+    assert!(
+        outer.pixels() > 600.0,
+        "remaining impulse reaches the nearest willing ancestor"
+    );
+
+    outer.jump_to(600.0);
+    inner.jump_to(650.0);
+    laid.tick();
+    let once = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let entered = Arc::clone(&once);
+    let reentrant = outer.clone();
+    let listenable = outer.as_listenable();
+    let listener = listenable.add_listener(Arc::new(move || {
+        if entered.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            reentrant.jump_to(123.0);
+        }
+    }));
+    release_inner_fling(&laid, flui_foundation::geometry::Axis::Vertical, false);
+    for _ in 0..15 {
+        laid.pump_for(Duration::from_millis(16));
+    }
+    assert!(
+        !once.load(std::sync::atomic::Ordering::SeqCst),
+        "real transferred motion invoked the reentrant listener"
+    );
+    assert_eq!(
+        outer.pixels(),
+        123.0,
+        "reentrant jump cancels the accepted trajectory"
+    );
+    laid.pump_for(Duration::from_millis(200));
+    assert_eq!(
+        outer.pixels(),
+        123.0,
+        "no older handoff overwrites the new position"
+    );
+    listenable.remove_listener(listener);
+    outer.jump_to(600.0);
+    inner.jump_to(650.0);
+    laid.tick();
+    release_inner_fling(&laid, flui_foundation::geometry::Axis::Vertical, false);
+    for _ in 0..15 {
+        laid.pump_for(Duration::from_millis(16));
+    }
+    assert!(
+        outer.pixels() > 600.0,
+        "fresh handoff recovers after reentry"
+    );
+}
+
+fn reveal_target_content(axis: flui_foundation::geometry::Axis) -> flui_view::BoxedView {
+    use flui_foundation::geometry::Axis;
+    let target = flui_widgets::Semantics::new()
+        .container(true)
+        .button(true)
+        .label("reveal target")
+        .child(SizedBox::new(40.0, 40.0))
+        .boxed();
+    match axis {
+        Axis::Vertical => flui_widgets::Column::new(vec![
+            SizedBox::new(200.0, 600.0).boxed(),
+            target,
+            SizedBox::new(200.0, 600.0).boxed(),
+        ])
+        .boxed(),
+        Axis::Horizontal => flui_widgets::Row::new(vec![
+            SizedBox::new(600.0, 200.0).boxed(),
+            target,
+            SizedBox::new(600.0, 200.0).boxed(),
+        ])
+        .boxed(),
+    }
+}
+
+fn request_reveal_target(laid: &LaidOut) {
+    use flui_testing::a11y::{Action, ActionRequest, TreeId};
+    let tree = laid.a11y_tree().expect("actual published semantics");
+    let target = tree
+        .find_by_label("reveal target")
+        .expect("offscreen target remains addressable");
+    let advertised = target.supports_action(Action::ScrollIntoView);
+    laid.invoke_semantics_action(ActionRequest {
+        action: Action::ScrollIntoView,
+        target_tree: TreeId::ROOT,
+        target_node: target.id(),
+        data: None,
+    })
+    .expect("actual ScrollIntoView request resolves through ancestor scrollables");
+    assert!(
+        advertised,
+        "automatic reveal must also be offered to the native adapter"
+    );
+}
+
+fn assert_reveal_target_visible(laid: &LaidOut) {
+    let tree = laid.a11y_tree().expect("republished semantics");
+    let rect = tree
+        .find_by_label("reveal target")
+        .expect("same target")
+        .bounds()
+        .expect("actual target geometry");
+    assert!(
+        rect.x0 >= -1e-9 && rect.y0 >= -1e-9 && rect.x1 <= 200.0 + 1e-9 && rect.y1 <= 200.0 + 1e-9,
+        "requested node is visibly inside the receiving viewport: {rect:?}"
+    );
+}
+
+pub(crate) fn show_on_screen_reveals_offscreen_targets_on_both_axes_and_reverse() {
+    use flui_foundation::geometry::Axis::{Horizontal, Vertical};
+    for axis in [Vertical, Horizontal] {
+        for reversed in [false, true] {
+            let scroll = ScrollController::new();
+            let mut laid = lay_out(
+                Scrollable::new()
+                    .controller(scroll.clone())
+                    .scroll_direction(axis)
+                    .reverse(reversed)
+                    .child(reveal_target_content(axis)),
+                tight(200.0, 200.0),
+            );
+            laid.enable_semantics();
+            laid.tick();
+            let before = laid.a11y_tree().expect("tree");
+            let rect = before
+                .find_by_label("reveal target")
+                .expect("offscreen node")
+                .bounds()
+                .expect("node bounds");
+            assert!(
+                rect.x0 < 0.0 || rect.y0 < 0.0 || rect.x1 > 200.0 || rect.y1 > 200.0,
+                "premise: target is offscreen {axis:?}/{reversed}: {rect:?}"
+            );
+            request_reveal_target(&laid);
+            laid.tick();
+            assert!(
+                scroll.pixels() > 0.0,
+                "real viewport moved toward its offscreen target"
+            );
+            assert_reveal_target_visible(&laid);
+            let revealed = scroll.pixels();
+            request_reveal_target(&laid);
+            laid.tick();
+            assert_eq!(
+                scroll.pixels(),
+                revealed,
+                "already-visible reveal is idempotent"
+            );
+            scroll.jump_to(0.0);
+            laid.tick();
+            request_reveal_target(&laid);
+            laid.tick();
+            assert_reveal_target_visible(&laid);
+        }
+    }
+}
+
+pub(crate) fn show_on_screen_walks_nested_axes_and_replacement_uses_current_geometry() {
+    use flui_foundation::geometry::Axis::{Horizontal, Vertical};
+    for inner_axis in [Vertical, Horizontal] {
+        let (outer, inner, replacement) = (
+            ScrollController::new(),
+            ScrollController::new(),
+            ScrollController::new(),
+        );
+        let content = |controller: &ScrollController| {
+            Scrollable::new()
+                .controller(outer.clone())
+                .child(flui_widgets::Column::new(vec![
+                    SizedBox::new(200.0, 600.0).boxed(),
+                    SizedBox::new(200.0, 200.0)
+                        .child(
+                            Scrollable::new()
+                                .controller(controller.clone())
+                                .scroll_direction(inner_axis)
+                                .child(reveal_target_content(inner_axis)),
+                        )
+                        .boxed(),
+                    SizedBox::new(200.0, 800.0).boxed(),
+                ]))
+        };
+        let mut laid = lay_out(content(&inner), tight(200.0, 200.0));
+        laid.enable_semantics();
+        laid.tick();
+        request_reveal_target(&laid);
+        laid.tick();
+        assert_eq!(
+            inner.pixels(),
+            440.0,
+            "inner reveals its nearest target edge"
+        );
+        assert_eq!(
+            outer.pixels(),
+            600.0,
+            "outer reveals the resulting inner viewport"
+        );
+        assert_reveal_target_visible(&laid);
+        outer.jump_to(0.0);
+        laid.pump_widget(content(&replacement));
+        request_reveal_target(&laid);
+        laid.tick();
+        assert_eq!(
+            inner.pixels(),
+            440.0,
+            "retired controller is not driven by a new request"
+        );
+        assert_eq!(
+            replacement.pixels(),
+            440.0,
+            "replacement gets its real target geometry"
+        );
+        assert_eq!(outer.pixels(), 600.0);
+        assert_reveal_target_visible(&laid);
+    }
+}
