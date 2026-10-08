@@ -136,10 +136,14 @@ fn resampling_sibling_case(fail: bool, compete: bool) {
     let mut clock = ManualClock::new();
     let mut realm = manual_clock_realm(&clock);
     let a = realm.presentation_id();
-    let b = realm.install_second_presentation_for_test();
     realm
         .attach_root_widget(&flui_widgets::SizedBox::square(200.0))
         .expect("A root");
+    // One sink acknowledges one producer's tree. Commit A before mounting B,
+    // otherwise the first pump can acknowledge only B and A's input stays held.
+    let mut sink = ScriptedSink::always_presents().with_size(200, 200);
+    assert!(realm.pump(&mut clock, &mut sink).presented(), "A commits");
+    let b = realm.install_second_presentation_for_test();
     realm
         .attach_root_widget_to_for_test(b, &flui_widgets::SizedBox::square(200.0))
         .expect("B root");
@@ -175,8 +179,7 @@ fn resampling_sibling_case(fail: bool, compete: bool) {
                 seen.borrow_mut().push(event.current().position.get().x);
             }
         }));
-    let mut sink = ScriptedSink::always_presents().with_size(200, 200);
-    let _ = realm.pump(&mut clock, &mut sink);
+    assert!(realm.pump(&mut clock, &mut sink).presented(), "B commits");
     clock.advance(Duration::from_millis(1_000));
     let pointer = PointerInfo::new(
         PointerId::try_from(1_u64).expect("contact"),
