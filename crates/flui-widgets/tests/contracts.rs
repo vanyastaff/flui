@@ -165,6 +165,8 @@ fn pointer_and_gesture_recognition() {
     run_cases(
         "pointer_and_gesture_recognition",
         &[
+            ("pointer_vocabulary::viewer_touch_focal_inertia_uses_the_admitted_profile", crate::pointer_vocabulary::viewer_touch_focal_inertia_uses_the_admitted_profile as fn()),
+            ("pointer_vocabulary::viewer_native_focal_inertia_uses_the_admitted_profile", crate::pointer_vocabulary::viewer_native_focal_inertia_uses_the_admitted_profile),
             ("pointer_vocabulary::viewer_focal_fling_rebuild_preserves_or_retires_geometry", crate::pointer_vocabulary::viewer_focal_fling_rebuild_preserves_or_retires_geometry as fn()),
             ("pointer_vocabulary::viewer_repeated_native_start_retires_the_previous_generation", crate::pointer_vocabulary::viewer_repeated_native_start_retires_the_previous_generation as fn()),
             ("pointer_vocabulary::viewer_native_owner_survives_descendant_enable_during_rebuild", crate::pointer_vocabulary::viewer_native_owner_survives_descendant_enable_during_rebuild),

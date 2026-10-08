@@ -398,6 +398,157 @@ pub(crate) fn viewer_extreme_finite_pan_preserves_the_boundary_result() {
     laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::End));
 }
 
+/// Focal inertia retains the admitted profile while raw reporting stays intact.
+pub(crate) fn viewer_touch_focal_inertia_uses_the_admitted_profile() {
+    viewer_focal_inertia_uses_profile(false);
+}
+
+pub(crate) fn viewer_native_focal_inertia_uses_the_admitted_profile() {
+    viewer_focal_inertia_uses_profile(true);
+}
+
+fn viewer_focal_inertia_uses_profile(native: bool) {
+    use flui_animation::Vsync;
+    use flui_widgets::{InteractiveViewer, TransformationController, VsyncScope};
+    use std::time::Duration;
+    let profile = |min, max| {
+        flui_interaction::GestureSettings::default()
+            .try_with_fling_velocity(min, max)
+            .expect("valid focal fling range")
+    };
+    let settings = flui_interaction::settings::GestureSettingsSource::new(profile(5000.0, 5000.0));
+    let controller = TransformationController::new();
+    let ends = Rc::new(RefCell::new(Vec::new()));
+    let recorder = Rc::clone(&ends);
+    let vsync = Vsync::new();
+    let mut laid = lay_out(
+        crate::common::SettingsScope::new(
+            settings.provider(),
+            VsyncScope::new(
+                vsync.clone(),
+                InteractiveViewer::new()
+                    .controller(controller.clone())
+                    .boundary_margin(EdgeInsets::all(1000.0))
+                    .on_interaction_end(move |_, details| recorder.borrow_mut().push(details))
+                    .child(SizedBox::new(200.0, 200.0)),
+            ),
+        ),
+        tight(200.0, 200.0),
+    );
+    laid.adopt_vsync(vsync);
+    for attempt in 0..3 {
+        let info = PointerInfo::new(
+            PointerId::try_from(100_u64 + attempt).expect("contact identity"),
+            if native {
+                PointerKind::Mouse
+            } else {
+                PointerKind::Touch
+            },
+        );
+        let held = PointerButtons::NONE.with(PointerButton::PRIMARY);
+        let base = attempt * 1000;
+        let sample = |millis, x| {
+            PointerSample::new(
+                EventTime::from_nanos((base + millis) * 1_000_000),
+                position(x, 100.0),
+            )
+        };
+        let native_packet = |millis, phase| {
+            PointerEvent::PanZoom(PanZoomEvent::new(
+                info,
+                EventTime::from_nanos((base + millis) * 1_000_000),
+                position(50.0, 100.0),
+                phase,
+            ))
+        };
+        let start = if native {
+            native_packet(0, PanZoomPhase::Start)
+        } else {
+            PointerEvent::Down(PointerPress::new(
+                info,
+                PointerButton::PRIMARY,
+                held,
+                sample(0, 20.0),
+            ))
+        };
+        laid.dispatch_pointer_event(&start);
+        for (millis, distance) in [(10, 20.0), (20, 40.0), (30, 60.0), (40, 80.0)] {
+            let movement = if native {
+                native_packet(
+                    millis,
+                    PanZoomPhase::Update(
+                        PanZoomTransform::try_new(Offset::new(distance, 0.0), 1.0, 0.0)
+                            .expect("finite focal pan"),
+                    ),
+                )
+            } else {
+                PointerEvent::Move(PointerMove::new(
+                    info,
+                    held,
+                    sample(millis, 20.0 + distance),
+                ))
+            };
+            laid.dispatch_pointer_event(&movement);
+            laid.pump_for(Duration::from_millis(10));
+        }
+        if attempt == 0 {
+            settings.replace(profile(50.0, 100.0));
+        }
+        if attempt == 1 {
+            settings.replace(profile(50.0, 600.0));
+        }
+        let end = if native {
+            native_packet(41, PanZoomPhase::End)
+        } else {
+            PointerEvent::Up(PointerRelease::new(
+                info,
+                PointerButton::PRIMARY,
+                PointerButtons::NONE,
+                sample(41, 100.0),
+            ))
+        };
+        laid.dispatch_pointer_event(&end);
+        let before = controller.value().transform_point(0.0, 0.0).0;
+        laid.pump_for(Duration::from_millis(16));
+        laid.pump_for(Duration::from_millis(16));
+        let coast = controller.value().transform_point(0.0, 0.0).0 - before;
+        let log = ends.borrow();
+        assert_eq!(
+            log.len(),
+            usize::try_from(attempt + 1).expect("three sessions"),
+            "each session reports raw terminal measurement"
+        );
+        assert!(
+            log.last()
+                .expect("terminal callback")
+                .velocity
+                .pixels_per_second
+                .dx
+                > 1000.0,
+            "raw focal measurement remains available when inertia is filtered"
+        );
+        assert_eq!(
+            log.last().expect("terminal callback").scale_velocity,
+            0.0,
+            "pure pan has no dimensionless scale velocity"
+        );
+        match attempt {
+            0 => assert_eq!(
+                coast, 0.0,
+                "native={native}: first admitted minimum blocks inertia despite source restoration before terminal"
+            ),
+            1 => assert!(
+                coast > 0.0 && coast < 4.0,
+                "native={native}: captured max100 caps focal inertia despite source600, coast {coast}"
+            ),
+            _ => assert!(
+                coast > 4.0 && coast < 20.0,
+                "native={native}: new max600 admission recovers, coast {coast}"
+            ),
+        }
+    }
+}
+
 /// The real presentation ticks the release velocity and new input retires it.
 pub(crate) fn viewer_focal_fling_advances_then_stops_on_new_input() {
     use flui_animation::Vsync;

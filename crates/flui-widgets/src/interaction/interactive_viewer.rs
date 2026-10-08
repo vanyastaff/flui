@@ -717,7 +717,7 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
             let anchor_end = anchor.clone();
             let pipeline_end = pipeline_cell.clone();
             let pan_end_details = callback_with(move |cx, details: ScaleEndDetails| {
-                let mut velocity = details.focal_velocity.pixels_per_second;
+                let mut velocity = details.focal_fling_velocity().pixels_per_second;
                 velocity = match pan_axis {
                     PanAxis::Free => velocity,
                     PanAxis::Horizontal => align_to_axis(velocity, Axis::Horizontal),
