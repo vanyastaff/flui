@@ -17,7 +17,7 @@ use std::{
     cell::RefCell,
     rc::{Rc, Weak},
 };
-use web_time::Instant;
+use web_time::{Duration, Instant};
 
 /// Callback carrying the contact in local and root coordinates.
 pub type DoubleTapCallback = Rc<dyn Fn(DoubleTapDetails)>;
@@ -102,6 +102,7 @@ enum DoubleTapState {
     FirstDown,
     Waiting {
         details: DoubleTapDetails,
+        first_up: Instant,
         deadline: Option<Instant>,
         settings: GestureSettings,
     },
@@ -244,6 +245,7 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
             DoubleTapState::FirstDown | DoubleTapState::SecondDown => return,
             DoubleTapState::Waiting {
                 details,
+                first_up,
                 deadline,
                 settings,
             } => {
@@ -260,6 +262,10 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
                     || distance > settings.double_tap_slop()
                 {
                     failure = RoutePanic::capture(|| self.retire_attempt(details, false));
+                } else if now.saturating_duration_since(first_up) < Duration::from_millis(40) {
+                    // Contact bounce is not a second tap. Keep the held first
+                    // verdict and its timeout; a later Up cannot admit this Down.
+                    return;
                 } else {
                     // The held first generation survives retiring its contact.
                     failure = RoutePanic::capture(|| {
@@ -322,6 +328,10 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
             }
             PointerEvent::Up(_) => match state {
                 DoubleTapState::FirstDown => {
+                    let first_up = self.contact.now();
+                    if !self.contact.is_current(contact.id) {
+                        return;
+                    }
                     let entry = self.contact.entry();
                     if let Some(entry) = &entry {
                         entry.hold();
@@ -333,6 +343,7 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
                     if self.contact.is_current(contact.id) {
                         *self.gesture.borrow_mut() = DoubleTapState::Waiting {
                             details,
+                            first_up,
                             deadline,
                             settings: contact.settings,
                         };
