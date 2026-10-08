@@ -2539,8 +2539,20 @@ pub(crate) fn show_on_screen_failure_continues_live_ancestors_and_fresh_requests
 }
 
 pub(crate) fn show_on_screen_same_pipeline_reentry_keeps_one_reveal_and_recovers() {
-    use flui_rendering::semantics::{AccessibilityNodeId, SemanticsAction, SemanticsActionRequest};
-    use std::sync::Mutex;
+    use flui_rendering::semantics::{
+        AccessibilityNodeId, SemanticsAction, SemanticsActionInvocation, SemanticsActionRequest,
+    };
+    use std::cell::RefCell;
+    thread_local! {
+        static PENDING_REVEAL: RefCell<Option<SemanticsActionInvocation>> = const { RefCell::new(None) };
+    }
+    struct RestoreScope(Option<SemanticsActionInvocation>);
+    impl Drop for RestoreScope {
+        fn drop(&mut self) {
+            let outgoing = PENDING_REVEAL.with(|slot| slot.replace(self.0.take()));
+            drop(outgoing);
+        }
+    }
     let (outer, inner) = (ScrollController::new(), ScrollController::new());
     let mut laid = lay_out(nested_reveal_content(&outer, &inner), tight(200.0, 200.0));
     laid.enable_semantics();
@@ -2561,11 +2573,12 @@ pub(crate) fn show_on_screen_same_pipeline_reentry_keeps_one_reveal_and_recovers
             })
         })
         .expect("actual automatic ancestor reveal");
-    let pending = Arc::new(Mutex::new(Some(invocation)));
-    let reentrant = Arc::clone(&pending);
+    let _scope = RestoreScope(PENDING_REVEAL.with(|slot| slot.replace(Some(invocation))));
     let listenable = inner.as_listenable();
-    let listener = listenable.add_listener(Arc::new(move || {
-        let invocation = reentrant.lock().expect("test holder").take();
+    let listener = listenable.add_listener(Arc::new(|| {
+        // The notification runs on the same owner thread. Resolve its local
+        // pending request without making that request cross-thread ownership.
+        let invocation = PENDING_REVEAL.with(|slot| slot.borrow_mut().take());
         if let Some(invocation) = invocation {
             invocation.invoke();
         }
@@ -2573,7 +2586,7 @@ pub(crate) fn show_on_screen_same_pipeline_reentry_keeps_one_reveal_and_recovers
     request_reveal_target(&laid);
     laid.tick();
     assert!(
-        pending.lock().expect("test holder").is_none(),
+        PENDING_REVEAL.with(|slot| slot.borrow().is_none()),
         "same-pipeline request actually reentered"
     );
     assert_eq!(
