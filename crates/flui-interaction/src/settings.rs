@@ -377,9 +377,6 @@ fn project_tier(
     {
         return Ok(value);
     }
-    if candidates.contains(&0.0) {
-        return Ok(0.0);
-    }
     Err(GestureSettingsError::UnrepresentableProjection {
         field,
         tier,
@@ -800,20 +797,11 @@ impl GestureSettings {
     /// The hit slop for `kind` — how far a pointer of that kind may drift
     /// before a gesture is rejected.
     ///
-    /// [`PointerKind::Mouse`] is precise, so it gets a fixed small constant
-    /// that no profile customises. Every other kind — `Pen` (tip or eraser),
-    /// `Touch`, `Trackpad` and `Unknown` — resolves through this settings object's touch tier.
-    /// **A pen is not precise under this rule**: that is deliberate (a
-    /// stylus gets the touch tier), not an omission.
-    ///
-    /// **Read this rather than `touch_slop()` wherever a recognizer checks
-    /// drift against the hit slop.** The rule was implemented separately in two
-    /// recognizers before this existed, and a third copy would have been the
-    /// point where they drifted: no *built-in* profile makes the two tiers
-    /// coincide (a caller can of course build one with
-    /// [`Self::try_with_touch_slop`]), so a recognizer that forgets the
-    /// distinction looks fine in a default-profile test and is wrong on every
-    /// shipped platform.
+    /// Touch uses its observed logical hit distance when available. Pen,
+    /// trackpad and unknown input retain the authored touch tier. Mouse returns
+    /// its scalar fallback; its observed axis rectangle cannot be expressed as
+    /// one distance. Recognizers compare movement through
+    /// [`Self::exceeds_hit_slop`] to preserve that rectangle.
     #[inline]
     #[must_use]
     pub fn hit_slop(&self, kind: PointerKind) -> f64 {
@@ -913,12 +901,12 @@ impl GestureSettings {
         self.scale_slop
     }
 
-    /// The span slop for `kind` — how far the *distance between two pointers*
-    /// must change, in logical pixels, before a scale is recognised.
+    /// The span slop for `kind` — how far the mean distance of the contacts from
+    /// their focal point must change, in logical pixels, before a scale is recognised.
     ///
-    /// Like [`Self::hit_slop`], it special-cases exactly the mouse as
-    /// precise; unlike it, it reads no settings at all, so neither arm here
-    /// is configurable.
+    /// Mouse retains its precise scalar tier. An observed touch hit distance
+    /// scales the baseline touch span tier by the same ratio as the other touch
+    /// distances. Other kinds retain their baseline tier.
     ///
     /// Distinct from [`Self::scale_slop`], which is a dimensionless ratio. The
     /// two are separate acceptance criteria, not two spellings of one: a pinch

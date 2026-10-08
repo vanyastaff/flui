@@ -59,6 +59,7 @@ use crate::{
     routing::{PointerDispatch, RoutePanic},
     settings::{GestureSettings, GestureSettingsProvider},
 };
+use flui_platform_api::pointer::DeviceId;
 
 // ============================================================================
 // Details types
@@ -203,6 +204,7 @@ struct LastTap {
     count: u32,
     settings: GestureSettings,
     kind: PointerKind,
+    device: Option<DeviceId>,
 }
 
 #[derive(Debug, Clone)]
@@ -218,6 +220,7 @@ struct TapDragState {
     /// `false` once the pointer wandered past tap slop.
     tap_viable: bool,
     kind: PointerKind,
+    device: Option<DeviceId>,
     count: u32,
     initial: Offset<f64>,
     initial_global: Offset<f64>,
@@ -245,6 +248,7 @@ impl Default for TapDragState {
             tap_down_delivered: false,
             tap_viable: true,
             kind: PointerKind::Touch,
+            device: None,
             count: 1,
             initial: Offset::ZERO,
             initial_global: Offset::ZERO,
@@ -335,6 +339,7 @@ impl TapDragState {
                 count: self.count,
                 settings: self.settings.clone(),
                 kind: self.kind,
+                device: self.device,
             });
         }
         self.reset_sequence();
@@ -712,6 +717,9 @@ impl GestureRecognizer for TapAndDragGestureRecognizer {
         if !is_primary_down(down.local) {
             return;
         }
+        let PointerEvent::Down(data) = down.local else {
+            return;
+        };
         let (Some(pointer), Some(position), Some(global_position)) = (
             down.local.pointer_id(),
             down.local.position(),
@@ -733,6 +741,9 @@ impl GestureRecognizer for TapAndDragGestureRecognizer {
             .last_tap
             .as_ref()
             .filter(|last| {
+                if last.kind != data.pointer.kind || last.device != data.pointer.device {
+                    return false;
+                }
                 let origin = if last.settings.double_tap_uses_down_time(last.kind) {
                     last.down_time
                 } else {
@@ -772,9 +783,10 @@ impl GestureRecognizer for TapAndDragGestureRecognizer {
         state.initial_global = global_position;
         if let PointerEvent::Down(data) = down.local {
             state.kind = data.pointer.kind;
+            state.device = data.pointer.device;
         }
         state.velocity_tracker =
-            VelocityTracker::with_estimator(state.kind, state.settings.velocity_estimator());
+            VelocityTracker::for_gesture(state.kind, state.settings.velocity_estimator());
         state.last = position;
         state.last_global = global_position;
         state.last_reported = position;

@@ -13,6 +13,7 @@ use crate::{
     settings::{GestureSettings, GestureSettingsProvider},
 };
 use flui_foundation::geometry::Offset;
+use flui_platform_api::pointer::DeviceId;
 use std::{
     cell::RefCell,
     rc::{Rc, Weak},
@@ -102,12 +103,14 @@ enum DoubleTapState {
     Ready,
     FirstDown {
         down_time: Option<Instant>,
+        device: Option<DeviceId>,
     },
     Waiting {
         details: DoubleTapDetails,
         first_up: Instant,
         deadline: Option<Instant>,
         settings: GestureSettings,
+        device: Option<DeviceId>,
     },
     SecondDown,
 }
@@ -252,6 +255,7 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
                 first_up,
                 deadline,
                 settings,
+                device,
             } => {
                 let Some(waiting_contact) = self.contact.current() else {
                     return;
@@ -260,7 +264,9 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
                 if !self.contact.is_current(waiting_contact.id) {
                     return;
                 }
-                if deadline.is_some_and(|deadline| now >= deadline)
+                if details.kind != data.pointer.kind
+                    || device != data.pointer.device
+                    || deadline.is_some_and(|deadline| now >= deadline)
                     || settings
                         .exceeds_double_tap_slop(details.kind, position - details.local_position)
                 {
@@ -289,7 +295,10 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
             *self.gesture.borrow_mut() = if second {
                 DoubleTapState::SecondDown
             } else {
-                DoubleTapState::FirstDown { down_time }
+                DoubleTapState::FirstDown {
+                    down_time,
+                    device: data.pointer.device,
+                }
             };
             if second {
                 let candidate = RoutePanic::capture(|| {
@@ -334,7 +343,7 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
                 }
             }
             PointerEvent::Up(_) => match state {
-                DoubleTapState::FirstDown { down_time } => {
+                DoubleTapState::FirstDown { down_time, device } => {
                     let first_up = self.contact.now();
                     if !self.contact.is_current(contact.id) {
                         return;
@@ -359,6 +368,7 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
                             first_up,
                             deadline,
                             settings: contact.settings,
+                            device,
                         };
                     }
                 }

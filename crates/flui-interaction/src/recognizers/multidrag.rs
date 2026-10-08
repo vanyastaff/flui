@@ -462,7 +462,7 @@ impl GestureRecognizer for MultiDragGestureRecognizer {
         let mut timeline = EventTimeline::default();
         let now = timeline.instant(event_time(dispatch.local), clock);
         let mut velocity_tracker =
-            VelocityTracker::with_estimator(kind, settings.velocity_estimator());
+            VelocityTracker::for_gesture(kind, settings.velocity_estimator());
         velocity_tracker.add_position(now, position);
         self.pointers.borrow_mut().insert(
             pointer,

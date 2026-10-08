@@ -645,11 +645,11 @@ impl NativeScale {
             global_focal,
             scale: 1.0,
             rotation: 0.0,
-            focal_velocity: VelocityTracker::with_estimator(
+            focal_velocity: VelocityTracker::for_gesture(
                 source.kind,
                 settings.velocity_estimator(),
             ),
-            scale_velocity: VelocityTracker::with_estimator(
+            scale_velocity: VelocityTracker::for_gesture(
                 source.kind,
                 settings.velocity_estimator(),
             ),
@@ -1288,11 +1288,11 @@ impl GestureRecognizer for ScaleGestureRecognizer {
             && let PointerEvent::Down(data) = down.local
         {
             state.settings = settings;
-            state.scale_velocity_tracker = VelocityTracker::with_estimator(
+            state.scale_velocity_tracker = VelocityTracker::for_gesture(
                 data.pointer.kind,
                 state.settings.velocity_estimator(),
             );
-            state.focal_velocity_tracker = VelocityTracker::with_estimator(
+            state.focal_velocity_tracker = VelocityTracker::for_gesture(
                 data.pointer.kind,
                 state.settings.velocity_estimator(),
             );
