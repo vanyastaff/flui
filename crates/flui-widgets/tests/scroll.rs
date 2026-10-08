@@ -1951,7 +1951,13 @@ pub(crate) fn nested_fling_parent_boundary_policy_receives_presentation_pixel_ra
             outer.jump_to(600.0);
             inner.jump_to(650.0);
             laid.tick();
-            release_inner_fling(&laid, Vertical, false);
+            laid.dispatch_pointer_down(100.0, 150.0);
+            laid.dispatch_pointer_move(100.0, 120.0);
+            laid.dispatch_pointer_move(100.0, 100.0);
+            // DPR2 raises the recognition threshold. This move is delivered
+            // after acceptance rather than counting the threshold crossing.
+            laid.dispatch_pointer_move(100.0, 80.0);
+            laid.dispatch_pointer_up(100.0, 80.0);
             assert_eq!(inner.pixels(), 670.0, "actual child release premise");
             assert_eq!(outer.pixels(), 600.0, "parent has not consumed the drag");
             for _ in 0..15 {
