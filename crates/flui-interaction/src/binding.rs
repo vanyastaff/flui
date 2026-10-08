@@ -60,8 +60,8 @@
 //! or after the target retires. End/Cancel, device removal and owner lifecycle
 //! withdrawal release selection before callbacks. A phase-less wheel burst
 //! expires after 500 ms without a packet on the presentation's monotonic clock.
-//! Source identity is the native `DeviceId`, or complete `PointerInfo` when the
-//! platform supplies no device. At most 32 sources are admitted; overflow still
+//! Source identity is the native `DeviceId`, or `PointerId` when the platform
+//! supplies no device; tool and role remain mutable metadata. At most 32 sources are admitted; overflow still
 //! reaches fresh observers but cannot start an unlatched consumptive sequence.
 //! `binding_input_contract_matrix` covers first failure, retired captures and
 //! reentrant replacement; `scroll_physics_and_activity` covers nested scrollers
@@ -312,14 +312,14 @@ const SCROLL_INACTIVITY_TIMEOUT: std::time::Duration = std::time::Duration::from
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum SignalSource {
     Device(DeviceId),
-    Unidentified(PointerInfo),
+    Pointer(PointerId),
 }
 
 impl From<PointerInfo> for SignalSource {
     fn from(pointer: PointerInfo) -> Self {
         pointer
             .device
-            .map_or(Self::Unidentified(pointer), Self::Device)
+            .map_or(Self::Pointer(pointer.id), Self::Device)
     }
 }
 
