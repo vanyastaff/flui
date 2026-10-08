@@ -376,7 +376,16 @@ impl<'a> PointerDispatch<'a> {
 
 type PointerHandler = Rc<dyn Fn(PointerDispatch<'_>) + 'static>;
 type ScrollHandler = Rc<dyn Fn(&ScrollEvent) -> EventPropagation + 'static>;
-type PanZoomHandler = Rc<dyn Fn(&PanZoomEvent) -> EventPropagation + 'static>;
+/// A native gesture in the receiving target's space and the root's space.
+#[derive(Clone, Copy, Debug)]
+pub struct PanZoomDispatch<'a> {
+    /// The gesture localized to the receiving target.
+    pub local: &'a PanZoomEvent,
+    /// The original gesture delivered by the presentation.
+    pub global: &'a PanZoomEvent,
+}
+
+type PanZoomHandler = Rc<dyn Fn(PanZoomDispatch<'_>) -> EventPropagation + 'static>;
 type PathClipper = Rc<dyn Fn(Size) -> Path + 'static>;
 type ShaderMaskFactory = Rc<dyn Fn(Rect<f64>) -> Shader + 'static>;
 
@@ -1708,6 +1717,17 @@ impl InteractionDispatchHandle {
         target: ScrollTarget,
         event: &ScrollEvent,
     ) -> Result<EventPropagation, InteractionDispatchError> {
+        self.invoke_scroll_target_with_claim(target, event, || {})
+    }
+
+    /// Publish a consumed route before retiring its snapshotted captures.
+    /// The hook belongs to the binding, not the consumer callback channel.
+    pub(crate) fn invoke_scroll_target_with_claim(
+        &self,
+        target: ScrollTarget,
+        event: &ScrollEvent,
+        claimed: impl FnOnce(),
+    ) -> Result<EventPropagation, InteractionDispatchError> {
         let lane = self.active_lane()?;
         self.validate_lane(target.lane_id)?;
         let cell = lane
@@ -1721,7 +1741,13 @@ impl InteractionDispatchHandle {
             return Err(InteractionDispatchError::TargetGone);
         }
         let handler = cell.snapshot();
-        Ok(latch.invoke(cell, handler, |handler| handler(event)))
+        Ok(latch.invoke(cell, handler, |handler| {
+            let propagation = handler(event);
+            if propagation.should_stop() {
+                claimed();
+            }
+            propagation
+        }))
     }
 
     /// Register a trackpad pan-zoom claim handler in the active owner lane.
@@ -1732,7 +1758,7 @@ impl InteractionDispatchHandle {
     /// thread, or when the lane's private identity source is exhausted.
     pub fn register_pan_zoom(
         &self,
-        handler: impl Fn(&PanZoomEvent) -> EventPropagation + 'static,
+        handler: impl Fn(PanZoomDispatch<'_>) -> EventPropagation + 'static,
     ) -> Result<PanZoomTarget, InteractionDispatchError> {
         let handler = self.admit(handler)?;
         let lane = self.active_lane()?;
@@ -1756,7 +1782,7 @@ impl InteractionDispatchHandle {
     pub fn replace_pan_zoom(
         &self,
         target: PanZoomTarget,
-        handler: impl Fn(&PanZoomEvent) -> EventPropagation + 'static,
+        handler: impl Fn(PanZoomDispatch<'_>) -> EventPropagation + 'static,
     ) -> Result<(), InteractionDispatchError> {
         let handler = self.admit(handler)?;
         let lane = self.active_lane()?;
@@ -1803,7 +1829,16 @@ impl InteractionDispatchHandle {
     pub fn invoke_pan_zoom_target(
         &self,
         target: PanZoomTarget,
-        event: &PanZoomEvent,
+        event: PanZoomDispatch<'_>,
+    ) -> Result<EventPropagation, InteractionDispatchError> {
+        self.invoke_pan_zoom_target_with_claim(target, event, || {})
+    }
+
+    pub(crate) fn invoke_pan_zoom_target_with_claim(
+        &self,
+        target: PanZoomTarget,
+        event: PanZoomDispatch<'_>,
+        claimed: impl FnOnce(),
     ) -> Result<EventPropagation, InteractionDispatchError> {
         let lane = self.active_lane()?;
         self.validate_lane(target.lane_id)?;
@@ -1818,7 +1853,13 @@ impl InteractionDispatchHandle {
             return Err(InteractionDispatchError::TargetGone);
         }
         let handler = cell.snapshot();
-        Ok(latch.invoke(cell, handler, |handler| handler(event)))
+        Ok(latch.invoke(cell, handler, |handler| {
+            let propagation = handler(event);
+            if propagation.should_stop() {
+                claimed();
+            }
+            propagation
+        }))
     }
 
     /// Register a path clipper in the active owner lane.
@@ -2310,7 +2351,7 @@ impl InteractionDispatchHandle {
                 .collect()
         };
 
-        let pointer = crate::events::get_pointer_info(event).copied();
+        let pointer = crate::events::pointer_info(event).copied();
         let position = event.position();
         let mut first_panic = None;
         for entry in resolved {

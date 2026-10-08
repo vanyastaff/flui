@@ -10,6 +10,110 @@ use crate::common::{lay_out, tight};
 use flui_painting::styling::Color;
 use flui_widgets::{ColoredBox, GestureDetector};
 
+pub(crate) fn exclusive_drag_callbacks_have_one_arena_winner() {
+    use std::{cell::RefCell, rc::Rc};
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let (pan_start, pan_end, horizontal_start, horizontal_end, horizontal_cancel) = (
+        Rc::clone(&calls),
+        Rc::clone(&calls),
+        Rc::clone(&calls),
+        Rc::clone(&calls),
+        Rc::clone(&calls),
+    );
+    let mut scoped = lay_out(
+        GestureDetector::new()
+            .exclusive_drags()
+            .on_pan_start(move |_, _| pan_start.borrow_mut().push("pan start"))
+            .on_pan_end(move |_, _| pan_end.borrow_mut().push("pan end"))
+            .on_horizontal_drag_start(move |_, _| {
+                horizontal_start.borrow_mut().push("horizontal start")
+            })
+            .on_horizontal_drag_end(move |_, _| horizontal_end.borrow_mut().push("horizontal end"))
+            .on_horizontal_drag_cancel(move |_| {
+                horizontal_cancel.borrow_mut().push("horizontal cancel")
+            })
+            .child(ColoredBox::new(Color::rgb(10, 20, 30))),
+        tight(100.0, 100.0),
+    );
+    scoped.dispatch_pointer_down(10.0, 50.0);
+    scoped.dispatch_pointer_move(50.0, 50.0);
+    scoped.dispatch_pointer_up(60.0, 50.0);
+    assert_eq!(
+        calls.borrow().as_slice(),
+        ["horizontal cancel", "pan start", "pan end"]
+    );
+}
+
+#[derive(Clone, flui_view::prelude::StatefulView)]
+struct ComposedDetector {
+    detector: GestureDetector,
+}
+
+struct ComposedDetectorState {
+    branch: Option<flui_interaction::GestureArena>,
+}
+
+impl flui_view::StatefulView for ComposedDetector {
+    type State = ComposedDetectorState;
+    fn create_state(&self) -> Self::State {
+        ComposedDetectorState { branch: None }
+    }
+}
+
+impl flui_view::ViewState<ComposedDetector> for ComposedDetectorState {
+    fn init_state(&mut self, ctx: &dyn flui_view::LifecycleContext) {
+        let arena = flui_widgets::GestureArenaScope::of(ctx);
+        let (first, _) = arena
+            .compose(flui_interaction::arena::GestureCompetition::Exclusive)
+            .expect("presentation root")
+            .into_branches();
+        self.branch = Some(first);
+    }
+    fn build(
+        &self,
+        view: &ComposedDetector,
+        _: &dyn flui_view::BuildContext,
+    ) -> impl flui_view::IntoView {
+        flui_widgets::GestureArenaScope::new(
+            self.branch.as_ref().expect("mounted branch").clone(),
+            view.detector.clone(),
+        )
+    }
+}
+
+pub(crate) fn a_detector_in_a_composed_scope_preserves_double_tap_timing() {
+    use std::time::Duration;
+    for double in [false, true] {
+        let taps = Arc::new(AtomicUsize::new(0));
+        let doubles = Arc::new(AtomicUsize::new(0));
+        let (tap, double_tap) = (Arc::clone(&taps), Arc::clone(&doubles));
+        let mut scoped = lay_out(
+            ComposedDetector {
+                detector: GestureDetector::new()
+                    .on_tap(move |_| {
+                        tap.fetch_add(1, Ordering::SeqCst);
+                    })
+                    .on_double_tap(move |_| {
+                        double_tap.fetch_add(1, Ordering::SeqCst);
+                    })
+                    .child(ColoredBox::new(Color::rgb(10, 20, 30))),
+            },
+            tight(100.0, 100.0),
+        );
+        scoped.dispatch_pointer_down(50.0, 50.0);
+        scoped.dispatch_pointer_up(50.0, 50.0);
+        scoped.pump_for(Duration::from_millis(50));
+        assert_eq!(taps.load(Ordering::SeqCst), 0);
+        if double {
+            scoped.dispatch_pointer_down(50.0, 50.0);
+            scoped.dispatch_pointer_up(50.0, 50.0);
+        }
+        scoped.pump_for(Duration::from_millis(400));
+        assert_eq!(taps.load(Ordering::SeqCst), usize::from(!double));
+        assert_eq!(doubles.load(Ordering::SeqCst), usize::from(double));
+    }
+}
+
 #[derive(Clone, flui_view::prelude::StatefulView)]
 struct ConfiguredGesture {
     settings: flui_interaction::GestureSettings,
@@ -417,14 +521,34 @@ pub(crate) fn mounted_drag_policy_replaces_targets_before_cancellation_and_recov
         assert_eq!(starts.get(), 1);
         policy.set(DragPointerStrategy::ContinueWithRemaining);
         probe.write(|cx| signal.get().expect("mounted probe").set(cx, 1)).expect("write policy rebuild");
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| laid.pump()));
+        // Lifecycle update failures are recovered by substituting the failed
+        // child, so this frame completes. Observe the host's contained report
+        // rather than expecting a dropped-frame panic from the pump.
+        let (_, log) = flui_testing::log_capture::capture(|| laid.pump());
+        let reports: Vec<_> = log.records().iter().filter(|record| {
+            record.message == "lifecycle panic contained; frame continued for this presentation"
+        }).collect();
         if cancel_panics {
-            let payload = result.expect_err("outgoing cancel failure remains authoritative");
-            assert_eq!(payload.downcast_ref::<&str>(), Some(&"drag policy cancellation"));
-        } else { result.expect("healthy policy replacement"); }
+            assert_eq!(reports.len(), 1, "outgoing cancellation is reported exactly once: {log}");
+            assert_eq!(reports[0].field("panic_message"), Some("drag policy cancellation"), "the original cancellation failure remains authoritative: {log}");
+            assert_eq!(reports[0].field("hook"), Some("Update"));
+            assert_eq!(reports[0].field("internal_invariant"), Some("false"));
+            assert_eq!(laid.count_elements_by_view_type::<GestureDetector>(), 0, "the failed lifecycle actor is substituted");
+        } else {
+            assert!(reports.is_empty(), "healthy policy replacement is not a lifecycle failure: {log}");
+            assert_eq!(laid.count_elements_by_view_type::<GestureDetector>(), 1);
+        }
         assert_eq!(cancelled.get(), 1, "old accepted drag is cancelled once");
         send(&laid, 2, 50.0, 2);
         assert_eq!(completed.get(), 0, "stale release cannot complete a replacement");
+
+        if cancel_panics {
+            // The tree's recovery replaces the failed actor. Rebuild the live
+            // parent to mount the configured healthy actor before fresh input.
+            probe.write(|cx| signal.get().expect("mounted probe").set(cx, 2)).expect("rebuild after contained cancellation");
+            laid.pump();
+            assert_eq!(laid.count_elements_by_view_type::<GestureDetector>(), 1);
+        }
 
         send(&laid, 2, 10.0, 0);
         send(&laid, 2, 50.0, 1);

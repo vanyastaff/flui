@@ -316,6 +316,7 @@ impl VelocityTracker {
     ///
     /// Takes `&mut self` to cache the buffer-pure estimate until the next
     /// sample or reset. The stop gate is checked on every query.
+    #[must_use]
     pub fn estimate_at(&mut self, now: Instant) -> Option<VelocityEstimate> {
         let newest = self.samples[self.index]?;
         let stopped = now
@@ -327,6 +328,7 @@ impl VelocityTracker {
     /// The velocity as of `now`, on the clock that stamped the samples:
     /// [`Self::estimate_at`]'s velocity, or [`Velocity::ZERO`] without an
     /// estimate.
+    #[must_use]
     pub fn velocity_at(&mut self, now: Instant) -> Velocity {
         velocity_from_estimate(self.estimate_at(now))
     }

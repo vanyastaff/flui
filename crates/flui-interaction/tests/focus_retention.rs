@@ -269,55 +269,60 @@ fn directional_provider_failure_preserves_first_failure_and_recovery() {
             assert!(!self.fail, "competing provider retirement");
         }
     }
-    for (provider_fails, destructor_fails) in [(true, false), (true, true), (false, true)] {
-        let manager = FocusManager::new();
-        manager
-            .root_scope()
-            .set_traversal_edge_behavior(TraversalEdgeBehavior::Stop);
-        let nodes = [FocusNode::new(), FocusNode::new()];
-        nodes[0].set_rect(Rect::new(0.0, 0.0, 10.0, 10.0));
-        nodes[1].set_rect(Rect::new(20.0, 0.0, 30.0, 10.0));
-        let _attachments = [
-            manager.root_scope().attach_node(&nodes[0]).expect("source"),
-            manager.root_scope().attach_node(&nodes[1]).expect("target"),
-        ];
-        let drops = Rc::new(Cell::new(0));
-        let captured = Capture {
-            owner: Rc::downgrade(&nodes[0]),
-            drops: Rc::clone(&drops),
-            fail: destructor_fails,
-        };
-        let probe = Rc::downgrade(&nodes[0]);
-        nodes[0].set_rect_provider(Rc::new(move || {
-            let _ = &captured;
-            probe.upgrade().expect("live source").clear_rect_provider();
-            assert!(!provider_fails, "first provider failure");
-            Some(Rect::new(0.0, 0.0, 10.0, 10.0))
-        }));
-        let _ = nodes[0].request_focus();
-        let payload = catch_unwind(AssertUnwindSafe(|| {
-            manager.focus_in_direction(FocusDirection::Right)
-        }))
-        .expect_err("failure propagates");
-        assert_eq!(
-            flui_foundation::panic::payload_text(payload.as_ref()),
-            Some(if provider_fails {
-                "first provider failure"
-            } else {
-                "competing provider retirement"
-            })
-        );
-        flui_foundation::panic::retain_opaque_payload(payload);
-        assert_eq!(drops.get(), usize::from(!provider_fails));
-        assert!(
-            nodes[0].has_primary_focus(),
-            "geometry failure cannot publish a focus change"
-        );
-        assert!(manager.focus_in_direction(FocusDirection::Right));
-        assert!(
-            nodes[1].has_primary_focus(),
-            "the cleared provider leaves the healthy fallback geometry usable"
-        );
+    let navigations: [fn(&FocusManager) -> bool; 2] = [FocusManager::focus_next, |manager| {
+        manager.focus_in_direction(FocusDirection::Right)
+    }];
+    for navigate in navigations {
+        for (provider_fails, destructor_fails) in [(true, false), (true, true), (false, true)] {
+            let manager = FocusManager::new();
+            manager
+                .root_scope()
+                .set_traversal_edge_behavior(TraversalEdgeBehavior::Stop);
+            let nodes = [FocusNode::new(), FocusNode::new()];
+            nodes[0].set_rect(Rect::new(0.0, 0.0, 10.0, 10.0));
+            nodes[1].set_rect(Rect::new(20.0, 0.0, 30.0, 10.0));
+            let _attachments = [
+                manager.root_scope().attach_node(&nodes[0]).expect("source"),
+                manager.root_scope().attach_node(&nodes[1]).expect("target"),
+            ];
+            let drops = Rc::new(Cell::new(0));
+            let captured = Capture {
+                owner: Rc::downgrade(&nodes[0]),
+                drops: Rc::clone(&drops),
+                fail: destructor_fails,
+            };
+            let probe = Rc::downgrade(&nodes[0]);
+            nodes[0].set_rect_provider(Rc::new(move || {
+                let _ = &captured;
+                probe.upgrade().expect("live source").clear_rect_provider();
+                assert!(!provider_fails, "first provider failure");
+                Some(Rect::new(0.0, 0.0, 10.0, 10.0))
+            }));
+            let _ = nodes[0].request_focus();
+            let payload = catch_unwind(AssertUnwindSafe(|| {
+                navigate(&manager)
+            }))
+            .expect_err("failure propagates");
+            assert_eq!(
+                flui_foundation::panic::payload_text(payload.as_ref()),
+                Some(if provider_fails {
+                    "first provider failure"
+                } else {
+                    "competing provider retirement"
+                })
+            );
+            flui_foundation::panic::retain_opaque_payload(payload);
+            assert_eq!(drops.get(), usize::from(!provider_fails));
+            assert!(
+                nodes[0].has_primary_focus(),
+                "geometry failure cannot publish a focus change"
+            );
+            assert!(navigate(&manager));
+            assert!(
+                nodes[1].has_primary_focus(),
+                "the cleared provider leaves the healthy fallback geometry usable"
+            );
+        }
     }
 }
 

@@ -6,3 +6,7 @@
 ### Changed
 
 - `FocusScope::edge_behavior` wires scope traversal edges through widget configuration.
+
+### Fixed
+
+- A rectangle provider that withdraws itself and panics preserves its first failure before capture retirement during both linear and directional focus traversal.

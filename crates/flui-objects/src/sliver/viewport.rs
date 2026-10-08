@@ -26,7 +26,7 @@ use flui_rendering::{
     context::{BoxHitTestContext, BoxLayoutContext, PaintCx},
     parent_data::BoxParentData,
     pipeline::{DirtySendError, RenderInvalidationHandle},
-    traits::RenderBox,
+    traits::{RenderBox, SemanticsClip},
     view::{CacheExtentStyle, ScrollableViewportOffset, SliverPaintOrder, ViewportOffset},
 };
 
@@ -1163,17 +1163,20 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderViewport<O> {
 
     /// The viewport's bounds grown by the cache extent along the scroll axis.
     ///
-    /// Wider than the paint clip on purpose — a row just past the edge is
-    /// off-screen but reachable, so it stays in the tree (flagged hidden by
-    /// the paint clip) for a screen reader to scroll to. A row past the cache
-    /// area is not there at all.
-    fn describe_semantics_clip(&self, _child_slot: usize, size: Size) -> Option<Rect<f64>> {
+    /// Ordinary publication follows this cache. Materialized descendants with
+    /// a reveal ancestor remain addressable beyond it; viewport paint clipping
+    /// alone does not hide them from native ScrollIntoView requests.
+    fn describe_semantics_clip(&self, _child_slot: usize, size: Size) -> Option<SemanticsClip> {
         let bounds = Rect::from_origin_size(Point::ZERO, size);
         let cache = self.committed_clips.cache_extent;
         if cache <= 0.0 {
-            return Some(bounds);
+            return Some(SemanticsClip::ScrollCache(bounds));
         }
-        Some(grow_along_axis(bounds, self.axis_direction.axis(), cache))
+        Some(SemanticsClip::ScrollCache(grow_along_axis(
+            bounds,
+            self.axis_direction.axis(),
+            cache,
+        )))
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Variable, Self::ParentData>) -> bool {
@@ -1864,17 +1867,20 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderShrinkWrappingViewport<O> 
 
     /// The viewport's bounds grown by the cache extent along the scroll axis.
     ///
-    /// Wider than the paint clip on purpose — a row just past the edge is
-    /// off-screen but reachable, so it stays in the tree (flagged hidden by
-    /// the paint clip) for a screen reader to scroll to. A row past the cache
-    /// area is not there at all.
-    fn describe_semantics_clip(&self, _child_slot: usize, size: Size) -> Option<Rect<f64>> {
+    /// Ordinary publication follows this cache. Materialized descendants with
+    /// a reveal ancestor remain addressable beyond it; viewport paint clipping
+    /// alone does not hide them from native ScrollIntoView requests.
+    fn describe_semantics_clip(&self, _child_slot: usize, size: Size) -> Option<SemanticsClip> {
         let bounds = Rect::from_origin_size(Point::ZERO, size);
         let cache = self.committed_clips.cache_extent;
         if cache <= 0.0 {
-            return Some(bounds);
+            return Some(SemanticsClip::ScrollCache(bounds));
         }
-        Some(grow_along_axis(bounds, self.axis_direction.axis(), cache))
+        Some(SemanticsClip::ScrollCache(grow_along_axis(
+            bounds,
+            self.axis_direction.axis(),
+            cache,
+        )))
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Variable, Self::ParentData>) -> bool {

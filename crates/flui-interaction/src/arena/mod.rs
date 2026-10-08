@@ -66,7 +66,7 @@ use crate::retain::Retain;
 use flui_foundation::{MonotonicClock, SystemClock};
 
 mod composition;
-use composition::CompositionBranch;
+use composition::{BranchPosition, CompositionBranch};
 pub use composition::{CompositionError, GestureBranches, GestureCompetition};
 
 // ============================================================================
@@ -536,6 +536,8 @@ struct ArenaEntryData {
     /// Members competing in this arena.
     /// Inline capacity: 4 (avoids heap for most cases).
     members: SmallVec<[Weak<dyn GestureArenaMember>; 4]>,
+    branches: SmallVec<[(Weak<dyn GestureArenaMember>, CompositionBranch); 4]>,
+    requested: SmallVec<[Weak<dyn GestureArenaMember>; 4]>,
     /// Whether the arena is still open for new members.
     /// When open, accepts are stored as eager_winner instead of resolving
     /// immediately.
@@ -587,6 +589,8 @@ impl ArenaEntryData {
     fn new() -> Self {
         Self {
             members: SmallVec::new(),
+            branches: SmallVec::new(),
+            requested: SmallVec::new(),
             is_open: true,
             is_held: false,
             is_resolved: false,
@@ -630,13 +634,31 @@ impl ArenaEntryData {
 
         if self.is_open {
             // Store as eager winner - will win when arena closes
-            if self.eager_winner.is_none() {
+            if !self
+                .requested
+                .iter()
+                .any(|request| Weak::ptr_eq(request, &identity))
+            {
+                self.requested.push(identity.clone());
+            }
+            if self.eager_winner.is_none() && !self.is_blocked(&identity) {
                 self.eager_winner = Some(identity);
             }
             // If already have eager winner, ignore subsequent accepts
             ArenaFollowUp::None
         } else {
-            ArenaFollowUp::ResolveInFavorOf(identity)
+            if self.is_blocked(&identity) {
+                if !self
+                    .requested
+                    .iter()
+                    .any(|request| Weak::ptr_eq(request, &identity))
+                {
+                    self.requested.push(identity);
+                }
+                ArenaFollowUp::None
+            } else {
+                ArenaFollowUp::ResolveInFavorOf(identity)
+            }
         }
     }
 
@@ -685,12 +707,22 @@ impl ArenaEntryData {
             return ArenaFollowUp::None;
         }
 
-        if self.members.len() == 1 {
+        if self.members.len() == 1 && !self.is_blocked(&self.members[0]) {
             ArenaFollowUp::DeferDefault
         } else if self.members.is_empty() {
             ArenaFollowUp::RemoveEmpty
-        } else if let Some(eager) = self.eager_winner.clone() {
+        } else if let Some(eager) = self
+            .eager_winner
+            .clone()
+            .filter(|eager| !self.is_blocked(eager))
+        {
             ArenaFollowUp::ResolveInFavorOf(eager)
+        } else if let Some(request) = self
+            .requested
+            .iter()
+            .find(|request| !self.is_blocked(request))
+        {
+            ArenaFollowUp::ResolveInFavorOf(request.clone())
         } else {
             ArenaFollowUp::None
         }
@@ -721,6 +753,10 @@ impl ArenaEntryData {
 
     fn prune_departed(&mut self) {
         self.members.retain(|member| member.strong_count() != 0);
+        self.branches
+            .retain(|(member, _)| self.members.iter().any(|live| Weak::ptr_eq(live, member)));
+        self.requested
+            .retain(|member| self.members.iter().any(|live| Weak::ptr_eq(live, member)));
         if self
             .eager_winner
             .as_ref()
@@ -730,10 +766,45 @@ impl ArenaEntryData {
         }
     }
 
+    fn is_blocked(&self, member: &Weak<dyn GestureArenaMember>) -> bool {
+        let Some((_, branch)) = self
+            .branches
+            .iter()
+            .find(|(candidate, _)| Weak::ptr_eq(candidate, member))
+        else {
+            return false;
+        };
+        self.branches.iter().any(|(_, other)| branch.blocks(other))
+    }
+
+    fn has_blocked_fallback(&mut self) -> bool {
+        self.prune_departed();
+        self.members.iter().any(|member| self.is_blocked(member))
+    }
+
     /// Add a member to this arena.
-    fn add(&mut self, member: &Rc<dyn GestureArenaMember>) -> bool {
+    fn add(
+        &mut self,
+        member: &Rc<dyn GestureArenaMember>,
+        branch: Option<&CompositionBranch>,
+    ) -> bool {
         if self.is_open && !self.is_resolved {
+            if (branch.is_some()
+                || self
+                    .branches
+                    .iter()
+                    .any(|(existing, _)| Weak::ptr_eq(existing, &Rc::downgrade(member))))
+                && self
+                    .members
+                    .iter()
+                    .any(|existing| Weak::ptr_eq(existing, &Rc::downgrade(member)))
+            {
+                return false;
+            }
             self.members.push(Rc::downgrade(member));
+            if let Some(branch) = branch {
+                self.branches.push((Rc::downgrade(member), branch.clone()));
+            }
             true
         } else {
             false
@@ -755,6 +826,13 @@ impl ArenaEntryData {
     /// Losers are reported in registration order before winner callbacks.
     #[must_use]
     fn resolve(&mut self, winner: Option<&Rc<dyn GestureArenaMember>>) -> PendingNotifications {
+        self.resolve_weak(winner.map(Rc::downgrade).as_ref())
+    }
+
+    fn resolve_weak(
+        &mut self,
+        winner: Option<&Weak<dyn GestureArenaMember>>,
+    ) -> PendingNotifications {
         if self.is_resolved {
             return PendingNotifications::new();
         }
@@ -771,7 +849,7 @@ impl ArenaEntryData {
         for member in members {
             let is_winner = winner
                 .as_ref()
-                .is_some_and(|winner| Weak::ptr_eq(&member, &Rc::downgrade(winner)));
+                .is_some_and(|winner| Weak::ptr_eq(&member, winner));
             if is_winner {
                 accepted.push((member, GestureDisposition::Accepted));
             } else {
@@ -791,6 +869,22 @@ impl ArenaEntryData {
         let mut pending = PendingNotifications::new();
         if self.is_resolved {
             return pending;
+        }
+        self.prune_departed();
+        if let Some(request) = self
+            .requested
+            .iter()
+            .find(|request| {
+                !self.is_blocked(request)
+                    && self.branches.iter().any(|(member, branch)| {
+                        Weak::ptr_eq(member, request)
+                            && branch.position == BranchPosition::Second
+                            && *branch.competition == GestureCompetition::RequireFirstFailure
+                    })
+            })
+            .cloned()
+        {
+            return self.resolve_weak(Some(&request));
         }
         self.is_resolved = true;
         let members = std::mem::take(&mut self.members);
@@ -1226,7 +1320,7 @@ impl GestureArena {
                 slot
             }
         };
-        let admitted = slot.data.borrow_mut().add(member);
+        let admitted = slot.data.borrow_mut().add(member, self.branch.as_ref());
         if !admitted {
             return None;
         }
@@ -1461,6 +1555,20 @@ impl GestureArena {
         let Some(slot) = self.current_slot(pointer) else {
             return;
         };
+        if let Some(candidate) = &winner {
+            let follow_up = {
+                let mut entry = slot.data.borrow_mut();
+                entry.prune_departed();
+                entry
+                    .is_blocked(&Rc::downgrade(candidate))
+                    .then(|| entry.accept(candidate))
+            };
+            if let Some(follow_up) = follow_up {
+                let pending = self.collect_follow_up(pointer, &slot, follow_up);
+                Self::dispatch_with_candidate(pending, pointer, winner);
+                return;
+            }
+        }
         let pending = slot.data.borrow_mut().resolve(winner.as_ref());
         self.remove_exact_slot(pointer, &slot);
         Self::dispatch_with_candidate(pending, pointer, winner);
@@ -1503,7 +1611,7 @@ impl GestureArena {
     fn sweep_slot(&self, slot: &Rc<ArenaSlot>) {
         let pending = {
             let mut entry = slot.data.borrow_mut();
-            if entry.is_held {
+            if entry.is_held || entry.has_blocked_fallback() {
                 // The pointer is up: its held generation leaves the active
                 // map, so the pointer's next Down opens a fresh arena instead
                 // of being refused by this closed one. Exact entry handles and
@@ -1577,7 +1685,7 @@ impl GestureArena {
         for slot in batch.slots {
             let pending = {
                 let mut entry = slot.data.borrow_mut();
-                if entry.is_held {
+                if entry.is_held || entry.has_blocked_fallback() {
                     entry.has_pending_sweep = true;
                     self.retained
                         .borrow_mut()
@@ -1883,8 +1991,13 @@ impl GestureArena {
 
     /// Check if an arena has an eager winner.
     pub fn has_eager_winner(&self, pointer: PointerId) -> bool {
-        self.inspection_slot(pointer)
-            .is_some_and(|slot| slot.data.borrow().eager_winner.is_some())
+        self.inspection_slot(pointer).is_some_and(|slot| {
+            let entry = slot.data.borrow();
+            entry
+                .eager_winner
+                .as_ref()
+                .is_some_and(|winner| !entry.is_blocked(winner))
+        })
     }
 
     /// Check if sweep is pending for an arena.
@@ -1916,7 +2029,11 @@ impl GestureArena {
             let follow_up = {
                 let mut entry = slot.data.borrow_mut();
                 entry.prune_departed();
-                if entry.has_pending_sweep && !entry.is_held && !entry.is_resolved {
+                if entry.has_pending_sweep
+                    && !entry.is_held
+                    && !entry.is_resolved
+                    && !entry.has_blocked_fallback()
+                {
                     ArenaFollowUp::DeferDefault
                 } else {
                     entry.follow_up()
@@ -1945,7 +2062,7 @@ impl GestureArena {
             let pending = {
                 let mut entry = slot.data.borrow_mut();
                 entry.prune_departed();
-                if entry.has_pending_sweep && !entry.is_held {
+                if entry.has_pending_sweep && !entry.is_held && !entry.has_blocked_fallback() {
                     entry.has_pending_sweep = false;
                     entry.sweep()
                 } else {

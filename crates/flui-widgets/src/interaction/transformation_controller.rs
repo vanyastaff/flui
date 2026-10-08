@@ -63,6 +63,9 @@ impl Default for TransformationController {
 }
 
 impl TransformationController {
+    pub(crate) fn ptr_eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
     /// A controller starting at the identity matrix (no transformation).
     #[must_use]
     pub fn new() -> Self {

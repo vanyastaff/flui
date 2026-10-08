@@ -36,6 +36,16 @@
 
 use std::any::TypeId;
 
+/// Why a parent limits its children's accessibility geometry.
+#[derive(Debug, Clone, Copy)]
+pub enum SemanticsClip {
+    /// Content outside these bounds is semantically excluded.
+    Bounds(flui_foundation::geometry::Rect<f64>),
+    /// A viewport's materialization cache, rather than author exclusion.
+    /// Laid-out descendants remain addressable when a reveal ancestor exists.
+    ScrollCache(flui_foundation::geometry::Rect<f64>),
+}
+
 use downcast_rs::{Downcast, impl_downcast};
 use flui_foundation::Diagnosticable;
 
@@ -734,28 +744,24 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
         None
     }
 
-    /// The rect, in THIS node's coordinates, outside which a child carries no
-    /// accessibility presence at all — `None` (the default) when this node
-    /// imposes no such limit.
+    /// The accessibility clip in THIS node's coordinates, or `None` when
+    /// this node imposes no limit.
     ///
     /// Wider than [`describe_approximate_paint_clip`](Self::describe_approximate_paint_clip)
-    /// wherever a node keeps off-screen content reachable: a viewport reports
-    /// its bounds grown by the cache extent, so the row just past the edge
-    /// stays in the tree for a "scroll to" action while the row far beyond it
-    /// does not. A node whose rect leaves nothing after this clip contributes
-    /// no semantics node, and one that is partly inside is narrowed to the
-    /// part that survives.
+    /// wherever a node keeps off-screen content reachable. A viewport reports
+    /// [`SemanticsClip::ScrollCache`]: materialized descendants with a reveal
+    /// ancestor remain addressable beyond that cache. Explicit
+    /// [`SemanticsClip::Bounds`] still excludes descendants outside its bounds.
     ///
-    /// Unlike the paint clip, an inner value REPLACES the accumulated one
-    /// rather than intersecting with it — a nested viewport
-    /// re-grants its own cache area to its own children.
+    /// An inner cache replaces the inherited cache without reopening explicit
+    /// authored bounds. An inner `Bounds` replaces the inherited bounds.
     ///
     /// Default: `None`.
     fn describe_semantics_clip(
         &self,
         _child_slot: usize,
         _size: flui_foundation::geometry::Size,
-    ) -> Option<flui_foundation::geometry::Rect<f64>> {
+    ) -> Option<SemanticsClip> {
         None
     }
 

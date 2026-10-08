@@ -91,7 +91,6 @@ pub(crate) fn viewer_native_session_reports_one_start_and_one_terminal() {
                 ends.borrow_mut().push(match details.reason {
                     GestureEndReason::Completed => "completed",
                     GestureEndReason::Cancelled => "cancelled",
-                    _ => panic!("unexpected terminal reason"),
                 });
             })
             .child(SizedBox::new(100.0, 100.0)),
@@ -115,6 +114,90 @@ pub(crate) fn viewer_native_session_reports_one_start_and_one_terminal() {
             "update",
             "cancelled"
         ]
+    );
+}
+
+pub(crate) fn viewer_repeated_native_start_retires_the_previous_generation() {
+    use flui_widgets::{GestureEndReason, InteractiveViewer, TransformationController};
+    let controller = TransformationController::new();
+    let reasons = Rc::new(RefCell::new(Vec::new()));
+    let log = reasons.clone();
+    let laid = lay_out(
+        InteractiveViewer::new()
+            .controller(controller.clone())
+            .boundary_margin(EdgeInsets::all(1000.0))
+            .on_interaction_end(move |_, details| log.borrow_mut().push(details.reason))
+            .child(SizedBox::new(100.0, 100.0)),
+        tight(100.0, 100.0),
+    );
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::Start));
+    laid.dispatch_pointer_event(&zoom_update(1.5));
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::Start));
+    assert_eq!(
+        *reasons.borrow(),
+        [GestureEndReason::Cancelled],
+        "repeated Start settles the old accepted session"
+    );
+    laid.dispatch_pointer_event(&zoom_update(1.2));
+    assert_scale(scale_of(&controller), 1.8);
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::End));
+    assert_eq!(
+        *reasons.borrow(),
+        [GestureEndReason::Cancelled, GestureEndReason::Completed]
+    );
+}
+
+/// A newly enabled descendant cannot steal its ancestor's accepted source.
+pub(crate) fn viewer_native_owner_survives_descendant_enable_during_rebuild() {
+    use flui_widgets::{InteractiveViewer, TransformationController};
+    let outer = TransformationController::new();
+    let inner = TransformationController::new();
+    let outer_ends = Rc::new(RefCell::new(Vec::new()));
+    let inner_ends = Rc::new(RefCell::new(Vec::new()));
+    let tree = |inner_enabled| {
+        let outer_log = outer_ends.clone();
+        let inner_log = inner_ends.clone();
+        InteractiveViewer::new()
+            .controller(outer.clone())
+            .boundary_margin(EdgeInsets::all(1000.0))
+            .on_interaction_end(move |_, details| outer_log.borrow_mut().push(details.reason))
+            .child(
+                InteractiveViewer::new()
+                    .controller(inner.clone())
+                    .scale_enabled(inner_enabled)
+                    .pan_enabled(false)
+                    .boundary_margin(EdgeInsets::all(1000.0))
+                    .on_interaction_end(move |_, details| {
+                        inner_log.borrow_mut().push(details.reason)
+                    })
+                    .child(SizedBox::new(200.0, 200.0)),
+            )
+    };
+    let mut laid = lay_out(tree(false), tight(200.0, 200.0));
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::Start));
+    laid.dispatch_pointer_event(&zoom_update(1.2));
+    assert_scale(scale_of(&outer), 1.2);
+    assert_scale(scale_of(&inner), 1.0);
+    laid.pump_widget(tree(true));
+    laid.pump();
+    laid.dispatch_pointer_event(&zoom_update(1.5));
+    assert_scale(scale_of(&outer), 1.5);
+    assert_scale(scale_of(&inner), 1.0);
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::End));
+    assert_eq!(outer_ends.borrow().len(), 1);
+    assert!(
+        inner_ends.borrow().is_empty(),
+        "unadmitted descendant has no source terminal"
+    );
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::Start));
+    laid.dispatch_pointer_event(&zoom_update(1.1));
+    assert_scale(scale_of(&outer), 1.5);
+    assert_scale(scale_of(&inner), 1.1);
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::Cancelled));
+    assert_eq!(
+        inner_ends.borrow().len(),
+        1,
+        "next source can choose the now-enabled descendant"
     );
 }
 
@@ -185,6 +268,328 @@ pub(crate) fn viewer_pan_transitions_to_pinch_without_contact_count_jumps() {
     );
     laid.dispatch_pointer_event(&up(second, 110.0));
     assert_eq!(*lifecycle.borrow(), ["start", "end"]);
+}
+
+/// Rotation is authored explicitly and keeps the scene's focal point fixed.
+pub(crate) fn viewer_native_rotation_preserves_the_scene_pivot() {
+    use flui_widgets::{InteractiveViewer, TransformationController};
+    let controller = TransformationController::new();
+    let mut laid = lay_out(
+        InteractiveViewer::new()
+            .controller(controller.clone())
+            .rotation_enabled(true)
+            .boundary_margin(EdgeInsets::all(1000.0))
+            .child(SizedBox::new(100.0, 100.0)),
+        tight(100.0, 100.0),
+    );
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::Start));
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::Update(
+        PanZoomTransform::try_new(Offset::ZERO, 1.5, std::f64::consts::FRAC_PI_2)
+            .expect("finite scale and quarter turn"),
+    )));
+    let pivot = controller.to_scene(Offset::new(50.0, 50.0));
+    assert_scale(pivot.dx, 50.0);
+    assert_scale(pivot.dy, 50.0);
+    let transformed = controller.value().transform_point(60.0, 50.0);
+    assert_scale(transformed.0, 50.0);
+    assert_scale(transformed.1, 65.0);
+    let rotated = controller.value();
+    laid.pump_widget(
+        InteractiveViewer::new()
+            .controller(controller.clone())
+            .rotation_enabled(true)
+            .boundary_margin(EdgeInsets::all(1000.0))
+            .child(SizedBox::new(100.0, 100.0)),
+    );
+    laid.pump();
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::Update(
+        PanZoomTransform::try_new(Offset::ZERO, 1.5, std::f64::consts::FRAC_PI_2)
+            .expect("repeated cumulative transform"),
+    )));
+    assert_eq!(
+        controller.value(),
+        rotated,
+        "rebuild preserves cumulative rotation history"
+    );
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::End));
+}
+
+pub(crate) fn viewer_rotation_refuses_an_unfittable_quad_then_recovers() {
+    use flui_widgets::{InteractiveViewer, TransformationController};
+    let controller = TransformationController::new();
+    let updates = Rc::new(RefCell::new(Vec::new()));
+    let log = updates.clone();
+    let laid = lay_out(
+        InteractiveViewer::new()
+            .controller(controller.clone())
+            .rotation_enabled(true)
+            .on_interaction_update(move |_, details| log.borrow_mut().push(details.scale))
+            .child(SizedBox::new(100.0, 100.0)),
+        tight(100.0, 100.0),
+    );
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::Start));
+    let rotated = |scale| {
+        pan_zoom(PanZoomPhase::Update(
+            PanZoomTransform::try_new(Offset::ZERO, scale, std::f64::consts::FRAC_PI_4)
+                .expect("finite requested rotation"),
+        ))
+    };
+    laid.dispatch_pointer_event(&rotated(1.0));
+    assert_eq!(
+        controller.value(),
+        flui_foundation::geometry::Matrix4::identity(),
+        "a rotated viewport cannot fit without extra zoom"
+    );
+    assert!(
+        updates.borrow().is_empty(),
+        "unadmitted native input has no recognized update"
+    );
+    laid.dispatch_pointer_event(&rotated(1.5));
+    let matrix = controller.value();
+    let m = matrix.to_col_major_array();
+    assert_scale(m[0].hypot(m[1]), 1.5);
+    assert!(m[1] > 1.0, "the recoverable input actually rotates");
+    for point in [
+        Offset::new(0.0, 0.0),
+        Offset::new(100.0, 0.0),
+        Offset::new(0.0, 100.0),
+        Offset::new(100.0, 100.0),
+    ] {
+        let scene = controller.to_scene(point);
+        assert!(scene.dx >= -1e-9 && scene.dx <= 100.0 + 1e-9);
+        assert!(scene.dy >= -1e-9 && scene.dy <= 100.0 + 1e-9);
+    }
+    let updates = updates.borrow();
+    assert_eq!(updates.len(), 1);
+    assert_scale(updates[0], 1.5);
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::End));
+}
+
+/// Large finite motion must clamp to the edge, not cancel away to the origin.
+pub(crate) fn viewer_extreme_finite_pan_preserves_the_boundary_result() {
+    use flui_widgets::TransformationController;
+    let controller = TransformationController::new();
+    let laid = lay_out(
+        viewer(controller.clone(), Rc::new(RefCell::new(Vec::new()))),
+        tight(100.0, 100.0),
+    );
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::Start));
+    let movement = |pan| {
+        pan_zoom(PanZoomPhase::Update(
+            PanZoomTransform::try_new(Offset::new(pan, 0.0), 1.0, 0.0)
+                .expect("finite requested pan"),
+        ))
+    };
+    laid.dispatch_pointer_event(&movement(f64::MAX));
+    let shifted_origin = controller.value().transform_point(0.0, 0.0);
+    assert_scale(shifted_origin.0, 1000.0);
+    assert_scale(shifted_origin.1, 0.0);
+    assert!(
+        controller
+            .value()
+            .to_col_major_array()
+            .iter()
+            .all(|value| value.is_finite())
+    );
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::End));
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::Start));
+    laid.dispatch_pointer_event(&movement(-20.0));
+    assert_scale(controller.value().transform_point(0.0, 0.0).0, 980.0);
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::End));
+}
+
+/// The real presentation ticks the release velocity and new input retires it.
+pub(crate) fn viewer_focal_fling_advances_then_stops_on_new_input() {
+    use flui_animation::Vsync;
+    use flui_widgets::{InteractiveViewer, TransformationController, VsyncScope};
+    use std::time::Duration;
+    let controller = TransformationController::new();
+    let released = Rc::new(RefCell::new(Vec::new()));
+    let ends = released.clone();
+    let vsync = Vsync::new();
+    let mut laid = lay_out(
+        VsyncScope::new(
+            vsync.clone(),
+            InteractiveViewer::new()
+                .controller(controller.clone())
+                .boundary_margin(EdgeInsets::all(1000.0))
+                .on_interaction_end(move |_, details| ends.borrow_mut().push(details.velocity))
+                .child(SizedBox::new(200.0, 200.0)),
+        ),
+        tight(200.0, 200.0),
+    );
+    laid.adopt_vsync(vsync);
+    let source = PointerInfo::new(
+        PointerId::try_from(81_u64).expect("contact"),
+        PointerKind::Touch,
+    );
+    let sample = |millis: u64, x| {
+        PointerSample::new(
+            EventTime::from_nanos(millis * 1_000_000),
+            position(x, 100.0),
+        )
+    };
+    let down = |millis, x| {
+        PointerEvent::Down(PointerPress::new(
+            source,
+            PointerButton::PRIMARY,
+            PointerButtons::NONE.with(PointerButton::PRIMARY),
+            sample(millis, x),
+        ))
+    };
+    let movement = |millis, x| {
+        PointerEvent::Move(PointerMove::new(
+            source,
+            PointerButtons::NONE.with(PointerButton::PRIMARY),
+            sample(millis, x),
+        ))
+    };
+    laid.dispatch_pointer_event(&down(0, 20.0));
+    for (millis, x) in [(10, 50.0), (20, 80.0), (30, 110.0)] {
+        laid.dispatch_pointer_event(&movement(millis, x));
+        laid.pump_for(Duration::from_millis(10));
+    }
+    laid.dispatch_pointer_event(&PointerEvent::Up(PointerRelease::new(
+        source,
+        PointerButton::PRIMARY,
+        PointerButtons::NONE,
+        sample(31, 110.0),
+    )));
+    assert!(
+        released
+            .borrow()
+            .last()
+            .expect("release callback")
+            .pixels_per_second
+            .dx
+            > 1000.0
+    );
+    let before = controller.value().transform_point(0.0, 0.0).0;
+    laid.pump_for(Duration::from_millis(16));
+    laid.pump_for(Duration::from_millis(16));
+    let after = controller.value().transform_point(0.0, 0.0).0;
+    assert!(
+        after > before,
+        "measured focal velocity continues through presentation ticks"
+    );
+    laid.dispatch_pointer_event(&down(70, 80.0));
+    let stopped = controller.value();
+    laid.pump_for(Duration::from_millis(16));
+    laid.pump_for(Duration::from_millis(16));
+    assert_eq!(
+        controller.value(),
+        stopped,
+        "new contact stops the previous focal fling"
+    );
+}
+
+/// A fling keeps immutable limits until real layout or authored bounds change.
+pub(crate) fn viewer_focal_fling_rebuild_preserves_or_retires_geometry() {
+    use flui_animation::Vsync;
+    use flui_widgets::{InteractiveViewer, TransformationController, VsyncScope};
+    use std::time::Duration;
+    for change_viewport in [false, true] {
+        let controller = TransformationController::new();
+        let vsync = Vsync::new();
+        let tree = |width, margin| {
+            VsyncScope::new(
+                vsync.clone(),
+                SizedBox::new(width, 200.0).child(
+                    InteractiveViewer::new()
+                        .controller(controller.clone())
+                        .boundary_margin(EdgeInsets::all(margin))
+                        .child(SizedBox::new(200.0, 200.0)),
+                ),
+            )
+        };
+        let mut laid = lay_out(tree(200.0, 1000.0), crate::common::loose(300.0));
+        laid.adopt_vsync(vsync.clone());
+        let packet = |millis: u64, phase| {
+            PointerEvent::PanZoom(PanZoomEvent::new(
+                mouse(),
+                EventTime::from_nanos(millis * 1_000_000),
+                position(50.0, 100.0),
+                phase,
+            ))
+        };
+        laid.dispatch_pointer_event(&packet(0, PanZoomPhase::Start));
+        for (millis, pan) in [(10, 20.0), (20, 40.0), (30, 60.0)] {
+            laid.dispatch_pointer_event(&packet(
+                millis,
+                PanZoomPhase::Update(
+                    PanZoomTransform::try_new(Offset::new(pan, 0.0), 1.0, 0.0)
+                        .expect("finite native pan"),
+                ),
+            ));
+        }
+        laid.dispatch_pointer_event(&packet(31, PanZoomPhase::End));
+        laid.pump_for(Duration::from_millis(16));
+        let before_rebuild = controller.value().transform_point(0.0, 0.0).0;
+        laid.pump_widget(tree(200.0, 1000.0));
+        laid.pump_for(Duration::from_millis(16));
+        assert!(
+            controller.value().transform_point(0.0, 0.0).0 > before_rebuild,
+            "an unchanged rebuild preserves the admitted fling"
+        );
+        laid.pump_widget(if change_viewport {
+            tree(100.0, 1000.0)
+        } else {
+            tree(200.0, 500.0)
+        });
+        laid.pump();
+        let stopped = controller.value();
+        laid.pump_for(Duration::from_millis(16));
+        laid.pump_for(Duration::from_millis(16));
+        assert_eq!(
+            controller.value(), stopped,
+            "changing {} retires the immutable fling limits",
+            if change_viewport { "the viewport" } else { "the boundary" }
+        );
+    }
+}
+
+/// Native cumulative scale and focal motion have different release units.
+pub(crate) fn viewer_reports_scale_velocity_separately_from_focal_velocity() {
+    use flui_widgets::InteractiveViewer;
+    let ends = Rc::new(RefCell::new(Vec::new()));
+    let log = ends.clone();
+    let laid = lay_out(
+        InteractiveViewer::new()
+            .boundary_margin(EdgeInsets::all(1000.0))
+            .on_interaction_end(move |_, details| log.borrow_mut().push(details))
+            .child(SizedBox::new(200.0, 200.0)),
+        tight(200.0, 200.0),
+    );
+    let packet = |millis: u64, phase| {
+        PointerEvent::PanZoom(PanZoomEvent::new(
+            mouse(),
+            EventTime::from_nanos(millis * 1_000_000),
+            position(50.0, 50.0),
+            phase,
+        ))
+    };
+    laid.dispatch_pointer_event(&packet(0, PanZoomPhase::Start));
+    for (millis, pan, scale) in [(10, 20.0, 1.2), (20, 40.0, 1.5), (30, 60.0, 1.9)] {
+        laid.dispatch_pointer_event(&packet(
+            millis,
+            PanZoomPhase::Update(
+                PanZoomTransform::try_new(Offset::new(pan, 0.0), scale, 0.0)
+                    .expect("finite authored native history"),
+            ),
+        ));
+    }
+    laid.dispatch_pointer_event(&packet(31, PanZoomPhase::End));
+    let observed = ends.borrow();
+    assert_eq!(observed.len(), 1, "one source release");
+    assert!(
+        observed[0].scale_velocity > 5.0,
+        "scale units per second remain observable"
+    );
+    assert!(
+        observed[0].velocity.pixels_per_second.dx > 1000.0,
+        "pan carries measured logical pixels per second"
+    );
+    assert!(observed[0].velocity.pixels_per_second.dy.abs() < 1e-9);
 }
 
 fn mouse() -> PointerInfo {
@@ -328,6 +733,44 @@ pub(crate) fn page_scroll_resolves_against_the_actual_viewport() {
             height * 0.5,
             "half page in {height}px viewport"
         );
+    }
+    // Counts belong to the scrollable: a geometric transform must not divide
+    // line/page counts before this producer applies its line height/viewport.
+    // The projective plane maps local (10,10) to screen (200/19,200/19).
+    use flui_foundation::geometry::Matrix4;
+    use flui_widgets::Transform;
+    let perspective = Matrix4::from([
+        1.0, 0.0, 0.0, -0.005, 0.0, 1.0, 0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+    ]);
+    for (transform, focal) in [
+        (Matrix4::scaling(2.0, 2.0, 1.0), position(20.0, 20.0)),
+        (perspective, position(200.0 / 19.0, 200.0 / 19.0)),
+    ] {
+        for (unit, expected) in [(ScrollUnit::Lines, 26.5), (ScrollUnit::Pages, 137.5)] {
+            let controller = ScrollController::new();
+            let laid = lay_out(
+                Transform::new(transform).child(
+                    Scrollable::new()
+                        .controller(controller.clone())
+                        .viewport_builder(Rc::new(|position| {
+                            SingleChildScrollView::new()
+                                .position(position)
+                                .child(SizedBox::new(100.0, 1000.0))
+                                .boxed()
+                        })),
+                ),
+                tight(100.0, 275.0),
+            );
+            assert_eq!(controller.position().viewport_dimension(), 275.0);
+            let scroll = ScrollEvent::new(
+                mouse(), EventTime::from_nanos(61), focal,
+                ScrollDelta::try_new(unit, 0.0, 0.5).expect("finite counts"),
+            ).with_precision(ScrollPrecision::Precise);
+            laid.dispatch_pointer_event(&PointerEvent::Scroll(scroll));
+            assert!((controller.pixels() - expected).abs() < 1e-9,
+                "transformed {unit:?} resolves in actual scrollable: {} != {expected}", controller.pixels());
+        }
     }
     // Counts belong to the scrollable: a geometric transform must not divide
     // line/page counts before this producer applies its line height/viewport.

@@ -3,7 +3,7 @@
 //! The SemanticsOwner coordinates updates to the semantics tree and
 //! sends updates to the platform accessibility services.
 
-use std::sync::Arc;
+use std::{rc::Weak, sync::Arc};
 
 use flui_foundation::SemanticsId;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -104,8 +104,18 @@ pub enum SemanticsActionError {
 pub struct SemanticsActionInvocation {
     node_id: AccessibilityNodeId,
     action: SemanticsAction,
-    arguments: Option<ActionArgs>,
-    handler: SemanticsActionHandler,
+    delivery: ActionDelivery,
+}
+
+enum ActionDelivery {
+    Direct {
+        arguments: Option<ActionArgs>,
+        handler: SemanticsActionHandler,
+    },
+    Reveal {
+        path: Vec<Weak<()>>,
+        steps: Vec<(SemanticsActionHandler, ActionArgs)>,
+    },
 }
 
 impl std::fmt::Debug for SemanticsActionInvocation {
@@ -114,8 +124,7 @@ impl std::fmt::Debug for SemanticsActionInvocation {
             .debug_struct("SemanticsActionInvocation")
             .field("node_id", &self.node_id)
             .field("action", &self.action)
-            .field("arguments", &self.arguments)
-            .field("handler", &"<callback>")
+            .field("delivery", &"<resolved callbacks>")
             .finish()
     }
 }
@@ -139,7 +148,40 @@ impl SemanticsActionInvocation {
     ///
     /// No semantics-tree borrow is held while user code runs.
     pub fn invoke(self) {
-        (self.handler)(self.action, self.arguments);
+        match self.delivery {
+            ActionDelivery::Direct { arguments, handler } => handler(self.action, arguments),
+            ActionDelivery::Reveal { path, steps } => {
+                let mut first = None;
+                let unwinding = std::thread::panicking();
+                for (handler, arguments) in steps {
+                    if !unwinding && path.iter().all(|member| member.strong_count() != 0) {
+                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            handler(SemanticsAction::ShowOnScreen, Some(arguments));
+                        }));
+                        if let Err(payload) = result {
+                            if first.is_none() {
+                                first = Some(payload);
+                            } else {
+                                flui_foundation::panic::retain_opaque_payload(payload);
+                            }
+                        }
+                    }
+                    // A failed callback's captures remain owned even when this was
+                    // the last snapshot owner. Healthy retirement runs outside the
+                    // pipeline borrow and is itself a user-code boundary.
+                    if unwinding || first.is_some() {
+                        std::mem::forget(handler);
+                    } else if let Err(payload) =
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(handler)))
+                    {
+                        first = Some(payload);
+                    }
+                }
+                if let Some(payload) = first {
+                    std::panic::resume_unwind(payload);
+                }
+            }
+        }
     }
 }
 
@@ -521,14 +563,70 @@ impl SemanticsOwner {
                     node_id: request.node_id,
                 });
             }
-            resolved = Some(node);
+            resolved = Some((id, node));
         }
 
-        let node = resolved.ok_or(SemanticsActionError::NodeNotFound {
+        let (target_id, node) = resolved.ok_or(SemanticsActionError::NodeNotFound {
             node_id: request.node_id,
         })?;
         let config = node.config();
         let actions = config.effective_actions_as_bits();
+        if request.action == SemanticsAction::ShowOnScreen
+            && actions & request.action.value() != 0
+            && config.action_handler(request.action).is_none()
+            && !config.is_hidden()
+        {
+            let mut path = Vec::new();
+            let mut steps = Vec::new();
+            let mut current = Some(target_id);
+            let mut target_rect = node.reveal_rect();
+            let mut ancestors = FxHashSet::default();
+            while let Some(id) = current {
+                if !ancestors.insert(id) {
+                    break;
+                }
+                let Some(ancestor) = self.tree.get(id) else {
+                    break;
+                };
+                let Some(member) = self.tree.membership(id) else {
+                    break;
+                };
+                path.push(member);
+                if id != target_id
+                    && ancestor.config().effective_actions_as_bits()
+                        & SemanticsAction::ShowOnScreen.value()
+                        != 0
+                    && let Some(handler) = ancestor
+                        .config()
+                        .action_handler(SemanticsAction::ShowOnScreen)
+                {
+                    let viewport_rect = ancestor.reveal_rect();
+                    steps.push((
+                        Arc::clone(handler),
+                        ActionArgs::ShowOnScreen {
+                            target_rect,
+                            viewport_rect,
+                        },
+                    ));
+                    target_rect = viewport_rect;
+                }
+                if id == root {
+                    if !steps.is_empty() {
+                        return Ok(SemanticsActionInvocation {
+                            node_id: request.node_id,
+                            action: request.action,
+                            delivery: ActionDelivery::Reveal { path, steps },
+                        });
+                    }
+                    break;
+                }
+                current = ancestor.parent();
+            }
+            return Err(SemanticsActionError::UnsupportedAction {
+                node_id: request.node_id,
+                action: request.action,
+            });
+        }
         // Expand and collapse are transitions, offered only from the state
         // that allows them; a request for the state the node already
         // publishes (or from a node without one) reaches no handler.
@@ -601,8 +699,7 @@ impl SemanticsOwner {
         Ok(SemanticsActionInvocation {
             node_id: request.node_id,
             action: routed,
-            arguments,
-            handler,
+            delivery: ActionDelivery::Direct { arguments, handler },
         })
     }
 

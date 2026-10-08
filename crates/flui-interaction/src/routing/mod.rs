@@ -21,8 +21,8 @@ pub(crate) mod pointer_capture;
 mod pointer_router;
 mod traversal;
 
-pub use traversal::{FocusDirection, FocusTraversalOverrides};
 pub use pointer_capture::{PointerCapture, PointerCaptureError};
+pub use traversal::{FocusDirection, FocusTraversalOverrides};
 
 pub use focus::{FocusChangeCallback, FocusManager};
 pub use focus_scope::{
@@ -35,6 +35,7 @@ pub use hit_test::{
     CursorRequest, EventPropagation, HitTestBehavior, HitTestEntry, HitTestResult, RenderId,
     TransformGuard,
 };
+pub(crate) use hit_test::{PanZoomRoute, ScrollRoute};
 #[doc(hidden)]
 pub use interaction_lane::DispatchCustody;
 pub(crate) use interaction_lane::OwnerLatch;
@@ -42,10 +43,10 @@ pub(crate) use interaction_lane::active_dispatch_handle;
 pub use interaction_lane::{
     HitTestHandle, HitTestProbe, HitTestSnapshot, InteractionDispatchError,
     InteractionDispatchHandle, InteractionLane, LocalPayloadTarget, MouseEnterCallback,
-    MouseExitCallback, MouseHoverCallback, MouseRegionCallbacks, MouseRegionTarget, PanZoomTarget,
-    PathClipTarget, PointerDispatch, PointerTarget, ResolvedRouteToken, RoutePanic,
-    RouteResolution, RouteResolutionMiss, ScrollTarget, ShaderMaskTarget, resolve_local_payload,
-    resolve_path_clip_target, resolve_shader_mask_target,
+    MouseExitCallback, MouseHoverCallback, MouseRegionCallbacks, MouseRegionTarget,
+    PanZoomDispatch, PanZoomTarget, PathClipTarget, PointerDispatch, PointerTarget,
+    ResolvedRouteToken, RoutePanic, RouteResolution, RouteResolutionMiss, ScrollTarget,
+    ShaderMaskTarget, resolve_local_payload, resolve_path_clip_target, resolve_shader_mask_target,
 };
 pub use mouse_tracker::{
     CursorChangeCallback, DeviceId, MouseTracker, MouseTrackerAnnotation, PointerMotionKind,

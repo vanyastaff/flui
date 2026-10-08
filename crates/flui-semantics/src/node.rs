@@ -71,6 +71,8 @@ pub struct SemanticsNode {
     // ========== Geometry ==========
     /// Bounding rectangle in global coordinates.
     rect: Rect<f64>,
+    /// Unclipped geometry used only by ancestor reveal delivery.
+    reveal_rect: Option<Rect<f64>>,
 
     /// Transform matrix.
     ///
@@ -96,6 +98,7 @@ impl SemanticsNode {
             source_render_id: None,
             config: SemanticsConfiguration::new(),
             rect: Rect::ZERO,
+            reveal_rect: None,
             transform: None,
             dirty: true,
         }
@@ -234,6 +237,15 @@ impl SemanticsNode {
     pub fn set_rect(&mut self, rect: Rect<f64>) {
         self.rect = rect;
         self.dirty = true;
+    }
+
+    /// Retain the render source's unclipped root-space logical geometry.
+    pub fn set_reveal_rect(&mut self, rect: Rect<f64>) {
+        self.reveal_rect = Some(rect);
+    }
+
+    pub(crate) fn reveal_rect(&self) -> Rect<f64> {
+        self.reveal_rect.unwrap_or(self.rect)
     }
 
     /// Returns the transform matrix, if any.

@@ -336,7 +336,8 @@ enum FocusNodeRegistrationKind {
 ///
 /// A registration is returned by
 /// [`FocusNode::register_on_key_event`],
-/// [`FocusNode::register_rect_provider`] or [`FocusNode::register_context`].
+/// [`FocusNode::register_rect_provider`], [`FocusNode::register_context`],
+/// [`FocusNode::register_traversal_group`] or [`FocusNode::register_traversal_overrides`].
 /// Dropping it clears the installed
 /// value only when no later writer has replaced that property. This lets a
 /// widget clean up the callback it installed without erasing newer
@@ -669,14 +670,22 @@ impl FocusNode {
     }
 
     /// Current traversal geometry.
+    ///
+    /// Providers may replace themselves reentrantly. Snapshot retirement runs
+    /// outside the provider borrow and preserves the first provider failure.
     pub fn rect(&self) -> Rect<f64> {
         let provider = self.rect_provider.borrow().clone();
-        if let Some(provider) = provider
-            && let Some(rect) = provider()
-        {
-            return rect;
-        }
-        self.rect.get()
+        let mut failure = FocusClosePanic::for_rejection(self.close_mode());
+        let rect = provider.as_ref().and_then(|provider| {
+            if failure.preserving() {
+                None
+            } else {
+                failure.invoke(|| provider()).flatten()
+            }
+        });
+        failure.retire(provider);
+        failure.finish();
+        rect.unwrap_or_else(|| self.rect.get())
     }
 
     /// Store fallback traversal geometry.

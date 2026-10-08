@@ -20,7 +20,8 @@ use crate::{
     events::{CursorIcon, PointerEvent},
     routing::MouseTrackerAnnotation,
     routing::interaction_lane::{
-        PanZoomTarget, PointerTarget, RoutePanic, ScrollTarget, active_dispatch_handle,
+        PanZoomDispatch, PanZoomTarget, PointerTarget, RoutePanic, ScrollTarget,
+        active_dispatch_handle,
     },
 };
 
@@ -56,6 +57,100 @@ impl EventPropagation {
     #[inline]
     pub const fn should_stop(self) -> bool {
         matches!(self, Self::Stop)
+    }
+}
+
+/// An exact selected scroll consumer and its admitted global-to-local transform.
+/// This holds data only; unregistering a target does not retain its callbacks.
+#[derive(Clone, Copy)]
+pub(crate) struct ScrollRoute {
+    target: ScrollTarget,
+    transform: Option<Matrix4>,
+}
+
+impl ScrollRoute {
+    pub(crate) fn dispatch(self, event: &ScrollEvent, claimed: impl FnOnce()) -> bool {
+        let local_event = if let Some(transform) = self.transform {
+            if !transform.is_invertible() {
+                return false;
+            }
+            let Some(local) = transform_scroll_event(event, &transform) else {
+                return false;
+            };
+            local
+        } else {
+            *event
+        };
+        let handle = match active_dispatch_handle() {
+            Ok(handle) => handle,
+            Err(error) => {
+                tracing::debug!(
+                    ?error,
+                    "scroll dispatch skipped without an active owner lane"
+                );
+                return false;
+            }
+        };
+        match handle.invoke_scroll_target_with_claim(self.target, &local_event, claimed) {
+            Ok(propagation) => propagation.should_stop(),
+            Err(error) => {
+                tracing::debug!(
+                    ?error,
+                    "scroll target unavailable during owner-lane dispatch"
+                );
+                false
+            }
+        }
+    }
+}
+
+/// Selected native gesture consumer; preserves the true root-space event.
+#[derive(Clone, Copy)]
+pub(crate) struct PanZoomRoute {
+    target: PanZoomTarget,
+    transform: Option<Matrix4>,
+}
+
+impl PanZoomRoute {
+    pub(crate) fn dispatch(self, event: &PanZoomEvent, claimed: impl FnOnce()) -> bool {
+        let local_event = if let Some(transform) = self.transform {
+            if !transform.is_invertible() {
+                return false;
+            }
+            let Some(local) = transform_pan_zoom_event(event, &transform) else {
+                return false;
+            };
+            local
+        } else {
+            *event
+        };
+        let handle = match active_dispatch_handle() {
+            Ok(handle) => handle,
+            Err(error) => {
+                tracing::debug!(
+                    ?error,
+                    "pan-zoom dispatch skipped without an active owner lane"
+                );
+                return false;
+            }
+        };
+        match handle.invoke_pan_zoom_target_with_claim(
+            self.target,
+            PanZoomDispatch {
+                local: &local_event,
+                global: event,
+            },
+            claimed,
+        ) {
+            Ok(propagation) => propagation.should_stop(),
+            Err(error) => {
+                tracing::debug!(
+                    ?error,
+                    "pan-zoom target unavailable during owner-lane dispatch"
+                );
+                false
+            }
+        }
     }
 }
 
@@ -211,36 +306,42 @@ impl HitTestEntry {
     }
 
     /// Builder: set cursor.
+    #[must_use]
     pub fn cursor(mut self, cursor: CursorIcon) -> Self {
         self.cursor = CursorRequest::Icon(cursor);
         self
     }
 
     /// Builder: contribute an explicit cursor or defer to the next entry.
+    #[must_use]
     pub fn cursor_request(mut self, cursor: CursorRequest) -> Self {
         self.cursor = cursor;
         self
     }
 
     /// Builder: set mouse-tracker annotation.
+    #[must_use]
     pub fn mouse_annotation(mut self, annotation: MouseTrackerAnnotation) -> Self {
         self.mouse_annotation = Some(annotation);
         self
     }
 
     /// Builder: set the owner-local pointer target identity.
+    #[must_use]
     pub fn pointer_target(mut self, target: PointerTarget) -> Self {
         self.pointer_target = Some(target);
         self
     }
 
     /// Builder: set the owner-local scroll target identity.
+    #[must_use]
     pub fn scroll_target(mut self, target: ScrollTarget) -> Self {
         self.scroll_target = Some(target);
         self
     }
 
     /// Builder: set the owner-local pan-zoom target identity.
+    #[must_use]
     pub fn pan_zoom_target(mut self, target: PanZoomTarget) -> Self {
         self.pan_zoom_target = Some(target);
         self
@@ -438,6 +539,7 @@ impl HitTestResult {
     /// A caller may catch a descendant's panic and continue the same hit walk
     /// without giving the next entry the failed descendant's coordinate space.
     /// Non-finite offsets return `None` without invoking the subtree.
+    #[must_use = "None means the subtree was not visited"]
     pub fn with_paint_offset<F, R>(&mut self, offset: Offset<f64>, f: F) -> Option<R>
     where
         F: FnOnce(&mut Self) -> R,
@@ -470,6 +572,7 @@ impl HitTestResult {
     ///
     /// The entry transform depth is restored on return and unwind, just as for
     /// [`with_paint_offset`](Self::with_paint_offset).
+    #[must_use = "None means the subtree was not visited"]
     pub fn with_paint_transform<F, R>(&mut self, transform: Matrix4, f: F) -> Option<R>
     where
         F: FnOnce(&mut Self) -> R,
@@ -646,48 +749,22 @@ impl HitTestResult {
 
     /// Dispatches a scroll event to all entries.
     pub fn dispatch_scroll(&self, event: &ScrollEvent) -> bool {
-        let handle = match active_dispatch_handle() {
-            Ok(handle) => handle,
-            Err(error) => {
-                tracing::debug!(
-                    ?error,
-                    "scroll dispatch skipped without an active owner lane"
-                );
-                return false;
-            }
-        };
+        self.dispatch_scroll_with_claim(event, |_| {})
+    }
+
+    pub(crate) fn dispatch_scroll_with_claim(
+        &self,
+        event: &ScrollEvent,
+        mut claimed: impl FnMut(ScrollRoute),
+    ) -> bool {
         for entry in &self.path {
             if let Some(target) = entry.scroll_target {
-                let local_event = if let Some(ref transform) = entry.transform {
-                    // `transform` is already global-to-local (see
-                    // `HitTestEntry::transform`'s doc) -- apply it directly.
-                    // `is_invertible` is a well-formedness probe -- it skips
-                    // computing (and discarding) the inverse itself: a
-                    // degenerate ancestor transform makes the composed
-                    // `transform` itself singular, and such an entry must
-                    // still skip delivery rather than report a bogus point
-                    // (unchanged pre-existing behavior).
-                    if transform.is_invertible() {
-                        let Some(local) = transform_scroll_event(event, transform) else {
-                            continue;
-                        };
-                        local
-                    } else {
-                        continue;
-                    }
-                } else {
-                    *event
+                let route = ScrollRoute {
+                    target,
+                    transform: entry.transform,
                 };
-
-                match handle.invoke_scroll_target(target, &local_event) {
-                    Ok(propagation) if propagation.should_stop() => return true,
-                    Ok(_) => {}
-                    Err(error) => {
-                        tracing::debug!(
-                            ?error,
-                            "scroll target unavailable during owner-lane dispatch"
-                        );
-                    }
+                if route.dispatch(event, || claimed(route)) {
+                    return true;
                 }
             }
         }
@@ -706,55 +783,28 @@ impl HitTestResult {
     /// so a viewer already clamped at its scale extent hands the pinch to the
     /// one above it.
     ///
-    /// Routing trackpad pan-zoom through the SCALE GESTURE ARENA would
-    /// resolve the same contention with full gesture arbitration. This claim
-    /// walk is the interim arbitration FLUI has until a recognizer takes
-    /// pan-zoom input; it is deliberately shaped like
-    /// the pointer-signal claim walk, which is the arbitration primitive this
-    /// codebase already has.
+    /// A native gesture is admitted before its recognizer publishes callbacks.
+    /// The claimant receives the localized gesture alongside its original
+    /// root-space event, so both focal points retain their actual coordinates.
     ///
     /// Returns `true` when a target claimed the event.
     pub fn dispatch_pan_zoom(&self, event: &PanZoomEvent) -> bool {
-        let handle = match active_dispatch_handle() {
-            Ok(handle) => handle,
-            Err(error) => {
-                tracing::debug!(
-                    ?error,
-                    "pan-zoom dispatch skipped without an active owner lane"
-                );
-                return false;
-            }
-        };
+        self.dispatch_pan_zoom_with_claim(event, |_| {})
+    }
+
+    pub(crate) fn dispatch_pan_zoom_with_claim(
+        &self,
+        event: &PanZoomEvent,
+        mut claimed: impl FnMut(PanZoomRoute),
+    ) -> bool {
         for entry in &self.path {
             if let Some(target) = entry.pan_zoom_target {
-                let local_event = if let Some(ref transform) = entry.transform {
-                    // `transform` is already global-to-local (see
-                    // `HitTestEntry::transform`'s doc). A degenerate ancestor
-                    // transform makes the composed matrix singular; such an
-                    // entry skips delivery rather than reporting a focal
-                    // point that is not on screen, exactly as the scroll walk
-                    // does.
-                    if transform.is_invertible() {
-                        let Some(local) = transform_pan_zoom_event(event, transform) else {
-                            continue;
-                        };
-                        local
-                    } else {
-                        continue;
-                    }
-                } else {
-                    *event
+                let route = PanZoomRoute {
+                    target,
+                    transform: entry.transform,
                 };
-
-                match handle.invoke_pan_zoom_target(target, &local_event) {
-                    Ok(propagation) if propagation.should_stop() => return true,
-                    Ok(_) => {}
-                    Err(error) => {
-                        tracing::debug!(
-                            ?error,
-                            "pan-zoom target unavailable during owner-lane dispatch"
-                        );
-                    }
+                if route.dispatch(event, || claimed(route)) {
+                    return true;
                 }
             }
         }

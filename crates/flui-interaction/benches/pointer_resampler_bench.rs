@@ -85,7 +85,7 @@ fn terminal(kind: Terminal, nanos: u64, x: f64) -> PointerEvent {
 }
 
 fn event_nanos(event: &PointerEvent) -> u64 {
-    flui_interaction::events::get_event_time(event)
+    event.time()
         .expect("fixture event time")
         .as_nanos()
 }

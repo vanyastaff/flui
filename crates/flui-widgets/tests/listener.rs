@@ -28,7 +28,8 @@ pub(crate) fn presentation_resampling_uses_the_owner_frame_clock() {
         let seen = Rc::clone(&observed);
         let terminal = Rc::new(Cell::new(0));
         let ends = Rc::clone(&terminal);
-        let view = Listener::new().child(SizedBox::square(200.0))
+        let view = Listener::new()
+            .child(SizedBox::square(200.0))
             .behavior(HitTestBehavior::Opaque)
             .on_pointer_move(move |_, event| {
                 let PointerEvent::Move(event) = event.global else {
@@ -46,12 +47,12 @@ pub(crate) fn presentation_resampling_uses_the_owner_frame_clock() {
                 .expect("idle presentation admits opt-in");
         }
         host.attach(&view).expect("mount Listener");
-        host.pump(Duration::from_millis(16));
+        let _ = host.pump(Duration::from_millis(16));
         let pointer = PointerInfo::new(
             PointerId::try_from(1_u64).expect("nonzero contact"),
             PointerKind::Touch,
         );
-        let sample = |x, ms| {
+        let sample = |x, ms: u64| {
             PointerSample::new(
                 EventTime::from_nanos(ms * 1_000_000),
                 PointerPosition::try_new(flui_foundation::geometry::Point::new(x, 10.0))
@@ -95,7 +96,7 @@ pub(crate) fn presentation_resampling_uses_the_owner_frame_clock() {
                 observed.borrow().is_empty(),
                 "resampling waits for the owner's frame"
             );
-            host.pump(Duration::ZERO);
+            let _ = host.pump(Duration::ZERO);
             let emitted = observed.borrow();
             assert_eq!(emitted.len(), 2);
             assert_eq!(emitted[0], (10.0, 0));
@@ -105,7 +106,7 @@ pub(crate) fn presentation_resampling_uses_the_owner_frame_clock() {
             );
             assert_eq!(emitted[1].1, 62_000_000);
             drop(emitted);
-            host.pump(Duration::from_millis(38));
+            let _ = host.pump(Duration::from_millis(38));
             assert_eq!(
                 observed.borrow().last(),
                 Some(&(110.0, 100_000_000)),
@@ -234,6 +235,114 @@ pub(crate) fn listener_capture_retains_one_target_and_drop_delivers_loss() {
             .count(),
         1,
         "terminal invalidates retained capture authority"
+    );
+}
+
+pub(crate) fn listener_unmount_preserves_one_captured_contact_terminal() {
+    use flui_interaction::PointerCapture;
+    use flui_platform_api::pointer::{CancelReason, PointerEvent};
+    use std::cell::RefCell;
+
+    let token = Rc::new(RefCell::new(None::<PointerCapture>));
+    let held = token.clone();
+    let callbacks = Rc::new(RefCell::new(Vec::new()));
+    let moved = callbacks.clone();
+    let cancelled = callbacks.clone();
+    let stage = Rc::new(Cell::new("down"));
+    let move_stage = stage.clone();
+    let cancel_stage = stage.clone();
+    let down_time = Rc::new(Cell::new(None));
+    let captured_time = down_time.clone();
+    let mut laid = lay_out(
+        Listener::new()
+            .behavior(HitTestBehavior::Opaque)
+            .on_pointer_down(move |_, dispatch| {
+                let PointerEvent::Down(press) = dispatch.global else {
+                    panic!("Down callback");
+                };
+                captured_time.set(Some(press.sample.time));
+                *held.borrow_mut() = Some(dispatch.capture().expect("mounted Down authority"));
+            })
+            .on_pointer_move(move |_, dispatch| {
+                moved
+                    .borrow_mut()
+                    .push((move_stage.get(), dispatch.global.clone()));
+            })
+            .on_pointer_cancel(move |_, dispatch| {
+                cancelled
+                    .borrow_mut()
+                    .push((cancel_stage.get(), dispatch.global.clone()));
+            })
+            .child(SizedBox::new(80.0, 80.0)),
+        tight(80.0, 80.0),
+    );
+    laid.dispatch_pointer_down(40.0, 40.0);
+    stage.set("unmount");
+    laid.pump_widget(SizedBox::new(80.0, 80.0));
+    assert!(
+        callbacks.borrow().is_empty(),
+        "unmount withdraws future admission; observed {:?}",
+        callbacks.borrow()
+    );
+    let retired_capture = token
+        .borrow_mut()
+        .take()
+        .expect("capture outlives its widget");
+    stage.set("release");
+    drop(retired_capture);
+    assert!(
+        callbacks.borrow().is_empty(),
+        "release invokes no event callback; observed {:?}",
+        callbacks.borrow()
+    );
+    stage.set("next motion");
+    laid.dispatch_pointer_move(200.0, 200.0);
+    stage.set("native terminal");
+    laid.dispatch_pointer_up(200.0, 200.0);
+    {
+        let observed = callbacks.borrow();
+        assert_eq!(
+            observed.len(),
+            1,
+            "cached contact receives one terminal, no released Move: {observed:?}"
+        );
+        let (delivery_stage, PointerEvent::Cancel(cancel)) = &observed[0] else {
+            panic!("cached contact owes CaptureLost cleanup: {observed:?}");
+        };
+        assert_eq!(*delivery_stage, "next motion");
+        assert_eq!(cancel.reason, CancelReason::CaptureLost);
+        assert_eq!(
+            Some(cancel.time),
+            down_time.get(),
+            "loss preserves the accepted contact timestamp"
+        );
+    }
+
+    let new_contacts = Rc::new(Cell::new(0));
+    let new_down = new_contacts.clone();
+    laid.pump_widget(
+        Listener::new()
+            .behavior(HitTestBehavior::Opaque)
+            .on_pointer_down(move |_, dispatch| {
+                let capture = dispatch
+                    .capture()
+                    .expect("replacement Listener captures fresh contact");
+                new_down.set(new_down.get() + 1);
+                drop(capture);
+            })
+            .child(SizedBox::new(80.0, 80.0)),
+    );
+    laid.dispatch_pointer_down(40.0, 40.0);
+    laid.dispatch_pointer_up(40.0, 40.0);
+    assert_eq!(
+        new_contacts.get(),
+        1,
+        "replacement tree admits a fresh captured contact"
+    );
+    assert_eq!(
+        callbacks.borrow().len(),
+        1,
+        "new contact cannot redeliver old terminal"
     );
 }
 

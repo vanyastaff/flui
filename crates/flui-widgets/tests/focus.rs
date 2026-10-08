@@ -95,15 +95,23 @@ pub(crate) fn nested_scope_edges_visit_the_containing_group_and_reuse_policy_ord
         let source = FocusNode::new();
         let outside = FocusNode::new();
         let calls = Rc::new(Cell::new(0));
-        let inner = FocusTraversalGroup::new(traversal_field(&source, 0.0, 0.0))
-            .policy(Rc::new(CountingPolicy(Rc::clone(&calls))))
-            .edge_behavior(TraversalEdgeBehavior::ParentScope);
+        let inner = FocusTraversalGroup::new(
+            Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Rc::clone(&source)),
+        )
+        .policy(Rc::new(CountingPolicy(Rc::clone(&calls))))
+        .edge_behavior(TraversalEdgeBehavior::ParentScope);
         let outer = FocusTraversalGroup::new(
             FocusScope::new(inner).edge_behavior(TraversalEdgeBehavior::ParentScope),
         )
         .edge_behavior(edge);
         let harness = mount(Stack::new(vec![
-            outer.into_view().boxed(),
+            Positioned::new(outer)
+                .left(0.0)
+                .top(0.0)
+                .width(10.0)
+                .height(10.0)
+                .into_view()
+                .boxed(),
             traversal_field(&outside, 100.0, 0.0),
         ]));
         let manager = harness.focus_manager();

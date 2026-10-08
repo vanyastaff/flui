@@ -11,4 +11,5 @@ fn trybuild_ui() {
     cases.pass("tests/compile_pass/dyn_compatible_extension_points.rs");
     cases.pass("tests/compile_pass/open_arena_member.rs");
     cases.pass("tests/compile_pass/allocated_interaction_identities.rs");
+    cases.pass("tests/compile_pass/scale_pan_or_scale.rs");
 }

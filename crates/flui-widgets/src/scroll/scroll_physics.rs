@@ -20,8 +20,8 @@
 use std::sync::Arc;
 
 use flui_animation::simulation::{
-    BouncingScrollSimulation, BoundedFrictionSimulation, Simulation, SimulationBounds,
-    SpringDescription, SpringSimulation, Tolerance,
+    BouncingScrollSimulation, BoundedFrictionSimulation, FrictionSimulation, Simulation,
+    SimulationBounds, SpringDescription, SpringSimulation, Tolerance,
 };
 use flui_rendering::view::ScrollPosition;
 
@@ -215,6 +215,19 @@ pub trait ScrollPhysics: Send + Sync + std::fmt::Debug {
         metrics: &ScrollMetrics,
         velocity_px_per_sec: f64,
     ) -> Option<Box<dyn Simulation>>;
+
+    /// Remaining logical-pixel velocity when this ballistic motion reaches a
+    /// hard content boundary, for transfer to an enclosing scrollable.
+    ///
+    /// The default keeps the motion local. Physics that overscrolls or springs
+    /// back should retain that default; a hard-boundary strategy can opt in.
+    fn boundary_velocity(
+        &self,
+        _metrics: &ScrollMetrics,
+        _velocity_px_per_sec: f64,
+    ) -> Option<f64> {
+        None
+    }
 }
 
 /// Shared, type-erased physics handle.
@@ -296,6 +309,31 @@ impl ScrollPhysics for ClampingScrollPhysics {
         )
         .ok()?;
         Some(Box::new(simulation))
+    }
+
+    fn boundary_velocity(&self, metrics: &ScrollMetrics, velocity_px_per_sec: f64) -> Option<f64> {
+        if velocity_px_per_sec.abs() < self.min_fling_velocity_px_per_sec
+            || metrics.pixels < metrics.min_scroll_extent
+            || metrics.pixels > metrics.max_scroll_extent
+        {
+            return None;
+        }
+        metrics.bounds()?;
+        let simulation = FrictionSimulation::new(
+            self.fling_drag_coefficient,
+            metrics.pixels,
+            velocity_px_per_sec,
+            metrics.ballistic_tolerance()?,
+        )
+        .ok()?;
+        let edge = if velocity_px_per_sec > 0.0 {
+            metrics.max_scroll_extent
+        } else {
+            metrics.min_scroll_extent
+        };
+        let arrival = simulation.time_at_x(edge);
+        let remaining = simulation.dx(arrival);
+        (arrival.is_finite() && remaining.is_finite() && remaining != 0.0).then_some(remaining)
     }
 }
 

@@ -467,9 +467,9 @@ impl DragGestureRecognizer {
     }
     fn reject_contact(&self, pointer: PointerId, id: ContactId) {
         let Some(tracked) = self.current(pointer).filter(|contact| contact.id == id) else { return; };
-        if self.active.get() == Some(id) {
+        if self.active.get() == Some(tracked.id) {
             self.terminate(GestureEndReason::Cancelled, None);
-        } else if let Some(outgoing) = self.remove(pointer, id) {
+        } else if let Some(outgoing) = self.remove(tracked.pointer, tracked.id) {
             outgoing.contact.withdraw();
         }
     }
@@ -499,7 +499,9 @@ impl DragGestureRecognizer {
             let mut first = clock_failure;
             for contact in outgoing {
                 let candidate = crate::routing::RoutePanic::capture(|| {
-                    if reason == GestureEndReason::Completed && contact.id == active.id {
+                    // An unaccepted drag bows out before pointer-up can sweep
+                    // the remaining competition; it must not win by order.
+                    if accepted && reason == GestureEndReason::Completed && contact.id == active.id {
                         contact.contact.finish();
                     } else if accepted {
                         contact.contact.cancel();
