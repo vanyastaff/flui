@@ -8,6 +8,19 @@ decisions` entries below; a full crate architecture writeup is deferred.
 
 ## Mapping decisions
 
+### Ticker delivery preserves an enclosing failure during resource retirement
+
+`TickerDelivery::deliver_after_failure` preserves accepted continuation and
+waiter invocation while retaining their opaque resources under ADR-0127. A
+controller calls it when its existing retirement context already owns a status
+or frame-peer failure: `thread::panicking()` alone cannot express a caught
+failure. Normal `deliver` still retires healthy resources. This extends the
+delivery seam rather than introducing another run or owner model.
+
+The public animation test `status_delivery_failure_custody` covers continuation
+and owning-waker retirement after status failure, including a previous sibling
+or child-registry failure (ADR-0173).
+
 ### Exhausted task identities permanently refuse admission
 
 Task identities (the process-wide `Task` allocator and each async driver's)

@@ -374,7 +374,6 @@ fn disposed_drops_late_value_listener() {
 }
 
 #[test]
-#[ignore = "contract: a NaN frame time does not anchor a run"]
 fn nan_frame_time_is_skipped() {
     nan_frame_time_does_not_anchor_a_run();
 }

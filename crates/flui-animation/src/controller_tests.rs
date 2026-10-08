@@ -595,11 +595,8 @@ fn a_panicking_status_listener_leaves_the_finished_run_ok() {
 
     // Registered on the FUTURE, not the controller: this only runs if
     // `TickerDelivery` actually delivers. `future.is_complete()` alone
-    // (the durable state `publish` writes) would stay green even with
-    // `Drop for TickerDelivery` emptied out, since `finish` never
-    // reaches its own `delivery.deliver()` line when `fire_status`
-    // panics — only the unwind dropping the `delivery` parameter runs
-    // it. This continuation proves that drop actually fires.
+    // observes publication, so it cannot prove that notification survived
+    // a status-listener failure. The continuation checks actual delivery.
     let seen = Arc::new(Mutex::new(None));
     let seen2 = Arc::clone(&seen);
     future.when_complete_or_cancel(move |outcome| {
@@ -624,7 +621,7 @@ fn a_panicking_status_listener_leaves_the_finished_run_ok() {
     assert_eq!(
         *seen.lock(),
         Some(Ok(())),
-        "TickerDelivery must still deliver on drop through the unwind, \
+        "TickerDelivery must still run the continuation after listener failure, \
          running the continuation with the outcome published before \
          the panicking listener ran"
     );

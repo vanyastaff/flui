@@ -11,6 +11,7 @@ use flui_scheduler::ticker::{TickerCompleter, TickerDelivery, TickerFuture};
 use flui_scheduler::{Ticker, UpdateScheduler};
 use parking_lot::Mutex;
 use smallvec::SmallVec;
+use std::collections::VecDeque;
 use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
@@ -88,6 +89,18 @@ impl RetiredSources {
     fn new() -> Self {
         Self::default()
     }
+}
+
+/// Accepted transitions and run outcomes share one controller delivery order.
+/// Snapshot ownership keeps removed callbacks alive until they can retire outside
+/// the state guard, with the round's first failure still authoritative.
+enum ControllerDelivery {
+    Status(
+        AnimationStatus,
+        SmallVec<[(ListenerId, Terminal<StatusCallback>); 4]>,
+    ),
+    Run(Terminal<TickerDelivery>),
+    Retire(RetiredSources),
 }
 
 struct SampleIdentity {
@@ -284,6 +297,9 @@ struct AnimationControllerInner {
     /// Status listeners, in registration order.
     status_listeners: Vec<(ListenerId, StatusCallback)>,
 
+    pending_delivery: VecDeque<ControllerDelivery>,
+    delivering: bool,
+
     /// Current run direction.
     direction: AnimationDirection,
 
@@ -336,12 +352,12 @@ struct AnimationControllerInner {
     /// stale curve.
     run_curve: Option<Arc<dyn Curve + Send + Sync>>,
 
-    /// Status most recently delivered to status listeners. The emission seam
-    /// ([`take_status_change`](AnimationControllerInner::take_status_change))
+    /// Status most recently committed for delivery. The emission seam
+    /// ([`enqueue_status_change`](AnimationControllerInner::enqueue_status_change))
     /// compares against this before firing, so a call that leaves `status`
     /// unchanged (e.g. `set_value` re-asserting the same directional status
     /// every frame of a gesture drag) does not re-notify.
-    last_reported_status: AnimationStatus,
+    last_committed_status: AnimationStatus,
 
     /// The write half of the current run's [`TickerFuture`], if a run is
     /// installed. Every run-starting method displaces this (canceling
@@ -617,14 +633,14 @@ impl AnimationController {
     /// The one place every constructor builds the inner state: `value`,
     /// `start_value`, and `target_value` all start at `initial_value`
     /// (`lower_bound` for a bounded controller, `0.0` for an unbounded one),
-    /// and `status`/`last_reported_status` are BOTH set from
+    /// and `status`/`last_committed_status` are BOTH set from
     /// [`AnimationControllerInner::settled_status_keep_direction`] at that
     /// value — the status rule applies at construction too, not only to a
     /// later `set_value` (a bounded
     /// controller at `lower_bound` stays `Dismissed`; an unbounded one at
     /// `0.0`, direction defaulted `Forward`, reports `Forward` — see
     /// `docs/ARCHITECTURE.md`'s mapping entry for the recorded cost). Both
-    /// fields must agree at construction: if `last_reported_status` stayed
+    /// fields must agree at construction: if `last_committed_status` stayed
     /// hard-coded `Dismissed` while `status` starts `Forward`, the first
     /// [`AnimationController::finish`] call — even one that changes
     /// nothing — would read them as different and fire a spurious status
@@ -647,6 +663,8 @@ impl AnimationController {
             upper_bound,
             ticker,
             status_listeners: Vec::new(),
+            pending_delivery: VecDeque::new(),
+            delivering: false,
             direction: AnimationDirection::Forward,
             start_value: initial_value,
             target_value: initial_value,
@@ -659,13 +677,13 @@ impl AnimationController {
             repeat: None,
             simulation: None,
             run_curve: None,
-            last_reported_status: AnimationStatus::Dismissed,
+            last_committed_status: AnimationStatus::Dismissed,
             active_run: None,
             non_finite_warned: false,
         };
         let initial_status = inner.settled_status_keep_direction();
         inner.status = initial_status;
-        inner.last_reported_status = initial_status;
+        inner.last_committed_status = initial_status;
 
         Self {
             inner: Arc::new(Mutex::new(inner)),
@@ -1868,6 +1886,17 @@ impl AnimationController {
     /// the private `tick_repeat`). Value and status listeners are fired
     /// only after the inner lock is released.
     pub fn tick_at(&self, raw_elapsed_secs: f64) {
+        let mut retirement = Retirement::new();
+        retirement
+            .run_with(|retirement| self.tick_at_with_retirement(raw_elapsed_secs, retirement));
+        retirement.finish();
+    }
+
+    pub(crate) fn tick_at_with_retirement(
+        &self,
+        raw_elapsed_secs: f64,
+        retirement: &mut Retirement,
+    ) {
         let source;
         let identity;
         {
@@ -1895,13 +1924,13 @@ impl AnimationController {
             });
         }
         let cycle = (raw_elapsed_secs / time_dilation().max(f64::MIN_POSITIVE)).max(0.0);
-        match source.get() {
+        retirement.run_with(|retirement| match source.get() {
             TickSource::Repeat(run) => {
                 let inner = self.inner.lock();
                 if !inner.matches_sample(&identity) {
                     return;
                 }
-                self.tick_repeat(inner, *run, cycle);
+                self.tick_repeat(inner, *run, cycle, retirement);
             }
             TickSource::Simulation(simulation) => {
                 let sampled = simulation.x(cycle);
@@ -1916,7 +1945,7 @@ impl AnimationController {
                 if !inner.matches_sample(&identity) {
                     return;
                 }
-                self.tick_simulation(inner, sampled, is_done);
+                self.tick_simulation(inner, sampled, is_done, retirement);
             }
             TickSource::Time {
                 curve,
@@ -1941,9 +1970,10 @@ impl AnimationController {
                 if !inner.matches_sample(&identity) {
                     return;
                 }
-                self.tick_time_based(inner, t, value);
+                self.tick_time_based(inner, t, value, retirement);
             }
-        }
+        });
+        retirement.retire(source);
     }
 
     /// Commit a caller sample only after its run and tick identity survived.
@@ -1952,17 +1982,18 @@ impl AnimationController {
         mut inner: parking_lot::MutexGuard<'_, AnimationControllerInner>,
         sampled: f64,
         is_done: bool,
+        retirement: &mut Retirement,
     ) {
         if !sampled.is_finite() {
             let should_warn = !inner.non_finite_warned;
             inner.non_finite_warned = true;
-            self.end_simulation_run(inner, ValueChange::Unchanged);
+            self.end_simulation_run(inner, ValueChange::Unchanged, retirement);
             Self::warn_non_finite_value(should_warn, sampled, NonFiniteOutcome::EndedRun);
             return;
         }
         inner.value = sampled.clamp(inner.lower_bound, inner.upper_bound);
         if is_done {
-            self.end_simulation_run(inner, ValueChange::Notify);
+            self.end_simulation_run(inner, ValueChange::Notify, retirement);
         } else {
             drop(inner);
             self.notifier.notify_listeners();
@@ -1978,13 +2009,14 @@ impl AnimationController {
     /// sample through). Clears `simulation`, stops the ticker, settles
     /// `status` by direction, and publishes the completion BEFORE `finish`
     /// unlocks (the completer resolves before listeners are notified), so a panicking value/status listener still
-    /// leaves the run `Ok` — the unwind drops the delivery, which delivers
-    /// the already-published outcome. `complete`, not `cancel`: both paths
+    /// leaves the run `Ok` — the admitted delivery preserves the
+    /// already-published outcome. `complete`, not `cancel`: both paths
     /// are the run ending on its own terms, never a cancellation.
     fn end_simulation_run(
         &self,
         mut inner: parking_lot::MutexGuard<'_, AnimationControllerInner>,
         value_change: ValueChange,
+        retirement: &mut Retirement,
     ) {
         let retired = RetiredSources {
             simulation: inner.simulation.take().map(Opaque::new),
@@ -1997,7 +2029,7 @@ impl AnimationController {
         let status = inner.direction.settled_status();
         inner.status = status;
         let delivery = inner.active_run.take().map(TickerCompleter::complete);
-        self.finish(status, value_change, delivery, retired, inner);
+        self.finish_with_retirement(status, value_change, delivery, retired, inner, retirement);
     }
 
     /// Time-based (tween) branch of [`tick_at`](Self::tick_at). Never called
@@ -2008,6 +2040,7 @@ impl AnimationController {
         mut inner: parking_lot::MutexGuard<'_, AnimationControllerInner>,
         t: f64,
         value: f64,
+        retirement: &mut Retirement,
     ) {
         inner.value = value;
         if t < 1.0 {
@@ -2021,12 +2054,13 @@ impl AnimationController {
         let status = inner.direction.settled_status();
         inner.status = status;
         let delivery = inner.active_run.take().map(TickerCompleter::complete);
-        self.finish(
+        self.finish_with_retirement(
             status,
             ValueChange::Notify,
             delivery,
             RetiredSources::new(),
             inner,
+            retirement,
         );
     }
 
@@ -2054,6 +2088,7 @@ impl AnimationController {
         mut inner: parking_lot::MutexGuard<'_, AnimationControllerInner>,
         run: RepeatRun,
         cycle: f64,
+        retirement: &mut Retirement,
     ) {
         // `tick_at` already clamps `cycle` to `.max(0.0)`, and NaN cannot
         // reach it (`f64::max` returns the non-NaN operand), so the only
@@ -2096,12 +2131,13 @@ impl AnimationController {
             let status = direction.settled_status();
             inner.status = status;
             let delivery = inner.active_run.take().map(TickerCompleter::complete);
-            self.finish(
+            self.finish_with_retirement(
                 status,
                 ValueChange::Notify,
                 delivery,
                 RetiredSources::new(),
                 inner,
+                retirement,
             );
             return;
         }
@@ -2110,7 +2146,7 @@ impl AnimationController {
         inner.direction = sample.direction;
         inner.start_value = sample.start;
         inner.target_value = sample.target;
-        // `take_status_change` dedups repeated same-status writes, so a leg
+        // `enqueue_status_change` dedups repeated same-status writes, so a leg
         // flip fires exactly one status change and an even number of
         // skipped bounce cycles in one long frame fires none. Value
         // listeners fire on every tick, as they do for the time-based and
@@ -2120,12 +2156,13 @@ impl AnimationController {
         inner.value = sample.value;
         let status = sample.direction.running_status();
         inner.status = status;
-        self.finish(
+        self.finish_with_retirement(
             status,
             ValueChange::Notify,
             None,
             RetiredSources::new(),
             inner,
+            retirement,
         );
     }
 
@@ -2368,58 +2405,106 @@ impl AnimationController {
         }
     }
 
-    /// Fire status callbacks. MUST be called with no controller lock held.
-    fn fire_status(callbacks: &[Opaque<StatusCallback>], status: AnimationStatus) {
-        for cb in callbacks {
-            cb.get()(status);
+    /// The outermost caller drains accepted work; reentry only appends to it.
+    fn drain_delivery(&self, retirement: &mut Retirement) {
+        loop {
+            let delivery = {
+                let mut inner = self.inner.lock();
+                let Some(delivery) = inner.pending_delivery.pop_front() else {
+                    inner.delivering = false;
+                    return;
+                };
+                delivery
+            };
+            match delivery {
+                ControllerDelivery::Status(status, listeners) => {
+                    for (id, callback) in &listeners {
+                        let live = {
+                            let inner = self.inner.lock();
+                            !inner.disposed
+                                && inner
+                                    .status_listeners
+                                    .iter()
+                                    .any(|(candidate, _)| candidate == id)
+                        };
+                        if live {
+                            retirement.run(|| callback.get()(status));
+                        }
+                    }
+                    for (_, callback) in listeners {
+                        retirement.retire(callback);
+                    }
+                }
+                ControllerDelivery::Run(delivery) => {
+                    let retain = retirement.has_failure();
+                    retirement.run(|| {
+                        let delivery = delivery.into_inner();
+                        if retain {
+                            delivery.deliver_after_failure();
+                        } else {
+                            delivery.deliver();
+                        }
+                    });
+                }
+                ControllerDelivery::Retire(retired) => retirement.retire(retired),
+            }
         }
     }
 
-    /// The single chokepoint for the unlock-then-fan-out sequence every
-    /// run-ending or run-starting site needs: drop the controller lock,
-    /// notify value listeners iff `value_change` says the value changed too
-    /// (a run-start changes status but not value; a settle/tick changes
-    /// both), fire status listeners for `status`, and — last — deliver a
-    /// resolved or displaced run's [`TickerDelivery`] if one is pending.
-    ///
-    /// `TickerDelivery::deliver` is called from nowhere else in this file:
-    /// every site that obtains one from [`TickerCompleter::complete`]/
-    /// [`cancel`](TickerCompleter::cancel) hands it here instead of
-    /// delivering it itself. Status fires BEFORE delivery:
-    /// a new run's status is observable before the run it displaced reports
-    /// its own cancellation, matching the order a caller sees them settle.
-    ///
-    /// `delivery` is declared before `inner` on purpose: parameters drop in
-    /// reverse declaration order, so if a panic unwinds from between
-    /// `take_status_change()` and the explicit `drop(inner)` below,
-    /// `inner`'s guard is still released before `delivery` — a delivery
-    /// dropped here always runs its fan-out with the controller lock free.
-    /// The six run-start callers run `restart_ticker` (which runs the
-    /// scheduler's `on_frame_scheduled` hook — genuinely foreign code, under
-    /// the guard, same as it always was) *before* creating this run's
-    /// completer, so no delivery is ever live across that call either; see
-    /// `restart_ticker`'s own doc. The run-ending callers (`stop`, `reset`,
-    /// `set_value`, `dispose`, the tick paths) never call it.
+    /// Commit status, run delivery and outgoing custody before unlocking.
+    /// The outermost finish owns the FIFO drain, including work admitted by
+    /// value listeners, status listeners, continuations and destructors.
+    /// Status precedes the corresponding run delivery (ADR-0064); accepted
+    /// transitions do not coalesce. A caught failure does not discard the tail
+    /// or change a published run outcome. Retirement resumes the first failure
+    /// only after the queue is empty and the delivery latch is released.
     fn finish(
         &self,
         status: AnimationStatus,
         value_change: ValueChange,
         delivery: Option<TickerDelivery>,
         retired: RetiredSources,
-        mut inner: parking_lot::MutexGuard<'_, AnimationControllerInner>,
+        inner: parking_lot::MutexGuard<'_, AnimationControllerInner>,
     ) {
-        let callbacks = inner.take_status_change();
+        let mut retirement = Retirement::new();
+        self.finish_with_retirement(
+            status,
+            value_change,
+            delivery,
+            retired,
+            inner,
+            &mut retirement,
+        );
+        retirement.finish();
+    }
+
+    fn finish_with_retirement(
+        &self,
+        status: AnimationStatus,
+        value_change: ValueChange,
+        delivery: Option<TickerDelivery>,
+        retired: RetiredSources,
+        mut inner: parking_lot::MutexGuard<'_, AnimationControllerInner>,
+        retirement: &mut Retirement,
+    ) {
+        inner.enqueue_status_change(status);
+        if let Some(delivery) = delivery {
+            inner
+                .pending_delivery
+                .push_back(ControllerDelivery::Run(Terminal::new(delivery)));
+        }
+        inner
+            .pending_delivery
+            .push_back(ControllerDelivery::Retire(retired));
+        let drain = !inner.delivering;
+        inner.delivering = true;
         drop(inner);
         if value_change == ValueChange::Notify {
-            self.notifier.notify_listeners();
+            retirement.run(|| self.notifier.notify_listeners());
         }
-        if let Some(callbacks) = callbacks {
-            Self::fire_status(&callbacks, status);
+        if drain {
+            self.drain_delivery(retirement);
         }
-        if let Some(delivery) = delivery {
-            delivery.deliver();
-        }
-        drop(retired);
     }
 }
 
@@ -2462,21 +2547,21 @@ impl AnimationControllerInner {
         self.active_run.take().map(TickerCompleter::cancel)
     }
 
-    /// Snapshot the callbacks to fire **iff** `self.status` differs from the
-    /// last-reported status, updating the marker so a later same-status
-    /// emission is suppressed. Every status-emission site in this file
-    /// funnels through this seam.
-    fn take_status_change(&mut self) -> Option<SmallVec<[Opaque<StatusCallback>; 4]>> {
-        if self.status == self.last_reported_status {
-            return None;
+    /// Admit each distinct committed status with its subscription snapshot.
+    /// Equal adjacent commits are silent; returning to an earlier status after
+    /// an intervening transition still admits that transition.
+    fn enqueue_status_change(&mut self, status: AnimationStatus) {
+        if self.disposed || status == self.last_committed_status {
+            return;
         }
-        self.last_reported_status = self.status;
-        Some(
-            self.status_listeners
-                .iter()
-                .map(|(_, cb)| Opaque::new(Arc::clone(cb)))
-                .collect(),
-        )
+        self.last_committed_status = status;
+        let listeners = self
+            .status_listeners
+            .iter()
+            .map(|(id, callback)| (*id, Terminal::new(Arc::clone(callback))))
+            .collect();
+        self.pending_delivery
+            .push_back(ControllerDelivery::Status(status, listeners));
     }
 
     /// Effective duration for the current run: per-run override, else repeat
@@ -2700,7 +2785,7 @@ impl Animation<f64> for AnimationController {
     }
 
     fn remove_status_listener(&self, id: ListenerId) {
-        let retired;
+        let mut retired;
         {
             let mut inner = self.inner.lock();
             retired = inner
@@ -2708,6 +2793,15 @@ impl Animation<f64> for AnimationController {
                 .iter()
                 .position(|(candidate, _)| *candidate == id)
                 .map(|index| Opaque::new(inner.status_listeners.remove(index).1));
+            if inner.delivering
+                && let Some(callback) = retired.take()
+            {
+                let mut sources = RetiredSources::new();
+                sources.callbacks.push(callback);
+                inner
+                    .pending_delivery
+                    .push_back(ControllerDelivery::Retire(sources));
+            }
         }
         drop(retired);
     }

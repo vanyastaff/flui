@@ -1485,12 +1485,13 @@ fn invoke_continuation(
     mut continuation: Continuation,
     outcome: Result<(), TickerCanceled>,
     first: &mut Option<PanicPayload>,
+    retain_after_failure: bool,
 ) {
     let called = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| continuation(outcome)));
     if let Err(payload) = called {
         std::mem::forget(continuation);
         record_delivery_failure(first, payload);
-    } else if first.is_some() || std::thread::panicking() {
+    } else if retain_after_failure || first.is_some() || std::thread::panicking() {
         std::mem::forget(continuation);
     } else if let Err(payload) =
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(continuation)))
@@ -1515,17 +1516,18 @@ fn deliver_now(
     outcome: Result<(), TickerCanceled>,
     continuations: Vec<Continuation>,
     waiters: Slab<std::task::Waker>,
+    retain_after_failure: bool,
 ) {
     let mut first = None;
     for continuation in continuations {
-        invoke_continuation(continuation, outcome, &mut first);
+        invoke_continuation(continuation, outcome, &mut first, retain_after_failure);
     }
     for (_, waker) in waiters {
         let woke = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| waker.wake_by_ref()));
         if let Err(payload) = woke {
             std::mem::forget(waker);
             record_delivery_failure(&mut first, payload);
-        } else if first.is_some() || std::thread::panicking() {
+        } else if retain_after_failure || first.is_some() || std::thread::panicking() {
             std::mem::forget(waker);
         } else if let Err(payload) =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(waker)))
@@ -1646,13 +1648,13 @@ impl TickerFuture {
             TickerFutureState::Complete => {
                 drop(state);
                 let mut first = None;
-                invoke_continuation(Box::new(f), Ok(()), &mut first);
+                invoke_continuation(Box::new(f), Ok(()), &mut first, false);
                 finish_delivery(first);
             }
             TickerFutureState::Canceled => {
                 drop(state);
                 let mut first = None;
-                invoke_continuation(Box::new(f), Err(TickerCanceled), &mut first);
+                invoke_continuation(Box::new(f), Err(TickerCanceled), &mut first, false);
                 finish_delivery(first);
             }
         }
@@ -1777,7 +1779,7 @@ impl TickerCompleter {
 impl Drop for TickerCompleter {
     fn drop(&mut self) {
         if let Some((continuations, waiters)) = self.publish(TickerFutureState::Canceled) {
-            deliver_now(Err(TickerCanceled), continuations, waiters);
+            deliver_now(Err(TickerCanceled), continuations, waiters, false);
         }
     }
 }
@@ -1834,23 +1836,37 @@ impl TickerDelivery {
     /// replacing that unwind. A second call, or a `Drop` after this one, is
     /// a no-op.
     pub fn deliver(mut self) {
-        self.run();
+        self.run(false);
     }
 
-    fn run(&mut self) {
+    /// Deliver accepted continuations and wake waiters while an enclosing
+    /// recovery boundary already owns a failure. Retain callback captures and
+    /// owning wakers even when their invocation succeeds (ADR-0127): catching
+    /// the enclosing failure made `thread::panicking()` false, but retiring an
+    /// opaque aggregate could still abort before that boundary regains control.
+    ///
+    /// The outcome and invocation order are unchanged. Any delivery failure is
+    /// raised after the tail; the enclosing boundary must preserve its earlier
+    /// failure. Use [`deliver`](Self::deliver) for normal delivery so healthy
+    /// captures retire normally.
+    pub fn deliver_after_failure(mut self) {
+        self.run(true);
+    }
+
+    fn run(&mut self, retain_after_failure: bool) {
         if self.delivered {
             return;
         }
         self.delivered = true;
         let continuations = std::mem::take(&mut *self.continuations.lock());
         let waiters = std::mem::take(&mut self.waiters);
-        deliver_now(self.outcome, continuations, waiters);
+        deliver_now(self.outcome, continuations, waiters, retain_after_failure);
     }
 }
 
 impl Drop for TickerDelivery {
     fn drop(&mut self) {
-        self.run();
+        self.run(false);
     }
 }
 

@@ -33,7 +33,7 @@ use std::sync::{Arc, Weak};
 use parking_lot::Mutex;
 
 use crate::AnimationController;
-use crate::animation::Terminal;
+use crate::animation::{Retirement, Terminal};
 
 /// Opaque handle identifying one controller registered with a [`Vsync`].
 ///
@@ -437,7 +437,20 @@ impl Vsync {
     /// lock (and so the map borrow) is dropped between steps; one such seek
     /// per resident controller per pump, so **O(N log N)** per pump.
     /// [`has_running`](Self::has_running) stays O(N) — see its doc for why.
+    ///
+    /// Non-finite instants are ignored before any run anchor changes. A child
+    /// registry or controller failure leaves the remaining admitted frame peers
+    /// deliverable; the walk resumes its first failure after those peers tick.
     pub fn tick_all(&self, now_secs: f64) {
+        let mut retirement = Retirement::new();
+        retirement.run_with(|retirement| self.tick_all_with_retirement(now_secs, retirement));
+        retirement.finish();
+    }
+
+    fn tick_all_with_retirement(&self, now_secs: f64, retirement: &mut Retirement) {
+        if !now_secs.is_finite() {
+            return;
+        }
         let (fence, children, muted) = {
             let inner = self.inner.lock();
             (
@@ -460,7 +473,9 @@ impl Vsync {
         }
 
         for child in children {
-            child.tick_all(now_secs);
+            let child = Terminal::new(child);
+            retirement.run_with(|retirement| child.tick_all_with_retirement(now_secs, retirement));
+            retirement.retire(child);
         }
 
         let mut cursor = 0u64;
@@ -506,7 +521,13 @@ impl Vsync {
             match step {
                 RegistryWalkStep::Finished => break,
                 RegistryWalkStep::NotRunning => {}
-                RegistryWalkStep::Running(controller, elapsed) => controller.tick_at(elapsed),
+                RegistryWalkStep::Running(controller, elapsed) => {
+                    let controller = Terminal::new(controller);
+                    retirement.run_with(|retirement| {
+                        controller.tick_at_with_retirement(elapsed, retirement);
+                    });
+                    retirement.retire(controller);
+                }
             }
         }
     }

@@ -8,9 +8,11 @@
 //! it failing on the assertion that names the behaviour.
 
 use std::any::Any;
+use std::future::Future;
 use std::panic::{AssertUnwindSafe, catch_unwind, panic_any};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll, Wake, Waker};
 use std::time::Duration;
 
 use crate::child_process;
@@ -395,6 +397,409 @@ fn reversing_on_completed_keeps_commit_order() {
     );
 }
 
+fn reentrant_transitions_keep_the_return_to_the_original_status() {
+    let controller = controller();
+    let slot = Arc::new(Mutex::new(Some(controller.clone())));
+    let pending = Arc::clone(&slot);
+    let (late, late_listener) = recorder();
+    controller.add_status_listener(Arc::new(move |status| {
+        if status == Forward {
+            let owner = pending.lock().expect("reentrant owner").take();
+            if let Some(owner) = owner {
+                owner.add_status_listener(Arc::clone(&late_listener));
+                let _reverse = owner.reverse_from(Some(0.5)).expect("nested reverse");
+                let _forward = owner.forward().expect("nested forward");
+            }
+        }
+    }));
+    let (observer, listener) = recorder();
+    controller.add_status_listener(listener);
+
+    let _run = controller.forward().expect("outer forward");
+
+    assert_eq!(seen(&observer), [Forward, Reverse, Forward]);
+    assert_eq!(
+        seen(&late),
+        [Reverse, Forward],
+        "a late subscriber misses only the already committed round"
+    );
+    assert_eq!(controller.status(), Forward);
+    controller.tick_at(0.5);
+    assert_eq!(
+        controller.value(),
+        1.0,
+        "the last admitted run survives delivery"
+    );
+    controller.dispose();
+}
+
+fn reentrant_completion_delivers_its_outcome_before_the_next_status() {
+    let controller = controller();
+    let run = controller.forward().expect("original run");
+    let order = Arc::new(Mutex::new(Vec::new()));
+    let slot = Arc::new(Mutex::new(Some(controller.clone())));
+    controller.add_status_listener(Arc::new(move |status| {
+        if status == Completed {
+            let owner = slot.lock().expect("reverse owner").take();
+            if let Some(owner) = owner {
+                let _next = owner.reverse().expect("replacement run");
+                panic_any("completion listener");
+            }
+        }
+    }));
+    let sink = Arc::clone(&order);
+    controller.add_status_listener(Arc::new(move |status| {
+        sink.lock().expect("delivery order").push(match status {
+            Completed => "completed status",
+            Reverse => "reverse status",
+            Dismissed => "dismissed status",
+            _ => "unexpected status",
+        });
+    }));
+    let sink = Arc::clone(&order);
+    run.when_complete_or_cancel(move |outcome| {
+        assert!(outcome.is_ok(), "replacement cannot cancel a completed run");
+        sink.lock()
+            .expect("delivery order")
+            .push("completed outcome");
+    });
+
+    let failure = catch_unwind(AssertUnwindSafe(|| controller.tick_at(1.0)))
+        .expect_err("first listener failure is resumed after delivery");
+    assert_eq!(payload_text(failure.as_ref()), Some("completion listener"));
+    assert_eq!(
+        *order.lock().expect("delivery order"),
+        ["completed status", "completed outcome", "reverse status"]
+    );
+    controller.tick_at(0.5);
+    assert_eq!(
+        controller.value(),
+        0.5,
+        "replacement advances on the next frame"
+    );
+    controller.tick_at(1.0);
+    assert_eq!(
+        *order.lock().expect("delivery order"),
+        [
+            "completed status",
+            "completed outcome",
+            "reverse status",
+            "dismissed status"
+        ]
+    );
+    controller.dispose();
+}
+
+struct DropFailure(Arc<AtomicUsize>);
+
+impl Drop for DropFailure {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        panic_any("opaque destructor failure");
+    }
+}
+
+struct HostileOwnership {
+    _first: DropFailure,
+    _second: DropFailure,
+}
+
+fn status_failure_retains_removed_captures_and_competing_payloads() {
+    let controller = controller();
+    let drops = Arc::new(AtomicUsize::new(0));
+    let armed = AtomicBool::new(true);
+    controller.add_status_listener(Arc::new(move |_| {
+        if armed.swap(false, Ordering::SeqCst) {
+            panic_any("first status failure");
+        }
+    }));
+    let capture = HostileOwnership {
+        _first: DropFailure(Arc::clone(&drops)),
+        _second: DropFailure(Arc::clone(&drops)),
+    };
+    let payload_drops = Arc::clone(&drops);
+    let failed = controller.add_status_listener(Arc::new(move |_| {
+        let _ = &capture;
+        panic_any(HostileOwnership {
+            _first: DropFailure(Arc::clone(&payload_drops)),
+            _second: DropFailure(Arc::clone(&payload_drops)),
+        });
+    }));
+    let removal = Arc::new(Mutex::new(None));
+    let pending = Arc::clone(&removal);
+    controller.add_status_listener(Arc::new(move |_| {
+        let removal = pending.lock().expect("capture removal").take();
+        if let Some((owner, removed)) = removal {
+            let owner: AnimationController = owner;
+            owner.remove_status_listener(failed);
+            owner.remove_status_listener(removed);
+        }
+    }));
+    let capture = HostileOwnership {
+        _first: DropFailure(Arc::clone(&drops)),
+        _second: DropFailure(Arc::clone(&drops)),
+    };
+    let removed = controller.add_status_listener(Arc::new(move |_| {
+        let _ = &capture;
+        panic_any("removed listener must be skipped");
+    }));
+    *removal.lock().expect("capture removal") = Some((controller.clone(), removed));
+    let (tail, listener) = recorder();
+    controller.add_status_listener(listener);
+
+    let failure = catch_unwind(AssertUnwindSafe(|| controller.forward()))
+        .expect_err("first failure resumes after the healthy tail");
+    assert_eq!(payload_text(failure.as_ref()), Some("first status failure"));
+    assert_eq!(seen(&tail), [Forward]);
+    assert_eq!(
+        drops.load(Ordering::SeqCst),
+        0,
+        "opaque captures and competing payloads retain failure custody"
+    );
+    controller.tick_at(1.0);
+    assert_eq!(
+        seen(&tail),
+        [Forward, Completed],
+        "the next frame still delivers"
+    );
+    controller.dispose();
+    assert_eq!(drops.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn status_delivery_failure_custody() {
+    let rows: &[(&str, fn())] = &[
+        (
+            "snapshot",
+            status_failure_retains_removed_captures_and_competing_payloads,
+        ),
+        (
+            "late_removal",
+            status_failure_retains_a_reentrantly_removed_new_subscription,
+        ),
+        ("run", status_failure_retains_completed_run_captures),
+        ("waiter", status_failure_retains_completed_run_waiter),
+        (
+            "run_competition",
+            status_failure_remains_authoritative_over_run_failure,
+        ),
+        ("sibling", frame_failure_retains_a_siblings_run_captures),
+        ("child", child_failure_retains_the_parents_run_captures),
+    ];
+    if let Some(selected) = child_process::selected_case() {
+        let (_, row) = rows
+            .iter()
+            .find(|(name, _)| *name == selected)
+            .expect("selected row");
+        row();
+        child_process::pass();
+    }
+    let names: Vec<_> = rows.iter().map(|(name, _)| *name).collect();
+    child_process::run_rows("status_delivery::status_delivery_failure_custody", &names);
+}
+
+fn status_failure_retains_a_reentrantly_removed_new_subscription() {
+    let controller = controller();
+    let drops = Arc::new(AtomicUsize::new(0));
+    let armed = AtomicBool::new(true);
+    controller.add_status_listener(Arc::new(move |_| {
+        if armed.swap(false, Ordering::SeqCst) {
+            panic_any("first status failure");
+        }
+    }));
+    let owner = Arc::new(Mutex::new(Some(controller.clone())));
+    let captures = Arc::clone(&drops);
+    controller.add_status_listener(Arc::new(move |_| {
+        let owner = owner.lock().expect("late subscription owner").take();
+        if let Some(owner) = owner {
+            let capture = HostileOwnership {
+                _first: DropFailure(Arc::clone(&captures)),
+                _second: DropFailure(Arc::clone(&captures)),
+            };
+            let id = owner.add_status_listener(Arc::new(move |_| {
+                let _ = &capture;
+            }));
+            owner.remove_status_listener(id);
+        }
+    }));
+    let (tail, listener) = recorder();
+    controller.add_status_listener(listener);
+    let failure =
+        catch_unwind(AssertUnwindSafe(|| controller.forward())).expect_err("status failure");
+    assert_eq!(payload_text(failure.as_ref()), Some("first status failure"));
+    assert_eq!(seen(&tail), [Forward]);
+    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    controller.tick_at(1.0);
+    assert_eq!(seen(&tail), [Forward, Completed]);
+    controller.dispose();
+}
+
+fn install_hostile_continuation(
+    controller: &AnimationController,
+    drops: &Arc<AtomicUsize>,
+) -> Arc<AtomicUsize> {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let called = Arc::clone(&calls);
+    let capture = HostileOwnership {
+        _first: DropFailure(Arc::clone(drops)),
+        _second: DropFailure(Arc::clone(drops)),
+    };
+    controller
+        .forward()
+        .expect("run starts")
+        .when_complete_or_cancel(move |outcome| {
+            let _ = &capture;
+            assert!(outcome.is_ok(), "accepted completion stays completed");
+            called.fetch_add(1, Ordering::SeqCst);
+        });
+    calls
+}
+
+fn fail_on_completion(controller: &AnimationController) {
+    controller.add_status_listener(Arc::new(|status| {
+        if status == Completed {
+            panic_any("first status failure");
+        }
+    }));
+}
+
+fn status_failure_retains_completed_run_captures() {
+    let controller = controller();
+    let drops = Arc::new(AtomicUsize::new(0));
+    fail_on_completion(&controller);
+    let calls = install_hostile_continuation(&controller, &drops);
+    let (tail, listener) = recorder();
+    controller.add_status_listener(listener);
+    let failure =
+        catch_unwind(AssertUnwindSafe(|| controller.tick_at(1.0))).expect_err("status failure");
+    assert_eq!(payload_text(failure.as_ref()), Some("first status failure"));
+    assert_eq!(seen(&tail), [Completed]);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    let _run = controller.reverse().expect("reverse starts");
+    controller.tick_at(1.0);
+    assert_eq!(seen(&tail), [Completed, Reverse, Dismissed]);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    controller.dispose();
+}
+
+struct HostileWaiter {
+    _captures: HostileOwnership,
+    calls: Arc<AtomicUsize>,
+}
+
+impl Wake for HostileWaiter {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+fn status_failure_retains_completed_run_waiter() {
+    let controller = controller();
+    fail_on_completion(&controller);
+    let drops = Arc::new(AtomicUsize::new(0));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut run = Box::pin(controller.forward().expect("waited run starts"));
+    {
+        let waker = Waker::from(Arc::new(HostileWaiter {
+            _captures: HostileOwnership {
+                _first: DropFailure(Arc::clone(&drops)),
+                _second: DropFailure(Arc::clone(&drops)),
+            },
+            calls: Arc::clone(&calls),
+        }));
+        assert!(matches!(
+            run.as_mut().poll(&mut Context::from_waker(&waker)),
+            Poll::Pending
+        ));
+    }
+    let failure =
+        catch_unwind(AssertUnwindSafe(|| controller.tick_at(1.0))).expect_err("status failure");
+    assert_eq!(payload_text(failure.as_ref()), Some("first status failure"));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    assert!(matches!(
+        run.as_mut().poll(&mut Context::from_waker(Waker::noop())),
+        Poll::Ready(Ok(()))
+    ));
+    controller.tick_at(2.0);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    controller.dispose();
+}
+
+fn status_failure_remains_authoritative_over_run_failure() {
+    let controller = controller();
+    fail_on_completion(&controller);
+    let drops = Arc::new(AtomicUsize::new(0));
+    let payload_drops = Arc::clone(&drops);
+    let run = controller.forward().expect("competing run starts");
+    run.when_complete_or_cancel(move |_| {
+        panic_any(HostileOwnership {
+            _first: DropFailure(Arc::clone(&payload_drops)),
+            _second: DropFailure(Arc::clone(&payload_drops)),
+        })
+    });
+    let calls = Arc::new(AtomicUsize::new(0));
+    let called = Arc::clone(&calls);
+    run.when_complete_or_cancel(move |outcome| {
+        assert!(outcome.is_ok());
+        called.fetch_add(1, Ordering::SeqCst);
+    });
+    let failure = catch_unwind(AssertUnwindSafe(|| controller.tick_at(1.0)))
+        .expect_err("first status failure");
+    assert_eq!(payload_text(failure.as_ref()), Some("first status failure"));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    let _reverse = controller.reverse().expect("recovery run starts");
+    controller.tick_at(1.0);
+    assert_eq!(controller.value(), 0.0);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    controller.dispose();
+}
+
+fn frame_failure_retains_a_siblings_run_captures() {
+    frame_failure_retains_run_captures(false);
+}
+
+fn child_failure_retains_the_parents_run_captures() {
+    frame_failure_retains_run_captures(true);
+}
+
+fn frame_failure_retains_run_captures(nested: bool) {
+    let parent = Vsync::new();
+    let child = Vsync::new();
+    let _child = nested.then(|| parent.attach_child(&child).expect("child registry"));
+    let failing = controller();
+    fail_on_completion(&failing);
+    let _run = failing.forward().expect("failing run starts");
+    let _first = if nested {
+        child.register(failing)
+    } else {
+        parent.register(failing)
+    };
+    let sibling = controller();
+    let drops = Arc::new(AtomicUsize::new(0));
+    let calls = install_hostile_continuation(&sibling, &drops);
+    let _sibling = parent.register(sibling.clone());
+    parent.tick_all(0.0);
+    let failure =
+        catch_unwind(AssertUnwindSafe(|| parent.tick_all(1.0))).expect_err("frame failure");
+    assert_eq!(payload_text(failure.as_ref()), Some("first status failure"));
+    assert_eq!(sibling.value(), 1.0);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    let _reverse = sibling.reverse().expect("sibling reverses");
+    parent.tick_all(1.0);
+    parent.tick_all(2.0);
+    assert_eq!(sibling.value(), 0.0);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    sibling.dispose();
+}
+
 // --- AnimationSwitch -----------------------------------------------------------
 
 #[derive(Clone, Copy)]
@@ -624,6 +1029,14 @@ fn reentrant_set_parent_last_commit_wins() {
 fn status_delivery_contract() {
     crate::run_table(&[
         (
+            "reentrant transitions retain A to B to A and respect subscription admission",
+            reentrant_transitions_keep_the_return_to_the_original_status,
+        ),
+        (
+            "reentrant completion preserves status and outcome order after failure",
+            reentrant_completion_delivers_its_outcome_before_the_next_status,
+        ),
+        (
             "panicking status listener leaves the next frame ticking",
             panicking_status_listener_leaves_the_next_frame_ticking,
         ),
@@ -643,13 +1056,11 @@ fn status_delivery_contract() {
 }
 
 #[test]
-#[ignore = "contract: a status listener's panic is re-raised after every listener got the status"]
 fn status_listener_panic_finishes_the_round() {
     panicking_status_listener_does_not_starve_later_listeners();
 }
 
 #[test]
-#[ignore = "contract: of two status-listener panics the first is re-raised after the round"]
 fn status_listener_panics_compete() {
     competing_status_listener_panics_re_raise_the_first();
 }
@@ -667,31 +1078,26 @@ fn value_listener_panics_compete() {
 }
 
 #[test]
-#[ignore = "contract: the Vsync walk ticks siblings after a panicking controller and re-raises the first payload"]
 fn vsync_walk_contains_a_sibling_panic() {
     vsync_walk_ticks_siblings_after_a_panicking_controller();
 }
 
 #[test]
-#[ignore = "contract: the Vsync walk ticks the parent registry after a panicking child registry"]
 fn vsync_walk_contains_a_child_registry_panic() {
     vsync_walk_ticks_the_parent_after_a_panicking_child_registry();
 }
 
 #[test]
-#[ignore = "contract: a status listener removed during a fan-out is not called"]
 fn removed_status_listener_is_skipped() {
     status_listener_removed_by_an_earlier_listener_is_skipped();
 }
 
 #[test]
-#[ignore = "contract: a controller disposed during a fan-out calls no further listener"]
 fn disposed_mid_fan_out_is_silent() {
     controller_disposed_mid_fan_out_calls_no_further_listener();
 }
 
 #[test]
-#[ignore = "contract: a status started from a listener reaches later listeners in commit order"]
 fn reentrant_status_keeps_commit_order() {
     reversing_on_completed_keeps_commit_order();
 }

@@ -239,7 +239,13 @@ impl Retirement {
     }
 
     pub(crate) fn run(&mut self, action: impl FnOnce()) {
-        if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(action)) {
+        self.run_with(|_| action());
+    }
+
+    pub(crate) fn run_with(&mut self, action: impl FnOnce(&mut Self)) {
+        if let Err(payload) =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| action(self)))
+        {
             if self.incoming || self.first.is_some() {
                 flui_foundation::panic::retain_opaque_payload(payload);
             } else {
@@ -248,8 +254,12 @@ impl Retirement {
         }
     }
 
+    pub(crate) fn has_failure(&self) -> bool {
+        self.incoming || self.first.is_some()
+    }
+
     pub(crate) fn retire<T>(&mut self, value: T) {
-        if self.incoming || self.first.is_some() {
+        if self.has_failure() {
             std::mem::forget(value);
         } else {
             self.run(|| drop(value));

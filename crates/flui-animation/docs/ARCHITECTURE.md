@@ -56,6 +56,22 @@ src/
 
 ## Core Abstractions
 
+### Controller delivery
+
+Controller status transitions and run deliveries share a FIFO committed under
+the controller state guard and drained outside it (ADR-0173). Reentrant changes
+append to the outermost drain. Each status snapshots subscription membership;
+removed listeners and disposed controllers are skipped before invocation. New
+subscriptions participate in subsequent commits without implicit catch-up.
+Callback custody remains alive through the round and retires in registration
+order under the existing first-failure policy. Vsync continues its admitted frame
+peers after a controller or child-registry failure, then resumes that failure.
+
+`status_delivery_contract` pins ordering, A to B to A, late subscription, published
+outcomes and subsequent frames. `status_delivery_failure_custody` covers hostile
+captures and competing payloads in a bounded child process. The current ownership
+and foundation value-notifier policies retain their separate contracts.
+
 ### Registration tokens and removal
 
 A `VsyncRegistration` names the registry that issued it (a weak identity) and
@@ -315,9 +331,8 @@ fact).
 `TickerCompleter::complete()` **before** `drop(inner)` — the same guard scope
 that sets `status`, before listeners are notified; only *delivery*
 (continuations, wakers) is deferred past the unlock. This is what makes a panicking status listener
-leave the run `Ok`: the unwind drops the `TickerDelivery` `finish` was mid-way
-through handing off, which delivers the already-published outcome instead of
-losing it.
+leave the run `Ok`: the controller drains the admitted `TickerDelivery` with
+the already-published outcome, even after containing a listener failure.
 
 **Status-before-cancel.** A run-starting site displaces `active_run` under
 the lock, but `finish` fires the run's own (new) status listeners **before**
@@ -872,9 +887,6 @@ finiteness and bounds), `tests/contracts/status_delivery.rs` (listener and
 
 - After `dispose`, `set_value` still changes the value, listener registration
   is still accepted, and value listeners stay attached.
-- A status listener that panics stops the listeners after it from seeing that
-  transition, and a panicking curve or simulation ends the whole
-  `Vsync::tick_all` walk for that frame.
 - A curved run publishes the curve's output without a finiteness check or a
   clamp to the bounds: a curve returning NaN or overshooting is published as is.
 - `AnimationSwitch` reads its parents' `value()` and `status()` while holding its
