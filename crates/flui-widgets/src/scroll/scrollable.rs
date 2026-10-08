@@ -108,22 +108,30 @@ impl FlingEndpoint {
         }
         let position = self.controller.position();
         let metrics = ScrollMetrics::from(&position).with_device_pixel_ratio(device_pixel_ratio);
+        let generation = self.fling.run_generation();
+        let is_current = || {
+            self.alive.load(Ordering::Acquire)
+                && self.fling.run_generation() == generation
+                && self.controller.pixels() == metrics.pixels
+        };
         let Some(simulation) = self.physics.create_ballistic_simulation(&metrics, velocity) else {
             return false;
         };
         let remaining = self.physics.boundary_velocity(&metrics, velocity);
-        let generation = self.fling.run_generation();
+        if !is_current() {
+            return true;
+        }
         position.set_is_scrolling(true);
+        if !is_current() {
+            return true;
+        }
         position.set_user_scroll_direction(if velocity > 0.0 {
             ScrollDirection::Reverse
         } else {
             ScrollDirection::Forward
         });
         // Activity observers may jump, replace the owner or start another run.
-        if !self.alive.load(Ordering::Acquire)
-            || self.fling.run_generation() != generation
-            || self.controller.pixels() != metrics.pixels
-        {
+        if !is_current() {
             return true;
         }
         let Ok(future) = self.fling.animate_with(simulation) else {
