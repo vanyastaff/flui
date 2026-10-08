@@ -64,6 +64,9 @@ pub enum ActionArgs {
         target_rect: flui_foundation::geometry::Rect<f64>,
         /// The receiving scrollable's viewport.
         viewport_rect: flui_foundation::geometry::Rect<f64>,
+        /// The receiving ancestor's position when this geometry was published.
+        /// Absent for handlers without scroll-position semantics.
+        scroll_position: Option<f64>,
     },
 
     /// Text selection arguments.

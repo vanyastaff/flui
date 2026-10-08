@@ -662,6 +662,7 @@ impl SemanticsOwner {
                         ActionArgs::ShowOnScreen {
                             target_rect,
                             viewport_rect,
+                            scroll_position: ancestor.config().scroll_position(),
                         },
                     ));
                     target_rect = viewport_rect;
