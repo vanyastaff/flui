@@ -86,19 +86,16 @@ pub struct MultiTapGestureRecognizerBuilder {
 }
 impl MultiTapGestureRecognizerBuilder {
     /// Freeze gesture settings at admission.
-    #[must_use]
     pub fn settings(mut self, settings: GestureSettings) -> Self {
         self.settings = settings;
         self
     }
     /// Called after all required contacts release.
-    #[must_use]
     pub fn on_multi_tap(mut self, callback: impl Fn(MultiTapDetails) + 'static) -> Self {
         self.callbacks.on_multi_tap = Some(Rc::new(callback));
         self
     }
     /// Called on explicit cancellation, timeout, or lost arena competition.
-    #[must_use]
     pub fn on_multi_tap_cancel(mut self, callback: impl Fn(MultiTapDetails) + 'static) -> Self {
         self.callbacks.on_multi_tap_cancel = Some(Rc::new(callback));
         self
@@ -124,7 +121,6 @@ impl MultiTapGestureRecognizer {
     ///
     /// # Panics
     /// Panics when `required_pointer_count` is less than two.
-    #[must_use]
     pub fn builder(
         arena: GestureArena,
         required_pointer_count: usize,
@@ -203,7 +199,7 @@ impl MultiTapGestureRecognizer {
         self.retire_entries(&sequence, GestureDisposition::Accepted, &mut first);
         let mut notices = CallbackSequence::new();
         notices.call(self.callbacks.on_multi_tap.clone(), |callback| {
-            callback(details)
+            callback(details);
         });
         RoutePanic::preserve_first(
             &mut first,
@@ -392,7 +388,7 @@ impl GestureRecognizer for MultiTapGestureRecognizer {
         self.retire_entries(&sequence, GestureDisposition::Rejected, &mut first);
         let mut notices = CallbackSequence::new();
         notices.call(self.callbacks.on_multi_tap_cancel.clone(), |callback| {
-            callback(details)
+            callback(details);
         });
         RoutePanic::preserve_first(
             &mut first,

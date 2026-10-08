@@ -231,11 +231,11 @@ impl MultiDragGestureRecognizer {
                     kind: state.kind,
                 };
                 RoutePanic::capture(|| {
-                    invoke_callback(Some(client.clone()), || {}, |client| client.end(details))
+                    invoke_callback(Some(client.clone()), || {}, |client| client.end(details));
                 })
             } else {
                 RoutePanic::capture(|| {
-                    invoke_callback(Some(client.clone()), || {}, |client| client.cancel())
+                    invoke_callback(Some(client.clone()), || {}, MultiDragHandle::cancel);
                 })
             };
             RoutePanic::preserve_first(first, delivered, "multi-drag terminal client");
@@ -313,15 +313,16 @@ impl MultiDragGestureRecognizer {
                 )
             } else {
                 state.pending_delta = pending;
-                let crossed = super::recognizer::measured_positions(dispatch.local).any(|position| {
-                    let delta = position - state.initial_position;
-                    let magnitude = match self.axis {
-                        MultiDragAxis::Free => delta.dx.hypot(delta.dy),
-                        MultiDragAxis::Horizontal => delta.dx.abs(),
-                        MultiDragAxis::Vertical => delta.dy.abs(),
-                    };
-                    magnitude > state.slop
-                });
+                let crossed =
+                    super::recognizer::measured_positions(dispatch.local).any(|position| {
+                        let delta = position - state.initial_position;
+                        let magnitude = match self.axis {
+                            MultiDragAxis::Free => delta.dx.hypot(delta.dy),
+                            MultiDragAxis::Horizontal => delta.dx.abs(),
+                            MultiDragAxis::Vertical => delta.dy.abs(),
+                        };
+                        magnitude > state.slop
+                    });
                 (
                     None,
                     None,
@@ -331,7 +332,7 @@ impl MultiDragGestureRecognizer {
         };
         if let (Some(client), Some(update)) = (client, update) {
             let mut failure = RoutePanic::capture(|| {
-                invoke_callback(Some(client.clone()), || {}, |client| client.update(update))
+                invoke_callback(Some(client.clone()), || {}, |client| client.update(update));
             });
             retire_callback(Some(client), &mut failure);
             finish_containment(failure, std::thread::panicking());
@@ -360,7 +361,7 @@ impl MultiDragGestureRecognizer {
                 |callback| {
                     client = callback(pointer, initial_position);
                 },
-            )
+            );
         });
         if failure.is_some() || client.is_none() {
             if let Some(state) = self.remove_current(pointer, id) {
@@ -396,11 +397,11 @@ impl MultiDragGestureRecognizer {
             && let Some(update) = update
         {
             failure = RoutePanic::capture(|| {
-                invoke_callback(Some(client.clone()), || {}, |client| client.update(update))
+                invoke_callback(Some(client.clone()), || {}, |client| client.update(update));
             });
         } else {
             failure = RoutePanic::capture(|| {
-                invoke_callback(Some(client.clone()), || {}, |client| client.cancel())
+                invoke_callback(Some(client.clone()), || {}, MultiDragHandle::cancel);
             });
         }
         retire_callback(Some(client), &mut failure);

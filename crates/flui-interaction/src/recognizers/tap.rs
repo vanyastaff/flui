@@ -291,7 +291,6 @@ impl Drop for TapArenaMember {
 }
 impl TapGestureRecognizer {
     /// Start configuring an owner-local recognizer.
-    #[must_use]
     pub fn builder(arena: GestureArena) -> TapGestureRecognizerBuilder {
         TapGestureRecognizerBuilder {
             arena,
@@ -478,12 +477,12 @@ impl GestureRecognizer for TapGestureRecognizer {
                         return;
                     };
                     let sequence = &mut sequences.live[index];
-                    if sequence.button != button {
-                        true
-                    } else {
+                    if sequence.button == button {
                         sequence.up = Some(details.clone());
                         sequences.current = None;
                         false
+                    } else {
+                        true
                     }
                 };
                 if mismatch {
@@ -523,7 +522,7 @@ impl GestureRecognizer for TapGestureRecognizer {
                         sequence.member.contact.cancel();
                     },
                     |callback| callback(sequence.down),
-                )
+                );
             });
             RoutePanic::preserve_first(&mut first, candidate, "tap cancellation");
         }

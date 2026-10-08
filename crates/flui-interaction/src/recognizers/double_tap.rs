@@ -124,7 +124,6 @@ impl std::fmt::Debug for DoubleTapGestureRecognizer {
 }
 impl DoubleTapGestureRecognizer {
     /// Start configuring an owner-local recognizer.
-    #[must_use]
     pub fn builder(arena: GestureArena) -> DoubleTapGestureRecognizerBuilder {
         DoubleTapGestureRecognizerBuilder {
             arena,
@@ -170,7 +169,7 @@ impl DoubleTapGestureRecognizer {
                 self.callbacks.on_double_tap_cancel.clone(),
                 || {},
                 |callback| callback(details),
-            )
+            );
         });
         RoutePanic::preserve_first(&mut first, candidate, "double tap cancellation");
         finish_containment(first, incoming);
@@ -214,7 +213,7 @@ impl DoubleTapGestureRecognizer {
                     self.callbacks.on_double_tap.clone(),
                     || {},
                     |callback| callback(details),
-                )
+                );
             });
             RoutePanic::preserve_first(&mut first, candidate, "double tap completion");
         }
@@ -285,7 +284,7 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
                         self.callbacks.on_double_tap_down.clone(),
                         || {},
                         |callback| callback(self.details()),
-                    )
+                    );
                 });
                 RoutePanic::preserve_first(&mut failure, candidate, "double tap second down");
             }

@@ -1079,7 +1079,9 @@ impl ScaleGestureRecognizer {
             state.contacts[index].position = position;
             let measure = state.sample();
             crossed |= state.contacts.len() >= state.start_mode.minimum_contacts()
-                && measure.is_some_and(|measure| baseline.is_some_and(|b| self.should_accept(b, measure, kind)));
+                && measure.is_some_and(|measure| {
+                    baseline.is_some_and(|b| self.should_accept(b, measure, kind))
+                });
             if measure.is_some() && state.contacts.len() >= 2 {
                 let scale = state.current.scale;
                 state
@@ -1173,7 +1175,7 @@ impl ScaleGestureRecognizer {
         RoutePanic::preserve_first(
             &mut first,
             RoutePanic::capture(|| {
-                self.withdraw_then_deliver(withdraw.into_iter().collect(), outcome)
+                self.withdraw_then_deliver(withdraw.into_iter().collect(), outcome);
             }),
             "scale terminal delivery",
         );
