@@ -52,6 +52,7 @@ pub type MultiDragStartCallback =
     Rc<dyn Fn(PointerId, Offset<f64>) -> Option<Rc<dyn MultiDragHandle>>>;
 /// Movement delivered to one drag client.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct MultiDragUpdateDetails {
     /// Contact pointer identity.
     pub pointer_id: PointerId,
@@ -68,6 +69,7 @@ pub struct MultiDragUpdateDetails {
 }
 /// Terminal contact delivered to a drag client.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct MultiDragEndDetails {
     /// Contact pointer identity.
     pub pointer_id: PointerId,
