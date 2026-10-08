@@ -121,3 +121,36 @@ RA6 ownership-измерения сохранены; итоговый gate за�
 | R3 ✅ | `on_tap_down` допускает следующий контакт — поколение растёт и уже принятый `TapUp` теряется (счёт 2 без первого Up) | `recognizers/tap_and_drag.rs` |
 | R4 ✅ | Самоуправляемая арена с соперником: Cancel у Eager делает sweep с семантикой Up и награждает соперника; отмена должна снимать поколение без победителя (и в других путях withdraw-and-sweep) | `recognizers/eager.rs`, `arena/**` |
 | R5 | Повторный допуск того же указателя из cancel-колбэка drag запускает жест дважды | `recognizers/drag.rs` |
+
+## Порядок принятого motion перед Keyboard и IME
+
+Дополнительная runtime-регрессия реализована локально: `UiRealm` доставляет
+замороженный measured prefix перед наблюдающим Keyboard/IME без продвижения
+frame clock и без завершения живых контактов. Keyboard сохраняет уже выбранную
+активную presentation при реентерабельной смене фокуса; IME остаётся у
+адресованной presentation и её действующего text store. Первая ошибка
+сохраняется, а последующий принятый ввод и здоровые хвосты доставляются.
+Долговечное решение дополнено в ADR-0163.
+
+Все 15 публичных строк `flui-testing::containment_and_isolation_matrix`
+подтверждены RED до соответствующего исправления и GREEN после него:
+
+- Mouse/Touch с обоими resampling policy: measured координаты перед Key.
+- Одиночный отказ motion, одиночный отказ Keyboard, конкурирующие отказы и
+  следующая здоровая операция с настоящим contact terminal.
+- Настоящий EditableText: commit наблюдает обновлённое motion-состояние;
+  competing `on_changed` не заменяет более ранний отказ motion.
+- Замороженные контакты, здоровый сосед после отказа, чтение motion-состояния
+  из Key и новое реентерабельное движение в следующем barrier.
+- Непрерывность настоящего GestureDetector Scale и snapshot resolved focus
+  owner при смене активного окна из motion callback.
+- Замена coalesced marker не стирает принятый prefix живого контакта;
+  реентерабельный capture release доставляет frozen Move, последующий принятый
+  tail и один CaptureLost, без дубликата от старого native Up.
+
+Контрольный запуск: `cargo nextest run --locked -p flui-testing
+containment_and_isolation_matrix --no-capture`. Это локальные public runtime и
+headless widget доказательства, не native hardware smoke. Независимые inverse
+проверки wiring Keyboard/IME, freeze measured prefixes, coalesced admission и
+capture guard ещё предстоят; итоговый gate зависимых потребителей и CI также
+не объявляются завершёнными.

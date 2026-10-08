@@ -74,8 +74,14 @@ owned by the admitted contact.
 
 The binding freezes every contact prefix before the first callback. Reentrant
 motion belongs to a later operation or frame; it cannot be pulled into another
-contact's frozen prefix. Capture delivery guards protect accepted measured
-prefixes until delivery finishes. The binding retains existing deterministic
+contact's frozen prefix. A newer coalesced marker cannot erase an already
+frozen Contact payload while its exact contact generation remains live; old
+cleanup cannot remove the newer marker. Native termination or replacement
+still invalidates the old contact. Capture delivery guards protect accepted
+measured and coalesced prefixes until delivery finishes, including when a
+callback queues newer motion and releases another contact's token. Loss
+settlement then delivers its accepted tail and one Cancel before the observing
+input. The binding retains existing deterministic
 pointer iteration; this contract does not establish global timestamp ordering
 across independent devices.
 
@@ -147,6 +153,11 @@ EditableText and text-store projection.
 `keyboard_reads_all_frozen_contacts_after_sibling_failure` and
 `keyboard_barrier_keeps_reentrant_contact_motion_for_the_next_round` pin frozen
 measured prefixes, Key's observation of motion-produced state and later debt.
+`keyboard_barrier_keeps_frozen_coalesced_motion_before_reentrant_replacement`
+pins the default-policy counterpart;
+`keyboard_coalesced_prefix_survives_reentrant_capture_release` pins frozen
+movement, release-tail delivery and one capture-loss terminal after replacement
+of the queued marker.
 `runtime_keyboard_barrier_preserves_scale_contacts_and_continuity` exercises
 the actual GestureDetector consumer; and
 `keyboard_motion_barrier_uses_resolved_focus_owner_during_reentrant_focus_change`

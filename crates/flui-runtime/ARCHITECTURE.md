@@ -211,9 +211,17 @@ pin measured coordinates before Key. The single and competing rows
 `ime_commit_survives_competing_motion_and_owner_failures` pin actual text edits.
 `keyboard_reads_all_frozen_contacts_after_sibling_failure`,
 `keyboard_barrier_keeps_reentrant_contact_motion_for_the_next_round`,
+`keyboard_barrier_keeps_frozen_coalesced_motion_before_reentrant_replacement`,
+`keyboard_coalesced_prefix_survives_reentrant_capture_release`,
 `runtime_keyboard_barrier_preserves_scale_contacts_and_continuity` and
 `keyboard_motion_barrier_uses_resolved_focus_owner_during_reentrant_focus_change`
 pin sibling prefixes, newer debt, gesture continuity and resolved ownership.
+
+The default-policy frozen Contact payload retains its exact live contact
+authority when a callback replaces its queued marker. Old cleanup leaves newer
+debt intact; terminal/replacement invalidation still refuses stale publication.
+Capture guards hold the committed prefix through reentrant release, then loss
+settlement drains its accepted tail and one Cancel before observing input.
 
 ### Frame input and ambient hover belong to each presentation
 
