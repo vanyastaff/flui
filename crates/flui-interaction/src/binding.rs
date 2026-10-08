@@ -221,6 +221,12 @@ struct ResamplerSnapshot {
     capture: Rc<ContactCapture>,
 }
 
+#[derive(Clone, Copy)]
+enum MotionFlush {
+    Frame(Option<(web_time::Instant, web_time::Instant)>),
+    BeforeInput,
+}
+
 /// A resampling policy change was requested while contact sequences were
 /// active.
 ///
@@ -774,7 +780,20 @@ impl GestureBinding {
             .is_resampling_enabled()
             .then(|| self.sampling_clock.get().tick())
             .flatten();
-        self.flush_pending_moves_kernel(sample_window)
+        self.flush_pending_moves_kernel(MotionFlush::Frame(sample_window))
+    }
+
+    /// Deliver this presentation's accepted measured motion before an observing
+    /// input operation, without advancing frame time or ending contacts.
+    /// Reentrant motion remains queued for a later operation or frame.
+    ///
+    /// The runtime calls this before Keyboard and IME dispatch. Ordinary frame
+    /// interpolation remains the responsibility of [`Self::flush_pending_moves`].
+    pub fn flush_pending_input(&self) -> usize {
+        if self.closed.get() {
+            return 0;
+        }
+        self.flush_pending_moves_kernel(MotionFlush::BeforeInput)
     }
 
     /// Flush pending moves with an explicit sampling window.
@@ -799,18 +818,19 @@ impl GestureBinding {
         if self.closed.get() {
             return Ok(0);
         }
-        Ok(self.flush_pending_moves_kernel(Some((sample_time, next_sample_time))))
+        Ok(self
+            .flush_pending_moves_kernel(MotionFlush::Frame(Some((sample_time, next_sample_time)))))
     }
 
-    fn flush_pending_moves_kernel(
-        &self,
-        sample_window: Option<(web_time::Instant, web_time::Instant)>,
-    ) -> usize {
+    fn flush_pending_moves_kernel(&self, mode: MotionFlush) -> usize {
         if self.tearing_down_all_pointers.get() || !self.tearing_down_pointers.borrow().is_empty() {
             return 0;
         }
 
-        let mut first_panic = self.drain_capture_losses(None);
+        let mut first_panic = match mode {
+            MotionFlush::Frame(_) => self.drain_capture_losses(None),
+            MotionFlush::BeforeInput => None,
+        };
         // Freeze the complete direct/coalesced frame batch before any user
         // callback runs. Re-entrant moves replace their exact marker and
         // therefore always belong to the next frame.
@@ -836,11 +856,62 @@ impl GestureBinding {
         };
 
         let mut count = 0;
+        if matches!(mode, MotionFlush::BeforeInput) {
+            // Freeze every measured prefix before callbacks or capture-loss
+            // settlement. A callback for A cannot pull newer B motion into this
+            // accepted round. Capture guards protect each committed prefix from
+            // reentrant release until all its measured packets are delivered.
+            let mut snapshots: SmallVec<[ResamplerSnapshot; 4]> = self
+                .hit_tests
+                .borrow()
+                .iter()
+                .filter(|(_, cached)| cached.resampler.is_tracked())
+                .map(|(&pointer_id, cached)| ResamplerSnapshot {
+                    pointer_id,
+                    sequence: cached.sequence,
+                    token: cached.token,
+                    resampler: cached.resampler.clone(),
+                    capture: Rc::clone(&cached.capture),
+                })
+                .collect();
+            snapshots.sort_unstable_by_key(|snapshot| snapshot.pointer_id);
+            let measured: SmallVec<[_; 4]> = snapshots
+                .into_iter()
+                .map(|snapshot| {
+                    let events = snapshot.resampler.take_pending_events();
+                    (snapshot, events)
+                })
+                .collect();
+            let deliveries: SmallVec<[_; 4]> = measured
+                .iter()
+                .map(|(snapshot, _)| snapshot.capture.begin_delivery())
+                .collect();
+            let losses = self.drain_capture_losses(None);
+            RoutePanic::preserve_first(&mut first_panic, losses, "input prefix capture loss");
+            for (snapshot, events) in &measured {
+                for event in events {
+                    if self.is_current_sequence(snapshot.pointer_id, snapshot.sequence) {
+                        let delivered = self.dispatch_event_with_capture(
+                            event,
+                            snapshot.token,
+                            Some(&snapshot.capture),
+                        );
+                        RoutePanic::preserve_first(
+                            &mut first_panic,
+                            delivered,
+                            "measured motion before input",
+                        );
+                        count += 1;
+                    }
+                }
+            }
+            drop(deliveries);
+        }
         // A resampled contact has exactly one queue: the resampler owned by
         // its cached Down route. Snapshot route capabilities before callbacks
         // so no map borrow crosses executable user code.
         if self.is_resampling_enabled()
-            && let Some((sample_time, next_sample_time)) = sample_window
+            && let MotionFlush::Frame(Some((sample_time, next_sample_time))) = mode
         {
             let mut samples: SmallVec<[ResamplerSnapshot; 4]> = self
                 .hit_tests
