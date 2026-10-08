@@ -353,9 +353,13 @@ fn coalescing_preserves_the_latest_dispatch_and_real_history() {
 fn coalescing_transfers_only_checked_history_ownership() {
     use flui_platform_api::keyboard::Modifiers;
     let sensor = sampled_at(20).with_pressure(Pressure::try_new(0.2).expect("pressure"));
+    let boundary_sensor = sampled_at(10).with_pressure(Pressure::try_new(0.2).expect("pressure"));
     for (old_time, old_history, new_history, expected) in [
+        (10, vec![], vec![], vec![sampled_at(10)]),
         (10, vec![sampled_at(0), sampled_at(5)], vec![sampled_at(15)],
             vec![sampled_at(0), sampled_at(5), sampled_at(10), sampled_at(15)]),
+        (10, vec![boundary_sensor], vec![sampled_at(10), boundary_sensor],
+            vec![boundary_sensor, sampled_at(10), sampled_at(10), boundary_sensor]),
         (10, vec![sampled_at(0)], vec![sampled_at(5), sampled_at(15)],
             vec![sampled_at(0), sampled_at(5), sampled_at(10), sampled_at(15)]),
         (20, vec![sampled_at(10), sensor], vec![sampled_at(10), sensor],
