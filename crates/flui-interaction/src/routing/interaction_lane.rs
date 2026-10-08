@@ -560,7 +560,6 @@ enum LocalEventTransform {
 }
 
 impl LocalEventTransform {
-    #[inline]
     fn capture(transform: Option<Matrix4>) -> Self {
         match transform {
             None => Self::Global,
