@@ -714,10 +714,38 @@ fn assert_capture_route(case: CaptureCase) {
 #[test]
 fn binding_input_contract_matrix() {
     if let Ok(mode) = std::env::var("FLUI_HOVER_METADATA_WORKER") {
-        assert_hover_path_retirement(mode != "metadata-only", 2);
+        match mode.as_str() {
+            "replacement" => assert_queued_hover_retirement(false, 2),
+            "mismatch" => assert_queued_hover_retirement(true, 2),
+            _ => assert_hover_path_retirement(mode != "metadata-only", 2),
+        }
         return;
     }
     let cases: &[(&str, fn())] = &[
+        (
+            "queued_hover_healthy_retirement",
+            queued_hover_healthy_retirement,
+        ),
+        (
+            "queued_hover_failed_retirement",
+            queued_hover_failed_retirement,
+        ),
+        (
+            "queued_hover_competing_retirement",
+            queued_hover_competing_retirement,
+        ),
+        (
+            "mismatched_hover_healthy_retirement_and_reentry",
+            mismatched_hover_healthy_retirement_and_reentry,
+        ),
+        (
+            "mismatched_hover_failed_retirement_and_reentry",
+            mismatched_hover_failed_retirement_and_reentry,
+        ),
+        (
+            "mismatched_hover_competing_retirement",
+            mismatched_hover_competing_retirement,
+        ),
         (
             "hover_healthy_metadata_retirement",
             hover_healthy_metadata_retirement,
@@ -1129,6 +1157,152 @@ fn assert_isolated_hover_metadata_retirement(mode: &str) {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+fn assert_queued_hover_retirement(mismatch: bool, failing_metadata: usize) {
+    use flui_interaction::events::{PointerEvent, PointerKind, make_move_event};
+    use flui_interaction::{GestureBinding, HitTestResult, Offset};
+    use flui_platform_api::pointer::{PointerButtons, PointerMove, PointerRole};
+    use std::{
+        cell::{Cell, RefCell},
+        panic::{AssertUnwindSafe, catch_unwind},
+        rc::Rc,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
+    struct Metadata {
+        drops: Arc<AtomicUsize>,
+        fails: bool,
+    }
+    impl Drop for Metadata {
+        fn drop(&mut self) {
+            self.drops.fetch_add(1, Ordering::SeqCst);
+            if self.fails {
+                panic!("queued hover metadata retirement failure");
+            }
+        }
+    }
+    let packet = |x: f64, changed: bool| {
+        let PointerEvent::Move(mut motion) =
+            make_move_event(Offset::new(x, 20.0), PointerKind::Mouse).expect("finite hover")
+        else {
+            unreachable!()
+        };
+        if changed {
+            motion.pointer.role = PointerRole::Primary;
+        }
+        PointerEvent::Move(PointerMove::new(
+            motion.pointer,
+            PointerButtons::NONE,
+            *motion.current(),
+        ))
+    };
+    let lane = InteractionLane::try_new().expect("owner lane");
+    let binding = Rc::new(GestureBinding::new());
+    let drops = Arc::new(AtomicUsize::new(0));
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let reentered = Rc::new(Cell::new(false));
+    let observed = Rc::clone(&calls);
+    let entered = Rc::clone(&reentered);
+    let owner = Rc::downgrade(&binding);
+    let newest = packet(40.0, mismatch);
+    binding
+        .pointer_router()
+        .add_global_handler(Rc::new(move |event| {
+            if let PointerEvent::Move(motion) = event {
+                observed
+                    .borrow_mut()
+                    .push(motion.current().position.get().x);
+                if mismatch && !entered.replace(true) {
+                    // The newer packet was admitted before this older source's callback.
+                    // Reentrant replacement must stay pending after outgoing retirement.
+                    owner
+                        .upgrade()
+                        .expect("live binding")
+                        .handle_pointer_event(&newest, |_| HitTestResult::new());
+                }
+            }
+        }));
+    lane.enter(|| {
+        binding.handle_pointer_event(&packet(20.0, false), |_| {
+            let mut path = HitTestResult::new();
+            for index in 0..2 {
+                path.add(
+                    HitTestEntry::new(RenderId::new(index + 1)).metadata(Arc::new(Metadata {
+                        drops: Arc::clone(&drops),
+                        fails: index < failing_metadata,
+                    })),
+                );
+            }
+            path
+        });
+        assert_eq!(drops.load(Ordering::SeqCst), 0);
+        let outcome = catch_unwind(AssertUnwindSafe(|| {
+            binding.handle_pointer_event(&packet(30.0, mismatch), |_| HitTestResult::new());
+        }));
+        if failing_metadata == 0 {
+            outcome.expect("healthy outgoing path retirement");
+            assert_eq!(drops.load(Ordering::SeqCst), 2);
+        } else {
+            let first = outcome.expect_err("outgoing metadata retirement failed");
+            assert_eq!(
+                first.downcast_ref::<&str>().copied(),
+                Some("queued hover metadata retirement failure")
+            );
+            assert_eq!(
+                drops.load(Ordering::SeqCst),
+                1,
+                "later opaque metadata is retained after the first failure"
+            );
+        }
+        assert_eq!(
+            calls.borrow().as_slice(),
+            if mismatch { &[20.0][..] } else { &[][..] }
+        );
+        assert_eq!(
+            binding.flush_pending_moves(),
+            1,
+            "accepted replacement survives outgoing retirement"
+        );
+        assert_eq!(
+            calls.borrow().as_slice(),
+            if mismatch {
+                &[20.0, 40.0][..]
+            } else {
+                &[30.0][..]
+            }
+        );
+        binding.handle_pointer_event(&packet(50.0, mismatch), |_| HitTestResult::new());
+        assert_eq!(
+            binding.flush_pending_moves(),
+            1,
+            "fresh work recovers after retirement failure"
+        );
+        assert_eq!(calls.borrow().last().copied(), Some(50.0));
+        assert_eq!(binding.flush_pending_moves(), 0);
+        binding.pointer_router().clear();
+    });
+}
+
+fn queued_hover_healthy_retirement() {
+    assert_queued_hover_retirement(false, 0);
+}
+fn queued_hover_failed_retirement() {
+    assert_queued_hover_retirement(false, 1);
+}
+fn queued_hover_competing_retirement() {
+    assert_isolated_hover_metadata_retirement("replacement");
+}
+fn mismatched_hover_healthy_retirement_and_reentry() {
+    assert_queued_hover_retirement(true, 0);
+}
+fn mismatched_hover_failed_retirement_and_reentry() {
+    assert_queued_hover_retirement(true, 1);
+}
+fn mismatched_hover_competing_retirement() {
+    assert_isolated_hover_metadata_retirement("mismatch");
 }
 
 fn device_removal_preserves_a_reentrant_replacement() {
