@@ -120,6 +120,10 @@ verification pending означает ограничения из `pointer-vocab
 Повторный restored-прогон на базе `9d171de1` проверил binding, allocator,
 private resampling, lower reveal/retirement и обе публичные widget-семьи.
 Полный gate, CI и слияние в `main` ещё не выполнены.
+После пяти независимых CombinedMode/scale-velocity/focal-fling/rotation/boundary
+откатов точные production-хунки восстановлены; повторный прогон всех 43
+pointer/gesture widget-строк на базе `85a5f10e6` прошёл. Это не заменяет
+оставшиеся native, docs, benchmark и final-gate проверки.
 
 | Row | Requirement | Status | Closure |
 |---|---|---|---|
@@ -132,8 +136,8 @@ private resampling, lower reveal/retirement и обе публичные widget-
 | M1-35 | Scroll latching | implemented locally; final gates pending | `nested_scroll_sequence_keeps_its_first_consumptive_target`, phase/cancel/timeout/device/source-local rows pass. Independent focus-drain, device-removal and exact kind/role identity inverses fail accepted delivery/count assertions; restored binding families pass |
 | M2-A6 | Competing-recognizer composition | implemented locally; final gates pending | `GestureCompetition` feeds real GestureDetector arbitration; eight arena rows pass, admission inverse fails and restored sources pass |
 | M2-D5 | Multi-pointer drag strategy | implemented locally; final gates pending | `DragPointerStrategy::ContinueWithRemaining` reaches GestureDetector/Scrollable; continuation and reentrant cancellation rows pass. Reverting continuation produces premature Scrollable fling and ends the recognizer on the first Up instead of retaining the remaining contact |
-| M2-S1 | Scale + rotate consumed by a widget | implemented locally; broader gesture inverses pending | Scale recognizer reaches mounted InteractiveViewer; pivot rotation, finite recovery, touch transition and focal-fling rows pass. Native lease inverse changes the mounted Viewer scale from the required 1.5 to 1.2 and fails ten binding rows; restored binding families pass |
-| M2-S6 | Scale end velocity | implemented locally; inverse pending | `viewer_reports_scale_velocity_separately_from_focal_velocity` and terminal event-clock cases pass |
+| M2-S1 | Scale + rotate consumed by a widget | implemented locally; final gates pending | Scale recognizer reaches mounted InteractiveViewer; pivot rotation, finite recovery, touch transition and focal-fling rows pass. Combined-mode inverse fails three actual contracts; zero-impulse focal-fling inverse fails both progress and rebuild/geometry rows; rotation-only inverse fails pivot and recovery; MAX finite-boundary inverse loses the boundary result. Native lease inverse changes the mounted Viewer scale from the required 1.5 to 1.2 and fails ten binding rows; each hunk was restored |
+| M2-S6 | Scale end velocity | implemented locally; final gates pending | `viewer_reports_scale_velocity_separately_from_focal_velocity` and terminal event-clock cases pass; scalar-scale-velocity inverse fails the distinct-units contract and exact production hunk was restored |
 | M2-S7 | Trackpad pan/zoom fed to recognizers | implemented locally; final gates pending | Native claim/session owner connects PanZoom to Scale/Viewer; repeated Start, descendant rebuild and terminal ownership rows pass. Independent lease, focus-drain, device-removal and exact kind/role identity inverses fail; restored binding families pass |
 | M2-X4 | Nested scroll fling handoff | implemented locally; final gates pending | All 56 scroll rows pass, including the actual receiver DPR=2 case. Independent delivery, bounce-parent policy, equal-edge reentrant jump, ordinary same-controller rebuild, custom-physics first-failure ordering and DPR inverses fail; exact restored sources pass the full family. ADR-0169 |
 | M3-H2 | Perspective transforms unproject the ray | implemented locally; final gates pending | Two public transform matrices pass; position and vector/widget inverses fail and restored sources pass; ADR-0162 |
