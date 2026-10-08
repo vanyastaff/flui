@@ -91,7 +91,6 @@ pub(crate) fn viewer_native_session_reports_one_start_and_one_terminal() {
                 ends.borrow_mut().push(match details.reason {
                     GestureEndReason::Completed => "completed",
                     GestureEndReason::Cancelled => "cancelled",
-                    _ => panic!("unexpected terminal reason"),
                 });
             })
             .child(SizedBox::new(100.0, 100.0)),

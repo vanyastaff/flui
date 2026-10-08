@@ -46,7 +46,7 @@ pub(crate) fn presentation_resampling_uses_the_owner_frame_clock() {
                 .expect("idle presentation admits opt-in");
         }
         host.attach(&view).expect("mount Listener");
-        host.pump(Duration::from_millis(16));
+        let _ = host.pump(Duration::from_millis(16));
         let pointer = PointerInfo::new(
             PointerId::try_from(1_u64).expect("nonzero contact"),
             PointerKind::Touch,
@@ -95,7 +95,7 @@ pub(crate) fn presentation_resampling_uses_the_owner_frame_clock() {
                 observed.borrow().is_empty(),
                 "resampling waits for the owner's frame"
             );
-            host.pump(Duration::ZERO);
+            let _ = host.pump(Duration::ZERO);
             let emitted = observed.borrow();
             assert_eq!(emitted.len(), 2);
             assert_eq!(emitted[0], (10.0, 0));
@@ -105,7 +105,7 @@ pub(crate) fn presentation_resampling_uses_the_owner_frame_clock() {
             );
             assert_eq!(emitted[1].1, 62_000_000);
             drop(emitted);
-            host.pump(Duration::from_millis(38));
+            let _ = host.pump(Duration::from_millis(38));
             assert_eq!(
                 observed.borrow().last(),
                 Some(&(110.0, 100_000_000)),
