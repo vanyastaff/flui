@@ -8,7 +8,7 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_foundation::geometry::Point;
-use flui_interaction::events::{PointerKind, make_move_event};
+use flui_interaction::events::{PointerEventExt, PointerKind, make_move_event};
 use flui_interaction::{HitTestEntry, InteractionLane, Offset, PointerTarget, RenderId};
 use flui_platform_api::pointer::{
     DeviceId, PointerEvent, PointerMove, PointerPosition, PointerRole, PointerSample, Pressure,
@@ -125,6 +125,86 @@ fn resolved_route_move_invocation_allocates_no_heap_after_setup() {
             }
         }
     }
+    for stop in [false, true] {
+        measure_resampler_delivery(stop);
+    }
+    resampler_raised_timestamp_keeps_checked_history_policy();
+}
+
+fn resampler_packets(down_time: u64) -> [PointerEvent; 3] {
+    use flui_platform_api::pointer::{PointerButton, PointerButtons, PointerInfo, PointerPress, PointerRelease};
+    let pointer = PointerInfo::new(
+        flui_platform_api::pointer::PointerId::new(core::num::NonZeroU64::MIN),
+        PointerKind::Mouse,
+    )
+    .with_device(DeviceId::try_from(7_u64).expect("source device"))
+    .with_role(PointerRole::Additional);
+    let buttons = PointerButtons::only(PointerButton::PRIMARY);
+    [
+        PointerEvent::Down(PointerPress::new(
+            pointer, PointerButton::PRIMARY, buttons, route_sample(down_time, 0.0, 0.0),
+        )),
+        PointerEvent::Move(PointerMove::new(pointer, buttons, route_sample(3_000_000, 30.0, 50.0))
+            .with_modifiers(Modifiers::SHIFT)
+            .with_coalesced(vec![route_sample(1_000_000, 10.0, 20.0), route_sample(2_000_000, 20.0, 30.0)])
+            .with_predicted(vec![route_sample(4_000_000, 40.0, 60.0)])),
+        PointerEvent::Up(PointerRelease::new(
+            pointer, PointerButton::PRIMARY, PointerButtons::NONE,
+            route_sample(down_time.max(5_000_000), 30.0, 50.0),
+        )),
+    ]
+}
+
+fn measure_resampler_delivery(stop: bool) {
+    use flui_interaction::processing::PointerEventResampler;
+    use web_time::{Duration, Instant};
+    let packets = resampler_packets(0);
+    let resampler = PointerEventResampler::new(packets[0].pointer_id().expect("contact identity"));
+    let base = Instant::now();
+    for (packet, millis) in packets.iter().zip([0, 3, 5]) {
+        resampler.add_event_at(packet.clone(), base + Duration::from_millis(millis));
+    }
+    let mut deliveries = 0;
+    let mut consume = |packet| {
+        assert_eq!(packet, packets[deliveries], "owned delivery preserves every source field");
+        deliveries += 1;
+    };
+    ALLOCATIONS.store(0, Ordering::Relaxed);
+    if stop {
+        resampler.stop(&mut consume);
+    } else {
+        resampler.sample(base + Duration::from_millis(3), base + Duration::from_millis(4), &mut consume);
+    }
+    let allocations = ALLOCATIONS.load(Ordering::Relaxed);
+    assert_eq!(allocations, 0, "unchanged-time measured history delivery reuses owned storage: stop={stop}");
+    if !stop {
+        resampler.stop(&mut consume);
+    }
+    assert_eq!(deliveries, 3, "the complete accepted sequence remains deliverable");
+    assert!(!resampler.has_pending_events());
+}
+
+fn resampler_raised_timestamp_keeps_checked_history_policy() {
+    use flui_interaction::processing::PointerEventResampler;
+    use web_time::{Duration, Instant};
+    let mut packets = resampler_packets(10_000_000);
+    let resampler = PointerEventResampler::new(packets[0].pointer_id().expect("contact identity"));
+    let base = Instant::now();
+    for (packet, millis) in packets.iter().zip([0, 1, 2]) {
+        resampler.add_event_at(packet.clone(), base + Duration::from_millis(millis));
+    }
+    let PointerEvent::Move(movement) = &packets[1] else { panic!("Move fixture") };
+    let mut current = *movement.current();
+    current.time = EventTime::from_nanos(10_000_000);
+    packets[1] = PointerEvent::Move(PointerMove::new(movement.pointer, movement.buttons, current)
+        .with_modifiers(movement.modifiers)
+        .with_coalesced(movement.coalesced().to_vec()));
+    let mut deliveries = 0;
+    resampler.stop(|packet| {
+        assert_eq!(packet, packets[deliveries], "raised time revalidates predictions while preserving measured history");
+        deliveries += 1;
+    });
+    assert_eq!(deliveries, 3);
 }
 
 fn route_sample(time: u64, x: f64, y: f64) -> PointerSample {
