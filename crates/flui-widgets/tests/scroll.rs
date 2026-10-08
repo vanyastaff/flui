@@ -76,7 +76,13 @@ pub(crate) fn scrollable_drag_up_increases_scroll_offset() {
 }
 
 pub(crate) fn a_remaining_touch_continues_scroll_without_an_intermediate_fling() {
-    use flui_platform_api::{EventTime, pointer::{PointerButton, PointerButtons, PointerEvent, PointerInfo, PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease, PointerSample}};
+    use flui_platform_api::{
+        EventTime,
+        pointer::{
+            PointerButton, PointerButtons, PointerEvent, PointerInfo, PointerKind, PointerMove,
+            PointerPosition, PointerPress, PointerRelease, PointerSample,
+        },
+    };
     use flui_testing::PointerPhase;
 
     let controller = ScrollController::new();
@@ -86,12 +92,33 @@ pub(crate) fn a_remaining_touch_continues_scroll_without_an_intermediate_fling()
         .child(SizedBox::new(300.0, 5000.0));
     let mut scoped = fling_scoped(widget, Vsync::new(), tight(300.0, 300.0));
     let event = |id: u64, millis: u64, y: f64, phase| {
-        let info = PointerInfo::new(flui_interaction::PointerId::try_from(id).expect("nonzero touch identity"), PointerKind::Touch);
-        let sample = PointerSample::new(EventTime::from_nanos(millis * 1_000_000), PointerPosition::try_new(flui_foundation::geometry::Point::new(150.0, y)).expect("finite touch position"));
+        let info = PointerInfo::new(
+            flui_interaction::PointerId::try_from(id).expect("nonzero touch identity"),
+            PointerKind::Touch,
+        );
+        let sample = PointerSample::new(
+            EventTime::from_nanos(millis * 1_000_000),
+            PointerPosition::try_new(flui_foundation::geometry::Point::new(150.0, y))
+                .expect("finite touch position"),
+        );
         match phase {
-            PointerPhase::Down => PointerEvent::Down(PointerPress::new(info, PointerButton::PRIMARY, PointerButtons::NONE.with(PointerButton::PRIMARY), sample)),
-            PointerPhase::Move => PointerEvent::Move(PointerMove::new(info, PointerButtons::NONE.with(PointerButton::PRIMARY), sample)),
-            PointerPhase::Up => PointerEvent::Up(PointerRelease::new(info, PointerButton::PRIMARY, PointerButtons::NONE, sample)),
+            PointerPhase::Down => PointerEvent::Down(PointerPress::new(
+                info,
+                PointerButton::PRIMARY,
+                PointerButtons::NONE.with(PointerButton::PRIMARY),
+                sample,
+            )),
+            PointerPhase::Move => PointerEvent::Move(PointerMove::new(
+                info,
+                PointerButtons::NONE.with(PointerButton::PRIMARY),
+                sample,
+            )),
+            PointerPhase::Up => PointerEvent::Up(PointerRelease::new(
+                info,
+                PointerButton::PRIMARY,
+                PointerButtons::NONE,
+                sample,
+            )),
             PointerPhase::Cancel => unreachable!("this row scripts touch release"),
         }
     };
@@ -105,25 +132,45 @@ pub(crate) fn a_remaining_touch_continues_scroll_without_an_intermediate_fling()
     ] {
         scoped.dispatch_pointer_event(&event(id, millis, y, phase));
     }
-    assert_eq!(controller.pixels(), 100.0, "passive touch motion does not move the active drag");
+    assert_eq!(
+        controller.pixels(),
+        100.0,
+        "passive touch motion does not move the active drag"
+    );
     scoped.dispatch_pointer_event(&event(2, 45, 150.0, PointerPhase::Up));
     scoped.pump_for(Duration::from_millis(16));
     scoped.pump_for(Duration::from_millis(16));
-    assert_eq!(controller.pixels(), 100.0, "first touch release must not start a ballistic run while another touch remains");
+    assert_eq!(
+        controller.pixels(),
+        100.0,
+        "first touch release must not start a ballistic run while another touch remains"
+    );
 
     scoped.dispatch_pointer_event(&event(3, 55, 90.0, PointerPhase::Move));
-    assert_eq!(controller.pixels(), 90.0, "handoff rebases to the successor: only its next 10px delta scrolls");
+    assert_eq!(
+        controller.pixels(),
+        90.0,
+        "handoff rebases to the successor: only its next 10px delta scrolls"
+    );
     scoped.dispatch_pointer_event(&event(3, 65, 100.0, PointerPhase::Move));
     assert_eq!(controller.pixels(), 80.0);
     scoped.dispatch_pointer_event(&event(3, 70, 100.0, PointerPhase::Up));
     scoped.pump_for(Duration::from_millis(16));
     scoped.pump_for(Duration::from_millis(16));
-    assert!(controller.pixels() < 80.0, "final fling uses the successor's downward measured history, not the first touch's upward velocity: {}", controller.pixels());
+    assert!(
+        controller.pixels() < 80.0,
+        "final fling uses the successor's downward measured history, not the first touch's upward velocity: {}",
+        controller.pixels()
+    );
 
     controller.jump_to(200.0);
     scoped.dispatch_pointer_event(&event(2, 200, 200.0, PointerPhase::Down));
     scoped.dispatch_pointer_event(&event(2, 210, 190.0, PointerPhase::Move));
-    assert_eq!(controller.pixels(), 210.0, "reused touch identity starts a fresh drag after completion");
+    assert_eq!(
+        controller.pixels(),
+        210.0,
+        "reused touch identity starts a fresh drag after completion"
+    );
     scoped.dispatch_pointer_event(&event(2, 220, 190.0, PointerPhase::Up));
 }
 
@@ -769,6 +816,133 @@ pub(crate) fn a_wheel_tick_over_nested_scrollables_moves_only_the_inner() {
         outer.pixels(),
         0.0,
         "the outer scrollable must NOT also scroll — the inner claimed the tick"
+    );
+}
+
+fn phased_scroll(
+    y: f64,
+    dy: f64,
+    phase: Option<flui_interaction::events::pointer::ScrollPhase>,
+    device: u64,
+) -> flui_interaction::PointerEvent {
+    use flui_interaction::events::pointer::*;
+    let pointer = PointerInfo::new(
+        PointerId::try_from(1_u64).expect("pointer"),
+        PointerKind::Mouse,
+    )
+    .with_device(DeviceId::try_from(device).expect("actual source"));
+    let mut event = ScrollEvent::new(
+        pointer,
+        flui_platform_api::EventTime::from_nanos(0),
+        PointerPosition::try_new(flui_foundation::geometry::Point::new(150.0, y))
+            .expect("finite focal point"),
+        ScrollDelta::try_new(ScrollUnit::Pixels, 0.0, dy).expect("finite scroll"),
+    );
+    event.phase = phase;
+    PointerEvent::Scroll(event)
+}
+
+/// The same native gesture cannot jump into an ancestor at the child's edge.
+pub(crate) fn nested_scroll_sequence_keeps_its_first_consumptive_target() {
+    use flui_interaction::events::pointer::ScrollPhase;
+    let outer = ScrollController::new();
+    let inner = ScrollController::new();
+    let scoped = nested_scrollables(&outer, &inner, Vsync::new());
+    inner.jump_to(inner.max_scroll_extent() - 20.0);
+    scoped.dispatch_pointer_event(&phased_scroll(100.0, 20.0, Some(ScrollPhase::Began), 1));
+    assert_eq!(inner.pixels(), inner.max_scroll_extent());
+    scoped.dispatch_pointer_event(&phased_scroll(100.0, 30.0, Some(ScrollPhase::Changed), 1));
+    assert_eq!(
+        outer.pixels(),
+        0.0,
+        "reaching the edge does not chain the same gesture into the ancestor"
+    );
+    scoped.dispatch_pointer_event(&phased_scroll(100.0, 0.0, Some(ScrollPhase::Ended), 1));
+    scoped.dispatch_pointer_event(&phased_scroll(100.0, 30.0, Some(ScrollPhase::Began), 1));
+    assert_eq!(
+        outer.pixels(),
+        30.0,
+        "the next gesture selects the first target that can actually move"
+    );
+    inner.jump_to(0.0);
+    scoped.dispatch_pointer_event(&phased_scroll(100.0, 30.0, Some(ScrollPhase::Changed), 1));
+    assert_eq!(
+        inner.pixels(),
+        0.0,
+        "a newly eligible descendant cannot steal an already claimed stream"
+    );
+    assert_eq!(outer.pixels(), 60.0);
+}
+
+pub(crate) fn scroll_latch_survives_focal_motion_and_releases_on_cancel() {
+    use flui_interaction::events::pointer::ScrollPhase;
+    let outer = ScrollController::new();
+    let inner = ScrollController::new();
+    let scoped = nested_scrollables(&outer, &inner, Vsync::new());
+    scoped.dispatch_pointer_event(&phased_scroll(100.0, 53.0, Some(ScrollPhase::Began), 1));
+    scoped.dispatch_pointer_event(&phased_scroll(250.0, 30.0, Some(ScrollPhase::Changed), 1));
+    assert_eq!(
+        inner.pixels(),
+        83.0,
+        "the exact first claimant receives later focal motion outside its viewport"
+    );
+    assert_eq!(outer.pixels(), 0.0);
+    scoped.dispatch_pointer_event(&phased_scroll(250.0, 0.0, Some(ScrollPhase::Cancelled), 1));
+    scoped.dispatch_pointer_event(&phased_scroll(250.0, 30.0, Some(ScrollPhase::Began), 1));
+    assert_eq!(
+        outer.pixels(),
+        30.0,
+        "cancellation releases the next fresh claim"
+    );
+}
+
+pub(crate) fn phase_less_scroll_latch_expires_on_owner_clock_inactivity() {
+    let outer = ScrollController::new();
+    let inner = ScrollController::new();
+    let mut scoped = nested_scrollables(&outer, &inner, Vsync::new());
+    scoped.dispatch_pointer_event(&phased_scroll(100.0, 53.0, None, 1));
+    scoped.pump_for(Duration::from_millis(499));
+    scoped.dispatch_pointer_event(&phased_scroll(250.0, 30.0, None, 1));
+    assert_eq!(
+        inner.pixels(),
+        83.0,
+        "a wheel burst remains latched just before the inactivity boundary"
+    );
+    assert_eq!(outer.pixels(), 0.0);
+    scoped.pump_for(Duration::from_millis(500));
+    scoped.dispatch_pointer_event(&phased_scroll(250.0, 30.0, None, 1));
+    assert_eq!(
+        outer.pixels(),
+        30.0,
+        "500ms of owner-clock inactivity releases the burst without sleeping"
+    );
+}
+
+pub(crate) fn scroll_latches_are_source_local_and_device_removal_releases() {
+    use flui_interaction::events::pointer::*;
+    let outer = ScrollController::new();
+    let inner = ScrollController::new();
+    let scoped = nested_scrollables(&outer, &inner, Vsync::new());
+    scoped.dispatch_pointer_event(&phased_scroll(100.0, 53.0, Some(ScrollPhase::Began), 1));
+    scoped.dispatch_pointer_event(&phased_scroll(250.0, 30.0, Some(ScrollPhase::Began), 2));
+    assert_eq!(
+        outer.pixels(),
+        30.0,
+        "another source owns its independent claim"
+    );
+    scoped.dispatch_pointer_event(&phased_scroll(250.0, 30.0, Some(ScrollPhase::Changed), 1));
+    assert_eq!(inner.pixels(), 83.0);
+    assert_eq!(outer.pixels(), 30.0);
+    scoped.dispatch_pointer_event(&PointerEvent::DeviceRemoved(PointerDeviceChange::new(
+        DeviceId::try_from(1_u64).expect("device"),
+        PointerKind::Mouse,
+        flui_platform_api::EventTime::from_nanos(0),
+    )));
+    scoped.dispatch_pointer_event(&phased_scroll(250.0, 30.0, Some(ScrollPhase::Changed), 1));
+    assert_eq!(
+        outer.pixels(),
+        60.0,
+        "a removed source cannot retain its stale claim"
     );
 }
 
