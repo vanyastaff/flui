@@ -805,6 +805,10 @@ fn binding_input_contract_matrix() {
         ("scroll_claim_reentry", scroll_claim_reentry_keeps_new_lease),
         ("scroll_focus_loss", scroll_focus_loss_releases_lease),
         (
+            "scroll_first_terminal_delta",
+            scroll_first_terminal_delta_remains_deliverable,
+        ),
+        (
             "scroll_claim_retirement",
             scroll_claim_survives_capture_retirement,
         ),
@@ -1815,6 +1819,66 @@ fn scroll_claim_reentry_keeps_new_lease() {
 }
 fn scroll_focus_loss_releases_lease() {
     assert_scroll_lease(ScrollLeaseCase::FocusLoss);
+}
+
+fn scroll_first_terminal_delta_remains_deliverable() {
+    use flui_foundation::geometry::Offset;
+    use flui_interaction::events::{PointerEvent, make_scroll_event};
+    use flui_interaction::{EventPropagation, GestureBinding, HitTestResult};
+    use flui_platform_api::pointer::ScrollPhase;
+    use std::{cell::Cell, rc::Rc};
+
+    let packet = |phase| {
+        let PointerEvent::Scroll(mut scroll) =
+            make_scroll_event(Offset::ZERO, Offset::new(0.0, 10.0)).expect("finite wheel")
+        else {
+            unreachable!()
+        };
+        scroll.phase = Some(phase);
+        PointerEvent::Scroll(scroll)
+    };
+    for prior_unconsumed in [false, true] {
+        let lane = InteractionLane::try_new().expect("lane");
+        let handle = lane.dispatch_handle();
+        let binding = GestureBinding::new();
+        let first = Rc::new(Cell::new(0));
+        let next = Rc::new(Cell::new(0));
+        lane.enter(|| {
+            let calls = Rc::clone(&first);
+            let target = handle
+                .register_scroll(move |_| {
+                    calls.set(calls.get() + 1);
+                    EventPropagation::Stop
+                })
+                .expect("terminal consumer");
+            let mut path = HitTestResult::new();
+            path.add(HitTestEntry::new(RenderId::new(1)).scroll_target(target));
+            if prior_unconsumed {
+                binding.handle_pointer_event(&packet(ScrollPhase::Began), |_| HitTestResult::new());
+            }
+            binding.handle_pointer_event(&packet(ScrollPhase::Ended), |_| path.clone());
+            assert_eq!(
+                first.get(),
+                1,
+                "first meaningful terminal delta is not discarded"
+            );
+            let calls = Rc::clone(&next);
+            let target = handle
+                .register_scroll(move |_| {
+                    calls.set(calls.get() + 1);
+                    EventPropagation::Stop
+                })
+                .expect("next consumer");
+            let mut path = HitTestResult::new();
+            path.add(HitTestEntry::new(RenderId::new(2)).scroll_target(target));
+            binding.handle_pointer_event(&packet(ScrollPhase::Changed), |_| path.clone());
+            assert_eq!(
+                next.get(),
+                1,
+                "terminal consumption does not retain a scroll lease"
+            );
+        });
+    }
 }
 
 fn scroll_claim_survives_capture_retirement() {
