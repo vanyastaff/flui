@@ -1869,6 +1869,7 @@ fn scroll_owner_batch_preserves_reentrant_admission() {
             else {
                 unreachable!()
             };
+            scroll.pointer.id = PointerId::try_from(3_u64).expect("distinct wheel pointer");
             scroll.pointer = scroll.pointer.with_device(device);
             scroll.phase = Some(phase);
             PointerEvent::Scroll(scroll)
