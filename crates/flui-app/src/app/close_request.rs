@@ -191,11 +191,14 @@ pub enum CloseResponse {
 #[derive(Clone)]
 pub struct CloseRequestHandler(
     #[cfg_attr(
-        all(target_arch = "wasm32", not(test)),
+        all(
+            any(target_arch = "wasm32", target_os = "android", target_os = "ios"),
+            not(test)
+        ),
         expect(
             dead_code,
-            reason = "reached through the loop-exit teardown (desktop/android/iOS); wasm32 has \
-                      no loop-exit teardown at all"
+            reason = "native close-request consultation is wired on desktop; mobile and web \
+                      retain the common handler API without invoking it"
         )
     )]
     Arc<dyn Fn(&CloseRequest) -> CloseResponse + Send + Sync>,
@@ -208,11 +211,14 @@ impl CloseRequestHandler {
     }
 
     #[cfg_attr(
-        all(target_arch = "wasm32", not(test)),
+        all(
+            any(target_arch = "wasm32", target_os = "android", target_os = "ios"),
+            not(test)
+        ),
         expect(
             dead_code,
-            reason = "reached through the loop-exit teardown (desktop/android/iOS); wasm32 has \
-                      no loop-exit teardown at all"
+            reason = "native close-request consultation is wired on desktop; mobile and web \
+                      retain the common handler API without invoking it"
         )
     )]
     fn call(&self, request: &CloseRequest) -> CloseResponse {
@@ -430,11 +436,14 @@ impl CloseRequestRouter {
     /// `reason` is why the close was asked for. Not yet carried to the
     /// handler: [`CloseRequest::reason`] reads [`CloseReason::User`].
     #[cfg_attr(
-        all(target_arch = "wasm32", not(test)),
+        all(
+            any(target_arch = "wasm32", target_os = "android", target_os = "ios"),
+            not(test)
+        ),
         expect(
             dead_code,
-            reason = "reached through the loop-exit teardown (desktop/android/iOS); wasm32 has \
-                      no loop-exit teardown at all"
+            reason = "native close-request consultation is wired on desktop; mobile and web \
+                      retain the common handler API without invoking it"
         )
     )]
     pub(crate) fn consult(

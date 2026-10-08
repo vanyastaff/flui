@@ -822,7 +822,7 @@ impl IOSPlatform {
             if outcome.is_ok() {
                 self.enqueue(SceneAction::Publish(pending));
             } else {
-                self.enqueue(SceneAction::Rollback(pending.origin.clone()));
+                self.enqueue(SceneAction::Rollback(pending.origin));
             }
         }
     }
