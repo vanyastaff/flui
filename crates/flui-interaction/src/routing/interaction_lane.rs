@@ -560,13 +560,13 @@ enum LocalEventTransform {
 }
 
 impl LocalEventTransform {
-    fn capture(transform: Option<Matrix4>) -> Self {
+    fn capture(transform: Option<&Matrix4>) -> Self {
         match transform {
             None => Self::Global,
             // A composed root identity changes no source reading. Borrow the
             // original event, including both histories, instead of owning a
             // localized copy. Approximate identity would erase real motion.
-            Some(transform) if transform == Matrix4::IDENTITY => Self::Global,
+            Some(transform) if *transform == Matrix4::IDENTITY => Self::Global,
             // `HitTestResult` composes `transform` by left-multiplying each
             // ancestor level's own inverse as the walk descends (see
             // `HitTestEntry::transform`'s doc), so it already maps global to
@@ -576,7 +576,7 @@ impl LocalEventTransform {
             // pipeline's guarded traversal (ADR-0113).
             Some(transform) => {
                 if transform.is_invertible() {
-                    Self::Local(transform)
+                    Self::Local(*transform)
                 } else {
                     Self::NonInvertible
                 }
@@ -2149,7 +2149,7 @@ impl InteractionDispatchHandle {
                         target,
                         owner: lane.target_owners.borrow().get(&target.target_id).cloned(),
                         handler_cell: Rc::clone(cell),
-                        local_transform: LocalEventTransform::capture(entry.transform),
+                        local_transform: LocalEventTransform::capture(entry.transform.as_ref()),
                     });
                 } else {
                     misses.push(RouteResolutionMiss::TargetGone { path_index });
@@ -2330,7 +2330,7 @@ impl InteractionDispatchHandle {
                         targets.get(&target.target_id).cloned().map(|cell| {
                             (
                                 cell,
-                                LocalEventTransform::capture(entry.transform),
+                                LocalEventTransform::capture(entry.transform.as_ref()),
                                 lane.owner_latch(target.target_id),
                             )
                         })
