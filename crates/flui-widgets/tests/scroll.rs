@@ -1891,7 +1891,6 @@ pub(crate) fn nested_fling_hands_remaining_velocity_to_matching_parent_axes() {
 
 pub(crate) fn nested_fling_parent_boundary_policy_receives_presentation_pixel_ratio() {
     use flui_animation::Simulation;
-    use flui_foundation::geometry::Axis::Vertical;
     use flui_widgets::{ScrollMetrics, ScrollPhysics};
 
     #[derive(Debug)]
