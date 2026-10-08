@@ -26,7 +26,13 @@ PR #1467 (held Down на blur), #1476 (контрактные тесты hover/h
 
 ## PR
 
-| Row | Requirement | Status | Closure |
+Эта таблица сохраняет исходное назначение строк PR на 2026-10-06.
+Колонка baseline не описывает текущую реализацию: её проверки и ограничения
+записаны в [tasks.md](tasks.md) и в текущих строках ниже. Отдельная проверка
+40 ms debounce двойного тапа остаётся открытой до публичного воспроизведения
+и подтверждённого исправления; наличие merged-PR её не закрывает.
+
+| Row | Requirement | Baseline status (2026-10-06) | Assigned closure |
 |---|---|---|---|
 | M1-14 | OS-level capture (drag leaves the window) | broken (Win32, web) | PR #1471 (Win32 `SetCapture`/`WM_CAPTURECHANGED`; web — pointer-vocabulary V14) |
 | M2-T3 | Button filtering for non-tap recognizers | broken | PR #1474 |
@@ -74,7 +80,7 @@ verification pending означает ограничения из `pointer-vocab
 | M1-29 | Scroll / gesture phases | implemented locally; producer verification pending | spec pointer-vocabulary P3-macOS (V11) / winit V10 |
 | M1-30 | Momentum phase + inertia cancel | implemented locally; producer verification pending | spec pointer-vocabulary P3-macOS (V11) |
 | M1-31 | Trackpad pinch / rotate as distinct events | implemented locally; producer verification pending | spec pointer-vocabulary P3-winit (V10) |
-| M1-32 | Trackpad two-finger pan as pan-zoom | implemented locally; producer verification pending | spec pointer-vocabulary P3-macOS (V11) |
+| M1-32 | Trackpad two-finger pan delivered through native scroll | implemented locally; producer verification pending | AppKit `scrollWheel:` produces one `ScrollEvent` with phase/momentum and precision; magnify/rotate share a separate cumulative `PanZoom` stream. Approved pointer-vocabulary P3-macOS (V11) and ADR-0143 preserve this distinction without duplicate scroll |
 | M1-36 | High-DPI: logical vs device px types | implemented locally; producer verification pending | spec pointer-vocabulary P2 (V6); web float coords — V14 |
 | M1-39 | Android mouse wheel (`ACTION_SCROLL`) | implemented locally; producer verification pending | spec pointer-vocabulary P3-Android (V13) |
 | M1-40 | Win32 pen and touch (`WM_POINTER`) | implemented locally; producer verification pending | spec pointer-vocabulary P3-Win32 (V9) |
@@ -97,7 +103,7 @@ verification pending означает ограничения из `pointer-vocab
 | M2-X1 | System timings from the OS | absent | spec platform-layer LY8 |
 | M1-10 | Predicted events | withdrawn (local extrapolator) | S2: неподключённый `InputPredictor` удалён; аппаратные predicted samples сохраняются в owned-событиях и локализации по pointer-vocabulary P2/P3. Синтез будущих samples не поддерживается |
 | M1-24 | Click count / interval from the OS | partial | spec flui-interaction I11 |
-| M2-A5 | Arena teams | withdrawn | S2: неподключённые team/TeamEntry и multiple-winner resolution удалены; NEW recognizer-composition остаётся будущей задачей, её поведение не объявляется реализованным |
+| M2-A5 | Arena teams | withdrawn | S2: неподключённые team/TeamEntry и multiple-winner resolution удалены. Typed exclusive/require-first-failure composition реализована в отдельной NEW-строке M2-A6; она не возвращает удалённую team surface или multiple-winner contract |
 | M2-A7 | Pointer-signal arbitration | withdrawn (standalone priority resolver) | S2: отдельный неподключённый resolver удалён. Действующая арбитрация widget hit-path сохраняется: `a_wheel_tick_over_nested_scrollables_moves_only_the_inner` проверяет ближайшего claimant и отсутствие двойного scroll |
 | M2-T6 | Multi-finger tap semantics | partial | spec flui-interaction S3 (record as a mapping decision) |
 | M2-D2 | Pan slop value | partial | spec flui-interaction I11 |
@@ -112,7 +118,7 @@ verification pending означает ограничения из `pointer-vocab
 
 ## NEW
 
-Сверка 2026-10-07 на интеграционной базе `3cf7329c6`: все 20 утверждённых строк
+Сверка 2026-10-08 на интеграционной базе `028df0a8f`: все 20 утверждённых строк
 ниже имеют реализацию или ранее merged-реализацию. Это не означает завершение
 15 задач приёмки: недостающие inverse-проверки, финальные gates и native smoke
 остаются явными условиями. Целевые прогоны прошли для 43 pointer-строк,
