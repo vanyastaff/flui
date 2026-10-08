@@ -282,6 +282,7 @@ fn scroll_physics_and_activity() {
         "scroll_physics_and_activity",
         &[
             ("scroll::nested_fling_hands_remaining_velocity_to_matching_parent_axes", crate::scroll::nested_fling_hands_remaining_velocity_to_matching_parent_axes as fn()),
+            ("scroll::nested_fling_same_controller_rebuild_preserves_accepted_handoff", crate::scroll::nested_fling_same_controller_rebuild_preserves_accepted_handoff),
             ("scroll::nested_fling_projects_reversed_child_and_preserves_orthogonal_and_bounce_policy", crate::scroll::nested_fling_projects_reversed_child_and_preserves_orthogonal_and_bounce_policy),
             ("scroll::replacing_parent_invalidates_old_fling_handoff_and_next_gesture_recovers", crate::scroll::replacing_parent_invalidates_old_fling_handoff_and_next_gesture_recovers),
             ("scroll::nested_fling_failure_keeps_first_panic_and_a_new_gesture_makes_progress", crate::scroll::nested_fling_failure_keeps_first_panic_and_a_new_gesture_makes_progress),

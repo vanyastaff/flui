@@ -1889,6 +1889,44 @@ pub(crate) fn nested_fling_hands_remaining_velocity_to_matching_parent_axes() {
     }
 }
 
+pub(crate) fn nested_fling_same_controller_rebuild_preserves_accepted_handoff() {
+    use flui_foundation::geometry::Axis::{Horizontal, Vertical};
+    for axis in [Vertical, Horizontal] {
+        let (outer, inner, vsync) = (
+            ScrollController::new(),
+            ScrollController::new(),
+            Vsync::new(),
+        );
+        let mut laid = crate::common::lay_out_animated(
+            nested_fling_content(&outer, &inner, &vsync, axis, axis, false, false),
+            tight(300.0, 300.0),
+            vsync.clone(),
+        );
+        for rebuild in [false, true, false] {
+            outer.jump_to(600.0);
+            inner.jump_to(650.0);
+            laid.tick();
+            release_inner_fling(&laid, axis, false);
+            assert_eq!(inner.pixels(), 670.0, "actual post-threshold drag");
+            assert_eq!(outer.pixels(), 600.0, "parent has not consumed the drag");
+            if rebuild {
+                laid.pump_widget(nested_fling_content(
+                    &outer, &inner, &vsync, axis, axis, false, false,
+                ));
+            }
+            for _ in 0..15 {
+                laid.pump_for(Duration::from_millis(16));
+            }
+            assert_eq!(inner.pixels(), 800.0, "child reaches its actual extent");
+            assert!(
+                outer.pixels() > 600.0,
+                "{axis:?}, rebuild={rebuild}: same controllers retain accepted handoff, got {}",
+                outer.pixels()
+            );
+        }
+    }
+}
+
 pub(crate) fn nested_fling_projects_reversed_child_and_preserves_orthogonal_and_bounce_policy() {
     use flui_foundation::geometry::Axis::{Horizontal, Vertical};
     for (outer_axis, reversed, bouncing, transfers) in [
