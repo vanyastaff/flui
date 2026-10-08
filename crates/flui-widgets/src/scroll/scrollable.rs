@@ -67,7 +67,7 @@ use flui_foundation::{Listenable, ListenerId};
 use flui_rendering::constraints::AxisDirection;
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::pipeline::{PipelineOwner, WeakPipelineCell};
-use flui_rendering::view::{ScrollDirection, ScrollPosition, ViewportOffset};
+use flui_rendering::view::{ScrollDirection, ScrollPosition};
 use flui_view::prelude::StatefulView;
 use flui_view::{
     BoxedView, BuildContext, BuildContextExt, Child, InheritedView, IntoView, LifecycleContext,
@@ -154,6 +154,14 @@ impl FlingEndpoint {
                     && owner.fling.run_generation() == generation
                     && owner.controller.pixels() == edge
                 {
+                    // A same-pixel jump still queues an authoritative Cancel
+                    // even though no position notify services it. The run's
+                    // completion was published before those pixel listeners,
+                    // so honor their accepted command before old handoff work.
+                    if let Some(command) = owner.controller.take_pending_command() {
+                        owner.controller.service_command(command, &owner.fling);
+                        return;
+                    }
                     let physical = if owner.reversed {
                         remaining
                     } else {
