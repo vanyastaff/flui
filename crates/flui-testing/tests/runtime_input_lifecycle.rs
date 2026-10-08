@@ -65,6 +65,249 @@ pub(crate) fn mouse_motion_precedes_keyboard_without_a_frame() {
     assert_motion_keyboard_order(PointerKind::Mouse, false, false, false);
 }
 
+pub(crate) fn ime_commit_observes_preceding_measured_motion() {
+    assert_ime_motion_order(false);
+}
+
+pub(crate) fn ime_commit_survives_competing_motion_and_owner_failures() {
+    assert_ime_motion_order(true);
+}
+
+fn assert_ime_motion_order(fail: bool) {
+    use flui_interaction::routing::FocusNode;
+    use flui_runtime::presentation::PointerResampling;
+    use flui_widgets::{EditableText, TextEditingController};
+
+    let window = flui_testing::HeadlessWindow::new(100, 40).with_text_input();
+    let mut realm = UiRealm::for_test_with_text_input(window.text_input());
+    let primary = realm.presentation_id();
+    realm
+        .set_pointer_resampling(primary, PointerResampling::FrameAligned)
+        .expect("policy before contact");
+    let node = FocusNode::new();
+    let controller = TextEditingController::new();
+    let state = Rc::new(Cell::new(0.0));
+    let observed = Rc::new(RefCell::new(Vec::new()));
+    let moved = Rc::clone(&state);
+    let committed = Rc::clone(&state);
+    let commits = Rc::clone(&observed);
+    let motion_failure = Cell::new(fail);
+    let commit_failure = Cell::new(fail);
+    realm
+        .attach_root_widget(
+            &Listener::new()
+                .behavior(HitTestBehavior::Opaque)
+                .on_pointer_move(move |_, event| {
+                    let PointerEvent::Move(event) = event.global else {
+                        panic!("motion callback receives motion");
+                    };
+                    moved.set(event.current().position.get().x);
+                    assert!(
+                        !motion_failure.replace(false),
+                        "IME preceding motion failure"
+                    );
+                })
+                .child(
+                    EditableText::new(controller.clone(), Rc::clone(&node)).on_changed(
+                        move |_, text| {
+                            commits
+                                .borrow_mut()
+                                .push((text.to_owned(), committed.get()));
+                            assert!(!commit_failure.replace(false), "IME owner second failure");
+                        },
+                    ),
+                ),
+        )
+        .expect("real text field attaches");
+    realm.synchronize_window_snapshot(primary, WindowExecutionState::Running, true, true);
+    pump(&mut realm);
+    realm.enter(|_| {
+        let _ = node.request_focus();
+    });
+    pump(&mut realm);
+    dispatch(
+        &realm,
+        primary,
+        make_down_event(Offset::new(10.0, 10.0), PointerKind::Mouse).expect("finite contact"),
+    );
+    dispatch(
+        &realm,
+        primary,
+        make_move_event(Offset::new(30.0, 10.0), PointerKind::Mouse).expect("finite motion"),
+    );
+    let commit = |text: &str| {
+        realm.enter(|realm| {
+            realm.handle_input_addressed(
+                primary,
+                PlatformInput::Ime(flui_platform_api::ImeEvent::Commit(text.to_owned())),
+            );
+        });
+    };
+    let outcome = catch_unwind(AssertUnwindSafe(|| commit("x")));
+    if fail {
+        assert_eq!(
+            outcome
+                .expect_err("first motion failure propagates")
+                .downcast_ref::<&str>(),
+            Some(&"IME preceding motion failure")
+        );
+    } else {
+        outcome.expect("healthy IME commit");
+    }
+    assert_eq!(
+        controller.text(),
+        "x",
+        "accepted IME edit survives motion failure"
+    );
+    assert_eq!(*observed.borrow(), [("x".to_owned(), 30.0)]);
+    dispatch(
+        &realm,
+        primary,
+        make_up_event(Offset::new(30.0, 10.0), PointerKind::Mouse).expect("finite terminal"),
+    );
+    commit("y");
+    assert_eq!(controller.text(), "xy", "next IME operation recovers");
+    assert_eq!(observed.borrow().len(), 2);
+}
+
+pub(crate) fn keyboard_reads_all_frozen_contacts_after_sibling_failure() {
+    assert_keyboard_contact_prefix(true, false);
+}
+
+pub(crate) fn keyboard_barrier_keeps_reentrant_contact_motion_for_the_next_round() {
+    assert_keyboard_contact_prefix(false, true);
+}
+
+fn assert_keyboard_contact_prefix(fail: bool, reenter: bool) {
+    use flui_interaction::events::{make_down_event_for_id, make_up_event_for_id};
+    use flui_interaction::routing::KeyEventResult;
+    use flui_interaction::testing::input::KeyEventBuilder;
+    use flui_platform_api::keyboard::Code;
+    use flui_runtime::presentation::PointerResampling;
+    use std::rc::Weak;
+
+    let mut realm = UiRealm::for_test();
+    let primary = realm.presentation_id();
+    realm
+        .set_pointer_resampling(primary, PointerResampling::FrameAligned)
+        .expect("policy");
+    let one = PointerId::try_from(1_u64).expect("contact");
+    let two = PointerId::try_from(2_u64).expect("contact");
+    let positions = Rc::new(RefCell::new(Vec::new()));
+    let log = Rc::clone(&positions);
+    let owner = Rc::new(RefCell::new(Weak::<UiRealm>::new()));
+    let callback_owner = Rc::clone(&owner);
+    let first = Cell::new(true);
+    realm
+        .attach_root_widget(
+            &Listener::new()
+                .behavior(HitTestBehavior::Opaque)
+                .on_pointer_move(move |_, event| {
+                    let PointerEvent::Move(event) = event.global else {
+                        panic!("motion");
+                    };
+                    log.borrow_mut()
+                        .push((event.pointer.id, event.current().position.get().x));
+                    if event.pointer.id == one && first.replace(false) {
+                        if reenter {
+                            dispatch(
+                                &callback_owner.borrow().upgrade().expect("live owner"),
+                                primary,
+                                make_move_event_for_id(
+                                    two,
+                                    Offset::new(80.0, 10.0),
+                                    PointerKind::Touch,
+                                )
+                                .expect("new measured motion"),
+                            );
+                        }
+                        assert!(!fail, "first contact failure");
+                    }
+                })
+                .child(SizedBox::new(100.0, 40.0)),
+        )
+        .expect("listener");
+    realm.synchronize_window_snapshot(primary, WindowExecutionState::Running, true, true);
+    pump(&mut realm);
+    let realm = Rc::new(realm);
+    *owner.borrow_mut() = Rc::downgrade(&realm);
+    let reads = Rc::new(RefCell::new(Vec::new()));
+    let read = Rc::clone(&reads);
+    let state = Rc::clone(&positions);
+    realm
+        .focus_manager()
+        .add_global_key_handler(Rc::new(move |_| {
+            read.borrow_mut().push(state.borrow().clone());
+            KeyEventResult::Handled
+        }));
+    for (id, x) in [(one, 10.0), (two, 30.0)] {
+        dispatch(
+            &realm,
+            primary,
+            make_down_event_for_id(id, Offset::new(x, 10.0), PointerKind::Touch).expect("down"),
+        );
+    }
+    for (id, x) in [(one, 20.0), (two, 40.0)] {
+        dispatch(
+            &realm,
+            primary,
+            make_move_event_for_id(id, Offset::new(x, 10.0), PointerKind::Touch).expect("motion"),
+        );
+    }
+    let key = || {
+        realm.enter(|realm| {
+            realm.handle_input_addressed(
+                primary,
+                PlatformInput::Keyboard(KeyEventBuilder::new(Code::F4).build()),
+            );
+        })
+    };
+    let outcome = catch_unwind(AssertUnwindSafe(key));
+    if fail {
+        assert_eq!(
+            outcome
+                .expect_err("first contact fails")
+                .downcast_ref::<&str>(),
+            Some(&"first contact failure")
+        );
+    } else {
+        outcome.expect("healthy prefix");
+    }
+    let mut expected = vec![(one, 20.0), (two, 40.0)];
+    assert_eq!(
+        *positions.borrow(),
+        expected,
+        "every frozen contact precedes Key"
+    );
+    assert_eq!(
+        reads.borrow()[0],
+        expected,
+        "Key observes motion-produced state"
+    );
+    key();
+    if reenter {
+        expected.push((two, 80.0));
+    }
+    assert_eq!(
+        *positions.borrow(),
+        expected,
+        "reentrant measured motion belongs to next barrier"
+    );
+    assert_eq!(reads.borrow()[1], expected);
+    for (id, x) in [(one, 20.0), (two, 80.0)] {
+        dispatch(
+            &realm,
+            primary,
+            make_up_event_for_id(id, Offset::new(x, 10.0), PointerKind::Touch).expect("terminal"),
+        );
+    }
+    assert_eq!(
+        *positions.borrow(),
+        expected,
+        "terminal cannot duplicate measured prefix"
+    );
+}
+
 pub(crate) fn touch_motion_precedes_keyboard_without_a_frame() {
     assert_motion_keyboard_order(PointerKind::Touch, false, false, false);
 }

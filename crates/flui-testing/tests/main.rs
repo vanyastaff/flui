@@ -99,6 +99,10 @@ fn containment_and_isolation_matrix() {
     run_table(
         "containment_and_isolation_matrix",
         &[
+            ("runtime_input_lifecycle::ime_commit_observes_preceding_measured_motion", runtime_input_lifecycle::ime_commit_observes_preceding_measured_motion as fn()),
+            ("runtime_input_lifecycle::ime_commit_survives_competing_motion_and_owner_failures", runtime_input_lifecycle::ime_commit_survives_competing_motion_and_owner_failures as fn()),
+            ("runtime_input_lifecycle::keyboard_reads_all_frozen_contacts_after_sibling_failure", runtime_input_lifecycle::keyboard_reads_all_frozen_contacts_after_sibling_failure as fn()),
+            ("runtime_input_lifecycle::keyboard_barrier_keeps_reentrant_contact_motion_for_the_next_round", runtime_input_lifecycle::keyboard_barrier_keeps_reentrant_contact_motion_for_the_next_round as fn()),
             ("runtime_input_lifecycle::mouse_motion_precedes_keyboard_without_a_frame", runtime_input_lifecycle::mouse_motion_precedes_keyboard_without_a_frame as fn()),
             ("runtime_input_lifecycle::touch_motion_precedes_keyboard_without_a_frame", runtime_input_lifecycle::touch_motion_precedes_keyboard_without_a_frame as fn()),
             ("runtime_input_lifecycle::resampled_mouse_motion_precedes_keyboard_without_a_frame", runtime_input_lifecycle::resampled_mouse_motion_precedes_keyboard_without_a_frame as fn()),
