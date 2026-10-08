@@ -19,12 +19,102 @@
 //! assert_eq!(mouse_settings.touch_slop(), 1.0);
 //! ```
 
-use std::time::Duration;
+use std::{cell::RefCell, rc::Rc, time::Duration};
 
 use flui_platform_api::TargetPlatform;
 use flui_platform_api::pointer::PointerKind;
 
 use crate::processing::VelocityEstimator;
+
+/// Presentation-owned writer of the gesture projection of host preferences.
+///
+/// This capability has one owner. Consumers receive only [`Self::provider`].
+/// Publishing invokes no callbacks and does not schedule frames; each recognizer
+/// copies the current profile when admitting a new gesture.
+#[derive(Debug)]
+pub struct GestureSettingsSource {
+    settings: Rc<RefCell<GestureSettings>>,
+}
+
+impl GestureSettingsSource {
+    /// Seed the presentation's validated gesture profile.
+    #[must_use]
+    pub fn new(settings: GestureSettings) -> Self {
+        Self {
+            settings: Rc::new(RefCell::new(settings)),
+        }
+    }
+
+    /// Grant a read-only owner-local capability to future admissions.
+    #[must_use]
+    pub fn provider(&self) -> GestureSettingsProvider {
+        GestureSettingsProvider {
+            profile: SettingsProfile::Live(self.settings.clone()),
+        }
+    }
+
+    /// Replace the projection, returning whether its effective value changed.
+    pub fn replace(&self, settings: GestureSettings) -> bool {
+        let mut current = self.settings.borrow_mut();
+        if *current == settings {
+            return false;
+        }
+        *current = settings;
+        true
+    }
+}
+
+/// Read-only settings used by new gesture admissions.
+///
+/// A fixed authored profile remains independent of host updates. A live provider
+/// shares one presentation's projection, retains its last value if the writer
+/// retires, and cannot cross threads. Equality compares fixed values or the exact
+/// live source identity, so publication does not replace an existing consumer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GestureSettingsProvider {
+    profile: SettingsProfile,
+}
+
+#[derive(Debug, Clone)]
+enum SettingsProfile {
+    Fixed(GestureSettings),
+    Live(Rc<RefCell<GestureSettings>>),
+}
+
+impl PartialEq for SettingsProfile {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Fixed(left), Self::Fixed(right)) => left == right,
+            (Self::Live(left), Self::Live(right)) => Rc::ptr_eq(left, right),
+            _ => false,
+        }
+    }
+}
+
+impl GestureSettingsProvider {
+    /// Copy a profile without retaining a source borrow during user code.
+    #[must_use]
+    pub fn snapshot(&self) -> GestureSettings {
+        match &self.profile {
+            SettingsProfile::Fixed(settings) => settings.clone(),
+            SettingsProfile::Live(settings) => settings.borrow().clone(),
+        }
+    }
+}
+
+impl From<GestureSettings> for GestureSettingsProvider {
+    fn from(settings: GestureSettings) -> Self {
+        Self {
+            profile: SettingsProfile::Fixed(settings),
+        }
+    }
+}
+
+impl Default for GestureSettingsProvider {
+    fn default() -> Self {
+        GestureSettings::default().into()
+    }
+}
 
 /// Default touch slop for touch devices (18 logical pixels).
 ///
