@@ -11,23 +11,36 @@
 //!
 //! # Example
 //!
-//! ```rust,ignore
-//! use flui_interaction::{PointerRouter, PointerId};
-//! use std::rc::Rc;
+//! ```rust
+//! use flui_interaction::{PointerRouter, PointerId, PointerRouteHandler};
+//! use flui_platform_api::{EventTime, pointer::{CancelReason, PointerCancel,
+//!     PointerEvent, PointerInfo, PointerKind}};
+//! use std::{cell::Cell, rc::Rc};
 //!
 //! let router = PointerRouter::new();
+//! let pointer_id = PointerId::try_from(1_u64)?;
+//! let pointer = PointerInfo::new(pointer_id, PointerKind::Touch);
+//! let pointer_event = PointerEvent::Cancel(PointerCancel::new(pointer,
+//!     EventTime::from_nanos(10), CancelReason::Platform));
+//! let delivered = Rc::new(Cell::new(0));
+//! let observed = delivered.clone();
 //!
 //! // Register a handler for a specific pointer
-//! let handler = Rc::new(|event: &PointerEvent| {
-//!     tracing::trace!(?event, "pointer event");
+//! let handler: PointerRouteHandler = Rc::new(move |event| {
+//!     assert!(matches!(event, PointerEvent::Cancel(_)));
+//!     observed.set(observed.get() + 1);
 //! });
-//! router.add_route(pointer_id, handler);
+//! router.add_route(pointer_id, handler.clone());
 //!
 //! // Route an event - all registered handlers receive it
 //! router.route(&pointer_event);
+//! assert_eq!(delivered.get(), 1);
 //!
 //! // Remove when done
-//! router.remove_route(pointer_id, handler);
+//! assert!(router.remove_route(pointer_id, &handler));
+//! router.route(&pointer_event);
+//! assert_eq!(delivered.get(), 1);
+//! # Ok::<(), std::num::TryFromIntError>(())
 //! ```
 
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
@@ -59,20 +72,8 @@ pub type GlobalPointerHandler = Rc<dyn Fn(&PointerEvent)>;
 /// storage; render hit-test data stays on the separate `Send + Sync` data
 /// plane.
 ///
-/// # Example
-///
-/// ```rust,ignore
-/// let router = PointerRouter::new();
-///
-/// // Gesture recognizer registers for pointer events
-/// let recognizer_handler = Rc::new(|event| {
-///     // Handle drag updates even when pointer leaves original target
-/// });
-/// router.add_route(pointer_id, recognizer_handler);
-///
-/// // Later, platform layer routes events
-/// router.route(&pointer_event);
-/// ```
+/// The module example demonstrates delivery and
+/// removal through the same public router.
 pub struct PointerRouter {
     closed: std::cell::Cell<bool>,
     close_mode: crate::__runtime::CloseTombstone,
@@ -127,14 +128,8 @@ impl PointerRouter {
     /// The handler will receive all events for this pointer until removed.
     /// Multiple handlers can be registered for the same pointer.
     ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let handler = Rc::new(|event: &PointerEvent| {
-    ///     tracing::trace!(?event, "received pointer event");
-    /// });
-    /// router.add_route(pointer_id, handler);
-    /// ```
+    /// Keep another [`Rc`] if the handler must later be removed by identity with
+    /// [`Self::remove_route`].
     pub fn add_route(&self, pointer: PointerId, handler: PointerRouteHandler) {
         if self.closed.get() {
             let mut failure = crate::__runtime::ClosePanic::for_rejection(self.close_mode.mode());
@@ -286,16 +281,18 @@ impl PointerRouter {
         if self.closed.get() {
             return None;
         }
-        let pointer = get_pointer_id(event);
+        let pointer = crate::PointerEventExt::pointer_id(event);
 
         // Snapshot per-pointer handlers (clone the `Rc`s) so the borrow is
         // released before dispatch — a handler may re-enter the router. A
         // `SmallVec` keeps the common ≤4-handler case off the heap.
-        let pointer_handlers: SmallVec<[PointerRouteHandler; 4]> = self
-            .routes
-            .borrow()
-            .get(&pointer)
-            .map(|h| h.iter().cloned().collect())
+        let pointer_handlers: SmallVec<[PointerRouteHandler; 4]> = pointer
+            .and_then(|pointer| {
+                self.routes
+                    .borrow()
+                    .get(&pointer)
+                    .map(|h| h.iter().cloned().collect())
+            })
             .unwrap_or_default();
 
         // Snapshot global handlers before the first callback for the same
@@ -307,7 +304,7 @@ impl PointerRouter {
 
         // Per-pointer handlers first.
         for handler in pointer_handlers {
-            if self.contains_route(pointer, &handler) {
+            if pointer.is_some_and(|pointer| self.contains_route(pointer, &handler)) {
                 let delivered = RoutePanic::capture(|| handler(event));
                 RoutePanic::preserve_first(
                     &mut first_panic,
@@ -431,12 +428,6 @@ impl PointerRouter {
     }
 }
 
-/// Helper to extract pointer ID from event.
-#[inline]
-fn get_pointer_id(event: &PointerEvent) -> PointerId {
-    crate::events::extract_pointer_id(event)
-}
-
 #[cfg(test)]
 mod tests {
     use std::{cell::Cell, rc::Rc};
@@ -444,20 +435,17 @@ mod tests {
     use flui_foundation::geometry::Offset;
 
     use super::*;
-    use crate::events::{PointerType, make_move_event};
+    use crate::events::{PointerKind, make_move_event};
 
-    fn make_event(device: i32, position: Offset<f64>) -> PointerEvent {
-        // For testing, use make_move_event with the position
-        // The device ID will be PRIMARY (0) by default
-        let _ = device; // device ID is not directly settable in ui-events
-        make_move_event(position, PointerType::Touch)
+    fn make_event(position: Offset<f64>) -> PointerEvent {
+        make_move_event(position, PointerKind::Touch).expect("finite input")
     }
 
     #[test]
     fn test_reentrancy_remove_self() {
         // Test that a handler can remove itself during dispatch
         let router = Rc::new(PointerRouter::new());
-        let pointer = PointerId::PRIMARY;
+        let pointer = PointerId::new(core::num::NonZeroU64::MIN);
 
         let call_count = Rc::new(Cell::new(0));
         let count_clone = call_count.clone();
@@ -468,12 +456,12 @@ mod tests {
             // Remove self during dispatch - this should work without deadlock
             // Note: We can't easily remove self here because we don't have the handler Rc
             // But we can remove all routes which exercises the same code path
-            router_clone.remove_all_routes(PointerId::PRIMARY);
+            router_clone.remove_all_routes(PointerId::new(core::num::NonZeroU64::MIN));
         });
 
         router.add_route(pointer, handler);
 
-        let event = make_event(0, Offset::new(50.0, 50.0));
+        let event = make_event(Offset::new(50.0, 50.0));
         router.route(&event); // Should not deadlock
 
         assert_eq!(call_count.get(), 1);

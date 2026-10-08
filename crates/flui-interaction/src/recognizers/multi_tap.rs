@@ -1,567 +1,452 @@
-//! Multi-tap gesture recognizer
-//!
-//! Recognizes multi-touch tap gestures (N fingers tapping simultaneously).
-//!
-//! A multi-tap requires:
-//! - Specified number of pointers down within time window
-//! - All pointers stay within slop tolerance
-//! - All pointers released (tap completed)
+//! Owner-local recognition of a tap involving several pointer contacts.
 
-use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc};
-
-use web_time::{Duration, Instant};
-
-use flui_foundation::geometry::Offset;
-use parking_lot::Mutex;
-
-use super::recognizer::{CallbackSequence, GestureRecognizer, RecognizerBase};
+use super::{
+    ArenaMembership, CancelOutcome, ContactId,
+    callback_containment::{
+        CallbackSequence, finish_containment, retire_callbacks, withdraw_cancelled,
+    },
+    recognizer::{GestureRecognizer, measured_positions},
+};
 use crate::{
-    arena::GestureArenaMember,
-    events::{PointerEvent, PointerType, extract_pointer_id},
+    arena::{
+        GestureArena, GestureArenaEntry, GestureArenaMember, GestureDeadlineRegistration,
+        GestureDisposition,
+    },
+    events::{PointerEvent, PointerEventExt, PointerKind},
     ids::PointerId,
-    routing::PointerDispatch,
+    routing::{PointerDispatch, RoutePanic},
     settings::GestureSettings,
 };
+use flui_foundation::geometry::Offset;
+use std::{
+    cell::{Cell, RefCell},
+    collections::BTreeMap,
+    rc::{Rc, Weak},
+};
+use web_time::{Duration, Instant};
 
-/// Callback for multi-tap events
+/// Callback for completion or cancellation of a multi-contact tap.
 pub type MultiTapCallback = Rc<dyn Fn(MultiTapDetails)>;
-
-/// Details about a multi-tap gesture
+/// Positions and device kind of a multi-contact tap.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct MultiTapDetails {
-    /// Number of pointers/fingers involved
+    /// Number of admitted contacts.
     pub pointer_count: usize,
-    /// Positions of all pointers when tap completed
+    /// Initial local positions in pointer identity order.
     pub positions: Vec<Offset<f64>>,
-    /// Center point of all taps
+    /// Center of the admitted positions.
     pub center: Offset<f64>,
-    /// Pointer device kind
-    pub kind: PointerType,
+    /// Kind of the first admitted contact.
+    pub kind: PointerKind,
 }
-
-/// Recognizes multi-tap gestures (multiple simultaneous taps)
-///
-/// Can detect 2-finger tap, 3-finger tap, etc.
-///
-/// # Example
-///
-/// ```rust,ignore
-/// use flui_interaction::prelude::*;
-///
-/// let arena = GestureArena::new();
-///
-/// // 2-finger tap recognizer
-/// let recognizer = MultiTapGestureRecognizer::new(arena, 2)
-///     .with_on_multi_tap(|details| {
-///         println!("{}-finger tap at center {:?}",
-///                  details.pointer_count, details.center);
-///     });
-///
-/// // Add multiple pointers
-/// recognizer.add_pointer(pointer1, position1, position1);
-/// recognizer.add_pointer(pointer2, position2, position2);
-/// recognizer.handle_event(PointerDispatch::at_root(&pointer_event));
-/// ```
-#[derive(Clone)]
-pub struct MultiTapGestureRecognizer {
-    /// Base state (arena, tracking, etc.)
-    state: RecognizerBase,
-
-    /// Required number of simultaneous pointers
-    required_pointer_count: usize,
-
-    /// Callbacks
-    callbacks: Rc<RefCell<MultiTapCallbacks>>,
-
-    /// Current gesture state
-    gesture_state: Arc<Mutex<MultiTapState>>,
-
-    /// Gesture settings (device-specific tolerances)
-    settings: Arc<Mutex<GestureSettings>>,
-
-    /// Maximum time window for all pointers to go down (ms)
-    max_time_window: Duration,
-}
-
 #[derive(Default)]
 struct MultiTapCallbacks {
     on_multi_tap: Option<MultiTapCallback>,
     on_multi_tap_cancel: Option<MultiTapCallback>,
 }
-
-impl MultiTapCallbacks {
-    /// Retire every capture one by one (see [`CallbackSequence::retire`]).
-    fn retire(self, sequence: &mut CallbackSequence) {
-        let Self {
-            on_multi_tap,
-            on_multi_tap_cancel,
-        } = self;
-        sequence.retire(on_multi_tap);
-        sequence.retire(on_multi_tap_cancel);
+impl Drop for MultiTapCallbacks {
+    fn drop(&mut self) {
+        retire_callbacks!(self; on_multi_tap, on_multi_tap_cancel);
     }
 }
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MultiTapPhase {
-    /// Ready to start
-    Ready,
-    /// Collecting pointers (waiting for N pointers)
-    Collecting,
-    /// All pointers down, waiting for all up
-    WaitingForUp,
-    /// Cancelled
-    Cancelled,
+struct PointerContact {
+    initial: Offset<f64>,
+    kind: PointerKind,
+    down: bool,
+    entry: GestureArenaEntry,
+}
+struct MultiTapSequence {
+    id: ContactId,
+    contacts: BTreeMap<PointerId, PointerContact>,
+    kind: PointerKind,
+    settings: GestureSettings,
+    deadline: Option<Instant>,
+    deadline_registration: Option<GestureDeadlineRegistration>,
 }
 
-#[derive(Debug, Clone)]
-struct PointerInfo {
-    /// Initial position
-    initial_position: Offset<f64>,
-    /// Current position
-    current_position: Offset<f64>,
-    /// Time when pointer went down
-    #[expect(dead_code)]
-    down_time: Instant,
-    /// Whether pointer is still down
-    is_down: bool,
+/// Recognizes a tap after all required contacts have been released.
+///
+/// Callbacks are immutable after construction. Capture a `Weak` in an external
+/// slot for reentry; storing a strong owner in that slot can form a cycle.
+pub struct MultiTapGestureRecognizer {
+    membership: ArenaMembership,
+    sequence: RefCell<Option<MultiTapSequence>>,
+    last_id: Cell<u64>,
+    callbacks: MultiTapCallbacks,
+    required_pointer_count: usize,
+    settings: GestureSettings,
 }
-
-#[derive(Debug, Clone)]
-struct MultiTapState {
-    /// Current phase
-    phase: MultiTapPhase,
-    /// Tracked pointers
-    pointers: HashMap<PointerId, PointerInfo>,
-    /// Time when first pointer went down
-    first_down_time: Option<Instant>,
-    /// Device kind
-    device_kind: Option<PointerType>,
+/// Immutable multi-tap policy and callbacks, consumed to create one owner.
+#[must_use]
+pub struct MultiTapGestureRecognizerBuilder {
+    arena: GestureArena,
+    callbacks: MultiTapCallbacks,
+    required_pointer_count: usize,
+    settings: GestureSettings,
 }
-
-impl Default for MultiTapState {
-    fn default() -> Self {
-        Self {
-            phase: MultiTapPhase::Ready,
-            pointers: HashMap::new(),
-            first_down_time: None,
-            device_kind: None,
-        }
+impl MultiTapGestureRecognizerBuilder {
+    /// Freeze gesture settings at admission.
+    pub fn settings(mut self, settings: GestureSettings) -> Self {
+        self.settings = settings;
+        self
+    }
+    /// Called after all required contacts release.
+    pub fn on_multi_tap(mut self, callback: impl Fn(MultiTapDetails) + 'static) -> Self {
+        self.callbacks.on_multi_tap = Some(Rc::new(callback));
+        self
+    }
+    /// Called on explicit cancellation, timeout, or lost arena competition.
+    pub fn on_multi_tap_cancel(mut self, callback: impl Fn(MultiTapDetails) + 'static) -> Self {
+        self.callbacks.on_multi_tap_cancel = Some(Rc::new(callback));
+        self
+    }
+    /// Create the allocation used for dispatch and every pointer's competition.
+    #[must_use]
+    pub fn build(self) -> Rc<MultiTapGestureRecognizer> {
+        Rc::new_cyclic(|this: &Weak<MultiTapGestureRecognizer>| {
+            let member: Weak<dyn GestureArenaMember> = this.clone();
+            MultiTapGestureRecognizer {
+                membership: ArenaMembership::new(self.arena, member),
+                sequence: RefCell::new(None),
+                last_id: Cell::new(0),
+                callbacks: self.callbacks,
+                required_pointer_count: self.required_pointer_count,
+                settings: self.settings,
+            }
+        })
     }
 }
-
 impl MultiTapGestureRecognizer {
-    /// Create a new multi-tap recognizer
-    ///
-    /// # Arguments
-    /// * `arena` - Gesture arena for conflict resolution
-    /// * `required_pointer_count` - Number of simultaneous pointers required
-    ///   (2, 3, 4, etc.)
+    /// Start immutable owner configuration for at least two contacts.
     ///
     /// # Panics
-    ///
-    /// Panics if `required_pointer_count` is less than 2.
-    pub fn new(arena: crate::arena::GestureArena, required_pointer_count: usize) -> Arc<Self> {
-        assert!(
-            required_pointer_count >= 2,
-            "MultiTapGestureRecognizer requires at least 2 pointers, got {required_pointer_count}"
-        );
-        Arc::new(Self {
-            state: RecognizerBase::new(arena),
-            required_pointer_count,
-            callbacks: Rc::new(RefCell::new(MultiTapCallbacks::default())),
-            gesture_state: Arc::new(Mutex::new(MultiTapState::default())),
-            settings: Arc::new(Mutex::new(GestureSettings::default())),
-            max_time_window: Duration::from_millis(100), // 100ms to get all pointers down
-        })
-    }
-
-    /// Create a new multi-tap recognizer with custom settings
-    pub fn with_settings(
-        arena: crate::arena::GestureArena,
+    /// Panics when `required_pointer_count` is less than two.
+    pub fn builder(
+        arena: GestureArena,
         required_pointer_count: usize,
-        settings: GestureSettings,
-    ) -> Arc<Self> {
+    ) -> MultiTapGestureRecognizerBuilder {
         assert!(
             required_pointer_count >= 2,
             "MultiTapGestureRecognizer requires at least 2 pointers, got {required_pointer_count}"
         );
-        Arc::new(Self {
-            state: RecognizerBase::new(arena),
+        MultiTapGestureRecognizerBuilder {
+            arena,
             required_pointer_count,
-            callbacks: Rc::new(RefCell::new(MultiTapCallbacks::default())),
-            gesture_state: Arc::new(Mutex::new(MultiTapState::default())),
-            settings: Arc::new(Mutex::new(settings)),
-            max_time_window: Duration::from_millis(100),
-        })
+            callbacks: MultiTapCallbacks::default(),
+            settings: GestureSettings::default(),
+        }
     }
-
-    /// Get the current gesture settings
-    pub fn settings(&self) -> GestureSettings {
-        self.settings.lock().clone()
+    fn details(sequence: &MultiTapSequence) -> MultiTapDetails {
+        let positions: Vec<_> = sequence
+            .contacts
+            .values()
+            .map(|contact| contact.initial)
+            .collect();
+        // Normalize before summing: finite contact positions must not overflow
+        // while computing their center, including contacts at opposite extremes.
+        let mean = |axis: fn(&Offset<f64>) -> f64| {
+            let sum = positions.iter().map(axis).sum::<f64>();
+            if sum.is_finite() {
+                return sum / positions.len() as f64;
+            }
+            let scale = positions.iter().map(axis).map(f64::abs).fold(0.0, f64::max);
+            if scale == 0.0 {
+                return 0.0;
+            }
+            let normalized = positions
+                .iter()
+                .map(|position| axis(position) / scale)
+                .sum::<f64>()
+                / positions.len() as f64;
+            normalized.clamp(-1.0, 1.0) * scale
+        };
+        let center = Offset::new(mean(|position| position.dx), mean(|position| position.dy));
+        MultiTapDetails {
+            pointer_count: positions.len(),
+            positions,
+            center,
+            kind: sequence.kind,
+        }
     }
-
-    /// Update gesture settings
-    pub fn set_settings(&self, settings: GestureSettings) {
-        *self.settings.lock() = settings;
-    }
-
-    /// Set the multi-tap callback
-    pub fn with_on_multi_tap(
-        self: Arc<Self>,
-        callback: impl Fn(MultiTapDetails) + 'static,
-    ) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_multi_tap = Some(Rc::new(callback));
-        self
-    }
-
-    /// Set the multi-tap cancel callback
-    pub fn with_on_multi_tap_cancel(
-        self: Arc<Self>,
-        callback: impl Fn(MultiTapDetails) + 'static,
-    ) -> Arc<Self> {
-        self.callbacks.borrow_mut().on_multi_tap_cancel = Some(Rc::new(callback));
-        self
-    }
-
-    /// Handle pointer down
-    fn handle_pointer_down(&self, pointer: PointerId, position: Offset<f64>, kind: PointerType) {
-        let mut state = self.gesture_state.lock();
-
-        match state.phase {
-            MultiTapPhase::Ready | MultiTapPhase::Collecting => {
-                // Add pointer
-                let now = self.state.now();
-
-                // Check time window if not first pointer
-                if let Some(first_time) = state.first_down_time {
-                    let elapsed = now.duration_since(first_time);
-                    if elapsed > self.max_time_window {
-                        // Too slow - reset and start over
-                        state.pointers.clear();
-                        state.first_down_time = Some(now);
+    fn retire_entries(
+        &self,
+        sequence: &MultiTapSequence,
+        disposition: GestureDisposition,
+        first: &mut Option<RoutePanic>,
+    ) {
+        for contact in sequence.contacts.values() {
+            RoutePanic::preserve_first(
+                first,
+                RoutePanic::capture(|| {
+                    if disposition.is_accepted() {
+                        contact.entry.resolve(GestureDisposition::Accepted);
+                    } else {
+                        withdraw_cancelled(&contact.entry, self.membership.arena());
                     }
-                } else {
-                    // First pointer
-                    state.first_down_time = Some(now);
-                }
-
-                state.pointers.insert(
-                    pointer,
-                    PointerInfo {
-                        initial_position: position,
-                        current_position: position,
-                        down_time: now,
-                        is_down: true,
-                    },
-                );
-
-                state.device_kind = Some(kind);
-
-                match state.pointers.len().cmp(&self.required_pointer_count) {
-                    std::cmp::Ordering::Less => state.phase = MultiTapPhase::Collecting,
-                    std::cmp::Ordering::Equal => {
-                        // Got all required pointers!
-                        state.phase = MultiTapPhase::WaitingForUp;
-                    }
-                    std::cmp::Ordering::Greater => {
-                        // Too many pointers - cancel (don't set phase here, let
-                        // handle_cancel do it)
-                        drop(state);
-                        self.handle_cancel();
-                    }
-                }
-            }
-            MultiTapPhase::WaitingForUp => {
-                // Already have enough pointers, another one means too many - cancel
-                drop(state);
-                self.handle_cancel();
-            }
-            MultiTapPhase::Cancelled => {}
+                }),
+                "multi tap arena completion",
+            );
+            RoutePanic::preserve_first(
+                first,
+                RoutePanic::capture(|| contact.entry.release()),
+                "multi tap hold release",
+            );
         }
     }
-
-    /// Handle pointer move
-    fn handle_pointer_move(&self, pointer: PointerId, position: Offset<f64>, kind: PointerType) {
-        // Cache settings to avoid nested locks
-        let settings = self.settings.lock().clone();
-        let mut state = self.gesture_state.lock();
-
-        if let Some(info) = state.pointers.get_mut(&pointer) {
-            info.current_position = position;
-
-            // Check slop
-            let delta = position - info.initial_position;
-            let distance = delta.distance();
-
-            // Kind-aware: reading the touch tier unconditionally let a
-            // pointer from a precise device wander the full finger tolerance
-            // before the tap was cancelled.
-            if distance > settings.hit_slop(kind) {
-                // Moved too far - cancel. Leave the phase alone: `handle_cancel`
-                // guards on `phase != Cancelled` and does the transition
-                // itself, so setting it here would make that guard reject its
-                // own work and strand the recognizer holding its pointers and
-                // its arena entry, with no cancel callback.
-                drop(state);
-                self.handle_cancel();
-            }
-        }
-    }
-
-    /// Handle pointer up
-    fn handle_pointer_up(&self, pointer: PointerId, kind: PointerType) {
-        let mut state = self.gesture_state.lock();
-
-        if let Some(info) = state.pointers.get_mut(&pointer) {
-            info.is_down = false;
-        }
-
-        if state.phase == MultiTapPhase::WaitingForUp {
-            // Check if all pointers are up
-            let all_up = state.pointers.values().all(|info| !info.is_down);
-
-            if all_up {
-                // Multi-tap completed! The recognizer resets and stops
-                // tracking before user code runs, so a callback that panics or
-                // disposes leaves it ready for the next gesture.
-                let positions: Vec<Offset<f64>> = state
-                    .pointers
-                    .values()
-                    .map(|info| info.initial_position)
-                    .collect();
-
-                let center = Self::calculate_center(&positions);
-                let count = positions.len();
-
-                *state = MultiTapState::default();
-                drop(state);
-                self.state.stop_tracking();
-
-                let callback = self.callbacks.borrow().on_multi_tap.clone();
-                if let Some(callback) = callback {
-                    callback(MultiTapDetails {
-                        pointer_count: count,
-                        positions,
-                        center,
-                        kind,
-                    });
-                }
-            }
-        }
-    }
-
-    /// Handle cancel
-    fn handle_cancel(&self) {
-        let mut state = self.gesture_state.lock();
-
-        if state.phase != MultiTapPhase::Ready && state.phase != MultiTapPhase::Cancelled {
-            state.phase = MultiTapPhase::Cancelled;
-
-            let positions: Vec<Offset<f64>> = state
-                .pointers
-                .values()
-                .map(|info| info.initial_position)
-                .collect();
-
-            let center = if positions.is_empty() {
-                Offset::new(0.0, 0.0)
-            } else {
-                Self::calculate_center(&positions)
-            };
-
-            let count = positions.len();
-            let kind = state.device_kind.unwrap_or(PointerType::Touch);
-            let callback = self.callbacks.borrow().on_multi_tap_cancel.clone();
-
-            *state = MultiTapState::default();
-            drop(state);
-
-            self.state.reject();
-            if let Some(callback) = callback {
-                callback(MultiTapDetails {
-                    pointer_count: count,
-                    positions,
-                    center,
-                    kind,
-                });
-            }
-        }
-    }
-
-    /// Calculate center point of all positions
-    fn calculate_center(positions: &[Offset<f64>]) -> Offset<f64> {
-        if positions.is_empty() {
-            return Offset::new(0.0, 0.0);
-        }
-
-        let mut sum_x = 0.0;
-        let mut sum_y = 0.0;
-
-        for pos in positions {
-            sum_x += pos.dx;
-            sum_y += pos.dy;
-        }
-
-        let count = positions.len() as f64;
-        Offset::new(sum_x / count, sum_y / count)
-    }
-
-    /// Check if time window has expired
-    pub fn check_timeout(&self) -> bool {
-        let state = self.gesture_state.lock();
-
-        if state.phase == MultiTapPhase::Collecting
-            && let Some(first_time) = state.first_down_time
-        {
-            let elapsed = self.state.now().duration_since(first_time);
-            if elapsed > self.max_time_window {
-                // Timeout - cancel. As on the slop path, the phase transition
-                // belongs to `handle_cancel`: setting `Cancelled` here trips
-                // its own `phase != Cancelled` guard and cancels nothing.
-                drop(state);
-                self.handle_cancel();
-                return true;
-            }
-        }
-
-        false
+    fn complete(&self, sequence: MultiTapSequence) {
+        let details = Self::details(&sequence);
+        let mut first = None;
+        self.retire_entries(&sequence, GestureDisposition::Accepted, &mut first);
+        let mut notices = CallbackSequence::new();
+        notices.call(self.callbacks.on_multi_tap.clone(), |callback| {
+            callback(details);
+        });
+        RoutePanic::preserve_first(
+            &mut first,
+            RoutePanic::capture(|| notices.finish()),
+            "multi tap completion callback",
+        );
+        finish_containment(first, std::thread::panicking());
     }
 }
-
 impl GestureRecognizer for MultiTapGestureRecognizer {
-    fn add_pointer(
-        self: &Arc<Self>,
-        pointer: PointerId,
-        position: Offset<f64>,
-        // Multi-tap's per-pointer callbacks carry no position, so none of them
-        // reports the global one. The base records it anyway — the stored
-        // contact is one value in two spaces, and half of it is a trap.
-        global_position: Offset<f64>,
-    ) {
-        if !self.state.assert_not_disposed("add_pointer") {
+    fn add_pointer(&self, down: PointerDispatch<'_>) {
+        let PointerEvent::Down(data) = down.local else {
+            return;
+        };
+        let (Some(local), Some(global)) = (down.local.position(), down.global.position()) else {
+            return;
+        };
+        if !local.dx.is_finite()
+            || !local.dy.is_finite()
+            || !global.dx.is_finite()
+            || !global.dy.is_finite()
+        {
             return;
         }
-        // For the first pointer, track with arena
-        if self.gesture_state.lock().pointers.is_empty() {
-            self.state
-                .start_tracking(pointer, position, global_position, self);
-        }
-
-        self.handle_pointer_down(pointer, position, PointerType::Touch);
-    }
-
-    fn handle_event(&self, dispatch: PointerDispatch<'_>) {
-        let event = dispatch.local;
-        if !self.state.assert_not_disposed("handle_event") {
+        let pointer = data.pointer.id;
+        let generation = self.last_id.get();
+        let existing = self.sequence.borrow().as_ref().map(|sequence| {
+            (
+                sequence.id,
+                sequence.deadline,
+                sequence.contacts.len(),
+                sequence.contacts.contains_key(&pointer),
+            )
+        });
+        if let Some((_, _, _, true)) = existing {
             return;
         }
-        let pointer = extract_pointer_id(event);
-        if !self.gesture_state.lock().pointers.contains_key(&pointer) {
+        if existing.is_some_and(|(_, _, count, _)| count >= self.required_pointer_count) {
+            self.cancel();
             return;
         }
-        match event {
-            PointerEvent::Move(data) => {
-                let pos = data.current.position;
-                let position = Offset::new(pos.x, pos.y);
-                self.handle_pointer_move(pointer, position, data.pointer.pointer_type);
+        let now = self.membership.now();
+        if self.last_id.get() != generation
+            || self.sequence.borrow().as_ref().map(|sequence| sequence.id)
+                != existing.map(|(id, _, _, _)| id)
+        {
+            return;
+        }
+        if existing
+            .is_some_and(|(_, deadline, _, _)| deadline.is_some_and(|deadline| now >= deadline))
+        {
+            self.cancel();
+            if self.last_id.get() == generation && self.sequence.borrow().is_none() {
+                self.add_pointer(down);
             }
-            PointerEvent::Up(data) => {
-                self.handle_pointer_up(pointer, data.pointer.pointer_type);
+            return;
+        }
+        let Some(entry) = self.membership.join(pointer) else {
+            return;
+        };
+        entry.hold();
+        if self.last_id.get() != generation
+            || self.sequence.borrow().as_ref().map(|sequence| sequence.id)
+                != existing.map(|(id, _, _, _)| id)
+        {
+            entry.release_deferred();
+            entry.withdraw_deferred();
+            return;
+        }
+        let registration = if existing.is_none() {
+            self.membership.register_deadline(pointer)
+        } else {
+            None
+        };
+        if existing.is_none() && registration.is_none() {
+            entry.release_deferred();
+            entry.withdraw_deferred();
+            return;
+        }
+        let outgoing_registration = {
+            let mut state = self.sequence.borrow_mut();
+            if state.is_none() {
+                let Some(id) = ContactId::next(&self.last_id) else {
+                    drop(state);
+                    entry.release_deferred();
+                    entry.withdraw_deferred();
+                    return;
+                };
+                *state = Some(MultiTapSequence {
+                    id,
+                    contacts: BTreeMap::new(),
+                    kind: data.pointer.kind,
+                    settings: self.settings.clone(),
+                    deadline: now.checked_add(Duration::from_millis(100)),
+                    deadline_registration: registration,
+                });
+            }
+            let sequence = state.as_mut().expect("BUG: multi tap sequence admitted");
+            sequence.contacts.insert(
+                pointer,
+                PointerContact {
+                    initial: local,
+                    kind: data.pointer.kind,
+                    down: true,
+                    entry,
+                },
+            );
+            if sequence.contacts.len() == self.required_pointer_count {
+                sequence.deadline = None;
+                sequence.deadline_registration.take()
+            } else {
+                None
+            }
+        };
+        drop(outgoing_registration);
+    }
+    fn handle_event(&self, dispatch: PointerDispatch<'_>) {
+        let Some(pointer) = dispatch.local.pointer_id() else {
+            return;
+        };
+        match dispatch.local {
+            PointerEvent::Move(_) => {
+                let Some(position) = dispatch.local.position() else {
+                    return;
+                };
+                let exceeded = {
+                    let state = self.sequence.borrow();
+                    let Some(sequence) = state.as_ref() else {
+                        return;
+                    };
+                    let Some(contact) = sequence.contacts.get(&pointer) else {
+                        return;
+                    };
+                    !position.dx.is_finite()
+                        || !position.dy.is_finite()
+                        || measured_positions(dispatch.local).any(|position| {
+                            let delta = position - contact.initial;
+                            delta.dx.hypot(delta.dy) > sequence.settings.hit_slop(contact.kind)
+                        })
+                };
+                if exceeded {
+                    self.cancel();
+                }
+            }
+            PointerEvent::Up(_) => {
+                let completed = {
+                    let mut state = self.sequence.borrow_mut();
+                    let Some(sequence) = state.as_mut() else {
+                        return;
+                    };
+                    let Some(contact) = sequence.contacts.get_mut(&pointer) else {
+                        return;
+                    };
+                    contact.down = false;
+                    if sequence.contacts.len() == self.required_pointer_count
+                        && sequence.contacts.values().all(|contact| !contact.down)
+                    {
+                        state.take()
+                    } else {
+                        None
+                    }
+                };
+                if let Some(sequence) = completed {
+                    self.complete(sequence);
+                }
             }
             PointerEvent::Cancel(_) => {
-                self.handle_cancel();
+                let tracks = self
+                    .sequence
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(|sequence| sequence.contacts.contains_key(&pointer));
+                if tracks {
+                    self.cancel();
+                }
             }
             _ => {}
         }
     }
-
-    fn dispose(&self) {
-        self.state.mark_disposed();
-        // Reject arena entries + clear tracked pointer, so a disposed
-        // recognizer never lingers in the arena for a tracked pointer.
-        self.state.reject();
-        // Captures are dropped outside the cell, so a capture whose destructor
-        // reaches this recognizer finds it unborrowed.
-        let callbacks = std::mem::take(&mut *self.callbacks.borrow_mut());
-        let mut retirement = CallbackSequence::new();
-        callbacks.retire(&mut retirement);
-        retirement.finish();
-    }
-
-    fn primary_pointer(&self) -> Option<PointerId> {
-        self.state.primary_pointer()
+    fn cancel(&self) -> CancelOutcome {
+        let Some(sequence) = self.sequence.borrow_mut().take() else {
+            return CancelOutcome::Idle;
+        };
+        let details = Self::details(&sequence);
+        let mut first = None;
+        self.retire_entries(&sequence, GestureDisposition::Rejected, &mut first);
+        let mut notices = CallbackSequence::new();
+        notices.call(self.callbacks.on_multi_tap_cancel.clone(), |callback| {
+            callback(details);
+        });
+        RoutePanic::preserve_first(
+            &mut first,
+            RoutePanic::capture(|| notices.finish()),
+            "multi tap cancellation callback",
+        );
+        finish_containment(first, std::thread::panicking());
+        CancelOutcome::Cancelled
     }
 }
-
 impl GestureArenaMember for MultiTapGestureRecognizer {
-    fn accept_gesture(&self, _pointer: PointerId) {
-        // We won the arena - gesture is accepted
+    fn accept_gesture(&self, _: PointerId) {}
+    fn reject_gesture(&self, pointer: PointerId) {
+        let tracks = self
+            .sequence
+            .borrow()
+            .as_ref()
+            .is_some_and(|sequence| sequence.contacts.contains_key(&pointer));
+        if tracks {
+            self.cancel();
+        }
     }
-
-    fn reject_gesture(&self, _pointer: PointerId) {
-        // We lost the arena - cancel the gesture
-        self.handle_cancel();
+    fn deadline(&self) -> Option<Instant> {
+        self.sequence
+            .borrow()
+            .as_ref()
+            .and_then(|sequence| sequence.deadline)
+    }
+    fn poll_deadline(&self, now: Instant) {
+        if self.deadline().is_some_and(|deadline| now >= deadline) {
+            self.cancel();
+        }
     }
 }
-
+impl Drop for MultiTapGestureRecognizer {
+    fn drop(&mut self) {
+        if let Some(sequence) = self.sequence.get_mut().take() {
+            for contact in sequence.contacts.values() {
+                contact.entry.release_deferred();
+                contact.entry.withdraw_deferred();
+            }
+        }
+    }
+}
 impl std::fmt::Debug for MultiTapGestureRecognizer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MultiTapGestureRecognizer")
-            .field("state", &self.state)
             .field("required_pointer_count", &self.required_pointer_count)
-            .field("gesture_state", &self.gesture_state.lock())
-            .field("settings", &self.settings.lock())
+            .field("settings", &self.settings)
             .finish_non_exhaustive()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::arena::GestureArena;
-
-    #[test]
-    fn test_two_finger_tap() {
-        let arena = GestureArena::new();
-        let tapped = Arc::new(Mutex::new(false));
-        let tap_count = Arc::new(Mutex::new(0usize));
-
-        let tapped_clone = tapped.clone();
-        let count_clone = tap_count.clone();
-
-        let recognizer =
-            MultiTapGestureRecognizer::new(arena, 2).with_on_multi_tap(move |details| {
-                *tapped_clone.lock() = true;
-                *count_clone.lock() = details.pointer_count;
-            });
-
-        let pointer1 = PointerId::new(2).expect("nonzero pointer id");
-        let pointer2 = PointerId::new(3).expect("nonzero pointer id");
-
-        // Add two pointers
-        recognizer.add_pointer(
-            pointer1,
-            Offset::new(100.0, 100.0),
-            Offset::new(100.0, 100.0),
-        );
-        recognizer.add_pointer(
-            pointer2,
-            Offset::new(200.0, 100.0),
-            Offset::new(200.0, 100.0),
-        );
-
-        // Verify collecting phase
-        let state = recognizer.gesture_state.lock();
-        assert_eq!(state.phase, MultiTapPhase::WaitingForUp);
-        assert_eq!(state.pointers.len(), 2);
-        drop(state);
-
-        // Release both pointers
-        recognizer.handle_pointer_up(pointer1, PointerType::Touch);
-        recognizer.handle_pointer_up(pointer2, PointerType::Touch);
-
-        // Should have called callback
-        assert!(*tapped.lock());
-        assert_eq!(*tap_count.lock(), 2);
+impl std::fmt::Debug for MultiTapGestureRecognizerBuilder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MultiTapGestureRecognizerBuilder")
+            .field("required_pointer_count", &self.required_pointer_count)
+            .field("settings", &self.settings)
+            .finish_non_exhaustive()
     }
 }

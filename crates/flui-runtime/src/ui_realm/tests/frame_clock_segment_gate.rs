@@ -264,13 +264,14 @@ pub(crate) fn occlude_then_dirty_then_unocclude_wakes_exactly_once_and_produces_
 /// the presented frame still carries the original epoch.
 pub(crate) fn surface_lost_retry_preserves_the_original_input_epoch_for_the_presented_frame() {
     use flui_foundation::geometry::Offset;
-    use flui_interaction::events::{PointerType, make_down_event};
+    use flui_interaction::events::{PointerKind, make_down_event};
 
     for verdict in [SubmitVerdict::SurfaceStale, SubmitVerdict::Retry] {
         let realm = mount_root_here();
         let primary_id = realm.presentations.primary().id();
 
-        let down = make_down_event(Offset::new(0.0, 0.0), PointerType::Mouse);
+        let down = make_down_event(Offset::new(0.0, 0.0), PointerKind::Mouse)
+            .expect("finite test position");
         realm.enter(|realm| {
             realm.handle_input_addressed(primary_id, PlatformInput::Pointer(down));
         });

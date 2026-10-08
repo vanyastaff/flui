@@ -1,7 +1,8 @@
 //! Mounted Slider contracts: input proposals, allocated paint and live numeric actions.
 use crate::common::{lay_out, tight};
 use flui_foundation::geometry::Size;
-use flui_interaction::events::{Key, KeyEvent, KeyState, NamedKey};
+use flui_interaction::events::{Code, Key, KeyState, NamedKey};
+use flui_interaction::testing::input::KeyEventBuilder;
 use flui_painting::{DrawOp, PaintStyle, typography::TextDirection};
 use flui_rendering::{
     constraints::BoxConstraints,
@@ -90,11 +91,14 @@ fn semantic_mount(log: &Proposals) -> LaidOut {
     laid
 }
 fn key(laid: &LaidOut, named: NamedKey) -> bool {
-    laid.focus_manager().dispatch_key_event(&KeyEvent {
-        state: KeyState::Down,
-        key: Key::Named(named),
-        ..KeyEvent::default()
-    })
+    laid.focus_manager()
+        .dispatch_key_event(
+            &KeyEventBuilder::new(Code::Unidentified)
+                .with_state(KeyState::Down)
+                .with_key(Key::Named(named))
+                .build(),
+        )
+        .is_handled()
 }
 
 pub(crate) fn slider_uses_allocated_fractional_bounds_for_paint_and_pointer_mapping() {
@@ -313,23 +317,34 @@ pub(crate) fn slider_focus_keys_and_semantic_actions_share_controlled_proposals(
     }
     assert_eq!(&*log.borrow(), &[35.0, 15.0, 0.0, 100.0]);
     for modifiers in [
-        flui_interaction::events::Modifiers::empty(),
+        flui_interaction::events::Modifiers::NONE,
         flui_interaction::events::Modifiers::SHIFT,
     ] {
-        assert!(laid.focus_manager().dispatch_key_event(&KeyEvent {
-            state: KeyState::Down,
-            key: Key::Character("+".into()),
-            modifiers,
-            ..KeyEvent::default()
-        }));
+        assert!(
+            laid.focus_manager()
+                .dispatch_key_event(
+                    &KeyEventBuilder::new(Code::Unidentified)
+                        .with_state(KeyState::Down)
+                        .with_key(Key::character("+"))
+                        .with_modifiers(modifiers)
+                        .build()
+                )
+                .is_handled()
+        );
         assert_eq!(log.borrow().last(), Some(&35.0));
     }
-    assert!(!laid.focus_manager().dispatch_key_event(&KeyEvent {
-        state: KeyState::Down,
-        key: Key::Named(NamedKey::ArrowRight),
-        modifiers: flui_interaction::events::Modifiers::SHIFT,
-        ..KeyEvent::default()
-    }));
+    assert!(
+        !laid
+            .focus_manager()
+            .dispatch_key_event(
+                &KeyEventBuilder::new(Code::Unidentified)
+                    .with_state(KeyState::Down)
+                    .with_key(Key::Named(NamedKey::ArrowRight))
+                    .with_modifiers(flui_interaction::events::Modifiers::SHIFT)
+                    .build()
+            )
+            .is_handled()
+    );
     log.borrow_mut().truncate(4);
     let listener = laid
         .accessibility_action_listener()

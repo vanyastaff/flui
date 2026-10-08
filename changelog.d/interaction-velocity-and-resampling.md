@@ -29,8 +29,5 @@
   `DEFAULT_MAX_FLING_VELOCITY` for any finite samples, and the least-squares tracker falls back to a
   linear fit when samples carry only two distinct timestamps instead of reporting zero velocity.
 - `Velocity::clamp_magnitude` no longer panics on inverted or NaN bounds.
-- `RawInputHandler` no longer panics when its callback replaces or clears itself.
-- `InputPredictor` output stays finite and bounded: the acceleration term comes from the
-  least-squares fit and is capped, and an out-of-range smoothing factor is clamped.
 - The resampler's queue-overflow diagnostic runs after committing the event and releasing its
   lock, so tracing subscribers can inspect or enqueue through the same resampler.

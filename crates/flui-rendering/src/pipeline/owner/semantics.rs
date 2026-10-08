@@ -177,6 +177,7 @@ struct BuiltSemanticsNode {
     source_render_id: RenderId,
     config: SemanticsConfiguration,
     rect: Rect<f64>,
+    reveal_rect: Rect<f64>,
     children: Vec<BuiltSemanticsNode>,
 }
 
@@ -184,6 +185,7 @@ struct PendingSemanticsNode {
     source_render_id: RenderId,
     config: SemanticsConfiguration,
     rect: Rect<f64>,
+    reveal_rect: Rect<f64>,
     children: Vec<BuiltSemanticsNode>,
 }
 
@@ -193,6 +195,7 @@ impl PendingSemanticsNode {
             source_render_id: self.source_render_id,
             config: self.config,
             rect: self.rect,
+            reveal_rect: self.reveal_rect,
             children: self.children,
         }
     }
@@ -205,26 +208,25 @@ enum SemanticsFragment {
 
 /// The clips an ancestor chain imposes on a node, in ROOT coordinates.
 ///
-/// Two rects, because "not painted" and "not there" are different answers for
-/// a screen reader. Content scrolled just past a viewport's edge is still
-/// reachable — a user can ask to scroll to it — so it stays in the tree and is
-/// flagged hidden; content past the cache area is gone from the tree entirely.
-/// Reporting either one as an ordinary visible node puts a focus ring on empty
-/// screen, which is why this is applied to the rect and not merely to the
-/// membership.
+/// Publication stays clipped to paint bounds where there is an intersection.
+/// Scroll caches limit ordinary publication but cannot erase a materialized
+/// descendant with a reveal ancestor. Authored bounds and occlusion retain
+/// their exclusion and hidden behavior independently of viewport clipping.
 #[derive(Debug, Clone, Copy, Default)]
 struct SemanticsClips {
     /// Outside this, a child is painted nowhere the user can see.
     paint: Option<Rect<f64>>,
     /// Outside this, a child has no accessibility presence at all.
     semantics: Option<Rect<f64>>,
+    cache: Option<Rect<f64>>,
+    occlusion: Option<Rect<f64>>,
 }
 
 /// What [`SemanticsClips::apply`] decided about one node's rect.
 struct ClippedRect {
     /// The rect to publish, already narrowed to the surviving part.
     rect: Rect<f64>,
-    /// The node is off-screen but reachable: publish it, flagged hidden.
+    /// Authored occlusion or ordinary off-screen content makes the node hidden.
     hidden: bool,
     /// Nothing of the node survives the semantics clip: publish no node for
     /// it. Its children are still walked — an overflowing child can extend
@@ -234,7 +236,7 @@ struct ClippedRect {
 
 impl SemanticsClips {
     /// Narrows `rect` to what these clips leave of it.
-    fn apply(self, rect: Rect<f64>) -> ClippedRect {
+    fn apply(self, rect: Rect<f64>, revealable: bool) -> ClippedRect {
         let was_empty = rect.is_empty();
 
         // `Rect::intersect` reports a zero-area overlap as `Some(empty)`;
@@ -243,7 +245,12 @@ impl SemanticsClips {
             clip.intersect(rect).filter(|kept| !kept.is_empty())
         };
 
-        let rect = match self.semantics {
+        let semantics = if revealable {
+            self.semantics
+        } else {
+            intersect_clips(self.semantics, self.cache)
+        };
+        let rect = match semantics {
             Some(clip) => match intersect(&clip, &rect) {
                 Some(kept) => kept,
                 // Nothing survives. An already-empty rect is not "clipped
@@ -279,7 +286,11 @@ impl SemanticsClips {
             // "scroll to" action has somewhere to aim, and flag it hidden.
             None => ClippedRect {
                 rect,
-                hidden: !was_empty,
+                hidden: !was_empty
+                    && (!revealable
+                        || self
+                            .occlusion
+                            .is_some_and(|clip| intersect(&clip, &rect).is_none())),
                 dropped: false,
             },
         }
@@ -287,22 +298,19 @@ impl SemanticsClips {
 
     /// The clips a child of this node inherits.
     ///
-    /// Paint clips always intersect. The semantics clip follows a three-way
-    /// rule:
-    ///
-    /// - a node that declares one REPLACES whatever it inherited, so a nested
-    ///   viewport re-grants its own cache area to its own children instead of
-    ///   being confined to its parent's;
-    /// - a node that declares only a paint clip NARROWS the inherited
-    ///   semantics clip by it — a clip that hides paint also limits how far
-    ///   an ancestor's cache area reaches through it;
-    /// - a node that declares neither passes the inherited one through, and a
-    ///   node with no inherited semantics clip stays unclipped whatever its
-    ///   paint clip says.
-    fn descend(self, local_paint: Option<Rect<f64>>, local_semantics: Option<Rect<f64>>) -> Self {
+    /// Paint clips intersect. A scroll cache replaces only the cache; authored
+    /// bounds replace the hard clip. Other paint clips narrow inherited bounds
+    /// and remain authored occlusion even inside a revealable scroll subtree.
+    fn descend(
+        self,
+        local_paint: Option<Rect<f64>>,
+        local_semantics: Option<crate::traits::SemanticsClip>,
+    ) -> Self {
+        use crate::traits::SemanticsClip;
         let paint = intersect_clips(self.paint, local_paint);
         let semantics = match local_semantics {
-            Some(replacement) => Some(replacement),
+            Some(SemanticsClip::Bounds(replacement)) => Some(replacement),
+            Some(SemanticsClip::ScrollCache(_)) => self.semantics,
             None => match (self.semantics, local_paint) {
                 // Disjoint means nothing survives, which is an EMPTY clip —
                 // `None` here would read as "no clip at all" and republish
@@ -314,7 +322,22 @@ impl SemanticsClips {
                 (None, _) => None,
             },
         };
-        Self { paint, semantics }
+        let cache = match local_semantics {
+            Some(SemanticsClip::ScrollCache(bounds)) => Some(bounds),
+            Some(SemanticsClip::Bounds(_)) => None,
+            None => intersect_clips(self.cache, local_paint),
+        };
+        let occlusion = if matches!(local_semantics, Some(SemanticsClip::ScrollCache(_))) {
+            self.occlusion
+        } else {
+            intersect_clips(self.occlusion, local_paint)
+        };
+        Self {
+            paint,
+            semantics,
+            cache,
+            occlusion,
+        }
     }
 }
 
@@ -347,7 +370,7 @@ fn child_clips_of(
     node: &RenderNode,
     origin: Offset,
     child_slot: usize,
-) -> (Option<Rect<f64>>, Option<Rect<f64>>) {
+) -> (Option<Rect<f64>>, Option<crate::traits::SemanticsClip>) {
     let offset = flui_foundation::geometry::Offset::new(origin.dx, origin.dy);
     // The node's own size is passed in rather than cached by each implementor.
     // A clip is always a function of the box it clips, so every implementor
@@ -379,7 +402,14 @@ fn child_clips_of(
     };
     (
         paint.map(|r| r.translate_offset(offset)),
-        semantics.map(|r| r.translate_offset(offset)),
+        semantics.map(|clip| match clip {
+            crate::traits::SemanticsClip::Bounds(rect) => {
+                crate::traits::SemanticsClip::Bounds(rect.translate_offset(offset))
+            }
+            crate::traits::SemanticsClip::ScrollCache(rect) => {
+                crate::traits::SemanticsClip::ScrollCache(rect.translate_offset(offset))
+            }
+        }),
     )
 }
 
@@ -388,6 +418,7 @@ struct SemanticsAssemblyContext {
     is_root: bool,
     parent_requires_explicit_node: bool,
     merge_into_ancestor: bool,
+    has_reveal_ancestor: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -421,6 +452,7 @@ fn assemble_semantics_root(
             is_root: true,
             parent_requires_explicit_node: false,
             merge_into_ancestor: false,
+            has_reveal_ancestor: false,
         },
         false,
     )
@@ -506,6 +538,13 @@ fn assembly_decisions(
             is_root: false,
             parent_requires_explicit_node: children_require_explicit_node,
             merge_into_ancestor: children_merge_into_ancestor,
+            has_reveal_ancestor: context.has_reveal_ancestor
+                || (config.effective_actions_as_bits()
+                    & flui_semantics::SemanticsAction::ShowOnScreen.value()
+                    != 0
+                    && config
+                        .action_handler(flui_semantics::SemanticsAction::ShowOnScreen)
+                        .is_some()),
         },
     }
 }
@@ -526,7 +565,9 @@ fn build_semantics_fragments_impl(
     let mut config = describe_semantics_configuration(node);
     let blocks_user_actions = ancestor_blocks_user_actions || config.blocks_user_actions();
     config.set_blocks_user_actions(blocks_user_actions);
-    let clipped = clips.apply(node_semantics_rect(node, origin));
+    config.set_has_reveal_ancestor(context.has_reveal_ancestor);
+    let reveal_rect = node_semantics_rect(node, origin);
+    let clipped = clips.apply(reveal_rect, context.has_reveal_ancestor);
     let rect = clipped.rect;
     if clipped.hidden {
         config.set_hidden(true);
@@ -609,6 +650,7 @@ fn build_semantics_fragments_impl(
         source_render_id: id,
         config,
         rect,
+        reveal_rect,
         children,
     };
 
@@ -691,6 +733,7 @@ fn semantics_node_parts(built: BuiltSemanticsNode) -> (SemanticsNode, Vec<BuiltS
         .with_source_render_id(built.source_render_id)
         .with_config(built.config);
     node.set_rect(built.rect);
+    node.set_reveal_rect(built.reveal_rect);
     (node, built.children)
 }
 
@@ -826,6 +869,7 @@ fn assembly_inputs_for(
         is_root: true,
         parent_requires_explicit_node: false,
         merge_into_ancestor: false,
+        has_reveal_ancestor: false,
     };
     let mut blocks_user_actions = false;
     let mut origin = Offset::ZERO;

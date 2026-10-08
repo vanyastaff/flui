@@ -239,11 +239,25 @@ thread_local! {
     ///
     /// `ManuallyDrop` is required because this module can be instantiated in a
     /// hot-reload cdylib. `RegistryActivation` empties the stack explicitly.
+    #[cfg_attr(
+        target_os = "android",
+        allow(
+            clippy::missing_const_for_thread_local,
+            reason = "Rust 1.99's Android OS TLS macro can misreport this explicit const initializer on cross hosts"
+        )
+    )]
     static REGISTRY_STACK: DropFreeRegistryStack = const {
         ManuallyDrop::new(RefCell::new(Vec::new()))
     };
     /// Legacy fixture lane. It never mutates the production activation stack.
     /// `take_registry` is its explicit teardown path.
+    #[cfg_attr(
+        target_os = "android",
+        allow(
+            clippy::missing_const_for_thread_local,
+            reason = "Rust 1.99's Android OS TLS macro can misreport this explicit const initializer on cross hosts"
+        )
+    )]
     static TEST_REGISTRY: DropFreeTestRegistrySlot = const {
         ManuallyDrop::new(RefCell::new(None))
     };

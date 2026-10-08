@@ -472,6 +472,33 @@ impl Action<PreviousFocusIntent> for PreviousFocusAction {
 // Text editing intents (ADR-0023)
 // ============================================================================
 
+/// Move focus along one geometric direction after the focused control declines the key.
+#[derive(Debug, Clone, Copy)]
+pub struct DirectionalFocusIntent(pub flui_interaction::FocusDirection);
+impl Intent for DirectionalFocusIntent {}
+
+/// Directional navigation bound to one presentation's focus owner.
+#[derive(Debug, Clone)]
+pub struct DirectionalFocusAction {
+    focus_manager: Rc<FocusManager>,
+}
+impl DirectionalFocusAction {
+    /// Bind directional traversal to this presentation.
+    #[must_use]
+    pub fn new(focus_manager: Rc<FocusManager>) -> Self {
+        Self { focus_manager }
+    }
+}
+impl Action<DirectionalFocusIntent> for DirectionalFocusAction {
+    fn invoke(&self, _cx: &mut EventCx<'_>, intent: &DirectionalFocusIntent) -> ActionOutcome {
+        if self.focus_manager.focus_in_direction(intent.0) {
+            ActionOutcome::Performed
+        } else {
+            ActionOutcome::NotPerformed
+        }
+    }
+}
+
 /// Copy or cut the focused field's selection.
 /// [`DefaultFocusTraversal`](super::shortcuts::DefaultFocusTraversal)
 /// binds Ctrl+C/Ctrl+X (Cmd on Apple platforms); an `EditableText` answers it

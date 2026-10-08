@@ -22,17 +22,21 @@
 //!
 //! # Example
 //!
-//! ```rust,ignore
-//! use flui_interaction::processing::sampling_clock::SamplingClock;
+//! ```rust
+//! use flui_interaction::processing::{PointerEventResampler, SamplingClock};
+//! use flui_interaction::PointerId;
 //! use std::time::Duration;
 //!
-//! // 120Hz input clock on a 60Hz display: up-sample to display rate.
+//! // Pace sampling at the display's 60Hz cadence.
 //! let clock = SamplingClock::Fixed {
-//!     period: Duration::from_micros(8_333), // ~120Hz
+//!     period: Duration::from_micros(16_667),
 //! };
 //!
-//! let (now, next) = clock.tick();
-//! resampler.sample(now, next, |event| dispatch(event));
+//! let resampler = PointerEventResampler::new(PointerId::try_from(1_u64)?);
+//! if let Some((now, next)) = clock.tick() {
+//!     resampler.sample(now, next, |event| { /* dispatch the sampled event */ });
+//! }
+//! # Ok::<(), std::num::TryFromIntError>(())
 //! ```
 
 use web_time::{Duration, Instant};

@@ -7,8 +7,8 @@ event.
 
 A handler is invoked with a `PointerDispatch`, not a bare event: `local` is the
 event rewritten into that entry's own space, `global` is the platform's own
-value passed through untouched. FLUI's pointer events are `ui_events`
-types with room for exactly one position, so the pair travels beside the event.
+value passed through untouched. Both use the owned `flui-platform-api` pointer
+vocabulary, so the pair travels beside the event.
 Both halves borrow values the dispatch already owns, so carrying the second one
 costs no clone.
 
@@ -21,7 +21,7 @@ costs no clone.
 - `pointer_target: Option<PointerTarget>`
 - `scroll_target: Option<ScrollTarget>` and `pan_zoom_target: Option<PanZoomTarget>`
 - `metadata: Option<Arc<dyn Any + Send + Sync>>`
-- `cursor: CursorIcon` and `mouse_annotation: Option<MouseTrackerAnnotation>`
+- `cursor: CursorRequest` and `mouse_annotation: Option<MouseTrackerAnnotation>`
 
 Executable pointer callbacks do not live in render storage or hit-test entries.
 Widgets register owner-local handlers through `RenderObjectContext`, render
@@ -45,18 +45,45 @@ Retaining the hit targets this way keeps render data
 `Send + Sync`. If a target unmounts after Down, new hit tests will miss it, but
 the active route keeps the owner-local handler cell alive until Up/Cancel.
 
+Recognizer attachments inside that handler are weak. Retaining a route keeps
+its dispatch infrastructure available, but does not keep an unmounted
+recognizer alive. Each attachment upgrades immediately before invocation;
+Down admission filters do not gate a previously admitted contact's terminal tail.
+
 Per-target panics are isolated: later targets still receive the event, cleanup
 runs, then the first panic is resumed by the dispatch owner.
 
-Localization rewrites the event's own position only. For a `Move`, the
-`coalesced` and `predicted` samples are copied unchanged and stay in global
-coordinates (`transform_pointer_event` in `routing/hit_test.rs`).
+Localization rewrites the current position and every coalesced and predicted
+sample into the same local coordinate space. Times, pointer/device identity,
+kind, primary role, buttons, modifiers and sensor readings are preserved.
+The global event stays unchanged. A computed non-finite local position refuses
+that transformed event (`transform_pointer_event` in `routing/hit_test.rs`).
+The mounted `pointer_delivery_preserves_source_and_sample_families` row checks
+both coordinate spaces and distinct sample families.
 
 ## Scroll and pan-zoom dispatch
 
-`EventPropagation` belongs to the two claiming walks: the pointer-signal /
-scroll resolver and the trackpad pan-zoom walk. A handler there may return
-`Stop` to claim the event. Ordinary pointer delivery does not use it.
+`EventPropagation` belongs to scroll and native pan-zoom claims. A handler may
+return `Stop` to claim the event. The binding retains the admitted native source
+owner through its terminal event; later updates use that owner rather than a
+fresh claim walk. Ordinary pointer delivery does not use a propagation result.
+
+Scroll delivery carries `ScrollEvent` with its checked delta unit, precision,
+phase and source metadata. Pixel displacements use the checked local chord
+`U(focal + delta) - U(focal)`, where `U` unprojects onto the receiving plane.
+An invalid endpoint or non-finite intermediate refuses the localized event.
+Lines and Pages retain their exact source counts and unit while the focal
+position is localized. Page deltas resolve against the consuming viewport's actual
+dimension. Line deltas currently use the widget's 53-logical-pixel fallback;
+system-derived line settings await the platform preferences producer.
+`scroll_claim_preserves_owned_source_units_and_phase` and
+`page_scroll_resolves_against_the_actual_viewport` pin the consumer contract.
+Trackpad delivery uses cumulative `PanZoomEvent` transforms. Local cumulative
+pan uses `U(current_focal + pan) - U(current_focal)` independently for each
+Update: routing does not infer a global starting focal. Scale and rotation
+remain unchanged, and the source event retains its original cumulative pan.
+The `transformed_entry_receives_local_samples_and_deltas` table distinguishes
+moving focal points and checks finite, horizon and behind-plane refusal.
 
 ## Mouse enter, exit and cursor
 
@@ -65,7 +92,9 @@ path. It delivers all exits first, in hit-test (leaf-first) order, then all
 enters in reverse hit-test order (outermost region first), then the cursor
 change callback (`DeviceWork::invoke`, `routing/mouse_tracker.rs`). The cursor
 is `HitTestResult::resolve_cursor`: the first entry along the leaf-first path
-whose cursor is not `CursorIcon::Default`, or `Default` when there is none.
+whose request is `CursorRequest::Icon`, including an explicit `CursorIcon::Default`
+arrow. `CursorRequest::Defer` leaves the choice to the next entry; an entirely
+deferring path resolves to the arrow (ADR-0158).
 
 ## Transform support
 
@@ -75,23 +104,28 @@ INVERSE of its own forward (paint-direction) offset/matrix — prefer the
 scope helpers, which invert and pop for you:
 
 ```rust
-use flui_interaction::prelude::*;
+use flui_interaction::{HitTestEntry, HitTestResult};
+use flui_foundation::RenderId;
 use flui_foundation::geometry::{Matrix4, Offset};
 
 let mut result = HitTestResult::new();
 
 // `with_paint_offset` takes the forward paint offset and pushes its
 // inverse (negated) internally.
-result.with_paint_offset(Offset::new(10.0, 20.0), |result| {
-    child.hit_test(position, result);
+let _ = result.with_paint_offset(Offset::new(10.0, 20.0), |result| {
+    result.add(HitTestEntry::new(RenderId::new(1)));
 });
+assert_eq!(result.path()[0].transform.expect("entry transform")
+    .transform_point(10.0, 20.0), (0.0, 0.0));
 
 // `with_paint_transform` takes the forward paint matrix and pushes its
 // inverse internally. Refusal skips the closure and returns None.
 let rotation = Matrix4::rotation_z(std::f64::consts::FRAC_PI_4);
 let hit = result.with_paint_transform(rotation, |result| {
-    child.hit_test(position, result)
+    result.add(HitTestEntry::new(RenderId::new(2)));
+    true
 }).unwrap_or(false);
+assert!(hit);
 ```
 
 `push_offset`/`push_transform` are the raw primitives underneath — they push
@@ -101,7 +135,12 @@ scope-helper's closure shape does not fit; `with_paint_offset`/
 `with_paint_transform` are correct by construction and should be preferred.
 
 Each entry captures the current (already-inverted) transform. During dispatch
-the event is transformed into that entry's local coordinate space.
+the event is unprojected onto that entry's local `z = 0` plane with
+`Matrix4::unproject_to_plane`. Applying the full inverse to screen depth zero
+would give the wrong point for a tilted plane under perspective. Behind-plane,
+horizon, edge-on and non-finite results refuse traversal or localized delivery.
+Ordinary finite affine arithmetic retains its original evaluation order;
+normalized homogeneous arithmetic handles the remaining admitted range.
 A paint-transform scope without an admitted finite computed inverse returns
 `None` before traversal can publish an entry. Callers map refusal to a subtree
 miss. Raw pushes remain the caller's responsibility (ADR-0113).

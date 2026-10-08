@@ -6,9 +6,12 @@
 
 use std::rc::Rc;
 
-use flui_interaction::events::{Key, KeyState};
 use flui_interaction::routing::FocusNode;
 use flui_objects::RenderEditable;
+use flui_platform_api::{
+    EventTime,
+    keyboard::{Code, Key, KeyEvent, KeyState, Modifiers},
+};
 use flui_widgets::{EditableText, TextEditingController};
 
 /// Platform requests travel through the real realm inbox and the mounted
@@ -679,13 +682,13 @@ fn dispatch_ime(harness: &crate::common::harness::Harness, event: &flui_platform
     harness.dispatch_ime(event);
 }
 
-fn character_key_event(ch: char) -> flui_interaction::events::KeyEvent {
-    use flui_interaction::events::Code;
-    use flui_interaction::testing::input::KeyEventBuilder;
-    KeyEventBuilder::new(Code::KeyA)
-        .with_key(Key::Character(ch.to_string()))
-        .with_state(KeyState::Down)
-        .build()
+fn character_key_event(ch: char) -> KeyEvent {
+    KeyEvent::new(
+        KeyState::Down,
+        Key::character(ch.to_string()),
+        Code::KeyA,
+        EventTime::from_nanos(0),
+    )
 }
 
 /// A normal post-mount focus edge attaches one IME client and routes
@@ -698,7 +701,7 @@ pub(crate) fn focus_gain_attaches_an_ime_client_and_routes_preedit_to_the_contro
         Rc::clone(&focus_node),
     ));
 
-    focus_node.request_focus();
+    let _ = focus_node.request_focus();
     assert_eq!(
         harness.active_ime_clients(),
         1,
@@ -862,7 +865,7 @@ pub(crate) fn a_pointer_down_and_a_paste_commit_the_composition_first() {
             controller.clone(),
             Rc::clone(&node),
         ));
-        node.request_focus();
+        let _ = node.request_focus();
         harness.tick();
         harness.dispatch_ime(&flui_platform_api::ImeEvent::Preedit {
             text: "東京".to_owned(),
@@ -894,19 +897,24 @@ pub(crate) fn a_pointer_down_and_a_paste_commit_the_composition_first() {
     let (harness, controller) = composing("ab");
     harness.clipboard().write_text("!".to_owned());
     assert!(
-        harness.focus_manager().dispatch_key_event(
-            &flui_interaction::testing::input::KeyEventBuilder::new(
-                flui_interaction::events::Code::KeyV
+        harness
+            .focus_manager()
+            .dispatch_key_event(
+                &KeyEvent::new(
+                    KeyState::Down,
+                    Key::character("v"),
+                    Code::KeyV,
+                    EventTime::from_nanos(0)
+                )
+                .with_modifiers(
+                    if cfg!(any(target_os = "macos", target_os = "ios")) {
+                        Modifiers::META
+                    } else {
+                        Modifiers::CONTROL
+                    }
+                )
             )
-            .with_key(Key::Character("v".to_owned()))
-            .with_state(KeyState::Down)
-            .with_modifiers(if cfg!(any(target_os = "macos", target_os = "ios")) {
-                flui_interaction::events::Modifiers::META
-            } else {
-                flui_interaction::events::Modifiers::CONTROL
-            })
-            .build()
-        ),
+            .is_handled(),
         "paste: the chord is consumed while composing"
     );
     assert!(committed(&harness), "paste: the host is asked first");
@@ -954,7 +962,7 @@ pub(crate) fn moving_focus_off_a_composing_field_commits_it_in_either_mount_orde
             mount_with_push_ime(fields)
         };
         let (source, destination) = if compose_in_later { (1, 0) } else { (0, 1) };
-        nodes[source].request_focus();
+        let _ = nodes[source].request_focus();
         harness.tick();
         harness.dispatch_ime(&flui_platform_api::ImeEvent::Preedit {
             text: "東京".to_owned(),
@@ -963,7 +971,7 @@ pub(crate) fn moving_focus_off_a_composing_field_commits_it_in_either_mount_orde
         let composing = &controllers[source];
         assert!(composing.is_composing(), "precondition: composing");
 
-        nodes[destination].request_focus();
+        let _ = nodes[destination].request_focus();
         harness.tick();
         assert!(
             !composing.is_composing(),
@@ -972,12 +980,13 @@ pub(crate) fn moving_focus_off_a_composing_field_commits_it_in_either_mount_orde
         let committed = format!("{}東京", if source == 0 { "ab" } else { "cd" });
         assert_eq!(composing.text(), committed, "keeping its text");
 
-        nodes[source].request_focus();
+        let _ = nodes[source].request_focus();
         harness.tick();
         assert!(
             harness
                 .focus_manager()
                 .dispatch_key_event(&character_key_event('x'))
+                .is_handled()
         );
         harness.tick();
         assert_eq!(
@@ -1022,7 +1031,7 @@ pub(crate) fn a_press_reentered_by_its_commit_is_not_a_second_contact() {
             }
         }),
     );
-    node.request_focus();
+    let _ = node.request_focus();
     harness.tick();
     harness.dispatch_ime(&flui_platform_api::ImeEvent::Preedit {
         text: "東京".to_owned(),
@@ -1090,12 +1099,14 @@ pub(crate) fn a_drag_selects_from_its_start_to_the_pointer() {
 /// in `wrap_double_tap_word_select` — the selection stays collapsed
 /// after the second tap, same as the first.
 pub(crate) fn a_double_tap_selects_the_word_under_it() {
+    use std::time::Duration;
+
     let controller = TextEditingController::with_text("hello world");
     let focus_node = FocusNode::with_debug_label("double-tapped field");
-    let harness = crate::common::harness::mount_with_ime(EditableText::new(
-        controller.clone(),
-        Rc::clone(&focus_node),
-    ));
+    let mut harness = crate::common::lay_out(
+        EditableText::new(controller.clone(), Rc::clone(&focus_node)),
+        crate::common::tight(200.0, 40.0),
+    );
 
     // First tap: places a collapsed caret, same as
     // `a_tap_places_the_caret_where_it_landed`.
@@ -1106,6 +1117,9 @@ pub(crate) fn a_double_tap_selects_the_word_under_it() {
         "the first tap alone only collapses"
     );
 
+    // Advance the presentation-owned arena clock past the debounce interval,
+    // while remaining inside the double-tap window.
+    harness.pump_for(Duration::from_millis(40));
     // Second tap, same spot: `on_double_tap_down` widens it to the word.
     harness.dispatch_pointer_down(1.0, 5.0);
 
@@ -1218,7 +1232,7 @@ pub(crate) mod text_store {
             controller.clone(),
             Rc::clone(&focus_node),
         ));
-        focus_node.request_focus();
+        let _ = focus_node.request_focus();
         harness.tick();
         (harness, focus_node)
     }
@@ -1365,7 +1379,8 @@ pub(crate) mod text_store {
 
         let handled = harness
             .focus_manager()
-            .dispatch_key_event(&character_key_event('b'));
+            .dispatch_key_event(&character_key_event('b'))
+            .is_handled();
         assert!(handled);
         assert_eq!(controller.text(), "Ab");
     }
@@ -1412,7 +1427,7 @@ pub(crate) mod text_store {
                 },
             ),
         );
-        focus_node.request_focus();
+        let _ = focus_node.request_focus();
         harness.tick();
         let field = store(&harness);
         *slot.borrow_mut() = Some(Rc::clone(&field));
@@ -1500,7 +1515,7 @@ pub(crate) mod text_store {
             EditableText::new(controller.clone(), Rc::clone(&focus_node))
                 .on_changed(move |_cx, text| sink.borrow_mut().push(text.to_owned())),
         );
-        focus_node.request_focus();
+        let _ = focus_node.request_focus();
         harness.tick();
         let field = store(&harness);
         LISTENED_FIELD.with(|slot| *slot.borrow_mut() = Some(Rc::clone(&field)));
@@ -1595,7 +1610,7 @@ pub(crate) mod text_store {
             old.clone(),
             Rc::clone(&focus_node),
         ))));
-        focus_node.request_focus();
+        let _ = focus_node.request_focus();
         harness.borrow_mut().tick();
         let field = store(&harness.borrow());
         let (nested, replacement, node) =
@@ -1624,7 +1639,7 @@ pub(crate) mod text_store {
             EditableText::new(controller.clone(), Rc::clone(&focus_node))
                 .on_changed(move |_cx, text| on_changed(text)),
         );
-        focus_node.request_focus();
+        let _ = focus_node.request_focus();
         harness.tick();
         (harness, focus_node)
     }
@@ -1841,8 +1856,10 @@ pub(crate) mod text_store {
     /// field reports, which follows the visible caret, not its position in
     /// the whole text.
     fn long_input_reports_the_visible_candidate_area() {
-        use flui_interaction::events::{Code, Key, KeyState, Modifiers, NamedKey};
-        use flui_interaction::testing::input::KeyEventBuilder;
+        use flui_platform_api::{
+            EventTime,
+            keyboard::{Code, Key, KeyEvent, KeyState, NamedKey},
+        };
         use flui_widgets::SizedBox;
 
         let controller = TextEditingController::new();
@@ -1850,7 +1867,7 @@ pub(crate) mod text_store {
         let mut harness = crate::common::harness::mount_with_push_ime(
             SizedBox::new(60.0, 30.0).child(EditableText::new(controller, Rc::clone(&focus))),
         );
-        focus.request_focus();
+        let _ = focus.request_focus();
         let assert_visible = |harness: &Harness| {
             let candidate = harness
                 .cursor_area_calls()
@@ -1867,17 +1884,24 @@ pub(crate) mod text_store {
                 harness
                     .focus_manager()
                     .dispatch_key_event(&super::character_key_event(ch))
+                    .is_handled()
             );
             harness.tick();
         }
         assert_visible(&harness);
         for key in [NamedKey::Home, NamedKey::End] {
-            let event = KeyEventBuilder::new(Code::Home)
-                .with_key(Key::Named(key))
-                .with_state(KeyState::Down)
-                .with_modifiers(Modifiers::empty())
-                .build();
-            assert!(harness.focus_manager().dispatch_key_event(&event));
+            let event = KeyEvent::new(
+                KeyState::Down,
+                Key::Named(key),
+                Code::Home,
+                EventTime::from_nanos(0),
+            );
+            assert!(
+                harness
+                    .focus_manager()
+                    .dispatch_key_event(&event)
+                    .is_handled()
+            );
             harness.tick();
             assert_visible(&harness);
         }
@@ -1897,9 +1921,11 @@ pub(crate) mod text_store {
 
     fn long_input(text: &'static str, obscured: bool) {
         use flui_foundation::geometry::Point;
-        use flui_interaction::events::{Code, Key, KeyState, Modifiers, NamedKey};
-        use flui_interaction::testing::input::KeyEventBuilder;
         use flui_platform_api::text_store::{PointMode, TextStoreError, Utf16Range};
+        use flui_platform_api::{
+            EventTime,
+            keyboard::{Code, Key, KeyEvent, KeyState, Modifiers, NamedKey},
+        };
         use flui_widgets::SizedBox;
 
         let controller = TextEditingController::new();
@@ -1907,12 +1933,13 @@ pub(crate) mod text_store {
         let mut harness = crate::common::harness::mount_with_ime(SizedBox::new(60.0, 30.0).child(
             EditableText::new(controller.clone(), Rc::clone(&focus)).obscure_text(obscured),
         ));
-        focus.request_focus();
+        let _ = focus.request_focus();
         for ch in text.chars() {
             assert!(
                 harness
                     .focus_manager()
                     .dispatch_key_event(&super::character_key_event(ch))
+                    .is_handled()
             );
             harness.tick();
         }
@@ -1968,22 +1995,35 @@ pub(crate) mod text_store {
         });
         assert!(full.clipped, "long document exceeds the visible field");
         for key in [NamedKey::Home, NamedKey::End, NamedKey::Home, NamedKey::End] {
-            let event = KeyEventBuilder::new(Code::Home)
-                .with_key(Key::Named(key))
-                .with_state(KeyState::Down)
-                .with_modifiers(Modifiers::empty())
-                .build();
-            assert!(harness.focus_manager().dispatch_key_event(&event));
+            let event = KeyEvent::new(
+                KeyState::Down,
+                Key::Named(key),
+                Code::Home,
+                EventTime::from_nanos(0),
+            );
+            assert!(
+                harness
+                    .focus_manager()
+                    .dispatch_key_event(&event)
+                    .is_handled()
+            );
             harness.tick();
             assert_visible(&harness);
         }
 
-        let select = KeyEventBuilder::new(Code::ArrowLeft)
-            .with_key(Key::Named(NamedKey::ArrowLeft))
-            .with_state(KeyState::Down)
-            .with_modifiers(Modifiers::SHIFT)
-            .build();
-        assert!(harness.focus_manager().dispatch_key_event(&select));
+        let select = KeyEvent::new(
+            KeyState::Down,
+            Key::Named(NamedKey::ArrowLeft),
+            Code::ArrowLeft,
+            EventTime::from_nanos(0),
+        )
+        .with_modifiers(Modifiers::SHIFT);
+        assert!(
+            harness
+                .focus_manager()
+                .dispatch_key_event(&select)
+                .is_handled()
+        );
         harness.tick();
         let selected = read(&field, |session| {
             session
@@ -1994,11 +2034,18 @@ pub(crate) mod text_store {
             !selected.clipped,
             "the selected adjacent grapheme uses viewport coordinates"
         );
-        let end = KeyEventBuilder::new(Code::End)
-            .with_key(Key::Named(NamedKey::End))
-            .with_state(KeyState::Down)
-            .build();
-        assert!(harness.focus_manager().dispatch_key_event(&end));
+        let end = KeyEvent::new(
+            KeyState::Down,
+            Key::Named(NamedKey::End),
+            Code::End,
+            EventTime::from_nanos(0),
+        );
+        assert!(
+            harness
+                .focus_manager()
+                .dispatch_key_event(&end)
+                .is_handled()
+        );
         harness.tick();
 
         // A visible suffix boundary is not the same x as its full-content
@@ -2016,6 +2063,7 @@ pub(crate) mod text_store {
             harness
                 .focus_manager()
                 .dispatch_key_event(&super::character_key_event('!'))
+                .is_handled()
         );
         assert_eq!(
             controller.text(),
@@ -2076,10 +2124,12 @@ pub(crate) mod text_store {
             SizedBox::new(60.0, 30.0).child(EditableText::new(controller, Rc::clone(&focus))),
             crate::common::tight(60.0, 30.0),
         );
-        focus.request_focus();
+        let _ = focus.request_focus();
         for ch in "abcdefghijklmnopqrstuvwxyz".chars() {
-            laid.focus_manager()
-                .dispatch_key_event(&super::character_key_event(ch));
+            let _ = laid
+                .focus_manager()
+                .dispatch_key_event(&super::character_key_event(ch))
+                .is_handled();
         }
         laid.tick();
         let tree = laid.layer_tree().expect("typing painted a frame");
@@ -2140,7 +2190,7 @@ pub(crate) mod event_cx {
             field(signals, probe_controller.clone(), Rc::clone(&probe_node))
         });
         let mut harness = mount_with_ime(probe.view());
-        harness.enter_owner_scope(|| focus_node.request_focus());
+        let _ = harness.enter_owner_scope(|| focus_node.request_focus());
         harness.tick();
         (probe, harness, controller)
     }
@@ -2153,8 +2203,12 @@ pub(crate) mod event_cx {
         });
 
         let keys = harness.focus_manager();
-        keys.dispatch_key_event(&character_key_event('a'));
-        keys.dispatch_key_event(&character_key_event('b'));
+        let _ = keys
+            .dispatch_key_event(&character_key_event('a'))
+            .is_handled();
+        let _ = keys
+            .dispatch_key_event(&character_key_event('b'))
+            .is_handled();
 
         assert_eq!(probe.value(), Ok(2));
         harness.tick();
@@ -2171,6 +2225,7 @@ pub(crate) mod event_cx {
             harness
                 .focus_manager()
                 .dispatch_key_event(&character_key_event('a'))
+                .is_handled()
         });
 
         assert!(
@@ -2208,7 +2263,9 @@ pub(crate) fn deleting_a_separator_keeps_the_caret_after_the_joined_flag() {
 }
 
 fn selection_contact(id: u64) -> flui_interaction::PointerId {
-    flui_interaction::PointerId::new(id).expect("nonzero fixture contact")
+    flui_interaction::PointerId::new(
+        std::num::NonZeroU64::new(id).expect("nonzero fixture contact"),
+    )
 }
 
 fn selection_field() -> (crate::common::LaidOut, TextEditingController, Rc<FocusNode>) {
@@ -2226,105 +2283,96 @@ fn selection_field() -> (crate::common::LaidOut, TextEditingController, Rc<Focus
 pub(crate) fn selection_drag_survives_a_same_controller_rebuild() {
     use flui_foundation::geometry::Offset;
     use flui_interaction::events::{
-        PointerType, make_cancel_event_for_id, make_down_event_for_id, make_move_event_for_id,
+        PointerKind, make_cancel_event_for_id, make_down_event_for_id, make_move_event_for_id,
     };
     let (mut tree, controller, focus) = selection_field();
     let contact = selection_contact(41);
-    tree.dispatch_pointer_event(&make_down_event_for_id(
-        contact,
-        Offset::new(1.0, 5.0),
-        PointerType::Touch,
-    ));
+    tree.dispatch_pointer_event(
+        &make_down_event_for_id(contact, Offset::new(1.0, 5.0), PointerKind::Touch)
+            .expect("finite selection fixture"),
+    );
     let anchor = controller.caret_byte_offset();
     assert_eq!(anchor, 0);
     tree.pump_widget(EditableText::new(controller.clone(), Rc::clone(&focus)).caret_height(19.0));
-    tree.dispatch_pointer_event(&make_move_event_for_id(
-        contact,
-        Offset::new(400.0, 5.0),
-        PointerType::Touch,
-    ));
+    tree.dispatch_pointer_event(
+        &make_move_event_for_id(contact, Offset::new(400.0, 5.0), PointerKind::Touch)
+            .expect("finite selection fixture"),
+    );
     assert_eq!(controller.selection().start, anchor);
     assert!(controller.selection().end > anchor);
-    tree.dispatch_pointer_event(&make_cancel_event_for_id(contact, PointerType::Touch));
+    tree.dispatch_pointer_event(&make_cancel_event_for_id(contact, PointerKind::Touch));
     let next = selection_contact(42);
-    tree.dispatch_pointer_event(&make_down_event_for_id(
-        next,
-        Offset::new(400.0, 5.0),
-        PointerType::Touch,
-    ));
+    tree.dispatch_pointer_event(
+        &make_down_event_for_id(next, Offset::new(400.0, 5.0), PointerKind::Touch)
+            .expect("finite selection fixture"),
+    );
     let next_anchor = controller.caret_byte_offset();
-    tree.dispatch_pointer_event(&make_move_event_for_id(
-        next,
-        Offset::new(1.0, 5.0),
-        PointerType::Touch,
-    ));
+    tree.dispatch_pointer_event(
+        &make_move_event_for_id(next, Offset::new(1.0, 5.0), PointerKind::Touch)
+            .expect("finite selection fixture"),
+    );
     assert!(controller.caret_byte_offset() < next_anchor);
 }
 
 fn foreign_selection_terminal(cancel: bool) {
     use flui_foundation::geometry::Offset;
     use flui_interaction::events::{
-        PointerType, make_cancel_event_for_id, make_down_event_for_id, make_move_event_for_id,
+        PointerKind, make_cancel_event_for_id, make_down_event_for_id, make_move_event_for_id,
         make_up_event_for_id,
     };
     let (tree, controller, _focus) = selection_field();
     let own = selection_contact(51);
     let foreign = selection_contact(52);
-    tree.dispatch_pointer_event(&make_down_event_for_id(
-        own,
-        Offset::new(1.0, 5.0),
-        PointerType::Touch,
-    ));
+    tree.dispatch_pointer_event(
+        &make_down_event_for_id(own, Offset::new(1.0, 5.0), PointerKind::Touch)
+            .expect("finite selection fixture"),
+    );
     let anchor = controller.caret_byte_offset();
-    tree.dispatch_pointer_event(&make_down_event_for_id(
-        foreign,
-        Offset::new(150.0, 5.0),
-        PointerType::Touch,
-    ));
+    tree.dispatch_pointer_event(
+        &make_down_event_for_id(foreign, Offset::new(150.0, 5.0), PointerKind::Touch)
+            .expect("finite selection fixture"),
+    );
     assert_eq!(
         controller.caret_byte_offset(),
         anchor,
         "first contact owns selection"
     );
-    tree.dispatch_pointer_event(&make_move_event_for_id(
-        foreign,
-        Offset::new(400.0, 5.0),
-        PointerType::Touch,
-    ));
+    tree.dispatch_pointer_event(
+        &make_move_event_for_id(foreign, Offset::new(400.0, 5.0), PointerKind::Touch)
+            .expect("finite selection fixture"),
+    );
     assert_eq!(
         controller.caret_byte_offset(),
         anchor,
         "foreign move cannot select"
     );
     let terminal = if cancel {
-        make_cancel_event_for_id(foreign, PointerType::Touch)
+        make_cancel_event_for_id(foreign, PointerKind::Touch)
     } else {
-        make_up_event_for_id(foreign, Offset::new(400.0, 5.0), PointerType::Touch)
+        make_up_event_for_id(foreign, Offset::new(400.0, 5.0), PointerKind::Touch)
+            .expect("finite selection fixture")
     };
     tree.dispatch_pointer_event(&terminal);
-    tree.dispatch_pointer_event(&make_move_event_for_id(
-        own,
-        Offset::new(400.0, 5.0),
-        PointerType::Touch,
-    ));
+    tree.dispatch_pointer_event(
+        &make_move_event_for_id(own, Offset::new(400.0, 5.0), PointerKind::Touch)
+            .expect("finite selection fixture"),
+    );
     assert_eq!(controller.selection().start, anchor);
     assert!(
         controller.selection().end > anchor,
         "foreign terminal preserves own drag"
     );
-    tree.dispatch_pointer_event(&make_cancel_event_for_id(own, PointerType::Touch));
+    tree.dispatch_pointer_event(&make_cancel_event_for_id(own, PointerKind::Touch));
     let next = selection_contact(53);
-    tree.dispatch_pointer_event(&make_down_event_for_id(
-        next,
-        Offset::new(400.0, 5.0),
-        PointerType::Touch,
-    ));
+    tree.dispatch_pointer_event(
+        &make_down_event_for_id(next, Offset::new(400.0, 5.0), PointerKind::Touch)
+            .expect("finite selection fixture"),
+    );
     let next_anchor = controller.caret_byte_offset();
-    tree.dispatch_pointer_event(&make_move_event_for_id(
-        next,
-        Offset::new(1.0, 5.0),
-        PointerType::Touch,
-    ));
+    tree.dispatch_pointer_event(
+        &make_move_event_for_id(next, Offset::new(1.0, 5.0), PointerKind::Touch)
+            .expect("finite selection fixture"),
+    );
     assert!(controller.caret_byte_offset() < next_anchor);
 }
 
@@ -2338,15 +2386,14 @@ pub(crate) fn foreign_cancel_preserves_the_selection_contact() {
 fn selection_retarget(replace: bool) {
     use flui_foundation::geometry::Offset;
     use flui_interaction::events::{
-        PointerType, make_cancel_event_for_id, make_down_event_for_id, make_move_event_for_id,
+        PointerKind, make_cancel_event_for_id, make_down_event_for_id, make_move_event_for_id,
     };
     let (mut tree, old, focus) = selection_field();
     let own = selection_contact(61);
-    tree.dispatch_pointer_event(&make_down_event_for_id(
-        own,
-        Offset::new(1.0, 5.0),
-        PointerType::Touch,
-    ));
+    tree.dispatch_pointer_event(
+        &make_down_event_for_id(own, Offset::new(1.0, 5.0), PointerKind::Touch)
+            .expect("finite selection fixture"),
+    );
     let current = if replace {
         TextEditingController::with_text("replacement")
     } else {
@@ -2357,29 +2404,30 @@ fn selection_retarget(replace: bool) {
         tree.pump_widget(EditableText::new(current.clone(), Rc::clone(&focus)));
     }
     let before = current.caret_byte_offset();
-    tree.dispatch_pointer_event(&make_move_event_for_id(
-        own,
-        Offset::new(if replace { 1.0 } else { 400.0 }, 5.0),
-        PointerType::Touch,
-    ));
+    tree.dispatch_pointer_event(
+        &make_move_event_for_id(
+            own,
+            Offset::new(if replace { 1.0 } else { 400.0 }, 5.0),
+            PointerKind::Touch,
+        )
+        .expect("finite selection fixture"),
+    );
     assert_eq!(
         current.caret_byte_offset(),
         before,
         "retired contact cannot edit the current document"
     );
-    tree.dispatch_pointer_event(&make_cancel_event_for_id(own, PointerType::Touch));
+    tree.dispatch_pointer_event(&make_cancel_event_for_id(own, PointerKind::Touch));
     let next = selection_contact(62);
-    tree.dispatch_pointer_event(&make_down_event_for_id(
-        next,
-        Offset::new(400.0, 5.0),
-        PointerType::Touch,
-    ));
+    tree.dispatch_pointer_event(
+        &make_down_event_for_id(next, Offset::new(400.0, 5.0), PointerKind::Touch)
+            .expect("finite selection fixture"),
+    );
     let anchor = current.caret_byte_offset();
-    tree.dispatch_pointer_event(&make_move_event_for_id(
-        next,
-        Offset::new(1.0, 5.0),
-        PointerType::Touch,
-    ));
+    tree.dispatch_pointer_event(
+        &make_move_event_for_id(next, Offset::new(1.0, 5.0), PointerKind::Touch)
+            .expect("finite selection fixture"),
+    );
     assert!(
         current.caret_byte_offset() < anchor,
         "new contact edits after retirement"

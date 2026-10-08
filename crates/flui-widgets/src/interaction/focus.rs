@@ -33,16 +33,17 @@ use std::{
 };
 
 use crate::anchored_box::AnchoredBox;
+use crate::localization::Directionality;
 use crate::semantics::Semantics;
 use crate::support::value_callback;
-use flui_foundation::ListenerId;
 use flui_foundation::geometry::Rect;
-use flui_interaction::events::KeyEvent;
 use flui_interaction::routing::{
     FocusAttachment, FocusManager, FocusNode, FocusNodeRegistration, FocusScopeNode,
-    KeyEventHandler, KeyEventResult, RectProvider,
+    FocusSubscription, FocusTraversalOverrides, KeyEventHandler, KeyEventResult, RectProvider,
+    TraversalEdgeBehavior,
 };
 use flui_objects::SubtreeAnchor;
+use flui_platform_api::keyboard::KeyEvent;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use flui_view::{RebuildHandle, impl_inherited_view};
@@ -272,6 +273,7 @@ pub struct Focus {
     on_key_event: Option<FocusKeyHandler>,
     debug_label: Option<&'static str>,
     include_semantics: bool,
+    traversal_overrides: Option<FocusTraversalOverrides>,
 }
 
 impl Focus {
@@ -288,6 +290,31 @@ impl Focus {
             on_key_event: None,
             debug_label: None,
             include_semantics: true,
+            traversal_overrides: None,
+        }
+    }
+
+    /// Install weak explicit links; unavailable targets fall back to traversal policy.
+    #[must_use]
+    pub fn traversal_overrides(mut self, overrides: FocusTraversalOverrides) -> Self {
+        self.traversal_overrides = Some(overrides);
+        self
+    }
+
+    fn sync_traversal_overrides(
+        &self,
+        node: &Rc<FocusNode>,
+        registration: &mut Option<FocusNodeRegistration>,
+    ) {
+        if matches!(self.node_ownership, FocusNodeOwnership::ExternalSource(_)) {
+            if let Some(previous) = registration.take() {
+                previous.relinquish();
+            }
+        } else {
+            *registration = self
+                .traversal_overrides
+                .as_ref()
+                .map(|overrides| node.register_traversal_overrides(overrides.clone()));
         }
     }
 
@@ -528,6 +555,8 @@ impl StatefulView for Focus {
         let writer = WriterSlot::default();
         let mut key_handler_registration = None;
         self.configure(&node, &mut key_handler_registration, &writer);
+        let mut traversal_registration = None;
+        self.sync_traversal_overrides(&node, &mut traversal_registration);
         FocusState {
             writer,
             observed_node: Rc::new(RefCell::new(Rc::clone(&node))),
@@ -535,6 +564,7 @@ impl StatefulView for Focus {
             node_revision: Rc::new(Cell::new(0)),
             node,
             key_handler_registration,
+            traversal_registration,
             focus_manager: None,
             attachment: None,
             parent: None,
@@ -544,7 +574,7 @@ impl StatefulView for Focus {
             action_chain: None,
             context_registration: None,
             rebuild_handle: None,
-            focus_listener_id: None,
+            focus_subscription: None,
             autofocus: self.autofocus,
             did_autofocus: false,
             on_focus_change: Rc::new(RefCell::new(self.on_focus_change.clone())),
@@ -556,6 +586,7 @@ impl StatefulView for Focus {
 /// requires it, and re-exported like every other widget's state in this crate
 /// (`GestureDetectorState`, `AnimatedAlignState`, …) so a caller can name it.
 pub struct FocusState {
+    traversal_registration: Option<FocusNodeRegistration>,
     /// Set first in `init_state`; the focus-edge listener and the key handler
     /// open their writes from it (ADR-0086).
     writer: WriterSlot,
@@ -604,7 +635,7 @@ pub struct FocusState {
     rebuild_handle: Option<RebuildHandle>,
     /// Listener installed on the current node. It drives both inherited
     /// dependents and the optional focus-edge callback.
-    focus_listener_id: Option<ListenerId>,
+    focus_subscription: Option<FocusSubscription>,
     /// Captured at `create_state`: `init_state` has no view reference.
     autofocus: bool,
     /// One-shot latch: whether this widget has already attempted its
@@ -637,7 +668,7 @@ impl FocusState {
 
     /// The rebuild-on-focus-change listener: descendants that read the node's state during
     /// build stay current, and `on_focus_change` fires on the edges.
-    fn add_focus_listener(&self, node: &Rc<FocusNode>) -> ListenerId {
+    fn add_focus_listener(&self, node: &Rc<FocusNode>) -> FocusSubscription {
         let rebuild = self
             .rebuild_handle
             .as_ref()
@@ -652,7 +683,7 @@ impl FocusState {
             .get()
             .expect("BUG: Focus listener installed before init_state acquired its writer source")
             .clone();
-        node.add_listener(Rc::new(move || {
+        node.subscribe(Rc::new(move || {
             let next_revision = node_revision
                 .get()
                 .checked_add(1)
@@ -686,17 +717,15 @@ impl FocusState {
     }
 
     fn install_focus_listener(&mut self) {
-        if self.focus_listener_id.is_some() {
+        if self.focus_subscription.is_some() {
             return;
         }
         self.observed_was_focused.set(self.node.has_focus());
-        self.focus_listener_id = Some(self.add_focus_listener(&self.node));
+        self.focus_subscription = Some(self.add_focus_listener(&self.node));
     }
 
     fn remove_focus_listener(&mut self) {
-        if let Some(id) = self.focus_listener_id.take() {
-            self.node.remove_listener(id);
-        }
+        drop(self.focus_subscription.take());
     }
 
     /// A one-shot autofocus
@@ -723,7 +752,7 @@ impl FocusState {
             .and_then(|parent| parent.as_scope().or_else(|| parent.enclosing_scope()))
             .unwrap_or_else(|| Rc::clone(self.manager().root_scope()));
         if scope.focused_child().is_none() {
-            self.node.request_focus();
+            let _ = self.node.request_focus();
         }
     }
 }
@@ -822,6 +851,9 @@ impl ViewState<Focus> for FocusState {
         if node_changed {
             let replacement = new_view.make_node();
             let mut replacement_key_handler_registration = None;
+            let mut replacement_traversal_registration = None;
+            new_view
+                .sync_traversal_overrides(&replacement, &mut replacement_traversal_registration);
             new_view.configure(
                 &replacement,
                 &mut replacement_key_handler_registration,
@@ -835,7 +867,7 @@ impl ViewState<Focus> for FocusState {
                 .action_chain
                 .as_ref()
                 .map(|chain| replacement.register_context(as_node_context(chain)));
-            let replacement_focus_listener_id = self.add_focus_listener(&replacement);
+            let replacement_focus_subscription = self.add_focus_listener(&replacement);
 
             // Observe the replacement before the core transaction delivers
             // its stable-tree notification. Keep the previous `has_focus`
@@ -857,21 +889,22 @@ impl ViewState<Focus> for FocusState {
             // the old node, so ancillary state can now be removed without
             // touching a newer host.
             self.key_handler_registration.take();
+            self.traversal_registration.take();
             self.rect_provider_registration.take();
             self.context_registration.take();
-            if let Some(listener_id) = self
-                .focus_listener_id
-                .replace(replacement_focus_listener_id)
-            {
-                self.node.remove_listener(listener_id);
-            }
+            let previous_subscription = self
+                .focus_subscription
+                .replace(replacement_focus_subscription);
             self.node = replacement;
             self.key_handler_registration = replacement_key_handler_registration;
+            self.traversal_registration = replacement_traversal_registration;
             self.rect_provider_registration = replacement_rect_provider_registration;
             self.context_registration = replacement_context_registration;
             self.attachment = Some(Rc::new(replacement_attachment));
+            drop(previous_subscription);
         } else {
             // Re-sync flags and handlers from the latest configuration.
+            new_view.sync_traversal_overrides(&self.node, &mut self.traversal_registration);
             new_view.configure(&self.node, &mut self.key_handler_registration, &self.writer);
         }
 
@@ -895,6 +928,7 @@ impl ViewState<Focus> for FocusState {
             .is_some_and(|attachment| attachment.is_attached());
         if owns_attachment {
             self.key_handler_registration.take();
+            self.traversal_registration.take();
             self.rect_provider_registration.take();
             self.context_registration.take();
         } else if let Some(registration) = self.key_handler_registration.take() {
@@ -902,6 +936,9 @@ impl ViewState<Focus> for FocusState {
             registration.relinquish();
         }
         if !owns_attachment && let Some(registration) = self.rect_provider_registration.take() {
+            registration.relinquish();
+        }
+        if !owns_attachment && let Some(registration) = self.traversal_registration.take() {
             registration.relinquish();
         }
         if !owns_attachment && let Some(registration) = self.context_registration.take() {
@@ -1003,6 +1040,7 @@ pub struct FocusScope {
     /// An externally owned scope node, the way a
     /// route drives its own scope. `None` = widget-owned.
     external_scope: Option<Rc<FocusScopeNode>>,
+    edge_behavior: Option<TraversalEdgeBehavior>,
 }
 
 impl FocusScope {
@@ -1011,6 +1049,7 @@ impl FocusScope {
         Self {
             child: BoxedView(Box::new(child.into_view())),
             external_scope: None,
+            edge_behavior: None,
         }
     }
 
@@ -1020,7 +1059,15 @@ impl FocusScope {
         Self {
             child: BoxedView(Box::new(child.into_view())),
             external_scope: Some(scope),
+            edge_behavior: None,
         }
+    }
+
+    /// Configure traversal at this scope's edge.
+    #[must_use]
+    pub fn edge_behavior(mut self, edge: TraversalEdgeBehavior) -> Self {
+        self.edge_behavior = Some(edge);
+        self
     }
 
     /// Returns the [`FocusScopeNode`] of the nearest enclosing [`Focus`] or
@@ -1065,17 +1112,21 @@ impl StatefulView for FocusScope {
     type State = FocusScopeState;
 
     fn create_state(&self) -> Self::State {
+        let scope = match &self.external_scope {
+            Some(scope) => Rc::clone(scope),
+            None => FocusScopeNode::with_debug_label("FocusScope"),
+        };
+        if let Some(edge) = self.edge_behavior {
+            scope.set_traversal_edge_behavior(edge);
+        }
         FocusScopeState {
-            scope: match &self.external_scope {
-                Some(scope) => Rc::clone(scope),
-                None => FocusScopeNode::with_debug_label("FocusScope"),
-            },
+            scope,
             focus_manager: None,
             attachment: None,
             parent: None,
             node_revision: Rc::new(Cell::new(0)),
             rebuild_handle: None,
-            focus_listener_id: None,
+            focus_subscription: None,
             action_chain: None,
             context_registration: None,
         }
@@ -1095,7 +1146,7 @@ pub struct FocusScopeState {
     /// Inherited-provider revision advanced by backing-node notifications.
     node_revision: Rc<Cell<u64>>,
     rebuild_handle: Option<RebuildHandle>,
-    focus_listener_id: Option<ListenerId>,
+    focus_subscription: Option<FocusSubscription>,
     /// The `Actions` chain visible at this scope, recorded on its backing
     /// node: the node itself can hold the primary focus (ADR-0079).
     action_chain: Option<ActionChain>,
@@ -1112,14 +1163,14 @@ impl std::fmt::Debug for FocusScopeState {
 }
 
 impl FocusScopeState {
-    fn add_focus_listener(&self, node: &Rc<FocusNode>) -> ListenerId {
+    fn add_focus_listener(&self, node: &Rc<FocusNode>) -> FocusSubscription {
         let revision = Rc::clone(&self.node_revision);
         let rebuild = self
             .rebuild_handle
             .as_ref()
             .expect("BUG: FocusScope listener installed before init_state")
             .clone();
-        node.add_listener(Rc::new(move || {
+        node.subscribe(Rc::new(move || {
             let next = revision
                 .get()
                 .checked_add(1)
@@ -1132,9 +1183,11 @@ impl FocusScopeState {
 
 impl ViewState<FocusScope> for FocusScopeState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        self.scope
+            .set_text_direction(Directionality::maybe_of(ctx).unwrap_or_default());
         self.focus_manager = Some(ctx.focus_manager());
         self.rebuild_handle = Some(ctx.rebuild_handle());
-        self.focus_listener_id = Some(self.add_focus_listener(self.scope.as_focus_node()));
+        self.focus_subscription = Some(self.add_focus_listener(self.scope.as_focus_node()));
         let parent = enclosing_focus_parent(ctx);
         self.attachment = Some(
             parent
@@ -1151,6 +1204,8 @@ impl ViewState<FocusScope> for FocusScopeState {
     }
 
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
+        self.scope
+            .set_text_direction(Directionality::maybe_of(ctx).unwrap_or_default());
         // An enclosing provider changed: move this scope — subtree, focus and
         // all — under the new parent (ADR-0026).
         let parent = enclosing_focus_parent(ctx);
@@ -1184,6 +1239,12 @@ impl ViewState<FocusScope> for FocusScopeState {
             _ => true,
         };
         if !scope_changed {
+            if let Some(edge) = new_view.edge_behavior {
+                self.scope.set_traversal_edge_behavior(edge);
+            } else if new_view.external_scope.is_none() && old_view.edge_behavior.is_some() {
+                self.scope
+                    .set_traversal_edge_behavior(TraversalEdgeBehavior::default());
+            }
             return;
         }
 
@@ -1191,7 +1252,11 @@ impl ViewState<FocusScope> for FocusScopeState {
             .external_scope
             .clone()
             .unwrap_or_else(|| FocusScopeNode::with_debug_label("FocusScope"));
-        let replacement_listener_id = self.add_focus_listener(replacement.as_focus_node());
+        replacement.set_text_direction(self.scope.text_direction());
+        if let Some(edge) = new_view.edge_behavior {
+            replacement.set_traversal_edge_behavior(edge);
+        }
+        let replacement_subscription = self.add_focus_listener(replacement.as_focus_node());
         let replacement_context_registration = self.action_chain.as_ref().map(|chain| {
             replacement
                 .as_focus_node()
@@ -1206,19 +1271,16 @@ impl ViewState<FocusScope> for FocusScopeState {
                 .replace_node(replacement.as_focus_node())
                 .expect("BUG: FocusScope could not atomically replace its attached scope"),
         );
-        if let Some(listener_id) = self.focus_listener_id.replace(replacement_listener_id) {
-            self.scope.as_focus_node().remove_listener(listener_id);
-        }
+        let previous_subscription = self.focus_subscription.replace(replacement_subscription);
         // The replaced scope's record goes with it; the replacement carries
         // the same chain.
         self.context_registration = replacement_context_registration;
         self.scope = replacement;
+        drop(previous_subscription);
     }
 
     fn dispose(&mut self) {
-        if let Some(listener_id) = self.focus_listener_id.take() {
-            self.scope.as_focus_node().remove_listener(listener_id);
-        }
+        drop(self.focus_subscription.take());
         // Only the current attachment may clear the record on an external
         // scope node a newer host may already have adopted.
         let owns_attachment = self

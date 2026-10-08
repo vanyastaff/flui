@@ -499,8 +499,8 @@ impl UiRealm {
     /// coalesced pointer moves; draw the frame (`Self::draw_frame_entered`);
     /// classify its result and, when the actual producer is not deferred,
     /// submit a non-empty painted scene and commit an accepted verdict;
-    /// re-hit-test stationary pointing devices against the primary tree only
-    /// when that presentation is committed; then arm retry work or mark the
+    /// re-hit-test stationary pointing devices against each committed
+    /// presentation's own tree; then arm retry work or mark the
     /// pump rendered as applicable. The producer's `FrameClock::is_deferred`
     /// submit gate is DELIBERATELY
     /// separate from `draw_frame_entered`'s own segment gate: first-frame
@@ -521,8 +521,52 @@ impl UiRealm {
     /// retried, respectively.
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) fn render_frame<S: crate::sink::FrameSink + ?Sized>(&self, sink: &mut S) -> bool {
-        self.gestures().drain_deferred_arena_resolutions();
-        self.gestures().flush_pending_moves();
+        let mut input_panic = None;
+        let frame_time = self
+            .frame_time
+            .get()
+            .unwrap_or_else(|| flui_foundation::MonotonicClock::now(&self.clock));
+        for presentation in self.presentations.iter() {
+            let deferred = catch_unwind(AssertUnwindSafe(|| {
+                presentation.gestures().drain_deferred_arena_resolutions();
+            }))
+            .err();
+            super::input::preserve_first_input_panic(
+                &mut input_panic,
+                deferred,
+                "frame deferred arena resolution",
+            );
+            let motion = catch_unwind(AssertUnwindSafe(|| {
+                let gestures = presentation.gestures();
+                if gestures.is_resampling_enabled() {
+                    let sample = frame_time
+                        .checked_sub(flui_interaction::processing::DEFAULT_RESAMPLE_LOOKBACK)
+                        .unwrap_or(frame_time);
+                    if let Some(next) = sample.checked_add(gestures.sampling_clock().period()) {
+                        gestures
+                            .flush_pending_moves_at(sample, next)
+                            .expect("BUG: positive sampling period creates an advancing window");
+                    }
+                } else {
+                    gestures.flush_pending_moves();
+                }
+            }))
+            .err();
+            super::input::preserve_first_input_panic(
+                &mut input_panic,
+                motion,
+                "frame pointer motion",
+            );
+        }
+        let pending_wake = self.wake_pending_pointer_samples();
+        super::input::preserve_first_input_panic(
+            &mut input_panic,
+            pending_wake,
+            "pending pointer sample wake",
+        );
+        if let Some(payload) = input_panic {
+            resume_unwind(payload);
+        }
 
         let (width, height) = sink.surface_size();
         let dpr = self
@@ -796,24 +840,35 @@ impl UiRealm {
             }
         }
 
-        // Ambient hover derivations belong to the primary presentation and
-        // may be refreshed only from a tree whose latest terminal revision
-        // has been acknowledged. This runs after submit classification so a
-        // just-painted primary can become committed in this same pump. A
-        // secondary failure does not suppress a still-committed primary;
-        // conversely, a primary failure holds its prior hover derivation.
-        if self.presentations.primary().frame_commit_state() == FrameCommitState::Committed {
-            self.gestures()
-                .mouse_tracker()
-                .update_all_devices(|position| {
-                    let mut result = flui_interaction::routing::HitTestResult::new();
-                    self.presentations.primary().renderer().hit_test_in_view(
-                        &mut result,
-                        position,
-                        0,
-                    );
-                    result
-                });
+        // Each window refreshes from its own acknowledged tree. A sibling's
+        // failed segment cannot substitute its tree or suppress this work.
+        let mut hover_panic = None;
+        for presentation in self
+            .presentations
+            .iter()
+            .filter(|presentation| presentation.frame_commit_state() == FrameCommitState::Committed)
+        {
+            let refresh = catch_unwind(AssertUnwindSafe(|| {
+                presentation
+                    .gestures()
+                    .mouse_tracker()
+                    .update_all_devices(|position| {
+                        let mut result = flui_interaction::routing::HitTestResult::new();
+                        presentation
+                            .renderer()
+                            .hit_test_in_view(&mut result, position, 0);
+                        result
+                    });
+            }))
+            .err();
+            super::input::preserve_first_input_panic(
+                &mut hover_panic,
+                refresh,
+                "frame ambient hover refresh",
+            );
+        }
+        if let Some(payload) = hover_panic {
+            resume_unwind(payload);
         }
 
         // The one place a frame decides whether the loop continues itself.
@@ -930,7 +985,27 @@ impl UiRealm {
             }
         }
 
+        // This frame's mark_rendered must not erase accepted sampling debt.
+        if let Some(payload) = self.wake_pending_pointer_samples() {
+            resume_unwind(payload);
+        }
         presented
+    }
+
+    fn wake_pending_pointer_samples(&self) -> Option<Box<dyn std::any::Any + Send>> {
+        let mut first = None;
+        for presentation in self.presentations.iter() {
+            if presentation.gestures().has_pending_pointer_samples() {
+                let wake =
+                    catch_unwind(AssertUnwindSafe(|| self.request_redraw_for(presentation))).err();
+                super::input::preserve_first_input_panic(
+                    &mut first,
+                    wake,
+                    "pointer sample presentation wake",
+                );
+            }
+        }
+        first
     }
 
     /// Finalize and record this pump's [`flui_scheduler::FrameSnapshot`] for

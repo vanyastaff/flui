@@ -47,13 +47,15 @@ pub fn start() {
     window.on_input(Box::new(|input: PlatformInput| {
         match &input {
             PlatformInput::Pointer(pe) => {
-                use ui_events::pointer::PointerEvent;
+                use flui_platform_api::pointer::PointerEvent;
                 match pe {
                     PointerEvent::Down(e) => {
                         web_sys::console::log_1(
                             &format!(
                                 "Pointer Down: button={:?} pos=({:.0}, {:.0})",
-                                e.button, e.state.position.x, e.state.position.y
+                                e.button(),
+                                e.sample.position.get().x,
+                                e.sample.position.get().y
                             )
                             .into(),
                         );
@@ -62,7 +64,9 @@ pub fn start() {
                         web_sys::console::log_1(
                             &format!(
                                 "Pointer Up: button={:?} pos=({:.0}, {:.0})",
-                                e.button, e.state.position.x, e.state.position.y
+                                e.button(),
+                                e.sample.position.get().x,
+                                e.sample.position.get().y
                             )
                             .into(),
                         );
@@ -77,7 +81,7 @@ pub fn start() {
             }
             PlatformInput::Keyboard(ke) => {
                 web_sys::console::log_1(
-                    &format!("Key {:?}: {:?} (code={:?})", ke.state, ke.key, ke.code).into(),
+                    &format!("Key {:?}: {:?} (code={:?})", ke.state(), ke.key, ke.code).into(),
                 );
             }
             PlatformInput::Ime(ime_event) => {

@@ -1,5 +1,9 @@
 //! Mouse tracking for hover, enter, and exit events.
 //!
+//! Hardware identity keys state when reported; otherwise the contact identity
+//! keys a separate fallback namespace. Callbacks receive the complete source
+//! [`PointerInfo`], preserving that distinction without a sentinel device.
+//!
 //! The tracker owns per-device enter/exit/cursor state, gated to
 //! `Mouse | Pen`. `MouseRegion::on_hover` is deliberately
 //! **not** part of that device state machine, and has no device-kind gate:
@@ -28,8 +32,7 @@
 
 use std::{
     cell::RefCell,
-    collections::{HashMap, HashSet},
-    panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
+    collections::{BTreeMap, HashSet},
     rc::Rc,
 };
 
@@ -41,7 +44,7 @@ pub use super::interaction_lane::{
 };
 use super::{HitTestResult, OwnerLatch, RoutePanic, active_dispatch_handle};
 use crate::{
-    events::{CursorIcon, PointerEvent, PointerEventExt, PointerType},
+    events::{CursorIcon, PointerEvent, PointerInfo, PointerKind},
     ids::RegionId,
     retain::Retain,
     routing::interaction_lane::MouseRegionCell,
@@ -49,6 +52,20 @@ use crate::{
 
 /// Device ID type (re-exported from events).
 pub use crate::events::DeviceId;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum SourceKey {
+    KnownDevice(DeviceId),
+    FallbackContact(crate::ids::PointerId),
+}
+
+impl SourceKey {
+    fn from_pointer(pointer: &PointerInfo) -> Self {
+        pointer
+            .device
+            .map_or(Self::FallbackContact(pointer.id), Self::KnownDevice)
+    }
+}
 
 /// How a pointer move participates in the mouse-region protocol.
 ///
@@ -137,8 +154,8 @@ type Latched<C> = (C, OwnerLatch);
 /// State for a single mouse device.
 #[derive(Debug, Clone)]
 struct DeviceState {
-    /// Device class used by the `mouse_is_connected` query.
-    pointer_type: PointerType,
+    /// Latest source metadata for callbacks and the `mouse_is_connected` query.
+    pointer: PointerInfo,
     /// Last known position.
     last_position: Offset<f64>,
     /// Set of regions currently under this device.
@@ -156,9 +173,9 @@ struct DeviceState {
 }
 
 impl DeviceState {
-    fn new(pointer_type: PointerType, position: Offset<f64>) -> Self {
+    fn new(pointer: PointerInfo, position: Offset<f64>) -> Self {
         Self {
-            pointer_type,
+            pointer,
             last_position: position,
             active_regions: HashSet::new(),
             active_order: Vec::new(),
@@ -183,20 +200,20 @@ impl std::fmt::Debug for MouseTracker {
     }
 }
 
-/// Callback for cursor changes.
-pub type CursorChangeCallback = Rc<dyn Fn(DeviceId, CursorIcon) + 'static>;
+/// Callback for cursor changes with the source's actual contact and optional hardware identity.
+pub type CursorChangeCallback = Rc<dyn Fn(PointerInfo, CursorIcon) + 'static>;
 
 struct MouseTrackerInner {
     closed: bool,
     close_mode: crate::__runtime::CloseTombstone,
-    /// State for each mouse device.
-    devices: HashMap<DeviceId, DeviceState>,
+    /// State for each reported hardware device or fallback contact.
+    devices: BTreeMap<SourceKey, DeviceState>,
     /// Last resolved annotations by region.
     ///
     /// Entries stay here until their exit callback has been collected: the
     /// previous map is replaced only after it has been diffed against the
     /// fresh one.
-    annotations: HashMap<RegionId, ResolvedMouseTrackerAnnotation>,
+    annotations: BTreeMap<RegionId, ResolvedMouseTrackerAnnotation>,
     /// Whether any mouse is connected.
     mouse_connected: bool,
     /// Callback for cursor changes.
@@ -210,8 +227,8 @@ impl MouseTracker {
             inner: Rc::new(RefCell::new(MouseTrackerInner {
                 closed: false,
                 close_mode: crate::__runtime::CloseTombstone::default(),
-                devices: HashMap::new(),
-                annotations: HashMap::new(),
+                devices: BTreeMap::new(),
+                annotations: BTreeMap::new(),
                 mouse_connected: false,
                 cursor_change_callback: None,
             })),
@@ -229,54 +246,42 @@ impl MouseTracker {
             return;
         }
         if let Some(resolved) = resolve_annotation(annotation) {
-            self.inner
+            let outgoing = self
+                .inner
                 .borrow_mut()
                 .annotations
                 .insert(annotation.region_id, resolved);
+            let mut failure = crate::__runtime::ClosePanic::new();
+            failure.retire(outgoing);
+            failure.finish();
         }
     }
 
     /// Unregisters a mouse region annotation and removes it from active device
     /// state.
     pub fn unregister_annotation(&self, region_id: RegionId) {
-        let mut inner = self.inner.borrow_mut();
-        inner.annotations.remove(&region_id);
-
-        for state in inner.devices.values_mut() {
-            state.active_regions.remove(&region_id);
-            state.active_order.retain(|id| *id != region_id);
-        }
-    }
-
-    /// Registers a pointing device with an optional initial position.
-    pub fn add_device(
-        &self,
-        device_id: DeviceId,
-        pointer_type: PointerType,
-        position: Offset<f64>,
-    ) {
-        let mut inner = self.inner.borrow_mut();
-        if inner.closed {
-            return;
-        }
-        inner
-            .devices
-            .entry(device_id)
-            .or_insert_with(|| DeviceState::new(pointer_type, position));
-        inner.mouse_connected = inner
-            .devices
-            .values()
-            .any(|state| state.pointer_type == PointerType::Mouse);
+        let outgoing = {
+            let mut inner = self.inner.borrow_mut();
+            let outgoing = inner.annotations.remove(&region_id);
+            for state in inner.devices.values_mut() {
+                state.active_regions.remove(&region_id);
+                state.active_order.retain(|id| *id != region_id);
+            }
+            outgoing
+        };
+        let mut failure = crate::__runtime::ClosePanic::new();
+        failure.retire(outgoing);
+        failure.finish();
     }
 
     /// Removes a pointing device and all hover state associated with it.
     pub fn remove_device(&self, device_id: DeviceId) {
         let mut inner = self.inner.borrow_mut();
-        inner.devices.remove(&device_id);
+        inner.devices.remove(&SourceKey::KnownDevice(device_id));
         inner.mouse_connected = inner
             .devices
             .values()
-            .any(|state| state.pointer_type == PointerType::Mouse);
+            .any(|state| state.pointer.kind == PointerKind::Mouse);
     }
 
     /// Fires exit callbacks for every region every device currently hovers,
@@ -302,7 +307,7 @@ impl MouseTracker {
             inner
                 .devices
                 .iter_mut()
-                .filter_map(|(&device_id, state)| {
+                .filter_map(|(_, state)| {
                     if state.active_order.is_empty() && state.current_cursor == CursorIcon::Default
                     {
                         return None;
@@ -327,12 +332,13 @@ impl MouseTracker {
                     state.inside_window = false;
                     Some(DeviceWork {
                         tracker: Rc::clone(&self.inner),
-                        device_id,
+                        pointer: state.pointer,
                         position,
                         enter_callbacks: SmallVec::new(),
                         exit_callbacks,
                         cursor_callback,
                         new_cursor: CursorIcon::Default,
+                        retired_annotations: Vec::new(),
                     })
                 })
                 .collect()
@@ -341,22 +347,11 @@ impl MouseTracker {
         // panics — the first panic resumes only after the loop, the same
         // all-callbacks-run-first posture `DeviceWork::invoke` has within
         // one device.
-        let mut first_panic = None;
+        let mut failure = crate::__runtime::ClosePanic::new();
         for work in sweeps {
-            if let Err(payload) = catch_unwind(AssertUnwindSafe(|| work.invoke())) {
-                if first_panic.is_none() {
-                    first_panic = Some(payload);
-                } else {
-                    tracing::error!(
-                        "window-leave sweep panicked for a later device after an earlier \
-                         device's callback already panicked; only the first is resumed"
-                    );
-                }
-            }
+            work.invoke(&mut failure);
         }
-        if let Some(payload) = first_panic {
-            resume_unwind(payload);
-        }
+        failure.finish();
     }
 
     /// Updates tracking state from one freshly hit-tested pointer move.
@@ -369,19 +364,18 @@ impl MouseTracker {
         if self.inner.borrow().closed {
             return;
         }
-        if !matches!(event, PointerEvent::Move(_)) {
-            return;
-        }
-        let Some(pointer_type) = event.pointer_type() else {
+        let PointerEvent::Move(update) = event else {
             return;
         };
-        if !matches!(pointer_type, PointerType::Mouse | PointerType::Pen) {
+        let pointer = update.pointer;
+        if !matches!(pointer.kind, PointerKind::Mouse | PointerKind::Pen { .. }) {
             return;
         }
-        let device_id = event.device_id();
-        let position = event.position();
+        let device_id = SourceKey::from_pointer(&pointer);
+        let point = update.current().position.get();
+        let position = Offset::new(point.x, point.y);
         tracing::trace!(
-            device_id,
+            ?device_id,
             ?kind,
             "mouse tracker updating enter/exit/cursor state"
         );
@@ -392,18 +386,21 @@ impl MouseTracker {
 
         let work = {
             let mut inner = self.inner.borrow_mut();
+            let mut retired_annotations = Vec::new();
             for (region_id, annotation) in resolved.annotations {
-                inner.annotations.insert(region_id, annotation);
+                if let Some(previous) = inner.annotations.insert(region_id, annotation) {
+                    retired_annotations.push(previous);
+                }
             }
-            if pointer_type == PointerType::Mouse {
+            if pointer.kind == PointerKind::Mouse {
                 inner.mouse_connected = true;
             }
 
             let state = inner
                 .devices
                 .entry(device_id)
-                .or_insert_with(|| DeviceState::new(pointer_type, position));
-            state.pointer_type = pointer_type;
+                .or_insert_with(|| DeviceState::new(pointer, position));
+            state.pointer = pointer;
             state.inside_window = true;
 
             let entered: SmallVec<[RegionId; 4]> = resolved
@@ -423,6 +420,7 @@ impl MouseTracker {
             let cursor_changed = state.current_cursor != new_cursor;
             state.last_position = position;
             state.active_regions = new_regions;
+            state.active_order = resolved.order;
             state.current_cursor = new_cursor;
 
             let enter_callbacks: SmallVec<[Latched<MouseEnterCallback>; 4]> = entered
@@ -444,29 +442,33 @@ impl MouseTracker {
                 })
                 .collect();
             for id in exited {
-                inner.annotations.remove(&id);
+                if !inner
+                    .devices
+                    .values()
+                    .any(|state| state.active_regions.contains(&id))
+                    && let Some(annotation) = inner.annotations.remove(&id)
+                {
+                    retired_annotations.push(annotation);
+                }
             }
             let cursor_callback = cursor_changed
                 .then(|| inner.cursor_change_callback.clone())
                 .flatten();
-            inner
-                .devices
-                .get_mut(&device_id)
-                .expect("BUG: mouse device was inserted earlier in this transaction")
-                .active_order = resolved.order;
-
             DeviceWork {
                 tracker: Rc::clone(&self.inner),
-                device_id,
+                pointer,
                 position,
                 enter_callbacks,
                 exit_callbacks,
                 cursor_callback,
                 new_cursor,
+                retired_annotations,
             }
         };
 
-        work.invoke();
+        let mut failure = crate::__runtime::ClosePanic::new();
+        work.invoke(&mut failure);
+        failure.finish();
     }
 
     /// Invokes `MouseRegion::on_hover` for every region under a hover-shaped
@@ -494,11 +496,12 @@ impl MouseTracker {
         let PointerEvent::Move(update) = event else {
             return None;
         };
-        if !update.current.buttons.is_empty() {
+        if !update.buttons.is_empty() {
             return None;
         }
-        let device_id = event.device_id();
-        let position = event.position();
+        let pointer = update.pointer;
+        let point = update.current().position.get();
+        let position = Offset::new(point.x, point.y);
 
         let resolved = resolve_hit_test_annotations(hit_test_result);
         let hover_callbacks: SmallVec<[Latched<MouseHoverCallback>; 4]> = resolved
@@ -516,7 +519,7 @@ impl MouseTracker {
         for (callback, latch) in hover_callbacks {
             // An earlier callback may have closed this region's owner.
             if !latch.is_closed() {
-                let delivered = RoutePanic::capture(|| callback(device_id, position));
+                let delivered = RoutePanic::capture(|| callback(pointer, position));
                 RoutePanic::preserve_first(&mut first_panic, delivered, "mouse hover callback");
             }
             let cleanup = RoutePanic::capture(|| latch.release(callback));
@@ -535,7 +538,7 @@ impl MouseTracker {
     where
         F: Fn(Offset<f64>) -> HitTestResult,
     {
-        let device_positions: Vec<(DeviceId, Offset<f64>)> = self
+        let device_positions: Vec<(SourceKey, PointerInfo, Offset<f64>)> = self
             .inner
             .borrow()
             .devices
@@ -544,25 +547,45 @@ impl MouseTracker {
             // stale in-window position — that would re-enter the regions the
             // sweep just exited. Its next real motion re-primes it.
             .filter(|(_, state)| state.inside_window)
-            .map(|(id, state)| (*id, state.last_position))
+            .map(|(id, state)| (*id, state.pointer, state.last_position))
             .collect();
 
+        let mut failure = crate::__runtime::ClosePanic::new();
         let mut pending = Vec::with_capacity(device_positions.len());
-        for (device_id, position) in device_positions {
-            let result = hit_test_fn(position);
-            let resolved = resolve_hit_test_annotations(&result);
+        for (device_id, pointer, position) in device_positions {
+            let Some((resolved, new_cursor)) = failure.invoke(|| {
+                let result = hit_test_fn(position);
+                (
+                    resolve_hit_test_annotations(&result),
+                    result.resolve_cursor(),
+                )
+            }) else {
+                continue;
+            };
             let new_regions: HashSet<RegionId> = resolved.order.iter().copied().collect();
-            let new_cursor = result.resolve_cursor();
+
+            // The probe may have removed or closed its own device. Its resolved
+            // captures retire without a tracker borrow in that case too.
+            if self.inner.borrow().closed || !self.inner.borrow().devices.contains_key(&device_id) {
+                for annotation in resolved.annotations.into_values() {
+                    failure.retire(annotation);
+                }
+                continue;
+            }
 
             let work = {
                 let mut inner = self.inner.borrow_mut();
+                let mut retired_annotations = Vec::new();
                 for (region_id, annotation) in resolved.annotations {
-                    inner.annotations.insert(region_id, annotation);
+                    if let Some(previous) = inner.annotations.insert(region_id, annotation) {
+                        retired_annotations.push(previous);
+                    }
                 }
 
-                let Some(state) = inner.devices.get_mut(&device_id) else {
-                    continue;
-                };
+                let state = inner
+                    .devices
+                    .get_mut(&device_id)
+                    .expect("BUG: refresh checked the device before borrowing the tracker");
 
                 let entered: SmallVec<[RegionId; 4]> = resolved
                     .order
@@ -602,7 +625,14 @@ impl MouseTracker {
                     })
                     .collect();
                 for id in exited {
-                    inner.annotations.remove(&id);
+                    if !inner
+                        .devices
+                        .values()
+                        .any(|state| state.active_regions.contains(&id))
+                        && let Some(annotation) = inner.annotations.remove(&id)
+                    {
+                        retired_annotations.push(annotation);
+                    }
                 }
                 let cursor_callback = cursor_changed
                     .then(|| inner.cursor_change_callback.clone())
@@ -610,20 +640,22 @@ impl MouseTracker {
 
                 DeviceWork {
                     tracker: Rc::clone(&self.inner),
-                    device_id,
+                    pointer,
                     position,
                     enter_callbacks,
                     exit_callbacks,
                     cursor_callback,
                     new_cursor,
+                    retired_annotations,
                 }
             };
             pending.push(work);
         }
 
         for work in pending {
-            work.invoke();
+            work.invoke(&mut failure);
         }
+        failure.finish();
     }
 
     /// Checks if any mouse is currently connected.
@@ -633,13 +665,23 @@ impl MouseTracker {
         self.inner.borrow().mouse_connected
     }
 
-    /// Gets the last known position for a device.
+    /// Gets the last known position for reported hardware, excluding fallback contacts.
     #[must_use]
     pub fn device_position(&self, device_id: DeviceId) -> Option<Offset<f64>> {
         self.inner
             .borrow()
             .devices
-            .get(&device_id)
+            .get(&SourceKey::KnownDevice(device_id))
+            .map(|state| state.last_position)
+    }
+
+    /// Gets the last known position for this hardware or fallback contact.
+    #[must_use]
+    pub fn source_position(&self, pointer: &PointerInfo) -> Option<Offset<f64>> {
+        self.inner
+            .borrow()
+            .devices
+            .get(&SourceKey::from_pointer(pointer))
             .map(|state| state.last_position)
     }
 
@@ -649,7 +691,7 @@ impl MouseTracker {
         self.inner
             .borrow()
             .devices
-            .get(&device_id)
+            .get(&SourceKey::KnownDevice(device_id))
             .map(|state| state.active_regions.clone())
             .unwrap_or_default()
     }
@@ -660,7 +702,7 @@ impl MouseTracker {
         self.inner
             .borrow()
             .devices
-            .get(&device_id)
+            .get(&SourceKey::KnownDevice(device_id))
             .map_or(CursorIcon::Default, |state| state.current_cursor)
     }
 
@@ -720,13 +762,6 @@ impl MouseTracker {
         }
         failure.finish();
     }
-
-    /// Gets the current cursor for the primary mouse device (device 0).
-    #[inline]
-    #[must_use]
-    pub fn current_cursor(&self) -> CursorIcon {
-        self.device_cursor(0)
-    }
 }
 
 impl Default for MouseTracker {
@@ -737,12 +772,12 @@ impl Default for MouseTracker {
 
 struct ResolvedHitAnnotations {
     order: Vec<RegionId>,
-    annotations: HashMap<RegionId, ResolvedMouseTrackerAnnotation>,
+    annotations: BTreeMap<RegionId, ResolvedMouseTrackerAnnotation>,
 }
 
 fn resolve_hit_test_annotations(result: &HitTestResult) -> ResolvedHitAnnotations {
     let mut order = Vec::new();
-    let mut annotations = HashMap::new();
+    let mut annotations = BTreeMap::new();
     let Some(handle) = active_dispatch_handle().ok() else {
         return ResolvedHitAnnotations { order, annotations };
     };
@@ -788,12 +823,14 @@ fn resolve_annotation_with_handle(
 struct DeviceWork {
     /// The tracker whose cursor callback this batch snapshotted.
     tracker: Rc<RefCell<MouseTrackerInner>>,
-    device_id: DeviceId,
+    pointer: PointerInfo,
     position: Offset<f64>,
     enter_callbacks: SmallVec<[Latched<MouseEnterCallback>; 4]>,
     exit_callbacks: SmallVec<[Latched<MouseExitCallback>; 4]>,
     cursor_callback: Option<CursorChangeCallback>,
     new_cursor: CursorIcon,
+    /// Replaced and departed annotations whose captures retire after dispatch.
+    retired_annotations: Vec<ResolvedMouseTrackerAnnotation>,
 }
 
 impl DeviceWork {
@@ -801,54 +838,37 @@ impl DeviceWork {
     /// each snapshot is rechecked against its owner's latch (and the cursor
     /// callback against this tracker) right before it runs, and released
     /// under that close's retention policy afterwards (ADR-0127).
-    fn invoke(self) {
-        let mut first_panic = None;
-        let mut record = |payload, kind: &str| {
-            if first_panic.is_none() {
-                first_panic = Some(payload);
-            } else {
-                tracing::error!(
-                    kind,
-                    "mouse callback panicked after an earlier mouse callback already \
-                     panicked; only the first panic is resumed"
-                );
-                // A later payload's own Drop may panic: retained, it can
-                // neither replace the first failure nor abort (ADR-0104).
-                flui_foundation::panic::retain_opaque_payload(payload);
-            }
-        };
+    fn invoke(self, failure: &mut crate::__runtime::ClosePanic) {
         for (callback, latch) in self.exit_callbacks {
-            if !latch.is_closed()
-                && let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
-                    callback(self.device_id, self.position);
-                }))
-            {
-                record(payload, "exit");
+            if !latch.is_closed() {
+                failure.invoke(|| {
+                    callback(self.pointer, self.position);
+                });
             }
-            if let Err(payload) = catch_unwind(AssertUnwindSafe(|| latch.release(callback))) {
-                record(payload, "exit snapshot cleanup");
+            if failure.preserving() {
+                callback.retain();
+            } else {
+                failure.invoke(|| latch.release(callback));
             }
         }
         for (callback, latch) in self.enter_callbacks {
-            if !latch.is_closed()
-                && let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
-                    callback(self.device_id, self.position);
-                }))
-            {
-                record(payload, "enter");
+            if !latch.is_closed() {
+                failure.invoke(|| {
+                    callback(self.pointer, self.position);
+                });
             }
-            if let Err(payload) = catch_unwind(AssertUnwindSafe(|| latch.release(callback))) {
-                record(payload, "enter snapshot cleanup");
+            if failure.preserving() {
+                callback.retain();
+            } else {
+                failure.invoke(|| latch.release(callback));
             }
         }
         if let Some(callback) = self.cursor_callback {
             let closed = self.tracker.borrow().closed;
-            if !closed
-                && let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
-                    callback(self.device_id, self.new_cursor);
-                }))
-            {
-                record(payload, "cursor");
+            if !closed {
+                failure.invoke(|| {
+                    callback(self.pointer, self.new_cursor);
+                });
             }
             let preserved = {
                 let inner = self.tracker.borrow();
@@ -856,12 +876,12 @@ impl DeviceWork {
             };
             if preserved {
                 callback.retain();
-            } else if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(callback))) {
-                record(payload, "cursor snapshot cleanup");
+            } else {
+                failure.retire(callback);
             }
         }
-        if let Some(payload) = first_panic {
-            resume_unwind(payload);
+        for annotation in self.retired_annotations {
+            failure.retire(annotation);
         }
     }
 }
@@ -876,7 +896,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        events::{PointerType, make_move_event},
+        events::{PointerKind, make_move_event},
         routing::{HitTestEntry, HitTestResult, InteractionLane, MouseRegionCallbacks},
     };
 
@@ -886,10 +906,6 @@ mod tests {
         fn drop(&mut self) {
             panic!("later payload drop");
         }
-    }
-
-    fn add_primary_mouse(tracker: &MouseTracker) {
-        tracker.add_device(0, PointerType::Mouse, Offset::ZERO);
     }
 
     #[test]
@@ -920,10 +936,8 @@ mod tests {
             (panicking_target, later_target)
         });
 
-        add_primary_mouse(&tracker);
-
         let position = Offset::new(10.0, 10.0);
-        let event = make_move_event(position, PointerType::Mouse);
+        let event = make_move_event(position, PointerKind::Mouse).expect("finite fixture position");
         let first_id = RenderId::new(1);
         let second_id = RenderId::new(2);
         let mut inside = HitTestResult::new();

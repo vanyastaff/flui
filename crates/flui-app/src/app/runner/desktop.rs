@@ -72,7 +72,8 @@ pub(super) fn install_desktop_window<V>(
 where
     V: View + Clone + 'static,
 {
-    let presentation_window = super::presentation_window(host);
+    let presentation_window =
+        super::presentation_window(host).with_pointer_resampling(config.pointer_resampling);
     let window = Arc::clone(presentation_window.window());
     let mut rollback = InstallRollback {
         window: Arc::clone(&window),

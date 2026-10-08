@@ -8,25 +8,36 @@ use std::rc::Rc;
 use flui_foundation::RenderId;
 use flui_foundation::geometry::{Matrix4, Offset};
 use flui_interaction::events::{
-    Modifiers, PointerButtons, PointerEvent, PointerType, ScrollDelta, ScrollEventData,
-    make_move_event_for_id, make_scroll_event,
+    Modifiers, PointerButtons, PointerEvent, PointerInfo, PointerKind, PointerPosition,
+    ScrollDelta, ScrollEvent, make_move_event_for_id, pointer::ScrollUnit,
 };
 use flui_interaction::routing::{
     DeviceId, InteractionDispatchHandle, InteractionLane, MouseRegionCallbacks, MouseRegionTarget,
     MouseTracker, MouseTrackerAnnotation, PointerMotionKind,
 };
 use flui_interaction::{CursorIcon, EventPropagation, HitTestEntry, HitTestResult, PointerId};
+use flui_platform_api::pointer::{PanZoomEvent, PanZoomPhase, PanZoomTransform, PenTool};
 
 const MOUSE: u64 = 2;
 const PEN: u64 = 3;
 
 /// A buttonless move, as a platform reports hover, `time_ms` after start.
-fn hover(pointer: u64, pointer_type: PointerType, position: Offset, time_ms: u64) -> PointerEvent {
-    let id = PointerId::new(pointer).expect("nonzero pointer id");
-    let mut event = make_move_event_for_id(id, position, pointer_type);
+fn hover(pointer: u64, pointer_type: PointerKind, position: Offset, time_ms: u64) -> PointerEvent {
+    let id = PointerId::new(std::num::NonZeroU64::new(pointer).expect("nonzero pointer id"));
+    let mut event =
+        make_move_event_for_id(id, position, pointer_type).expect("valid fixture sample");
     if let PointerEvent::Move(update) = &mut event {
-        update.current.buttons = PointerButtons::new();
-        update.current.time = time_ms * 1_000_000;
+        update.buttons = PointerButtons::NONE;
+        update.pointer = update.pointer.with_device(device(pointer));
+        {
+            let mut sample = *update.current();
+            sample.time = flui_platform_api::EventTime::from_nanos(time_ms * 1_000_000);
+            *update =
+                flui_interaction::events::PointerMove::new(update.pointer, update.buttons, sample)
+                    .with_modifiers(update.modifiers)
+                    .with_coalesced(update.coalesced().to_vec())
+                    .with_predicted(update.predicted().to_vec());
+        };
     }
     event
 }
@@ -58,10 +69,24 @@ fn logging_region(
     handle
         .register_mouse_region(MouseRegionCallbacks {
             on_enter: Some(Rc::new(move |device, _| {
-                entered.borrow_mut().push(format!("enter {name} {device}"));
+                entered.borrow_mut().push(format!(
+                    "enter {name} {}",
+                    device
+                        .device
+                        .expect("fixture reports hardware identity")
+                        .get()
+                        .get()
+                ));
             })),
             on_exit: Some(Rc::new(move |device, _| {
-                exited.borrow_mut().push(format!("exit {name} {device}"));
+                exited.borrow_mut().push(format!(
+                    "exit {name} {}",
+                    device
+                        .device
+                        .expect("fixture reports hardware identity")
+                        .get()
+                        .get()
+                ));
             })),
             ..MouseRegionCallbacks::default()
         })
@@ -84,27 +109,27 @@ fn shared_region_exits_once_per_device() {
 
     lane.enter(|| {
         tracker.update_with_motion(
-            &hover(MOUSE, PointerType::Mouse, at, 1),
+            &hover(MOUSE, PointerKind::Mouse, at, 1),
             PointerMotionKind::Hover,
             &over,
         );
         tracker.update_with_motion(
-            &hover(PEN, PointerType::Pen, at, 2),
+            &hover(PEN, PointerKind::Pen { tool: PenTool::Tip }, at, 2),
             PointerMotionKind::Hover,
             &over,
         );
         tracker.update_with_motion(
-            &hover(PEN, PointerType::Pen, at, 3),
+            &hover(PEN, PointerKind::Pen { tool: PenTool::Tip }, at, 3),
             PointerMotionKind::Hover,
             &away,
         );
         tracker.update_with_motion(
-            &hover(MOUSE, PointerType::Mouse, at, 4),
+            &hover(MOUSE, PointerKind::Mouse, at, 4),
             PointerMotionKind::Hover,
             &away,
         );
         tracker.update_with_motion(
-            &hover(MOUSE, PointerType::Mouse, at, 5),
+            &hover(MOUSE, PointerKind::Mouse, at, 5),
             PointerMotionKind::Hover,
             &away,
         );
@@ -134,7 +159,7 @@ fn stationary_device_follows_layout_without_duplicates() {
 
     lane.enter(|| {
         tracker.update_with_motion(
-            &hover(MOUSE, PointerType::Mouse, at, 1),
+            &hover(MOUSE, PointerKind::Mouse, at, 1),
             PointerMotionKind::Hover,
             &HitTestResult::new(),
         );
@@ -150,7 +175,7 @@ fn stationary_device_follows_layout_without_duplicates() {
         // Layout replaces them with a sibling: every exit precedes the enter.
         tracker.update_all_devices(|_| moved.clone());
         tracker.update_with_motion(
-            &hover(MOUSE, PointerType::Mouse, at, 2),
+            &hover(MOUSE, PointerKind::Mouse, at, 2),
             PointerMotionKind::Hover,
             &moved,
         );
@@ -206,12 +231,12 @@ fn refresh_callback_panic_reaches_every_device() {
     };
     lane.enter(|| {
         tracker.update_with_motion(
-            &hover(MOUSE, PointerType::Mouse, mouse_at, 1),
+            &hover(MOUSE, PointerKind::Mouse, mouse_at, 1),
             PointerMotionKind::Hover,
             &regions_at(mouse_at),
         );
         tracker.update_with_motion(
-            &hover(PEN, PointerType::Pen, pen_at, 2),
+            &hover(PEN, PointerKind::Pen { tool: PenTool::Tip }, pen_at, 2),
             PointerMotionKind::Hover,
             &regions_at(pen_at),
         );
@@ -223,9 +248,10 @@ fn refresh_callback_panic_reaches_every_device() {
     }));
     let payload = failure.expect_err("an exit panic resumes after the refresh");
     let message = payload.downcast_ref::<&str>().copied();
-    assert!(
-        matches!(message, Some("first region exit" | "second region exit")),
-        "the resumed panic is an exit callback's: {message:?}"
+    assert_eq!(
+        message,
+        Some("first region exit"),
+        "the lower device identity's failure remains authoritative"
     );
     assert_eq!(exits.get(), 2, "the other device's exit still runs");
 
@@ -248,12 +274,12 @@ fn refresh_hit_test_panic_keeps_the_device_for_the_next_refresh() {
     let pen_at = Offset::new(20.0, 20.0);
     lane.enter(|| {
         tracker.update_with_motion(
-            &hover(MOUSE, PointerType::Mouse, mouse_at, 1),
+            &hover(MOUSE, PointerKind::Mouse, mouse_at, 1),
             PointerMotionKind::Hover,
             &path(&[(1, mouse_region)]),
         );
         tracker.update_with_motion(
-            &hover(PEN, PointerType::Pen, pen_at, 2),
+            &hover(PEN, PointerKind::Pen { tool: PenTool::Tip }, pen_at, 2),
             PointerMotionKind::Hover,
             &path(&[(2, pen_region)]),
         );
@@ -280,6 +306,57 @@ fn refresh_hit_test_panic_keeps_the_device_for_the_next_refresh() {
         take(&log),
         ["exit P 3"],
         "the failed device is retried, once"
+    );
+}
+
+fn refresh_hit_test_failure_precedes_a_competing_callback_failure() {
+    let lane = InteractionLane::try_new().expect("lane");
+    let handle = lane.dispatch_handle();
+    let tracker = MouseTracker::new();
+    let exits = Rc::new(Cell::new(0));
+    let enters = Rc::new(Cell::new(0));
+    let mouse_region =
+        lane.enter(|| panicking_exit(&handle, &exits, &enters, "callback failure after probe"));
+    let mouse_at = Offset::new(10.0, 10.0);
+    let pen_at = Offset::new(20.0, 20.0);
+    lane.enter(|| {
+        tracker.update_with_motion(
+            &hover(MOUSE, PointerKind::Mouse, mouse_at, 1),
+            PointerMotionKind::Hover,
+            &path(&[(1, mouse_region)]),
+        );
+        tracker.update_with_motion(
+            &hover(PEN, PointerKind::Pen { tool: PenTool::Tip }, pen_at, 2),
+            PointerMotionKind::Hover,
+            &HitTestResult::new(),
+        );
+    });
+
+    let payload = catch_unwind(AssertUnwindSafe(|| {
+        lane.enter(|| {
+            tracker.update_all_devices(|position| {
+                assert!(position != pen_at, "probe failure first");
+                HitTestResult::new()
+            });
+        });
+    }))
+    .expect_err("the probe failure resumes after delivering the committed exit");
+    assert_eq!(payload.downcast_ref::<&str>(), Some(&"probe failure first"));
+    assert_eq!(exits.get(), 1, "the competing exit callback still runs");
+
+    lane.enter(|| {
+        tracker.update_all_devices(|position| {
+            if position == mouse_at {
+                path(&[(1, mouse_region)])
+            } else {
+                HitTestResult::new()
+            }
+        });
+    });
+    assert_eq!(
+        enters.get(),
+        2,
+        "the next refresh can enter the region again"
     );
 }
 
@@ -318,7 +395,7 @@ fn region_destructor_may_reenter_the_tracker() {
     let at = Offset::new(10.0, 10.0);
     lane.enter(|| {
         tracker.update_with_motion(
-            &hover(MOUSE, PointerType::Mouse, at, 1),
+            &hover(MOUSE, PointerKind::Mouse, at, 1),
             PointerMotionKind::Hover,
             &path(&[(1, region)]),
         );
@@ -328,12 +405,153 @@ fn region_destructor_may_reenter_the_tracker() {
             .unregister_mouse_region(region)
             .expect("unregister region");
         tracker.update_with_motion(
-            &hover(MOUSE, PointerType::Mouse, at, 2),
+            &hover(MOUSE, PointerKind::Mouse, at, 2),
             PointerMotionKind::Hover,
             &HitTestResult::new(),
         );
     });
     assert!(reentered.get(), "the released callbacks were destroyed");
+}
+
+fn region_retirement_preserves_first_failure_and_recovers() {
+    const SELECTED: &str = "FLUI_MOUSE_REGION_RETIREMENT_CASE";
+    if let Ok(selected) = std::env::var(SELECTED) {
+        assert_region_retirement_recovery(selected == "competing");
+        return;
+    }
+
+    for selected in ["single", "competing"] {
+        let mut child =
+            std::process::Command::new(std::env::current_exe().expect("test executable"))
+                .args([
+                    "--exact",
+                    "mouse_tracking::released_region_destructor_reenters_tracker",
+                    "--nocapture",
+                ])
+                .env(SELECTED, selected)
+                .env("RUST_BACKTRACE", "0")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .expect("mouse retirement child");
+        let start = std::time::Instant::now();
+        while child.try_wait().expect("child status").is_none() {
+            if start.elapsed() > std::time::Duration::from_secs(10) {
+                child.kill().expect("kill stalled mouse retirement child");
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(
+            child.wait().expect("child exit").success(),
+            "mouse retirement {selected} failed"
+        );
+    }
+}
+
+fn assert_region_retirement_recovery(competing: bool) {
+    struct Capture {
+        tracker: MouseTracker,
+        drops: Rc<Cell<usize>>,
+        panic_message: Option<&'static str>,
+    }
+    impl Drop for Capture {
+        fn drop(&mut self) {
+            let _ = self.tracker.device_cursor(device(MOUSE));
+            self.drops.set(self.drops.get() + 1);
+            if let Some(message) = self.panic_message {
+                std::panic::panic_any(message);
+            }
+        }
+    }
+
+    let lane = InteractionLane::try_new().expect("lane");
+    let handle = lane.dispatch_handle();
+    let tracker = MouseTracker::new();
+    let first_drops = Rc::new(Cell::new(0));
+    let second_drops = Rc::new(Cell::new(0));
+    let healthy_drops = Rc::new(Cell::new(0));
+    let regions = lane.enter(|| {
+        let mut regions = Vec::new();
+        for (index, (drops, message)) in [
+            (&first_drops, Some("first capture failure")),
+            (&second_drops, competing.then_some("second capture failure")),
+            (&healthy_drops, None),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let capture = Capture {
+                tracker: tracker.clone(),
+                drops: Rc::clone(drops),
+                panic_message: message,
+            };
+            let target = handle
+                .register_mouse_region(MouseRegionCallbacks {
+                    on_enter: Some(Rc::new(move |_, _| {
+                        let _ = &capture;
+                    })),
+                    ..MouseRegionCallbacks::default()
+                })
+                .expect("register captured region");
+            regions.push((index + 1, target));
+        }
+        regions
+    });
+    let at = Offset::new(10.0, 10.0);
+    lane.enter(|| {
+        tracker.update_with_motion(
+            &hover(MOUSE, PointerKind::Mouse, at, 1),
+            PointerMotionKind::Hover,
+            &path(&regions),
+        );
+        for &(_, target) in &regions {
+            handle
+                .unregister_mouse_region(target)
+                .expect("unregister captured region");
+        }
+    });
+    let payload = catch_unwind(AssertUnwindSafe(|| {
+        lane.enter(|| {
+            tracker.update_with_motion(
+                &hover(MOUSE, PointerKind::Mouse, at, 2),
+                PointerMotionKind::Hover,
+                &HitTestResult::new(),
+            );
+        });
+    }))
+    .expect_err("first capture failure resumes");
+    assert_eq!(
+        payload.downcast_ref::<&str>(),
+        Some(&"first capture failure")
+    );
+    assert_eq!(first_drops.get(), 1);
+    assert_eq!(
+        second_drops.get(),
+        0,
+        "the retired tail is retained after the first failure"
+    );
+    assert_eq!(
+        healthy_drops.get(),
+        0,
+        "healthy opaque captures obey the same retention policy"
+    );
+
+    let log = Log::default();
+    lane.enter(|| {
+        let target = logging_region(&handle, "healthy", &log);
+        tracker.update_with_motion(
+            &hover(MOUSE, PointerKind::Mouse, at, 3),
+            PointerMotionKind::Hover,
+            &path(&[(4, target)]),
+        );
+        tracker.update_with_motion(
+            &hover(MOUSE, PointerKind::Mouse, at, 4),
+            PointerMotionKind::Hover,
+            &HitTestResult::new(),
+        );
+    });
+    assert_eq!(take(&log), ["enter healthy 2", "exit healthy 2"]);
 }
 
 fn cursor_path(cursors: &[Option<CursorIcon>]) -> HitTestResult {
@@ -375,12 +593,12 @@ fn tracker_reports_the_explicit_arrow() {
     let text_area = cursor_path(&[None, Some(CursorIcon::Text)]);
     let button = cursor_path(&[Some(CursorIcon::Default), Some(CursorIcon::Text)]);
     tracker.update_with_motion(
-        &hover(MOUSE, PointerType::Mouse, at, 1),
+        &hover(MOUSE, PointerKind::Mouse, at, 1),
         PointerMotionKind::Hover,
         &text_area,
     );
     tracker.update_with_motion(
-        &hover(MOUSE, PointerType::Mouse, at, 2),
+        &hover(MOUSE, PointerKind::Mouse, at, 2),
         PointerMotionKind::Hover,
         &button,
     );
@@ -443,78 +661,92 @@ fn pointer_events_seen_locally(events: &[PointerEvent]) -> Vec<PointerEvent> {
 }
 
 fn move_samples_are_localized() {
-    let mut event = hover(MOUSE, PointerType::Mouse, Offset::new(80.0, 70.0), 3);
+    let mut event = hover(MOUSE, PointerKind::Mouse, Offset::new(80.0, 70.0), 3);
     if let PointerEvent::Move(update) = &mut event {
-        for (x, y) in [(90.0, 60.0), (84.0, 66.0)] {
-            let mut sample = update.current.clone();
-            sample.position = dpi::PhysicalPosition::new(x, y);
-            update.coalesced.push(sample);
-        }
-        let mut predicted = update.current.clone();
-        predicted.position = dpi::PhysicalPosition::new(76.0, 74.0);
-        update.predicted.push(predicted);
+        let coalesced = [(90.0, 60.0), (84.0, 66.0)].map(|(x, y)| {
+            let mut sample = *update.current();
+            sample.position = PointerPosition::try_new(flui_foundation::geometry::Point::new(x, y))
+                .expect("finite historical position");
+            sample
+        });
+        let mut predicted = *update.current();
+        predicted.position =
+            PointerPosition::try_new(flui_foundation::geometry::Point::new(76.0, 74.0))
+                .expect("finite predicted position");
+        *update = update
+            .clone()
+            .with_coalesced(coalesced.to_vec())
+            .with_predicted(vec![predicted]);
     }
     let seen = pointer_events_seen_locally(&[event]);
     let [PointerEvent::Move(local)] = seen.as_slice() else {
         panic!("one localized move: {seen:?}");
     };
-    let point =
-        |state: &flui_interaction::events::PointerState| (state.position.x, state.position.y);
+    let point = |state: &flui_interaction::events::PointerSample| {
+        (state.position.get().x, state.position.get().y)
+    };
     assert_close(
-        point(&local.current),
+        point(local.current()),
         expected_local((80.0, 70.0)),
         "current",
     );
-    assert_eq!(local.coalesced.len(), 2);
+    assert_eq!(local.coalesced().len(), 2);
     assert_close(
-        point(&local.coalesced[0]),
+        point(&local.coalesced()[0]),
         expected_local((90.0, 60.0)),
         "coalesced[0]",
     );
     assert_close(
-        point(&local.coalesced[1]),
+        point(&local.coalesced()[1]),
         expected_local((84.0, 66.0)),
         "coalesced[1]",
     );
-    assert_eq!(local.predicted.len(), 1);
+    assert_eq!(local.predicted().len(), 1);
     assert_close(
-        point(&local.predicted[0]),
+        point(&local.predicted()[0]),
         expected_local((76.0, 74.0)),
         "predicted",
     );
 }
 
 fn scroll_delta_is_localized_as_a_vector() {
-    let pixels = make_scroll_event(Offset::new(80.0, 70.0), Offset::new(0.0, 30.0));
+    let pixels = PointerEvent::Scroll(ScrollEvent::new(
+        PointerInfo::new(
+            PointerId::new(std::num::NonZeroU64::MIN),
+            PointerKind::Mouse,
+        ),
+        flui_platform_api::EventTime::from_nanos(0),
+        PointerPosition::try_new(flui_foundation::geometry::Point::new(80.0, 70.0))
+            .expect("finite scroll position"),
+        ScrollDelta::try_new(ScrollUnit::Pixels, 0.0, 30.0).expect("finite pixel delta"),
+    ));
     let mut lines = pixels.clone();
     if let PointerEvent::Scroll(scroll) = &mut lines {
-        scroll.delta = ScrollDelta::LineDelta(4.0, 0.0);
+        scroll.delta =
+            ScrollDelta::try_new(ScrollUnit::Lines, 4.0, 0.0).expect("finite line delta");
     }
     let seen = pointer_events_seen_locally(&[pixels, lines]);
     let [PointerEvent::Scroll(pixels), PointerEvent::Scroll(lines)] = seen.as_slice() else {
         panic!("two localized scrolls: {seen:?}");
     };
     assert_close(
-        (pixels.state.position.x, pixels.state.position.y),
+        (pixels.position.get().x, pixels.position.get().y),
         expected_local((80.0, 70.0)),
         "scroll position",
     );
-    let ScrollDelta::PixelDelta(delta) = pixels.delta else {
-        panic!("pixel delta stays pixels: {:?}", pixels.delta);
-    };
+    let delta = pixels.delta;
+    assert_eq!(delta.unit(), ScrollUnit::Pixels, "pixel delta stays pixels");
     assert_close(
-        (delta.x, delta.y),
+        (delta.x(), delta.y()),
         expected_local_delta((0.0, 30.0)),
         "pixel delta",
     );
-    let ScrollDelta::LineDelta(x, y) = lines.delta else {
-        panic!("line delta stays lines: {:?}", lines.delta);
-    };
-    assert_close(
-        (f64::from(x), f64::from(y)),
-        expected_local_delta((4.0, 0.0)),
-        "line delta",
+    assert_eq!(
+        lines.delta.unit(),
+        ScrollUnit::Lines,
+        "line delta stays lines"
     );
+    assert_close((lines.delta.x(), lines.delta.y()), (4.0, 0.0), "line delta");
 }
 
 fn scroll_target_delta_is_localized_as_a_vector() {
@@ -530,11 +762,17 @@ fn scroll_target_delta_is_localized_as_a_vector() {
             })
             .expect("register scroll");
         let result = transformed_entry(HitTestEntry::new(RenderId::new(1)).scroll_target(target));
-        let event = ScrollEventData::new(
-            Offset::new(80.0, 70.0),
-            Offset::new(12.0, 0.0),
-            Modifiers::empty(),
-        );
+        let event = ScrollEvent::new(
+            PointerInfo::new(
+                PointerId::new(std::num::NonZeroU64::MIN),
+                PointerKind::Mouse,
+            ),
+            flui_platform_api::EventTime::from_nanos(1_000),
+            PointerPosition::try_new(flui_foundation::geometry::Point::new(80.0, 70.0))
+                .expect("finite scroll position"),
+            ScrollDelta::try_new(ScrollUnit::Pixels, 12.0, 0.0).expect("finite scroll delta"),
+        )
+        .with_modifiers(Modifiers::NONE);
         result.dispatch_scroll(&event);
     });
     let seen = seen.take();
@@ -542,15 +780,180 @@ fn scroll_target_delta_is_localized_as_a_vector() {
         panic!("one localized scroll: {seen:?}");
     };
     assert_close(
-        (local.position.dx, local.position.dy),
+        (local.position.get().x, local.position.get().y),
         expected_local((80.0, 70.0)),
         "position",
     );
     assert_close(
-        (local.delta.dx, local.delta.dy),
+        (local.delta.x(), local.delta.y()),
         expected_local_delta((12.0, 0.0)),
         "delta",
     );
+    assert_eq!(local.delta.unit(), ScrollUnit::Pixels);
+    assert_eq!(local.time, flui_platform_api::EventTime::from_nanos(1_000));
+    assert_eq!(local.modifiers, Modifiers::NONE);
+    assert_eq!(local.pointer.kind, PointerKind::Mouse);
+}
+
+fn perspective_vectors_follow_the_current_focal_and_preserve_counts() {
+    use flui_foundation::geometry::Point;
+    use flui_platform_api::{
+        EventTime,
+        pointer::{ScrollPhase, ScrollPrecision},
+    };
+
+    // Forward projection is (x, y) / (1 - x/2). Thus screen (0,2)
+    // is local (0,2), and screen (1,2) is local (2/3,4/3).
+    let forward = Matrix4::from([
+        1.0, 0.0, 0.0, -0.5, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+    ]);
+    let pointer = PointerInfo::new(
+        PointerId::new(std::num::NonZeroU64::MIN),
+        PointerKind::Mouse,
+    );
+    let position = |x, y| PointerPosition::try_new(Point::new(x, y)).expect("finite focal");
+    let scroll = |unit, x, dx| {
+        PointerEvent::Scroll(
+            ScrollEvent::new(
+                pointer,
+                EventTime::from_nanos(77),
+                position(x, 2.0),
+                ScrollDelta::try_new(unit, dx, 0.0).expect("finite delta"),
+            )
+            .with_precision(ScrollPrecision::Precise)
+            .with_phase(ScrollPhase::MomentumChanged)
+            .with_modifiers(Modifiers::SHIFT),
+        )
+    };
+    let pan = |x, dx| {
+        PointerEvent::PanZoom(
+            PanZoomEvent::new(
+                pointer,
+                EventTime::from_nanos(78),
+                position(x, 2.0),
+                PanZoomPhase::Update(
+                    PanZoomTransform::try_new(Offset::new(dx, 0.0), 1.25, 0.3)
+                        .expect("finite cumulative transform"),
+                ),
+            )
+            .with_modifiers(Modifiers::CONTROL),
+        )
+    };
+    let events = [
+        scroll(ScrollUnit::Pixels, 0.0, 1.0),
+        scroll(ScrollUnit::Lines, 0.0, -2.0),
+        scroll(ScrollUnit::Pages, 0.0, -3.0),
+        pan(0.0, 1.0),
+        pan(2.0, 1.0),
+    ];
+    let lane = InteractionLane::try_new().expect("lane");
+    let handle = lane.dispatch_handle();
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let claimed = Rc::new(RefCell::new(Vec::new()));
+    lane.enter(|| {
+        let sink = seen.clone();
+        let target = handle
+            .register_pointer(move |dispatch| {
+                sink.borrow_mut()
+                    .push((dispatch.local.clone(), dispatch.global.clone()));
+            })
+            .expect("pointer target");
+        let sink = claimed.clone();
+        let claim = handle
+            .register_scroll(move |event| {
+                sink.borrow_mut().push(*event);
+                EventPropagation::Continue
+            })
+            .expect("scroll claim");
+        let mut result = HitTestResult::new();
+        result
+            .with_paint_transform(forward, |result| {
+                result.add(
+                    HitTestEntry::new(RenderId::new(1))
+                        .pointer_target(target)
+                        .scroll_target(claim),
+                );
+            })
+            .expect("invertible projective plane");
+        for event in &events {
+            result.dispatch(event);
+            if let PointerEvent::Scroll(scroll) = event {
+                result.dispatch_scroll(scroll);
+            }
+        }
+        // The focal is admitted; only the metric endpoint is on/beyond the
+        // horizon, or overflows during finite-input endpoint addition.
+        for (x, dx) in [
+            (0.0, -2.0),
+            (0.0, -3.0),
+            (0.0, -2.0 + f64::EPSILON),
+            (f64::MAX, f64::MAX),
+        ] {
+            for event in [scroll(ScrollUnit::Pixels, x, dx), pan(x, dx)] {
+                result.dispatch(&event);
+                if let PointerEvent::Scroll(scroll) = event {
+                    result.dispatch_scroll(&scroll);
+                }
+            }
+        }
+    });
+    let seen = seen.borrow();
+    assert_eq!(
+        seen.len(),
+        events.len(),
+        "invalid metric endpoints are refused"
+    );
+    assert_eq!(
+        claimed.borrow().len(),
+        3,
+        "claims share checked localization"
+    );
+    for (index, (local, global)) in seen.iter().enumerate() {
+        assert_eq!(global, &events[index], "source provenance");
+        match (local, global) {
+            (PointerEvent::Scroll(local), PointerEvent::Scroll(global)) => {
+                let expected = if index == 0 {
+                    (2.0 / 3.0, -2.0 / 3.0)
+                } else {
+                    (global.delta.x(), global.delta.y())
+                };
+                assert_close(
+                    (local.delta.x(), local.delta.y()),
+                    expected,
+                    "anchored pixels or source counts",
+                );
+                let mut metadata = *local;
+                metadata.position = global.position;
+                metadata.delta = global.delta;
+                assert_eq!(&metadata, global, "scroll metadata");
+                assert_eq!(
+                    claimed.borrow()[index],
+                    *local,
+                    "claim and pointer localization agree"
+                );
+            }
+            (PointerEvent::PanZoom(local), PointerEvent::PanZoom(global)) => {
+                let PanZoomPhase::Update(value) = local.phase else {
+                    panic!("update");
+                };
+                let expected = if index == 3 {
+                    (2.0 / 3.0, -2.0 / 3.0)
+                } else {
+                    (1.0 / 5.0, -1.0 / 5.0)
+                };
+                assert_close(
+                    (value.pan().dx, value.pan().dy),
+                    expected,
+                    "current-focal cumulative pan",
+                );
+                let mut metadata = *local;
+                metadata.position = global.position;
+                metadata.phase = global.phase;
+                assert_eq!(&metadata, global, "pan metadata");
+            }
+            _ => panic!("same event family"),
+        }
+    }
 }
 
 /// Runs every row, then fails naming the rows that failed.
@@ -584,7 +987,6 @@ fn mouse_tracking_ordering_and_cursor_deferral() {
 }
 
 #[test]
-#[ignore = "contract: a region hovered by two devices delivers an exit to each device"]
 fn shared_region_exit_per_device() {
     run_rows(
         "shared region",
@@ -596,8 +998,6 @@ fn shared_region_exit_per_device() {
 }
 
 #[test]
-#[ignore = "contract: an ambient hover refresh delivers every device's transitions even when \
-            another device's hit test or callback panics, then resumes the first panic"]
 fn ambient_refresh_contains_each_device() {
     run_rows(
         "ambient refresh",
@@ -610,25 +1010,32 @@ fn ambient_refresh_contains_each_device() {
                 "refresh hit-test panic",
                 refresh_hit_test_panic_keeps_the_device_for_the_next_refresh,
             ),
+            (
+                "probe and callback compete",
+                refresh_hit_test_failure_precedes_a_competing_callback_failure,
+            ),
         ],
     );
 }
 
 #[test]
-#[ignore = "contract: callbacks the tracker releases are destroyed outside its borrow, so a \
-            capture destructor can use the tracker"]
 fn released_region_destructor_reenters_tracker() {
     run_rows(
         "region release",
-        &[(
-            "region destructor reenters",
-            region_destructor_may_reenter_the_tracker,
-        )],
+        &[
+            (
+                "region destructor reenters",
+                region_destructor_may_reenter_the_tracker,
+            ),
+            (
+                "capture failure and recovery",
+                region_retirement_preserves_first_failure_and_recovers,
+            ),
+        ],
     );
 }
 
 #[test]
-#[ignore = "contract: an explicit arrow cursor on a child wins over an ancestor's cursor"]
 fn explicit_arrow_cursor_wins() {
     run_rows(
         "explicit arrow",
@@ -643,13 +1050,15 @@ fn explicit_arrow_cursor_wins() {
 }
 
 #[test]
-#[ignore = "contract: a transformed hit entry receives coalesced and predicted samples and scroll \
-            deltas in its local space, deltas rotated and scaled but not translated"]
 fn transformed_entry_receives_local_samples_and_deltas() {
     run_rows(
         "localization",
         &[
             ("move samples localized", move_samples_are_localized),
+            (
+                "perspective vectors and symbolic counts",
+                perspective_vectors_follow_the_current_focal_and_preserve_counts,
+            ),
             (
                 "scroll delta localized",
                 scroll_delta_is_localized_as_a_vector,

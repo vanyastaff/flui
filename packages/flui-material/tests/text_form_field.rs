@@ -6,6 +6,7 @@ use crate::common;
 use std::rc::Rc;
 
 use common::{lay_out, tight};
+use flui_interaction::KeyEventResult;
 use flui_interaction::events::{Code, Key, KeyState};
 use flui_interaction::testing::input::KeyEventBuilder;
 use flui_material::{InputDecoration, TextFormField, Theme, ThemeData};
@@ -47,12 +48,15 @@ pub fn validator_error_reaches_the_input_decorator_error_line() {
     laid.tick();
     assert!(laid.find_text("Required").is_some(), "the error line shows");
 
-    node.request_focus();
+    let _ = node.request_focus();
     let event = KeyEventBuilder::new(Code::KeyA)
-        .with_key(Key::Character("a".to_owned()))
+        .with_key(Key::character("a"))
         .with_state(KeyState::Down)
         .build();
-    laid.focus_manager().dispatch_key_event(&event);
+    assert_eq!(
+        laid.focus_manager().dispatch_key_event(&event),
+        KeyEventResult::Handled
+    );
     assert!(form.validate());
     laid.tick();
     assert!(

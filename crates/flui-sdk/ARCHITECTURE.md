@@ -43,6 +43,14 @@ topology is not part of any package manifest.
 
 ## The measured surface
 
+`interaction::FocusSubscription` exposes the existing owner-affine RAII token
+for Material TextField's effective-node observer. The package acquires it with
+`Rc<FocusNode>::subscribe`, publishes replacement ownership before retiring the
+previous token, and withdraws by Drop. It does not regain the private listener
+ID mutation methods or depend directly on flui-interaction. The surface list
+and measured import in `tests/surface.rs` pin this gateway (ADR-0088 §4;
+ADR-0165).
+
 The items are what `flui-material` and `flui-cupertino` import from the internal crates outside
 their tests, measured at `431c8757c` (2026-09-26):
 

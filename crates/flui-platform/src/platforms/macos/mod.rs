@@ -79,7 +79,6 @@ mod window_tiling;
 pub use accessibility::MacosAccessibility;
 pub use clipboard::MacOSClipboard;
 pub use display::MacOSDisplay;
-pub use events::convert_ns_event;
 pub use liquid_glass::{BlendingMode, LiquidGlassConfig, LiquidGlassMaterial};
 pub use platform::MacOSPlatform;
 pub use window::MacOSWindow;

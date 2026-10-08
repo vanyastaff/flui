@@ -3,7 +3,7 @@
 //! The SemanticsOwner coordinates updates to the semantics tree and
 //! sends updates to the platform accessibility services.
 
-use std::sync::Arc;
+use std::{rc::Weak, sync::Arc};
 
 use flui_foundation::SemanticsId;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -97,15 +97,57 @@ pub enum SemanticsActionError {
 /// A resolved action whose handler has been cloned out of the semantics tree.
 ///
 /// Resolution and invocation are deliberately separate. A caller may resolve
-/// this value while holding an outer `PipelineOwner` lock, release that lock,
-/// and only then call [`Self::invoke`]. Reentrant handlers therefore cannot
-/// deadlock by reaching back into the render pipeline.
+/// this value while borrowing the presentation's pipeline owner, release that
+/// borrow, and only then invoke or retire the snapshot. Reentrant handlers and
+/// callback destructors can therefore reach the same owner without overlapping
+/// a tree borrow.
 #[must_use = "resolved semantics actions must be invoked or intentionally dropped"]
 pub struct SemanticsActionInvocation {
     node_id: AccessibilityNodeId,
     action: SemanticsAction,
-    arguments: Option<ActionArgs>,
+    delivery: Option<ActionDelivery>,
+}
+
+enum ActionDelivery {
+    Direct {
+        arguments: Option<ActionArgs>,
+        handler: SemanticsActionHandler,
+    },
+    Reveal {
+        path: Vec<Weak<()>>,
+        steps: Vec<(SemanticsActionHandler, ActionArgs)>,
+    },
+}
+
+fn retire_reveal_handler(
     handler: SemanticsActionHandler,
+    first: &mut Option<Box<dyn std::any::Any + Send>>,
+    unwinding: bool,
+) {
+    // User-owned captures are an independent failure boundary, including when
+    // an intentionally dropped snapshot is their last owner.
+    if unwinding || first.is_some() {
+        std::mem::forget(handler);
+    } else if let Err(payload) =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(handler)))
+    {
+        *first = Some(payload);
+    }
+}
+
+impl Drop for SemanticsActionInvocation {
+    fn drop(&mut self) {
+        if let Some(ActionDelivery::Reveal { steps, .. }) = self.delivery.take() {
+            let mut first = None;
+            let unwinding = std::thread::panicking();
+            for (handler, _) in steps {
+                retire_reveal_handler(handler, &mut first, unwinding);
+            }
+            if let Some(payload) = first {
+                std::panic::resume_unwind(payload);
+            }
+        }
+    }
 }
 
 impl std::fmt::Debug for SemanticsActionInvocation {
@@ -114,8 +156,7 @@ impl std::fmt::Debug for SemanticsActionInvocation {
             .debug_struct("SemanticsActionInvocation")
             .field("node_id", &self.node_id)
             .field("action", &self.action)
-            .field("arguments", &self.arguments)
-            .field("handler", &"<callback>")
+            .field("delivery", &"<resolved callbacks>")
             .finish()
     }
 }
@@ -138,8 +179,36 @@ impl SemanticsActionInvocation {
     /// Invoke the cloned handler.
     ///
     /// No semantics-tree borrow is held while user code runs.
-    pub fn invoke(self) {
-        (self.handler)(self.action, self.arguments);
+    pub fn invoke(mut self) {
+        match self
+            .delivery
+            .take()
+            .expect("BUG: action delivery is consumed once")
+        {
+            ActionDelivery::Direct { arguments, handler } => handler(self.action, arguments),
+            ActionDelivery::Reveal { path, steps } => {
+                let mut first = None;
+                let unwinding = std::thread::panicking();
+                for (handler, arguments) in steps {
+                    if !unwinding && path.iter().all(|member| member.strong_count() != 0) {
+                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            handler(SemanticsAction::ShowOnScreen, Some(arguments));
+                        }));
+                        if let Err(payload) = result {
+                            if first.is_none() {
+                                first = Some(payload);
+                            } else {
+                                flui_foundation::panic::retain_opaque_payload(payload);
+                            }
+                        }
+                    }
+                    retire_reveal_handler(handler, &mut first, unwinding);
+                }
+                if let Some(payload) = first {
+                    std::panic::resume_unwind(payload);
+                }
+            }
+        }
     }
 }
 
@@ -484,8 +553,11 @@ impl SemanticsOwner {
     /// text handler resolves to its numeric handler when the text parses as a
     /// finite number.
     ///
-    /// The returned invocation owns an `Arc` clone of the handler and may be
-    /// invoked after any outer owner lock has been released.
+    /// The returned invocation owns callback snapshots and must be invoked
+    /// after the outer pipeline owner borrow has been released. Descendant
+    /// reveal snapshots refuse removed, replaced or reparented geometry. Their
+    /// published scroll-position basis lets receiving scrollables rebase
+    /// reentrant requests without repeating cached movement.
     pub fn resolve_action(
         &self,
         request: SemanticsActionRequest,
@@ -521,14 +593,71 @@ impl SemanticsOwner {
                     node_id: request.node_id,
                 });
             }
-            resolved = Some(node);
+            resolved = Some((id, node));
         }
 
-        let node = resolved.ok_or(SemanticsActionError::NodeNotFound {
+        let (target_id, node) = resolved.ok_or(SemanticsActionError::NodeNotFound {
             node_id: request.node_id,
         })?;
         let config = node.config();
         let actions = config.effective_actions_as_bits();
+        if request.action == SemanticsAction::ShowOnScreen
+            && actions & request.action.value() != 0
+            && config.action_handler(request.action).is_none()
+            && !config.is_hidden()
+        {
+            let mut path = Vec::new();
+            let mut steps = Vec::new();
+            let mut current = Some(target_id);
+            let mut target_rect = node.reveal_rect();
+            let mut ancestors = FxHashSet::default();
+            while let Some(id) = current {
+                if !ancestors.insert(id) {
+                    break;
+                }
+                let Some(ancestor) = self.tree.get(id) else {
+                    break;
+                };
+                let Some(member) = self.tree.membership(id) else {
+                    break;
+                };
+                path.push(member);
+                if id != target_id
+                    && ancestor.config().effective_actions_as_bits()
+                        & SemanticsAction::ShowOnScreen.value()
+                        != 0
+                    && let Some(handler) = ancestor
+                        .config()
+                        .action_handler(SemanticsAction::ShowOnScreen)
+                {
+                    let viewport_rect = ancestor.reveal_rect();
+                    steps.push((
+                        Arc::clone(handler),
+                        ActionArgs::ShowOnScreen {
+                            target_rect,
+                            viewport_rect,
+                            scroll_position: ancestor.config().scroll_position(),
+                        },
+                    ));
+                    target_rect = viewport_rect;
+                }
+                if id == root {
+                    if !steps.is_empty() {
+                        return Ok(SemanticsActionInvocation {
+                            node_id: request.node_id,
+                            action: request.action,
+                            delivery: Some(ActionDelivery::Reveal { path, steps }),
+                        });
+                    }
+                    break;
+                }
+                current = ancestor.parent();
+            }
+            return Err(SemanticsActionError::UnsupportedAction {
+                node_id: request.node_id,
+                action: request.action,
+            });
+        }
         // Expand and collapse are transitions, offered only from the state
         // that allows them; a request for the state the node already
         // publishes (or from a node without one) reaches no handler.
@@ -601,8 +730,7 @@ impl SemanticsOwner {
         Ok(SemanticsActionInvocation {
             node_id: request.node_id,
             action: routed,
-            arguments,
-            handler,
+            delivery: Some(ActionDelivery::Direct { arguments, handler }),
         })
     }
 

@@ -22,10 +22,10 @@
 //! Each event is placed on the sampling clock by its own time, not by when it
 //! reached the resampler. [`PointerEventResampler::add_event_at`] takes that
 //! time from the caller. [`PointerEventResampler::add_event`] reads the
-//! event's `PointerState::time` and maps it onto [`Instant`] through the
+//! event's owned `EventTime` and maps it onto [`Instant`] through the
 //! smallest delivery latency seen so far, so a burst of events delivered
-//! together keeps its original spacing; an event without a time (a `Cancel`,
-//! or a zero timestamp) is placed at its arrival. Times are made monotonic in
+//! together keeps its original spacing; zero is a valid coarse timestamp.
+//! An event without a supported time is placed at arrival. Times are made monotonic in
 //! queue order, and emitted events carry non-decreasing `time` values.
 //!
 //! # Example
@@ -36,7 +36,7 @@
 //! use flui_interaction::ids::PointerId;
 //! use flui_interaction::processing::PointerEventResampler;
 //!
-//! let resampler = PointerEventResampler::new(PointerId::PRIMARY);
+//! let resampler = PointerEventResampler::new(PointerId::new(core::num::NonZeroU64::MIN));
 //! // The 60 Hz frame tick. The resampler enforces a 1 ms minimum
 //! // interval between samples, so back-to-back ticks coalesce.
 //! let now = Instant::now();
@@ -51,12 +51,13 @@ use std::{collections::VecDeque, sync::Arc};
 
 use web_time::{Duration, Instant};
 
-use flui_foundation::geometry::Offset;
+use flui_foundation::geometry::{Offset, Point};
+use flui_platform_api::EventTime;
 use parking_lot::Mutex;
 use smallvec::SmallVec;
 
 use crate::{
-    events::{PointerEvent, PointerEventExt},
+    events::{PointerEvent, PointerEventExt, PointerMove, PointerPosition, PointerSample},
     ids::PointerId,
 };
 
@@ -150,24 +151,35 @@ struct ResamplerInner {
 
 /// The event's own time in nanoseconds, if it carries a usable one.
 fn event_nanos(event: &PointerEvent) -> Option<u64> {
-    let nanos = match event {
-        PointerEvent::Down(button) | PointerEvent::Up(button) => button.state.time,
-        PointerEvent::Move(update) => update.current.time,
-        _ => return None,
-    };
-    (nanos != 0).then_some(nanos)
+    crate::events::event_time(event).map(EventTime::as_nanos)
+}
+
+fn measured_move(movement: &PointerMove, sample: PointerSample) -> PointerMove {
+    PointerMove::new(movement.pointer, movement.buttons, sample)
+        .with_modifiers(movement.modifiers)
+        .with_coalesced(movement.coalesced().to_vec())
+        .with_predicted(movement.predicted().to_vec())
 }
 
 /// Raise the event's own `time` to at least `floor`; returns the time it
 /// now carries (or `floor` when it has none).
 fn raise_time(event: &mut PointerEvent, floor: u64) -> u64 {
     let time = match event {
-        PointerEvent::Down(button) | PointerEvent::Up(button) => &mut button.state.time,
-        PointerEvent::Move(update) => &mut update.current.time,
+        PointerEvent::Down(button) => &mut button.sample.time,
+        PointerEvent::Up(button) => &mut button.sample.time,
+        PointerEvent::Move(update) => {
+            if update.current().time.as_nanos() >= floor {
+                return update.current().time.as_nanos();
+            }
+            let mut sample = *update.current();
+            sample.time = EventTime::from_nanos(sample.time.as_nanos().max(floor));
+            *update = measured_move(update, sample);
+            return sample.time.as_nanos();
+        }
         _ => return floor,
     };
-    *time = (*time).max(floor);
-    *time
+    *time = EventTime::from_nanos(time.as_nanos().max(floor));
+    time.as_nanos()
 }
 
 /// An event that opens, closes or re-scopes a pointer sequence; the queue
@@ -246,21 +258,20 @@ impl ResamplerInner {
         }) else {
             return false;
         };
-        let mut history = match &mut self.event_queue[index].event {
-            PointerEvent::Move(older) => {
-                let mut history = std::mem::take(&mut older.coalesced);
-                history.push(older.current.clone());
-                history
+        let [older, newer] = self
+            .event_queue
+            .make_contiguous()
+            .get_disjoint_mut([index, index + 1])
+            .expect("BUG: adjacent queue entries exist");
+        if let (PointerEvent::Move(older), PointerEvent::Move(newer)) =
+            (&mut older.event, &mut newer.event)
+        {
+            if newer.try_coalesce_from(older).is_err() {
+                return false;
             }
-            _ => return false,
-        };
-        if let PointerEvent::Move(newer) = &mut self.event_queue[index + 1].event {
-            history.append(&mut newer.coalesced);
             // Keep the newest samples only, so a queue that is never sampled
             // cannot grow without bound through the history either.
-            let excess = history.len().saturating_sub(MAX_COALESCED_HISTORY);
-            history.drain(..excess);
-            newer.coalesced = history;
+            newer.retain_latest_coalesced(MAX_COALESCED_HISTORY);
         }
         self.event_queue.remove(index);
         true
@@ -278,7 +289,9 @@ impl ResamplerInner {
         match &event {
             PointerEvent::Down(..) | PointerEvent::Move(..) => {
                 self.anchor = Some(Anchor {
-                    position: event.position(),
+                    position: event
+                        .position()
+                        .expect("BUG: measured contact carries position"),
                     timestamp: at,
                     nanos,
                 });
@@ -338,7 +351,11 @@ impl PointerEventResampler {
     /// call. `Down`, `Up`, `Cancel` and other non-move events are never
     /// dropped; a full queue coalesces moves instead.
     pub fn add_event(&self, event: PointerEvent) {
-        let arrival = Instant::now();
+        self.add_event_with_arrival(event, Instant::now());
+    }
+
+    /// The binding owns the arrival clock; keep mapping and enqueue atomic.
+    pub(crate) fn add_event_with_arrival(&self, event: PointerEvent, arrival: Instant) {
         // Derive the stamp, install the clock base and enqueue under one lock:
         // a `stop` from another handle in between would clear the base an
         // `EventTime` stamp relies on.
@@ -455,7 +472,7 @@ impl PointerEventResampler {
                 let span = next_at.duration_since(anchor.timestamp).as_secs_f64();
                 let elapsed = sample_time.duration_since(anchor.timestamp).as_secs_f64();
                 let fraction = (elapsed / span).clamp(0.0, 1.0);
-                let next_pos = next.event.position();
+                let next_pos = next.event.position().expect("BUG: Move carries position");
                 let lerp = |from: f64, to: f64| from + (to - from) * fraction;
                 let position = Offset::new(
                     lerp(anchor.position.dx, next_pos.dx),
@@ -463,7 +480,7 @@ impl PointerEventResampler {
                 );
                 if position != anchor.position && position.dx.is_finite() && position.dy.is_finite()
                 {
-                    let next_nanos = next_move.current.time;
+                    let next_nanos = next_move.current().time.as_nanos();
                     let nanos = if next_nanos > anchor.nanos {
                         // Exact in f64 for any realistic span; rounding down
                         // keeps the stamp at or before the next event.
@@ -471,14 +488,15 @@ impl PointerEventResampler {
                     } else {
                         anchor.nanos
                     };
-                    let mut interpolated = next.event.clone();
-                    if let PointerEvent::Move(update) = &mut interpolated {
-                        update.current.position =
-                            dpi::PhysicalPosition::new(position.dx, position.dy);
-                        update.current.time = nanos;
-                        update.coalesced.clear();
-                        update.predicted.clear();
-                    }
+                    let mut sample = *next_move.current();
+                    sample.position =
+                        PointerPosition::try_new(Point::new(position.dx, position.dy))
+                            .expect("BUG: finite interpolated position checked above");
+                    sample.time = EventTime::from_nanos(nanos);
+                    let interpolated = PointerEvent::Move(
+                        PointerMove::new(next_move.pointer, next_move.buttons, sample)
+                            .with_modifiers(next_move.modifiers),
+                    );
                     inner.emit(interpolated, sample_time, &mut emitted);
                 }
             }
@@ -492,6 +510,48 @@ impl PointerEventResampler {
         for event in emitted {
             callback(event);
         }
+    }
+
+    /// Deliver measured packets through a synchronous mid-contact boundary.
+    ///
+    /// A button edge must follow earlier hardware movement without ending the
+    /// contact or resetting its interpolation anchor. New packets admitted by
+    /// callbacks remain queued for the next boundary or sampling window.
+    pub(crate) fn flush_through(
+        &self,
+        boundary: EventTime,
+        mut callback: impl FnMut(PointerEvent),
+    ) {
+        let emitted: SmallVec<[PointerEvent; 4]> = {
+            let mut inner = self.inner.lock();
+            let mut emitted = SmallVec::new();
+            while inner.event_queue.front().is_some_and(|buffered| {
+                event_nanos(&buffered.event).is_some_and(|time| time <= boundary.as_nanos())
+            }) {
+                let buffered = inner
+                    .event_queue
+                    .pop_front()
+                    .expect("BUG: the queued prefix was checked before removal");
+                let at = inner.timestamp(buffered.stamp);
+                inner.emit(buffered.event, at, &mut emitted);
+            }
+            emitted
+        };
+        for event in emitted {
+            callback(event);
+        }
+    }
+
+    /// Commit the accepted measured prefix without advancing frame sampling or
+    /// ending the contact. The binding freezes all prefixes before dispatch.
+    pub(crate) fn take_pending_events(&self) -> SmallVec<[PointerEvent; 4]> {
+        let mut inner = self.inner.lock();
+        let mut emitted = SmallVec::new();
+        while let Some(buffered) = inner.event_queue.pop_front() {
+            let at = inner.timestamp(buffered.stamp);
+            inner.emit(buffered.event, at, &mut emitted);
+        }
+        emitted
     }
 
     /// Stops resampling and flushes all remaining events

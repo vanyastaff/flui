@@ -372,7 +372,10 @@ impl RenderBox for RenderFlow {
             let Some(inverse) = transform.try_inverse() else {
                 continue;
             };
-            let (local_x, local_y) = inverse.transform_point(position.dx, position.dy);
+            let Some((local_x, local_y)) = inverse.unproject_to_plane(position.dx, position.dy)
+            else {
+                continue;
+            };
             let child_hit = ctx.with_transform(transform, |ctx| {
                 ctx.hit_test_child(index, Offset::new(local_x, local_y))
             });

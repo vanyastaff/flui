@@ -190,6 +190,7 @@ impl TryFrom<u64> for DeviceId {
 
 /// Which end of a pen is in use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum PenTool {
     /// The writing tip.
@@ -202,6 +203,7 @@ pub enum PenTool {
 
 /// The kind of device behind a pointer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum PointerKind {
     /// A mouse or other indirect cursor device.
@@ -466,7 +468,62 @@ pub struct PointerMove {
     predicted: Vec<PointerSample>,
 }
 
+/// Two movements describe different contact metadata and cannot be coalesced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("pointer metadata differs between movements")]
+pub struct MismatchedPointerInfo;
+
 impl PointerMove {
+    /// Fold an earlier movement's measured readings into this dispatch.
+    ///
+    /// The complete [`PointerInfo`] must match; refusal leaves both movements
+    /// unchanged. This dispatch keeps its current sample, predicted readings,
+    /// buttons and modifiers, while its history includes `older`'s history and
+    /// current sample before its own history. As in [`with_coalesced`](Self::with_coalesced),
+    /// readings are sorted oldest first, future readings and exact copies of
+    /// this dispatch's current sample are excluded. Repeated historical readings
+    /// remain distinct: a coarse timestamp does not identify a reading.
+    pub fn try_coalesce(&mut self, older: &Self) -> Result<(), MismatchedPointerInfo> {
+        if self.pointer != older.pointer {
+            return Err(MismatchedPointerInfo);
+        }
+        self.merge_checked_history(older.coalesced.clone(), older.current);
+        Ok(())
+    }
+
+    /// Transfer an earlier movement's measured history into this dispatch.
+    ///
+    /// Like [`try_coalesce`](Self::try_coalesce), the complete pointer identity
+    /// must match and this dispatch retains its current reading, predictions,
+    /// buttons and modifiers. Refusal leaves both movements unchanged. Success
+    /// empties `older`'s measured history and reuses its storage; `older` retains
+    /// its current reading, predictions and dispatch metadata. This operation
+    /// lets bounded queues transfer ownership before retiring the older packet.
+    pub fn try_coalesce_from(&mut self, older: &mut Self) -> Result<(), MismatchedPointerInfo> {
+        if self.pointer != older.pointer {
+            return Err(MismatchedPointerInfo);
+        }
+        self.merge_checked_history(std::mem::take(&mut older.coalesced), older.current);
+        Ok(())
+    }
+
+    fn merge_checked_history(&mut self, mut samples: Vec<PointerSample>, older: PointerSample) {
+        // Checked histories end at their own current reading. These boundaries
+        // prove the concatenation is ordered and excludes this current reading.
+        let ordered = older.time < self.current.time
+            && self
+                .coalesced
+                .first()
+                .is_none_or(|sample| sample.time >= older.time);
+        samples.push(older);
+        samples.extend_from_slice(&self.coalesced);
+        if !ordered {
+            samples.retain(|sample| sample.time <= self.current.time && *sample != self.current);
+            samples.sort_by_key(|sample| sample.time);
+        }
+        self.coalesced = samples;
+    }
+
     /// The latest reading.
     #[must_use]
     pub const fn current(&self) -> &PointerSample {
@@ -479,6 +536,17 @@ impl PointerMove {
     #[must_use]
     pub fn coalesced(&self) -> &[PointerSample] {
         &self.coalesced
+    }
+
+    /// Retain at most `maximum` latest measured historical readings in place.
+    ///
+    /// A bounded coalescing queue can retire its oldest readings without
+    /// copying or revalidating the already-checked chronological history.
+    /// Zero removes all historical readings. The current sample, predictions
+    /// and dispatch metadata remain unchanged.
+    pub fn retain_latest_coalesced(&mut self, maximum: usize) {
+        let excess = self.coalesced.len().saturating_sub(maximum);
+        drop(self.coalesced.drain(..excess));
     }
 
     /// Readings the platform predicts after [`current`](Self::current), oldest first.

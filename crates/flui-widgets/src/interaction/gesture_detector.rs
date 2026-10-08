@@ -1,18 +1,24 @@
 //! [`GestureDetector`] — recognizes high-level gestures (tap, long-press,
-//! double-tap, and pan/drag) from the raw pointer stream a [`Listener`] delivers.
+//! double-tap, pan/drag, and scale) from the pointer stream a [`Listener`] delivers.
 
 use std::{
     cell::{Cell, RefCell},
     collections::VecDeque,
-    rc::Rc,
+    rc::{Rc, Weak},
     sync::{Arc, Mutex},
 };
 
+use flui_interaction::arena::GestureCompetition;
+use flui_interaction::recognizers::scale::{
+    ScaleEndDetails, ScaleGestureRecognizer, ScaleStartDetails, ScaleStartMode, ScaleUpdateDetails,
+};
+use flui_interaction::routing::{EventPropagation, PanZoomDispatch};
 use flui_interaction::{
     DoubleTapDetails, DoubleTapGestureRecognizer, DragAxis, DragDownDetails, DragEndDetails,
-    DragGestureRecognizer, DragStartDetails, DragUpdateDetails, GestureRecognizer,
-    LongPressGestureRecognizer, PointerDispatch, TapGestureRecognizer,
+    DragGestureRecognizer, DragPointerStrategy, DragStartDetails, DragUpdateDetails,
+    GestureRecognizer, LongPressGestureRecognizer, TapGestureRecognizer, cancel_all,
 };
+use flui_interaction::{PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerInfo};
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_view::prelude::*;
 
@@ -30,6 +36,10 @@ type DoubleTapDownHandler = Rc<dyn Fn(&mut EventCx<'_>, DoubleTapDetails)>;
 type PanStartHandler = Rc<dyn Fn(&mut EventCx<'_>, DragStartDetails)>;
 type PanUpdateHandler = Rc<dyn Fn(&mut EventCx<'_>, DragUpdateDetails)>;
 type PanEndHandler = Rc<dyn Fn(&mut EventCx<'_>, DragEndDetails)>;
+type ScaleStartHandler = Rc<dyn Fn(&mut EventCx<'_>, ScaleStartDetails)>;
+type ScaleUpdateHandler = Rc<dyn Fn(&mut EventCx<'_>, ScaleUpdateDetails)>;
+type ScaleEndHandler = Rc<dyn Fn(&mut EventCx<'_>, ScaleEndDetails)>;
+type NativeScaleAdmission = Rc<dyn Fn(&PanZoomEvent) -> bool>;
 /// Horizontal-drag callbacks carry the same detail types as pan, but the
 /// underlying recognizer is axis-constrained ([`DragAxis::Horizontal`])
 /// rather than free — see [`GestureDetector`]'s docs on why this and
@@ -47,7 +57,7 @@ type HorizontalDragCancelHandler = Rc<dyn Fn(&mut EventCx<'_>)>;
 /// pointer stream to every recognizer; an arena resolves the competition and the
 /// winning recognizer fires its callback.
 ///
-/// Five gesture families are wired:
+/// The detector supports these gesture families:
 /// - **tap** (`on_tap`) / **secondary tap** (`on_secondary_tap`) — a primary- /
 ///   secondary-button down + up without moving past the touch slop.
 /// - **long press** (`on_long_press`) — the contact held still past the
@@ -70,10 +80,15 @@ type HorizontalDragCancelHandler = Rc<dyn Fn(&mut EventCx<'_>)>;
 ///   [`DragGestureRecognizer`] ([`DragAxis::Horizontal`]) from the free-axis pan
 ///   recognizer above; see the [conflict](#pan-and-horizontal-drag-conflict)
 ///   note on why the two are mutually exclusive on one detector.
+/// - **scale** (`on_scale_start` / `on_scale_update` / `on_scale_end` /
+///   `on_scale_cancel`) — multi-contact scale and rotation, or a native trackpad
+///   pan/zoom session. Native input is claimed leaf-first before publishing
+///   callbacks; an ancestor does not also recognize the same update.
 ///
 /// Only the recognizers whose callback is set participate in the arena for a
-/// contact (a recognizer is constructed only when its callback
-/// is set). They compete in one arena: a quick down→up resolves to the tap
+/// contact. Admission reads the current callbacks on Down; every admitted
+/// contact still receives its terminal event if those callbacks change.
+/// They compete in one arena: a quick down→up resolves to the tap
 /// (the front member), a hold resolves to the long-press, a drag past slop hands
 /// off to whichever drag-family recognizer is configured — so at most one
 /// gesture fires per contact.
@@ -118,10 +133,21 @@ type HorizontalDragCancelHandler = Rc<dyn Fn(&mut EventCx<'_>)>;
 /// Every callback receives the dispatch's `&mut EventCx<'_>` first, so it
 /// writes a signal directly (ADR-0086):
 ///
-/// ```rust,ignore
-/// GestureDetector::new()
-///     .on_tap(move |cx| count.update(cx, |n| *n += 1))
-///     .on_pan_update(move |cx, details| offset.update(cx, |o| *o += details.delta))
+/// Create element-owned signals in `init_state` and retain the configured
+/// detector or its signal handles in the widget state:
+///
+/// ```rust
+/// use flui_foundation::geometry::Offset;
+/// use flui_view::{BuildContextExt, LifecycleContext, SignalWriteExt};
+/// use flui_widgets::GestureDetector;
+///
+/// fn detector(ctx: &dyn LifecycleContext) -> GestureDetector {
+///     let count = ctx.signal(0_u32);
+///     let offset = ctx.signal(Offset::<f64>::ZERO);
+///     GestureDetector::new()
+///         .on_tap(move |cx| count.update(cx, |n| *n += 1))
+///         .on_pan_update(move |cx, details| offset.update(cx, |o| *o += details.delta))
+/// }
 /// ```
 ///
 /// A callback may return `()` or the `Result` of a write; a refused write is
@@ -158,6 +184,12 @@ pub struct GestureDetector {
     on_pan_start: Option<PanStartHandler>,
     on_pan_update: Option<PanUpdateHandler>,
     on_pan_end: Option<PanEndHandler>,
+    on_scale_start: Option<ScaleStartHandler>,
+    on_scale_update: Option<ScaleUpdateHandler>,
+    on_scale_end: Option<ScaleEndHandler>,
+    on_scale_cancel: Option<GestureCallback>,
+    scale_start_mode: ScaleStartMode,
+    native_scale_admission: Option<NativeScaleAdmission>,
     on_horizontal_drag_down: Option<HorizontalDragDownHandler>,
     on_horizontal_drag_start: Option<HorizontalDragStartHandler>,
     on_horizontal_drag_update: Option<HorizontalDragUpdateHandler>,
@@ -165,6 +197,8 @@ pub struct GestureDetector {
     on_horizontal_drag_cancel: Option<HorizontalDragCancelHandler>,
     /// How the underlying [`Listener`] participates in hit-testing.
     behavior: HitTestBehavior,
+    drag_pointer_strategy: DragPointerStrategy,
+    exclusive_drags: bool,
     child: Child,
 }
 
@@ -179,12 +213,20 @@ impl Default for GestureDetector {
             on_pan_start: None,
             on_pan_update: None,
             on_pan_end: None,
+            on_scale_start: None,
+            on_scale_update: None,
+            on_scale_end: None,
+            on_scale_cancel: None,
+            scale_start_mode: ScaleStartMode::Scale,
+            native_scale_admission: None,
             on_horizontal_drag_down: None,
             on_horizontal_drag_start: None,
             on_horizontal_drag_update: None,
             on_horizontal_drag_end: None,
             on_horizontal_drag_cancel: None,
             behavior: HitTestBehavior::DeferToChild,
+            drag_pointer_strategy: DragPointerStrategy::PrimaryOnly,
+            exclusive_drags: false,
             child: Child::empty(),
         }
     }
@@ -227,6 +269,23 @@ impl std::fmt::Debug for GestureDetector {
 }
 
 impl GestureDetector {
+    /// Allow pan and horizontal-drag callbacks to compete for one arena winner.
+    ///
+    /// The first recognizer to claim the contact wins; the other receives
+    /// cancellation. Without this explicit policy, configuring both families
+    /// remains a configuration error in debug builds.
+    #[must_use]
+    pub fn exclusive_drags(mut self) -> Self {
+        self.exclusive_drags = true;
+        self
+    }
+    /// Configure contact handoff for pan and horizontal drags. A mounted
+    /// policy change cancels the outgoing drag and applies to the next Down.
+    #[must_use]
+    pub fn drag_pointer_strategy(mut self, strategy: DragPointerStrategy) -> Self {
+        self.drag_pointer_strategy = strategy;
+        self
+    }
     /// A detector with no callbacks yet.
     pub fn new() -> Self {
         Self::default()
@@ -348,6 +407,63 @@ impl GestureDetector {
         self
     }
 
+    /// Called when a multi-contact or native trackpad scale begins.
+    #[must_use]
+    pub fn on_scale_start<F, R>(mut self, callback: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, ScaleStartDetails) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_scale_start = Some(value_callback(callback));
+        self
+    }
+
+    /// Called with the gesture's cumulative scale and incremental focal motion.
+    #[must_use]
+    pub fn on_scale_update<F, R>(mut self, callback: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, ScaleUpdateDetails) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_scale_update = Some(value_callback(callback));
+        self
+    }
+
+    /// Called when the scale ends, carrying its scalar and focal velocities.
+    #[must_use]
+    pub fn on_scale_end<F, R>(mut self, callback: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, ScaleEndDetails) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_scale_end = Some(value_callback(callback));
+        self
+    }
+
+    /// Called when an admitted scale is cancelled.
+    #[must_use]
+    pub fn on_scale_cancel<F, R>(mut self, callback: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_scale_cancel = Some(event_callback(callback));
+        self
+    }
+
+    pub(crate) fn scale_start_mode(mut self, mode: ScaleStartMode) -> Self {
+        self.scale_start_mode = mode;
+        self
+    }
+
+    pub(crate) fn native_scale_admission(
+        mut self,
+        admit: impl Fn(&PanZoomEvent) -> bool + 'static,
+    ) -> Self {
+        self.native_scale_admission = Some(Rc::new(admit));
+        self
+    }
+
     /// Called when a pointer that might begin a horizontal drag contacts the
     /// screen — before any movement threshold is met. Mutually exclusive with
     /// `on_pan_*` on one detector; see the type docs.
@@ -454,6 +570,146 @@ struct HorizontalDragCallbacks {
     cancel: Option<HorizontalDragCancelHandler>,
 }
 
+#[derive(Clone, Default)]
+struct ScaleCallbacks {
+    start: Option<ScaleStartHandler>,
+    update: Option<ScaleUpdateHandler>,
+    end: Option<ScaleEndHandler>,
+    cancel: Option<GestureCallback>,
+    native_admission: Option<NativeScaleAdmission>,
+}
+
+impl ScaleCallbacks {
+    fn is_active(&self) -> bool {
+        self.start.is_some() || self.update.is_some() || self.end.is_some() || self.cancel.is_some()
+    }
+}
+
+#[derive(Default)]
+struct NativeScaleRoute {
+    pending: Option<(PanZoomEvent, PanZoomEvent)>,
+    active: Option<PointerInfo>,
+}
+
+fn same_native_source(left: &PointerInfo, right: &PointerInfo) -> bool {
+    left.id == right.id && left.device == right.device
+}
+
+fn claim_native_scale(
+    recognizer: &ScaleGestureRecognizer,
+    gates: &RecognizerGates,
+    route: &RefCell<NativeScaleRoute>,
+    dispatch: PanZoomDispatch<'_>,
+) -> EventPropagation {
+    let event = dispatch.local;
+    match event.phase {
+        PanZoomPhase::Start => {
+            let retired = {
+                let mut route = route.borrow_mut();
+                if route
+                    .active
+                    .is_some_and(|active| !same_native_source(&active, event.pointer()))
+                {
+                    return EventPropagation::Continue;
+                }
+                let retired = route.active.take().is_some();
+                route.pending = Some((*dispatch.local, *dispatch.global));
+                retired
+            };
+            if retired {
+                // Publish the replacement route before cancelling the previous
+                // actor generation; its callback may deliver the new Update.
+                recognizer.handle_pan_zoom(dispatch);
+                EventPropagation::Stop
+            } else {
+                EventPropagation::Continue
+            }
+        }
+        PanZoomPhase::Update(transform) => {
+            let active = route.borrow().active;
+            if let Some(active) = active {
+                if !same_native_source(&active, event.pointer()) {
+                    return EventPropagation::Continue;
+                }
+            } else {
+                if !gates.scale_active() || transform == PanZoomTransform::IDENTITY {
+                    return EventPropagation::Continue;
+                }
+                // Typed input is finite; adding cumulative motion can still overflow.
+                for event in [dispatch.local, dispatch.global] {
+                    let PanZoomPhase::Update(transform) = event.phase else {
+                        return EventPropagation::Continue;
+                    };
+                    let focal = event.position.get() + transform.pan();
+                    if !focal.x.is_finite() || !focal.y.is_finite() {
+                        return EventPropagation::Continue;
+                    }
+                }
+                let admission = gates.scale_slot.borrow().native_admission.clone();
+                if admission.is_some_and(|admit| !admit(event)) {
+                    return EventPropagation::Continue;
+                }
+                let pending = {
+                    let mut route = route.borrow_mut();
+                    let pending = route.pending.filter(|(local, _)| {
+                        same_native_source(local.pointer(), event.pointer())
+                            && local.time <= event.time
+                    });
+                    if pending.is_some() {
+                        route.pending = None;
+                        route.active = Some(*event.pointer());
+                    }
+                    pending
+                };
+                if let Some((local, global)) = pending {
+                    recognizer.handle_pan_zoom(PanZoomDispatch {
+                        local: &local,
+                        global: &global,
+                    });
+                }
+            }
+            let handled = recognizer.handle_pan_zoom(dispatch);
+            if handled || active.is_some() {
+                EventPropagation::Stop
+            } else {
+                let mut route = route.borrow_mut();
+                if route
+                    .active
+                    .is_some_and(|active| same_native_source(&active, event.pointer()))
+                {
+                    route.active = None;
+                }
+                EventPropagation::Continue
+            }
+        }
+        PanZoomPhase::End | PanZoomPhase::Cancelled => {
+            let active = {
+                let mut route = route.borrow_mut();
+                if route
+                    .pending
+                    .is_some_and(|(local, _)| same_native_source(local.pointer(), event.pointer()))
+                {
+                    route.pending = None;
+                }
+                let active = route
+                    .active
+                    .is_some_and(|active| same_native_source(&active, event.pointer()));
+                if active {
+                    route.active = None;
+                }
+                active
+            };
+            if active {
+                recognizer.handle_pan_zoom(dispatch);
+                EventPropagation::Stop
+            } else {
+                EventPropagation::Continue
+            }
+        }
+        _ => EventPropagation::Continue,
+    }
+}
+
 /// The recognizers, built once in [`GestureDetectorState::init_state`] against
 /// the presentation arena.
 ///
@@ -464,27 +720,80 @@ struct HorizontalDragCallbacks {
 struct Recognizers {
     /// Tap recognizer — added to the arena FIRST so it is the front member that
     /// wins an ambiguous quick tap on sweep.
-    tap: Arc<TapGestureRecognizer>,
+    tap: Rc<TapGestureRecognizer>,
     /// Long-press recognizer — wins when its hold deadline fires (binding-polled).
-    long_press: Arc<LongPressGestureRecognizer>,
+    long_press: Rc<LongPressGestureRecognizer>,
     /// Double-tap recognizer — completes purely from the event stream; its
     /// give-up timer is binding-polled.
-    double_tap: Arc<DoubleTapGestureRecognizer>,
+    double_tap: Rc<DoubleTapGestureRecognizer>,
     /// Pan/drag recognizer (free axis) — wins by attrition when a move past the
     /// slop makes the tap reject itself.
-    drag: Arc<DragGestureRecognizer>,
+    drag: Rc<DragGestureRecognizer>,
     /// Horizontal-drag recognizer (axis-constrained) — mutually exclusive with
     /// `drag` on one detector, see [`GestureDetector`]'s conflict doc.
-    horizontal_drag: Arc<DragGestureRecognizer>,
+    horizontal_drag: Rc<DragGestureRecognizer>,
+    scale: Rc<ScaleGestureRecognizer>,
 }
 
 /// Persistent gesture state: the recognizers + their shared arena survive
-/// rebuilds (the pointer stream is stateful), and are disposed on unmount.
+/// rebuilds (the pointer stream is stateful), and are cancelled on unmount.
 ///
 /// `create_state` allocates only the live callback slots; the recognizers are
-/// built in `init_state` (which has the `BuildContext` needed to read the
-/// ambient arena) and read — never rebuilt — by `build`.
+/// built in `init_state` against the ambient arena. Policy changes replace only
+/// the affected owner and update its weak attachment before cancellation.
+struct RecognizerConfiguration {
+    arena: flui_interaction::GestureArena,
+    settings: flui_interaction::GestureSettings,
+    writer: WriterSource,
+}
+
+// The mounted Listener retains this stable weak attachment while a view
+// policy replaces its recognizer. Never hold the target borrow across dispatch.
+struct RecognizerAttachment<R> {
+    target: RefCell<Weak<R>>,
+}
+impl<R> Default for RecognizerAttachment<R> {
+    fn default() -> Self {
+        Self {
+            target: RefCell::new(Weak::new()),
+        }
+    }
+}
+impl<R: GestureRecognizer> flui_interaction::GestureArenaMember for RecognizerAttachment<R> {
+    // Attachments never join an arena; their targets own exact contact members.
+    fn accept_gesture(&self, _: flui_interaction::PointerId) {}
+    fn reject_gesture(&self, _: flui_interaction::PointerId) {}
+}
+impl<R: GestureRecognizer> GestureRecognizer for RecognizerAttachment<R> {
+    fn add_pointer(&self, dispatch: flui_interaction::PointerDispatch<'_>) {
+        let target = self.target.borrow().upgrade();
+        if let Some(target) = target {
+            target.add_pointer(dispatch);
+        }
+    }
+    fn handle_event(&self, dispatch: flui_interaction::PointerDispatch<'_>) {
+        let target = self.target.borrow().upgrade();
+        if let Some(target) = target {
+            target.handle_event(dispatch);
+        }
+    }
+    fn cancel(&self) -> flui_interaction::CancelOutcome {
+        let target = self.target.borrow().upgrade();
+        target.map_or(flui_interaction::CancelOutcome::Idle, |target| {
+            target.cancel()
+        })
+    }
+}
+
+/// Persistent gesture state owns recognizers and weak listener attachments.
+/// Policy replacement commits new targets before cancelling outgoing drags.
 pub struct GestureDetectorState {
+    drag_pointer_strategy: DragPointerStrategy,
+    exclusive_drags: bool,
+    recognizer_configuration: Option<RecognizerConfiguration>,
+    drag_attachment: Rc<RecognizerAttachment<DragGestureRecognizer>>,
+    horizontal_drag_attachment: Rc<RecognizerAttachment<DragGestureRecognizer>>,
+    scale_attachment: Rc<RecognizerAttachment<ScaleGestureRecognizer>>,
     /// Shared admission authority for captured pointer and semantics delivery.
     mounted: Rc<Cell<bool>>,
     /// The live `on_tap`, refreshed each `build`. The recognizer reads THIS slot
@@ -502,6 +811,9 @@ pub struct GestureDetectorState {
     pan_slot: Rc<RefCell<PanCallbacks>>,
     /// The live horizontal-drag callbacks, refreshed each `build`.
     horizontal_drag_slot: Rc<RefCell<HorizontalDragCallbacks>>,
+    scale_slot: Rc<RefCell<ScaleCallbacks>>,
+    scale_start_mode: ScaleStartMode,
+    native_scale_route: Rc<RefCell<NativeScaleRoute>>,
     /// The recognizers + arena, built once in `init_state`. `None` only in the
     /// window between `create_state` and the first `init_state` — never observed
     /// by `build`, which always runs after `init_state`.
@@ -597,6 +909,12 @@ impl StatefulView for GestureDetector {
         // Allocate the live callback slots only — recognizers are built in
         // `init_state`, which has the context needed to read the ambient arena.
         GestureDetectorState {
+            drag_pointer_strategy: self.drag_pointer_strategy,
+            exclusive_drags: self.exclusive_drags,
+            recognizer_configuration: None,
+            drag_attachment: Rc::new(RecognizerAttachment::default()),
+            horizontal_drag_attachment: Rc::new(RecognizerAttachment::default()),
+            scale_attachment: Rc::new(RecognizerAttachment::default()),
             mounted: Rc::new(Cell::new(true)),
             tap_slot: Rc::new(RefCell::new(self.on_tap.clone())),
             secondary_tap_slot: Rc::new(RefCell::new(self.on_secondary_tap.clone())),
@@ -615,6 +933,15 @@ impl StatefulView for GestureDetector {
                 end: self.on_horizontal_drag_end.clone(),
                 cancel: self.on_horizontal_drag_cancel.clone(),
             })),
+            scale_slot: Rc::new(RefCell::new(ScaleCallbacks {
+                start: self.on_scale_start.clone(),
+                update: self.on_scale_update.clone(),
+                end: self.on_scale_end.clone(),
+                cancel: self.on_scale_cancel.clone(),
+                native_admission: self.native_scale_admission.clone(),
+            })),
+            scale_start_mode: self.scale_start_mode,
+            native_scale_route: Rc::new(RefCell::new(NativeScaleRoute::default())),
             recognizers: None,
             semantics_requests: Arc::new(SemanticsRequests::default()),
             rebuild: None,
@@ -698,6 +1025,60 @@ impl GestureDetectorState {
 }
 
 impl ViewState<GestureDetector> for GestureDetectorState {
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
+        self.recognizer_configuration = Some(RecognizerConfiguration {
+            arena: GestureArenaScope::of(ctx),
+            settings: GestureArenaScope::settings_of(ctx),
+            writer: ctx.writer_source(),
+        });
+    }
+
+    fn did_update_view(&mut self, old_view: &GestureDetector, new_view: &GestureDetector) {
+        let replace_drag = old_view.drag_pointer_strategy != new_view.drag_pointer_strategy
+            || old_view.exclusive_drags != new_view.exclusive_drags;
+        let replace_scale = old_view.scale_start_mode != new_view.scale_start_mode;
+        if !replace_drag && !replace_scale {
+            return;
+        }
+        let incoming_drag = replace_drag.then(|| {
+            self.make_drag_recognizers(new_view.drag_pointer_strategy, new_view.exclusive_drags)
+        });
+        let incoming_scale =
+            replace_scale.then(|| self.make_scale_recognizer(new_view.scale_start_mode));
+        let Some(recognizers) = self.recognizers.as_mut() else {
+            return;
+        };
+        // Both new owners and the already mounted Listener's weak targets
+        // become visible before retiring user-controlled outgoing callbacks.
+        let outgoing_drag = incoming_drag.map(|(drag, horizontal)| {
+            self.drag_pointer_strategy = new_view.drag_pointer_strategy;
+            self.exclusive_drags = new_view.exclusive_drags;
+            let old_drag = std::mem::replace(&mut recognizers.drag, drag);
+            let old_horizontal = std::mem::replace(&mut recognizers.horizontal_drag, horizontal);
+            *self.drag_attachment.target.borrow_mut() = Rc::downgrade(&recognizers.drag);
+            *self.horizontal_drag_attachment.target.borrow_mut() =
+                Rc::downgrade(&recognizers.horizontal_drag);
+            (old_drag, old_horizontal)
+        });
+        let outgoing_scale = incoming_scale.map(|scale| {
+            self.scale_start_mode = new_view.scale_start_mode;
+            let old = std::mem::replace(&mut recognizers.scale, scale);
+            *self.scale_attachment.target.borrow_mut() = Rc::downgrade(&recognizers.scale);
+            *self.native_scale_route.borrow_mut() = NativeScaleRoute::default();
+            old
+        });
+        cancel_all(
+            outgoing_drag
+                .iter()
+                .flat_map(|(drag, horizontal)| [&**drag as &dyn GestureRecognizer, &**horizontal])
+                .chain(
+                    outgoing_scale
+                        .iter()
+                        .map(|scale| &**scale as &dyn GestureRecognizer),
+                ),
+        );
+    }
+
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         let writer = ctx.writer_source();
         self.semantics_delivery = Some(Rc::new(SemanticsDeliveryTarget {
@@ -707,6 +1088,20 @@ impl ViewState<GestureDetector> for GestureDetectorState {
             mounted: Rc::clone(&self.mounted),
         }));
         let arena = GestureArenaScope::of(ctx);
+        let settings = GestureArenaScope::settings_of(ctx);
+        // A detector in a caller-provided branch inherits that enclosing
+        // relationship. Its existing double-tap hold still defers the tap;
+        // constructing another nested relation is explicitly unsupported.
+        let (double_tap_arena, tap_arena) =
+            match arena.compose(GestureCompetition::RequireFirstFailure) {
+                Ok(branches) => branches.into_branches(),
+                Err(_) => (arena.clone(), arena.clone()),
+            };
+        self.recognizer_configuration = Some(RecognizerConfiguration {
+            arena: arena.clone(),
+            settings: settings.clone(),
+            writer: writer.clone(),
+        });
         self.rebuild = Some(ctx.rebuild_handle());
         self.local_post_frame = ctx.local_post_frame_handle();
 
@@ -719,123 +1114,66 @@ impl ViewState<GestureDetector> for GestureDetectorState {
             let secondary_slot = Rc::clone(&self.secondary_tap_slot);
             let primary_writer = writer.clone();
             let secondary_writer = writer.clone();
-            TapGestureRecognizer::new(arena.clone())
-                .with_on_tap(move |_details| {
+            TapGestureRecognizer::builder(tap_arena)
+                .settings(settings.clone())
+                .on_tap(move |_details| {
                     let handler = primary_slot.borrow().clone();
                     if let Some(handler) = handler {
                         primary_writer.write(|cx| handler(cx));
                     }
                 })
-                .with_on_secondary_tap(move |_details| {
+                .on_secondary_tap(move |_details| {
                     let handler = secondary_slot.borrow().clone();
                     if let Some(handler) = handler {
                         secondary_writer.write(|cx| handler(cx));
                     }
                 })
+                .build()
         };
 
         let long_press = {
             let slot = Rc::clone(&self.long_press_slot);
             let writer = writer.clone();
-            LongPressGestureRecognizer::new(arena.clone()).with_on_long_press(move || {
-                let handler = slot.borrow().clone();
-                if let Some(handler) = handler {
-                    writer.write(|cx| handler(cx));
-                }
-            })
+            LongPressGestureRecognizer::builder(arena)
+                .settings(settings.clone())
+                .on_long_press(move || {
+                    let handler = slot.borrow().clone();
+                    if let Some(handler) = handler {
+                        writer.write(|cx| handler(cx));
+                    }
+                })
+                .build()
         };
 
         let double_tap = {
             let slot = Rc::clone(&self.double_tap_slot);
             let down_slot = Rc::clone(&self.double_tap_down_slot);
             let tap_writer = writer.clone();
-            let down_writer = writer.clone();
-            DoubleTapGestureRecognizer::new(arena.clone())
-                .with_on_double_tap(move |_details| {
+            let down_writer = writer;
+            DoubleTapGestureRecognizer::builder(double_tap_arena)
+                .settings(settings)
+                .on_double_tap(move |_details| {
                     let handler = slot.borrow().clone();
                     if let Some(handler) = handler {
                         tap_writer.write(|cx| handler(cx));
                     }
                 })
-                .with_on_double_tap_down(move |details| {
+                .on_double_tap_down(move |details| {
                     let handler = down_slot.borrow().clone();
                     if let Some(handler) = handler {
                         down_writer.write(|cx| handler(cx, details));
                     }
                 })
+                .build()
         };
 
-        let drag = {
-            let start_slot = Rc::clone(&self.pan_slot);
-            let update_slot = Rc::clone(&self.pan_slot);
-            let end_slot = Rc::clone(&self.pan_slot);
-            let start_writer = writer.clone();
-            let update_writer = writer.clone();
-            let end_writer = writer.clone();
-            DragGestureRecognizer::new(arena.clone(), DragAxis::Free)
-                .with_on_start(move |details| {
-                    let callback = start_slot.borrow().start.clone();
-                    if let Some(callback) = callback {
-                        start_writer.write(|cx| callback(cx, details));
-                    }
-                })
-                .with_on_update(move |details| {
-                    let callback = update_slot.borrow().update.clone();
-                    if let Some(callback) = callback {
-                        update_writer.write(|cx| callback(cx, details));
-                    }
-                })
-                .with_on_end(move |details| {
-                    let callback = end_slot.borrow().end.clone();
-                    if let Some(callback) = callback {
-                        end_writer.write(|cx| callback(cx, details));
-                    }
-                })
-        };
+        let scale = self.make_scale_recognizer(self.scale_start_mode);
+        *self.scale_attachment.target.borrow_mut() = Rc::downgrade(&scale);
 
-        let horizontal_drag = {
-            let down_slot = Rc::clone(&self.horizontal_drag_slot);
-            let start_slot = Rc::clone(&self.horizontal_drag_slot);
-            let update_slot = Rc::clone(&self.horizontal_drag_slot);
-            let end_slot = Rc::clone(&self.horizontal_drag_slot);
-            let cancel_slot = Rc::clone(&self.horizontal_drag_slot);
-            let down_writer = writer.clone();
-            let start_writer = writer.clone();
-            let update_writer = writer.clone();
-            let end_writer = writer.clone();
-            let cancel_writer = writer;
-            DragGestureRecognizer::new(arena, DragAxis::Horizontal)
-                .with_on_down(move |details| {
-                    let callback = down_slot.borrow().down.clone();
-                    if let Some(callback) = callback {
-                        down_writer.write(|cx| callback(cx, details));
-                    }
-                })
-                .with_on_start(move |details| {
-                    let callback = start_slot.borrow().start.clone();
-                    if let Some(callback) = callback {
-                        start_writer.write(|cx| callback(cx, details));
-                    }
-                })
-                .with_on_update(move |details| {
-                    let callback = update_slot.borrow().update.clone();
-                    if let Some(callback) = callback {
-                        update_writer.write(|cx| callback(cx, details));
-                    }
-                })
-                .with_on_end(move |details| {
-                    let callback = end_slot.borrow().end.clone();
-                    if let Some(callback) = callback {
-                        end_writer.write(|cx| callback(cx, details));
-                    }
-                })
-                .with_on_cancel(move || {
-                    let callback = cancel_slot.borrow().cancel.clone();
-                    if let Some(callback) = callback {
-                        cancel_writer.write(|cx| callback(cx));
-                    }
-                })
-        };
+        let (drag, horizontal_drag) =
+            self.make_drag_recognizers(self.drag_pointer_strategy, self.exclusive_drags);
+        *self.drag_attachment.target.borrow_mut() = Rc::downgrade(&drag);
+        *self.horizontal_drag_attachment.target.borrow_mut() = Rc::downgrade(&horizontal_drag);
 
         self.recognizers = Some(Recognizers {
             tap,
@@ -843,6 +1181,7 @@ impl ViewState<GestureDetector> for GestureDetectorState {
             double_tap,
             drag,
             horizontal_drag,
+            scale,
         });
     }
 
@@ -878,6 +1217,14 @@ impl ViewState<GestureDetector> for GestureDetectorState {
             slot.end.clone_from(&view.on_horizontal_drag_end);
             slot.cancel.clone_from(&view.on_horizontal_drag_cancel);
         }
+        let outgoing_scale_callbacks = self.scale_slot.replace(ScaleCallbacks {
+            start: view.on_scale_start.clone(),
+            update: view.on_scale_update.clone(),
+            end: view.on_scale_end.clone(),
+            cancel: view.on_scale_cancel.clone(),
+            native_admission: view.native_scale_admission.clone(),
+        });
+        drop(outgoing_scale_callbacks);
 
         self.drain_semantics_requests();
 
@@ -886,7 +1233,7 @@ impl ViewState<GestureDetector> for GestureDetectorState {
         let recognizers = self
             .recognizers
             .as_ref()
-            .expect("init_state builds the recognizers before the first build");
+            .expect("BUG: init_state builds the recognizers before the first build");
 
         let listener = self.make_listener(recognizers).behavior(view.behavior);
 
@@ -905,12 +1252,15 @@ impl ViewState<GestureDetector> for GestureDetectorState {
         // event. Revoke this group's admission before recognizer retirement can
         // invoke cancellation callbacks or reenter pointer dispatch.
         self.mounted.set(false);
-        if let Some(recognizers) = self.recognizers.as_ref() {
-            recognizers.tap.dispose();
-            recognizers.long_press.dispose();
-            recognizers.double_tap.dispose();
-            recognizers.drag.dispose();
-            recognizers.horizontal_drag.dispose();
+        if let Some(recognizers) = self.recognizers.take() {
+            cancel_all([
+                &*recognizers.tap as &dyn GestureRecognizer,
+                &*recognizers.long_press,
+                &*recognizers.double_tap,
+                &*recognizers.drag,
+                &*recognizers.horizontal_drag,
+                &*recognizers.scale,
+            ]);
         }
     }
 }
@@ -927,7 +1277,7 @@ fn assert_no_pan_horizontal_drag_conflict(view: &GestureDetector) {
         || view.on_horizontal_drag_update.is_some()
         || view.on_horizontal_drag_end.is_some();
     debug_assert!(
-        !(have_pan && have_horizontal_drag),
+        !(have_pan && have_horizontal_drag) || view.exclusive_drags,
         "GestureDetector: on_pan_* and on_horizontal_drag_* are both configured on one \
          detector. FLUI's pan recognizer is DragAxis::Free — it already spans the horizontal \
          axis — so it competes directly with the horizontal recognizer for the same \
@@ -938,6 +1288,148 @@ fn assert_no_pan_horizontal_drag_conflict(view: &GestureDetector) {
 }
 
 impl GestureDetectorState {
+    fn make_scale_recognizer(&self, mode: ScaleStartMode) -> Rc<ScaleGestureRecognizer> {
+        let configuration = self
+            .recognizer_configuration
+            .as_ref()
+            .expect("BUG: recognizer configuration acquired during init_state");
+        let start_slot = Rc::clone(&self.scale_slot);
+        let update_slot = Rc::clone(&self.scale_slot);
+        let end_slot = Rc::clone(&self.scale_slot);
+        let cancel_slot = Rc::clone(&self.scale_slot);
+        let start_writer = configuration.writer.clone();
+        let update_writer = configuration.writer.clone();
+        let end_writer = configuration.writer.clone();
+        let cancel_writer = configuration.writer.clone();
+        ScaleGestureRecognizer::builder(configuration.arena.clone())
+            .settings(configuration.settings.clone())
+            .start_mode(mode)
+            .on_start(move |details| {
+                let callback = start_slot.borrow().start.clone();
+                if let Some(callback) = callback {
+                    start_writer.write(|cx| callback(cx, details));
+                }
+            })
+            .on_update(move |details| {
+                let callback = update_slot.borrow().update.clone();
+                if let Some(callback) = callback {
+                    update_writer.write(|cx| callback(cx, details));
+                }
+            })
+            .on_end(move |details| {
+                let callback = end_slot.borrow().end.clone();
+                if let Some(callback) = callback {
+                    end_writer.write(|cx| callback(cx, details));
+                }
+            })
+            .on_cancel(move || {
+                let callback = cancel_slot.borrow().cancel.clone();
+                if let Some(callback) = callback {
+                    cancel_writer.write(|cx| callback(cx));
+                }
+            })
+            .build()
+    }
+
+    fn make_drag_recognizers(
+        &self,
+        strategy: DragPointerStrategy,
+        exclusive: bool,
+    ) -> (Rc<DragGestureRecognizer>, Rc<DragGestureRecognizer>) {
+        let configuration = self
+            .recognizer_configuration
+            .as_ref()
+            .expect("BUG: drag configuration acquired during init_state");
+        let arena = configuration.arena.clone();
+        let (pan_arena, horizontal_arena) = if exclusive {
+            match arena.compose(GestureCompetition::Exclusive) {
+                Ok(branches) => branches.into_branches(),
+                Err(_) => (arena.clone(), arena),
+            }
+        } else {
+            (arena.clone(), arena)
+        };
+        let settings = configuration.settings.clone();
+        let writer = configuration.writer.clone();
+        let drag = {
+            let start_slot = Rc::clone(&self.pan_slot);
+            let update_slot = Rc::clone(&self.pan_slot);
+            let end_slot = Rc::clone(&self.pan_slot);
+            let start_writer = writer.clone();
+            let update_writer = writer.clone();
+            let end_writer = writer.clone();
+            DragGestureRecognizer::builder(pan_arena, DragAxis::Free)
+                .pointer_strategy(strategy)
+                .settings(settings.clone())
+                .on_start(move |details| {
+                    let callback = start_slot.borrow().start.clone();
+                    if let Some(callback) = callback {
+                        start_writer.write(|cx| callback(cx, details));
+                    }
+                })
+                .on_update(move |details| {
+                    let callback = update_slot.borrow().update.clone();
+                    if let Some(callback) = callback {
+                        update_writer.write(|cx| callback(cx, details));
+                    }
+                })
+                .on_end(move |details| {
+                    let callback = end_slot.borrow().end.clone();
+                    if let Some(callback) = callback {
+                        end_writer.write(|cx| callback(cx, details));
+                    }
+                })
+                .build()
+        };
+
+        let horizontal_drag = {
+            let down_slot = Rc::clone(&self.horizontal_drag_slot);
+            let start_slot = Rc::clone(&self.horizontal_drag_slot);
+            let update_slot = Rc::clone(&self.horizontal_drag_slot);
+            let end_slot = Rc::clone(&self.horizontal_drag_slot);
+            let cancel_slot = Rc::clone(&self.horizontal_drag_slot);
+            let down_writer = writer.clone();
+            let start_writer = writer.clone();
+            let update_writer = writer.clone();
+            let end_writer = writer.clone();
+            let cancel_writer = writer;
+            DragGestureRecognizer::builder(horizontal_arena, DragAxis::Horizontal)
+                .pointer_strategy(strategy)
+                .settings(settings)
+                .on_down(move |details| {
+                    let callback = down_slot.borrow().down.clone();
+                    if let Some(callback) = callback {
+                        down_writer.write(|cx| callback(cx, details));
+                    }
+                })
+                .on_start(move |details| {
+                    let callback = start_slot.borrow().start.clone();
+                    if let Some(callback) = callback {
+                        start_writer.write(|cx| callback(cx, details));
+                    }
+                })
+                .on_update(move |details| {
+                    let callback = update_slot.borrow().update.clone();
+                    if let Some(callback) = callback {
+                        update_writer.write(|cx| callback(cx, details));
+                    }
+                })
+                .on_end(move |details| {
+                    let callback = end_slot.borrow().end.clone();
+                    if let Some(callback) = callback {
+                        end_writer.write(|cx| callback(cx, details));
+                    }
+                })
+                .on_cancel(move || {
+                    let callback = cancel_slot.borrow().cancel.clone();
+                    if let Some(callback) = callback {
+                        cancel_writer.write(|cx| callback(cx));
+                    }
+                })
+                .build()
+        };
+        (drag, horizontal_drag)
+    }
     /// Build the [`Listener`] that drives the recognizers from the pointer
     /// stream.
     ///
@@ -947,13 +1439,8 @@ impl GestureDetectorState {
     /// with a changed configuration is honored, and a double-tap-only detector
     /// does not let its tap recognizer steal the first up.
     fn make_listener(&self, recognizers: &Recognizers) -> Listener {
-        let group = RecognizerGroup {
+        let gates = Rc::new(RecognizerGates {
             mounted: Rc::clone(&self.mounted),
-            tap: Arc::clone(&recognizers.tap),
-            long_press: Arc::clone(&recognizers.long_press),
-            double_tap: Arc::clone(&recognizers.double_tap),
-            drag: Arc::clone(&recognizers.drag),
-            horizontal_drag: Arc::clone(&recognizers.horizontal_drag),
             tap_slot: Rc::clone(&self.tap_slot),
             secondary_tap_slot: Rc::clone(&self.secondary_tap_slot),
             long_press_slot: Rc::clone(&self.long_press_slot),
@@ -961,12 +1448,8 @@ impl GestureDetectorState {
             double_tap_down_slot: Rc::clone(&self.double_tap_down_slot),
             pan_slot: Rc::clone(&self.pan_slot),
             horizontal_drag_slot: Rc::clone(&self.horizontal_drag_slot),
-        };
-
-        let down = group.clone();
-        let on_move = group.clone();
-        let on_up = group.clone();
-        let on_cancel = group;
+            scale_slot: Rc::clone(&self.scale_slot),
+        });
 
         // The whole `PointerDispatch` goes through, both spaces. Dispatch
         // rewrites an event into the receiving node's coordinates before a
@@ -974,24 +1457,57 @@ impl GestureDetectorState {
         // this point except in the pair's global half — a recogniser handed
         // only the local event has no way to report a global position and can
         // only restate the local one under that name (issue #908).
+
         Listener::new()
-            .on_pointer_down(move |_cx, dispatch| down.handle_down(dispatch))
-            .on_pointer_move(move |_cx, dispatch| on_move.forward(dispatch))
-            .on_pointer_up(move |_cx, dispatch| on_up.forward(dispatch))
-            .on_pointer_cancel(move |_cx, dispatch| on_cancel.forward(dispatch))
+            .contact_recognizers()
+            .recognizer_when(&recognizers.tap, {
+                let gates = Rc::clone(&gates);
+                move |_| gates.tap_active()
+            })
+            .recognizer_when(&recognizers.long_press, {
+                let gates = Rc::clone(&gates);
+                move |_| gates.long_press_active()
+            })
+            .recognizer_when(&recognizers.double_tap, {
+                let gates = Rc::clone(&gates);
+                move |_| gates.double_tap_active()
+            })
+            .recognizer_when(&self.drag_attachment, {
+                let gates = Rc::clone(&gates);
+                move |_| gates.drag_active()
+            })
+            .recognizer_when(&self.horizontal_drag_attachment, {
+                let gates = Rc::clone(&gates);
+                move |_| gates.horizontal_drag_active()
+            })
+            .recognizer_when(&self.scale_attachment, {
+                let gates = Rc::clone(&gates);
+                move |_| gates.scale_active()
+            })
+            .on_pointer_pan_zoom_claim({
+                let attachment = Rc::downgrade(&self.scale_attachment);
+                let route = Rc::clone(&self.native_scale_route);
+                move |dispatch| {
+                    if !gates.mounted.get() {
+                        return EventPropagation::Continue;
+                    }
+                    let Some(attachment) = attachment.upgrade() else {
+                        return EventPropagation::Continue;
+                    };
+                    let recognizer = attachment.target.borrow().upgrade();
+                    let Some(recognizer) = recognizer else {
+                        return EventPropagation::Continue;
+                    };
+                    claim_native_scale(&recognizer, &gates, &route, dispatch)
+                }
+            })
     }
 }
 
-/// The recognizers + the live slots that gate their participation, captured by
-/// the [`Listener`] callbacks. One shared bundle, cloned once per callback.
-#[derive(Clone)]
-struct RecognizerGroup {
+/// Live admission predicates. The Listener holds these slots, while only the
+/// widget state owns the recognizers themselves.
+struct RecognizerGates {
     mounted: Rc<Cell<bool>>,
-    tap: Arc<TapGestureRecognizer>,
-    long_press: Arc<LongPressGestureRecognizer>,
-    double_tap: Arc<DoubleTapGestureRecognizer>,
-    drag: Arc<DragGestureRecognizer>,
-    horizontal_drag: Arc<DragGestureRecognizer>,
     tap_slot: Rc<RefCell<Option<GestureCallback>>>,
     secondary_tap_slot: Rc<RefCell<Option<GestureCallback>>>,
     long_press_slot: Rc<RefCell<Option<GestureCallback>>>,
@@ -999,9 +1515,13 @@ struct RecognizerGroup {
     double_tap_down_slot: Rc<RefCell<Option<DoubleTapDownHandler>>>,
     pan_slot: Rc<RefCell<PanCallbacks>>,
     horizontal_drag_slot: Rc<RefCell<HorizontalDragCallbacks>>,
+    scale_slot: Rc<RefCell<ScaleCallbacks>>,
 }
 
-impl RecognizerGroup {
+impl RecognizerGates {
+    fn scale_active(&self) -> bool {
+        self.mounted.get() && self.scale_slot.borrow().is_active()
+    }
     /// The tap recognizer participates iff a primary- OR secondary-tap callback
     /// is currently set.
     fn tap_active(&self) -> bool {
@@ -1044,75 +1564,6 @@ impl RecognizerGroup {
             || horizontal.update.is_some()
             || horizontal.end.is_some()
             || horizontal.cancel.is_some()
-    }
-
-    /// Register every participating recognizer for this contact (tap first so
-    /// it is the arena's front member). The binding closes the arena only after
-    /// Down has reached the entire hit-test path, so overlapping detectors can
-    /// all join before the single close.
-    fn handle_down(&self, dispatch: PointerDispatch<'_>) {
-        if !self.mounted.get() {
-            return;
-        }
-        // Each recognizer is admitted from the Down itself: it reads the
-        // device kind (slop tier) and the button from the event, and stays
-        // out of the arena for a button it does not answer — a right-click
-        // does not start a pan or a long press, and does not register a
-        // double tap.
-        if self.tap_active() {
-            self.tap.add_pointer_down(dispatch);
-        }
-        if self.long_press_active() {
-            self.long_press.add_pointer_down(dispatch);
-        }
-        if self.double_tap_active() {
-            self.double_tap.add_pointer_down(dispatch);
-        }
-        if self.drag_active() {
-            self.drag.add_pointer_down(dispatch);
-        }
-        if self.horizontal_drag_active() {
-            self.horizontal_drag.add_pointer_down(dispatch);
-        }
-    }
-
-    /// Forward a move / up / cancel event to every participating recognizer.
-    fn forward(&self, dispatch: PointerDispatch<'_>) {
-        if !self.mounted.get() {
-            return;
-        }
-        // Each active predicate rechecks admission: an earlier recognizer's
-        // callback may synchronously unmount and dispose this whole group.
-        if self.tap_active() {
-            self.tap.handle_event(dispatch);
-        }
-        if self.long_press_active() {
-            self.long_press.handle_event(dispatch);
-        }
-        // NOT gated on `double_tap_active()`, unlike the others: a
-        // rebuild can flip the slot to empty WHILE `double_tap` is
-        // already mid-gesture for a pointer it registered while still
-        // active (`EditableText::enabled` toggling false between a
-        // first tap's down and up, say). Gating this call the same way
-        // `handle_down`'s registration is gated would then never deliver
-        // that pointer's Up/Cancel, orphaning the recognizer in
-        // `FirstDown`/`SecondDown` forever — nothing else polls it out
-        // of a phase that isn't `WaitingForSecond` (`check_timeout`'s
-        // own guard). Safe to call unconditionally: `handle_event`
-        // no-ops on a pointer id it never registered via `add_pointer`
-        // (`self.state.primary_pointer()` won't match), and the
-        // CALLBACK itself still won't fire while disabled — that is
-        // gated separately, by the live slot the callback closure reads
-        // at call time, not by this participation check.
-        if self.mounted.get() {
-            self.double_tap.handle_event(dispatch);
-        }
-        if self.drag_active() {
-            self.drag.handle_event(dispatch);
-        }
-        if self.horizontal_drag_active() {
-            self.horizontal_drag.handle_event(dispatch);
-        }
     }
 }
 

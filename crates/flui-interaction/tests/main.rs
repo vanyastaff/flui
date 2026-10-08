@@ -23,11 +23,19 @@ mod focus_retention;
 #[path = "text_store_host.rs"]
 mod text_store_host;
 
+mod button_delivery;
 #[path = "gesture_lifecycle.rs"]
 mod gesture_lifecycle;
 #[path = "mouse_tracking.rs"]
 mod mouse_tracking;
 #[path = "multi_pointer_recognizers.rs"]
 mod multi_pointer_recognizers;
+mod pointer_identity;
+#[path = "pointer_source.rs"]
+mod pointer_source;
+#[path = "recognizer_api.rs"]
+mod recognizer_api;
+#[path = "recognizer_lifecycle.rs"]
+mod recognizer_lifecycle;
 #[path = "velocity_and_resampling.rs"]
 mod velocity_and_resampling;

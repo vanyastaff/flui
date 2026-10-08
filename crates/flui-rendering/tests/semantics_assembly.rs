@@ -223,8 +223,13 @@ impl RenderBox for SemanticsContainer {
         self.excludes_subtree
     }
 
-    fn describe_semantics_clip(&self, _child_slot: usize, _size: Size) -> Option<Rect<f64>> {
+    fn describe_semantics_clip(
+        &self,
+        _child_slot: usize,
+        _size: Size,
+    ) -> Option<flui_rendering::traits::SemanticsClip> {
         self.semantics_clip
+            .map(flui_rendering::traits::SemanticsClip::Bounds)
     }
 
     fn describe_approximate_paint_clip(

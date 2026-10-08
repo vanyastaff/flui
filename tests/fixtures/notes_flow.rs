@@ -20,7 +20,8 @@ mod notes_flow {
     };
 
     use flui::foundation::RenderId;
-    use flui::interaction::{Key, KeyEvent, KeyState, Modifiers, NamedKey};
+    use flui::interaction::{Code, Key, KeyEvent, KeyEventResult, KeyState, Modifiers, NamedKey};
+    use flui::platform::EventTime;
     use flui::testing::a11y::{A11yTree, Action, ActionRequest, Role, TreeId};
     use flui::testing::widgets::{LaidOut, lay_out, offset, settle_lazy, tight};
 
@@ -288,15 +289,13 @@ mod notes_flow {
         laid
     }
 
-    fn dispatch(laid: &LaidOut, key: Key, modifiers: Modifiers) {
+    fn dispatch(laid: &LaidOut, key: Key, code: Code, modifiers: Modifiers) {
         let description = format!("{key:?} with {modifiers:?}");
-        assert!(
-            laid.focus_manager().dispatch_key_event(&KeyEvent {
-                state: KeyState::Down,
-                key,
-                modifiers,
-                ..KeyEvent::default()
-            }),
+        let event = KeyEvent::new(KeyState::Down, key, code, EventTime::from_nanos(0))
+            .with_modifiers(modifiers);
+        assert_eq!(
+            laid.focus_manager().dispatch_key_event(&event),
+            KeyEventResult::Handled,
             "focused input must consume {description}"
         );
     }
@@ -335,10 +334,26 @@ mod notes_flow {
         } else {
             Modifiers::CONTROL
         };
-        dispatch(laid, Key::Character("a".to_owned()), command);
-        dispatch(laid, Key::Named(NamedKey::Backspace), Modifiers::empty());
+        dispatch(laid, Key::character("a"), Code::KeyA, command);
+        dispatch(
+            laid,
+            Key::Named(NamedKey::Backspace),
+            Code::Backspace,
+            Modifiers::default(),
+        );
         for ch in text.chars() {
-            dispatch(laid, Key::Character(ch.to_string()), Modifiers::empty());
+            let code = if ch == ' ' {
+                Code::Space
+            } else {
+                Code::from_w3c(&format!("Key{}", ch.to_ascii_uppercase()))
+                    .expect("notes fixture text uses ASCII letter keys")
+            };
+            dispatch(
+                laid,
+                Key::character(ch.to_string()),
+                code,
+                Modifiers::default(),
+            );
         }
         frames(laid);
         assert_eq!(
@@ -368,10 +383,30 @@ mod notes_flow {
         replace_by_keyboard(&mut laid, "Community note");
         // The field's successor must be the usable Save action. Go backwards
         // and forwards once to prove traversal, then activate through Enter.
-        dispatch(&laid, Key::Named(NamedKey::Tab), Modifiers::empty());
-        dispatch(&laid, Key::Named(NamedKey::Tab), Modifiers::SHIFT);
-        dispatch(&laid, Key::Named(NamedKey::Tab), Modifiers::empty());
-        dispatch(&laid, Key::Named(NamedKey::Enter), Modifiers::empty());
+        dispatch(
+            &laid,
+            Key::Named(NamedKey::Tab),
+            Code::Tab,
+            Modifiers::default(),
+        );
+        dispatch(
+            &laid,
+            Key::Named(NamedKey::Tab),
+            Code::Tab,
+            Modifiers::SHIFT,
+        );
+        dispatch(
+            &laid,
+            Key::Named(NamedKey::Tab),
+            Code::Tab,
+            Modifiers::default(),
+        );
+        dispatch(
+            &laid,
+            Key::Named(NamedKey::Enter),
+            Code::Enter,
+            Modifiers::default(),
+        );
         frames(&mut laid);
         rendered_text(&laid, "Saved note 0");
         assert!(active_text(&laid, "Enter a title").is_empty());

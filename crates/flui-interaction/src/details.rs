@@ -3,14 +3,12 @@
 //! Recognizer-independent gesture detail payloads: tap, long-press
 //! move-update/end, and force press. The drag, scale, and long-press
 //! down/start payloads are defined next to their recognizers in
-//! `flui-interaction` instead — they carry the W3C pointer vocabulary
-//! (`ui_events::pointer::PointerType`) and the recognizer clock
-//! (`Instant`), neither of which this dependency-free vocabulary crate
-//! knows about.
+//! `flui-interaction` instead. Device kind is the owned platform vocabulary
+//! (`PointerKind`); timestamps use the recognizer's clock.
 
 use flui_foundation::geometry::Offset;
 
-use crate::{PointerDeviceKind, Velocity};
+use crate::{PointerKind, Velocity};
 
 // ============================================================================
 // Tap Gesture Details
@@ -20,6 +18,7 @@ use crate::{PointerDeviceKind, Velocity};
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 /// Details for a tap-down event: the pointer has contacted the screen and
 /// might begin a tap.
+#[non_exhaustive]
 pub struct TapDownDetails {
     /// The global position where the tap occurred
     pub global_position: Offset<f64>,
@@ -28,7 +27,7 @@ pub struct TapDownDetails {
     pub local_position: Offset<f64>,
 
     /// The kind of device that triggered the tap
-    pub kind: PointerDeviceKind,
+    pub kind: PointerKind,
 }
 
 impl TapDownDetails {
@@ -38,13 +37,13 @@ impl TapDownDetails {
         Self {
             global_position,
             local_position,
-            kind: PointerDeviceKind::Touch,
+            kind: PointerKind::Touch,
         }
     }
 
     /// Builder method to set the device kind
     #[inline]
-    pub fn with_kind(mut self, kind: PointerDeviceKind) -> Self {
+    pub fn with_kind(mut self, kind: PointerKind) -> Self {
         self.kind = kind;
         self
     }
@@ -54,6 +53,7 @@ impl TapDownDetails {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 /// Details for a tap-up event: the pointer that triggered a tap has
 /// stopped contacting the screen.
+#[non_exhaustive]
 pub struct TapUpDetails {
     /// The global position where the tap ended
     pub global_position: Offset<f64>,
@@ -62,7 +62,7 @@ pub struct TapUpDetails {
     pub local_position: Offset<f64>,
 
     /// The kind of device that triggered the tap
-    pub kind: PointerDeviceKind,
+    pub kind: PointerKind,
 }
 
 impl TapUpDetails {
@@ -72,13 +72,13 @@ impl TapUpDetails {
         Self {
             global_position,
             local_position,
-            kind: PointerDeviceKind::Touch,
+            kind: PointerKind::Touch,
         }
     }
 
     /// Builder method to set the device kind
     #[inline]
-    pub fn with_kind(mut self, kind: PointerDeviceKind) -> Self {
+    pub fn with_kind(mut self, kind: PointerKind) -> Self {
         self.kind = kind;
         self
     }
@@ -92,6 +92,7 @@ impl TapUpDetails {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 /// Details for a long-press-move-update event: the pointer has moved
 /// while the long press is held, carrying offsets from the press origin.
+#[non_exhaustive]
 pub struct LongPressMoveUpdateDetails {
     /// The global position of the pointer
     pub global_position: Offset<f64>,
@@ -128,6 +129,7 @@ impl LongPressMoveUpdateDetails {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 /// Details for a long-press-end event: the pointer that held the long
 /// press has stopped contacting the screen.
+#[non_exhaustive]
 pub struct LongPressEndDetails {
     /// The global position where the long press ended
     pub global_position: Offset<f64>,
@@ -163,6 +165,7 @@ impl LongPressEndDetails {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 /// Details for a force-press event: the pointer's pressure on a
 /// pressure-sensitive screen, along with its position.
+#[non_exhaustive]
 pub struct ForcePressDetails {
     /// The global position of the pointer
     pub global_position: Offset<f64>,

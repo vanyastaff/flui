@@ -49,7 +49,7 @@ impl FocusGuard {
 
     /// Focus this node so key dispatch is routed to its handler.
     fn request_focus(&self) {
-        self.node.request_focus();
+        let _ = self.node.request_focus();
     }
 }
 
@@ -73,7 +73,7 @@ impl Drop for FocusGuard {
 /// wrong method were called.
 fn make_editable_text_handler(controller: TextEditingController) -> KeyEventHandler {
     Rc::new(move |event| {
-        if event.state != KeyState::Down {
+        if event.state() != KeyState::Down {
             return KeyEventResult::Ignored;
         }
         match &event.key {
@@ -105,7 +105,7 @@ fn make_editable_text_handler(controller: TextEditingController) -> KeyEventHand
                 controller.move_caret_end();
                 KeyEventResult::Handled
             }
-            Key::Named(_) => KeyEventResult::Ignored,
+            _ => KeyEventResult::Ignored,
         }
     })
 }
@@ -133,10 +133,10 @@ pub(crate) fn focused_character_key_inserts_into_controller() {
     guard.request_focus();
 
     let event = KeyEventBuilder::new(Code::KeyH)
-        .with_key(Key::Character("h".to_string()))
+        .with_key(Key::character("h"))
         .with_state(KeyState::Down)
         .build();
-    manager.dispatch_key_event(&event);
+    let _ = manager.dispatch_key_event(&event).is_handled();
 
     assert_eq!(
         controller.text(),
@@ -158,10 +158,10 @@ pub(crate) fn unfocused_field_does_not_receive_key_events() {
 
     // Dispatch a character key — with no node focused, the handler must not fire.
     let event = KeyEventBuilder::new(Code::KeyX)
-        .with_key(Key::Character("x".to_string()))
+        .with_key(Key::character("x"))
         .with_state(KeyState::Down)
         .build();
-    manager.dispatch_key_event(&event);
+    let _ = manager.dispatch_key_event(&event).is_handled();
 
     assert_eq!(
         controller.text(),

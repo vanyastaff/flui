@@ -10,7 +10,7 @@ use std::{
 use flui_foundation::geometry::Offset;
 #[cfg(not(target_os = "ios"))]
 use flui_interaction::HitTestResult;
-use flui_interaction::events::{PointerType, make_down_event};
+use flui_interaction::events::{PointerKind, make_down_event};
 use flui_platform::traits::{PlatformInput, PlatformWindow};
 
 use super::super::host::{
@@ -28,10 +28,10 @@ use crate::app::runtime::WindowPolicy;
 static_assertions::assert_impl_all!(PlatformToUi: Send);
 
 fn down_input(offset: f64) -> PlatformInput {
-    PlatformInput::Pointer(make_down_event(
-        Offset::new(offset, offset),
-        PointerType::Mouse,
-    ))
+    PlatformInput::Pointer(
+        make_down_event(Offset::new(offset, offset), PointerKind::Mouse)
+            .expect("finite mouse down position"),
+    )
 }
 
 fn test_window() -> std::sync::Arc<dyn flui_platform::traits::PlatformWindow> {
@@ -252,9 +252,9 @@ fn system_key_default_follows_the_realms_decision() {
         dispatcher,
         RealmTask::Frame(Box::new(move |realm| {
             realm.focus_manager().add_global_key_handler(Rc::new(
-                move |_: &flui_interaction::events::KeyboardEvent| {
+                move |_: &flui_interaction::events::KeyEvent| {
                     delivered_in_handler.set(delivered_in_handler.get() + 1);
-                    false
+                    flui_interaction::KeyEventResult::Ignored
                 },
             ));
             let native = turn_window
@@ -283,7 +283,13 @@ fn system_key_default_follows_the_realms_decision() {
         dispatcher,
         RealmTask::Frame(Box::new(|realm| {
             realm.focus_manager().add_global_key_handler(Rc::new(
-                |event: &flui_interaction::events::KeyboardEvent| event.code == Code::F4,
+                |event: &flui_interaction::events::KeyEvent| {
+                    if event.code == Code::F4 {
+                        flui_interaction::KeyEventResult::Handled
+                    } else {
+                        flui_interaction::KeyEventResult::Ignored
+                    }
+                },
             ));
         })),
     )

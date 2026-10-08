@@ -60,6 +60,49 @@ the hidden token cannot be imported or forged with `Default` outside this crate.
 owner-local access and `SharedPlatform` thread bounds. It also checks each
 retired tracker, embedder and timestamp name independently (ADR-0082 §5).
 
+### Win32 mouse samples preserve their queued generation times
+
+Each window rebases `GetMessageTime` onto the shared process epoch using
+`GetTickCount64`. The 32-bit message tick is extended by a wrapping subtraction
+from current uptime, so an uptime rollover cannot compress a queued gesture.
+Messages older than an entire 32-bit wrap cannot be distinguished by Win32's
+timestamp. Sent messages inheriting an older retrieved timestamp cannot move
+the window's clock backwards. The sample timestamp is committed before hover
+callbacks or native capture changes can dispatch another message.
+
+`queued_mouse_samples_keep_native_message_time` drives the public native window
+with delayed queued mouse samples. The private arithmetic row
+`message_clock_preserves_wrapping_samples_and_window_epochs` covers rollover,
+older sent timestamps, epoch rebasing and saturation: there is no public API
+that advances the OS uptime by 49.7 days. These checks do not establish physical
+mouse delivery, pen/touch translation, or other backend clocks.
+
+### Browser capture ends each admitted contact once
+
+The canvas requests native pointer capture before delivering Down. Its
+owner-local admission set is updated before release or input callbacks:
+Up and browser Cancel consume admission, and a capture loss cancels only a
+still-admitted contact. The loss following a normal terminal event stays inert,
+and a later contact can reuse the pointer identity. Native capture refusal is
+reported through diagnostics without discarding the original Down. Synthetic
+DOM events do not create native capture admission.
+
+The DOM's floating-point `offsetX`/`offsetY` getters supply logical pointer and
+wheel positions. Local wasm-bindgen getters preserve their CSSOM View double
+precision where web-sys exposes the historical integer signatures. Some
+browsers round wheel offsets themselves. For a canvas whose whole ancestry
+has no CSS coordinate transform or zoom, viewport coordinates minus its border
+box origin and border widths recover the padding-edge position, including
+fractional origins. A transformed canvas retains the browser's local offsets;
+its wheel precision remains browser-limited rather than applying an incorrect
+bounding-rectangle inversion.
+
+`examples/browser_input_probe` checks browser cancellation, duplicate capture
+loss and recovery, fractional pointer/wheel positions, and a trusted drag whose
+release occurs outside the canvas. Its README describes execution. These are
+browser smoke contracts, not automatically executed CI tests; a wasm compile
+does not prove that they pass. Browser touch-action policy remains page-owned.
+
 ### Native Win32 delivers admitted idle deadlines through live window paints
 
 The owner loop keeps admitted deadline delivery separate from the next hook
@@ -324,7 +367,7 @@ embedder code that closed the window. The native rows in `tests/contract.rs`
 ### The winit backend delegates the whole keyboard event to `ui-events-winit`; Win32/AppKit keep hand-written tables
 
 **Rule:** every native keyboard event this crate receives must be normalized
-into the canonical `ui_events`/`keyboard-types` vocabulary (`Code`, `Key`,
+into FLUI's owned keyboard vocabulary (`Code`, `Key`,
 `Location`) at the platform boundary — see the module doc of `crates/flui-platform-api/src/input.rs`.
 `Code::Unidentified` must mean the backend genuinely could not identify the
 physical key, never that a conversion table was incomplete (issue #1092).
@@ -359,6 +402,16 @@ This asymmetry between backends is deliberate, not inconsistent: the rule is
 `cross_backend_physical_key_agreement` test cross-checks a curated set of
 physical keys against both hand-written tables so the two authored
 translations and the delegated one cannot silently drift apart.
+
+The Winit and Android ecosystem mappings remain boundary dependencies:
+`shared::keyboard_adapter` converts their results to owned `KeyEvent` values.
+Win32 and AppKit tables return owned enums directly, and Web parses the DOM's
+W3C spellings against the generated owned tables. No pointer event uses the
+keyboard adapter. `keyboard_adapter_contract` preserves all named/physical
+key spellings, legacy Meta aliases and every event field. This conversion
+test lives beside the private adapter because Winit's complete `KeyEvent`
+contains private platform state and cannot be constructed by an integration
+test; native backend probes cover actual input delivery separately.
 
 **Alternatives considered:**
 

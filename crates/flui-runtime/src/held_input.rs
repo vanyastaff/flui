@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 
 use flui_foundation::PresentationId;
-use flui_interaction::{PointerEvent, PointerId};
+use flui_interaction::{PointerEvent, PointerEventExt, PointerId};
 
 /// Most pointer events one presentation retains while it has no committed
 /// tree, counting events handed out for an in-flight replay.
@@ -101,26 +101,32 @@ impl HeldPointerQueue {
     /// Admit one event whose pointer may already have a live gesture route.
     pub fn append_with_active_contact(
         &mut self,
-        event: PointerEvent,
+        mut event: PointerEvent,
         has_active_contact_sequence: bool,
     ) {
-        let pointer_id = flui_interaction::events::extract_pointer_id(&event);
+        let pointer_id = flui_interaction::PointerEventExt::pointer_id(&event);
         let motion_class = Self::motion_class(&event);
-        let has_queued_open_epoch = self.has_open_epoch(pointer_id);
+        let has_queued_open_epoch = pointer_id.is_some_and(|id| self.has_open_epoch(id));
         let has_active_route_open = has_active_contact_sequence
-            && !self.has_active_route_terminal_after_latest_down(pointer_id);
+            && pointer_id.is_some_and(|id| !self.has_active_route_terminal_after_latest_down(id));
         let has_open_epoch = has_queued_open_epoch || has_active_route_open;
 
         if matches!(motion_class, Some(MotionClass::Contact)) && !has_open_epoch {
             self.counters.dropped_events = self.counters.dropped_events.saturating_add(1);
             return;
         }
-        if matches!(event, PointerEvent::Up(_) | PointerEvent::Cancel(_)) && !has_open_epoch {
+        if matches!(
+            event,
+            PointerEvent::ButtonChange(_) | PointerEvent::Up(_) | PointerEvent::Cancel(_)
+        ) && !has_open_epoch
+        {
             self.counters.dropped_events = self.counters.dropped_events.saturating_add(1);
             return;
         }
 
-        if matches!(event, PointerEvent::Down(_)) {
+        if let Some(pointer_id) = pointer_id
+            && matches!(event, PointerEvent::Down(_))
+        {
             let replay_supersession =
                 if self.replay_in_flight && self.replay_tail_open_pointers.contains(&pointer_id) {
                     Some(ReplaySupersession::FinalUndispatched(pointer_id))
@@ -144,8 +150,12 @@ impl HeldPointerQueue {
             }
         }
 
-        if let Some(class) = motion_class
+        if let Some(pointer_id) = pointer_id
+            && let Some(class) = motion_class
             && let Some(index) = self.coalescible_motion_index(pointer_id, class)
+            && let PointerEvent::Move(newer) = &mut event
+            && let PointerEvent::Move(older) = &self.events[index]
+            && newer.try_coalesce(older).is_ok()
         {
             let _ = self.events.remove(index);
             self.events.push_back(event);
@@ -155,7 +165,9 @@ impl HeldPointerQueue {
 
         let is_terminal = matches!(event, PointerEvent::Up(_) | PointerEvent::Cancel(_));
         let needs_active_terminal_room = is_terminal && has_active_route_open;
-        let has_room = if needs_active_terminal_room {
+        let has_room = if let Some(pointer_id) = pointer_id
+            && needs_active_terminal_room
+        {
             self.make_room_for_active_route_terminal(pointer_id)
         } else if is_terminal {
             true
@@ -173,7 +185,10 @@ impl HeldPointerQueue {
         }
 
         self.events.push_back(event);
-        if is_terminal && has_active_route_open {
+        if let Some(pointer_id) = pointer_id
+            && is_terminal
+            && has_active_route_open
+        {
             self.record_active_route_terminal(pointer_id);
         }
         while self.total_len() > HELD_POINTER_CAPACITY {
@@ -223,7 +238,7 @@ impl HeldPointerQueue {
             .events
             .iter()
             .filter(|event| matches!(event, PointerEvent::Down(_)))
-            .map(flui_interaction::events::extract_pointer_id);
+            .filter_map(flui_interaction::PointerEventExt::pointer_id);
         for pointer_id in self
             .replay_tail_open_pointers
             .iter()
@@ -242,8 +257,7 @@ impl HeldPointerQueue {
                 continue;
             }
             let queued_start = self.events.iter().rposition(|event| {
-                matches!(event, PointerEvent::Down(_))
-                    && flui_interaction::events::extract_pointer_id(event) == pointer_id
+                matches!(event, PointerEvent::Down(_)) && event.pointer_id() == Some(pointer_id)
             });
             let start = queued_start.unwrap_or(0);
             let before = self.events.len();
@@ -252,7 +266,8 @@ impl HeldPointerQueue {
                 .enumerate()
                 .filter_map(|(index, event)| {
                     let belongs_to_open_epoch = index >= start
-                        && flui_interaction::events::extract_pointer_id(&event) == pointer_id;
+                        && flui_interaction::PointerEventExt::pointer_id(&event)
+                            == Some(pointer_id);
                     (!belongs_to_open_epoch).then_some(event)
                 })
                 .collect();
@@ -328,9 +343,7 @@ impl HeldPointerQueue {
 
     fn motion_class(event: &PointerEvent) -> Option<MotionClass> {
         match event {
-            PointerEvent::Move(update) if update.current.buttons.is_empty() => {
-                Some(MotionClass::Hover)
-            }
+            PointerEvent::Move(update) if update.buttons.is_empty() => Some(MotionClass::Hover),
             PointerEvent::Move(_) => Some(MotionClass::Contact),
             _ => None,
         }
@@ -340,7 +353,7 @@ impl HeldPointerQueue {
         let mut is_open = self.replay_tail_open_pointers.contains(&pointer_id)
             || self.replay_dispatched_open_pointers.contains(&pointer_id);
         for event in &self.events {
-            if flui_interaction::events::extract_pointer_id(event) != pointer_id {
+            if event.pointer_id() != Some(pointer_id) {
                 continue;
             }
             match event {
@@ -354,7 +367,7 @@ impl HeldPointerQueue {
 
     fn coalescible_motion_index(&self, pointer_id: PointerId, class: MotionClass) -> Option<usize> {
         let index = self.events.iter().rposition(|queued| {
-            flui_interaction::events::extract_pointer_id(queued) == pointer_id
+            flui_interaction::PointerEventExt::pointer_id(queued) == Some(pointer_id)
         })?;
         if Self::motion_class(&self.events[index]) != Some(class) {
             return None;
@@ -365,7 +378,7 @@ impl HeldPointerQueue {
     fn remove_open_epoch(&mut self, pointer_id: PointerId) {
         let mut open_start = None;
         for (index, event) in self.events.iter().enumerate() {
-            if flui_interaction::events::extract_pointer_id(event) != pointer_id {
+            if event.pointer_id() != Some(pointer_id) {
                 continue;
             }
             match event {
@@ -383,7 +396,7 @@ impl HeldPointerQueue {
             .enumerate()
             .filter_map(|(index, event)| {
                 let belongs_to_superseded_epoch = index >= open_start
-                    && flui_interaction::events::extract_pointer_id(&event) == pointer_id;
+                    && flui_interaction::PointerEventExt::pointer_id(&event) == Some(pointer_id);
                 (!belongs_to_superseded_epoch).then_some(event)
             })
             .collect();
@@ -424,9 +437,11 @@ impl HeldPointerQueue {
             if !matches!(event, PointerEvent::Down(_)) {
                 continue;
             }
-            let pointer_id = flui_interaction::events::extract_pointer_id(event);
+            let Some(pointer_id) = event.pointer_id() else {
+                continue;
+            };
             for (end, candidate) in self.events.iter().enumerate().skip(start + 1) {
-                if flui_interaction::events::extract_pointer_id(candidate) != pointer_id {
+                if flui_interaction::PointerEventExt::pointer_id(candidate) != Some(pointer_id) {
                     continue;
                 }
                 match candidate {
@@ -454,7 +469,7 @@ impl HeldPointerQueue {
             .enumerate()
             .filter_map(|(index, event)| {
                 let belongs_to_victim = (start..=end).contains(&index)
-                    && flui_interaction::events::extract_pointer_id(&event) == pointer_id;
+                    && flui_interaction::PointerEventExt::pointer_id(&event) == Some(pointer_id);
                 (!belongs_to_victim).then_some(event)
             })
             .collect();
@@ -470,6 +485,7 @@ impl HeldPointerQueue {
             !matches!(
                 event,
                 PointerEvent::Down(_)
+                    | PointerEvent::ButtonChange(_)
                     | PointerEvent::Move(_)
                     | PointerEvent::Up(_)
                     | PointerEvent::Cancel(_)
@@ -497,7 +513,7 @@ impl HeldPointerQueue {
 
     fn evict_oldest_contact_motion(&mut self, pointer_id: PointerId) -> bool {
         let Some(index) = self.events.iter().position(|event| {
-            flui_interaction::events::extract_pointer_id(event) == pointer_id
+            event.pointer_id() == Some(pointer_id)
                 && Self::motion_class(event) == Some(MotionClass::Contact)
         }) else {
             return false;
@@ -520,13 +536,13 @@ impl HeldPointerQueue {
             .events
             .iter()
             .filter(|event| {
-                flui_interaction::events::extract_pointer_id(event) == pointer_id
+                event.pointer_id() == Some(pointer_id)
                     && matches!(event, PointerEvent::Up(_) | PointerEvent::Cancel(_))
             })
             .count();
         let mut terminal_count = 0usize;
         for (index, event) in self.events.iter().enumerate() {
-            if flui_interaction::events::extract_pointer_id(event) == pointer_id
+            if event.pointer_id() == Some(pointer_id)
                 && matches!(event, PointerEvent::Up(_) | PointerEvent::Cancel(_))
             {
                 terminal_count = terminal_count.saturating_add(1);
@@ -560,14 +576,14 @@ impl HeldPointerQueue {
             .events
             .iter()
             .filter(|event| {
-                flui_interaction::events::extract_pointer_id(event) == pointer_id
+                event.pointer_id() == Some(pointer_id)
                     && matches!(event, PointerEvent::Up(_) | PointerEvent::Cancel(_))
             })
             .count();
         let mut terminal_count = 0usize;
         let mut protected_suffix_count = 0usize;
         for (index, event) in self.events.iter().enumerate() {
-            if flui_interaction::events::extract_pointer_id(event) == pointer_id
+            if event.pointer_id() == Some(pointer_id)
                 && matches!(event, PointerEvent::Up(_) | PointerEvent::Cancel(_))
             {
                 terminal_count = terminal_count.saturating_add(1);
@@ -588,7 +604,7 @@ impl HeldPointerQueue {
             .events
             .iter()
             .filter(|event| {
-                flui_interaction::events::extract_pointer_id(event) == pointer_id
+                event.pointer_id() == Some(pointer_id)
                     && matches!(event, PointerEvent::Up(_) | PointerEvent::Cancel(_))
             })
             .count();
@@ -597,7 +613,7 @@ impl HeldPointerQueue {
             .replay_active_route_terminal_pointers
             .contains(&pointer_id);
         for event in &self.events {
-            if flui_interaction::events::extract_pointer_id(event) != pointer_id {
+            if event.pointer_id() != Some(pointer_id) {
                 continue;
             }
             match event {
@@ -629,7 +645,7 @@ impl HeldPointerQueue {
                 .events
                 .iter()
                 .filter(|event| {
-                    flui_interaction::events::extract_pointer_id(event) == *pointer_id
+                    event.pointer_id() == Some(*pointer_id)
                         && matches!(event, PointerEvent::Up(_) | PointerEvent::Cancel(_))
                 })
                 .count();
@@ -650,7 +666,7 @@ impl HeldPointerQueue {
             let terminal_count = replay_events
                 .iter()
                 .filter(|event| {
-                    flui_interaction::events::extract_pointer_id(event) == *pointer_id
+                    event.pointer_id() == Some(*pointer_id)
                         && matches!(event, PointerEvent::Up(_) | PointerEvent::Cancel(_))
                 })
                 .count();
@@ -674,7 +690,7 @@ impl HeldPointerQueue {
         let remaining_terminal_count = replay_events_after_dispatch
             .iter()
             .filter(|event| {
-                flui_interaction::events::extract_pointer_id(event) == pointer_id
+                event.pointer_id() == Some(pointer_id)
                     && matches!(event, PointerEvent::Up(_) | PointerEvent::Cancel(_))
             })
             .count();
@@ -693,7 +709,9 @@ impl HeldPointerQueue {
     fn evict_oldest_incomplete_sequence(&mut self) -> bool {
         let mut open_epochs = Vec::new();
         for (index, event) in self.events.iter().enumerate() {
-            let pointer_id = flui_interaction::events::extract_pointer_id(event);
+            let Some(pointer_id) = event.pointer_id() else {
+                continue;
+            };
             match event {
                 PointerEvent::Down(_) => {
                     open_epochs.retain(|(open_pointer, _)| *open_pointer != pointer_id);
@@ -715,7 +733,7 @@ impl HeldPointerQueue {
             .enumerate()
             .filter_map(|(index, event)| {
                 let belongs_to_victim = index >= start
-                    && flui_interaction::events::extract_pointer_id(&event) == pointer_id;
+                    && flui_interaction::PointerEventExt::pointer_id(&event) == Some(pointer_id);
                 (!belongs_to_victim).then_some(event)
             })
             .collect();
@@ -838,7 +856,9 @@ impl<'a> HeldPointerReplay<'a> {
             queue.replay_active_route_terminal_pointers =
                 std::mem::take(&mut queue.active_route_terminal_pointers);
             for event in &remaining {
-                let pointer_id = flui_interaction::events::extract_pointer_id(event);
+                let Some(pointer_id) = event.pointer_id() else {
+                    continue;
+                };
                 match event {
                     PointerEvent::Down(_) => {
                         if !queue.replay_tail_open_pointers.contains(&pointer_id) {
@@ -914,7 +934,9 @@ impl<'a> HeldPointerReplay<'a> {
                     self.remaining = std::mem::take(&mut self.remaining)
                         .into_iter()
                         .filter_map(|event| {
-                            if flui_interaction::events::extract_pointer_id(&event) != pointer_id {
+                            if flui_interaction::PointerEventExt::pointer_id(&event)
+                                != Some(pointer_id)
+                            {
                                 return Some(event);
                             }
                             if removing_epoch {
@@ -931,7 +953,7 @@ impl<'a> HeldPointerReplay<'a> {
                 ReplaySupersession::FinalUndispatched(_) => {
                     let mut open_start = None;
                     for (index, event) in self.remaining.iter().enumerate() {
-                        if flui_interaction::events::extract_pointer_id(event) != pointer_id {
+                        if event.pointer_id() != Some(pointer_id) {
                             continue;
                         }
                         match event {
@@ -946,8 +968,8 @@ impl<'a> HeldPointerReplay<'a> {
                             .enumerate()
                             .filter_map(|(index, event)| {
                                 let belongs_to_final_open_epoch = index >= open_start
-                                    && flui_interaction::events::extract_pointer_id(&event)
-                                        == pointer_id;
+                                    && flui_interaction::PointerEventExt::pointer_id(&event)
+                                        == Some(pointer_id);
                                 (!belongs_to_final_open_epoch).then_some(event)
                             })
                             .collect();
@@ -994,32 +1016,34 @@ impl Iterator for HeldPointerReplay<'_> {
         self.discard_superseded_suffixes();
         let event = self.remaining.pop_front();
         if let Some(event) = &event {
-            let pointer_id = flui_interaction::events::extract_pointer_id(event);
+            let pointer_id = event.pointer_id();
             let final_open_down_remains = matches!(event, PointerEvent::Down(_))
                 && self.remaining.iter().any(|remaining| {
                     matches!(remaining, PointerEvent::Down(_))
-                        && flui_interaction::events::extract_pointer_id(remaining) == pointer_id
+                        && flui_interaction::PointerEventExt::pointer_id(remaining) == pointer_id
                 });
             let mut queue = self.queue.borrow_mut();
             queue.replay_reserved = queue.replay_reserved.saturating_sub(1);
-            match event {
-                PointerEvent::Down(_) => {
-                    if !final_open_down_remains {
-                        queue
-                            .replay_tail_open_pointers
-                            .retain(|open| *open != pointer_id);
+            if let Some(pointer_id) = pointer_id {
+                match event {
+                    PointerEvent::Down(_) => {
+                        if !final_open_down_remains {
+                            queue
+                                .replay_tail_open_pointers
+                                .retain(|open| *open != pointer_id);
+                        }
+                        if !queue.replay_dispatched_open_pointers.contains(&pointer_id) {
+                            queue.replay_dispatched_open_pointers.push(pointer_id);
+                        }
                     }
-                    if !queue.replay_dispatched_open_pointers.contains(&pointer_id) {
-                        queue.replay_dispatched_open_pointers.push(pointer_id);
-                    }
+                    PointerEvent::Up(_) | PointerEvent::Cancel(_) => queue
+                        .replay_dispatched_open_pointers
+                        .retain(|open| *open != pointer_id),
+                    _ => {}
                 }
-                PointerEvent::Up(_) | PointerEvent::Cancel(_) => queue
-                    .replay_dispatched_open_pointers
-                    .retain(|open| *open != pointer_id),
-                _ => {}
-            }
-            if matches!(event, PointerEvent::Up(_) | PointerEvent::Cancel(_)) {
-                queue.remove_replay_active_route_terminal(pointer_id, &self.remaining);
+                if matches!(event, PointerEvent::Up(_) | PointerEvent::Cancel(_)) {
+                    queue.remove_replay_active_route_terminal(pointer_id, &self.remaining);
+                }
             }
         } else {
             self.complete_inner();
@@ -1065,7 +1089,7 @@ mod tests {
 
     use flui_foundation::PresentationId;
     use flui_foundation::geometry::Offset;
-    use flui_interaction::events::pointer::{PointerButtons, PointerType};
+    use flui_interaction::events::pointer::{PointerButtons, PointerKind};
     use flui_interaction::events::{
         PointerEventExt as _, make_cancel_event_for_id, make_down_event_for_id,
         make_move_event_for_id, make_up_event_for_id,
@@ -1075,7 +1099,7 @@ mod tests {
     use super::{HELD_POINTER_CAPACITY, HeldPointerQueue, HeldPointerReplay};
 
     fn pointer(raw: u64) -> PointerId {
-        PointerId::new(raw).expect("test pointer ids are nonzero")
+        PointerId::try_from(raw).expect("test pointer ids are nonzero")
     }
 
     fn position(x: f64) -> Offset<f64> {
@@ -1083,32 +1107,39 @@ mod tests {
     }
 
     fn down(pointer_id: PointerId) -> PointerEvent {
-        make_down_event_for_id(pointer_id, position(0.0), PointerType::Touch)
+        make_down_event_for_id(pointer_id, position(0.0), PointerKind::Touch)
+            .expect("test pointer positions are finite")
     }
 
     fn contact_move(pointer_id: PointerId, x: f64) -> PointerEvent {
-        make_move_event_for_id(pointer_id, position(x), PointerType::Touch)
+        make_move_event_for_id(pointer_id, position(x), PointerKind::Touch)
+            .expect("test pointer positions are finite")
     }
 
     fn hover(pointer_id: PointerId, x: f64) -> PointerEvent {
-        let mut event = make_move_event_for_id(pointer_id, position(x), PointerType::Mouse);
+        let mut event = make_move_event_for_id(pointer_id, position(x), PointerKind::Mouse)
+            .expect("test pointer positions are finite");
         let PointerEvent::Move(update) = &mut event else {
             unreachable!("the move helper always constructs PointerEvent::Move")
         };
-        update.current.buttons = PointerButtons::new();
+        update.buttons = PointerButtons::NONE;
         event
     }
 
     fn up(pointer_id: PointerId) -> PointerEvent {
-        make_up_event_for_id(pointer_id, position(9.0), PointerType::Touch)
+        make_up_event_for_id(pointer_id, position(9.0), PointerKind::Touch)
+            .expect("test pointer positions are finite")
     }
 
     fn cancel(pointer_id: PointerId) -> PointerEvent {
-        make_cancel_event_for_id(pointer_id, PointerType::Touch)
+        make_cancel_event_for_id(pointer_id, PointerKind::Touch)
     }
 
     fn positions(events: &[PointerEvent]) -> Vec<f64> {
-        events.iter().map(|event| event.position().dx).collect()
+        events
+            .iter()
+            .map(|event| event.position().expect("test events carry positions").dx)
+            .collect()
     }
 
     fn drain(queue: &RefCell<HeldPointerQueue>) -> Vec<PointerEvent> {
@@ -1158,8 +1189,8 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert!(matches!(events[0], PointerEvent::Up(_)));
         assert_eq!(
-            flui_interaction::events::extract_pointer_id(&events[0]),
-            active_route
+            flui_interaction::PointerEventExt::pointer_id(&events[0]),
+            Some(active_route)
         );
     }
 
@@ -1189,9 +1220,12 @@ mod tests {
         let restored = drain(&queue);
         let restored_ids: Vec<_> = restored
             .iter()
-            .map(flui_interaction::events::extract_pointer_id)
+            .map(flui_interaction::PointerEventExt::pointer_id)
             .collect();
-        assert_eq!(restored_ids, vec![interleaved, interleaved, superseded]);
+        assert_eq!(
+            restored_ids,
+            vec![Some(interleaved), Some(interleaved), Some(superseded)]
+        );
         assert_eq!(positions(&restored), vec![0.0, 2.0, 0.0]);
     }
 
@@ -1209,7 +1243,7 @@ mod tests {
         }
 
         assert!(queue.borrow().is_empty());
-        assert!(drain(&queue).is_empty());
+        assert_eq!(drain(&queue), [] as [flui_interaction::PointerEvent; 0]);
     }
 
     fn dropping_open_sequences_mid_replay_keeps_only_complete_epochs() {
@@ -1233,9 +1267,9 @@ mod tests {
 
         let ids: Vec<_> = rest
             .iter()
-            .map(flui_interaction::events::extract_pointer_id)
+            .map(flui_interaction::PointerEventExt::pointer_id)
             .collect();
-        assert_eq!(ids, vec![complete, complete]);
+        assert_eq!(ids, vec![Some(complete), Some(complete)]);
         assert!(matches!(rest[0], PointerEvent::Down(_)));
         assert!(matches!(rest[1], PointerEvent::Up(_)));
         assert!(queue.borrow().is_empty());

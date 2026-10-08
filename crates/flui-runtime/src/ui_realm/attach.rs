@@ -65,7 +65,8 @@ impl UiRealm {
         );
         let focused = FocusRoot::new(with_media_query);
         let animated = VsyncScope::new(self.vsync(), focused);
-        let wrapped = GestureArenaScope::new(self.gestures().arena().clone(), animated);
+        let wrapped = GestureArenaScope::new(self.gestures().arena().clone(), animated)
+            .settings(self.gestures().default_settings().clone());
         self.presentations
             .primary()
             .widgets()
@@ -104,7 +105,8 @@ impl UiRealm {
             );
             let focused = FocusRoot::new(view.clone());
             let animated = VsyncScope::new(presentation.vsync(), focused);
-            let wrapped = GestureArenaScope::new(presentation.gestures().arena().clone(), animated);
+            let wrapped = GestureArenaScope::new(presentation.gestures().arena().clone(), animated)
+                .settings(presentation.gestures().default_settings().clone());
             presentation.widgets().attach_root_widget(&wrapped)?;
             realm.request_redraw_for(presentation);
             tracing::debug!(?id, "Root widget attached (non-primary, test-only)");
@@ -150,7 +152,8 @@ impl UiRealm {
             );
             let focused = FocusRoot::new(with_media_query);
             let animated = VsyncScope::new(presentation.vsync(), focused);
-            let wrapped = GestureArenaScope::new(presentation.gestures().arena().clone(), animated);
+            let wrapped = GestureArenaScope::new(presentation.gestures().arena().clone(), animated)
+                .settings(presentation.gestures().default_settings().clone());
             presentation
                 .widgets()
                 .attach_root_widget_with_size(&wrapped, width, height)?;
@@ -208,7 +211,8 @@ impl UiRealm {
         );
         let focused = FocusRoot::new(with_media_query);
         let animated = VsyncScope::new(self.vsync(), focused);
-        let wrapped = GestureArenaScope::new(self.gestures().arena().clone(), animated);
+        let wrapped = GestureArenaScope::new(self.gestures().arena().clone(), animated)
+            .settings(self.gestures().default_settings().clone());
         self.presentations
             .primary()
             .widgets()

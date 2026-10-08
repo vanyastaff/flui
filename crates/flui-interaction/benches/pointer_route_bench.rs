@@ -19,7 +19,7 @@ use std::hint::black_box;
 use std::rc::Rc;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use flui_interaction::events::{PointerType, make_down_event, make_move_event};
+use flui_interaction::events::{PointerKind, make_down_event, make_move_event};
 use flui_interaction::{
     HitTestEntry, InteractionDispatchHandle, InteractionLane, Offset, PointerTarget, RenderId,
 };
@@ -76,7 +76,7 @@ fn bench_resolve_pointer_route(c: &mut Criterion) {
 
 fn bench_invoke_cached_pointer_route(c: &mut Criterion) {
     let mut group = c.benchmark_group("InteractionLane::invoke_pointer_route/common_move");
-    let event = make_move_event(Offset::ZERO, PointerType::Mouse);
+    let event = make_move_event(Offset::ZERO, PointerKind::Mouse).expect("valid fixture sample");
     for target_count in [1_usize, 4, 16] {
         let lane = InteractionLane::try_new().expect("bench lane");
         let handle = lane.dispatch_handle();
@@ -110,7 +110,7 @@ fn bench_invoke_cached_pointer_route(c: &mut Criterion) {
 
 fn bench_direct_hit_test_dispatch(c: &mut Criterion) {
     let mut group = c.benchmark_group("HitTestResult::dispatch/direct");
-    let event = make_down_event(Offset::ZERO, PointerType::Mouse);
+    let event = make_down_event(Offset::ZERO, PointerKind::Mouse).expect("valid fixture sample");
     for target_count in [1_usize, 4, 16] {
         let lane = InteractionLane::try_new().expect("bench lane");
         let handle = lane.dispatch_handle();

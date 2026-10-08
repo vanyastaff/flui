@@ -334,6 +334,8 @@ pub(super) struct WindowContext {
     /// `&mut WindowContext` from the raw `GWLP_USERDATA` pointer while the
     /// shared one is still live.
     pub scale_factor: std::cell::Cell<f64>,
+    pub message_clock: super::events::MessageClock,
+    pub pointer_registry: RefCell<super::events::NativePointerRegistry>,
     /// Current window mode (replaces display_state + saved bounds)
     pub mode: std::cell::Cell<WindowMode>,
     /// Last known size (before minimization) for restore detection
@@ -343,7 +345,7 @@ pub(super) struct WindowContext {
     /// Is mouse hovering over this window? (T034)
     pub is_hovered: std::cell::Cell<bool>,
     /// Current keyboard modifiers (T035)
-    pub modifiers: std::cell::Cell<keyboard_types::Modifiers>,
+    pub modifiers: std::cell::Cell<flui_platform_api::Modifiers>,
     /// Cursor selected by this exact window's presentation.
     pub cursor: std::cell::Cell<CursorIcon>,
     /// Window style bits before fullscreen (Windows-specific: WS_OVERLAPPEDWINDOW, etc.)
@@ -794,6 +796,11 @@ impl WindowsPlatform {
         // Ignore errors - this can fail if already set or on older Windows
         unsafe {
             let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+            // This native process setting is idempotent for the same value.
+            // A host that already fixed it to false keeps the legacy mouse route.
+            if let Err(error) = windows::Win32::UI::Input::Pointer::EnableMouseInPointer(true) {
+                tracing::debug!(%error, "mouse pointer messages unavailable; retaining mouse messages");
+            }
         }
 
         // SAFETY: `register_window_class`'s own `# Safety` contract (below)
@@ -1031,6 +1038,15 @@ impl WindowsPlatform {
 
             match msg {
                 WM_CREATE => {
+                    // SAFETY: this is the just-created owner-thread HWND. Windows
+                    // owns notification delivery until its destruction.
+                    if let Err(error) =
+                        windows::Win32::UI::Controls::RegisterPointerDeviceNotifications(
+                            hwnd, false,
+                        )
+                    {
+                        tracing::warn!(%error, "pointer device notifications unavailable");
+                    }
                     tracing::debug!("WM_CREATE for HWND {:?}", hwnd);
                     LRESULT(0)
                 }
@@ -1533,6 +1549,7 @@ impl WindowsPlatform {
 
                 WM_MOUSEMOVE => {
                     if let Some(ctx) = ctx {
+                        let time = ctx.message_clock.message_time();
                         // Request WM_MOUSELEAVE notification for hover tracking
                         let mut tme = TRACKMOUSEEVENT {
                             cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
@@ -1549,7 +1566,7 @@ impl WindowsPlatform {
                         ctx.callbacks.dispatch_hover_status_change(true);
 
                         use super::events::mouse_move_event;
-                        let event = mouse_move_event(wparam, lparam, ctx.scale_factor.get());
+                        let event = mouse_move_event(wparam, lparam, ctx.scale_factor.get(), time);
                         ctx.callbacks.dispatch_input(event);
                     }
                     LRESULT(0)
@@ -1573,13 +1590,21 @@ impl WindowsPlatform {
                     DefWindowProcW(hwnd, msg, wparam, lparam)
                 }
 
-                WM_LBUTTONDOWN | WM_LBUTTONUP | WM_RBUTTONDOWN | WM_RBUTTONUP | WM_MBUTTONDOWN
-                | WM_MBUTTONUP => {
+                WM_LBUTTONDOWN
+                | WM_LBUTTONUP
+                | WM_RBUTTONDOWN
+                | WM_RBUTTONUP
+                | WM_MBUTTONDOWN
+                | WM_MBUTTONUP
+                | windows::Win32::UI::WindowsAndMessaging::WM_XBUTTONDOWN
+                | windows::Win32::UI::WindowsAndMessaging::WM_XBUTTONUP => {
                     use super::events::{
                         button_message, capture_on_press, mouse_button_event, release_capture_after,
                     };
-                    let (button, is_down) =
-                        button_message(msg).expect("BUG: the arm matches only button messages");
+                    let Some((button, is_down)) = button_message(msg, wparam) else {
+                        return LRESULT(0);
+                    };
+                    let timed_context = ctx.map(|ctx| (ctx, ctx.message_clock.message_time()));
                     // The capture follows the native button state even with
                     // no context to deliver to, and is settled before user
                     // code runs: a release outside the client area must
@@ -1590,15 +1615,87 @@ impl WindowsPlatform {
                     } else {
                         release_capture_after(hwnd, wparam);
                     }
-                    if let Some(ctx) = ctx {
+                    if let Some((ctx, time)) = timed_context {
                         let event = mouse_button_event(
                             button,
                             is_down,
                             wparam,
                             lparam,
                             ctx.scale_factor.get(),
+                            time,
                         );
-                        ctx.callbacks.dispatch_input(event);
+                        if let Some(event) = event {
+                            ctx.callbacks.dispatch_input(event);
+                        }
+                    }
+                    LRESULT(isize::from(matches!(
+                        msg,
+                        windows::Win32::UI::WindowsAndMessaging::WM_XBUTTONDOWN
+                            | windows::Win32::UI::WindowsAndMessaging::WM_XBUTTONUP
+                    )))
+                }
+
+                windows::Win32::UI::WindowsAndMessaging::WM_POINTERDOWN
+                | windows::Win32::UI::WindowsAndMessaging::WM_POINTERUP
+                | windows::Win32::UI::WindowsAndMessaging::WM_POINTERUPDATE
+                | windows::Win32::UI::WindowsAndMessaging::WM_POINTERENTER
+                | windows::Win32::UI::WindowsAndMessaging::WM_POINTERLEAVE
+                | windows::Win32::UI::WindowsAndMessaging::WM_POINTERCAPTURECHANGED => {
+                    if let Some(ctx) = ctx {
+                        let events = super::events::native_pointer_input(
+                            hwnd,
+                            msg,
+                            (wparam.0 & 0xffff) as u32,
+                            ctx.scale_factor.get(),
+                            &ctx.message_clock,
+                            &ctx.pointer_registry,
+                        );
+                        for event in events {
+                            let deliver = ctx.pointer_registry.borrow().delivers(&event);
+                            if deliver {
+                                ctx.callbacks.dispatch_input(event);
+                            }
+                        }
+                    }
+                    // Consume the native route: DefWindowProc would promote it
+                    // to a second legacy mouse event.
+                    LRESULT(0)
+                }
+
+                windows::Win32::UI::WindowsAndMessaging::WM_POINTERDEVICECHANGE => {
+                    if let Some(ctx) = ctx
+                        && let Ok(device) =
+                            flui_platform_api::pointer::DeviceId::try_from(lparam.0 as usize as u64)
+                    {
+                        let time = flui_platform_api::EventTime::from_nanos(
+                            ctx.message_clock.message_time(),
+                        );
+                        let events = if wparam.0
+                            == windows::Win32::UI::WindowsAndMessaging::PDC_REMOVAL as usize
+                        {
+                            ctx.pointer_registry
+                                .borrow_mut()
+                                .remove_device(device, time)
+                        } else if wparam.0
+                            == windows::Win32::UI::WindowsAndMessaging::PDC_ARRIVAL as usize
+                        {
+                            if let Some(kind) = super::events::native_device_kind(
+                                windows::Win32::Foundation::HANDLE(
+                                    lparam.0 as *mut core::ffi::c_void,
+                                ),
+                            ) {
+                                ctx.pointer_registry
+                                    .borrow_mut()
+                                    .add_device(device, kind, time)
+                            } else {
+                                Vec::new()
+                            }
+                        } else {
+                            Vec::new()
+                        };
+                        for event in events {
+                            ctx.callbacks.dispatch_input(event);
+                        }
                     }
                     LRESULT(0)
                 }
@@ -1608,7 +1705,11 @@ impl WindowsPlatform {
                     // the capture mid-press: this window will never see the
                     // sequence's release, so end it here.
                     if let Some(ctx) = ctx
-                        && let Some(cancel) = super::events::capture_changed_event(hwnd, lparam)
+                        && let Some(cancel) = super::events::capture_changed_event(
+                            hwnd,
+                            lparam,
+                            ctx.message_clock.message_time(),
+                        )
                     {
                         ctx.callbacks.dispatch_input(cancel);
                     }
@@ -1618,8 +1719,12 @@ impl WindowsPlatform {
                 WM_MOUSEWHEEL => {
                     if let Some(ctx) = ctx {
                         use super::events::mouse_wheel_event;
-                        let event = mouse_wheel_event(hwnd, wparam, lparam, ctx.scale_factor.get());
-                        ctx.callbacks.dispatch_input(event);
+                        let time = ctx.message_clock.message_time();
+                        let event =
+                            mouse_wheel_event(hwnd, wparam, lparam, ctx.scale_factor.get(), time);
+                        if let Some(event) = event {
+                            ctx.callbacks.dispatch_input(event);
+                        }
                     }
                     LRESULT(0)
                 }
@@ -1627,9 +1732,12 @@ impl WindowsPlatform {
                 WM_MOUSEHWHEEL => {
                     if let Some(ctx) = ctx {
                         use super::events::mouse_hwheel_event;
+                        let time = ctx.message_clock.message_time();
                         let event =
-                            mouse_hwheel_event(hwnd, wparam, lparam, ctx.scale_factor.get());
-                        ctx.callbacks.dispatch_input(event);
+                            mouse_hwheel_event(hwnd, wparam, lparam, ctx.scale_factor.get(), time);
+                        if let Some(event) = event {
+                            ctx.callbacks.dispatch_input(event);
+                        }
                     }
                     LRESULT(0)
                 }

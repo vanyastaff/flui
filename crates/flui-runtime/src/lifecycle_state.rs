@@ -126,7 +126,7 @@ mod lifecycle_derivation_tests {
     use flui_foundation::geometry::Offset;
     use flui_interaction::{
         HitTestEntry, HitTestResult, InteractionLane, RenderId,
-        events::{PointerType, make_down_event},
+        events::{PointerKind, make_down_event},
     };
     use flui_view::WidgetsBindingObserver;
 
@@ -227,7 +227,8 @@ mod lifecycle_derivation_tests {
                     .expect("register lifecycle target");
                 let mut result = HitTestResult::new();
                 result.add(HitTestEntry::new(RenderId::new(1)).pointer_target(target));
-                let down = make_down_event(Offset::new(3.0, 5.0), PointerType::Touch);
+                let down = make_down_event(Offset::new(3.0, 5.0), PointerKind::Touch)
+                    .expect("finite test position");
                 realm.gestures().handle_pointer_event(&down, |_| result);
                 handle
                     .unregister_pointer(target)

@@ -8,17 +8,16 @@ use std::{cell::RefCell, rc::Rc, time::Duration};
 
 use flui_foundation::geometry::Offset;
 use flui_interaction::events::{
-    PointerEvent, PointerType, make_cancel_event_for_id, make_down_event_for_id,
-    make_move_event_for_id, make_pinch_gesture_event, make_scroll_event, make_up_event_for_id,
+    PointerEvent, PointerInfo, PointerKind, PointerPosition, ScrollDelta, ScrollEvent,
+    make_cancel_event_for_id, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
+    pointer::ScrollUnit,
 };
 use flui_interaction::processing::{
-    ImpulseVelocityTracker, InputPredictor, IosFlingVelocityTracker, MacosFlingVelocityTracker,
-    PointerEventResampler, PredictionConfig, RawInputHandler, SamplingClock, VelocityTracker,
+    PointerEventResampler, SamplingClock, VelocityEstimator, VelocityTracker,
 };
 use flui_interaction::{
     DEFAULT_MAX_FLING_VELOCITY, GestureBinding, GestureSettings, GestureSettingsError,
-    HitTestResult, PointerId, PointerPanZoomEvent, PointerRouteHandler, Velocity, VelocityEstimate,
-    from_w3c_event,
+    HitTestResult, PointerId, PointerRouteHandler, Velocity, VelocityEstimate,
 };
 use proptest::prelude::*;
 use web_time::Instant;
@@ -72,34 +71,50 @@ fn assert_bounded(estimate: Option<VelocityEstimate>, what: &str) {
 }
 
 fn contact() -> PointerId {
-    PointerId::new(7).expect("non-zero pointer id")
+    PointerId::new(std::num::NonZeroU64::new(7).expect("non-zero pointer id"))
 }
 
 fn with_time(mut event: PointerEvent, nanos: u64) -> PointerEvent {
     match &mut event {
-        PointerEvent::Down(button) | PointerEvent::Up(button) => button.state.time = nanos,
-        PointerEvent::Move(update) => update.current.time = nanos,
+        PointerEvent::Down(button) => {
+            button.sample.time = flui_platform_api::EventTime::from_nanos(nanos);
+        }
+        PointerEvent::Up(button) => {
+            button.sample.time = flui_platform_api::EventTime::from_nanos(nanos);
+        }
+        PointerEvent::Move(update) => {
+            let mut sample = *update.current();
+            sample.time = flui_platform_api::EventTime::from_nanos(nanos);
+            *update =
+                flui_interaction::events::PointerMove::new(update.pointer, update.buttons, sample)
+                    .with_modifiers(update.modifiers)
+                    .with_coalesced(update.coalesced().to_vec())
+                    .with_predicted(update.predicted().to_vec());
+        }
         _ => {}
     }
     event
 }
 
 fn move_to(x: f64) -> PointerEvent {
-    make_move_event_for_id(contact(), Offset::new(x, 0.0), PointerType::Touch)
+    make_move_event_for_id(contact(), Offset::new(x, 0.0), PointerKind::Touch)
+        .expect("valid fixture sample")
 }
 
 fn event_time(event: &PointerEvent) -> Option<u64> {
     match event {
-        PointerEvent::Down(button) | PointerEvent::Up(button) => Some(button.state.time),
-        PointerEvent::Move(update) => Some(update.current.time),
+        PointerEvent::Down(button) => Some(button.sample.time.as_nanos()),
+        PointerEvent::Up(button) => Some(button.sample.time.as_nanos()),
+        PointerEvent::Move(update) => Some(update.current().time.as_nanos()),
         _ => None,
     }
 }
 
 fn event_x(event: &PointerEvent) -> Option<f64> {
     match event {
-        PointerEvent::Down(button) | PointerEvent::Up(button) => Some(button.state.position.x),
-        PointerEvent::Move(update) => Some(update.current.position.x),
+        PointerEvent::Down(button) => Some(button.sample.position.get().x),
+        PointerEvent::Up(button) => Some(button.sample.position.get().x),
+        PointerEvent::Move(update) => Some(update.current().position.get().x),
         _ => None,
     }
 }
@@ -183,9 +198,10 @@ fn sub_millisecond_spacing_is_bounded() {
 fn huge_coordinates_stay_finite() {
     let t0 = origin();
     let mut lsq = VelocityTracker::new();
-    let mut impulse = ImpulseVelocityTracker::default();
-    let mut ios = IosFlingVelocityTracker::default();
-    let mut macos = MacosFlingVelocityTracker::default();
+    let mut impulse =
+        VelocityTracker::with_estimator(PointerKind::Touch, VelocityEstimator::Impulse);
+    let mut ios = VelocityTracker::with_estimator(PointerKind::Touch, VelocityEstimator::Ios);
+    let mut macos = VelocityTracker::with_estimator(PointerKind::Touch, VelocityEstimator::Macos);
     for i in 0..8 {
         let x = if i % 2 == 0 { 1e300 } else { -1e300 };
         let at = t0 + ms(f64::from(i));
@@ -196,9 +212,138 @@ fn huge_coordinates_stay_finite() {
         macos.add_position(at, position);
     }
     assert_bounded(lsq.estimate_at(t0 + ms(7.0)), "lsq");
-    assert_bounded(impulse.get_velocity_estimate(), "impulse");
-    assert_bounded(ios.get_velocity_estimate(), "ios");
-    assert_bounded(macos.get_velocity_estimate(), "macos");
+    assert_bounded(impulse.estimate_at(t0 + ms(7.0)), "impulse");
+    assert_bounded(ios.estimate_at(t0 + ms(7.0)), "ios");
+    assert_bounded(macos.estimate_at(t0 + ms(7.0)), "macos");
+}
+
+fn selected_estimators_use_the_sample_clock_and_recover() {
+    for (estimator, expected) in [
+        (VelocityEstimator::LeastSquares, 500.0),
+        (VelocityEstimator::Impulse, 1_589.925_798_583_198_2),
+        (VelocityEstimator::Ios, 2550.0),
+        (VelocityEstimator::Macos, 1950.0),
+    ] {
+        let t0 = origin();
+        let mut tracker = VelocityTracker::with_estimator(PointerKind::Touch, estimator);
+        assert!(tracker.estimate_at(t0).is_none());
+        for sign in [1.0, -1.0] {
+            for (millis, x) in [(0, 10.0), (10, 40.0), (20, 60.0), (30, 70.0)] {
+                tracker.add_position(
+                    t0 + Duration::from_millis(millis),
+                    Offset::new(sign * x, 0.0),
+                );
+            }
+            // The sample origin is in the future of the process clock. Both
+            // an earlier query and repeated queries use sample time, not wall
+            // elapsed time; the repeated query also exercises the fit cache.
+            for query in [t0, t0 + ms(30.0), t0 + ms(30.0)] {
+                let velocity = tracker.velocity_at(query);
+                assert!(
+                    (velocity.dx() - sign * expected).abs() < 1e-6,
+                    "{estimator:?}: {velocity:?}"
+                );
+            }
+            assert_eq!(
+                tracker.velocity_at(t0 + ms(70.0)),
+                Velocity::ZERO,
+                "{estimator:?} stop gate"
+            );
+            tracker.reset();
+            assert!(tracker.estimate_at(t0).is_none());
+        }
+    }
+}
+
+fn impulse_recovers_constant_velocity_exactly() {
+    let t0 = origin();
+    let mut tracker =
+        VelocityTracker::with_estimator(PointerKind::Touch, VelocityEstimator::Impulse);
+    for i in 0..10 {
+        tracker.add_position(
+            t0 + Duration::from_millis(i * 9),
+            Offset::new(i as f64 * 9.0, 0.0),
+        );
+    }
+    let velocity = tracker.velocity_at(t0 + ms(81.0));
+    assert!(
+        (velocity.dx() - 1000.0).abs() < 10.0,
+        "constant 1000 px/s must be recovered exactly: {velocity:?}"
+    );
+}
+
+fn long_pause_matches_an_independent_fresh_tail(estimator: VelocityEstimator) {
+    let t0 = origin();
+    let mut prefixed = VelocityTracker::with_estimator(PointerKind::Touch, estimator);
+    let mut fresh = VelocityTracker::with_estimator(PointerKind::Touch, estimator);
+    for (millis, x) in [(0, 0.0), (10, 80.0), (20, 160.0)] {
+        prefixed.add_position(t0 + Duration::from_millis(millis), Offset::new(x, 0.0));
+    }
+    assert!(prefixed.velocity_at(t0 + ms(20.0)).dx() > 0.0);
+    assert_eq!(prefixed.velocity_at(t0 + ms(1000.0)), Velocity::ZERO);
+
+    // The pointer resumes after a long stationary interval. Three fresh
+    // positions travel at 100 px/s and also determine an LSQ fit. The gap's
+    // displacement is not an interval of the resumed movement. An independent
+    // tracker receives exactly this same tail, without the old fast stroke.
+    let tail = [(1000, 500.0), (1010, 501.0), (1020, 502.0)];
+    for (millis, x) in tail {
+        let time = t0 + Duration::from_millis(millis);
+        prefixed.add_position(time, Offset::new(x, 0.0));
+        fresh.add_position(time, Offset::new(x, 0.0));
+    }
+    let terminal = t0 + ms(1020.0);
+    let expected = fresh.estimate_at(terminal).expect("fresh moving tail");
+    assert!(expected.is_valid() && expected.pixels_per_second.dx > 0.0);
+    for _ in 0..2 {
+        assert_eq!(
+            prefixed.estimate_at(terminal),
+            Some(expected),
+            "{estimator:?}: stale prefix must not affect resumed velocity or span"
+        );
+    }
+    assert_eq!(prefixed.velocity_at(t0 + ms(1060.0)), Velocity::ZERO);
+    assert_eq!(fresh.velocity_at(t0 + ms(1060.0)), Velocity::ZERO);
+
+    // Reuse both handles after reset; the stopped query must neither poison
+    // the fit cache nor change the selected policy for the next stroke.
+    prefixed.reset();
+    fresh.reset();
+    for (millis, x) in tail {
+        let time = t0 + Duration::from_millis(millis);
+        prefixed.add_position(time, Offset::new(-x, 0.0));
+        fresh.add_position(time, Offset::new(-x, 0.0));
+    }
+    assert!(fresh.velocity_at(terminal).dx() < 0.0);
+    assert_eq!(prefixed.estimate_at(terminal), fresh.estimate_at(terminal));
+}
+
+fn lsq_recovers_from_a_long_pause() {
+    long_pause_matches_an_independent_fresh_tail(VelocityEstimator::LeastSquares);
+}
+
+fn impulse_recovers_from_a_long_pause() {
+    long_pause_matches_an_independent_fresh_tail(VelocityEstimator::Impulse);
+}
+
+fn ios_weights_recover_from_a_long_pause() {
+    long_pause_matches_an_independent_fresh_tail(VelocityEstimator::Ios);
+}
+
+fn macos_weights_recover_from_a_long_pause() {
+    long_pause_matches_an_independent_fresh_tail(VelocityEstimator::Macos);
+}
+
+fn selected_estimators_recover_from_a_long_pause() {
+    run_rows(
+        "long-pause recovery",
+        &[
+            ("least squares", lsq_recovers_from_a_long_pause),
+            ("impulse", impulse_recovers_from_a_long_pause),
+            ("iOS weights", ios_weights_recover_from_a_long_pause),
+            ("macOS weights", macos_weights_recover_from_a_long_pause),
+        ],
+    );
 }
 
 #[test]
@@ -219,6 +364,18 @@ fn velocity_estimates_are_finite_bounded_and_on_the_sample_clock() {
                 sub_millisecond_spacing_is_bounded,
             ),
             ("huge coordinates", huge_coordinates_stay_finite),
+            (
+                "selected estimators on sample clock",
+                selected_estimators_use_the_sample_clock_and_recover,
+            ),
+            (
+                "constant impulse motion",
+                impulse_recovers_constant_velocity_exactly,
+            ),
+            (
+                "long-pause recovery",
+                selected_estimators_recover_from_a_long_pause,
+            ),
         ],
     );
 }
@@ -259,9 +416,9 @@ proptest! {
             }
         };
         let mut lsq = VelocityTracker::new();
-        let mut impulse = ImpulseVelocityTracker::default();
-        let mut ios = IosFlingVelocityTracker::default();
-        let mut macos = MacosFlingVelocityTracker::default();
+        let mut impulse = VelocityTracker::with_estimator(PointerKind::Touch, VelocityEstimator::Impulse);
+        let mut ios = VelocityTracker::with_estimator(PointerKind::Touch, VelocityEstimator::Ios);
+        let mut macos = VelocityTracker::with_estimator(PointerKind::Touch, VelocityEstimator::Macos);
         let mut last = t0;
         for (offset, x, y) in &samples {
             last = at(*offset);
@@ -276,9 +433,9 @@ proptest! {
         let fling = lsq.velocity_at(query);
         prop_assert!(fling.is_finite());
         prop_assert!(fling.magnitude() <= DEFAULT_MAX_FLING_VELOCITY * (1.0 + 1e-9));
-        assert_bounded(impulse.get_velocity_estimate(), "impulse");
-        assert_bounded(ios.get_velocity_estimate(), "ios");
-        assert_bounded(macos.get_velocity_estimate(), "macos");
+        assert_bounded(impulse.estimate_at(query), "impulse");
+        assert_bounded(ios.estimate_at(query), "ios");
+        assert_bounded(macos.estimate_at(query), "macos");
     }
 }
 
@@ -466,7 +623,8 @@ fn overflow_keeps_terminals_and_the_newest_move() {
     let resampler = PointerEventResampler::new(contact());
     resampler.add_event_at(
         with_time(
-            make_down_event_for_id(contact(), Offset::ZERO, PointerType::Touch),
+            make_down_event_for_id(contact(), Offset::ZERO, PointerKind::Touch)
+                .expect("valid fixture sample"),
             1,
         ),
         t0,
@@ -479,7 +637,8 @@ fn overflow_keeps_terminals_and_the_newest_move() {
     }
     resampler.add_event_at(
         with_time(
-            make_up_event_for_id(contact(), Offset::new(150.0, 0.0), PointerType::Touch),
+            make_up_event_for_id(contact(), Offset::new(150.0, 0.0), PointerKind::Touch)
+                .expect("valid fixture sample"),
             151_000_000,
         ),
         t0 + ms(151.0),
@@ -527,7 +686,8 @@ fn manual_clock_does_not_starve_moves() {
     binding
         .pointer_router()
         .add_route(contact(), Rc::clone(&handler));
-    let down = make_down_event_for_id(contact(), Offset::ZERO, PointerType::Touch);
+    let down = make_down_event_for_id(contact(), Offset::ZERO, PointerKind::Touch)
+        .expect("valid fixture sample");
     binding.handle_pointer_event(&down, |_| HitTestResult::new());
     binding.handle_pointer_event(&move_to(10.0), |_| HitTestResult::new());
     assert_eq!(
@@ -536,7 +696,8 @@ fn manual_clock_does_not_starve_moves() {
         "the frame flushes the queued move"
     );
     assert_eq!(*moves.borrow(), 1);
-    let up = make_up_event_for_id(contact(), Offset::new(10.0, 0.0), PointerType::Touch);
+    let up = make_up_event_for_id(contact(), Offset::new(10.0, 0.0), PointerKind::Touch)
+        .expect("valid fixture sample");
     binding.handle_pointer_event(&up, |_| HitTestResult::new());
     binding.pointer_router().remove_route(contact(), &handler);
 }
@@ -548,19 +709,27 @@ fn interleaved_non_moves_stay_bounded() {
     let t0 = origin();
     let resampler = PointerEventResampler::new(contact());
     resampler.add_event_at(
-        make_down_event_for_id(contact(), Offset::ZERO, PointerType::Touch),
+        make_down_event_for_id(contact(), Offset::ZERO, PointerKind::Touch)
+            .expect("valid fixture sample"),
         t0,
     );
     for i in 1..=500_u32 {
         let x = f64::from(i);
         resampler.add_event_at(
-            make_scroll_event(Offset::new(x, 0.0), Offset::new(0.0, 1.0)),
+            PointerEvent::Scroll(ScrollEvent::new(
+                PointerInfo::new(contact(), PointerKind::Mouse),
+                flui_platform_api::EventTime::from_nanos(0),
+                PointerPosition::try_new(flui_foundation::geometry::Point::new(x, 0.0))
+                    .expect("finite scroll position"),
+                ScrollDelta::try_new(ScrollUnit::Pixels, 0.0, 1.0).expect("finite scroll delta"),
+            )),
             t0 + ms(x),
         );
         resampler.add_event_at(move_to(x), t0 + ms(x));
     }
     resampler.add_event_at(
-        make_up_event_for_id(contact(), Offset::new(500.0, 0.0), PointerType::Touch),
+        make_up_event_for_id(contact(), Offset::new(500.0, 0.0), PointerKind::Touch)
+            .expect("valid fixture sample"),
         t0 + ms(501.0),
     );
     assert!(
@@ -578,6 +747,10 @@ fn resampler_interpolates_on_event_time_and_never_drops_terminals() {
     run_rows(
         "resampler",
         &[
+            (
+                "binding keeps all measured packets",
+                binding_keeps_all_measured_packets_and_only_latest_predictions,
+            ),
             (
                 "interpolation factor",
                 interpolation_uses_the_bracketing_samples,
@@ -598,6 +771,83 @@ fn resampler_interpolates_on_event_time_and_never_drops_terminals() {
             ),
         ],
     );
+}
+
+fn binding_keeps_all_measured_packets_and_only_latest_predictions() {
+    use flui_foundation::geometry::Point;
+    use flui_platform_api::{
+        EventTime,
+        pointer::{PointerButtons, PointerMove, PointerSample},
+    };
+    for contact_active in [false, true] {
+        let binding = GestureBinding::new();
+        let observed = Rc::new(RefCell::new(Vec::new()));
+        let output = observed.clone();
+        binding
+            .pointer_router()
+            .add_global_handler(Rc::new(move |event| {
+                if let PointerEvent::Move(update) = event {
+                    output.borrow_mut().push(update.clone());
+                }
+            }));
+        let kind = if contact_active {
+            PointerKind::Touch
+        } else {
+            PointerKind::Mouse
+        };
+        if contact_active {
+            binding.handle_pointer_event(
+                &make_down_event_for_id(contact(), Offset::ZERO, kind).expect("finite Down"),
+                |_| HitTestResult::new(),
+            );
+        }
+        let sample = |at: u64| {
+            PointerSample::new(
+                EventTime::from_nanos(at * 1_000_000),
+                PointerPosition::try_new(Point::new(at as f64, 0.0))
+                    .expect("finite measured position"),
+            )
+        };
+        for at in [10_u64, 20, 30] {
+            let update = PointerMove::new(
+                PointerInfo::new(contact(), kind),
+                PointerButtons::NONE,
+                sample(at),
+            )
+            .with_coalesced(vec![sample(at - 5)])
+            .with_predicted(vec![sample(at + 5)]);
+            binding.handle_pointer_event(&PointerEvent::Move(update), |_| HitTestResult::new());
+        }
+        assert_eq!(binding.flush_pending_moves(), 1, "one combined observation");
+        let updates = observed.borrow();
+        let [update] = updates.as_slice() else {
+            panic!("one Move")
+        };
+        let measured: Vec<_> = update
+            .coalesced()
+            .iter()
+            .chain(std::iter::once(update.current()))
+            .map(|sample| (sample.time.as_nanos(), sample.position.get().x))
+            .collect();
+        assert_eq!(
+            measured,
+            [
+                (5_000_000, 5.0),
+                (10_000_000, 10.0),
+                (15_000_000, 15.0),
+                (20_000_000, 20.0),
+                (25_000_000, 25.0),
+                (30_000_000, 30.0)
+            ],
+            "all measured samples survive, contact={contact_active}"
+        );
+        assert_eq!(update.predicted().len(), 1);
+        assert_eq!(
+            update.predicted()[0].time.as_nanos(),
+            35_000_000,
+            "old predictions are not measurements"
+        );
+    }
 }
 
 /// The subscriber reads the public handle on a worker with a bounded wait:
@@ -648,22 +898,19 @@ fn queue_diagnostic_permits_inspection() {
             }
         };
         for _ in 0..50 {
-            enqueue(make_down_event_for_id(
-                contact(),
-                Offset::ZERO,
-                PointerType::Touch,
-            ));
-            enqueue(make_up_event_for_id(
-                contact(),
-                Offset::ZERO,
-                PointerType::Touch,
-            ));
+            enqueue(
+                make_down_event_for_id(contact(), Offset::ZERO, PointerKind::Touch)
+                    .expect("valid fixture sample"),
+            );
+            enqueue(
+                make_up_event_for_id(contact(), Offset::ZERO, PointerKind::Touch)
+                    .expect("valid fixture sample"),
+            );
         }
-        enqueue(make_down_event_for_id(
-            contact(),
-            Offset::ZERO,
-            PointerType::Touch,
-        ));
+        enqueue(
+            make_down_event_for_id(contact(), Offset::ZERO, PointerKind::Touch)
+                .expect("valid fixture sample"),
+        );
         let observed = Arc::new(AtomicUsize::new(0));
         flui_testing::log_capture::disarm_interest_cache();
         tracing::subscriber::with_default(
@@ -702,8 +949,8 @@ fn op() -> impl Strategy<Value = Op> {
 
 fn terminal_tag(event: &PointerEvent) -> Option<(char, u64)> {
     match event {
-        PointerEvent::Down(button) => Some(('d', button.state.position.y.to_bits())),
-        PointerEvent::Up(button) => Some(('u', button.state.position.y.to_bits())),
+        PointerEvent::Down(button) => Some(('d', button.sample.position.get().y.to_bits())),
+        PointerEvent::Up(button) => Some(('u', button.sample.position.get().y.to_bits())),
         PointerEvent::Cancel(_) => Some(('c', 0)),
         _ => None,
     }
@@ -736,17 +983,17 @@ proptest! {
             let (event, at) = match *op {
                 Op::Down(t) => {
                     let (ns, at) = stamp(t);
-                    (with_time(make_down_event_for_id(contact(), Offset::new(0.0, tag), PointerType::Touch), ns), at)
+                    (with_time(make_down_event_for_id(contact(), Offset::new(0.0, tag), PointerKind::Touch).expect("finite fixture"), ns), at)
                 }
                 Op::Move(t, x) => {
                     let (ns, at) = stamp(t);
-                    (with_time(make_move_event_for_id(contact(), Offset::new(x, 0.0), PointerType::Touch), ns), at)
+                    (with_time(make_move_event_for_id(contact(), Offset::new(x, 0.0), PointerKind::Touch).expect("finite fixture"), ns), at)
                 }
                 Op::Up(t) => {
                     let (ns, at) = stamp(t);
-                    (with_time(make_up_event_for_id(contact(), Offset::new(0.0, tag), PointerType::Touch), ns), at)
+                    (with_time(make_up_event_for_id(contact(), Offset::new(0.0, tag), PointerKind::Touch).expect("finite fixture"), ns), at)
                 }
-                Op::Cancel => (make_cancel_event_for_id(contact(), PointerType::Touch), t0),
+                Op::Cancel => (make_cancel_event_for_id(contact(), PointerKind::Touch), t0),
                 Op::Sample(step) => {
                     frame += Duration::from_millis(step);
                     resampler.sample(frame, frame + ms(16.0), |event| emitted.push(event));
@@ -773,84 +1020,60 @@ proptest! {
 }
 
 // ----------------------------------------------------------------------------
-// Raw input, prediction and pan/zoom
+// Checked pan/zoom transport
 // ----------------------------------------------------------------------------
 
-/// A raw-input callback may replace or clear itself; the next event uses the
-/// replacement.
-fn raw_input_callback_can_replace_itself() {
-    let handler = RawInputHandler::new();
-    let seen = Rc::new(RefCell::new(Vec::new()));
-    let reentrant = handler.clone();
-    let first = Rc::clone(&seen);
-    let second = Rc::clone(&seen);
-    handler.set_callback(move |_| {
-        first.borrow_mut().push("first");
-        let second = Rc::clone(&second);
-        reentrant.set_callback(move |_| second.borrow_mut().push("second"));
-    });
-    let down = make_down_event_for_id(contact(), Offset::ZERO, PointerType::Touch);
-    handler.handle_event(&down);
-    handler.handle_event(&move_to(4.0));
-    assert_eq!(*seen.borrow(), ["first", "second"]);
-}
+fn pinch_scale_is_finite_and_positive() {
+    use flui_interaction::events::{PanZoomEvent, PanZoomPhase, PanZoomTransform};
+    use flui_interaction::{EventPropagation, HitTestEntry, routing::InteractionLane};
 
-/// An out-of-range smoothing factor and noisy acceleration still give a
-/// finite prediction no further ahead than the fling bound allows.
-fn prediction_stays_finite_and_bounded() {
-    let t0 = origin();
-    let mut predictor = InputPredictor::with_config(PredictionConfig {
-        max_prediction_time: Duration::from_secs(10),
-        use_acceleration: true,
-        smoothing: 2.0,
-    });
-    let mut worst: f64 = 0.0;
-    for i in 0..200_u32 {
-        let jitter = if i % 2 == 0 { 3.0 } else { -3.0 };
-        let position = Offset::new(f64::from(i) * 2.0 + jitter, 0.0);
-        predictor.add_sample(t0 + ms(2.0 * f64::from(i)), position);
-        let predicted = predictor.predict(Duration::from_millis(25));
-        assert!(predicted.position.dx.is_finite() && predicted.position.dy.is_finite());
-        assert!(predicted.confidence.is_finite());
-        worst = worst.max((predicted.position - position).distance());
+    // The old upstream pinch fractions NaN/-1/-3/inf imply these invalid
+    // cumulative scales. Checked transport refuses them before routing.
+    for scale in [f64::NAN, 0.0, -2.0, f64::INFINITY] {
+        assert!(
+            PanZoomTransform::try_new(Offset::ZERO, scale, 0.0).is_err(),
+            "invalid cumulative scale {scale}"
+        );
     }
-    let reach = 2.0 * DEFAULT_MAX_FLING_VELOCITY * 0.025;
-    assert!(
-        worst <= reach,
-        "prediction overshoots {worst} px past the {reach} px bound"
+    let lane = InteractionLane::try_new().expect("panzoom owner");
+    let handle = lane.dispatch_handle();
+    let observed = Rc::new(RefCell::new(Vec::new()));
+    lane.enter(|| {
+        let sink = observed.clone();
+        let target = handle
+            .register_pan_zoom(move |dispatch| {
+                let event = dispatch.local;
+                if let PanZoomPhase::Update(transform) = event.phase {
+                    sink.borrow_mut()
+                        .push((transform.scale(), transform.rotation()));
+                }
+                EventPropagation::Continue
+            })
+            .expect("panzoom target");
+        let mut path = HitTestResult::new();
+        path.add(HitTestEntry::new(flui_foundation::RenderId::new(1)).pan_zoom_target(target));
+        let event = PointerEvent::PanZoom(PanZoomEvent::new(
+            PointerInfo::new(contact(), PointerKind::Trackpad),
+            flui_platform_api::EventTime::from_nanos(1_000),
+            PointerPosition::try_new(flui_foundation::geometry::Point::ZERO)
+                .expect("finite focal position"),
+            PanZoomPhase::Update(
+                PanZoomTransform::try_new(Offset::ZERO, 1.25, 0.0).expect("valid zoom"),
+            ),
+        ));
+        GestureBinding::new().handle_pointer_event_with_result(&event, &path);
+    });
+    assert_eq!(
+        &*observed.borrow(),
+        &[(1.25, 0.0)],
+        "checked cumulative pinch reaches its actual target"
     );
 }
 
-fn pinch_scale_is_finite_and_positive() {
-    for fraction in [f64::NAN, -1.0, -3.0, f64::INFINITY] {
-        let event = make_pinch_gesture_event(Offset::ZERO, fraction);
-        let Some(PointerPanZoomEvent::Update {
-            scale, rotation, ..
-        }) = from_w3c_event(&event)
-        else {
-            panic!("a gesture event converts to an Update");
-        };
-        assert!(
-            scale.is_finite() && scale > 0.0,
-            "pinch {fraction} gave scale {scale}"
-        );
-        assert!(rotation.is_finite());
-    }
-    let event = make_pinch_gesture_event(Offset::ZERO, 0.25);
-    let Some(PointerPanZoomEvent::Update { scale, .. }) = from_w3c_event(&event) else {
-        panic!("a gesture event converts to an Update");
-    };
-    assert_eq!(scale, 1.25, "a valid per-tick pinch passes through");
-}
-
 #[test]
-fn raw_input_prediction_and_pan_zoom_stay_consistent() {
+fn checked_pan_zoom_reaches_its_actual_target() {
     run_rows(
         "processing",
-        &[
-            ("raw input reentry", raw_input_callback_can_replace_itself),
-            ("prediction bounds", prediction_stays_finite_and_bounded),
-            ("pinch scale", pinch_scale_is_finite_and_positive),
-        ],
+        &[("pinch scale", pinch_scale_is_finite_and_positive)],
     );
 }

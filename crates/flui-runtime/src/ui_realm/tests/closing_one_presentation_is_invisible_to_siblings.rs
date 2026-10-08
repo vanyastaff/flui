@@ -361,11 +361,11 @@ fn run_custom_key_child(fail: bool) {
     assert_eq!(realm.global_key_scope.claim_count(), 2);
 }
 
-impl flui_interaction::CustomGestureRecognizer for CloseArenaMember {
-    fn on_arena_accept(&self, _: flui_interaction::PointerId) {
+impl flui_interaction::GestureArenaMember for CloseArenaMember {
+    fn accept_gesture(&self, _: flui_interaction::PointerId) {
         self.calls.set(self.calls.get() + 1);
     }
-    fn on_arena_reject(&self, _: flui_interaction::PointerId) {
+    fn reject_gesture(&self, _: flui_interaction::PointerId) {
         let _ = (&self.captures.first, &self.captures.second);
         self.calls.set(self.calls.get() + 1);
         CLOSE_REENTRY.with(|hook| {
@@ -721,8 +721,9 @@ fn run_scoped_routes_child(fail_cursor: bool) {
     };
     let event = flui_interaction::events::make_down_event(
         flui_foundation::geometry::Offset::new(2.0, 2.0),
-        flui_interaction::events::PointerType::Touch,
-    );
+        flui_interaction::events::PointerKind::Touch,
+    )
+    .expect("finite test position");
     let withdrawal_seen = Rc::new(Cell::new(None));
     let probe = WithdrawalProbe {
         focus: realm.focus_manager(),
@@ -924,10 +925,6 @@ fn run_scoped_routes_child(fail_cursor: bool) {
     );
 }
 
-#[expect(
-    clippy::arc_with_non_send_sync,
-    reason = "the arena requires Arc members; these hostile capture probes remain on the owner thread"
-)]
 pub(crate) fn run_presentation_close_child(kind: &str) {
     if kind == "realm-sibling" {
         run_realm_sibling_child();
@@ -1008,7 +1005,7 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
         .root_scope()
         .attach_node(&focused)
         .expect("focus node attaches");
-    focused.request_focus();
+    let _ = focused.request_focus();
     assert!(focused.has_primary_focus());
 
     let input = realm.text_input_handle();
@@ -1065,12 +1062,13 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
                 drops: Arc::clone(&arena_drops),
             },
         };
+        let member = Rc::new(CloseArenaMember {
+            calls: Rc::clone(&arena_calls),
+            captures,
+        });
         let entry = arena.add(
-            flui_interaction::PointerId::PRIMARY,
-            Arc::new(CloseArenaMember {
-                calls: Rc::clone(&arena_calls),
-                captures,
-            }),
+            flui_interaction::PointerId::new(std::num::NonZeroU64::MIN),
+            &member,
         );
         let captures = DropCompetition {
             first: CursorCapture {
@@ -1086,6 +1084,9 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
             .gestures()
             .pointer_router()
             .add_global_handler(Rc::new(move |_| {
+                // The presentation's registered handler owns its recognizer;
+                // arena admission itself intentionally retains only Weak.
+                let _ = &member;
                 let _ = (&captures.first, &captures.second);
             }));
         Some((arena, entry))
@@ -1187,7 +1188,7 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
                 };
                 target_focus.add_global_key_handler(Rc::new(move |_| {
                     let _ = (&bundle.first, &bundle.second);
-                    false
+                    flui_interaction::KeyEventResult::Ignored
                 }));
             }));
         });
@@ -1224,13 +1225,21 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
                 drops: Arc::clone(&arena_drops),
             },
         };
-        Some(realm.gestures().arena().add(
-            flui_interaction::PointerId::PRIMARY,
-            Arc::new(CloseArenaMember {
-                calls: Rc::clone(&arena_calls),
-                captures,
-            }),
-        ))
+        let member = Rc::new(CloseArenaMember {
+            calls: Rc::clone(&arena_calls),
+            captures,
+        });
+        let entry = realm.gestures().arena().add(
+            flui_interaction::PointerId::new(std::num::NonZeroU64::MIN),
+            &member,
+        );
+        realm
+            .gestures()
+            .pointer_router()
+            .add_global_handler(Rc::new(move |_| {
+                let _ = &member;
+            }));
+        Some(entry)
     } else {
         None
     };
@@ -1330,8 +1339,8 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
                 },
             };
             let rejected = arena.add(
-                flui_interaction::PointerId::PRIMARY,
-                Arc::new(CloseArenaMember {
+                flui_interaction::PointerId::new(std::num::NonZeroU64::MIN),
+                &Rc::new(CloseArenaMember {
                     calls: Rc::clone(&arena_calls),
                     captures,
                 }),

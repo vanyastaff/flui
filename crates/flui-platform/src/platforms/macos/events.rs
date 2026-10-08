@@ -1,238 +1,403 @@
-//! macOS event conversion to W3C ui-events (0.3 API)
+//! AppKit input translated directly into the owned pointer vocabulary.
 //!
-//! Converts NSEvent to platform-agnostic ui-events types.
-//!
-//! # Architecture
-//!
-//! ```text
-//! NSEvent (Cocoa)
-//!     ↓
-//! convert_ns_event() (this module)
-//!     ↓
-//! PlatformInput (ui-events wrapper)
-//!     ↓
-//! WindowCallbacks::dispatch_input
-//! ```
-//!
-//! # Key Mappings
-//!
-//! - NSEvent.characters / keyCode → keyboard_types::Key (named-key
-//!   intercepts and the physical-key `Code` table live in
-//!   `crate::shared::keys_macos`, where their tests execute on any host)
-//! - NSEventModifierFlags → keyboard_types::Modifiers
-//! - NSEventType → PointerEvent / KeyboardEvent
-//! - NSPoint → logical pixels (NSEvent coordinates are already logical;
-//!   the Y axis is flipped from bottom-left to top-left origin)
+//! Mouse chords belong to the receiving view; trackpad magnify and rotate
+//! components share one cumulative session. Two-finger scroll remains scroll,
+//! retaining the native finger/momentum phase and delta precision.
 
-use dpi::{PhysicalPosition, PhysicalSize};
-use keyboard_types::{Key, Modifiers, NamedKey};
-use objc2::{ClassType, msg_send};
-use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType};
-use objc2_foundation::NSPoint;
-use ui_events::{
-    keyboard::{KeyState, KeyboardEvent},
-    pointer::{
-        PointerButton, PointerButtonEvent, PointerButtons, PointerEvent, PointerInfo,
-        PointerOrientation, PointerScrollEvent, PointerState, PointerType, PointerUpdate,
-    },
+use std::num::{NonZeroU8, NonZeroU64};
+use std::time::Duration;
+
+use flui_foundation::geometry::{Offset, Point};
+use flui_platform_api::EventTime;
+use flui_platform_api::keyboard::Modifiers as OwnedModifiers;
+use flui_platform_api::keyboard::{Key, KeyEvent, KeyRepeat, KeyState, Modifiers, NamedKey};
+use flui_platform_api::pointer::{
+    ButtonChange, CancelReason, PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerButton,
+    PointerButtons, PointerCancel, PointerEvent, PointerId, PointerInfo, PointerKind, PointerMove,
+    PointerPosition, PointerPress, PointerRelease, PointerRole, PointerSample, PointerSignal,
+    Pressure, ScrollDelta, ScrollEvent, ScrollPhase, ScrollPrecision, ScrollUnit,
 };
+use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventPhase, NSEventType};
+use objc2_foundation::NSProcessInfo;
 
-use crate::{
-    shared::events::{event_timestamp_ns, primary_mouse_info},
-    traits::PlatformInput,
-};
+use crate::traits::PlatformInput;
 
-// ============================================================================
-// NSEvent Conversion
-// ============================================================================
-
-/// Convert NSEvent to PlatformInput
-///
-/// `view_height` is the receiving view's logical height, used to flip the
-/// Y axis from macOS bottom-left origin to the framework's top-left origin.
-///
-/// Returns None if the event type is not supported (e.g., gesture events)
-///
-/// # Safety
-///
-/// `ns_event` must be a valid, live `NSEvent*` for the duration of the call.
-pub unsafe fn convert_ns_event(
-    ns_event: *mut std::ffi::c_void,
-    scale_factor: f64,
-    view_height: f64,
-) -> Option<PlatformInput> {
-    if ns_event.is_null() {
-        return None;
-    }
-    // SAFETY: the caller guarantees `ns_event` points to a live `NSEvent`; the
-    // borrow is scoped to this call.
-    let event: &NSEvent = unsafe { &*(ns_event as *const NSEvent) };
-    convert_typed_event(event, scale_factor, view_height)
+struct Gesture {
+    pointer: PointerInfo,
+    transform: PanZoomTransform,
+    components: u8,
+    position: PointerPosition,
 }
 
-/// Convert a typed `NSEvent` to `PlatformInput`.
-///
-/// Split from [`convert_ns_event`] so the conversion itself is entirely typed
-/// objc2 and the raw-pointer cast lives at one boundary.
-fn convert_typed_event(
-    event: &NSEvent,
-    scale_factor: f64,
-    view_height: f64,
-) -> Option<PlatformInput> {
-    {
-        let event_type = event.r#type();
+/// Owner-local AppKit input state, committed before callbacks run.
+pub(super) struct MacInputState {
+    buttons: PointerButtons,
+    gesture: Option<Gesture>,
+    next_gesture: Option<NonZeroU64>,
+}
 
-        match event_type {
-            // Keyboard events
-            NSEventType::KeyDown => {
-                let key_code = event.keyCode();
-                let key = extract_key(event, key_code);
-                let code = crate::shared::keys_macos::keycode_to_code(key_code);
-                let modifiers = extract_modifiers(event);
-                let is_repeat = event.isARepeat();
-
-                Some(PlatformInput::Keyboard(KeyboardEvent {
-                    state: KeyState::Down,
-                    key,
-                    code,
-                    location: crate::shared::keys::location_for_code(code),
-                    modifiers,
-                    repeat: is_repeat,
-                    is_composing: false,
-                }))
-            }
-
-            NSEventType::KeyUp => {
-                let key_code = event.keyCode();
-                let key = extract_key(event, key_code);
-                let code = crate::shared::keys_macos::keycode_to_code(key_code);
-                let modifiers = extract_modifiers(event);
-
-                Some(PlatformInput::Keyboard(KeyboardEvent {
-                    state: KeyState::Up,
-                    key,
-                    code,
-                    location: crate::shared::keys::location_for_code(code),
-                    modifiers,
-                    repeat: false,
-                    is_composing: false,
-                }))
-            }
-
-            // Mouse button events
-            NSEventType::LeftMouseDown => Some(convert_mouse_button(
-                event,
-                scale_factor,
-                view_height,
-                PointerButton::Primary,
-                true,
-            )),
-
-            NSEventType::LeftMouseUp => Some(convert_mouse_button(
-                event,
-                scale_factor,
-                view_height,
-                PointerButton::Primary,
-                false,
-            )),
-
-            NSEventType::RightMouseDown => Some(convert_mouse_button(
-                event,
-                scale_factor,
-                view_height,
-                PointerButton::Secondary,
-                true,
-            )),
-
-            NSEventType::RightMouseUp => Some(convert_mouse_button(
-                event,
-                scale_factor,
-                view_height,
-                PointerButton::Secondary,
-                false,
-            )),
-
-            NSEventType::OtherMouseDown => Some(convert_mouse_button(
-                event,
-                scale_factor,
-                view_height,
-                PointerButton::Auxiliary,
-                true,
-            )),
-
-            NSEventType::OtherMouseUp => Some(convert_mouse_button(
-                event,
-                scale_factor,
-                view_height,
-                PointerButton::Auxiliary,
-                false,
-            )),
-
-            // Mouse movement events
-            NSEventType::MouseMoved
-            | NSEventType::LeftMouseDragged
-            | NSEventType::RightMouseDragged
-            | NSEventType::OtherMouseDragged => {
-                Some(convert_mouse_move(event, scale_factor, view_height))
-            }
-
-            // Scroll events
-            NSEventType::ScrollWheel => {
-                Some(convert_scroll_event(event, scale_factor, view_height))
-            }
-
-            // Trackpad pinch/rotation — the native producer for the pan-zoom
-            // lane (ordinary macOS apps select THIS backend, not winit).
-            // `magnification` is the fraction the shared conversion expects;
-            // `rotation` is counterclockwise degrees, converted to the
-            // lane's clockwise radians in the same shared function the winit
-            // boundary uses, so the two backends cannot drift.
-            NSEventType::Magnify => {
-                let magnification = event.magnification();
-                crate::shared::gestures::pinch(magnification)
-                    .map(|gesture| convert_gesture_event(event, scale_factor, view_height, gesture))
-            }
-            NSEventType::Rotate => {
-                let degrees = event.rotation();
-                Some(convert_gesture_event(
-                    event,
-                    scale_factor,
-                    view_height,
-                    crate::shared::gestures::rotation_ccw_degrees(degrees),
-                ))
-            }
-
-            // Mouse enter/exit carry no useful position payload in the W3C
-            // model — Enter/Leave only identify the pointer.
-            NSEventType::MouseEntered => Some(PlatformInput::Pointer(PointerEvent::Enter(
-                primary_mouse_info(),
-            ))),
-
-            NSEventType::MouseExited => Some(PlatformInput::Pointer(PointerEvent::Leave(
-                primary_mouse_info(),
-            ))),
-
-            // Unsupported events
-            _ => None,
+impl Default for MacInputState {
+    fn default() -> Self {
+        Self {
+            buttons: PointerButtons::NONE,
+            gesture: None,
+            next_gesture: NonZeroU64::new(2),
         }
     }
 }
 
-// ============================================================================
-// Keyboard Event Conversion
-// ============================================================================
+impl MacInputState {
+    /// # Safety
+    /// The pointer must refer to the live NSEvent delivered to this view.
+    pub(super) unsafe fn convert(
+        &mut self,
+        event: *mut std::ffi::c_void,
+        view_height: f64,
+    ) -> Vec<PlatformInput> {
+        if event.is_null() {
+            return Vec::new();
+        }
+        // SAFETY: the caller supplies the live event for the duration of this call.
+        let event = unsafe { &*event.cast::<NSEvent>() };
+        self.convert_typed(event, view_height)
+    }
 
-/// Extract key from NSEvent
-///
-/// The shared named-key table (`shared::keys_macos`) intercepts keys whose
-/// `NSEvent.characters` are control characters or private-use-area
-/// codepoints; everything else types through `characters`, the layout- and
-/// modifier-aware translation.
-///
-/// # Safety
-///
-/// `ns_event` must be a valid, live `NSEvent*` of a keyboard event, and
-/// `key_code` must be its `keyCode`.
+    fn convert_typed(&mut self, event: &NSEvent, view_height: f64) -> Vec<PlatformInput> {
+        let time = native_time(
+            event.timestamp(),
+            NSProcessInfo::processInfo().systemUptime(),
+        );
+        let event_type = event.r#type();
+        if event_type == NSEventType::KeyDown || event_type == NSEventType::KeyUp {
+            let key_code = event.keyCode();
+            let code = crate::shared::keys_macos::keycode_to_code(key_code);
+            return vec![PlatformInput::Keyboard(
+                KeyEvent::new(
+                    if event_type == NSEventType::KeyDown {
+                        KeyState::Down
+                    } else {
+                        KeyState::Up
+                    },
+                    extract_key(event, key_code),
+                    code,
+                    time,
+                )
+                .with_location(crate::shared::keys::location_for_code(code))
+                .with_modifiers(extract_modifiers(event))
+                .with_repeat(
+                    if event_type == NSEventType::KeyDown && event.isARepeat() {
+                        KeyRepeat::AutoRepeat
+                    } else {
+                        KeyRepeat::First
+                    },
+                ),
+            )];
+        }
+        let pointer = mouse_info();
+        let modifiers = extract_modifiers(event);
+        let location = event.locationInWindow();
+        let position =
+            PointerPosition::try_new(Point::new(location.x, view_height - location.y)).ok();
+        if event_type == NSEventType::MouseEntered || event_type == NSEventType::MouseExited {
+            let mut signal = PointerSignal::new(pointer, time);
+            if let Some(position) = position {
+                signal = signal.with_position(position);
+            }
+            return vec![PlatformInput::Pointer(
+                if event_type == NSEventType::MouseEntered {
+                    PointerEvent::Enter(signal)
+                } else {
+                    PointerEvent::Leave(signal)
+                },
+            )];
+        }
+        if event_type == NSEventType::MouseCancelled {
+            if self.buttons.is_empty() {
+                return Vec::new();
+            }
+            self.buttons = PointerButtons::NONE;
+            return vec![PlatformInput::Pointer(PointerEvent::Cancel(
+                PointerCancel::new(pointer, time, CancelReason::Platform),
+            ))];
+        }
+        let is_press = matches!(
+            event_type,
+            NSEventType::LeftMouseDown | NSEventType::RightMouseDown | NSEventType::OtherMouseDown
+        );
+        let is_release = matches!(
+            event_type,
+            NSEventType::LeftMouseUp | NSEventType::RightMouseUp | NSEventType::OtherMouseUp
+        );
+        if is_press || is_release {
+            let Some(button) = mouse_button(event.buttonNumber()) else {
+                return Vec::new();
+            };
+            let before = self.buttons;
+            if is_press && before.contains(button) || is_release && !before.contains(button) {
+                return Vec::new();
+            }
+            let Some(position) = position else {
+                if is_release {
+                    self.buttons = PointerButtons::NONE;
+                    return vec![PlatformInput::Pointer(PointerEvent::Cancel(
+                        PointerCancel::new(pointer, time, CancelReason::InvalidInput),
+                    ))];
+                }
+                return Vec::new();
+            };
+            self.buttons = if is_press {
+                before.with(button)
+            } else {
+                before.without(button)
+            };
+            let sample = PointerSample::new(time, position);
+            let event = if is_press {
+                let mut press =
+                    PointerPress::new(pointer, button, before, sample).with_modifiers(modifiers);
+                if let Ok(count) = u8::try_from(event.clickCount())
+                    && let Some(count) = NonZeroU8::new(count)
+                {
+                    press = press.with_click_count(count);
+                }
+                if before.is_empty() {
+                    PointerEvent::Down(press)
+                } else {
+                    PointerEvent::ButtonChange(ButtonChange::Pressed(press))
+                }
+            } else {
+                let release =
+                    PointerRelease::new(pointer, button, before, sample).with_modifiers(modifiers);
+                if self.buttons.is_empty() {
+                    PointerEvent::Up(release)
+                } else {
+                    PointerEvent::ButtonChange(ButtonChange::Released(release))
+                }
+            };
+            return vec![PlatformInput::Pointer(event)];
+        }
+        let position = position.or_else(|| {
+            if matches!(
+                event_type,
+                NSEventType::Magnify | NSEventType::Rotate | NSEventType::EndGesture
+            ) && (event_type == NSEventType::EndGesture
+                || event.phase().contains(NSEventPhase::Ended)
+                || event.phase().contains(NSEventPhase::Cancelled))
+            {
+                self.gesture.as_ref().map(|gesture| gesture.position)
+            } else {
+                None
+            }
+        });
+        let Some(position) = position else {
+            return Vec::new();
+        };
+        if matches!(
+            event_type,
+            NSEventType::MouseMoved
+                | NSEventType::LeftMouseDragged
+                | NSEventType::RightMouseDragged
+                | NSEventType::OtherMouseDragged
+                | NSEventType::Pressure
+        ) {
+            let mut sample = PointerSample::new(time, position);
+            // AppKit pressure stages have separate normalized curves. Keep the
+            // first-stage reading; summing stages would invent a pressure range.
+            if event_type == NSEventType::Pressure
+                && event.stage() == 1
+                && let Ok(pressure) = Pressure::try_new(event.pressure())
+            {
+                sample = sample.with_pressure(pressure);
+            }
+            return vec![PlatformInput::Pointer(PointerEvent::Move(
+                PointerMove::new(pointer, self.buttons, sample).with_modifiers(modifiers),
+            ))];
+        }
+        if event_type == NSEventType::ScrollWheel {
+            let precise = event.hasPreciseScrollingDeltas();
+            let unit = if precise {
+                ScrollUnit::Pixels
+            } else {
+                ScrollUnit::Lines
+            };
+            let delta =
+                ScrollDelta::try_new(unit, -event.scrollingDeltaX(), -event.scrollingDeltaY())
+                    .unwrap_or_else(|_| ScrollDelta::zero(unit));
+            let mut scroll = ScrollEvent::new(pointer, time, position, delta)
+                .with_modifiers(modifiers)
+                .with_precision(if precise {
+                    ScrollPrecision::Precise
+                } else {
+                    ScrollPrecision::Notched
+                });
+            if let Some(phase) = scroll_phase(event.phase(), event.momentumPhase()) {
+                scroll = scroll.with_phase(phase);
+            }
+            return vec![PlatformInput::Pointer(PointerEvent::Scroll(scroll))];
+        }
+        if event_type == NSEventType::BeginGesture || event_type == NSEventType::EndGesture {
+            let phase = if event_type == NSEventType::BeginGesture {
+                NSEventPhase::Began
+            } else {
+                // A native outer terminal also retires a component whose own
+                // Ended notification never arrived.
+                if let Some(gesture) = self.gesture.as_mut() {
+                    gesture.components = 4;
+                }
+                NSEventPhase::Ended
+            };
+            return self
+                .gesture(4, phase, (1.0, 0.0), position, time, modifiers)
+                .into_iter()
+                .map(|event| PlatformInput::Pointer(PointerEvent::PanZoom(event)))
+                .collect();
+        }
+        let (component, scale, rotation) = if event_type == NSEventType::Magnify {
+            (1, 1.0 + event.magnification(), 0.0)
+        } else if event_type == NSEventType::Rotate {
+            (2, 1.0, -f64::from(event.rotation()).to_radians())
+        } else {
+            return Vec::new();
+        };
+        self.gesture(
+            component,
+            event.phase(),
+            (scale, rotation),
+            position,
+            time,
+            modifiers,
+        )
+        .into_iter()
+        .map(|event| PlatformInput::Pointer(PointerEvent::PanZoom(event)))
+        .collect()
+    }
+
+    fn gesture(
+        &mut self,
+        component: u8,
+        phase: NSEventPhase,
+        (scale, rotation): (f64, f64),
+        position: PointerPosition,
+        time: EventTime,
+        modifiers: OwnedModifiers,
+    ) -> Vec<PanZoomEvent> {
+        let mut events = Vec::new();
+        if phase.contains(NSEventPhase::Began) {
+            if self.gesture.is_none() {
+                let Some(id) = self.next_gesture else {
+                    return events;
+                };
+                self.next_gesture = id.get().checked_add(1).and_then(NonZeroU64::new);
+                let pointer = PointerInfo::new(PointerId::new(id), PointerKind::Trackpad)
+                    .with_role(PointerRole::Primary);
+                self.gesture = Some(Gesture {
+                    pointer,
+                    transform: PanZoomTransform::IDENTITY,
+                    components: 0,
+                    position,
+                });
+                events.push(
+                    PanZoomEvent::new(pointer, time, position, PanZoomPhase::Start)
+                        .with_modifiers(modifiers),
+                );
+            }
+            if let Some(gesture) = self.gesture.as_mut() {
+                gesture.components |= component;
+            }
+        }
+        let Some(gesture) = self.gesture.as_mut() else {
+            return events;
+        };
+        gesture.position = position;
+        if phase.contains(NSEventPhase::Cancelled) {
+            let pointer = gesture.pointer;
+            self.gesture = None;
+            events.push(
+                PanZoomEvent::new(pointer, time, position, PanZoomPhase::Cancelled)
+                    .with_modifiers(modifiers),
+            );
+            return events;
+        }
+        if gesture.components & component == 0 {
+            return events;
+        }
+        if (scale != 1.0 || rotation != 0.0)
+            && let Ok(transform) = PanZoomTransform::try_new(
+                Offset::ZERO,
+                gesture.transform.scale() * scale,
+                gesture.transform.rotation() + rotation,
+            )
+        {
+            gesture.transform = transform;
+            events.push(
+                PanZoomEvent::new(
+                    gesture.pointer,
+                    time,
+                    position,
+                    PanZoomPhase::Update(transform),
+                )
+                .with_modifiers(modifiers),
+            );
+        }
+        if phase.contains(NSEventPhase::Ended) {
+            gesture.components &= !component;
+            if gesture.components == 0 {
+                let pointer = gesture.pointer;
+                self.gesture = None;
+                events.push(
+                    PanZoomEvent::new(pointer, time, position, PanZoomPhase::End)
+                        .with_modifiers(modifiers),
+                );
+            }
+        }
+        events
+    }
+}
+
+fn mouse_info() -> PointerInfo {
+    PointerInfo::new(PointerId::new(NonZeroU64::MIN), PointerKind::Mouse)
+        .with_role(PointerRole::Primary)
+}
+
+fn mouse_button(number: isize) -> Option<PointerButton> {
+    // Native numbers are zero-based; FLUI reserves six for the pen eraser tool.
+    let number = match number {
+        0..=4 => number + 1,
+        5..=30 => number + 2,
+        _ => return None,
+    };
+    PointerButton::try_from(u8::try_from(number).ok()?).ok()
+}
+
+fn scroll_phase(phase: NSEventPhase, momentum: NSEventPhase) -> Option<ScrollPhase> {
+    if momentum.contains(NSEventPhase::Ended) || momentum.contains(NSEventPhase::Cancelled) {
+        Some(ScrollPhase::MomentumEnded)
+    } else if momentum.contains(NSEventPhase::Began) {
+        Some(ScrollPhase::MomentumBegan)
+    } else if momentum.contains(NSEventPhase::Changed)
+        || momentum.contains(NSEventPhase::Stationary)
+    {
+        Some(ScrollPhase::MomentumChanged)
+    } else if phase.contains(NSEventPhase::Cancelled) {
+        Some(ScrollPhase::Cancelled)
+    } else if phase.contains(NSEventPhase::Ended) {
+        Some(ScrollPhase::Ended)
+    } else if phase.contains(NSEventPhase::Began) {
+        Some(ScrollPhase::Began)
+    } else if phase.contains(NSEventPhase::Changed) || phase.contains(NSEventPhase::Stationary) {
+        Some(ScrollPhase::Changed)
+    } else {
+        None
+    }
+}
+
+fn native_time(timestamp: f64, uptime: f64) -> EventTime {
+    let now = crate::shared::events::event_timestamp_ns();
+    let age = Duration::try_from_secs_f64((uptime - timestamp).max(0.0))
+        .ok()
+        .and_then(|duration| u64::try_from(duration.as_nanos()).ok());
+    EventTime::from_nanos(age.map_or(now, |age| now.saturating_sub(age)))
+}
+
 fn extract_key(event: &NSEvent, key_code: u16) -> Key {
     // Check for special keys via key code first.
     if let Some(special_key) = crate::shared::keys_macos::keycode_to_key(key_code) {
@@ -249,7 +414,7 @@ fn extract_key(event: &NSEvent, key_code: u16) -> Key {
     if chars_str.is_empty() {
         return Key::Named(NamedKey::Unidentified);
     }
-    Key::Character(chars_str)
+    Key::character(chars_str)
 }
 
 /// Extract modifiers from NSEvent
@@ -260,197 +425,151 @@ fn extract_key(event: &NSEvent, key_code: u16) -> Key {
 fn extract_modifiers(event: &NSEvent) -> Modifiers {
     let flags = event.modifierFlags();
 
-    let mut modifiers = Modifiers::empty();
+    let mut modifiers = Modifiers::NONE;
     if flags.contains(NSEventModifierFlags::Shift) {
-        modifiers.insert(Modifiers::SHIFT);
+        modifiers |= Modifiers::SHIFT;
     }
     if flags.contains(NSEventModifierFlags::Control) {
-        modifiers.insert(Modifiers::CONTROL);
+        modifiers |= Modifiers::CONTROL;
     }
     if flags.contains(NSEventModifierFlags::Option) {
-        modifiers.insert(Modifiers::ALT);
+        modifiers |= Modifiers::ALT;
     }
     if flags.contains(NSEventModifierFlags::Command) {
-        modifiers.insert(Modifiers::META); // Command = Meta
+        modifiers |= Modifiers::META; // Command = Meta
     }
     modifiers
 }
 
-// ============================================================================
-// Mouse Event Conversion
-// ============================================================================
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-/// Build a `PointerState` from an NSEvent's window-relative location.
-///
-/// # Safety
-///
-/// `ns_event` must be a valid, live `NSEvent*` of a mouse event.
-/// `count` is the W3C click count — `1` on Down/Up transitions, `0`
-/// elsewhere; `pressure` follows the sensor-less rule (`0.5` while any
-/// button is held per the live `pressedMouseButtons` state, `0.0`
-/// otherwise) — the cross-wire contract in flui-interaction's module doc.
-fn pointer_state(event: &NSEvent, scale_factor: f64, view_height: f64, count: u8) -> PointerState {
-    // NSEvent.locationInWindow is already in logical coordinates with a
-    // bottom-left origin; flip Y to the framework's top-left origin.
-    let NSPoint { x, y } = event.locationInWindow();
-    let modifiers = extract_modifiers(event);
-    let buttons = extract_mouse_buttons();
-    let pressure = if buttons == PointerButtons::default() {
-        0.0
-    } else {
-        0.5
-    };
-
-    PointerState {
-        time: event_timestamp_ns(),
-        position: PhysicalPosition::new(x, view_height - y),
-        buttons,
-        modifiers,
-        count,
-        contact_geometry: PhysicalSize::new(1.0, 1.0),
-        orientation: PointerOrientation::default(),
-        pressure,
-        tangential_pressure: 0.0,
-        scale_factor,
+    #[test]
+    fn native_scroll_phases_preserve_momentum_and_unphased_wheels() {
+        for (phase, momentum, expected) in [
+            (NSEventPhase::None, NSEventPhase::None, None),
+            (NSEventPhase::MayBegin, NSEventPhase::None, None),
+            (
+                NSEventPhase::Began,
+                NSEventPhase::None,
+                Some(ScrollPhase::Began),
+            ),
+            (
+                NSEventPhase::Changed,
+                NSEventPhase::None,
+                Some(ScrollPhase::Changed),
+            ),
+            (
+                NSEventPhase::Ended,
+                NSEventPhase::None,
+                Some(ScrollPhase::Ended),
+            ),
+            (
+                NSEventPhase::Cancelled,
+                NSEventPhase::None,
+                Some(ScrollPhase::Cancelled),
+            ),
+            (
+                NSEventPhase::None,
+                NSEventPhase::Began,
+                Some(ScrollPhase::MomentumBegan),
+            ),
+            (
+                NSEventPhase::None,
+                NSEventPhase::Changed,
+                Some(ScrollPhase::MomentumChanged),
+            ),
+            (
+                NSEventPhase::Ended,
+                NSEventPhase::Ended,
+                Some(ScrollPhase::MomentumEnded),
+            ),
+        ] {
+            assert_eq!(scroll_phase(phase, momentum), expected);
+        }
     }
-}
 
-/// Convert mouse button event
-///
-/// # Safety
-///
-/// `ns_event` must be a valid, live `NSEvent*` of a mouse-button event.
-fn convert_mouse_button(
-    event: &NSEvent,
-    scale_factor: f64,
-    view_height: f64,
-    button: PointerButton,
-    is_down: bool,
-) -> PlatformInput {
-    // The held-set-derived pressure is already right for both edges:
-    // `pressedMouseButtons` includes the pressed button at Down and excludes
-    // it at Up.
-    let state = pointer_state(event, scale_factor, view_height, 1);
-
-    let button_event = PointerButtonEvent {
-        pointer: primary_mouse_info(),
-        state,
-        button: Some(button),
-    };
-
-    let pointer_event = if is_down {
-        PointerEvent::Down(button_event)
-    } else {
-        PointerEvent::Up(button_event)
-    };
-
-    PlatformInput::Pointer(pointer_event)
-}
-
-/// Convert mouse movement event
-///
-/// # Safety
-///
-/// `ns_event` must be a valid, live `NSEvent*` of a mouse-move event.
-fn convert_mouse_move(event: &NSEvent, scale_factor: f64, view_height: f64) -> PlatformInput {
-    let state = pointer_state(event, scale_factor, view_height, 0);
-
-    PlatformInput::Pointer(PointerEvent::Move(PointerUpdate {
-        pointer: primary_mouse_info(),
-        current: state,
-        coalesced: Vec::new(),
-        predicted: Vec::new(),
-    }))
-}
-
-/// Convert scroll wheel event
-///
-/// AppKit's `scrollingDeltaX/Y` are positive for a swipe/scroll UP or LEFT
-/// (Apple's NSEvent docs: same sign as the legacy `deltaX/deltaY`; the
-/// system applies the natural-scrolling preference before delivery) — the
-/// inverse of the cross-backend convention (positive = content scrolls
-/// down/right), so `from_appkit` negates both axes at this boundary. Precise
-/// (trackpad) deltas are points, which are already logical pixels — no
-/// scale-factor conversion. See `crate::shared::scroll` for the sign/unit
-/// table and citations.
-///
-/// # Safety
-///
-/// `ns_event` must be a valid, live `NSEvent*` of a scroll-wheel event.
-fn convert_scroll_event(event: &NSEvent, scale_factor: f64, view_height: f64) -> PlatformInput {
-    let state = pointer_state(event, scale_factor, view_height, 0);
-
-    let delta_x = event.scrollingDeltaX();
-    let delta_y = event.scrollingDeltaY();
-
-    // Precise scrolling (trackpad) delivers point deltas; a conventional
-    // mouse wheel delivers whole lines.
-    let has_precise_delta = event.hasPreciseScrollingDeltas();
-
-    let delta = crate::shared::scroll::from_appkit(delta_x, delta_y, has_precise_delta);
-
-    PlatformInput::Pointer(PointerEvent::Scroll(PointerScrollEvent {
-        pointer: primary_mouse_info(),
-        state,
-        delta,
-    }))
-}
-
-/// Assemble a `PointerEvent::Gesture` around an already-converted
-/// `ui_events::pointer::PointerGesture` at the event's own location, with the
-/// shared synthetic gesture identity (see `shared::gestures`).
-///
-/// # Safety
-///
-/// Caller guarantees `ns_event` validity; `pointer_state` reads only
-/// documented NSEvent getters.
-fn convert_gesture_event(
-    event: &NSEvent,
-    scale_factor: f64,
-    view_height: f64,
-    gesture: ui_events::pointer::PointerGesture,
-) -> PlatformInput {
-    let state = pointer_state(event, scale_factor, view_height, 0);
-    PlatformInput::Pointer(PointerEvent::Gesture(
-        ui_events::pointer::PointerGestureEvent {
-            pointer: PointerInfo {
-                pointer_id: ui_events::pointer::PointerId::new(
-                    crate::shared::gestures::GESTURE_POINTER_ID,
-                ),
-                pointer_type: PointerType::Touch,
-                persistent_device_id: None,
-            },
-            gesture,
-            state,
-        },
-    ))
-}
-
-// ============================================================================
-// Helper Functions
-// ============================================================================
-
-/// Extract global mouse button state via `NSEvent.pressedMouseButtons`
-///
-/// # Safety
-///
-/// Must be called with AppKit loaded (any process that created an NSEvent).
-fn extract_mouse_buttons() -> PointerButtons {
-    // `+[NSEvent pressedMouseButtons]` returns a plain NSUInteger bitmask; no
-    // object lifetime is involved. objc2's `msg_send!` takes the class object
-    // as the receiver for a class method.
-    let cls = NSEvent::class();
-    let buttons_mask: u64 = unsafe { msg_send![cls, pressedMouseButtons] };
-
-    let mut buttons = PointerButtons::default();
-    if (buttons_mask & 0x1) != 0 {
-        buttons.insert(PointerButton::Primary);
+    #[test]
+    fn native_pinch_and_rotation_share_one_cumulative_gesture() {
+        let mut state = MacInputState::default();
+        let at = PointerPosition::try_new(flui_foundation::geometry::Point::new(10.25, 20.5))
+            .expect("finite");
+        let time = EventTime::from_nanos(10);
+        let modifiers = flui_platform_api::keyboard::Modifiers::NONE;
+        assert_eq!(
+            state.gesture(1, NSEventPhase::Changed, (1.1, 0.0), at, time, modifiers),
+            []
+        );
+        let first = state.gesture(1, NSEventPhase::Began, (1.1, 0.0), at, time, modifiers);
+        assert_eq!(first.len(), 2);
+        assert_eq!(first[0].phase, PanZoomPhase::Start);
+        let id = first[0].pointer().id;
+        let joined = state.gesture(
+            2,
+            NSEventPhase::Began,
+            (1.0, -std::f64::consts::FRAC_PI_6),
+            at,
+            time,
+            modifiers,
+        );
+        assert_eq!(joined.len(), 1);
+        let PanZoomPhase::Update(transform) = joined[0].phase else {
+            panic!("update")
+        };
+        assert_eq!(joined[0].pointer().id, id);
+        assert_eq!(transform.scale(), 1.1);
+        assert_eq!(transform.rotation(), -std::f64::consts::FRAC_PI_6);
+        let ended_component =
+            state.gesture(1, NSEventPhase::Ended, (1.2, 0.0), at, time, modifiers);
+        assert_eq!(ended_component.len(), 1);
+        let last = state.gesture(
+            2,
+            NSEventPhase::Ended,
+            (1.0, -std::f64::consts::FRAC_PI_6),
+            at,
+            time,
+            modifiers,
+        );
+        assert_eq!(last.len(), 2);
+        let PanZoomPhase::Update(transform) = last[0].phase else {
+            panic!("update")
+        };
+        assert!((transform.scale() - 1.32).abs() < 1e-12);
+        assert_eq!(transform.rotation(), -std::f64::consts::FRAC_PI_3);
+        assert_eq!(last[1].phase, PanZoomPhase::End);
+        assert_eq!(last[1].pointer().id, id);
+        let next = state.gesture(1, NSEventPhase::Began, (1.0, 0.0), at, time, modifiers);
+        assert_ne!(next[0].pointer().id, id);
+        let cancelled = state.gesture(
+            1,
+            NSEventPhase::Cancelled,
+            (f64::NAN, 0.0),
+            at,
+            time,
+            modifiers,
+        );
+        assert_eq!(cancelled.len(), 1);
+        assert_eq!(cancelled[0].phase, PanZoomPhase::Cancelled);
+        assert_eq!(
+            state.gesture(1, NSEventPhase::Changed, (1.1, 0.0), at, time, modifiers),
+            []
+        );
+        let outer = state.gesture(4, NSEventPhase::Began, (1.0, 0.0), at, time, modifiers);
+        assert_eq!(outer.len(), 1);
+        let outer_id = outer[0].pointer().id;
+        state.gesture(1, NSEventPhase::Began, (1.1, 0.0), at, time, modifiers);
+        assert_eq!(
+            state.gesture(1, NSEventPhase::Ended, (1.0, 0.0), at, time, modifiers),
+            []
+        );
+        let rotation = state.gesture(2, NSEventPhase::Began, (1.0, 0.1), at, time, modifiers);
+        assert_eq!(rotation.len(), 1);
+        assert_eq!(rotation[0].pointer().id, outer_id);
+        state.gesture(2, NSEventPhase::Ended, (1.0, 0.0), at, time, modifiers);
+        let end = state.gesture(4, NSEventPhase::Ended, (1.0, 0.0), at, time, modifiers);
+        assert_eq!(end.len(), 1);
+        assert_eq!(end[0].phase, PanZoomPhase::End);
+        assert_eq!(end[0].pointer().id, outer_id);
     }
-    if (buttons_mask & 0x2) != 0 {
-        buttons.insert(PointerButton::Secondary);
-    }
-    if (buttons_mask & 0x4) != 0 {
-        buttons.insert(PointerButton::Auxiliary);
-    }
-    buttons
 }

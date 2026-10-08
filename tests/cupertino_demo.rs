@@ -27,7 +27,7 @@ use std::time::Duration;
 use flui_cupertino::{CupertinoTabController, CupertinoTheme, CupertinoThemeData};
 use flui_foundation::RenderId;
 use flui_foundation::geometry::{Offset, Size};
-use flui_interaction::events::{PointerType, make_down_event, make_up_event};
+use flui_interaction::events::{PointerKind, make_down_event, make_up_event};
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::hit_testing::HitTestResult;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
@@ -128,11 +128,15 @@ impl MountedDemo {
     }
 
     fn tap_down(&self, x: f64, y: f64) {
-        self.dispatch_pointer(make_down_event(offset(x, y), PointerType::Mouse));
+        self.dispatch_pointer(
+            make_down_event(offset(x, y), PointerKind::Mouse).expect("finite pointer fixture"),
+        );
     }
 
     fn tap_up(&self, x: f64, y: f64) {
-        self.dispatch_pointer(make_up_event(offset(x, y), PointerType::Mouse));
+        self.dispatch_pointer(
+            make_up_event(offset(x, y), PointerKind::Mouse).expect("finite pointer fixture"),
+        );
     }
 
     /// A full tap (down + up) at `(x, y)`.

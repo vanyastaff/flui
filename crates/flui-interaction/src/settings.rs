@@ -6,23 +6,25 @@
 //!
 //! # Example
 //!
-//! ```rust,ignore
+//! ```rust
 //! use flui_interaction::settings::GestureSettings;
-//! use ui_events::pointer::PointerType;
+//! use flui_platform_api::pointer::PointerKind;
 //!
 //! // Get settings for touch input
-//! let touch_settings = GestureSettings::for_device(PointerType::Touch);
+//! let touch_settings = GestureSettings::for_device(PointerKind::Touch);
 //! assert_eq!(touch_settings.touch_slop(), 18.0);
 //!
 //! // Get settings for mouse input (more precise)
-//! let mouse_settings = GestureSettings::for_device(PointerType::Mouse);
+//! let mouse_settings = GestureSettings::for_device(PointerKind::Mouse);
 //! assert_eq!(mouse_settings.touch_slop(), 1.0);
 //! ```
 
 use std::time::Duration;
 
 use flui_platform_api::TargetPlatform;
-use ui_events::pointer::PointerType;
+use flui_platform_api::pointer::PointerKind;
+
+use crate::processing::VelocityEstimator;
 
 /// Default touch slop for touch devices (18 logical pixels).
 ///
@@ -122,10 +124,11 @@ pub const DEFAULT_MAX_FLING_VELOCITY: f64 = 8000.0;
 ///
 /// # Example
 ///
-/// ```rust,ignore
+/// ```rust
 /// use flui_interaction::settings::GestureSettings;
 ///
 /// let settings = GestureSettings::default();
+/// let distance = 10.0;
 ///
 /// // Check touch slop
 /// if distance < settings.touch_slop() {
@@ -172,6 +175,9 @@ pub struct GestureSettings {
 
     /// Maximum velocity for a fling (clamped).
     max_fling_velocity: f64,
+
+    /// Release-velocity policy captured when a gesture sequence begins.
+    velocity_estimator: VelocityEstimator,
 }
 
 impl Default for GestureSettings {
@@ -257,6 +263,7 @@ impl GestureSettings {
             long_press_timeout,
             min_fling_velocity,
             max_fling_velocity,
+            velocity_estimator: VelocityEstimator::LeastSquares,
         })
     }
 
@@ -275,6 +282,7 @@ impl GestureSettings {
             long_press_timeout: DEFAULT_LONG_PRESS_TIMEOUT,
             min_fling_velocity: DEFAULT_MIN_FLING_VELOCITY,
             max_fling_velocity: DEFAULT_MAX_FLING_VELOCITY,
+            velocity_estimator: VelocityEstimator::LeastSquares,
         }
     }
 
@@ -297,6 +305,7 @@ impl GestureSettings {
             long_press_timeout: DEFAULT_LONG_PRESS_TIMEOUT,
             min_fling_velocity: DEFAULT_MIN_FLING_VELOCITY,
             max_fling_velocity: DEFAULT_MAX_FLING_VELOCITY,
+            velocity_estimator: VelocityEstimator::LeastSquares,
         }
     }
 
@@ -365,6 +374,7 @@ impl GestureSettings {
             long_press_timeout: Duration::from_millis(400),
             min_fling_velocity: 50.0,
             max_fling_velocity: 8000.0,
+            velocity_estimator: VelocityEstimator::LeastSquares,
         }
     }
 
@@ -387,6 +397,7 @@ impl GestureSettings {
             long_press_timeout: Duration::from_millis(500),
             min_fling_velocity: 50.0,
             max_fling_velocity: 8000.0,
+            velocity_estimator: VelocityEstimator::LeastSquares,
         }
     }
 
@@ -405,6 +416,7 @@ impl GestureSettings {
             long_press_timeout: DEFAULT_LONG_PRESS_TIMEOUT,
             min_fling_velocity: DEFAULT_MIN_FLING_VELOCITY,
             max_fling_velocity: DEFAULT_MAX_FLING_VELOCITY,
+            velocity_estimator: VelocityEstimator::LeastSquares,
         }
     }
 
@@ -412,17 +424,17 @@ impl GestureSettings {
     ///
     /// # Example
     ///
-    /// ```rust,ignore
+    /// ```rust
     /// use flui_interaction::settings::GestureSettings;
-    /// use ui_events::pointer::PointerType;
+    /// use flui_platform_api::pointer::PointerKind;
     ///
-    /// let settings = GestureSettings::for_device(PointerType::Touch);
+    /// let settings = GestureSettings::for_device(PointerKind::Touch);
     /// ```
-    pub fn for_device(device_kind: PointerType) -> Self {
+    pub fn for_device(device_kind: PointerKind) -> Self {
         match device_kind {
-            PointerType::Mouse => Self::mouse_defaults(),
-            PointerType::Pen => Self::pen_defaults(),
-            // Touch, and any unknown device type, use touch defaults.
+            PointerKind::Mouse => Self::mouse_defaults(),
+            PointerKind::Pen { .. } => Self::pen_defaults(),
+            // Touch, trackpad gestures and unknown kinds use touch defaults.
             _ => Self::touch_defaults(),
         }
     }
@@ -430,6 +442,23 @@ impl GestureSettings {
     // ========================================================================
     // Getters
     // ========================================================================
+
+    /// Release-velocity algorithm captured by a new gesture sequence.
+    #[must_use]
+    pub const fn velocity_estimator(&self) -> VelocityEstimator {
+        self.velocity_estimator
+    }
+
+    /// Choose how a new gesture estimates its release velocity.
+    ///
+    /// Existing contacts keep their captured settings. All built-in settings
+    /// profiles use least squares unless the caller explicitly selects another
+    /// algorithm; platform thresholds and algorithm selection are independent.
+    #[must_use]
+    pub const fn with_velocity_estimator(mut self, estimator: VelocityEstimator) -> Self {
+        self.velocity_estimator = estimator;
+        self
+    }
 
     /// Get the touch slop (maximum movement for a tap).
     #[inline]
@@ -446,9 +475,9 @@ impl GestureSettings {
     /// The hit slop for `kind` — how far a pointer of that kind may drift
     /// before a gesture is rejected.
     ///
-    /// [`PointerType::Mouse`] is precise, so it gets a fixed small constant
-    /// that no profile customises. Every other kind — here `Pen`, `Touch`,
-    /// and `Unknown` — resolves through this settings object's touch tier.
+    /// [`PointerKind::Mouse`] is precise, so it gets a fixed small constant
+    /// that no profile customises. Every other kind — `Pen` (tip or eraser),
+    /// `Touch`, `Trackpad` and `Unknown` — resolves through this settings object's touch tier.
     /// **A pen is not precise under this rule**: that is deliberate (a
     /// stylus gets the touch tier), not an omission.
     ///
@@ -462,9 +491,9 @@ impl GestureSettings {
     /// shipped platform.
     #[inline]
     #[must_use]
-    pub fn hit_slop(&self, kind: PointerType) -> f64 {
+    pub fn hit_slop(&self, kind: PointerKind) -> f64 {
         match kind {
-            PointerType::Mouse => DEFAULT_MOUSE_SLOP,
+            PointerKind::Mouse => DEFAULT_MOUSE_SLOP,
             _ => self.touch_slop(),
         }
     }
@@ -481,9 +510,9 @@ impl GestureSettings {
     /// wrong in production.
     #[inline]
     #[must_use]
-    pub fn pan_slop_for(&self, kind: PointerType) -> f64 {
+    pub fn pan_slop_for(&self, kind: PointerKind) -> f64 {
         match kind {
-            PointerType::Mouse => DEFAULT_MOUSE_PAN_SLOP,
+            PointerKind::Mouse => DEFAULT_MOUSE_PAN_SLOP,
             _ => self.pan_slop(),
         }
     }
@@ -528,9 +557,9 @@ impl GestureSettings {
     /// before it reaches 5%, and a small pinch crosses the ratio tier while
     /// barely moving.
     #[inline]
-    pub fn span_slop_for(&self, kind: PointerType) -> f64 {
+    pub fn span_slop_for(&self, kind: PointerKind) -> f64 {
         match kind {
-            PointerType::Mouse => DEFAULT_MOUSE_SPAN_SLOP,
+            PointerKind::Mouse => DEFAULT_MOUSE_SPAN_SLOP,
             _ => DEFAULT_SPAN_SLOP,
         }
     }

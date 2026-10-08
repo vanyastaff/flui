@@ -8,8 +8,11 @@ pub(crate) mod intent_tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use flui_interaction::events::{Key, KeyEvent, KeyState, Modifiers};
     use flui_interaction::routing::FocusNode;
+    use flui_platform_api::{
+        EventTime,
+        keyboard::{Code, Key, KeyEvent, KeyState, Modifiers},
+    };
     use flui_widgets::SizedBox;
     use flui_widgets::interaction::{
         Actions, CallbackAction, Focus, Intent, Shortcuts, SingleActivator,
@@ -21,12 +24,13 @@ pub(crate) mod intent_tests {
     impl Intent for SaveIntent {}
 
     fn ctrl_s() -> KeyEvent {
-        KeyEvent {
-            state: KeyState::Down,
-            key: Key::Character("s".into()),
-            modifiers: Modifiers::CONTROL,
-            ..KeyEvent::default()
-        }
+        KeyEvent::new(
+            KeyState::Down,
+            Key::character("s"),
+            Code::KeyS,
+            EventTime::from_nanos(0),
+        )
+        .with_modifiers(Modifiers::CONTROL)
     }
 
     /// `Shortcuts` end to end (ADR-0023): Ctrl+S bubbles from the focused field,
@@ -50,16 +54,20 @@ pub(crate) mod intent_tests {
             })),
         );
         let manager = harness.focus_manager();
-        field.request_focus();
+        let _ = field.request_focus();
 
-        assert!(manager.dispatch_key_event(&ctrl_s()), "consumed");
+        assert!(
+            manager.dispatch_key_event(&ctrl_s()).is_handled(),
+            "consumed"
+        );
         assert_eq!(saves.load(Ordering::SeqCst), 1, "the action ran");
 
         // Bare "s" does not match the activator: unhandled, nothing runs.
-        assert!(!manager.dispatch_key_event(&KeyEvent {
-            modifiers: Modifiers::empty(),
-            ..ctrl_s()
-        }));
+        assert!(
+            !manager
+                .dispatch_key_event(&ctrl_s().with_modifiers(Modifiers::NONE))
+                .is_handled()
+        );
         assert_eq!(saves.load(Ordering::SeqCst), 1);
     }
 }
@@ -68,10 +76,14 @@ pub(crate) mod tab_tests {
     use std::cell::Cell;
     use std::rc::{Rc, Weak};
 
-    use flui_interaction::events::{Key, KeyEvent, KeyState, Modifiers, NamedKey};
     use flui_interaction::routing::{
         FocusAttachment, FocusDetachOutcome, FocusNode, FocusScopeNode, FocusTraversalPolicy,
         ReadingOrderPolicy,
+    };
+    use flui_painting::typography::TextDirection;
+    use flui_platform_api::{
+        EventTime,
+        keyboard::{Code, Key, KeyEvent, KeyState, Modifiers, NamedKey},
     };
     use flui_view::ViewExt;
     use flui_view::prelude::*;
@@ -81,16 +93,17 @@ pub(crate) mod tab_tests {
     use crate::common::harness::mount;
 
     fn tab(shift: bool) -> KeyEvent {
-        KeyEvent {
-            state: KeyState::Down,
-            key: Key::Named(NamedKey::Tab),
-            modifiers: if shift {
-                Modifiers::SHIFT
-            } else {
-                Modifiers::empty()
-            },
-            ..KeyEvent::default()
-        }
+        KeyEvent::new(
+            KeyState::Down,
+            Key::Named(NamedKey::Tab),
+            Code::Tab,
+            EventTime::from_nanos(0),
+        )
+        .with_modifiers(if shift {
+            Modifiers::SHIFT
+        } else {
+            Modifiers::NONE
+        })
     }
 
     #[derive(Debug)]
@@ -100,14 +113,13 @@ pub(crate) mod tab_tests {
     }
 
     impl FocusTraversalPolicy for ReplacingPolicy {
-        fn sort_descendants(&self, nodes: &[Rc<FocusNode>]) -> Vec<Rc<FocusNode>> {
+        fn order(&self, nodes: &mut [Rc<FocusNode>], direction: TextDirection) {
             self.scope
                 .upgrade()
                 .expect("the mounted scope remains alive")
                 .set_traversal_policy(Rc::new(ReadingOrderPolicy));
-            let mut order = ReadingOrderPolicy.sort_descendants(nodes);
-            order.reverse();
-            order
+            ReadingOrderPolicy.order(nodes, direction);
+            nodes.reverse();
         }
     }
 
@@ -154,27 +166,33 @@ pub(crate) mod tab_tests {
             ]),
         ));
         let manager = harness.focus_manager();
-        left.request_focus();
+        let _ = left.request_focus();
 
-        assert!(manager.dispatch_key_event(&tab(false)), "Tab is consumed");
+        assert!(
+            manager.dispatch_key_event(&tab(false)).is_handled(),
+            "Tab is consumed"
+        );
         assert!(
             middle.has_primary_focus(),
             "Tab moved the focus to the next node in reading order"
         );
 
-        assert!(manager.dispatch_key_event(&tab(true)), "Shift+Tab too");
+        assert!(
+            manager.dispatch_key_event(&tab(true)).is_handled(),
+            "Shift+Tab too"
+        );
         assert!(left.has_primary_focus(), "and it stepped back");
 
         // Begin inside the order so the outgoing-policy assertion does not
         // depend on what happens when traversal reaches a scope edge.
-        middle.request_focus();
+        let _ = middle.request_focus();
         assert!(middle.has_primary_focus());
         let retired = Rc::new(Cell::new(false));
         scope.set_traversal_policy(Rc::new(ReplacingPolicy {
             scope: Rc::downgrade(&scope),
             retired: Rc::clone(&retired),
         }));
-        assert!(manager.dispatch_key_event(&tab(false)));
+        assert!(manager.dispatch_key_event(&tab(false)).is_handled());
         assert!(
             left.has_primary_focus(),
             "the current key uses the outgoing reverse reading-order policy"
@@ -183,7 +201,7 @@ pub(crate) mod tab_tests {
             retired.get(),
             "policy destruction can reenter the same scope"
         );
-        assert!(manager.dispatch_key_event(&tab(false)));
+        assert!(manager.dispatch_key_event(&tab(false)).is_handled());
         assert!(
             middle.has_primary_focus(),
             "the next key uses the replacement reading-order policy"
@@ -212,7 +230,7 @@ pub(crate) mod tab_tests {
     }
 
     impl FocusTraversalPolicy for UnwindingPolicy {
-        fn sort_descendants(&self, nodes: &[Rc<FocusNode>]) -> Vec<Rc<FocusNode>> {
+        fn order(&self, nodes: &mut [Rc<FocusNode>], _: TextDirection) {
             let _ = &self.capture;
             self.scope
                 .upgrade()
@@ -223,7 +241,7 @@ pub(crate) mod tab_tests {
                 FocusDetachOutcome::Detached
             );
             assert!(!self.panic_sort, "first traversal sort failure");
-            nodes.iter().rev().cloned().collect()
+            nodes.reverse();
         }
     }
 
@@ -327,7 +345,7 @@ pub(crate) mod tab_tests {
                 ]),
             ));
             let manager = harness.focus_manager();
-            left.request_focus();
+            let _ = left.request_focus();
 
             let policy_drops = Rc::new(Cell::new(0));
             let candidate_drops = Rc::new(Cell::new(0));
@@ -350,8 +368,9 @@ pub(crate) mod tab_tests {
                 },
             }));
 
-            let outcome =
-                catch_unwind(AssertUnwindSafe(|| manager.dispatch_key_event(&tab(false))));
+            let outcome = catch_unwind(AssertUnwindSafe(|| {
+                manager.dispatch_key_event(&tab(false)).is_handled()
+            }));
             let payload = outcome.expect_err("the first traversal failure propagates");
             assert_eq!(
                 flui_foundation::panic::payload_text(payload.as_ref()),
@@ -368,12 +387,12 @@ pub(crate) mod tab_tests {
                 left.has_primary_focus(),
                 "the failed sort published no focus step"
             );
-            assert!(manager.dispatch_key_event(&tab(false)));
+            assert!(manager.dispatch_key_event(&tab(false)).is_handled());
             assert!(
                 middle.has_primary_focus(),
                 "the replacement policy serves the next key"
             );
-            assert!(manager.dispatch_key_event(&tab(true)));
+            assert!(manager.dispatch_key_event(&tab(true)).is_handled());
             assert!(left.has_primary_focus());
         }
     }
@@ -383,20 +402,23 @@ pub(crate) mod activation_tests {
     use std::cell::Cell;
     use std::rc::Rc;
 
-    use flui_interaction::events::{Key, KeyEvent, KeyState, Modifiers, NamedKey};
     use flui_interaction::routing::FocusNode;
+    use flui_platform_api::{
+        EventTime,
+        keyboard::{Code, Key, KeyEvent, KeyState, NamedKey},
+    };
     use flui_widgets::SizedBox;
     use flui_widgets::interaction::{Actions, ActivateIntent, CallbackAction, Focus};
 
     use crate::common::harness::mount;
 
     fn key_down(key: Key) -> KeyEvent {
-        KeyEvent {
-            state: KeyState::Down,
+        KeyEvent::new(
+            KeyState::Down,
             key,
-            modifiers: Modifiers::empty(),
-            ..KeyEvent::default()
-        }
+            Code::Unidentified,
+            EventTime::from_nanos(0),
+        )
     }
 
     /// Enter, Space and Select activate the focused control through the
@@ -416,15 +438,17 @@ pub(crate) mod activation_tests {
                 })),
         );
         let manager = harness.focus_manager();
-        button.request_focus();
+        let _ = button.request_focus();
 
         for key in [
             Key::Named(NamedKey::Enter),
-            Key::Character(" ".into()),
+            Key::character(" "),
             Key::Named(NamedKey::Select),
         ] {
             assert!(
-                manager.dispatch_key_event(&key_down(key.clone())),
+                manager
+                    .dispatch_key_event(&key_down(key.clone()))
+                    .is_handled(),
                 "{key:?} is consumed"
             );
         }
@@ -438,8 +462,11 @@ pub(crate) mod activation_tests {
 pub(crate) mod event_cx_tests {
     use std::rc::Rc;
 
-    use flui_interaction::events::{Key, KeyEvent, KeyState, Modifiers};
     use flui_interaction::routing::FocusNode;
+    use flui_platform_api::{
+        EventTime,
+        keyboard::{Code, Key, KeyEvent, KeyState, Modifiers},
+    };
     use flui_view::prelude::*;
     use flui_widgets::SizedBox;
     use flui_widgets::interaction::{
@@ -453,12 +480,13 @@ pub(crate) mod event_cx_tests {
     impl Intent for SaveIntent {}
 
     fn ctrl_s() -> KeyEvent {
-        KeyEvent {
-            state: KeyState::Down,
-            key: Key::Character("s".into()),
-            modifiers: Modifiers::CONTROL,
-            ..KeyEvent::default()
-        }
+        KeyEvent::new(
+            KeyState::Down,
+            Key::character("s"),
+            Code::KeyS,
+            EventTime::from_nanos(0),
+        )
+        .with_modifiers(Modifiers::CONTROL)
     }
 
     fn field(node: &Rc<FocusNode>) -> Focus {
@@ -466,8 +494,11 @@ pub(crate) mod event_cx_tests {
     }
 
     fn press_ctrl_s(harness: &Harness, node: &Rc<FocusNode>) -> bool {
-        node.request_focus();
-        harness.focus_manager().dispatch_key_event(&ctrl_s())
+        let _ = node.request_focus();
+        harness
+            .focus_manager()
+            .dispatch_key_event(&ctrl_s())
+            .is_handled()
     }
 
     pub(crate) fn callback_shortcut_writes_a_signal_and_rebuilds_its_reader() {
@@ -578,16 +609,20 @@ pub(crate) mod event_cx_tests {
 }
 
 pub(crate) mod activator_tests {
-    use flui_interaction::events::{Key, KeyEvent, KeyState, Modifiers};
+    use flui_platform_api::{
+        EventTime,
+        keyboard::{Code, Key, KeyEvent, KeyState, Modifiers},
+    };
     use flui_widgets::interaction::SingleActivator;
 
     fn down(character: &str, modifiers: Modifiers) -> KeyEvent {
-        KeyEvent {
-            state: KeyState::Down,
-            key: Key::Character(character.into()),
-            modifiers,
-            ..KeyEvent::default()
-        }
+        KeyEvent::new(
+            KeyState::Down,
+            Key::character(character),
+            Code::Unidentified,
+            EventTime::from_nanos(0),
+        )
+        .with_modifiers(modifiers)
     }
 
     /// A character Shift produces (`?` is Shift+/ on a US keyboard) is
@@ -600,7 +635,7 @@ pub(crate) mod activator_tests {
             "US layout: Shift+/"
         );
         assert!(
-            question.matches(&down("?", Modifiers::empty())),
+            question.matches(&down("?", Modifiers::NONE)),
             "a layout with a ? key"
         );
         assert!(

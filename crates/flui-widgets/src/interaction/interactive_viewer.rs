@@ -6,32 +6,23 @@
 //! gestures update that matrix; `min_scale`/`max_scale` clamp the zoom level;
 //! `boundary_margin` constrains how far the transformed viewport may drift
 //! from the child's own rect (an all-infinite margin removes the boundary
-//! entirely); `pan_enabled`/`scale_enabled` gate whether a gesture is allowed
-//! to *apply*, though `on_interaction_*` callbacks still fire regardless
-//! ("will be called even if the interaction is disabled").
+//! entirely). Contact callbacks observe the recognized gesture even when an
+//! application option disables its transform. Native sources are admitted only
+//! when their enabled transform changes the scene, so an ancestor can act.
 //!
-//! # Scope (V1)
+//! Contact pan, pinch and rotation use one persistent Scale recognizer in
+//! combined pan/scale mode. Adding or lifting a contact rebases measurement
+//! without moving the scene or restarting the interaction. Rotation is opt-in.
+//! Native pan-zoom uses the same actor after leaf-first admission; a started
+//! source carries cumulative transforms until End or Cancelled. Unstarted
+//! relative updates remain independent interactions. Wheel zoom uses the
+//! existing scroll claim lane with `exp(-scroll_dy / scale_factor)`.
 //!
-//! - **Pan** is wired through [`GestureDetector::on_pan_start`]/`on_pan_update`/
-//!   `on_pan_end` — a genuine single-pointer drag, dispatched and slop-tested
-//!   through the real gesture arena in tests.
-//! - **Scale** is wired through [`Listener::on_pointer_signal`] — a real mouse
-//!   wheel / discrete-scroll event, with an exponential scale change
-//!   (`exp(-scroll_dy / scale_factor)`).
-//! - **Trackpad pinch** arrives on the pan-zoom lane
-//!   ([`Listener::on_pointer_pan_zoom_claim`]) and is *arbitrated*: the
-//!   leaf-most viewer that will actually transform claims the tick, so
-//!   nested viewers do not all zoom on one pinch. This claim walk is FLUI's
-//!   interim arbitration until a scale recognizer joins the gesture arena,
-//!   deliberately shaped like the pointer-signal claim the wheel branch
-//!   already uses. It is not that recognizer: nothing here tracks a gesture's
-//!   start/end boundary or competes with a pan in the arena.
-//! - **Two-pointer pinch-to-zoom and two-finger rotation are out of scope.**
-//!   They need a combined scale gesture fed by two simultaneous pointers;
-//!   FLUI's `GestureDetector` has no such recognizer yet — this is a
-//!   framework-level gap, not merely a test-harness one. With rotation
-//!   permanently off, the boundary math is plain axis-aligned `Rect`
-//!   containment, with no rotation-aware quad algorithm needed.
+//! The scene point under the moving focal point remains anchored when bounds
+//! permit. Rotation that cannot fit the boundary at the admitted scale is
+//! refused; no extra zoom is invented. Focal release velocity drives a library
+//! friction simulation through the presentation's VsyncScope. New contact or
+//! accepted wheel input stops it; source cancellation supplies no impulse.
 //! - **`constrained: false`** (an unconstrained child laid out via an
 //!   `OverflowBox`-equivalent, escaping the viewport) is **deferred**. V1
 //!   only supports `constrained: true` — the child is laid out under
@@ -44,30 +35,41 @@
 //!   [`InteractiveViewerState::geometry`]. Adding `constrained: false` later
 //!   means that identity stops holding and a second, viewport-only anchor
 //!   becomes load bearing again.
-//! - **Inertia/fling after a pan release** is deferred — `on_interaction_end`
-//!   fires with the release velocity, but no animation follows it. Needs an
-//!   `AnimationController`/`Vsync` wiring pass of its own.
 //!
 //! `on_interaction_start`/`on_interaction_update`/`on_interaction_end` carry
 //! FLUI's own detail types ([`InteractionStartDetails`] etc.) rather than
-//! those of a combined pan+scale+rotate gesture, which this widget does not
-//! recognize as one gesture. The shape here carries what pan and wheel-scale
-//! actually produce: a focal point, a scale multiplier (1.0 for a pure pan),
-//! a translation delta, and a release velocity.
+//! the recognizer's cumulative measurements. The update carries the applied
+//! scale multiplier (1.0 for a pure pan), a focal point and a translation
+//! delta. The end carries separate focal and scale release velocities.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+use std::time::Duration;
 
+use flui_animation::{
+    Animation, AnimationController, FrictionSimulation, Tolerance, Vsync, VsyncRegistration,
+};
 use flui_foundation::geometry::Axis;
 use flui_foundation::geometry::Matrix4;
 use flui_foundation::geometry::{EdgeInsets, Offset, Point, Rect};
+use flui_foundation::{Listenable, ListenerId};
+use flui_interaction::GestureEndReason;
 use flui_interaction::Velocity;
-use flui_interaction::events::{Modifiers, ScrollEventData};
+use flui_interaction::recognizers::scale::{
+    ScaleEndDetails, ScaleStartDetails, ScaleStartMode, ScaleUpdateDetails,
+};
 use flui_interaction::routing::EventPropagation;
-use flui_interaction::{DragEndDetails, DragStartDetails, DragUpdateDetails, GestureEndReason};
 use flui_objects::SubtreeAnchor;
 use flui_painting::Alignment;
 use flui_painting::paint::Clip;
+use flui_platform_api::{
+    keyboard::Modifiers,
+    pointer::{PanZoomEvent, PanZoomPhase, ScrollEvent, ScrollUnit},
+};
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::pipeline::PipelineCell;
 use flui_view::element::ElementKind;
@@ -75,7 +77,7 @@ use flui_view::prelude::*;
 use flui_view::{Child, IntoView, View, ViewState};
 
 use crate::anchored_box::AnchoredBox;
-use crate::{AnimatedBuilder, ClipRect, GestureDetector, Listener, Transform};
+use crate::{AnimatedBuilder, ClipRect, GestureDetector, Listener, Transform, VsyncScope};
 
 use super::transformation_controller::TransformationController;
 
@@ -140,6 +142,9 @@ pub struct InteractionEndDetails {
     /// The gesture's release velocity. [`Velocity::ZERO`] for a discrete
     /// wheel-scale interaction (there is no release to measure).
     pub velocity: Velocity,
+    /// Measured scale change in scale units per second. Zero for cancellation
+    /// and a discrete wheel step, which supply no scale release history.
+    pub scale_velocity: f64,
 }
 
 type StartCallback = Rc<dyn Fn(&mut EventCx<'_>, InteractionStartDetails)>;
@@ -181,6 +186,7 @@ pub struct InteractiveViewer {
     max_scale: f64,
     pan_enabled: bool,
     scale_enabled: bool,
+    rotation_enabled: bool,
     wheel_scale_gate: WheelScaleGate,
     pan_axis: PanAxis,
     scale_factor: f64,
@@ -217,6 +223,7 @@ impl Default for InteractiveViewer {
             max_scale: 2.5,
             pan_enabled: true,
             scale_enabled: true,
+            rotation_enabled: false,
             wheel_scale_gate: WheelScaleGate::default(),
             pan_axis: PanAxis::Free,
             scale_factor: 200.0,
@@ -231,6 +238,12 @@ impl Default for InteractiveViewer {
 }
 
 impl InteractiveViewer {
+    /// Allow rotation around the gesture's focal point. Disabled by default.
+    #[must_use]
+    pub fn rotation_enabled(mut self, enabled: bool) -> Self {
+        self.rotation_enabled = enabled;
+        self
+    }
     /// A new `InteractiveViewer` with default limits (`min_scale: 0.8`,
     /// `max_scale: 2.5`, zero boundary margin, pan and wheel-scale both
     /// enabled).
@@ -418,9 +431,14 @@ impl StatefulView for InteractiveViewer {
             gesture: Rc::new(GestureTracking {
                 pan_start_local: Cell::new(None),
                 current_axis: Cell::new(None),
+                scale: Cell::new(1.0),
+                rotation: Cell::new(0.0),
             }),
             pipeline_cell: None,
             writer: None,
+            fling: Rc::new(FocalFling::new()),
+            vsync: None,
+            vsync_registration: None,
         }
     }
 }
@@ -430,7 +448,7 @@ impl StatefulView for InteractiveViewer {
 // ============================================================================
 
 /// Tracks the in-flight pan gesture's dominant-axis lock (for
-/// [`PanAxis::Aligned`]) across the several `on_pan_update` calls one drag
+/// [`PanAxis::Aligned`]) across the scale updates of one interaction
 /// produces. `Rc`-shared into the closures `build` hands to `GestureDetector`
 /// so it survives from `on_pan_start` through the matching `on_pan_end`, even
 /// across a rebuild that swaps in fresh closures mid-gesture.
@@ -443,6 +461,84 @@ struct GestureTracking {
     /// the first non-zero movement of the gesture. `None` before that, and
     /// reset to `None` at the end of every gesture.
     current_axis: Cell<Option<Axis>>,
+    scale: Cell<f64>,
+    rotation: Cell<f64>,
+}
+
+#[derive(Debug)]
+struct FocalFling {
+    controller: AnimationController,
+    listener: RefCell<Option<(ListenerId, Arc<AtomicBool>)>>,
+    closed: Cell<bool>,
+    enabled: Cell<bool>,
+}
+
+impl FocalFling {
+    fn new() -> Self {
+        Self {
+            controller: AnimationController::unbounded_without_ticker(Duration::from_millis(1)),
+            listener: RefCell::new(None),
+            closed: Cell::new(false),
+            enabled: Cell::new(false),
+        }
+    }
+
+    fn stop(&self) {
+        let listener = self.listener.borrow_mut().take();
+        if let Some((id, live)) = listener {
+            live.store(false, Ordering::Release);
+            self.controller.remove_listener(id);
+        }
+        let _ = self.controller.stop();
+    }
+
+    fn start(
+        &self,
+        target: TransformationController,
+        velocity: Offset<f64>,
+        viewport: Rect<f64>,
+        boundary: Rect<f64>,
+    ) {
+        self.stop();
+        let speed = velocity.dx.hypot(velocity.dy);
+        if self.closed.get() || !self.enabled.get() || !speed.is_finite() || speed <= 0.0 {
+            return;
+        }
+        // Ten percent of the release speed remains after one second. The
+        // library simulation supplies finite admission and its rest threshold.
+        let Ok(simulation) = FrictionSimulation::new(0.1, 0.0, speed, Tolerance::DEFAULT) else {
+            return;
+        };
+        let origin = target.value();
+        let direction = velocity / speed;
+        let live = Arc::new(AtomicBool::new(true));
+        let callback_live = live.clone();
+        let animation = self.controller.clone();
+        let id = self.controller.add_listener(Arc::new(move || {
+            if !callback_live.load(Ordering::Acquire) {
+                return;
+            }
+            let delta = direction * animation.value();
+            let proposed = Matrix4::translation(delta.dx, delta.dy, 0.0) * origin;
+            let Some(next) = contain_transform(proposed, viewport, boundary) else {
+                let _ = animation.stop();
+                return;
+            };
+            if next == target.value() && animation.value() != 0.0 {
+                let _ = animation.stop();
+            } else {
+                target.set_value(next);
+            }
+        }));
+        *self.listener.borrow_mut() = Some((id, live));
+        let _ = self.controller.animate_with(simulation);
+    }
+
+    fn close(&self) {
+        self.closed.set(true);
+        self.stop();
+        self.controller.dispose();
+    }
 }
 
 /// Persistent state for [`InteractiveViewer`].
@@ -461,12 +557,35 @@ pub struct InteractiveViewerState {
     /// acquire-in-lifecycle-hook, use-from-callback shape
     /// `FocusState::init_state` uses for its own pipeline handle.
     pipeline_cell: Option<PipelineCell>,
+    fling: Rc<FocalFling>,
+    vsync: Option<Vsync>,
+    vsync_registration: Option<VsyncRegistration>,
 }
 
 impl ViewState<InteractiveViewer> for InteractiveViewerState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.pipeline_cell = ctx.pipeline_owner();
         self.writer = Some(ctx.writer_source());
+        if let Some(vsync) = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone()) {
+            self.vsync_registration = Some(vsync.register(self.fling.controller.clone()));
+            self.vsync = Some(vsync);
+            self.fling.enabled.set(true);
+        }
+    }
+
+    fn did_update_view(&mut self, old: &InteractiveViewer, view: &InteractiveViewer) {
+        if !old.controller.ptr_eq(&view.controller) {
+            self.fling.stop();
+        }
+    }
+
+    fn dispose(&mut self) {
+        if let Some(registration) = self.vsync_registration.take()
+            && let Some(vsync) = self.vsync.take()
+        {
+            vsync.unregister(&registration);
+        }
+        self.fling.close();
     }
 
     #[expect(clippy::too_many_lines)] // one gesture-wiring build(); splitting fragments the callback capture set
@@ -480,6 +599,8 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
         let max_scale = view.max_scale;
         let pan_enabled = view.pan_enabled;
         let scale_enabled = view.scale_enabled;
+        let rotation_enabled = view.rotation_enabled;
+        let fling = self.fling.clone();
         let wheel_scale_gate = view.wheel_scale_gate;
         let pan_axis = view.pan_axis;
         let scale_factor = view.scale_factor;
@@ -502,17 +623,21 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
             // -- Pan (GestureDetector) -------------------------------------
             let gesture_start = Rc::clone(&gesture);
             let on_start_pan = on_start.clone();
-            let pan_start_details = callback_with(move |cx, details: DragStartDetails| {
+            let fling_start = fling.clone();
+            let pan_start_details = callback_with(move |cx, details: ScaleStartDetails| {
+                fling_start.stop();
                 gesture_start.current_axis.set(None);
+                gesture_start.scale.set(1.0);
+                gesture_start.rotation.set(0.0);
                 gesture_start
                     .pan_start_local
-                    .set(Some(details.local_position));
+                    .set(Some(details.local_focal_point));
                 if let Some(callback) = &on_start_pan {
                     callback(
                         cx,
                         InteractionStartDetails {
-                            focal_point: details.global_position,
-                            local_focal_point: details.local_position,
+                            focal_point: details.focal_point,
+                            local_focal_point: details.local_focal_point,
                         },
                     );
                 }
@@ -523,47 +648,59 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
             let anchor_update = anchor.clone();
             let pipeline_cell_update = pipeline_cell.clone();
             let on_update_pan = on_update.clone();
-            let pan_update_details = callback_with(move |cx, details: DragUpdateDetails| {
+            let pan_update_details = callback_with(move |cx, details: ScaleUpdateDetails| {
+                let before = controller_update.value();
+                let ratio = details.scale / gesture_update.scale.replace(details.scale);
+                let rotation = details.rotation - gesture_update.rotation.replace(details.rotation);
+                let mut delta = details.focal_point_delta;
                 if pan_enabled {
                     if let Some(start_local) = gesture_update.pan_start_local.get()
                         && gesture_update.current_axis.get().is_none()
                         && pan_axis != PanAxis::Free
                     {
-                        let total = details.local_position - start_local;
+                        let total = details.local_focal_point - start_local;
                         if total != Offset::ZERO {
                             gesture_update.current_axis.set(Some(dominant_axis(total)));
                         }
                     }
-                    if let Some((viewport, boundary)) = InteractiveViewerState::geometry(
-                        pipeline_cell_update.as_ref(),
-                        &anchor_update,
-                        boundary_margin,
-                    ) {
-                        let current_matrix = controller_update.value();
-                        let scale = uniform_scale(&current_matrix);
-                        let raw_delta =
-                            Offset::new(details.delta.dx / scale, details.delta.dy / scale);
-                        let aligned = match pan_axis {
-                            PanAxis::Free => raw_delta,
-                            PanAxis::Horizontal => align_to_axis(raw_delta, Axis::Horizontal),
-                            PanAxis::Vertical => align_to_axis(raw_delta, Axis::Vertical),
-                            PanAxis::Aligned => match gesture_update.current_axis.get() {
-                                Some(axis) => align_to_axis(raw_delta, axis),
-                                None => raw_delta,
-                            },
-                        };
-                        let next = clamp_translation(current_matrix, aligned, viewport, boundary);
-                        controller_update.set_value(next);
-                    }
+                    delta = match pan_axis {
+                        PanAxis::Free => delta,
+                        PanAxis::Horizontal => align_to_axis(delta, Axis::Horizontal),
+                        PanAxis::Vertical => align_to_axis(delta, Axis::Vertical),
+                        PanAxis::Aligned => gesture_update
+                            .current_axis
+                            .get()
+                            .map_or(delta, |axis| align_to_axis(delta, axis)),
+                    };
+                } else {
+                    delta = Offset::ZERO;
+                }
+                if let Some((viewport, boundary)) = InteractiveViewerState::geometry(
+                    pipeline_cell_update.as_ref(),
+                    &anchor_update,
+                    boundary_margin,
+                ) && let Some(next) = gesture_transform(
+                    before,
+                    details.local_focal_point,
+                    delta,
+                    if scale_enabled { ratio } else { 1.0 },
+                    if rotation_enabled { rotation } else { 0.0 },
+                    min_scale,
+                    max_scale,
+                    viewport,
+                    boundary,
+                ) {
+                    controller_update.set_value(next);
                 }
                 if let Some(callback) = &on_update_pan {
                     callback(
                         cx,
                         InteractionUpdateDetails {
-                            focal_point: details.global_position,
-                            local_focal_point: details.local_position,
-                            scale: 1.0,
-                            focal_point_delta: Offset::new(details.delta.dx, details.delta.dy),
+                            focal_point: details.focal_point,
+                            local_focal_point: details.local_focal_point,
+                            scale: uniform_scale(&controller_update.value())
+                                / uniform_scale(&before),
+                            focal_point_delta: delta,
                         },
                     );
                 }
@@ -571,15 +708,41 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
 
             let gesture_end = Rc::clone(&gesture);
             let on_end_pan = on_end.clone();
-            let pan_end_details = callback_with(move |cx, details: DragEndDetails| {
+            let fling_end = fling.clone();
+            let controller_end = controller.clone();
+            let anchor_end = anchor.clone();
+            let pipeline_end = pipeline_cell.clone();
+            let pan_end_details = callback_with(move |cx, details: ScaleEndDetails| {
+                let mut velocity = details.focal_velocity.pixels_per_second;
+                velocity = match pan_axis {
+                    PanAxis::Free => velocity,
+                    PanAxis::Horizontal => align_to_axis(velocity, Axis::Horizontal),
+                    PanAxis::Vertical => align_to_axis(velocity, Axis::Vertical),
+                    PanAxis::Aligned => gesture_end
+                        .current_axis
+                        .get()
+                        .map_or(velocity, |axis| align_to_axis(velocity, axis)),
+                };
                 gesture_end.pan_start_local.set(None);
                 gesture_end.current_axis.set(None);
+                gesture_end.scale.set(1.0);
+                gesture_end.rotation.set(0.0);
+                if pan_enabled
+                    && let Some((viewport, boundary)) = InteractiveViewerState::geometry(
+                        pipeline_end.as_ref(),
+                        &anchor_end,
+                        boundary_margin,
+                    )
+                {
+                    fling_end.start(controller_end.clone(), velocity, viewport, boundary);
+                }
                 if let Some(callback) = &on_end_pan {
                     callback(
                         cx,
                         InteractionEndDetails {
-                            reason: details.reason,
-                            velocity: details.velocity,
+                            reason: GestureEndReason::Completed,
+                            velocity: details.focal_velocity,
+                            scale_velocity: details.velocity,
                         },
                     );
                 }
@@ -599,7 +762,8 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
             let on_update_wheel = on_update.clone();
             let on_end_wheel = on_end.clone();
             let wheel_writer = writer.clone();
-            let scroll_claim = move |data: &ScrollEventData| {
+            let wheel_fling = fling.clone();
+            let scroll_claim = move |data: &ScrollEvent| {
                 wheel_writer.write(|cx| {
                     if wheel_scale_gate == WheelScaleGate::CtrlWheel
                         && !data.modifiers.contains(Modifiers::CONTROL)
@@ -608,32 +772,54 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
                         // the ctrl-gated contract.
                         return EventPropagation::Continue;
                     }
-                    if data.delta.dy == 0.0 {
+                    let geometry = InteractiveViewerState::geometry(
+                        pipeline_cell_wheel.as_ref(),
+                        &anchor_wheel,
+                        boundary_margin,
+                    );
+                    let pixels_per_unit = match data.delta.unit() {
+                        ScrollUnit::Pixels => 1.0,
+                        // Preserve the existing consumer policy while system
+                        // wheel preferences remain owned by the platform layer.
+                        ScrollUnit::Lines => 53.0,
+                        ScrollUnit::Pages => {
+                            let Some((viewport, _)) = geometry else {
+                                return EventPropagation::Continue;
+                            };
+                            let height = viewport.height();
+                            if !height.is_finite() || height <= 0.0 {
+                                return EventPropagation::Continue;
+                            }
+                            height
+                        }
+                        _ => return EventPropagation::Continue,
+                    };
+                    let delta = data.delta.y() * pixels_per_unit;
+                    if delta == 0.0 || !delta.is_finite() {
                         // Ignore horizontal-only wheel scroll.
                         return EventPropagation::Continue;
                     }
 
+                    let position = data.position.get();
+                    let position = Offset::new(position.x, position.y);
+                    let scale_change = (-delta / scale_factor).exp();
+                    if !scale_change.is_finite() || scale_change <= 0.0 {
+                        return EventPropagation::Continue;
+                    }
+                    wheel_fling.stop();
                     if let Some(callback) = &on_start_wheel {
                         callback(
                             cx,
                             InteractionStartDetails {
-                                focal_point: data.position,
-                                local_focal_point: data.position,
+                                focal_point: position,
+                                local_focal_point: position,
                             },
                         );
                     }
 
-                    let scale_change = (-data.delta.dy / scale_factor).exp();
-
                     let value_before_zoom = controller_wheel.value();
-                    if scale_enabled
-                        && let Some((viewport, boundary)) = InteractiveViewerState::geometry(
-                            pipeline_cell_wheel.as_ref(),
-                            &anchor_wheel,
-                            boundary_margin,
-                        )
-                    {
-                        let scene_before = controller_wheel.to_scene(data.position);
+                    if scale_enabled && let Some((viewport, boundary)) = geometry {
+                        let scene_before = controller_wheel.to_scene(position);
                         let scaled = clamp_scale(
                             controller_wheel.value(),
                             scale_change,
@@ -646,7 +832,7 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
 
                         // Keep the same scene point under the cursor before and
                         // after the scale.
-                        let scene_after = controller_wheel.to_scene(data.position);
+                        let scene_after = controller_wheel.to_scene(position);
                         let correction = Offset::new(
                             scene_after.dx - scene_before.dx,
                             scene_after.dy - scene_before.dy,
@@ -664,8 +850,8 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
                         callback(
                             cx,
                             InteractionUpdateDetails {
-                                focal_point: data.position,
-                                local_focal_point: data.position,
+                                focal_point: position,
+                                local_focal_point: position,
                                 scale: scale_change,
                                 focal_point_delta: Offset::ZERO,
                             },
@@ -677,6 +863,7 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
                             InteractionEndDetails {
                                 reason: GestureEndReason::Completed,
                                 velocity: Velocity::ZERO,
+                                scale_velocity: 0.0,
                             },
                         );
                     }
@@ -707,126 +894,90 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
                 .clip_behavior(clip_behavior)
                 .child(transform);
 
-            let recognized = GestureDetector::new()
-                // Opaque is necessary when panning off screen (the child's own
-                // hit-test area can end up smaller than the viewport once
-                // transformed).
-                .behavior(HitTestBehavior::Opaque)
-                .on_pan_start(pan_start_details)
-                .on_pan_update(pan_update_details)
-                .on_pan_end(pan_end_details)
-                .child(clipped);
-
-            // -- Trackpad pinch (Listener::on_pointer_pan_zoom_claim) -----
-            //
-            // Arbitrated, for the same reason the wheel branch above is:
-            // ordinary pan-zoom delivery reaches every listener on the hit
-            // path, so two nested enabled viewers would both scale on one
-            // pinch tick. The claim walk hands the tick to the leaf-most
-            // viewer that actually transforms. (A scale-recognizer arena entry
-            // would do this instead, which V1 scopes out; see this module's
-            // own docs.)
-            //
-            // The pan-zoom lane delivers per-tick updates whose `scale` is
-            // the tick's own factor (each converted gesture is a one-tick
-            // "cumulative" — see `convert_gesture`'s doc), so composing is
-            // a straight multiply per update, with the identical
-            // clamp-and-keep-the-focal-point-fixed steps the wheel branch
-            // uses. Ticks that change nothing (pure rotation, scale 1.0)
-            // fire the interaction callbacks and leave the transform alone.
+            // Reject an idle native claimant before it can mutate its actor.
+            // Once admitted, GestureDetector owns the source through terminal.
             let controller_pinch = controller.clone();
             let anchor_pinch = anchor.clone();
             let pipeline_cell_pinch = pipeline_cell.clone();
-            let on_start_pinch = on_start.clone();
-            let on_update_pinch = on_update.clone();
-            let on_end_pinch = on_end.clone();
-            let pinch_writer = writer.clone();
-            let pan_zoom = move |event: &flui_interaction::PointerPanZoomEvent| {
-                pinch_writer.write(|cx| {
-                    let flui_interaction::PointerPanZoomEvent::Update {
-                        position, scale, ..
-                    } = *event
-                    else {
-                        return EventPropagation::Continue;
-                    };
-                    if let Some(callback) = &on_start_pinch {
-                        callback(
-                            cx,
-                            InteractionStartDetails {
-                                focal_point: position,
-                                local_focal_point: position,
-                            },
-                        );
+            let native_admission = move |event: &PanZoomEvent| {
+                let PanZoomPhase::Update(transform) = event.phase else {
+                    return false;
+                };
+                let Some((viewport, boundary)) = InteractiveViewerState::geometry(
+                    pipeline_cell_pinch.as_ref(),
+                    &anchor_pinch,
+                    boundary_margin,
+                ) else {
+                    return false;
+                };
+                let point = event.position.get();
+                let delta = if pan_enabled {
+                    match pan_axis {
+                        PanAxis::Horizontal => align_to_axis(transform.pan(), Axis::Horizontal),
+                        PanAxis::Vertical => align_to_axis(transform.pan(), Axis::Vertical),
+                        PanAxis::Aligned if transform.pan() != Offset::ZERO => {
+                            align_to_axis(transform.pan(), dominant_axis(transform.pan()))
+                        }
+                        _ => transform.pan(),
                     }
-                    let scale_change = scale;
-                    let value_before_zoom = controller_pinch.value();
-                    if scale_enabled
-                        && scale_change != 1.0
-                        && let Some((viewport, boundary)) = InteractiveViewerState::geometry(
-                            pipeline_cell_pinch.as_ref(),
-                            &anchor_pinch,
-                            boundary_margin,
-                        )
-                    {
-                        let scene_before = controller_pinch.to_scene(position);
-                        let scaled = clamp_scale(
-                            controller_pinch.value(),
-                            scale_change,
-                            min_scale,
-                            max_scale,
-                            viewport,
-                            boundary,
-                        );
-                        controller_pinch.set_value(scaled);
-                        let scene_after = controller_pinch.to_scene(position);
-                        let correction = Offset::new(
-                            scene_after.dx - scene_before.dx,
-                            scene_after.dy - scene_before.dy,
-                        );
-                        let translated = clamp_translation(
-                            controller_pinch.value(),
-                            correction,
-                            viewport,
-                            boundary,
-                        );
-                        controller_pinch.set_value(translated);
-                    }
-                    if let Some(callback) = &on_update_pinch {
-                        callback(
-                            cx,
-                            InteractionUpdateDetails {
-                                focal_point: position,
-                                local_focal_point: position,
-                                scale: scale_change,
-                                focal_point_delta: Offset::ZERO,
-                            },
-                        );
-                    }
-                    if let Some(callback) = &on_end_pinch {
+                } else {
+                    Offset::ZERO
+                };
+                let focal = Offset::new(point.x, point.y) + transform.pan();
+                let before = controller_pinch.value();
+                gesture_transform(
+                    before,
+                    focal,
+                    delta,
+                    if scale_enabled {
+                        transform.scale()
+                    } else {
+                        1.0
+                    },
+                    if rotation_enabled {
+                        transform.rotation()
+                    } else {
+                        0.0
+                    },
+                    min_scale,
+                    max_scale,
+                    viewport,
+                    boundary,
+                )
+                .is_some_and(|next| next != before)
+            };
+            let cancel_gesture = gesture.clone();
+            let cancel_fling = fling.clone();
+            let cancel_end = on_end.clone();
+            let recognized = GestureDetector::new()
+                .behavior(HitTestBehavior::Opaque)
+                .scale_start_mode(ScaleStartMode::PanOrScale)
+                .native_scale_admission(native_admission)
+                .on_scale_start(pan_start_details)
+                .on_scale_update(pan_update_details)
+                .on_scale_end(pan_end_details)
+                .on_scale_cancel(callback(move |cx| {
+                    cancel_fling.stop();
+                    cancel_gesture.pan_start_local.set(None);
+                    cancel_gesture.current_axis.set(None);
+                    cancel_gesture.scale.set(1.0);
+                    cancel_gesture.rotation.set(0.0);
+                    if let Some(callback) = &cancel_end {
                         callback(
                             cx,
                             InteractionEndDetails {
-                                reason: GestureEndReason::Completed,
+                                reason: GestureEndReason::Cancelled,
                                 velocity: Velocity::ZERO,
+                                scale_velocity: 0.0,
                             },
                         );
                     }
-                    // Claim only when the viewer actually transformed — the same
-                    // predicate the wheel branch uses. Scaling disabled, a pure
-                    // rotation tick, or a zoom the clamps collapsed to a no-op
-                    // leaves the tick to an enclosing viewer; the interaction
-                    // callbacks above still observed it.
-                    if controller_pinch.value().m == value_before_zoom.m {
-                        EventPropagation::Continue
-                    } else {
-                        EventPropagation::Stop
-                    }
-                })
-            };
-
+                }))
+                .child(clipped);
+            let input_fling = fling.clone();
             Listener::new()
+                .on_pointer_down(move |_, _| input_fling.stop())
                 .on_scroll_claim(scroll_claim)
-                .on_pointer_pan_zoom_claim(pan_zoom)
                 .child(recognized)
         })
     }
@@ -866,9 +1017,153 @@ impl InteractiveViewerState {
 // Matrix math — boundary-clamped translate/scale
 // ============================================================================
 
-/// The uniform scale factor of a matrix built solely from translation +
-/// uniform scale (no rotation — see the module docs on why rotation is out of
-/// scope): the length of the transformed x basis vector.
+/// Compose in viewport space, then keep the same scene point under the moving
+/// focal point. Publish only an invertible finite matrix inside the boundary.
+#[expect(clippy::too_many_arguments)]
+fn gesture_transform(
+    matrix: Matrix4,
+    focal: Offset<f64>,
+    delta: Offset<f64>,
+    scale: f64,
+    rotation: f64,
+    min_scale: f64,
+    max_scale: f64,
+    viewport: Rect<f64>,
+    boundary: Rect<f64>,
+) -> Option<Matrix4> {
+    if !focal.is_finite()
+        || !delta.is_finite()
+        || scale.is_nan()
+        || scale < 0.0
+        || !rotation.is_finite()
+        || !viewport.is_finite()
+        || viewport.width() <= 0.0
+        || viewport.height() <= 0.0
+    {
+        return None;
+    }
+    if delta == Offset::ZERO && scale == 1.0 && rotation == 0.0 {
+        return contain_transform(matrix, viewport, boundary);
+    }
+    let previous_focal = focal - delta;
+    if !previous_focal.is_finite() {
+        return None;
+    }
+    let inverse = matrix.try_inverse()?;
+    let pivot = inverse.transform_point(previous_focal.dx, previous_focal.dy);
+    if !pivot.0.is_finite() || !pivot.1.is_finite() {
+        return None;
+    }
+    let current_scale = uniform_scale(&matrix);
+    if !current_scale.is_finite() || current_scale <= 0.0 {
+        return None;
+    }
+    let scaled = clamp_scale(matrix, scale, min_scale, max_scale, viewport, boundary);
+    let mut next = Matrix4::rotation_z(rotation) * scaled;
+    let mapped = next.transform_point(pivot.0, pivot.1);
+    let correction = focal - Offset::new(mapped.0, mapped.1);
+    if !correction.is_finite() {
+        return None;
+    }
+    next = Matrix4::translation(correction.dx, correction.dy, 0.0) * next;
+    contain_transform(next, viewport, boundary)
+}
+
+fn contain_transform(
+    mut matrix: Matrix4,
+    viewport: Rect<f64>,
+    boundary: Rect<f64>,
+) -> Option<Matrix4> {
+    if !matrix
+        .to_col_major_array()
+        .iter()
+        .all(|value| value.is_finite())
+    {
+        return None;
+    }
+    let values = matrix.to_col_major_array();
+    if boundary.is_finite()
+        && values[3] == 0.0
+        && values[7] == 0.0
+        && values[11] == 0.0
+        && values[15] == 1.0
+    {
+        // Separate translation from the viewport's shape. Subtracting a huge
+        // excess from a huge translation loses the small boundary coordinate.
+        let (x, y, z) = matrix.translation_component();
+        let mut linear = matrix;
+        linear.set_translation(0.0, 0.0, 0.0);
+        let inverse = linear.try_inverse()?;
+        let shape = inverse.transform_rect(&viewport);
+        if !shape.is_finite()
+            || shape.width() > boundary.width() + EXCESS_EPSILON
+            || shape.height() > boundary.height() + EXCESS_EPSILON
+        {
+            return None;
+        }
+        let shift = inverse.transform_point(-x, -y);
+        if !shift.0.is_finite() || !shift.1.is_finite() {
+            return None;
+        }
+        let lower = Offset::new(boundary.min.x - shape.min.x, boundary.min.y - shape.min.y);
+        let upper = Offset::new(boundary.max.x - shape.max.x, boundary.max.y - shape.max.y);
+        if !lower.is_finite() || !upper.is_finite() {
+            return None;
+        }
+        let clamped = Offset::new(
+            shift.0.clamp(lower.dx, upper.dx.max(lower.dx)),
+            shift.1.clamp(lower.dy, upper.dy.max(lower.dy)),
+        );
+        if clamped.dx != shift.0 || clamped.dy != shift.1 {
+            let translated = linear.transform_point(-clamped.dx, -clamped.dy);
+            if !translated.0.is_finite() || !translated.1.is_finite() {
+                return None;
+            }
+            matrix.set_translation(translated.0, translated.1, z);
+        }
+    }
+    let inverse = matrix.try_inverse()?;
+    let scene_viewport = inverse.transform_rect(&viewport);
+    if !scene_viewport.is_finite() {
+        return None;
+    }
+    if !boundary.is_finite() {
+        return (![
+            boundary.min.x,
+            boundary.min.y,
+            boundary.max.x,
+            boundary.max.y,
+        ]
+        .iter()
+        .any(|value| value.is_nan()))
+        .then_some(matrix);
+    }
+    // A rotated viewport is a quad; its bounding rectangle fits this
+    // axis-aligned scene boundary exactly when all four corners fit. If its
+    // extent cannot fit at the admitted scale, reject rather than invent zoom.
+    if scene_viewport.width() > boundary.width() + EXCESS_EPSILON
+        || scene_viewport.height() > boundary.height() + EXCESS_EPSILON
+    {
+        return None;
+    }
+    let excess = rect_excess(boundary, scene_viewport);
+    if !excess.is_finite() {
+        return None;
+    }
+    if !excess_is_negligible(excess) {
+        matrix *= Matrix4::translation(-excess.dx, -excess.dy, 0.0);
+    }
+    let result = matrix.try_inverse()?.transform_rect(&viewport);
+    (matrix
+        .to_col_major_array()
+        .iter()
+        .all(|value| value.is_finite())
+        && result.is_finite()
+        && excess_is_negligible(rect_excess(boundary, result)))
+    .then_some(matrix)
+}
+
+/// Uniform scale of a translated/rotated matrix: length of its x basis vector.
 fn uniform_scale(matrix: &Matrix4) -> f64 {
     let m = matrix.to_col_major_array();
     m[0].hypot(m[1])
@@ -890,10 +1185,9 @@ fn transform_viewport(matrix: Matrix4, viewport: Rect<f64>) -> Rect<f64> {
 /// one axis, signed so that adding it to the viewport's position moves it
 /// back inside the boundary. Zero when already inside (inclusive).
 ///
-/// With rotation permanently disabled (see the module docs), this plain
-/// interval comparison is sufficient, including a viewport wider than the
-/// boundary on this axis (checked against both edges; the edge quoting the
-/// larger-magnitude excess wins).
+/// The caller supplies the transformed viewport's bounding rectangle, so the
+/// interval comparison also covers rotation. If the viewport is wider than
+/// the boundary, the edge with the larger-magnitude excess wins.
 fn axis_excess(view_min: f64, view_max: f64, bound_min: f64, bound_max: f64) -> f64 {
     let excess_min = if view_min < bound_min {
         bound_min - view_min

@@ -1,6 +1,6 @@
 # pointer-vocabulary — задачи
 
-- **Статус:** P1 — draft-PR; P2, P3 — не начаты
+- **Статус:** P1 завершена (PR #1478 merged); P2 и производители P3 реализованы; локальный check-changed прошёл, CI/merge и непроверенные native/hardware пути остаются открытыми
 - **Дата:** 2026-10-06
 - **Дизайн:** [design.md](design.md); требования — [requirements.md](requirements.md)
 - **Правила:** задача = ветка `interaction/<slug>` = worktree = draft-PR; `[P]` — можно
@@ -8,6 +8,35 @@
   тестах и коммитах. Каждая сборка — через общий замок хоста. Win32 — прогон на Windows-хосте
   с выводом в PR; macOS/iOS/Android — только `cargo xtask cross-typecheck`, в матрице
   «скомпилировано, не запущено»; web — `cargo xtask wasm-check`.
+
+## Текущая сверка
+
+Сверка исходников 2026-10-08 на интеграционной базе `5f28646ad`.
+`PlatformInput`, binding, routing, распознаватели, runtime, widgets, testing и facade
+используют owned-словарь. Общий pointer-мост удалён; каждый backend строит события
+на своей границе. Сохранённый приватный keyboard adapter использует mature upstream
+таблицы клавиш, не возвращая upstream-типы в публичные сигнатуры.
+
+На `5f28646ad` локальный `cargo xtask check-changed --base
+d6ad274194483c6d1bc100f9a14d42e3890b6c0e` завершился exit 0. Driver 46/46,
+workspace 793/793 (62 skipped), strict workspace clippy/rustdoc/doctests,
+Windows native required-feature all-targets clippy, wasm workspace lib/bins
+и facade no-default/hot-reload, ordinary platform trybuild 1/1 прошли.
+macOS без cargo-zigbuild, iOS без genuine Apple SDK, Android без NDK/CC/AR
+и Linux native execution без Linux/xvfb пропущены. Классифицированный план
+не выполнял отдельную cargo-hack matrix каждого feature. CI ещё не опубликован;
+I11 и physical pen/touch activation эта проверка не закрывает.
+
+| Задачи | Реализация | Остаток проверки |
+|---|---|---|
+| V1–V4 | Типы и генератор уже merged; ADR-0143 принят | Исторический P1-мост заменён прямыми производителями |
+| V5–V7 | Owned-события проходят production-конвейер; единицы scroll доходят до viewport | Локальный classified gate прошёл; точные optional/native ограничения указаны выше |
+| V8 | Миграция и changelog интегрированы | `cargo xtask check-changed` exit 0; CI/merge впереди |
+| V9 | Win32 pointer/mouse/keyboard производители интегрированы | Hidden-HWND Xbutton/coarse-clock и откаты прошли; финальные all-features decoder и fractional-wheel hidden-HWND проверки прошли. Независимый precision-only откат теряет Precise и падает; точный восстановленный producer smoke проходит. Pen/touch activation отказал, поэтому CANNOT_VERIFY |
+| V10 | winit producer интегрирован | Четыре pointer-translation контракта и локальный gate прошли; Linux native execution пропущена без Linux/xvfb |
+| V11–V13 | macOS/iOS/Android producer интегрированы | Предыдущая cross-typecheck прошла: скомпилировано, не запущено. На базе `64ab42b43` strict clippy проверка flui-runtime/flui-app/flui с default features на aarch64-linux-android завершилась exit 0; это не Android execution и не all-features/all-targets проверка. Финальные native проверки пропущены без cargo-zigbuild/Apple SDK/Android NDK; ранние результаты не подменяют эти пропуски |
+| V14 | Web producer интегрирован | Живой Chrome smoke после V15, включая getter reentry, прошёл; финальные wasm workspace lib/bins и facade no-default/hot-reload strict clippy прошли отдельно |
+| V15 | `flui-platform-api` не зависит от `ui-events`/`keyboard-types`/`dpi`; общий мост удалён; xtask использует прямой `keyboard-types` | `ui-events` остаётся только там, где нужны platform keyboard tables; локальный classified gate прошёл |
 
 ## P1 — словарь, ADR, мост (без изменения поведения)
 
@@ -33,7 +62,7 @@
 |---|---|---|---|---|---|
 | V9 | Win32 | `WM_POINTER*` (`EnableMouseInPointer`): touch, pen (давление, tilt → altitude/azimuth, twist, ластик), `POINTER_INFO.sourceDevice` → `DeviceId`, `WM_POINTERDEVICECHANGE`/`WM_POINTERDEVICEINRANGE`; `SetCapture`/`ReleaseCapture`, `WM_CAPTURECHANGED` → `CaptureLost`; `WM_XBUTTON*`; время `GetMessageTime`; `ButtonChange`; мышь без давления | `crates/flui-platform/src/platforms/windows/{events.rs,platform.rs}` (не `window.rs`, не `text_services/**` до слияния `text-ime/host-contract`) | [P] | Win32-unit + `cargo xtask device windows-input` на хосте, вывод в PR |
 | V10 | winit | первым касанием — роль `Primary` (мост не может вывести её из id: winit выдаёт касаниям id с 2); `Force::Calibrated` → altitude; `PinchGesture`/`PanGesture`/`RotationGesture` с фазой → один `PanZoom` поток с накоплением; `MouseWheel{phase}` → `ScrollPhase`; `TouchpadPressure`; `DeviceEvent::Added/Removed`; точность по варианту дельты | `crates/flui-platform/src/platforms/winit/{events.rs,platform.rs}` | [P] | unit на хосте; `cargo xtask live-smoke` где доступен |
-| V11 | macOS | `NSEvent` `phase`/`momentumPhase` → `ScrollPhase`, `hasPreciseScrollingDeltas` → `ScrollPrecision`, `magnify`/`rotate`/двухпальцевый пан → `PanZoom` Start/Update/End, `pressure`/`stage` (Force Touch), `clickCount`, `buttonNumber`, время `timestamp` | `crates/flui-platform/src/platforms/macos/events.rs` | [P] | `cross-typecheck`; «скомпилировано, не запущено» |
+| V11 | macOS | `scrollWheel:` (включая двухпальцевый пан) → один `ScrollEvent`: `NSEvent` `phase`/`momentumPhase` → `ScrollPhase`, `hasPreciseScrollingDeltas` → `ScrollPrecision`; `magnifyWithEvent:`/`rotateWithEvent:` → общий накопительный `PanZoom` Start/Update/End без дублирования scroll; `pressure`/`stage` (Force Touch), `clickCount`, `buttonNumber`, время `timestamp` (ADR-0143 §5) | `crates/flui-platform/src/platforms/macos/{events.rs,view.rs}` | [P] | `native_scroll_phases_preserve_momentum_and_unphased_wheels`, `native_pinch_and_rotation_share_one_cumulative_gesture`; `cross-typecheck` подтверждает только компиляцию, запуск на macOS указывается отдельно |
 | V12 | iOS | `UITouch.altitudeAngle`/`azimuthAngle`, `majorRadius` → размер контакта, `force` → давление (`maximumPossibleForce`), `UIHoverGestureRecognizer` → hover пера, `touchesCancelled` → `Platform` | `crates/flui-platform/src/platforms/ios/events.rs` | [P] | `cross-typecheck` |
 | V13 | Android | `TOOL_TYPE_ERASER` → ластик, `getButtonState`, `AXIS_TILT`/`AXIS_ORIENTATION`, `TOUCH_MAJOR/MINOR` в логических px, `getHistorical*` → `coalesced`, `ACTION_SCROLL` → `ScrollEvent`, `getEventTimeNanos` | `crates/flui-platform/src/platforms/android/input.rs` | [P] | `cross-typecheck` |
 | V14 | Web | `pointercancel` → `Platform`, `setPointerCapture`/`lostpointercapture` → `CaptureLost`, `getCoalescedEvents`/`getPredictedEvents`, `altitudeAngle`/`azimuthAngle`/`twist`, дробные координаты, `deltaMode` с единицей | `crates/flui-platform/src/platforms/web/events.rs` | [P] | `cargo xtask wasm-check`; браузерный unit — недоступно, так и записать |

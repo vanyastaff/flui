@@ -11,8 +11,9 @@ use std::{any::Any, sync::Arc};
 use cursor_icon::CursorIcon;
 use flui_foundation::geometry::{Bounds, Point, Size};
 
+use crate::keyboard::Modifiers;
 use crate::{
-    CursorError, DispatchEventResult, Modifiers, PlatformDisplay, PlatformHaptics, PlatformInput,
+    CursorError, DispatchEventResult, PlatformDisplay, PlatformHaptics, PlatformInput,
     PlatformTextInput, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
     WindowExecutionState, WindowId, WindowShowError,
 };
@@ -288,7 +289,7 @@ pub trait PlatformWindow: Send + Sync {
 
     /// Get the currently pressed keyboard modifiers
     fn modifiers(&self) -> Modifiers {
-        Modifiers::empty()
+        Modifiers::NONE
     }
 
     /// Get the window's current appearance (light/dark)

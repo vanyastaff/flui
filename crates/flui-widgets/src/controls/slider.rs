@@ -144,7 +144,7 @@ impl Live {
     }
     fn request_focus(&self, cx: &EventCx<'_>) {
         if self.usable() && self.admits_context(cx) {
-            self.focus.request_focus();
+            let _ = self.focus.request_focus();
         }
     }
     fn at_pointer(&self, cx: &mut EventCx<'_>, x: f64) {
@@ -333,7 +333,7 @@ impl ViewState<Slider> for SliderState {
                 }
             })
             .on_key_event(move |cx, event| {
-                if event.state != KeyState::Down || !key.usable() || !key.admits_context(cx) {
+                if event.state() != KeyState::Down || !key.usable() || !key.admits_context(cx) {
                     return KeyEventResult::Ignored;
                 }
                 if crate::SingleActivator::character_ignoring_shift("+").matches(event) {
