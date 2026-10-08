@@ -1,6 +1,6 @@
 # pointer-vocabulary — задачи
 
-- **Статус:** P1 завершена (PR #1478 merged); P2 и производители P3 реализованы; локальный check-changed прошёл, CI/merge и непроверенные native/hardware пути остаются открытыми
+- **Статус:** P1 merged через PR #1478; P2/P3 merged через PR #1514. CI прошёл; непроверенные native/hardware пути остаются явно ограниченными.
 - **Дата:** 2026-10-06
 - **Дизайн:** [design.md](design.md); требования — [requirements.md](requirements.md)
 - **Правила:** задача = ветка `interaction/<slug>` = worktree = draft-PR; `[P]` — можно
@@ -10,6 +10,12 @@
   «скомпилировано, не запущено»; web — `cargo xtask wasm-check`.
 
 ## Текущая сверка
+
+PR #1514 слит после успешного CI на `3e803ebfc`; источник и ссылка — в
+[../tasks.md](../tasks.md). Linux `live-smoke` выполнен в CI, native
+cross-typecheck четырёх остальных платформ прошёл без заявления аппаратного
+исполнения. Ниже сохранён локальный gate до публикации; его пропуски не являются
+статусом последующего CI. I11 и physical pen/touch остаются отдельными задачами.
 
 Сверка исходников 2026-10-08 на интеграционной базе `5f28646ad`.
 `PlatformInput`, binding, routing, распознаватели, runtime, widgets, testing и facade

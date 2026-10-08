@@ -85,14 +85,49 @@ DPI without creating another native observer. Wheel disabled, line/character and
 page values remain distinguishable; pixel-based input does not acquire a second
 system multiplier.
 
-`GestureArenaScope` distributes the interaction projection alongside its existing
-arena identity. Its production consumers observe changes through lifecycle
-dependencies. A settings update has an explicit active-sequence policy, pinned
-through recognizer behavior: retain the admitted settings until terminal, or
-replace/cancel through existing containment. Silently changing an active
-sequence's thresholds is not an implementation choice. Authored overrides remain
-authoritative. A separate gesture-settings source or parallel inherited scope
-would recreate the authority this decision removes.
+`GestureArenaScope` distributes a read-only, owner-local interaction projection
+alongside its existing arena identity. Host publication commits this projection
+before the next admitted input; a later inherited rebuild is not its delivery
+barrier. Each new contact or gesture session captures an immutable settings
+snapshot. Active contacts, multi-contact handoffs and consecutive-tap candidates
+retain their admitted settings until terminal. Changing the host observation
+therefore affects new sequences without silently changing an active sequence's
+thresholds. Terminal fling policy also comes from that admitted snapshot rather
+than a later settings read or a framework default.
+
+Authored scope settings remain authoritative. An actual authored provider
+replacement commits new recognizer ownership before cancelling outgoing owners
+through existing containment; an equal fixed profile or an unchanged live
+provider identity does not cancel a gesture. Lifecycle dependencies handle these
+provider replacements, while ordinary host updates use the existing live
+projection. A separate native settings source or parallel inherited scope would
+recreate the authority this decision removes.
+
+An unconfigured nested gesture scope inherits both projections. Explicit
+authored settings override gesture policy without hiding the host's wheel
+policy. The composition wrapper resolves these values into one inherited
+provider; it does not install a second settings authority.
+
+Presentation geometry queries distinguish accepted absence from failure.
+Accepted absence restores the consumer baseline. A failed query retains the
+last observation and a bounded retry obligation. Its geometry is usable only
+in the coordinate context it was accepted for: after a DPI change, new
+admissions use the baseline until a query for that presentation succeeds.
+Timing observations remain independently applicable. Retrying services the
+owner's existing wake path without beginning a synthetic frame.
+
+Native touch slop supplies the touch displacement measurement. The consumer
+retains its deliberate pan-to-hit and per-axis policy ratios rather than
+collapsing distinct gesture thresholds into one value. Projection validates
+intermediate arithmetic, handles a zero baseline explicitly and leaves
+dimensionless scale tolerance independent of pixel distances.
+
+An observed mouse double-click interval measures first press to second press;
+it does not extend by the duration of the first held press. This follows the
+[Windows double-click message sequence](https://learn.microsoft.com/en-us/windows/win32/inputdev/about-mouse-input#double-click-messages)
+and [AppKit mouse-down click counting](https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/EventOverview/HandlingMouseEvents/HandlingMouseEvents.html).
+Touch double-tap and fixed authored timing keep their existing release-to-press
+policy. A retained consecutive-tap candidate includes its timing origin.
 
 Motion observations distinguish no preference, reduced motion and a finite,
 strictly positive duration scale. An OS scale of zero maps to reduced motion;
