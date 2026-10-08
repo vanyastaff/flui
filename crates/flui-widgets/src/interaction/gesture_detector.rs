@@ -580,11 +580,26 @@ fn claim_native_scale(
     let event = dispatch.local;
     match event.phase {
         PanZoomPhase::Start => {
-            let mut route = route.borrow_mut();
-            if route.active.is_none() {
+            let retired = {
+                let mut route = route.borrow_mut();
+                if route
+                    .active
+                    .is_some_and(|active| !same_native_source(&active, event.pointer()))
+                {
+                    return EventPropagation::Continue;
+                }
+                let retired = route.active.take().is_some();
                 route.pending = Some((*dispatch.local, *dispatch.global));
+                retired
+            };
+            if retired {
+                // Publish the replacement route before cancelling the previous
+                // actor generation; its callback may deliver the new Update.
+                recognizer.handle_pan_zoom(dispatch);
+                EventPropagation::Stop
+            } else {
+                EventPropagation::Continue
             }
-            EventPropagation::Continue
         }
         PanZoomPhase::Update(transform) => {
             let active = route.borrow().active;
