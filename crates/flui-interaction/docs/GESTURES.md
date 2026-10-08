@@ -30,6 +30,12 @@ multi-tap its contact count, and multi-drag its axis. Configure callbacks and
 `.settings(GestureSettings)` before `.build()`, which returns `Rc<Self>`.
 Callbacks are immutable after construction and may capture `Rc` UI state.
 
+Callback detail payloads are `#[non_exhaustive]`: read their public fields or
+use a destructuring pattern with `..`. Existing detail constructors support
+authored payloads where consumers need them; recognizer-produced outputs do
+not require consumers to construct an exhaustive struct literal. The
+`trybuild_ui` family pins both rejected literals and supported constructors.
+
 ```rust
 use flui_interaction::{GestureArena, TapGestureRecognizer};
 
