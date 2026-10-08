@@ -856,6 +856,30 @@ impl GestureBinding {
         };
 
         let mut count = 0;
+        let contact_captures: SmallVec<[Rc<ContactCapture>; 4]> =
+            if matches!(mode, MotionFlush::BeforeInput) {
+                let routes = self.hit_tests.borrow();
+                drained
+                    .iter()
+                    .filter_map(|(pointer, _, pending)| {
+                        let PendingMove::Contact { sequence, .. } = pending else {
+                            return None;
+                        };
+                        routes
+                            .get(pointer)
+                            .filter(|cached| cached.sequence == *sequence)
+                            .map(|cached| Rc::clone(&cached.capture))
+                    })
+                    .collect()
+            } else {
+                SmallVec::new()
+            };
+        // Replacement queued markers do not revoke this committed input prefix.
+        // Capture release must therefore also recognize its delivery authority.
+        let contact_deliveries: SmallVec<[_; 4]> = contact_captures
+            .iter()
+            .map(|capture| capture.begin_delivery())
+            .collect();
         if matches!(mode, MotionFlush::BeforeInput) {
             // Freeze every measured prefix before callbacks or capture-loss
             // settlement. A callback for A cannot pull newer B motion into this
@@ -954,7 +978,12 @@ impl GestureBinding {
 
         for (pointer_id, generation, pending) in drained {
             if !self.is_pending_move_in_flight(pointer_id, generation) {
-                continue;
+                let accepted_contact = matches!(mode, MotionFlush::BeforeInput)
+                    && matches!(&pending, PendingMove::Contact { sequence, .. }
+                        if self.is_current_sequence(pointer_id, *sequence));
+                if !accepted_contact {
+                    continue;
+                }
             }
             match pending {
                 PendingMove::Contact { event, sequence } => {
@@ -988,6 +1017,7 @@ impl GestureBinding {
             self.remove_pending_move_if_in_flight(pointer_id, generation);
         }
 
+        drop(contact_deliveries);
         let losses = self.drain_capture_losses(None);
         RoutePanic::preserve_first(&mut first_panic, losses, "frame capture loss");
 
