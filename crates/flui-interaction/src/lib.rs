@@ -184,6 +184,9 @@ pub mod observability;
 pub mod settings;
 pub mod text_input;
 pub mod velocity;
+mod wheel_preferences;
+
+pub use wheel_preferences::{WheelPreferencesProvider, WheelPreferencesSource};
 
 // ============================================================================
 // Re-exports: IDs

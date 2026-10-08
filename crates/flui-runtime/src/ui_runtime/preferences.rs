@@ -7,6 +7,10 @@ use super::UiRuntime;
 use crate::{owner::SystemPreferencesSnapshot, presentation::PresentationState};
 
 pub(super) fn publish(presentation: &PresentationState, snapshot: &SystemPreferencesSnapshot) {
+    // Commit input policy before a media-query wake can invoke user code.
+    presentation
+        .wheel_preferences
+        .replace(snapshot.values.wheel().clone());
     presentation.media_query.update(|data| {
         data.text_scale_factor = snapshot.values.text_scale().unwrap_or(1.0);
         data.high_contrast = snapshot.values.high_contrast().unwrap_or(false);

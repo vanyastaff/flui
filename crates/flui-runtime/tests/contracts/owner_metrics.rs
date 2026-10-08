@@ -518,7 +518,9 @@ fn wheel_preferences_reach_the_next_mounted_input() {
         PointerEvent, PointerId, PointerInfo, PointerKind, PointerPosition, ScrollDelta,
         ScrollEvent, ScrollUnit,
     };
-    use flui_platform_api::{EventTime, PlatformInput, SystemPreferences, WheelPreferences, WheelStep};
+    use flui_platform_api::{
+        EventTime, PlatformInput, SystemPreferences, WheelPreferences, WheelStep,
+    };
 
     let owner = OwnerHost::new();
     let runtime = crate::owner_publication::runtime();
@@ -532,11 +534,17 @@ fn wheel_preferences_reach_the_next_mounted_input() {
             600.0,
         )
         .expect("mount scroll consumer");
-    let address = owner.publication(owner.prepare_runtime(runtime)).expect("publish").commit();
+    let address = owner
+        .publication(owner.prepare_runtime(runtime))
+        .expect("publish")
+        .commit();
     let size = Rc::new(Cell::new((800, 600)));
     let effects = Effects {
         address,
-        sink: RefCell::new(Sink { size: Rc::clone(&size), submitted: 0 }),
+        sink: RefCell::new(Sink {
+            size: Rc::clone(&size),
+            submitted: 0,
+        }),
         size,
         frame_time: Cell::new(web_time::Instant::now()),
         trace: RefCell::new(Vec::new()),
@@ -547,20 +555,38 @@ fn wheel_preferences_reach_the_next_mounted_input() {
         fail_resize: Cell::new(false),
         fail_tail: Cell::new(false),
     };
-    owner.frame_dispatcher(address).expect("frame").deliver(&effects).expect("mount frame");
-    owner.update_preferences(
-        SystemPreferences::default().with_wheel(WheelPreferences::default().with_vertical(WheelStep::Lines(3))),
-        &effects,
-    ).expect("accept wheel settings");
+    owner
+        .frame_dispatcher(address)
+        .expect("frame")
+        .deliver(&effects)
+        .expect("mount frame");
+    owner
+        .update_preferences(
+            SystemPreferences::default()
+                .with_wheel(WheelPreferences::default().with_vertical(WheelStep::Lines(3))),
+            &effects,
+        )
+        .expect("accept wheel settings");
     let event = PointerEvent::Scroll(ScrollEvent::new(
-        PointerInfo::new(PointerId::try_from(1_u64).expect("pointer"), PointerKind::Mouse),
+        PointerInfo::new(
+            PointerId::try_from(1_u64).expect("pointer"),
+            PointerKind::Mouse,
+        ),
         EventTime::from_nanos(1),
-        PointerPosition::try_new(flui_foundation::geometry::Point::new(100.0, 100.0)).expect("point"),
+        PointerPosition::try_new(flui_foundation::geometry::Point::new(100.0, 100.0))
+            .expect("point"),
         ScrollDelta::try_new(ScrollUnit::Detents, 0.0, 1.0).expect("rotation"),
     ));
-    owner.presentation_dispatcher(address).expect("input")
-        .input(PlatformInput::Pointer(event), &effects).expect("wheel input");
-    assert_eq!(scroll.pixels(), 159.0, "three authored line distances before another frame");
+    owner
+        .presentation_dispatcher(address)
+        .expect("input")
+        .input(PlatformInput::Pointer(event), &effects)
+        .expect("wheel input");
+    assert_eq!(
+        scroll.pixels(),
+        159.0,
+        "three authored line distances before another frame"
+    );
     owner.shutdown(&effects);
 }
 

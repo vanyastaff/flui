@@ -318,6 +318,7 @@ pub struct PresentationState {
     /// presentation must not keep it alive past the window.
     accessibility: Option<Weak<dyn PlatformAccessibility>>,
     gestures: GestureBinding,
+    pub(crate) wheel_preferences: flui_interaction::WheelPreferencesSource,
     interaction_dispatch: Option<InteractionDispatchHandle>,
     /// Pointer input retained while this presentation has no committed tree.
     /// The queue is owner-thread-only and internally capped; replay detaches
@@ -778,6 +779,7 @@ impl PresentationState {
             window: Arc::downgrade(&window),
             accessibility: accessibility.as_ref().map(Arc::downgrade),
             gestures,
+            wheel_preferences: flui_interaction::WheelPreferencesSource::new(Default::default()),
             interaction_dispatch: Some(interaction_dispatch),
             held_pointer_input: RefCell::new(HeldPointerQueue::new(id)),
             focus,
@@ -862,6 +864,7 @@ impl PresentationState {
             window: Arc::downgrade(&window),
             accessibility: accessibility.as_ref().map(Arc::downgrade),
             gestures,
+            wheel_preferences: flui_interaction::WheelPreferencesSource::new(Default::default()),
             interaction_dispatch: None,
             held_pointer_input: RefCell::new(HeldPointerQueue::new(id)),
             focus,
