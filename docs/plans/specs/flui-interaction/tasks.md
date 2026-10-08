@@ -84,6 +84,14 @@ Interaction all-target/all-features clippy прошёл; `compile_fail::trybuild
 E0277-диагностики расширены заметками о provider; запрет Send не изменён.
 Android и AppKit проверены Rust-only library compilation; это не native execution
 и не проверка физического устройства. `cargo xtask check-changed` и CI ещё ожидаются.
+Standards и Spec review не нашли оставшихся concrete blockers.
+Явное patch-level сравнение `cargo-semver-checks` с базой `b357bc903`, default
+features и `serde` прошло 229 checks для interaction и widgets. Platform-api
+имеет один намеренный отказ: `GesturePreferences` больше не реализует `Eq`.
+Побочные сдвиги discriminants трёх enum устранены; прежние значения сохранены.
+Ручная сверка дополнительно учитывает новый return type native admission,
+удаление `InheritedView` у конфигурации scope и inference migration settings
+builders; они записаны в changelog и не объявляются совместимыми patch changes.
 Эта приёмка закрывает реализацию I11 gesture/wheel, но не остальные требования
 LY8/LY9 к text, motion и общей host authority.
 
