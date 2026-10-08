@@ -1363,6 +1363,7 @@ fn tap_and_drag_resolves_through_the_shared_arena() {
             ("multi drag measured excursion", multi_drag_measured_excursion),
             ("tap drag measured excursion", tap_drag_measured_excursion),
             ("scale measured excursion", scale_measured_excursion),
+            ("prediction does not admit drag", prediction_does_not_admit_drag),
             ("tap against a tap", tap_wins_against_a_later_tap_recognizer),
             ("drag against a pan", drag_claims_the_arena_before_starting),
             ("consecutive clicks", consecutive_clicks_count_up_and_reset),
@@ -1411,6 +1412,34 @@ fn queue_excursion(rig: &Rig, coalesced_packet: bool) {
     }
     rig.send(&returned);
     rig.frame();
+}
+
+fn prediction_does_not_admit_drag() {
+    let rig = Rig::new();
+    let starts = Rc::new(Cell::new(0));
+    let taps = Rc::new(Cell::new(0));
+    let (started, tapped) = (starts.clone(), taps.clone());
+    let drag = DragGestureRecognizer::builder(rig.binding.arena().clone(), DragAxis::Free)
+        .on_start(move |_| started.set(started.get() + 1)).build();
+    let tap = TapGestureRecognizer::builder(rig.binding.arena().clone())
+        .on_tap(move |_| tapped.set(tapped.get() + 1)).build();
+    rig.attach(&drag, None);
+    rig.attach(&tap, None);
+    rig.down(1, 100.0, 100.0);
+    let future = make_move_event_for_id(id(1), Offset::new(200.0, 100.0), PointerKind::Touch)
+        .expect("finite prediction");
+    let PointerEvent::Move(future) = future else { unreachable!() };
+    let mut future = *future.current();
+    let mut current = make_move_event_for_id(id(1), Offset::new(100.0, 100.0), PointerKind::Touch)
+        .expect("finite measured position");
+    let PointerEvent::Move(movement) = &mut current else { unreachable!() };
+    future.time = flui_platform_api::EventTime::from_nanos(movement.current().time.as_nanos() + 1);
+    *movement = movement.clone().with_predicted(vec![future]);
+    assert_eq!(movement.predicted().len(), 1, "the packet contains the distant future reading");
+    rig.send(&current);
+    rig.frame();
+    rig.up(1, 100.0, 100.0);
+    assert_eq!((starts.get(), taps.get()), (0, 1), "predictions cannot cross measured slop");
 }
 
 fn stationary_gesture_measured_excursion(family: &str) {
