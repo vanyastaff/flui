@@ -78,6 +78,7 @@ pub struct TextPainter {
 
     /// Text scaling factor for accessibility.
     pub(super) text_scale_factor: f64,
+    pub(super) font_weight_adjustment: i32,
 
     /// Maximum number of lines before truncation.
     pub(super) max_lines: Option<u32>,
@@ -147,6 +148,7 @@ impl TextPainter {
             text_align: TextAlign::Start,
             text_direction: None,
             text_scale_factor: 1.0,
+            font_weight_adjustment: 0,
             max_lines: None,
             ellipsis: None,
             layout_cache: None,
@@ -314,6 +316,20 @@ impl TextPainter {
             self.text_scale_factor = factor;
             self.mark_needs_layout();
         }
+    }
+
+    /// Changes the resolved weight policy and discards the previous layout.
+    pub fn set_font_weight_adjustment(&mut self, adjustment: i32) {
+        if self.font_weight_adjustment != adjustment {
+            self.font_weight_adjustment = adjustment;
+            self.mark_needs_layout();
+        }
+    }
+
+    /// The signed adjustment used to resolve authored weights for shaping.
+    #[must_use]
+    pub const fn font_weight_adjustment(&self) -> i32 {
+        self.font_weight_adjustment
     }
 
     /// Sets the maximum number of lines.

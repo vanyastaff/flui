@@ -85,6 +85,7 @@ impl StatelessView for RichText {
         ResolvedParagraph {
             authored: self.clone(),
             text_scale_factor: MediaQuery::text_scale_factor_of(ctx).unwrap_or(1.0),
+            font_weight_adjustment: MediaQuery::font_weight_adjustment_of(ctx).unwrap_or(0),
         }
     }
 }
@@ -95,6 +96,7 @@ impl StatelessView for RichText {
 struct ResolvedParagraph {
     authored: RichText,
     text_scale_factor: f64,
+    font_weight_adjustment: i32,
 }
 
 impl RenderView for ResolvedParagraph {
@@ -109,6 +111,7 @@ impl RenderView for ResolvedParagraph {
             .with_text_align(self.authored.align)
             .with_max_lines(self.authored.max_lines)
             .with_text_scale_factor(self.text_scale_factor)
+            .with_font_weight_adjustment(self.font_weight_adjustment)
     }
 
     fn update_render_object(
@@ -121,6 +124,7 @@ impl RenderView for ResolvedParagraph {
             | render_object.set_text_direction(self.authored.direction)
             | render_object.set_max_lines(self.authored.max_lines)
             | render_object.set_text_scale_factor(self.text_scale_factor)
+            | render_object.set_font_weight_adjustment(self.font_weight_adjustment)
     }
 }
 

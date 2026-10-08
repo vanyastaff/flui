@@ -545,6 +545,7 @@ fn text_contract() {
             ("font_features_change_the_measured_and_painted_glyphs", text_painter_unit::font_features_change_the_measured_and_painted_glyphs),
             ("invalid_font_features_do_not_replace_valid_settings", text_painter_unit::invalid_font_features_do_not_replace_valid_settings),
             ("font_variations_select_the_painted_run_instance", text_painter_unit::font_variations_select_the_painted_run_instance),
+            ("text_weight_adjustment_shapes_once_and_restores_authored_weights", text_painter_unit::text_weight_adjustment_shapes_once_and_restores_authored_weights),
             ("invalid_font_variations_do_not_replace_valid_settings", text_painter_unit::invalid_font_variations_do_not_replace_valid_settings),
             (
                 "styled_text_pipeline",

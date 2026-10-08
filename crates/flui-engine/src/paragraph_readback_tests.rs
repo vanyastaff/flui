@@ -521,6 +521,7 @@ fn colliding_font_scene(text: &str, family: &str) -> flui_layer::Scene {
     let spans = [(text.to_owned(), None)];
     let paragraph = context
         .shape(&flui_painting::parley_text::ParagraphSpec {
+            font_weight_adjustment: 0,
             spans: &spans,
             default_style: Some(&style),
             font_size: 48.0,
@@ -827,6 +828,7 @@ fn overlay_frames_do_not_grow_the_glyph_registry(renderer: &crate::headless::Hea
     let mut text = flui_painting::TextContext::new(&FontCollection::new());
     let app = std::sync::Arc::new(
         text.shape(&flui_painting::parley_text::ParagraphSpec {
+            font_weight_adjustment: 0,
             spans: &[("Hamburg".to_owned(), None)],
             default_style: None,
             font_size: 14.0,

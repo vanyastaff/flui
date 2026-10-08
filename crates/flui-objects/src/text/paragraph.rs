@@ -90,6 +90,28 @@ impl RenderParagraph {
         }
     }
 
+    /// Applies a signed weight adjustment without modifying authored spans.
+    #[must_use]
+    pub fn with_font_weight_adjustment(mut self, adjustment: i32) -> Self {
+        self.painter.set_font_weight_adjustment(adjustment);
+        self
+    }
+
+    /// Updates weight resolution and invalidates paragraph geometry.
+    pub fn set_font_weight_adjustment(
+        &mut self,
+        adjustment: i32,
+    ) -> flui_rendering::RenderUpdateImpact {
+        let previous = self.painter.font_weight_adjustment();
+        self.painter.set_font_weight_adjustment(adjustment);
+        if previous == adjustment {
+            flui_rendering::RenderUpdateImpact::NONE
+        } else {
+            flui_rendering::RenderUpdateImpact::LAYOUT
+                | flui_rendering::RenderUpdateImpact::SEMANTICS
+        }
+    }
+
     /// Disables line wrapping (builder form) — the text lays out at unbounded
     /// width and may overflow the box.
     #[must_use]

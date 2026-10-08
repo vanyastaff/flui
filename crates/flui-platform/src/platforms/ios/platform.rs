@@ -128,6 +128,7 @@ pub struct IOSPlatform {
     handlers: Arc<Mutex<PlatformHandlers>>,
     running: Arc<AtomicBool>,
     scenes: NativeOwner<RefCell<SceneState>>,
+    preferences: NativeOwner<super::preferences::Preferences>,
     signal: Arc<OwnerSignal>,
     identity: Arc<()>,
     background_executor: Arc<IOSExecutor>,
@@ -189,6 +190,10 @@ impl IOSPlatform {
                     next_window: 1,
                     next_attachment: 1,
                 }),
+                marker,
+            ),
+            preferences: NativeOwner::new(
+                super::preferences::Preferences::new(&signal, marker),
                 marker,
             ),
             signal,
@@ -272,6 +277,9 @@ impl IOSPlatform {
             return;
         }
         self.signal.close();
+        self.preferences
+            .get(MainThreadMarker::new().expect("BUG: UIKit quit runs on main"))
+            .close();
         let session = self
             .state()
             .borrow()
@@ -366,6 +374,13 @@ impl Platform for IOSPlatform {
 
     fn active_window(&self) -> Option<WindowId> {
         MainThreadMarker::new().and_then(|_| self.active().map(|window| window.id()))
+    }
+
+    fn preferences(&self) -> Result<flui_platform_api::SystemPreferences, PlatformError> {
+        let marker = MainThreadMarker::new().ok_or_else(|| PlatformError::Preferences {
+            message: "UIKit preference sampling must run on the main thread".into(),
+        })?;
+        self.preferences.get(marker).sample(marker)
     }
 
     fn displays(&self) -> Vec<Arc<dyn PlatformDisplay>> {

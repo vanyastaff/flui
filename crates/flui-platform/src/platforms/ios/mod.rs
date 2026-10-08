@@ -54,6 +54,7 @@ mod events;
 mod executor;
 mod native_owner;
 mod platform;
+mod preferences;
 mod scene;
 mod window;
 

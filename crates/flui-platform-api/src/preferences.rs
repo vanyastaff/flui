@@ -8,6 +8,34 @@ use std::time::Duration;
 
 use crate::Locale;
 
+/// An observed text-weight request, before framework or application policy.
+///
+/// A categorical bold request has no universal native numeric mapping. Numeric
+/// adjustments retain their signed value; consumers bound the resulting weight.
+/// An unavailable observation is `None` in [`SystemPreferences`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TextWeightPreference {
+    /// The system requests the authored weight without an adjustment.
+    NoPreference,
+    /// The system requests heavier, more legible text.
+    Bold,
+    /// A signed adjustment to each resolved authored weight.
+    Adjustment(std::num::NonZeroI32),
+}
+
+impl TextWeightPreference {
+    /// Preserve a numeric adjustment; zero means no adjustment.
+    /// Native adapters must handle their unavailable-value sentinel first.
+    #[must_use]
+    pub const fn from_adjustment(value: i32) -> Self {
+        match std::num::NonZeroI32::new(value) {
+            Some(value) => Self::Adjustment(value),
+            None => Self::NoPreference,
+        }
+    }
+}
+
 /// An invalid numeric observation refused before snapshot publication.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
@@ -172,7 +200,7 @@ pub struct SystemPreferences {
     text_scale: Option<f64>,
     motion: Option<MotionPreference>,
     high_contrast: Option<bool>,
-    bold_text: Option<bool>,
+    text_weight: Option<TextWeightPreference>,
     locales: Option<Arc<[Locale]>>,
     gestures: GesturePreferences,
     wheel: WheelPreferences,
@@ -229,16 +257,16 @@ impl SystemPreferences {
         self
     }
 
-    /// Whether bold text was observed as enabled or disabled.
+    /// The observed categorical or numeric text-weight request.
     #[must_use]
-    pub const fn bold_text(&self) -> Option<bool> {
-        self.bold_text
+    pub const fn text_weight(&self) -> Option<TextWeightPreference> {
+        self.text_weight
     }
 
-    /// Record an observed bold-text setting.
+    /// Record an observed text-weight request without choosing consumer policy.
     #[must_use]
-    pub const fn with_bold_text(mut self, value: bool) -> Self {
-        self.bold_text = Some(value);
+    pub const fn with_text_weight(mut self, value: TextWeightPreference) -> Self {
+        self.text_weight = Some(value);
         self
     }
 

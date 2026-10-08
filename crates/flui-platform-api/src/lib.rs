@@ -134,7 +134,7 @@ pub use pointer::{
 };
 pub use preferences::{
     DurationScale, GesturePreferences, InvalidPreference, MotionPreference, SystemPreferences,
-    WheelPreferences, WheelStep,
+    TextWeightPreference, WheelPreferences, WheelStep,
 };
 pub use storage::{
     Storage, StorageError, StorageFuture, StorageName, Stored, StoredVersion, WriteMode,

@@ -405,6 +405,7 @@ mod tests {
         for text in corpus {
             let spans: Vec<(String, Option<TextStyle>)> = vec![(text.to_owned(), None)];
             let paragraph = context.shape(&ParagraphSpec {
+                font_weight_adjustment: 0,
                 spans: &spans,
                 default_style: None,
                 font_size: 16.0,

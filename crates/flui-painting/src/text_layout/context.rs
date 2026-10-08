@@ -747,6 +747,7 @@ mod tests {
             let spans: Vec<(String, Option<TextStyle>)> = vec![(text.to_owned(), None)];
             TextContext::new(fonts)
                 .shape(&ParagraphSpec {
+                    font_weight_adjustment: 0,
                     spans: &spans,
                     default_style: None,
                     font_size: 20.0,
@@ -977,6 +978,7 @@ mod tests {
         let spans: Vec<(String, Option<TextStyle>)> = vec![("Shaped".to_owned(), None)];
         let width = TextContext::new(&fonts)
             .shape(&ParagraphSpec {
+                font_weight_adjustment: 0,
                 spans: &spans,
                 default_style: None,
                 font_size: 20.0,
@@ -1031,6 +1033,7 @@ mod tests {
                 vec![("Hamburgefonstiv".to_owned(), Some(style))];
             TextContext::new(fonts)
                 .shape(&ParagraphSpec {
+                    font_weight_adjustment: 0,
                     spans: &spans,
                     default_style: None,
                     font_size: 20.0,
@@ -1102,6 +1105,7 @@ mod tests {
         let face = |cx: &mut TextContext, registry: Option<&mut FontRegistry>| -> FaceKey {
             let paragraph = cx
                 .shape(&ParagraphSpec {
+                    font_weight_adjustment: 0,
                     spans: &spans,
                     default_style: None,
                     font_size: 16.0,
@@ -1399,6 +1403,7 @@ mod tests {
             let spans: Vec<(String, Option<TextStyle>)> = vec![("Ao Bo".to_owned(), Some(style))];
             let paragraph = TextContext::new(&fonts)
                 .shape(&ParagraphSpec {
+                    font_weight_adjustment: 0,
                     spans: &spans,
                     default_style: None,
                     font_size: SIZE,

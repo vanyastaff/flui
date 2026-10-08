@@ -111,6 +111,7 @@ impl PerformanceOverlayLayer {
             let spans = [(text_str.to_owned(), None)];
             let paragraph = text
                 .shape(&ParagraphSpec {
+                    font_weight_adjustment: 0,
                     spans: &spans,
                     default_style: None,
                     font_size,
@@ -326,6 +327,7 @@ mod tests {
         let shape = |text: &mut TextContext| {
             let spans = [("GPU 0123456789.".to_owned(), None)];
             text.shape(&ParagraphSpec {
+                font_weight_adjustment: 0,
                 spans: &spans,
                 default_style: None,
                 font_size: 11.0,
