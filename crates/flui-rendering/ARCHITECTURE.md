@@ -32,6 +32,24 @@ deepest-first element unmount so view lifecycle hooks remain canonical.
 
 This section records design decisions and why they were taken. Each entry follows the "Accepted trade-offs" format established by [`docs/plans/2026-03-31-custom-render-callback-design.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/plans/2026-03-31-custom-render-callback-design.md): state the rule (or absence of rule), the choice, the alternatives considered, the trade-off accepted.
 
+### Scroll caches preserve materialized descendant reveal
+
+[`SemanticsClip`](src/traits/render_object.rs) distinguishes authored bounds from
+viewport cache geometry. Cache clipping cannot remove a materialized descendant
+under a registered reveal ancestor. Explicit bounds and authored occlusion keep
+their exclusion behavior; viewport paint clipping alone does not make a reveal
+target hidden in the native accessibility tree. Assembly retains both clipped
+publication geometry and unclipped root-logical reveal geometry, paired with
+the ancestor's published scroll position. Callback snapshots leave the owner
+borrow before invocation or retirement; delivery belongs to `SemanticsOwner`.
+
+[ADR-0168](../../docs/adr/ADR-0168-descendant-reveal-through-scroll-ancestors.md)
+records the cross-crate contract. Existing public row
+`a_semantics_clip_drops_a_child_that_falls_entirely_outside_it` preserves explicit
+bounds, while widget row
+`show_on_screen_reveals_offscreen_targets_on_both_axes_and_reverse` exercises
+actual viewport addressability, advertised native actions and visible output.
+
 ### Render storage and pipeline callbacks retain user values on failure
 
 Dropping a render entry drops its render object, then its parent data; a

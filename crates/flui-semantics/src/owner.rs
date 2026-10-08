@@ -98,8 +98,9 @@ pub enum SemanticsActionError {
 ///
 /// Resolution and invocation are deliberately separate. A caller may resolve
 /// this value while borrowing the presentation's pipeline owner, release that
-/// borrow, and only then call [`Self::invoke`]. Reentrant handlers can therefore
-/// reach the same owner without overlapping a tree borrow.
+/// borrow, and only then invoke or retire the snapshot. Reentrant handlers and
+/// callback destructors can therefore reach the same owner without overlapping
+/// a tree borrow.
 #[must_use = "resolved semantics actions must be invoked or intentionally dropped"]
 pub struct SemanticsActionInvocation {
     node_id: AccessibilityNodeId,
