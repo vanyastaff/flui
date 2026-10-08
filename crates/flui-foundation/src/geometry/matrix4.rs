@@ -530,6 +530,17 @@ impl Matrix4 {
             if self.m[10] == 0.0 {
                 return None;
             }
+            if self.m[3] == 0.0 && self.m[7] == 0.0 && self.m[15] > 0.0 {
+                // Preserve ordinary affine evaluation order and its exact
+                // coordinates. Normalize only when direct arithmetic cannot
+                // produce a finite result, rather than adding roundoff to a
+                // translation or scale that already fits the admitted range.
+                let local_x = (self.m[0] * x + self.m[4] * y + self.m[12]) / self.m[15];
+                let local_y = (self.m[1] * x + self.m[5] * y + self.m[13]) / self.m[15];
+                if local_x.is_finite() && local_y.is_finite() {
+                    return Some((local_x, local_y));
+                }
+            }
             let plane = [self.m[0], self.m[1], self.m[3], self.m[4], self.m[5],
                 self.m[7], self.m[12], self.m[13], self.m[15]];
             let scale = plane.iter().fold(0.0_f64, |scale, value| scale.max(value.abs()));
