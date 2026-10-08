@@ -874,7 +874,7 @@ fn dispatch_native_inputs(inputs: Vec<(Arc<WinitWindow>, NativeDispatch)>) {
                 window.callbacks().dispatch_input(input);
             }
             NativeDispatch::Hover(hovered) => {
-                window.callbacks().dispatch_hover_status_change(hovered)
+                window.callbacks().dispatch_hover_status_change(hovered);
             }
         }));
         if let Err(payload) = result {
@@ -1105,10 +1105,10 @@ impl ApplicationHandler for WinitApp {
                 .collect();
             match event {
                 WinitWindowEvent::CursorEntered { .. } => {
-                    batch.push((Arc::clone(&window), NativeDispatch::Hover(true)))
+                    batch.push((Arc::clone(&window), NativeDispatch::Hover(true)));
                 }
                 WinitWindowEvent::CursorLeft { .. } => {
-                    batch.push((Arc::clone(&window), NativeDispatch::Hover(false)))
+                    batch.push((Arc::clone(&window), NativeDispatch::Hover(false)));
                 }
                 _ => {}
             }
@@ -1210,10 +1210,8 @@ impl ApplicationHandler for WinitApp {
                 self.platform.with_state(|state| {
                     if focused {
                         state.active_window = Some(platform_id);
-                    } else {
-                        if state.active_window == Some(platform_id) {
-                            state.active_window = None;
-                        }
+                    } else if state.active_window == Some(platform_id) {
+                        state.active_window = None;
                     }
                 });
 
