@@ -66,7 +66,10 @@ global accessibility-weight preference.
 The mounted `bold_text_changes_the_painted_glyphs` row checks the actual registered
 variable font instance in submitted frames for all three text widgets, numeric
 bounds, on/off/unknown restoration, nested overrides, and the first frame of late
-runtimes. The shaping row
+runtimes and presentations. Disabling only presentation-install seeding makes
+the new presentation's distinguishable submitted text use the default instance;
+restoring that seed passes. This does not establish simultaneous presentation
+submission. The shaping row
 `text_weight_adjustment_shapes_once_and_restores_authored_weights` checks mixed
 span inheritance, explicit and duplicate weight axes, fractional and extreme
 numeric adjustments, restoration, intrinsic widths and caret endpoints. Reverting

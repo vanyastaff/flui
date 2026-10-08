@@ -572,19 +572,20 @@ fn bold_text_changes_the_painted_glyphs() {
             .with_font_family("FLUI Probe Variable")
             .with_font_weight(FontWeight::W400)
             .with_font_size(24.0);
-        let root = match kind {
-            "Text" => flui_widgets::Text::new("AA").style(style.clone()).boxed(),
+        let text_root = |text: &str| match kind {
+            "Text" => flui_widgets::Text::new(text).style(style.clone()).boxed(),
             "RichText" => {
-                flui_widgets::RichText::new(TextSpan::styled("AA", style.clone())).boxed()
+                flui_widgets::RichText::new(TextSpan::styled(text, style.clone())).boxed()
             }
             "EditableText" => flui_widgets::EditableText::new(
-                flui_widgets::TextEditingController::with_text("AA"),
+                flui_widgets::TextEditingController::with_text(text),
                 flui_interaction::routing::FocusNode::new(),
             )
             .text_style(style.clone())
             .boxed(),
             _ => unreachable!(),
         };
+        let root = text_root("AA");
         let root = if let Some(adjustment) = override_weight {
             flui_widgets::MediaQuery::new(
                 flui_widgets::MediaQueryData {
@@ -753,19 +754,7 @@ fn bold_text_changes_the_painted_glyphs() {
                 ),
             )
             .expect("late text runtime");
-            let late_root = match kind {
-                "Text" => flui_widgets::Text::new("AA").style(style.clone()).boxed(),
-                "RichText" => {
-                    flui_widgets::RichText::new(TextSpan::styled("AA", style.clone())).boxed()
-                }
-                "EditableText" => flui_widgets::EditableText::new(
-                    flui_widgets::TextEditingController::with_text("AA"),
-                    flui_interaction::routing::FocusNode::new(),
-                )
-                .text_style(style.clone())
-                .boxed(),
-                _ => unreachable!(),
-            };
+            let late_root = text_root("AA");
             late.attach_root_widget_with_size(&late_root, 800.0, 600.0)
                 .expect("mount late text consumer");
             let mut sink = Sink {
@@ -791,6 +780,39 @@ fn bold_text_changes_the_painted_glyphs() {
                 late_run.coords().first().copied().unwrap_or(0) > authored[0],
                 "{kind}'s first painted frame must use the accepted heavier instance"
             );
+            let accepted_coords = late_run.coords().to_vec();
+            let primary = late.presentation_id();
+            let secondary = late.install_presentation(
+                late.assemble_presentation(crate::owner_publication::window()),
+            );
+            late.attach_root_widget_with_size_to(secondary, &text_root("AAA"), 800.0, 600.0)
+                .expect("mount a late presentation's real text consumer");
+            assert!(
+                late.pump(
+                    &mut flui_runtime::pump::SampledClock(web_time::Instant::now()),
+                    &mut sink,
+                )
+                .presented()
+            );
+            let paragraph = sink.paragraphs.first().expect("late presentation frame");
+            assert_eq!(
+                paragraph.text(),
+                "AAA",
+                "the new presentation produced this frame"
+            );
+            let run = paragraph.runs().next().expect("late presentation run");
+            assert_eq!(
+                run.face().blob().bytes().as_ref().as_ref(),
+                include_bytes!("../../../flui-painting/assets/fonts/probe-variable-wght.ttf"),
+            );
+            assert_eq!(
+                run.coords(),
+                accepted_coords,
+                "{kind}'s first late-presentation frame must retain the accepted weight"
+            );
+            // Only one presentation needs content after this seed proof;
+            // simultaneous presentation submit routing is a separate contract.
+            assert!(late.close_presentation_entered(primary));
             let late_address = owner
                 .publication(owner.prepare_runtime(late))
                 .expect("publish late text runtime")
