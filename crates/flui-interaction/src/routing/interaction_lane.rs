@@ -7,7 +7,7 @@
 //! pointer sequence.
 
 use std::any::Any;
-use std::cell::{Cell, RefCell};
+use std::cell::{Cell, LazyCell, RefCell};
 use std::collections::HashMap;
 use std::fmt;
 use std::num::NonZeroU64;
@@ -879,8 +879,8 @@ impl LocalLaneInner {
 }
 
 thread_local! {
-    static LOCAL_LANES: RefCell<HashMap<LaneId, Weak<LocalLaneInner>>> =
-        RefCell::new(HashMap::new());
+    static LOCAL_LANES: LazyCell<RefCell<HashMap<LaneId, Weak<LocalLaneInner>>>> =
+        const { LazyCell::new(|| RefCell::new(HashMap::new())) };
     static ACTIVE_LANES: RefCell<Vec<LaneTicket>> = const { RefCell::new(Vec::new()) };
 }
 
