@@ -118,6 +118,7 @@ fn resolved_route_move_invocation_allocates_no_heap_after_setup() {
             RouteShape::Global,
             RouteShape::Identity,
             RouteShape::Translated,
+            RouteShape::NearIdentity,
         ] {
             for history in [false, true] {
                 measure_route_shape(target_count, shape, history);
@@ -139,10 +140,16 @@ enum RouteShape {
     Global,
     Identity,
     Translated,
+    NearIdentity,
 }
 
 fn measure_route_shape(target_count: usize, shape: RouteShape, history: bool) {
-    let translated = matches!(shape, RouteShape::Translated);
+    let translated = matches!(shape, RouteShape::Translated | RouteShape::NearIdentity);
+    let (dx, dy) = match shape {
+        RouteShape::Translated => (10.0, 20.0),
+        RouteShape::NearIdentity => (0.000_001, -0.000_002),
+        RouteShape::Global | RouteShape::Identity => (0.0, 0.0),
+    };
     let lane = InteractionLane::try_new().expect("lane");
     let handle = lane.dispatch_handle();
     let deliveries = Rc::new(Cell::new(0));
@@ -185,7 +192,6 @@ fn measure_route_shape(target_count: usize, shape: RouteShape, history: bool) {
                     original.position = global.position;
                     assert_eq!(original, *global, "localization preserves every source sample field except position");
                 }
-                let (dx, dy) = if translated { (10.0, 20.0) } else { (0.0, 0.0) };
                 assert_eq!(global.current().position.get(), Point::new(30.0, 50.0));
                 assert_eq!(local.current().position.get(), Point::new(30.0 - dx, 50.0 - dy));
                 assert_eq!(local.current().time.as_nanos(), 3_000_000);
@@ -213,7 +219,7 @@ fn measure_route_shape(target_count: usize, shape: RouteShape, history: bool) {
         if !matches!(shape, RouteShape::Global) {
             let mut result = flui_interaction::HitTestResult::new();
             if translated {
-                result.with_paint_offset(Offset::new(10.0, 20.0), |result| {
+                result.with_paint_offset(Offset::new(dx, dy), |result| {
                     for entry in path.drain(..) { result.add(entry); }
                 }).expect("finite offset");
             } else {
