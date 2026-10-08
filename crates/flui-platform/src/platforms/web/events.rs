@@ -195,10 +195,10 @@ fn register_pointer_events(canvas: &web_sys::HtmlCanvasElement, callbacks: &Arc<
             // Up/cancel removes admission before releasing capture. The loss
             // notification following that terminal edge must stay inert.
             let was_active = active.borrow_mut().remove(&id).is_some();
-            if was_active {
-                if let Some(input) = convert_pointer_cancel(&pe, CancelReason::CaptureLost) {
-                    callbacks.dispatch_input(input);
-                }
+            if was_active
+                && let Some(input) = convert_pointer_cancel(&pe, CancelReason::CaptureLost)
+            {
+                callbacks.dispatch_input(input);
             }
         });
         let _ = canvas.add_event_listener_with_callback(
