@@ -1775,10 +1775,10 @@ fn nested_fling_content(
     if inner_reversed {
         child = child
             .axis_direction(match inner_axis {
-                Axis::Vertical => flui_rendering::constraints::AxisDirection::Up,
-                Axis::Horizontal => flui_rendering::constraints::AxisDirection::Left,
+                Axis::Vertical => flui_rendering::constraints::AxisDirection::BottomToTop,
+                Axis::Horizontal => flui_rendering::constraints::AxisDirection::RightToLeft,
             })
-            .viewport_builder(move |position| {
+            .viewport_builder(Rc::new(move |position| {
                 flui_widgets::SingleChildScrollView::new()
                     .scroll_direction(inner_axis)
                     .reverse(true)
@@ -1788,7 +1788,7 @@ fn nested_fling_content(
                         Axis::Horizontal => SizedBox::new(1000.0, 300.0),
                     })
                     .boxed()
-            });
+            }));
     }
     if bouncing {
         child = child.physics(Arc::new(BouncingScrollPhysics::new()));
@@ -2225,17 +2225,17 @@ pub(crate) fn show_on_screen_reveals_offscreen_targets_on_both_axes_and_reverse(
             if reversed {
                 view = view
                     .axis_direction(match axis {
-                        Vertical => flui_rendering::constraints::AxisDirection::Up,
-                        Horizontal => flui_rendering::constraints::AxisDirection::Left,
+                        Vertical => flui_rendering::constraints::AxisDirection::BottomToTop,
+                        Horizontal => flui_rendering::constraints::AxisDirection::RightToLeft,
                     })
-                    .viewport_builder(move |position| {
+                    .viewport_builder(Rc::new(move |position| {
                         flui_widgets::SingleChildScrollView::new()
                             .scroll_direction(axis)
                             .reverse(true)
                             .position(position)
                             .child(reveal_target_content(axis))
                             .boxed()
-                    });
+                    }));
             }
             let mut laid = lay_out(view, tight(200.0, 200.0));
             laid.enable_semantics();
