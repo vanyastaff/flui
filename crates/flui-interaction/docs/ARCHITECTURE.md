@@ -74,6 +74,15 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   borrow under ADR-0127. `shared_region_exit_per_device`,
   `ambient_refresh_contains_each_device` and
   `released_region_destructor_reenters_tracker` pin these contracts.
+- **Hover payload retirement preserves delivery and first failure (ADR-0127).**
+  Queued replacement commits its newer movement before the outgoing hit path
+  retires. Each entry detaches metadata before destruction and retains it
+  during unwind. Frame delivery explicitly retires metadata after an already
+  caught callback failure, while accepted sibling movements still run.
+  `binding_input_contract_matrix` pins healthy destruction, callback and
+  metadata retirement competition, reentrant replacement and fresh recovery.
+  Containment ends at each opaque payload; its own double-panicking destructor
+  cannot be rescued by the framework path.
 
 - **Focus node identities are never reissued.** The allocator admits its final nonzero identity once and then refuses every new `FocusNode` with a panic, permanently, even after that panic is caught. Wrapping would hand a retired identity, and the focus authority it names, to a new node; refusing keeps every attached node's requests and listeners intact.
 - **Configure before sharing; cancel before releasing.** Builders return `Rc`

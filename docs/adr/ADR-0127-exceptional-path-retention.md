@@ -64,3 +64,22 @@ example, `FocusManager::close` drops its taken callback vectors unconditionally.
 They are brought into line by the retirement changes to focus, text input,
 pointer routes, navigation, animation, rendering, notifiers and presentation
 close that cite this ADR.
+
+## Hit-test metadata retirement
+
+Hit-test entries detach their opaque metadata before destruction. Healthy
+retirement releases each owner; an entry destroyed during unwind retains its
+metadata, so a framework-owned path cannot start a second payload destructor
+after the first one fails. This also applies when a pending hover is replaced
+before frame delivery.
+
+Frame delivery has a separate caught-failure boundary: the binding retires
+each metadata owner with its existing first failure before resuming that
+failure, and continues delivering accepted frame peers. Publishing a newer
+pending movement precedes outgoing retirement, so reentrant replacement and
+subsequent healthy input remain deliverable. The public
+`binding_input_contract_matrix` covers healthy destruction, callback and
+metadata failure competition, queued replacement, source-metadata boundaries,
+reentrant callbacks and recovery. Competing ordinary metadata destructors run
+in child processes. A single opaque payload whose own fields double-panic
+remains outside the containment guarantee.
