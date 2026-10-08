@@ -180,6 +180,7 @@ fn continuation_cancel_commits_before_reentry_and_retains_the_first_failure() {
                     let event = make_down_event_for_id(PointerId::try_from(2).expect("nonzero contact"), Offset::new(100.0, 0.0), PointerKind::Touch).expect("finite replacement");
                     recognizer.add_pointer(PointerDispatch::at_root(&event));
                     run_pointer_lifecycle(&callback_arena, &event);
+                    callback_arena.drain_deferred_resolutions();
                     if callback_panics { panic!("continuation terminal callback"); }
                 }
             }).build();
@@ -188,6 +189,7 @@ fn continuation_cancel_commits_before_reentry_and_retains_the_first_failure() {
             let down = make_down_event_for_id(PointerId::try_from(id).expect("nonzero contact"), Offset::ZERO, PointerKind::Touch).expect("finite touch");
             drag.add_pointer(PointerDispatch::at_root(&down));
             run_pointer_lifecycle(&arena, &down);
+            arena.drain_deferred_resolutions();
         }
         assert_eq!(starts.get(), 1);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drag.cancel()));
@@ -222,6 +224,7 @@ fn continuation_does_not_take_a_rejected_or_other_device_contact() {
             }
             drag.add_pointer(PointerDispatch::at_root(&down));
             run_pointer_lifecycle(&arena, &down);
+            arena.drain_deferred_resolutions();
         }
         let up = make_up_event_for_id(PointerId::try_from(2).expect("nonzero contact"), Offset::ZERO, PointerKind::Touch).expect("finite release");
         drag.handle_event(PointerDispatch::at_root(&up));
@@ -241,6 +244,7 @@ fn continuation_does_not_take_a_rejected_or_other_device_contact() {
         let down = make_down_event_for_id(PointerId::try_from(id).expect("nonzero contact"), Offset::ZERO, PointerKind::Touch).expect("finite touch");
         drag.add_pointer(PointerDispatch::at_root(&down));
         run_pointer_lifecycle(&arena, &down);
+        arena.drain_deferred_resolutions();
     };
     send_down(2);
     let pointer = PointerId::try_from(3).expect("nonzero contact");
