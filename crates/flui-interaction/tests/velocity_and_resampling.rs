@@ -77,10 +77,10 @@ fn contact() -> PointerId {
 fn with_time(mut event: PointerEvent, nanos: u64) -> PointerEvent {
     match &mut event {
         PointerEvent::Down(button) => {
-            button.sample.time = flui_platform_api::EventTime::from_nanos(nanos)
+            button.sample.time = flui_platform_api::EventTime::from_nanos(nanos);
         }
         PointerEvent::Up(button) => {
-            button.sample.time = flui_platform_api::EventTime::from_nanos(nanos)
+            button.sample.time = flui_platform_api::EventTime::from_nanos(nanos);
         }
         PointerEvent::Move(update) => {
             let mut sample = *update.current();
@@ -220,7 +220,7 @@ fn huge_coordinates_stay_finite() {
 fn selected_estimators_use_the_sample_clock_and_recover() {
     for (estimator, expected) in [
         (VelocityEstimator::LeastSquares, 500.0),
-        (VelocityEstimator::Impulse, 1589.9257985831982),
+        (VelocityEstimator::Impulse, 1_589.925_798_583_198_2),
         (VelocityEstimator::Ios, 2550.0),
         (VelocityEstimator::Macos, 1950.0),
     ] {

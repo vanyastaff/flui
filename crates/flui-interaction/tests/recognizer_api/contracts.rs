@@ -222,7 +222,7 @@ fn recognizer_set_preserves_first_failure_and_recovers() {
     second.fail_delivery.set(true);
     let event = down(pointer(74));
     let failure = catch_unwind(AssertUnwindSafe(|| {
-        set.dispatch(PointerDispatch::at_root(&event))
+        set.dispatch(PointerDispatch::at_root(&event));
     }))
     .expect_err("delivery failures");
     assert_eq!(
@@ -337,7 +337,7 @@ fn stale_contact_drop_cannot_withdraw_a_reused_pointer() {
     let arena = GestureArena::new();
     let owner = Extension::new(arena.clone(), "owner", log.clone());
     let rival = Extension::new(arena.clone(), "rival", log.clone());
-    let member: Rc<dyn GestureArenaMember> = owner.clone();
+    let member: Rc<dyn GestureArenaMember> = owner;
     let contact = PrimaryContact::new(ArenaMembership::new(arena.clone(), Rc::downgrade(&member)));
     let event = down(pointer(79));
     contact
@@ -482,7 +482,7 @@ fn diagnostic_panic_cannot_replace_first_delivery_failure_or_skip_a_peer() {
     let failure =
         tracing::subscriber::with_default(DiagnosticPanic(diagnostic_calls.clone()), || {
             catch_unwind(AssertUnwindSafe(|| {
-                set.dispatch(PointerDispatch::at_root(&event))
+                set.dispatch(PointerDispatch::at_root(&event));
             }))
         })
         .expect_err("first delivery failure resumes");

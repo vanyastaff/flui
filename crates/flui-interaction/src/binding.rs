@@ -3246,6 +3246,7 @@ mod tests {
             assert_eq!(binding.active_resampler_count(), 0);
             assert_eq!(binding.pending_move_count(), 0);
             assert!(binding.arena().is_empty());
+            drop(members);
         });
     }
 

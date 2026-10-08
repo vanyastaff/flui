@@ -338,7 +338,7 @@ fn refresh_hit_test_failure_precedes_a_competing_callback_failure() {
                 assert!(position != pen_at, "probe failure first");
                 HitTestResult::new()
             });
-        })
+        });
     }))
     .expect_err("the probe failure resumes after delivering the committed exit");
     assert_eq!(payload.downcast_ref::<&str>(), Some(&"probe failure first"));
@@ -351,7 +351,7 @@ fn refresh_hit_test_failure_precedes_a_competing_callback_failure() {
             } else {
                 HitTestResult::new()
             }
-        })
+        });
     });
     assert_eq!(
         enters.get(),
@@ -518,7 +518,7 @@ fn assert_region_retirement_recovery(competing: bool) {
                 PointerMotionKind::Hover,
                 &HitTestResult::new(),
             );
-        })
+        });
     }))
     .expect_err("first capture failure resumes");
     assert_eq!(

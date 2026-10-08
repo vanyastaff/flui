@@ -1310,7 +1310,7 @@ fn tap_drag_cancelled_from_its_start_recovers() {
     let log = Rc::new(TapDragLog::default());
     let (s, c, start, update, end, cancelled) = (
         slot.clone(),
-        cancel_once.clone(),
+        cancel_once,
         log.clone(),
         log.clone(),
         log.clone(),

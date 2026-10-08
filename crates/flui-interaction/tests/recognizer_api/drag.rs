@@ -197,9 +197,7 @@ fn continuation_cancel_commits_before_reentry_and_retains_the_first_failure() {
                     recognizer.add_pointer(PointerDispatch::at_root(&event));
                     run_pointer_lifecycle(&callback_arena, &event);
                     callback_arena.drain_deferred_resolutions();
-                    if callback_panics {
-                        panic!("continuation terminal callback");
-                    }
+                    assert!(!callback_panics, "continuation terminal callback");
                 }
             })
             .build();
@@ -319,7 +317,7 @@ fn continuation_does_not_take_a_rejected_or_other_device_contact() {
     let pointer = PointerId::try_from(3).expect("nonzero contact");
     let rival = Rc::new(Rival);
     arena.add(pointer, &rival);
-    let erased: Rc<dyn GestureArenaMember> = rival.clone();
+    let erased: Rc<dyn GestureArenaMember> = rival;
     arena.accept(pointer, &erased);
     send_down(3);
     assert_eq!(
