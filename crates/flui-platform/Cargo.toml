@@ -342,7 +342,13 @@ a11y = ["dep:accesskit_unix", "dep:accesskit_windows", "dep:accesskit_macos"]
 
 # winit fallback backend — primary on Linux until native Wayland/X11 lands
 # (roadmap Cross.P); optional on Windows/macOS.
-winit-backend = ["dep:winit", "dep:arboard", "dep:crossbeam-channel", "dep:ui-events-winit", "dep:keyboard-types"]
+winit-backend = [
+    "dep:winit",
+    "dep:arboard",
+    "dep:crossbeam-channel",
+    "dep:ui-events-winit",
+    "dep:keyboard-types",
+]
 
 # Web platform
 # Honest note (verified 2026-08-04): no-op selector — zero
