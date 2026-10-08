@@ -5,7 +5,7 @@
 //! surface creation.
 
 use std::sync::{
-    Arc,
+    Arc, Weak,
     atomic::{AtomicBool, Ordering},
 };
 
@@ -27,22 +27,40 @@ use crate::{
 ///
 /// `AndroidApp` implements `HasWindowHandle` and `HasDisplayHandle`, so this
 /// window can be used directly with wgpu for Vulkan surface creation.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AndroidWindow {
     app: AndroidApp,
     callbacks: Arc<WindowCallbacks>,
     redraw_requested: Arc<AtomicBool>,
     execution_resumed: Arc<AtomicBool>,
+    owner: std::thread::ThreadId,
+    owner_signal: Weak<crate::shared::owner_signal::OwnerSignal>,
+    geometry_live: Arc<AtomicBool>,
+}
+
+impl std::fmt::Debug for AndroidWindow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AndroidWindow")
+            .field("owner", &self.owner)
+            .finish_non_exhaustive()
+    }
 }
 
 impl AndroidWindow {
     /// Create a new Android window wrapping the given `AndroidApp`
-    pub(crate) fn new(app: AndroidApp, execution_resumed: Arc<AtomicBool>) -> Self {
+    pub(crate) fn new(
+        app: AndroidApp,
+        execution_resumed: Arc<AtomicBool>,
+        owner_signal: Weak<crate::shared::owner_signal::OwnerSignal>,
+    ) -> Self {
         Self {
             app,
             callbacks: Arc::new(WindowCallbacks::new()),
             redraw_requested: Arc::new(AtomicBool::new(true)),
             execution_resumed,
+            owner: std::thread::current().id(),
+            owner_signal,
+            geometry_live: Arc::new(AtomicBool::new(true)),
         }
     }
 
@@ -50,6 +68,12 @@ impl AndroidWindow {
     /// events)
     pub fn callbacks(&self) -> &WindowCallbacks {
         &self.callbacks
+    }
+
+    /// Replacing the Activity presentation retires this projection capability,
+    /// even if an old handle still keeps the shared AndroidApp alive.
+    pub(crate) fn revoke_geometry(&self) {
+        self.geometry_live.store(false, Ordering::Release);
     }
 
     /// Read whether a redraw is pending without consuming it. The event loop
@@ -110,11 +134,32 @@ impl PlatformWindow for AndroidWindow {
     }
 
     fn scale_factor(&self) -> f64 {
+        if let Ok(ratio) = super::preferences::pixel_ratio(&self.app) {
+            return ratio.get();
+        }
         // android-activity config returns density as DPI / 160
         // Default to 2.0 if config is unavailable
         let config = self.app.config();
         let density = config.density().unwrap_or(320);
         density as f64 / 160.0
+    }
+
+    fn gesture_geometry(
+        &self,
+    ) -> Result<Option<crate::GestureGeometry>, crate::PreferenceQueryError> {
+        if self.owner != std::thread::current().id() {
+            return Err(crate::PreferenceQueryError::WrongThread);
+        }
+        if !self.geometry_live.load(Ordering::Acquire)
+            || self.app.native_window().is_none()
+            || !self
+                .owner_signal
+                .upgrade()
+                .is_some_and(|signal| signal.accepting())
+        {
+            return Err(crate::PreferenceQueryError::Unavailable);
+        }
+        super::preferences::geometry(&self.app).map(Some)
     }
 
     fn execution_state(&self) -> WindowExecutionState {

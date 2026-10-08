@@ -918,6 +918,26 @@ impl PlatformWindow for WindowsWindow {
         self.state.lock().scale_factor
     }
 
+    fn gesture_geometry(
+        &self,
+    ) -> Result<Option<flui_platform_api::GestureGeometry>, flui_platform_api::PreferenceQueryError>
+    {
+        use crate::shared::hwnd_affinity::UserDataRefusal;
+        use flui_platform_api::{GestureGeometry, PreferenceQueryError};
+
+        super::platform::with_window_context_checked(self.hwnd, "gesture geometry", |_| {
+            // SAFETY: the checked owner context proves this is the still-live
+            // owned HWND. The scalar DPI getter does not dispatch user code.
+            let dpi = unsafe { GetDpiForWindow(self.hwnd) };
+            let native = super::preferences::mouse_geometry(dpi)?;
+            Ok(Some(GestureGeometry::from_native_mouse(&native)?))
+        })
+        .map_err(|refusal| match refusal {
+            UserDataRefusal::ForeignThread => PreferenceQueryError::WrongThread,
+            _ => PreferenceQueryError::Unavailable,
+        })?
+    }
+
     fn request_redraw(&self) {
         // SAFETY: `InvalidateRect` takes `self.hwnd` and `None` for the
         // rect (invalidate the whole client area) — no pointer to validate.
