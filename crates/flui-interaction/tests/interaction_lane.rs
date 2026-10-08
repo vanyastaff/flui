@@ -805,6 +805,24 @@ fn binding_input_contract_matrix() {
         ("scroll_claim_reentry", scroll_claim_reentry_keeps_new_lease),
         ("scroll_focus_loss", scroll_focus_loss_releases_lease),
         (
+            "native_selected_failure",
+            native_selected_failure_keeps_lease,
+        ),
+        (
+            "native_competing_failure",
+            native_observer_failure_stays_first,
+        ),
+        (
+            "native_retired_target",
+            native_retired_target_does_not_chain,
+        ),
+        (
+            "native_terminal_reentry",
+            native_terminal_reentry_keeps_new_lease,
+        ),
+        ("native_claim_reentry", native_claim_reentry_keeps_new_lease),
+        ("native_focus_loss", native_focus_loss_releases_lease),
+        (
             "scroll_batch_reentry",
             scroll_owner_batch_preserves_reentrant_admission,
         ),
@@ -2102,17 +2120,66 @@ fn assert_scroll_claim_retirement(competing: bool) {
 }
 
 fn assert_scroll_lease(case: ScrollLeaseCase) {
+    assert_signal_lease(case, false);
+}
+
+fn native_selected_failure_keeps_lease() {
+    assert_signal_lease(ScrollLeaseCase::Failure, true);
+}
+fn native_observer_failure_stays_first() {
+    assert_signal_lease(ScrollLeaseCase::Competing, true);
+}
+fn native_retired_target_does_not_chain() {
+    assert_signal_lease(ScrollLeaseCase::Retired, true);
+}
+fn native_terminal_reentry_keeps_new_lease() {
+    assert_signal_lease(ScrollLeaseCase::TerminalReentry, true);
+}
+fn native_claim_reentry_keeps_new_lease() {
+    assert_signal_lease(ScrollLeaseCase::ClaimReentry, true);
+}
+fn native_focus_loss_releases_lease() {
+    assert_signal_lease(ScrollLeaseCase::FocusLoss, true);
+}
+
+fn assert_signal_lease(case: ScrollLeaseCase, native: bool) {
     use flui_foundation::geometry::Offset;
     use flui_interaction::events::{PointerEvent, make_scroll_event};
     use flui_interaction::{EventPropagation, GestureBinding, HitTestResult};
-    use flui_platform_api::pointer::ScrollPhase;
+    use flui_platform_api::{
+        EventTime,
+        pointer::{
+            PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerId, PointerInfo, PointerKind,
+            PointerPosition, ScrollPhase,
+        },
+    };
     use std::{
         cell::Cell,
         panic::{AssertUnwindSafe, catch_unwind},
         rc::Rc,
     };
 
-    let packet = |phase| {
+    let packet = move |phase| {
+        if native {
+            let native_phase = match phase {
+                ScrollPhase::Began => PanZoomPhase::Start,
+                ScrollPhase::Changed => PanZoomPhase::Update(
+                    PanZoomTransform::try_new(Offset::ZERO, 1.2, 0.0)
+                        .expect("finite native transform"),
+                ),
+                ScrollPhase::Ended => PanZoomPhase::End,
+                _ => unreachable!("fixture phase"),
+            };
+            return PointerEvent::PanZoom(PanZoomEvent::new(
+                PointerInfo::new(
+                    PointerId::try_from(1_u64).expect("pointer"),
+                    PointerKind::Trackpad,
+                ),
+                EventTime::from_nanos(0),
+                PointerPosition::try_new(flui_foundation::geometry::Point::ZERO).expect("position"),
+                native_phase,
+            ));
+        }
         let PointerEvent::Scroll(mut scroll) =
             make_scroll_event(Offset::ZERO, Offset::new(0.0, 10.0)).expect("finite wheel")
         else {
@@ -2128,29 +2195,49 @@ fn assert_scroll_lease(case: ScrollLeaseCase) {
     let fresh_calls = Rc::new(Cell::new(0));
     let observed = Rc::new(Cell::new(0));
     let failing = Rc::new(Cell::new(false));
+    #[derive(Clone, Copy)]
+    enum Target {
+        Wheel(flui_interaction::ScrollTarget),
+        Native(flui_interaction::routing::PanZoomTarget),
+    }
+    let entry = |id, target| match target {
+        Target::Wheel(target) => HitTestEntry::new(RenderId::new(id)).scroll_target(target),
+        Target::Native(target) => HitTestEntry::new(RenderId::new(id)).pan_zoom_target(target),
+    };
     lane.enter(|| {
         let calls = Rc::clone(&fresh_calls);
-        let fresh = handle
-            .register_scroll(move |_| {
-                calls.set(calls.get() + 1);
-                EventPropagation::Stop
-            })
-            .expect("fresh target");
+        let claim = move || {
+            calls.set(calls.get() + 1);
+            EventPropagation::Stop
+        };
+        let fresh = if native {
+            Target::Native(
+                handle
+                    .register_pan_zoom(move |_| claim())
+                    .expect("fresh target"),
+            )
+        } else {
+            Target::Wheel(
+                handle
+                    .register_scroll(move |_| claim())
+                    .expect("fresh target"),
+            )
+        };
         let mut fresh_path = HitTestResult::new();
-        fresh_path.add(HitTestEntry::new(RenderId::new(2)).scroll_target(fresh));
+        fresh_path.add(entry(2, fresh));
         let weak = Rc::downgrade(&binding);
         let replacement = fresh_path.clone();
         let count = Rc::clone(&observed);
         let fail = Rc::clone(&failing);
         let observer = handle
             .register_pointer(move |dispatch| {
-                let PointerEvent::Scroll(scroll) = dispatch.local else {
-                    return;
+                let terminal = match dispatch.local {
+                    PointerEvent::Scroll(scroll) => scroll.phase == Some(ScrollPhase::Ended),
+                    PointerEvent::PanZoom(event) => event.phase == PanZoomPhase::End,
+                    _ => return,
                 };
                 count.set(count.get() + 1);
-                if case == ScrollLeaseCase::TerminalReentry
-                    && scroll.phase == Some(ScrollPhase::Ended)
-                {
+                if case == ScrollLeaseCase::TerminalReentry && terminal {
                     weak.upgrade()
                         .expect("binding")
                         .handle_pointer_event(&packet(ScrollPhase::Began), |_| replacement.clone());
@@ -2165,22 +2252,33 @@ fn assert_scroll_lease(case: ScrollLeaseCase) {
         let fail = Rc::clone(&failing);
         let weak = Rc::downgrade(&binding);
         let replacement = fresh_path.clone();
-        let selected = handle
-            .register_scroll(move |_| {
-                calls.set(calls.get() + 1);
-                if case == ScrollLeaseCase::ClaimReentry && calls.get() == 1 {
-                    weak.upgrade()
-                        .expect("binding")
-                        .handle_pointer_event(&packet(ScrollPhase::Began), |_| replacement.clone());
-                }
-                if fail.get() {
-                    panic!("selected scroll consumer failure");
-                }
-                EventPropagation::Stop
-            })
-            .expect("selected target");
+        let claim = move || {
+            calls.set(calls.get() + 1);
+            if case == ScrollLeaseCase::ClaimReentry && calls.get() == 1 {
+                weak.upgrade()
+                    .expect("binding")
+                    .handle_pointer_event(&packet(ScrollPhase::Began), |_| replacement.clone());
+            }
+            if fail.get() {
+                panic!("selected scroll consumer failure");
+            }
+            EventPropagation::Stop
+        };
+        let selected = if native {
+            Target::Native(
+                handle
+                    .register_pan_zoom(move |_| claim())
+                    .expect("selected target"),
+            )
+        } else {
+            Target::Wheel(
+                handle
+                    .register_scroll(move |_| claim())
+                    .expect("selected target"),
+            )
+        };
         let mut selected_path = HitTestResult::new();
-        selected_path.add(HitTestEntry::new(RenderId::new(1)).scroll_target(selected));
+        selected_path.add(entry(1, selected));
         binding.handle_pointer_event(&packet(ScrollPhase::Began), |_| selected_path.clone());
         match case {
             ScrollLeaseCase::Failure | ScrollLeaseCase::Competing => {
@@ -2210,9 +2308,11 @@ fn assert_scroll_lease(case: ScrollLeaseCase) {
                 assert_eq!(observed.get(), 2, "raw observers follow each fresh path");
             }
             ScrollLeaseCase::Retired => {
-                handle
-                    .unregister_scroll(selected)
-                    .expect("retire selected target");
+                match selected {
+                    Target::Wheel(target) => handle.unregister_scroll(target),
+                    Target::Native(target) => handle.unregister_pan_zoom(target),
+                }
+                .expect("retire selected target");
                 binding.handle_pointer_event(&packet(ScrollPhase::Changed), |_| fresh_path.clone());
                 assert_eq!(
                     fresh_calls.get(),
