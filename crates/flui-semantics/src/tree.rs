@@ -4,7 +4,7 @@
 //! tree: slab storage, parent/child links, and the cascading [`SemanticsTree::remove`].
 
 use flui_foundation::{ElementId, SemanticsId};
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 use slab::Slab;
 use smallvec::SmallVec;
 use std::rc::{Rc, Weak};
@@ -112,7 +112,7 @@ impl SemanticsTree {
     /// Creates a SemanticsTree with pre-allocated capacity.
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            memberships: FxHashMap::with_capacity_and_hasher(capacity, Default::default()),
+            memberships: FxHashMap::with_capacity_and_hasher(capacity, FxBuildHasher::default()),
             nodes: Slab::with_capacity(capacity),
             root: None,
             dirty: FxHashSet::default(),
