@@ -158,10 +158,21 @@ pub fn replacing_and_unmounting_the_field_withdraws_its_node_subscription() {
         .render_property(decorated_box, "decoration")
         .expect("resolved unfocused decoration");
     assert!(unfocused.contains(&format!("{:?}", colors.on_surface_variant)));
+    assert_eq!(
+        laid.with_build_owner_mut(|owner| owner.pending_external_builds()),
+        0
+    );
     let painted = laid.painted_frame_count();
     // This notifies the retained old node without requesting a root rebuild
     // or moving focus through another mounted widget.
     previous.set_skip_traversal(true);
+    // Inspect accepted rebuild work before the frame drains it: a no-op
+    // rebuild need not produce a new layer tree or change decoration.
+    assert_eq!(
+        laid.with_build_owner_mut(|owner| owner.pending_external_builds()),
+        0,
+        "the outgoing node must not enqueue work for the replacement field"
+    );
     laid.tick();
     assert_eq!(
         laid.painted_frame_count(),
@@ -177,8 +188,17 @@ pub fn replacing_and_unmounting_the_field_withdraws_its_node_subscription() {
     laid.pump_widget(Theme::new(theme, SizedBox::new(300.0, 100.0)));
     assert!(laid.try_find_by_render_type("RenderEditable").is_none());
     let painted = laid.painted_frame_count();
+    assert_eq!(
+        laid.with_build_owner_mut(|owner| owner.pending_external_builds()),
+        0
+    );
     previous.set_skip_traversal(false);
     replacement.set_skip_traversal(true);
+    assert_eq!(
+        laid.with_build_owner_mut(|owner| owner.pending_external_builds()),
+        0,
+        "retained nodes must not enqueue work for a disposed field"
+    );
     laid.tick();
     assert_eq!(
         laid.painted_frame_count(),
