@@ -1,6 +1,7 @@
 ### Changed
 
 - Gesture recognizer builders accept fixed settings or a read-only live provider. Active contacts and retained gesture candidates keep the settings admitted for their sequence.
+  Calls that previously relied on `.settings(Default::default())` should name `GestureSettings::default()`; the provider conversion accepts multiple input types. Pass an existing settings value directly instead of relying on an inferred `.into()` target.
 - Native scale Begin captures its profile before the first movement. `ScaleGestureRecognizer::handle_pan_zoom` distinguishes refused admission, dormant admission and recognized delivery instead of returning an ambiguous boolean; a refused Begin cannot resume after an intervening touch contact ends.
 - Drag and scale callbacks retain finite measured velocity independently of the admitted fling limit; `DragEndDetails::fling_velocity` and `ScaleEndDetails::focal_fling_velocity` supply the sequence's resolved pixel-speed policy. Scale-change velocity keeps its scale-per-second units. Public standalone velocity trackers retain their existing default ceiling.
 - `InteractiveViewer` applies the touch or native sequence's captured fling range to its focal release inertia while preserving raw measurements in application callbacks.
