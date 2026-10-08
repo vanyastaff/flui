@@ -787,6 +787,24 @@ fn binding_input_contract_matrix() {
             wheel_listener_failure_keeps_claim_delivery,
         ),
         (
+            "scroll_selected_failure",
+            scroll_selected_failure_keeps_lease,
+        ),
+        (
+            "scroll_competing_failure",
+            scroll_observer_failure_stays_first,
+        ),
+        (
+            "scroll_retired_target",
+            scroll_retired_target_does_not_chain,
+        ),
+        (
+            "scroll_terminal_reentry",
+            scroll_terminal_reentry_keeps_new_lease,
+        ),
+        ("scroll_claim_reentry", scroll_claim_reentry_keeps_new_lease),
+        ("scroll_focus_loss", scroll_focus_loss_releases_lease),
+        (
             "wheel_first_failure_survives_claim_failure",
             wheel_first_failure_survives_claim_failure,
         ),
@@ -1760,6 +1778,203 @@ fn assert_signal_claim_delivery(route: SignalRoute, competing: bool) {
 
 fn wheel_listener_failure_keeps_claim_delivery() {
     assert_signal_claim_delivery(SignalRoute::Wheel, false);
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ScrollLeaseCase {
+    Failure,
+    Competing,
+    Retired,
+    TerminalReentry,
+    ClaimReentry,
+    FocusLoss,
+}
+
+fn scroll_selected_failure_keeps_lease() {
+    assert_scroll_lease(ScrollLeaseCase::Failure);
+}
+fn scroll_observer_failure_stays_first() {
+    assert_scroll_lease(ScrollLeaseCase::Competing);
+}
+fn scroll_retired_target_does_not_chain() {
+    assert_scroll_lease(ScrollLeaseCase::Retired);
+}
+fn scroll_terminal_reentry_keeps_new_lease() {
+    assert_scroll_lease(ScrollLeaseCase::TerminalReentry);
+}
+fn scroll_claim_reentry_keeps_new_lease() {
+    assert_scroll_lease(ScrollLeaseCase::ClaimReentry);
+}
+fn scroll_focus_loss_releases_lease() {
+    assert_scroll_lease(ScrollLeaseCase::FocusLoss);
+}
+
+fn assert_scroll_lease(case: ScrollLeaseCase) {
+    use flui_foundation::geometry::Offset;
+    use flui_interaction::events::{PointerEvent, make_scroll_event};
+    use flui_interaction::{EventPropagation, GestureBinding, HitTestResult};
+    use flui_platform_api::pointer::ScrollPhase;
+    use std::{
+        cell::Cell,
+        panic::{AssertUnwindSafe, catch_unwind},
+        rc::Rc,
+    };
+
+    let packet = |phase| {
+        let PointerEvent::Scroll(mut scroll) =
+            make_scroll_event(Offset::ZERO, Offset::new(0.0, 10.0)).expect("finite wheel")
+        else {
+            unreachable!()
+        };
+        scroll.phase = Some(phase);
+        PointerEvent::Scroll(scroll)
+    };
+    let lane = InteractionLane::try_new().expect("lane");
+    let handle = lane.dispatch_handle();
+    let binding = Rc::new(GestureBinding::new());
+    let selected_calls = Rc::new(Cell::new(0));
+    let fresh_calls = Rc::new(Cell::new(0));
+    let observed = Rc::new(Cell::new(0));
+    let failing = Rc::new(Cell::new(false));
+    lane.enter(|| {
+        let calls = Rc::clone(&fresh_calls);
+        let fresh = handle
+            .register_scroll(move |_| {
+                calls.set(calls.get() + 1);
+                EventPropagation::Stop
+            })
+            .expect("fresh target");
+        let mut fresh_path = HitTestResult::new();
+        fresh_path.add(HitTestEntry::new(RenderId::new(2)).scroll_target(fresh));
+        let weak = Rc::downgrade(&binding);
+        let replacement = fresh_path.clone();
+        let count = Rc::clone(&observed);
+        let fail = Rc::clone(&failing);
+        let observer = handle
+            .register_pointer(move |dispatch| {
+                let PointerEvent::Scroll(scroll) = dispatch.local else {
+                    return;
+                };
+                count.set(count.get() + 1);
+                if case == ScrollLeaseCase::TerminalReentry
+                    && scroll.phase == Some(ScrollPhase::Ended)
+                {
+                    weak.upgrade()
+                        .expect("binding")
+                        .handle_pointer_event(&packet(ScrollPhase::Began), |_| replacement.clone());
+                }
+                if case == ScrollLeaseCase::Competing && fail.get() {
+                    panic!("fresh scroll observer first failure");
+                }
+            })
+            .expect("fresh observer");
+        fresh_path.add(hit_entry(observer));
+        let calls = Rc::clone(&selected_calls);
+        let fail = Rc::clone(&failing);
+        let weak = Rc::downgrade(&binding);
+        let replacement = fresh_path.clone();
+        let selected = handle
+            .register_scroll(move |_| {
+                calls.set(calls.get() + 1);
+                if case == ScrollLeaseCase::ClaimReentry && calls.get() == 1 {
+                    weak.upgrade()
+                        .expect("binding")
+                        .handle_pointer_event(&packet(ScrollPhase::Began), |_| replacement.clone());
+                }
+                if fail.get() {
+                    panic!("selected scroll consumer failure");
+                }
+                EventPropagation::Stop
+            })
+            .expect("selected target");
+        let mut selected_path = HitTestResult::new();
+        selected_path.add(HitTestEntry::new(RenderId::new(1)).scroll_target(selected));
+        binding.handle_pointer_event(&packet(ScrollPhase::Began), |_| selected_path.clone());
+        match case {
+            ScrollLeaseCase::Failure | ScrollLeaseCase::Competing => {
+                failing.set(true);
+                let payload = catch_unwind(AssertUnwindSafe(|| {
+                    binding.handle_pointer_event(&packet(ScrollPhase::Changed), |_| {
+                        fresh_path.clone()
+                    });
+                }))
+                .expect_err("selected consumer must still run off its fresh hit path");
+                assert_eq!(
+                    flui_foundation::panic::payload_text(&*payload),
+                    Some(if case == ScrollLeaseCase::Competing {
+                        "fresh scroll observer first failure"
+                    } else {
+                        "selected scroll consumer failure"
+                    })
+                );
+                failing.set(false);
+                binding.handle_pointer_event(&packet(ScrollPhase::Changed), |_| fresh_path.clone());
+                assert_eq!(
+                    selected_calls.get(),
+                    3,
+                    "selected consumer recovers after containment"
+                );
+                assert_eq!(fresh_calls.get(), 0, "later path cannot steal the sequence");
+                assert_eq!(observed.get(), 2, "raw observers follow each fresh path");
+            }
+            ScrollLeaseCase::Retired => {
+                handle
+                    .unregister_scroll(selected)
+                    .expect("retire selected target");
+                binding.handle_pointer_event(&packet(ScrollPhase::Changed), |_| fresh_path.clone());
+                assert_eq!(
+                    fresh_calls.get(),
+                    0,
+                    "retirement does not hand this gesture to an ancestor"
+                );
+                binding.handle_pointer_event(&packet(ScrollPhase::Ended), |_| fresh_path.clone());
+                binding.handle_pointer_event(&packet(ScrollPhase::Began), |_| fresh_path.clone());
+                assert_eq!(
+                    fresh_calls.get(),
+                    1,
+                    "the next gesture can select a healthy target"
+                );
+            }
+            ScrollLeaseCase::TerminalReentry => {
+                binding.handle_pointer_event(&packet(ScrollPhase::Ended), |_| fresh_path.clone());
+                binding
+                    .handle_pointer_event(&packet(ScrollPhase::Changed), |_| selected_path.clone());
+                assert_eq!(
+                    selected_calls.get(),
+                    2,
+                    "terminal reaches old consumer once"
+                );
+                assert_eq!(
+                    fresh_calls.get(),
+                    2,
+                    "reentrant begin survives old terminal delivery"
+                );
+            }
+            ScrollLeaseCase::ClaimReentry => {
+                binding
+                    .handle_pointer_event(&packet(ScrollPhase::Changed), |_| selected_path.clone());
+                assert_eq!(
+                    selected_calls.get(),
+                    1,
+                    "old Stop cannot overwrite a replacement begin"
+                );
+                assert_eq!(
+                    fresh_calls.get(),
+                    2,
+                    "replacement consumer remains selected"
+                );
+            }
+            ScrollLeaseCase::FocusLoss => {
+                binding.cancel_active_pointers();
+                binding.handle_pointer_event(&packet(ScrollPhase::Changed), |_| fresh_path.clone());
+                assert_eq!(
+                    fresh_calls.get(),
+                    1,
+                    "focus loss releases scroll without a Down contact"
+                );
+            }
+        }
+    });
 }
 fn wheel_first_failure_survives_claim_failure() {
     assert_signal_claim_delivery(SignalRoute::Wheel, true);
