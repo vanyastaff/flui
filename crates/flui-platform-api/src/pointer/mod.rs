@@ -510,6 +510,17 @@ impl PointerMove {
         &self.coalesced
     }
 
+    /// Retain at most `maximum` latest measured historical readings in place.
+    ///
+    /// A bounded coalescing queue can retire its oldest readings without
+    /// copying or revalidating the already-checked chronological history.
+    /// Zero removes all historical readings. The current sample, predictions
+    /// and dispatch metadata remain unchanged.
+    pub fn retain_latest_coalesced(&mut self, maximum: usize) {
+        let excess = self.coalesced.len().saturating_sub(maximum);
+        drop(self.coalesced.drain(..excess));
+    }
+
     /// Readings the platform predicts after [`current`](Self::current), oldest first.
     #[must_use]
     pub fn predicted(&self) -> &[PointerSample] {

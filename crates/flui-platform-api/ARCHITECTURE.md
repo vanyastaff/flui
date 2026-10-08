@@ -118,6 +118,17 @@ scroll units, button sets, generated key spellings) and `flui-platform`'s
 `input_vocabulary_conversion` (every backend shape, eraser, non-finite
 release, key round trip through `keyboard-types`).
 
+### Bounded measured history retains checked ownership
+
+`PointerMove::retain_latest_coalesced` removes an oldest prefix from its
+already-checked chronological readings without exposing a mutable vector or
+revalidating copied data. `flui-interaction`'s resampler uses it after canonical
+coalescing to enforce its queue's retained-history bound. Zero is a valid bound;
+the current reading, predictions and complete pointer metadata stay unchanged.
+`bounded_coalesced_history_keeps_latest_readings_and_predictions` in
+`input_vocabulary_contract` pins zero, one and multiple retained readings,
+including distinct sensor readings sharing a coarse timestamp.
+
 ### Data-transfer delivery shares the foundation claim slot
 
 `TransferRequest::channel` uses `ClaimSlot` for cancellation, executor

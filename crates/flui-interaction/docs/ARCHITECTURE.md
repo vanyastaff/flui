@@ -126,6 +126,15 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   recovery and cancellation from a coalesced start callback.
   `resampler_interpolates_on_event_time_and_never_drops_terminals` pins preservation
   of three packets' six measured readings and only the newest prediction family.
+- **Resampler delivery preserves owned history storage.** An unchanged event
+  timestamp reuses its measured and predicted vectors; raising a timestamp still
+  uses the checked builders to exclude predictions preceding the new current
+  reading. Saturated queues retain at most 100 historical readings per move in
+  place after canonical coalescing validates full pointer identity. The
+  counting-allocator family
+  `resolved_route_move_invocation_allocates_no_heap_after_setup` pins owning
+  Sample/Stop delivery, raised-time filtering and saturated admission with 199
+  delivered measured readings plus the newest predictions.
 - **`TapButton` is a typed enum, not integer button constants.** `TapButton` (`src/recognizers/tap.rs`) maps pointer buttons explicitly through `from_pointer_button`, so the type system enforces the choice. It is `#[non_exhaustive]` so a future fourth button slot can be added without breaking downstream.
 - **Weak arena membership.** The inline-four member list stores weak identities,
   not lifetime ownership. Dead members withdraw; queued verdicts recheck

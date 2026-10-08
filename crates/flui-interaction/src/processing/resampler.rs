@@ -271,10 +271,7 @@ impl ResamplerInner {
             }
             // Keep the newest samples only, so a queue that is never sampled
             // cannot grow without bound through the history either.
-            let history = newer.coalesced();
-            let excess = history.len().saturating_sub(MAX_COALESCED_HISTORY);
-            let bounded = history[excess..].to_vec();
-            *newer = newer.clone().with_coalesced(bounded);
+            newer.retain_latest_coalesced(MAX_COALESCED_HISTORY);
         }
         self.event_queue.remove(index);
         true
