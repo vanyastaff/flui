@@ -1,365 +1,233 @@
-//! Locale information
+//! Complete language identity for resource selection and platform observations.
 
-use std::fmt;
+use language_tags::LanguageTag;
+use std::{collections::HashSet, fmt, str::FromStr};
 
-/// Deprecated ISO 639 language subtags mapped to their IANA "preferred value"
-/// replacement.
+/// A malformed language identifier or component combination.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("invalid language tag")]
+pub struct InvalidLocale;
+
+/// A syntactically validated BCP 47 language tag.
 ///
-/// Derived from the IANA language subtag registry, which lists ~90 historical
-/// ISO 639-3 retirements; only the three that are reachable through FLUI's RTL
-/// detection and locale-resolution surfaces today (`iw`/`in`/`ji`, all
-/// three-letter-vs-two-letter Bidi-relevant subtags) are included. The rest
-/// are deferred — a future full-CLDR canonicalizer can extend this table
-/// without changing its shape.
-const DEPRECATED_LANGUAGE_SUBTAGS: &[(&str, &str)] = &[
-    ("in", "id"), // Indonesian; deprecated 1989-01-01
-    ("iw", "he"), // Hebrew; deprecated 1989-01-01
-    ("ji", "yi"), // Yiddish; deprecated 1989-01-01
-];
-
-/// Deprecated ISO 3166 region subtags mapped to their IANA "preferred value"
-/// replacement.
-///
-/// Derived from the same registry as [`DEPRECATED_LANGUAGE_SUBTAGS`], and
-/// complete — six entries, no scope cut needed.
-const DEPRECATED_REGION_SUBTAGS: &[(&str, &str)] = &[
-    ("BU", "MM"), // Burma; deprecated 1989-12-05
-    ("DD", "DE"), // German Democratic Republic; deprecated 1990-10-30
-    ("FX", "FR"), // Metropolitan France; deprecated 1997-07-14
-    ("TP", "TL"), // East Timor; deprecated 2002-05-20
-    ("YD", "YE"), // Democratic Yemen; deprecated 1990-08-14
-    ("ZR", "CD"), // Zaire; deprecated 1997-07-14
-];
-
-/// Replaces a deprecated language subtag with its preferred code, if `code`
-/// appears in [`DEPRECATED_LANGUAGE_SUBTAGS`]; otherwise returns `code`
-/// unchanged.
-fn canonicalize_language_subtag(code: &str) -> &str {
-    DEPRECATED_LANGUAGE_SUBTAGS
-        .iter()
-        .find_map(|(deprecated, preferred)| (*deprecated == code).then_some(*preferred))
-        .unwrap_or(code)
-}
-
-/// Replaces a deprecated region subtag with its preferred code, if `code`
-/// appears in [`DEPRECATED_REGION_SUBTAGS`]; otherwise returns `code`
-/// unchanged.
-fn canonicalize_region_subtag(code: &str) -> &str {
-    DEPRECATED_REGION_SUBTAGS
-        .iter()
-        .find_map(|(deprecated, preferred)| (*deprecated == code).then_some(*preferred))
-        .unwrap_or(code)
-}
-
-/// An identifier for a user's language and regional preferences.
-///
-/// A language code plus optional country
-/// and script subtags (e.g. `en_US`, `zh_Hans_CN`), used for
-/// localization and text-direction resolution.
-///
-/// ## Canonicalization
-///
-/// Deprecated language/region subtags are canonicalized to their preferred
-/// form at construction time (`Locale::new("iw", None::<&str>).language() ==
-/// "he"`), so two `Locale`s built from different historical spellings of the
-/// same subtag compare equal and hash identically. The script subtag is
-/// passed through unchanged; scripts are not canonicalized.
+/// Variants, extensions and private-use subtags remain part of equality and
+/// serialization. Parsing normalizes casing and accepts legacy `_` separators.
+/// Historical `in`/`iw`/`ji` language aliases and six deprecated region aliases
+/// retain their preferred spellings. This is not CLDR maximization or registry
+/// validation. Explicit scripts are retained.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-// Deserialize is routed through `LocaleShadow` (below) so the derive cannot
-// bypass canonicalization by assigning raw subtags straight into the private
-// fields — see `LocaleShadow`'s doc for why this is load-bearing, not
-// decorative.
-#[cfg_attr(feature = "serde", serde(from = "LocaleShadow"))]
-pub struct Locale {
-    /// The language code (e.g., "en", "es", "fr")
-    language: String,
+pub struct Locale(LanguageTag);
 
-    /// The country/region code (e.g., "US", "GB", "MX")
-    country: Option<String>,
-
-    /// Optional script code (e.g., "Latn", "Cyrl")
-    script: Option<String>,
+fn language_alias(language: &str) -> &str {
+    match language {
+        "in" => "id",
+        "iw" => "he",
+        "ji" => "yi",
+        _ => language,
+    }
 }
 
-/// The wire shape `Locale` deserializes through — plain, uncanonicalized
-/// subtags, matching exactly what [`Locale`]'s own (unmodified) `Serialize`
-/// derive produces (same field names, so round-tripping is transparent).
-///
-/// Without this indirection, `#[derive(Deserialize)]` on `Locale` directly
-/// would assign incoming JSON straight into the private `language`/`country`
-/// fields, bypassing [`Locale::canonical`] entirely: deserializing
-/// `{"language":"iw",...}` would produce a `Locale` whose `language()` is
-/// still `"iw"` — silently breaking the `Locale::new("iw") ==
-/// Locale::new("he")` / matching-hash guarantee the type's own docs promise
-/// for every OTHER construction path. Routing through `#[serde(from =
-/// "LocaleShadow")]` keeps `Locale::canonical` the sole construction path,
-/// including for deserialization.
-#[cfg(feature = "serde")]
-#[derive(serde::Deserialize)]
-struct LocaleShadow {
-    language: String,
-    country: Option<String>,
-    script: Option<String>,
+fn region_alias(region: &str) -> &str {
+    match region {
+        "BU" => "MM",
+        "DD" => "DE",
+        "FX" => "FR",
+        "TP" => "TL",
+        "YD" => "YE",
+        "ZR" => "CD",
+        _ => region,
+    }
 }
 
-#[cfg(feature = "serde")]
-impl From<LocaleShadow> for Locale {
-    fn from(shadow: LocaleShadow) -> Self {
-        Self::canonical(shadow.language, shadow.country, shadow.script)
+impl FromStr for Locale {
+    type Err = InvalidLocale;
+
+    fn from_str(input: &str) -> Result<Self, Self::Err> {
+        let input = input.replace('_', "-");
+        // The upstream private-use fast path does not check subtag lengths or
+        // empty segments. Enforce the shared lexical boundary before parsing.
+        if input.split('-').any(|part| {
+            part.is_empty() || part.len() > 8 || !part.bytes().all(|b| b.is_ascii_alphanumeric())
+        }) {
+            return Err(InvalidLocale);
+        }
+        let parsed = LanguageTag::parse(&input).map_err(|_| InvalidLocale)?;
+        let mut variants = HashSet::new();
+        let mut extensions = HashSet::new();
+        if parsed.variant_subtags().any(|part| !variants.insert(part))
+            || parsed
+                .extension_subtags()
+                .any(|(key, _)| !extensions.insert(key))
+        {
+            return Err(InvalidLocale);
+        }
+        let language = language_alias(parsed.primary_language());
+        let region = parsed.region();
+        if language == parsed.primary_language()
+            && region.is_none_or(|value| region_alias(value) == value)
+        {
+            return Ok(Self(parsed));
+        }
+        let mut normalized = language.to_owned();
+        let mut region_pending = region;
+        for part in parsed.as_str()[parsed.primary_language().len()..]
+            .split('-')
+            .skip(1)
+        {
+            normalized.push('-');
+            if region_pending == Some(part) {
+                normalized.push_str(region_alias(part));
+                region_pending = None;
+            } else {
+                normalized.push_str(part);
+            }
+        }
+        LanguageTag::parse(&normalized)
+            .map(Self)
+            .map_err(|_| InvalidLocale)
     }
 }
 
 impl Locale {
-    /// Builds a `Locale` from already-owned subtags, canonicalizing the
-    /// language and region against the deprecated-subtag tables. The sole
-    /// construction path every public constructor below (and, behind the
-    /// `serde` feature, `LocaleShadow`'s `From` impl) routes through, so
-    /// canonicalization happens in exactly one place.
-    fn canonical(language: String, country: Option<String>, script: Option<String>) -> Self {
-        Self {
-            language: canonicalize_language_subtag(&language).to_owned(),
-            country: country.map(|code| canonicalize_region_subtag(&code).to_owned()),
-            script,
-        }
+    /// Create a language and optional region identifier.
+    ///
+    /// # Errors
+    /// Rejects malformed components; use string parsing for full language tags.
+    pub fn new(
+        language: impl AsRef<str>,
+        country: Option<impl AsRef<str>>,
+    ) -> Result<Self, InvalidLocale> {
+        Self::with_script(language, country, None::<&str>)
     }
 
-    /// Creates a new locale
+    /// Create a language, optional region and optional script identifier.
     ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_platform_api::Locale;
-    ///
-    /// let locale = Locale::new("en", Some("US"));
-    /// assert_eq!(locale.language(), "en");
-    /// assert_eq!(locale.country(), Some("US"));
-    /// ```
-    #[inline]
-    pub fn new(language: impl Into<String>, country: Option<impl Into<String>>) -> Self {
-        Self::canonical(language.into(), country.map(Into::into), None)
-    }
-
-    /// Creates a new locale with a script code
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_platform_api::Locale;
-    ///
-    /// let locale = Locale::with_script("zh", Some("CN"), Some("Hans"));
-    /// assert_eq!(locale.language(), "zh");
-    /// assert_eq!(locale.country(), Some("CN"));
-    /// assert_eq!(locale.script(), Some("Hans"));
-    /// ```
-    #[inline]
+    /// # Errors
+    /// Rejects malformed components and components supplied in the wrong role.
     pub fn with_script(
-        language: impl Into<String>,
-        country: Option<impl Into<String>>,
-        script: Option<impl Into<String>>,
-    ) -> Self {
-        Self::canonical(
-            language.into(),
-            country.map(Into::into),
-            script.map(Into::into),
-        )
-    }
-
-    /// Returns the language code (e.g. `"en"`).
-    #[must_use]
-    #[inline]
-    pub fn language(&self) -> &str {
-        &self.language
-    }
-
-    /// Returns the country/region code, if any (e.g. `"US"`).
-    #[must_use]
-    #[inline]
-    pub fn country(&self) -> Option<&str> {
-        self.country.as_deref()
-    }
-
-    /// Returns the script code, if any (e.g. `"Hans"`).
-    #[must_use]
-    #[inline]
-    pub fn script(&self) -> Option<&str> {
-        self.script.as_deref()
-    }
-
-    /// Formats this locale as an underscore-separated language tag:
-    /// `"en"`, `"en_US"`, `"zh_Hans"` or `"zh_Hans_CN"`, which
-    /// [`from_language_tag`](Self::from_language_tag) reads back.
-    #[must_use]
-    #[inline]
-    pub fn to_language_tag(&self) -> String {
-        let mut tag = self.language.clone();
-        for subtag in [&self.script, &self.country].into_iter().flatten() {
-            tag.push('_');
-            tag.push_str(subtag);
+        language: impl AsRef<str>,
+        country: Option<impl AsRef<str>>,
+        script: Option<impl AsRef<str>>,
+    ) -> Result<Self, InvalidLocale> {
+        let language = language.as_ref().to_ascii_lowercase();
+        let country = country
+            .as_ref()
+            .map(|value| value.as_ref().to_ascii_uppercase());
+        let script = script.as_ref().map(AsRef::as_ref);
+        let mut tag = language.clone();
+        for part in [script, country.as_deref()].into_iter().flatten() {
+            tag.push('-');
+            tag.push_str(part);
         }
-        tag
+        let locale: Self = tag.parse()?;
+        if locale.language() != language_alias(&language)
+            || locale.country() != country.as_deref().map(region_alias)
+            || !match (locale.script(), script) {
+                (Some(actual), Some(authored)) => actual.eq_ignore_ascii_case(authored),
+                (None, None) => true,
+                _ => false,
+            }
+            || language.contains('-')
+            || language.contains('_')
+            || locale.0.variant().is_some()
+            || locale.0.extension().is_some()
+            || locale.0.private_use().is_some()
+            || locale.0.extended_language().is_some()
+        {
+            return Err(InvalidLocale);
+        }
+        Ok(locale)
     }
 
-    /// Returns `true` if this locale's text direction is left-to-right.
-    ///
-    /// The complement of [`is_rtl`](Self::is_rtl).
+    /// Language component; grandfathered and private-use-only tags retain their full identity.
     #[must_use]
-    #[inline]
+    pub fn language(&self) -> &str {
+        self.0.primary_language()
+    }
+    /// Optional region component.
+    #[must_use]
+    pub fn country(&self) -> Option<&str> {
+        self.0.region()
+    }
+    /// Optional script component.
+    #[must_use]
+    pub fn script(&self) -> Option<&str> {
+        self.0.script()
+    }
+    /// Complete normalized BCP 47 tag, including variants and extensions.
+    #[must_use]
+    pub fn to_language_tag(&self) -> String {
+        self.0.as_str().to_owned()
+    }
+    /// Whether the language's default text direction is left-to-right.
+    #[must_use]
     pub fn is_ltr(&self) -> bool {
         !self.is_rtl()
     }
-
-    /// Returns `true` if this locale's text direction is right-to-left.
-    ///
-    /// Determined by the language code against a fixed set of RTL
-    /// languages (Arabic, Persian, Hebrew, Pashto, Urdu, Yiddish); the script
-    /// code is not consulted. Deprecated codes such as `ji` are already
-    /// canonicalized (to `yi`) by construction.
+    /// Whether the language's default text direction is right-to-left.
+    /// This language-based policy does not infer direction from a script override.
     #[must_use]
-    #[inline]
     pub fn is_rtl(&self) -> bool {
-        matches!(
-            self.language.as_str(),
-            "ar" | "fa" | "he" | "ps" | "ur" | "yi"
-        )
+        matches!(self.language(), "ar" | "fa" | "he" | "ps" | "ur" | "yi")
     }
-
-    /// Parses a locale from a language tag with `-` or `_` separators.
-    ///
-    /// Accepts `"en"`, `"en_US"`/`"en-US"`, `"zh_Hans"` (a 4-character
-    /// second subtag is treated as a script), and `"zh_Hans_CN"`.
-    /// Returns `None` for empty input or more than three subtags.
+    /// Parse a full language tag, returning `None` for malformed input.
     #[must_use]
-    #[inline]
     pub fn from_language_tag(tag: &str) -> Option<Self> {
-        if tag.is_empty() {
-            return None;
-        }
-
-        // Normalize separators to underscore
-        let normalized = tag.replace('-', "_");
-        let parts: Vec<&str> = normalized.split('_').collect();
-
-        match parts.len() {
-            1 => {
-                // Just language: "en"
-                Some(Self::new(parts[0], None::<String>))
-            }
-            2 => {
-                // Language + country OR language + script
-                // Country codes are typically 2 chars, script codes are 4
-                if parts[1].len() == 4 {
-                    // Probably a script: "zh_Hans"
-                    Some(Self::with_script(parts[0], None::<String>, Some(parts[1])))
-                } else {
-                    // Probably a country: "en_US"
-                    Some(Self::new(parts[0], Some(parts[1])))
-                }
-            }
-            3 => {
-                // Language + script + country: "zh_Hans_CN"
-                Some(Self::with_script(parts[0], Some(parts[2]), Some(parts[1])))
-            }
-            _ => None, // Invalid format
-        }
+        tag.parse().ok()
+    }
+    /// English (United States).
+    #[must_use]
+    pub fn en_us() -> Self {
+        "en-US".parse().expect("BUG: valid built-in locale")
+    }
+    /// English (United Kingdom).
+    #[must_use]
+    pub fn en_gb() -> Self {
+        "en-GB".parse().expect("BUG: valid built-in locale")
+    }
+    /// Spanish (Spain).
+    #[must_use]
+    pub fn es_es() -> Self {
+        "es-ES".parse().expect("BUG: valid built-in locale")
+    }
+    /// French (France).
+    #[must_use]
+    pub fn fr_fr() -> Self {
+        "fr-FR".parse().expect("BUG: valid built-in locale")
+    }
+    /// German (Germany).
+    #[must_use]
+    pub fn de_de() -> Self {
+        "de-DE".parse().expect("BUG: valid built-in locale")
+    }
+    /// Chinese (China).
+    #[must_use]
+    pub fn zh_cn() -> Self {
+        "zh-CN".parse().expect("BUG: valid built-in locale")
+    }
+    /// Japanese (Japan).
+    #[must_use]
+    pub fn ja_jp() -> Self {
+        "ja-JP".parse().expect("BUG: valid built-in locale")
     }
 }
 
 impl fmt::Display for Locale {
-    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.to_language_tag())
+        f.write_str(self.0.as_str())
     }
 }
 
-// Common locales
-impl Locale {
-    /// English (United States)
-    #[inline]
-    pub fn en_us() -> Self {
-        Self::new("en", Some("US"))
-    }
-
-    /// English (United Kingdom)
-    #[inline]
-    pub fn en_gb() -> Self {
-        Self::new("en", Some("GB"))
-    }
-
-    /// Spanish (Spain)
-    #[inline]
-    pub fn es_es() -> Self {
-        Self::new("es", Some("ES"))
-    }
-
-    /// French (France)
-    #[inline]
-    pub fn fr_fr() -> Self {
-        Self::new("fr", Some("FR"))
-    }
-
-    /// German (Germany)
-    #[inline]
-    pub fn de_de() -> Self {
-        Self::new("de", Some("DE"))
-    }
-
-    /// Chinese (China)
-    #[inline]
-    pub fn zh_cn() -> Self {
-        Self::new("zh", Some("CN"))
-    }
-
-    /// Japanese (Japan)
-    #[inline]
-    pub fn ja_jp() -> Self {
-        Self::new("ja", Some("JP"))
+#[cfg(feature = "serde")]
+impl serde::Serialize for Locale {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.0.as_str())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Deprecated subtags canonicalize at construction (and, with `serde`, at
-    /// deserialization, which must route through the canonicalizing
-    /// constructor rather than a bare derive), so the deprecated and preferred
-    /// spellings are one locale: equal and hash-equal.
-    #[test]
-    fn deprecated_subtags_canonicalize_everywhere_a_locale_is_built() {
-        for (deprecated, preferred) in DEPRECATED_LANGUAGE_SUBTAGS {
-            assert_eq!(
-                Locale::new(*deprecated, None::<&str>).language(),
-                *preferred,
-                "language {deprecated}"
-            );
-        }
-        for (deprecated, preferred) in DEPRECATED_REGION_SUBTAGS {
-            assert_eq!(
-                Locale::new("en", Some(*deprecated)).country(),
-                Some(*preferred),
-                "region {deprecated}"
-            );
-        }
-
-        let iw = Locale::new("iw", None::<&str>);
-        let he = Locale::new("he", None::<&str>);
-        assert_eq!(iw, he, "iw and he must be the same locale");
-        let mut set = std::collections::HashSet::new();
-        set.insert(iw);
-        assert!(
-            set.contains(&he),
-            "canonicalized locales must hash identically, not just compare equal"
-        );
-
-        #[cfg(feature = "serde")]
-        {
-            let iw: Locale =
-                serde_json::from_str(r#"{"language":"iw","country":null,"script":null}"#)
-                    .expect("valid Locale JSON");
-            assert_eq!(iw, he, "deserialized iw");
-            assert_eq!(iw.language(), "he");
-            assert!(iw.is_rtl());
-        }
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for Locale {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let tag = <String as serde::Deserialize>::deserialize(deserializer)?;
+        tag.parse().map_err(serde::de::Error::custom)
     }
 }

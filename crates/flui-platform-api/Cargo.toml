@@ -25,6 +25,7 @@ workspace = true
 cursor-icon = { workspace = true }
 # `DataTransferId`, the generational id of the ADR-0038 transport.
 flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
+language-tags = { workspace = true }
 # The one-shot slot inside `TransferRequest`.
 parking_lot = { workspace = true }
 # `PlatformWindow`'s GPU handles, through `HasWindowHandle`/`HasDisplayHandle`
