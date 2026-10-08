@@ -2025,26 +2025,28 @@ pub(crate) fn nested_fling_failure_keeps_first_panic_and_a_new_gesture_makes_pro
             }
         }));
         release_inner_fling(&laid, Vertical, false);
-        let mut failure = None;
-        for _ in 0..15 {
-            if let Err(panic) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let ((), log) = flui_testing::log_capture::capture(|| {
+            for _ in 0..15 {
                 laid.pump_for(Duration::from_millis(16))
-            })) {
-                failure = Some(panic);
-                break;
             }
-        }
-        let failure =
-            failure.expect("actual parent handoff must reach the failing public listener");
-        let text = failure
-            .downcast_ref::<&str>()
-            .copied()
-            .or_else(|| failure.downcast_ref::<String>().map(String::as_str));
-        assert_eq!(text, Some("first parent handoff notification"));
+        });
+        let expected = if competing {
+            vec![
+                "first parent handoff notification",
+                "second parent handoff notification",
+            ]
+        } else {
+            vec!["first parent handoff notification"]
+        };
+        assert_notification_failures(&log, &expected);
         assert!(!first.load(Ordering::SeqCst));
         assert!(
             !second.load(Ordering::SeqCst),
             "competing notification cleanup completed"
+        );
+        assert!(
+            outer.pixels() > 600.0,
+            "contained notification failures do not stall accepted motion"
         );
         listenable.remove_listener(first_id);
         listenable.remove_listener(second_id);
@@ -2060,6 +2062,18 @@ pub(crate) fn nested_fling_failure_keeps_first_panic_and_a_new_gesture_makes_pro
             "after containment a fresh gesture still hands off"
         );
     }
+}
+
+fn assert_notification_failures(log: &flui_testing::log_capture::CapturedLog, expected: &[&str]) {
+    let reported: Vec<_> = log
+        .records()
+        .iter()
+        .filter_map(|record| record.field("panic_payload"))
+        .collect();
+    assert_eq!(
+        reported, expected,
+        "the actual notifier reports the first failure before competing failures: {log}"
+    );
 }
 
 pub(crate) fn nested_fling_skips_saturated_parent_and_reentrant_jump_retires_transfer() {
@@ -2488,15 +2502,18 @@ pub(crate) fn show_on_screen_failure_continues_live_ancestors_and_fresh_requests
                 panic!("second outer reveal notification");
             }
         }));
-        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let ((), log) = flui_testing::log_capture::capture(|| {
             request_reveal_target(&laid);
-        }))
-        .expect_err("actual inner reveal must reach its failing pixel listener");
-        let text = failure
-            .downcast_ref::<&str>()
-            .copied()
-            .or_else(|| failure.downcast_ref::<String>().map(String::as_str));
-        assert_eq!(text, Some("first inner reveal notification"));
+        });
+        let expected = if competing {
+            vec![
+                "first inner reveal notification",
+                "second outer reveal notification",
+            ]
+        } else {
+            vec!["first inner reveal notification"]
+        };
+        assert_notification_failures(&log, &expected);
         assert!(!first.load(Ordering::SeqCst));
         assert!(
             !second.load(Ordering::SeqCst),
