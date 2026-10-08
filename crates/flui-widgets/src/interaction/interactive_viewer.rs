@@ -158,10 +158,10 @@ type EndCallback = Rc<dyn Fn(&mut EventCx<'_>, InteractionEndDetails)>;
 /// When the wheel is allowed to drive scroll-to-scale.
 ///
 /// The desktop contract "wheel scrolls, ctrl+wheel zooms" is only
-/// composable when the viewer restricts itself to the chord — an enclosing
-/// scrollable declines ctrl+wheel ticks, so under [`CtrlWheel`] the two
-/// gestures split cleanly. [`AnyWheel`] zooms on every vertical tick and is the
-/// default.
+/// composable when the viewer restricts itself to the chord. It claims ticks
+/// that actually zoom before the enclosing scrollable is asked. Under
+/// [`CtrlWheel`], plain ticks reach that scrollable. [`AnyWheel`] zooms on every
+/// vertical tick and is the default.
 ///
 /// [`CtrlWheel`]: WheelScaleGate::CtrlWheel
 /// [`AnyWheel`]: WheelScaleGate::AnyWheel
@@ -349,6 +349,10 @@ impl InteractiveViewer {
     /// exponential scale change (`scale_change = exp(-scroll_dy /
     /// scale_factor)`). Larger values feel slower; smaller values feel
     /// faster. Defaults to `200.0`.
+    ///
+    /// Raw wheel detents and normalized line packets each use an authored
+    /// zoom distance of 53 logical pixels per unit. System scroll line counts
+    /// and scroll disabling apply to scrolling, independently of this zoom policy.
     #[must_use]
     pub fn scale_factor(mut self, scale_factor: f64) -> Self {
         self.scale_factor = scale_factor;
@@ -779,9 +783,10 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
                     );
                     let pixels_per_unit = match data.delta.unit() {
                         ScrollUnit::Pixels => 1.0,
-                        // Preserve the existing consumer policy while system
-                        // wheel preferences remain owned by the platform layer.
-                        ScrollUnit::Lines => 53.0,
+                        // Raw rotation and already normalized lines both retain
+                        // the authored zoom step. Scroll preferences govern
+                        // translation, independently of the zoom divisor.
+                        ScrollUnit::Detents | ScrollUnit::Lines => 53.0,
                         ScrollUnit::Pages => {
                             let Some((viewport, _)) = geometry else {
                                 return EventPropagation::Continue;

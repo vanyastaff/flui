@@ -182,6 +182,7 @@ fn pointer_and_gesture_recognition() {
             ("pointer_vocabulary::scroll_claim_preserves_owned_source_units_and_phase", crate::pointer_vocabulary::scroll_claim_preserves_owned_source_units_and_phase as fn()),
             ("pointer_vocabulary::pointer_delivery_preserves_source_and_sample_families", crate::pointer_vocabulary::pointer_delivery_preserves_source_and_sample_families),
             ("pointer_vocabulary::page_scroll_resolves_against_the_actual_viewport", crate::pointer_vocabulary::page_scroll_resolves_against_the_actual_viewport),
+            ("pointer_vocabulary::viewer_raw_detents_zoom_without_stealing_plain_scrolls", crate::pointer_vocabulary::viewer_raw_detents_zoom_without_stealing_plain_scrolls),
             ("pointer_vocabulary::viewer_page_zoom_resolves_against_the_actual_viewport", crate::pointer_vocabulary::viewer_page_zoom_resolves_against_the_actual_viewport),
             ("pointer_vocabulary::viewer_cumulative_zoom_survives_rebuild_and_resets", crate::pointer_vocabulary::viewer_cumulative_zoom_survives_rebuild_and_resets),
             ("pointer_vocabulary::viewer_unstarted_pinch_updates_remain_independent_steps", crate::pointer_vocabulary::viewer_unstarted_pinch_updates_remain_independent_steps),

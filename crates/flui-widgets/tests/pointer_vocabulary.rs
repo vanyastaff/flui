@@ -784,6 +784,116 @@ pub(crate) fn page_scroll_resolves_against_the_actual_viewport() {
     }
 }
 
+#[derive(Clone, flui_view::prelude::StatelessView)]
+struct ZoomWheelPreferences {
+    child: flui_view::BoxedView,
+    count: u32,
+}
+
+impl flui_view::StatelessView for ZoomWheelPreferences {
+    fn build(&self, ctx: &dyn flui_view::BuildContext) -> impl flui_view::IntoView {
+        flui_widgets::GestureArenaScope::new(
+            flui_widgets::GestureArenaScope::of(ctx),
+            self.child.clone(),
+        )
+        .wheel_preferences(
+            flui_platform_api::WheelPreferences::default()
+                .with_vertical(flui_platform_api::WheelStep::Lines(self.count)),
+        )
+    }
+}
+
+pub(crate) fn viewer_raw_detents_zoom_without_stealing_plain_scrolls() {
+    use flui_widgets::{InteractiveViewer, TransformationController, WheelScaleGate};
+
+    // Raw Win32 rotation retains the authored zoom step. Normalized lines are
+    // a control, and fractions remain fractions under the authored divisor.
+    for unit in [ScrollUnit::Lines, ScrollUnit::Detents] {
+        for (factor, count) in [(100.0, 0), (200.0, 3)] {
+            let transform = TransformationController::new();
+            let scroll = ScrollController::new();
+            let scales = Rc::new(RefCell::new(Vec::new()));
+            let updates = scales.clone();
+            let content = Scrollable::new().controller(scroll.clone()).child(
+                SizedBox::new(300.0, 1000.0).child(
+                    InteractiveViewer::new()
+                        .controller(transform.clone())
+                        .wheel_scale_gate(WheelScaleGate::CtrlWheel)
+                        .scale_factor(factor)
+                        .boundary_margin(EdgeInsets::all(1000.0))
+                        .on_interaction_update(move |_, details| {
+                            updates.borrow_mut().push(details.scale);
+                        })
+                        .child(SizedBox::new(300.0, 1000.0)),
+                ),
+            );
+            let mut laid = lay_out(
+                ZoomWheelPreferences {
+                    child: content.boxed(),
+                    count,
+                },
+                tight(300.0, 300.0),
+            );
+            let packet = |dy, modifiers| {
+                PointerEvent::Scroll(
+                    ScrollEvent::new(
+                        mouse(),
+                        EventTime::from_nanos(60),
+                        position(100.0, 100.0),
+                        ScrollDelta::try_new(unit, 0.0, dy).expect("finite wheel delta"),
+                    )
+                    .with_modifiers(modifiers),
+                )
+            };
+            laid.dispatch_pointer_event(&packet(-1.0, Modifiers::CONTROL));
+            let first = (53.0_f64 / factor).exp();
+            assert_scale(scale_of(&transform), first);
+            assert_eq!(scroll.pixels(), 0.0, "zoom claims {unit:?}");
+            assert_scale(scales.borrow()[0], first);
+
+            laid.dispatch_pointer_event(&packet(-0.25, Modifiers::CONTROL));
+            let second = (66.25_f64 / factor).exp();
+            assert_scale(scale_of(&transform), second);
+            assert_eq!(scroll.pixels(), 0.0, "fractional zoom stays claimed");
+            assert_scale(scales.borrow()[1], (13.25_f64 / factor).exp());
+
+            // A phase-less burst retains its claimant until owner-clock
+            // inactivity. The next chord is a fresh burst on the same source.
+            laid.pump_for(std::time::Duration::from_millis(500));
+            laid.dispatch_pointer_event(&packet(0.25, Modifiers::NONE));
+            let plain_distance = if unit == ScrollUnit::Detents {
+                13.25 * f64::from(count)
+            } else {
+                13.25
+            };
+            assert_eq!(
+                scroll.pixels(),
+                plain_distance,
+                "plain tick follows outer scroll policy"
+            );
+            assert_scale(scale_of(&transform), second);
+            assert_eq!(scales.borrow().len(), 2);
+
+            laid.pump_for(std::time::Duration::from_millis(500));
+            laid.dispatch_pointer_event(&packet(f64::MAX, Modifiers::CONTROL));
+            assert_eq!(
+                scroll.pixels(),
+                plain_distance,
+                "invalid zoom cannot scroll"
+            );
+            assert_scale(scale_of(&transform), second);
+            laid.dispatch_pointer_event(&packet(-0.25, Modifiers::CONTROL));
+            assert_scale(scale_of(&transform), (79.5_f64 / factor).exp());
+            assert_eq!(
+                scroll.pixels(),
+                plain_distance,
+                "healthy zoom recovers claim"
+            );
+            assert_eq!(scales.borrow().len(), 3);
+        }
+    }
+}
+
 pub(crate) fn viewer_page_zoom_resolves_against_the_actual_viewport() {
     use flui_painting::styling::Color;
     use flui_widgets::{ColoredBox, InteractiveViewer, TransformationController};
