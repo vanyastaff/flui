@@ -20,6 +20,146 @@ use crate::common::{LaidOut, ProbeSignals, SignalProbe, lay_out, tight};
 /// How a test wires the draggable's callbacks to the probe's signals.
 type Configure = Rc<dyn Fn(Draggable<u32>, ProbeSignals) -> Draggable<u32>>;
 
+pub(crate) fn draggable_reads_admission_profiles_and_retires_authored_owners() {
+    crate::common::cases::run_cases(
+        "mounted draggable policy",
+        &[
+            (
+                "live admission snapshot",
+                draggable_retains_down_profile_and_refreshes_next_contact,
+            ),
+            (
+                "authored replacement",
+                draggable_cancels_authored_replacement_before_stale_terminal,
+            ),
+        ],
+    );
+}
+
+fn touch(laid: &LaidOut, id: u64, y: f64, phase: u8) {
+    use flui_foundation::geometry::Offset;
+    use flui_interaction::events::{
+        PointerKind, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
+    };
+    let pointer = flui_interaction::PointerId::try_from(id).expect("nonzero touch");
+    let position = Offset::new(50.0, y);
+    let event = match phase {
+        0 => make_down_event_for_id(pointer, position, PointerKind::Touch),
+        1 => make_move_event_for_id(pointer, position, PointerKind::Touch),
+        2 => make_up_event_for_id(pointer, position, PointerKind::Touch),
+        _ => unreachable!("scripted touch phase"),
+    }
+    .expect("finite touch fixture");
+    laid.dispatch_pointer_event(&event);
+}
+
+fn draggable_retains_down_profile_and_refreshes_next_contact() {
+    use flui_interaction::{GestureSettings, GestureSettingsSource};
+    use flui_widgets::GestureDetector;
+    let profile = |slop| {
+        GestureSettings::default()
+            .try_with_touch_slop(slop)
+            .expect("finite slop")
+    };
+    let source = GestureSettingsSource::new(profile(20.0));
+    let starts = Rc::new(Cell::new(0));
+    let started = starts.clone();
+    let laid = lay_out(
+        crate::common::SettingsScope::new(
+            source.provider(),
+            GestureDetector::new().on_tap(|_| {}).child(
+                Draggable::new(ColoredBox::new(Color::RED))
+                    .data(7_u32)
+                    .on_drag_started(move |_| started.set(started.get() + 1)),
+            ),
+        ),
+        tight(400.0, 400.0),
+    );
+    touch(&laid, 1, 50.0, 0);
+    source.replace(profile(100.0));
+    touch(&laid, 1, 90.0, 1);
+    assert_eq!(
+        starts.get(),
+        1,
+        "active contact retains its admitted short slop"
+    );
+    touch(&laid, 1, 90.0, 2);
+    touch(&laid, 2, 50.0, 0);
+    touch(&laid, 2, 90.0, 1);
+    assert_eq!(starts.get(), 1, "next contact reads the updated large slop");
+    touch(&laid, 2, 170.0, 1);
+    assert_eq!(
+        starts.get(),
+        2,
+        "new threshold still permits a deliberate drag"
+    );
+    touch(&laid, 2, 170.0, 2);
+}
+
+fn draggable_cancels_authored_replacement_before_stale_terminal() {
+    use flui_interaction::GestureSettings;
+    use flui_widgets::GestureDetector;
+    let threshold = Rc::new(Cell::new(20.0));
+    let starts = Rc::new(Cell::new(0));
+    let ends = Rc::new(Cell::new(0));
+    let cancels = Rc::new(Cell::new(0));
+    let signal = Rc::new(Cell::new(None));
+    let (profile, started, ended, cancelled, remembered) = (
+        threshold.clone(),
+        starts.clone(),
+        ends.clone(),
+        cancels.clone(),
+        signal.clone(),
+    );
+    let probe = SignalProbe::new(move |ProbeSignals { count, .. }| {
+        remembered.set(Some(count));
+        let (started, ended, cancelled) = (started.clone(), ended.clone(), cancelled.clone());
+        crate::common::SettingsScope::new(
+            GestureSettings::default()
+                .try_with_touch_slop(profile.get())
+                .expect("finite slop"),
+            GestureDetector::new().on_tap(|_| {}).child(
+                Draggable::new(ColoredBox::new(Color::RED))
+                    .data(7_u32)
+                    .on_drag_started(move |_| started.set(started.get() + 1))
+                    .on_drag_end(move |_, _| ended.set(ended.get() + 1))
+                    .on_draggable_canceled(move |_, _| cancelled.set(cancelled.get() + 1)),
+            ),
+        )
+    });
+    let mut laid = lay_out(probe.view(), tight(400.0, 400.0));
+    touch(&laid, 1, 50.0, 0);
+    touch(&laid, 1, 90.0, 1);
+    assert_eq!(starts.get(), 1);
+    probe
+        .write(|cx| signal.get().expect("mounted probe").set(cx, 1))
+        .expect("publish equal authored draggable policy");
+    laid.pump();
+    assert_eq!(
+        (ends.get(), cancels.get()),
+        (0, 0),
+        "equal policy keeps the accepted drag"
+    );
+    threshold.set(100.0);
+    probe
+        .write(|cx| signal.get().expect("mounted probe").set(cx, 2))
+        .expect("replace authored draggable policy");
+    laid.pump();
+    assert_eq!(
+        (ends.get(), cancels.get()),
+        (1, 1),
+        "outgoing drag is cancelled once"
+    );
+    touch(&laid, 1, 90.0, 2);
+    assert_eq!(ends.get(), 1, "stale release cannot end a replacement");
+    touch(&laid, 2, 50.0, 0);
+    touch(&laid, 2, 90.0, 1);
+    assert_eq!(starts.get(), 1, "replacement keeps the authored threshold");
+    touch(&laid, 2, 170.0, 1);
+    touch(&laid, 2, 170.0, 2);
+    assert_eq!((starts.get(), ends.get(), cancels.get()), (2, 2, 2));
+}
+
 /// A probe whose child is an `Overlay` hosting one entry: the draggable
 /// under test (so its feedback has an overlay to go into), or, once `show`
 /// is cleared and the entry rebuilt, nothing.
