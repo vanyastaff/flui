@@ -483,6 +483,71 @@ pub(crate) fn viewer_focal_fling_advances_then_stops_on_new_input() {
     );
 }
 
+/// A fling keeps immutable limits until real layout or authored bounds change.
+pub(crate) fn viewer_focal_fling_rebuild_preserves_or_retires_geometry() {
+    use flui_animation::Vsync;
+    use flui_widgets::{InteractiveViewer, TransformationController, VsyncScope};
+    use std::time::Duration;
+    for change_viewport in [false, true] {
+        let controller = TransformationController::new();
+        let vsync = Vsync::new();
+        let tree = |width, margin| {
+            VsyncScope::new(
+                vsync.clone(),
+                SizedBox::new(width, 200.0).child(
+                    InteractiveViewer::new()
+                        .controller(controller.clone())
+                        .boundary_margin(EdgeInsets::all(margin))
+                        .child(SizedBox::new(200.0, 200.0)),
+                ),
+            )
+        };
+        let mut laid = lay_out(tree(200.0, 1000.0), crate::common::loose(300.0));
+        laid.adopt_vsync(vsync.clone());
+        let packet = |millis: u64, phase| {
+            PointerEvent::PanZoom(PanZoomEvent::new(
+                mouse(),
+                EventTime::from_nanos(millis * 1_000_000),
+                position(50.0, 100.0),
+                phase,
+            ))
+        };
+        laid.dispatch_pointer_event(&packet(0, PanZoomPhase::Start));
+        for (millis, pan) in [(10, 20.0), (20, 40.0), (30, 60.0)] {
+            laid.dispatch_pointer_event(&packet(
+                millis,
+                PanZoomPhase::Update(
+                    PanZoomTransform::try_new(Offset::new(pan, 0.0), 1.0, 0.0)
+                        .expect("finite native pan"),
+                ),
+            ));
+        }
+        laid.dispatch_pointer_event(&packet(31, PanZoomPhase::End));
+        laid.pump_for(Duration::from_millis(16));
+        let before_rebuild = controller.value().transform_point(0.0, 0.0).0;
+        laid.pump_widget(tree(200.0, 1000.0));
+        laid.pump_for(Duration::from_millis(16));
+        assert!(
+            controller.value().transform_point(0.0, 0.0).0 > before_rebuild,
+            "an unchanged rebuild preserves the admitted fling"
+        );
+        laid.pump_widget(if change_viewport {
+            tree(100.0, 1000.0)
+        } else {
+            tree(200.0, 500.0)
+        });
+        laid.pump();
+        let stopped = controller.value();
+        laid.pump_for(Duration::from_millis(16));
+        laid.pump_for(Duration::from_millis(16));
+        assert_eq!(
+            controller.value(), stopped,
+            "changing {} retires the immutable fling limits",
+            if change_viewport { "the viewport" } else { "the boundary" }
+        );
+    }
+}
+
 /// Native cumulative scale and focal motion have different release units.
 pub(crate) fn viewer_reports_scale_velocity_separately_from_focal_velocity() {
     use flui_widgets::InteractiveViewer;
