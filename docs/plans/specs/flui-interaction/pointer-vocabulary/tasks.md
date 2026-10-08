@@ -11,7 +11,7 @@
 
 ## Текущая сверка
 
-Сверка исходников 2026-10-07 на интеграционной базе `3cf7329c6`.
+Сверка исходников 2026-10-08 на интеграционной базе `64ab42b43`.
 `PlatformInput`, binding, routing, распознаватели, runtime, widgets, testing и facade
 используют owned-словарь. Общий pointer-мост удалён; каждый backend строит события
 на своей границе. Сохранённый приватный keyboard adapter использует mature upstream
@@ -24,7 +24,7 @@
 | V8 | Миграция и changelog интегрированы | `cargo xtask check-changed` ещё не объявлен завершённым |
 | V9 | Win32 pointer/mouse/keyboard производители интегрированы | Hidden-HWND Xbutton/coarse-clock и откаты прошли; финальные all-features decoder и fractional-wheel hidden-HWND проверки прошли. Независимый precision-only откат теряет Precise и падает; точный восстановленный producer smoke проходит. Pen/touch activation отказал, поэтому CANNOT_VERIFY |
 | V10 | winit producer интегрирован | Четыре pointer-translation контракта прошли; final gate и live smoke по доступности остаются отдельными проверками |
-| V11–V13 | macOS/iOS/Android producer интегрированы | Предыдущая cross-typecheck прошла: скомпилировано, не запущено. После последних V15/API изменений требуется повторная финальная cross-typecheck |
+| V11–V13 | macOS/iOS/Android producer интегрированы | Предыдущая cross-typecheck прошла: скомпилировано, не запущено. На базе `64ab42b43` свежая strict clippy проверка flui-runtime/flui-app/flui с default features на aarch64-linux-android завершилась exit 0; это не Android execution и не all-features/all-targets проверка. Повторная финальная cross-typecheck остаётся отдельной задачей |
 | V14 | Web producer интегрирован | Живой Chrome smoke после V15, включая getter reentry, прошёл; это не заменяет финальный wasm gate после последующих изменений |
 | V15 | `flui-platform-api` не зависит от `ui-events`/`keyboard-types`/`dpi`; общий мост удалён; xtask использует прямой `keyboard-types` | `ui-events` остаётся только там, где нужны platform keyboard tables; итоговые `deps`/`reach` впереди |
 
