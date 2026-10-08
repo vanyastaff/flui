@@ -270,6 +270,13 @@ fn scroll_physics_and_activity() {
     run_cases(
         "scroll_physics_and_activity",
         &[
+            ("scroll::nested_fling_hands_remaining_velocity_to_matching_parent_axes", crate::scroll::nested_fling_hands_remaining_velocity_to_matching_parent_axes as fn()),
+            ("scroll::nested_fling_projects_reversed_child_and_preserves_orthogonal_and_bounce_policy", crate::scroll::nested_fling_projects_reversed_child_and_preserves_orthogonal_and_bounce_policy),
+            ("scroll::replacing_parent_invalidates_old_fling_handoff_and_next_gesture_recovers", crate::scroll::replacing_parent_invalidates_old_fling_handoff_and_next_gesture_recovers),
+            ("scroll::nested_fling_failure_keeps_first_panic_and_a_new_gesture_makes_progress", crate::scroll::nested_fling_failure_keeps_first_panic_and_a_new_gesture_makes_progress),
+            ("scroll::nested_fling_skips_saturated_parent_and_reentrant_jump_retires_transfer", crate::scroll::nested_fling_skips_saturated_parent_and_reentrant_jump_retires_transfer),
+            ("scroll::show_on_screen_reveals_offscreen_targets_on_both_axes_and_reverse", crate::scroll::show_on_screen_reveals_offscreen_targets_on_both_axes_and_reverse),
+            ("scroll::show_on_screen_walks_nested_axes_and_replacement_uses_current_geometry", crate::scroll::show_on_screen_walks_nested_axes_and_replacement_uses_current_geometry),
             ("scroll::nested_scroll_sequence_keeps_its_first_consumptive_target", crate::scroll::nested_scroll_sequence_keeps_its_first_consumptive_target as fn()),
             ("scroll::scroll_latch_survives_focal_motion_and_releases_on_cancel", crate::scroll::scroll_latch_survives_focal_motion_and_releases_on_cancel),
             ("scroll::phase_less_scroll_latch_expires_on_owner_clock_inactivity", crate::scroll::phase_less_scroll_latch_expires_on_owner_clock_inactivity),
