@@ -19,6 +19,12 @@ trait depends on `flui-platform-api` instead.
 
 ## Invariants
 
+- **The winit fallback is a desktop backend.** Its module, public re-exports
+  and `arboard` clipboard dependency are available only on Windows, macOS and
+  Linux. Enabling every feature on Android or iOS keeps the native backend;
+  it does not enable desktop clipboard code. The required-target and
+  all-features `cargo xtask cross-typecheck` configurations compile this
+  boundary, including the selected packages' tests, examples and benches.
 - **A window leaves a backend as an `Arc<dyn HostWindow>`.**
   `HostWindow: PlatformWindow` adds the one AccessKit-speaking accessor,
   `accessibility()`. `Platform::open_window`, `WindowOpen::Ready` and
@@ -44,6 +50,15 @@ trait depends on `flui-platform-api` instead.
 ---
 
 ## Mapping decisions
+
+### Owner capability boundaries have external compiler witnesses
+
+`OwnerPlatform` stays owner-local, and callers obtain its thread-safe residual
+through `shared`. A text-store host is reached through that owner capability;
+the hidden token cannot be imported or forged with `Default` outside this crate.
+`trybuild_ui::ui_tests` pins the external caller diagnostics alongside valid
+owner-local access and `SharedPlatform` thread bounds. It also checks each
+retired tracker, embedder and timestamp name independently (ADR-0082 §5).
 
 ### Win32 mouse samples preserve their queued generation times
 

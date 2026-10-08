@@ -375,6 +375,17 @@ impl Listenable for ChangeNotifier {
 ///     _notifier = ValueNotifier::new(message.as_str());
 /// }
 /// ```
+///
+/// Moving the referent into the notifier instead of borrowing it compiles:
+///
+/// ```
+/// use flui_foundation::ValueNotifier;
+/// let _notifier;
+/// {
+///     let message = String::from("temporary");
+///     _notifier = ValueNotifier::new(message);
+/// }
+/// ```
 #[derive(Clone)]
 pub struct ValueNotifier<T> {
     value: Option<T>,

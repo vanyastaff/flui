@@ -223,6 +223,13 @@ pub(crate) fn install_owner_platform(
                   never call this"
     )
 )]
+#[cfg_attr(
+    all(test, target_os = "android"),
+    expect(
+        dead_code,
+        reason = "desktop exit-policy tests are excluded on Android"
+    )
+)]
 pub(super) fn install_exit_policy_hook(policy: ExitPolicy) {
     let shared = with_owner_platform(|owner| {
         owner.shared().set_exit_policy_hook(Box::new(move || {
@@ -352,6 +359,13 @@ pub(super) fn install_platform_quit_hook() {
                   never call this"
     )
 )]
+#[cfg_attr(
+    all(test, any(target_os = "android", target_os = "ios")),
+    expect(
+        dead_code,
+        reason = "desktop wake-deadline tests are excluded on mobile"
+    )
+)]
 pub(super) fn install_wake_deadline_hook(
     secondary_deadline: impl Fn() -> Option<web_time::Instant> + Send + Sync + 'static,
 ) {
@@ -459,20 +473,27 @@ pub(super) fn desktop_secondary_wake_deadline(
 /// through [`OwnerPlatform::shared`](flui_platform::OwnerPlatform::shared),
 /// which returns `SharedPlatform` — a type whose method list IS the fence
 /// (no owner-affine method, e.g. `open_window`, is ever added to it; see
-/// its own rustdoc). This
-/// `compile_fail` doctest is CI-run evidence for that fence: `flui-app`
-/// dev/normal-depends on `flui-platform`, and its doc tests run in CI's
-/// `doc-test` job and in `cargo xtask ci`.
+/// its own rustdoc). The failing and passing examples share a bootstrap
+/// callback and differ only in the window-opening receiver: the shared
+/// residual has no `open_window`, while the owner capability does. The
+/// examples compile in the doctest suite; the valid callback is not run.
 ///
 /// ```compile_fail,E0599
 /// use flui_platform::headless_platform;
 ///
 /// let _ = headless_platform().run(Box::new(|owner| {
 ///     let shared = owner.shared();
-///     // `SharedPlatform` has no `open_window` — it stays owner-affine on
-///     // `OwnerPlatform` only. Fails with "no method named `open_window`
-///     // found for struct `SharedPlatform`" (E0599).
 ///     let _ = shared.open_window(Default::default());
+///     Ok(())
+/// }));
+/// ```
+///
+/// ```no_run
+/// use flui_platform::headless_platform;
+///
+/// let _ = headless_platform().run(Box::new(|owner| {
+///     let shared = owner.shared();
+///     let _ = owner.open_window(Default::default());
 ///     Ok(())
 /// }));
 /// ```

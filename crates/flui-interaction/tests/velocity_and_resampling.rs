@@ -748,6 +748,10 @@ fn resampler_interpolates_on_event_time_and_never_drops_terminals() {
         "resampler",
         &[
             (
+                "binding keeps all measured packets",
+                binding_keeps_all_measured_packets_and_only_latest_predictions,
+            ),
+            (
                 "interpolation factor",
                 interpolation_uses_the_bracketing_samples,
             ),
@@ -767,6 +771,83 @@ fn resampler_interpolates_on_event_time_and_never_drops_terminals() {
             ),
         ],
     );
+}
+
+fn binding_keeps_all_measured_packets_and_only_latest_predictions() {
+    use flui_foundation::geometry::Point;
+    use flui_platform_api::{
+        EventTime,
+        pointer::{PointerButtons, PointerMove, PointerSample},
+    };
+    for contact_active in [false, true] {
+        let binding = GestureBinding::new();
+        let observed = Rc::new(RefCell::new(Vec::new()));
+        let output = observed.clone();
+        binding
+            .pointer_router()
+            .add_global_handler(Rc::new(move |event| {
+                if let PointerEvent::Move(update) = event {
+                    output.borrow_mut().push(update.clone());
+                }
+            }));
+        let kind = if contact_active {
+            PointerKind::Touch
+        } else {
+            PointerKind::Mouse
+        };
+        if contact_active {
+            binding.handle_pointer_event(
+                &make_down_event_for_id(contact(), Offset::ZERO, kind).expect("finite Down"),
+                |_| HitTestResult::new(),
+            );
+        }
+        let sample = |at: u64| {
+            PointerSample::new(
+                EventTime::from_nanos(at * 1_000_000),
+                PointerPosition::try_new(Point::new(at as f64, 0.0))
+                    .expect("finite measured position"),
+            )
+        };
+        for at in [10_u64, 20, 30] {
+            let update = PointerMove::new(
+                PointerInfo::new(contact(), kind),
+                PointerButtons::NONE,
+                sample(at),
+            )
+            .with_coalesced(vec![sample(at - 5)])
+            .with_predicted(vec![sample(at + 5)]);
+            binding.handle_pointer_event(&PointerEvent::Move(update), |_| HitTestResult::new());
+        }
+        assert_eq!(binding.flush_pending_moves(), 1, "one combined observation");
+        let updates = observed.borrow();
+        let [update] = updates.as_slice() else {
+            panic!("one Move")
+        };
+        let measured: Vec<_> = update
+            .coalesced()
+            .iter()
+            .chain(std::iter::once(update.current()))
+            .map(|sample| (sample.time.as_nanos(), sample.position.get().x))
+            .collect();
+        assert_eq!(
+            measured,
+            [
+                (5_000_000, 5.0),
+                (10_000_000, 10.0),
+                (15_000_000, 15.0),
+                (20_000_000, 20.0),
+                (25_000_000, 25.0),
+                (30_000_000, 30.0)
+            ],
+            "all measured samples survive, contact={contact_active}"
+        );
+        assert_eq!(update.predicted().len(), 1);
+        assert_eq!(
+            update.predicted()[0].time.as_nanos(),
+            35_000_000,
+            "old predictions are not measurements"
+        );
+    }
 }
 
 /// The subscriber reads the public handle on a worker with a bounded wait:

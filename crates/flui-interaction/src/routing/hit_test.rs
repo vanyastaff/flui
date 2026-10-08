@@ -869,6 +869,9 @@ pub(crate) fn transform_pointer_event(
     event: &PointerEvent,
     transform: &Matrix4,
 ) -> Option<PointerEvent> {
+    if let PointerEvent::Move(movement) = event {
+        return transform_move_event(movement, transform).map(PointerEvent::Move);
+    }
     let mut local = event.clone();
     match &mut local {
         PointerEvent::Down(event) => event.sample = transform_sample(event.sample, transform)?,
@@ -878,25 +881,6 @@ pub(crate) fn transform_pointer_event(
         }
         PointerEvent::ButtonChange(ButtonChange::Released(event)) => {
             event.sample = transform_sample(event.sample, transform)?;
-        }
-        PointerEvent::Move(event) => {
-            let current = transform_sample(*event.current(), transform)?;
-            let coalesced = event
-                .coalesced()
-                .iter()
-                .copied()
-                .map(|sample| transform_sample(sample, transform))
-                .collect::<Option<Vec<_>>>()?;
-            let predicted = event
-                .predicted()
-                .iter()
-                .copied()
-                .map(|sample| transform_sample(sample, transform))
-                .collect::<Option<Vec<_>>>()?;
-            *event = PointerMove::new(event.pointer, event.buttons, current)
-                .with_modifiers(event.modifiers)
-                .with_coalesced(coalesced)
-                .with_predicted(predicted);
         }
         PointerEvent::Scroll(event) => *event = transform_scroll_event(event, transform)?,
         PointerEvent::PanZoom(event) => *event = transform_pan_zoom_event(event, transform)?,
@@ -910,6 +894,27 @@ pub(crate) fn transform_pointer_event(
         _ => {}
     }
     Some(local)
+}
+
+/// Localize each source reading directly into the required owned histories.
+fn transform_move_event(event: &PointerMove, transform: &Matrix4) -> Option<PointerMove> {
+    let current = transform_sample(*event.current(), transform)?;
+    let coalesced = event
+        .coalesced()
+        .iter()
+        .copied()
+        .map(|sample| transform_sample(sample, transform))
+        .collect::<Option<Vec<_>>>()?;
+    let predicted = event
+        .predicted()
+        .iter()
+        .copied()
+        .map(|sample| transform_sample(sample, transform))
+        .collect::<Option<Vec<_>>>()?;
+    Some(PointerMove::new(event.pointer, event.buttons, current)
+        .with_modifiers(event.modifiers)
+        .with_coalesced(coalesced)
+        .with_predicted(predicted))
 }
 
 /// Refuse a local coordinate that cannot be represented by the checked vocabulary.

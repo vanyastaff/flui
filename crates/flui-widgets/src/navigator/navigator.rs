@@ -1986,7 +1986,6 @@ impl NavigatorHandle {
     /// const COUNT: RouteKey<i32> = RouteKey::new("/count");
     ///
     /// let navigator = NavigatorHandle::new();
-    /// // `SimpleRoute<String>` does not deliver the key's `i32`.
     /// navigator.route_keyed(COUNT, |_request: &RouteRequest<'_>| {
     ///     Some(SimpleRoute::<String>::new(|_ctx| Text::new("Count").into_view().boxed()))
     /// });

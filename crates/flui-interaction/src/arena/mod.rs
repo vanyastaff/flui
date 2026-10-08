@@ -562,7 +562,7 @@ impl std::fmt::Debug for ArenaEntryData {
             .field("is_resolved", &self.is_resolved)
             .field("has_eager_winner", &self.eager_winner.is_some())
             .field("has_pending_sweep", &self.has_pending_sweep)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -646,19 +646,17 @@ impl ArenaEntryData {
             }
             // If already have eager winner, ignore subsequent accepts
             ArenaFollowUp::None
-        } else {
-            if self.is_blocked(&identity) {
-                if !self
-                    .requested
-                    .iter()
-                    .any(|request| Weak::ptr_eq(request, &identity))
-                {
-                    self.requested.push(identity);
-                }
-                ArenaFollowUp::None
-            } else {
-                ArenaFollowUp::ResolveInFavorOf(identity)
+        } else if self.is_blocked(&identity) {
+            if !self
+                .requested
+                .iter()
+                .any(|request| Weak::ptr_eq(request, &identity))
+            {
+                self.requested.push(identity);
             }
+            ArenaFollowUp::None
+        } else {
+            ArenaFollowUp::ResolveInFavorOf(identity)
         }
     }
 
@@ -1312,13 +1310,12 @@ impl GestureArena {
             return None;
         }
 
-        let slot = match self.current_slot(pointer) {
-            Some(slot) => slot,
-            None => {
-                let slot = self.allocate_slot(pointer);
-                self.entries.borrow_mut().insert(pointer, Rc::clone(&slot));
-                slot
-            }
+        let slot = if let Some(slot) = self.current_slot(pointer) {
+            slot
+        } else {
+            let slot = self.allocate_slot(pointer);
+            self.entries.borrow_mut().insert(pointer, Rc::clone(&slot));
+            slot
         };
         let admitted = slot.data.borrow_mut().add(member, self.branch.as_ref());
         if !admitted {

@@ -6,6 +6,9 @@
 - **Superseded in part by:** ADR-0079 (§4's `Actions(Shortcuts(child))` nesting rule)
 - **Superseded-by:** [ADR-0160](ADR-0160-focus-reading-order.md) (§2's required
   traversal-policy signature only; its sorted-list resolver remains in force)
+- **Superseded-by:** [ADR-0165](ADR-0165-focus-policy-groups-and-directional-traversal.md)
+  (§2's scope-only resolver and §3's scope-only parent retry; groups and directional
+  traversal below are now implemented)
 
 ## Context
 
@@ -92,14 +95,11 @@ root); custom embedders can install it themselves.
 - **`Action::invoke` changed signature** instead of gaining a second defaulted method: two
   methods that must agree is a permanent hazard, and the break cost two in-repo impls.
 
+`FocusTraversalGroup` and directional traversal are implemented by ADR-0165.
+
 ## Not implemented
 
-- `FocusTraversalGroup`. When it lands it is a plain non-scope node carrying a policy, found by
-  climbing the node ancestry. It must not be a scope, which would corrupt autofocus and route
-  restore. Its `can_request_focus(false)` must not hide its descendants; that holds only
-  because `allows_descendant_focus` reads a node's own flag for scopes alone, so the group needs
-  a test pinning it.
-- Directional traversal, highlight modes, `includeSemantics`, legacy `onKey`.
+- Highlight modes, `includeSemantics`, legacy `onKey`.
 - `ModalRoute` defaulting to `ParentScope`.
 - Flutter's `deactivate`-parks-on-root. Focus surviving a `GlobalKey` move is not claimed until
   a test pins it.

@@ -67,7 +67,7 @@ use flui_foundation::{Listenable, ListenerId};
 use flui_rendering::constraints::AxisDirection;
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::pipeline::{PipelineOwner, WeakPipelineCell};
-use flui_rendering::view::{ScrollDirection, ScrollPosition, ViewportOffset};
+use flui_rendering::view::{ScrollDirection, ScrollPosition};
 use flui_view::prelude::StatefulView;
 use flui_view::{
     BoxedView, BuildContext, BuildContextExt, Child, InheritedView, IntoView, LifecycleContext,
@@ -83,8 +83,8 @@ use flui_platform_api::{
     keyboard::Modifiers,
     pointer::{ScrollEvent, ScrollPrecision, ScrollUnit},
 };
-use flui_scheduler::PostFrameHandle;
 use flui_rendering::semantics::{ActionArgs, SemanticsAction};
+use flui_scheduler::PostFrameHandle;
 
 use super::scroll_position_scope::ScrollPositionScope;
 
@@ -114,10 +114,15 @@ impl FlingEndpoint {
                 && self.fling.run_generation() == generation
                 && self.controller.pixels() == metrics.pixels
         };
+        // Determine transfer policy before owning a returned simulation. A
+        // failing custom callback must not unwind through its arbitrary Drop.
+        let remaining = self.physics.boundary_velocity(&metrics, velocity);
+        if !is_current() {
+            return true;
+        }
         let Some(simulation) = self.physics.create_ballistic_simulation(&metrics, velocity) else {
             return false;
         };
-        let remaining = self.physics.boundary_velocity(&metrics, velocity);
         if !is_current() {
             return true;
         }
@@ -154,6 +159,14 @@ impl FlingEndpoint {
                     && owner.fling.run_generation() == generation
                     && owner.controller.pixels() == edge
                 {
+                    // A same-pixel jump still queues an authoritative Cancel
+                    // even though no position notify services it. The run's
+                    // completion was published before those pixel listeners,
+                    // so honor their accepted command before old handoff work.
+                    if let Some(command) = owner.controller.take_pending_command() {
+                        owner.controller.service_command(command, &owner.fling);
+                        return;
+                    }
                     let physical = if owner.reversed {
                         remaining
                     } else {
@@ -179,11 +192,27 @@ impl FlingEndpoint {
             } else {
                 -physical_velocity
             };
-            let position = owner.controller.position();
-            let outward = (velocity > 0.0 && position.pixels() >= position.max_scroll_extent())
-                || (velocity < 0.0 && position.pixels() <= position.min_scroll_extent());
-            if owner.axis == self.axis && !outward && owner.start(velocity, device_pixel_ratio) {
-                return;
+            if owner.axis == self.axis {
+                let metrics = ScrollMetrics::from(&owner.controller.position())
+                    .with_device_pixel_ratio(device_pixel_ratio);
+                let generation = owner.fling.run_generation();
+                // Ask the owner's real boundary policy whether motion in this
+                // direction is admitted. Bouncing at an extent remains willing;
+                // a hard clamp at the same extent is skipped.
+                let proposed = metrics.pixels + velocity.signum();
+                let allowed = owner.physics.apply_boundary_conditions(&metrics, proposed);
+                if !owner.alive.load(Ordering::Acquire)
+                    || owner.fling.run_generation() != generation
+                    || owner.controller.pixels() != metrics.pixels
+                {
+                    return;
+                }
+                if allowed.is_finite()
+                    && allowed != metrics.pixels
+                    && owner.start(velocity, device_pixel_ratio)
+                {
+                    return;
+                }
             }
             parent = owner.parent.as_ref().and_then(Weak::upgrade);
         }
@@ -241,25 +270,26 @@ pub type ViewportBuilder = Rc<dyn Fn(ScrollPosition) -> BoxedView>;
 /// dirtied. See this module's docs.
 ///
 /// A [`VsyncScope`] must be above the `Scrollable` in the tree (or provided
-/// by the application's binding) for fling animations to run at all. There is
-/// no wall-clock fallback: the fling controller is built with
-/// `AnimationController::without_ticker_bounds`, so with no `VsyncScope` to
-/// register it, nothing ever advances it — a fling or an `animate_to` sets up
-/// and then stays put. Drag and wheel scrolling are unaffected, since both
-/// write the position directly.
+/// by the application's binding) for fling, `animate_to` and notched-wheel
+/// animations to advance. There is no wall-clock fallback: the animation
+/// controller is built with `AnimationController::unbounded_without_ticker`
+/// and registered with that scope. Drag updates and precise or unknown wheel
+/// packets write the position directly and do not require animation ticks.
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// let controller = ScrollController::new();
-/// controller.update_dimensions(400.0, 0.0, 1000.0);
+/// ```rust
+/// use flui_animation::Vsync;
+/// use flui_widgets::{ScrollController, Scrollable, SizedBox, VsyncScope};
 ///
-/// VsyncScope::new(
-///     vsync.clone(),
+/// let controller = ScrollController::new();
+///
+/// let view = VsyncScope::new(
+///     Vsync::new(),
 ///     Scrollable::new()
-///         .controller(controller.clone())
-///         .child(MyTallContent::new()),
-/// )
+///         .controller(controller)
+///         .child(SizedBox::new(300.0, 1400.0)),
+/// );
 /// ```
 ///
 /// [`Listenable`]: flui_foundation::Listenable
@@ -267,8 +297,8 @@ pub type ViewportBuilder = Rc<dyn Fn(ScrollPosition) -> BoxedView>;
 pub struct Scrollable {
     /// The shared position + notification hub.
     controller: ScrollController,
-    /// The boundary / fling behaviour.
-    physics: SharedScrollPhysics,
+    /// An authored boundary / fling policy; `None` uses the owner's default.
+    physics: Option<SharedScrollPhysics>,
     /// The axis along which the child scrolls.
     scroll_direction: Axis,
     /// Overrides the resolved [`AxisDirection`] used to orient gesture
@@ -307,7 +337,7 @@ impl Default for Scrollable {
     fn default() -> Self {
         Self {
             controller: ScrollController::new(),
-            physics: Arc::new(ClampingScrollPhysics::new()),
+            physics: None,
             scroll_direction: Axis::Vertical,
             axis_direction: None,
             child: Child::empty(),
@@ -337,7 +367,7 @@ impl Scrollable {
     /// [`ClampingScrollPhysics`]).
     #[must_use]
     pub fn physics(mut self, physics: SharedScrollPhysics) -> Self {
-        self.physics = physics;
+        self.physics = Some(physics);
         self
     }
 
@@ -412,6 +442,8 @@ struct WheelMotion {
 /// are never clamped. A value listener on the controller pushes the live pixel
 /// position into the [`ScrollController`] each tick.
 pub struct ScrollableState {
+    /// Stable policy identity across ordinary default-config rebuilds.
+    default_physics: SharedScrollPhysics,
     /// The scroll controller from the current view configuration. Kept in
     /// state so the fling listener (installed by
     /// [`install_fling_listener`](ScrollableState::install_fling_listener))
@@ -507,6 +539,7 @@ impl StatefulView for Scrollable {
             AnimationController::unbounded_without_ticker(Duration::from_millis(1));
 
         ScrollableState {
+            default_physics: Arc::new(ClampingScrollPhysics::new()),
             scroll_controller: self.controller.clone(),
             stop_hook: None,
             fling_controller,
@@ -527,6 +560,7 @@ impl ScrollableState {
     fn endpoint(
         &self,
         view: &Scrollable,
+        physics: &SharedScrollPhysics,
         axis_direction: AxisDirection,
         ctx: &dyn BuildContext,
     ) -> Arc<FlingEndpoint> {
@@ -542,7 +576,7 @@ impl ScrollableState {
                 .controller
                 .position()
                 .ptr_eq(&view.controller.position())
-                && Arc::ptr_eq(&endpoint.physics, &view.physics)
+                && Arc::ptr_eq(&endpoint.physics, physics)
                 && endpoint.axis == view.scroll_direction
                 && endpoint.reversed == axis_direction.is_reversed()
                 && same_parent
@@ -554,7 +588,7 @@ impl ScrollableState {
         let endpoint = Arc::new(FlingEndpoint {
             controller: view.controller.clone(),
             fling: self.fling_controller.clone(),
-            physics: view.physics.clone(),
+            physics: physics.clone(),
             axis: view.scroll_direction,
             reversed: axis_direction.is_reversed(),
             parent,
@@ -735,7 +769,11 @@ impl ViewState<Scrollable> for ScrollableState {
     fn build(&self, view: &Scrollable, ctx: &dyn BuildContext) -> impl IntoView {
         let scroll_controller = view.controller.clone();
         let a11y_controller = view.controller.clone();
-        let physics = view.physics.clone();
+        let physics = view
+            .physics
+            .as_ref()
+            .unwrap_or(&self.default_physics)
+            .clone();
         let scroll_direction = view.scroll_direction;
         // No explicit override: resolve the same way the `.child()` fast
         // path's internally-composed `SingleChildScrollView` resolves its
@@ -746,7 +784,7 @@ impl ViewState<Scrollable> for ScrollableState {
         let axis_direction = view.axis_direction.unwrap_or_else(|| {
             axis_direction_from_axis_reverse_and_directionality(ctx, scroll_direction, false)
         });
-        let endpoint = self.endpoint(view, axis_direction, ctx);
+        let endpoint = self.endpoint(view, &physics, axis_direction, ctx);
         let child = view.child.clone();
         let viewport_builder = view.viewport_builder.clone();
         let fling_controller = self.fling_controller.clone();
@@ -1198,10 +1236,16 @@ fn scroll_semantics(
         let Some(ActionArgs::ShowOnScreen {
             target_rect,
             viewport_rect,
+            scroll_position: Some(sampled_pixels),
         }) = args
         else {
             return;
         };
+        let current_pixels = reveal_controller.pixels();
+        let difference = current_pixels - sampled_pixels;
+        if !sampled_pixels.is_finite() || !current_pixels.is_finite() || !difference.is_finite() {
+            return;
+        }
         let (start, end, viewport_start, viewport_end) = match axis {
             Axis::Vertical => (
                 target_rect.top(),
@@ -1216,6 +1260,14 @@ fn scroll_semantics(
                 viewport_rect.right(),
             ),
         };
+        // The published geometry may precede an earlier reveal in this same
+        // callback walk. Project that measured target into the current offset.
+        let displacement = if reversed { -difference } else { difference };
+        let start = start - displacement;
+        let end = end - displacement;
+        if !start.is_finite() || !end.is_finite() {
+            return;
+        }
         // A target larger than the viewport already exposing both edges
         // stays put; otherwise move the nearest obscured edge into view.
         let delta = if start < viewport_start && end > viewport_end {

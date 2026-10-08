@@ -76,7 +76,7 @@ pub(crate) type StopHook = Arc<dyn Fn() + Send + Sync>;
 /// One slot, not a queue: a later command always supersedes an earlier,
 /// not-yet-serviced one: a jump cancels whatever activity (ballistic or driven)
 /// is currently running, and a second `animate_to` replaces the first.
-enum PendingScrollCommand {
+pub(super) enum PendingScrollCommand {
     /// Drive the fling controller through a curve/duration tween to
     /// `target_pixels` (already clamped to `[min_scroll_extent,
     /// max_scroll_extent]` by [`ScrollController::animate_to`]).
@@ -437,7 +437,7 @@ impl ScrollController {
     }
 
     /// Takes (and clears) the pending command, if any.
-    fn take_pending_command(&self) -> Option<PendingScrollCommand> {
+    pub(super) fn take_pending_command(&self) -> Option<PendingScrollCommand> {
         self.pending_command
             .lock()
             .expect("BUG: pending_command mutex poisoned — a panic escaped a locked section")
@@ -464,6 +464,15 @@ impl ScrollController {
         let Some(command) = self.take_pending_command() else {
             return;
         };
+        self.service_command(command, fling);
+    }
+
+    /// Consume already-admitted command work outside the pending-slot guard.
+    pub(super) fn service_command(
+        &self,
+        command: PendingScrollCommand,
+        fling: &AnimationController,
+    ) {
         match command {
             PendingScrollCommand::AnimateTo {
                 target_pixels,

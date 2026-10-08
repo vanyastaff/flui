@@ -84,6 +84,16 @@ pub(crate) struct Tree {
 
 /// Walks the module trees under `roots` (crate root files).
 pub(crate) fn walk(roots: impl IntoIterator<Item = PathBuf>) -> Tree {
+    walk_with_tests(roots, false)
+}
+
+/// Walk every source module, reporting unreadable or unresolved test modules
+/// too. Coverage discovery cannot silently discard a target-gated test file.
+pub(crate) fn walk_all(roots: impl IntoIterator<Item = PathBuf>) -> Tree {
+    walk_with_tests(roots, true)
+}
+
+fn walk_with_tests(roots: impl IntoIterator<Item = PathBuf>, strict_tests: bool) -> Tree {
     let mut tree = Tree::default();
     // (file, whether it is a mod-rs file, whether it is only compiled for tests)
     let mut queue: Vec<(PathBuf, bool, bool)> = roots
@@ -97,7 +107,7 @@ pub(crate) fn walk(roots: impl IntoIterator<Item = PathBuf>) -> Tree {
         }
         let text = match std::fs::read_to_string(&path) {
             Ok(text) => text,
-            Err(error) if !test => {
+            Err(error) if !test || strict_tests => {
                 tree.problems.push(Problem::Unreadable {
                     file: path,
                     error: error.to_string(),
@@ -112,7 +122,7 @@ pub(crate) fn walk(roots: impl IntoIterator<Item = PathBuf>) -> Tree {
         let parsed = match outcome {
             Ok(parsed) => parsed,
             // a test module that does not parse is the test build's problem
-            Err(_) if test => continue,
+            Err(_) if test && !strict_tests => continue,
             Err(error) => {
                 tree.problems
                     .push(Problem::Unreadable { file: path, error });
@@ -128,7 +138,7 @@ pub(crate) fn walk(roots: impl IntoIterator<Item = PathBuf>) -> Tree {
                         || found.file_name().is_some_and(|name| name == "mod.rs");
                     queue.push((found.clone(), child_mod_rs, child_test));
                 }
-                None if child_test => {}
+                None if child_test && !strict_tests => {}
                 None => tree.problems.push(Problem::Unresolved {
                     file: path.clone(),
                     line: declaration.line,

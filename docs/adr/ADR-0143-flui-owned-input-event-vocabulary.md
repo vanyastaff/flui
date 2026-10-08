@@ -145,6 +145,19 @@ remains. Web wheel events carry no pointer id, so that producer deliberately use
 primary mouse fallback. Missing native capabilities stay absent instead of acquiring
 synthetic readings or phases.
 
+AppKit's two-finger pan arrives through `scrollWheel:` and remains a `ScrollEvent`
+with its native finger or momentum phase and `hasPreciseScrollingDeltas` precision.
+It does not also emit `PanZoom`. The native `magnifyWithEvent:` and
+`rotateWithEvent:` callbacks share one cumulative `PanZoom` sequence; the producer
+accumulates scale and rotation and ends the sequence when its native components
+finish. This distinction preserves the input AppKit actually reports without
+inventing a second pan stream or a gesture phase for an ordinary wheel tick.
+
+Win32 wheel precision describes observed packet granularity, not hardware identity:
+a distance that is not a multiple of `WHEEL_DELTA` is `Precise`, while whole-step
+and zero packets remain `Unknown`. Both retain their signed line unit and actual
+hover source. An integral packet alone cannot identify a notched device.
+
 Winit's complete keyboard-event mapping and Android's native keycode tables remain in
 their maintained ecosystem adapters. `flui-platform`'s private `shared::keyboard_adapter`
 converts those results to owned key events without leaking upstream types through Stable
@@ -216,13 +229,30 @@ Winit physical geometry dependency is not mistaken for a Stable signature leak.
   legacy Meta aliases and preservation of keyboard event fields. Its private placement is
   documented in the crate's mapping decision: Winit's complete native `KeyEvent` contains
   inaccessible platform state.
-- Native producer tests: Winit's `native_scroll_units_precision_and_phases` and
-  `native_pan_zoom_phase_and_recovery_matrix`, Win32's
-  `native_pen_masks_preserve_sensor_presence` and
-  `native_touch_contact_and_pressure_are_measured`, and the browser input probe's
+- Native decoder contracts: Winit's `native_scroll_units_precision_and_phases` and
+  `native_pan_zoom_phase_and_recovery_matrix`; Win32's
+  `native_pointer_decoding_contracts`, including the rows
+  `native_pen_masks_preserve_sensor_presence`,
+  `native_touch_contact_and_pressure_are_measured` and
+  `native_enter_before_down_preserves_first_contact_admission`; AppKit's
+  `native_scroll_phases_preserve_momentum_and_unphased_wheels` and
+  `native_pinch_and_rotation_share_one_cumulative_gesture`; UIKit's
+  `native_touch_readings_keep_sensor_presence_and_pen_angles`; Android's
+  `android_native_pointer_readings`. These pin the decoding seams used by real
+  producers; compiling a target does not establish native execution or hardware
+  delivery.
+- Native window checks: Win32's
+  `fractional_native_wheel_packets_preserve_observed_precision_and_source` queues
+  actual wheel messages to an owned hidden window and checks fractional distances,
+  precision, units and source preservation.
+  `synthetic_touch_and_pen_reach_native_pointer_dispatch` exercises native injection
+  only when the host admits it: foreground refusal, an occluded target or unavailable
+  injection capability reports `CANNOT_VERIFY`, which is not proof of touch/pen
+  delivery. `cargo xtask device windows-input` is an application mouse/keyboard
+  smoke check, not a replacement for that touch/pen path. The browser input probe's
   `owned-wheel-check`, `owned-keyboard-check`, fractional, sensor, capture and reentry
-  checks. These references pin source contracts; off-host compilation does not establish
-  hardware delivery or native execution.
+  checks exercise its DOM producer separately. These references describe available
+  checks; their inclusion here does not claim a successful run on the current host.
 - `pointer_identity_contracts` pins source isolation, mutable contact metadata and
   delivery debt; widget `viewer_unstarted_pinch_updates_remain_independent_steps` retains
   the deliberate isolated-Update consumer behavior separately from native cumulative

@@ -2227,6 +2227,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "trybuild",
  "ui-events",
  "ui-events-winit",
  "wasm-bindgen",
@@ -2320,6 +2321,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "trybuild",
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
  "web-time",
@@ -2358,6 +2360,7 @@ dependencies = [
  "flui-scheduler",
  "flui-view",
  "flui-widgets",
+ "trybuild",
 ]
 
 [[package]]

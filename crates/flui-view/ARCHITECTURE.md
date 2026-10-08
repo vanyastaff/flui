@@ -10,6 +10,15 @@ behaviour taxonomy and remains a sibling appendix.
 
 ## Mapping decisions
 
+### Local-state and element-depth authority
+
+`StateCell` and `StateHandle` keep their state and rebuild trigger owner-local;
+neither implements `Send` or `Sync`. `ElementDepth` can be minted only by this
+crate, while element implementations receive the opaque depth when the tree
+stamps it. `trybuild_ui::ui_tests` pins E0277 for both local-state types' thread
+bounds, E0624 for depth minting and E0308 for raw-integer stamping, alongside
+valid local-state constructors and an opaque-depth forwarding caller.
+
 ### Clean widget frames report no builds
 
 The binding's draw-frame entry clears build telemetry even when no build work is pending.
@@ -316,6 +325,9 @@ their `WriterSource` through `LifecycleContext::writer_source`; render views acq
 `RenderObjectContext::writer_source` while registering owner-local interaction handlers.
 Neither capability is exposed by `build`'s `&dyn BuildContext`. A detached render context
 returns `None`, rather than manufacturing a graph unrelated to a presentation.
+`trybuild_ui::ui_tests` pins E0624 for `WriterSource::new` called from a build
+context, alongside a compiling lifecycle acquisition, so public graph access
+does not silently become writer-minting authority.
 The contexts hand out a source over the graph their element reads through
 (`ElementReads::graph`), so a source writes into its own presentation's graph and refuses another
 graph's handles with `ForeignGraph`. The run-time guard is unchanged and stays authoritative: a
@@ -542,8 +554,9 @@ ADR-0075's subject); shrinking `ElementBase` into a capability-typed `Element<V,
 and shared annotations whose code belongs to a plugin image. Its caller must
 retain none of those image-dependent payloads after the callback boundary,
 including an unwinding call. The hook may then unload on the next frame or
-on drop. A `compile_fail,E0133` doctest pins mandatory acknowledgement at the
-public invocation. Ordinary worker polling remains safe and unchanged.
+on drop. The safe-call rejection example and its compiling counterpart differ
+only at the unsafe invocation line, pinning mandatory acknowledgement while
+checking the caller's setup. Ordinary worker polling remains safe and unchanged.
 
 The scene callback also receives a pending font namespace reset and returns a
 rendering verdict. The host uses the dedicated plugin renderer entry point;

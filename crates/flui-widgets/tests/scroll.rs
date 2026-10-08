@@ -1889,6 +1889,150 @@ pub(crate) fn nested_fling_hands_remaining_velocity_to_matching_parent_axes() {
     }
 }
 
+pub(crate) fn nested_fling_parent_boundary_policy_receives_presentation_pixel_ratio() {
+    use flui_animation::Simulation;
+    use flui_platform_api::{
+        EventTime, PlatformInput,
+        pointer::{PointerButton, PointerButtons, PointerEvent, PointerId, PointerInfo,
+            PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease, PointerSample},
+    };
+    use flui_testing::{HeadlessHost, HeadlessWindow};
+    use flui_widgets::{ScrollMetrics, ScrollPhysics};
+
+    #[derive(Debug)]
+    struct HighDensityPhysics;
+    impl ScrollPhysics for HighDensityPhysics {
+        fn apply_boundary_conditions(&self, metrics: &ScrollMetrics, proposed: f64) -> f64 {
+            if metrics.device_pixel_ratio != 2.0 {
+                return metrics.pixels;
+            }
+            ClampingScrollPhysics::new().apply_boundary_conditions(metrics, proposed)
+        }
+        fn create_ballistic_simulation(
+            &self,
+            metrics: &ScrollMetrics,
+            velocity: f64,
+        ) -> Option<Box<dyn Simulation>> {
+            ClampingScrollPhysics::new().create_ballistic_simulation(metrics, velocity)
+        }
+        fn boundary_velocity(&self, metrics: &ScrollMetrics, velocity: f64) -> Option<f64> {
+            ClampingScrollPhysics::new().boundary_velocity(metrics, velocity)
+        }
+    }
+
+    for density_sensitive in [false, true] {
+        let (outer, inner) = (
+            ScrollController::new(),
+            ScrollController::new(),
+        );
+        let physics: SharedScrollPhysics = if density_sensitive {
+            Arc::new(HighDensityPhysics)
+        } else {
+            Arc::new(ClampingScrollPhysics::new())
+        };
+        let parent = Scrollable::new()
+            .controller(outer.clone())
+            .physics(physics)
+            .child(flui_widgets::Column::new(vec![
+                SizedBox::new(300.0, 600.0).boxed(),
+                SizedBox::new(300.0, 200.0)
+                    .child(
+                        flui_widgets::Align::new(flui_painting::Alignment::TOP_LEFT)
+                            .child(SizedBox::new(200.0, 200.0).child(
+                                Scrollable::new()
+                                    .controller(inner.clone())
+                                    .child(SizedBox::new(300.0, 1000.0)),
+                            )),
+                    )
+                    .boxed(),
+                SizedBox::new(300.0, 4800.0).boxed(),
+            ]));
+        let mut host = HeadlessHost::new(HeadlessWindow::new(300, 300));
+        host.set_scale_factor(host.primary_window(), 2.0);
+        host.attach(&parent).expect("mount dense nested scroll owner");
+        let _ = host.pump(Duration::ZERO);
+        assert_eq!(inner.position().max_scroll_extent(), 800.0);
+        for id in 1_u64..=2 {
+            outer.jump_to(600.0);
+            inner.jump_to(650.0);
+            let _ = host.pump(Duration::ZERO);
+            let pointer = PointerInfo::new(
+                PointerId::try_from(id).expect("nonzero contact"), PointerKind::Mouse,
+            );
+            let sample = |y: f64| {
+                PointerSample::new(
+                    EventTime::from_nanos(u64::try_from(host.clock().elapsed().as_nanos())
+                        .expect("fixture clock fits event time")),
+                    PointerPosition::try_new(flui_foundation::geometry::Point::new(100.0, y))
+                        .expect("finite authored mouse position"),
+                )
+            };
+            host.dispatch(PlatformInput::Pointer(PointerEvent::Down(PointerPress::new(
+                pointer, PointerButton::PRIMARY, PointerButtons::only(PointerButton::PRIMARY),
+                sample(150.0),
+            ))));
+            for y in [120.0, 100.0] {
+                host.clock().advance(Duration::from_millis(8));
+                host.dispatch(PlatformInput::Pointer(PointerEvent::Move(PointerMove::new(
+                    pointer, PointerButtons::only(PointerButton::PRIMARY), sample(y),
+                ))));
+            }
+            host.dispatch(PlatformInput::Pointer(PointerEvent::Up(PointerRelease::new(
+                pointer, PointerButton::PRIMARY, PointerButtons::NONE, sample(100.0),
+            ))));
+            assert_eq!(inner.pixels(), 670.0, "actual child release premise");
+            assert_eq!(outer.pixels(), 600.0, "parent has not consumed the drag");
+            for _ in 0..15 {
+                let _ = host.pump(Duration::from_millis(16));
+            }
+            assert_eq!(inner.pixels(), 800.0, "child reaches its hard edge");
+            assert!(
+                outer.pixels() > 600.0,
+                "density_sensitive={density_sensitive}: the real DPR2 parent's policy accepts the impulse, got {}",
+                outer.pixels()
+            );
+        }
+    }
+}
+
+pub(crate) fn nested_fling_same_controller_rebuild_preserves_accepted_handoff() {
+    use flui_foundation::geometry::Axis::{Horizontal, Vertical};
+    for axis in [Vertical, Horizontal] {
+        let (outer, inner, vsync) = (
+            ScrollController::new(),
+            ScrollController::new(),
+            Vsync::new(),
+        );
+        let mut laid = crate::common::lay_out_animated(
+            nested_fling_content(&outer, &inner, &vsync, axis, axis, false, false),
+            tight(300.0, 300.0),
+            vsync.clone(),
+        );
+        for rebuild in [false, true, false] {
+            outer.jump_to(600.0);
+            inner.jump_to(650.0);
+            laid.tick();
+            release_inner_fling(&laid, axis, false);
+            assert_eq!(inner.pixels(), 670.0, "actual post-threshold drag");
+            assert_eq!(outer.pixels(), 600.0, "parent has not consumed the drag");
+            if rebuild {
+                laid.pump_widget(nested_fling_content(
+                    &outer, &inner, &vsync, axis, axis, false, false,
+                ));
+            }
+            for _ in 0..15 {
+                laid.pump_for(Duration::from_millis(16));
+            }
+            assert_eq!(inner.pixels(), 800.0, "child reaches its actual extent");
+            assert!(
+                outer.pixels() > 600.0,
+                "{axis:?}, rebuild={rebuild}: same controllers retain accepted handoff, got {}",
+                outer.pixels()
+            );
+        }
+    }
+}
+
 pub(crate) fn nested_fling_projects_reversed_child_and_preserves_orthogonal_and_bounce_policy() {
     use flui_foundation::geometry::Axis::{Horizontal, Vertical};
     for (outer_axis, reversed, bouncing, transfers) in [
@@ -2076,6 +2220,66 @@ fn assert_notification_failures(log: &flui_testing::log_capture::CapturedLog, ex
     );
 }
 
+pub(crate) fn nested_fling_equal_edge_jump_cancels_old_handoff_and_next_gesture_recovers() {
+    use flui_foundation::geometry::Axis::Vertical;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let (outer, inner, vsync) = (
+        ScrollController::new(),
+        ScrollController::new(),
+        Vsync::new(),
+    );
+    let mut laid = crate::common::lay_out_animated(
+        nested_fling_content(&outer, &inner, &vsync, Vertical, Vertical, false, false),
+        tight(300.0, 300.0),
+        vsync,
+    );
+    outer.jump_to(600.0);
+    inner.jump_to(650.0);
+    laid.tick();
+    let pending_jump = Arc::new(AtomicBool::new(true));
+    let jump = Arc::clone(&pending_jump);
+    let controller = inner.clone();
+    let listenable = inner.as_listenable();
+    let listener = listenable.add_listener(Arc::new(move || {
+        if controller.pixels() == 800.0 && jump.swap(false, Ordering::SeqCst) {
+            // Explicit programmatic cancellation must win even when it leaves
+            // the already-committed edge pixels unchanged.
+            controller.jump_to(800.0);
+        }
+    }));
+    release_inner_fling(&laid, Vertical, false);
+    assert_eq!(
+        inner.pixels(),
+        670.0,
+        "actual release retains its accepted velocity"
+    );
+    for _ in 0..15 {
+        laid.pump_for(Duration::from_millis(16));
+    }
+    assert!(
+        !pending_jump.load(Ordering::SeqCst),
+        "edge notification actually reentered jump_to"
+    );
+    assert_eq!(inner.pixels(), 800.0);
+    assert_eq!(
+        outer.pixels(),
+        600.0,
+        "the explicit equal-edge jump cancels the older residual impulse"
+    );
+    listenable.remove_listener(listener);
+    inner.jump_to(650.0);
+    outer.jump_to(600.0);
+    laid.tick();
+    release_inner_fling(&laid, Vertical, false);
+    for _ in 0..15 {
+        laid.pump_for(Duration::from_millis(16));
+    }
+    assert!(
+        outer.pixels() > 600.0,
+        "a fresh gesture can still hand off after cancellation"
+    );
+}
+
 pub(crate) fn nested_fling_skips_saturated_parent_and_reentrant_jump_retires_transfer() {
     let (outer, middle, inner, vsync) = (
         ScrollController::new(),
@@ -2179,7 +2383,6 @@ fn reveal_target_content(axis: flui_foundation::geometry::Axis) -> flui_view::Bo
 
 pub(crate) fn nested_fling_bouncing_parent_at_extent_absorbs_before_grandparent() {
     use flui_foundation::geometry::Axis::Vertical;
-    use flui_rendering::view::ViewportOffset;
     let (outer, middle, inner, vsync) = (
         ScrollController::new(),
         ScrollController::new(),
@@ -2539,8 +2742,20 @@ pub(crate) fn show_on_screen_failure_continues_live_ancestors_and_fresh_requests
 }
 
 pub(crate) fn show_on_screen_same_pipeline_reentry_keeps_one_reveal_and_recovers() {
-    use flui_rendering::semantics::{AccessibilityNodeId, SemanticsAction, SemanticsActionRequest};
-    use std::sync::Mutex;
+    use flui_rendering::semantics::{
+        AccessibilityNodeId, SemanticsAction, SemanticsActionInvocation, SemanticsActionRequest,
+    };
+    use std::cell::RefCell;
+    thread_local! {
+        static PENDING_REVEAL: RefCell<Option<SemanticsActionInvocation>> = const { RefCell::new(None) };
+    }
+    struct RestoreScope(Option<SemanticsActionInvocation>);
+    impl Drop for RestoreScope {
+        fn drop(&mut self) {
+            let outgoing = PENDING_REVEAL.with(|slot| slot.replace(self.0.take()));
+            drop(outgoing);
+        }
+    }
     let (outer, inner) = (ScrollController::new(), ScrollController::new());
     let mut laid = lay_out(nested_reveal_content(&outer, &inner), tight(200.0, 200.0));
     laid.enable_semantics();
@@ -2561,11 +2776,12 @@ pub(crate) fn show_on_screen_same_pipeline_reentry_keeps_one_reveal_and_recovers
             })
         })
         .expect("actual automatic ancestor reveal");
-    let pending = Arc::new(Mutex::new(Some(invocation)));
-    let reentrant = Arc::clone(&pending);
+    let _scope = RestoreScope(PENDING_REVEAL.with(|slot| slot.replace(Some(invocation))));
     let listenable = inner.as_listenable();
-    let listener = listenable.add_listener(Arc::new(move || {
-        let invocation = reentrant.lock().expect("test holder").take();
+    let listener = listenable.add_listener(Arc::new(|| {
+        // The notification runs on the same owner thread. Resolve its local
+        // pending request without making that request cross-thread ownership.
+        let invocation = PENDING_REVEAL.with(|slot| slot.borrow_mut().take());
         if let Some(invocation) = invocation {
             invocation.invoke();
         }
@@ -2573,7 +2789,7 @@ pub(crate) fn show_on_screen_same_pipeline_reentry_keeps_one_reveal_and_recovers
     request_reveal_target(&laid);
     laid.tick();
     assert!(
-        pending.lock().expect("test holder").is_none(),
+        PENDING_REVEAL.with(|slot| slot.borrow().is_none()),
         "same-pipeline request actually reentered"
     );
     assert_eq!(
@@ -2592,4 +2808,291 @@ pub(crate) fn show_on_screen_same_pipeline_reentry_keeps_one_reveal_and_recovers
     assert_eq!(inner.pixels(), 440.0);
     assert_eq!(outer.pixels(), 600.0);
     assert_reveal_target_visible(&laid);
+}
+
+pub(crate) fn show_on_screen_sibling_reentry_delivers_last_target_without_stale_motion() {
+    use flui_rendering::semantics::{
+        AccessibilityNodeId, SemanticsAction, SemanticsActionInvocation, SemanticsActionRequest,
+    };
+    use std::cell::RefCell;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    thread_local! {
+        static PENDING_SIBLING: RefCell<Option<SemanticsActionInvocation>> = const { RefCell::new(None) };
+    }
+    struct RestoreScope(Option<SemanticsActionInvocation>);
+    impl Drop for RestoreScope {
+        fn drop(&mut self) {
+            let outgoing = PENDING_SIBLING.with(|slot| slot.replace(self.0.take()));
+            drop(outgoing);
+        }
+    }
+    let content = |controller: &ScrollController, before, gap| {
+        let target = |label| {
+            flui_widgets::Semantics::new()
+                .container(true)
+                .button(true)
+                .label(label)
+                .child(SizedBox::new(40.0, 40.0))
+                .boxed()
+        };
+        Scrollable::new()
+            .controller(controller.clone())
+            .child(flui_widgets::Column::new(vec![
+                SizedBox::new(200.0, before).boxed(),
+                target("first sibling"),
+                SizedBox::new(200.0, gap).boxed(),
+                target("second sibling"),
+                SizedBox::new(200.0, 800.0).boxed(),
+            ]))
+    };
+    // Both labelled nodes from the same constructor are visible and native
+    // addressable when their actual layout positions fit the viewport.
+    let mut visible = lay_out(
+        content(&ScrollController::new(), 0.0, 40.0),
+        tight(200.0, 200.0),
+    );
+    visible.enable_semantics();
+    visible.tick();
+    for label in ["first sibling", "second sibling"] {
+        let tree = visible.a11y_tree().expect("visible control tree");
+        let target = tree.find_by_label(label).expect("visible labelled sibling");
+        assert!(!target.raw().is_hidden());
+        assert!(target.supports_action(flui_testing::a11y::Action::ScrollIntoView));
+        let bounds = target.bounds().expect("actual visible geometry");
+        assert!(bounds.y0 >= 0.0 && bounds.y1 <= 200.0);
+    }
+    for first_is_nearer in [true, false] {
+        let controller = ScrollController::new();
+        let mut laid = lay_out(content(&controller, 600.0, 360.0), tight(200.0, 200.0));
+        laid.enable_semantics();
+        laid.tick();
+        let (first_label, last_label, expected) = if first_is_nearer {
+            ("first sibling", "second sibling", 840.0)
+        } else {
+            ("second sibling", "first sibling", 600.0)
+        };
+        let tree = laid.a11y_tree().expect("actual offscreen tree");
+        let first = tree
+            .find_by_label(first_label)
+            .expect("first addressable sibling")
+            .id();
+        let last = tree
+            .find_by_label(last_label)
+            .expect("last addressable sibling")
+            .id();
+        let invocation = laid
+            .pipeline_owner()
+            .with(|owner| {
+                owner.resolve_semantics_action(SemanticsActionRequest::new(
+                    AccessibilityNodeId::from_u64(last.0).expect("published identity"),
+                    SemanticsAction::ShowOnScreen,
+                ))
+            })
+            .expect("actual pending sibling reveal");
+        let _scope = RestoreScope(PENDING_SIBLING.with(|slot| slot.replace(Some(invocation))));
+        let notifications = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&notifications);
+        let listenable = controller.as_listenable();
+        let listener = listenable.add_listener(Arc::new(move || {
+            seen.fetch_add(1, Ordering::SeqCst);
+            let invocation = PENDING_SIBLING.with(|slot| slot.borrow_mut().take());
+            if let Some(invocation) = invocation {
+                invocation.invoke();
+            }
+        }));
+        laid.invoke_semantics_action(flui_testing::a11y::ActionRequest {
+            action: flui_testing::a11y::Action::ScrollIntoView,
+            target_tree: flui_testing::a11y::TreeId::ROOT,
+            target_node: first,
+            data: None,
+        })
+        .expect("first accepted native reveal");
+        laid.tick();
+        assert!(
+            PENDING_SIBLING.with(|slot| slot.borrow().is_none()),
+            "sibling request actually reentered"
+        );
+        assert!(
+            notifications.load(Ordering::SeqCst) >= 2,
+            "both accepted targets caused actual movement"
+        );
+        assert_eq!(
+            controller.pixels(),
+            expected,
+            "last sibling wins without reapplying cached geometry: {first_label} then {last_label}"
+        );
+        let current = laid.a11y_tree().expect("republished geometry");
+        let bounds = current
+            .find_by_label(last_label)
+            .expect("last target remains present")
+            .bounds()
+            .expect("actual last target geometry");
+        assert!(
+            bounds.y0 >= -1e-9 && bounds.y1 <= 200.0 + 1e-9,
+            "last accepted target is visible: {bounds:?}"
+        );
+        listenable.remove_listener(listener);
+        controller.jump_to(0.0);
+        laid.tick();
+        let current = laid.a11y_tree().expect("fresh geometry");
+        let target = current
+            .find_by_label(last_label)
+            .expect("fresh target")
+            .id();
+        laid.invoke_semantics_action(flui_testing::a11y::ActionRequest {
+            action: flui_testing::a11y::Action::ScrollIntoView,
+            target_tree: flui_testing::a11y::TreeId::ROOT,
+            target_node: target,
+            data: None,
+        })
+        .expect("fresh request remains deliverable");
+        laid.tick();
+        assert_eq!(
+            controller.pixels(),
+            if first_is_nearer { 840.0 } else { 440.0 }
+        );
+    }
+}
+
+pub(crate) fn nested_fling_custom_physics_failure_and_retirement_preserve_first_and_recover() {
+    use flui_animation::Simulation;
+    use flui_foundation::geometry::Axis::Vertical;
+    use flui_widgets::{ScrollMetrics, ScrollPhysics};
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    struct RetiringSimulation {
+        motion: Box<dyn Simulation>,
+        fail_drop: Arc<AtomicBool>,
+    }
+    impl Simulation for RetiringSimulation {
+        fn x(&self, time: f64) -> f64 {
+            self.motion.x(time)
+        }
+        fn dx(&self, time: f64) -> f64 {
+            self.motion.dx(time)
+        }
+        fn is_done(&self, time: f64) -> bool {
+            self.motion.is_done(time)
+        }
+    }
+    impl Drop for RetiringSimulation {
+        fn drop(&mut self) {
+            if self.fail_drop.swap(false, Ordering::SeqCst) {
+                panic!("custom parent simulation retirement failure");
+            }
+        }
+    }
+    #[derive(Debug)]
+    struct FaultPhysics {
+        fail_boundary: Arc<AtomicBool>,
+        fail_drop: Arc<AtomicBool>,
+    }
+    impl ScrollPhysics for FaultPhysics {
+        fn apply_boundary_conditions(&self, metrics: &ScrollMetrics, proposed: f64) -> f64 {
+            ClampingScrollPhysics::new().apply_boundary_conditions(metrics, proposed)
+        }
+        fn create_ballistic_simulation(
+            &self,
+            metrics: &ScrollMetrics,
+            velocity: f64,
+        ) -> Option<Box<dyn Simulation>> {
+            Some(Box::new(RetiringSimulation {
+                motion: ClampingScrollPhysics::new()
+                    .create_ballistic_simulation(metrics, velocity)?,
+                fail_drop: Arc::clone(&self.fail_drop),
+            }))
+        }
+        fn boundary_velocity(&self, metrics: &ScrollMetrics, velocity: f64) -> Option<f64> {
+            if self.fail_boundary.swap(false, Ordering::SeqCst) {
+                panic!("custom parent boundary failure");
+            }
+            ClampingScrollPhysics::new().boundary_velocity(metrics, velocity)
+        }
+    }
+
+    for (boundary_fault, retirement_fault) in
+        [(false, false), (true, false), (false, true), (true, true)]
+    {
+        let (outer, inner, vsync) = (
+            ScrollController::new(),
+            ScrollController::new(),
+            Vsync::new(),
+        );
+        let fail_boundary = Arc::new(AtomicBool::new(boundary_fault));
+        let fail_drop = Arc::new(AtomicBool::new(retirement_fault));
+        let parent = Scrollable::new()
+            .controller(outer.clone())
+            .physics(Arc::new(FaultPhysics {
+                fail_boundary: Arc::clone(&fail_boundary),
+                fail_drop: Arc::clone(&fail_drop),
+            }))
+            .child(flui_widgets::Column::new(vec![
+                SizedBox::new(200.0, 600.0).boxed(),
+                SizedBox::new(200.0, 200.0)
+                    .child(
+                        Scrollable::new()
+                            .controller(inner.clone())
+                            .child(SizedBox::new(200.0, 1000.0)),
+                    )
+                    .boxed(),
+                SizedBox::new(200.0, 4800.0).boxed(),
+            ]));
+        let mut laid = crate::common::lay_out_animated(
+            VsyncScope::new(vsync.clone(), parent),
+            tight(200.0, 200.0),
+            vsync,
+        );
+        outer.jump_to(600.0);
+        inner.jump_to(650.0);
+        laid.tick();
+        release_inner_fling(&laid, Vertical, false);
+        assert_eq!(inner.pixels(), 670.0);
+        let mut failure = None;
+        for _ in 0..500 {
+            if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                laid.pump_for(Duration::from_millis(16));
+            })) {
+                failure = Some(payload);
+                break;
+            }
+        }
+        if boundary_fault || retirement_fault {
+            let payload = failure.expect("the actual parent physics/retirement callback must run");
+            let text = payload
+                .downcast_ref::<&str>()
+                .copied()
+                .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+                .expect("the frame reports its first failure text");
+            let expected = if boundary_fault {
+                "custom parent boundary failure"
+            } else {
+                "custom parent simulation retirement failure"
+            };
+            assert!(
+                text.contains(expected),
+                "the first failure remains authoritative: {text}"
+            );
+        } else {
+            assert!(failure.is_none(), "healthy custom physics completes");
+            assert!(
+                outer.pixels() > 600.0,
+                "actual custom parent receives the impulse"
+            );
+        }
+        assert!(!fail_boundary.load(Ordering::SeqCst));
+        // Faulted ownership may be retained instead of invoking another
+        // destructor during unwind. Disable that fault for the fresh operation.
+        fail_drop.store(false, Ordering::SeqCst);
+        inner.jump_to(650.0);
+        outer.jump_to(600.0);
+        laid.tick();
+        release_inner_fling(&laid, Vertical, false);
+        for _ in 0..15 {
+            laid.pump_for(Duration::from_millis(16));
+        }
+        assert!(
+            outer.pixels() > 600.0,
+            "fresh transfer makes progress after containment"
+        );
+    }
 }

@@ -81,7 +81,7 @@ impl Rig {
 
     /// Route events to `recognizer`, optionally for one pointer only. The
     /// returned flag stops delivery (a detector unmounting it).
-    fn attach<R: GestureRecognizer + 'static>(
+    fn attach<R: GestureRecognizer + ?Sized + 'static>(
         &self,
         recognizer: &Rc<R>,
         only: Option<u64>,
@@ -91,7 +91,7 @@ impl Rig {
 
     /// [`attach`](Self::attach), delivering `global(event)` as the root-space
     /// event that accompanies each local one.
-    fn attach_with_global<R: GestureRecognizer + 'static>(
+    fn attach_with_global<R: GestureRecognizer + ?Sized + 'static>(
         &self,
         recognizer: &Rc<R>,
         only: Option<u64>,
@@ -1349,6 +1349,23 @@ fn tap_and_drag_resolves_through_the_shared_arena() {
     run_rows(
         "tap and drag",
         &[
+            (
+                "queued out-and-back motion",
+                queued_out_and_back_motion_is_a_drag,
+            ),
+            (
+                "coalesced start reentry",
+                coalesced_drag_start_reentry_finishes_the_old_generation,
+            ),
+            ("long press measured excursion", long_press_measured_excursion),
+            ("double tap measured excursion", double_tap_measured_excursion),
+            ("multi tap measured excursion", multi_tap_measured_excursion),
+            ("multi drag measured excursion", multi_drag_measured_excursion),
+            ("tap drag measured excursion", tap_drag_measured_excursion),
+            ("scale measured excursion", scale_measured_excursion),
+            ("tap measured excursion", tap_measured_excursion),
+            ("drag measured excursion", drag_measured_excursion),
+            ("prediction does not admit drag", prediction_does_not_admit_drag),
             ("tap against a tap", tap_wins_against_a_later_tap_recognizer),
             ("drag against a pan", drag_claims_the_arena_before_starting),
             ("consecutive clicks", consecutive_clicks_count_up_and_reset),
@@ -1380,6 +1397,260 @@ fn tap_and_drag_resolves_through_the_shared_arena() {
                 tap_drag_cancelled_from_its_start_recovers,
             ),
         ],
+    );
+}
+
+fn queue_excursion(rig: &Rig, coalesced_packet: bool) {
+    let outward = make_move_event_for_id(id(1), Offset::new(200.0, 100.0), PointerKind::Touch)
+        .expect("finite excursion");
+    let mut returned = make_move_event_for_id(id(1), Offset::new(100.0, 100.0), PointerKind::Touch)
+        .expect("finite return");
+    if coalesced_packet {
+        let PointerEvent::Move(outward) = outward else { unreachable!() };
+        let PointerEvent::Move(current) = &mut returned else { unreachable!() };
+        *current = current.clone().with_coalesced(vec![*outward.current()]);
+    } else {
+        rig.send(&outward);
+    }
+    rig.send(&returned);
+    rig.frame();
+}
+
+fn prediction_does_not_admit_drag() {
+    let rig = Rig::new();
+    let starts = Rc::new(Cell::new(0));
+    let taps = Rc::new(Cell::new(0));
+    let (started, tapped) = (starts.clone(), taps.clone());
+    let drag = DragGestureRecognizer::builder(rig.binding.arena().clone(), DragAxis::Free)
+        .on_start(move |_| started.set(started.get() + 1)).build();
+    let tap = TapGestureRecognizer::builder(rig.binding.arena().clone())
+        .on_tap(move |_| tapped.set(tapped.get() + 1)).build();
+    rig.attach(&drag, None);
+    rig.attach(&tap, None);
+    rig.down(1, 100.0, 100.0);
+    let future = make_move_event_for_id(id(1), Offset::new(200.0, 100.0), PointerKind::Touch)
+        .expect("finite prediction");
+    let PointerEvent::Move(future) = future else { unreachable!() };
+    let mut future = *future.current();
+    let mut current = make_move_event_for_id(id(1), Offset::new(100.0, 100.0), PointerKind::Touch)
+        .expect("finite measured position");
+    let PointerEvent::Move(movement) = &mut current else { unreachable!() };
+    future.time = flui_platform_api::EventTime::from_nanos(movement.current().time.as_nanos() + 1);
+    *movement = movement.clone().with_predicted(vec![future]);
+    assert_eq!(movement.predicted().len(), 1, "the packet contains the distant future reading");
+    rig.send(&current);
+    rig.frame();
+    rig.up(1, 100.0, 100.0);
+    assert_eq!((starts.get(), taps.get()), (0, 1), "predictions cannot cross measured slop");
+}
+
+fn stationary_gesture_measured_excursion(family: &str) {
+    use flui_interaction::{DoubleTapGestureRecognizer, LongPressGestureRecognizer, MultiTapGestureRecognizer};
+    for coalesced_packet in [false, true] {
+        let rig = Rig::new();
+        let recognized = Rc::new(Cell::new(0));
+        let cancelled = Rc::new(Cell::new(0));
+        let (r, c) = (recognized.clone(), cancelled.clone());
+        let owner: Rc<dyn GestureRecognizer> = match family {
+            "tap" => TapGestureRecognizer::builder(rig.binding.arena().clone())
+                .on_tap(move |_| r.set(r.get() + 1))
+                .on_tap_cancel(move |_| c.set(c.get() + 1)).build(),
+            "long press" => LongPressGestureRecognizer::builder(rig.binding.arena().clone())
+                .on_long_press(move || r.set(r.get() + 1))
+                .on_long_press_cancel(move |_| c.set(c.get() + 1)).build(),
+            "double tap" => DoubleTapGestureRecognizer::builder(rig.binding.arena().clone())
+                .on_double_tap(move |_| r.set(r.get() + 1))
+                .on_double_tap_cancel(move |_| c.set(c.get() + 1)).build(),
+            "multi tap" => MultiTapGestureRecognizer::builder(rig.binding.arena().clone(), 2)
+                .on_multi_tap(move |_| r.set(r.get() + 1))
+                .on_multi_tap_cancel(move |_| c.set(c.get() + 1)).build(),
+            _ => unreachable!(),
+        };
+        rig.attach(&owner, None);
+        rig.down(1, 100.0, 100.0);
+        if family == "multi tap" { rig.down(2, 300.0, 100.0); }
+        queue_excursion(&rig, coalesced_packet);
+        assert_eq!((recognized.get(), cancelled.get()), (0, 1),
+            "{family}: a measured excursion cancels before returning to the origin");
+        rig.up(1, 100.0, 100.0);
+        if family == "multi tap" { rig.up(2, 300.0, 100.0); }
+        rig.advance(1000);
+        rig.binding.arena().poll_deadlines();
+        rig.down(1, 100.0, 100.0);
+        if family == "multi tap" { rig.down(2, 300.0, 100.0); }
+        if family == "long press" {
+            rig.advance(1000);
+            rig.binding.arena().poll_deadlines();
+            rig.frame();
+        }
+        rig.up(1, 100.0, 100.0);
+        if family == "multi tap" { rig.up(2, 300.0, 100.0); }
+        if family == "double tap" {
+            rig.advance(100);
+            rig.down(1, 100.0, 100.0);
+            rig.up(1, 100.0, 100.0);
+        }
+        assert_eq!(recognized.get(), 1, "{family}: a healthy next gesture recovers");
+    }
+}
+
+fn long_press_measured_excursion() { stationary_gesture_measured_excursion("long press"); }
+fn tap_measured_excursion() { stationary_gesture_measured_excursion("tap"); }
+fn double_tap_measured_excursion() { stationary_gesture_measured_excursion("double tap"); }
+fn multi_tap_measured_excursion() { stationary_gesture_measured_excursion("multi tap"); }
+
+fn moving_gesture_measured_excursion(family: &str) {
+    use flui_interaction::{GestureSettings, MultiDragAxis, MultiDragGestureRecognizer};
+    use flui_interaction::recognizers::scale::ScaleStartMode;
+    for coalesced_packet in [false, true] {
+        let rig = Rig::new();
+        let starts = Rc::new(Cell::new(0));
+        let counted = starts.clone();
+        let owner: Rc<dyn GestureRecognizer> = match family {
+            "drag" => DragGestureRecognizer::builder(rig.binding.arena().clone(), DragAxis::Free)
+                .on_start(move |_| counted.set(counted.get() + 1)).build(),
+            "multi drag" => MultiDragGestureRecognizer::builder(rig.binding.arena().clone(), MultiDragAxis::Free)
+                .on_start(move |_, _| { counted.set(counted.get() + 1); None }).build(),
+            "tap drag" => TapAndDragGestureRecognizer::builder(rig.binding.arena().clone())
+                .on_drag_start(move |_| counted.set(counted.get() + 1)).build(),
+            "scale" => ScaleGestureRecognizer::builder(rig.binding.arena().clone())
+                .start_mode(ScaleStartMode::PanOrScale)
+                .on_start(move |_| counted.set(counted.get() + 1)).build(),
+            _ => unreachable!(),
+        };
+        // Keep real competition alive so a default arena win cannot stand in
+        // for recognizing the measured threshold crossing.
+        let rival = DragGestureRecognizer::builder(rig.binding.arena().clone(), DragAxis::Free)
+            .settings(GestureSettings::default().try_with_pan_slop(1000.0).expect("positive slop"))
+            .build();
+        rig.attach(&owner, None);
+        rig.attach(&rival, None);
+        rig.down(1, 100.0, 100.0);
+        queue_excursion(&rig, coalesced_packet);
+        assert_eq!(starts.get(), 1, "{family}: the excursion claims before Up's arena sweep");
+        rig.up(1, 100.0, 100.0);
+        rig.down(1, 100.0, 100.0);
+        rig.move_to(1, 200.0, 100.0);
+        rig.up(1, 200.0, 100.0);
+        assert_eq!(starts.get(), 2, "{family}: the next contact still starts");
+    }
+}
+
+fn multi_drag_measured_excursion() { moving_gesture_measured_excursion("multi drag"); }
+fn drag_measured_excursion() { moving_gesture_measured_excursion("drag"); }
+fn tap_drag_measured_excursion() { moving_gesture_measured_excursion("tap drag"); }
+fn scale_measured_excursion() { moving_gesture_measured_excursion("scale"); }
+
+fn queued_out_and_back_motion_is_a_drag() {
+    for coalesced_packet in [false, true] {
+        for drag_first in [false, true] {
+            let rig = Rig::new();
+            let drags = Rc::new(Cell::new(0));
+            let taps = Rc::new(Cell::new(0));
+            let started = drags.clone();
+            let tapped = taps.clone();
+            let drag = DragGestureRecognizer::builder(rig.binding.arena().clone(), DragAxis::Free)
+                .on_start(move |_| started.set(started.get() + 1))
+                .build();
+            let tap = TapGestureRecognizer::builder(rig.binding.arena().clone())
+                .on_tap(move |_| tapped.set(tapped.get() + 1))
+                .build();
+            if drag_first {
+                rig.attach(&drag, None);
+                rig.attach(&tap, None);
+            } else {
+                rig.attach(&tap, None);
+                rig.attach(&drag, None);
+            }
+            rig.down(1, 100.0, 100.0);
+            let outward =
+                make_move_event_for_id(id(1), Offset::new(200.0, 100.0), PointerKind::Touch)
+                    .expect("finite outward sample");
+            let mut returned =
+                make_move_event_for_id(id(1), Offset::new(100.0, 100.0), PointerKind::Touch)
+                    .expect("finite returning sample");
+            if coalesced_packet {
+                let (PointerEvent::Move(older), PointerEvent::Move(newer)) =
+                    (&outward, &mut returned)
+                else {
+                    panic!("Move fixtures")
+                };
+                *newer = newer.clone().with_coalesced(vec![*older.current()]);
+            } else {
+                rig.send(&outward);
+            }
+            rig.send(&returned);
+            rig.frame();
+            rig.up(1, 100.0, 100.0);
+            assert_eq!(
+                (drags.get(), taps.get()),
+                (1, 0),
+                "measured excursion crosses slop: packet={coalesced_packet}, drag_first={drag_first}"
+            );
+            // The old excursion does not leak into the next same-id contact.
+            rig.down(1, 100.0, 100.0);
+            rig.up(1, 100.0, 100.0);
+            assert_eq!(
+                (drags.get(), taps.get()),
+                (1, 1),
+                "healthy same-id tap recovers"
+            );
+        }
+    }
+}
+
+fn coalesced_drag_start_reentry_finishes_the_old_generation() {
+    let rig = Rig::new();
+    let starts = Rc::new(Cell::new(0));
+    let taps = Rc::new(Cell::new(0));
+    let started = starts.clone();
+    let binding = Rc::downgrade(&rig.binding);
+    let drag = DragGestureRecognizer::builder(rig.binding.arena().clone(), DragAxis::Free)
+        .on_start(move |_| {
+            started.set(started.get() + 1);
+            let binding = binding.upgrade().expect("live owner");
+            binding
+                .handle_pointer_event(&make_cancel_event_for_id(id(1), PointerKind::Touch), |_| {
+                    HitTestResult::new()
+                });
+            let next = make_down_event_for_id(id(1), Offset::new(100.0, 100.0), PointerKind::Touch)
+                .expect("new Down");
+            binding.handle_pointer_event(&next, |_| HitTestResult::new());
+            let up = make_up_event_for_id(id(1), Offset::new(100.0, 100.0), PointerKind::Touch)
+                .expect("new Up");
+            binding.handle_pointer_event(&up, |_| HitTestResult::new());
+        })
+        .build();
+    let tapped = taps.clone();
+    let tap = TapGestureRecognizer::builder(rig.binding.arena().clone())
+        .on_tap(move |_| tapped.set(tapped.get() + 1))
+        .build();
+    rig.attach(&drag, None);
+    rig.attach(&tap, None);
+    rig.down(1, 100.0, 100.0);
+    for x in [200.0, 100.0] {
+        rig.send(
+            &make_move_event_for_id(id(1), Offset::new(x, 100.0), PointerKind::Touch)
+                .expect("finite motion"),
+        );
+    }
+    rig.frame();
+    assert_eq!(
+        (starts.get(), taps.get()),
+        (1, 1),
+        "start callback retires old contact and completes a fresh tap"
+    );
+    assert_eq!(
+        rig.binding.active_pointer_count(),
+        0,
+        "old history cannot resurrect a retired contact"
+    );
+    rig.down(1, 100.0, 100.0);
+    rig.up(1, 100.0, 100.0);
+    assert_eq!(
+        (starts.get(), taps.get()),
+        (1, 2),
+        "next operation recovers"
     );
 }
 

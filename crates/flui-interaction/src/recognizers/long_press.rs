@@ -3,7 +3,7 @@
 use super::{
     ArenaMembership, CancelOutcome, ContactId, PrimaryContact,
     callback_containment::{CallbackSequence, finish_containment, retire_callbacks},
-    recognizer::{GestureRecognizer, is_primary_down},
+    recognizer::{GestureRecognizer, is_primary_down, measured_positions},
 };
 use crate::{
     arena::{GestureArena, GestureArenaMember},
@@ -111,25 +111,21 @@ pub struct LongPressGestureRecognizerBuilder {
 }
 impl LongPressGestureRecognizerBuilder {
     /// Freeze device-specific gesture policy for contact admission.
-    #[must_use]
     pub fn settings(mut self, settings: GestureSettings) -> Self {
         self.settings = settings;
         self
     }
     /// Called immediately after contact admission.
-    #[must_use]
     pub fn on_long_press_down(mut self, callback: impl Fn(LongPressDownDetails) + 'static) -> Self {
         self.callbacks.on_long_press_down = Some(Rc::new(callback));
         self
     }
     /// Called when the press is recognized.
-    #[must_use]
     pub fn on_long_press(mut self, callback: impl Fn() + 'static) -> Self {
         self.callbacks.on_long_press = Some(Rc::new(callback));
         self
     }
     /// Called after the simple recognition callback while the contact remains current.
-    #[must_use]
     pub fn on_long_press_start(
         mut self,
         callback: impl Fn(LongPressStartDetails) + 'static,
@@ -138,7 +134,6 @@ impl LongPressGestureRecognizerBuilder {
         self
     }
     /// Called for movement after recognition.
-    #[must_use]
     pub fn on_long_press_move_update(
         mut self,
         callback: impl Fn(LongPressDetails) + 'static,
@@ -147,19 +142,16 @@ impl LongPressGestureRecognizerBuilder {
         self
     }
     /// Called for release after recognition.
-    #[must_use]
     pub fn on_long_press_up(mut self, callback: impl Fn(LongPressDetails) + 'static) -> Self {
         self.callbacks.on_long_press_up = Some(Rc::new(callback));
         self
     }
     /// Called after release while its contact is still current.
-    #[must_use]
     pub fn on_long_press_end(mut self, callback: impl Fn(LongPressDetails) + 'static) -> Self {
         self.callbacks.on_long_press_end = Some(Rc::new(callback));
         self
     }
     /// Called for explicit cancellation or a lost arena competition.
-    #[must_use]
     pub fn on_long_press_cancel(mut self, callback: impl Fn(LongPressDetails) + 'static) -> Self {
         self.callbacks.on_long_press_cancel = Some(Rc::new(callback));
         self
@@ -180,7 +172,6 @@ impl LongPressGestureRecognizerBuilder {
 }
 impl LongPressGestureRecognizer {
     /// Start immutable owner configuration.
-    #[must_use]
     pub fn builder(arena: GestureArena) -> LongPressGestureRecognizerBuilder {
         LongPressGestureRecognizerBuilder {
             arena,
@@ -237,7 +228,7 @@ impl LongPressGestureRecognizer {
                     global_position: details.global_position,
                     local_position: details.local_position,
                     kind: details.kind,
-                })
+                });
             });
         }
         RoutePanic::preserve_first(
@@ -282,7 +273,7 @@ impl GestureRecognizer for LongPressGestureRecognizer {
                 global_position: contact.global,
                 local_position: contact.local,
                 kind: contact.kind,
-            })
+            });
         });
         notices.finish();
     }
@@ -316,9 +307,10 @@ impl GestureRecognizer for LongPressGestureRecognizer {
                 let global = dispatch.global.position().unwrap_or(contact.global);
                 let phase = self.state.borrow().phase;
                 if phase == LongPressPhase::Possible
-                    && self
-                        .contact
-                        .moved_beyond(local, contact.settings.hit_slop(contact.kind))
+                    && measured_positions(dispatch.local).any(|position| {
+                        let delta = position - contact.local;
+                        delta.dx.hypot(delta.dy) > contact.settings.hit_slop(contact.kind)
+                    })
                 {
                     self.cancel();
                     return;
@@ -357,11 +349,11 @@ impl GestureRecognizer for LongPressGestureRecognizer {
                 let mut notices = CallbackSequence::new();
                 if started {
                     notices.call(self.callbacks.on_long_press_up.clone(), |callback| {
-                        callback(details.clone())
+                        callback(details.clone());
                     });
                     if self.contact.is_current(contact.id) {
                         notices.call(self.callbacks.on_long_press_end.clone(), |callback| {
-                            callback(details)
+                            callback(details);
                         });
                     }
                 }
@@ -392,7 +384,7 @@ impl GestureRecognizer for LongPressGestureRecognizer {
         let mut notices = CallbackSequence::new();
         if notify {
             notices.call(self.callbacks.on_long_press_cancel.clone(), |callback| {
-                callback(details)
+                callback(details);
             });
         }
         RoutePanic::preserve_first(

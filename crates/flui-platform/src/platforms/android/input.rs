@@ -261,8 +261,7 @@ impl AndroidInputState {
             DeviceReading::Removed if had_device => return output,
             // Android-generated/virtual events can have no InputDevice object.
             // Preserve their native contact and position, with absent device/sensors.
-            DeviceReading::Removed => None,
-            DeviceReading::Unavailable => None,
+            DeviceReading::Removed | DeviceReading::Unavailable => None,
         };
         let modifiers = owned_modifiers(event.meta_state());
         let action = event.action();
@@ -958,8 +957,10 @@ mod tests {
     }
 
     fn terminal_device_allocation_stays_refused() {
-        let mut owner = AndroidInputState::default();
-        owner.next_device = Some(std::num::NonZeroU64::MAX);
+        let mut owner = AndroidInputState {
+            next_device: Some(std::num::NonZeroU64::MAX),
+            ..AndroidInputState::default()
+        };
         assert_eq!(
             owner
                 .allocate_device_id()
@@ -973,8 +974,10 @@ mod tests {
     }
 
     fn lifecycle_cancellation_retires_contacts() {
-        let mut owner = AndroidInputState::default();
-        owner.last_time = Some(EventTime::from_nanos(91));
+        let mut owner = AndroidInputState {
+            last_time: Some(EventTime::from_nanos(91)),
+            ..AndroidInputState::default()
+        };
         let first = PointerInfo::new(
             PointerId::try_from(1_u64).expect("fixture ID"),
             PointerKind::Touch,

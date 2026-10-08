@@ -1563,9 +1563,7 @@ impl WindowsPlatform {
 
                         use super::events::mouse_move_event;
                         let event = mouse_move_event(wparam, lparam, ctx.scale_factor.get(), time);
-                        if let Some(event) = event {
-                            ctx.callbacks.dispatch_input(event);
-                        }
+                        ctx.callbacks.dispatch_input(event);
                     }
                     LRESULT(0)
                 }

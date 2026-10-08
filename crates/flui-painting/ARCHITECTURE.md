@@ -154,9 +154,11 @@ that a later rasterization has the same dimensions or texels.
 The public `glyph_images_admit_only_complete_mask_and_color_buffers` row in
 `parley_oracle_contract` covers mask/RGBA admission, short and excess buffers,
 format/length disagreement, empty-axis extremes, overflow and a healthy next
-image. `GlyphImage`'s compile-fail doctests prohibit literal construction,
-dimension mutation and pixel mutation through its getter. The existing Swash
-bitmap oracle continues to pin actual producer output.
+image. `compile_fail::trybuild_ui` pins E0451 for literal construction, E0616
+for dimension mutation and E0594 for pixel mutation through the getter, with a
+passing constructor-and-getter caller. `GlyphImage`'s compile-fail doctests
+illustrate these restrictions. The existing Swash bitmap oracle continues to
+pin actual producer output.
 
 ---
 
@@ -982,8 +984,9 @@ draw nothing, while a visible neighboring edge spans the full box height.
 ### 22. Gradient interpolation validates its inputs and preserves discontinuities
 
 All three gradient kinds reject empty colors, stop/color count mismatches,
-stops outside the documented closed `0..=1` range, descending stops, and a NaN
-interpolation fraction before the equal-input shortcut. Ordered repeated stops
+stops outside the documented closed `0..=1` range, descending stops, non-finite
+geometry or interpolation fractions, and negative input radii before the
+equal-input shortcut. Ordered repeated stops
 within the range are valid. Their left and
 right colors remain separate output stops at the same position; interpolation
 samples both limits with `slice::partition_point`, rather than approximating a
@@ -1002,6 +1005,64 @@ endpoints whose subtraction would overflow outside the admitted range.
 `radial_interpolation_keeps_hard_transitions` and
 `sweep_interpolation_keeps_hard_transitions` pin both colors of a red-to-blue
 hard edge interpolated toward black.
+
+Finite gradient positions, focal points and signed sweep angles extrapolate
+outside `0..=1`, consistent with the unbounded geometry contract in ADR-0149.
+Radii extrapolate with a zero lower bound. Circle positions, radii, reciprocal
+scale and circle differences must survive `f32` packing after shared unit-box
+normalization, rather than restricting the raw radii. Fragment-coordinate
+subtraction and the radial quadratic must retain their nonzero values and
+equation sign. Sweep centers are refused only when impossible even at the
+smallest nonzero packed box dimension; larger raw centers can remain valid in
+small boxes. Extrapolated sweep spans must retain their scale after phase-reduced packing.
+The engine still validates the resolved bounds, normalization and equation. Colors
+saturate through `Color::lerp`;
+stop positions retain the sampled union rather than inventing correspondence
+between lists of different lengths. Arithmetic preserves representable results
+when endpoint subtraction overflows, and refuses non-finite output.
+Independent interpolation of direction, angle and focal-center spans
+detects translation-induced distortion beyond the renderer's relative precision.
+Compensated endpoint differences retain finite residuals when large spans cancel,
+so zero intended spans are validated too. Linear projection packing is deferred
+until the actual paint bounds are known. A successfully extrapolated decoration retains its bounded
+endpoint until paint can check the actual bounds-local linear coefficients and
+shader arithmetic, normalized radial circles and equation, or sweep center.
+If those checks fail, paint resolves the bounded endpoint. Geometry resolves in
+the decoration rectangle, while packing is checked against the dispatched
+silhouette bounds, including the engine's narrowed circle radius.
+Chained extrapolations retain the terminal bounded fallback. Interior lerps
+interpolate terminal fallbacks with the same color mixing and lone-gradient
+alpha fading as their raw gradients, including identical endpoints. If raw
+interpolation refuses, the terminal mix is used directly. The fallback
+travels with cloned and serialized decorations; replacing the
+gradient through its setter clears it, and direct field replacement is checked
+against the original extrapolated gradient before the fallback is used.
+`BoxDecoration::lerp` forwards the raw fraction for paired gradient geometry;
+its other fields keep their bounded interpolation and exact endpoint behavior.
+Outside the interval, it preserves the selected endpoint's color/stop ramp so
+merging disjoint ramps cannot exceed the renderer's stop limit.
+If extrapolation is unrepresentable, the infallible decoration producer falls
+back to bounded gradient interpolation. Radial interpolation refuses coincident
+nonzero circles, which the renderer cannot represent; negative radius overflow
+still reaches the finite zero lower bound.
+`gradient_packing_preserves_extrapolated_geometry` covers the sweep-center,
+sweep-span, radial quadratic and fragment-coordinate cases.
+`decoration_gradient_falls_back_after_bounds_scaling` records the public paint
+producer's raw overshoot in a small box and bounded endpoint in a tall box,
+including replacement and serialization behavior.
+`decoration_gradient_centers_fall_back_after_bounds_scaling` covers sweep-center
+packing and radial quadratic underflow after resolving tall paint boxes.
+`decoration_silhouette_and_terminal_fallback` covers circle bounds and chained
+extrapolation; `decoration_endpoint_ramp_preserves_stop_limit` keeps a
+renderable endpoint ramp while geometry extrapolates, and
+`decoration_linear_overshoot_resolves_in_small_box` retains directions that
+only become packable after resolving a small box.
+The public `value_contract` rows `gradient_geometry_preserves_overshoot`,
+`decoration_gradient_geometry_preserves_overshoot`,
+`gradient_geometry_rejects_invalid_inputs_before_equal_shortcuts`,
+`gradient_geometry_checks_intermediate_and_output_overflow` and
+`gradient_domains_keep_zero_radii_and_signed_angles` and
+`radial_overshoot_refuses_coincident_nonzero_circles` pin these boundaries.
 
 ### 23. Text styles reach Parley's spacing and OpenType setting properties
 

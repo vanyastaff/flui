@@ -1,11 +1,11 @@
 # pointer-vocabulary — дизайн
 
-- **Статус:** P1 merged (PR #1478); P2/P3 ожидают реализации по этому дизайну
+- **Статус:** P1 merged (PR #1478); P2/P3 интегрированы, приёмка и платформенные ограничения отражены в [tasks.md](tasks.md)
 - **Дата:** 2026-10-06, база `main` @ `d56188c14`
 - **Требования:** [requirements.md](requirements.md); задачи — [tasks.md](tasks.md)
 - **ADR:** [ADR-0143](../../../../adr/ADR-0143-flui-owned-input-event-vocabulary.md) (Accepted)
 
-## Текущий код
+## Исходный код на базе дизайна
 
 - **Словарь — чужой.** `flui-platform-api` реэкспортирует `ui_events::{ScrollDelta,
   keyboard::{KeyboardEvent, Key, Modifiers}, pointer::{PointerButton, PointerButtons,

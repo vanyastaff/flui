@@ -713,7 +713,27 @@ fn assert_capture_route(case: CaptureCase) {
 
 #[test]
 fn binding_input_contract_matrix() {
+    if std::env::var_os("FLUI_HOVER_METADATA_WORKER").is_some() {
+        assert_hover_path_retirement(true, 2);
+        return;
+    }
     let cases: &[(&str, fn())] = &[
+        (
+            "hover_healthy_metadata_retirement",
+            hover_healthy_metadata_retirement,
+        ),
+        (
+            "hover_callback_retains_metadata",
+            hover_callback_failure_retains_metadata,
+        ),
+        (
+            "hover_callback_first_before_metadata_drop",
+            hover_callback_failure_stays_first_before_metadata_drop,
+        ),
+        (
+            "hover_competing_metadata_drop",
+            hover_competing_metadata_retirement_is_contained,
+        ),
         (
             "non_finite_hover_move_is_refused",
             non_finite_hover_move_is_refused,
@@ -731,8 +751,8 @@ fn binding_input_contract_matrix() {
             non_finite_pinch_position_is_refused,
         ),
         (
-            "non_finite_captured_pinch_position_is_refused",
-            non_finite_captured_pinch_position_is_refused,
+            "non_finite_pinch_during_contact_is_refused",
+            non_finite_pinch_during_contact_is_refused,
         ),
         (
             "frame_coalescing_preserves_hardware_history",
@@ -845,6 +865,14 @@ fn binding_input_contract_matrix() {
             scroll_device_batch_preserves_reentrant_admission,
         ),
         (
+            "native_focus_batch_reentry",
+            native_focus_batch_preserves_reentrant_admission,
+        ),
+        (
+            "native_device_batch_reentry",
+            native_device_batch_preserves_reentrant_admission,
+        ),
+        (
             "scroll_first_terminal_delta",
             scroll_first_terminal_delta_remains_deliverable,
         ),
@@ -887,6 +915,161 @@ fn binding_input_contract_matrix() {
         }
     }
     assert!(failures.is_empty(), "failed rows:\n{}", failures.join("\n"));
+}
+
+fn assert_hover_path_retirement(callback_fails: bool, failing_metadata: usize) {
+    use flui_interaction::events::{PointerEvent, PointerKind, make_move_event};
+    use flui_interaction::{GestureBinding, HitTestResult, Offset};
+    use std::{
+        any::Any,
+        cell::{Cell, RefCell},
+        panic::{AssertUnwindSafe, catch_unwind},
+        rc::Rc,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
+    struct MetadataCapture {
+        drops: Arc<AtomicUsize>,
+        panic_on_drop: bool,
+    }
+    impl Drop for MetadataCapture {
+        fn drop(&mut self) {
+            self.drops.fetch_add(1, Ordering::SeqCst);
+            if self.panic_on_drop {
+                panic!("later hover metadata retirement failure");
+            }
+        }
+    }
+    let lane = InteractionLane::try_new().expect("owner lane");
+    let binding = GestureBinding::new();
+    let drops = Arc::new(AtomicUsize::new(0));
+    let entries = failing_metadata.max(1);
+    let external: Rc<RefCell<Vec<Arc<dyn Any + Send + Sync>>>> = Rc::new(RefCell::new(
+        (0..entries)
+            .map(|index| {
+                Arc::new(MetadataCapture {
+                    drops: Arc::clone(&drops),
+                    panic_on_drop: index < failing_metadata,
+                }) as Arc<dyn Any + Send + Sync>
+            })
+            .collect(),
+    ));
+    let owner = Rc::clone(&external);
+    let calls = Rc::new(Cell::new(0));
+    let observed = Rc::clone(&calls);
+    binding
+        .pointer_router()
+        .add_global_handler(Rc::new(move |event| {
+            if matches!(event, PointerEvent::Move(_)) {
+                observed.set(observed.get() + 1);
+                // The accepted hover path is now each payload's last owner. This
+                // retirement is safe before failure because that path still owns it.
+                let released = owner.borrow_mut().drain(..).collect::<Vec<_>>();
+                drop(released);
+                if callback_fails {
+                    panic!("first hover callback failure");
+                }
+            }
+        }));
+    let movement =
+        make_move_event(Offset::new(20.0, 20.0), PointerKind::Mouse).expect("finite hover");
+    let PointerEvent::Move(motion) = movement else {
+        unreachable!()
+    };
+    let movement = PointerEvent::Move(flui_platform_api::pointer::PointerMove::new(
+        motion.pointer,
+        flui_platform_api::pointer::PointerButtons::NONE,
+        *motion.current(),
+    ));
+    lane.enter(|| {
+        binding.handle_pointer_event(&movement, |_| {
+            let mut path = HitTestResult::new();
+            for (index, metadata) in external.borrow().iter().enumerate() {
+                path.add(
+                    HitTestEntry::new(RenderId::new(index + 1)).metadata(Arc::clone(metadata)),
+                );
+            }
+            path
+        });
+        assert_eq!(
+            calls.get(),
+            0,
+            "hover delivery is queued until the owner frame"
+        );
+        assert_eq!(drops.load(Ordering::SeqCst), 0);
+        let outcome = catch_unwind(AssertUnwindSafe(|| binding.flush_pending_moves()));
+        if callback_fails {
+            let first = outcome.expect_err("the public callback failed");
+            assert_eq!(
+                first.downcast_ref::<&str>().copied(),
+                Some("first hover callback failure")
+            );
+            assert_eq!(
+                drops.load(Ordering::SeqCst),
+                0,
+                "failed delivery retains last-owner opaque metadata before any destructor runs"
+            );
+        } else {
+            assert_eq!(outcome.expect("healthy hover delivery"), 1);
+            assert_eq!(
+                drops.load(Ordering::SeqCst),
+                1,
+                "healthy last-owner metadata is destroyed"
+            );
+        }
+        assert!(
+            external.borrow().is_empty(),
+            "callback released its independent metadata owners"
+        );
+        assert_eq!(calls.get(), 1);
+        binding.pointer_router().clear();
+        let healthy_calls = Rc::new(Cell::new(0));
+        let healthy = Rc::clone(&healthy_calls);
+        binding
+            .pointer_router()
+            .add_global_handler(Rc::new(move |_| healthy.set(healthy.get() + 1)));
+        binding.handle_pointer_event(&movement, |_| HitTestResult::new());
+        assert_eq!(
+            binding.flush_pending_moves(),
+            1,
+            "next accepted hover remains deliverable"
+        );
+        assert_eq!(healthy_calls.get(), 1);
+        assert_eq!(binding.flush_pending_moves(), 0);
+        binding.pointer_router().clear();
+    });
+}
+
+fn hover_healthy_metadata_retirement() {
+    assert_hover_path_retirement(false, 0);
+}
+fn hover_callback_failure_retains_metadata() {
+    assert_hover_path_retirement(true, 0);
+}
+fn hover_callback_failure_stays_first_before_metadata_drop() {
+    assert_hover_path_retirement(true, 1);
+}
+fn hover_competing_metadata_retirement_is_contained() {
+    // Two ordinary metadata destructors can abort a default path Vec Drop.
+    // Isolate that baseline failure; no panic payload has a hostile destructor.
+    let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
+        .args([
+            "--exact",
+            "interaction_lane::binding_input_contract_matrix",
+            "--nocapture",
+        ])
+        .env("FLUI_HOVER_METADATA_WORKER", "competing")
+        .env("RUST_BACKTRACE", "0")
+        .output()
+        .expect("isolated hover metadata worker");
+    assert!(
+        output.status.success(),
+        "competing hover metadata worker failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 fn device_removal_preserves_a_reentrant_replacement() {
@@ -1118,7 +1301,7 @@ enum NonFiniteInput {
     ContactMove,
     Wheel,
     Pinch,
-    CapturedPinch,
+    PinchDuringContact,
 }
 
 fn assert_non_finite_motion_or_signal_is_refused(input: NonFiniteInput) {
@@ -1140,18 +1323,16 @@ fn assert_non_finite_motion_or_signal_is_refused(input: NonFiniteInput) {
             binding
                 .pointer_router()
                 .add_global_handler(Rc::new(move |_| log.set(log.get() + 1)));
-            let pointer = if matches!(input, NonFiniteInput::CapturedPinch) {
-                PointerId::try_from(u64::MAX).expect("synthetic pinch identity")
-            } else {
-                PointerId::new(core::num::NonZeroU64::MIN)
-            };
+            // Native PanZoom uses its own virtual contact identity; it cannot
+            // reuse the live touch contact that is kept captured here.
+            let pointer = PointerId::new(core::num::NonZeroU64::MIN);
             let route = |_| {
                 hits.set(hits.get() + 1);
                 HitTestResult::new()
             };
             let captured = matches!(
                 input,
-                NonFiniteInput::ContactMove | NonFiniteInput::CapturedPinch
+                NonFiniteInput::ContactMove | NonFiniteInput::PinchDuringContact
             );
             if captured {
                 binding.handle_pointer_event(
@@ -1168,7 +1349,7 @@ fn assert_non_finite_motion_or_signal_is_refused(input: NonFiniteInput) {
                     checked_move(pointer, position, PointerKind::Touch)
                 }
                 NonFiniteInput::Wheel => checked_scroll(position, Offset::new(0.0, 10.0)),
-                NonFiniteInput::Pinch | NonFiniteInput::CapturedPinch => {
+                NonFiniteInput::Pinch | NonFiniteInput::PinchDuringContact => {
                     checked_pinch(position, 0.1)
                 }
             };
@@ -1189,10 +1370,12 @@ fn assert_non_finite_motion_or_signal_is_refused(input: NonFiniteInput) {
             binding.flush_pending_moves();
             assert_eq!(deliveries.get(), 1, "healthy input follows refused input");
             if captured {
+                let expected_hits =
+                    usize::from(matches!(input, NonFiniteInput::PinchDuringContact));
                 assert_eq!(
                     hits.get(),
-                    0,
-                    "the admitted contact retains its capture route"
+                    expected_hits,
+                    "native gestures hit-test independently while contact motion retains its route"
                 );
                 binding.handle_pointer_event(
                     &make_up_event_for_id(pointer, Offset::ZERO, PointerKind::Touch)
@@ -1203,6 +1386,11 @@ fn assert_non_finite_motion_or_signal_is_refused(input: NonFiniteInput) {
                     deliveries.get(),
                     2,
                     "the admitted contact still delivers its terminal event"
+                );
+                assert_eq!(
+                    hits.get(),
+                    expected_hits,
+                    "touch Up retains its captured route"
                 );
             } else {
                 assert_eq!(hits.get(), 1, "healthy input performs a fresh hit test");
@@ -1223,8 +1411,8 @@ fn non_finite_wheel_position_is_refused() {
 fn non_finite_pinch_position_is_refused() {
     assert_non_finite_motion_or_signal_is_refused(NonFiniteInput::Pinch);
 }
-fn non_finite_captured_pinch_position_is_refused() {
-    assert_non_finite_motion_or_signal_is_refused(NonFiniteInput::CapturedPinch);
+fn non_finite_pinch_during_contact_is_refused() {
+    assert_non_finite_motion_or_signal_is_refused(NonFiniteInput::PinchDuringContact);
 }
 
 fn hardware_trace_event(
@@ -1791,7 +1979,7 @@ fn assert_signal_claim_delivery(route: SignalRoute, competing: bool) {
                 make_pinch_gesture_event(Offset::ZERO, 0.1).expect("finite input")
             }
         };
-        let pointer = PointerId::try_from(u64::MAX).expect("synthetic pinch identity");
+        let pointer = PointerId::new(core::num::NonZeroU64::MIN);
         if matches!(route, SignalRoute::CapturedPinch) {
             binding.handle_pointer_event(
                 &make_down_event_for_id(pointer, Offset::ZERO, PointerKind::Touch)
@@ -1872,14 +2060,21 @@ fn scroll_role_metadata_keeps_lease() {
 }
 
 fn scroll_owner_batch_preserves_reentrant_admission() {
-    assert_scroll_owner_batch(false);
+    assert_signal_owner_batch(false, false);
 }
 
 fn scroll_device_batch_preserves_reentrant_admission() {
-    assert_scroll_owner_batch(true);
+    assert_signal_owner_batch(true, false);
 }
 
-fn assert_scroll_owner_batch(device_removal: bool) {
+fn native_focus_batch_preserves_reentrant_admission() {
+    assert_signal_owner_batch(false, true);
+}
+fn native_device_batch_preserves_reentrant_admission() {
+    assert_signal_owner_batch(true, true);
+}
+
+fn assert_signal_owner_batch(device_removal: bool, native: bool) {
     use flui_foundation::geometry::Offset;
     use flui_interaction::events::{
         PointerEvent, PointerKind, make_down_event_for_id, make_scroll_event,
@@ -1887,7 +2082,10 @@ fn assert_scroll_owner_batch(device_removal: bool) {
     use flui_interaction::{EventPropagation, GestureBinding, HitTestResult};
     use flui_platform_api::{
         EventTime,
-        pointer::{DeviceId, PointerDeviceChange, PointerId, ScrollPhase},
+        pointer::{
+            DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerDeviceChange, PointerId,
+            PointerInfo, PointerPosition, ScrollPhase,
+        },
     };
     use std::{cell::Cell, rc::Rc};
 
@@ -1899,6 +2097,25 @@ fn assert_scroll_owner_batch(device_removal: bool) {
     let device = DeviceId::try_from(1_u64).expect("device");
     let first_pointer = PointerId::try_from(1_u64).expect("pointer");
     let packet = move |phase| {
+        if native {
+            let native_phase = match phase {
+                ScrollPhase::Began => PanZoomPhase::Start,
+                ScrollPhase::Changed => PanZoomPhase::Update(
+                    PanZoomTransform::try_new(Offset::ZERO, 1.2, 0.0).expect("native transform"),
+                ),
+                _ => unreachable!("batch fixture phase"),
+            };
+            return PointerEvent::PanZoom(PanZoomEvent::new(
+                PointerInfo::new(
+                    PointerId::try_from(3_u64).expect("distinct native pointer"),
+                    PointerKind::Trackpad,
+                )
+                .with_device(device),
+                EventTime::from_nanos(0),
+                PointerPosition::try_new(flui_foundation::geometry::Point::ZERO).expect("position"),
+                native_phase,
+            ));
+        }
         let PointerEvent::Scroll(mut scroll) =
             make_scroll_event(Offset::ZERO, Offset::new(0.0, 10.0)).expect("finite wheel")
         else {
@@ -1911,14 +2128,25 @@ fn assert_scroll_owner_batch(device_removal: bool) {
     };
     lane.enter(|| {
         let calls = Rc::clone(&selected_calls);
-        let selected = handle
-            .register_scroll(move |_| {
-                calls.set(calls.get() + 1);
-                EventPropagation::Stop
-            })
-            .expect("reentrant consumer");
+        let claim = move || {
+            calls.set(calls.get() + 1);
+            EventPropagation::Stop
+        };
+        let selected_entry = if native {
+            HitTestEntry::new(RenderId::new(1)).pan_zoom_target(
+                handle
+                    .register_pan_zoom(move |_| claim())
+                    .expect("reentrant consumer"),
+            )
+        } else {
+            HitTestEntry::new(RenderId::new(1)).scroll_target(
+                handle
+                    .register_scroll(move |_| claim())
+                    .expect("reentrant consumer"),
+            )
+        };
         let mut selected_path = HitTestResult::new();
-        selected_path.add(HitTestEntry::new(RenderId::new(1)).scroll_target(selected));
+        selected_path.add(selected_entry);
         let weak = Rc::downgrade(&binding);
         let observer = handle
             .register_pointer(move |dispatch| {
@@ -1962,15 +2190,26 @@ fn assert_scroll_owner_batch(device_removal: bool) {
             binding.cancel_active_pointers();
         }
         let calls = Rc::clone(&other_calls);
-        let other = handle
-            .register_scroll(move |_| {
-                calls.set(calls.get() + 1);
-                EventPropagation::Stop
-            })
-            .expect("other consumer");
+        let claim = move || {
+            calls.set(calls.get() + 1);
+            EventPropagation::Stop
+        };
+        let other_entry = if native {
+            HitTestEntry::new(RenderId::new(2)).pan_zoom_target(
+                handle
+                    .register_pan_zoom(move |_| claim())
+                    .expect("other consumer"),
+            )
+        } else {
+            HitTestEntry::new(RenderId::new(2)).scroll_target(
+                handle
+                    .register_scroll(move |_| claim())
+                    .expect("other consumer"),
+            )
+        };
         binding.handle_pointer_event(&packet(ScrollPhase::Changed), |_| {
             let mut path = HitTestResult::new();
-            path.add(HitTestEntry::new(RenderId::new(2)).scroll_target(other));
+            path.add(other_entry);
             path
         });
         assert_eq!(

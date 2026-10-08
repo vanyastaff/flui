@@ -6,7 +6,9 @@
 //! configuration. The toolchain itself is not a row: `rust-toolchain.toml`
 //! pins it, and rustup has already resolved it by the time xtask runs.
 
-use std::process::{Command, ExitCode};
+use std::ffi::OsStr;
+use std::io::Write as _;
+use std::process::{Command, ExitCode, Stdio};
 
 use crate::docs_links;
 use crate::fonts::find_python;
@@ -72,6 +74,26 @@ struct Doctor {
 }
 
 impl Doctor {
+    fn check_android_ndk(&mut self, compiler: &OsStr, archiver: &OsStr) {
+        let compiler_ok = android_compiler_available(compiler);
+        let archiver_ok = android_archiver_available(archiver);
+        let hint = "install the Android NDK; set CC_aarch64_linux_android to its API-21 clang wrapper and AR_aarch64_linux_android to its llvm-ar";
+        self.row(
+            Scope::Full,
+            "Android NDK compiler",
+            compiler_ok,
+            &compiler.to_string_lossy(),
+            hint,
+        );
+        self.row(
+            Scope::Full,
+            "Android NDK archiver",
+            archiver_ok,
+            &archiver.to_string_lossy(),
+            hint,
+        );
+    }
+
     fn row(&mut self, scope: Scope, name: &str, ok: bool, detail: &str, install: &str) {
         let status = if ok { "ok" } else { "MISSING" };
         println!("  {:<5} {name:<34} {status:<8} {detail}", scope.label());
@@ -164,6 +186,60 @@ impl Doctor {
             );
         }
     }
+
+    fn check_full_targets(&mut self, installed: &[String]) {
+        for triple in [
+            "wasm32-unknown-unknown",
+            "x86_64-pc-windows-msvc",
+            "aarch64-apple-darwin",
+            "aarch64-linux-android",
+            "aarch64-apple-ios",
+        ] {
+            if triple == "aarch64-apple-ios" && !self.macos {
+                continue;
+            }
+            self.check_target(Scope::Full, triple, installed);
+        }
+    }
+}
+
+/// Probe the configured compiler's Android target and sysroot, without an object file.
+pub(crate) fn android_compiler_available(compiler: &OsStr) -> bool {
+    let Ok(mut child) = Command::new(compiler)
+        .args(["-x", "c", "-fsyntax-only", "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return false;
+    };
+    let input_ok = child.stdin.take().is_some_and(|mut input| {
+        input.write_all(b"#include <android/api-level.h>\n#if !defined(__ANDROID__) || !defined(__ANDROID_API__) || __ANDROID_API__ < 21\n#error Android API 21 or later required\n#endif\n").is_ok()
+    });
+    let status = child.wait();
+    input_ok && status.is_ok_and(|status| status.success())
+}
+
+/// Probe whether the selected Android archiver executes successfully.
+pub(crate) fn android_archiver_available(archiver: &OsStr) -> bool {
+    Command::new(archiver)
+        .arg("--version")
+        .output()
+        .is_ok_and(|out| out.status.success())
+}
+
+/// Select the same target overrides that cc-rs consumes.
+pub(crate) fn android_tool(prefix: &str, fallback: &str) -> std::ffi::OsString {
+    [
+        format!("{prefix}_aarch64-linux-android"),
+        format!("{prefix}_aarch64_linux_android"),
+        format!("TARGET_{prefix}"),
+        prefix.to_owned(),
+    ]
+    .into_iter()
+    .find_map(std::env::var_os)
+    .unwrap_or_else(|| fallback.into())
 }
 
 fn first_line(bytes: &[u8]) -> String {
@@ -283,6 +359,26 @@ pub(crate) fn doctor(args: &DoctorArgs) -> anyhow::Result<ExitCode> {
     );
 
     // `cargo xtask ci-full`
+    doctor.check_android_ndk(&android_tool("CC", "clang"), &android_tool("AR", "llvm-ar"));
+    if os != "windows" {
+        doctor.check_cargo_sub(Scope::Full, "xwin", "cargo install --locked cargo-xwin --version 0.23.1 (also needs clang/LLVM and MSVC SDK/CRT provisioning)");
+    }
+    if os == "macos" {
+        doctor.check_bin(
+            Scope::Full,
+            "xcrun",
+            "install Xcode with the iOS SDK",
+            &["--sdk", "iphoneos", "--show-sdk-path"],
+        );
+    } else {
+        doctor.check_bin(
+            Scope::Full,
+            "cargo-zigbuild",
+            "cargo install --locked cargo-zigbuild --version 0.23.4",
+            &["--version"],
+        );
+        doctor.check_bin(Scope::Full, "zig", "install Zig 0.17.0 (macOS cross C headers); iOS checks require a genuine Apple SDK on macOS", &["version"]);
+    }
     for (sub, install) in ci_full_cargo_subs() {
         doctor.check_cargo_sub(Scope::Full, sub, &install);
     }
@@ -325,15 +421,7 @@ pub(crate) fn doctor(args: &DoctorArgs) -> anyhow::Result<ExitCode> {
     let zizmor = doctor.brew_or("zizmor", "cargo install --locked zizmor");
     doctor.check_bin(Scope::Full, "zizmor", &zizmor, &["--version"]);
     let installed = output_lines("rustup", &["target", "list", "--installed"]);
-    for triple in [
-        "wasm32-unknown-unknown",
-        "x86_64-pc-windows-msvc",
-        "aarch64-apple-darwin",
-        "aarch64-linux-android",
-        "aarch64-apple-ios",
-    ] {
-        doctor.check_target(Scope::Full, triple, &installed);
-    }
+    doctor.check_full_targets(&installed);
     match succeeded_first_line("rustup", &["run", "nightly", "cargo", "miri", "--version"]) {
         Some(version) => doctor.row(Scope::Full, "nightly + miri", true, &version, ""),
         None => doctor.row(
@@ -424,11 +512,44 @@ mod tests {
         );
     }
 
+    fn a_version_only_compiler_does_not_supply_android_headers() {
+        let mut full = doctor(Mode::Full);
+        full.check_android_ndk(OsStr::new("cargo"), OsStr::new("cargo"));
+        assert!(
+            full.summary()
+                .contains("1 missing for `cargo xtask ci-full`")
+        );
+    }
+
+    fn only_apple_hosts_require_the_ios_target() {
+        let installed = [
+            "wasm32-unknown-unknown",
+            "x86_64-pc-windows-msvc",
+            "aarch64-apple-darwin",
+            "aarch64-linux-android",
+        ]
+        .map(str::to_owned);
+        for macos in [false, true] {
+            let mut full = doctor(Mode::Full);
+            full.macos = macos;
+            full.check_full_targets(&installed);
+            assert_eq!(full.missing_required, usize::from(macos));
+        }
+    }
+
     #[test]
     fn doctor_contract() {
         crate::table_test::run_table(
             "doctor_contract",
             &[
+                (
+                    "only_apple_hosts_require_the_ios_target",
+                    only_apple_hosts_require_the_ios_target as fn(),
+                ),
+                (
+                    "a_version_only_compiler_does_not_supply_android_headers",
+                    a_version_only_compiler_does_not_supply_android_headers as fn(),
+                ),
                 (
                     "a_failing_binary_probe_is_not_an_available_tool",
                     a_failing_binary_probe_is_not_an_available_tool as fn(),

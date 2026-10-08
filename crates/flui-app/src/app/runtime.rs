@@ -251,7 +251,7 @@ impl RealmRegistry {
     // neither the mobile runners nor wasm build.
     #[cfg(any(test, not(target_arch = "wasm32")))]
     #[cfg_attr(
-        all(not(test), any(target_os = "android", target_os = "ios")),
+        any(target_os = "android", target_os = "ios"),
         expect(dead_code, reason = "consumed only by the desktop wake-deadline hook")
     )]
     pub(super) fn get(&self, id: &RealmId) -> Option<&RealmSlot> {
@@ -318,6 +318,10 @@ impl RealmRegistry {
             not(target_arch = "wasm32")
         )
     ))]
+    #[cfg_attr(
+        target_os = "android",
+        expect(dead_code, reason = "realm iteration tests are excluded on Android")
+    )]
     pub(super) fn keys(&self) -> Vec<RealmId> {
         self.slots.iter().map(|(id, _)| *id).collect()
     }
@@ -347,6 +351,10 @@ enum RealmMapMutation {
             reason = "constructed only by request_realm_install, whose one production caller \
                       (runner.rs::install_realm_alongside) is desktop-only"
         )
+    )]
+    #[cfg_attr(
+        all(test, target_os = "android"),
+        expect(dead_code, reason = "realm install tests are excluded on Android")
     )]
     Install(RealmId, Box<RealmSlot>, Arc<dyn PlatformWindow>),
     /// Remove one realm from the registry (a window closing while siblings
@@ -426,7 +434,7 @@ pub enum ExitPolicy {
 // is gated out there (see `lib.rs`), while android and wasm32 keep the
 // re-export and therefore a reachable path.
 #[cfg_attr(
-    all(not(test), target_os = "ios"),
+    target_os = "ios",
     expect(
         dead_code,
         reason = "secondary-window policy; its iOS re-export is gated out"
@@ -1027,6 +1035,13 @@ impl AppRuntime {
     /// taken at the last window's close would never be re-decided once
     /// the vetoing service completes.
     #[cfg(not(target_arch = "wasm32"))]
+    #[cfg_attr(
+        all(test, target_os = "android"),
+        expect(
+            dead_code,
+            reason = "desktop exit-policy wiring tests are excluded on Android"
+        )
+    )]
     pub(super) fn set_lifecycle_exit_notifier(&mut self, notifier: Arc<dyn Fn() + Send + Sync>) {
         self.service_registry.set_exit_notifier(notifier);
     }
@@ -1078,6 +1093,10 @@ impl AppRuntime {
             reason = "production paths resolve through ensure_execution/start_service; \
                       only tests read the resolved services back through this accessor"
         )
+    )]
+    #[cfg_attr(
+        all(test, target_os = "android"),
+        expect(dead_code, reason = "execution accessor tests are excluded on Android")
     )]
     pub(super) fn execution(&self) -> Option<&ExecutionServices> {
         self.execution.get().map(Arc::as_ref)
@@ -1226,6 +1245,13 @@ impl AppRuntime {
     /// owner-local means every deadline returned here is advanced by the
     /// same realm frame path that the wake re-enters.
     #[must_use]
+    #[cfg_attr(
+        all(test, any(target_os = "android", target_os = "ios")),
+        expect(
+            dead_code,
+            reason = "desktop wake-deadline tests are excluded on mobile"
+        )
+    )]
     pub(super) fn next_wake(&self) -> Option<web_time::Instant> {
         self.realms
             .iter()
@@ -1331,6 +1357,10 @@ impl AppRuntime {
             reason = "runner.rs::install_realm_alongside (its one production caller) is \
                       desktop-only -- android/wasm32 have no caller outside this crate's own tests"
         )
+    )]
+    #[cfg_attr(
+        all(test, target_os = "android"),
+        expect(dead_code, reason = "realm install tests are excluded on Android")
     )]
     pub(super) fn request_realm_install(
         &mut self,
@@ -1778,6 +1808,13 @@ pub(super) fn take_parked_host_feeds() -> Vec<ParkedHostFeed> {
 /// rises then. If no thread can be started the feed runs here, before the
 /// first frame; on wasm32, which has no threads (and where fontdb finds no
 /// host fonts), it always does.
+#[cfg_attr(
+    all(test, target_os = "ios"),
+    expect(
+        dead_code,
+        reason = "iOS tests park the host feed instead of spawning it"
+    )
+)]
 fn spawn_host_feed(feed: HostFontFeed, wake: Arc<dyn Fn() + Send + Sync>) {
     fn feed_then_wake(feed: HostFontFeed, wake: &(dyn Fn() + Send + Sync)) {
         use std::panic::{AssertUnwindSafe, catch_unwind};

@@ -3,7 +3,7 @@
 use super::{
     callback_containment::{CallbackSequence, finish_containment, invoke_callback},
     contact::{ArenaMembership, ContactId, PrimaryContact},
-    recognizer::{CancelOutcome, GestureRecognizer},
+    recognizer::{CancelOutcome, GestureRecognizer, measured_positions},
 };
 use crate::events::PointerButton;
 use crate::{
@@ -291,7 +291,6 @@ impl Drop for TapArenaMember {
 }
 impl TapGestureRecognizer {
     /// Start configuring an owner-local recognizer.
-    #[must_use]
     pub fn builder(arena: GestureArena) -> TapGestureRecognizerBuilder {
         TapGestureRecognizerBuilder {
             arena,
@@ -455,10 +454,10 @@ impl GestureRecognizer for TapGestureRecognizer {
         };
         match dispatch.local {
             PointerEvent::Move(_) => {
-                if member.contact.moved_beyond(
-                    details.local_position,
-                    snapshot.settings.hit_slop(snapshot.kind),
-                ) {
+                if measured_positions(dispatch.local).any(|position| {
+                    let delta = position - snapshot.local;
+                    delta.dx.hypot(delta.dy) > snapshot.settings.hit_slop(snapshot.kind)
+                }) {
                     self.cancel_sequence(member.sequence, details);
                 } else {
                     invoke_callback(
@@ -478,12 +477,12 @@ impl GestureRecognizer for TapGestureRecognizer {
                         return;
                     };
                     let sequence = &mut sequences.live[index];
-                    if sequence.button != button {
-                        true
-                    } else {
+                    if sequence.button == button {
                         sequence.up = Some(details.clone());
                         sequences.current = None;
                         false
+                    } else {
+                        true
                     }
                 };
                 if mismatch {
@@ -523,7 +522,7 @@ impl GestureRecognizer for TapGestureRecognizer {
                         sequence.member.contact.cancel();
                     },
                     |callback| callback(sequence.down),
-                )
+                );
             });
             RoutePanic::preserve_first(&mut first, candidate, "tap cancellation");
         }

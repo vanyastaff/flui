@@ -11,7 +11,7 @@ use flui_foundation::geometry::Point;
 use flui_interaction::events::{PointerKind, make_move_event};
 use flui_interaction::{HitTestEntry, InteractionLane, Offset, PointerTarget, RenderId};
 use flui_platform_api::EventTime;
-use flui_platform_api::pointer::{PointerEvent, PointerMove, PointerPosition, PointerSample};
+use flui_platform_api::pointer::{PointerEvent, PointerMove, PointerPosition, PointerSample, Pressure};
 
 static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
 
@@ -125,6 +125,7 @@ fn route_sample(time: u64, x: f64, y: f64) -> PointerSample {
         EventTime::from_nanos(time),
         PointerPosition::try_new(Point::new(x, y)).expect("finite fixture sample"),
     )
+    .with_pressure(Pressure::try_new(0.65).expect("valid fixture pressure"))
 }
 
 fn measure_route_shape(target_count: usize, translated: bool, history: bool) {
@@ -156,6 +157,17 @@ fn measure_route_shape(target_count: usize, translated: bool, history: bool) {
             handle.register_pointer(move |dispatch| {
                 let PointerEvent::Move(local) = dispatch.local else { panic!("local Move") };
                 let PointerEvent::Move(global) = dispatch.global else { panic!("global Move") };
+                assert_eq!(local.pointer, global.pointer);
+                assert_eq!(local.buttons, global.buttons);
+                assert_eq!(local.modifiers, global.modifiers);
+                for (local, global) in std::iter::once((local.current(), global.current()))
+                    .chain(local.coalesced().iter().zip(global.coalesced()))
+                    .chain(local.predicted().iter().zip(global.predicted()))
+                {
+                    let mut original = *local;
+                    original.position = global.position;
+                    assert_eq!(original, *global, "localization preserves every source sample field except position");
+                }
                 let (dx, dy) = if translated { (10.0, 20.0) } else { (0.0, 0.0) };
                 assert_eq!(global.current().position.get(), Point::new(30.0, 50.0));
                 assert_eq!(local.current().position.get(), Point::new(30.0 - dx, 50.0 - dy));
@@ -173,6 +185,7 @@ fn measure_route_shape(target_count: usize, translated: bool, history: bool) {
                     assert_eq!(local.predicted()[0].time.as_nanos(), 4_000_000);
                     assert_eq!(local.predicted()[0].position.get(), Point::new(40.0 - dx, 60.0 - dy));
                     assert_eq!(global.coalesced()[0].position.get(), Point::new(10.0, 20.0));
+                    assert_eq!(global.coalesced()[1].position.get(), Point::new(20.0, 30.0));
                     assert_eq!(global.predicted()[0].position.get(), Point::new(40.0, 60.0));
                 }
                 deliveries.set(deliveries.get() + 1);
@@ -194,11 +207,13 @@ fn measure_route_shape(target_count: usize, translated: bool, history: bool) {
         let allocations = ALLOCATIONS.load(Ordering::Relaxed);
         assert!(result.is_none());
         assert_eq!(deliveries.get(), target_count * 2);
-        if !history {
+        if !history || !translated {
             assert_eq!(allocations, 0, "scalar cached delivery allocates no heap after setup");
+        } else {
+            assert!(allocations <= target_count * 2, "translated measured and predicted histories need at most one owned allocation each per target: targets={target_count}, allocations={allocations}");
         }
-        // History may require owned localized vectors. Record its measured
-        // cost without pinning a private clone/collection implementation.
+        // Localizing nonempty measured and predicted histories requires owned
+        // storage; global-only delivery continues to borrow the source event.
         println!("cached Move: targets={target_count}, translated={translated}, history={history}, allocations={allocations}");
         handle.release_route(route).expect("release route");
     });

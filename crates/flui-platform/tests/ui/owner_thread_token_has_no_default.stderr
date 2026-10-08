@@ -1,0 +1,5 @@
+error[E0277]: the trait bound `traits::host_window::sealed::OwnerThreadToken: std::default::Default` is not satisfied
+ --> tests/ui/owner_thread_token_has_no_default.rs:4:36
+  |
+4 |     let _ = window.text_store_host(Default::default());
+  |                                    ^^^^^^^^^^^^^^^^^^ the trait `std::default::Default` is not implemented for `traits::host_window::sealed::OwnerThreadToken`

@@ -259,9 +259,9 @@ impl UiRealm {
             PlatformInput::Ime(ime_event) => {
                 let clock = presentation.clock();
                 clock.stamp_input_epoch(clock.now());
-                let dispatch = catch_unwind(AssertUnwindSafe(|| {
+                let dispatch = Self::dispatch_after_pending_motion(presentation, || {
                     presentation.text_input().dispatch(&ime_event);
-                }));
+                });
                 self.finish_addressed_input_dispatch(presentation, dispatch);
                 false
             }
@@ -287,12 +287,12 @@ impl UiRealm {
                 let clock = presentation.clock();
                 clock.stamp_input_epoch(clock.now());
                 let mut handled = false;
-                let dispatch = catch_unwind(AssertUnwindSafe(|| {
+                let dispatch = Self::dispatch_after_pending_motion(presentation, || {
                     handled = presentation
                         .focus_manager()
                         .dispatch_key_event(&keyboard_event)
                         .is_handled();
-                }));
+                });
                 self.finish_addressed_input_dispatch(presentation, dispatch);
                 handled
             }
@@ -307,6 +307,26 @@ impl UiRealm {
                 false
             }
         }
+    }
+
+    /// The already resolved presentation owns both the measured prefix and the
+    /// accepted observing input, even if motion changes the active focus owner.
+    fn dispatch_after_pending_motion(
+        presentation: &PresentationState,
+        dispatch: impl FnOnce(),
+    ) -> Result<(), Box<dyn std::any::Any + Send>> {
+        let mut first = catch_unwind(AssertUnwindSafe(|| {
+            presentation.gestures().flush_pending_input();
+        }))
+        .err();
+        let resolved = catch_unwind(AssertUnwindSafe(|| {
+            presentation.gestures().drain_deferred_arena_resolutions();
+        }))
+        .err();
+        preserve_first_input_panic(&mut first, resolved, "input motion resolution");
+        let dispatched = catch_unwind(AssertUnwindSafe(dispatch)).err();
+        preserve_first_input_panic(&mut first, dispatched, "input after measured motion");
+        first.map_or(Ok(()), Err)
     }
 
     pub(super) fn dispatch_pointer_event_entered(

@@ -1,7 +1,6 @@
 # Распознаватели жестов: API — требования
 
-- **Статус:** черновик; scope подтверждён владельцем 2026-10-06 ([../orchestration.md](../orchestration.md),
-  «Scope-решения»)
+- **Статус:** дизайн утверждён; API и production-потребители интегрированы, итоговая приёмка остаётся открытой ([tasks.md](tasks.md)); scope подтверждён владельцем 2026-10-06 ([../orchestration.md](../orchestration.md), «Scope-решения»)
 - **Дата:** 2026-10-06
 - **База:** `main` @ `9a4daa3ed` (worktree оркестратора @ `814d77e8d`); строится **поверх** веток
   I1 `interaction/arena-recognizer-lifecycle` @ `2c7e48c00` и I2 `interaction/multi-pointer-recognizers`
@@ -16,7 +15,9 @@
 
 ## Зачем
 
-Распознаватель — единственная точка расширения жестов, и сегодня ею нельзя пользоваться:
+Исходная проблема на базе дизайна: распознаватель — единственная точка расширения
+жестов, но пользоваться ею было нельзя. Перечисленные ниже дефекты описывают эту
+базу; текущее выполнение и оставшаяся проверка записаны в [tasks.md](tasks.md).
 
 - `GestureRecognizer` не dyn-compatible (`add_pointer(self: &Arc<Self>, ..)`,
   `crates/flui-interaction/src/recognizers/recognizer.rs:47-52`, E0038 подтверждён `rustc 1.99.0`), поэтому

@@ -92,7 +92,10 @@ host.
   (`local_post_frame_lane`) is `test-support` only, so a host has no way to
   draw a frame, or end one, except the pump. Tests of the draw step alone
   reach it through `render_frame_for_test` and `draw_frame`, both under
-  `test-support`.
+  `test-support`. `trybuild_ui::ui_tests` checks the private draw-step diagnostic
+  from a host caller and compiles a valid pump caller. It also rejects moving
+  a clone from `RenderingBinding::root_pipeline_owner` to another thread while
+  accepting local access to that same binding's pipeline.
 - **The realm renders through a sink, never an engine.** `UiRealm::pump`
   takes any `&mut dyn FrameSink`; the host picks one (`flui-app`'s raster
   lane, or its direct sink over a borrowed backend on the web runner), and
@@ -189,6 +192,47 @@ host.
   impl for `ManualClock`, which a trait impl cannot gate per caller.
 
 ## Mapping decisions
+
+### Observing input follows its presentation's accepted motion
+
+Keyboard and IME drain a frozen measured motion prefix before dispatch without
+advancing frame time or ending contacts (ADR-0163). Keyboard retains the active
+presentation resolved at admission through reentrant focus changes; IME retains
+its addressed presentation. Callback failures finish accepted motion, deferred
+arena settlement and the observing input before the first failure resumes.
+Reentrant movement stays debt for the next operation or frame. This observes
+input-produced state; layout and paint still follow their frame transaction.
+
+The public flui-testing `containment_and_isolation_matrix` rows
+`mouse_motion_precedes_keyboard_without_a_frame`,
+`touch_motion_precedes_keyboard_without_a_frame` and their resampled variants
+pin measured coordinates before Key. The single and competing rows
+`motion_failure_keeps_following_keyboard_and_contact_terminal`,
+`keyboard_failure_keeps_preceding_motion_and_contact_terminal` and
+`motion_failure_precedes_competing_keyboard_failure_and_recovers` pin recovery.
+`ime_commit_observes_preceding_measured_motion` and
+`ime_commit_survives_competing_motion_and_owner_failures` pin actual text edits.
+`keyboard_reads_all_frozen_contacts_after_sibling_failure`,
+`keyboard_barrier_keeps_reentrant_contact_motion_for_the_next_round`,
+`keyboard_barrier_keeps_frozen_coalesced_motion_before_reentrant_replacement`,
+`keyboard_coalesced_prefix_survives_reentrant_capture_release`,
+`runtime_keyboard_barrier_preserves_scale_contacts_and_continuity` and
+`keyboard_motion_barrier_uses_resolved_focus_owner_during_reentrant_focus_change`
+pin sibling prefixes, newer debt, gesture continuity and resolved ownership.
+
+The default-policy frozen Contact payload retains its exact live contact
+authority when a callback replaces its queued marker. Old cleanup leaves newer
+debt intact; terminal/replacement invalidation still refuses stale publication.
+Capture guards hold the committed prefix through reentrant release, then loss
+settlement drains its accepted tail and one Cancel before observing input.
+
+Independent removal of Keyboard or IME barrier wiring makes the corresponding
+public rows observe stale motion state and the wrong competing first failure.
+Per-contact dispatch-time measured draining admits newer reentrant movement
+into the old Key round. Removing coalesced prefix authority loses the committed
+old Move; removing only its capture guard loses that Move during release.
+These source inverses distinguish production behavior from eventual frame
+delivery and from a test-only flush seam (ADR-0163).
 
 ### Frame input and ambient hover belong to each presentation
 

@@ -129,9 +129,6 @@
 
 // Public items keep their contract documentation at the API boundary.
 #![deny(missing_docs)]
-// ADR-0027: executable callbacks are owner-local. An Arc-shaped data-plane seam
-// does not authorize adding Send + Sync bounds to those callbacks.
-#![expect(clippy::arc_with_non_send_sync)]
 
 // ============================================================================
 // Core infrastructure modules

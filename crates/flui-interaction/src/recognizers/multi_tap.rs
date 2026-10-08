@@ -5,7 +5,7 @@ use super::{
     callback_containment::{
         CallbackSequence, finish_containment, retire_callbacks, withdraw_cancelled,
     },
-    recognizer::GestureRecognizer,
+    recognizer::{GestureRecognizer, measured_positions},
 };
 use crate::{
     arena::{
@@ -86,19 +86,16 @@ pub struct MultiTapGestureRecognizerBuilder {
 }
 impl MultiTapGestureRecognizerBuilder {
     /// Freeze gesture settings at admission.
-    #[must_use]
     pub fn settings(mut self, settings: GestureSettings) -> Self {
         self.settings = settings;
         self
     }
     /// Called after all required contacts release.
-    #[must_use]
     pub fn on_multi_tap(mut self, callback: impl Fn(MultiTapDetails) + 'static) -> Self {
         self.callbacks.on_multi_tap = Some(Rc::new(callback));
         self
     }
     /// Called on explicit cancellation, timeout, or lost arena competition.
-    #[must_use]
     pub fn on_multi_tap_cancel(mut self, callback: impl Fn(MultiTapDetails) + 'static) -> Self {
         self.callbacks.on_multi_tap_cancel = Some(Rc::new(callback));
         self
@@ -124,7 +121,6 @@ impl MultiTapGestureRecognizer {
     ///
     /// # Panics
     /// Panics when `required_pointer_count` is less than two.
-    #[must_use]
     pub fn builder(
         arena: GestureArena,
         required_pointer_count: usize,
@@ -203,7 +199,7 @@ impl MultiTapGestureRecognizer {
         self.retire_entries(&sequence, GestureDisposition::Accepted, &mut first);
         let mut notices = CallbackSequence::new();
         notices.call(self.callbacks.on_multi_tap.clone(), |callback| {
-            callback(details)
+            callback(details);
         });
         RoutePanic::preserve_first(
             &mut first,
@@ -337,10 +333,12 @@ impl GestureRecognizer for MultiTapGestureRecognizer {
                     let Some(contact) = sequence.contacts.get(&pointer) else {
                         return;
                     };
-                    let delta = position - contact.initial;
                     !position.dx.is_finite()
                         || !position.dy.is_finite()
-                        || delta.dx.hypot(delta.dy) > sequence.settings.hit_slop(contact.kind)
+                        || measured_positions(dispatch.local).any(|position| {
+                            let delta = position - contact.initial;
+                            delta.dx.hypot(delta.dy) > sequence.settings.hit_slop(contact.kind)
+                        })
                 };
                 if exceeded {
                     self.cancel();
@@ -390,7 +388,7 @@ impl GestureRecognizer for MultiTapGestureRecognizer {
         self.retire_entries(&sequence, GestureDisposition::Rejected, &mut first);
         let mut notices = CallbackSequence::new();
         notices.call(self.callbacks.on_multi_tap_cancel.clone(), |callback| {
-            callback(details)
+            callback(details);
         });
         RoutePanic::preserve_first(
             &mut first,

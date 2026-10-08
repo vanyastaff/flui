@@ -3,7 +3,7 @@
 use super::{
     callback_containment::{finish_containment, invoke_callback},
     contact::{ArenaMembership, PrimaryContact},
-    recognizer::{CancelOutcome, GestureRecognizer, is_primary_down},
+    recognizer::{CancelOutcome, GestureRecognizer, is_primary_down, measured_positions},
 };
 use crate::{
     arena::{GestureArena, GestureArenaEntry, GestureArenaMember, GestureDisposition},
@@ -124,7 +124,6 @@ impl std::fmt::Debug for DoubleTapGestureRecognizer {
 }
 impl DoubleTapGestureRecognizer {
     /// Start configuring an owner-local recognizer.
-    #[must_use]
     pub fn builder(arena: GestureArena) -> DoubleTapGestureRecognizerBuilder {
         DoubleTapGestureRecognizerBuilder {
             arena,
@@ -170,7 +169,7 @@ impl DoubleTapGestureRecognizer {
                 self.callbacks.on_double_tap_cancel.clone(),
                 || {},
                 |callback| callback(details),
-            )
+            );
         });
         RoutePanic::preserve_first(&mut first, candidate, "double tap cancellation");
         finish_containment(first, incoming);
@@ -214,7 +213,7 @@ impl DoubleTapGestureRecognizer {
                     self.callbacks.on_double_tap.clone(),
                     || {},
                     |callback| callback(details),
-                )
+                );
             });
             RoutePanic::preserve_first(&mut first, candidate, "double tap completion");
         }
@@ -285,7 +284,7 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
                         self.callbacks.on_double_tap_down.clone(),
                         || {},
                         |callback| callback(self.details()),
-                    )
+                    );
                 });
                 RoutePanic::preserve_first(&mut failure, candidate, "double tap second down");
             }
@@ -314,10 +313,10 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
                 if matches!(
                     state,
                     DoubleTapState::FirstDown | DoubleTapState::SecondDown
-                ) && self.contact.moved_beyond(
-                    details.local_position,
-                    contact.settings.hit_slop(contact.kind),
-                ) {
+                ) && measured_positions(dispatch.local).any(|position| {
+                    let delta = position - contact.local;
+                    delta.dx.hypot(delta.dy) > contact.settings.hit_slop(contact.kind)
+                }) {
                     self.retire_attempt(details, true);
                 }
             }

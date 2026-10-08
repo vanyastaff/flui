@@ -394,7 +394,10 @@ impl DragGestureRecognizer {
                 primary_delta: self.primary_delta(delta), kind: snapshot.kind,
             });
             let claim = active && !state.accepted
-                && self.primary_delta(position - snapshot.local).abs() > self.slop(snapshot.kind, &snapshot.settings);
+                && super::recognizer::measured_positions(dispatch.local).any(|position| {
+                    self.primary_delta(position - snapshot.local).abs()
+                        > self.slop(snapshot.kind, &snapshot.settings)
+                });
             (update, claim)
         };
         if let Some(details) = update {

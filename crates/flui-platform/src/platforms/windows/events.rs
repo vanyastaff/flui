@@ -21,7 +21,11 @@
 use flui_platform_api::{
     EventTime, Modifiers as KeyboardModifiers,
     keyboard::{Code, Key, KeyEvent, KeyRepeat, KeyState, Location, NamedKey},
-    pointer::{ButtonChange, CancelReason, PointerButton, PointerButtons, PointerCancel, PointerEvent, PointerMove, PointerPosition, PointerPress, PointerRelease, PointerSample, ScrollEvent, ScrollPrecision},
+    pointer::{
+        ButtonChange, CancelReason, PointerButton, PointerButtons, PointerCancel, PointerEvent,
+        PointerMove, PointerPosition, PointerPress, PointerRelease, PointerSample, ScrollEvent,
+        ScrollPrecision,
+    },
 };
 use windows::Win32::{
     Foundation::{HWND, LPARAM, POINT, WPARAM},
@@ -30,7 +34,8 @@ use windows::Win32::{
     UI::{
         Input::KeyboardAndMouse::{
             GetCapture, GetKeyState, ReleaseCapture, SetCapture, VIRTUAL_KEY, VK_CONTROL,
-            VK_LBUTTON, VK_LWIN, VK_MBUTTON, VK_MENU, VK_RBUTTON, VK_RWIN, VK_SHIFT, VK_XBUTTON1, VK_XBUTTON2,
+            VK_LBUTTON, VK_LWIN, VK_MBUTTON, VK_MENU, VK_RBUTTON, VK_RWIN, VK_SHIFT, VK_XBUTTON1,
+            VK_XBUTTON2,
         },
         WindowsAndMessaging::{
             GetMessageTime, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP,
@@ -180,9 +185,7 @@ mod message_clock_contract {
 use super::util::{get_x_lparam, get_y_lparam};
 use crate::{
     shared::events::{event_timestamp_ns, primary_mouse_info},
-    shared::{
-        keys,
-    },
+    shared::keys,
     traits::PlatformInput,
 };
 
@@ -208,8 +211,17 @@ fn decode_native_reading(
     time: flui_platform_api::EventTime,
 ) -> Option<DecodedPointer> {
     use flui_foundation::geometry::{Point, Size};
-    use flui_platform_api::pointer::*;
-    use windows::Win32::UI::{Input::Pointer::POINTER_FLAG_PRIMARY, WindowsAndMessaging::*};
+    use flui_platform_api::pointer::{
+        ContactSize, DeviceId, PenOrientation, PenTool, PointerKind, PointerPosition, PointerRole,
+        PointerSample, Pressure, Twist,
+    };
+    use windows::Win32::UI::{
+        Input::Pointer::POINTER_FLAG_PRIMARY,
+        WindowsAndMessaging::{
+            PEN_FLAG_ERASER, PEN_MASK_PRESSURE, PEN_MASK_ROTATION, PEN_MASK_TILT_X,
+            PEN_MASK_TILT_Y, PT_MOUSE, PT_TOUCHPAD, TOUCH_MASK_CONTACTAREA, TOUCH_MASK_PRESSURE,
+        },
+    };
     if !scale.is_finite() || scale <= 0.0 {
         return None;
     }
@@ -217,7 +229,8 @@ fn decode_native_reading(
     let position = PointerPosition::try_new(Point::new(
         (f64::from(native.ptPixelLocationRaw.x) + f64::from(client_offset.x)) / scale,
         (f64::from(native.ptPixelLocationRaw.y) + f64::from(client_offset.y)) / scale,
-    )).ok()?;
+    ))
+    .ok()?;
     let mut sample = PointerSample::new(time, position);
     let kind = match reading {
         NativeReading::Pen(pen) => {
@@ -225,31 +238,52 @@ fn decode_native_reading(
                 sample.pressure = Some(Pressure::try_new(pen.pressure as f32 / 1024.0).ok()?);
             }
             if pen.penMask & PEN_MASK_ROTATION != 0 {
-                if pen.rotation > 359 { return None; }
+                if pen.rotation > 359 {
+                    return None;
+                }
                 sample.twist = Some(Twist::try_new(f64::from(pen.rotation).to_radians()).ok()?);
             }
-            if pen.penMask & (PEN_MASK_TILT_X | PEN_MASK_TILT_Y) == (PEN_MASK_TILT_X | PEN_MASK_TILT_Y) {
-                if !(-90..=90).contains(&pen.tiltX) || !(-90..=90).contains(&pen.tiltY) { return None; }
+            if pen.penMask & (PEN_MASK_TILT_X | PEN_MASK_TILT_Y)
+                == (PEN_MASK_TILT_X | PEN_MASK_TILT_Y)
+            {
+                if !(-90..=90).contains(&pen.tiltX) || !(-90..=90).contains(&pen.tiltY) {
+                    return None;
+                }
                 let x = f64::from(pen.tiltX).to_radians().tan();
                 let y = f64::from(pen.tiltY).to_radians().tan();
                 let distance = x.hypot(y);
                 sample.orientation = Some(if distance == 0.0 {
                     PenOrientation::try_altitude(std::f64::consts::FRAC_PI_2).ok()?
                 } else {
-                    PenOrientation::try_new(1.0_f64.atan2(distance), y.atan2(x).rem_euclid(std::f64::consts::TAU)).ok()?
+                    PenOrientation::try_new(
+                        1.0_f64.atan2(distance),
+                        y.atan2(x).rem_euclid(std::f64::consts::TAU),
+                    )
+                    .ok()?
                 });
             }
-            PointerKind::Pen { tool: if pen.penFlags & PEN_FLAG_ERASER != 0 { PenTool::Eraser } else { PenTool::Tip } }
+            PointerKind::Pen {
+                tool: if pen.penFlags & PEN_FLAG_ERASER != 0 {
+                    PenTool::Eraser
+                } else {
+                    PenTool::Tip
+                },
+            }
         }
         NativeReading::Touch(touch) => {
             if touch.touchMask & TOUCH_MASK_PRESSURE != 0 {
                 sample.pressure = Some(Pressure::try_new(touch.pressure as f32 / 1024.0).ok()?);
             }
             if touch.touchMask & TOUCH_MASK_CONTACTAREA != 0 {
-                sample.contact_size = Some(ContactSize::try_new(Size::new(
-                    (f64::from(touch.rcContactRaw.right) - f64::from(touch.rcContactRaw.left)) / scale,
-                    (f64::from(touch.rcContactRaw.bottom) - f64::from(touch.rcContactRaw.top)) / scale,
-                )).ok()?);
+                sample.contact_size = Some(
+                    ContactSize::try_new(Size::new(
+                        (f64::from(touch.rcContactRaw.right) - f64::from(touch.rcContactRaw.left))
+                            / scale,
+                        (f64::from(touch.rcContactRaw.bottom) - f64::from(touch.rcContactRaw.top))
+                            / scale,
+                    ))
+                    .ok()?,
+                );
             }
             PointerKind::Touch
         }
@@ -261,7 +295,11 @@ fn decode_native_reading(
     };
     Some(DecodedPointer {
         kind,
-        role: if native.pointerFlags.0 & POINTER_FLAG_PRIMARY.0 != 0 { PointerRole::Primary } else { PointerRole::Additional },
+        role: if native.pointerFlags.0 & POINTER_FLAG_PRIMARY.0 != 0 {
+            PointerRole::Primary
+        } else {
+            PointerRole::Additional
+        },
         device: DeviceId::try_from(native.sourceDevice.0 as usize as u64).ok(),
         sample,
     })
@@ -269,37 +307,64 @@ fn decode_native_reading(
 
 impl NativeReading {
     fn info(self) -> windows::Win32::UI::Input::Pointer::POINTER_INFO {
-        match self { Self::Pointer(info) => info, Self::Pen(info) => info.pointerInfo, Self::Touch(info) => info.pointerInfo }
+        match self {
+            Self::Pointer(info) => info,
+            Self::Pen(info) => info.pointerInfo,
+            Self::Touch(info) => info.pointerInfo,
+        }
     }
 }
 
 /// Native history is newest first and includes current. Read it before any
 /// callback, then decode every measured sample against one uptime snapshot.
 fn native_history(raw: u32) -> Option<Vec<NativeReading>> {
-    use windows::Win32::UI::{Input::Pointer::*, WindowsAndMessaging::{PT_PEN, PT_TOUCH}};
+    use windows::Win32::UI::{
+        Input::Pointer::{
+            GetPointerInfo, GetPointerInfoHistory, GetPointerPenInfoHistory,
+            GetPointerTouchInfoHistory, POINTER_INFO, POINTER_PEN_INFO, POINTER_TOUCH_INFO,
+        },
+        WindowsAndMessaging::{PT_PEN, PT_TOUCH},
+    };
     // SAFETY: initialized out buffers belong to this call. The native ID is
     // obtained from the message; Windows rejects stale or invented IDs.
     unsafe {
         let mut info = POINTER_INFO::default();
-        GetPointerInfo(raw, &mut info).ok()?;
+        GetPointerInfo(raw, &raw mut info).ok()?;
         let count = info.historyCount.max(1);
         match info.pointerType {
-            PT_PEN => read_history(count, |count, buffer| GetPointerPenInfoHistory(raw, count, Some(buffer)))
-                .map(|readings: Vec<POINTER_PEN_INFO>| readings.into_iter().map(NativeReading::Pen).collect()),
-            PT_TOUCH => read_history(count, |count, buffer| GetPointerTouchInfoHistory(raw, count, Some(buffer)))
-                .map(|readings: Vec<POINTER_TOUCH_INFO>| readings.into_iter().map(NativeReading::Touch).collect()),
-            _ => read_history(count, |count, buffer| GetPointerInfoHistory(raw, count, Some(buffer)))
-                .map(|readings: Vec<POINTER_INFO>| readings.into_iter().map(NativeReading::Pointer).collect()),
+            PT_PEN => read_history(count, |count, buffer| {
+                GetPointerPenInfoHistory(raw, count, Some(buffer))
+            })
+            .map(|readings: Vec<POINTER_PEN_INFO>| {
+                readings.into_iter().map(NativeReading::Pen).collect()
+            }),
+            PT_TOUCH => read_history(count, |count, buffer| {
+                GetPointerTouchInfoHistory(raw, count, Some(buffer))
+            })
+            .map(|readings: Vec<POINTER_TOUCH_INFO>| {
+                readings.into_iter().map(NativeReading::Touch).collect()
+            }),
+            _ => read_history(count, |count, buffer| {
+                GetPointerInfoHistory(raw, count, Some(buffer))
+            })
+            .map(|readings: Vec<POINTER_INFO>| {
+                readings.into_iter().map(NativeReading::Pointer).collect()
+            }),
         }
     }
 }
 
-fn read_history<T: Default + Clone>(mut count: u32, query: impl FnOnce(*mut u32, *mut T) -> windows::core::Result<()>) -> Option<Vec<T>> {
+fn read_history<T: Default + Clone>(
+    mut count: u32,
+    query: impl FnOnce(*mut u32, *mut T) -> windows::core::Result<()>,
+) -> Option<Vec<T>> {
     let mut values = Vec::new();
     values.try_reserve_exact(count as usize).ok()?;
     values.resize(count as usize, T::default());
-    query(&mut count, values.as_mut_ptr()).ok()?;
-    if count as usize > values.len() { return None; }
+    query(&raw mut count, values.as_mut_ptr()).ok()?;
+    if count as usize > values.len() {
+        return None;
+    }
     values.truncate(count as usize);
     Some(values)
 }
@@ -312,59 +377,102 @@ pub(super) fn native_pointer_input(
     clock: &MessageClock,
     registry: &std::cell::RefCell<NativePointerRegistry>,
 ) -> Vec<PlatformInput> {
-    use flui_platform_api::{EventTime, pointer::{CancelReason, PointerEvent}};
+    use flui_platform_api::{
+        EventTime,
+        pointer::{CancelReason, PointerEvent},
+    };
     use windows::Win32::UI::WindowsAndMessaging::{WM_POINTERCAPTURECHANGED, WM_POINTERUPDATE};
     let cancel_time = EventTime::from_nanos(clock.message_time());
     if message == WM_POINTERCAPTURECHANGED {
-        return registry.borrow_mut().cancel(raw, cancel_time, CancelReason::CaptureLost);
+        return registry
+            .borrow_mut()
+            .cancel(raw, cancel_time, CancelReason::CaptureLost);
     }
     let Some(readings) = native_history(raw) else {
-        return registry.borrow_mut().cancel(raw, cancel_time, CancelReason::InvalidInput);
+        return registry
+            .borrow_mut()
+            .cancel(raw, cancel_time, CancelReason::InvalidInput);
     };
-    let Some(current) = readings.first().copied() else { return Vec::new(); };
-    if current.info().pointerFlags.0 & windows::Win32::UI::Input::Pointer::POINTER_FLAG_CANCELED.0 != 0 {
-        return registry.borrow_mut().cancel(raw, cancel_time, CancelReason::Platform);
+    let Some(current) = readings.first().copied() else {
+        return Vec::new();
+    };
+    if current.info().pointerFlags.0 & windows::Win32::UI::Input::Pointer::POINTER_FLAG_CANCELED.0
+        != 0
+    {
+        return registry
+            .borrow_mut()
+            .cancel(raw, cancel_time, CancelReason::Platform);
     }
     let mut offset = POINT::default();
     // SAFETY: the live owner HWND and initialized client translation buffer
     // remain valid under the window procedure's ContextGuard.
     let now = unsafe {
-        if !ScreenToClient(hwnd, &mut offset).as_bool() { return registry.borrow_mut().cancel(raw, cancel_time, CancelReason::InvalidInput); }
+        if !ScreenToClient(hwnd, &raw mut offset).as_bool() {
+            return registry
+                .borrow_mut()
+                .cancel(raw, cancel_time, CancelReason::InvalidInput);
+        }
         GetTickCount64()
     };
     let mut samples = Vec::new();
     for reading in readings.into_iter().rev() {
         let time = EventTime::from_nanos(clock.rebase_at(reading.info().dwTime, now));
         let Some(decoded) = decode_native_reading(reading, offset, scale, time) else {
-            return registry.borrow_mut().cancel(raw, cancel_time, CancelReason::InvalidInput);
+            return registry
+                .borrow_mut()
+                .cancel(raw, cancel_time, CancelReason::InvalidInput);
         };
         samples.push(decoded.sample);
     }
     let time = EventTime::from_nanos(clock.rebase_at(current.info().dwTime, now));
-    let Some(decoded) = decode_native_reading(current, offset, scale, time) else { return Vec::new(); };
-    let output = registry.borrow_mut().commit(&current.info(), decoded, message);
+    let Some(decoded) = decode_native_reading(current, offset, scale, time) else {
+        return Vec::new();
+    };
+    let output = registry
+        .borrow_mut()
+        .commit(&current.info(), decoded, message);
     let modifiers = message_modifiers();
-    output.into_iter().map(|input| match input {
-        PlatformInput::Pointer(PointerEvent::Move(movement)) => PlatformInput::Pointer(PointerEvent::Move(
-            if message == WM_POINTERUPDATE { movement.with_modifiers(modifiers).with_coalesced(std::mem::take(&mut samples)) } else { movement.with_modifiers(modifiers) }
-        )),
-        PlatformInput::Pointer(PointerEvent::Down(press)) => PlatformInput::Pointer(PointerEvent::Down(press.with_modifiers(modifiers))),
-        PlatformInput::Pointer(PointerEvent::Up(release)) => PlatformInput::Pointer(PointerEvent::Up(release.with_modifiers(modifiers))),
-        PlatformInput::Pointer(PointerEvent::ButtonChange(change)) => {
-            use flui_platform_api::pointer::ButtonChange;
-            PlatformInput::Pointer(PointerEvent::ButtonChange(match change {
-                ButtonChange::Pressed(press) => ButtonChange::Pressed(press.with_modifiers(modifiers)),
-                ButtonChange::Released(release) => ButtonChange::Released(release.with_modifiers(modifiers)),
-            }))
-        }
-        input => input,
-    }).collect()
+    output
+        .into_iter()
+        .map(|input| match input {
+            PlatformInput::Pointer(PointerEvent::Move(movement)) => {
+                PlatformInput::Pointer(PointerEvent::Move(if message == WM_POINTERUPDATE {
+                    movement
+                        .with_modifiers(modifiers)
+                        .with_coalesced(std::mem::take(&mut samples))
+                } else {
+                    movement.with_modifiers(modifiers)
+                }))
+            }
+            PlatformInput::Pointer(PointerEvent::Down(press)) => {
+                PlatformInput::Pointer(PointerEvent::Down(press.with_modifiers(modifiers)))
+            }
+            PlatformInput::Pointer(PointerEvent::Up(release)) => {
+                PlatformInput::Pointer(PointerEvent::Up(release.with_modifiers(modifiers)))
+            }
+            PlatformInput::Pointer(PointerEvent::ButtonChange(change)) => {
+                use flui_platform_api::pointer::ButtonChange;
+                PlatformInput::Pointer(PointerEvent::ButtonChange(match change {
+                    ButtonChange::Pressed(press) => {
+                        ButtonChange::Pressed(press.with_modifiers(modifiers))
+                    }
+                    ButtonChange::Released(release) => {
+                        ButtonChange::Released(release.with_modifiers(modifiers))
+                    }
+                }))
+            }
+            input => input,
+        })
+        .collect()
 }
 
 pub(super) struct NativePointerRegistry {
     next_contact: u64,
     contacts: std::collections::BTreeMap<u32, NativeContact>,
-    devices: std::collections::BTreeMap<flui_platform_api::pointer::DeviceId, flui_platform_api::pointer::PointerKind>,
+    devices: std::collections::BTreeMap<
+        flui_platform_api::pointer::DeviceId,
+        flui_platform_api::pointer::PointerKind,
+    >,
 }
 
 struct NativeContact {
@@ -380,7 +488,11 @@ enum NativeContactPhase {
 
 impl Default for NativePointerRegistry {
     fn default() -> Self {
-        Self { next_contact: 1, contacts: Default::default(), devices: Default::default() }
+        Self {
+            next_contact: 1,
+            contacts: std::collections::BTreeMap::new(),
+            devices: std::collections::BTreeMap::new(),
+        }
     }
 }
 
@@ -391,35 +503,68 @@ impl NativePointerRegistry {
         decoded: DecodedPointer,
         message: u32,
     ) -> Vec<PlatformInput> {
-        use flui_platform_api::pointer::*;
-        use windows::Win32::UI::{Input::Pointer::*, WindowsAndMessaging::*};
+        use flui_platform_api::pointer::{
+            ButtonChange, CancelReason, PointerButton, PointerButtons, PointerDeviceChange,
+            PointerEvent, PointerId, PointerInfo, PointerMove, PointerPress, PointerRelease,
+            PointerSignal,
+        };
+        use windows::Win32::UI::{
+            Input::Pointer::{
+                POINTER_FLAG_CANCELED, POINTER_FLAG_FIFTHBUTTON, POINTER_FLAG_FIRSTBUTTON,
+                POINTER_FLAG_FOURTHBUTTON, POINTER_FLAG_SECONDBUTTON, POINTER_FLAG_THIRDBUTTON,
+            },
+            WindowsAndMessaging::{WM_POINTERDOWN, WM_POINTERENTER, WM_POINTERLEAVE, WM_POINTERUP},
+        };
         let time = decoded.sample.time;
         if native.pointerFlags.0 & POINTER_FLAG_CANCELED.0 != 0 {
             return self.cancel(native.pointerId, time, CancelReason::Platform);
         }
         let mut output = Vec::new();
         if !self.contacts.contains_key(&native.pointerId) {
-            if matches!(message, WM_POINTERUP | WM_POINTERLEAVE) { return output; }
-            let Some(next) = self.next_contact.checked_add(1) else { return output; };
+            if matches!(message, WM_POINTERUP | WM_POINTERLEAVE) {
+                return output;
+            }
+            let Some(next) = self.next_contact.checked_add(1) else {
+                return output;
+            };
             self.next_contact = next;
             let id = PointerId::try_from(next).expect("BUG: checked contact successor is nonzero");
             let mut info = PointerInfo::new(id, decoded.kind).with_role(decoded.role);
             if let Some(device) = decoded.device {
                 info = info.with_device(device);
                 if self.devices.insert(device, decoded.kind).is_none() {
-                    output.push(PlatformInput::Pointer(PointerEvent::DeviceAdded(PointerDeviceChange::new(device, decoded.kind, time))));
+                    output.push(PlatformInput::Pointer(PointerEvent::DeviceAdded(
+                        PointerDeviceChange::new(device, decoded.kind, time),
+                    )));
                 }
             }
-            self.contacts.insert(native.pointerId, NativeContact { info, phase: NativeContactPhase::Hover });
+            self.contacts.insert(
+                native.pointerId,
+                NativeContact {
+                    info,
+                    phase: NativeContactPhase::Hover,
+                },
+            );
         }
-        let contact = self.contacts.get_mut(&native.pointerId).expect("BUG: contact was admitted");
+        let contact = self
+            .contacts
+            .get_mut(&native.pointerId)
+            .expect("BUG: contact was admitted");
         // A native ID reused with different hardware cannot inherit the old owner's sequence.
         if contact.info.device != decoded.device || contact.info.kind != decoded.kind {
             return self.cancel(native.pointerId, time, CancelReason::InvalidInput);
         }
         let mut buttons = PointerButtons::NONE;
-        for (flag, button) in [(POINTER_FLAG_FIRSTBUTTON, PointerButton::PRIMARY), (POINTER_FLAG_SECONDBUTTON, PointerButton::SECONDARY), (POINTER_FLAG_THIRDBUTTON, PointerButton::AUXILIARY), (POINTER_FLAG_FOURTHBUTTON, PointerButton::BACK), (POINTER_FLAG_FIFTHBUTTON, PointerButton::FORWARD)] {
-            if native.pointerFlags.0 & flag.0 != 0 { buttons = buttons.with(button); }
+        for (flag, button) in [
+            (POINTER_FLAG_FIRSTBUTTON, PointerButton::PRIMARY),
+            (POINTER_FLAG_SECONDBUTTON, PointerButton::SECONDARY),
+            (POINTER_FLAG_THIRDBUTTON, PointerButton::AUXILIARY),
+            (POINTER_FLAG_FOURTHBUTTON, PointerButton::BACK),
+            (POINTER_FLAG_FIFTHBUTTON, PointerButton::FORWARD),
+        ] {
+            if native.pointerFlags.0 & flag.0 != 0 {
+                buttons = buttons.with(button);
+            }
         }
         let in_contact = matches!(contact.phase, NativeContactPhase::Contact);
         let info = contact.info;
@@ -430,19 +575,29 @@ impl NativePointerRegistry {
             9 | 10 => PointerButton::FORWARD,
             _ => PointerButton::PRIMARY,
         };
-        let pressed = matches!(native.ButtonChangeType.0, 1 | 3 | 5 | 7 | 9) || message == WM_POINTERDOWN;
-        let released = matches!(native.ButtonChangeType.0, 2 | 4 | 6 | 8 | 10) || message == WM_POINTERUP;
+        let pressed =
+            matches!(native.ButtonChangeType.0, 1 | 3 | 5 | 7 | 9) || message == WM_POINTERDOWN;
+        let released =
+            matches!(native.ButtonChangeType.0, 2 | 4 | 6 | 8 | 10) || message == WM_POINTERUP;
         // ENTER can follow DOWN while both notifications refer to the same
         // native packet. Its cached ButtonChangeType is not a second press.
         let event = if message == WM_POINTERENTER {
-            PointerEvent::Enter(PointerSignal::new(info, time).with_position(decoded.sample.position))
+            PointerEvent::Enter(
+                PointerSignal::new(info, time).with_position(decoded.sample.position),
+            )
         } else if message == WM_POINTERLEAVE {
             self.contacts.remove(&native.pointerId);
-            PointerEvent::Leave(PointerSignal::new(info, time).with_position(decoded.sample.position))
+            PointerEvent::Leave(
+                PointerSignal::new(info, time).with_position(decoded.sample.position),
+            )
         } else if pressed {
             let press = PointerPress::new(info, changed, buttons, decoded.sample);
             contact.phase = NativeContactPhase::Contact;
-            if !in_contact { PointerEvent::Down(press) } else { PointerEvent::ButtonChange(ButtonChange::Pressed(press)) }
+            if in_contact {
+                PointerEvent::ButtonChange(ButtonChange::Pressed(press))
+            } else {
+                PointerEvent::Down(press)
+            }
         } else if released {
             let release = PointerRelease::new(info, changed, buttons, decoded.sample);
             if !in_contact {
@@ -452,7 +607,9 @@ impl NativePointerRegistry {
             if release.buttons().is_empty() {
                 self.contacts.remove(&native.pointerId);
                 PointerEvent::Up(release)
-            } else { PointerEvent::ButtonChange(ButtonChange::Released(release)) }
+            } else {
+                PointerEvent::ButtonChange(ButtonChange::Released(release))
+            }
         } else {
             PointerEvent::Move(PointerMove::new(info, buttons, decoded.sample))
         };
@@ -467,7 +624,14 @@ impl NativePointerRegistry {
         reason: flui_platform_api::pointer::CancelReason,
     ) -> Vec<PlatformInput> {
         use flui_platform_api::pointer::{PointerCancel, PointerEvent};
-        self.contacts.remove(&raw).map(|contact| vec![PlatformInput::Pointer(PointerEvent::Cancel(PointerCancel::new(contact.info, time, reason)))]).unwrap_or_default()
+        self.contacts
+            .remove(&raw)
+            .map(|contact| {
+                vec![PlatformInput::Pointer(PointerEvent::Cancel(
+                    PointerCancel::new(contact.info, time, reason),
+                ))]
+            })
+            .unwrap_or_default()
     }
 
     pub(super) fn remove_device(
@@ -475,20 +639,37 @@ impl NativePointerRegistry {
         device: flui_platform_api::pointer::DeviceId,
         time: flui_platform_api::EventTime,
     ) -> Vec<PlatformInput> {
-        use flui_platform_api::pointer::*;
-        let ids: Vec<_> = self.contacts.iter().filter_map(|(raw, contact)| (contact.info.device == Some(device)).then_some(*raw)).collect();
+        use flui_platform_api::pointer::{CancelReason, PointerDeviceChange, PointerEvent};
+        let ids: Vec<_> = self
+            .contacts
+            .iter()
+            .filter_map(|(raw, contact)| (contact.info.device == Some(device)).then_some(*raw))
+            .collect();
         let mut output = Vec::new();
-        for raw in ids { output.extend(self.cancel(raw, time, CancelReason::DeviceRemoved)); }
+        for raw in ids {
+            output.extend(self.cancel(raw, time, CancelReason::DeviceRemoved));
+        }
         if let Some(kind) = self.devices.remove(&device) {
-            output.push(PlatformInput::Pointer(PointerEvent::DeviceRemoved(PointerDeviceChange::new(device, kind, time))));
+            output.push(PlatformInput::Pointer(PointerEvent::DeviceRemoved(
+                PointerDeviceChange::new(device, kind, time),
+            )));
         }
         output
     }
 
-    pub(super) fn add_device(&mut self, device: flui_platform_api::pointer::DeviceId, kind: flui_platform_api::pointer::PointerKind, time: flui_platform_api::EventTime) -> Vec<PlatformInput> {
+    pub(super) fn add_device(
+        &mut self,
+        device: flui_platform_api::pointer::DeviceId,
+        kind: flui_platform_api::pointer::PointerKind,
+        time: flui_platform_api::EventTime,
+    ) -> Vec<PlatformInput> {
         use flui_platform_api::pointer::{PointerDeviceChange, PointerEvent};
-        if self.devices.insert(device, kind).is_some() { return Vec::new(); }
-        vec![PlatformInput::Pointer(PointerEvent::DeviceAdded(PointerDeviceChange::new(device, kind, time)))]
+        if self.devices.insert(device, kind).is_some() {
+            return Vec::new();
+        }
+        vec![PlatformInput::Pointer(PointerEvent::DeviceAdded(
+            PointerDeviceChange::new(device, kind, time),
+        ))]
     }
 
     pub(super) fn delivers(&self, event: &PlatformInput) -> bool {
@@ -507,15 +688,28 @@ impl NativePointerRegistry {
     }
 }
 
-pub(super) fn native_device_kind(handle: windows::Win32::Foundation::HANDLE) -> Option<flui_platform_api::pointer::PointerKind> {
-    use flui_platform_api::pointer::{PointerKind, PenTool};
-    use windows::Win32::UI::{Controls::*, Input::Pointer::GetPointerDevice};
+pub(super) fn native_device_kind(
+    handle: windows::Win32::Foundation::HANDLE,
+) -> Option<flui_platform_api::pointer::PointerKind> {
+    use flui_platform_api::pointer::{PenTool, PointerKind};
+    use windows::Win32::UI::{
+        Controls::{
+            POINTER_DEVICE_INFO, POINTER_DEVICE_TYPE_EXTERNAL_PEN,
+            POINTER_DEVICE_TYPE_INTEGRATED_PEN, POINTER_DEVICE_TYPE_TOUCH,
+            POINTER_DEVICE_TYPE_TOUCH_PAD,
+        },
+        Input::Pointer::GetPointerDevice,
+    };
     let mut info = POINTER_DEVICE_INFO::default();
     // SAFETY: the notification carries the device handle and the initialized
     // output lives through the query. Stale/removed handles are refused by Windows.
-    unsafe { GetPointerDevice(handle, &mut info).ok()?; }
+    unsafe {
+        GetPointerDevice(handle, &raw mut info).ok()?;
+    }
     Some(match info.pointerDeviceType {
-        POINTER_DEVICE_TYPE_INTEGRATED_PEN | POINTER_DEVICE_TYPE_EXTERNAL_PEN => PointerKind::Pen { tool: PenTool::Tip },
+        POINTER_DEVICE_TYPE_INTEGRATED_PEN | POINTER_DEVICE_TYPE_EXTERNAL_PEN => {
+            PointerKind::Pen { tool: PenTool::Tip }
+        }
         POINTER_DEVICE_TYPE_TOUCH => PointerKind::Touch,
         POINTER_DEVICE_TYPE_TOUCH_PAD => PointerKind::Trackpad,
         _ => PointerKind::Unknown,
@@ -527,13 +721,14 @@ mod native_pointer_contracts {
     use super::*;
     use flui_platform_api::{
         EventTime,
-        pointer::{PenTool, PointerKind, PointerRole},
+        pointer::{PenTool, PointerKind, PointerRole, Pressure},
     };
     use windows::Win32::{
         Foundation::HANDLE,
         UI::{
             Input::Pointer::{
-                POINTER_FLAG_PRIMARY, POINTER_INFO, POINTER_PEN_INFO, POINTER_TOUCH_INFO,
+                POINTER_FLAG_PRIMARY, POINTER_FLAGS, POINTER_INFO, POINTER_PEN_INFO,
+                POINTER_TOUCH_INFO,
             },
             WindowsAndMessaging::{
                 PEN_FLAG_ERASER, PEN_MASK_PRESSURE, PEN_MASK_ROTATION, PEN_MASK_TILT_X,
@@ -572,7 +767,7 @@ mod native_pointer_contracts {
         assert_eq!(packet.role, PointerRole::Primary);
         assert_eq!(packet.sample.pressure, None);
         let mut secondary = info();
-        secondary.pointerFlags = Default::default();
+        secondary.pointerFlags = POINTER_FLAGS::default();
         secondary.sourceDevice = HANDLE::default();
         let packet = decoded(NativeReading::Pointer(secondary));
         assert_eq!(packet.role, PointerRole::Additional);
@@ -609,10 +804,7 @@ mod native_pointer_contracts {
                 tool: PenTool::Eraser
             }
         );
-        assert_eq!(
-            present.sample.pressure.map(|pressure| pressure.get()),
-            Some(1.0)
-        );
+        assert_eq!(present.sample.pressure.map(Pressure::get), Some(1.0));
         let orientation = present.sample.orientation.expect("both native tilt axes");
         assert!(
             (orientation.altitude().expect("altitude") - std::f64::consts::FRAC_PI_4).abs() < 1e-12
@@ -656,10 +848,7 @@ mod native_pointer_contracts {
         };
         let packet = decoded(NativeReading::Touch(touch));
         assert_eq!(packet.kind, PointerKind::Touch);
-        assert_eq!(
-            packet.sample.pressure.map(|pressure| pressure.get()),
-            Some(0.5)
-        );
+        assert_eq!(packet.sample.pressure.map(Pressure::get), Some(0.5));
         assert_eq!(
             packet.sample.contact_size.expect("reported contact").get(),
             flui_foundation::geometry::Size::new(20.0, 30.0)
@@ -697,7 +886,7 @@ mod native_pointer_contracts {
             ..Default::default()
         }));
         assert_eq!(
-            packet.sample.pressure.map(|pressure| pressure.get()),
+            packet.sample.pressure.map(Pressure::get),
             Some(0.0),
             "reported zero is a sensor reading"
         );
@@ -855,7 +1044,13 @@ mod native_pointer_contracts {
 
     fn enter_after_native_down_is_not_another_button_press() {
         use flui_platform_api::pointer::PointerEvent;
-        use windows::Win32::UI::{Input::Pointer::{POINTER_CHANGE_FIRSTBUTTON_DOWN, POINTER_FLAG_DOWN, POINTER_FLAG_FIRSTBUTTON, POINTER_FLAG_INCONTACT}, WindowsAndMessaging::{WM_POINTERDOWN, WM_POINTERENTER}};
+        use windows::Win32::UI::{
+            Input::Pointer::{
+                POINTER_CHANGE_FIRSTBUTTON_DOWN, POINTER_FLAG_DOWN, POINTER_FLAG_FIRSTBUTTON,
+                POINTER_FLAG_INCONTACT,
+            },
+            WindowsAndMessaging::{WM_POINTERDOWN, WM_POINTERENTER},
+        };
         let mut registry = NativePointerRegistry::default();
         let native = POINTER_INFO {
             pointerId: 7,
@@ -865,13 +1060,29 @@ mod native_pointer_contracts {
         };
         let admitted = registry.commit(&native, packet(0x3450, 1), WM_POINTERDOWN);
         let entered = registry.commit(&native, packet(0x3450, 1), WM_POINTERENTER);
-        assert!(admitted.iter().any(|input| matches!(input, PlatformInput::Pointer(PointerEvent::Down(_)))));
-        assert!(matches!(entered.as_slice(), [PlatformInput::Pointer(PointerEvent::Enter(_))]), "the native DOWN packet also backs the following ENTER notification: {entered:?}");
+        assert!(
+            admitted
+                .iter()
+                .any(|input| matches!(input, PlatformInput::Pointer(PointerEvent::Down(_))))
+        );
+        assert!(
+            matches!(
+                entered.as_slice(),
+                [PlatformInput::Pointer(PointerEvent::Enter(_))]
+            ),
+            "the native DOWN packet also backs the following ENTER notification: {entered:?}"
+        );
     }
 
     fn native_enter_before_down_preserves_first_contact_admission() {
         use flui_platform_api::pointer::PointerEvent;
-        use windows::Win32::UI::{Input::Pointer::{POINTER_CHANGE_FIRSTBUTTON_DOWN, POINTER_FLAG_DOWN, POINTER_FLAG_FIRSTBUTTON, POINTER_FLAG_INCONTACT}, WindowsAndMessaging::{WM_POINTERDOWN, WM_POINTERENTER}};
+        use windows::Win32::UI::{
+            Input::Pointer::{
+                POINTER_CHANGE_FIRSTBUTTON_DOWN, POINTER_FLAG_DOWN, POINTER_FLAG_FIRSTBUTTON,
+                POINTER_FLAG_INCONTACT,
+            },
+            WindowsAndMessaging::{WM_POINTERDOWN, WM_POINTERENTER},
+        };
         let mut registry = NativePointerRegistry::default();
         let native = POINTER_INFO {
             pointerId: 7,
@@ -880,9 +1091,21 @@ mod native_pointer_contracts {
             ..info()
         };
         let entered = registry.commit(&native, packet(0x3450, 1), WM_POINTERENTER);
-        let enter_info = entered.iter().find_map(|event| if let PlatformInput::Pointer(PointerEvent::Enter(signal)) = event { Some(signal.pointer) } else { None }).expect("native entry");
+        let enter_info = entered
+            .iter()
+            .find_map(|event| {
+                if let PlatformInput::Pointer(PointerEvent::Enter(signal)) = event {
+                    Some(signal.pointer)
+                } else {
+                    None
+                }
+            })
+            .expect("native entry");
         let contact = registry.commit(&native, packet(0x3450, 1), WM_POINTERDOWN);
-        assert!(matches!(contact.as_slice(), [PlatformInput::Pointer(PointerEvent::Down(press))] if press.pointer == enter_info), "ENTER observes the identity but does not admit its first press: {contact:?}");
+        assert!(
+            matches!(contact.as_slice(), [PlatformInput::Pointer(PointerEvent::Down(press))] if press.pointer == enter_info),
+            "ENTER observes the identity but does not admit its first press: {contact:?}"
+        );
     }
 }
 
@@ -1041,13 +1264,27 @@ pub(super) fn capture_changed_event(
     let held = [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON, VK_XBUTTON1, VK_XBUTTON2]
         .into_iter()
         .any(key_down_in_queue);
-    if gaining == hwnd || !held { return None; }
-    Some(PlatformInput::Pointer(PointerEvent::Cancel(PointerCancel::new(primary_mouse_info(), EventTime::from_nanos(time), CancelReason::CaptureLost))))
+    if gaining == hwnd || !held {
+        return None;
+    }
+    Some(PlatformInput::Pointer(PointerEvent::Cancel(
+        PointerCancel::new(
+            primary_mouse_info(),
+            EventTime::from_nanos(time),
+            CancelReason::CaptureLost,
+        ),
+    )))
 }
 
 fn mouse_sample(x: i32, y: i32, scale: f64, time: u64) -> Option<PointerSample> {
-    if !scale.is_finite() || scale <= 0.0 { return None; }
-    let position = PointerPosition::try_new(flui_foundation::geometry::Point::new(f64::from(x) / scale, f64::from(y) / scale)).ok()?;
+    if !scale.is_finite() || scale <= 0.0 {
+        return None;
+    }
+    let position = PointerPosition::try_new(flui_foundation::geometry::Point::new(
+        f64::from(x) / scale,
+        f64::from(y) / scale,
+    ))
+    .ok()?;
     Some(PointerSample::new(EventTime::from_nanos(time), position))
 }
 
@@ -1061,9 +1298,22 @@ pub fn mouse_button_event(
     scale_factor: f64,
     time: u64,
 ) -> Option<PlatformInput> {
-    let sample = match mouse_sample(get_x_lparam(lparam), get_y_lparam(lparam), scale_factor, time) {
+    let sample = match mouse_sample(
+        get_x_lparam(lparam),
+        get_y_lparam(lparam),
+        scale_factor,
+        time,
+    ) {
         Some(sample) => sample,
-        None if !is_down => return Some(PlatformInput::Pointer(PointerEvent::Cancel(PointerCancel::new(primary_mouse_info(), EventTime::from_nanos(time), CancelReason::InvalidInput)))),
+        None if !is_down => {
+            return Some(PlatformInput::Pointer(PointerEvent::Cancel(
+                PointerCancel::new(
+                    primary_mouse_info(),
+                    EventTime::from_nanos(time),
+                    CancelReason::InvalidInput,
+                ),
+            )));
+        }
         None => return None,
     };
     let held = held_buttons(wparam);
@@ -1071,10 +1321,19 @@ pub fn mouse_button_event(
         let press = PointerPress::new(primary_mouse_info(), button, held, sample)
             .with_modifiers(message_modifiers())
             .with_click_count(std::num::NonZeroU8::new(1).expect("BUG: one click is nonzero"));
-        if held.without(button).is_empty() { PointerEvent::Down(press) } else { PointerEvent::ButtonChange(ButtonChange::Pressed(press)) }
+        if held.without(button).is_empty() {
+            PointerEvent::Down(press)
+        } else {
+            PointerEvent::ButtonChange(ButtonChange::Pressed(press))
+        }
     } else {
-        let release = PointerRelease::new(primary_mouse_info(), button, held, sample).with_modifiers(message_modifiers());
-        if release.buttons().is_empty() { PointerEvent::Up(release) } else { PointerEvent::ButtonChange(ButtonChange::Released(release)) }
+        let release = PointerRelease::new(primary_mouse_info(), button, held, sample)
+            .with_modifiers(message_modifiers());
+        if release.buttons().is_empty() {
+            PointerEvent::Up(release)
+        } else {
+            PointerEvent::ButtonChange(ButtonChange::Released(release))
+        }
     };
     Some(PlatformInput::Pointer(event))
 }
@@ -1085,12 +1344,24 @@ pub fn mouse_move_event(
     lparam: LPARAM,
     scale_factor: f64,
     time: u64,
-) -> Option<PlatformInput> {
-    let event = match mouse_sample(get_x_lparam(lparam), get_y_lparam(lparam), scale_factor, time) {
-        Some(sample) => PointerEvent::Move(PointerMove::new(primary_mouse_info(), held_buttons(wparam), sample).with_modifiers(message_modifiers())),
-        None => PointerEvent::Cancel(PointerCancel::new(primary_mouse_info(), EventTime::from_nanos(time), CancelReason::InvalidInput)),
+) -> PlatformInput {
+    let event = match mouse_sample(
+        get_x_lparam(lparam),
+        get_y_lparam(lparam),
+        scale_factor,
+        time,
+    ) {
+        Some(sample) => PointerEvent::Move(
+            PointerMove::new(primary_mouse_info(), held_buttons(wparam), sample)
+                .with_modifiers(message_modifiers()),
+        ),
+        None => PointerEvent::Cancel(PointerCancel::new(
+            primary_mouse_info(),
+            EventTime::from_nanos(time),
+            CancelReason::InvalidInput,
+        )),
     };
-    Some(PlatformInput::Pointer(event))
+    PlatformInput::Pointer(event)
 }
 
 /// The signed scroll distance both wheel messages carry in the high word of
@@ -1109,12 +1380,7 @@ fn wheel_distance(wparam: WPARAM) -> i16 {
 /// logical sample path DPI-scales it — otherwise scroll hit-testing
 /// targets the wrong child whenever the window's client origin is not the
 /// desktop origin.
-fn wheel_sample(
-    hwnd: HWND,
-    lparam: LPARAM,
-    scale_factor: f64,
-    time: u64,
-) -> Option<PointerSample> {
+fn wheel_sample(hwnd: HWND, lparam: LPARAM, scale_factor: f64, time: u64) -> Option<PointerSample> {
     let mut point = POINT {
         x: get_x_lparam(lparam),
         y: get_y_lparam(lparam),
@@ -1249,10 +1515,21 @@ pub fn key_down_event(
         )
     };
 
-    PlatformInput::Keyboard(KeyEvent::new(KeyState::Down, key, code, EventTime::from_nanos(event_timestamp_ns()))
+    PlatformInput::Keyboard(
+        KeyEvent::new(
+            KeyState::Down,
+            key,
+            code,
+            EventTime::from_nanos(event_timestamp_ns()),
+        )
         .with_location(keys::location_for_code(code))
         .with_modifiers(modifiers)
-        .with_repeat(if is_repeat { KeyRepeat::AutoRepeat } else { KeyRepeat::First }))
+        .with_repeat(if is_repeat {
+            KeyRepeat::AutoRepeat
+        } else {
+            KeyRepeat::First
+        }),
+    )
 }
 
 /// Convert WM_KEYUP to W3C KeyboardEvent.
@@ -1276,8 +1553,16 @@ pub fn key_up_event(wparam: WPARAM, lparam: LPARAM, held_dead: &mut HeldDeadKeys
     };
     let code = keys::scancode_to_code(scan_code, extended);
 
-    PlatformInput::Keyboard(KeyEvent::new(KeyState::Up, key, code, EventTime::from_nanos(event_timestamp_ns()))
-        .with_location(keys::location_for_code(code)).with_modifiers(modifiers))
+    PlatformInput::Keyboard(
+        KeyEvent::new(
+            KeyState::Up,
+            key,
+            code,
+            EventTime::from_nanos(event_timestamp_ns()),
+        )
+        .with_location(keys::location_for_code(code))
+        .with_modifiers(modifiers),
+    )
 }
 
 /// Build the KeyboardEvent for an out-of-band `WM_CHAR` — one that reached
@@ -1288,10 +1573,16 @@ pub fn key_up_event(wparam: WPARAM, lparam: LPARAM, held_dead: &mut HeldDeadKeys
 pub fn stray_char_event(text: String) -> PlatformInput {
     let modifiers = message_modifiers();
 
-    PlatformInput::Keyboard(KeyEvent::new(KeyState::Down,
-        Key::character(text),
-        Code::Unidentified, EventTime::from_nanos(event_timestamp_ns()))
-        .with_location(Location::Standard).with_modifiers(modifiers))
+    PlatformInput::Keyboard(
+        KeyEvent::new(
+            KeyState::Down,
+            Key::character(text),
+            Code::Unidentified,
+            EventTime::from_nanos(event_timestamp_ns()),
+        )
+        .with_location(Location::Standard)
+        .with_modifiers(modifiers),
+    )
 }
 
 /// What `TranslateMessage` produced for one keydown.

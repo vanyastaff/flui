@@ -81,7 +81,6 @@ impl KeyEventResult {
     }
 
     /// Combine several handler channels on one node.
-    #[must_use]
     pub fn combine(self, other: Self) -> Self {
         use KeyEventResult::{Handled, Ignored, SkipRemainingHandlers};
         match (self, other) {
@@ -419,7 +418,7 @@ impl FocusNodeRegistration {
                 node.clear_context_generation(self.generation);
             }
             FocusNodeRegistrationKind::TraversalGroup => {
-                node.clear_traversal_group_generation(self.generation)
+                node.clear_traversal_group_generation(self.generation);
             }
             FocusNodeRegistrationKind::TraversalOverrides => {
                 if node.traversal_overrides_generation.get() == self.generation {
@@ -999,7 +998,7 @@ impl FocusNode {
             ManagerBinding::Bound(owner) => owner.upgrade().map_or(CloseMode::Ordinary, |owner| {
                 owner.notification_failure_mode()
             }),
-            _ => CloseMode::Ordinary,
+            ManagerBinding::Unbound => CloseMode::Ordinary,
         }
     }
 

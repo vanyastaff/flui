@@ -22,6 +22,15 @@ Down before closing the arena, sweeps after Up, and does not force a winner
 on Cancel. Each target receives `PointerDispatch`: `local` is transformed for
 that target, while `global` preserves the original event.
 
+An actual target's Down callback can retain a successful `dispatch.capture()` as a
+non-Clone `PointerCapture`. The first claim selects that target for later
+contact packets; the original Down still visits the entire route. Drop or
+consuming `release()` schedules one `CaptureLost` after accepted motion, without
+calling an event handler inside release. The token weakly references its exact
+contact generation, so an ended contact or closed presentation makes it inert.
+This is logical routing capture; it does not request explicit OS release.
+See [ADR-0164](../../docs/adr/ADR-0164-down-route-logical-pointer-capture.md).
+
 The public wire uses `flui-platform-api`'s owned `PointerEvent` and `KeyEvent`
 contracts. `PointerId` names a contact, `DeviceId` names hardware, and
 `PointerInfo` carries the reported `PointerKind` and primary role. Samples use

@@ -136,10 +136,14 @@ fn resampling_sibling_case(fail: bool, compete: bool) {
     let mut clock = ManualClock::new();
     let mut realm = manual_clock_realm(&clock);
     let a = realm.presentation_id();
-    let b = realm.install_second_presentation_for_test();
     realm
         .attach_root_widget(&flui_widgets::SizedBox::square(200.0))
         .expect("A root");
+    // One sink acknowledges one producer's tree. Commit A before mounting B,
+    // otherwise the first pump can acknowledge only B and A's input stays held.
+    let mut sink = ScriptedSink::always_presents().with_size(200, 200);
+    assert!(realm.pump(&mut clock, &mut sink).presented(), "A commits");
+    let b = realm.install_second_presentation_for_test();
     realm
         .attach_root_widget_to_for_test(b, &flui_widgets::SizedBox::square(200.0))
         .expect("B root");
@@ -175,14 +179,13 @@ fn resampling_sibling_case(fail: bool, compete: bool) {
                 seen.borrow_mut().push(event.current().position.get().x);
             }
         }));
-    let mut sink = ScriptedSink::always_presents().with_size(200, 200);
-    realm.pump(&mut clock, &mut sink);
+    assert!(realm.pump(&mut clock, &mut sink).presented(), "B commits");
     clock.advance(Duration::from_millis(1_000));
     let pointer = PointerInfo::new(
         PointerId::try_from(1_u64).expect("contact"),
         PointerKind::Touch,
     );
-    let sample = |x, ms| {
+    let sample = |x, ms: u64| {
         PointerSample::new(
             EventTime::from_nanos(ms * 1_000_000),
             PointerPosition::try_new(flui_foundation::geometry::Point::new(x, 10.0))
@@ -235,7 +238,7 @@ fn resampling_sibling_case(fail: bool, compete: bool) {
             Some("first presentation sample")
         );
     } else {
-        result.expect("healthy samples");
+        let _ = result.expect("healthy samples");
     }
     assert_eq!(
         &*b_seen.borrow(),
@@ -254,7 +257,7 @@ fn resampling_sibling_case(fail: bool, compete: bool) {
     );
     armed.set(false);
     clock.advance(Duration::from_millis(38));
-    realm.pump(&mut clock, &mut sink);
+    let _ = realm.pump(&mut clock, &mut sink);
     assert_eq!(
         a_seen.borrow().last(),
         Some(&110.0),

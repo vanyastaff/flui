@@ -542,6 +542,18 @@ impl PointerEventResampler {
         }
     }
 
+    /// Commit the accepted measured prefix without advancing frame sampling or
+    /// ending the contact. The binding freezes all prefixes before dispatch.
+    pub(crate) fn take_pending_events(&self) -> SmallVec<[PointerEvent; 4]> {
+        let mut inner = self.inner.lock();
+        let mut emitted = SmallVec::new();
+        while let Some(buffered) = inner.event_queue.pop_front() {
+            let at = inner.timestamp(buffered.stamp);
+            inner.emit(buffered.event, at, &mut emitted);
+        }
+        emitted
+    }
+
     /// Stops resampling and flushes all remaining events
     ///
     /// Invokes the callback with every buffered event, in order, and resets

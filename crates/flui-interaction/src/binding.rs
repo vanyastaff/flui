@@ -45,8 +45,8 @@
 //! 1. **Pointer Down**: Hit test → cache result → dispatch → close arena
 //! 2. **Contact Move**: Reuse the Down route → dispatch (coalesced)
 //! 3. **Hover Move**: Fresh hit test → ephemeral dispatch (coalesced)
-//! 4. **Pointer Up**: Use cached hit test → dispatch → sweep arena → clear cache
-//! 5. **Pointer Cancel**: Use cached hit test → dispatch recognizer rejection →
+//! 4. **Pointer Up**: Use resolved Down route → dispatch → sweep arena → clear cache
+//! 5. **Pointer Cancel**: Use resolved Down route → dispatch recognizer rejection →
 //!    clear cache without a binding sweep
 //! 6. **Enter/Leave**: cached route mid-contact; otherwise a fresh ephemeral
 //!    hit test at the device's last-known hover position (the events carry
@@ -131,18 +131,19 @@ fn terminal_hit_test(_: Offset<f64>) -> HitTestResult {
     unreachable!("BUG: terminal Cancel never hit-tests")
 }
 
-/// Per-pointer state cached at Down: the data-only hit path plus the
-/// owner-local resolved route token that Move reuses and Up/Cancel releases.
+/// Contact admission identity, independent of a reusable platform pointer ID.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PointerSequence(u64);
+
+/// Per-pointer state cached at Down. The owner-local resolved token retains
+/// the admitted handlers and transforms that Move reuses and Up/Cancel releases.
+/// The original spatial hit snapshot is no longer needed after resolution.
 ///
 /// `token` is `None` when no interaction lane was active at Down (a
 /// gesture-only binding without a mounted tree) or when the path carried no
 /// pointer targets; the pointer router still routes such events.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct PointerSequence(u64);
-
 #[derive(Clone)]
 struct CachedPointerRoute {
-    result: HitTestResult,
     token: Option<ResolvedRouteToken>,
     sequence: PointerSequence,
     capture: Rc<ContactCapture>,
@@ -218,6 +219,12 @@ struct ResamplerSnapshot {
     token: Option<ResolvedRouteToken>,
     resampler: PointerEventResampler,
     capture: Rc<ContactCapture>,
+}
+
+#[derive(Clone, Copy)]
+enum MotionFlush {
+    Frame(Option<(web_time::Instant, web_time::Instant)>),
+    BeforeInput,
 }
 
 /// A resampling policy change was requested while contact sequences were
@@ -363,13 +370,13 @@ struct RefusedContact {
 }
 
 enum RefusedContacts {
-    Tracking([Option<RefusedContact>; MAX_SIMULTANEOUS_POINTERS]),
+    Tracking(Box<[Option<RefusedContact>; MAX_SIMULTANEOUS_POINTERS]>),
     Saturated,
 }
 
 impl Default for RefusedContacts {
     fn default() -> Self {
-        Self::Tracking([None; MAX_SIMULTANEOUS_POINTERS])
+        Self::Tracking(Box::new([None; MAX_SIMULTANEOUS_POINTERS]))
     }
 }
 
@@ -455,7 +462,7 @@ pub struct GestureBinding {
     closed: Cell<bool>,
     close_mode: crate::__runtime::CloseTombstone,
     capture_wake: RefCell<Option<std::sync::Weak<dyn flui_platform_api::PlatformWindow>>>,
-    /// Cached hit paths and resolved routes per pointer.
+    /// Resolved Down routes per pointer.
     /// Down resolves once; move/up events reuse the cached route.
     hit_tests: RefCell<HashMap<PointerId, CachedPointerRoute>>,
 
@@ -773,7 +780,20 @@ impl GestureBinding {
             .is_resampling_enabled()
             .then(|| self.sampling_clock.get().tick())
             .flatten();
-        self.flush_pending_moves_kernel(sample_window)
+        self.flush_pending_moves_kernel(MotionFlush::Frame(sample_window))
+    }
+
+    /// Deliver this presentation's accepted measured motion before an observing
+    /// input operation, without advancing frame time or ending contacts.
+    /// Reentrant motion remains queued for a later operation or frame.
+    ///
+    /// The runtime calls this before Keyboard and IME dispatch. Ordinary frame
+    /// interpolation remains the responsibility of [`Self::flush_pending_moves`].
+    pub fn flush_pending_input(&self) -> usize {
+        if self.closed.get() {
+            return 0;
+        }
+        self.flush_pending_moves_kernel(MotionFlush::BeforeInput)
     }
 
     /// Flush pending moves with an explicit sampling window.
@@ -798,18 +818,19 @@ impl GestureBinding {
         if self.closed.get() {
             return Ok(0);
         }
-        Ok(self.flush_pending_moves_kernel(Some((sample_time, next_sample_time))))
+        Ok(self
+            .flush_pending_moves_kernel(MotionFlush::Frame(Some((sample_time, next_sample_time)))))
     }
 
-    fn flush_pending_moves_kernel(
-        &self,
-        sample_window: Option<(web_time::Instant, web_time::Instant)>,
-    ) -> usize {
+    fn flush_pending_moves_kernel(&self, mode: MotionFlush) -> usize {
         if self.tearing_down_all_pointers.get() || !self.tearing_down_pointers.borrow().is_empty() {
             return 0;
         }
 
-        let mut first_panic = self.drain_capture_losses(None);
+        let mut first_panic = match mode {
+            MotionFlush::Frame(_) => self.drain_capture_losses(None),
+            MotionFlush::BeforeInput => None,
+        };
         // Freeze the complete direct/coalesced frame batch before any user
         // callback runs. Re-entrant moves replace their exact marker and
         // therefore always belong to the next frame.
@@ -835,11 +856,86 @@ impl GestureBinding {
         };
 
         let mut count = 0;
+        let contact_captures: SmallVec<[Rc<ContactCapture>; 4]> =
+            if matches!(mode, MotionFlush::BeforeInput) {
+                let routes = self.hit_tests.borrow();
+                drained
+                    .iter()
+                    .filter_map(|(pointer, _, pending)| {
+                        let PendingMove::Contact { sequence, .. } = pending else {
+                            return None;
+                        };
+                        routes
+                            .get(pointer)
+                            .filter(|cached| cached.sequence == *sequence)
+                            .map(|cached| Rc::clone(&cached.capture))
+                    })
+                    .collect()
+            } else {
+                SmallVec::new()
+            };
+        // Replacement queued markers do not revoke this committed input prefix.
+        // Capture release must therefore also recognize its delivery authority.
+        let contact_deliveries: SmallVec<[_; 4]> = contact_captures
+            .iter()
+            .map(|capture| capture.begin_delivery())
+            .collect();
+        if matches!(mode, MotionFlush::BeforeInput) {
+            // Freeze every measured prefix before callbacks or capture-loss
+            // settlement. A callback for A cannot pull newer B motion into this
+            // accepted round. Capture guards protect each committed prefix from
+            // reentrant release until all its measured packets are delivered.
+            let mut snapshots: SmallVec<[ResamplerSnapshot; 4]> = self
+                .hit_tests
+                .borrow()
+                .iter()
+                .filter(|(_, cached)| cached.resampler.is_tracked())
+                .map(|(&pointer_id, cached)| ResamplerSnapshot {
+                    pointer_id,
+                    sequence: cached.sequence,
+                    token: cached.token,
+                    resampler: cached.resampler.clone(),
+                    capture: Rc::clone(&cached.capture),
+                })
+                .collect();
+            snapshots.sort_unstable_by_key(|snapshot| snapshot.pointer_id);
+            let measured: SmallVec<[_; 4]> = snapshots
+                .into_iter()
+                .map(|snapshot| {
+                    let events = snapshot.resampler.take_pending_events();
+                    (snapshot, events)
+                })
+                .collect();
+            let deliveries: SmallVec<[_; 4]> = measured
+                .iter()
+                .map(|(snapshot, _)| snapshot.capture.begin_delivery())
+                .collect();
+            let losses = self.drain_capture_losses(None);
+            RoutePanic::preserve_first(&mut first_panic, losses, "input prefix capture loss");
+            for (snapshot, events) in &measured {
+                for event in events {
+                    if self.is_current_sequence(snapshot.pointer_id, snapshot.sequence) {
+                        let delivered = self.dispatch_event_with_capture(
+                            event,
+                            snapshot.token,
+                            Some(&snapshot.capture),
+                        );
+                        RoutePanic::preserve_first(
+                            &mut first_panic,
+                            delivered,
+                            "measured motion before input",
+                        );
+                        count += 1;
+                    }
+                }
+            }
+            drop(deliveries);
+        }
         // A resampled contact has exactly one queue: the resampler owned by
         // its cached Down route. Snapshot route capabilities before callbacks
         // so no map borrow crosses executable user code.
         if self.is_resampling_enabled()
-            && let Some((sample_time, next_sample_time)) = sample_window
+            && let MotionFlush::Frame(Some((sample_time, next_sample_time))) = mode
         {
             let mut samples: SmallVec<[ResamplerSnapshot; 4]> = self
                 .hit_tests
@@ -882,7 +978,12 @@ impl GestureBinding {
 
         for (pointer_id, generation, pending) in drained {
             if !self.is_pending_move_in_flight(pointer_id, generation) {
-                continue;
+                let accepted_contact = matches!(mode, MotionFlush::BeforeInput)
+                    && matches!(&pending, PendingMove::Contact { sequence, .. }
+                        if self.is_current_sequence(pointer_id, *sequence));
+                if !accepted_contact {
+                    continue;
+                }
             }
             match pending {
                 PendingMove::Contact { event, sequence } => {
@@ -916,6 +1017,7 @@ impl GestureBinding {
             self.remove_pending_move_if_in_flight(pointer_id, generation);
         }
 
+        drop(contact_deliveries);
         let losses = self.drain_capture_losses(None);
         RoutePanic::preserve_first(&mut first_panic, losses, "frame capture loss");
 
@@ -931,7 +1033,7 @@ impl GestureBinding {
         self.pending_moves
             .borrow()
             .values()
-            .any(|state| state.is_queued())
+            .any(PendingMoveState::is_queued)
             || self.hit_tests.borrow().values().any(|route| {
                 route.capture.release_requested() || route.resampler.has_pending_events()
             })
@@ -1400,7 +1502,7 @@ impl GestureBinding {
                         self.handle_pointer_event_after_signal_withdrawal(
                             &cancel,
                             terminal_hit_test,
-                        )
+                        );
                     });
                     RoutePanic::preserve_first(
                         &mut first_panic,
@@ -1544,6 +1646,9 @@ impl GestureBinding {
                 };
 
                 let token = Self::resolve_route(&result);
+                // Hit entries contain inert target identities and transforms;
+                // the resolved token owns the actual admitted handler route.
+                drop(result);
                 let sequence = self.allocate_pointer_sequence();
                 let capture = ContactCapture::new(
                     down.pointer,
@@ -1557,7 +1662,6 @@ impl GestureBinding {
                 let replaced = self.hit_tests.borrow_mut().insert(
                     pointer_id,
                     CachedPointerRoute {
-                        result,
                         token,
                         sequence,
                         capture,
@@ -1893,9 +1997,9 @@ impl GestureBinding {
                         && (closing
                             || ending == Some(cached.pointer.id)
                             || (!cached.capture.is_delivering()
-                                && !moves
+                                && moves
                                     .get(&cached.pointer.id)
-                                    .is_some_and(|state| state.pending.is_none())))
+                                    .is_none_or(|state| state.pending.is_some())))
                 })
                 .map(|cached| (cached.pointer, cached.time, cached.sequence))
                 .collect()
