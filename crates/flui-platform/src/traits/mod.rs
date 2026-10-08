@@ -43,12 +43,12 @@ pub use flui_platform_api::{
 pub use capabilities::{
     DesktopCapabilities, MobileCapabilities, PlatformCapabilities, WebCapabilities,
 };
+pub use flui_platform_api::keyboard::NamedKey;
 pub use flui_semantics::platform::{
     AccessibilityActionListener, AccessibilityActivationListener, PlatformAccessibility,
 };
 pub use host_window::HostWindow;
 pub(crate) use host_window::OwnerThreadToken;
-pub use flui_platform_api::keyboard::NamedKey;
 pub use owner::{
     OpenWindowError, OwnerPlatform, PendingWindow, PlatformProxy, ProxySendError, SharedPlatform,
     WaitError, WakeRegistrationError, WindowOpen,

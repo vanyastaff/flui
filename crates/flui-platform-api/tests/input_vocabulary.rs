@@ -144,8 +144,7 @@ fn partial_pen_orientation_preserves_only_reported_angles() {
         ),
     ];
     for (orientation, altitude, azimuth) in cases {
-        let sample = PointerSample::new(T0, position(1.0, 2.0))
-            .with_orientation(orientation);
+        let sample = PointerSample::new(T0, position(1.0, 2.0)).with_orientation(orientation);
         let reported = sample.orientation.expect("at least one reported angle");
         assert_eq!(reported.altitude(), altitude);
         assert_eq!(reported.azimuth(), azimuth);
@@ -157,7 +156,10 @@ fn partial_pen_orientation_preserves_only_reported_angles() {
     );
     assert!(matches!(
         PenOrientation::try_altitude(FRAC_PI_2 + 0.001),
-        Err(InputValueError::OutOfRange { quantity: Quantity::Altitude, .. }),
+        Err(InputValueError::OutOfRange {
+            quantity: Quantity::Altitude,
+            ..
+        }),
     ));
     assert_eq!(
         PenOrientation::try_azimuth(f64::INFINITY).map(drop),
@@ -356,30 +358,64 @@ fn coalescing_transfers_only_checked_history_ownership() {
     let boundary_sensor = sampled_at(10).with_pressure(Pressure::try_new(0.2).expect("pressure"));
     for (old_time, old_history, new_history, expected) in [
         (10, vec![], vec![], vec![sampled_at(10)]),
-        (10, vec![sampled_at(0), sampled_at(5)], vec![sampled_at(15)],
-            vec![sampled_at(0), sampled_at(5), sampled_at(10), sampled_at(15)]),
-        (10, vec![boundary_sensor], vec![sampled_at(10), boundary_sensor],
-            vec![boundary_sensor, sampled_at(10), sampled_at(10), boundary_sensor]),
-        (10, vec![sampled_at(0)], vec![sampled_at(5), sampled_at(15)],
-            vec![sampled_at(0), sampled_at(5), sampled_at(10), sampled_at(15)]),
-        (20, vec![sampled_at(10), sensor], vec![sampled_at(10), sensor],
-            vec![sampled_at(10), sampled_at(10), sensor, sensor]),
-        (30, vec![sampled_at(10), sampled_at(20), sensor, sampled_at(25)], vec![sampled_at(5)],
-            vec![sampled_at(5), sampled_at(10), sensor]),
+        (
+            10,
+            vec![sampled_at(0), sampled_at(5)],
+            vec![sampled_at(15)],
+            vec![sampled_at(0), sampled_at(5), sampled_at(10), sampled_at(15)],
+        ),
+        (
+            10,
+            vec![boundary_sensor],
+            vec![sampled_at(10), boundary_sensor],
+            vec![
+                boundary_sensor,
+                sampled_at(10),
+                sampled_at(10),
+                boundary_sensor,
+            ],
+        ),
+        (
+            10,
+            vec![sampled_at(0)],
+            vec![sampled_at(5), sampled_at(15)],
+            vec![sampled_at(0), sampled_at(5), sampled_at(10), sampled_at(15)],
+        ),
+        (
+            20,
+            vec![sampled_at(10), sensor],
+            vec![sampled_at(10), sensor],
+            vec![sampled_at(10), sampled_at(10), sensor, sensor],
+        ),
+        (
+            30,
+            vec![sampled_at(10), sampled_at(20), sensor, sampled_at(25)],
+            vec![sampled_at(5)],
+            vec![sampled_at(5), sampled_at(10), sensor],
+        ),
     ] {
         let mut older = PointerMove::new(mouse(), PointerButtons::NONE, sampled_at(old_time))
             .with_modifiers(Modifiers::ALT)
             .with_coalesced(old_history)
             .with_predicted(vec![sampled_at(40)]);
-        let mut newer = PointerMove::new(mouse(), PointerButtons::only(PointerButton::PRIMARY), sampled_at(20))
-            .with_modifiers(Modifiers::SHIFT)
-            .with_coalesced(new_history)
-            .with_predicted(vec![sampled_at(35)]);
+        let mut newer = PointerMove::new(
+            mouse(),
+            PointerButtons::only(PointerButton::PRIMARY),
+            sampled_at(20),
+        )
+        .with_modifiers(Modifiers::SHIFT)
+        .with_coalesced(new_history)
+        .with_predicted(vec![sampled_at(35)]);
         let old_header = older.clone().with_coalesced(vec![]);
         let new_dispatch = newer.clone().with_coalesced(expected);
-        newer.try_coalesce_from(&mut older).expect("same full pointer identity");
+        newer
+            .try_coalesce_from(&mut older)
+            .expect("same full pointer identity");
         assert_eq!(older, old_header, "only older measured history transfers");
-        assert_eq!(newer, new_dispatch, "chronology, coarse sensor readings and dispatch metadata survive");
+        assert_eq!(
+            newer, new_dispatch,
+            "chronology, coarse sensor readings and dispatch metadata survive"
+        );
     }
 }
 
@@ -389,7 +425,8 @@ fn bounded_coalesced_history_keeps_latest_readings_and_predictions() {
     let ordinary = sampled_at(25);
     let sensor = ordinary.with_pressure(Pressure::try_new(0.2).expect("valid pressure"));
     let initial = PointerMove::new(
-        mouse().with_device(DeviceId::try_from(7_u64).expect("device identity"))
+        mouse()
+            .with_device(DeviceId::try_from(7_u64).expect("device identity"))
             .with_role(PointerRole::Additional),
         PointerButtons::only(PointerButton::PRIMARY),
         sampled_at(50),
@@ -407,8 +444,11 @@ fn bounded_coalesced_history_keeps_latest_readings_and_predictions() {
     ] {
         let mut movement = initial.clone();
         movement.retain_latest_coalesced(maximum);
-        assert_eq!(movement, initial.clone().with_coalesced(readings),
-            "bounded measured readings retain ordering, coarse-time identity and every other dispatch field");
+        assert_eq!(
+            movement,
+            initial.clone().with_coalesced(readings),
+            "bounded measured readings retain ordering, coarse-time identity and every other dispatch field"
+        );
     }
 }
 
@@ -429,11 +469,16 @@ fn coalescing_refuses_every_pointer_metadata_mismatch_without_mutation() {
         assert_eq!(newer, before);
         assert_eq!(*older.current(), sampled_at(0));
         assert_eq!(older.pointer, other);
-        let mut older = older.with_coalesced(vec![sampled_at(0).with_pressure(
-            Pressure::try_new(0.2).expect("pressure"),
-        )]).with_predicted(vec![sampled_at(10)]);
+        let mut older = older
+            .with_coalesced(vec![
+                sampled_at(0).with_pressure(Pressure::try_new(0.2).expect("pressure")),
+            ])
+            .with_predicted(vec![sampled_at(10)]);
         let old_before = older.clone();
-        assert_eq!(newer.try_coalesce_from(&mut older), Err(MismatchedPointerInfo));
+        assert_eq!(
+            newer.try_coalesce_from(&mut older),
+            Err(MismatchedPointerInfo)
+        );
         assert_eq!(newer, before);
         assert_eq!(older, old_before, "refusal retains both owned histories");
     }

@@ -541,9 +541,14 @@ pub(crate) fn viewer_focal_fling_rebuild_preserves_or_retires_geometry() {
         laid.pump_for(Duration::from_millis(16));
         laid.pump_for(Duration::from_millis(16));
         assert_eq!(
-            controller.value(), stopped,
+            controller.value(),
+            stopped,
             "changing {} retires the immutable fling limits",
-            if change_viewport { "the viewport" } else { "the boundary" }
+            if change_viewport {
+                "the viewport"
+            } else {
+                "the boundary"
+            }
         );
     }
 }
@@ -740,8 +745,7 @@ pub(crate) fn page_scroll_resolves_against_the_actual_viewport() {
     use flui_foundation::geometry::Matrix4;
     use flui_widgets::Transform;
     let perspective = Matrix4::from([
-        1.0, 0.0, 0.0, -0.005, 0.0, 1.0, 0.0, 0.0,
-        0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+        1.0, 0.0, 0.0, -0.005, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
     ]);
     for (transform, focal) in [
         (Matrix4::scaling(2.0, 2.0, 1.0), position(20.0, 20.0)),
@@ -764,12 +768,18 @@ pub(crate) fn page_scroll_resolves_against_the_actual_viewport() {
             );
             assert_eq!(controller.position().viewport_dimension(), 275.0);
             let scroll = ScrollEvent::new(
-                mouse(), EventTime::from_nanos(61), focal,
+                mouse(),
+                EventTime::from_nanos(61),
+                focal,
                 ScrollDelta::try_new(unit, 0.0, 0.5).expect("finite counts"),
-            ).with_precision(ScrollPrecision::Precise);
+            )
+            .with_precision(ScrollPrecision::Precise);
             laid.dispatch_pointer_event(&PointerEvent::Scroll(scroll));
-            assert!((controller.pixels() - expected).abs() < 1e-9,
-                "transformed {unit:?} resolves in actual scrollable: {} != {expected}", controller.pixels());
+            assert!(
+                (controller.pixels() - expected).abs() < 1e-9,
+                "transformed {unit:?} resolves in actual scrollable: {} != {expected}",
+                controller.pixels()
+            );
         }
     }
 }

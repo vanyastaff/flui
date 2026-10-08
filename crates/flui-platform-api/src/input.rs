@@ -20,9 +20,9 @@
 //! flui_interaction (gesture recognition)
 //! ```
 //!
+use crate::{keyboard::KeyEvent, pointer::PointerEvent};
 use flui_foundation::DataTransferId;
 use flui_foundation::geometry::{Offset, Point};
-use crate::{keyboard::KeyEvent, pointer::PointerEvent};
 
 /// Result of dispatching an input event through a callback
 ///

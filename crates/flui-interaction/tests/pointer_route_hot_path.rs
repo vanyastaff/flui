@@ -133,7 +133,9 @@ fn resolved_route_move_invocation_allocates_no_heap_after_setup() {
 }
 
 fn resampler_packets(down_time: u64) -> [PointerEvent; 3] {
-    use flui_platform_api::pointer::{PointerButton, PointerButtons, PointerInfo, PointerPress, PointerRelease};
+    use flui_platform_api::pointer::{
+        PointerButton, PointerButtons, PointerInfo, PointerPress, PointerRelease,
+    };
     let pointer = PointerInfo::new(
         flui_platform_api::pointer::PointerId::new(core::num::NonZeroU64::MIN),
         PointerKind::Mouse,
@@ -143,14 +145,24 @@ fn resampler_packets(down_time: u64) -> [PointerEvent; 3] {
     let buttons = PointerButtons::only(PointerButton::PRIMARY);
     [
         PointerEvent::Down(PointerPress::new(
-            pointer, PointerButton::PRIMARY, buttons, route_sample(down_time, 0.0, 0.0),
+            pointer,
+            PointerButton::PRIMARY,
+            buttons,
+            route_sample(down_time, 0.0, 0.0),
         )),
-        PointerEvent::Move(PointerMove::new(pointer, buttons, route_sample(3_000_000, 30.0, 50.0))
-            .with_modifiers(Modifiers::SHIFT)
-            .with_coalesced(vec![route_sample(1_000_000, 10.0, 20.0), route_sample(2_000_000, 20.0, 30.0)])
-            .with_predicted(vec![route_sample(4_000_000, 40.0, 60.0)])),
+        PointerEvent::Move(
+            PointerMove::new(pointer, buttons, route_sample(3_000_000, 30.0, 50.0))
+                .with_modifiers(Modifiers::SHIFT)
+                .with_coalesced(vec![
+                    route_sample(1_000_000, 10.0, 20.0),
+                    route_sample(2_000_000, 20.0, 30.0),
+                ])
+                .with_predicted(vec![route_sample(4_000_000, 40.0, 60.0)]),
+        ),
         PointerEvent::Up(PointerRelease::new(
-            pointer, PointerButton::PRIMARY, PointerButtons::NONE,
+            pointer,
+            PointerButton::PRIMARY,
+            PointerButtons::NONE,
             route_sample(down_time.max(5_000_000), 30.0, 50.0),
         )),
     ]
@@ -167,21 +179,34 @@ fn measure_resampler_delivery(stop: bool) {
     }
     let mut deliveries = 0;
     let mut consume = |packet| {
-        assert_eq!(packet, packets[deliveries], "owned delivery preserves every source field");
+        assert_eq!(
+            packet, packets[deliveries],
+            "owned delivery preserves every source field"
+        );
         deliveries += 1;
     };
     ALLOCATIONS.store(0, Ordering::Relaxed);
     if stop {
         resampler.stop(&mut consume);
     } else {
-        resampler.sample(base + Duration::from_millis(3), base + Duration::from_millis(4), &mut consume);
+        resampler.sample(
+            base + Duration::from_millis(3),
+            base + Duration::from_millis(4),
+            &mut consume,
+        );
     }
     let allocations = ALLOCATIONS.load(Ordering::Relaxed);
-    assert_eq!(allocations, 0, "unchanged-time measured history delivery reuses owned storage: stop={stop}");
+    assert_eq!(
+        allocations, 0,
+        "unchanged-time measured history delivery reuses owned storage: stop={stop}"
+    );
     if !stop {
         resampler.stop(&mut consume);
     }
-    assert_eq!(deliveries, 3, "the complete accepted sequence remains deliverable");
+    assert_eq!(
+        deliveries, 3,
+        "the complete accepted sequence remains deliverable"
+    );
     assert!(!resampler.has_pending_events());
 }
 
@@ -194,15 +219,22 @@ fn resampler_raised_timestamp_keeps_checked_history_policy() {
     for (packet, millis) in packets.iter().zip([0, 1, 2]) {
         resampler.add_event_at(packet.clone(), base + Duration::from_millis(millis));
     }
-    let PointerEvent::Move(movement) = &packets[1] else { panic!("Move fixture") };
+    let PointerEvent::Move(movement) = &packets[1] else {
+        panic!("Move fixture")
+    };
     let mut current = *movement.current();
     current.time = EventTime::from_nanos(10_000_000);
-    packets[1] = PointerEvent::Move(PointerMove::new(movement.pointer, movement.buttons, current)
-        .with_modifiers(movement.modifiers)
-        .with_coalesced(movement.coalesced().to_vec()));
+    packets[1] = PointerEvent::Move(
+        PointerMove::new(movement.pointer, movement.buttons, current)
+            .with_modifiers(movement.modifiers)
+            .with_coalesced(movement.coalesced().to_vec()),
+    );
     let mut deliveries = 0;
     resampler.stop(|packet| {
-        assert_eq!(packet, packets[deliveries], "raised time revalidates predictions while preserving measured history");
+        assert_eq!(
+            packet, packets[deliveries],
+            "raised time revalidates predictions while preserving measured history"
+        );
         deliveries += 1;
     });
     assert_eq!(deliveries, 3);
@@ -218,11 +250,19 @@ fn saturated_resampler_admission_reuses_bounded_history_storage() {
     let pointer = base_move.pointer;
     let buttons = base_move.buttons;
     let movement = |millis: u64| {
-        PointerEvent::Move(PointerMove::new(
-            pointer, buttons, route_sample(millis * 1_000_000, millis as f64, 50.0),
-        ).with_modifiers(Modifiers::SHIFT).with_predicted(vec![
-            route_sample((millis + 1) * 1_000_000, (millis + 1) as f64, 50.0),
-        ]))
+        PointerEvent::Move(
+            PointerMove::new(
+                pointer,
+                buttons,
+                route_sample(millis * 1_000_000, millis as f64, 50.0),
+            )
+            .with_modifiers(Modifiers::SHIFT)
+            .with_predicted(vec![route_sample(
+                (millis + 1) * 1_000_000,
+                (millis + 1) as f64,
+                50.0,
+            )]),
+        )
     };
     let resampler = PointerEventResampler::new(pointer.id);
     let base = Instant::now();
@@ -236,9 +276,14 @@ fn saturated_resampler_admission_reuses_bounded_history_storage() {
     let allocations = ALLOCATIONS.load(Ordering::Relaxed);
     // The queue retires the older packet, so its checked history storage can
     // transfer to the newer packet. At most one growth allocation is needed.
-    assert!(allocations <= 1, "saturated admission transfers existing history storage: {allocations}");
+    assert!(
+        allocations <= 1,
+        "saturated admission transfers existing history storage: {allocations}"
+    );
     let up = PointerEvent::Up(PointerRelease::new(
-        pointer, PointerButton::PRIMARY, PointerButtons::NONE,
+        pointer,
+        PointerButton::PRIMARY,
+        PointerButtons::NONE,
         route_sample(302_000_000, 301.0, 50.0),
     ));
     resampler.add_event_at(up.clone(), base + Duration::from_millis(302));
@@ -253,15 +298,32 @@ fn saturated_resampler_admission_reuses_bounded_history_storage() {
             assert_eq!(movement.pointer, pointer);
             assert_eq!(movement.buttons, buttons);
             assert_eq!(movement.modifiers, Modifiers::SHIFT);
-            for sample in movement.coalesced().iter().chain(std::iter::once(movement.current())) {
+            for sample in movement
+                .coalesced()
+                .iter()
+                .chain(std::iter::once(movement.current()))
+            {
                 let millis = sample.time.as_nanos() / 1_000_000;
-                assert!(millis > previous, "retained measured readings stay chronological");
-                assert_eq!(*sample, route_sample(millis * 1_000_000, millis as f64, 50.0));
+                assert!(
+                    millis > previous,
+                    "retained measured readings stay chronological"
+                );
+                assert_eq!(
+                    *sample,
+                    route_sample(millis * 1_000_000, millis as f64, 50.0)
+                );
                 previous = millis;
                 readings += 1;
             }
             let millis = movement.current().time.as_nanos() / 1_000_000;
-            assert_eq!(movement.predicted(), &[route_sample((millis + 1) * 1_000_000, (millis + 1) as f64, 50.0)]);
+            assert_eq!(
+                movement.predicted(),
+                &[route_sample(
+                    (millis + 1) * 1_000_000,
+                    (millis + 1) as f64,
+                    50.0
+                )]
+            );
             moves += 1;
         }
         PointerEvent::Up(_) => {

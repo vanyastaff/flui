@@ -299,10 +299,8 @@ fn directional_provider_failure_preserves_first_failure_and_recovery() {
                 Some(Rect::new(0.0, 0.0, 10.0, 10.0))
             }));
             let _ = nodes[0].request_focus();
-            let payload = catch_unwind(AssertUnwindSafe(|| {
-                navigate(&manager)
-            }))
-            .expect_err("failure propagates");
+            let payload = catch_unwind(AssertUnwindSafe(|| navigate(&manager)))
+                .expect_err("failure propagates");
             assert_eq!(
                 flui_foundation::panic::payload_text(payload.as_ref()),
                 Some(if provider_fails {

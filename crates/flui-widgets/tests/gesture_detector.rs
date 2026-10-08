@@ -473,9 +473,11 @@ pub(crate) fn clearing_pan_callbacks_mid_drag_still_finishes_the_drag() {
 
 pub(crate) fn mounted_drag_policy_replaces_targets_before_cancellation_and_recovers() {
     use crate::common::{ProbeSignals, SignalProbe};
-    use flui_interaction::{DragPointerStrategy, GestureEndReason};
-    use flui_interaction::events::{make_down_event_for_id, make_move_event_for_id, make_up_event_for_id, PointerKind};
     use flui_foundation::geometry::Offset;
+    use flui_interaction::events::{
+        PointerKind, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
+    };
+    use flui_interaction::{DragPointerStrategy, GestureEndReason};
     use flui_view::SignalWriteExt;
     use std::{cell::Cell, rc::Rc};
 
@@ -486,11 +488,24 @@ pub(crate) fn mounted_drag_policy_replaces_targets_before_cancellation_and_recov
         let completed = Rc::new(Cell::new(0));
         let updates = Rc::new(std::cell::RefCell::new(Vec::new()));
         let signal = Rc::new(Cell::new(None));
-        let (p, s, c, e, u, remembered) = (policy.clone(), starts.clone(), cancelled.clone(), completed.clone(), updates.clone(), signal.clone());
+        let (p, s, c, e, u, remembered) = (
+            policy.clone(),
+            starts.clone(),
+            cancelled.clone(),
+            completed.clone(),
+            updates.clone(),
+            signal.clone(),
+        );
         let fail_once = Rc::new(Cell::new(cancel_panics));
         let probe = SignalProbe::new(move |ProbeSignals { count, .. }| {
             remembered.set(Some(count));
-            let (s, c, e, u, fail) = (s.clone(), c.clone(), e.clone(), u.clone(), fail_once.clone());
+            let (s, c, e, u, fail) = (
+                s.clone(),
+                c.clone(),
+                e.clone(),
+                u.clone(),
+                fail_once.clone(),
+            );
             GestureDetector::new()
                 .drag_pointer_strategy(p.get())
                 .on_pan_start(move |_, _| s.set(s.get() + 1))
@@ -499,7 +514,9 @@ pub(crate) fn mounted_drag_policy_replaces_targets_before_cancellation_and_recov
                     GestureEndReason::Completed => e.set(e.get() + 1),
                     GestureEndReason::Cancelled => {
                         c.set(c.get() + 1);
-                        if fail.replace(false) { panic!("drag policy cancellation"); }
+                        if fail.replace(false) {
+                            panic!("drag policy cancellation");
+                        }
                     }
                 })
                 .child(ColoredBox::new(Color::rgb(10, 20, 30)))
@@ -513,39 +530,67 @@ pub(crate) fn mounted_drag_policy_replaces_targets_before_cancellation_and_recov
                 1 => make_move_event_for_id(pointer, position, PointerKind::Touch),
                 2 => make_up_event_for_id(pointer, position, PointerKind::Touch),
                 _ => unreachable!("scripted phase"),
-            }.expect("finite touch fixture");
+            }
+            .expect("finite touch fixture");
             laid.dispatch_pointer_event(&event);
         };
         send(&laid, 2, 10.0, 0);
         send(&laid, 2, 50.0, 1);
         assert_eq!(starts.get(), 1);
         policy.set(DragPointerStrategy::ContinueWithRemaining);
-        probe.write(|cx| signal.get().expect("mounted probe").set(cx, 1)).expect("write policy rebuild");
+        probe
+            .write(|cx| signal.get().expect("mounted probe").set(cx, 1))
+            .expect("write policy rebuild");
         // Lifecycle update failures are recovered by substituting the failed
         // child, so this frame completes. Observe the host's contained report
         // rather than expecting a dropped-frame panic from the pump.
         let (_, log) = flui_testing::log_capture::capture(|| laid.pump());
-        let reports: Vec<_> = log.records().iter().filter(|record| {
-            record.message == "lifecycle panic contained; frame continued for this presentation"
-        }).collect();
+        let reports: Vec<_> = log
+            .records()
+            .iter()
+            .filter(|record| {
+                record.message == "lifecycle panic contained; frame continued for this presentation"
+            })
+            .collect();
         if cancel_panics {
-            assert_eq!(reports.len(), 1, "outgoing cancellation is reported exactly once: {log}");
-            assert_eq!(reports[0].field("panic_message"), Some("drag policy cancellation"), "the original cancellation failure remains authoritative: {log}");
+            assert_eq!(
+                reports.len(),
+                1,
+                "outgoing cancellation is reported exactly once: {log}"
+            );
+            assert_eq!(
+                reports[0].field("panic_message"),
+                Some("drag policy cancellation"),
+                "the original cancellation failure remains authoritative: {log}"
+            );
             assert_eq!(reports[0].field("hook"), Some("Update"));
             assert_eq!(reports[0].field("internal_invariant"), Some("false"));
-            assert_eq!(laid.count_elements_by_view_type::<GestureDetector>(), 0, "the failed lifecycle actor is substituted");
+            assert_eq!(
+                laid.count_elements_by_view_type::<GestureDetector>(),
+                0,
+                "the failed lifecycle actor is substituted"
+            );
         } else {
-            assert!(reports.is_empty(), "healthy policy replacement is not a lifecycle failure: {log}");
+            assert!(
+                reports.is_empty(),
+                "healthy policy replacement is not a lifecycle failure: {log}"
+            );
             assert_eq!(laid.count_elements_by_view_type::<GestureDetector>(), 1);
         }
         assert_eq!(cancelled.get(), 1, "old accepted drag is cancelled once");
         send(&laid, 2, 50.0, 2);
-        assert_eq!(completed.get(), 0, "stale release cannot complete a replacement");
+        assert_eq!(
+            completed.get(),
+            0,
+            "stale release cannot complete a replacement"
+        );
 
         if cancel_panics {
             // The tree's recovery replaces the failed actor. Rebuild the live
             // parent to mount the configured healthy actor before fresh input.
-            probe.write(|cx| signal.get().expect("mounted probe").set(cx, 2)).expect("rebuild after contained cancellation");
+            probe
+                .write(|cx| signal.get().expect("mounted probe").set(cx, 2))
+                .expect("rebuild after contained cancellation");
             laid.pump();
             assert_eq!(laid.count_elements_by_view_type::<GestureDetector>(), 1);
         }
@@ -555,9 +600,17 @@ pub(crate) fn mounted_drag_policy_replaces_targets_before_cancellation_and_recov
         send(&laid, 3, 20.0, 0);
         send(&laid, 3, 30.0, 1);
         send(&laid, 2, 50.0, 2);
-        assert_eq!(completed.get(), 0, "mounted listener must route to the new continuation mode");
+        assert_eq!(
+            completed.get(),
+            0,
+            "mounted listener must route to the new continuation mode"
+        );
         send(&laid, 3, 40.0, 1);
-        assert_eq!(updates.borrow().last(), Some(&10.0), "replacement survives old cancellation failure and rebases handoff");
+        assert_eq!(
+            updates.borrow().last(),
+            Some(&10.0),
+            "replacement survives old cancellation failure and rebases handoff"
+        );
         send(&laid, 3, 40.0, 2);
         assert_eq!((starts.get(), cancelled.get(), completed.get()), (2, 1, 1));
     }

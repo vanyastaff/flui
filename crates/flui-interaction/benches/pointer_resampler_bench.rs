@@ -85,9 +85,7 @@ fn terminal(kind: Terminal, nanos: u64, x: f64) -> PointerEvent {
 }
 
 fn event_nanos(event: &PointerEvent) -> u64 {
-    event.time()
-        .expect("fixture event time")
-        .as_nanos()
+    event.time().expect("fixture event time").as_nanos()
 }
 
 /// Consume both the source clock and the delivered value, not merely callback count.

@@ -79,9 +79,7 @@ pub(crate) fn motion_history(
 /// Every measured position in packet order, excluding predictions. Admission
 /// must observe excursions even when the frame's current position returns to
 /// the contact origin; callbacks still publish the current dispatch.
-pub(crate) fn measured_positions(
-    event: &PointerEvent,
-) -> impl Iterator<Item = Offset<f64>> + '_ {
+pub(crate) fn measured_positions(event: &PointerEvent) -> impl Iterator<Item = Offset<f64>> + '_ {
     use crate::events::PointerEventExt;
     motion_history(event)
         .map(|(_, position)| position)

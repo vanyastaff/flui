@@ -1040,7 +1040,11 @@ impl WindowsPlatform {
                 WM_CREATE => {
                     // SAFETY: this is the just-created owner-thread HWND. Windows
                     // owns notification delivery until its destruction.
-                    if let Err(error) = windows::Win32::UI::Controls::RegisterPointerDeviceNotifications(hwnd, false) {
+                    if let Err(error) =
+                        windows::Win32::UI::Controls::RegisterPointerDeviceNotifications(
+                            hwnd, false,
+                        )
+                    {
                         tracing::warn!(%error, "pointer device notifications unavailable");
                     }
                     tracing::debug!("WM_CREATE for HWND {:?}", hwnd);
@@ -1586,8 +1590,13 @@ impl WindowsPlatform {
                     DefWindowProcW(hwnd, msg, wparam, lparam)
                 }
 
-                WM_LBUTTONDOWN | WM_LBUTTONUP | WM_RBUTTONDOWN | WM_RBUTTONUP | WM_MBUTTONDOWN
-                | WM_MBUTTONUP | windows::Win32::UI::WindowsAndMessaging::WM_XBUTTONDOWN
+                WM_LBUTTONDOWN
+                | WM_LBUTTONUP
+                | WM_RBUTTONDOWN
+                | WM_RBUTTONUP
+                | WM_MBUTTONDOWN
+                | WM_MBUTTONUP
+                | windows::Win32::UI::WindowsAndMessaging::WM_XBUTTONDOWN
                 | windows::Win32::UI::WindowsAndMessaging::WM_XBUTTONUP => {
                     use super::events::{
                         button_message, capture_on_press, mouse_button_event, release_capture_after,
@@ -1619,7 +1628,11 @@ impl WindowsPlatform {
                             ctx.callbacks.dispatch_input(event);
                         }
                     }
-                    LRESULT(isize::from(matches!(msg, windows::Win32::UI::WindowsAndMessaging::WM_XBUTTONDOWN | windows::Win32::UI::WindowsAndMessaging::WM_XBUTTONUP)))
+                    LRESULT(isize::from(matches!(
+                        msg,
+                        windows::Win32::UI::WindowsAndMessaging::WM_XBUTTONDOWN
+                            | windows::Win32::UI::WindowsAndMessaging::WM_XBUTTONUP
+                    )))
                 }
 
                 windows::Win32::UI::WindowsAndMessaging::WM_POINTERDOWN
@@ -1629,10 +1642,19 @@ impl WindowsPlatform {
                 | windows::Win32::UI::WindowsAndMessaging::WM_POINTERLEAVE
                 | windows::Win32::UI::WindowsAndMessaging::WM_POINTERCAPTURECHANGED => {
                     if let Some(ctx) = ctx {
-                        let events = super::events::native_pointer_input(hwnd, msg, (wparam.0 & 0xffff) as u32, ctx.scale_factor.get(), &ctx.message_clock, &ctx.pointer_registry);
+                        let events = super::events::native_pointer_input(
+                            hwnd,
+                            msg,
+                            (wparam.0 & 0xffff) as u32,
+                            ctx.scale_factor.get(),
+                            &ctx.message_clock,
+                            &ctx.pointer_registry,
+                        );
                         for event in events {
                             let deliver = ctx.pointer_registry.borrow().delivers(&event);
-                            if deliver { ctx.callbacks.dispatch_input(event); }
+                            if deliver {
+                                ctx.callbacks.dispatch_input(event);
+                            }
                         }
                     }
                     // Consume the native route: DefWindowProc would promote it
@@ -1642,17 +1664,38 @@ impl WindowsPlatform {
 
                 windows::Win32::UI::WindowsAndMessaging::WM_POINTERDEVICECHANGE => {
                     if let Some(ctx) = ctx
-                        && let Ok(device) = flui_platform_api::pointer::DeviceId::try_from(lparam.0 as usize as u64)
+                        && let Ok(device) =
+                            flui_platform_api::pointer::DeviceId::try_from(lparam.0 as usize as u64)
                     {
-                        let time = flui_platform_api::EventTime::from_nanos(ctx.message_clock.message_time());
-                        let events = if wparam.0 == windows::Win32::UI::WindowsAndMessaging::PDC_REMOVAL as usize {
-                            ctx.pointer_registry.borrow_mut().remove_device(device, time)
-                        } else if wparam.0 == windows::Win32::UI::WindowsAndMessaging::PDC_ARRIVAL as usize {
-                            if let Some(kind) = super::events::native_device_kind(windows::Win32::Foundation::HANDLE(lparam.0 as *mut core::ffi::c_void)) {
-                                ctx.pointer_registry.borrow_mut().add_device(device, kind, time)
-                            } else { Vec::new() }
-                        } else { Vec::new() };
-                        for event in events { ctx.callbacks.dispatch_input(event); }
+                        let time = flui_platform_api::EventTime::from_nanos(
+                            ctx.message_clock.message_time(),
+                        );
+                        let events = if wparam.0
+                            == windows::Win32::UI::WindowsAndMessaging::PDC_REMOVAL as usize
+                        {
+                            ctx.pointer_registry
+                                .borrow_mut()
+                                .remove_device(device, time)
+                        } else if wparam.0
+                            == windows::Win32::UI::WindowsAndMessaging::PDC_ARRIVAL as usize
+                        {
+                            if let Some(kind) = super::events::native_device_kind(
+                                windows::Win32::Foundation::HANDLE(
+                                    lparam.0 as *mut core::ffi::c_void,
+                                ),
+                            ) {
+                                ctx.pointer_registry
+                                    .borrow_mut()
+                                    .add_device(device, kind, time)
+                            } else {
+                                Vec::new()
+                            }
+                        } else {
+                            Vec::new()
+                        };
+                        for event in events {
+                            ctx.callbacks.dispatch_input(event);
+                        }
                     }
                     LRESULT(0)
                 }

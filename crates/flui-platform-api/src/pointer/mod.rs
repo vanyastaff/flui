@@ -511,7 +511,10 @@ impl PointerMove {
         // Checked histories end at their own current reading. These boundaries
         // prove the concatenation is ordered and excludes this current reading.
         let ordered = older.time < self.current.time
-            && self.coalesced.first().is_none_or(|sample| sample.time >= older.time);
+            && self
+                .coalesced
+                .first()
+                .is_none_or(|sample| sample.time >= older.time);
         samples.push(older);
         samples.extend_from_slice(&self.coalesced);
         if !ordered {

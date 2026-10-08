@@ -1893,8 +1893,10 @@ pub(crate) fn nested_fling_parent_boundary_policy_receives_presentation_pixel_ra
     use flui_animation::Simulation;
     use flui_platform_api::{
         EventTime, PlatformInput,
-        pointer::{PointerButton, PointerButtons, PointerEvent, PointerId, PointerInfo,
-            PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease, PointerSample},
+        pointer::{
+            PointerButton, PointerButtons, PointerEvent, PointerId, PointerInfo, PointerKind,
+            PointerMove, PointerPosition, PointerPress, PointerRelease, PointerSample,
+        },
     };
     use flui_testing::{HeadlessHost, HeadlessWindow};
     use flui_widgets::{ScrollMetrics, ScrollPhysics};
@@ -1921,10 +1923,7 @@ pub(crate) fn nested_fling_parent_boundary_policy_receives_presentation_pixel_ra
     }
 
     for density_sensitive in [false, true] {
-        let (outer, inner) = (
-            ScrollController::new(),
-            ScrollController::new(),
-        );
+        let (outer, inner) = (ScrollController::new(), ScrollController::new());
         let physics: SharedScrollPhysics = if density_sensitive {
             Arc::new(HighDensityPhysics)
         } else {
@@ -1937,19 +1936,21 @@ pub(crate) fn nested_fling_parent_boundary_policy_receives_presentation_pixel_ra
                 SizedBox::new(300.0, 600.0).boxed(),
                 SizedBox::new(300.0, 200.0)
                     .child(
-                        flui_widgets::Align::new(flui_painting::Alignment::TOP_LEFT)
-                            .child(SizedBox::new(200.0, 200.0).child(
+                        flui_widgets::Align::new(flui_painting::Alignment::TOP_LEFT).child(
+                            SizedBox::new(200.0, 200.0).child(
                                 Scrollable::new()
                                     .controller(inner.clone())
                                     .child(SizedBox::new(300.0, 1000.0)),
-                            )),
+                            ),
+                        ),
                     )
                     .boxed(),
                 SizedBox::new(300.0, 4800.0).boxed(),
             ]));
         let mut host = HeadlessHost::new(HeadlessWindow::new(300, 300));
         host.set_scale_factor(host.primary_window(), 2.0);
-        host.attach(&parent).expect("mount dense nested scroll owner");
+        host.attach(&parent)
+            .expect("mount dense nested scroll owner");
         let _ = host.pump(Duration::ZERO);
         assert_eq!(inner.position().max_scroll_extent(), 800.0);
         for id in 1_u64..=2 {
@@ -1957,29 +1958,45 @@ pub(crate) fn nested_fling_parent_boundary_policy_receives_presentation_pixel_ra
             inner.jump_to(650.0);
             let _ = host.pump(Duration::ZERO);
             let pointer = PointerInfo::new(
-                PointerId::try_from(id).expect("nonzero contact"), PointerKind::Mouse,
+                PointerId::try_from(id).expect("nonzero contact"),
+                PointerKind::Mouse,
             );
             let sample = |y: f64| {
                 PointerSample::new(
-                    EventTime::from_nanos(u64::try_from(host.clock().elapsed().as_nanos())
-                        .expect("fixture clock fits event time")),
+                    EventTime::from_nanos(
+                        u64::try_from(host.clock().elapsed().as_nanos())
+                            .expect("fixture clock fits event time"),
+                    ),
                     PointerPosition::try_new(flui_foundation::geometry::Point::new(100.0, y))
                         .expect("finite authored mouse position"),
                 )
             };
-            host.dispatch(PlatformInput::Pointer(PointerEvent::Down(PointerPress::new(
-                pointer, PointerButton::PRIMARY, PointerButtons::only(PointerButton::PRIMARY),
-                sample(150.0),
-            ))));
+            host.dispatch(PlatformInput::Pointer(PointerEvent::Down(
+                PointerPress::new(
+                    pointer,
+                    PointerButton::PRIMARY,
+                    PointerButtons::only(PointerButton::PRIMARY),
+                    sample(150.0),
+                ),
+            )));
             for y in [120.0, 100.0] {
                 host.clock().advance(Duration::from_millis(8));
-                host.dispatch(PlatformInput::Pointer(PointerEvent::Move(PointerMove::new(
-                    pointer, PointerButtons::only(PointerButton::PRIMARY), sample(y),
-                ))));
+                host.dispatch(PlatformInput::Pointer(PointerEvent::Move(
+                    PointerMove::new(
+                        pointer,
+                        PointerButtons::only(PointerButton::PRIMARY),
+                        sample(y),
+                    ),
+                )));
             }
-            host.dispatch(PlatformInput::Pointer(PointerEvent::Up(PointerRelease::new(
-                pointer, PointerButton::PRIMARY, PointerButtons::NONE, sample(100.0),
-            ))));
+            host.dispatch(PlatformInput::Pointer(PointerEvent::Up(
+                PointerRelease::new(
+                    pointer,
+                    PointerButton::PRIMARY,
+                    PointerButtons::NONE,
+                    sample(100.0),
+                ),
+            )));
             assert_eq!(inner.pixels(), 670.0, "actual child release premise");
             assert_eq!(outer.pixels(), 600.0, "parent has not consumed the drag");
             for _ in 0..15 {

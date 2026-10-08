@@ -11,12 +11,12 @@ use std::{any::Any, sync::Arc};
 use cursor_icon::CursorIcon;
 use flui_foundation::geometry::{Bounds, Point, Size};
 
+use crate::keyboard::Modifiers;
 use crate::{
     CursorError, DispatchEventResult, PlatformDisplay, PlatformHaptics, PlatformInput,
     PlatformTextInput, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
     WindowExecutionState, WindowId, WindowShowError,
 };
-use crate::keyboard::Modifiers;
 
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 

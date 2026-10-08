@@ -119,18 +119,18 @@ pub use haptic_feedback::HapticFeedback;
 pub use haptics::PlatformHaptics;
 pub use ime::ImeEvent;
 pub use input::{
-    DispatchEventResult, DragDropEvent, PlatformInput, delta_offset_from_coords,
-    device_to_logical, logical_to_device, offset_from_coords,
+    DispatchEventResult, DragDropEvent, PlatformInput, delta_offset_from_coords, device_to_logical,
+    logical_to_device, offset_from_coords,
 };
 pub use keyboard::{Code, Key, KeyEvent, KeyState, Location, Modifiers, NamedKey};
-pub use pointer::{
-    ButtonChange, CancelReason, DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform,
-    PenTool, PointerButton, PointerButtons, PointerCancel, PointerEvent, PointerId, PointerInfo,
-    PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease, PointerRole, PointerSample,
-    ScrollDelta, ScrollEvent, ScrollPhase, ScrollPrecision, ScrollUnit,
-};
 pub use locale::Locale;
 pub use platform_window::PlatformWindow;
+pub use pointer::{
+    ButtonChange, CancelReason, DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenTool,
+    PointerButton, PointerButtons, PointerCancel, PointerEvent, PointerId, PointerInfo,
+    PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease, PointerRole,
+    PointerSample, ScrollDelta, ScrollEvent, ScrollPhase, ScrollPrecision, ScrollUnit,
+};
 pub use storage::{
     Storage, StorageError, StorageFuture, StorageName, Stored, StoredVersion, WriteMode,
 };
