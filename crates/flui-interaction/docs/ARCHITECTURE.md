@@ -196,6 +196,14 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   as zero. Free-drag terminal scalar magnitude alone uses `f64::MAX` when its norm
   cannot be represented; the finite raw vector and derived directional fling
   remain available separately.
+  `DragEndDetails::fling_velocity` and `ScaleEndDetails::focal_fling_velocity`
+  apply the admitted pixel-speed bounds once at terminal delivery. Scale's
+  dimensionless velocity remains independent of those bounds. Native scale
+  stages its profile at Begin without claiming delivery or invoking callbacks;
+  `PanZoomDisposition` distinguishes that admission from a refused Begin and
+  from recognized handling. The mounting owner keeps a refused native session
+  refused until its terminal event, while an Update without Begin remains an
+  independent relative step.
 - **Focus scope identity is explicit.** A `FocusScopeNode` owns an inner `FocusNode`, and that backing node carries a `Weak<FocusScopeNode>` owner link. This keeps enclosing-scope lookup, focused-child history, and `FocusManager::focus_next` / `focus_previous` rooted in the same tree instead of relying on a parallel manager structure. `descendants_are_focusable=false` gates descendant requests; a true-to-false transition evicts focus held by the node or its subtree while leaving the node eligible for a later explicit request. FLUI clears primary focus to `None` rather than selecting a previously focused child.
 - **`processing::lsq_solver` is crate-internal.** `VelocityTracker` is its only user; the resampler interpolates linearly and does not fit a polynomial.
 - **Observability is crate-public.** `pub mod observability` exports stable `GestureEvent` spellings, component-name constants, and `pointer_event_kind`. `flui-app` configures a generic subscriber; gesture-specific devtools consumption requires its own integration. `stable_recognizer_observability_kinds_reach_the_subscriber` pins admission and dispatch fields through public recognizer calls.

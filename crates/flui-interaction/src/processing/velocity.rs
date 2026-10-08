@@ -682,11 +682,11 @@ impl VelocityTracker {
             return 0.0;
         }
         let mut work = 0.0_f64;
-        for i in 0..positions.len() - 1 {
+        for (i, &velocity) in velocities.iter().take(positions.len() - 1).enumerate() {
             let v_prev = Self::kinetic_energy_to_velocity(work);
             // Integrate dimensionless work, so squaring representable measured
             // speeds cannot overflow before the terminal policy sees them.
-            let v_curr = velocities[i] / scale;
+            let v_curr = velocity / scale;
             work += (v_curr - v_prev) * v_curr.abs();
             if i == 0 {
                 // Boundary condition (AOSP "approach 2"): with no information
