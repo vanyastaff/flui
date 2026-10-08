@@ -218,13 +218,20 @@ pub(crate) fn a_floating_snap_header_snaps_fully_open_when_a_startward_scroll_en
     // content = Forward), released without fling velocity: the release is
     // what must trigger the snap.
     laid.dispatch_pointer_down(150.0, 100.0);
-    laid.dispatch_pointer_move(150.0, 170.0); // 70px down: slop + pan_start
-    laid.tick(); // Deliver the start before the next frame's accepted update.
+    // The sole pan member wins the closed arena at Down. Both moves are
+    // accepted updates, so their full displacement reaches the scroll offset.
+    laid.dispatch_pointer_move(150.0, 170.0);
+    laid.tick();
+    assert_eq!(
+        controller.pixels(),
+        130.0,
+        "premise: the sole accepted pan delivers the first 70px update"
+    );
     laid.dispatch_pointer_move(150.0, 175.0); // small further drag
     laid.tick();
     assert_eq!(
         controller.pixels(),
-        195.0,
+        125.0,
         "premise: the accepted drag moves toward the start"
     );
     assert!(
