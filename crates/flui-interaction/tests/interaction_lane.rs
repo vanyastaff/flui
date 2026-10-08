@@ -804,6 +804,8 @@ fn binding_input_contract_matrix() {
         ),
         ("scroll_claim_reentry", scroll_claim_reentry_keeps_new_lease),
         ("scroll_focus_loss", scroll_focus_loss_releases_lease),
+        ("scroll_kind_metadata", scroll_kind_metadata_keeps_lease),
+        ("scroll_role_metadata", scroll_role_metadata_keeps_lease),
         (
             "native_selected_failure",
             native_selected_failure_keeps_lease,
@@ -1822,6 +1824,8 @@ enum ScrollLeaseCase {
     TerminalReentry,
     ClaimReentry,
     FocusLoss,
+    KindMetadata,
+    RoleMetadata,
 }
 
 fn scroll_selected_failure_keeps_lease() {
@@ -1841,6 +1845,13 @@ fn scroll_claim_reentry_keeps_new_lease() {
 }
 fn scroll_focus_loss_releases_lease() {
     assert_scroll_lease(ScrollLeaseCase::FocusLoss);
+}
+
+fn scroll_kind_metadata_keeps_lease() {
+    assert_scroll_lease(ScrollLeaseCase::KindMetadata);
+}
+fn scroll_role_metadata_keeps_lease() {
+    assert_scroll_lease(ScrollLeaseCase::RoleMetadata);
 }
 
 fn scroll_owner_batch_preserves_reentrant_admission() {
@@ -2187,6 +2198,16 @@ fn assert_signal_lease(case: ScrollLeaseCase, native: bool) {
             unreachable!()
         };
         scroll.phase = Some(phase);
+        if phase == ScrollPhase::Changed {
+            if case == ScrollLeaseCase::KindMetadata {
+                scroll.pointer.kind = PointerKind::Pen {
+                    tool: flui_platform_api::pointer::PenTool::Eraser,
+                };
+            }
+            if case == ScrollLeaseCase::RoleMetadata {
+                scroll.pointer.role = flui_platform_api::pointer::PointerRole::Primary;
+            }
+        }
         PointerEvent::Scroll(scroll)
     };
     let lane = InteractionLane::try_new().expect("lane");
@@ -2365,6 +2386,15 @@ fn assert_signal_lease(case: ScrollLeaseCase, native: bool) {
                     1,
                     "focus loss releases scroll without a Down contact"
                 );
+            }
+            ScrollLeaseCase::KindMetadata | ScrollLeaseCase::RoleMetadata => {
+                binding.handle_pointer_event(&packet(ScrollPhase::Changed), |_| fresh_path.clone());
+                assert_eq!(
+                    selected_calls.get(),
+                    2,
+                    "tool and role metadata do not replace source identity"
+                );
+                assert_eq!(fresh_calls.get(), 0, "metadata update cannot steal a lease");
             }
         }
     });
