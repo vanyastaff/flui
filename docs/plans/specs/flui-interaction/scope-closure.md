@@ -115,7 +115,9 @@ verification pending означает ограничения из `pointer-vocab
 ниже имеют реализацию или ранее merged-реализацию. Это не означает завершение
 15 задач приёмки: недостающие inverse-проверки, финальные gates и native smoke
 остаются явными условиями. Целевые прогоны прошли для 43 pointer-строк,
-55 scroll-строк, нижнего reveal/retirement и counting-allocator контракта.
+56 scroll-строк, нижнего reveal/retirement и counting-allocator контракта.
+Повторный restored-прогон на базе `9d171de1` проверил binding, allocator,
+private resampling, lower reveal/retirement и обе публичные widget-семьи.
 Полный gate, CI и слияние в `main` ещё не выполнены.
 
 | Row | Requirement | Status | Closure |
@@ -123,23 +125,23 @@ verification pending означает ограничения из `pointer-vocab
 | M1-11 | Resampling to the vsync (enable policy) | implemented locally; final gates pending | `PresentationConfig::with_pointer_resampling` connects frame-aligned delivery; public pointer and private `resampling_is_presentation_local_and_preserves_delivery_after_failure` families pass. Independent arrival/frame inverses fail in both paths; pending-wake inverse fails the redraw obligation; restored private family passes |
 | M1-13 | Explicit pointer capture + lost capture | implemented locally; final gates pending | `PointerCapture` preserves the Down route and defers one `CaptureLost`; `explicit_pointer_capture_contract` passes, four independent production inverses fail and restored sources pass; ADR-0164 |
 | M3-H8 | Explicit pointer capture/release API | implemented locally; final gates pending | Same token contract, mounted `listener_capture_retains_one_target_and_drop_delivers_loss`; native capture remains a separately checked producer contract |
-| M1-27 | High-precision vs notched wheel | implemented locally; fractional native smoke pending | Owned `ScrollPrecision` reaches `Scrollable`; only notched deltas animate. Current public families pass; actual fractional-wheel producer smoke remains unrun |
+| M1-27 | High-precision vs notched wheel | implemented locally; final gates pending | Owned `ScrollPrecision` reaches `Scrollable`; only notched deltas animate. Current public families and actual fractional hidden-HWND producer smoke pass; this does not establish pen/touch activation |
 | M1-28 | Smooth notched-wheel scrolling | implemented locally; final gates pending | `notched_wheel_accumulates_distance_and_eases_out_in_150ms`, interruption/replacement/unmount/sibling rows pass; zero-duration inverse fails four actual scroll rows, restored smooth-wheel rows pass |
 | M1-34 | Shift+wheel → horizontal scroll | implemented | PR #1487 merged: `wheel_axis_delta`, `shift_wheel_scrolls_the_horizontal_axis` |
-| M1-35 | Scroll latching | implemented locally; final gates pending | `nested_scroll_sequence_keeps_its_first_consumptive_target`, phase/cancel/timeout/device/source-local rows pass in the current scroll family |
+| M1-35 | Scroll latching | implemented locally; final gates pending | `nested_scroll_sequence_keeps_its_first_consumptive_target`, phase/cancel/timeout/device/source-local rows pass. Independent focus-drain, device-removal and exact kind/role identity inverses fail accepted delivery/count assertions; restored binding families pass |
 | M2-A6 | Competing-recognizer composition | implemented locally; final gates pending | `GestureCompetition` feeds real GestureDetector arbitration; eight arena rows pass, admission inverse fails and restored sources pass |
 | M2-D5 | Multi-pointer drag strategy | implemented locally; final gates pending | `DragPointerStrategy::ContinueWithRemaining` reaches GestureDetector/Scrollable; continuation and reentrant cancellation rows pass. Reverting continuation produces premature Scrollable fling and ends the recognizer on the first Up instead of retaining the remaining contact |
-| M2-S1 | Scale + rotate consumed by a widget | implemented locally; inverse pending | Scale recognizer reaches mounted InteractiveViewer; pivot rotation, finite recovery, touch transition and focal-fling rows pass |
+| M2-S1 | Scale + rotate consumed by a widget | implemented locally; broader gesture inverses pending | Scale recognizer reaches mounted InteractiveViewer; pivot rotation, finite recovery, touch transition and focal-fling rows pass. Native lease inverse changes the mounted Viewer scale from the required 1.5 to 1.2 and fails ten binding rows; restored binding families pass |
 | M2-S6 | Scale end velocity | implemented locally; inverse pending | `viewer_reports_scale_velocity_separately_from_focal_velocity` and terminal event-clock cases pass |
-| M2-S7 | Trackpad pan/zoom fed to recognizers | implemented locally; inverse pending | Native claim/session owner connects PanZoom to Scale/Viewer; repeated Start, descendant rebuild and terminal ownership rows pass |
-| M2-X4 | Nested scroll fling handoff | implemented locally; final gates pending | Current nested-fling rows pass inside all 55 scroll rows: axes/reverse, replacement, saturated parent, bounce policy, reentrant jumps and competing physics retirement |
+| M2-S7 | Trackpad pan/zoom fed to recognizers | implemented locally; final gates pending | Native claim/session owner connects PanZoom to Scale/Viewer; repeated Start, descendant rebuild and terminal ownership rows pass. Independent lease, focus-drain, device-removal and exact kind/role identity inverses fail; restored binding families pass |
+| M2-X4 | Nested scroll fling handoff | implemented locally; final gates pending | All 56 scroll rows pass, including the actual receiver DPR=2 case. Independent delivery, bounce-parent policy, equal-edge reentrant jump, ordinary same-controller rebuild, custom-physics first-failure ordering and DPR inverses fail; exact restored sources pass the full family. ADR-0169 |
 | M3-H2 | Perspective transforms unproject the ray | implemented locally; final gates pending | Two public transform matrices pass; position and vector/widget inverses fail and restored sources pass; ADR-0162 |
 | M3-F3 | Explicit traversal order and groups | implemented locally; final gates pending | Group/weak override production path is covered by 28 mounted focus rows and public/private containment; ADR-0165 |
 | M3-F5 | Scope edge behaviour | implemented locally; final gates pending | Widget scope edges and nested actual group/scope retries pass; policy order is reused during a parent retry |
 | M3-F4 | Directional navigation | implemented locally; final gates pending | Four-way beam/gap/distance search, arrow fallback and reentrant geometry pass. Provider containment inverse fails and restored sources pass; broader traversal inverses remain separate |
 | M3-K5 | Dead keys | implemented | PR #1489 merged: Win32 emits `Key::Dead`; production conversion contract rows |
 | M3-K9 | Character shortcuts independent of Shift | implemented | PR #1490 merged: `SingleActivator::character(...).ignoring_shift()` and shortcut contracts; a separate duplicate type is unnecessary |
-| M3-A5 | Scroll actions and ShowOnScreen on scrollables | implemented locally; final gates pending | Existing axis actions plus routed ShowOnScreen cover both axes/reverse, nested ancestors, published geometry and sibling reentry. All 55 scroll rows and lower reveal/retirement pass; published-basis and retirement inverses fail and restored sources pass |
+| M3-A5 | Scroll actions and ShowOnScreen on scrollables | implemented locally; final gates pending | Existing axis actions plus routed ShowOnScreen cover both axes/reverse, nested ancestors, published geometry and sibling reentry. All 56 scroll rows and lower reveal/retirement pass; published-basis and retirement inverses fail and restored sources pass |
 
 ## OUT
 

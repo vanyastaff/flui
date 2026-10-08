@@ -22,8 +22,8 @@
 | V1–V4 | Типы и генератор уже merged; ADR-0143 принят | Исторический P1-мост заменён прямыми производителями |
 | V5–V7 | Owned-события проходят production-конвейер; единицы scroll доходят до viewport | Итоговый gate зависимых потребителей и optional features |
 | V8 | Миграция и changelog интегрированы | `cargo xtask check-changed` ещё не объявлен завершённым |
-| V9 | Win32 pointer/mouse/keyboard производители интегрированы | Hidden-HWND Xbutton/coarse-clock проверки и откаты прошли; pen/touch activation отказал, поэтому CANNOT_VERIFY. Fractional wheel smoke не выполнен |
-| V10 | winit producer интегрирован | Финальная optional-feature проверка и live smoke по доступности |
+| V9 | Win32 pointer/mouse/keyboard производители интегрированы | Hidden-HWND Xbutton/coarse-clock и откаты прошли; финальные all-features decoder и fractional-wheel hidden-HWND проверки прошли. Pen/touch activation отказал, поэтому CANNOT_VERIFY |
+| V10 | winit producer интегрирован | Четыре pointer-translation контракта прошли; final gate и live smoke по доступности остаются отдельными проверками |
 | V11–V13 | macOS/iOS/Android producer интегрированы | Предыдущая cross-typecheck прошла: скомпилировано, не запущено. После последних V15/API изменений требуется повторная финальная cross-typecheck |
 | V14 | Web producer интегрирован | Живой Chrome smoke после V15, включая getter reentry, прошёл; это не заменяет финальный wasm gate после последующих изменений |
 | V15 | `flui-platform-api` не зависит от `ui-events`/`keyboard-types`/`dpi`; общий мост удалён; xtask использует прямой `keyboard-types` | `ui-events` остаётся только там, где нужны platform keyboard tables; итоговые `deps`/`reach` впереди |
