@@ -1,6 +1,6 @@
 # flui-interaction — задачи (волна 1)
 
-- **Статус:** основная реализация merged; I11 gesture/wheel реализована, целевые проверки и Win32 wheel smoke прошли; заключительный gate и CI ожидаются
+- **Статус:** основная реализация merged; I11 gesture/wheel реализована, заключительный локальный gate и Win32 wheel smoke прошли; CI ожидается
 - **Дата:** 2026-10-06, база `main` @ `9a4daa3ed`
 - **Источник:** [orchestration.md](orchestration.md), [matrix.md](matrix.md); ledger'ы этапа 1 — вне репозитория.
 - **Правила:** задача = ветка `interaction/<slug>` = worktree = draft-PR. Каждый фикс: тест через
@@ -83,7 +83,15 @@ Interaction all-target/all-features clippy прошёл; `compile_fail::trybuild
 проверил все 12 fixtures с обновлением ожиданий выключенным. Две ожидаемые
 E0277-диагностики расширены заметками о provider; запрет Send не изменён.
 Android и AppKit проверены Rust-only library compilation; это не native execution
-и не проверка физического устройства. `cargo xtask check-changed` и CI ещё ожидаются.
+и не проверка физического устройства.
+Заключительный `cargo xtask check-changed --base b357bc9031324f0929f419305f6d647577862428`
+на исходниках `38f9d52388803c00b7365f4e1632e1ece9f85969` завершился exit 0:
+522 теста прошли, 20 skipped; platform compiler guards — 1/1. Strict clippy,
+private-items rustdoc, doctests, native Windows и wasm проверки прошли;
+оба per-feature прохода завершились 65/65, включая tests, benches и examples.
+Полные macOS/iOS/Android cross-typecheck локально пропущены из-за отсутствующих
+cross toolchain/SDK; Linux native suite требует xvfb-run и остаётся за CI.
+CI этой реализации ещё ожидается.
 Standards и Spec review не нашли оставшихся concrete blockers.
 Явное patch-level сравнение `cargo-semver-checks` с базой `b357bc903`, default
 features и `serde` прошло 229 checks для interaction и widgets. Platform-api

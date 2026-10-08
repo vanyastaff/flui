@@ -115,7 +115,8 @@ graph LR
   и `frame_pacing_and_pump_matrix`; детали и native ограничения —
   [приёмка I11](../flui-interaction/tasks.md#текущая-локальная-приёмка-i11-gesturewheel).
   All-features clippy/compile-fail и Win32 wheel smoke прошли. Заключительный
-  gate и CI ещё ожидаются; остальные пункты LY8/LY9 этой отметкой не закрываются.
+  `check-changed` прошёл на `38f9d5238` относительно `b357bc903`; CI ещё ожидается.
+  Остальные пункты LY8/LY9 этой отметкой не закрываются.
 - [ ] Motion и остальные значения имеют production-потребителей; политика
   приложения остаётся runtime-owned. Существующий animation spec сверяется перед
   реализацией, отдельный SystemMotion producer не появляется.

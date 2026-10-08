@@ -218,7 +218,12 @@ also executed successfully, without `CANNOT_VERIFY`: actual injected and queued
 native packets preserve source, precision, signed Detents and DPI conversion.
 Interaction all-target/all-feature clippy and all 12 compiler fixtures passed.
 Android and AppKit evidence is Rust-only library compilation, not native
-execution. The scoped gate and CI remain pending.
+execution. The scoped `cargo xtask check-changed` gate passed at `38f9d5238`
+against `b357bc903`: 522 tests passed, 20 skipped, and platform compiler guards
+passed. Strict clippy, private-items rustdoc, doctests, native Windows and wasm
+checks passed, together with both 65-case per-feature passes. Complete Apple and
+Android cross-typechecks need unavailable SDKs/toolchains on this host; the
+Linux native suite needs xvfb-run. Those paths and CI acceptance remain pending.
 This local gesture/wheel acceptance does not complete text, motion or
 the broader host-authority acceptance in the platform-layer specification.
 
