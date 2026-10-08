@@ -2436,7 +2436,7 @@ pub(crate) fn show_on_screen_failure_continues_live_ancestors_and_fresh_requests
 }
 
 pub(crate) fn show_on_screen_same_pipeline_reentry_keeps_one_reveal_and_recovers() {
-    use flui_semantics::{AccessibilityNodeId, SemanticsAction, SemanticsActionRequest};
+    use flui_rendering::semantics::{AccessibilityNodeId, SemanticsAction, SemanticsActionRequest};
     use std::sync::Mutex;
     let (outer, inner) = (ScrollController::new(), ScrollController::new());
     let mut laid = lay_out(nested_reveal_content(&outer, &inner), tight(200.0, 200.0));
