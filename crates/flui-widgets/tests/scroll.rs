@@ -2165,6 +2165,7 @@ fn reveal_target_content(axis: flui_foundation::geometry::Axis) -> flui_view::Bo
 
 pub(crate) fn nested_fling_bouncing_parent_at_extent_absorbs_before_grandparent() {
     use flui_foundation::geometry::Axis::Vertical;
+    use flui_rendering::view::ViewportOffset;
     let (outer, middle, inner, vsync) = (
         ScrollController::new(),
         ScrollController::new(),
@@ -2232,10 +2233,7 @@ pub(crate) fn nested_fling_bouncing_parent_at_extent_absorbs_before_grandparent(
         "absorbed impulse springs back locally"
     );
     assert_eq!(outer.pixels(), 600.0);
-    middle.jump_to(700.0);
     inner.jump_to(650.0);
-    laid.tick();
-    // The parent can also accept a fresh impulse while inside its range.
     middle.jump_to(800.0);
     laid.tick();
     release_inner_fling(&laid, Vertical, false);
