@@ -346,7 +346,9 @@ fn assert_capture_route(case: CaptureCase) {
     use flui_interaction::events::{
         PointerEvent, PointerKind, make_down_event, make_move_event, make_up_event,
     };
-    use flui_interaction::{GestureBinding, HitTestResult, PointerCapture, PointerDispatch};
+    use flui_interaction::{
+        GestureBinding, HitTestResult, PointerCapture, PointerCaptureError, PointerDispatch,
+    };
     use flui_platform_api::pointer::CancelReason;
     use std::{cell::RefCell, rc::Rc};
 
@@ -364,7 +366,10 @@ fn assert_capture_route(case: CaptureCase) {
         press.pointer = press.pointer.with_device(device);
     }
     assert!(
-        PointerDispatch::at_root(&down).capture().is_err(),
+        matches!(
+            PointerDispatch::at_root(&down).capture(),
+            Err(PointerCaptureError::Unavailable)
+        ),
         "synthetic dispatch has no capture authority"
     );
     let fails = matches!(
@@ -413,7 +418,7 @@ fn assert_capture_route(case: CaptureCase) {
                     held.borrow_mut().push(token);
                 } else if matches!(dispatch.global, PointerEvent::Move(_)) {
                     assert!(
-                        dispatch.capture().is_err(),
+                        matches!(dispatch.capture(), Err(PointerCaptureError::NotDown)),
                         "Move cannot mint capture authority"
                     );
                     if case == CaptureCase::CallbackRelease {
@@ -445,7 +450,7 @@ fn assert_capture_route(case: CaptureCase) {
                     && matches!(dispatch.global, PointerEvent::Down(_))
                 {
                     assert!(
-                        dispatch.capture().is_err(),
+                        matches!(dispatch.capture(), Err(PointerCaptureError::AlreadyClaimed)),
                         "first claimant keeps exclusive authority"
                     );
                 }
