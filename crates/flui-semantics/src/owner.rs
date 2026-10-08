@@ -101,9 +101,9 @@ pub enum SemanticsActionError {
 /// A resolved action whose handler has been cloned out of the semantics tree.
 ///
 /// Resolution and invocation are deliberately separate. A caller may resolve
-/// this value while holding an outer `PipelineOwner` lock, release that lock,
-/// and only then call [`Self::invoke`]. Reentrant handlers therefore cannot
-/// deadlock by reaching back into the render pipeline.
+/// this value while borrowing the presentation's pipeline owner, release that
+/// borrow, and only then call [`Self::invoke`]. Reentrant handlers can therefore
+/// reach the same owner without overlapping a tree borrow.
 #[must_use = "resolved semantics actions must be invoked or intentionally dropped"]
 pub struct SemanticsActionInvocation {
     node_id: AccessibilityNodeId,
@@ -580,8 +580,10 @@ impl SemanticsOwner {
     /// text handler resolves to its numeric handler when the text parses as a
     /// finite number.
     ///
-    /// The returned invocation owns an `Arc` clone of the handler and may be
-    /// invoked after any outer owner lock has been released.
+    /// The returned invocation owns callback snapshots and must be invoked
+    /// after the outer pipeline owner borrow has been released. Descendant
+    /// reveal snapshots refuse removed, replaced or reparented geometry and
+    /// simultaneous reentry for the same live target membership.
     pub fn resolve_action(
         &self,
         request: SemanticsActionRequest,
