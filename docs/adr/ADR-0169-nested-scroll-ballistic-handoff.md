@@ -1,6 +1,6 @@
 # ADR-0169: Nested scroll ballistic boundary handoff
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-08
 - **Related:** [ADR-0127](ADR-0127-exceptional-path-retention.md)
   (exceptional retirement),
