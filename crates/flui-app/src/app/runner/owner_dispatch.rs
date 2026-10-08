@@ -112,7 +112,6 @@ impl From<flui_runtime::owner::DispatchError> for DispatchError {
 // unconstructed there.
 #[cfg_attr(
     all(
-        any(not(test), target_os = "android"),
         // Only android and iOS drop the window-event variants: the web runner
         // constructs `WindowFocus`/`WindowHover` through the browser's
         // visibility/focus signals, so on wasm32 they are live.

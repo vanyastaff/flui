@@ -35,6 +35,10 @@ the dispatch layer moves there too.
   `deferred_native_reads_preserve_accepted_preferences` checks the next build and
   subsequent successful refresh through the app builder.
   Mobile live refresh and end-to-end OS-generated change acceptance remain pending.
+  `preferences_wake_each_isolated_window` constructs two runtimes with the shared
+  host wake, points the legacy redraw slot at the newer window, and verifies
+  that preference publication requests each native redraw before pumping it.
+  The presentation's build-scheduling callback supplies this addressed wake.
 
 - **Admission is not window readiness.** A desktop rendered installation publishes its
   native driver and logical membership together, then applies initial facts

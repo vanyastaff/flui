@@ -218,7 +218,7 @@ impl WindowInstall {
         self.initial.observations.push(observation);
     }
 
-    #[cfg(any(test, not(target_os = "ios")))]
+    #[cfg(not(target_os = "ios"))]
     pub(super) fn lifecycle(&mut self, lifecycle: flui_scheduler::AppLifecycleState) {
         self.initial.lifecycle = Some(lifecycle);
     }

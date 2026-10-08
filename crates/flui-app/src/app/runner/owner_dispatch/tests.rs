@@ -27,6 +27,7 @@ use crate::app::runtime::WindowPolicy;
 
 static_assertions::assert_impl_all!(RuntimeEvent: Send);
 
+#[cfg(not(target_os = "ios"))]
 fn observe_runtime<T: 'static>(
     dispatcher: PresentationDispatcher,
     observe: impl FnOnce(&crate::app::ui_runtime::UiRuntime) -> T + 'static,
@@ -998,6 +999,91 @@ fn deferred_native_reads_preserve_accepted_preferences() {
             Ok(())
         }))
         .expect("deferred source recovery");
+}
+
+fn preferences_wake_each_isolated_window() {
+    use super::super::frame_driver::{FrameDriver, TestFrameDriver};
+    use flui_platform::{HeadlessPlatform, Platform};
+    use flui_view::prelude::*;
+    use std::sync::atomic::Ordering;
+
+    #[derive(Clone, StatelessView)]
+    struct Reader(Rc<RefCell<Vec<f64>>>);
+    impl StatelessView for Reader {
+        fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+            let scale = flui_widgets::MediaQuery::text_scale_factor_of(ctx).expect("preferences");
+            self.0.borrow_mut().push(scale);
+            flui_widgets::SizedBox::new(20.0 * scale, 20.0)
+        }
+    }
+    let _clear = OwnerHostClearGuard::arm();
+    let outputs = Rc::new(RefCell::new(Vec::new()));
+    let installed = Rc::clone(&outputs);
+    Box::new(HeadlessPlatform::new())
+        .run(Box::new(move |owner| {
+            install_owner_platform(owner)?;
+            for id in [101, 102] {
+                let window = crate::app::window_test_support::TestWindow::new().with_id(id);
+                let redraws = window.redraw_calls_handle();
+                let window: Arc<dyn PlatformWindow> = Arc::new(window);
+                let observed = Rc::new(RefCell::new(Vec::new()));
+                let runtime = super::super::host::build_ui_runtime(
+                    &super::super::host::runtime_wake_callback(),
+                    Arc::clone(&window),
+                    1.0,
+                )?;
+                runtime.attach_root_widget_with_size(
+                    &Reader(Rc::clone(&observed)),
+                    800.0,
+                    600.0,
+                )?;
+                let mut installation = prepare_ui_runtime_alongside(runtime, Arc::clone(&window));
+                let dispatcher = installation.dispatcher();
+                let frame = installation
+                    .frame_driver(FrameDriver::Test(TestFrameDriver {
+                        installed: None,
+                        sink: flui_runtime::testing::ScriptedSink::always_presents(),
+                        prelude: None,
+                        resize: None,
+                    }))
+                    .expect("driver");
+                APP_RUNTIME.with(|slot| slot.borrow().set_redraw_window(Arc::clone(&window)));
+                installation
+                    .submit()
+                    .outcome()
+                    .expect("publication")
+                    .expect("installed");
+                dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(frame.binding))
+                    .expect("initial frame");
+                installed
+                    .borrow_mut()
+                    .push((dispatcher, frame.binding, window, redraws, observed));
+            }
+            Ok(())
+        }))
+        .expect("bootstrap");
+    for (_, _, _, redraws, _) in outputs.borrow().iter() {
+        redraws.store(0, Ordering::SeqCst);
+    }
+    let host = APP_RUNTIME.with(|slot| slot.borrow().installed_host.clone());
+    host.logical()
+        .update_preferences(
+            flui_platform_api::SystemPreferences::default()
+                .with_text_scale(2.0)
+                .expect("scale"),
+            host.effects(),
+        )
+        .expect("preferences");
+    for (dispatcher, frame, _, redraws, observed) in outputs.borrow().iter() {
+        assert!(
+            redraws.load(Ordering::SeqCst) > 0,
+            "each isolated native window must be woken"
+        );
+        dispatch_platform_ui_runtime(*dispatcher, RuntimeTask::Frame(*frame))
+            .expect("requested frame");
+        assert_eq!(&*observed.borrow(), &[1.0, 2.0]);
+    }
+    teardown_platform_ui_runtime();
 }
 
 fn owner_wake_refreshes_installed_preference_consumers() {
@@ -2184,6 +2270,10 @@ fn owner_dispatch_matrix() {
             (
                 "deferred_native_reads_preserve_accepted_preferences",
                 deferred_native_reads_preserve_accepted_preferences as fn(),
+            ),
+            (
+                "preferences_wake_each_isolated_window",
+                preferences_wake_each_isolated_window as fn(),
             ),
             (
                 "owner_wake_refreshes_installed_preference_consumers",
