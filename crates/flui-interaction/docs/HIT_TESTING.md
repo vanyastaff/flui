@@ -68,14 +68,21 @@ scroll resolver and the trackpad pan-zoom walk. A handler there may return
 `Stop` to claim the event. Ordinary pointer delivery does not use it.
 
 Scroll delivery carries `ScrollEvent` with its checked delta unit, precision,
-phase and source metadata. Localization changes the focal position, not the
-delta's unit. Page deltas resolve against the consuming viewport's actual
+phase and source metadata. Pixel displacements use the checked local chord
+`U(focal + delta) - U(focal)`, where `U` unprojects onto the receiving plane.
+An invalid endpoint or non-finite intermediate refuses the localized event.
+Lines and Pages retain their exact source counts and unit while the focal
+position is localized. Page deltas resolve against the consuming viewport's actual
 dimension. Line deltas currently use the widget's 53-logical-pixel fallback;
 system-derived line settings await the platform preferences producer.
 `scroll_claim_preserves_owned_source_units_and_phase` and
 `page_scroll_resolves_against_the_actual_viewport` pin the consumer contract.
-Trackpad delivery uses cumulative `PanZoomEvent` transforms rather than a
-second interaction-only pan-zoom vocabulary.
+Trackpad delivery uses cumulative `PanZoomEvent` transforms. Local cumulative
+pan uses `U(current_focal + pan) - U(current_focal)` independently for each
+Update: routing does not infer a global starting focal. Scale and rotation
+remain unchanged, and the source event retains its original cumulative pan.
+The `transformed_entry_receives_local_samples_and_deltas` table distinguishes
+moving focal points and checks finite, horizon and behind-plane refusal.
 
 ## Mouse enter, exit and cursor
 
