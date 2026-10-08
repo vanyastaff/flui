@@ -193,6 +193,8 @@ fn pointer_and_gesture_recognition() {
             ("gesture_detector::authored_settings_replace_active_owners_and_preserve_equal_profiles", crate::gesture_detector::authored_settings_replace_active_owners_and_preserve_equal_profiles),
             ("gesture_detector::authored_settings_retire_tap_candidates_and_deadlines", crate::gesture_detector::authored_settings_retire_tap_candidates_and_deadlines),
             ("gesture_detector::authored_settings_retire_native_scale_session_before_fresh_admission", crate::gesture_detector::authored_settings_retire_native_scale_session_before_fresh_admission),
+            ("gesture_detector::mounted_native_begin_retains_estimator_before_first_claim", crate::gesture_detector::mounted_native_begin_retains_estimator_before_first_claim),
+            ("gesture_detector::mounted_native_begin_refused_by_touch_cannot_claim_after_touch_terminal", crate::gesture_detector::mounted_native_begin_refused_by_touch_cannot_claim_after_touch_terminal),
             ("gesture_detector::scoped_settings_control_touch_recognition_thresholds", crate::gesture_detector::scoped_settings_control_touch_recognition_thresholds),
             ("gesture_detector::scoped_settings_control_gesture_deadlines", crate::gesture_detector::scoped_settings_control_gesture_deadlines),
             ("gesture_detector::scoped_estimator_controls_delivered_drag_velocity", crate::gesture_detector::scoped_estimator_controls_delivered_drag_velocity),

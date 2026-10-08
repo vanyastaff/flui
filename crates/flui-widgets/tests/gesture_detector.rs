@@ -952,6 +952,201 @@ pub(crate) fn authored_settings_retire_native_scale_session_before_fresh_admissi
     assert_eq!((starts.get(), cancelled.get(), completed.get()), (2, 1, 1));
 }
 
+pub(crate) fn mounted_native_begin_retains_estimator_before_first_claim() {
+    use std::{cell::Cell, rc::Rc};
+
+    use crate::common::SettingsScope;
+    use flui_foundation::geometry::{Offset, Point};
+    use flui_interaction::{GestureSettings, GestureSettingsSource, processing::VelocityEstimator};
+    use flui_platform_api::{
+        EventTime,
+        pointer::{
+            PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerEvent, PointerId, PointerInfo,
+            PointerKind, PointerPosition,
+        },
+    };
+
+    let profile = |estimator| GestureSettings::default().with_velocity_estimator(estimator);
+    let source = GestureSettingsSource::new(profile(VelocityEstimator::LeastSquares));
+    let starts = Rc::new(Cell::new(0));
+    let velocity = Rc::new(Cell::new(None));
+    let (started, terminal) = (starts.clone(), velocity.clone());
+    let laid = lay_out(
+        SettingsScope::new(
+            source.provider(),
+            GestureDetector::new()
+                .on_scale_start(move |_, _| started.set(started.get() + 1))
+                .on_scale_end(move |_, details| terminal.set(Some(details.velocity)))
+                .child(ColoredBox::new(Color::RED)),
+        ),
+        tight(100.0, 100.0),
+    );
+    for (session, expected) in [(1_u64, 5.0), (2, 15.899_257_985_831_98)] {
+        let send = |millis, phase| {
+            laid.dispatch_pointer_event(&PointerEvent::PanZoom(PanZoomEvent::new(
+                PointerInfo::new(
+                    PointerId::try_from(session).expect("nonzero pointer"),
+                    PointerKind::Mouse,
+                ),
+                EventTime::from_nanos((session * 100 + millis) * 1_000_000),
+                PointerPosition::try_new(Point::new(50.0, 50.0)).expect("finite position"),
+                phase,
+            )))
+        };
+        send(0, PanZoomPhase::Start);
+        assert_eq!(
+            starts.get(),
+            session as usize - 1,
+            "Begin stages policy without claiming or callbacks"
+        );
+        if session == 1 {
+            source.replace(profile(VelocityEstimator::Impulse));
+        }
+        for (millis, scale) in [(10, 1.3), (20, 1.5), (30, 1.6)] {
+            send(
+                millis,
+                PanZoomPhase::Update(
+                    PanZoomTransform::try_new(Offset::ZERO, scale, 0.0).expect("finite scale"),
+                ),
+            );
+        }
+        assert_eq!(
+            starts.get(),
+            session as usize,
+            "first real update claims exactly once"
+        );
+        send(30, PanZoomPhase::End);
+        let actual = velocity.get().expect("claimed native session completes");
+        assert!(
+            (actual - expected).abs() < 1e-6,
+            "session{session} estimator admitted at Begin: actual{actual}, expected{expected}"
+        );
+    }
+    for (session, terminal_phase) in [(3_u64, PanZoomPhase::End), (4, PanZoomPhase::Cancelled)] {
+        source.replace(profile(VelocityEstimator::LeastSquares));
+        velocity.set(None);
+        let send = |millis, phase| {
+            laid.dispatch_pointer_event(&PointerEvent::PanZoom(PanZoomEvent::new(
+                PointerInfo::new(
+                    PointerId::try_from(session).expect("nonzero pointer"),
+                    PointerKind::Mouse,
+                ),
+                EventTime::from_nanos((session * 100 + millis) * 1_000_000),
+                PointerPosition::try_new(Point::new(50.0, 50.0)).expect("finite position"),
+                phase,
+            )));
+        };
+        send(0, PanZoomPhase::Start);
+        source.replace(profile(VelocityEstimator::Impulse));
+        send(10, PanZoomPhase::Update(PanZoomTransform::IDENTITY));
+        assert_eq!(
+            starts.get(),
+            session as usize - 1,
+            "identity update leaves Begin unclaimed"
+        );
+        send(20, terminal_phase);
+        assert!(
+            velocity.get().is_none(),
+            "unclaimed terminal has no completion callback"
+        );
+        send(
+            30,
+            PanZoomPhase::Update(
+                PanZoomTransform::try_new(Offset::ZERO, 1.3, 0.0).expect("finite scale"),
+            ),
+        );
+        assert_eq!(
+            starts.get(),
+            session as usize,
+            "independent update starts after dormant retirement"
+        );
+        assert!(
+            velocity.get().is_some(),
+            "independent update completes after unclaimed terminal clears the staged Begin"
+        );
+    }
+}
+
+pub(crate) fn mounted_native_begin_refused_by_touch_cannot_claim_after_touch_terminal() {
+    use std::{cell::Cell, rc::Rc};
+
+    use flui_foundation::geometry::{Offset, Point};
+    use flui_interaction::events::{make_down_event_for_id, make_up_event_for_id};
+    use flui_platform_api::{
+        EventTime,
+        pointer::{
+            PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerEvent, PointerId, PointerInfo,
+            PointerKind, PointerPosition,
+        },
+    };
+
+    let starts = Rc::new(Cell::new(0));
+    let ends = Rc::new(Cell::new(0));
+    let (started, completed) = (starts.clone(), ends.clone());
+    let laid = lay_out(
+        GestureDetector::new()
+            .on_tap(|_| {})
+            .on_scale_start(move |_, _| started.set(started.get() + 1))
+            .on_scale_end(move |_, _| completed.set(completed.get() + 1))
+            .child(ColoredBox::new(Color::RED)),
+        tight(100.0, 100.0),
+    );
+    let touch = PointerId::try_from(100_u64).expect("nonzero touch");
+    let native = PointerInfo::new(
+        PointerId::try_from(200_u64).expect("nonzero native source"),
+        PointerKind::Mouse,
+    );
+    let send = |millis: u64, phase| {
+        laid.dispatch_pointer_event(&PointerEvent::PanZoom(PanZoomEvent::new(
+            native,
+            EventTime::from_nanos(millis * 1_000_000),
+            PointerPosition::try_new(Point::new(50.0, 50.0)).expect("finite position"),
+            phase,
+        )))
+    };
+    let update = || {
+        PanZoomPhase::Update(
+            PanZoomTransform::try_new(Offset::ZERO, 1.3, 0.0).expect("finite scale"),
+        )
+    };
+    laid.dispatch_pointer_event(
+        &make_down_event_for_id(touch, Offset::new(50.0, 50.0), PointerKind::Touch)
+            .expect("finite touch"),
+    );
+    send(0, PanZoomPhase::Start);
+    assert_eq!(
+        (starts.get(), ends.get()),
+        (0, 0),
+        "busy Begin cannot start native callbacks"
+    );
+    laid.dispatch_pointer_event(
+        &make_up_event_for_id(touch, Offset::new(50.0, 50.0), PointerKind::Touch)
+            .expect("finite touch"),
+    );
+    send(10, update());
+    assert_eq!(
+        (starts.get(), ends.get()),
+        (0, 0),
+        "refused Begin cannot become a delayed native session after touch terminal"
+    );
+    send(20, PanZoomPhase::End);
+    send(30, update());
+    assert_eq!(
+        (starts.get(), ends.get()),
+        (1, 1),
+        "Update without Begin remains an independent completed step"
+    );
+    send(40, PanZoomPhase::Start);
+    send(50, update());
+    assert_eq!(
+        (starts.get(), ends.get()),
+        (2, 1),
+        "a healthy new Begin admits a retained native session"
+    );
+    send(60, PanZoomPhase::End);
+    assert_eq!((starts.get(), ends.get()), (2, 2));
+}
+
 pub(crate) fn unmount_mid_drag_cancels_once_and_hands_the_arena_to_the_rival() {
     use crate::common::{ProbeSignals, SignalProbe};
     use flui_view::{IntoView, SignalWriteExt, ViewExt};
