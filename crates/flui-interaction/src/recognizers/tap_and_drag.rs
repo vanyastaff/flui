@@ -586,7 +586,7 @@ impl TapAndDragGestureRecognizer {
         for (stamp, position) in history {
             let delta = position - state.initial;
             exceeded_tap |= settings.exceeds_hit_slop(kind, delta);
-            exceeded_drag |= settings.exceeds_pan_slop(kind, delta);
+            exceeded_drag |= settings.exceeds_pan_slop_for(kind, delta);
             let timestamp = state.timeline.instant(stamp, now);
             state.velocity_tracker.add_position(timestamp, position);
         }
@@ -604,7 +604,7 @@ impl TapAndDragGestureRecognizer {
                 if exceeded_tap || settings.exceeds_hit_slop(kind, delta) {
                     state.tap_viable = false;
                 }
-                if exceeded_drag || settings.exceeds_pan_slop(kind, delta) {
+                if exceeded_drag || settings.exceeds_pan_slop_for(kind, delta) {
                     if state.won {
                         state.start_drag(&mut notices);
                     } else {

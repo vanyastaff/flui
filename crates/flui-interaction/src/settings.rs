@@ -483,7 +483,7 @@ impl GestureSettings {
 
     /// Whether free-plane movement exceeds the admitted pan tolerance.
     #[must_use]
-    pub fn exceeds_pan_slop(&self, kind: PointerKind, delta: Offset<f64>) -> bool {
+    pub fn exceeds_pan_slop_for(&self, kind: PointerKind, delta: Offset<f64>) -> bool {
         exceeds_tolerance(delta, self.mouse_drag(kind), self.pan_slop_for(kind))
     }
 

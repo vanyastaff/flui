@@ -1066,7 +1066,7 @@ impl ScaleGestureRecognizer {
         {
             return true;
         }
-        settings.exceeds_pan_slop(kind, current.focal - baseline.focal)
+        settings.exceeds_pan_slop_for(kind, current.focal - baseline.focal)
     }
 
     /// Handle a tracked contact's move.
