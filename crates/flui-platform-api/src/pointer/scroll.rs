@@ -9,9 +9,6 @@ use crate::keyboard::Modifiers;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum ScrollUnit {
-    /// Raw wheel rotation: one conventional detent is `1.0`; fractional
-    /// rotation is preserved. The consumer applies the system notch policy.
-    Detents,
     /// Already translated line distances. System lines-per-detent preferences
     /// have already been applied by the producer and must not be applied again.
     Lines,
@@ -19,6 +16,9 @@ pub enum ScrollUnit {
     Pixels,
     /// Pages: one page is the receiving viewport's extent.
     Pages,
+    /// Raw wheel rotation: one conventional detent is `1.0`; fractional
+    /// rotation is preserved. The consumer applies the system notch policy.
+    Detents,
 }
 
 /// How far one scroll event asks to scroll, in the unit the device reported.

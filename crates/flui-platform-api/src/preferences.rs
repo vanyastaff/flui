@@ -18,15 +18,15 @@ pub use geometry::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum InvalidPreference {
-    /// Native sampling scale must be finite and strictly positive.
-    #[error("preference sampling pixel ratio must be finite and strictly positive")]
-    PixelRatio,
     /// Text sizing factors must be in the supported accessibility range.
     #[error("text scale must be between 1/64 and 64 inclusive")]
     TextScale,
     /// Motion duration factors must be finite and nonnegative.
     #[error("motion duration scale must be finite and nonnegative")]
     DurationScale,
+    /// Native sampling scale must be finite and strictly positive.
+    #[error("preference sampling pixel ratio must be finite and strictly positive")]
+    PixelRatio,
     /// Rectangle dimensions and drag half-extents must be finite and nonnegative.
     #[error("gesture area must have finite nonnegative dimensions")]
     GestureArea,
