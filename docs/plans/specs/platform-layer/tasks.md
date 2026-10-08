@@ -114,8 +114,8 @@ graph LR
   `scroll_physics_and_activity`, `navigator_and_overlay`, `owner_metrics_contract`
   и `frame_pacing_and_pump_matrix`; детали и native ограничения —
   [приёмка I11](../flui-interaction/tasks.md#текущая-локальная-приёмка-i11-gesturewheel).
-  Заключительный gate, all-features clippy/compile-fail, Win32 wheel smoke и CI
-  ещё ожидаются; остальные пункты LY8/LY9 этой отметкой не закрываются.
+  All-features clippy/compile-fail и Win32 wheel smoke прошли. Заключительный
+  gate и CI ещё ожидаются; остальные пункты LY8/LY9 этой отметкой не закрываются.
 - [ ] Motion и остальные значения имеют production-потребителей; политика
   приложения остаётся runtime-owned. Существующий animation spec сверяется перед
   реализацией, отдельный SystemMotion producer не появляется.

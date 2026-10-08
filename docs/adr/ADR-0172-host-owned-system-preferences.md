@@ -210,10 +210,16 @@ repairs failed these affected contracts; restored implementations passed.
 
 Windows [`preferences_contract`](../../crates/flui-platform/tests/preferences.rs)
 executes native queries and cold-cache recovery through
-`windows_reads_preferences_before_a_user_window_exists`. Android and AppKit
-evidence is Rust-only library compilation, not native execution. Final
-all-features clippy/compile-fail, Win32 wheel smoke, the scoped gate and CI remain
-pending. This local gesture/wheel acceptance does not complete text, motion or
+`windows_reads_preferences_before_a_user_window_exists`. The direct child rows
+`native_mouse_wheels_keep_hover_identity_and_signed_units` and
+`fractional_native_wheel_packets_preserve_observed_precision_and_source` in
+[`test_window_lifecycle_contract`](../../crates/flui-platform/tests/contract.rs)
+also executed successfully, without `CANNOT_VERIFY`: actual injected and queued
+native packets preserve source, precision, signed Detents and DPI conversion.
+Interaction all-target/all-feature clippy and all 12 compiler fixtures passed.
+Android and AppKit evidence is Rust-only library compilation, not native
+execution. The scoped gate and CI remain pending.
+This local gesture/wheel acceptance does not complete text, motion or
 the broader host-authority acceptance in the platform-layer specification.
 
 ## Windows transport constraint

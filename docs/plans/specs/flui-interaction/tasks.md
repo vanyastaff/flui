@@ -1,6 +1,6 @@
 # flui-interaction — задачи (волна 1)
 
-- **Статус:** основная реализация merged; I11 gesture/wheel реализована и проверена локально; заключительный gate, native wheel smoke и CI ожидаются
+- **Статус:** основная реализация merged; I11 gesture/wheel реализована, целевые проверки и Win32 wheel smoke прошли; заключительный gate и CI ожидаются
 - **Дата:** 2026-10-06, база `main` @ `9a4daa3ed`
 - **Источник:** [orchestration.md](orchestration.md), [matrix.md](matrix.md); ledger'ы этапа 1 — вне репозитория.
 - **Правила:** задача = ветка `interaction/<slug>` = worktree = draft-PR. Каждый фикс: тест через
@@ -46,7 +46,10 @@ Mounted admission и authored replacement проверены в
 Реальная wheel/inertia доставка проверена в `scroll_physics_and_activity`,
 `pointer_and_gesture_recognition` и `navigator_and_overlay`: Scrollable,
 RefreshIndicator, горизонтальный и вертикальный Dismissible, InteractiveViewer
-и Back gesture используют принятый fling profile. `owner_metrics_contract`
+и Back gesture используют принятый fling profile. Material Drawer проверен
+строками `drawer_settling_uses_the_captured_fling_profile` и
+`open_drawer_settling_uses_the_captured_fling_profile` в `overlay_contracts`.
+`owner_metrics_contract`
 проверяет input-order publication, wheel delivery, geometry retry без кадра
 и изоляцию presentations. Private `frame_pacing_and_pump_matrix` включает
 `checked_geometry_refusal_acknowledges_the_query_and_keeps_safe_admission`:
@@ -64,15 +67,23 @@ cargo nextest run --locked -p flui-interaction gesture_lifecycle_matrix --no-cap
 cargo nextest run --locked -p flui-widgets pointer_and_gesture_recognition --no-capture
 cargo nextest run --locked -p flui-widgets scroll_physics_and_activity --no-capture
 cargo nextest run --locked -p flui-widgets navigator_and_overlay --no-capture
+cargo nextest run --locked -p flui-material overlay_contracts --no-capture
 cargo nextest run --locked -p flui-runtime owner_metrics_contract --no-capture
 cargo nextest run --locked -p flui-runtime frame_pacing_and_pump_matrix --no-capture
 ```
 
 Windows `preferences_contract` исполнил native query и восстановление после
 холодного COM cache через `windows_reads_preferences_before_a_user_window_exists`.
+Win32 wheel строки `native_mouse_wheels_keep_hover_identity_and_signed_units`
+и `fractional_native_wheel_packets_preserve_observed_precision_and_source`
+исполнены напрямую в `contract::test_window_lifecycle_contract`: реальные
+`SendInput` и пакеты очереди owned HWND прошли без `CANNOT_VERIFY`.
+Проверены Detents, знак, source identity, precision и DPI conversion.
+Interaction all-target/all-features clippy прошёл; `compile_fail::trybuild_ui`
+проверил все 12 fixtures с обновлением ожиданий выключенным. Две ожидаемые
+E0277-диагностики расширены заметками о provider; запрет Send не изменён.
 Android и AppKit проверены Rust-only library compilation; это не native execution
-и не проверка физического устройства. Финальные all-features clippy/compile-fail,
-Win32 wheel smoke, `cargo xtask check-changed` и CI ещё ожидаются.
+и не проверка физического устройства. `cargo xtask check-changed` и CI ещё ожидаются.
 Эта приёмка закрывает реализацию I11 gesture/wheel, но не остальные требования
 LY8/LY9 к text, motion и общей host authority.
 
