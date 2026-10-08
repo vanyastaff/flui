@@ -7,8 +7,8 @@
 //!
 //! Performance targets (per `docs/testing.md` and the constitution's "60 fps
 //! / 16 ms frame" budget):
-//! - `estimate` on a full 20-sample buffer: < 5 µs (12.5% of one frame is
-//!   already a lot; 5 µs is comfortable headroom for the rest of drag-end).
+//! - `estimate` on a full 20-sample buffer: < 5 µs (about 0.03% of a 16 ms
+//!   frame; this is a target, not a measured frame-time guarantee).
 //! - `add_position` push: < 100 ns (one slot write; must not allocate).
 //!
 //! Follows the workspace benchmark template at
