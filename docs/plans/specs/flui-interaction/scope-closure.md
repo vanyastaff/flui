@@ -50,7 +50,8 @@ PR #1467 (held Down на blur), #1476 (контрактные тесты hover/h
 Owned vocabulary и прямые producers в строках ниже интегрированы, но producer
 verification pending означает ограничения из `pointer-vocabulary/tasks.md`:
 предыдущая Apple/Android cross-typecheck — только компиляция, pen/touch activation
-на Windows отказал, fractional wheel smoke и финальные gates не выполнены.
+на Windows отказал; fractional hidden-HWND wheel smoke прошёл, финальные gates
+ещё не выполнены.
 Строки внешних focus-keyboard/text-ime/platform-layer спецификаций этим не закрываются.
 
 | Row | Requirement | Status | Closure |
