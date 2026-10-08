@@ -300,7 +300,7 @@ fn directional_provider_failure_preserves_first_failure_and_recovery() {
             }));
             let _ = nodes[0].request_focus();
             let payload = catch_unwind(AssertUnwindSafe(|| {
-                manager.focus_in_direction(FocusDirection::Right)
+                navigate(&manager)
             }))
             .expect_err("failure propagates");
             assert_eq!(
@@ -317,7 +317,7 @@ fn directional_provider_failure_preserves_first_failure_and_recovery() {
                 nodes[0].has_primary_focus(),
                 "geometry failure cannot publish a focus change"
             );
-            assert!(manager.focus_in_direction(FocusDirection::Right));
+            assert!(navigate(&manager));
             assert!(
                 nodes[1].has_primary_focus(),
                 "the cleared provider leaves the healthy fallback geometry usable"
