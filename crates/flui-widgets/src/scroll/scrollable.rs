@@ -193,7 +193,8 @@ impl FlingEndpoint {
                 -physical_velocity
             };
             if owner.axis == self.axis {
-                let metrics = ScrollMetrics::from(&owner.controller.position());
+                let metrics = ScrollMetrics::from(&owner.controller.position())
+                    .with_device_pixel_ratio(device_pixel_ratio);
                 let generation = owner.fling.run_generation();
                 // Ask the owner's real boundary policy whether motion in this
                 // direction is admitted. Bouncing at an extent remains willing;

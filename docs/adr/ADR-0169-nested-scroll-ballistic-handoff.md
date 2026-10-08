@@ -53,6 +53,9 @@ The presentation's measured device pixel ratio is captured at release and
 carried through this same-window chain. The Send completion callback does not
 capture the owner-local pipeline cell. Endpoints share immutable configuration
 and a closed-owner authority bit, without adding per-node locks.
+The parent's boundary-admission probe and simulation factory receive that same
+measured ratio; a custom policy must not see a default ratio during admission
+and a different ratio when its trajectory starts.
 
 ## Ownership and failure
 
@@ -91,6 +94,9 @@ The public `scroll_physics_and_activity` table in
 
 - `nested_fling_hands_remaining_velocity_to_matching_parent_axes` and
   `nested_fling_projects_reversed_child_and_preserves_orthogonal_and_bounce_policy`;
+- `nested_fling_parent_boundary_policy_receives_presentation_pixel_ratio`,
+  using the host's real scale-change ingress with ordinary and density-sensitive
+  parent policies;
 - `nested_fling_skips_saturated_parent_and_reentrant_jump_retires_transfer` and
   `nested_fling_bouncing_parent_at_extent_absorbs_before_grandparent`;
 - `replacing_parent_invalidates_old_fling_handoff_and_next_gesture_recovers`,
