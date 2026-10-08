@@ -487,13 +487,38 @@ impl PointerMove {
         if self.pointer != older.pointer {
             return Err(MismatchedPointerInfo);
         }
-        let mut samples = older.coalesced.clone();
-        samples.push(older.current);
-        samples.extend_from_slice(&self.coalesced);
-        samples.retain(|sample| sample.time <= self.current.time && *sample != self.current);
-        samples.sort_by_key(|sample| sample.time);
-        self.coalesced = samples;
+        self.merge_checked_history(older.coalesced.clone(), older.current);
         Ok(())
+    }
+
+    /// Transfer an earlier movement's measured history into this dispatch.
+    ///
+    /// Like [`try_coalesce`](Self::try_coalesce), the complete pointer identity
+    /// must match and this dispatch retains its current reading, predictions,
+    /// buttons and modifiers. Refusal leaves both movements unchanged. Success
+    /// empties `older`'s measured history and reuses its storage; `older` retains
+    /// its current reading, predictions and dispatch metadata. This operation
+    /// lets bounded queues transfer ownership before retiring the older packet.
+    pub fn try_coalesce_from(&mut self, older: &mut Self) -> Result<(), MismatchedPointerInfo> {
+        if self.pointer != older.pointer {
+            return Err(MismatchedPointerInfo);
+        }
+        self.merge_checked_history(std::mem::take(&mut older.coalesced), older.current);
+        Ok(())
+    }
+
+    fn merge_checked_history(&mut self, mut samples: Vec<PointerSample>, older: PointerSample) {
+        // Checked histories end at their own current reading. These boundaries
+        // prove the concatenation is ordered and excludes this current reading.
+        let ordered = older.time < self.current.time
+            && self.coalesced.first().is_none_or(|sample| sample.time >= older.time);
+        samples.push(older);
+        samples.extend_from_slice(&self.coalesced);
+        if !ordered {
+            samples.retain(|sample| sample.time <= self.current.time && *sample != self.current);
+            samples.sort_by_key(|sample| sample.time);
+        }
+        self.coalesced = samples;
     }
 
     /// The latest reading.

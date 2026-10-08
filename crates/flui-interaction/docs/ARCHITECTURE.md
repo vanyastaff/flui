@@ -134,7 +134,10 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   timestamp reuses its measured and predicted vectors; raising a timestamp still
   uses the checked builders to exclude predictions preceding the new current
   reading. Saturated queues retain at most 100 historical readings per move in
-  place after canonical coalescing validates full pointer identity. The
+  place after canonical coalescing validates full pointer identity. Coalescing
+  transfers the retiring packet's history storage; checked chronological
+  boundaries avoid re-sorting, while overlapping timestamps retain canonical
+  filtering and stable ordering. The
   counting-allocator family
   `resolved_route_move_invocation_allocates_no_heap_after_setup` pins owning
   Sample/Stop delivery, raised-time filtering and saturated admission with 199

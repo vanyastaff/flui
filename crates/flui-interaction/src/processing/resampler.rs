@@ -264,9 +264,9 @@ impl ResamplerInner {
             .get_disjoint_mut([index, index + 1])
             .expect("BUG: adjacent queue entries exist");
         if let (PointerEvent::Move(older), PointerEvent::Move(newer)) =
-            (&older.event, &mut newer.event)
+            (&mut older.event, &mut newer.event)
         {
-            if newer.try_coalesce(older).is_err() {
+            if newer.try_coalesce_from(older).is_err() {
                 return false;
             }
             // Keep the newest samples only, so a queue that is never sampled
