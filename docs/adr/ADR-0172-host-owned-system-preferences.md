@@ -103,6 +103,32 @@ provider replacements, while ordinary host updates use the existing live
 projection. A separate native settings source or parallel inherited scope would
 recreate the authority this decision removes.
 
+An unconfigured nested gesture scope inherits both projections. Explicit
+authored settings override gesture policy without hiding the host's wheel
+policy. The composition wrapper resolves these values into one inherited
+provider; it does not install a second settings authority.
+
+Presentation geometry queries distinguish accepted absence from failure.
+Accepted absence restores the consumer baseline. A failed query retains the
+last observation and a bounded retry obligation. Its geometry is usable only
+in the coordinate context it was accepted for: after a DPI change, new
+admissions use the baseline until a query for that presentation succeeds.
+Timing observations remain independently applicable. Retrying services the
+owner's existing wake path without beginning a synthetic frame.
+
+Native touch slop supplies the touch displacement measurement. The consumer
+retains its deliberate pan-to-hit and per-axis policy ratios rather than
+collapsing distinct gesture thresholds into one value. Projection validates
+intermediate arithmetic, handles a zero baseline explicitly and leaves
+dimensionless scale tolerance independent of pixel distances.
+
+An observed mouse double-click interval measures first press to second press;
+it does not extend by the duration of the first held press. This follows the
+[Windows double-click message sequence](https://learn.microsoft.com/en-us/windows/win32/inputdev/about-mouse-input#double-click-messages)
+and [AppKit mouse-down click counting](https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/EventOverview/HandlingMouseEvents/HandlingMouseEvents.html).
+Touch double-tap and fixed authored timing keep their existing release-to-press
+policy. A retained consecutive-tap candidate includes its timing origin.
+
 Motion observations distinguish no preference, reduced motion and a finite,
 strictly positive duration scale. An OS scale of zero maps to reduced motion;
 one maps to no preference; negative and non-finite values are refused. Duration
