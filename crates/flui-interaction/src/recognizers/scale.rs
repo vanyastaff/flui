@@ -39,7 +39,7 @@ use crate::{
     ids::PointerId,
     processing::{Velocity, VelocityTracker},
     routing::{PanZoomDispatch, PointerDispatch, RoutePanic},
-    settings::GestureSettings,
+    settings::{GestureSettings, GestureSettingsProvider},
 };
 
 // ============================================================================
@@ -193,7 +193,7 @@ pub struct ScaleGestureRecognizer {
     next_contact: Cell<u64>,
     gesture_state: RefCell<ScaleState>,
     native: RefCell<Option<NativeScale>>,
-    settings: GestureSettings,
+    settings: GestureSettingsProvider,
     callbacks: ScaleCallbacks,
 }
 
@@ -333,6 +333,8 @@ impl Ratios {
 #[derive(Debug)]
 struct ScaleState {
     start_mode: ScaleStartMode,
+    /// First-contact profile, retained until the last contact retires.
+    settings: GestureSettings,
     /// Identity of the current contact sequence, never reused after retirement.
     sequence: Option<ContactId>,
     phase: ScalePhase,
@@ -371,6 +373,7 @@ impl Default for ScaleState {
     fn default() -> Self {
         Self {
             start_mode: ScaleStartMode::Scale,
+            settings: GestureSettings::default(),
             sequence: None,
             phase: ScalePhase::Idle,
             contacts: Vec::new(),
@@ -673,7 +676,7 @@ impl NativeScale {
 #[must_use]
 pub struct ScaleGestureRecognizerBuilder {
     arena: crate::arena::GestureArena,
-    settings: GestureSettings,
+    settings: GestureSettingsProvider,
     start_mode: ScaleStartMode,
     callbacks: ScaleCallbacks,
 }
@@ -693,8 +696,8 @@ impl ScaleGestureRecognizerBuilder {
         self
     }
     /// Freeze device-specific tolerances before contact admission.
-    pub fn settings(mut self, settings: GestureSettings) -> Self {
-        self.settings = settings;
+    pub fn settings(mut self, settings: impl Into<GestureSettingsProvider>) -> Self {
+        self.settings = settings.into();
         self
     }
     /// Configure the callback delivered once the scale wins its arenas.
@@ -765,14 +768,28 @@ impl ScaleGestureRecognizer {
         let global_anchor = global.position.get();
         let anchor = Offset::new(anchor.x, anchor.y);
         let global_anchor = Offset::new(global_anchor.x, global_anchor.y);
+        let settings = match local.phase {
+            PanZoomPhase::Start => Some(self.settings.snapshot()),
+            PanZoomPhase::Update(_) if self.native.borrow().is_none() => {
+                Some(self.settings.snapshot())
+            }
+            _ => None,
+        };
         let now = self.membership.now();
         match local.phase {
             PanZoomPhase::Start => {
                 let Some(id) = ContactId::next(&self.next_contact) else {
                     return false;
                 };
-                let mut incoming =
-                    NativeScale::new(id, source, anchor, global_anchor, &self.settings);
+                let mut incoming = NativeScale::new(
+                    id,
+                    source,
+                    anchor,
+                    global_anchor,
+                    settings
+                        .as_ref()
+                        .expect("BUG: native start captures settings"),
+                );
                 let time = incoming.timeline.instant(Some(local.time.as_nanos()), now);
                 incoming.focal_velocity.add_position(time, anchor);
                 incoming
@@ -799,6 +816,10 @@ impl ScaleGestureRecognizer {
                 }
                 let independent = state.is_none();
                 if independent {
+                    let Some(settings) = settings.as_ref() else {
+                        // The clock retired the active session reentrantly.
+                        return false;
+                    };
                     let Some(id) = ContactId::next(&self.next_contact) else {
                         return false;
                     };
@@ -807,7 +828,7 @@ impl ScaleGestureRecognizer {
                         source,
                         anchor,
                         global_anchor,
-                        &self.settings,
+                        settings,
                     ));
                 }
                 let native = state
@@ -903,7 +924,7 @@ impl ScaleGestureRecognizer {
     pub fn builder(arena: crate::arena::GestureArena) -> ScaleGestureRecognizerBuilder {
         ScaleGestureRecognizerBuilder {
             arena,
-            settings: GestureSettings::default(),
+            settings: GestureSettingsProvider::default(),
             start_mode: ScaleStartMode::Scale,
             callbacks: ScaleCallbacks::default(),
         }
@@ -1028,8 +1049,12 @@ impl ScaleGestureRecognizer {
     ///
     /// The span and focal tiers are per-kind (`computeScaleSlop` /
     /// `computePanSlop`); the ratio tier is dimensionless and so has no kind.
-    fn should_accept(&self, baseline: Measure, current: Measure, kind: PointerKind) -> bool {
-        let settings = &self.settings;
+    fn should_accept(
+        baseline: Measure,
+        current: Measure,
+        kind: PointerKind,
+        settings: &GestureSettings,
+    ) -> bool {
         if (current.span - baseline.span).abs() > settings.span_slop_for(kind) {
             return true;
         }
@@ -1041,7 +1066,7 @@ impl ScaleGestureRecognizer {
         {
             return true;
         }
-        (current.focal - baseline.focal).distance() > settings.pan_slop_for(kind)
+        settings.exceeds_pan_slop(kind, current.focal - baseline.focal)
     }
 
     /// Handle a tracked contact's move.
@@ -1080,7 +1105,7 @@ impl ScaleGestureRecognizer {
             let measure = state.sample();
             crossed |= state.contacts.len() >= state.start_mode.minimum_contacts()
                 && measure.is_some_and(|measure| {
-                    baseline.is_some_and(|b| self.should_accept(b, measure, kind))
+                    baseline.is_some_and(|b| Self::should_accept(b, measure, kind, &state.settings))
                 });
             if measure.is_some() && state.contacts.len() >= 2 {
                 let scale = state.current.scale;
@@ -1115,7 +1140,8 @@ impl ScaleGestureRecognizer {
                 // transition, so an observer never sees `on_start` for a
                 // gesture a competitor then takes.
                 crossed |= state.contacts.len() >= state.start_mode.minimum_contacts()
-                    && baseline.is_some_and(|b| self.should_accept(b, measure, kind));
+                    && baseline
+                        .is_some_and(|b| Self::should_accept(b, measure, kind, &state.settings));
                 if crossed && !state.won {
                     state.claiming = true;
                     let entries = state.contacts.iter().map(|c| c.entry.clone()).collect();
@@ -1250,6 +1276,7 @@ impl GestureRecognizer for ScaleGestureRecognizer {
         let Some(id) = ContactId::next(&self.next_contact) else {
             return;
         };
+        let settings = self.settings.snapshot();
         let Some(entry) = self.membership.join(pointer) else {
             return;
         };
@@ -1260,13 +1287,14 @@ impl GestureRecognizer for ScaleGestureRecognizer {
         if state.contacts.is_empty()
             && let PointerEvent::Down(data) = down.local
         {
+            state.settings = settings;
             state.scale_velocity_tracker = VelocityTracker::with_estimator(
                 data.pointer.kind,
-                self.settings.velocity_estimator(),
+                state.settings.velocity_estimator(),
             );
             state.focal_velocity_tracker = VelocityTracker::with_estimator(
                 data.pointer.kind,
-                self.settings.velocity_estimator(),
+                state.settings.velocity_estimator(),
             );
         }
         let claim = state.won.then(|| entry.clone());
