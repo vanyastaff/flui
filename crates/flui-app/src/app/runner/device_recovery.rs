@@ -129,12 +129,10 @@ pub(super) struct FrameRecoveryOutcome {
     /// field carries no separate production obligation of its own — kept
     /// on the struct anyway because it is what makes the wake-on-failure-
     /// only contract independently checkable per call.
+    // Dependency builds can cap dead_code while still checking expectations.
     #[cfg_attr(
         not(all(test, not(any(target_os = "android", target_os = "ios")))),
-        expect(
-            dead_code,
-            reason = "read by this module's own tests only -- see field doc"
-        )
+        allow(dead_code, reason = "read by this module's own tests only")
     )]
     pub(super) just_failed: bool,
     /// The earliest instant the next recovery attempt is allowed, if the
@@ -145,10 +143,7 @@ pub(super) struct FrameRecoveryOutcome {
     /// `DeviceRecoveryBackoff::next_attempt_at` directly instead.
     #[cfg_attr(
         not(all(test, not(any(target_os = "android", target_os = "ios")))),
-        expect(
-            dead_code,
-            reason = "read by this module's own tests only -- see field doc"
-        )
+        allow(dead_code, reason = "read by this module's own tests only")
     )]
     pub(super) next_attempt_at: Option<web_time::Instant>,
 }

@@ -5,7 +5,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-#[cfg(any(test, target_arch = "wasm32"))]
+#[cfg(any(all(test, not(target_os = "android")), target_arch = "wasm32"))]
 use std::rc::Weak;
 
 use super::native_retirement::NativeRetirement;
@@ -23,11 +23,11 @@ impl FrameBinding {
 }
 
 /// A weak readiness authority for owner-local async renderer completions.
-#[cfg(any(test, target_arch = "wasm32"))]
+#[cfg(any(all(test, not(target_os = "android")), target_arch = "wasm32"))]
 #[derive(Clone)]
 pub(super) struct FrameLiveness(Weak<FrameRecord>);
 
-#[cfg(any(test, target_arch = "wasm32"))]
+#[cfg(any(all(test, not(target_os = "android")), target_arch = "wasm32"))]
 impl FrameLiveness {
     pub(super) fn is_live(&self) -> bool {
         self.0.upgrade().is_some_and(|record| {
@@ -68,14 +68,14 @@ pub(super) enum FrameDriver {
     #[cfg(target_arch = "wasm32")]
     Web(super::web::WebFrameDriver),
     /// Private failure seam: uses the product pump and a scripted sink.
-    #[cfg(test)]
+    #[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
     Test(TestFrameDriver),
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
 type TestResize = Box<dyn FnMut(flui_foundation::geometry::Size<f64>, f64)>;
 
-#[cfg(test)]
+#[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
 pub(super) struct TestFrameDriver {
     pub(super) sink: flui_runtime::testing::ScriptedSink,
     pub(super) installed: Option<Box<dyn FnOnce()>>,
@@ -100,7 +100,7 @@ impl FrameDriver {
             Self::Ios(driver) => driver.installed(),
             #[cfg(target_arch = "wasm32")]
             Self::Web(driver) => driver.installed(FrameLiveness(Rc::downgrade(record))),
-            #[cfg(test)]
+            #[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
             Self::Test(driver) => {
                 if let Some(installed) = driver.installed.take() {
                     installed();
@@ -122,7 +122,7 @@ impl FrameDriver {
             Self::Ios(driver) => driver.resize(size, scale_factor),
             #[cfg(target_arch = "wasm32")]
             Self::Web(driver) => driver.resize(size, scale_factor),
-            #[cfg(test)]
+            #[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
             Self::Test(driver) => {
                 if let Some(resize) = driver.resize.as_mut() {
                     resize(size, scale_factor);
@@ -147,7 +147,7 @@ impl FrameDriver {
             Self::Ios(driver) => driver.wake(runtime),
             #[cfg(target_arch = "wasm32")]
             Self::Web(driver) => driver.wake(runtime, FrameLiveness(Rc::downgrade(record))),
-            #[cfg(test)]
+            #[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
             Self::Test(driver) => {
                 if let Some(prelude) = driver.prelude.as_mut() {
                     prelude();
@@ -197,7 +197,7 @@ impl PreparedFrame {
         });
         let registration = FrameRegistration {
             binding,
-            #[cfg(test)]
+            #[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
             liveness: FrameLiveness(Rc::downgrade(&record)),
         };
         (Self(record), registration)
@@ -216,7 +216,7 @@ pub(in crate::app) struct FrameDrivers {
 
 pub(super) struct FrameRegistration {
     pub(super) binding: FrameBinding,
-    #[cfg(test)]
+    #[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
     pub(super) liveness: FrameLiveness,
 }
 

@@ -39,7 +39,10 @@ impl RuntimeDispatcher {
         dispatch_owner_turn(OwnerTurn::Runtime(self, RuntimeOperation::Lifecycle(state)))
     }
 
-    #[cfg(any(test, target_os = "ios"))]
+    #[cfg(any(
+        all(test, not(target_os = "android"), not(target_arch = "wasm32")),
+        target_os = "ios"
+    ))]
     pub(super) fn background(self) -> Result<(), DispatchError> {
         dispatch_owner_turn(OwnerTurn::Runtime(self, RuntimeOperation::Background))
     }
@@ -109,7 +112,7 @@ impl From<flui_runtime::owner::DispatchError> for DispatchError {
 // unconstructed there.
 #[cfg_attr(
     all(
-        not(test),
+        any(not(test), target_os = "android"),
         // Only android and iOS drop the window-event variants: the web runner
         // constructs `WindowFocus`/`WindowHover` through the browser's
         // visibility/focus signals, so on wasm32 they are live.
@@ -200,7 +203,7 @@ pub(in crate::app) enum RuntimeEvent {
 /// the UI runtime explicitly for its backend gate and prelude.
 pub(in crate::app) enum RuntimeTask {
     Event(RuntimeEvent),
-    #[cfg(test)]
+    #[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
     TestCallback(Box<dyn FnOnce(&crate::app::ui_runtime::UiRuntime)>),
     Frame(super::frame_driver::FrameBinding),
     ClosePresentation(flui_foundation::PresentationId),
@@ -250,7 +253,7 @@ impl RuntimeEvent {
 
 /// Test fixture for an idle, fresh host. It exercises production preparation
 /// and requires completed publication before returning a dispatcher.
-#[cfg(test)]
+#[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
 pub(super) fn install_platform_ui_runtime(
     ui_runtime: crate::app::ui_runtime::UiRuntime,
     window: &std::sync::Arc<dyn flui_platform::traits::PlatformWindow>,
@@ -283,7 +286,7 @@ pub(super) fn prepare_platform_ui_runtime(
 
 /// Explicit replacement fixture for shutdown/reentry tests. Production creates
 /// its host before runtime construction and retains it through publication.
-#[cfg(test)]
+#[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
 pub(super) fn prepare_replacement_ui_runtime(
     ui_runtime: crate::app::ui_runtime::UiRuntime,
     window: std::sync::Arc<dyn flui_platform::traits::PlatformWindow>,
@@ -305,7 +308,7 @@ pub(super) fn prepare_replacement_ui_runtime(
 }
 
 /// Idle-host test fixture using the production installation receipt.
-#[cfg(test)]
+#[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
 pub(super) fn install_ui_runtime_alongside(
     ui_runtime: crate::app::ui_runtime::UiRuntime,
     window: &std::sync::Arc<dyn flui_platform::traits::PlatformWindow>,
@@ -336,7 +339,7 @@ pub(super) fn prepare_ui_runtime_alongside(
 }
 
 #[cfg(any(
-    test,
+    all(test, not(target_os = "android"), not(target_arch = "wasm32")),
     all(
         not(target_os = "android"),
         not(target_os = "ios"),
@@ -372,7 +375,7 @@ pub(super) fn prepare_presentation_alongside(
 /// the wrong thing about what actually went wrong.
 #[cfg_attr(
     not(any(
-        test,
+        all(test, not(target_os = "android"), not(target_arch = "wasm32")),
         all(
             not(target_os = "android"),
             not(target_os = "ios"),
@@ -421,7 +424,7 @@ pub(super) enum InstallPresentationError {
     WindowAlreadyMapped(#[from] crate::app::window_registry::RegistryError),
     #[error(transparent)]
     Native(#[from] super::native_bindings::NativeInstallError),
-    #[cfg(test)]
+    #[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
     #[error("presentation initialization did not complete")]
     InitializationFailed,
 }
@@ -439,7 +442,7 @@ impl From<flui_runtime::owner::PublicationError> for InstallPresentationError {
 }
 
 /// Idle-host test fixture requiring the shared presentation to finish publication.
-#[cfg(test)]
+#[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
 pub(super) fn install_presentation_alongside(
     dispatcher: PresentationDispatcher,
     window: impl Into<crate::app::presentation::PresentationWindow>,
@@ -582,7 +585,7 @@ fn dispatch_owner_turn(turn: OwnerTurn) -> Result<(), DispatchError> {
                     closing.close(host.effects())
                 }
                 RuntimeTask::Event(event) => event.deliver(&host, dispatcher.address, &target),
-                #[cfg(test)]
+                #[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
                 RuntimeTask::TestCallback(run) => target.test_callback(run, host.effects()),
             }
         }
@@ -634,7 +637,7 @@ pub(super) fn drive_fanout_owner_callback(
 }
 
 #[cfg(any(
-    test,
+    all(test, not(target_os = "android"), not(target_arch = "wasm32")),
     all(
         not(target_os = "android"),
         not(target_os = "ios"),

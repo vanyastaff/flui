@@ -75,7 +75,7 @@ pub(in crate::app) type IOSController = SessionController<IOSSceneSessionId>;
 
 struct ControllerLease {
     controller: Option<IOSController>,
-    identity: Arc<()>,
+    host: super::InstalledHost,
 }
 impl Drop for ControllerLease {
     fn drop(&mut self) {
@@ -83,7 +83,7 @@ impl Drop for ControllerLease {
         let retired = APP_RUNTIME.with(|slot| {
             let mut runtime = slot.borrow_mut();
             if runtime.ios_running
-                && Arc::ptr_eq(&runtime.loop_identity, &self.identity)
+                && runtime.installed_host.same_host(&self.host)
                 && runtime.ios_controller.is_none()
             {
                 std::mem::replace(&mut runtime.ios_controller, controller)
@@ -113,7 +113,7 @@ fn lease_controller() -> Option<ControllerLease> {
             .take()
             .map(|controller| ControllerLease {
                 controller: Some(controller),
-                identity: Arc::clone(&state.loop_identity),
+                host: state.installed_host.clone(),
             })
     })
 }

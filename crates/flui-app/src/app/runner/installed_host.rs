@@ -36,7 +36,10 @@ pub(super) enum InstallError {
 /// a ready window; the completion tail observes its eventual result.
 #[must_use = "observe installation completion before reporting a window ready"]
 pub(super) struct Installation {
-    #[cfg(any(test, target_os = "ios"))]
+    #[cfg(any(
+        all(test, not(target_os = "android"), not(target_arch = "wasm32")),
+        target_os = "ios"
+    ))]
     pub(super) address: PresentationAddress,
     result: Rc<Cell<Option<Result<(), InstallError>>>>,
     closed: Arc<AtomicBool>,
@@ -125,7 +128,10 @@ impl InstalledHost {
         initial: InstallInitialization,
         window: InstallationWindow,
     ) -> Installation {
-        #[cfg(any(test, target_os = "ios"))]
+        #[cfg(any(
+            all(test, not(target_os = "android"), not(target_arch = "wasm32")),
+            target_os = "ios"
+        ))]
         let address = prepared.address();
         let token = prepared
             .take_delivery()
@@ -145,7 +151,10 @@ impl InstalledHost {
             drop(pending);
         }
         Installation {
-            #[cfg(any(test, target_os = "ios"))]
+            #[cfg(any(
+                all(test, not(target_os = "android"), not(target_arch = "wasm32")),
+                target_os = "ios"
+            ))]
             address,
             result,
             closed: cancellation,
