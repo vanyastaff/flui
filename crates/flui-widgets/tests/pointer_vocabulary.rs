@@ -329,6 +329,44 @@ pub(crate) fn page_scroll_resolves_against_the_actual_viewport() {
             "half page in {height}px viewport"
         );
     }
+    // Counts belong to the scrollable: a geometric transform must not divide
+    // line/page counts before this producer applies its line height/viewport.
+    // The projective plane maps local (10,10) to screen (200/19,200/19).
+    use flui_foundation::geometry::Matrix4;
+    use flui_widgets::Transform;
+    let perspective = Matrix4::from([
+        1.0, 0.0, 0.0, -0.005, 0.0, 1.0, 0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+    ]);
+    for (transform, focal) in [
+        (Matrix4::scaling(2.0, 2.0, 1.0), position(20.0, 20.0)),
+        (perspective, position(200.0 / 19.0, 200.0 / 19.0)),
+    ] {
+        for (unit, expected) in [(ScrollUnit::Lines, 26.5), (ScrollUnit::Pages, 137.5)] {
+            let controller = ScrollController::new();
+            let laid = lay_out(
+                Transform::new(transform).child(
+                    Scrollable::new()
+                        .controller(controller.clone())
+                        .viewport_builder(Rc::new(|position| {
+                            SingleChildScrollView::new()
+                                .position(position)
+                                .child(SizedBox::new(100.0, 1000.0))
+                                .boxed()
+                        })),
+                ),
+                tight(100.0, 275.0),
+            );
+            assert_eq!(controller.position().viewport_dimension(), 275.0);
+            let scroll = ScrollEvent::new(
+                mouse(), EventTime::from_nanos(61), focal,
+                ScrollDelta::try_new(unit, 0.0, 0.5).expect("finite counts"),
+            ).with_precision(ScrollPrecision::Precise);
+            laid.dispatch_pointer_event(&PointerEvent::Scroll(scroll));
+            assert!((controller.pixels() - expected).abs() < 1e-9,
+                "transformed {unit:?} resolves in actual scrollable: {} != {expected}", controller.pixels());
+        }
+    }
 }
 
 pub(crate) fn viewer_page_zoom_resolves_against_the_actual_viewport() {
