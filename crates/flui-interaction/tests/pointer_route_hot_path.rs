@@ -234,9 +234,9 @@ fn saturated_resampler_admission_reuses_bounded_history_storage() {
     ALLOCATIONS.store(0, Ordering::Relaxed);
     resampler.add_event_at(last, base + Duration::from_millis(301));
     let allocations = ALLOCATIONS.load(Ordering::Relaxed);
-    // Canonical merge may allocate owned history and sorting scratch. Bounding
-    // that already-checked history must not copy either source-history buffer.
-    assert!(allocations <= 3, "saturated admission needs no redundant history copies: {allocations}");
+    // The queue retires the older packet, so its checked history storage can
+    // transfer to the newer packet. At most one growth allocation is needed.
+    assert!(allocations <= 1, "saturated admission transfers existing history storage: {allocations}");
     let up = PointerEvent::Up(PointerRelease::new(
         pointer, PointerButton::PRIMARY, PointerButtons::NONE,
         route_sample(302_000_000, 301.0, 50.0),
