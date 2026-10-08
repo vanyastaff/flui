@@ -441,7 +441,7 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + 'static {
         &self,
         _child_slot: usize,
         _size: flui_foundation::geometry::Size,
-    ) -> Option<flui_foundation::geometry::Rect<f64>> {
+    ) -> Option<crate::traits::SemanticsClip> {
         None
     }
 
@@ -617,7 +617,7 @@ where
         &self,
         child_slot: usize,
         size: flui_foundation::geometry::Size,
-    ) -> Option<flui_foundation::geometry::Rect<f64>> {
+    ) -> Option<crate::traits::SemanticsClip> {
         <T as RenderSliver>::describe_semantics_clip(self, child_slot, size)
     }
 

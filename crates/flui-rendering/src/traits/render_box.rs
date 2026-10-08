@@ -559,7 +559,7 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
         &self,
         _child_slot: usize,
         _size: flui_foundation::geometry::Size,
-    ) -> Option<flui_foundation::geometry::Rect<f64>> {
+    ) -> Option<crate::traits::SemanticsClip> {
         None
     }
 
@@ -893,7 +893,7 @@ where
         &self,
         child_slot: usize,
         size: flui_foundation::geometry::Size,
-    ) -> Option<flui_foundation::geometry::Rect<f64>> {
+    ) -> Option<crate::traits::SemanticsClip> {
         <T as RenderBox>::describe_semantics_clip(self, child_slot, size)
     }
 

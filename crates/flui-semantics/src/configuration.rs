@@ -49,6 +49,8 @@ enum DescendantSemanticsMerge {
 /// ```
 #[derive(Default, Clone)]
 pub struct SemanticsConfiguration {
+    /// Assembly-derived reveal support, without a fabricated node callback.
+    has_reveal_ancestor: bool,
     /// Whether a semantic payload setter has touched this configuration.
     ///
     /// Structural assembly directives such as boundary formation, explicit
@@ -178,7 +180,8 @@ impl PartialEq for SemanticsConfiguration {
                     .is_some_and(|other_handler| Arc::ptr_eq(handler, other_handler))
             });
 
-        self.has_been_annotated == other.has_been_annotated
+        self.has_reveal_ancestor == other.has_reveal_ancestor
+            && self.has_been_annotated == other.has_been_annotated
             && self.is_semantics_boundary == other.is_semantics_boundary
             && self.blocks_user_actions == other.blocks_user_actions
             && self.explicit_child_nodes == other.explicit_child_nodes
@@ -784,6 +787,12 @@ impl SemanticsConfiguration {
         self.actions.get(&action)
     }
 
+    /// Record the ancestor reveal route discovered during render assembly.
+    /// This structural directive does not annotate otherwise transparent nodes.
+    pub fn set_has_reveal_ancestor(&mut self, value: bool) {
+        self.has_reveal_ancestor = value;
+    }
+
     /// Returns a bitmask of registered actions before blocking policy.
     pub fn actions_as_bits(&self) -> u64 {
         self.actions
@@ -798,7 +807,12 @@ impl SemanticsConfiguration {
     /// legacy node exports, and future action routing must all use this policy
     /// rather than [`Self::actions_as_bits`].
     pub fn effective_actions_as_bits(&self) -> u64 {
-        let actions = self.actions_as_bits();
+        let actions = self.actions_as_bits()
+            | if self.has_reveal_ancestor {
+                SemanticsAction::ShowOnScreen.value()
+            } else {
+                0
+            };
         if self.blocks_user_actions {
             actions & UNBLOCKED_USER_ACTIONS_MASK
         } else {

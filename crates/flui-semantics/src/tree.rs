@@ -7,6 +7,7 @@ use flui_foundation::{ElementId, SemanticsId};
 use rustc_hash::{FxHashMap, FxHashSet};
 use slab::Slab;
 use smallvec::SmallVec;
+use std::rc::{Rc, Weak};
 
 use crate::identity::AccessibilityNodeId;
 use crate::node::SemanticsNode;
@@ -30,8 +31,8 @@ use crate::node::SemanticsNode;
 ///
 /// # Thread Safety
 ///
-/// SemanticsTree itself is not thread-safe. Use `Arc<RwLock<SemanticsTree>>`
-/// for multi-threaded access.
+/// Tree mutation and detached action delivery belong to one owner thread.
+/// Use immutable [`crate::SemanticsSnapshot`] data for cross-thread handoff.
 ///
 /// # Example
 ///
@@ -52,6 +53,8 @@ use crate::node::SemanticsNode;
 /// ```
 #[derive(Debug)]
 pub struct SemanticsTree {
+    /// Per-tree authority for detached geometry snapshots; never copied with a node.
+    memberships: FxHashMap<SemanticsId, Rc<()>>,
     /// Slab storage for SemanticsNodes (0-based indexing internally)
     nodes: Slab<SemanticsNode>,
 
@@ -97,6 +100,7 @@ impl SemanticsTree {
     /// Creates a new empty SemanticsTree.
     pub fn new() -> Self {
         Self {
+            memberships: FxHashMap::default(),
             nodes: Slab::new(),
             root: None,
             dirty: FxHashSet::default(),
@@ -136,6 +140,9 @@ impl SemanticsTree {
             return;
         }
         self.root = root;
+        for token in self.memberships.values_mut() {
+            *token = Rc::new(());
+        }
         if let Some(id) = root {
             self.mark_dirty(id);
         }
@@ -183,6 +190,7 @@ impl SemanticsTree {
         let stable = node.accessibility_id();
         let slab_index = self.nodes.insert(node);
         let id = SemanticsId::new(slab_index + 1); // +1 offset
+        self.memberships.insert(id, Rc::new(()));
         if is_dirty {
             self.dirty.insert(id);
         }
@@ -225,6 +233,7 @@ impl SemanticsTree {
     /// dirty bit that the next flush clears without publishing anything.
     pub fn get_mut(&mut self, id: SemanticsId) -> Option<&mut SemanticsNode> {
         let node = self.nodes.get_mut(id.get() - 1)?;
+        self.memberships.insert(id, Rc::new(()));
         if !node.is_dirty() {
             node.mark_dirty();
         }
@@ -312,6 +321,7 @@ impl SemanticsTree {
             self.root = None;
         }
         let removed = self.nodes.try_remove(id.get() - 1);
+        self.memberships.remove(&id);
         self.dirty.remove(&id);
         if let Some(stable) = removed.as_ref().and_then(SemanticsNode::accessibility_id) {
             self.forget_stable(stable.as_u64(), id);
@@ -337,6 +347,7 @@ impl SemanticsTree {
     /// same bookkeeping as [`Self::remove_shallow`]), so a publisher
     /// diffing against its last delivered update learns about the wipe.
     pub fn clear(&mut self) {
+        self.memberships.clear();
         for (_, node) in &self.nodes {
             if let Some(stable) = node.accessibility_id() {
                 self.removed_stable.push(stable.as_u64());
@@ -618,6 +629,7 @@ impl SemanticsTree {
             return false;
         };
         node.set_parent(slot.parent());
+        self.memberships.insert(id, Rc::new(()));
         let old = std::mem::replace(slot, node);
 
         let old_stable = old.accessibility_id();
@@ -664,9 +676,16 @@ impl SemanticsTree {
     /// a real change slip past the O(1) dirty check.
     pub fn iter_mut(&mut self) -> impl Iterator<Item = (SemanticsId, &mut SemanticsNode)> + '_ {
         self.mark_all_dirty();
+        for token in self.memberships.values_mut() {
+            *token = Rc::new(());
+        }
         self.nodes
             .iter_mut()
             .map(|(index, node)| (SemanticsId::new(index + 1), node))
+    }
+
+    pub(crate) fn membership(&self, id: SemanticsId) -> Option<Weak<()>> {
+        self.memberships.get(&id).map(Rc::downgrade)
     }
 }
 
