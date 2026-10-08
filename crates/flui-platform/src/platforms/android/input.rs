@@ -957,8 +957,10 @@ mod tests {
     }
 
     fn terminal_device_allocation_stays_refused() {
-        let mut owner = AndroidInputState::default();
-        owner.next_device = Some(std::num::NonZeroU64::MAX);
+        let mut owner = AndroidInputState {
+            next_device: Some(std::num::NonZeroU64::MAX),
+            ..AndroidInputState::default()
+        };
         assert_eq!(
             owner
                 .allocate_device_id()
@@ -972,8 +974,10 @@ mod tests {
     }
 
     fn lifecycle_cancellation_retires_contacts() {
-        let mut owner = AndroidInputState::default();
-        owner.last_time = Some(EventTime::from_nanos(91));
+        let mut owner = AndroidInputState {
+            last_time: Some(EventTime::from_nanos(91)),
+            ..AndroidInputState::default()
+        };
         let first = PointerInfo::new(
             PointerId::try_from(1_u64).expect("fixture ID"),
             PointerKind::Touch,
