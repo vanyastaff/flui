@@ -91,7 +91,11 @@ private-items rustdoc, doctests, native Windows и wasm проверки про�
 оба per-feature прохода завершились 65/65, включая tests, benches и examples.
 Полные macOS/iOS/Android cross-typecheck локально пропущены из-за отсутствующих
 cross toolchain/SDK; Linux native suite требует xvfb-run и остаётся за CI.
-CI этой реализации ещё ожидается.
+CI этой реализации в [PR #1519](https://github.com/vanyastaff/flui/pull/1519)
+ещё ожидается. Первый Android SDK cross-typecheck обнаружил два JNI 0.22
+lint-сайта: лишний `as_ref()` и binding для unit-результата `exception_clear()`.
+Двухстрочное исправление `ae47bdb52` прошло Android Rust-only library clippy
+с `-D warnings`; полный SDK CI запускается повторно.
 Standards и Spec review не нашли оставшихся concrete blockers.
 Явное patch-level сравнение `cargo-semver-checks` с базой `b357bc903`, default
 features и `serde` прошло 229 checks для interaction и widgets. Platform-api
