@@ -1,6 +1,6 @@
 # ADR-0172: Host-owned system preferences and ordered runtime delivery
 
-- **Status:** Accepted architecture; implementation and consumer acceptance pending.
+- **Status:** Accepted architecture; gesture/wheel consumers implemented with local acceptance; broader implementation and acceptance pending.
 - **Date:** 2026-10-08
 - **Supersedes:** [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md) §4 only.
 - **Related:** [ADR-0082](ADR-0082-platform-api-contract-crate.md),
@@ -189,6 +189,32 @@ claim to reproduce the operating system's custom high-contrast colors.
 The runtime owns its root publication mechanism. Remove `AccessibilityFeatures`
 and other superseded authorities when their consumers have migrated; no public
 constant-backed facade or mount-only seed satisfies this decision.
+
+## Gesture and wheel consumer acceptance
+
+The implemented projection reaches real recognizers and wheel/inertia consumers.
+[`admitted_gesture_settings_contract`](../../crates/flui-interaction/tests/recognizer_api/settings_admission.rs)
+and [`gesture_lifecycle_matrix`](../../crates/flui-interaction/tests/gesture_lifecycle.rs)
+pin immutable admission policy and selected estimators.
+The widget tables `pointer_and_gesture_recognition`, `scroll_physics_and_activity`
+and `navigator_and_overlay` in [consumer contracts](../../crates/flui-widgets/tests/contracts.rs)
+exercise provider replacement, native Begin admission and admitted fling policy.
+[`owner_metrics_contract`](../../crates/flui-runtime/tests/contracts/owner_metrics.rs)
+checks ordered publication, mounted wheel/inertia delivery and independent
+presentation geometry recovery.
+[`frame_pacing_and_pump_matrix`](../../crates/flui-runtime/src/ui_runtime/tests/mod.rs)
+additionally pins
+successful-query acknowledgement when projection is unrepresentable, preserving
+same-context geometry or a safe baseline. Independent inverses of the geometry
+repairs failed these affected contracts; restored implementations passed.
+
+Windows [`preferences_contract`](../../crates/flui-platform/tests/preferences.rs)
+executes native queries and cold-cache recovery through
+`windows_reads_preferences_before_a_user_window_exists`. Android and AppKit
+evidence is Rust-only library compilation, not native execution. Final
+all-features clippy/compile-fail, Win32 wheel smoke, the scoped gate and CI remain
+pending. This local gesture/wheel acceptance does not complete text, motion or
+the broader host-authority acceptance in the platform-layer specification.
 
 ## Windows transport constraint
 

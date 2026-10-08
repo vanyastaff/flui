@@ -1,6 +1,6 @@
 # flui-interaction — задачи (волна 1)
 
-- **Статус:** основная реализация merged; I11 в работе после появления host-owned SystemPreferences
+- **Статус:** основная реализация merged; I11 gesture/wheel реализована и проверена локально; заключительный gate, native wheel smoke и CI ожидаются
 - **Дата:** 2026-10-06, база `main` @ `9a4daa3ed`
 - **Источник:** [orchestration.md](orchestration.md), [matrix.md](matrix.md); ledger'ы этапа 1 — вне репозитория.
 - **Правила:** задача = ветка `interaction/<slug>` = worktree = draft-PR. Каждый фикс: тест через
@@ -17,13 +17,68 @@ cross-typecheck Windows/macOS/iOS/Android прошли. Native cross-typecheck �
 отдельным ограничением.
 
 [PR #1515](https://github.com/vanyastaff/flui/pull/1515) добавил host-owned
-SystemPreferences и его доставку. На базе `main` @ `b357bc903` публикация runtime
-применяет text scale и contrast; gesture timing, geometry, fling и wheel ещё
-не подключены к полной цепочке потребителей. I11 не закрыта наличием снимка
-или host FIFO и продолжается по ADR-0172 и platform-layer LY9.
+SystemPreferences и его доставку. На исторической базе `main` @ `b357bc903`
+публикация runtime применяла text scale и contrast; gesture timing, geometry,
+fling и wheel ещё не были подключены к полной цепочке потребителей.
+Текущая реализация I11 следует ADR-0172 и platform-layer LY9; её отдельная
+локальная приёмка записана ниже.
 
-Ниже сохранена локальная приёмка до публикации PR #1514. Указанные в её таблице
-«CI/merge впереди» относятся к этому историческому состоянию.
+## Текущая локальная приёмка I11: gesture/wheel
+
+Host-owned `SystemPreferences` доставляет timings, per-presentation geometry
+и wheel policy через существующий `GestureArenaScope`. Новые admissions читают
+live provider, а активные contacts, native sessions, handoffs и consecutive-tap
+candidates сохраняют принятый профиль. Authored overrides заменяют владельцев
+распознавателей; равный fixed profile или прежний live provider их не отменяет.
+Невыставленный nested scope наследует gesture и wheel policy.
+
+Публичная таблица `admitted_gesture_settings_contract` проверяет native timings,
+per-axis mouse geometry, touch/pan ratios, сохранение профиля и terminal fling.
+В `gesture_lifecycle_matrix` строки `drag_captures_the_selected_estimator`,
+`multidrag_captures_the_selected_estimator`,
+`tap_and_drag_captures_the_selected_estimator` и
+`scale_captures_the_selected_estimator` проверяют выбранный estimator.
+Mounted admission и authored replacement проверены в
+`pointer_and_gesture_recognition`, включая
+`mounted_native_begin_retains_estimator_before_first_claim` и
+`mounted_native_begin_refused_by_touch_cannot_claim_after_touch_terminal`.
+
+Реальная wheel/inertia доставка проверена в `scroll_physics_and_activity`,
+`pointer_and_gesture_recognition` и `navigator_and_overlay`: Scrollable,
+RefreshIndicator, горизонтальный и вертикальный Dismissible, InteractiveViewer
+и Back gesture используют принятый fling profile. `owner_metrics_contract`
+проверяет input-order publication, wheel delivery, geometry retry без кадра
+и изоляцию presentations. Private `frame_pacing_and_pump_matrix` включает
+`checked_geometry_refusal_acknowledges_the_query_and_keeps_safe_admission`:
+успешный native query с непредставимой проекцией погашает query debt, сохраняя
+пригодный профиль в том же контексте либо baseline после смены DPI.
+Публичные и private geometry failure families проверены независимыми
+откатами production-изменений: пять причинных откатов дали ожидаемый отказ,
+исходники восстановлены и целевые прогоны прошли. Runtime clippy также прошёл.
+
+Целевые команды приёмки (запускаются владельцем интеграции):
+
+```text
+cargo nextest run --locked -p flui-interaction admitted_gesture_settings_contract --no-capture
+cargo nextest run --locked -p flui-interaction gesture_lifecycle_matrix --no-capture
+cargo nextest run --locked -p flui-widgets pointer_and_gesture_recognition --no-capture
+cargo nextest run --locked -p flui-widgets scroll_physics_and_activity --no-capture
+cargo nextest run --locked -p flui-widgets navigator_and_overlay --no-capture
+cargo nextest run --locked -p flui-runtime owner_metrics_contract --no-capture
+cargo nextest run --locked -p flui-runtime frame_pacing_and_pump_matrix --no-capture
+```
+
+Windows `preferences_contract` исполнил native query и восстановление после
+холодного COM cache через `windows_reads_preferences_before_a_user_window_exists`.
+Android и AppKit проверены Rust-only library compilation; это не native execution
+и не проверка физического устройства. Финальные all-features clippy/compile-fail,
+Win32 wheel smoke, `cargo xtask check-changed` и CI ещё ожидаются.
+Эта приёмка закрывает реализацию I11 gesture/wheel, но не остальные требования
+LY8/LY9 к text, motion и общей host authority.
+
+Ниже сохранена историческая локальная приёмка до публикации PR #1514.
+Её «CI/merge впереди» и отложенная внешняя зависимость I11 описывают только
+то состояние, а не текущую реализацию gesture/wheel.
 
 ## Локальная приёмка до публикации
 
