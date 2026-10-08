@@ -982,6 +982,9 @@ impl GestureBinding {
                     && matches!(&pending, PendingMove::Contact { sequence, .. }
                         if self.is_current_sequence(pointer_id, *sequence));
                 if !accepted_contact {
+                    if let PendingMove::Hover { hit_test, .. } = pending {
+                        hit_test.retire_metadata(&mut first_panic);
+                    }
                     continue;
                 }
             }
@@ -1011,6 +1014,7 @@ impl GestureBinding {
                     let delivered =
                         self.dispatch_ephemeral_with_hover_interleaved(&event, &hit_test);
                     RoutePanic::preserve_first(&mut first_panic, delivered, "coalesced hover move");
+                    hit_test.retire_metadata(&mut first_panic);
                     count += 1;
                 }
             }

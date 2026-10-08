@@ -409,6 +409,23 @@ impl TransformPart {
 }
 
 impl HitTestResult {
+    /// Retire framework-owned entries individually after dispatch, outside any
+    /// binding borrow. An opaque payload's destructor may reenter or fail.
+    pub(crate) fn retire_metadata(mut self, first: &mut Option<RoutePanic>) {
+        let unwinding = std::thread::panicking();
+        for entry in &mut self.path {
+            let Some(metadata) = entry.metadata.take() else {
+                continue;
+            };
+            if unwinding || first.is_some() {
+                crate::retain::Retain::retain(metadata);
+            } else {
+                let retired = RoutePanic::capture(|| drop(metadata));
+                RoutePanic::preserve_first(first, retired, "hover hit-test metadata retirement");
+            }
+        }
+    }
+
     /// Creates an empty hit test result.
     pub fn new() -> Self {
         Self {
@@ -911,10 +928,12 @@ fn transform_move_event(event: &PointerMove, transform: &Matrix4) -> Option<Poin
         .copied()
         .map(|sample| transform_sample(sample, transform))
         .collect::<Option<Vec<_>>>()?;
-    Some(PointerMove::new(event.pointer, event.buttons, current)
-        .with_modifiers(event.modifiers)
-        .with_coalesced(coalesced)
-        .with_predicted(predicted))
+    Some(
+        PointerMove::new(event.pointer, event.buttons, current)
+            .with_modifiers(event.modifiers)
+            .with_coalesced(coalesced)
+            .with_predicted(predicted),
+    )
 }
 
 /// Refuse a local coordinate that cannot be represented by the checked vocabulary.
@@ -953,7 +972,9 @@ fn transform_scroll_event(event: &ScrollEvent, transform: &Matrix4) -> Option<Sc
     // them as screen endpoints would silently change that quantity.
     if event.delta.unit() == ScrollUnit::Pixels {
         let delta = transform_delta(
-            transform, event.position, Offset::new(event.delta.x(), event.delta.y()),
+            transform,
+            event.position,
+            Offset::new(event.delta.x(), event.delta.y()),
         )?;
         local.delta = ScrollDelta::try_new(ScrollUnit::Pixels, delta.dx, delta.dy).ok()?;
     }
