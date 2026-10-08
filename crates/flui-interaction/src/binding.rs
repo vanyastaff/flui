@@ -104,7 +104,7 @@ use crate::events::{
 use crate::routing::pointer_capture::ContactCapture;
 use flui_foundation::MonotonicClock;
 use flui_foundation::geometry::Offset;
-use flui_platform_api::pointer::{DeviceId, ScrollEvent, ScrollPhase};
+use flui_platform_api::pointer::{ScrollEvent, ScrollPhase};
 use smallvec::SmallVec;
 
 use crate::{
