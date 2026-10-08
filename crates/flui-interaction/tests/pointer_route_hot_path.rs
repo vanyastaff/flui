@@ -129,6 +129,7 @@ fn resolved_route_move_invocation_allocates_no_heap_after_setup() {
         measure_resampler_delivery(stop);
     }
     resampler_raised_timestamp_keeps_checked_history_policy();
+    saturated_resampler_admission_reuses_bounded_history_storage();
 }
 
 fn resampler_packets(down_time: u64) -> [PointerEvent; 3] {
@@ -205,6 +206,72 @@ fn resampler_raised_timestamp_keeps_checked_history_policy() {
         deliveries += 1;
     });
     assert_eq!(deliveries, 3);
+}
+
+fn saturated_resampler_admission_reuses_bounded_history_storage() {
+    use flui_interaction::processing::PointerEventResampler;
+    use flui_platform_api::pointer::{PointerButton, PointerButtons, PointerRelease};
+    use web_time::{Duration, Instant};
+    let [down, PointerEvent::Move(base_move), _] = resampler_packets(0) else {
+        panic!("measured Move fixture")
+    };
+    let pointer = base_move.pointer;
+    let buttons = base_move.buttons;
+    let movement = |millis: u64| {
+        PointerEvent::Move(PointerMove::new(
+            pointer, buttons, route_sample(millis * 1_000_000, millis as f64, 50.0),
+        ).with_modifiers(Modifiers::SHIFT).with_predicted(vec![
+            route_sample((millis + 1) * 1_000_000, (millis + 1) as f64, 50.0),
+        ]))
+    };
+    let resampler = PointerEventResampler::new(pointer.id);
+    let base = Instant::now();
+    resampler.add_event_at(down.clone(), base);
+    for millis in 1..=300 {
+        resampler.add_event_at(movement(millis), base + Duration::from_millis(millis));
+    }
+    let last = movement(301);
+    ALLOCATIONS.store(0, Ordering::Relaxed);
+    resampler.add_event_at(last, base + Duration::from_millis(301));
+    let allocations = ALLOCATIONS.load(Ordering::Relaxed);
+    // Canonical merge may allocate owned history and sorting scratch. Bounding
+    // that already-checked history must not copy either source-history buffer.
+    assert!(allocations <= 3, "saturated admission needs no redundant history copies: {allocations}");
+    let up = PointerEvent::Up(PointerRelease::new(
+        pointer, PointerButton::PRIMARY, PointerButtons::NONE,
+        route_sample(302_000_000, 301.0, 50.0),
+    ));
+    resampler.add_event_at(up.clone(), base + Duration::from_millis(302));
+    let (mut downs, mut moves, mut readings, mut ups) = (0, 0, 0, 0);
+    let mut previous = 0;
+    resampler.stop(|event| match event {
+        PointerEvent::Down(_) => {
+            assert_eq!(event, down);
+            downs += 1;
+        }
+        PointerEvent::Move(movement) => {
+            assert_eq!(movement.pointer, pointer);
+            assert_eq!(movement.buttons, buttons);
+            assert_eq!(movement.modifiers, Modifiers::SHIFT);
+            for sample in movement.coalesced().iter().chain(std::iter::once(movement.current())) {
+                let millis = sample.time.as_nanos() / 1_000_000;
+                assert!(millis > previous, "retained measured readings stay chronological");
+                assert_eq!(*sample, route_sample(millis * 1_000_000, millis as f64, 50.0));
+                previous = millis;
+                readings += 1;
+            }
+            let millis = movement.current().time.as_nanos() / 1_000_000;
+            assert_eq!(movement.predicted(), &[route_sample((millis + 1) * 1_000_000, (millis + 1) as f64, 50.0)]);
+            moves += 1;
+        }
+        PointerEvent::Up(_) => {
+            assert_eq!(event, up);
+            ups += 1;
+        }
+        _ => panic!("unexpected accepted sequence event"),
+    });
+    assert_eq!((downs, moves, readings, ups), (1, 99, 199, 1));
+    assert_eq!(previous, 301, "latest accepted reading remains deliverable");
 }
 
 fn route_sample(time: u64, x: f64, y: f64) -> PointerSample {
