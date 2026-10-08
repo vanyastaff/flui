@@ -10,6 +10,9 @@ use crate::common;
 use std::rc::Rc;
 
 use common::{lay_out, tight};
+use flui_interaction::events::{Code, Key, KeyEvent, NamedKey};
+use flui_interaction::testing::input::KeyEventBuilder;
+use flui_interaction::KeyEventResult;
 use flui_material::InkWell;
 use flui_sdk::interaction::FocusNode;
 use flui_sdk::view::SignalWriteExt;
@@ -28,7 +31,10 @@ pub fn pointer_and_keyboard_activation_write_the_owning_signal() {
     laid.dispatch_pointer_up(40.0, 20.0);
     assert_eq!(probe.value(), Ok(1));
     let _ = node.request_focus();
-    assert!(laid.focus_manager().dispatch_key_event(&enter()));
+    assert_eq!(
+        laid.focus_manager().dispatch_key_event(&enter()),
+        KeyEventResult::Handled
+    );
     assert_eq!(probe.value(), Ok(2));
     laid.pump();
     assert_eq!(probe.reads(), [0, 2]);
@@ -78,19 +84,16 @@ pub fn disabled_ink_well_does_not_fire_a_tap_callback() {
 // assertions (`disabled_ink_well_does_not_fire_a_tap_callback`) already prove the sync
 // itself still happens correctly at the new call sites.
 
-fn enter() -> flui_interaction::events::KeyEvent {
-    flui_interaction::events::KeyEvent {
-        state: flui_interaction::events::KeyState::Down,
-        key: flui_interaction::events::Key::Named(flui_interaction::events::NamedKey::Enter),
-        ..flui_interaction::events::KeyEvent::default()
-    }
+fn enter() -> KeyEvent {
+    KeyEventBuilder::new(Code::Enter)
+        .with_key(Key::Named(NamedKey::Enter))
+        .build()
 }
 
-fn tab() -> flui_interaction::events::KeyEvent {
-    flui_interaction::events::KeyEvent {
-        key: flui_interaction::events::Key::Named(flui_interaction::events::NamedKey::Tab),
-        ..enter()
-    }
+fn tab() -> KeyEvent {
+    KeyEventBuilder::new(Code::Tab)
+        .with_key(Key::Named(NamedKey::Tab))
+        .build()
 }
 
 /// Enter on a focused `ElevatedButton` reaches its `InkWell`'s activation
@@ -111,12 +114,14 @@ pub fn enter_on_a_focused_elevated_button_writes_a_signal_and_rebuilds_its_reade
     });
     let mut laid = lay_out(probe.view(), tight(120.0, 48.0));
 
-    assert!(
+    assert_eq!(
         laid.focus_manager().dispatch_key_event(&tab()),
+        KeyEventResult::Handled,
         "the first Tab focuses the button"
     );
-    assert!(
+    assert_eq!(
         laid.focus_manager().dispatch_key_event(&enter()),
+        KeyEventResult::Handled,
         "Enter is consumed"
     );
     assert_eq!(probe.value(), Ok(1), "the activation wrote at dispatch");
