@@ -1080,6 +1080,47 @@ fn contain_transform(
     {
         return None;
     }
+    let values = matrix.to_col_major_array();
+    if boundary.is_finite()
+        && values[3] == 0.0
+        && values[7] == 0.0
+        && values[11] == 0.0
+        && values[15] == 1.0
+    {
+        // Separate translation from the viewport's shape. Subtracting a huge
+        // excess from a huge translation loses the small boundary coordinate.
+        let (x, y, z) = matrix.translation_component();
+        let mut linear = matrix;
+        linear.set_translation(0.0, 0.0, 0.0);
+        let inverse = linear.try_inverse()?;
+        let shape = inverse.transform_rect(&viewport);
+        if !shape.is_finite()
+            || shape.width() > boundary.width() + EXCESS_EPSILON
+            || shape.height() > boundary.height() + EXCESS_EPSILON
+        {
+            return None;
+        }
+        let shift = inverse.transform_point(-x, -y);
+        if !shift.0.is_finite() || !shift.1.is_finite() {
+            return None;
+        }
+        let lower = Offset::new(boundary.min.x - shape.min.x, boundary.min.y - shape.min.y);
+        let upper = Offset::new(boundary.max.x - shape.max.x, boundary.max.y - shape.max.y);
+        if !lower.is_finite() || !upper.is_finite() {
+            return None;
+        }
+        let clamped = Offset::new(
+            shift.0.clamp(lower.dx, upper.dx.max(lower.dx)),
+            shift.1.clamp(lower.dy, upper.dy.max(lower.dy)),
+        );
+        if clamped.dx != shift.0 || clamped.dy != shift.1 {
+            let translated = linear.transform_point(-clamped.dx, -clamped.dy);
+            if !translated.0.is_finite() || !translated.1.is_finite() {
+                return None;
+            }
+            matrix.set_translation(translated.0, translated.1, z);
+        }
+    }
     let inverse = matrix.try_inverse()?;
     let scene_viewport = inverse.transform_rect(&viewport);
     if !scene_viewport.is_finite() {
