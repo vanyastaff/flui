@@ -55,7 +55,8 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use flui_animation::{
@@ -69,7 +70,8 @@ use flui_rendering::pipeline::{PipelineOwner, WeakPipelineCell};
 use flui_rendering::view::{ScrollDirection, ScrollPosition};
 use flui_view::prelude::StatefulView;
 use flui_view::{
-    BoxedView, BuildContext, BuildContextExt, Child, IntoView, LifecycleContext, ViewExt, ViewState,
+    BoxedView, BuildContext, BuildContextExt, Child, InheritedView, IntoView, LifecycleContext,
+    View, ViewExt, ViewState, impl_inherited_view,
 };
 
 use crate::animated::VsyncScope;
@@ -84,6 +86,124 @@ use flui_platform_api::{
 use flui_scheduler::PostFrameHandle;
 
 use super::scroll_position_scope::ScrollPositionScope;
+
+/// A mounted scroll owner, shared with exact-run animation continuations.
+/// The parent is the owner observed at admission, never a later replacement.
+#[derive(Debug)]
+struct FlingEndpoint {
+    controller: ScrollController,
+    fling: AnimationController,
+    physics: SharedScrollPhysics,
+    axis: Axis,
+    reversed: bool,
+    parent: Option<Weak<FlingEndpoint>>,
+    alive: AtomicBool,
+}
+
+impl FlingEndpoint {
+    fn start(self: &Arc<Self>, velocity: f64, device_pixel_ratio: f64) -> bool {
+        if !self.alive.load(Ordering::Acquire) {
+            return false;
+        }
+        let position = self.controller.position();
+        let metrics = ScrollMetrics::from(&position).with_device_pixel_ratio(device_pixel_ratio);
+        let Some(simulation) = self.physics.create_ballistic_simulation(&metrics, velocity) else {
+            return false;
+        };
+        let remaining = self.physics.boundary_velocity(&metrics, velocity);
+        let generation = self.fling.run_generation();
+        position.set_is_scrolling(true);
+        position.set_user_scroll_direction(if velocity > 0.0 {
+            ScrollDirection::Reverse
+        } else {
+            ScrollDirection::Forward
+        });
+        // Activity observers may jump, replace the owner or start another run.
+        if !self.alive.load(Ordering::Acquire)
+            || self.fling.run_generation() != generation
+            || self.controller.pixels() != metrics.pixels
+        {
+            return true;
+        }
+        let Ok(future) = self.fling.animate_with(simulation) else {
+            return false;
+        };
+        if let Some(remaining) = remaining {
+            let owner = Arc::downgrade(self);
+            let generation = self.fling.run_generation();
+            let edge = if remaining > 0.0 {
+                metrics.max_scroll_extent
+            } else {
+                metrics.min_scroll_extent
+            };
+            future.when_complete_or_cancel(move |result| {
+                let Some(owner) = owner.upgrade() else {
+                    return;
+                };
+                if result.is_ok()
+                    && owner.alive.load(Ordering::Acquire)
+                    && owner.fling.run_generation() == generation
+                    && owner.controller.pixels() == edge
+                {
+                    let physical = if owner.reversed {
+                        remaining
+                    } else {
+                        -remaining
+                    };
+                    owner.transfer(physical, device_pixel_ratio);
+                }
+            });
+        }
+        true
+    }
+
+    fn transfer(&self, physical_velocity: f64, device_pixel_ratio: f64) {
+        let mut parent = self.parent.as_ref().and_then(Weak::upgrade);
+        while let Some(owner) = parent {
+            // A retired link must not retarget an accepted impulse into a
+            // replacement occupying the same place in the view tree.
+            if !owner.alive.load(Ordering::Acquire) {
+                return;
+            }
+            let velocity = if owner.reversed {
+                physical_velocity
+            } else {
+                -physical_velocity
+            };
+            let position = owner.controller.position();
+            let outward = (velocity > 0.0 && position.pixels() >= position.max_scroll_extent())
+                || (velocity < 0.0 && position.pixels() <= position.min_scroll_extent());
+            if owner.axis == self.axis && !outward && owner.start(velocity, device_pixel_ratio) {
+                return;
+            }
+            parent = owner.parent.as_ref().and_then(Weak::upgrade);
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct FlingScope {
+    endpoint: Arc<FlingEndpoint>,
+    child: BoxedView,
+}
+
+impl InheritedView for FlingScope {
+    type Data = Arc<FlingEndpoint>;
+
+    fn data(&self) -> &Self::Data {
+        &self.endpoint
+    }
+
+    fn child(&self) -> &dyn View {
+        &self.child
+    }
+
+    fn update_should_notify(&self, old: &Self) -> bool {
+        !Arc::ptr_eq(&self.endpoint, &old.endpoint)
+    }
+}
+
+impl_inherited_view!(FlingScope);
 
 /// A caller-supplied composition of the scrollable content, receiving the
 /// [`Scrollable`]'s shared [`ScrollPosition`] and returning the view to
@@ -301,6 +421,7 @@ pub struct ScrollableState {
     fling_controller: AnimationController,
     /// Owner-local accepted wheel work, independent of the displayed pixels.
     wheel_motion: Rc<RefCell<Option<Rc<WheelMotion>>>>,
+    fling_endpoint: RefCell<Option<Arc<FlingEndpoint>>>,
     /// Value-listener ID on `fling_controller` that pushes pixels into
     /// `scroll_controller` each tick. Installed by
     /// [`install_fling_listener`](ScrollableState::install_fling_listener)
@@ -381,6 +502,7 @@ impl StatefulView for Scrollable {
             stop_hook: None,
             fling_controller,
             wheel_motion: Rc::new(RefCell::new(None)),
+            fling_endpoint: RefCell::new(None),
             fling_listener_id: None,
             fling_status_listener_id: None,
             post_frame: None,
@@ -393,6 +515,53 @@ impl StatefulView for Scrollable {
 }
 
 impl ScrollableState {
+    fn endpoint(
+        &self,
+        view: &Scrollable,
+        axis_direction: AxisDirection,
+        ctx: &dyn BuildContext,
+    ) -> Arc<FlingEndpoint> {
+        let parent = ctx.get::<FlingScope, _>(|scope| Arc::downgrade(&scope.endpoint));
+        let existing = self.fling_endpoint.borrow().clone();
+        if let Some(endpoint) = &existing {
+            let same_parent = match (&endpoint.parent, &parent) {
+                (None, None) => true,
+                (Some(old), Some(new)) => Weak::ptr_eq(old, new),
+                _ => false,
+            };
+            if endpoint
+                .controller
+                .position()
+                .ptr_eq(&view.controller.position())
+                && Arc::ptr_eq(&endpoint.physics, &view.physics)
+                && endpoint.axis == view.scroll_direction
+                && endpoint.reversed == axis_direction.is_reversed()
+                && same_parent
+            {
+                return Arc::clone(endpoint);
+            }
+            endpoint.alive.store(false, Ordering::Release);
+        }
+        let endpoint = Arc::new(FlingEndpoint {
+            controller: view.controller.clone(),
+            fling: self.fling_controller.clone(),
+            physics: view.physics.clone(),
+            axis: view.scroll_direction,
+            reversed: axis_direction.is_reversed(),
+            parent,
+            alive: AtomicBool::new(true),
+        });
+        let outgoing = self.fling_endpoint.replace(Some(Arc::clone(&endpoint)));
+        drop(outgoing);
+        endpoint
+    }
+
+    fn retire_endpoint(&mut self) {
+        if let Some(endpoint) = self.fling_endpoint.get_mut().take() {
+            endpoint.alive.store(false, Ordering::Release);
+        }
+    }
+
     /// Installs the binding's post-frame capability on the scroll
     /// controller's shared `ScrollPosition`, so `RenderViewport::
     /// perform_layout`'s committed content extents (`apply_viewport_dimension`/
@@ -568,6 +737,7 @@ impl ViewState<Scrollable> for ScrollableState {
         let axis_direction = view.axis_direction.unwrap_or_else(|| {
             axis_direction_from_axis_reverse_and_directionality(ctx, scroll_direction, false)
         });
+        let endpoint = self.endpoint(view, axis_direction, ctx);
         let child = view.child.clone();
         let viewport_builder = view.viewport_builder.clone();
         let fling_controller = self.fling_controller.clone();
@@ -588,9 +758,7 @@ impl ViewState<Scrollable> for ScrollableState {
             let wheel_drag = Rc::clone(&self.wheel_motion);
             let ctrl_update = scroll_controller.clone();
             let phys_update = physics.clone();
-            let fling_start = fling_controller.clone();
-            let phys_fling = physics.clone();
-            let ctrl_fling = scroll_controller.clone();
+            let endpoint_fling = Arc::clone(&endpoint);
             let pipeline_fling = self.pipeline.clone();
 
             // Position mode, not `.offset(pixels)`: the composed viewport's
@@ -702,21 +870,10 @@ impl ViewState<Scrollable> for ScrollableState {
                     let fling_velocity_px_per_sec = flui_interaction::GestureSettings::default()
                         .clamp_fling_velocity(fling_velocity_px_per_sec);
 
-                    let metrics = ScrollMetrics::from(&ctrl_fling.position())
-                        .with_device_pixel_ratio(presentation_device_pixel_ratio(
-                            pipeline_fling.as_ref(),
-                        ));
-                    if let Some(sim) =
-                        phys_fling.create_ballistic_simulation(&metrics, fling_velocity_px_per_sec)
-                    {
-                        // `Box<dyn Simulation>` implements `Simulation` via the
-                        // blanket impl in `flui-animation`, so it can be passed
-                        // directly as `S: Simulation + 'static`.
-                        // Scrolling continues through the ballistic run; the
-                        // fling controller's status listener marks the
-                        // position idle when it settles.
-                        let _ = fling_start.animate_with(sim);
-                    } else {
+                    if !endpoint_fling.start(
+                        fling_velocity_px_per_sec,
+                        presentation_device_pixel_ratio(pipeline_fling.as_ref()),
+                    ) {
                         // No ballistic run: the release IS the end of
                         // scrolling.
                         position_end.set_is_scrolling(false);
@@ -895,7 +1052,12 @@ impl ViewState<Scrollable> for ScrollableState {
                 post_frame,
                 self.pipeline.clone(),
             );
-            viewport_semantics.child(position_semantics.child(listener))
+            FlingScope {
+                endpoint,
+                child: viewport_semantics
+                    .child(position_semantics.child(listener))
+                    .boxed(),
+            }
         }
     }
 
@@ -909,6 +1071,7 @@ impl ViewState<Scrollable> for ScrollableState {
         }
         // Stop the retired trajectory while its listeners still target the
         // old position; its metrics must never drive the incoming position.
+        self.retire_endpoint();
         self.wheel_motion.borrow_mut().take();
         let _ = self.fling_controller.stop();
         self.scroll_controller.position().set_is_scrolling(false);
@@ -922,6 +1085,7 @@ impl ViewState<Scrollable> for ScrollableState {
     }
 
     fn dispose(&mut self) {
+        self.retire_endpoint();
         self.wheel_motion.borrow_mut().take();
         // An unmount mid-drag or mid-ballistic-run must not leave the shared
         // position claiming a scroll is underway — end the activity FIRST,
