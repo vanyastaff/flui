@@ -270,7 +270,7 @@ impl UiRealm {
                     != FrameCommitState::Committed
                     || !presentation.held_pointer_input().borrow().is_empty();
                 if should_hold_pointer {
-                    let pointer_id = flui_interaction::events::extract_pointer_id(&pointer_event);
+                    let pointer_id = flui_interaction::PointerEventExt::pointer_id(&pointer_event);
                     let has_active_contact_sequence =
                         pointer_id.is_some_and(|id| presentation.gestures().has_hit_test(id));
                     presentation

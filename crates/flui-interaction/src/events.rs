@@ -26,7 +26,7 @@ pub use pointer::{
 
 /// Extract the contact metadata when this event describes a contact.
 #[must_use]
-pub fn get_pointer_info(event: &PointerEvent) -> Option<&PointerInfo> {
+pub(crate) fn pointer_info(event: &PointerEvent) -> Option<&PointerInfo> {
     match event {
         PointerEvent::Down(data) => Some(&data.pointer),
         PointerEvent::Up(data) => Some(&data.pointer),
@@ -45,7 +45,7 @@ pub fn get_pointer_info(event: &PointerEvent) -> Option<&PointerInfo> {
 
 /// Extract the current measured sample, excluding predictions.
 #[must_use]
-pub fn get_pointer_sample(event: &PointerEvent) -> Option<&PointerSample> {
+fn pointer_sample(event: &PointerEvent) -> Option<&PointerSample> {
     match event {
         PointerEvent::Down(data) => Some(&data.sample),
         PointerEvent::Up(data) => Some(&data.sample),
@@ -58,7 +58,7 @@ pub fn get_pointer_sample(event: &PointerEvent) -> Option<&PointerSample> {
 
 /// Extract the platform's timestamp, including the valid epoch value zero.
 #[must_use]
-pub fn get_event_time(event: &PointerEvent) -> Option<flui_platform_api::EventTime> {
+pub(crate) fn event_time(event: &PointerEvent) -> Option<flui_platform_api::EventTime> {
     Some(match event {
         PointerEvent::Down(data) => data.sample.time,
         PointerEvent::Up(data) => data.sample.time,
@@ -76,27 +76,40 @@ pub fn get_event_time(event: &PointerEvent) -> Option<flui_platform_api::EventTi
     })
 }
 
-/// Extract a contact identity without inventing one for device lifecycle events.
-#[must_use]
-pub fn extract_pointer_id(event: &PointerEvent) -> Option<PointerId> {
-    get_pointer_info(event).map(|pointer| pointer.id)
+mod sealed {
+    pub trait Sealed {}
+
+    impl Sealed for super::PointerEvent {}
 }
 
-/// Canonical geometry and identity queries for pointer events.
-pub trait PointerEventExt {
+/// Canonical geometry, identity and time queries for owned pointer events.
+///
+/// Sealed because these queries describe the platform's owned event vocabulary.
+pub trait PointerEventExt: sealed::Sealed {
+    /// The reported event timestamp, including the valid epoch value zero.
+    #[must_use]
+    fn time(&self) -> Option<flui_platform_api::EventTime>;
     /// The reported position, when this event carries one.
+    #[must_use]
     fn position(&self) -> Option<Offset<f64>>;
     /// The contact identity, absent for device lifecycle events.
+    #[must_use]
     fn pointer_id(&self) -> Option<PointerId>;
     /// The device kind, including device lifecycle events.
+    #[must_use]
     fn pointer_kind(&self) -> Option<PointerKind>;
     /// The hardware identity, when the platform reports it.
+    #[must_use]
     fn device_id(&self) -> Option<DeviceId>;
 }
 
 impl PointerEventExt for PointerEvent {
+    fn time(&self) -> Option<flui_platform_api::EventTime> {
+        event_time(self)
+    }
+
     fn position(&self) -> Option<Offset<f64>> {
-        let position = if let Some(sample) = get_pointer_sample(self) {
+        let position = if let Some(sample) = pointer_sample(self) {
             Some(sample.position)
         } else {
             match self {
@@ -113,13 +126,13 @@ impl PointerEventExt for PointerEvent {
     }
 
     fn pointer_id(&self) -> Option<PointerId> {
-        extract_pointer_id(self)
+        pointer_info(self).map(|pointer| pointer.id)
     }
 
     fn pointer_kind(&self) -> Option<PointerKind> {
         match self {
             PointerEvent::DeviceAdded(data) | PointerEvent::DeviceRemoved(data) => Some(data.kind),
-            _ => get_pointer_info(self).map(|pointer| pointer.kind),
+            _ => pointer_info(self).map(|pointer| pointer.kind),
         }
     }
 
@@ -128,7 +141,7 @@ impl PointerEventExt for PointerEvent {
             PointerEvent::DeviceAdded(data) | PointerEvent::DeviceRemoved(data) => {
                 Some(data.device)
             }
-            _ => get_pointer_info(self).and_then(|pointer| pointer.device),
+            _ => pointer_info(self).and_then(|pointer| pointer.device),
         }
     }
 }

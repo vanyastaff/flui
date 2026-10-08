@@ -649,7 +649,7 @@ impl GestureBinding {
             event,
             PointerEvent::Down(_) | PointerEvent::Up(_) | PointerEvent::Cancel(_)
         )
-        .then(|| crate::events::extract_pointer_id(event))
+        .then(|| crate::PointerEventExt::pointer_id(event))
         .flatten();
         let mut first = self.drain_capture_losses(ending);
         let delivered =
@@ -877,14 +877,6 @@ impl GestureBinding {
     // ========================================================================
     // Pointer Sequence State
     // ========================================================================
-
-    /// Get the cached hit test result for a pointer.
-    pub fn get_hit_test(&self, pointer_id: PointerId) -> Option<HitTestResult> {
-        self.hit_tests
-            .borrow()
-            .get(&pointer_id)
-            .map(|cached| cached.result.clone())
-    }
 
     /// Check if there's a cached hit test for a pointer.
     #[inline]
@@ -1162,7 +1154,7 @@ impl GestureBinding {
         if self.tearing_down_all_pointers.get() {
             return;
         }
-        let Some(pointer_id) = crate::events::extract_pointer_id(event) else {
+        let Some(pointer_id) = crate::PointerEventExt::pointer_id(event) else {
             // Device lifecycle has no contact identity. It still reaches
             // global observers without fabricating a per-pointer route.
             let mut first_panic = None;
@@ -1235,7 +1227,7 @@ impl GestureBinding {
                 | PointerEvent::Up(_)
                 | PointerEvent::Cancel(_)
                 | PointerEvent::ButtonChange(_)
-        ) && let Some(pointer) = crate::events::get_pointer_info(event)
+        ) && let Some(pointer) = crate::events::pointer_info(event)
         {
             let mut routes = self.hit_tests.borrow_mut();
             if let Some(cached) = routes.get_mut(&pointer_id) {
@@ -1245,7 +1237,7 @@ impl GestureBinding {
                     return;
                 }
                 cached.pointer = *pointer;
-                if let Some(time) = crate::events::get_event_time(event) {
+                if let Some(time) = crate::events::event_time(event) {
                     cached.time = time;
                 }
             }
@@ -1446,7 +1438,7 @@ impl GestureBinding {
                     // event dispatches with no hit path, router only).
                     use crate::events::PointerEventExt as _;
                     let result = match event.position().or_else(|| {
-                        crate::events::get_pointer_info(event)
+                        crate::events::pointer_info(event)
                             .and_then(|info| self.mouse_tracker.source_position(info))
                     }) {
                         Some(position) => hit_test_fn(position),
@@ -1572,7 +1564,7 @@ impl GestureBinding {
                         );
                     }
                     if self.is_resampling_enabled()
-                        && let Some(time) = crate::events::get_event_time(event)
+                        && let Some(time) = crate::events::event_time(event)
                     {
                         resampler.flush_through(time, |movement| {
                             if self.is_current_sequence(pointer_id, sequence) {
@@ -2049,7 +2041,7 @@ impl GestureBinding {
         event: &PointerEvent,
         token: Option<ResolvedRouteToken>,
     ) -> Option<RoutePanic> {
-        let capture = crate::events::extract_pointer_id(event).and_then(|pointer| {
+        let capture = crate::PointerEventExt::pointer_id(event).and_then(|pointer| {
             self.hit_tests
                 .borrow()
                 .get(&pointer)

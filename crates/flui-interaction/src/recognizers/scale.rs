@@ -1316,7 +1316,7 @@ impl GestureRecognizer for ScaleGestureRecognizer {
         let event = dispatch.local;
         // Route by the event's own pointer id: a secondary finger's events
         // belong to that finger's contact.
-        let Some(pointer) = crate::events::extract_pointer_id(event) else {
+        let Some(pointer) = crate::PointerEventExt::pointer_id(event) else {
             return;
         };
         match event {

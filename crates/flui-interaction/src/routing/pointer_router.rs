@@ -281,7 +281,7 @@ impl PointerRouter {
         if self.closed.get() {
             return None;
         }
-        let pointer = get_pointer_id(event);
+        let pointer = crate::PointerEventExt::pointer_id(event);
 
         // Snapshot per-pointer handlers (clone the `Rc`s) so the borrow is
         // released before dispatch — a handler may re-enter the router. A
@@ -426,12 +426,6 @@ impl PointerRouter {
             panic.resume();
         }
     }
-}
-
-/// Helper to extract pointer ID from event.
-#[inline]
-fn get_pointer_id(event: &PointerEvent) -> Option<PointerId> {
-    crate::events::extract_pointer_id(event)
 }
 
 #[cfg(test)]

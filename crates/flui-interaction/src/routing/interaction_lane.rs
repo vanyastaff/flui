@@ -2319,7 +2319,7 @@ impl InteractionDispatchHandle {
                 .collect()
         };
 
-        let pointer = crate::events::get_pointer_info(event).copied();
+        let pointer = crate::events::pointer_info(event).copied();
         let position = event.position();
         let mut first_panic = None;
         for entry in resolved {

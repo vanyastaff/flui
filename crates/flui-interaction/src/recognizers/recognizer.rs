@@ -55,7 +55,7 @@ pub(crate) fn is_primary_down(event: &PointerEvent) -> bool {
 }
 
 pub(crate) fn event_time(event: &PointerEvent) -> Option<u64> {
-    crate::events::get_event_time(event).map(flui_platform_api::EventTime::as_nanos)
+    crate::events::event_time(event).map(flui_platform_api::EventTime::as_nanos)
 }
 
 /// Historical local positions only. Geometry and callbacks still publish the

@@ -914,7 +914,7 @@ impl EditableTextState {
                 let Some(drag) = drag_anchor.get() else {
                     return;
                 };
-                if flui_interaction::events::extract_pointer_id(dispatch.global)
+                if flui_interaction::PointerEventExt::pointer_id(dispatch.global)
                     != Some(drag.contact)
                 {
                     return;
@@ -938,7 +938,7 @@ impl EditableTextState {
             move |_: &mut EventCx<'_>, dispatch: PointerDispatch<'_>| {
                 if drag_anchor.get().is_some_and(|drag| {
                     Some(drag.contact)
-                        == flui_interaction::events::extract_pointer_id(dispatch.global)
+                        == flui_interaction::PointerEventExt::pointer_id(dispatch.global)
                 }) {
                     drag_anchor.set(None);
                 }
@@ -949,7 +949,7 @@ impl EditableTextState {
             move |_: &mut EventCx<'_>, dispatch: PointerDispatch<'_>| {
                 if drag_anchor.get().is_some_and(|drag| {
                     Some(drag.contact)
-                        == flui_interaction::events::extract_pointer_id(dispatch.global)
+                        == flui_interaction::PointerEventExt::pointer_id(dispatch.global)
                 }) {
                     drag_anchor.set(None);
                 }

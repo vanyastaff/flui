@@ -151,7 +151,7 @@ struct ResamplerInner {
 
 /// The event's own time in nanoseconds, if it carries a usable one.
 fn event_nanos(event: &PointerEvent) -> Option<u64> {
-    crate::events::get_event_time(event).map(EventTime::as_nanos)
+    crate::events::event_time(event).map(EventTime::as_nanos)
 }
 
 fn measured_move(movement: &PointerMove, sample: PointerSample) -> PointerMove {
