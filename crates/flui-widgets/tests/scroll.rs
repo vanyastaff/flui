@@ -1858,8 +1858,8 @@ pub(crate) fn nested_fling_hands_remaining_velocity_to_matching_parent_axes() {
         release_inner_fling(&laid, axis, false);
         assert_eq!(
             inner.pixels(),
-            700.0,
-            "{axis:?}: actual inner drag claimed the gesture"
+            670.0,
+            "{axis:?}: actual inner drag receives the post-threshold move"
         );
         assert_eq!(
             outer.pixels(),
@@ -1914,8 +1914,8 @@ pub(crate) fn nested_fling_projects_reversed_child_and_preserves_orthogonal_and_
         release_inner_fling(&laid, Vertical, reversed);
         assert_eq!(
             inner.pixels(),
-            700.0,
-            "premise: real child drag moves toward its end"
+            670.0,
+            "premise: real child drag moves toward its end after recognition"
         );
         for _ in 0..500 {
             laid.pump_for(Duration::from_millis(16));
@@ -1955,7 +1955,7 @@ pub(crate) fn replacing_parent_invalidates_old_fling_handoff_and_next_gesture_re
     inner.jump_to(650.0);
     laid.tick();
     release_inner_fling(&laid, Vertical, false);
-    assert_eq!(inner.pixels(), 700.0);
+    assert_eq!(inner.pixels(), 670.0);
     new.jump_to(600.0);
     laid.pump_widget(nested_fling_content(
         &new, &inner, &vsync, Vertical, Vertical, false, false,
@@ -2097,7 +2097,7 @@ pub(crate) fn nested_fling_skips_saturated_parent_and_reentrant_jump_retires_tra
     inner.jump_to(650.0);
     laid.tick();
     release_inner_fling(&laid, flui_foundation::geometry::Axis::Vertical, false);
-    assert_eq!(inner.pixels(), 700.0, "leaf claimed the real gesture");
+    assert_eq!(inner.pixels(), 670.0, "leaf claimed the post-threshold move");
     for _ in 0..15 {
         laid.pump_for(Duration::from_millis(16));
     }
@@ -2157,6 +2157,10 @@ pub(crate) fn nested_fling_skips_saturated_parent_and_reentrant_jump_retires_tra
 }
 
 fn reveal_target_content(axis: flui_foundation::geometry::Axis) -> flui_view::BoxedView {
+    reveal_target_content_at(axis, 600.0)
+}
+
+fn reveal_target_content_at(axis: flui_foundation::geometry::Axis, before: f64) -> flui_view::BoxedView {
     use flui_foundation::geometry::Axis;
     let target = flui_widgets::Semantics::new()
         .container(true)
@@ -2166,13 +2170,13 @@ fn reveal_target_content(axis: flui_foundation::geometry::Axis) -> flui_view::Bo
         .boxed();
     match axis {
         Axis::Vertical => flui_widgets::Column::new(vec![
-            SizedBox::new(200.0, 600.0).boxed(),
+            SizedBox::new(200.0, before).boxed(),
             target,
             SizedBox::new(200.0, 600.0).boxed(),
         ])
         .boxed(),
         Axis::Horizontal => flui_widgets::Row::new(vec![
-            SizedBox::new(600.0, 200.0).boxed(),
+            SizedBox::new(before, 200.0).boxed(),
             target,
             SizedBox::new(600.0, 200.0).boxed(),
         ])
@@ -2200,6 +2204,16 @@ fn request_reveal_target(laid: &LaidOut) {
     );
 }
 
+fn assert_reveal_label_fixture_is_visible(axis: flui_foundation::geometry::Axis) {
+    let mut visible = lay_out(
+        Scrollable::new().scroll_direction(axis).child(reveal_target_content_at(axis, 0.0)),
+        tight(200.0, 200.0),
+    );
+    visible.enable_semantics();
+    visible.tick();
+    assert_reveal_target_visible(&visible);
+}
+
 fn assert_reveal_target_visible(laid: &LaidOut) {
     let tree = laid.a11y_tree().expect("republished semantics");
     let rect = tree
@@ -2216,6 +2230,7 @@ fn assert_reveal_target_visible(laid: &LaidOut) {
 pub(crate) fn show_on_screen_reveals_offscreen_targets_on_both_axes_and_reverse() {
     use flui_foundation::geometry::Axis::{Horizontal, Vertical};
     for axis in [Vertical, Horizontal] {
+        assert_reveal_label_fixture_is_visible(axis);
         for reversed in [false, true] {
             let scroll = ScrollController::new();
             let mut view = Scrollable::new()
@@ -2277,6 +2292,7 @@ pub(crate) fn show_on_screen_reveals_offscreen_targets_on_both_axes_and_reverse(
 pub(crate) fn show_on_screen_walks_nested_axes_and_replacement_uses_current_geometry() {
     use flui_foundation::geometry::Axis::{Horizontal, Vertical};
     for inner_axis in [Vertical, Horizontal] {
+        assert_reveal_label_fixture_is_visible(inner_axis);
         let (outer, inner, replacement) = (
             ScrollController::new(),
             ScrollController::new(),
