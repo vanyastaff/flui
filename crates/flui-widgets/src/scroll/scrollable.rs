@@ -1234,10 +1234,16 @@ fn scroll_semantics(
         let Some(ActionArgs::ShowOnScreen {
             target_rect,
             viewport_rect,
+            scroll_position: Some(sampled_pixels),
         }) = args
         else {
             return;
         };
+        let current_pixels = reveal_controller.pixels();
+        let difference = current_pixels - sampled_pixels;
+        if !sampled_pixels.is_finite() || !current_pixels.is_finite() || !difference.is_finite() {
+            return;
+        }
         let (start, end, viewport_start, viewport_end) = match axis {
             Axis::Vertical => (
                 target_rect.top(),
@@ -1252,6 +1258,14 @@ fn scroll_semantics(
                 viewport_rect.right(),
             ),
         };
+        // The published geometry may precede an earlier reveal in this same
+        // callback walk. Project that measured target into the current offset.
+        let displacement = if reversed { -difference } else { difference };
+        let start = start - displacement;
+        let end = end - displacement;
+        if !start.is_finite() || !end.is_finite() {
+            return;
+        }
         // A target larger than the viewport already exposing both edges
         // stays put; otherwise move the nearest obscured edge into view.
         let delta = if start < viewport_start && end > viewport_end {
