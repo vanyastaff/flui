@@ -112,7 +112,7 @@ impl SemanticsTree {
     /// Creates a SemanticsTree with pre-allocated capacity.
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            memberships: FxHashMap::with_capacity_and_hasher(capacity, FxBuildHasher::default()),
+            memberships: FxHashMap::with_capacity_and_hasher(capacity, FxBuildHasher),
             nodes: Slab::with_capacity(capacity),
             root: None,
             dirty: FxHashSet::default(),
