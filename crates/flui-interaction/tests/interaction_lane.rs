@@ -845,6 +845,14 @@ fn binding_input_contract_matrix() {
             scroll_device_batch_preserves_reentrant_admission,
         ),
         (
+            "native_focus_batch_reentry",
+            native_focus_batch_preserves_reentrant_admission,
+        ),
+        (
+            "native_device_batch_reentry",
+            native_device_batch_preserves_reentrant_admission,
+        ),
+        (
             "scroll_first_terminal_delta",
             scroll_first_terminal_delta_remains_deliverable,
         ),
@@ -1872,14 +1880,21 @@ fn scroll_role_metadata_keeps_lease() {
 }
 
 fn scroll_owner_batch_preserves_reentrant_admission() {
-    assert_scroll_owner_batch(false);
+    assert_signal_owner_batch(false, false);
 }
 
 fn scroll_device_batch_preserves_reentrant_admission() {
-    assert_scroll_owner_batch(true);
+    assert_signal_owner_batch(true, false);
 }
 
-fn assert_scroll_owner_batch(device_removal: bool) {
+fn native_focus_batch_preserves_reentrant_admission() {
+    assert_signal_owner_batch(false, true);
+}
+fn native_device_batch_preserves_reentrant_admission() {
+    assert_signal_owner_batch(true, true);
+}
+
+fn assert_signal_owner_batch(device_removal: bool, native: bool) {
     use flui_foundation::geometry::Offset;
     use flui_interaction::events::{
         PointerEvent, PointerKind, make_down_event_for_id, make_scroll_event,
@@ -1887,7 +1902,10 @@ fn assert_scroll_owner_batch(device_removal: bool) {
     use flui_interaction::{EventPropagation, GestureBinding, HitTestResult};
     use flui_platform_api::{
         EventTime,
-        pointer::{DeviceId, PointerDeviceChange, PointerId, ScrollPhase},
+        pointer::{
+            DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerDeviceChange, PointerId,
+            PointerInfo, PointerPosition, ScrollPhase,
+        },
     };
     use std::{cell::Cell, rc::Rc};
 
@@ -1899,6 +1917,25 @@ fn assert_scroll_owner_batch(device_removal: bool) {
     let device = DeviceId::try_from(1_u64).expect("device");
     let first_pointer = PointerId::try_from(1_u64).expect("pointer");
     let packet = move |phase| {
+        if native {
+            let native_phase = match phase {
+                ScrollPhase::Began => PanZoomPhase::Start,
+                ScrollPhase::Changed => PanZoomPhase::Update(
+                    PanZoomTransform::try_new(Offset::ZERO, 1.2, 0.0).expect("native transform"),
+                ),
+                _ => unreachable!("batch fixture phase"),
+            };
+            return PointerEvent::PanZoom(PanZoomEvent::new(
+                PointerInfo::new(
+                    PointerId::try_from(3_u64).expect("distinct native pointer"),
+                    PointerKind::Trackpad,
+                )
+                .with_device(device),
+                EventTime::from_nanos(0),
+                PointerPosition::try_new(flui_foundation::geometry::Point::ZERO).expect("position"),
+                native_phase,
+            ));
+        }
         let PointerEvent::Scroll(mut scroll) =
             make_scroll_event(Offset::ZERO, Offset::new(0.0, 10.0)).expect("finite wheel")
         else {
@@ -1911,14 +1948,25 @@ fn assert_scroll_owner_batch(device_removal: bool) {
     };
     lane.enter(|| {
         let calls = Rc::clone(&selected_calls);
-        let selected = handle
-            .register_scroll(move |_| {
-                calls.set(calls.get() + 1);
-                EventPropagation::Stop
-            })
-            .expect("reentrant consumer");
+        let claim = move || {
+            calls.set(calls.get() + 1);
+            EventPropagation::Stop
+        };
+        let selected_entry = if native {
+            HitTestEntry::new(RenderId::new(1)).pan_zoom_target(
+                handle
+                    .register_pan_zoom(move |_| claim())
+                    .expect("reentrant consumer"),
+            )
+        } else {
+            HitTestEntry::new(RenderId::new(1)).scroll_target(
+                handle
+                    .register_scroll(move |_| claim())
+                    .expect("reentrant consumer"),
+            )
+        };
         let mut selected_path = HitTestResult::new();
-        selected_path.add(HitTestEntry::new(RenderId::new(1)).scroll_target(selected));
+        selected_path.add(selected_entry);
         let weak = Rc::downgrade(&binding);
         let observer = handle
             .register_pointer(move |dispatch| {
@@ -1962,15 +2010,26 @@ fn assert_scroll_owner_batch(device_removal: bool) {
             binding.cancel_active_pointers();
         }
         let calls = Rc::clone(&other_calls);
-        let other = handle
-            .register_scroll(move |_| {
-                calls.set(calls.get() + 1);
-                EventPropagation::Stop
-            })
-            .expect("other consumer");
+        let claim = move || {
+            calls.set(calls.get() + 1);
+            EventPropagation::Stop
+        };
+        let other_entry = if native {
+            HitTestEntry::new(RenderId::new(2)).pan_zoom_target(
+                handle
+                    .register_pan_zoom(move |_| claim())
+                    .expect("other consumer"),
+            )
+        } else {
+            HitTestEntry::new(RenderId::new(2)).scroll_target(
+                handle
+                    .register_scroll(move |_| claim())
+                    .expect("other consumer"),
+            )
+        };
         binding.handle_pointer_event(&packet(ScrollPhase::Changed), |_| {
             let mut path = HitTestResult::new();
-            path.add(HitTestEntry::new(RenderId::new(2)).scroll_target(other));
+            path.add(other_entry);
             path
         });
         assert_eq!(
