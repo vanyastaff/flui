@@ -482,6 +482,10 @@ fn owner_metrics_contract() {
         "owner_metrics_contract",
         &[
             (
+                "gesture_preferences_are_captured_in_input_order_before_a_frame",
+                gesture_preferences_are_captured_in_input_order_before_a_frame as fn(),
+            ),
+            (
                 "preference_fanout_survives_a_failing_runtime",
                 preference_fanout_survives_a_failing_runtime as fn(),
             ),
@@ -507,6 +511,194 @@ fn owner_metrics_contract() {
             ),
         ],
     );
+}
+
+#[derive(Clone, StatefulView)]
+struct AuthoredGestureTiming {
+    timeout: std::time::Duration,
+    child: flui_widgets::GestureDetector,
+}
+
+struct AuthoredGestureTimingState {
+    arena: Option<flui_interaction::GestureArena>,
+}
+
+impl flui_view::StatefulView for AuthoredGestureTiming {
+    type State = AuthoredGestureTimingState;
+
+    fn create_state(&self) -> Self::State {
+        AuthoredGestureTimingState { arena: None }
+    }
+}
+
+impl flui_view::ViewState<AuthoredGestureTiming> for AuthoredGestureTimingState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        self.arena = Some(flui_widgets::GestureArenaScope::of(ctx));
+    }
+
+    fn build(&self, view: &AuthoredGestureTiming, _: &dyn BuildContext) -> impl IntoView {
+        flui_widgets::GestureArenaScope::new(
+            self.arena.as_ref().expect("mounted arena").clone(),
+            view.child.clone(),
+        )
+        .settings(
+            flui_interaction::GestureSettings::default().with_long_press_timeout(view.timeout),
+        )
+    }
+}
+
+fn gesture_preferences_are_captured_in_input_order_before_a_frame() {
+    use flui_foundation::{ManualClock, MonotonicClock, geometry::Offset};
+    use flui_interaction::{
+        events::PointerKind,
+        testing::input::{pointer_down, pointer_up},
+    };
+    use flui_platform_api::{GesturePreferences, PlatformInput, SystemPreferences};
+    use std::{sync::Arc, time::Duration};
+
+    for (preferences_first, authored_timeout) in [
+        (true, None),
+        (false, None),
+        (true, Some(Duration::from_millis(700))),
+    ] {
+        let owner = OwnerHost::new();
+        let clock = ManualClock::new();
+        let runtime = UiRuntime::new(
+            crate::owner_publication::window(),
+            1.0,
+            flui_runtime::ui_runtime::RuntimeHostServices::new(
+                Arc::new(|| {}),
+                Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                Arc::new(flui_platform_api::InMemoryClipboard::new()),
+                &flui_painting::FontCollection::new(),
+                flui_scheduler::ClockSource::Manual(clock.clone()),
+            ),
+        )
+        .expect("manual-clock runtime");
+        let calls = Rc::new(Cell::new(0));
+        let activated = Rc::clone(&calls);
+        let detector = flui_widgets::GestureDetector::new()
+            .on_long_press(move |_| activated.set(activated.get() + 1))
+            .child(flui_widgets::ColoredBox::new(
+                flui_painting::styling::Color::RED,
+            ));
+        let root = authored_timeout.map_or_else(
+            || detector.clone().boxed(),
+            |timeout| {
+                AuthoredGestureTiming {
+                    timeout,
+                    child: detector.clone(),
+                }
+                .boxed()
+            },
+        );
+        runtime
+            .attach_root_widget_with_size(&root, 800.0, 600.0)
+            .expect("attach detector");
+        let address = owner
+            .publication(owner.prepare_runtime(runtime))
+            .expect("publish")
+            .commit();
+        let size = Rc::new(Cell::new((800, 600)));
+        let effects = Effects {
+            address,
+            sink: RefCell::new(Sink {
+                size: Rc::clone(&size),
+                submitted: 0,
+            }),
+            size,
+            frame_time: Cell::new(clock.now()),
+            trace: RefCell::new(Vec::new()),
+            expects_present: Cell::new(None),
+            owner: owner.clone(),
+            burst: Cell::new(false),
+            native_sizes: RefCell::new(Vec::new()),
+            fail_resize: Cell::new(false),
+            fail_tail: Cell::new(false),
+        };
+        let frames = owner.frame_dispatcher(address).expect("frame dispatcher");
+        let frame = |duration| {
+            clock.advance(duration);
+            effects
+                .frame_time
+                .set(clock.now() - Duration::from_millis(16));
+            frames.deliver(&effects).expect("frame");
+        };
+        frame(Duration::from_millis(16));
+        let target = owner
+            .presentation_dispatcher(address)
+            .expect("pointer dispatcher");
+        let down = || {
+            target
+                .input(
+                    PlatformInput::Pointer(
+                        pointer_down(Offset::new(40.0, 40.0), PointerKind::Touch).expect("down"),
+                    ),
+                    &effects,
+                )
+                .expect("deliver down")
+        };
+        let up = || {
+            target
+                .input(
+                    PlatformInput::Pointer(
+                        pointer_up(Offset::new(40.0, 40.0), PointerKind::Touch).expect("up"),
+                    ),
+                    &effects,
+                )
+                .expect("deliver up")
+        };
+        let preferences = SystemPreferences::default().with_gestures(
+            GesturePreferences::default().with_long_press_timeout(Duration::from_millis(200)),
+        );
+        if !preferences_first {
+            down();
+        }
+        owner
+            .update_preferences(preferences, &effects)
+            .expect("accepted gesture preference");
+        if preferences_first {
+            down();
+        }
+        // There is deliberately no frame between the preference and pointer commands.
+        frame(Duration::from_millis(250));
+        assert_eq!(
+            calls.get(),
+            usize::from(preferences_first && authored_timeout.is_none()),
+            "new admission sees the preceding preference; existing admission and authored override retain policy"
+        );
+        frame(Duration::from_millis(500));
+        assert_eq!(
+            calls.get(),
+            1,
+            "the originally admitted hold eventually completes"
+        );
+        up();
+        down();
+        frame(Duration::from_millis(250));
+        assert_eq!(
+            calls.get(),
+            if authored_timeout.is_some() { 1 } else { 2 },
+            "fresh contact adopts the latest policy"
+        );
+        frame(Duration::from_millis(500));
+        assert_eq!(calls.get(), 2);
+        up();
+        owner
+            .update_preferences(SystemPreferences::default(), &effects)
+            .expect("unknown observation");
+        down();
+        frame(Duration::from_millis(250));
+        assert_eq!(
+            calls.get(),
+            2,
+            "unknown observation restores the consumer baseline"
+        );
+        frame(Duration::from_millis(500));
+        assert_eq!(calls.get(), 3);
+        up();
+        owner.shutdown(&effects);
+    }
 }
 
 fn preference_fanout_survives_a_failing_runtime() {
