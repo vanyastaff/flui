@@ -36,7 +36,7 @@ PR #1467 (held Down на blur), #1476 (контрактные тесты hover/h
 |---|---|---|---|
 | M1-14 | OS-level capture (drag leaves the window) | broken (Win32, web) | PR #1471 (Win32 `SetCapture`/`WM_CAPTURECHANGED`; web — pointer-vocabulary V14) |
 | M2-T3 | Button filtering for non-tap recognizers | broken | PR #1474 |
-| M2-T4 | Double tap: timeout, slop between taps, debounce | partial | Existing timeout/per-kind slop are retained; debounce is now implemented locally, with final gates pending. Second Down is eligible at 40 ms after first Up on the frozen owner-clock snapshot. Public Mouse/Touch 39/40 ms, held-first-contact and reused-ID recovery rows pass. Independent debounce inverse admits the 39 ms Down and fails, exact40 control stays GREEN; exact source was restored and broader public/trybuild plus cancellation-reuse checks passed |
+| M2-T4 | Double tap: timeout, slop between taps, debounce | partial | Existing timeout/per-kind slop are retained; debounce is now implemented locally, with local gate passed; CI/merge pending. Second Down is eligible at 40 ms after first Up on the frozen owner-clock snapshot. Public Mouse/Touch 39/40 ms, held-first-contact and reused-ID recovery rows pass. Independent debounce inverse admits the 39 ms Down and fails, exact40 control stays GREEN; exact source was restored and broader public/trybuild plus cancellation-reuse checks passed |
 | M2-L1 | Long press timeout and movement tolerance | partial | PR #1474 |
 | M2-X3 | Per-device-kind settings | partial | PR #1474 (`touch_slop()` crate-private — S1) |
 | M2-V3 | Velocity samples use the event timestamp | broken | PR #1474 |
@@ -57,8 +57,10 @@ Owned vocabulary и прямые producers в строках ниже интег
 verification pending означает ограничения из `pointer-vocabulary/tasks.md`:
 предыдущая Apple cross-typecheck и свежая строгая Android libraries проверка —
 только компиляция, pen/touch activation
-на Windows отказал; fractional hidden-HWND wheel smoke прошёл, финальные gates
-ещё не выполнены.
+на Windows отказал; fractional hidden-HWND wheel smoke прошёл. Локальный
+`check-changed` на `5f28646ad` прошёл; CI/merge ещё впереди. Финальные native
+macOS/iOS/Android и Linux execution пропущены по отсутствующим инструментам
+и host capabilities; ранняя cross-typecheck означает только компиляцию.
 Строки внешних focus-keyboard/text-ime/platform-layer спецификаций этим не закрываются.
 
 | Row | Requirement | Status | Closure |
@@ -93,8 +95,8 @@ verification pending означает ограничения из `pointer-vocab
 | M3-K4 | Pressed-key set sync on window focus change | absent | spec focus-keyboard T6 |
 | M3-K8 | Full default intent set | partial | spec focus-keyboard T8 (arrows after M3-F4) |
 | M3-K6 | IME composition flag on key events | partial | spec text-ime T5 |
-| M1-9 | Coalesced events kept | implemented locally; final gates pending | Binding preserves three packets' six measured readings and only the newest prediction family. All eight slop-sensitive recognizers inspect delivered measured excursions, including origin-return packets, without prediction admission or per-sample callback replay. Public queued/authored history, reentry and recovery rows pass; eight independent admission inverses fail their isolated rows and exact source hunks were restored |
-| M2-V4 | No sample loss to the velocity tracker | implemented locally; final gates pending | Drag, multi-drag, scale and tap-and-drag feed delivered measured history with production timestamps into the selected estimator; bounded estimator retention remains deliberate. `resampler_interpolates_on_event_time_and_never_drops_terminals` pins merged measured history and newest predictions; selected-estimator and terminal-clock families pin the consumers |
+| M1-9 | Coalesced events kept | implemented locally; local gate passed; CI/merge pending | Binding preserves three packets' six measured readings and only the newest prediction family. All eight slop-sensitive recognizers inspect delivered measured excursions, including origin-return packets, without prediction admission or per-sample callback replay. Public queued/authored history, reentry and recovery rows pass; eight independent admission inverses fail their isolated rows and exact source hunks were restored |
+| M2-V4 | No sample loss to the velocity tracker | implemented locally; local gate passed; CI/merge pending | Drag, multi-drag, scale and tap-and-drag feed delivered measured history with production timestamps into the selected estimator; bounded estimator retention remains deliberate. `resampler_interpolates_on_event_time_and_never_drops_terminals` pins merged measured history and newest predictions; selected-estimator and terminal-clock families pin the consumers |
 | M3-H3 | Non-finite positions rejected at the edge | absent | spec send-flip T6d (handoff H17) |
 | M3-H10 | Dead or legacy surface | broken (unwired) | spec send-flip T6d (handoff N6) |
 | M3-C5 | Cursor defer vs explicit arrow | broken | spec send-flip T6d (contract test in PR #1476) |
@@ -112,17 +114,17 @@ verification pending означает ограничения из `pointer-vocab
 | M2-V2 | Estimator choice per platform reaches production | authored selection implemented; OS producer pending | `GestureSettings::with_velocity_estimator` reaches drag/multidrag/scale/tap-and-drag; selected-estimator public rows pass. Platform policy source remains I11/LY8 |
 | M2-R2 | Prediction | withdrawn (local extrapolation) | S2: локальный extrapolator удалён; сохранение аппаратных predicted samples не означает реализацию синтезированной prediction для ink/drag |
 | M2-X2 | Settings profile reaches recognizers | authored consumer implemented; OS producer pending | `GestureArenaScope::settings` reaches mounted production builders; threshold/deadline rows pass and fail with the consumer wiring reverted. `SystemPreferences` producer remains I11/LY8 |
-| M2-X5 | Cheapest sound ownership on the gesture path | owner-local implementation integrated; final gates pending | I10/recognizer-api use Rc/RefCell, weak arena slots and immutable authored configuration. No dynamic OS settings path is claimed |
+| M2-X5 | Cheapest sound ownership on the gesture path | owner-local implementation integrated; local gate passed; CI/merge pending | I10/recognizer-api use Rc/RefCell, weak arena slots and immutable authored configuration. No dynamic OS settings path is claimed |
 | M3-C1 | Re-hit-test after layout per presentation | partial | spec flui-interaction S5 |
 | M3-D2 | DPI change per presentation | partial | spec flui-interaction S5 |
 | M3-M1 | Per-window input state | partial | spec flui-interaction S5 |
 
 ## NEW
 
-Сверка 2026-10-08 на интеграционной базе `3d6fae0de`: все 20 утверждённых строк
+Сверка 2026-10-08 на интеграционной базе `5f28646ad`: все 20 утверждённых строк
 ниже имеют реализацию или ранее merged-реализацию. Это не означает завершение
-15 задач приёмки: недостающие inverse-проверки, финальные gates и native smoke
-остаются явными условиями. Целевые прогоны прошли для 43 pointer-строк,
+15 задач приёмки целиком: внешний I11, CI/merge и native hardware ограничения
+остаются явными условиями. Локальный final gate прошёл. Целевые прогоны прошли для 43 pointer-строк,
 56 scroll-строк, нижнего reveal/retirement и counting-allocator контракта.
 Повторный restored-прогон на базе `9d171de1` проверил binding,
 private resampling, lower reveal/retirement и обе публичные widget-семьи.
@@ -141,41 +143,55 @@ API/resampling/allocator/binding тестов прошли; runtime containment 
 прогоном не выбран. Точный inverse source-хунк восстановлен без diff.
 Все хунки восстановлены, целевые публичные проверки прошли. Подробности —
 в `tasks.md`, «Публичные allocation contracts».
-Полный gate, CI и слияние в `main` ещё не выполнены.
+Локальный `cargo xtask check-changed --base d6ad274194483c6d1bc100f9a14d42e3890b6c0e`
+на `5f28646ad` завершился exit 0: driver 46/46, workspace 793/793 (62 skipped),
+strict clippy/rustdoc/doctests, Windows required-feature all-targets и wasm
+checks, ordinary platform trybuild прошли. Native macOS/iOS/Android и Linux
+execution пропущены; отдельная cargo-hack feature matrix не запускалась.
+CI ещё не опубликован, слияние в `main` не выполнено; детали в `tasks.md`.
 После пяти независимых CombinedMode/scale-velocity/focal-fling/rotation/boundary
 откатов точные production-хунки восстановлены; повторный прогон всех 43
 pointer/gesture widget-строк на базе `85a5f10e6` прошёл. Это не заменяет
-оставшиеся native и final-gate проверки. Interaction source doctests и восемь
+непроверенные native/hardware пути и CI. Interaction source doctests и восемь
 прямых Markdown-примеров прошли; GestureDetector snippet проверен widget
 doctests (33 runtime и три compile-fail; 13 других примеров ignored).
-Все пять wire-бенчей измерены на `64ab42b43`; после обнаруженных и исправленных
-allocation regressions окончательные AFTER timings ещё впереди.
+Все пять wire-бенчей прошли окончательное измерение на logical CPU 0 при
+normal priority: 33 полные пары и шесть AFTER-only cases, production AFTER
+`3d6fae0de`. PERFORMANCE.md сохраняет means, 95% confidence intervals,
+historical adapters, source revisions и объяснения изменённых workloads.
 Промежуточные borrowed-transform means показывают elapsed-time regressions
 +8.39% для четырёх targets и +4.68% для 16 targets; финальные девять route
-shapes и три затронутых бенча ещё выполняются, улучшение не заявлено.
+shapes заменены полной парной проверкой, прежние наблюдения не выдаются за
+окончательный результат. Отдельная свежая пара пяти estimate cases на
+`c1dc17881` проверила private kernel isolation: LSQ20 -1.52%, LSQ3 +0.53%,
+четыре queries +8.24%, Impulse -0.05%, Ios +237.51%; исходный LSQ20 regression
+сохранён в PERFORMANCE.md. Ios сохраняет исправленный eligible history window.
+Restored-прогон одиннадцати публичных тестов включает настоящий flui-testing
+runtime containment; он не смешивается с более ранними десятью тестами без
+containment. Timing acceptance и локальный gate прошли; CI и слияние pending.
 
 | Row | Requirement | Status | Closure |
 |---|---|---|---|
-| M1-11 | Resampling to the vsync (enable policy) | implemented locally; final gates pending | `PresentationConfig::with_pointer_resampling` connects frame-aligned delivery; public pointer and private `resampling_is_presentation_local_and_preserves_delivery_after_failure` families pass. Independent arrival/frame inverses fail in both paths; pending-wake inverse fails the redraw obligation; restored private family passes |
-| M1-13 | Explicit pointer capture + lost capture | implemented locally; final gates pending | `PointerCapture` preserves the Down route and defers one `CaptureLost`; `explicit_pointer_capture_contract` passes, four independent production inverses fail and restored sources pass; ADR-0164 |
-| M3-H8 | Explicit pointer capture/release API | implemented locally; final gates pending | Same token contract, mounted `listener_capture_retains_one_target_and_drop_delivers_loss`; native capture remains a separately checked producer contract |
-| M1-27 | High-precision vs notched wheel | implemented locally; final gates pending | Owned `ScrollPrecision` reaches `Scrollable`; only notched deltas animate. Current public families and actual fractional hidden-HWND producer smoke pass. Precision-only native inverse reports Unknown instead of required Precise and fails; exact restored producer smoke passes. This does not establish pen/touch activation |
-| M1-28 | Smooth notched-wheel scrolling | implemented locally; final gates pending | `notched_wheel_accumulates_distance_and_eases_out_in_150ms`, interruption/replacement/unmount/sibling rows pass; zero-duration inverse fails four actual scroll rows, restored smooth-wheel rows pass |
+| M1-11 | Resampling to the vsync (enable policy) | implemented locally; local gate passed; CI/merge pending | `PresentationConfig::with_pointer_resampling` connects frame-aligned delivery; public pointer and private `resampling_is_presentation_local_and_preserves_delivery_after_failure` families pass. Independent arrival/frame inverses fail in both paths; pending-wake inverse fails the redraw obligation; restored private family passes |
+| M1-13 | Explicit pointer capture + lost capture | implemented locally; local gate passed; CI/merge pending | `PointerCapture` preserves the Down route and defers one `CaptureLost`; `explicit_pointer_capture_contract` passes, four independent production inverses fail and restored sources pass; ADR-0164 |
+| M3-H8 | Explicit pointer capture/release API | implemented locally; local gate passed; CI/merge pending | Same token contract, mounted `listener_capture_retains_one_target_and_drop_delivers_loss`; native capture remains a separately checked producer contract |
+| M1-27 | High-precision vs notched wheel | implemented locally; local gate passed; CI/merge pending | Owned `ScrollPrecision` reaches `Scrollable`; only notched deltas animate. Current public families and actual fractional hidden-HWND producer smoke pass. Precision-only native inverse reports Unknown instead of required Precise and fails; exact restored producer smoke passes. This does not establish pen/touch activation |
+| M1-28 | Smooth notched-wheel scrolling | implemented locally; local gate passed; CI/merge pending | `notched_wheel_accumulates_distance_and_eases_out_in_150ms`, interruption/replacement/unmount/sibling rows pass; zero-duration inverse fails four actual scroll rows, restored smooth-wheel rows pass |
 | M1-34 | Shift+wheel → horizontal scroll | implemented | PR #1487 merged: `wheel_axis_delta`, `shift_wheel_scrolls_the_horizontal_axis` |
-| M1-35 | Scroll latching | implemented locally; final gates pending | `nested_scroll_sequence_keeps_its_first_consumptive_target`, phase/cancel/timeout/device/source-local rows pass. Independent focus-drain, device-removal and exact kind/role identity inverses fail accepted delivery/count assertions; restored binding families pass |
-| M2-A6 | Competing-recognizer composition | implemented locally; final gates pending | `GestureCompetition` feeds real GestureDetector arbitration; eight arena rows pass, admission inverse fails and restored sources pass |
-| M2-D5 | Multi-pointer drag strategy | implemented locally; final gates pending | `DragPointerStrategy::ContinueWithRemaining` reaches GestureDetector/Scrollable; continuation and reentrant cancellation rows pass. Reverting continuation produces premature Scrollable fling and ends the recognizer on the first Up instead of retaining the remaining contact |
-| M2-S1 | Scale + rotate consumed by a widget | implemented locally; final gates pending | Scale recognizer reaches mounted InteractiveViewer; pivot rotation, finite recovery, touch transition and focal-fling rows pass. Combined-mode inverse fails three actual contracts; zero-impulse focal-fling inverse fails both progress and rebuild/geometry rows; rotation-only inverse fails pivot and recovery; MAX finite-boundary inverse loses the boundary result. Native lease inverse changes the mounted Viewer scale from the required 1.5 to 1.2 and fails ten binding rows; each hunk was restored |
-| M2-S6 | Scale end velocity | implemented locally; final gates pending | `viewer_reports_scale_velocity_separately_from_focal_velocity` and terminal event-clock cases pass; scalar-scale-velocity inverse fails the distinct-units contract and exact production hunk was restored |
-| M2-S7 | Trackpad pan/zoom fed to recognizers | implemented locally; final gates pending | Native claim/session owner connects PanZoom to Scale/Viewer; repeated Start, descendant rebuild and terminal ownership rows pass. Independent lease, focus-drain, device-removal and exact kind/role identity inverses fail; restored binding families pass |
-| M2-X4 | Nested scroll fling handoff | implemented locally; final gates pending | All 56 scroll rows pass, including the actual receiver DPR=2 case. Independent delivery, bounce-parent policy, equal-edge reentrant jump, ordinary same-controller rebuild, custom-physics first-failure ordering and DPR inverses fail; exact restored sources pass the full family. ADR-0169 |
-| M3-H2 | Perspective transforms unproject the ray | implemented locally; final gates pending | Two public transform matrices pass; position and vector/widget inverses fail and restored sources pass; ADR-0162 |
-| M3-F3 | Explicit traversal order and groups | implemented locally; final gates pending | Group/weak override production path is covered by 28 mounted focus rows and public/private containment; ADR-0165 |
-| M3-F5 | Scope edge behaviour | implemented locally; final gates pending | Widget scope edges and nested actual group/scope retries pass; policy order is reused during a parent retry |
-| M3-F4 | Directional navigation | implemented locally; final gates pending | Four-way beam/gap/distance search, arrow fallback and reentrant geometry pass. Provider containment inverse fails and restored sources pass; broader traversal inverses remain separate |
+| M1-35 | Scroll latching | implemented locally; local gate passed; CI/merge pending | `nested_scroll_sequence_keeps_its_first_consumptive_target`, phase/cancel/timeout/device/source-local rows pass. Independent focus-drain, device-removal and exact kind/role identity inverses fail accepted delivery/count assertions; restored binding families pass |
+| M2-A6 | Competing-recognizer composition | implemented locally; local gate passed; CI/merge pending | `GestureCompetition` feeds real GestureDetector arbitration; eight arena rows pass, admission inverse fails and restored sources pass |
+| M2-D5 | Multi-pointer drag strategy | implemented locally; local gate passed; CI/merge pending | `DragPointerStrategy::ContinueWithRemaining` reaches GestureDetector/Scrollable; continuation and reentrant cancellation rows pass. Reverting continuation produces premature Scrollable fling and ends the recognizer on the first Up instead of retaining the remaining contact |
+| M2-S1 | Scale + rotate consumed by a widget | implemented locally; local gate passed; CI/merge pending | Scale recognizer reaches mounted InteractiveViewer; pivot rotation, finite recovery, touch transition and focal-fling rows pass. Combined-mode inverse fails three actual contracts; zero-impulse focal-fling inverse fails both progress and rebuild/geometry rows; rotation-only inverse fails pivot and recovery; MAX finite-boundary inverse loses the boundary result. Native lease inverse changes the mounted Viewer scale from the required 1.5 to 1.2 and fails ten binding rows; each hunk was restored |
+| M2-S6 | Scale end velocity | implemented locally; local gate passed; CI/merge pending | `viewer_reports_scale_velocity_separately_from_focal_velocity` and terminal event-clock cases pass; scalar-scale-velocity inverse fails the distinct-units contract and exact production hunk was restored |
+| M2-S7 | Trackpad pan/zoom fed to recognizers | implemented locally; local gate passed; CI/merge pending | Native claim/session owner connects PanZoom to Scale/Viewer; repeated Start, descendant rebuild and terminal ownership rows pass. Independent lease, focus-drain, device-removal and exact kind/role identity inverses fail; restored binding families pass |
+| M2-X4 | Nested scroll fling handoff | implemented locally; local gate passed; CI/merge pending | All 56 scroll rows pass, including the actual receiver DPR=2 case. Independent delivery, bounce-parent policy, equal-edge reentrant jump, ordinary same-controller rebuild, custom-physics first-failure ordering and DPR inverses fail; exact restored sources pass the full family. ADR-0169 |
+| M3-H2 | Perspective transforms unproject the ray | implemented locally; local gate passed; CI/merge pending | Two public transform matrices pass; position and vector/widget inverses fail and restored sources pass; ADR-0162 |
+| M3-F3 | Explicit traversal order and groups | implemented locally; local gate passed; CI/merge pending | Group/weak override production path is covered by 28 mounted focus rows and public/private containment; ADR-0165 |
+| M3-F5 | Scope edge behaviour | implemented locally; local gate passed; CI/merge pending | Widget scope edges and nested actual group/scope retries pass; policy order is reused during a parent retry |
+| M3-F4 | Directional navigation | implemented locally; local gate passed; CI/merge pending | Four-way beam/gap/distance search, arrow fallback and reentrant geometry pass. Provider containment inverse fails and restored sources pass; broader traversal inverses remain separate |
 | M3-K5 | Dead keys | implemented | PR #1489 merged: Win32 emits `Key::Dead`; production conversion contract rows |
 | M3-K9 | Character shortcuts independent of Shift | implemented | PR #1490 merged: `SingleActivator::character(...).ignoring_shift()` and shortcut contracts; a separate duplicate type is unnecessary |
-| M3-A5 | Scroll actions and ShowOnScreen on scrollables | implemented locally; final gates pending | Existing axis actions plus routed ShowOnScreen cover both axes/reverse, nested ancestors, published geometry and sibling reentry. All 56 scroll rows and lower reveal/retirement pass; published-basis and retirement inverses fail and restored sources pass |
+| M3-A5 | Scroll actions and ShowOnScreen on scrollables | implemented locally; local gate passed; CI/merge pending | Existing axis actions plus routed ShowOnScreen cover both axes/reverse, nested ancestors, published geometry and sibling reentry. All 56 scroll rows and lower reveal/retirement pass; published-basis and retirement inverses fail and restored sources pass |
 
 ## OUT
 

@@ -9,38 +9,62 @@
 
 ## Текущее выполнение
 
-Сверка 2026-10-08 по интеграционной базе `3d6fae0de`, коду и именам тестов.
-Отмеченные прогоны — целевые проверки интеграции. Итоговые `check-changed`,
-optional-feature/platform gates, CI и слияние в `main` ещё не объявляются завершёнными.
+Сверка 2026-10-08 по интеграционной базе `5f28646ad`, коду и именам тестов.
+Локальный `check-changed` завершился exit 0; CI ещё не опубликован, слияние
+в `main` не выполнено. I11 остаётся явно отложенной внешней зависимостью.
+Пропущенные native платформы и physical pen/touch не объявляются проверенными.
+
+Финальная команда на `5f28646ad`:
+
+```text
+cargo xtask check-changed --base d6ad274194483c6d1bc100f9a14d42e3890b6c0e
+```
+
+На Windows-хосте с build jobs 6 и test threads 4 прошли strict workspace
+all-targets clippy, engine/testing clippy, driver 46/46 (31.961 s), workspace
+793/793 (80.478 s; 62 skipped), strict private-items workspace rustdoc и
+workspace doctests. Windows native all-targets с required optional features
+strict clippy прошла (52.18 s); wasm workspace lib/bins strict clippy (15.93 s)
+и facade no-default/hot-reload (9.99 s), обычный platform trybuild 1/1
+(9.207 s) тоже прошли. Классифицированный план не запускал отдельную
+cargo-hack matrix каждого feature.
+
+Финальная native проверка macOS пропущена без cargo-zigbuild, iOS — без
+genuine Apple SDK на macOS, Android — без NDK/CC/AR. Linux native execution
+требует Linux/xvfb и пропущена. Более ранние narrow cross-compiles ниже
+сохраняют свой источник и не подменяют эти пропуски. Physical Win32 pen/touch
+activation остаётся CANNOT_VERIFY; ранее выполненные hidden-HWND и browser
+smoke отделены от текущей компиляции.
 
 | Задачи | Состояние | Доказательство или следующий шаг |
 |---|---|---|
 | I1, C1 | Реализованы | PR #1474 и #1494 merged; таблица `gesture_lifecycle_matrix` и property-тест `arena_settles_every_member_exactly_once` |
 | I2, C2, R1–R4 | Реализованы | PR #1472 и #1500 merged; таблицы многоконтактных и реентерабельных жестов |
-| I3, C3 | Численные исправления и перенос времени в потребителей реализованы; итоговый gate впереди | PR #1479 merged; `velocity_and_resampling.rs`; C5 подключает время Up и `velocity_at` во всех четырёх производителях, целевые проверки и откаты прошли |
-| I4, C4 | Реализованы в интеграционной ветке; итоговый gate впереди | Hover/hit-test контракты включены и проходят; добавлены конкурирующие отказы и восстановление. Две независимые inverse-проверки hover retirement воспроизводят потерю first-failure authority и безопасного retirement хвоста; точные source-хунки восстановлены. ADR-0158 фиксирует cursor/finite-offset контракт, ADR-0127 — exceptional ownership |
+| I3, C3 | Численные исправления и перенос времени в потребителей реализованы; локальный gate прошёл; CI/merge впереди | PR #1479 merged; `velocity_and_resampling.rs`; C5 подключает время Up и `velocity_at` во всех четырёх производителях, целевые проверки и откаты прошли |
+| I4, C4 | Реализованы в интеграционной ветке; локальный gate прошёл; CI/merge впереди | Hover/hit-test контракты включены и проходят; добавлены конкурирующие отказы и восстановление. Две независимые inverse-проверки hover retirement воспроизводят потерю first-failure authority и безопасного retirement хвоста; точные source-хунки восстановлены. ADR-0158 фиксирует cursor/finite-offset контракт, ADR-0127 — exceptional ownership |
 | I5 | Конвейер реализован локально; системный источник настроек остаётся I11/LY8 | Owner-local binding сохраняет admission, claim, finite вход и coalesced history. Восемь slop-sensitive распознавателей учитывают измеренную историю до текущей позиции; origin-return, prediction control и восстановление проверены отдельными публичными строками и независимыми откатами admission. Authored settings доходят через `GestureArenaScope` до production-распознавателей. Целевые прогоны проверили binding, private resampling, 43 pointer- и 56 scroll-контрактов; allocator matrix проверена отдельно. Принятая доставка сохраняется при конкурирующих отказах |
-| I6 | Реализована локально; итоговый gate впереди | Уведомления продолжаются после паники, принятый запрос фокуса сохраняется, первая ошибка остаётся исходной. Все 28 строк `focus_actions_and_shortcuts` и public/private failure matrices проходят; откаты порядка siblings и provider containment воспроизводят нарушения. ADR-0160 и ADR-0165 |
-| I7 | Реализована локально; итоговый gate впереди | Lifecycle pause подключён к drain каждого input owner, deferred Down отменяется; публичные runtime-проверки прошли. Итоговая проверка зависимых потребителей впереди |
+| I6 | Реализована локально; локальный gate прошёл; CI/merge впереди | Уведомления продолжаются после паники, принятый запрос фокуса сохраняется, первая ошибка остаётся исходной. Все 28 строк `focus_actions_and_shortcuts` и public/private failure matrices проходят; откаты порядка siblings и provider containment воспроизводят нарушения. ADR-0160 и ADR-0165 |
+| I7 | Реализована локально; локальный gate прошёл; CI/merge впереди | Lifecycle pause подключён к drain каждого input owner, deferred Down отменяется; публичные runtime-проверки прошли. Локальная проверка зависимых потребителей прошла; CI/merge впереди |
 | I8 | Реализована локально; аппаратная проверка ограничена | Owned Win32 producer и owner-local MessageClock интегрированы; hidden-HWND Xbutton/coarse-clock и откаты прошли. Финальные decoder и fractional-wheel hidden-HWND проверки прошли. ForcePress отвергает mouse без датчика. Full pen/touch activation отказал (CANNOT_VERIFY) |
-| I9 | Реализована локально; финальный wasm gate впереди | В живом Chrome после V15 проверены cancel/recovery, capture, дробные координаты и getter reentry. Контракт transformed canvas ограничен задокументированным fallback; общая поддержка DOM-трансформаций не заявлена |
-| I10 | Реализована в интеграционной ветке; итоговый gate впереди | Owner-local состояние, постоянный отказ при исчерпании signal ID и удержание отклонённого callback; lifecycle/property проверки проходят. ADR-0159 |
+| I9 | Реализована локально; локальный wasm gate прошёл; CI/merge впереди | В живом Chrome после V15 проверены cancel/recovery, capture, дробные координаты и getter reentry. Контракт transformed canvas ограничен задокументированным fallback; общая поддержка DOM-трансформаций не заявлена |
+| I10 | Реализована в интеграционной ветке; локальный gate прошёл; CI/merge впереди | Owner-local состояние, постоянный отказ при исчерпании signal ID и удержание отклонённого callback; lifecycle/property проверки проходят. ADR-0159 |
 | I11 | Authored-settings consumer реализован; системный producer остаётся внешней зависимостью | `GestureArenaScope::settings` → `GestureDetector`/production builders проверен RED/GREEN и откатом. Не вводится дублирующий settings scope. `SystemPreferences` и его host/realm доставка выполняются отдельно через LY8; эта зависимость не закрыта текущей interaction-приёмкой. OS timings/slop и динамическое обновление не объявляются реализованными |
 | C5 | Реализована в интеграционной ветке; PR ещё не опубликован | Четыре производителя используют время Up и `velocity_at`; строки движения/паузы/восстановления проходят и падают при откате production-hunk |
 | C6 | Реализована | PR #1478 merged; типизированные Down/Up и `DeviceId(NonZeroU64)` в новом словаре |
 | C7 | Реализована локально | Owner-local MessageClock использует `wrapping_sub` тиков; мёртвый `is_key_pressed` удалён. Реальная очередь hidden HWND и rollover прошли, обе проверки падают при откате и снова проходят после восстановления |
-| S1, S2 | Основные миграции и compiler-контракты проверены; итоговый gate впереди | Owned vocabulary, checked focus ID, typed focus contracts, RAII listeners, immutable Rc builders и production estimator selection подключены. Public gesture details защищены non-exhaustive compiler fixtures; обычный `trybuild_ui` прошёл все 12 fixtures без обновления expected stderr, включая external construction failures и законные constructors. HandlerId, ложная sealed-иерархия, team/standalone signal resolver, predictor и общий vocabulary bridge удалены по scope; `__runtime` остаётся намеренным контрактом ADR-0081 |
-| S3, S4 | Source doctests, прямые Markdown-примеры и allocator contracts прошли; итоговые timings и gate впереди | Пустые `include_str!` модули удалены. На базе `3139a3193` all-features interaction source doctests: 51 runtime-пример и один compile-fail прошли, ignored нет. Прямая Markdown-проверка: README 4, GESTURES 3, HIT_TESTING 1 — все восемь прошли; ARCHITECTURE/PERFORMANCE не содержат executable examples, ignored нет. Runnable GestureDetector snippet проверен widget doctests: 33 runtime-примера и три compile-fail прошли; 13 ignored относятся к другим примерам. Все пять текущих wire-бенчей измерены на `64ab42b43`; повторы обнаружили allocation regressions, исправленные на текущей базе. Окончательные AFTER timings ещё не получены. Публичная allocator matrix ниже отделяет storage bounds от elapsed time |
-| S5 | Реализована локально; итоговый gate впереди | DPI исправлен PR #1493; frame flush, drain и hover refresh обходят все input owners. Публичные runtime-проверки прошли |
-| R5 | Текущий same-pointer контракт закреплён; итоговый gate впереди | В `gesture_lifecycle_matrix` сохраняются `drag_cancel_callback_admits_the_next_contact_once` и `drag_cancelled_end_callback_admits_the_next_contact_once`. Таблица `drag_lifecycle_contracts` проверяет same-pointer replacement из terminal callback, первую панику и следующий Up; она прошла в restored-прогоне 49 связанных тестов на базе `502a8334f` до main merge. Этот прогон не объявляется пост-merge gate; исторический guard inverse не выдаётся за новый дефект изменённого drag |
+| S1, S2 | Основные миграции и compiler-контракты проверены; локальный gate прошёл; CI/merge впереди | Owned vocabulary, checked focus ID, typed focus contracts, RAII listeners, immutable Rc builders и production estimator selection подключены. Public gesture details защищены non-exhaustive compiler fixtures; обычный `trybuild_ui` прошёл все 12 fixtures без обновления expected stderr, включая external construction failures и законные constructors. HandlerId, ложная sealed-иерархия, team/standalone signal resolver, predictor и общий vocabulary bridge удалены по scope; `__runtime` остаётся намеренным контрактом ADR-0081 |
+| S3, S4 | Source doctests, Markdown-примеры, allocator contracts и timing acceptance проверены; локальный gate прошёл; CI/merge впереди | Пустые `include_str!` модули удалены. На базе `3139a3193` all-features interaction source doctests: 51 runtime-пример и один compile-fail прошли, ignored нет. Прямая Markdown-проверка: README 4, GESTURES 3, HIT_TESTING 1 — все восемь прошли; ARCHITECTURE/PERFORMANCE не содержат executable examples, ignored нет. Runnable GestureDetector snippet проверен widget doctests: 33 runtime-примера и три compile-fail прошли; 13 ignored относятся к другим примерам. Окончательные пять wire-бенчей дали 33 полные BEFORE/AFTER пары и шесть AFTER-only cases; separate fresh five-estimate pair проверяет private LSQ kernel isolation. PERFORMANCE.md сохраняет means, confidence intervals, source revisions и объяснения regressions. Публичная allocator matrix ниже отделяет storage bounds от elapsed time; локальный gate прошёл; CI/merge впереди |
+| S5 | Реализована локально; локальный gate прошёл; CI/merge впереди | DPI исправлен PR #1493; frame flush, drain и hover refresh обходят все input owners. Публичные runtime-проверки прошли |
+| R5 | Текущий same-pointer контракт закреплён; локальный gate прошёл; CI/merge впереди | В `gesture_lifecycle_matrix` сохраняются `drag_cancel_callback_admits_the_next_contact_once` и `drag_cancelled_end_callback_admits_the_next_contact_once`. Таблица `drag_lifecycle_contracts` проверяет same-pointer replacement из terminal callback, первую панику и следующий Up; она прошла в restored-прогоне 49 связанных тестов на базе `502a8334f` до main merge. Этот прогон не объявляется пост-merge gate; исторический guard inverse не выдаётся за новый дефект изменённого drag |
 
 RA0 подготовлена: живые baseline-бенчи сохранены, исходные E0277 и E0038 подтверждены.
 RA1–RA4 интегрированы атомарно с публичными потребителями; обычный `trybuild_ui`
 прошёл без обновления expected stderr: семь compile-fail fixtures (включая три
 E0277 и non-exhaustive details) и пять успешных внешних fixtures. Исправления retirement и
 diagnostics подтверждены откатом production-хунков. RA5 и ADR-0161 интегрированы,
-RA6 ownership-измерения сохранены; пять текущих wire-бенчей измерены, но после
-performance-исправлений окончательные timings и gate зависимых потребителей впереди.
+RA6 ownership-измерения сохранены; окончательные wire timings записаны в
+PERFORMANCE.md с source revisions, means и confidence intervals. Итоговый
+gate зависимых потребителей прошёл; CI и слияние ещё впереди.
 Задачи идут по графу `recognizer-api/tasks.md`. P1 словаря завершена; P2/P3 реализованы,
 но финальная приёмка и ограничения producer smoke остаются в `pointer-vocabulary/tasks.md`.
 Все 20 утверждённых NEW-строк повторно сверены в `scope-closure.md`: наличие реализации
@@ -119,9 +143,32 @@ allocations при budget одной, тогда как новая API table о�
 Borrowed-transform candidate дал means 234.505 против 216.349 для четырёх
 targets (+8.39%) и 724.587 против 692.167 для 16 targets (+4.68%). Это
 промежуточные elapsed-time regressions, а не улучшение и не окончательные
-AFTER results. Финальный повтор всех девяти route shapes и три затронутых
-бенча (route/resampler/velocity, baseline `interaction_verified`) ещё выполняются;
-окончательные timings, final gate и CI остаются pending.
+AFTER results. Окончательная парная проверка пяти бенчей выполнена на logical
+CPU 0, normal priority: 33 полные BEFORE/AFTER пары и шесть AFTER-only cases.
+PERFORMANCE.md сохраняет исходные means, 95% confidence intervals, revisions,
+различия workload contracts и regressions; ускорение всех путей не заявляется.
+После обнаруженного LSQ20 regression отдельный свежий paired run пяти
+estimate cases на `c1dc17881` проверил изоляцию существующего private numerical
+kernel: 557.446 против 566.027 ns для LSQ20 (-1.52%), LSQ3 +0.53%, четыре
+queries +8.24%, Impulse -0.05%, Ios +237.51%. Ios сохраняет исправленный
+eligible continuous-history window; старые timings не перезаписаны.
+После точного восстановления production sources одиннадцать публичных тестов
+прошли, включая настоящий flui-testing runtime containment. Этот прогон
+отделён от десяти тестов выше, где containment не был выбран. Timing acceptance
+записана и объяснена; локальный gate прошёл, CI и слияние остаются pending.
+
+## Focus subscription в package-потребителе
+
+Material TextField использует canonical `FocusSubscription`, экспортированный
+через SDK. Публичный lifecycle case повторно подключает прежний внешний
+FocusNode после replacement и после unmount, затем проверяет доставку через
+реальный build inbox. Два независимых unsubscribe-only inverse воспроизводят
+лишнюю доставку: pending external build 1 вместо 0 для заменённого и отдельно
+для disposed field. Оба production-хунка восстановлены точно; целевые Material
+и SDK surface проверки проходят. Более ранние paint-only и detached-node
+inbox-only cases прошли и без исправления и не считаются inverse proof.
+Это production package-потребитель observer-контракта I6, а не private-counter
+проверка; целевой прогон не заменяет final gate зависимых потребителей.
 
 ## Hover retirement и double-tap debounce
 
@@ -138,7 +185,7 @@ queued/mismatched hover, реентерабельную замену и посл
   здоровому соседу. Это отдельный дефект от отсутствующего Drop guard.
 
 Оба исходных production-хунка восстановлены в точности. Связанные публичные
-семейства прошли после восстановления; final gate/CI ещё впереди.
+семейства и локальный final gate прошли после восстановления; CI/merge впереди.
 
 40 ms double-tap debounce реализован на frozen owner-clock snapshot первого
 Up. Публичные Mouse/Touch строки проверяют 39 ms bounce, exact 40 ms,
@@ -224,7 +271,7 @@ Up. Публичные Mouse/Touch строки проверяют 39 ms bounce,
 | R2 ✅ | `on_start` снимает контакт при захвате: `Start → End → Update` | `recognizers/scale.rs` |
 | R3 ✅ | `on_tap_down` допускает следующий контакт — поколение растёт и уже принятый `TapUp` теряется (счёт 2 без первого Up) | `recognizers/tap_and_drag.rs` |
 | R4 ✅ | Самоуправляемая арена с соперником: Cancel у Eager делает sweep с семантикой Up и награждает соперника; отмена должна снимать поколение без победителя (и в других путях withdraw-and-sweep) | `recognizers/eager.rs`, `arena/**` |
-| R5 — контракт закреплён | Исторический дефект: повторный допуск того же указателя из cancel-колбэка drag запускал жест дважды. Текущие exact-contact проверки сохраняют replacement; same-pointer reentry и следующий Up проверяются `drag_lifecycle_contracts`. Итоговый post-merge gate остаётся впереди | `recognizers/drag.rs` |
+| R5 — контракт закреплён | Исторический дефект: повторный допуск того же указателя из cancel-колбэка drag запускал жест дважды. Текущие exact-contact проверки сохраняют replacement; same-pointer reentry и следующий Up проверяются `drag_lifecycle_contracts`. Локальный post-merge gate прошёл; CI/merge впереди | `recognizers/drag.rs` |
 
 ## Измеренная история и gesture admission
 
@@ -249,7 +296,7 @@ samples не порождают отдельные пользовательск�
 строки: stationary cancellation или moving start оставались равны нулю вместо
 одного. Prediction control проходил при каждом откате; точные production-хунки
 восстановлены. До откатов полный recognizer-прогон прошёл. Итоговый расширенный
-restored-прогон и gate зависимых потребителей ещё не объявляются завершёнными.
+restored-прогон связанных семейств и локальный gate зависимых потребителей прошли.
 `resampler_interpolates_on_event_time_and_never_drops_terminals` отдельно
 проверяет три пакета с шестью measured samples и только newest prediction
 family. Это локальные публичные binding/recognizer доказательства, не native
@@ -273,8 +320,8 @@ Timeout и межконтактный slop по frozen settings сохраняю
 production inverse воспроизвели лишний second-down callback на 39 ms; контроль
 40 ms прошёл при откате. Точные production-хунки восстановлены; расширенная
 публичная таблица, обычный trybuild и `tap_builder_lifecycle_contract` после
-коррекции его нулевого timing premise прошли. Финальные gates зависимых
-потребителей и CI остаются отдельными условиями приёмки.
+коррекции его нулевого timing premise прошли. Локальный gate зависимых
+потребителей прошёл; CI и слияние остаются отдельными условиями приёмки.
 
 ## Порядок принятого motion перед Keyboard и IME
 
@@ -322,9 +369,10 @@ headless widget доказательства, не native hardware smoke.
 
 Production-хунки после каждого отката восстановлены в точности. Restored
 таблица всех 15 causal строк и полный recognizer-прогон ранее прошли; повторный
-расширенный прогон связанных семейств, итоговый gate зависимых потребителей,
-optional-feature/platform gates и CI ещё не объявляются завершёнными.
-Предыдущие ownership-измерения и historical baseline не доказывают performance
-нового barrier: актуальные wire-бенчи и native producer smoke сохраняют свои
-отдельные задачи приёмки. Эти пять доказательств не означают live hardware
+расширенный прогон связанных семейств и локальный gate зависимых потребителей
+прошли. Точные optional/native ограничения указаны выше; CI ещё не опубликован.
+Предыдущие ownership-измерения и historical baseline не подменяют текущие
+парные wire-бенчи: их окончательные means и объяснения записаны в PERFORMANCE.md.
+Native producer smoke сохраняет отдельные ограничения приёмки. Эти пять
+доказательств не означают live hardware
 проверку Keyboard/IME timing или нового input sampling поведения.

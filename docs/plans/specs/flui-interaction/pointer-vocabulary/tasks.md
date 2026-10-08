@@ -1,6 +1,6 @@
 # pointer-vocabulary — задачи
 
-- **Статус:** P1 завершена (PR #1478 merged); P2 и производители P3 реализованы в интеграционной ветке; итоговые gates и платформенная проверка остаются условиями приёмки
+- **Статус:** P1 завершена (PR #1478 merged); P2 и производители P3 реализованы; локальный check-changed прошёл, CI/merge и непроверенные native/hardware пути остаются открытыми
 - **Дата:** 2026-10-06
 - **Дизайн:** [design.md](design.md); требования — [requirements.md](requirements.md)
 - **Правила:** задача = ветка `interaction/<slug>` = worktree = draft-PR; `[P]` — можно
@@ -11,22 +11,32 @@
 
 ## Текущая сверка
 
-Сверка исходников 2026-10-08 на интеграционной базе `3d6fae0de`.
+Сверка исходников 2026-10-08 на интеграционной базе `5f28646ad`.
 `PlatformInput`, binding, routing, распознаватели, runtime, widgets, testing и facade
 используют owned-словарь. Общий pointer-мост удалён; каждый backend строит события
 на своей границе. Сохранённый приватный keyboard adapter использует mature upstream
 таблицы клавиш, не возвращая upstream-типы в публичные сигнатуры.
 
+На `5f28646ad` локальный `cargo xtask check-changed --base
+d6ad274194483c6d1bc100f9a14d42e3890b6c0e` завершился exit 0. Driver 46/46,
+workspace 793/793 (62 skipped), strict workspace clippy/rustdoc/doctests,
+Windows native required-feature all-targets clippy, wasm workspace lib/bins
+и facade no-default/hot-reload, ordinary platform trybuild 1/1 прошли.
+macOS без cargo-zigbuild, iOS без genuine Apple SDK, Android без NDK/CC/AR
+и Linux native execution без Linux/xvfb пропущены. Классифицированный план
+не выполнял отдельную cargo-hack matrix каждого feature. CI ещё не опубликован;
+I11 и physical pen/touch activation эта проверка не закрывает.
+
 | Задачи | Реализация | Остаток проверки |
 |---|---|---|
 | V1–V4 | Типы и генератор уже merged; ADR-0143 принят | Исторический P1-мост заменён прямыми производителями |
-| V5–V7 | Owned-события проходят production-конвейер; единицы scroll доходят до viewport | Итоговый gate зависимых потребителей и optional features |
-| V8 | Миграция и changelog интегрированы | `cargo xtask check-changed` ещё не объявлен завершённым |
+| V5–V7 | Owned-события проходят production-конвейер; единицы scroll доходят до viewport | Локальный classified gate прошёл; точные optional/native ограничения указаны выше |
+| V8 | Миграция и changelog интегрированы | `cargo xtask check-changed` exit 0; CI/merge впереди |
 | V9 | Win32 pointer/mouse/keyboard производители интегрированы | Hidden-HWND Xbutton/coarse-clock и откаты прошли; финальные all-features decoder и fractional-wheel hidden-HWND проверки прошли. Независимый precision-only откат теряет Precise и падает; точный восстановленный producer smoke проходит. Pen/touch activation отказал, поэтому CANNOT_VERIFY |
-| V10 | winit producer интегрирован | Четыре pointer-translation контракта прошли; final gate и live smoke по доступности остаются отдельными проверками |
-| V11–V13 | macOS/iOS/Android producer интегрированы | Предыдущая cross-typecheck прошла: скомпилировано, не запущено. На базе `64ab42b43` свежая strict clippy проверка flui-runtime/flui-app/flui с default features на aarch64-linux-android завершилась exit 0; это не Android execution и не all-features/all-targets проверка. Повторная финальная cross-typecheck остаётся отдельной задачей |
-| V14 | Web producer интегрирован | Живой Chrome smoke после V15, включая getter reentry, прошёл; это не заменяет финальный wasm gate после последующих изменений |
-| V15 | `flui-platform-api` не зависит от `ui-events`/`keyboard-types`/`dpi`; общий мост удалён; xtask использует прямой `keyboard-types` | `ui-events` остаётся только там, где нужны platform keyboard tables; итоговые `deps`/`reach` впереди |
+| V10 | winit producer интегрирован | Четыре pointer-translation контракта и локальный gate прошли; Linux native execution пропущена без Linux/xvfb |
+| V11–V13 | macOS/iOS/Android producer интегрированы | Предыдущая cross-typecheck прошла: скомпилировано, не запущено. На базе `64ab42b43` strict clippy проверка flui-runtime/flui-app/flui с default features на aarch64-linux-android завершилась exit 0; это не Android execution и не all-features/all-targets проверка. Финальные native проверки пропущены без cargo-zigbuild/Apple SDK/Android NDK; ранние результаты не подменяют эти пропуски |
+| V14 | Web producer интегрирован | Живой Chrome smoke после V15, включая getter reentry, прошёл; финальные wasm workspace lib/bins и facade no-default/hot-reload strict clippy прошли отдельно |
+| V15 | `flui-platform-api` не зависит от `ui-events`/`keyboard-types`/`dpi`; общий мост удалён; xtask использует прямой `keyboard-types` | `ui-events` остаётся только там, где нужны platform keyboard tables; локальный classified gate прошёл |
 
 ## P1 — словарь, ADR, мост (без изменения поведения)
 
