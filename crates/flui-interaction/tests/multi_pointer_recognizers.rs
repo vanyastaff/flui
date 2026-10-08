@@ -1366,6 +1366,8 @@ fn tap_and_drag_resolves_through_the_shared_arena() {
             ("tap measured excursion", tap_measured_excursion),
             ("drag measured excursion", drag_measured_excursion),
             ("prediction does not admit drag", prediction_does_not_admit_drag),
+            ("double tap rejects 39 ms bounce", double_tap_rejects_39ms_bounce),
+            ("double tap admits exact 40 ms", double_tap_admits_exact_40ms),
             ("tap against a tap", tap_wins_against_a_later_tap_recognizer),
             ("drag against a pan", drag_claims_the_arena_before_starting),
             ("consecutive clicks", consecutive_clicks_count_up_and_reset),
@@ -1443,6 +1445,54 @@ fn prediction_does_not_admit_drag() {
     rig.up(1, 100.0, 100.0);
     assert_eq!((starts.get(), taps.get()), (0, 1), "predictions cannot cross measured slop");
 }
+
+fn double_tap_minimum_interval(gap_ms: u64) {
+    use flui_interaction::DoubleTapGestureRecognizer;
+    for kind in [PointerKind::Mouse, PointerKind::Touch] {
+        for first_press_ms in [0, 250] {
+            let rig = Rig::new();
+            let downs = Rc::new(Cell::new(0));
+            let doubles = Rc::new(Cell::new(0));
+            let (second_down, completed) = (downs.clone(), doubles.clone());
+            let owner = DoubleTapGestureRecognizer::builder(rig.binding.arena().clone())
+                .on_double_tap_down(move |_| second_down.set(second_down.get() + 1))
+                .on_double_tap(move |_| completed.set(completed.get() + 1))
+                .build();
+            rig.attach(&owner, None);
+            let down = || make_down_event_for_id(id(1), Offset::new(100.0, 100.0), kind)
+                .expect("finite primary Down");
+            let up = || make_up_event_for_id(id(1), Offset::new(100.0, 100.0), kind)
+                .expect("finite primary Up");
+            rig.send(&down());
+            rig.advance(first_press_ms);
+            rig.send(&up());
+            rig.advance(gap_ms);
+            rig.send(&down());
+            let admitted = usize::from(gap_ms >= 40);
+            assert_eq!(downs.get(), admitted,
+                "{kind:?}, first press {first_press_ms} ms: second Down uses the interval since first Up");
+            // Crossing the boundary while this second contact is held cannot
+            // retroactively admit a Down that arrived inside the debounce.
+            rig.advance(1);
+            rig.send(&up());
+            assert_eq!(doubles.get(), admitted,
+                "{kind:?}: only a second contact admitted at Down completes a double tap");
+            rig.advance(400);
+            rig.binding.arena().poll_deadlines();
+            rig.frame();
+            rig.send(&down());
+            rig.send(&up());
+            rig.advance(40);
+            rig.send(&down());
+            rig.send(&up());
+            assert_eq!((downs.get(), doubles.get()), (admitted + 1, admitted + 1),
+                "{kind:?}: the next healthy pair recovers with the reused pointer identity");
+        }
+    }
+}
+
+fn double_tap_rejects_39ms_bounce() { double_tap_minimum_interval(39); }
+fn double_tap_admits_exact_40ms() { double_tap_minimum_interval(40); }
 
 fn stationary_gesture_measured_excursion(family: &str) {
     use flui_interaction::{DoubleTapGestureRecognizer, LongPressGestureRecognizer, MultiTapGestureRecognizer};
