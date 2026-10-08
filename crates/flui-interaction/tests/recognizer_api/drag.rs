@@ -299,8 +299,11 @@ fn remaining_touches_continue_in_admission_order_without_a_jump() {
         send(2, 10, 40.0, 1);
         send(3, 15, 1000.0, 0);
         send(3, 20, 1020.0, 1);
-        send(4, 25, 2000.0, 0);
-        send(4, 30, 2020.0, 1);
+        // The final successor's own measured trajectory is a constant 500
+        // px/s. A sparse, sharply decelerating quadratic fit can legitimately
+        // have a negative endpoint derivative despite increasing positions.
+        send(4, 25, 2022.5, 0);
+        send(4, 30, 2025.0, 1);
         assert_eq!(&*updates.borrow(), &[40.0], "passive contacts do not update: {strategy:?}");
         send(2, 35, 40.0, 2);
         assert_eq!(ends.borrow().len(), usize::from(strategy == DragPointerStrategy::PrimaryOnly));
@@ -317,7 +320,7 @@ fn remaining_touches_continue_in_admission_order_without_a_jump() {
                 assert_eq!(&*updates.borrow(), &[40.0, 10.0, 10.0], "earliest remaining contact wins; latest passive position is the handoff baseline");
                 let end = ends.borrow();
                 assert_eq!(end[0].global_position.dx, 2040.0);
-                assert!(end[0].primary_velocity > 0.0 && end[0].primary_velocity < 2000.0, "successor's measured tracker cannot include inter-finger jumps: {:?}", end[0]);
+                assert!((end[0].primary_velocity - 500.0).abs() < 1.0, "successor's measured tracker must preserve its own trajectory without inter-finger jumps: {:?}", end[0]);
             }
             _ => unreachable!("listed strategy rows"),
         }
