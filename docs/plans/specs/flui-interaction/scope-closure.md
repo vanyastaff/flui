@@ -124,8 +124,10 @@ verification pending означает ограничения из `pointer-vocab
 15 задач приёмки: недостающие inverse-проверки, финальные gates и native smoke
 остаются явными условиями. Целевые прогоны прошли для 43 pointer-строк,
 56 scroll-строк, нижнего reveal/retirement и counting-allocator контракта.
-Повторный restored-прогон на базе `9d171de1` проверил binding, allocator,
+Повторный restored-прогон на базе `9d171de1` проверил binding,
 private resampling, lower reveal/retirement и обе публичные widget-семьи.
+Counting-allocator matrix проверена отдельно: её allocations 2/8/32 не
+приписываются прогонам с фильтром только по pointer/binding именам тестов.
 Полный gate, CI и слияние в `main` ещё не выполнены.
 После пяти независимых CombinedMode/scale-velocity/focal-fling/rotation/boundary
 откатов точные production-хунки восстановлены; повторный прогон всех 43
