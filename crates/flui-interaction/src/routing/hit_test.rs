@@ -242,6 +242,12 @@ pub struct HitTestEntry {
     /// inside the pipeline, holding the tree; a caller resolving it later
     /// would need the pipeline itself, and would be reading a tree that may
     /// have moved on.
+    ///
+    /// Healthy retirement releases the payload. During unwind it is retained,
+    /// so a later entry's destructor cannot replace the first failure. This
+    /// guards ownership between entries; it cannot contain competing panics
+    /// inside one opaque payload's destructor. Use [`Option::take`] to move the
+    /// payload out of an owned entry.
     pub metadata: Option<std::sync::Arc<dyn std::any::Any + Send + Sync>>,
 
     /// Data-plane identity of this target's owner-local scroll handler.
@@ -256,6 +262,17 @@ pub struct HitTestEntry {
     /// Mouse-tracker annotation contributed by this target, if it wants
     /// enter/exit/hover tracking.
     pub mouse_annotation: Option<MouseTrackerAnnotation>,
+}
+
+impl Drop for HitTestEntry {
+    fn drop(&mut self) {
+        let metadata = self.metadata.take();
+        if std::thread::panicking() {
+            crate::retain::Retain::retain(metadata);
+        } else {
+            drop(metadata);
+        }
+    }
 }
 
 impl std::fmt::Debug for HitTestEntry {
