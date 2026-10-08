@@ -10,8 +10,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use flui_foundation::geometry::Point;
 use flui_interaction::events::{PointerKind, make_move_event};
 use flui_interaction::{HitTestEntry, InteractionLane, Offset, PointerTarget, RenderId};
-use flui_platform_api::EventTime;
-use flui_platform_api::pointer::{PointerEvent, PointerMove, PointerPosition, PointerSample, Pressure};
+use flui_platform_api::pointer::{
+    DeviceId, PointerEvent, PointerMove, PointerPosition, PointerRole, PointerSample, Pressure,
+};
+use flui_platform_api::{EventTime, Modifiers};
 
 static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
 
@@ -112,9 +114,13 @@ fn resolved_route_move_invocation_allocates_no_heap_after_setup() {
     // Keep every counting case in this one test: a global allocator counter
     // must not race a sibling test in the same Rust test process.
     for target_count in [1_usize, 4, 16] {
-        for translated in [false, true] {
+        for shape in [
+            RouteShape::Global,
+            RouteShape::Identity,
+            RouteShape::Translated,
+        ] {
             for history in [false, true] {
-                measure_route_shape(target_count, translated, history);
+                measure_route_shape(target_count, shape, history);
             }
         }
     }
@@ -128,7 +134,15 @@ fn route_sample(time: u64, x: f64, y: f64) -> PointerSample {
     .with_pressure(Pressure::try_new(0.65).expect("valid fixture pressure"))
 }
 
-fn measure_route_shape(target_count: usize, translated: bool, history: bool) {
+#[derive(Clone, Copy, Debug)]
+enum RouteShape {
+    Global,
+    Identity,
+    Translated,
+}
+
+fn measure_route_shape(target_count: usize, shape: RouteShape, history: bool) {
+    let translated = matches!(shape, RouteShape::Translated);
     let lane = InteractionLane::try_new().expect("lane");
     let handle = lane.dispatch_handle();
     let deliveries = Rc::new(Cell::new(0));
@@ -138,10 +152,13 @@ fn measure_route_shape(target_count: usize, translated: bool, history: bool) {
         panic!("move fixture")
     };
     let mut movement = PointerMove::new(
-        base.pointer,
+        base.pointer
+            .with_device(DeviceId::try_from(7_u64).expect("source device"))
+            .with_role(PointerRole::Additional),
         base.buttons,
         route_sample(3_000_000, 30.0, 50.0),
-    );
+    )
+    .with_modifiers(Modifiers::SHIFT);
     if history {
         movement = movement
             .with_coalesced(vec![
@@ -193,11 +210,17 @@ fn measure_route_shape(target_count: usize, translated: bool, history: bool) {
         }).collect();
         let mut path: Vec<_> = targets.iter().enumerate()
             .map(|(index, target)| hit_entry(index, *target)).collect();
-        if translated {
+        if !matches!(shape, RouteShape::Global) {
             let mut result = flui_interaction::HitTestResult::new();
-            result.with_paint_offset(Offset::new(10.0, 20.0), |result| {
+            if translated {
+                result.with_paint_offset(Offset::new(10.0, 20.0), |result| {
+                    for entry in path.drain(..) { result.add(entry); }
+                }).expect("finite offset");
+            } else {
+                // The real hit-test producer installs the root's composed
+                // identity rather than leaving these entries untransformed.
                 for entry in path.drain(..) { result.add(entry); }
-            }).expect("finite offset");
+            }
             path = result.path().to_vec();
         }
         let route = handle.resolve_pointer_route(&path).expect("resolve route").token();
@@ -208,13 +231,13 @@ fn measure_route_shape(target_count: usize, translated: bool, history: bool) {
         assert!(result.is_none());
         assert_eq!(deliveries.get(), target_count * 2);
         if !history || !translated {
-            assert_eq!(allocations, 0, "scalar cached delivery allocates no heap after setup");
+            assert_eq!(allocations, 0, "scalar and identity cached delivery borrow every source history after setup: shape={shape:?}, targets={target_count}, history={history}");
         } else {
             assert!(allocations <= target_count * 2, "translated measured and predicted histories need at most one owned allocation each per target: targets={target_count}, allocations={allocations}");
         }
         // Localizing nonempty measured and predicted histories requires owned
         // storage; global-only delivery continues to borrow the source event.
-        println!("cached Move: targets={target_count}, translated={translated}, history={history}, allocations={allocations}");
+        println!("cached Move: targets={target_count}, shape={shape:?}, history={history}, allocations={allocations}");
         handle.release_route(route).expect("release route");
     });
 }
