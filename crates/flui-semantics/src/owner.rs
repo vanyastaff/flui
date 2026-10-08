@@ -3,7 +3,11 @@
 //! The SemanticsOwner coordinates updates to the semantics tree and
 //! sends updates to the platform accessibility services.
 
-use std::{rc::Weak, sync::Arc};
+use std::{
+    cell::RefCell,
+    rc::{Rc, Weak},
+    sync::Arc,
+};
 
 use flui_foundation::SemanticsId;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -113,9 +117,40 @@ enum ActionDelivery {
         handler: SemanticsActionHandler,
     },
     Reveal {
+        admissions: Rc<RefCell<Vec<Weak<()>>>>,
         path: Vec<Weak<()>>,
         steps: Vec<(SemanticsActionHandler, ActionArgs)>,
     },
+}
+
+/// Framework-only admission ownership; its retirement cannot invoke user code.
+struct RevealAdmission {
+    admissions: Rc<RefCell<Vec<Weak<()>>>>,
+    target: Weak<()>,
+}
+
+impl RevealAdmission {
+    fn enter(admissions: Rc<RefCell<Vec<Weak<()>>>>, target: &Weak<()>) -> Option<Self> {
+        {
+            let mut active = admissions.borrow_mut();
+            if active.iter().any(|member| member.ptr_eq(target)) {
+                return None;
+            }
+            active.push(target.clone());
+        }
+        Some(Self {
+            admissions,
+            target: target.clone(),
+        })
+    }
+}
+
+impl Drop for RevealAdmission {
+    fn drop(&mut self) {
+        self.admissions
+            .borrow_mut()
+            .retain(|member| !member.ptr_eq(&self.target));
+    }
 }
 
 impl std::fmt::Debug for SemanticsActionInvocation {
@@ -150,11 +185,23 @@ impl SemanticsActionInvocation {
     pub fn invoke(self) {
         match self.delivery {
             ActionDelivery::Direct { arguments, handler } => handler(self.action, arguments),
-            ActionDelivery::Reveal { path, steps } => {
+            ActionDelivery::Reveal {
+                admissions,
+                path,
+                steps,
+            } => {
                 let mut first = None;
                 let unwinding = std::thread::panicking();
+                // A pixel listener can resolve the same geometry before layout
+                // publishes its movement. Admit that live target only once until
+                // delivery and capture retirement have both finished.
+                let admission = path.first().and_then(|target| {
+                    (!unwinding && path.iter().all(|member| member.strong_count() != 0))
+                        .then(|| RevealAdmission::enter(admissions, target))
+                        .flatten()
+                });
                 for (handler, arguments) in steps {
-                    if !unwinding && path.iter().all(|member| member.strong_count() != 0) {
+                    if admission.is_some() && path.iter().all(|member| member.strong_count() != 0) {
                         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                             handler(SemanticsAction::ShowOnScreen, Some(arguments));
                         }));
@@ -177,6 +224,7 @@ impl SemanticsActionInvocation {
                         first = Some(payload);
                     }
                 }
+                drop(admission);
                 if let Some(payload) = first {
                     std::panic::resume_unwind(payload);
                 }
@@ -233,6 +281,9 @@ impl SemanticsActionInvocation {
 pub struct SemanticsOwner {
     /// The semantics tree.
     tree: SemanticsTree,
+
+    /// In-flight reveal geometry, keyed by live target membership rather than labels.
+    reveal_admissions: Rc<RefCell<Vec<Weak<()>>>>,
 
     /// Platform callback for sending updates.
     callback: Option<SemanticsUpdateCallback>,
@@ -359,6 +410,7 @@ impl SemanticsOwner {
     pub fn new(callback: SemanticsUpdateCallback) -> Self {
         Self {
             tree: SemanticsTree::new(),
+            reveal_admissions: Rc::default(),
             callback: Some(callback),
             enabled: true,
             published: None,
@@ -380,6 +432,7 @@ impl SemanticsOwner {
     pub fn new_without_callback() -> Self {
         Self {
             tree: SemanticsTree::new(),
+            reveal_admissions: Rc::default(),
             callback: None,
             enabled: true,
             published: None,
@@ -395,6 +448,7 @@ impl SemanticsOwner {
     pub fn with_capacity(capacity: usize, callback: SemanticsUpdateCallback) -> Self {
         Self {
             tree: SemanticsTree::with_capacity(capacity),
+            reveal_admissions: Rc::default(),
             callback: Some(callback),
             enabled: true,
             published: None,
@@ -615,7 +669,11 @@ impl SemanticsOwner {
                         return Ok(SemanticsActionInvocation {
                             node_id: request.node_id,
                             action: request.action,
-                            delivery: ActionDelivery::Reveal { path, steps },
+                            delivery: ActionDelivery::Reveal {
+                                admissions: Rc::clone(&self.reveal_admissions),
+                                path,
+                                steps,
+                            },
                         });
                     }
                     break;
