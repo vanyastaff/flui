@@ -212,36 +212,42 @@ impl HitTestEntry {
     }
 
     /// Builder: set cursor.
+    #[must_use]
     pub fn cursor(mut self, cursor: CursorIcon) -> Self {
         self.cursor = CursorRequest::Icon(cursor);
         self
     }
 
     /// Builder: contribute an explicit cursor or defer to the next entry.
+    #[must_use]
     pub fn cursor_request(mut self, cursor: CursorRequest) -> Self {
         self.cursor = cursor;
         self
     }
 
     /// Builder: set mouse-tracker annotation.
+    #[must_use]
     pub fn mouse_annotation(mut self, annotation: MouseTrackerAnnotation) -> Self {
         self.mouse_annotation = Some(annotation);
         self
     }
 
     /// Builder: set the owner-local pointer target identity.
+    #[must_use]
     pub fn pointer_target(mut self, target: PointerTarget) -> Self {
         self.pointer_target = Some(target);
         self
     }
 
     /// Builder: set the owner-local scroll target identity.
+    #[must_use]
     pub fn scroll_target(mut self, target: ScrollTarget) -> Self {
         self.scroll_target = Some(target);
         self
     }
 
     /// Builder: set the owner-local pan-zoom target identity.
+    #[must_use]
     pub fn pan_zoom_target(mut self, target: PanZoomTarget) -> Self {
         self.pan_zoom_target = Some(target);
         self
@@ -439,6 +445,7 @@ impl HitTestResult {
     /// A caller may catch a descendant's panic and continue the same hit walk
     /// without giving the next entry the failed descendant's coordinate space.
     /// Non-finite offsets return `None` without invoking the subtree.
+    #[must_use = "None means the subtree was not visited"]
     pub fn with_paint_offset<F, R>(&mut self, offset: Offset<f64>, f: F) -> Option<R>
     where
         F: FnOnce(&mut Self) -> R,
@@ -471,6 +478,7 @@ impl HitTestResult {
     ///
     /// The entry transform depth is restored on return and unwind, just as for
     /// [`with_paint_offset`](Self::with_paint_offset).
+    #[must_use = "None means the subtree was not visited"]
     pub fn with_paint_transform<F, R>(&mut self, transform: Matrix4, f: F) -> Option<R>
     where
         F: FnOnce(&mut Self) -> R,
