@@ -2163,6 +2163,94 @@ fn reveal_target_content(axis: flui_foundation::geometry::Axis) -> flui_view::Bo
     reveal_target_content_at(axis, 600.0)
 }
 
+pub(crate) fn nested_fling_bouncing_parent_at_extent_absorbs_before_grandparent() {
+    use flui_foundation::geometry::Axis::Vertical;
+    let (outer, middle, inner, vsync) = (
+        ScrollController::new(),
+        ScrollController::new(),
+        ScrollController::new(),
+        Vsync::new(),
+    );
+    let leaf = Scrollable::new()
+        .controller(inner.clone())
+        .child(SizedBox::new(200.0, 1000.0));
+    let middle_view = Scrollable::new()
+        .controller(middle.clone())
+        .physics(Arc::new(BouncingScrollPhysics::new()))
+        .child(flui_widgets::Column::new(vec![
+            SizedBox::new(200.0, 800.0).boxed(),
+            SizedBox::new(200.0, 200.0).child(leaf).boxed(),
+        ]));
+    let outer_view = Scrollable::new()
+        .controller(outer.clone())
+        .child(flui_widgets::Column::new(vec![
+            SizedBox::new(200.0, 600.0).boxed(),
+            SizedBox::new(200.0, 200.0).child(middle_view).boxed(),
+            SizedBox::new(200.0, 4800.0).boxed(),
+        ]));
+    let mut laid = crate::common::lay_out_animated(
+        VsyncScope::new(vsync.clone(), outer_view),
+        tight(200.0, 200.0),
+        vsync,
+    );
+    outer.jump_to(600.0);
+    middle.jump_to(800.0);
+    inner.jump_to(650.0);
+    laid.tick();
+    assert_eq!(
+        middle.position().max_scroll_extent(),
+        800.0,
+        "parent starts at its outward edge"
+    );
+    release_inner_fling(&laid, Vertical, false);
+    assert_eq!(
+        inner.pixels(),
+        670.0,
+        "actual leaf claimed the post-threshold move"
+    );
+    let mut parent_overscrolled = false;
+    for _ in 0..40 {
+        laid.pump_for(Duration::from_millis(16));
+        parent_overscrolled |= middle.pixels() > 800.0;
+        assert_eq!(
+            outer.pixels(),
+            600.0,
+            "a willing bouncing parent absorbs before grandparent"
+        );
+    }
+    assert!(
+        parent_overscrolled,
+        "actual parent ballistic physics received the boundary impulse"
+    );
+    assert_eq!(inner.pixels(), 800.0);
+    for _ in 0..500 {
+        laid.pump_for(Duration::from_millis(16));
+    }
+    assert_eq!(
+        middle.pixels(),
+        800.0,
+        "absorbed impulse springs back locally"
+    );
+    assert_eq!(outer.pixels(), 600.0);
+    middle.jump_to(700.0);
+    inner.jump_to(650.0);
+    laid.tick();
+    // The parent can also accept a fresh impulse while inside its range.
+    middle.jump_to(800.0);
+    laid.tick();
+    release_inner_fling(&laid, Vertical, false);
+    let mut recovered = false;
+    for _ in 0..40 {
+        laid.pump_for(Duration::from_millis(16));
+        recovered |= middle.pixels() > 800.0;
+    }
+    assert!(
+        recovered,
+        "next real gesture still reaches the parent physics"
+    );
+    assert_eq!(outer.pixels(), 600.0);
+}
+
 fn reveal_target_content_at(
     axis: flui_foundation::geometry::Axis,
     before: f64,
