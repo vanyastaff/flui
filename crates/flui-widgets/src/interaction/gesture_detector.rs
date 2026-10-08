@@ -743,7 +743,7 @@ struct Recognizers {
 /// the affected owner and update its weak attachment before cancellation.
 struct RecognizerConfiguration {
     arena: flui_interaction::GestureArena,
-    settings: flui_interaction::GestureSettings,
+    settings: flui_interaction::GestureSettingsProvider,
     writer: WriterSource,
 }
 

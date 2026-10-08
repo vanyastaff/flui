@@ -294,6 +294,9 @@ struct SegmentProbe {
 pub struct PresentationState {
     id: PresentationId,
     pub(super) media_query: Rc<crate::media_query_root::MediaQuerySource>,
+    /// Presentation-local projection of the host's accepted interaction policy.
+    /// Recognizers read it at admission; active sequences keep owned snapshots.
+    pub(super) gesture_settings: flui_interaction::GestureSettingsSource,
     pub(super) window_visible: Cell<bool>,
     pub(super) window_focused: Cell<bool>,
     pub(super) window_execution: Cell<flui_platform_api::WindowExecutionState>,
@@ -764,6 +767,9 @@ impl PresentationState {
 
         let state = Self {
             id,
+            gesture_settings: flui_interaction::GestureSettingsSource::new(
+                gestures.default_settings().clone(),
+            ),
             media_query: Rc::new(crate::media_query_root::MediaQuerySource::from_window(
                 window.as_ref(),
             )),
@@ -849,6 +855,9 @@ impl PresentationState {
 
         let state = Self {
             id,
+            gesture_settings: flui_interaction::GestureSettingsSource::new(
+                gestures.default_settings().clone(),
+            ),
             media_query: Rc::new(crate::media_query_root::MediaQuerySource::from_window(
                 window.as_ref(),
             )),

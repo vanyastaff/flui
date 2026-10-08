@@ -7,7 +7,13 @@ use super::UiRuntime;
 use crate::{owner::SystemPreferencesSnapshot, presentation::PresentationState};
 
 pub(super) fn publish(presentation: &PresentationState, snapshot: &SystemPreferencesSnapshot) {
-    // Commit input policy before a media-query wake can invoke user code.
+    // Commit admission policy before inherited publication can wake or reenter
+    // user code. A later FIFO Down reads this source even without a frame.
+    let mut settings = presentation.gestures().default_settings().clone();
+    if let Some(timeout) = snapshot.values.gestures().long_press_timeout() {
+        settings = settings.with_long_press_timeout(timeout);
+    }
+    presentation.gesture_settings.replace(settings);
     presentation
         .wheel_preferences
         .replace(snapshot.values.wheel().clone());
