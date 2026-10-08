@@ -61,8 +61,9 @@
 //! withdrawal release selection before callbacks. A phase-less wheel burst
 //! expires after 500 ms without a packet on the presentation's monotonic clock.
 //! Source identity is the native `DeviceId`, or `PointerId` when the platform
-//! supplies no device; tool and role remain mutable metadata. At most 32 sources are admitted; overflow still
-//! reaches fresh observers but cannot start an unlatched consumptive sequence.
+//! supplies no device; tool and role remain mutable metadata. At most 32 sources
+//! are admitted; overflow reaches fresh observers but cannot start an unlatched
+//! consumptive sequence.
 //! `binding_input_contract_matrix` covers first failure, retired captures and
 //! reentrant replacement; `scroll_physics_and_activity` covers nested scrollers
 //! and clock-driven wheel inactivity through the widget consumer.
@@ -1113,7 +1114,7 @@ impl GestureBinding {
             // panic resumes (the same all-work-first posture the kernel
             // itself has within one sequence).
             let delivered = RoutePanic::capture(|| {
-                self.handle_pointer_event_kernel(&cancel, |_| {
+                self.handle_pointer_event_after_signal_withdrawal(&cancel, |_| {
                     unreachable!("BUG: a terminal Cancel must never hit-test")
                 });
             });
@@ -1354,6 +1355,19 @@ impl GestureBinding {
                 .borrow_mut()
                 .remove(&SignalSource::from(cancel.pointer));
         }
+        self.handle_pointer_event_after_signal_withdrawal(event, hit_test_fn);
+    }
+
+    /// Owner cancellation batches withdraw signal admissions before invoking
+    /// their first callback. Later old contacts must not withdraw a newly
+    /// admitted signal from an earlier callback in that same batch.
+    fn handle_pointer_event_after_signal_withdrawal<F>(&self, event: &PointerEvent, hit_test_fn: F)
+    where
+        F: FnOnce(Offset<f64>) -> HitTestResult,
+    {
+        if self.tearing_down_all_pointers.get() {
+            return;
+        }
         let Some(pointer_id) = crate::PointerEventExt::pointer_id(event) else {
             // Device lifecycle has no contact identity. It still reaches
             // global observers without fabricating a per-pointer route.
@@ -1383,7 +1397,10 @@ impl GestureBinding {
                         CancelReason::DeviceRemoved,
                     ));
                     let delivered = RoutePanic::capture(|| {
-                        self.handle_pointer_event_kernel(&cancel, terminal_hit_test)
+                        self.handle_pointer_event_after_signal_withdrawal(
+                            &cancel,
+                            terminal_hit_test,
+                        )
                     });
                     RoutePanic::preserve_first(
                         &mut first_panic,
