@@ -2,6 +2,61 @@
 
 ## Среда и границы
 
+### Исполнение: доставка контроллера, 2026-10-08
+
+Новая база реализации: `b357bc9031324f0929f419305f6d647577862428`.
+`git fetch origin main` повторён перед изменениями; база осталась той же.
+Ветка `codex/animation-production`; восстановленные documentation-only коммиты
+перенесены как `caaa146bb` и `70c8358ea`. Исторический production-код не перенесён.
+Host SystemPreferences уже интегрирован, motion consumer остаётся pending по
+ADR-0172. Send-flip остаётся draft, ADR-0136 принимает только §2: новая модель
+владения в этом срезе не введена.
+
+| Требование | Production consumer | Red на новой базе | Изменение и green |
+|---|---|---|---|
+| Status panic, competing failures, removal/dispose и reentry | AnimatedSwitcher `ChildEntry::register`, AnimatedSize `init_state`; navigation controller status | `436e46ea-563f-494d-a9eb-b0764e31bec8`: 2/2 failed; полный baseline ниже | Controller FIFO: commit → snapshot → live membership → callbacks → run delivery → retirement; восемь старых ignore удалены совместно с Vsync/NaN |
+| Healthy frame peers после failure | Runtime frame и HeadlessBinding → Vsync, включая вложенный TickerMode | `7dae8def-67c6-437b-a2dd-fd1ab55bc0af`: 32/32 старых ignored failed | Vsync завершает допустимый хвост обхода, затем resume первого failure; неконечное время не меняет anchors |
+| A→B→A, late subscribe, completion/replacement и failure custody | Те же controller/status/run entry points; будущая подписка к уже resolved future сохраняет контракт ADR-0064 | `d0b27b1a-1413-4736-ae69-014774b94e67`: 10/10 выбранных тестов failed с production-hunks reverted | `7f14ad0d-7640-4906-8202-a7ee796d3efc`: 84 normal all-features passed, 24 skipped, включая allocation и controller_sources; hostile captures проверены в child process |
+
+Команды нового baseline и regression proof:
+
+```text
+cargo nextest run --locked -p flui-animation --all-features --run-ignored only --no-fail-fast
+cargo nextest run --locked -p flui-animation --all-features -E 'test(status_delivery::status_listener_) | test(status_delivery::reentrant_status_) | test(status_delivery::removed_status_) | test(status_delivery::disposed_mid_) | test(status_delivery::vsync_walk_) | test(status_delivery::status_delivery_contract) | test(status_delivery::status_delivery_failure_custody) | test(controller_robustness::nan_frame_time_is_skipped)' --no-fail-fast
+cargo nextest run --locked -p flui-animation --all-features --no-fail-fast
+```
+
+Откат проведён после завершения предыдущей сборки; восстановлены точные исходные
+controller/Vsync из HEAD, тесты оставлены новыми. После красного прогона production
+patch восстановлен до следующей сборки. Все десять failures приходятся на
+проверяемые order/tail/anchor assertions, а не на ошибку компиляции.
+
+Первый срез не завершает A1. Foundation value-listener policy, proxy/switch,
+controller lifecycle/activity/numeric contracts и ownership остаются отдельными
+незакрытыми требованиями. Новый нормальный green не объявляет production readiness.
+Implementation SHA: `ddf36ab6f1257b56d3b491aa7a3860737f95242a`.
+Финальный `cargo xtask check-changed --base b357bc9031324f0929f419305f6d647577862428`
+завершился с exit code 0: `588/588` consumer tests, `44 skipped`, run ID
+`70f6015c-77c4-4e0b-b7d2-83cd421921da`. Strict rustdoc, doctests,
+Windows и wasm32 clippy, оба feature sweeps (`39/39` каждый) прошли.
+Apple и Android source checks пропущены из-за отсутствующих SDK/wrappers;
+native/GPU выполнение этим прогоном не проверялось.
+
+Дополнительное ревью failure custody нашло abort после уже перехваченного
+status failure: удаление новой reentrant subscription и retirement continuation
+или owning waker. Первый scoped gate прошёл, включая `588/588` consumer tests
+(`52125f98-5a92-402a-b076-9b512ba9da31`), но эти новые сценарии в него ещё не входили.
+`02c36a40-8b7a-4c49-8b7c-e06d23a496e0` воспроизвёл отказ на первом исправлении.
+После переноса существующего Retirement через frame/controller и явной
+exceptional retention в TickerDelivery выполнен отдельный rollback proof:
+`61455dcc-fe8b-47ba-bb34-37f6fd6b3cf2`, пять child rows (`late_removal`, `run`,
+`waiter`, `sibling`, `child`) завершились abort `0xc0000409` с новыми hunks reverted.
+Исходный snapshot row первого исправления остался green. Восстановленный код:
+`b5aa1051-17d3-4905-aa04-1c1958cafda7`, `84/84` normal all-features passed,
+`24 skipped`; allocation и source/reentry matrix тоже прошли.
+
+### Исторический аудит
+
 - Source baseline: `91bb1fe1d2a349f62915846303f6f25780ae5c6d` (`origin/main`, получен `git fetch origin main`).
 - Изолированный worktree, ветка `codex/animation-readiness-audit`.
 - Windows x86_64 MSVC; toolchain из `rust-toolchain.toml`; nextest 0.9.146.
