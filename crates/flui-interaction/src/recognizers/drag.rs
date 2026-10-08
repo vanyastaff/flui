@@ -126,7 +126,9 @@ pub struct DragEndDetails {
     pub global_position: Offset<f64>,
     /// Final receiving-node position.
     pub local_position: Offset<f64>,
-    /// Axis component of the velocity.
+    /// Exact axis component, or the vector magnitude for a free drag.
+    /// An unrepresentable free-drag magnitude uses the finite scalar ceiling
+    /// `f64::MAX`; the raw vector components remain available in [`Self::velocity`].
     pub primary_velocity: f64,
     fling_velocity: Velocity,
 }
@@ -135,7 +137,8 @@ impl DragEndDetails {
     ///
     /// Cancellation and releases below the minimum give zero. The maximum caps
     /// vector magnitude while preserving direction. [`Self::velocity`] remains
-    /// the raw measured estimate, including its independent safety ceiling.
+    /// the raw finite-component measurement, independent of fling policy. A
+    /// component estimate outside the representable range is refused as zero.
     #[must_use]
     pub const fn fling_velocity(&self) -> Velocity {
         self.fling_velocity
@@ -675,7 +678,9 @@ impl DragGestureRecognizer {
                     velocity,
                     local_position: position,
                     global_position: global,
-                    primary_velocity: self.primary_delta(velocity.pixels_per_second),
+                    primary_velocity: self
+                        .primary_delta(velocity.pixels_per_second)
+                        .clamp(f64::MIN, f64::MAX),
                     fling_velocity,
                 });
             });
@@ -727,7 +732,7 @@ impl GestureRecognizer for DragGestureRecognizer {
         let mut timeline = EventTimeline::default();
         let now = timeline.instant(event_time(dispatch.local), clock);
         let mut velocity_tracker =
-            VelocityTracker::with_estimator(down.pointer.kind, settings.velocity_estimator());
+            VelocityTracker::for_gesture(down.pointer.kind, settings.velocity_estimator());
         let Some(position) = dispatch.local.position() else {
             return;
         };

@@ -11,7 +11,7 @@ use flui_foundation::geometry::Offset;
 use super::{
     callback_containment::{finish_containment, invoke_callback, retire_callback},
     contact::{ArenaMembership, PrimaryContact},
-    recognizer::{CancelOutcome, GestureRecognizer, is_primary_down},
+    recognizer::{CancelOutcome, GestureRecognizer, is_primary_down, measured_positions},
 };
 use crate::{
     ForcePressDetails,
@@ -390,6 +390,18 @@ impl GestureRecognizer for ForcePressGestureRecognizer {
                 }
             }
             PointerEvent::Move(data) => {
+                if let Some(contact) = self.contact.current()
+                    && measured_positions(dispatch.local).any(|position| {
+                        contact
+                            .settings
+                            .exceeds_hit_slop(contact.kind, position - contact.local)
+                    })
+                {
+                    let mut notices = Vec::new();
+                    self.gesture_state.borrow_mut().retire(&mut notices);
+                    self.finish(ArenaStep::Withdraw, notices);
+                    return;
+                }
                 if let (Some(pressure), Some(local), Some(global)) = (
                     data.current().pressure,
                     dispatch.local.position(),
