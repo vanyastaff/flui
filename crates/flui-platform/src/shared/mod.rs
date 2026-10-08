@@ -26,7 +26,13 @@ pub(crate) mod owner_signal;
 // module warning-free everywhere. (`accessibility_bridge` can afford
 // `pub(crate)` only because Linux production code consumes it too.)
 pub mod hwnd_affinity;
-#[cfg(any(feature = "winit-backend", target_os = "android"))]
+#[cfg(any(
+    target_os = "android",
+    all(
+        feature = "winit-backend",
+        any(target_os = "windows", target_os = "macos", target_os = "linux")
+    )
+))]
 pub(crate) mod keyboard_adapter;
 pub mod keys;
 pub mod keys_macos;
