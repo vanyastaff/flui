@@ -506,7 +506,7 @@ impl DragGestureRecognizer {
                 self.callbacks.on_start.clone(),
                 || {},
                 |callback| callback(start),
-            )
+            );
         });
         if first.is_none()
             && self.is_current(tracked)
@@ -518,7 +518,7 @@ impl DragGestureRecognizer {
                     self.callbacks.on_update.clone(),
                     || {},
                     |callback| callback(details),
-                )
+                );
             });
             crate::routing::RoutePanic::preserve_first(
                 &mut first,
@@ -653,11 +653,11 @@ impl DragGestureRecognizer {
                     local_position: position,
                     global_position: global,
                     primary_velocity: self.primary_delta(velocity.pixels_per_second),
-                })
+                });
             });
         } else {
             invoke_callback(self.callbacks.on_cancel.clone(), retire, |callback| {
-                callback()
+                callback();
             });
         }
         CancelOutcome::Cancelled
@@ -741,7 +741,7 @@ impl GestureRecognizer for DragGestureRecognizer {
                     global_position: global,
                     local_position: position,
                     kind: down.pointer.kind,
-                })
+                });
             },
         );
         if self.started.get() && self.is_current(&tracked) {
