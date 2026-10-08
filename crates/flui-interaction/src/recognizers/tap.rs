@@ -459,7 +459,7 @@ impl GestureRecognizer for TapGestureRecognizer {
             PointerEvent::Move(_) => {
                 if measured_positions(dispatch.local).any(|position| {
                     let delta = position - snapshot.local;
-                    delta.dx.hypot(delta.dy) > snapshot.settings.hit_slop(snapshot.kind)
+                    snapshot.settings.exceeds_hit_slop(snapshot.kind, delta)
                 }) {
                     self.cancel_sequence(member.sequence, details);
                 } else {

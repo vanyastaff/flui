@@ -19,7 +19,7 @@ use crate::{
     events::{PointerEvent, PointerEventExt},
     ids::PointerId,
     routing::{PointerDispatch, RoutePanic},
-    settings::GestureSettings,
+    settings::GestureSettingsProvider,
 };
 
 /// Default pressure needed to start a force press.
@@ -43,7 +43,7 @@ pub type ForcePressEndCallback = Rc<dyn Fn(ForcePressDetails)>;
 pub struct ForcePressGestureRecognizer {
     contact: PrimaryContact,
     gesture_state: RefCell<ForcePressState>,
-    settings: GestureSettings,
+    settings: GestureSettingsProvider,
     thresholds: Thresholds,
     callbacks: ForcePressCallbacks,
 }
@@ -141,7 +141,7 @@ enum ArenaStep {
 #[must_use]
 pub struct ForcePressGestureRecognizerBuilder {
     arena: GestureArena,
-    settings: GestureSettings,
+    settings: GestureSettingsProvider,
     thresholds: Thresholds,
     callbacks: ForcePressCallbacks,
 }
@@ -157,8 +157,8 @@ impl std::fmt::Debug for ForcePressGestureRecognizerBuilder {
 
 impl ForcePressGestureRecognizerBuilder {
     /// Freeze the gesture policy used by each admitted contact.
-    pub fn settings(mut self, settings: GestureSettings) -> Self {
-        self.settings = settings;
+    pub fn settings(mut self, settings: impl Into<GestureSettingsProvider>) -> Self {
+        self.settings = settings.into();
         self
     }
     /// Set the start threshold, clamped to `0..=1`; ignore nonfinite values.
@@ -215,7 +215,7 @@ impl ForcePressGestureRecognizer {
     pub fn builder(arena: GestureArena) -> ForcePressGestureRecognizerBuilder {
         ForcePressGestureRecognizerBuilder {
             arena,
-            settings: GestureSettings::default(),
+            settings: GestureSettingsProvider::default(),
             thresholds: Thresholds {
                 start: FORCE_PRESS_START_PRESSURE,
                 peak: FORCE_PRESS_PEAK_PRESSURE,
@@ -276,7 +276,9 @@ impl ForcePressGestureRecognizer {
             return;
         }
         if position.is_finite()
-            && (position - contact.local).distance() > contact.settings.hit_slop(contact.kind)
+            && contact
+                .settings
+                .exceeds_hit_slop(contact.kind, position - contact.local)
         {
             state.retire(&mut notices);
             drop(state);
@@ -349,7 +351,8 @@ impl GestureRecognizer for ForcePressGestureRecognizer {
         if !is_primary_down(down.local) {
             return;
         }
-        if self.contact.begin(down, &self.settings).is_err() {
+        let settings = self.settings.snapshot();
+        if self.contact.begin(down, &settings).is_err() {
             return;
         }
         let Some(contact) = self.contact.current() else {

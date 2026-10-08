@@ -57,7 +57,7 @@ use crate::{
     ids::PointerId,
     processing::{Velocity, VelocityTracker},
     routing::{PointerDispatch, RoutePanic},
-    settings::GestureSettings,
+    settings::{GestureSettings, GestureSettingsProvider},
 };
 
 // ============================================================================
@@ -195,15 +195,20 @@ impl Drop for TapDragCallbacks {
 }
 
 /// The last completed tap, which the next contact may continue.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct LastTap {
     up_time: Instant,
+    down_time: Instant,
     down_position: Offset<f64>,
     count: u32,
+    settings: GestureSettings,
+    kind: PointerKind,
 }
 
 #[derive(Debug, Clone)]
 struct TapDragState {
+    /// Policy retained by this attempt and its consecutive-tap candidate.
+    settings: GestureSettings,
     phase: Phase,
     pointer: Option<PointerId>,
     entry: Option<GestureArenaEntry>,
@@ -224,6 +229,7 @@ struct TapDragState {
     timeline: EventTimeline,
     pending_up: Option<TapDragUpDetails>,
     up_time: Option<Instant>,
+    down_time: Option<Instant>,
     /// Survives the sequence reset; a drag, cancel or loss clears it.
     last_tap: Option<LastTap>,
 }
@@ -231,6 +237,7 @@ struct TapDragState {
 impl Default for TapDragState {
     fn default() -> Self {
         Self {
+            settings: GestureSettings::default(),
             phase: Phase::Ready,
             pointer: None,
             entry: None,
@@ -248,6 +255,7 @@ impl Default for TapDragState {
             timeline: EventTimeline::default(),
             pending_up: None,
             up_time: None,
+            down_time: None,
             last_tap: None,
         }
     }
@@ -275,7 +283,7 @@ enum ArenaStep {
 impl TapDragState {
     /// Clear the sequence, keeping the consecutive-tap chain.
     fn reset_sequence(&mut self) {
-        let last_tap = self.last_tap;
+        let last_tap = self.last_tap.take();
         *self = Self {
             last_tap,
             ..Self::default()
@@ -316,12 +324,17 @@ impl TapDragState {
 
     fn complete_tap(&mut self, out: &mut Vec<Notice>) {
         self.deliver_tap_down(out);
-        if let (Some(up), Some(up_time)) = (self.pending_up.take(), self.up_time) {
+        if let (Some(up), Some(up_time), Some(down_time)) =
+            (self.pending_up.take(), self.up_time, self.down_time)
+        {
             out.push(Notice::TapUp(up));
             self.last_tap = Some(LastTap {
                 up_time,
+                down_time,
                 down_position: self.initial,
                 count: self.count,
+                settings: self.settings.clone(),
+                kind: self.kind,
             });
         }
         self.reset_sequence();
@@ -353,7 +366,7 @@ pub struct TapAndDragGestureRecognizer {
     arena: crate::arena::GestureArena,
     gesture_state: RefCell<TapDragState>,
     callbacks: TapDragCallbacks,
-    settings: GestureSettings,
+    settings: GestureSettingsProvider,
 }
 
 impl std::fmt::Debug for TapAndDragGestureRecognizer {
@@ -371,7 +384,7 @@ impl std::fmt::Debug for TapAndDragGestureRecognizer {
 pub struct TapAndDragGestureRecognizerBuilder {
     arena: crate::arena::GestureArena,
     callbacks: TapDragCallbacks,
-    settings: GestureSettings,
+    settings: GestureSettingsProvider,
 }
 
 impl std::fmt::Debug for TapAndDragGestureRecognizerBuilder {
@@ -384,8 +397,8 @@ impl std::fmt::Debug for TapAndDragGestureRecognizerBuilder {
 
 impl TapAndDragGestureRecognizerBuilder {
     /// Freeze settings for contacts admitted by this recognizer.
-    pub fn settings(mut self, settings: GestureSettings) -> Self {
-        self.settings = settings;
+    pub fn settings(mut self, settings: impl Into<GestureSettingsProvider>) -> Self {
+        self.settings = settings.into();
         self
     }
 
@@ -452,7 +465,7 @@ impl TapAndDragGestureRecognizer {
         TapAndDragGestureRecognizerBuilder {
             arena,
             callbacks: TapDragCallbacks::default(),
-            settings: GestureSettings::default(),
+            settings: GestureSettingsProvider::default(),
         }
     }
 
@@ -560,12 +573,7 @@ impl TapAndDragGestureRecognizer {
             return;
         };
         let kind = contact.kind;
-        let (drag_slop, tap_slop) = {
-            let settings = &contact.settings;
-            // A free-plane drag takes the pan tier; tap viability is a hit
-            // test and takes the plain tier.
-            (settings.pan_slop_for(kind), settings.hit_slop(kind))
-        };
+        let settings = &contact.settings;
         let now = self.contact.now();
         if !self.contact.is_current(contact.id) {
             return;
@@ -577,9 +585,8 @@ impl TapAndDragGestureRecognizer {
         let mut exceeded_drag = false;
         for (stamp, position) in history {
             let delta = position - state.initial;
-            let distance = delta.dx.hypot(delta.dy);
-            exceeded_tap |= distance > tap_slop;
-            exceeded_drag |= distance > drag_slop;
+            exceeded_tap |= settings.exceeds_hit_slop(kind, delta);
+            exceeded_drag |= settings.exceeds_pan_slop(kind, delta);
             let timestamp = state.timeline.instant(stamp, now);
             state.velocity_tracker.add_position(timestamp, position);
         }
@@ -594,11 +601,10 @@ impl TapAndDragGestureRecognizer {
         match state.phase {
             Phase::Down => {
                 let delta = position - state.initial;
-                let distance = delta.dx.hypot(delta.dy);
-                if exceeded_tap || distance > tap_slop {
+                if exceeded_tap || settings.exceeds_hit_slop(kind, delta) {
                     state.tap_viable = false;
                 }
-                if exceeded_drag || distance > drag_slop {
+                if exceeded_drag || settings.exceeds_pan_slop(kind, delta) {
                     if state.won {
                         state.start_drag(&mut notices);
                     } else {
@@ -719,24 +725,38 @@ impl GestureRecognizer for TapAndDragGestureRecognizer {
             pointer = ?pointer,
             event = %crate::observability::GestureEvent::RecognizerAdded,
         );
+        let prospective_settings = self.settings.snapshot();
         let now = self.contact.now();
-        if self.contact.begin(down, &self.settings).is_err() {
+        let continuation = self
+            .gesture_state
+            .borrow()
+            .last_tap
+            .as_ref()
+            .filter(|last| {
+                let origin = if last.settings.double_tap_uses_down_time(last.kind) {
+                    last.down_time
+                } else {
+                    last.up_time
+                };
+                now.saturating_duration_since(origin)
+                    <= last.settings.double_tap_timeout_for(last.kind)
+                    && !last
+                        .settings
+                        .exceeds_double_tap_slop(last.kind, position - last.down_position)
+            })
+            .cloned();
+        let settings = continuation
+            .as_ref()
+            .map_or(prospective_settings, |last| last.settings.clone());
+        if self.contact.begin(down, &settings).is_err() {
             return;
         }
-        let (timeout, slop) = {
-            let settings = &self.settings;
-            (settings.double_tap_timeout(), settings.double_tap_slop())
-        };
         let entry = self.contact.entry();
         let mut state = self.gesture_state.borrow_mut();
-        let count = state
-            .last_tap
-            .filter(|last| {
-                now.saturating_duration_since(last.up_time) <= timeout
-                    && (position - last.down_position).distance() <= slop
-            })
-            .map_or(1, |last| last.count.saturating_add(1));
+        let count = continuation.map_or(1, |last| last.count.saturating_add(1));
         state.reset_sequence();
+        state.settings = settings;
+        state.down_time = Some(now);
         state.phase = Phase::Down;
         state.pointer = Some(pointer);
         state.entry = entry;
@@ -754,7 +774,7 @@ impl GestureRecognizer for TapAndDragGestureRecognizer {
             state.kind = data.pointer.kind;
         }
         state.velocity_tracker =
-            VelocityTracker::with_estimator(state.kind, self.settings.velocity_estimator());
+            VelocityTracker::with_estimator(state.kind, state.settings.velocity_estimator());
         state.last = position;
         state.last_global = global_position;
         state.last_reported = position;
