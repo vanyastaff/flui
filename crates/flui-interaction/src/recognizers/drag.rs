@@ -396,7 +396,7 @@ impl DragGestureRecognizer {
         delta: Offset<f64>,
     ) -> bool {
         match self.axis {
-            DragAxis::Free => settings.exceeds_pan_slop(kind, delta),
+            DragAxis::Free => settings.exceeds_pan_slop_for(kind, delta),
             DragAxis::Vertical => delta.dy.abs() > settings.pan_slop_vertical_for(kind),
             DragAxis::Horizontal => delta.dx.abs() > settings.pan_slop_horizontal_for(kind),
         }
