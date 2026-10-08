@@ -161,7 +161,7 @@ fn bench_ios_estimate(c: &mut Criterion) {
                 tracker
             },
             |mut tracker| black_box(tracker.estimate_at(query)),
-            criterion::BatchSize::SmallInput,
+            criterion::BatchSize::PerIteration,
         );
     });
 }
@@ -182,7 +182,7 @@ fn bench_estimate_impulse(c: &mut Criterion) {
                 tracker
             },
             |mut tracker| black_box(tracker.estimate_at(query)),
-            criterion::BatchSize::SmallInput,
+            criterion::BatchSize::PerIteration,
         );
     });
 }
