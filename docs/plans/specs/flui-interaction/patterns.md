@@ -3,6 +3,11 @@
 База: `main` @ `9a4daa3ed` (worktree оркестратора). Пути — от `crates/flui-interaction/src/`.
 Версии std — по `rust-lang/rust/RELEASES.md`; probe-компиляция не выполнена (остановлена в очереди).
 
+Это исходная сверка 2026-10-06. Предложения `Cell<GestureSettings>`, `set_settings`
+и `GestureSettingsScope` ниже заменены [ADR-0172](../../../adr/ADR-0172-host-owned-system-preferences.md):
+существующий `GestureArenaScope` доставляет read-only provider; последовательность
+сохраняет snapshot при admission до terminal. Текущая приёмка — [tasks.md](tasks.md), I11.
+
 ## 1. Выбранный паттерн по теме
 
 | Тема | Паттерн | Почему (и чем не является) |

@@ -106,6 +106,13 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   `ArenaMembership` independently for each pointer.
   `public_recognizer_extension_contracts` pins overlapping admission, settings
   freezing, cancellation of every owner, silent Drop and later recovery.
+- **Multi-tap is a simultaneous contact group.** `MultiTapGestureRecognizer`
+  recognizes the configured number of contacts only after all have released
+  within their own slop. Either release order completes once; an unrelated
+  cancellation leaves the group intact, while a tracked cancellation retires
+  the attempt and allows the next group. This is the policy documented in
+  [GESTURES.md](GESTURES.md), pinned by
+  `multi_contact_events_keep_independent_pointer_identity`.
 - **One owned input vocabulary (ADR-0143).** Platform dispatch, interaction,
   runtime replay and widget callbacks share `flui-platform-api`'s pointer and
   keyboard types. Pointer and hardware IDs remain distinct; absent device or

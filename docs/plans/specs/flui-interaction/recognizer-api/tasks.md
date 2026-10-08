@@ -2,6 +2,12 @@
 
 - **Статус:** RA0–RA6 merged через PR #1514; локальная приёмка и успешный CI указаны в [../tasks.md](../tasks.md). I11 продолжается отдельно; native ограничения сохраняются.
 - **Дата:** 2026-10-06
+- **Актуализация I11, 2026-10-08:** упоминания `Cell<GestureSettings>` и
+  `set_settings` ниже — сохранённый исходный план, заменённый
+  [ADR-0172](../../../../adr/ADR-0172-host-owned-system-preferences.md) и
+  [design.md §D8](design.md#d8-настройки). Реализация использует существующий
+  `GestureArenaScope`, read-only provider и snapshot при admission; текущая
+  приёмка I11 находится в [../tasks.md](../tasks.md).
 - **Design:** [design.md](design.md); требования — [requirements.md](requirements.md); волна —
   [../tasks.md](../tasks.md) «Спека `recognizer-api/`»
 - **Старт:** после слияния I1 (`interaction/arena-recognizer-lifecycle`) и I2
