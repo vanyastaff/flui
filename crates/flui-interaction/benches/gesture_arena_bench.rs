@@ -196,10 +196,11 @@ impl ResolutionFixture {
     }
 }
 
-/// Resolution alone: setup, owner allocation and retirement are not timed.
-/// The original strong-membership baseline has no isolated resolution row.
-/// Its `add + accept (eager vs competitor)` row includes setup, so only that
-/// unchanged legacy row can compare the whole conflict before and after.
+/// Resolution public-call cost: fixture setup and retirement are not timed.
+/// The strong baseline's `resolve/strong` takes an owned Arc candidate, so
+/// candidate cloning and argument retirement are timed; `resolve/weak` borrows
+/// its Rc candidate and resolves weak membership. The comparison includes
+/// these ownership contracts rather than isolating Rc versus Arc operations.
 fn bench_weak_resolution(c: &mut Criterion) {
     let witness = ResolutionFixture::new();
     witness.resolve();
