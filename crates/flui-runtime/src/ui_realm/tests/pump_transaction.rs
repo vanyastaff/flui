@@ -182,7 +182,7 @@ fn resampling_sibling_case(fail: bool, compete: bool) {
         PointerId::try_from(1_u64).expect("contact"),
         PointerKind::Touch,
     );
-    let sample = |x, ms| {
+    let sample = |x, ms: u64| {
         PointerSample::new(
             EventTime::from_nanos(ms * 1_000_000),
             PointerPosition::try_new(flui_foundation::geometry::Point::new(x, 10.0))
