@@ -252,9 +252,8 @@ pub(crate) fn a_floating_snap_header_snaps_fully_open_when_a_startward_scroll_en
         "premise: the stationary release ends scrolling"
     );
 
-    // Drive frames: whatever the release produced (immediate end or a brief
-    // ballistic run), the snap animation must then expand the header to
-    // fully revealed. Bounded so a never-snapping regression fails loudly.
+    // Drive the snap after the idle release until the header is fully
+    // revealed. Bounded so a never-snapping regression fails loudly.
     let mut frames = 0;
     while builds.borrow().last().map(|(shrink, _)| *shrink) != Some(0.0) && frames < 2_000 {
         laid.pump_for(Duration::from_millis(16));
