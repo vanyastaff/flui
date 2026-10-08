@@ -302,20 +302,6 @@ impl Default for GestureSettings {
 #[derive(Debug, Clone, Copy, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum GestureSettingsError {
-    /// A baseline ratio and native distance have no finite representation.
-    #[error(
-        "native gesture setting `{field}` cannot represent baseline ratio {tier}/{hit} at {observed}"
-    )]
-    UnrepresentableProjection {
-        /// Derived tier that could not be represented.
-        field: &'static str,
-        /// Authored tier distance.
-        tier: f64,
-        /// Authored hit distance.
-        hit: f64,
-        /// Observed native hit distance.
-        observed: f64,
-    },
     /// A slop, ratio or velocity was NaN, infinite or negative.
     #[error("gesture setting `{field}` must be finite and not negative, got {value}")]
     InvalidValue {
@@ -331,6 +317,20 @@ pub enum GestureSettingsError {
         min: f64,
         /// The requested maximum, px/s.
         max: f64,
+    },
+    /// A baseline ratio and native distance have no finite representation.
+    #[error(
+        "native gesture setting `{field}` cannot represent baseline ratio {tier}/{hit} at {observed}"
+    )]
+    UnrepresentableProjection {
+        /// Derived tier that could not be represented.
+        field: &'static str,
+        /// Authored tier distance.
+        tier: f64,
+        /// Authored hit distance.
+        hit: f64,
+        /// Observed native hit distance.
+        observed: f64,
     },
 }
 
