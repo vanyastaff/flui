@@ -84,6 +84,7 @@ use flui_platform_api::{
     pointer::{ScrollEvent, ScrollPrecision, ScrollUnit},
 };
 use flui_scheduler::PostFrameHandle;
+use flui_semantics::{ActionArgs, SemanticsAction};
 
 use super::scroll_position_scope::ScrollPositionScope;
 
@@ -1147,6 +1148,7 @@ fn scroll_semantics(
         .label("Scroll position")
         .scroll_source(controller.position(), axis, reversed);
     let movement_controller = controller.clone();
+    let reveal_fling = fling.clone();
     let move_to: Rc<dyn Fn(f64)> = Rc::new(move |target| {
         let position = movement_controller.position();
         if !target.is_finite() {
@@ -1175,6 +1177,7 @@ fn scroll_semantics(
             position.set_is_scrolling(false);
         }
     });
+    let reveal_controller = controller.clone();
     let step: Rc<dyn Fn(bool)> = {
         let move_to = Rc::clone(&move_to);
         Rc::new(move |increase| {
@@ -1182,6 +1185,43 @@ fn scroll_semantics(
             move_to(controller.pixels() + if increase { delta } else { -delta });
         })
     };
+    let reveal = Rc::clone(&move_to);
+    let semantics = semantics.on_action(SemanticsAction::ShowOnScreen, move |_cx, args| {
+        let Some(ActionArgs::ShowOnScreen {
+            target_rect,
+            viewport_rect,
+        }) = args
+        else {
+            return;
+        };
+        let (start, end, viewport_start, viewport_end) = match axis {
+            Axis::Vertical => (
+                target_rect.top(),
+                target_rect.bottom(),
+                viewport_rect.top(),
+                viewport_rect.bottom(),
+            ),
+            Axis::Horizontal => (
+                target_rect.left(),
+                target_rect.right(),
+                viewport_rect.left(),
+                viewport_rect.right(),
+            ),
+        };
+        // A target larger than the viewport already exposing both edges
+        // stays put; otherwise move the nearest obscured edge into view.
+        let delta = if start < viewport_start && end > viewport_end {
+            0.0
+        } else if start < viewport_start {
+            start - viewport_start
+        } else if end > viewport_end {
+            end - viewport_end
+        } else {
+            0.0
+        };
+        let _ = reveal_fling.stop();
+        reveal(reveal_controller.pixels() + if reversed { -delta } else { delta });
+    });
     let set = move_to;
     let increase = Rc::clone(&step);
     let decrease = Rc::clone(&step);
