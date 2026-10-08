@@ -162,6 +162,13 @@ fn pointer_and_gesture_recognition() {
     run_cases(
         "pointer_and_gesture_recognition",
         &[
+            ("pointer_vocabulary::viewer_repeated_native_start_retires_the_previous_generation", crate::pointer_vocabulary::viewer_repeated_native_start_retires_the_previous_generation as fn()),
+            ("pointer_vocabulary::viewer_native_owner_survives_descendant_enable_during_rebuild", crate::pointer_vocabulary::viewer_native_owner_survives_descendant_enable_during_rebuild),
+            ("pointer_vocabulary::viewer_native_rotation_preserves_the_scene_pivot", crate::pointer_vocabulary::viewer_native_rotation_preserves_the_scene_pivot),
+            ("pointer_vocabulary::viewer_rotation_refuses_an_unfittable_quad_then_recovers", crate::pointer_vocabulary::viewer_rotation_refuses_an_unfittable_quad_then_recovers),
+            ("pointer_vocabulary::viewer_extreme_finite_pan_preserves_the_boundary_result", crate::pointer_vocabulary::viewer_extreme_finite_pan_preserves_the_boundary_result),
+            ("pointer_vocabulary::viewer_focal_fling_advances_then_stops_on_new_input", crate::pointer_vocabulary::viewer_focal_fling_advances_then_stops_on_new_input),
+            ("pointer_vocabulary::viewer_reports_scale_velocity_separately_from_focal_velocity", crate::pointer_vocabulary::viewer_reports_scale_velocity_separately_from_focal_velocity),
             ("listener::presentation_resampling_uses_the_owner_frame_clock", crate::listener::presentation_resampling_uses_the_owner_frame_clock as fn()),
             ("pointer_vocabulary::viewer_native_pan_moves_the_scene_under_the_focal_point", crate::pointer_vocabulary::viewer_native_pan_moves_the_scene_under_the_focal_point as fn()),
             ("pointer_vocabulary::viewer_native_session_reports_one_start_and_one_terminal", crate::pointer_vocabulary::viewer_native_session_reports_one_start_and_one_terminal),
