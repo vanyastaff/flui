@@ -58,9 +58,9 @@ impl PlatformWindow for ReentrantIdentityWindow {
         self.queried
             .store(true, std::sync::atomic::Ordering::SeqCst);
         assert!(matches!(
-            crate::request_presentation_close(self.probe),
-            Err(crate::CloseRequestError::UnknownPresentation { .. }
-                | crate::CloseRequestError::NoHostedRuntime)
+            crate::app::runner::request_presentation_close(self.probe),
+            Err(crate::app::CloseRequestError::UnknownPresentation { .. }
+                | crate::app::CloseRequestError::NoHostedRuntime)
         ));
         self.inner.id()
     }
@@ -176,9 +176,9 @@ fn presentation_assembly_reentry_revalidates_its_authorizer() {
                     return;
                 }
                 assert!(matches!(
-                    crate::request_presentation_close(probe),
-                    Err(crate::CloseRequestError::UnknownPresentation { .. }
-                        | crate::CloseRequestError::NoHostedRuntime)
+                    crate::app::runner::request_presentation_close(probe),
+                    Err(crate::app::CloseRequestError::UnknownPresentation { .. }
+                        | crate::app::CloseRequestError::NoHostedRuntime)
                 ));
                 if close_authorizer {
                     close_this_window(primary);
