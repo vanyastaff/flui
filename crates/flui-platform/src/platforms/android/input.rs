@@ -261,8 +261,7 @@ impl AndroidInputState {
             DeviceReading::Removed if had_device => return output,
             // Android-generated/virtual events can have no InputDevice object.
             // Preserve their native contact and position, with absent device/sensors.
-            DeviceReading::Removed => None,
-            DeviceReading::Unavailable => None,
+            DeviceReading::Removed | DeviceReading::Unavailable => None,
         };
         let modifiers = owned_modifiers(event.meta_state());
         let action = event.action();

@@ -182,7 +182,14 @@ mod redraw_poll;
 pub mod shared;
 #[cfg(feature = "storage")]
 pub mod storage;
-#[cfg(all(test, feature = "storage", not(target_arch = "wasm32")))]
+#[cfg(all(
+    test,
+    any(
+        all(feature = "storage", not(target_arch = "wasm32")),
+        feature = "winit-backend",
+        target_os = "android"
+    )
+))]
 mod table_test;
 pub mod task;
 pub mod traits;
