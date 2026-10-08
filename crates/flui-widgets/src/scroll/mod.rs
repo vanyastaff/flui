@@ -45,7 +45,7 @@ pub use scroll_physics::{
     BouncingScrollPhysics, ClampingScrollPhysics, ScrollMetrics, ScrollPhysics, SharedScrollPhysics,
 };
 pub use scroll_position_scope::ScrollPositionScope;
-pub use scrollable::Scrollable;
+pub use scrollable::{InvalidWheelScrollDistance, Scrollable, WheelScrollDistances};
 pub use scrollbar::Scrollbar;
 pub use single_child_scroll_view::SingleChildScrollView;
 pub use sliver_fill_remaining::{

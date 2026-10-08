@@ -1,115 +1,96 @@
-//! [`GestureArenaScope`] — provides a shared, clock-bound [`GestureArena`] to a
-//! subtree so overlapping `GestureDetector`s compete in one arena and a binding
-//! can drive their deadlines.
-//!
-//! FLUI is non-singleton, so there is no ambient arena: it is handed down
-//! explicitly as inherited data, scoped to a subtree.
+//! Presentation-owned gesture arbitration and inherited input policy.
 
-use flui_interaction::GestureSettings;
 use flui_interaction::arena::{GestureArena, SweepModel};
+use flui_interaction::{GestureSettingsProvider, WheelPreferencesProvider};
 use flui_view::prelude::*;
 use flui_view::{BoxedView, InheritedView, impl_inherited_view};
 
-/// Provides a shared [`GestureArena`] to its descendant gesture detectors.
+/// Shares one binding-driven arena and its input policy with descendants.
 ///
-/// A binding (or a test harness) wraps the application subtree in
-/// `GestureArenaScope::new(binding.arena().clone(), child)` configured with
-/// `.settings(binding.default_settings().clone())`. Every
-/// gesture consumer below reads this arena ambiently in `init_state` through
-/// [`GestureArenaScope::of`] and builds all of its recognizers
-/// against it. Two consequences follow:
+/// The presentation installs its live gesture and wheel providers at the root.
+/// An authored nested scope inherits both policies unless explicitly overridden:
+/// `.settings(...)` overrides gestures independently of wheel observations.
+/// Without an outer scope, absent policies use framework defaults.
 ///
-/// 1. **Competition for free** — overlapping detectors along a hit-test path add
-///    their recognizers to the *same* arena entry for one contact, so the
-///    standard disambiguation (front-member-wins, reject-on-loss) plays
-///    out across detectors, not just within one.
-/// 2. **Deadline polling** — because [`GestureArena`] is a shared handle, the clone
-///    the scope hands down and the one the binding holds are the same arena and
-///    the same clock. The binding's `pump_frame` polls that arena's deadlines,
-///    so clock-driven gestures (long-press hold, double-tap give-up) resolve on
-///    the virtual timeline.
-/// 3. **Authored settings** — `GestureDetector` captures the scope's settings
-///    when mounting its recognizers. Scope configuration does not change an
-///    already mounted recognizer's policy.
-///
-/// Gesture consumers require this scope. Missing presentation ownership is an
-/// invariant violation during `init_state`; consumers never create a private
-/// arena or take over the binding's close/sweep lifecycle.
-///
-/// The provided data — the arena handle — never changes for a given scope, so
-/// [`update_should_notify`](InheritedView::update_should_notify) is always
-/// `false`: a descendant reads the handle once in `init_state` and never needs a
-/// dependency-driven rebuild on it.
-#[derive(Clone)]
+/// This composition widget resolves inheritance before publishing one inherited
+/// node containing the arena and both policies. Use [`Self::of`] to acquire the
+/// arena; the public configuration is not itself an [`InheritedView`].
+#[derive(Clone, StatelessView)]
 pub struct GestureArenaScope {
-    /// The shared arena handed to descendants. Cloning the scope clones this
-    /// handle, so all clones observe the same arena state + clock.
     arena: GestureArena,
-    /// Authored settings captured when descendant recognizers are mounted.
-    settings: GestureSettings,
-    /// The wrapped subtree the arena is provided to.
+    settings: Option<GestureSettingsProvider>,
+    wheel_preferences: Option<WheelPreferencesProvider>,
     child: BoxedView,
 }
 
 impl GestureArenaScope {
-    /// Wrap `child` in a scope that provides `arena` to its descendants.
+    /// Wrap `child` with the presentation's shared arena.
     ///
     /// # Panics
-    ///
-    /// Panics when `arena` is not binding-driven. A presentation scope is the
-    /// binding's lifecycle boundary; admitting a self-driven arena would create
-    /// a second close/sweep owner below that boundary.
+    /// Panics if `arena` is not binding-driven. A scope never creates a second
+    /// owner of the arena's close/sweep lifecycle.
     #[must_use]
     pub fn new(arena: GestureArena, child: impl IntoView) -> Self {
         assert_eq!(
             arena.sweep_model(),
             SweepModel::BindingDriven,
             "BUG: GestureArenaScope requires a BindingDriven arena owned by the presentation \
-             binding; SelfDriven arenas cannot back a presentation scope",
+             binding; SelfDriven arenas cannot back a presentation scope"
         );
         Self {
             arena,
-            settings: GestureSettings::default(),
+            settings: None,
+            wheel_preferences: None,
             child: BoxedView(Box::new(child.into_view())),
         }
     }
 
-    /// Configure the settings descendant recognizers capture at mount.
+    /// Explicitly override gesture policy, retaining inherited wheel policy.
     ///
-    /// A presentation supplies its binding's settings here. This immutable
-    /// configuration does not update recognizers that are already mounted.
+    /// An authored [`flui_interaction::GestureSettings`] becomes a fixed profile;
+    /// a presentation supplies its live provider. New admissions read the
+    /// provider while active contacts retain their admitted settings.
     #[must_use]
-    pub fn settings(mut self, settings: GestureSettings) -> Self {
-        self.settings = settings;
+    pub fn settings(mut self, settings: impl Into<GestureSettingsProvider>) -> Self {
+        self.settings = Some(settings.into());
         self
     }
 
-    pub(crate) fn settings_of(ctx: &dyn BuildContext) -> GestureSettings {
-        ctx.get::<Self, _>(|scope| scope.settings.clone())
+    /// Explicitly override wheel observations independently of gesture policy.
+    ///
+    /// Leaving this unset inherits the outer scope's exact provider, including
+    /// future host updates. An authored fixed value replaces that inheritance.
+    #[must_use]
+    pub fn wheel_preferences(mut self, preferences: impl Into<WheelPreferencesProvider>) -> Self {
+        self.wheel_preferences = Some(preferences.into());
+        self
+    }
+
+    pub(crate) fn settings_of(ctx: &dyn BuildContext) -> GestureSettingsProvider {
+        ctx.depend_on::<ResolvedGestureArenaScope, _>(|scope| scope.data.settings.clone())
             .expect("BUG: gesture consumers must acquire settings beneath GestureArenaScope")
     }
 
-    /// Resolve the presentation's exact shared arena without registering an
-    /// inherited dependency.
-    ///
-    /// Gesture recognizers capture their arena for their whole lifetime, so
-    /// consumers call this once from `init_state`; the scope handle itself is
-    /// immutable and never triggers dependency-driven rebuilds.
-    ///
-    /// # Panics
-    ///
-    /// Panics when the consumer is mounted outside a presentation
-    /// [`GestureArenaScope`].
-    #[must_use]
-    pub fn of(ctx: &dyn BuildContext) -> GestureArena {
-        ctx.get::<Self, _>(|scope| scope.arena.clone()).expect(
-            "BUG: gesture consumers must be mounted beneath GestureArenaScope; \
-             the presentation binding is the sole GestureArena lifecycle owner",
-        )
+    pub(crate) fn wheel_preferences_of(ctx: &dyn BuildContext) -> WheelPreferencesProvider {
+        ctx.depend_on::<ResolvedGestureArenaScope, _>(|scope| scope.data.wheel_preferences.clone())
+            .expect("BUG: wheel consumers must acquire preferences beneath GestureArenaScope")
     }
 
-    /// The shared arena this scope provides — what a descendant detector reads
-    /// in `init_state` to build its recognizers against.
+    /// Acquire the exact arena without registering an inherited dependency.
+    ///
+    /// # Panics
+    /// Panics outside a presentation scope. Consumers never create a private
+    /// arena or take over the binding's lifecycle.
+    #[must_use]
+    pub fn of(ctx: &dyn BuildContext) -> GestureArena {
+        ctx.get::<ResolvedGestureArenaScope, _>(|scope| scope.data.arena.clone())
+            .expect(
+                "BUG: gesture consumers must be mounted beneath GestureArenaScope; \
+             the presentation binding is the sole GestureArena lifecycle owner",
+            )
+    }
+
+    /// The shared arena configured for this scope.
     #[must_use]
     pub fn arena(&self) -> &GestureArena {
         &self.arena
@@ -124,22 +105,54 @@ impl std::fmt::Debug for GestureArenaScope {
     }
 }
 
-impl InheritedView for GestureArenaScope {
-    type Data = GestureArena;
-
-    fn data(&self) -> &Self::Data {
-        &self.arena
-    }
-
-    fn child(&self) -> &dyn View {
-        &self.child
-    }
-
-    fn update_should_notify(&self, _old: &Self) -> bool {
-        // The arena handle is fixed for a scope's lifetime; descendants read it
-        // once in `init_state` and never depend on it for rebuilds.
-        false
+impl StatelessView for GestureArenaScope {
+    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+        let settings = self.settings.clone().unwrap_or_else(|| {
+            ctx.depend_on::<ResolvedGestureArenaScope, _>(|scope| scope.data.settings.clone())
+                .unwrap_or_default()
+        });
+        let wheel_preferences = self.wheel_preferences.clone().unwrap_or_else(|| {
+            ctx.depend_on::<ResolvedGestureArenaScope, _>(|scope| {
+                scope.data.wheel_preferences.clone()
+            })
+            .unwrap_or_default()
+        });
+        ResolvedGestureArenaScope {
+            data: GestureScopeData {
+                arena: self.arena.clone(),
+                settings,
+                wheel_preferences,
+            },
+            child: self.child.clone(),
+        }
     }
 }
 
-impl_inherited_view!(GestureArenaScope);
+#[derive(Clone)]
+struct GestureScopeData {
+    arena: GestureArena,
+    settings: GestureSettingsProvider,
+    wheel_preferences: WheelPreferencesProvider,
+}
+
+#[derive(Clone)]
+struct ResolvedGestureArenaScope {
+    data: GestureScopeData,
+    child: BoxedView,
+}
+
+impl InheritedView for ResolvedGestureArenaScope {
+    type Data = GestureScopeData;
+    fn data(&self) -> &Self::Data {
+        &self.data
+    }
+    fn child(&self) -> &dyn View {
+        &self.child
+    }
+    fn update_should_notify(&self, old: &Self) -> bool {
+        self.data.settings != old.data.settings
+            || self.data.wheel_preferences != old.data.wheel_preferences
+    }
+}
+
+impl_inherited_view!(ResolvedGestureArenaScope);
