@@ -2809,3 +2809,146 @@ pub(crate) fn show_on_screen_sibling_reentry_delivers_last_target_without_stale_
         );
     }
 }
+
+pub(crate) fn nested_fling_custom_physics_failure_and_retirement_preserve_first_and_recover() {
+    use flui_animation::Simulation;
+    use flui_foundation::geometry::Axis::Vertical;
+    use flui_widgets::{ScrollMetrics, ScrollPhysics};
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    struct RetiringSimulation {
+        motion: Box<dyn Simulation>,
+        fail_drop: Arc<AtomicBool>,
+    }
+    impl Simulation for RetiringSimulation {
+        fn x(&self, time: f64) -> f64 {
+            self.motion.x(time)
+        }
+        fn dx(&self, time: f64) -> f64 {
+            self.motion.dx(time)
+        }
+        fn is_done(&self, time: f64) -> bool {
+            self.motion.is_done(time)
+        }
+    }
+    impl Drop for RetiringSimulation {
+        fn drop(&mut self) {
+            if self.fail_drop.swap(false, Ordering::SeqCst) {
+                panic!("custom parent simulation retirement failure");
+            }
+        }
+    }
+    #[derive(Debug)]
+    struct FaultPhysics {
+        fail_boundary: Arc<AtomicBool>,
+        fail_drop: Arc<AtomicBool>,
+    }
+    impl ScrollPhysics for FaultPhysics {
+        fn apply_boundary_conditions(&self, metrics: &ScrollMetrics, proposed: f64) -> f64 {
+            ClampingScrollPhysics::new().apply_boundary_conditions(metrics, proposed)
+        }
+        fn create_ballistic_simulation(
+            &self,
+            metrics: &ScrollMetrics,
+            velocity: f64,
+        ) -> Option<Box<dyn Simulation>> {
+            Some(Box::new(RetiringSimulation {
+                motion: ClampingScrollPhysics::new()
+                    .create_ballistic_simulation(metrics, velocity)?,
+                fail_drop: Arc::clone(&self.fail_drop),
+            }))
+        }
+        fn boundary_velocity(&self, metrics: &ScrollMetrics, velocity: f64) -> Option<f64> {
+            if self.fail_boundary.swap(false, Ordering::SeqCst) {
+                panic!("custom parent boundary failure");
+            }
+            ClampingScrollPhysics::new().boundary_velocity(metrics, velocity)
+        }
+    }
+
+    for (boundary_fault, retirement_fault) in
+        [(false, false), (true, false), (false, true), (true, true)]
+    {
+        let (outer, inner, vsync) = (
+            ScrollController::new(),
+            ScrollController::new(),
+            Vsync::new(),
+        );
+        let fail_boundary = Arc::new(AtomicBool::new(boundary_fault));
+        let fail_drop = Arc::new(AtomicBool::new(retirement_fault));
+        let parent = Scrollable::new()
+            .controller(outer.clone())
+            .physics(Arc::new(FaultPhysics {
+                fail_boundary: Arc::clone(&fail_boundary),
+                fail_drop: Arc::clone(&fail_drop),
+            }))
+            .child(flui_widgets::Column::new(vec![
+                SizedBox::new(200.0, 600.0).boxed(),
+                SizedBox::new(200.0, 200.0)
+                    .child(
+                        Scrollable::new()
+                            .controller(inner.clone())
+                            .child(SizedBox::new(200.0, 1000.0)),
+                    )
+                    .boxed(),
+                SizedBox::new(200.0, 4800.0).boxed(),
+            ]));
+        let mut laid = crate::common::lay_out_animated(
+            VsyncScope::new(vsync.clone(), parent),
+            tight(200.0, 200.0),
+            vsync,
+        );
+        outer.jump_to(600.0);
+        inner.jump_to(650.0);
+        laid.tick();
+        release_inner_fling(&laid, Vertical, false);
+        assert_eq!(inner.pixels(), 670.0);
+        let mut failure = None;
+        for _ in 0..500 {
+            if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                laid.pump_for(Duration::from_millis(16));
+            })) {
+                failure = Some(payload);
+                break;
+            }
+        }
+        if boundary_fault || retirement_fault {
+            let payload = failure.expect("the actual parent physics/retirement callback must run");
+            let text = payload
+                .downcast_ref::<&str>()
+                .copied()
+                .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+                .expect("the frame reports its first failure text");
+            let expected = if boundary_fault {
+                "custom parent boundary failure"
+            } else {
+                "custom parent simulation retirement failure"
+            };
+            assert!(
+                text.contains(expected),
+                "the first failure remains authoritative: {text}"
+            );
+        } else {
+            assert!(failure.is_none(), "healthy custom physics completes");
+            assert!(
+                outer.pixels() > 600.0,
+                "actual custom parent receives the impulse"
+            );
+        }
+        assert!(!fail_boundary.load(Ordering::SeqCst));
+        // Faulted ownership may be retained instead of invoking another
+        // destructor during unwind. Disable that fault for the fresh operation.
+        fail_drop.store(false, Ordering::SeqCst);
+        inner.jump_to(650.0);
+        outer.jump_to(600.0);
+        laid.tick();
+        release_inner_fling(&laid, Vertical, false);
+        for _ in 0..15 {
+            laid.pump_for(Duration::from_millis(16));
+        }
+        assert!(
+            outer.pixels() > 600.0,
+            "fresh transfer makes progress after containment"
+        );
+    }
+}

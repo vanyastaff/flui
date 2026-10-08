@@ -286,6 +286,7 @@ fn scroll_physics_and_activity() {
             ("scroll::replacing_parent_invalidates_old_fling_handoff_and_next_gesture_recovers", crate::scroll::replacing_parent_invalidates_old_fling_handoff_and_next_gesture_recovers),
             ("scroll::nested_fling_failure_keeps_first_panic_and_a_new_gesture_makes_progress", crate::scroll::nested_fling_failure_keeps_first_panic_and_a_new_gesture_makes_progress),
             ("scroll::nested_fling_equal_edge_jump_cancels_old_handoff_and_next_gesture_recovers", crate::scroll::nested_fling_equal_edge_jump_cancels_old_handoff_and_next_gesture_recovers),
+            ("scroll::nested_fling_custom_physics_failure_and_retirement_preserve_first_and_recover", crate::scroll::nested_fling_custom_physics_failure_and_retirement_preserve_first_and_recover),
             ("scroll::nested_fling_skips_saturated_parent_and_reentrant_jump_retires_transfer", crate::scroll::nested_fling_skips_saturated_parent_and_reentrant_jump_retires_transfer),
             ("scroll::nested_fling_bouncing_parent_at_extent_absorbs_before_grandparent", crate::scroll::nested_fling_bouncing_parent_at_extent_absorbs_before_grandparent),
             ("scroll::show_on_screen_reveals_offscreen_targets_on_both_axes_and_reverse", crate::scroll::show_on_screen_reveals_offscreen_targets_on_both_axes_and_reverse),
