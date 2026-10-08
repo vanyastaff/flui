@@ -292,6 +292,7 @@ fn scroll_physics_and_activity() {
             ("scroll::show_on_screen_walks_nested_axes_and_replacement_uses_current_geometry", crate::scroll::show_on_screen_walks_nested_axes_and_replacement_uses_current_geometry),
             ("scroll::show_on_screen_failure_continues_live_ancestors_and_fresh_requests_recover", crate::scroll::show_on_screen_failure_continues_live_ancestors_and_fresh_requests_recover),
             ("scroll::show_on_screen_same_pipeline_reentry_keeps_one_reveal_and_recovers", crate::scroll::show_on_screen_same_pipeline_reentry_keeps_one_reveal_and_recovers),
+            ("scroll::show_on_screen_sibling_reentry_delivers_last_target_without_stale_motion", crate::scroll::show_on_screen_sibling_reentry_delivers_last_target_without_stale_motion),
             ("scroll::nested_scroll_sequence_keeps_its_first_consumptive_target", crate::scroll::nested_scroll_sequence_keeps_its_first_consumptive_target as fn()),
             ("scroll::scroll_latch_survives_focal_motion_and_releases_on_cancel", crate::scroll::scroll_latch_survives_focal_motion_and_releases_on_cancel),
             ("scroll::phase_less_scroll_latch_expires_on_owner_clock_inactivity", crate::scroll::phase_less_scroll_latch_expires_on_owner_clock_inactivity),
