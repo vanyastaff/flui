@@ -39,7 +39,7 @@ fn with_activity<T>(
             let raw_activity = app.activity_as_ptr() as jni::sys::jobject;
             // SAFETY: AndroidApp owns this global Activity reference for the
             // entire borrow of app. as_cast_raw borrows it without deleting it.
-            let activity = unsafe { env.as_cast_raw::<Global<JObject>>(&raw_activity)? };
+            let activity = unsafe { env.as_cast_raw::<Global<JObject<'_>>>(&raw_activity)? };
             query(env, activity.as_ref().as_ref())
         })();
         if result.is_err() {
@@ -241,7 +241,7 @@ pub(super) fn scroll_factors(
                     &[
                         JValue::Int(attribute),
                         JValue::Object(&value),
-                        JValue::Bool(1),
+                        JValue::Bool(true),
                     ],
                 )?
                 .z()?;
