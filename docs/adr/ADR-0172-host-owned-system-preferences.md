@@ -116,6 +116,15 @@ admissions use the baseline until a query for that presentation succeeds.
 Timing observations remain independently applicable. Retrying services the
 owner's existing wake path without beginning a synthetic frame.
 
+A successful exact-context query can still yield geometry whose projection
+against the authored baseline is not representable. This acknowledges the query
+obligation, but does not replace the last successfully projected geometry in that
+same context; without one, the consumer uses its baseline. Latest timings and
+wheel observations remain independently deliverable. Repeating a successful
+native read cannot repair a deterministic projection failure, so only a later
+host or DPI barrier initiates another query. The raw host snapshot retains the
+observation; the fallback is consumer policy.
+
 Native touch slop supplies the touch displacement measurement. The consumer
 retains its deliberate pan-to-hit and per-axis policy ratios rather than
 collapsing distinct gesture thresholds into one value. Projection validates
