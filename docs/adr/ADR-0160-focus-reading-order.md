@@ -6,6 +6,8 @@
   traversal-policy signature only
 - **Related:** [ADR-0079](ADR-0079-keyboard-activation-and-focus-for-assistive-technology.md),
   [ADR-0127](ADR-0127-exceptional-path-retention.md)
+- **Superseded-by:** [ADR-0165](ADR-0165-focus-policy-groups-and-directional-traversal.md)
+  (scope-only traversal primitive; reading-order algorithm and policy signature remain)
 
 ## Decision
 
