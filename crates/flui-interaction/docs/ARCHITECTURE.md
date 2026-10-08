@@ -47,6 +47,14 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   A second target trait or generic dispatcher would duplicate this ownership
   boundary without providing a producer. `transformed_entry_receives_local_samples_and_deltas`
   pins dispatch through the actual lane, including local geometry.
+- **Exact root identity borrows complete pointer readings.**
+  `HitTestResult::add` composes an identity for targets in root space. Resolving
+  that exact matrix as an unlocalized route keeps measured and predicted
+  histories borrowed and preserves source metadata. A near-identity matrix
+  still follows checked localization; a tolerance would erase authored motion.
+  `resolved_route_move_invocation_allocates_no_heap_after_setup` covers real
+  identity, translated and near-identity hit paths, complete sample families
+  and their allocation contracts.
 - **Explicit capture belongs to one admitted Down generation (ADR-0164).**
   A real target's `PointerDispatch::capture` returns a non-Clone weak token.
   The first claimant selects later target delivery while the original Down

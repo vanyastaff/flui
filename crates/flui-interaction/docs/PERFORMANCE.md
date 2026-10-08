@@ -40,6 +40,14 @@ before replacing them with localized histories; its one-target case allocated
 four times. Localization now constructs the required owned histories directly
 from the borrowed source. These counts are allocation costs, not elapsed times.
 
+The root hit-test path produced by `HitTestResult::add` carries a composed
+identity matrix rather than an absent transform. Exact identity also borrows
+the original pointer event, including both histories, without local sample
+allocation. The allocation matrix covers that producer alongside translated
+paths and a small nonzero translation. Approximate identity is not sufficient:
+even a small authored displacement must localize every reading. Nonidentity
+paths retain checked plane projection and their required owned histories.
+
 ## Bounds
 
 | Component | Bound | Source |
@@ -98,6 +106,10 @@ retained history rather than claiming lossless delivery beyond its cap.
 The route timing bench uses scalar events without sample history. The
 history-bearing localization allocation matrix above is a separate public
 test, so scalar route timings do not price that workload.
+Direct dispatch resolves and releases its route inside each measured iteration;
+cached invocation excludes that setup and retirement. Its root identity entries
+borrow source readings, while transformed entries still validate and localize
+their samples. Neither timing includes destruction of the original hit path.
 
 For an API or ownership change, compare saved baselines on the same host and
 toolchain. Keep the fixture lifetime and callback witnesses identical:
