@@ -1891,6 +1891,12 @@ pub(crate) fn nested_fling_hands_remaining_velocity_to_matching_parent_axes() {
 
 pub(crate) fn nested_fling_parent_boundary_policy_receives_presentation_pixel_ratio() {
     use flui_animation::Simulation;
+    use flui_platform_api::{
+        EventTime, PlatformInput,
+        pointer::{PointerButton, PointerButtons, PointerEvent, PointerId, PointerInfo,
+            PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease, PointerSample},
+    };
+    use flui_testing::{HeadlessHost, HeadlessWindow};
     use flui_widgets::{ScrollMetrics, ScrollPhysics};
 
     #[derive(Debug)]
@@ -1915,10 +1921,9 @@ pub(crate) fn nested_fling_parent_boundary_policy_receives_presentation_pixel_ra
     }
 
     for density_sensitive in [false, true] {
-        let (outer, inner, vsync) = (
+        let (outer, inner) = (
             ScrollController::new(),
             ScrollController::new(),
-            Vsync::new(),
         );
         let physics: SharedScrollPhysics = if density_sensitive {
             Arc::new(HighDensityPhysics)
@@ -1929,38 +1934,56 @@ pub(crate) fn nested_fling_parent_boundary_policy_receives_presentation_pixel_ra
             .controller(outer.clone())
             .physics(physics)
             .child(flui_widgets::Column::new(vec![
-                SizedBox::new(200.0, 600.0).boxed(),
-                SizedBox::new(200.0, 200.0)
+                SizedBox::new(300.0, 600.0).boxed(),
+                SizedBox::new(300.0, 200.0)
                     .child(
-                        Scrollable::new()
-                            .controller(inner.clone())
-                            .child(SizedBox::new(200.0, 1000.0)),
+                        flui_widgets::Align::new(flui_painting::Alignment::TOP_LEFT)
+                            .child(SizedBox::new(200.0, 200.0).child(
+                                Scrollable::new()
+                                    .controller(inner.clone())
+                                    .child(SizedBox::new(300.0, 1000.0)),
+                            )),
                     )
                     .boxed(),
-                SizedBox::new(200.0, 4800.0).boxed(),
+                SizedBox::new(300.0, 4800.0).boxed(),
             ]));
-        let mut laid = crate::common::lay_out_animated(
-            VsyncScope::new(vsync.clone(), parent),
-            tight(200.0, 200.0),
-            vsync,
-        );
-        laid.pipeline_owner()
-            .with_mut(|owner| owner.set_device_pixel_ratio(2.0));
-        for _ in 0..2 {
+        let mut host = HeadlessHost::new(HeadlessWindow::new(300, 300));
+        host.set_scale_factor(host.primary_window(), 2.0);
+        host.attach(&parent).expect("mount dense nested scroll owner");
+        let _ = host.pump(Duration::ZERO);
+        assert_eq!(inner.position().max_scroll_extent(), 800.0);
+        for id in 1_u64..=2 {
             outer.jump_to(600.0);
             inner.jump_to(650.0);
-            laid.tick();
-            laid.dispatch_pointer_down(100.0, 150.0);
-            laid.dispatch_pointer_move(100.0, 120.0);
-            laid.dispatch_pointer_move(100.0, 100.0);
-            // DPR2 raises the recognition threshold. This move is delivered
-            // after acceptance rather than counting the threshold crossing.
-            laid.dispatch_pointer_move(100.0, 80.0);
-            laid.dispatch_pointer_up(100.0, 80.0);
+            let _ = host.pump(Duration::ZERO);
+            let pointer = PointerInfo::new(
+                PointerId::try_from(id).expect("nonzero contact"), PointerKind::Mouse,
+            );
+            let sample = |y: f64| {
+                PointerSample::new(
+                    EventTime::from_nanos(u64::try_from(host.clock().elapsed().as_nanos())
+                        .expect("fixture clock fits event time")),
+                    PointerPosition::try_new(flui_foundation::geometry::Point::new(100.0, y))
+                        .expect("finite authored mouse position"),
+                )
+            };
+            host.dispatch(PlatformInput::Pointer(PointerEvent::Down(PointerPress::new(
+                pointer, PointerButton::PRIMARY, PointerButtons::only(PointerButton::PRIMARY),
+                sample(150.0),
+            ))));
+            for y in [120.0, 100.0] {
+                host.clock().advance(Duration::from_millis(8));
+                host.dispatch(PlatformInput::Pointer(PointerEvent::Move(PointerMove::new(
+                    pointer, PointerButtons::only(PointerButton::PRIMARY), sample(y),
+                ))));
+            }
+            host.dispatch(PlatformInput::Pointer(PointerEvent::Up(PointerRelease::new(
+                pointer, PointerButton::PRIMARY, PointerButtons::NONE, sample(100.0),
+            ))));
             assert_eq!(inner.pixels(), 670.0, "actual child release premise");
             assert_eq!(outer.pixels(), 600.0, "parent has not consumed the drag");
             for _ in 0..15 {
-                laid.pump_for(Duration::from_millis(16));
+                let _ = host.pump(Duration::from_millis(16));
             }
             assert_eq!(inner.pixels(), 800.0, "child reaches its hard edge");
             assert!(
