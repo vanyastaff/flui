@@ -324,6 +324,12 @@ struct ScrollSequence {
     phase_less: Cell<bool>,
 }
 
+enum ScrollAdmission {
+    Active(Rc<ScrollSequence>),
+    Terminal(Option<ScrollRoute>),
+    Refused,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum RefusalPolicy {
     NativeTerminal,
@@ -1202,7 +1208,7 @@ impl GestureBinding {
     // Internal Methods
     // ========================================================================
 
-    fn prepare_scroll_sequence(&self, event: &ScrollEvent) -> Option<Rc<ScrollSequence>> {
+    fn prepare_scroll_sequence(&self, event: &ScrollEvent) -> ScrollAdmission {
         let now = self.clock.now();
         let source = ScrollSource::from(event.pointer);
         let mut sequences = self.scroll_sequences.borrow_mut();
@@ -1216,7 +1222,11 @@ impl GestureBinding {
             Some(ScrollPhase::Ended | ScrollPhase::Cancelled | ScrollPhase::MomentumEnded)
         ) {
             // Withdrawal precedes terminal observers and consumer callbacks.
-            return sequences.remove(&source);
+            return ScrollAdmission::Terminal(
+                sequences
+                    .remove(&source)
+                    .and_then(|sequence| sequence.route.get()),
+            );
         }
         if matches!(
             event.phase,
@@ -1227,12 +1237,12 @@ impl GestureBinding {
         if let Some(sequence) = sequences.get(&source) {
             sequence.last_packet.set(now);
             sequence.phase_less.set(event.phase.is_none());
-            return Some(Rc::clone(sequence));
+            return ScrollAdmission::Active(Rc::clone(sequence));
         }
         if sequences.len() >= MAX_SIMULTANEOUS_POINTERS {
             // Refuse consumption rather than publish an unlatched gesture.
             // Its fresh observers still receive the packet.
-            return None;
+            return ScrollAdmission::Refused;
         }
         let sequence = Rc::new(ScrollSequence {
             route: Cell::new(None),
@@ -1240,7 +1250,7 @@ impl GestureBinding {
             phase_less: Cell::new(event.phase.is_none()),
         });
         sequences.insert(source, Rc::clone(&sequence));
-        Some(sequence)
+        ScrollAdmission::Active(sequence)
     }
 
     fn is_current_scroll_sequence(
@@ -1634,21 +1644,28 @@ impl GestureBinding {
                 let fresh_result = hit_test_fn(position);
                 let mut first_panic = self.dispatch_ephemeral(event, &fresh_result);
                 let claim = RoutePanic::capture(|| {
-                    let claimed = sequence.as_ref().is_some_and(|sequence| {
-                        if let Some(route) = sequence.route.get() {
-                            // A gone target stays inert until the sequence ends;
-                            // it never hands this gesture to a new hit path.
-                            route.dispatch(scroll, || {})
-                        } else if self.is_current_scroll_sequence(scroll.pointer, sequence) {
-                            fresh_result.dispatch_scroll_with_claim(scroll, |route| {
-                                if self.is_current_scroll_sequence(scroll.pointer, sequence) {
-                                    sequence.route.set(Some(route));
-                                }
-                            })
-                        } else {
-                            false
+                    let claimed = match &sequence {
+                        ScrollAdmission::Terminal(Some(route)) => route.dispatch(scroll, || {}),
+                        // A final delta may be the first meaningful packet.
+                        // It is deliverable, but cannot publish a lasting lease.
+                        ScrollAdmission::Terminal(None) => fresh_result.dispatch_scroll(scroll),
+                        ScrollAdmission::Refused => false,
+                        ScrollAdmission::Active(sequence) => {
+                            if let Some(route) = sequence.route.get() {
+                                // A gone target stays inert until the sequence ends;
+                                // it never hands this gesture to a new hit path.
+                                route.dispatch(scroll, || {})
+                            } else if self.is_current_scroll_sequence(scroll.pointer, sequence) {
+                                fresh_result.dispatch_scroll_with_claim(scroll, |route| {
+                                    if self.is_current_scroll_sequence(scroll.pointer, sequence) {
+                                        sequence.route.set(Some(route));
+                                    }
+                                })
+                            } else {
+                                false
+                            }
                         }
-                    });
+                    };
                     tracing::trace!(
                         claimed,
                         scroll_targets = fresh_result.entries_with_scroll_targets().count(),
