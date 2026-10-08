@@ -266,6 +266,13 @@ fn capture_release_refuses_only_its_own_device_tail() {
                 unreachable!()
             };
             motion.pointer = motion.pointer.with_device(device);
+            if device == other {
+                *motion = flui_platform_api::pointer::PointerMove::new(
+                    motion.pointer,
+                    flui_platform_api::pointer::PointerButtons::NONE,
+                    *motion.current(),
+                );
+            }
             binding.handle_pointer_event(&movement, |_| {
                 assert_eq!(device, other, "released device tail cannot hit-test");
                 path()
