@@ -246,7 +246,7 @@ impl MacInputState {
                 NSEventPhase::Ended
             };
             return self
-                .gesture(4, phase, 1.0, 0.0, position, time, modifiers)
+                .gesture(4, phase, (1.0, 0.0), position, time, modifiers)
                 .into_iter()
                 .map(|event| PlatformInput::Pointer(PointerEvent::PanZoom(event)))
                 .collect();
@@ -261,8 +261,7 @@ impl MacInputState {
         self.gesture(
             component,
             event.phase(),
-            scale,
-            rotation,
+            (scale, rotation),
             position,
             time,
             modifiers,
@@ -276,8 +275,7 @@ impl MacInputState {
         &mut self,
         component: u8,
         phase: NSEventPhase,
-        scale: f64,
-        rotation: f64,
+        (scale, rotation): (f64, f64),
         position: PointerPosition,
         time: EventTime,
         modifiers: OwnedModifiers,
@@ -322,23 +320,23 @@ impl MacInputState {
         if gesture.components & component == 0 {
             return events;
         }
-        if scale != 1.0 || rotation != 0.0 {
-            if let Ok(transform) = PanZoomTransform::try_new(
+        if (scale != 1.0 || rotation != 0.0)
+            && let Ok(transform) = PanZoomTransform::try_new(
                 Offset::ZERO,
                 gesture.transform.scale() * scale,
                 gesture.transform.rotation() + rotation,
-            ) {
-                gesture.transform = transform;
-                events.push(
-                    PanZoomEvent::new(
-                        gesture.pointer,
-                        time,
-                        position,
-                        PanZoomPhase::Update(transform),
-                    )
-                    .with_modifiers(modifiers),
-                );
-            }
+            )
+        {
+            gesture.transform = transform;
+            events.push(
+                PanZoomEvent::new(
+                    gesture.pointer,
+                    time,
+                    position,
+                    PanZoomPhase::Update(transform),
+                )
+                .with_modifiers(modifiers),
+            );
         }
         if phase.contains(NSEventPhase::Ended) {
             gesture.components &= !component;
@@ -499,20 +497,18 @@ mod tests {
             .expect("finite");
         let time = EventTime::from_nanos(10);
         let modifiers = flui_platform_api::keyboard::Modifiers::NONE;
-        assert!(
-            state
-                .gesture(1, NSEventPhase::Changed, 1.1, 0.0, at, time, modifiers)
-                .is_empty()
+        assert_eq!(
+            state.gesture(1, NSEventPhase::Changed, (1.1, 0.0), at, time, modifiers),
+            []
         );
-        let first = state.gesture(1, NSEventPhase::Began, 1.1, 0.0, at, time, modifiers);
+        let first = state.gesture(1, NSEventPhase::Began, (1.1, 0.0), at, time, modifiers);
         assert_eq!(first.len(), 2);
         assert_eq!(first[0].phase, PanZoomPhase::Start);
         let id = first[0].pointer().id;
         let joined = state.gesture(
             2,
             NSEventPhase::Began,
-            1.0,
-            -std::f64::consts::FRAC_PI_6,
+            (1.0, -std::f64::consts::FRAC_PI_6),
             at,
             time,
             modifiers,
@@ -524,13 +520,13 @@ mod tests {
         assert_eq!(joined[0].pointer().id, id);
         assert_eq!(transform.scale(), 1.1);
         assert_eq!(transform.rotation(), -std::f64::consts::FRAC_PI_6);
-        let ended_component = state.gesture(1, NSEventPhase::Ended, 1.2, 0.0, at, time, modifiers);
+        let ended_component =
+            state.gesture(1, NSEventPhase::Ended, (1.2, 0.0), at, time, modifiers);
         assert_eq!(ended_component.len(), 1);
         let last = state.gesture(
             2,
             NSEventPhase::Ended,
-            1.0,
-            -std::f64::consts::FRAC_PI_6,
+            (1.0, -std::f64::consts::FRAC_PI_6),
             at,
             time,
             modifiers,
@@ -543,38 +539,35 @@ mod tests {
         assert_eq!(transform.rotation(), -std::f64::consts::FRAC_PI_3);
         assert_eq!(last[1].phase, PanZoomPhase::End);
         assert_eq!(last[1].pointer().id, id);
-        let next = state.gesture(1, NSEventPhase::Began, 1.0, 0.0, at, time, modifiers);
+        let next = state.gesture(1, NSEventPhase::Began, (1.0, 0.0), at, time, modifiers);
         assert_ne!(next[0].pointer().id, id);
         let cancelled = state.gesture(
             1,
             NSEventPhase::Cancelled,
-            f64::NAN,
-            0.0,
+            (f64::NAN, 0.0),
             at,
             time,
             modifiers,
         );
         assert_eq!(cancelled.len(), 1);
         assert_eq!(cancelled[0].phase, PanZoomPhase::Cancelled);
-        assert!(
-            state
-                .gesture(1, NSEventPhase::Changed, 1.1, 0.0, at, time, modifiers)
-                .is_empty()
+        assert_eq!(
+            state.gesture(1, NSEventPhase::Changed, (1.1, 0.0), at, time, modifiers),
+            []
         );
-        let outer = state.gesture(4, NSEventPhase::Began, 1.0, 0.0, at, time, modifiers);
+        let outer = state.gesture(4, NSEventPhase::Began, (1.0, 0.0), at, time, modifiers);
         assert_eq!(outer.len(), 1);
         let outer_id = outer[0].pointer().id;
-        state.gesture(1, NSEventPhase::Began, 1.1, 0.0, at, time, modifiers);
-        assert!(
-            state
-                .gesture(1, NSEventPhase::Ended, 1.0, 0.0, at, time, modifiers)
-                .is_empty()
+        state.gesture(1, NSEventPhase::Began, (1.1, 0.0), at, time, modifiers);
+        assert_eq!(
+            state.gesture(1, NSEventPhase::Ended, (1.0, 0.0), at, time, modifiers),
+            []
         );
-        let rotation = state.gesture(2, NSEventPhase::Began, 1.0, 0.1, at, time, modifiers);
+        let rotation = state.gesture(2, NSEventPhase::Began, (1.0, 0.1), at, time, modifiers);
         assert_eq!(rotation.len(), 1);
         assert_eq!(rotation[0].pointer().id, outer_id);
-        state.gesture(2, NSEventPhase::Ended, 1.0, 0.0, at, time, modifiers);
-        let end = state.gesture(4, NSEventPhase::Ended, 1.0, 0.0, at, time, modifiers);
+        state.gesture(2, NSEventPhase::Ended, (1.0, 0.0), at, time, modifiers);
+        let end = state.gesture(4, NSEventPhase::Ended, (1.0, 0.0), at, time, modifiers);
         assert_eq!(end.len(), 1);
         assert_eq!(end[0].phase, PanZoomPhase::End);
         assert_eq!(end[0].pointer().id, outer_id);
