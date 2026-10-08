@@ -22,9 +22,23 @@ The measured cached-route Move fixture without sample history performs no heap
 allocation after setup; the
 counting-allocator test `resolved_route_move_invocation_allocates_no_heap_after_setup`
 (`tests/pointer_route_hot_path.rs`) asserts it.
-Localizing coalesced or predicted histories may allocate their transformed
-sample collections; that fixture does not establish an allocation bound for
-history-bearing events.
+The same public counting-allocator matrix covers measured and predicted
+histories at 1, 4 and 16 cached targets. On the Windows x86_64 host it measured:
+
+| Cached targets | Scalar Move, global or translated | Move with both histories, global | Move with both histories, translated |
+|---|---:|---:|---:|
+| 1 | 0 | 0 | 2 |
+| 4 | 0 | 0 | 8 |
+| 16 | 0 | 0 | 32 |
+
+Setup and route resolution are excluded. Each history-bearing packet contains
+two measured historical samples and one predicted sample. The test permits
+at most two allocations per translated target, one for each nonempty owned
+localized history, while asserting every sample field, metadata and unchanged
+global readings. The previous implementation cloned both source histories
+before replacing them with localized histories; its one-target case allocated
+four times. Localization now constructs the required owned histories directly
+from the borrowed source. These counts are allocation costs, not elapsed times.
 
 ## Bounds
 
@@ -50,11 +64,11 @@ Each needs the `testing` feature, which the dev-dependency enables.
 
 | Bench | Cases |
 |---|---|
-| `velocity_tracker_bench` | `VelocityTracker::estimate_at` with 20 and 3 samples and 4 repeated queries; `add_position`; selected Ios and Impulse estimates; `OneEuroFilter2D::filter` |
+| `velocity_tracker_bench` | `VelocityTracker::estimate_at` with 20 and 3 samples and 4 repeated queries; `add_position`; selected Ios and Impulse estimates; standalone `OneEuroFilter2D::filter` |
 | `gesture_arena_bench` | `add` into an empty and a busy (4-member) arena; `sweep` of one member; add + accept with a competitor; add + close + sweep |
 | `tap_detector_bench` | live tap sequences without callbacks and with primary/secondary callbacks; fresh fixtures keep setup and retirement outside measured invocation; `add_pointer` |
-| `pointer_resampler_bench` | `add_event` at 60 Hz and 240 Hz; `sample` draining 60 events; `add_event` at the 100-event cap |
-| `pointer_route_bench` | `InteractionLane::resolve_pointer_route`, cached-route Move invocation, and direct `HitTestResult::dispatch`, each for 1, 4 and 16 targets |
+| `pointer_resampler_bench` | owned source-time admission; complete 60/240 Hz source traces sampled at 60 Hz with Up/Cancel flush; measured plus interpolated sample delivery; separate Up/Cancel tail flush; overflow with scalar and saturated history |
+| `pointer_route_bench` | `InteractionLane::resolve_pointer_route` plus route release, scalar cached-route Move invocation, and direct scalar Down `HitTestResult::dispatch`, each for 1, 4 and 16 targets |
 
 ```bash
 cargo bench -p flui-interaction                                 # all five
@@ -63,6 +77,18 @@ cargo bench -p flui-interaction --bench gesture_arena_bench     # one
 
 The per-bench time targets in each file's module docs are goals; nothing
 checks them.
+
+Resampler traces independently witness a 1000 px/s source trajectory,
+monotonic timestamps, valid timestamp zero, delivered readings and exactly one
+terminal. Setup and fixture retirement stay outside the isolated sample,
+stop and overflow timings. A frame-trace timing includes admission, sampling,
+callback consumption and terminal flush for the entire one-second workload;
+it is not a per-event number. The overflow fixture explicitly checks bounded
+retained history rather than claiming lossless delivery beyond its cap.
+
+The route timing bench uses scalar events without sample history. The
+history-bearing localization allocation matrix above is a separate public
+test, so scalar route timings do not price that workload.
 
 For an API or ownership change, compare saved baselines on the same host and
 toolchain. Keep the fixture lifetime and callback witnesses identical:
@@ -81,55 +107,32 @@ against static dispatch on the new implementation. Weak-member resolution
 must keep a strong fixture owner alive; measuring dead weak references would
 exercise withdrawal instead of arbitration.
 
-## Recognizer ownership measurements
+## Timing measurement scope
 
-Measured on 2026-10-07, on the same Windows x86_64 MSVC host with Rust 1.99.0,
-Criterion's optimized bench profile, six build jobs, 20 samples, one second of
-warmup and two seconds of measurement. The live-contact baseline was saved at
-`6f60614b8`; measurements after the recognizer migration use `6dd428949`.
-These measurements precede the owned pointer-wire migration and measure the
-recognizer ownership change only. The existing benchmark names and timed loops
-are preserved. Tap fixture setup,
-cancellation and destruction are outside the measured interval; callback
-witnesses assert that the sequence actually completes.
+The earlier recognizer-ownership timings used the pointer representation from
+before the owned input migration. They are not measurements of these final
+fixtures and are omitted here. No elapsed-time or portable speedup claim is
+made for the current owned input path until the complete fixtures are measured.
 
-The table reports Criterion's slope point estimates, in nanoseconds:
-
-| Existing fixture | Before | After |
-|---|---:|---:|
-| Tap, no callbacks | 982.14 | 377.55 |
-| Tap, primary callbacks | 628.25 | 347.41 |
-| Tap, secondary callbacks | 650.77 | 361.67 |
-| Tap admission | 266.78 | 235.46 |
-| Arena add into empty arena, including prior sweep | 231.74 | 79.34 |
-| Arena add into four-member arena, including rejection | 179.32 | 46.33 |
-| Arena add and single-member sweep | 236.65 | 73.01 |
-| Arena construction, two admissions and eager conflict | 4163.90 | 347.69 |
-| Arena construction, admission, close and sweep | 985.37 | 320.79 |
-
-Dynamic tap delivery through `RecognizerSet` measured 363.71 ns without
-callbacks, 352.80 ns with primary callbacks and 395.69 ns with secondary
-callbacks. These new rows have no historical baseline: the old recognizer
-trait was not dyn-compatible. Both static and dynamic fixtures deliver the
-same three events and assert the same callback and settlement witnesses.
-
-Isolated `resolve/weak` measured 93.91 ns (95% slope interval 88.80–100.90 ns).
-Its two strong fixture owners and closed arena are prepared outside timing;
-the witness asserts one acceptance, one rejection and an empty arena. The
-older eager-conflict row includes construction and admission, so its timing
-cannot serve as an isolated strong-resolution baseline. No isolated
-strong-resolution measurement was saved.
-
-Reproduce the existing-row comparison with the saved `before` data:
+Run final timings sequentially on the same host and pinned toolchain, with
+six build jobs and no concurrent benchmark or gate. Retain Criterion's point
+estimate and confidence interval, source revision, host and fixture identity:
 
 ```bash
-cargo bench -p flui-interaction --bench tap_detector_bench -- 'handle_event/static|add_pointer' --baseline before --sample-size 20 --warm-up-time 1 --measurement-time 2
-cargo bench -p flui-interaction --bench gesture_arena_bench -- GestureArena --baseline before --sample-size 20 --warm-up-time 1 --measurement-time 2
+cargo bench --locked -p flui-interaction --bench tap_detector_bench -- --save-baseline owned-input --sample-size 20 --warm-up-time 1 --measurement-time 2
+cargo bench --locked -p flui-interaction --bench gesture_arena_bench -- --save-baseline owned-input --sample-size 20 --warm-up-time 1 --measurement-time 2
+cargo bench --locked -p flui-interaction --bench velocity_tracker_bench -- --save-baseline owned-input --sample-size 20 --warm-up-time 1 --measurement-time 2
+cargo bench --locked -p flui-interaction --bench pointer_resampler_bench -- --save-baseline owned-input --sample-size 20 --warm-up-time 1 --measurement-time 2
+cargo bench --locked -p flui-interaction --bench pointer_route_bench -- --save-baseline owned-input --sample-size 20 --warm-up-time 1 --measurement-time 2
 ```
 
-Run `handle_event/dyn` and `resolve/weak` separately with `--save-baseline after`.
-The host was shared, confidence intervals vary by row, and these observations
-do not establish a portable percentage speedup or a CI performance threshold.
+Tap static and dynamic delivery complete the same live three-event sequence.
+Strong fixture owners survive weak arena arbitration. The isolated
+`resolve/weak` case prepares its two owners and closed arena outside timing and
+witnesses one acceptance, one rejection and settlement; construction-inclusive
+arena rows are different workloads. Compare saved baselines only when their
+fixture semantics and lifetime boundaries agree. A host-shared observation
+does not establish a CI threshold or a portable percentage speedup.
 
 ## See also
 
