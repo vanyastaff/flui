@@ -1367,7 +1367,7 @@ pub(crate) fn wheel_policy_resolves_authored_axes_and_provider_replacement() {
     );
     dispatch_wheel_distance(&laid, ScrollUnit::Detents, 1.0, 0.0, Modifiers::NONE);
     assert!(
-        (scroll.pixels() - 42.94967295).abs() < 1e-10,
+        (scroll.pixels() - 42.949_672_95).abs() < 1e-10,
         "horizontal UINT_MAX remains a character count, not a page sentinel"
     );
 }

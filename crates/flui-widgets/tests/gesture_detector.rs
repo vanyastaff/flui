@@ -772,10 +772,10 @@ pub(crate) fn authored_settings_retire_tap_candidates_and_deadlines() {
         &[
             ("tap", || authored_contact_owner_replacement("tap")),
             ("long press", || {
-                authored_contact_owner_replacement("long press")
+                authored_contact_owner_replacement("long press");
             }),
             ("double tap", || {
-                authored_contact_owner_replacement("double tap")
+                authored_contact_owner_replacement("double tap");
             }),
         ],
     );
@@ -991,7 +991,7 @@ pub(crate) fn mounted_native_begin_retains_estimator_before_first_claim() {
                 EventTime::from_nanos((session * 100 + millis) * 1_000_000),
                 PointerPosition::try_new(Point::new(50.0, 50.0)).expect("finite position"),
                 phase,
-            )))
+            )));
         };
         send(0, PanZoomPhase::Start);
         assert_eq!(
@@ -1102,7 +1102,7 @@ pub(crate) fn mounted_native_begin_refused_by_touch_cannot_claim_after_touch_ter
             EventTime::from_nanos(millis * 1_000_000),
             PointerPosition::try_new(Point::new(50.0, 50.0)).expect("finite position"),
             phase,
-        )))
+        )));
     };
     let update = || {
         PanZoomPhase::Update(
