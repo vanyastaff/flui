@@ -295,8 +295,8 @@ pub type ViewportBuilder = Rc<dyn Fn(ScrollPosition) -> BoxedView>;
 pub struct Scrollable {
     /// The shared position + notification hub.
     controller: ScrollController,
-    /// The boundary / fling behaviour.
-    physics: SharedScrollPhysics,
+    /// An authored boundary / fling policy; `None` uses the owner's default.
+    physics: Option<SharedScrollPhysics>,
     /// The axis along which the child scrolls.
     scroll_direction: Axis,
     /// Overrides the resolved [`AxisDirection`] used to orient gesture
@@ -335,7 +335,7 @@ impl Default for Scrollable {
     fn default() -> Self {
         Self {
             controller: ScrollController::new(),
-            physics: Arc::new(ClampingScrollPhysics::new()),
+            physics: None,
             scroll_direction: Axis::Vertical,
             axis_direction: None,
             child: Child::empty(),
@@ -365,7 +365,7 @@ impl Scrollable {
     /// [`ClampingScrollPhysics`]).
     #[must_use]
     pub fn physics(mut self, physics: SharedScrollPhysics) -> Self {
-        self.physics = physics;
+        self.physics = Some(physics);
         self
     }
 
@@ -440,6 +440,8 @@ struct WheelMotion {
 /// are never clamped. A value listener on the controller pushes the live pixel
 /// position into the [`ScrollController`] each tick.
 pub struct ScrollableState {
+    /// Stable policy identity across ordinary default-config rebuilds.
+    default_physics: SharedScrollPhysics,
     /// The scroll controller from the current view configuration. Kept in
     /// state so the fling listener (installed by
     /// [`install_fling_listener`](ScrollableState::install_fling_listener))
@@ -535,6 +537,7 @@ impl StatefulView for Scrollable {
             AnimationController::unbounded_without_ticker(Duration::from_millis(1));
 
         ScrollableState {
+            default_physics: Arc::new(ClampingScrollPhysics::new()),
             scroll_controller: self.controller.clone(),
             stop_hook: None,
             fling_controller,
@@ -555,6 +558,7 @@ impl ScrollableState {
     fn endpoint(
         &self,
         view: &Scrollable,
+        physics: &SharedScrollPhysics,
         axis_direction: AxisDirection,
         ctx: &dyn BuildContext,
     ) -> Arc<FlingEndpoint> {
@@ -570,7 +574,7 @@ impl ScrollableState {
                 .controller
                 .position()
                 .ptr_eq(&view.controller.position())
-                && Arc::ptr_eq(&endpoint.physics, &view.physics)
+                && Arc::ptr_eq(&endpoint.physics, physics)
                 && endpoint.axis == view.scroll_direction
                 && endpoint.reversed == axis_direction.is_reversed()
                 && same_parent
@@ -582,7 +586,7 @@ impl ScrollableState {
         let endpoint = Arc::new(FlingEndpoint {
             controller: view.controller.clone(),
             fling: self.fling_controller.clone(),
-            physics: view.physics.clone(),
+            physics: physics.clone(),
             axis: view.scroll_direction,
             reversed: axis_direction.is_reversed(),
             parent,
@@ -763,7 +767,11 @@ impl ViewState<Scrollable> for ScrollableState {
     fn build(&self, view: &Scrollable, ctx: &dyn BuildContext) -> impl IntoView {
         let scroll_controller = view.controller.clone();
         let a11y_controller = view.controller.clone();
-        let physics = view.physics.clone();
+        let physics = view
+            .physics
+            .as_ref()
+            .unwrap_or(&self.default_physics)
+            .clone();
         let scroll_direction = view.scroll_direction;
         // No explicit override: resolve the same way the `.child()` fast
         // path's internally-composed `SingleChildScrollView` resolves its
@@ -774,7 +782,7 @@ impl ViewState<Scrollable> for ScrollableState {
         let axis_direction = view.axis_direction.unwrap_or_else(|| {
             axis_direction_from_axis_reverse_and_directionality(ctx, scroll_direction, false)
         });
-        let endpoint = self.endpoint(view, axis_direction, ctx);
+        let endpoint = self.endpoint(view, &physics, axis_direction, ctx);
         let child = view.child.clone();
         let viewport_builder = view.viewport_builder.clone();
         let fling_controller = self.fling_controller.clone();
