@@ -158,6 +158,14 @@ pub fn replacing_and_unmounting_the_field_withdraws_its_node_subscription() {
         .render_property(decorated_box, "decoration")
         .expect("resolved unfocused decoration");
     assert!(unfocused.contains(&format!("{:?}", colors.on_surface_variant)));
+    // A retained external node may be reused elsewhere in the presentation.
+    // Detached nodes suppress policy notifications, so reattach it before
+    // checking that its former field subscription has been withdrawn.
+    let reused_previous = laid
+        .focus_manager()
+        .root_scope()
+        .attach_node(&previous)
+        .expect("reuse the outgoing field node");
     assert_eq!(
         laid.with_build_owner_mut(|owner| owner.pending_external_builds()),
         0
@@ -187,6 +195,11 @@ pub fn replacing_and_unmounting_the_field_withdraws_its_node_subscription() {
 
     laid.pump_widget(Theme::new(theme, SizedBox::new(300.0, 100.0)));
     assert!(laid.try_find_by_render_type("RenderEditable").is_none());
+    let reused_replacement = laid
+        .focus_manager()
+        .root_scope()
+        .attach_node(&replacement)
+        .expect("reuse the unmounted field node");
     let painted = laid.painted_frame_count();
     assert_eq!(
         laid.with_build_owner_mut(|owner| owner.pending_external_builds()),
@@ -206,6 +219,8 @@ pub fn replacing_and_unmounting_the_field_withdraws_its_node_subscription() {
         "retained nodes must not schedule a disposed field"
     );
     assert!(laid.try_find_by_render_type("RenderEditable").is_none());
+    drop(reused_replacement);
+    drop(reused_previous);
 }
 
 // ============================================================================
