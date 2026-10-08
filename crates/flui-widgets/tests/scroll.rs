@@ -76,15 +76,18 @@ fn terminal_motion_uses_the_admitted_fling_profile(refresh: bool) {
         vsync,
     );
     controller.set_pixels(500.0);
-    for attempt in 0..3 {
+    for attempt in 0..4 {
         laid.dispatch_pointer_down(150.0, 250.0);
-        for y in [230.0, 210.0, 190.0, 170.0, 150.0] {
+        let step = if attempt == 3 { 200.0 } else { 20.0 };
+        let end = 250.0 - 5.0 * step;
+        for sample in 1..=5 {
+            let y = 250.0 - f64::from(sample) * step;
             laid.dispatch_pointer_move_after(150.0, y, Duration::from_millis(10));
         }
         if attempt == 0 {
             source.replace(profile(5000.0, 5000.0));
         }
-        laid.dispatch_pointer_up(150.0, 150.0);
+        laid.dispatch_pointer_up(150.0, end);
         let released = controller.pixels();
         // Anchor the controller's first tick, then observe actual pixels.
         laid.pump_for(Duration::from_millis(16));
@@ -96,12 +99,20 @@ fn terminal_motion_uses_the_admitted_fling_profile(refresh: bool) {
                 "{refresh}: next contact below its admitted minimum does not coast"
             );
             source.replace(profile(50.0, 600.0));
+        } else if attempt == 3 {
+            assert!(
+                coast > 200.0 && coast < 250.0,
+                "{refresh}: admitted max15000 determines the coasting distance, coast {coast}"
+            );
         } else {
             let bound = if attempt == 0 { 10.0 } else { 20.0 };
             assert!(
                 coast > 0.0 && coast < bound,
                 "{refresh}: attempt {attempt} uses its captured maximum, coast {coast}"
             );
+            if attempt == 2 {
+                source.replace(profile(50.0, 15000.0));
+            }
         }
     }
 }

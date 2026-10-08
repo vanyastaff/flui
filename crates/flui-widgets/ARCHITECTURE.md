@@ -2236,6 +2236,8 @@ application callbacks.
 `terminal_scroll_motion_uses_the_admitted_fling_profile` and
 `terminal_refresh_motion_uses_the_admitted_fling_profile` observe bounded coast,
 below-minimum rest and fresh-contact recovery after a live profile change.
+They also admit a maximum above the framework baseline and observe the larger
+coasting distance; no second default ceiling constrains the resolved impulse.
 `dismissal_release_uses_its_captured_fling_profile` and
 `vertical_dismissal_release_uses_its_captured_fling_profile` preserve dismissal
 thresholds and the active contact's impulse on both axes.
