@@ -78,7 +78,7 @@ pub struct GestureSettingsProvider {
 
 #[derive(Debug, Clone)]
 enum SettingsProfile {
-    Fixed(GestureSettings),
+    Fixed(Rc<GestureSettings>),
     Live(Rc<RefCell<GestureSettings>>),
 }
 
@@ -97,7 +97,7 @@ impl GestureSettingsProvider {
     #[must_use]
     pub fn snapshot(&self) -> GestureSettings {
         match &self.profile {
-            SettingsProfile::Fixed(settings) => settings.clone(),
+            SettingsProfile::Fixed(settings) => settings.as_ref().clone(),
             SettingsProfile::Live(settings) => settings.borrow().clone(),
         }
     }
@@ -106,7 +106,7 @@ impl GestureSettingsProvider {
 impl From<GestureSettings> for GestureSettingsProvider {
     fn from(settings: GestureSettings) -> Self {
         Self {
-            profile: SettingsProfile::Fixed(settings),
+            profile: SettingsProfile::Fixed(Rc::new(settings)),
         }
     }
 }

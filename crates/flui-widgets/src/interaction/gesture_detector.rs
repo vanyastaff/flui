@@ -10,7 +10,8 @@ use std::{
 
 use flui_interaction::arena::GestureCompetition;
 use flui_interaction::recognizers::scale::{
-    ScaleEndDetails, ScaleGestureRecognizer, ScaleStartDetails, ScaleStartMode, ScaleUpdateDetails,
+    PanZoomDisposition, ScaleEndDetails, ScaleGestureRecognizer, ScaleStartDetails, ScaleStartMode,
+    ScaleUpdateDetails,
 };
 use flui_interaction::routing::{EventPropagation, PanZoomDispatch};
 use flui_interaction::{
@@ -19,6 +20,7 @@ use flui_interaction::{
     GestureRecognizer, LongPressGestureRecognizer, TapGestureRecognizer, cancel_all,
 };
 use flui_interaction::{PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerInfo};
+use flui_platform_api::EventTime;
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_view::prelude::*;
 
@@ -588,8 +590,22 @@ impl ScaleCallbacks {
 
 #[derive(Default)]
 struct NativeScaleRoute {
-    pending: Option<(PanZoomEvent, PanZoomEvent)>,
+    pending: Option<PendingNativeScale>,
     active: Option<PointerInfo>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NativeBeginAdmission {
+    Staging,
+    Admitted,
+    Rejected,
+}
+
+#[derive(Clone, Copy)]
+struct PendingNativeScale {
+    source: PointerInfo,
+    time: EventTime,
+    admission: NativeBeginAdmission,
 }
 
 fn same_native_source(left: &PointerInfo, right: &PointerInfo) -> bool {
@@ -614,13 +630,31 @@ fn claim_native_scale(
                     return EventPropagation::Continue;
                 }
                 let retired = route.active.take().is_some();
-                route.pending = Some((*dispatch.local, *dispatch.global));
+                route.pending = Some(PendingNativeScale {
+                    source: *event.pointer(),
+                    time: event.time,
+                    admission: NativeBeginAdmission::Staging,
+                });
                 retired
             };
+            // Start captures the dormant actor's profile immediately. Claiming
+            // and recognized callbacks still wait for an admitted real Update.
+            let disposition = recognizer.handle_pan_zoom(dispatch);
+            {
+                let mut route = route.borrow_mut();
+                if let Some(pending) = route.pending.as_mut()
+                    && pending.admission == NativeBeginAdmission::Staging
+                    && same_native_source(&pending.source, event.pointer())
+                    && pending.time == event.time
+                {
+                    pending.admission = if disposition == PanZoomDisposition::Admitted {
+                        NativeBeginAdmission::Admitted
+                    } else {
+                        NativeBeginAdmission::Rejected
+                    };
+                }
+            }
             if retired {
-                // Publish the replacement route before cancelling the previous
-                // actor generation; its callback may deliver the new Update.
-                recognizer.handle_pan_zoom(dispatch);
                 EventPropagation::Stop
             } else {
                 EventPropagation::Continue
@@ -633,6 +667,12 @@ fn claim_native_scale(
                     return EventPropagation::Continue;
                 }
             } else {
+                if route.borrow().pending.is_some_and(|pending| {
+                    same_native_source(&pending.source, event.pointer())
+                        && pending.admission == NativeBeginAdmission::Rejected
+                }) {
+                    return EventPropagation::Continue;
+                }
                 if !gates.scale_active() || transform == PanZoomTransform::IDENTITY {
                     return EventPropagation::Continue;
                 }
@@ -650,27 +690,19 @@ fn claim_native_scale(
                 if admission.is_some_and(|admit| !admit(event)) {
                     return EventPropagation::Continue;
                 }
-                let pending = {
+                {
                     let mut route = route.borrow_mut();
-                    let pending = route.pending.filter(|(local, _)| {
-                        same_native_source(local.pointer(), event.pointer())
-                            && local.time <= event.time
-                    });
-                    if pending.is_some() {
+                    if route.pending.is_some_and(|pending| {
+                        same_native_source(&pending.source, event.pointer())
+                            && pending.time <= event.time
+                    }) {
                         route.pending = None;
                         route.active = Some(*event.pointer());
                     }
-                    pending
-                };
-                if let Some((local, global)) = pending {
-                    recognizer.handle_pan_zoom(PanZoomDispatch {
-                        local: &local,
-                        global: &global,
-                    });
                 }
             }
             let handled = recognizer.handle_pan_zoom(dispatch);
-            if handled || active.is_some() {
+            if handled == PanZoomDisposition::Handled || active.is_some() {
                 EventPropagation::Stop
             } else {
                 let mut route = route.borrow_mut();
@@ -684,24 +716,28 @@ fn claim_native_scale(
             }
         }
         PanZoomPhase::End | PanZoomPhase::Cancelled => {
-            let active = {
+            let (active, staged) = {
                 let mut route = route.borrow_mut();
-                if route
-                    .pending
-                    .is_some_and(|(local, _)| same_native_source(local.pointer(), event.pointer()))
+                let staged = if let Some(pending) = route.pending
+                    && same_native_source(&pending.source, event.pointer())
                 {
                     route.pending = None;
-                }
+                    pending.admission != NativeBeginAdmission::Rejected
+                } else {
+                    false
+                };
                 let active = route
                     .active
                     .is_some_and(|active| same_native_source(&active, event.pointer()));
                 if active {
                     route.active = None;
                 }
-                active
+                (active, staged)
             };
+            if active || staged {
+                let _ = recognizer.handle_pan_zoom(dispatch);
+            }
             if active {
-                recognizer.handle_pan_zoom(dispatch);
                 EventPropagation::Stop
             } else {
                 EventPropagation::Continue
