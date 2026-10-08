@@ -168,6 +168,9 @@ fn raise_time(event: &mut PointerEvent, floor: u64) -> u64 {
         PointerEvent::Down(button) => &mut button.sample.time,
         PointerEvent::Up(button) => &mut button.sample.time,
         PointerEvent::Move(update) => {
+            if update.current().time.as_nanos() >= floor {
+                return update.current().time.as_nanos();
+            }
             let mut sample = *update.current();
             sample.time = EventTime::from_nanos(sample.time.as_nanos().max(floor));
             *update = measured_move(update, sample);
