@@ -210,6 +210,7 @@ fn pointer_and_gesture_recognition() {
             ("listener::listener_raw_observer_panic_still_delivers_the_recognizer_event", crate::listener::listener_raw_observer_panic_still_delivers_the_recognizer_event),
             ("listener::custom_recognizer_competes_through_a_listener", crate::listener::custom_recognizer_competes_through_a_listener),
             ("draggable_events::unmounting_a_target_releases_its_slot", crate::draggable_events::unmounting_a_target_releases_its_slot),
+            ("draggable_events::draggable_reads_admission_profiles_and_retires_authored_owners", crate::draggable_events::draggable_reads_admission_profiles_and_retires_authored_owners),
             ("back_gesture::release_matrix_fling_and_slow_release", crate::back_gesture::release_matrix_fling_and_slow_release),
             ("page_route::back_gesture_edge_drag_normalizes_against_the_routes_real_width_not_the_hit_strip", crate::page_route::back_gesture_edge_drag_normalizes_against_the_routes_real_width_not_the_hit_strip),
         ],
@@ -415,6 +416,9 @@ fn navigator_and_overlay() {
         "navigator_and_overlay",
         &[
             ("back_gesture::cancelling_a_back_swipe_past_halfway_keeps_the_route", crate::back_gesture::cancelling_a_back_swipe_past_halfway_keeps_the_route as fn()),
+            ("back_gesture::mounted_back_swipe_reads_retained_admission_settings", crate::back_gesture::mounted_back_swipe_reads_retained_admission_settings),
+            ("back_gesture::replacing_authored_back_swipe_policy_cancels_the_outgoing_contact", crate::back_gesture::replacing_authored_back_swipe_policy_cancels_the_outgoing_contact),
+            ("back_gesture::mounted_back_swipe_settle_uses_the_admitted_fling_bound", crate::back_gesture::mounted_back_swipe_settle_uses_the_admitted_fling_bound),
             ("navigator::local_history::an_entry_pops_before_the_route_and_observers_stay_silent", crate::navigator::local_history::an_entry_pops_before_the_route_and_observers_stay_silent as fn()),
             ("navigator::navigator_pop_removes_top_route_and_completes_result", crate::navigator::navigator_pop_removes_top_route_and_completes_result),
             ("navigator::navigator_push_builds_new_route_and_rearranges_overlay", crate::navigator::navigator_push_builds_new_route_and_rearranges_overlay),

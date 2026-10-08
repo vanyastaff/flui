@@ -18,6 +18,7 @@ mod meta_data;
 mod mouse_region;
 mod offstage;
 mod raw_button;
+pub(crate) mod recognizer_attachment;
 mod shortcuts;
 mod transformation_controller;
 mod visibility;

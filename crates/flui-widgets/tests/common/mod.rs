@@ -7,6 +7,9 @@
 
 pub use flui_testing::widgets::*;
 
+mod gesture_settings;
+pub(crate) use gesture_settings::SettingsScope;
+
 #[allow(dead_code)]
 pub mod cases;
 #[allow(dead_code)]

@@ -4,7 +4,7 @@
 use std::{
     cell::{Cell, RefCell},
     collections::VecDeque,
-    rc::{Rc, Weak},
+    rc::Rc,
     sync::{Arc, Mutex},
 };
 
@@ -22,6 +22,7 @@ use flui_interaction::{PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerInfo
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_view::prelude::*;
 
+use super::recognizer_attachment::RecognizerAttachment;
 use crate::support::{event_callback, value_callback};
 use crate::{GestureArenaScope, Listener, Semantics};
 
@@ -760,44 +761,6 @@ struct RecognizerConfiguration {
     writer: WriterSource,
 }
 
-// The mounted Listener retains this stable weak attachment while a view
-// policy replaces its recognizer. Never hold the target borrow across dispatch.
-struct RecognizerAttachment<R> {
-    target: RefCell<Weak<R>>,
-}
-impl<R> Default for RecognizerAttachment<R> {
-    fn default() -> Self {
-        Self {
-            target: RefCell::new(Weak::new()),
-        }
-    }
-}
-impl<R: GestureRecognizer> flui_interaction::GestureArenaMember for RecognizerAttachment<R> {
-    // Attachments never join an arena; their targets own exact contact members.
-    fn accept_gesture(&self, _: flui_interaction::PointerId) {}
-    fn reject_gesture(&self, _: flui_interaction::PointerId) {}
-}
-impl<R: GestureRecognizer> GestureRecognizer for RecognizerAttachment<R> {
-    fn add_pointer(&self, dispatch: flui_interaction::PointerDispatch<'_>) {
-        let target = self.target.borrow().upgrade();
-        if let Some(target) = target {
-            target.add_pointer(dispatch);
-        }
-    }
-    fn handle_event(&self, dispatch: flui_interaction::PointerDispatch<'_>) {
-        let target = self.target.borrow().upgrade();
-        if let Some(target) = target {
-            target.handle_event(dispatch);
-        }
-    }
-    fn cancel(&self) -> flui_interaction::CancelOutcome {
-        let target = self.target.borrow().upgrade();
-        target.map_or(flui_interaction::CancelOutcome::Idle, |target| {
-            target.cancel()
-        })
-    }
-}
-
 /// Persistent gesture state owns recognizers and weak listener attachments.
 /// Policy replacement commits new targets before cancelling outgoing drags.
 pub struct GestureDetectorState {
@@ -1088,15 +1051,15 @@ impl ViewState<GestureDetector> for GestureDetectorState {
             self.exclusive_drags = new_view.exclusive_drags;
             let old_drag = std::mem::replace(&mut recognizers.drag, drag);
             let old_horizontal = std::mem::replace(&mut recognizers.horizontal_drag, horizontal);
-            *self.drag_attachment.target.borrow_mut() = Rc::downgrade(&recognizers.drag);
-            *self.horizontal_drag_attachment.target.borrow_mut() =
-                Rc::downgrade(&recognizers.horizontal_drag);
+            self.drag_attachment.attach(&recognizers.drag);
+            self.horizontal_drag_attachment
+                .attach(&recognizers.horizontal_drag);
             (old_drag, old_horizontal)
         });
         let outgoing_scale = incoming_scale.map(|scale| {
             self.scale_start_mode = new_view.scale_start_mode;
             let old = std::mem::replace(&mut recognizers.scale, scale);
-            *self.scale_attachment.target.borrow_mut() = Rc::downgrade(&recognizers.scale);
+            self.scale_attachment.attach(&recognizers.scale);
             *self.native_scale_route.borrow_mut() = NativeScaleRoute::default();
             old
         });
@@ -1228,13 +1191,13 @@ fn assert_no_pan_horizontal_drag_conflict(view: &GestureDetector) {
 
 impl GestureDetectorState {
     fn attach_recognizers(&self, recognizers: &Recognizers) {
-        *self.tap_attachment.target.borrow_mut() = Rc::downgrade(&recognizers.tap);
-        *self.long_press_attachment.target.borrow_mut() = Rc::downgrade(&recognizers.long_press);
-        *self.double_tap_attachment.target.borrow_mut() = Rc::downgrade(&recognizers.double_tap);
-        *self.drag_attachment.target.borrow_mut() = Rc::downgrade(&recognizers.drag);
-        *self.horizontal_drag_attachment.target.borrow_mut() =
-            Rc::downgrade(&recognizers.horizontal_drag);
-        *self.scale_attachment.target.borrow_mut() = Rc::downgrade(&recognizers.scale);
+        self.tap_attachment.attach(&recognizers.tap);
+        self.long_press_attachment.attach(&recognizers.long_press);
+        self.double_tap_attachment.attach(&recognizers.double_tap);
+        self.drag_attachment.attach(&recognizers.drag);
+        self.horizontal_drag_attachment
+            .attach(&recognizers.horizontal_drag);
+        self.scale_attachment.attach(&recognizers.scale);
     }
 
     fn make_recognizers(&self) -> Recognizers {
@@ -1524,7 +1487,7 @@ impl GestureDetectorState {
                     let Some(attachment) = attachment.upgrade() else {
                         return EventPropagation::Continue;
                     };
-                    let recognizer = attachment.target.borrow().upgrade();
+                    let recognizer = attachment.owner();
                     let Some(recognizer) = recognizer else {
                         return EventPropagation::Continue;
                     };
