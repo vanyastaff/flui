@@ -270,6 +270,10 @@ fn scroll_physics_and_activity() {
     run_cases(
         "scroll_physics_and_activity",
         &[
+            ("scroll::nested_scroll_sequence_keeps_its_first_consumptive_target", crate::scroll::nested_scroll_sequence_keeps_its_first_consumptive_target as fn()),
+            ("scroll::scroll_latch_survives_focal_motion_and_releases_on_cancel", crate::scroll::scroll_latch_survives_focal_motion_and_releases_on_cancel),
+            ("scroll::phase_less_scroll_latch_expires_on_owner_clock_inactivity", crate::scroll::phase_less_scroll_latch_expires_on_owner_clock_inactivity),
+            ("scroll::scroll_latches_are_source_local_and_device_removal_releases", crate::scroll::scroll_latches_are_source_local_and_device_removal_releases),
             ("scroll::a_remaining_touch_continues_scroll_without_an_intermediate_fling", crate::scroll::a_remaining_touch_continues_scroll_without_an_intermediate_fling as fn()),
             ("scroll::notched_wheel_accumulates_distance_and_eases_out_in_150ms", crate::scroll::notched_wheel_accumulates_distance_and_eases_out_in_150ms),
             ("scroll::precise_and_unknown_wheels_interrupt_synthetic_motion_once", crate::scroll::precise_and_unknown_wheels_interrupt_synthetic_motion_once),
