@@ -176,7 +176,7 @@ fn resampling_sibling_case(fail: bool, compete: bool) {
             }
         }));
     let mut sink = ScriptedSink::always_presents().with_size(200, 200);
-    realm.pump(&mut clock, &mut sink);
+    let _ = realm.pump(&mut clock, &mut sink);
     clock.advance(Duration::from_millis(1_000));
     let pointer = PointerInfo::new(
         PointerId::try_from(1_u64).expect("contact"),
@@ -235,7 +235,7 @@ fn resampling_sibling_case(fail: bool, compete: bool) {
             Some("first presentation sample")
         );
     } else {
-        result.expect("healthy samples");
+        let _ = result.expect("healthy samples");
     }
     assert_eq!(
         &*b_seen.borrow(),
@@ -254,7 +254,7 @@ fn resampling_sibling_case(fail: bool, compete: bool) {
     );
     armed.set(false);
     clock.advance(Duration::from_millis(38));
-    realm.pump(&mut clock, &mut sink);
+    let _ = realm.pump(&mut clock, &mut sink);
     assert_eq!(
         a_seen.borrow().last(),
         Some(&110.0),
