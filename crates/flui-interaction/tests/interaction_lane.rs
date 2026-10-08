@@ -825,6 +825,10 @@ fn binding_input_contract_matrix() {
         ("native_claim_reentry", native_claim_reentry_keeps_new_lease),
         ("native_focus_loss", native_focus_loss_releases_lease),
         (
+            "native_repeated_start_owner",
+            native_repeated_start_keeps_selected_owner,
+        ),
+        (
             "scroll_batch_reentry",
             scroll_owner_batch_preserves_reentrant_admission,
         ),
@@ -1826,6 +1830,7 @@ enum ScrollLeaseCase {
     FocusLoss,
     KindMetadata,
     RoleMetadata,
+    RepeatedStart,
 }
 
 fn scroll_selected_failure_keeps_lease() {
@@ -2154,6 +2159,10 @@ fn native_focus_loss_releases_lease() {
     assert_signal_lease(ScrollLeaseCase::FocusLoss, true);
 }
 
+fn native_repeated_start_keeps_selected_owner() {
+    assert_signal_lease(ScrollLeaseCase::RepeatedStart, true);
+}
+
 fn assert_signal_lease(case: ScrollLeaseCase, native: bool) {
     use flui_foundation::geometry::Offset;
     use flui_interaction::events::{PointerEvent, make_scroll_event};
@@ -2395,6 +2404,27 @@ fn assert_signal_lease(case: ScrollLeaseCase, native: bool) {
                     "tool and role metadata do not replace source identity"
                 );
                 assert_eq!(fresh_calls.get(), 0, "metadata update cannot steal a lease");
+            }
+            ScrollLeaseCase::RepeatedStart => {
+                binding.handle_pointer_event(&packet(ScrollPhase::Began), |_| fresh_path.clone());
+                binding.handle_pointer_event(&packet(ScrollPhase::Changed), |_| fresh_path.clone());
+                assert_eq!(
+                    selected_calls.get(),
+                    3,
+                    "replacement cumulative session stays with its admitted consumer"
+                );
+                assert_eq!(
+                    fresh_calls.get(),
+                    0,
+                    "repeated Start cannot transfer ownership mid-stream"
+                );
+                binding.handle_pointer_event(&packet(ScrollPhase::Ended), |_| fresh_path.clone());
+                binding.handle_pointer_event(&packet(ScrollPhase::Began), |_| fresh_path.clone());
+                assert_eq!(
+                    fresh_calls.get(),
+                    1,
+                    "fresh source after terminal can choose a new consumer"
+                );
             }
         }
     });
