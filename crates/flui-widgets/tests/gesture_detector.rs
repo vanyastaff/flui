@@ -20,7 +20,7 @@ pub(crate) fn exclusive_drag_callbacks_have_one_arena_winner() {
         Rc::clone(&calls),
         Rc::clone(&calls),
     );
-    let mut scoped = lay_out(
+    let scoped = lay_out(
         GestureDetector::new()
             .exclusive_drags()
             .on_pan_start(move |_, _| pan_start.borrow_mut().push("pan start"))
