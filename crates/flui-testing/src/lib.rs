@@ -61,34 +61,53 @@
 //! ## Example
 //!
 //! ```
-//! use std::sync::Arc;
-//! use std::sync::atomic::{AtomicBool, Ordering};
+//! use std::{cell::Cell, rc::Rc};
 //! use std::time::Duration;
 //!
 //! use flui_testing::HeadlessBinding;
 //! use flui_interaction::settings::GestureSettings;
 //! use flui_interaction::{GestureRecognizer, LongPressGestureRecognizer, PointerId};
-//! use flui_foundation::geometry::Offset;
+//! use flui_interaction::routing::PointerDispatch;
+//! use flui_foundation::geometry::Point;
+//! use flui_platform_api::EventTime;
+//! use flui_platform_api::pointer::{
+//!     PointerButton, PointerButtons, PointerEvent, PointerInfo, PointerKind,
+//!     PointerPosition, PointerPress, PointerSample,
+//! };
 //!
 //! let mut binding = HeadlessBinding::new();
 //!
-//! let fired = Arc::new(AtomicBool::new(false));
-//! let in_callback = Arc::clone(&fired);
-//! let recognizer = LongPressGestureRecognizer::with_settings(
-//!     binding.arena().clone(),
-//!     GestureSettings::touch_defaults().with_long_press_timeout(Duration::from_millis(500)),
-//! )
-//! .with_on_long_press_start(move |_details| in_callback.store(true, Ordering::SeqCst));
+//! let fired = Rc::new(Cell::new(false));
+//! let in_callback = Rc::clone(&fired);
+//! let recognizer = LongPressGestureRecognizer::builder(binding.arena().clone())
+//!     .settings(
+//!         GestureSettings::touch_defaults().with_long_press_timeout(Duration::from_millis(500)),
+//!     )
+//!     .on_long_press_start(move |_details| in_callback.set(true))
+//!     .build();
 //!
-//! recognizer.add_pointer(PointerId::new(std::num::NonZeroU64::MIN), Offset::new(10.0, 10.0), Offset::new(10.0, 10.0));
+//! let pointer = PointerId::new(std::num::NonZeroU64::MIN);
+//! let sample = PointerSample::new(
+//!     EventTime::from_nanos(0),
+//!     PointerPosition::try_new(Point::new(10.0, 10.0)).expect("finite position"),
+//! );
+//! let down = PointerEvent::Down(PointerPress::new(
+//!     PointerInfo::new(pointer, PointerKind::Touch),
+//!     PointerButton::PRIMARY,
+//!     PointerButtons::NONE,
+//!     sample,
+//! ));
+//! recognizer.add_pointer(PointerDispatch::at_root(&down));
+//! // This bare-recognizer example closes Down admission explicitly.
+//! binding.arena().close(pointer);
 //!
 //! // 300ms of virtual time — the 500ms deadline has not elapsed.
 //! binding.pump_frame(Duration::from_millis(300));
-//! assert!(!fired.load(Ordering::SeqCst));
+//! assert!(!fired.get());
 //!
 //! // Crossing 500ms fires the deadline inside the frame, deterministically.
 //! binding.pump_frame(Duration::from_millis(300));
-//! assert!(fired.load(Ordering::SeqCst));
+//! assert!(fired.get());
 //! ```
 
 // Every public item is documented; keep it that way.
