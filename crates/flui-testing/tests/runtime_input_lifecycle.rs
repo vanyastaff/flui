@@ -359,14 +359,18 @@ fn assert_ime_motion_order(fail: bool) {
 }
 
 pub(crate) fn keyboard_reads_all_frozen_contacts_after_sibling_failure() {
-    assert_keyboard_contact_prefix(true, false);
+    assert_keyboard_contact_prefix(true, false, true);
 }
 
 pub(crate) fn keyboard_barrier_keeps_reentrant_contact_motion_for_the_next_round() {
-    assert_keyboard_contact_prefix(false, true);
+    assert_keyboard_contact_prefix(false, true, true);
 }
 
-fn assert_keyboard_contact_prefix(fail: bool, reenter: bool) {
+pub(crate) fn keyboard_barrier_keeps_frozen_coalesced_motion_before_reentrant_replacement() {
+    assert_keyboard_contact_prefix(false, true, false);
+}
+
+fn assert_keyboard_contact_prefix(fail: bool, reenter: bool, resampling: bool) {
     use flui_interaction::events::{make_down_event_for_id, make_up_event_for_id};
     use flui_interaction::routing::KeyEventResult;
     use flui_interaction::testing::input::KeyEventBuilder;
@@ -377,7 +381,14 @@ fn assert_keyboard_contact_prefix(fail: bool, reenter: bool) {
     let mut realm = UiRealm::for_test();
     let primary = realm.presentation_id();
     realm
-        .set_pointer_resampling(primary, PointerResampling::FrameAligned)
+        .set_pointer_resampling(
+            primary,
+            if resampling {
+                PointerResampling::FrameAligned
+            } else {
+                PointerResampling::Disabled
+            },
+        )
         .expect("policy");
     let one = PointerId::try_from(1_u64).expect("contact");
     let two = PointerId::try_from(2_u64).expect("contact");
