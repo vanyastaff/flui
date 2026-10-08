@@ -825,6 +825,14 @@ fn binding_input_contract_matrix() {
         ("native_claim_reentry", native_claim_reentry_keeps_new_lease),
         ("native_focus_loss", native_focus_loss_releases_lease),
         (
+            "native_claim_retirement",
+            native_claim_survives_capture_retirement,
+        ),
+        (
+            "native_competing_retirement",
+            native_first_failure_survives_capture_retirement,
+        ),
+        (
             "native_repeated_start_owner",
             native_repeated_start_keeps_selected_owner,
         ),
@@ -2037,10 +2045,27 @@ fn scroll_first_failure_survives_capture_retirement() {
 }
 
 fn assert_scroll_claim_retirement(competing: bool) {
+    assert_signal_claim_retirement(competing, false);
+}
+
+fn native_claim_survives_capture_retirement() {
+    assert_signal_claim_retirement(false, true);
+}
+fn native_first_failure_survives_capture_retirement() {
+    assert_signal_claim_retirement(true, true);
+}
+
+fn assert_signal_claim_retirement(competing: bool, native: bool) {
     use flui_foundation::geometry::Offset;
     use flui_interaction::events::{PointerEvent, make_scroll_event};
     use flui_interaction::{EventPropagation, GestureBinding, HitTestResult};
-    use flui_platform_api::pointer::ScrollPhase;
+    use flui_platform_api::{
+        EventTime,
+        pointer::{
+            PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerId, PointerInfo, PointerKind,
+            PointerPosition, ScrollPhase,
+        },
+    };
     use std::{
         cell::Cell,
         panic::{AssertUnwindSafe, catch_unwind},
@@ -2053,7 +2078,27 @@ fn assert_scroll_claim_retirement(competing: bool) {
             panic!("consumed scroll capture retirement failure");
         }
     }
-    let packet = |phase| {
+    let packet = move |phase| {
+        if native {
+            let native_phase = match phase {
+                ScrollPhase::Began => PanZoomPhase::Start,
+                ScrollPhase::Changed => PanZoomPhase::Update(
+                    PanZoomTransform::try_new(Offset::ZERO, 1.2, 0.0)
+                        .expect("finite native transform"),
+                ),
+                ScrollPhase::Ended => PanZoomPhase::End,
+                _ => unreachable!("fixture phase"),
+            };
+            return PointerEvent::PanZoom(PanZoomEvent::new(
+                PointerInfo::new(
+                    PointerId::try_from(1_u64).expect("pointer"),
+                    PointerKind::Trackpad,
+                ),
+                EventTime::from_nanos(0),
+                PointerPosition::try_new(flui_foundation::geometry::Point::ZERO).expect("position"),
+                native_phase,
+            ));
+        }
         let PointerEvent::Scroll(mut scroll) =
             make_scroll_event(Offset::ZERO, Offset::new(0.0, 10.0)).expect("finite wheel")
         else {
@@ -2067,22 +2112,44 @@ fn assert_scroll_claim_retirement(competing: bool) {
     let binding = GestureBinding::new();
     let selected_calls = Rc::new(Cell::new(0));
     let other_calls = Rc::new(Cell::new(0));
+    #[derive(Clone, Copy)]
+    enum Target {
+        Wheel(flui_interaction::ScrollTarget),
+        Native(flui_interaction::PanZoomTarget),
+    }
+    let entry = |id, target| match target {
+        Target::Wheel(target) => HitTestEntry::new(RenderId::new(id)).scroll_target(target),
+        Target::Native(target) => HitTestEntry::new(RenderId::new(id)).pan_zoom_target(target),
+    };
     lane.enter(|| {
         let slot = Rc::new(Cell::new(None));
         let own_slot = Rc::clone(&slot);
         let own_handle = handle.clone();
         let calls = Rc::clone(&selected_calls);
         let capture = RetiredCapture;
-        let selected = handle
-            .register_scroll(move |_| {
-                let _ = &capture;
-                calls.set(calls.get() + 1);
-                own_handle
-                    .unregister_scroll(own_slot.get().expect("published target"))
-                    .expect("withdraw callback ownership");
-                EventPropagation::Stop
-            })
-            .expect("selected target");
+        let claim = move || {
+            let _ = &capture;
+            calls.set(calls.get() + 1);
+            match own_slot.get().expect("published target") {
+                Target::Wheel(target) => own_handle.unregister_scroll(target),
+                Target::Native(target) => own_handle.unregister_pan_zoom(target),
+            }
+            .expect("withdraw callback ownership");
+            EventPropagation::Stop
+        };
+        let selected = if native {
+            Target::Native(
+                handle
+                    .register_pan_zoom(move |_| claim())
+                    .expect("selected target"),
+            )
+        } else {
+            Target::Wheel(
+                handle
+                    .register_scroll(move |_| claim())
+                    .expect("selected target"),
+            )
+        };
         slot.set(Some(selected));
         let observer = handle
             .register_pointer(move |_| {
@@ -2093,7 +2160,7 @@ fn assert_scroll_claim_retirement(competing: bool) {
             .expect("observer");
         let mut selected_path = HitTestResult::new();
         selected_path.add(hit_entry(observer));
-        selected_path.add(HitTestEntry::new(RenderId::new(1)).scroll_target(selected));
+        selected_path.add(entry(1, selected));
         let payload = catch_unwind(AssertUnwindSafe(|| {
             binding.handle_pointer_event(&packet(ScrollPhase::Began), |_| selected_path.clone());
         }))
@@ -2112,14 +2179,25 @@ fn assert_scroll_claim_retirement(competing: bool) {
             "accepted claim runs despite earlier observer failure"
         );
         let calls = Rc::clone(&other_calls);
-        let other = handle
-            .register_scroll(move |_| {
-                calls.set(calls.get() + 1);
-                EventPropagation::Stop
-            })
-            .expect("healthy target");
+        let claim = move || {
+            calls.set(calls.get() + 1);
+            EventPropagation::Stop
+        };
+        let other = if native {
+            Target::Native(
+                handle
+                    .register_pan_zoom(move |_| claim())
+                    .expect("healthy target"),
+            )
+        } else {
+            Target::Wheel(
+                handle
+                    .register_scroll(move |_| claim())
+                    .expect("healthy target"),
+            )
+        };
         let mut fresh_path = HitTestResult::new();
-        fresh_path.add(HitTestEntry::new(RenderId::new(2)).scroll_target(other));
+        fresh_path.add(entry(2, other));
         binding.handle_pointer_event(&packet(ScrollPhase::Changed), |_| fresh_path.clone());
         assert_eq!(
             other_calls.get(),
