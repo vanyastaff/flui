@@ -113,7 +113,7 @@ use std::sync::Arc;
 
 use flui_sdk::foundation::ListenerId;
 use flui_sdk::foundation::notifier::Listenable;
-use flui_sdk::interaction::FocusNode;
+use flui_sdk::interaction::{FocusNode, FocusSubscription};
 use flui_sdk::view::RebuildHandle;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{EditableText, GestureDetector, SubmitCallback, TextEditingController};
@@ -285,7 +285,7 @@ pub struct MaterialTextFieldState {
     focus_node: Rc<FocusNode>,
     rebuild: Option<RebuildHandle>,
     controller_listener_id: Option<ListenerId>,
-    focus_listener_id: Option<ListenerId>,
+    focus_subscription: Option<FocusSubscription>,
 }
 
 impl std::fmt::Debug for MaterialTextFieldState {
@@ -309,21 +309,21 @@ impl StatefulView for TextField {
             ),
             rebuild: None,
             controller_listener_id: None,
-            focus_listener_id: None,
+            focus_subscription: None,
         }
     }
 }
 
 impl MaterialTextFieldState {
-    fn install_focus_listener(&mut self) {
+    fn subscribe_focus(&self, node: &Rc<FocusNode>) -> FocusSubscription {
         let rebuild = self
             .rebuild
             .as_ref()
             .expect("BUG: MaterialTextFieldState must retain its rebuild handle")
             .clone();
-        self.focus_listener_id = Some(self.focus_node.add_listener(Rc::new(move || {
+        node.subscribe(Rc::new(move || {
             rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
-        })));
+        }))
     }
 }
 
@@ -343,7 +343,7 @@ impl ViewState<TextField> for MaterialTextFieldState {
 
         // The effective node is the single source of focus truth for the
         // decorated field and its EditableText child.
-        self.install_focus_listener();
+        self.focus_subscription = Some(self.subscribe_focus(&self.focus_node));
     }
 
     fn did_update_view(&mut self, old_view: &TextField, new_view: &TextField) {
@@ -382,24 +382,27 @@ impl ViewState<TextField> for MaterialTextFieldState {
             return;
         }
 
-        if let Some(id) = self.focus_listener_id.take() {
-            self.focus_node.remove_listener(id);
-        }
-        self.focus_node = new_view.external_focus_node.as_ref().map_or_else(
+        let replacement = new_view.external_focus_node.as_ref().map_or_else(
             || FocusNode::with_debug_label("MaterialTextField"),
             Rc::clone,
         );
-        self.install_focus_listener();
+        let replacement_subscription = self.subscribe_focus(&replacement);
+        let previous_subscription = self.focus_subscription.replace(replacement_subscription);
+        let previous_node = std::mem::replace(&mut self.focus_node, replacement);
+        // Commit effective ownership before retiring the outgoing listener.
+        drop(previous_subscription);
+        drop(previous_node);
     }
 
     fn dispose(&mut self) {
-        if let Some(id) = self.controller_listener_id.take() {
+        let controller_listener_id = self.controller_listener_id.take();
+        let focus_subscription = self.focus_subscription.take();
+        let rebuild = self.rebuild.take();
+        if let Some(id) = controller_listener_id {
             self.controller.remove_listener(id);
         }
-        if let Some(id) = self.focus_listener_id.take() {
-            self.focus_node.remove_listener(id);
-        }
-        self.rebuild = None;
+        drop(focus_subscription);
+        drop(rebuild);
     }
 
     fn build(&self, view: &TextField, ctx: &dyn BuildContext) -> impl IntoView {
