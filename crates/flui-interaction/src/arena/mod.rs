@@ -908,19 +908,17 @@ impl ArenaEntryData {
 /// `close(pointer)` on pointer-down and `sweep(pointer)` on pointer-up.
 ///
 /// - [`SelfDriven`](Self::SelfDriven) — a low-level recognizer owns its private
-///   arena lifecycle, so [`RecognizerBase::stop_tracking`] sweeps on up. This
+///   arena lifecycle, so finishing pointer-up tracking sweeps the arena. This
 ///   model is for standalone recognizer use and focused recognizer tests, never
 ///   a presentation widget subtree.
 /// - [`BindingDriven`](Self::BindingDriven) — a binding owns the arena and runs
 ///   the close/sweep lifecycle after routing each pointer event to the hit-test
 ///   path. Recognizers below it must *not* self-sweep: a tap's own
-///   `stop_tracking → sweep` on the first up would force-resolve a shared entry
+///   sweep on the first up would force-resolve a shared entry
 ///   to the front member before a double-tap (or a peer detector) could
 ///   complete.
 ///
 /// The model is immutable per arena, like the clock; every clone observes it.
-///
-/// [`RecognizerBase::stop_tracking`]: crate::recognizers::RecognizerBase::stop_tracking
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SweepModel {
     /// A standalone recognizer owns the lifecycle of its private arena.
@@ -1025,7 +1023,7 @@ pub struct GestureArena {
     /// deadline (e.g. long-press) elapses deterministically without sleeping.
     clock: Arc<dyn MonotonicClock>,
     /// Who owns the close/sweep lifecycle. Immutable per arena (like the clock);
-    /// recognizers read it to decide whether `stop_tracking` should self-sweep.
+    /// recognizers read it to decide whether finishing tracking should self-sweep.
     sweep_model: SweepModel,
 }
 
@@ -1171,7 +1169,7 @@ impl GestureArena {
     /// Create a binding-owned gesture arena driven by the given clock.
     ///
     /// The returned arena answers [`SweepModel::BindingDriven`], so recognizers
-    /// added to it never self-sweep in `stop_tracking` — the binding runs the
+    /// added to it never self-sweep when finishing tracking — the binding runs the
     /// close/sweep lifecycle via [`run_pointer_lifecycle`] after routing each
     /// pointer event. This is the arena a [`HeadlessBinding`](https://docs.rs/flui-testing)
     /// or production `GestureBinding` hands down to a subtree.
