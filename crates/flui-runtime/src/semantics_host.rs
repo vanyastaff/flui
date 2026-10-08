@@ -8,10 +8,9 @@
 //! two presentations never share an enablement counter or step on each
 //! other's platform callback.
 //!
-//! `accessibility_features` (the OS-level, read-mostly reduced-motion/
-//! high-contrast/etc. flags) is process-scoped, not per-presentation, and
-//! lives on `SharedEngineServices` (`flui-app`'s `app::runtime`) instead — see
-//! that module's own field for the other half of the retired binding's state.
+//! System settings come from the installed host's `SystemPreferences` source
+//! (ADR-0172). They are independent of semantics collection and platform delivery;
+//! this module does not maintain another settings snapshot.
 //!
 //! Handle acquisition keeps semantics collected while an agent reads the
 //! tree: `UiRuntime::semantics_agent` holds one handle for all clones of the

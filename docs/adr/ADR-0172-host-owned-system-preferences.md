@@ -119,9 +119,11 @@ the effective light/dark family, then falls back to that family's ordinary
 selection. These are palette-selection policies, not forced recoloring or a
 claim to reproduce the operating system's custom high-contrast colors.
 
-The runtime owns its root publication mechanism. Remove `AccessibilityFeatures`
-and other superseded authorities when their consumers have migrated; no public
-constant-backed facade or mount-only seed satisfies this decision.
+The runtime owns its root publication mechanism. The constant-backed
+`AccessibilityFeatures` type and its unused app storage are removed; they had
+no consumers to migrate. Other superseded authorities are removed with their
+consumer migrations. No public constant-backed facade or mount-only seed
+satisfies this decision.
 
 ## Windows transport constraint
 

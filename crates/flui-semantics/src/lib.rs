@@ -62,7 +62,6 @@
 // MODULES
 // ============================================================================
 
-pub mod accessibility;
 pub mod agent;
 // Private: the curated entry point is re-exported below. Publishing the module
 // would enrol its internal helpers (`to_node`, `resolve_role`) in the crate's
@@ -88,10 +87,6 @@ pub mod update;
 // ============================================================================
 
 pub use action::{ActionArgs, SemanticsAction, SemanticsActionHandler, SemanticsActionRequest};
-// ============================================================================
-// RE-EXPORTS - Accessibility Types
-// ============================================================================
-pub use accessibility::AccessibilityFeatures;
 // ============================================================================
 // RE-EXPORTS - AccessKit Translation
 // ============================================================================
@@ -182,8 +177,8 @@ pub mod prelude {
     pub use smol_str::SmolStr;
 
     pub use crate::{
-        AccessibilityFeatures, AccessibilityFocusBlockType, AccessibilityNodeId, ActionArgs,
-        Assertiveness, AttributedString, DebugSemanticsDumpOrder, NumericRange, NumericRangeError,
+        AccessibilityFocusBlockType, AccessibilityNodeId, ActionArgs, Assertiveness,
+        AttributedString, DebugSemanticsDumpOrder, NumericRange, NumericRangeError,
         SemanticsAction, SemanticsActionError, SemanticsActionHandler, SemanticsActionInvocation,
         SemanticsActionRequest, SemanticsConfiguration, SemanticsEvent, SemanticsEventType,
         SemanticsFlag, SemanticsFlags, SemanticsId, SemanticsNode, SemanticsNodeData,
