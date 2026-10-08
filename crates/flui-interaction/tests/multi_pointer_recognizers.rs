@@ -1363,6 +1363,8 @@ fn tap_and_drag_resolves_through_the_shared_arena() {
             ("multi drag measured excursion", multi_drag_measured_excursion),
             ("tap drag measured excursion", tap_drag_measured_excursion),
             ("scale measured excursion", scale_measured_excursion),
+            ("tap measured excursion", tap_measured_excursion),
+            ("drag measured excursion", drag_measured_excursion),
             ("prediction does not admit drag", prediction_does_not_admit_drag),
             ("tap against a tap", tap_wins_against_a_later_tap_recognizer),
             ("drag against a pan", drag_claims_the_arena_before_starting),
@@ -1450,6 +1452,9 @@ fn stationary_gesture_measured_excursion(family: &str) {
         let cancelled = Rc::new(Cell::new(0));
         let (r, c) = (recognized.clone(), cancelled.clone());
         let owner: Rc<dyn GestureRecognizer> = match family {
+            "tap" => TapGestureRecognizer::builder(rig.binding.arena().clone())
+                .on_tap(move |_| r.set(r.get() + 1))
+                .on_tap_cancel(move |_| c.set(c.get() + 1)).build(),
             "long press" => LongPressGestureRecognizer::builder(rig.binding.arena().clone())
                 .on_long_press(move || r.set(r.get() + 1))
                 .on_long_press_cancel(move |_| c.set(c.get() + 1)).build(),
@@ -1490,6 +1495,7 @@ fn stationary_gesture_measured_excursion(family: &str) {
 }
 
 fn long_press_measured_excursion() { stationary_gesture_measured_excursion("long press"); }
+fn tap_measured_excursion() { stationary_gesture_measured_excursion("tap"); }
 fn double_tap_measured_excursion() { stationary_gesture_measured_excursion("double tap"); }
 fn multi_tap_measured_excursion() { stationary_gesture_measured_excursion("multi tap"); }
 
@@ -1501,6 +1507,8 @@ fn moving_gesture_measured_excursion(family: &str) {
         let starts = Rc::new(Cell::new(0));
         let counted = starts.clone();
         let owner: Rc<dyn GestureRecognizer> = match family {
+            "drag" => DragGestureRecognizer::builder(rig.binding.arena().clone(), DragAxis::Free)
+                .on_start(move |_| counted.set(counted.get() + 1)).build(),
             "multi drag" => MultiDragGestureRecognizer::builder(rig.binding.arena().clone(), MultiDragAxis::Free)
                 .on_start(move |_, _| { counted.set(counted.get() + 1); None }).build(),
             "tap drag" => TapAndDragGestureRecognizer::builder(rig.binding.arena().clone())
@@ -1529,6 +1537,7 @@ fn moving_gesture_measured_excursion(family: &str) {
 }
 
 fn multi_drag_measured_excursion() { moving_gesture_measured_excursion("multi drag"); }
+fn drag_measured_excursion() { moving_gesture_measured_excursion("drag"); }
 fn tap_drag_measured_excursion() { moving_gesture_measured_excursion("tap drag"); }
 fn scale_measured_excursion() { moving_gesture_measured_excursion("scale"); }
 
