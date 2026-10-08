@@ -768,7 +768,9 @@ impl PresentationState {
 
         let state = Self {
             id,
-            gesture_geometry: RefCell::new(Default::default()),
+            gesture_geometry: RefCell::new(
+                crate::ui_runtime::preferences::GeometryProjection::default(),
+            ),
             gesture_settings: flui_interaction::GestureSettingsSource::new(
                 gestures.default_settings().clone(),
             ),
@@ -787,7 +789,9 @@ impl PresentationState {
             window: Arc::downgrade(&window),
             accessibility: accessibility.as_ref().map(Arc::downgrade),
             gestures,
-            wheel_preferences: flui_interaction::WheelPreferencesSource::new(Default::default()),
+            wheel_preferences: flui_interaction::WheelPreferencesSource::new(
+                flui_platform_api::WheelPreferences::default(),
+            ),
             interaction_dispatch: Some(interaction_dispatch),
             held_pointer_input: RefCell::new(HeldPointerQueue::new(id)),
             focus,
@@ -857,7 +861,9 @@ impl PresentationState {
 
         let state = Self {
             id,
-            gesture_geometry: RefCell::new(Default::default()),
+            gesture_geometry: RefCell::new(
+                crate::ui_runtime::preferences::GeometryProjection::default(),
+            ),
             gesture_settings: flui_interaction::GestureSettingsSource::new(
                 gestures.default_settings().clone(),
             ),
@@ -876,7 +882,9 @@ impl PresentationState {
             window: Arc::downgrade(&window),
             accessibility: accessibility.as_ref().map(Arc::downgrade),
             gestures,
-            wheel_preferences: flui_interaction::WheelPreferencesSource::new(Default::default()),
+            wheel_preferences: flui_interaction::WheelPreferencesSource::new(
+                flui_platform_api::WheelPreferences::default(),
+            ),
             interaction_dispatch: None,
             held_pointer_input: RefCell::new(HeldPointerQueue::new(id)),
             focus,

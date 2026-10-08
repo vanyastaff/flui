@@ -136,7 +136,9 @@ impl OwnerEffects for Effects {
             runtime.drain_owner_inbox();
             clock.advance(std::time::Duration::from_secs(2));
             self.frame_time.set(
-                flui_foundation::MonotonicClock::now(&clock) - std::time::Duration::from_millis(16),
+                flui_foundation::MonotonicClock::now(&clock)
+                    .checked_sub(std::time::Duration::from_millis(16))
+                    .expect("advanced frame clock"),
             );
         }
         let now = self.frame_time.get() + std::time::Duration::from_millis(16);
@@ -503,6 +505,10 @@ fn owner_metrics_contract() {
                 late_geometry_recovery_is_isolated_per_presentation as fn(),
             ),
             (
+                "native_fling_profile_controls_real_scroll_inertia",
+                native_fling_profile_controls_real_scroll_inertia as fn(),
+            ),
+            (
                 "wheel_preferences_reach_the_next_mounted_input",
                 wheel_preferences_reach_the_next_mounted_input as fn(),
             ),
@@ -536,6 +542,179 @@ fn owner_metrics_contract() {
             ),
         ],
     );
+}
+
+fn native_fling_profile_controls_real_scroll_inertia() {
+    use flui_foundation::{
+        ManualClock, MonotonicClock,
+        geometry::{DevicePixelRatio, Point},
+    };
+    use flui_platform_api::pointer::{
+        PointerButton, PointerButtons, PointerEvent, PointerInfo, PointerKind, PointerMove,
+        PointerPosition, PointerPress, PointerRelease, PointerSample,
+    };
+    use flui_platform_api::{FlingSpeeds, GestureGeometry, PlatformInput, SystemPreferences};
+    use std::{
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicBool, AtomicUsize},
+        },
+        time::Duration,
+    };
+    let profile = |min, max| {
+        Some(
+            GestureGeometry::new(DevicePixelRatio::ONE)
+                .with_fling_speeds(FlingSpeeds::new(min, max).expect("fling range")),
+        )
+    };
+    let event = |millis: u64, y: f64, phase: u8| {
+        let info = PointerInfo::new(
+            flui_interaction::PointerId::try_from(1).expect("pointer"),
+            PointerKind::Touch,
+        );
+        let buttons = PointerButtons::NONE.with(PointerButton::PRIMARY);
+        let sample = PointerSample::new(
+            flui_platform_api::EventTime::from_nanos(millis * 1_000_000),
+            PointerPosition::try_new(Point::new(150.0, y)).expect("position"),
+        );
+        match phase {
+            0 => PointerEvent::Down(PointerPress::new(
+                info,
+                PointerButton::PRIMARY,
+                buttons,
+                sample,
+            )),
+            1 => PointerEvent::Move(PointerMove::new(info, buttons, sample)),
+            _ => PointerEvent::Up(PointerRelease::new(
+                info,
+                PointerButton::PRIMARY,
+                PointerButtons::NONE,
+                sample,
+            )),
+        }
+    };
+    let owner = OwnerHost::new();
+    let clock = ManualClock::new();
+    let window = Arc::new(GeometryWindow {
+        inner: Arc::clone(crate::owner_publication::window().window()),
+        answer: Mutex::new(Ok(profile(50.0, 300.0))),
+        calls: AtomicUsize::new(0),
+        query_time: Mutex::new(None),
+        panic_next: AtomicBool::new(false),
+    });
+    let runtime = UiRuntime::new(
+        flui_runtime::presentation::PresentationWindow::new(window.clone(), None),
+        1.0,
+        flui_runtime::ui_runtime::RuntimeHostServices::new(
+            Arc::new(|| {}),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(flui_platform_api::InMemoryClipboard::new()),
+            &flui_painting::FontCollection::new(),
+            flui_scheduler::ClockSource::Manual(clock.clone()),
+        ),
+    )
+    .expect("native geometry runtime");
+    let controller = flui_widgets::ScrollController::new();
+    controller.update_dimensions(300.0, 0.0, 4700.0);
+    runtime
+        .attach_root_widget_with_size(
+            &flui_widgets::Scrollable::new()
+                .controller(controller.clone())
+                .child(flui_widgets::SizedBox::new(300.0, 5000.0)),
+            300.0,
+            300.0,
+        )
+        .expect("mount scrolling consumer");
+    let address = owner
+        .publication(owner.prepare_runtime(runtime))
+        .expect("publish")
+        .commit();
+    let size = Rc::new(Cell::new((300, 300)));
+    let effects = Effects {
+        address,
+        sink: RefCell::new(Sink {
+            size: Rc::clone(&size),
+            submitted: 0,
+        }),
+        size,
+        frame_time: Cell::new(clock.now()),
+        trace: RefCell::default(),
+        expects_present: Cell::new(None),
+        owner: owner.clone(),
+        burst: Cell::new(false),
+        native_sizes: RefCell::default(),
+        fail_resize: Cell::new(false),
+        fail_tail: Cell::new(false),
+        geometry_gate: RefCell::new(None),
+    };
+    let frames = owner.frame_dispatcher(address).expect("frames");
+    let target = owner.presentation_dispatcher(address).expect("input");
+    let frame = || {
+        clock.advance(Duration::from_millis(16));
+        effects.frame_time.set(
+            clock
+                .now()
+                .checked_sub(Duration::from_millis(16))
+                .expect("advanced frame clock"),
+        );
+        frames.deliver(&effects).expect("actual runtime frame");
+    };
+    frame();
+    controller.set_pixels(500.0);
+    for attempt in 0..3 {
+        target
+            .input(
+                PlatformInput::Pointer(event(u64::from(attempt * 100), 250.0, 0)),
+                &effects,
+            )
+            .expect("admit touch drag");
+        for sample in 1_u32..=5 {
+            clock.advance(Duration::from_millis(10));
+            target
+                .input(
+                    PlatformInput::Pointer(event(
+                        u64::from(attempt * 100 + sample * 10),
+                        250.0 - f64::from(sample) * 20.0,
+                        1,
+                    )),
+                    &effects,
+                )
+                .expect("measured touch movement");
+        }
+        if attempt == 0 {
+            *window.answer.lock().expect("script") = Ok(profile(5000.0, 5000.0));
+            owner
+                .update_preferences(
+                    SystemPreferences::default().with_high_contrast(true),
+                    &effects,
+                )
+                .expect("new profile before old contact ends");
+        }
+        target
+            .input(
+                PlatformInput::Pointer(event(u64::from(attempt * 100 + 50), 150.0, 2)),
+                &effects,
+            )
+            .expect("terminal touch motion");
+        let released = controller.pixels();
+        frame();
+        frame();
+        let coast = controller.pixels() - released;
+        if attempt == 1 {
+            assert_eq!(coast, 0.0, "fresh native minimum refuses terminal inertia");
+            *window.answer.lock().expect("script") = Ok(profile(50.0, 600.0));
+            owner
+                .update_preferences(SystemPreferences::default(), &effects)
+                .expect("third profile");
+        } else {
+            let bound = if attempt == 0 { 10.0 } else { 20.0 };
+            assert!(
+                coast > 0.0 && coast < bound,
+                "native admission profile controls actual terminal coast: attempt {attempt}, coast {coast}"
+            );
+        }
+    }
+    owner.shutdown(&effects);
 }
 
 fn late_geometry_recovery_is_isolated_per_presentation() {
@@ -1006,6 +1185,24 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
         "next contact adopts exact DPI2 native threshold"
     );
 
+    *window.answer.lock().expect("foreign context script") = Ok(geometry(1.0, 100.0));
+    owner
+        .update_preferences(
+            SystemPreferences::default().with_high_contrast(true),
+            &effects,
+        )
+        .expect("query returned geometry for another context");
+    tap();
+    assert_eq!(
+        taps.get(),
+        3,
+        "successful foreign-DPI reading cannot replace accepted native geometry"
+    );
+    assert!(
+        owner.next_wake().expect("foreign context wake").is_some(),
+        "wrong-DPI output remains a bounded query obligation"
+    );
+
     *window.answer.lock().expect("script") = Ok(geometry(2.0, f64::MAX));
     owner
         .update_preferences(
@@ -1038,9 +1235,12 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
         )
         .expect("latest timing admission");
     clock.advance(Duration::from_millis(20));
-    effects
-        .frame_time
-        .set(clock.now() - Duration::from_millis(16));
+    effects.frame_time.set(
+        clock
+            .now()
+            .checked_sub(Duration::from_millis(16))
+            .expect("advanced frame clock"),
+    );
     owner
         .frame_dispatcher(address)
         .expect("frames")
@@ -1140,6 +1340,7 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
         "native before-gate drain and frame pump share one structural attempt budget even after deadline passes"
     );
     window.panic_next.store(true, Ordering::Relaxed);
+    effects.fail_tail.set(true);
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         owner
             .update_preferences(SystemPreferences::default(), &effects)
@@ -1149,6 +1350,10 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
     assert_eq!(
         failure.downcast_ref::<&str>(),
         Some(&"scripted geometry query failure")
+    );
+    assert!(
+        !effects.fail_tail.get(),
+        "competing owner completion failure was reached without replacing the native query failure"
     );
     *window.answer.lock().expect("recovery") = Ok(geometry(2.0, 2.0));
     let before_recovery = window.calls.load(Ordering::Relaxed);
@@ -1520,9 +1725,12 @@ fn gesture_preferences_are_captured_in_input_order_before_a_frame() {
         let frames = owner.frame_dispatcher(address).expect("frame dispatcher");
         let frame = |duration| {
             clock.advance(duration);
-            effects
-                .frame_time
-                .set(clock.now() - Duration::from_millis(16));
+            effects.frame_time.set(
+                clock
+                    .now()
+                    .checked_sub(Duration::from_millis(16))
+                    .expect("advanced frame clock"),
+            );
             frames.deliver(&effects).expect("frame");
         };
         frame(Duration::from_millis(16));
