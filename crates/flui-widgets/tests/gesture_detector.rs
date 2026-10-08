@@ -614,6 +614,127 @@ pub(crate) fn mounted_drag_policy_replaces_targets_before_cancellation_and_recov
     }
 }
 
+pub(crate) fn authored_settings_replace_active_owners_and_preserve_equal_profiles() {
+    use crate::common::{ProbeSignals, SignalProbe};
+    use flui_foundation::geometry::Offset;
+    use flui_interaction::events::{
+        PointerKind, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
+    };
+    use flui_interaction::{GestureEndReason, GestureSettings};
+    use flui_view::SignalWriteExt;
+    use std::{cell::Cell, rc::Rc};
+
+    for (changes, cancellation_panics) in [(false, false), (true, false), (true, true)] {
+        let threshold = Rc::new(Cell::new(20.0));
+        let starts = Rc::new(Cell::new(0));
+        let cancelled = Rc::new(Cell::new(0));
+        let completed = Rc::new(Cell::new(0));
+        let fail_once = Rc::new(Cell::new(cancellation_panics));
+        let signal = Rc::new(Cell::new(None));
+        let (profile, started, cancels, ends, fail, remembered) = (
+            threshold.clone(),
+            starts.clone(),
+            cancelled.clone(),
+            completed.clone(),
+            fail_once.clone(),
+            signal.clone(),
+        );
+        let probe = SignalProbe::new(move |ProbeSignals { count, .. }| {
+            remembered.set(Some(count));
+            let (started, cancels, ends, fail) =
+                (started.clone(), cancels.clone(), ends.clone(), fail.clone());
+            ConfiguredGesture {
+                settings: GestureSettings::default()
+                    .try_with_touch_slop(90.0)
+                    .expect("tap remains a contender below the drag threshold")
+                    .try_with_pan_slop(profile.get())
+                    .expect("finite authored threshold"),
+                detector: GestureDetector::new()
+                    .on_tap(|_| {})
+                    .on_pan_start(move |_, _| started.set(started.get() + 1))
+                    .on_pan_end(move |_, details| match details.reason {
+                        GestureEndReason::Completed => ends.set(ends.get() + 1),
+                        GestureEndReason::Cancelled => {
+                            cancels.set(cancels.get() + 1);
+                            assert!(!fail.replace(false), "authored settings cancellation");
+                        }
+                    })
+                    .child(ColoredBox::new(Color::rgb(10, 20, 30))),
+            }
+        });
+        let mut laid = lay_out(probe.view(), tight(100.0, 100.0));
+        let send = |laid: &crate::common::LaidOut, id: u64, y, phase| {
+            let pointer = flui_interaction::PointerId::try_from(id).expect("nonzero touch");
+            let position = Offset::new(50.0, y);
+            let event = match phase {
+                0 => make_down_event_for_id(pointer, position, PointerKind::Touch),
+                1 => make_move_event_for_id(pointer, position, PointerKind::Touch),
+                2 => make_up_event_for_id(pointer, position, PointerKind::Touch),
+                _ => unreachable!("scripted phase"),
+            }
+            .expect("finite touch fixture");
+            laid.dispatch_pointer_event(&event);
+        };
+        send(&laid, 2, 10.0, 0);
+        send(&laid, 2, 50.0, 1);
+        assert_eq!(starts.get(), 1, "initial owner accepts the pan");
+        if changes {
+            threshold.set(60.0);
+        }
+        probe
+            .write(|cx| signal.get().expect("mounted probe").set(cx, 1))
+            .expect("rebuild authored scope");
+        let ((), log) = flui_testing::log_capture::capture(|| laid.pump());
+        assert_eq!(
+            cancelled.get(),
+            usize::from(changes),
+            "only a changed authored profile cancels the accepted owner"
+        );
+        let reports: Vec<_> = log
+            .records()
+            .iter()
+            .filter(|record| {
+                record.message == "lifecycle panic contained; frame continued for this presentation"
+            })
+            .collect();
+        assert_eq!(reports.len(), usize::from(cancellation_panics), "{log}");
+        if cancellation_panics {
+            assert_eq!(
+                reports[0].field("panic_message"),
+                Some("authored settings cancellation")
+            );
+            assert_eq!(
+                laid.count_elements_by_view_type::<GestureDetector>(),
+                0,
+                "the failed lifecycle actor is substituted"
+            );
+        }
+        send(&laid, 2, 50.0, 2);
+        assert_eq!(
+            completed.get(),
+            usize::from(!changes),
+            "a stale terminal cannot complete a replacement"
+        );
+        if cancellation_panics {
+            probe
+                .write(|cx| signal.get().expect("mounted probe").set(cx, 2))
+                .expect("remount after containment");
+            laid.pump();
+        }
+        send(&laid, 3, 10.0, 0);
+        send(&laid, 3, 50.0, 1);
+        assert_eq!(
+            starts.get(),
+            if changes { 1 } else { 2 },
+            "fresh input obeys the replacement threshold"
+        );
+        send(&laid, 3, 90.0, 1);
+        assert_eq!(starts.get(), 2);
+        send(&laid, 3, 90.0, 2);
+        assert_eq!(completed.get(), if changes { 1 } else { 2 });
+    }
+}
+
 pub(crate) fn unmount_mid_drag_cancels_once_and_hands_the_arena_to_the_rival() {
     use crate::common::{ProbeSignals, SignalProbe};
     use flui_view::{IntoView, SignalWriteExt, ViewExt};
