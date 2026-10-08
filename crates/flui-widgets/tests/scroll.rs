@@ -2665,3 +2665,147 @@ pub(crate) fn show_on_screen_same_pipeline_reentry_keeps_one_reveal_and_recovers
     assert_eq!(outer.pixels(), 600.0);
     assert_reveal_target_visible(&laid);
 }
+
+pub(crate) fn show_on_screen_sibling_reentry_delivers_last_target_without_stale_motion() {
+    use flui_rendering::semantics::{
+        AccessibilityNodeId, SemanticsAction, SemanticsActionInvocation, SemanticsActionRequest,
+    };
+    use std::cell::RefCell;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    thread_local! {
+        static PENDING_SIBLING: RefCell<Option<SemanticsActionInvocation>> = const { RefCell::new(None) };
+    }
+    struct RestoreScope(Option<SemanticsActionInvocation>);
+    impl Drop for RestoreScope {
+        fn drop(&mut self) {
+            let outgoing = PENDING_SIBLING.with(|slot| slot.replace(self.0.take()));
+            drop(outgoing);
+        }
+    }
+    let content = |controller: &ScrollController, before, gap| {
+        let target = |label| {
+            flui_widgets::Semantics::new()
+                .container(true)
+                .button(true)
+                .label(label)
+                .child(SizedBox::new(40.0, 40.0))
+                .boxed()
+        };
+        Scrollable::new()
+            .controller(controller.clone())
+            .child(flui_widgets::Column::new(vec![
+                SizedBox::new(200.0, before).boxed(),
+                target("first sibling"),
+                SizedBox::new(200.0, gap).boxed(),
+                target("second sibling"),
+                SizedBox::new(200.0, 800.0).boxed(),
+            ]))
+    };
+    // Both labelled nodes from the same constructor are visible and native
+    // addressable when their actual layout positions fit the viewport.
+    let mut visible = lay_out(
+        content(&ScrollController::new(), 0.0, 40.0),
+        tight(200.0, 200.0),
+    );
+    visible.enable_semantics();
+    visible.tick();
+    for label in ["first sibling", "second sibling"] {
+        let tree = visible.a11y_tree().expect("visible control tree");
+        let target = tree.find_by_label(label).expect("visible labelled sibling");
+        assert!(!target.raw().is_hidden());
+        assert!(target.supports_action(flui_testing::a11y::Action::ScrollIntoView));
+        let bounds = target.bounds().expect("actual visible geometry");
+        assert!(bounds.y0 >= 0.0 && bounds.y1 <= 200.0);
+    }
+    for first_is_nearer in [true, false] {
+        let controller = ScrollController::new();
+        let mut laid = lay_out(content(&controller, 600.0, 360.0), tight(200.0, 200.0));
+        laid.enable_semantics();
+        laid.tick();
+        let (first_label, last_label, expected) = if first_is_nearer {
+            ("first sibling", "second sibling", 840.0)
+        } else {
+            ("second sibling", "first sibling", 600.0)
+        };
+        let tree = laid.a11y_tree().expect("actual offscreen tree");
+        let first = tree
+            .find_by_label(first_label)
+            .expect("first addressable sibling")
+            .id();
+        let last = tree
+            .find_by_label(last_label)
+            .expect("last addressable sibling")
+            .id();
+        let invocation = laid
+            .pipeline_owner()
+            .with(|owner| {
+                owner.resolve_semantics_action(SemanticsActionRequest::new(
+                    AccessibilityNodeId::from_u64(last.0).expect("published identity"),
+                    SemanticsAction::ShowOnScreen,
+                ))
+            })
+            .expect("actual pending sibling reveal");
+        let _scope = RestoreScope(PENDING_SIBLING.with(|slot| slot.replace(Some(invocation))));
+        let notifications = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&notifications);
+        let listenable = controller.as_listenable();
+        let listener = listenable.add_listener(Arc::new(move || {
+            seen.fetch_add(1, Ordering::SeqCst);
+            let invocation = PENDING_SIBLING.with(|slot| slot.borrow_mut().take());
+            if let Some(invocation) = invocation {
+                invocation.invoke();
+            }
+        }));
+        laid.invoke_semantics_action(flui_testing::a11y::ActionRequest {
+            action: flui_testing::a11y::Action::ScrollIntoView,
+            target_tree: flui_testing::a11y::TreeId::ROOT,
+            target_node: first,
+            data: None,
+        })
+        .expect("first accepted native reveal");
+        laid.tick();
+        assert!(
+            PENDING_SIBLING.with(|slot| slot.borrow().is_none()),
+            "sibling request actually reentered"
+        );
+        assert!(
+            notifications.load(Ordering::SeqCst) >= 2,
+            "both accepted targets caused actual movement"
+        );
+        assert_eq!(
+            controller.pixels(),
+            expected,
+            "last sibling wins without reapplying cached geometry: {first_label} then {last_label}"
+        );
+        let current = laid.a11y_tree().expect("republished geometry");
+        let bounds = current
+            .find_by_label(last_label)
+            .expect("last target remains present")
+            .bounds()
+            .expect("actual last target geometry");
+        assert!(
+            bounds.y0 >= -1e-9 && bounds.y1 <= 200.0 + 1e-9,
+            "last accepted target is visible: {bounds:?}"
+        );
+        listenable.remove_listener(listener);
+        controller.jump_to(0.0);
+        laid.tick();
+        let current = laid.a11y_tree().expect("fresh geometry");
+        let target = current
+            .find_by_label(last_label)
+            .expect("fresh target")
+            .id();
+        laid.invoke_semantics_action(flui_testing::a11y::ActionRequest {
+            action: flui_testing::a11y::Action::ScrollIntoView,
+            target_tree: flui_testing::a11y::TreeId::ROOT,
+            target_node: target,
+            data: None,
+        })
+        .expect("fresh request remains deliverable");
+        laid.tick();
+        assert_eq!(
+            controller.pixels(),
+            if first_is_nearer { 840.0 } else { 440.0 }
+        );
+    }
+}
