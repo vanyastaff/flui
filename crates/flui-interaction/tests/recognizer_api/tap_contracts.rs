@@ -5,9 +5,9 @@ use std::{
 
 use flui_foundation::geometry::Offset;
 use flui_interaction::{
-    CancelOutcome, DoubleTapGestureRecognizer, GestureArena, GestureRecognizer,
-    TapGestureRecognizer,
-    events::{PointerEventExt, PointerKind, make_down_event, make_up_event},
+    CancelOutcome, DoubleTapGestureRecognizer, GestureArena, GestureRecognizer, GestureSettings,
+    GestureSettingsSource, TapGestureRecognizer,
+    events::{PointerEventExt, PointerKind, make_down_event, make_move_event, make_up_event},
     routing::PointerDispatch,
 };
 
@@ -15,6 +15,10 @@ use flui_interaction::{
 fn tap_builder_lifecycle_contract() {
     for (name, row) in [
         ("cancel_reuses_tap", cancel_reuses_tap as fn()),
+        (
+            "live_settings_apply_to_next_contact",
+            live_settings_apply_to_next_contact,
+        ),
         (
             "panicking_cancel_callback_cannot_strand_tap_tracking",
             panicking_cancel_callback_cannot_strand_tap_tracking,
@@ -34,6 +38,62 @@ fn tap_builder_lifecycle_contract() {
             std::panic::resume_unwind(payload);
         }
     }
+}
+
+fn live_settings_apply_to_next_contact() {
+    let arena = GestureArena::new();
+    let source = GestureSettingsSource::new(GestureSettings::touch_defaults());
+    let taps = Rc::new(Cell::new(0));
+    let recognizer = TapGestureRecognizer::builder(arena.clone())
+        .settings(source.provider())
+        .on_tap({
+            let taps = taps.clone();
+            move |_| taps.set(taps.get() + 1)
+        })
+        .build();
+    let down = make_down_event(Offset::ZERO, PointerKind::Touch).expect("valid sample");
+    let moved = make_move_event(Offset::new(10.0, 0.0), PointerKind::Touch).expect("valid sample");
+    let up = make_up_event(Offset::new(10.0, 0.0), PointerKind::Touch).expect("valid sample");
+    let pointer = down.pointer_id().expect("contact identity");
+
+    recognizer.add_pointer(PointerDispatch::at_root(&down));
+    source.replace(
+        GestureSettings::touch_defaults()
+            .try_with_touch_slop(2.0)
+            .expect("valid slop"),
+    );
+    recognizer.handle_event(PointerDispatch::at_root(&moved));
+    arena.close(pointer);
+    recognizer.handle_event(PointerDispatch::at_root(&up));
+    arena.drain_deferred_resolutions();
+    assert_eq!(
+        taps.get(),
+        1,
+        "active contact retains its 18 px admission tolerance"
+    );
+
+    recognizer.add_pointer(PointerDispatch::at_root(&down));
+    recognizer.handle_event(PointerDispatch::at_root(&moved));
+    arena.close(pointer);
+    recognizer.handle_event(PointerDispatch::at_root(&up));
+    arena.drain_deferred_resolutions();
+    assert_eq!(
+        taps.get(),
+        1,
+        "next contact captures the new 2 px tolerance"
+    );
+
+    source.replace(GestureSettings::touch_defaults());
+    recognizer.add_pointer(PointerDispatch::at_root(&down));
+    recognizer.handle_event(PointerDispatch::at_root(&moved));
+    arena.close(pointer);
+    recognizer.handle_event(PointerDispatch::at_root(&up));
+    arena.drain_deferred_resolutions();
+    assert_eq!(
+        taps.get(),
+        2,
+        "restoring policy restores next-contact behavior"
+    );
 }
 
 struct BuilderCapture {
