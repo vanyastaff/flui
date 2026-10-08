@@ -9,7 +9,7 @@
 
 ## Текущее выполнение
 
-Сверка 2026-10-08 по интеграционной базе `028df0a8f`, коду и именам тестов.
+Сверка 2026-10-08 по интеграционной базе `64ab42b43`, коду и именам тестов.
 Отмеченные прогоны — целевые проверки интеграции. Итоговые `check-changed`,
 optional-feature/platform gates, CI и слияние в `main` ещё не объявляются завершёнными.
 
@@ -18,19 +18,19 @@ optional-feature/platform gates, CI и слияние в `main` ещё не об
 | I1, C1 | Реализованы | PR #1474 и #1494 merged; таблица `gesture_lifecycle_matrix` и property-тест `arena_settles_every_member_exactly_once` |
 | I2, C2, R1–R4 | Реализованы | PR #1472 и #1500 merged; таблицы многоконтактных и реентерабельных жестов |
 | I3, C3 | Численные исправления и перенос времени в потребителей реализованы; итоговый gate впереди | PR #1479 merged; `velocity_and_resampling.rs`; C5 подключает время Up и `velocity_at` во всех четырёх производителях, целевые проверки и откаты прошли |
-| I4, C4 | Реализованы в интеграционной ветке; PR ещё не опубликован | Шесть контрактов включены и проходят; добавлены конкурирующие отказы и восстановление. ADR-0158 фиксирует cursor/finite-offset контракт |
+| I4, C4 | Реализованы в интеграционной ветке; итоговый gate впереди | Hover/hit-test контракты включены и проходят; добавлены конкурирующие отказы и восстановление. Две независимые inverse-проверки hover retirement воспроизводят потерю first-failure authority и безопасного retirement хвоста; точные source-хунки восстановлены. ADR-0158 фиксирует cursor/finite-offset контракт, ADR-0127 — exceptional ownership |
 | I5 | Конвейер реализован локально; системный источник настроек остаётся I11/LY8 | Owner-local binding сохраняет admission, claim, finite вход и coalesced history. Восемь slop-sensitive распознавателей учитывают измеренную историю до текущей позиции; origin-return, prediction control и восстановление проверены отдельными публичными строками и независимыми откатами admission. Authored settings доходят через `GestureArenaScope` до production-распознавателей. Restored-прогон проверил binding, private resampling, allocator, 43 pointer- и 56 scroll-контрактов; принятая доставка сохраняется при конкурирующих отказах |
 | I6 | Реализована локально; итоговый gate впереди | Уведомления продолжаются после паники, принятый запрос фокуса сохраняется, первая ошибка остаётся исходной. Все 28 строк `focus_actions_and_shortcuts` и public/private failure matrices проходят; откаты порядка siblings и provider containment воспроизводят нарушения. ADR-0160 и ADR-0165 |
 | I7 | Реализована локально; итоговый gate впереди | Lifecycle pause подключён к drain каждого input owner, deferred Down отменяется; публичные runtime-проверки прошли. Итоговая проверка зависимых потребителей впереди |
 | I8 | Реализована локально; аппаратная проверка ограничена | Owned Win32 producer и owner-local MessageClock интегрированы; hidden-HWND Xbutton/coarse-clock и откаты прошли. Финальные decoder и fractional-wheel hidden-HWND проверки прошли. ForcePress отвергает mouse без датчика. Full pen/touch activation отказал (CANNOT_VERIFY) |
 | I9 | Реализована локально; финальный wasm gate впереди | В живом Chrome после V15 проверены cancel/recovery, capture, дробные координаты и getter reentry. Контракт transformed canvas ограничен задокументированным fallback; общая поддержка DOM-трансформаций не заявлена |
 | I10 | Реализована в интеграционной ветке; итоговый gate впереди | Owner-local состояние, постоянный отказ при исчерпании signal ID и удержание отклонённого callback; lifecycle/property проверки проходят. ADR-0159 |
-| I11 | Authored-settings consumer реализован; системный producer не реализован | `GestureArenaScope::settings` → `GestureDetector`/production builders проверен RED/GREEN и откатом. Не вводится дублирующий settings scope. `SystemPreferences::gestures()` требует внешней Proposed LY8; OS timings/slop и динамическое обновление не объявляются реализованными |
+| I11 | Authored-settings consumer реализован; системный producer остаётся внешней зависимостью | `GestureArenaScope::settings` → `GestureDetector`/production builders проверен RED/GREEN и откатом. Не вводится дублирующий settings scope. `SystemPreferences` и его host/realm доставка выполняются отдельно через LY8; эта зависимость не закрыта текущей interaction-приёмкой. OS timings/slop и динамическое обновление не объявляются реализованными |
 | C5 | Реализована в интеграционной ветке; PR ещё не опубликован | Четыре производителя используют время Up и `velocity_at`; строки движения/паузы/восстановления проходят и падают при откате production-hunk |
 | C6 | Реализована | PR #1478 merged; типизированные Down/Up и `DeviceId(NonZeroU64)` в новом словаре |
 | C7 | Реализована локально | Owner-local MessageClock использует `wrapping_sub` тиков; мёртвый `is_key_pressed` удалён. Реальная очередь hidden HWND и rollover прошли, обе проверки падают при откате и снова проходят после восстановления |
 | S1, S2 | Основные миграции интегрированы; итоговая проверка поверхности впереди | Owned vocabulary, checked focus ID, typed focus contracts, RAII listeners, immutable Rc builders и production estimator selection подключены. HandlerId, ложная sealed-иерархия, team/standalone signal resolver, predictor и общий vocabulary bridge удалены по scope; `__runtime` остаётся намеренным контрактом ADR-0081 |
-| S3, S4 | Source doctests прошли; итоговые Markdown-проверки и бенчи впереди | Пустые `include_str!` модули удалены. На базе `3139a3193` all-features source doctests: 51 runtime-пример и один compile-fail прошли, ignored нет. Прямой повторный прогон восьми Markdown примеров ещё не объявляется завершённым. Предыдущие ownership timings относятся к прежней форме событий и не подменяют текущие wire-бенчи. Counting-allocator контракт `resolved_route_move_invocation_allocates_no_heap_after_setup` проверяет ноль аллокаций scalar Move и не более двух на каждый translated target с обеими history: измерены 2/8/32 для 1/4/16 targets, с проверкой всех sample fields и global history; PERFORMANCE.md описывает этот bound отдельно от elapsed time |
+| S3, S4 | Source doctests и прямые Markdown-примеры прошли; итоговые бенчи впереди | Пустые `include_str!` модули удалены. На базе `3139a3193` all-features source doctests: 51 runtime-пример и один compile-fail прошли, ignored нет. Свежая прямая Markdown-проверка: README 4, GESTURES 3, HIT_TESTING 1 — все восемь прошли; ARCHITECTURE/PERFORMANCE не содержат executable examples, ignored нет. Предыдущие ownership timings относятся к прежней форме событий и не подменяют текущие wire-бенчи. Counting-allocator контракт `resolved_route_move_invocation_allocates_no_heap_after_setup` проверяет ноль аллокаций scalar Move и не более двух на каждый translated target с обеими history: измерены 2/8/32 для 1/4/16 targets, с проверкой всех sample fields и global history; PERFORMANCE.md описывает этот bound отдельно от elapsed time |
 | S5 | Реализована локально; итоговый gate впереди | DPI исправлен PR #1493; frame flush, drain и hover refresh обходят все input owners. Публичные runtime-проверки прошли |
 | R5 | Текущий same-pointer контракт закреплён; итоговый gate впереди | В `gesture_lifecycle_matrix` сохраняются `drag_cancel_callback_admits_the_next_contact_once` и `drag_cancelled_end_callback_admits_the_next_contact_once`. Таблица `drag_lifecycle_contracts` проверяет same-pointer replacement из terminal callback, первую панику и следующий Up; она прошла в restored-прогоне 49 связанных тестов на базе `502a8334f` до main merge. Этот прогон не объявляется пост-merge gate; исторический guard inverse не выдаётся за новый дефект изменённого drag |
 
@@ -55,6 +55,46 @@ cargo nextest run --locked -p flui-interaction -p flui-widgets -p flui-rendering
 43 pointer- и 56 scroll-строк, 15 runtime containment-строк и lower reveal.
 Последующее слияние актуального `origin/main` в `8cfc0ea64` требует итоговой
 проверки интеграции; этот более ранний целевой прогон её не заменяет.
+
+После main merge и точного восстановления hover/debounce inverse-хунков
+связанный прогон четырёх публичных семейств прошёл, включая настоящий
+EditableText. Это целевая проверка текущих изменений, не итоговый gate.
+
+Свежая строгая проверка Android-зависимых libraries на базе `64ab42b43`
+завершилась с exit 0:
+
+```text
+cargo clippy -p flui-runtime -p flui-app -p flui --locked --target aarch64-linux-android --message-format=json -- -D warnings
+```
+
+Android здесь скомпилирован, не запущен. Команда использует default features
+и не объявляет пройденными all-features/all-targets, native smoke или весь
+platform gate.
+
+## Hover retirement и double-tap debounce
+
+Публичный `binding_input_contract_matrix` проверяет healthy metadata Drop,
+одиночный callback failure, metadata failure, конкурирующие отказы,
+queued/mismatched hover, реентерабельную замену и последующее восстановление.
+Две независимые inverse-проверки разделяют разные containment обязанности:
+
+- Без `HitTestEntry` Drop containment хвост metadata освобождается после
+  первого отказа: счётчик 2 вместо 1; competing destructor case обрывает
+  дочерний процесс.
+- Без explicit retirement в hover dispatch, с сохранённым Drop containment,
+  теряется authority сохранённого callback failure и обязательство доставки
+  здоровому соседу. Это отдельный дефект от отсутствующего Drop guard.
+
+Оба исходных production-хунка восстановлены в точности. Связанные публичные
+семейства прошли после восстановления; final gate/CI ещё впереди.
+
+40 ms double-tap debounce реализован на frozen owner-clock snapshot первого
+Up. Публичные Mouse/Touch строки проверяют 39 ms bounce, exact 40 ms,
+удержанный первый контакт и здоровую повторную последовательность с тем же ID.
+Независимый inverse нижней границы доставляет bounce callback при 39 ms
+(1 вместо 0), сохраняя GREEN для exact 40 ms; production-хунк восстановлен.
+Этот потребительский контракт не означает поставку OS double-click interval:
+системный источник остаётся I11/LY8.
 
 ## Занятые файлы (не трогать без согласования)
 

@@ -28,15 +28,15 @@ PR #1467 (held Down на blur), #1476 (контрактные тесты hover/h
 
 Эта таблица сохраняет исходное назначение строк PR на 2026-10-06.
 Колонка baseline не описывает текущую реализацию: её проверки и ограничения
-записаны в [tasks.md](tasks.md) и в текущих строках ниже. Отдельная проверка
-40 ms debounce двойного тапа остаётся открытой до публичного воспроизведения
-и подтверждённого исправления; наличие merged-PR её не закрывает.
+записаны в [tasks.md](tasks.md) и в текущих строках ниже. 40 ms debounce
+двойного тапа теперь подтверждён публичной boundary-проверкой и независимым
+откатом; это отдельное доказательство от наличия исторического merged-PR.
 
 | Row | Requirement | Baseline status (2026-10-06) | Assigned closure |
 |---|---|---|---|
 | M1-14 | OS-level capture (drag leaves the window) | broken (Win32, web) | PR #1471 (Win32 `SetCapture`/`WM_CAPTURECHANGED`; web — pointer-vocabulary V14) |
 | M2-T3 | Button filtering for non-tap recognizers | broken | PR #1474 |
-| M2-T4 | Double tap: timeout, slop between taps, debounce | implemented locally; final gates pending | Existing timeout/per-kind slop are retained; second Down is eligible at 40 ms after first Up on the frozen owner-clock snapshot. Public Mouse/Touch 39/40 ms, held-first-contact and reused-ID recovery rows pass. Independent debounce inverse admits the 39 ms Down and fails, exact40 control stays GREEN; exact source was restored and broader public/trybuild plus cancellation-reuse checks passed |
+| M2-T4 | Double tap: timeout, slop between taps, debounce | partial | Existing timeout/per-kind slop are retained; debounce is now implemented locally, with final gates pending. Second Down is eligible at 40 ms after first Up on the frozen owner-clock snapshot. Public Mouse/Touch 39/40 ms, held-first-contact and reused-ID recovery rows pass. Independent debounce inverse admits the 39 ms Down and fails, exact40 control stays GREEN; exact source was restored and broader public/trybuild plus cancellation-reuse checks passed |
 | M2-L1 | Long press timeout and movement tolerance | partial | PR #1474 |
 | M2-X3 | Per-device-kind settings | partial | PR #1474 (`touch_slop()` crate-private — S1) |
 | M2-V3 | Velocity samples use the event timestamp | broken | PR #1474 |
@@ -55,7 +55,8 @@ PR #1467 (held Down на blur), #1476 (контрактные тесты hover/h
 
 Owned vocabulary и прямые producers в строках ниже интегрированы, но producer
 verification pending означает ограничения из `pointer-vocabulary/tasks.md`:
-предыдущая Apple/Android cross-typecheck — только компиляция, pen/touch activation
+предыдущая Apple cross-typecheck и свежая строгая Android libraries проверка —
+только компиляция, pen/touch activation
 на Windows отказал; fractional hidden-HWND wheel smoke прошёл, финальные gates
 ещё не выполнены.
 Строки внешних focus-keyboard/text-ime/platform-layer спецификаций этим не закрываются.
@@ -118,7 +119,7 @@ verification pending означает ограничения из `pointer-vocab
 
 ## NEW
 
-Сверка 2026-10-08 на интеграционной базе `028df0a8f`: все 20 утверждённых строк
+Сверка 2026-10-08 на интеграционной базе `64ab42b43`: все 20 утверждённых строк
 ниже имеют реализацию или ранее merged-реализацию. Это не означает завершение
 15 задач приёмки: недостающие inverse-проверки, финальные gates и native smoke
 остаются явными условиями. Целевые прогоны прошли для 43 pointer-строк,
