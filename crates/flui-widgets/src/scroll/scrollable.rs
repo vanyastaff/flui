@@ -114,10 +114,15 @@ impl FlingEndpoint {
                 && self.fling.run_generation() == generation
                 && self.controller.pixels() == metrics.pixels
         };
+        // Determine transfer policy before owning a returned simulation. A
+        // failing custom callback must not unwind through its arbitrary Drop.
+        let remaining = self.physics.boundary_velocity(&metrics, velocity);
+        if !is_current() {
+            return true;
+        }
         let Some(simulation) = self.physics.create_ballistic_simulation(&metrics, velocity) else {
             return false;
         };
-        let remaining = self.physics.boundary_velocity(&metrics, velocity);
         if !is_current() {
             return true;
         }
