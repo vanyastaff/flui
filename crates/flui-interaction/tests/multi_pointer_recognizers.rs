@@ -1466,7 +1466,7 @@ fn multi_tap_measured_excursion() { stationary_gesture_measured_excursion("multi
 
 fn moving_gesture_measured_excursion(family: &str) {
     use flui_interaction::{GestureSettings, MultiDragAxis, MultiDragGestureRecognizer};
-    use flui_interaction::recognizers::ScaleStartMode;
+    use flui_interaction::recognizers::scale::ScaleStartMode;
     for coalesced_packet in [false, true] {
         let rig = Rig::new();
         let starts = Rc::new(Cell::new(0));
