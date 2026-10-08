@@ -69,6 +69,194 @@ pub(crate) fn ime_commit_observes_preceding_measured_motion() {
     assert_ime_motion_order(false);
 }
 
+pub(crate) fn runtime_keyboard_barrier_preserves_scale_contacts_and_continuity() {
+    use flui_interaction::events::{make_down_event_for_id, make_up_event_for_id};
+    use flui_interaction::routing::KeyEventResult;
+    use flui_interaction::testing::input::KeyEventBuilder;
+    use flui_platform_api::keyboard::Code;
+    use flui_runtime::presentation::PointerResampling;
+
+    for policy in [PointerResampling::Disabled, PointerResampling::FrameAligned] {
+        let mut realm = UiRealm::for_test();
+        let primary = realm.presentation_id();
+        realm
+            .set_pointer_resampling(primary, policy)
+            .expect("policy");
+        let scale = Rc::new(Cell::new(1.0));
+        let ends = Rc::new(Cell::new(0));
+        let updates = Rc::clone(&scale);
+        let ended = Rc::clone(&ends);
+        realm
+            .attach_root_widget(
+                &GestureDetector::new()
+                    .behavior(HitTestBehavior::Opaque)
+                    .on_scale_update(move |_, details| updates.set(details.scale))
+                    .on_scale_end(move |_, _| ended.set(ended.get() + 1))
+                    .child(SizedBox::new(400.0, 40.0)),
+            )
+            .expect("scale consumer");
+        realm.synchronize_window_snapshot(primary, WindowExecutionState::Running, true, true);
+        pump(&mut realm);
+        let key_scale = Rc::clone(&scale);
+        let reads = Rc::new(RefCell::new(Vec::new()));
+        let read = Rc::clone(&reads);
+        realm
+            .focus_manager()
+            .add_global_key_handler(Rc::new(move |_| {
+                read.borrow_mut().push(key_scale.get());
+                KeyEventResult::Handled
+            }));
+        let one = PointerId::try_from(1_u64).expect("contact");
+        let two = PointerId::try_from(2_u64).expect("contact");
+        for (id, x) in [(one, 100.0), (two, 300.0)] {
+            dispatch(
+                &realm,
+                primary,
+                make_down_event_for_id(id, Offset::new(x, 10.0), PointerKind::Touch).expect("down"),
+            );
+        }
+        let key = || {
+            realm.enter(|realm| {
+                realm.handle_input_addressed(
+                    primary,
+                    PlatformInput::Keyboard(KeyEventBuilder::new(Code::F4).build()),
+                );
+            })
+        };
+        for (left, right, expected) in [(50.0, 350.0, 1.5), (25.0, 375.0, 1.75)] {
+            for (id, x) in [(one, left), (two, right)] {
+                dispatch(
+                    &realm,
+                    primary,
+                    make_move_event_for_id(id, Offset::new(x, 10.0), PointerKind::Touch)
+                        .expect("motion"),
+                );
+            }
+            key();
+            assert!(
+                (scale.get() - expected).abs() < 1e-9,
+                "{policy:?}: continuous measured scale {}",
+                scale.get()
+            );
+            assert_eq!(ends.get(), 0, "a causal barrier cannot end live contacts");
+            assert_eq!(
+                *reads.borrow().last().expect("key reads scale"),
+                scale.get()
+            );
+        }
+        for (id, x) in [(one, 25.0), (two, 375.0)] {
+            dispatch(
+                &realm,
+                primary,
+                make_up_event_for_id(id, Offset::new(x, 10.0), PointerKind::Touch)
+                    .expect("terminal"),
+            );
+        }
+        assert_eq!(ends.get(), 1, "native contact terminals finish one scale");
+    }
+}
+
+pub(crate) fn keyboard_motion_barrier_uses_resolved_focus_owner_during_reentrant_focus_change() {
+    use flui_interaction::routing::{FocusNode, KeyEventResult};
+    use flui_interaction::testing::input::KeyEventBuilder;
+    use flui_platform_api::keyboard::Code;
+    use flui_runtime::presentation::PointerResampling;
+    use flui_widgets::Focus;
+    use std::rc::Weak;
+
+    let mut realm = UiRealm::for_test();
+    let primary = realm.presentation_id();
+    let secondary = install_secondary(&mut realm);
+    realm
+        .set_pointer_resampling(secondary, PointerResampling::FrameAligned)
+        .expect("policy");
+    let owner = Rc::new(RefCell::new(Weak::<UiRealm>::new()));
+    let changing_owner = Rc::clone(&owner);
+    let state = Rc::new(Cell::new(0.0));
+    let moved = Rc::clone(&state);
+    let secondary_state = Rc::clone(&state);
+    let observations = Rc::new(RefCell::new(Vec::new()));
+    let secondary_keys = Rc::clone(&observations);
+    let node = FocusNode::new();
+    realm
+        .attach_root_widget_to_for_test(
+            secondary,
+            &Focus::new(
+                Listener::new()
+                    .behavior(HitTestBehavior::Opaque)
+                    .on_pointer_move(move |_, event| {
+                        let PointerEvent::Move(event) = event.global else {
+                            panic!("motion");
+                        };
+                        moved.set(event.current().position.get().x);
+                        changing_owner
+                            .borrow()
+                            .upgrade()
+                            .expect("owner")
+                            .synchronize_window_snapshot(
+                                primary,
+                                WindowExecutionState::Running,
+                                true,
+                                true,
+                            );
+                    })
+                    .child(SizedBox::new(100.0, 40.0)),
+            )
+            .focus_node(Rc::clone(&node))
+            .on_key_event(move |_, _| {
+                secondary_keys
+                    .borrow_mut()
+                    .push(("secondary", secondary_state.get()));
+                KeyEventResult::Handled
+            }),
+        )
+        .expect("secondary focus consumer");
+    realm.synchronize_window_snapshot(secondary, WindowExecutionState::Running, true, true);
+    pump(&mut realm);
+    realm.enter(|_| {
+        let _ = node.request_focus();
+    });
+    let primary_keys = Rc::clone(&observations);
+    realm
+        .focus_manager()
+        .add_global_key_handler(Rc::new(move |_| {
+            primary_keys.borrow_mut().push(("primary", 0.0));
+            KeyEventResult::Handled
+        }));
+    let realm = Rc::new(realm);
+    *owner.borrow_mut() = Rc::downgrade(&realm);
+    dispatch(
+        &realm,
+        secondary,
+        make_down_event(Offset::new(10.0, 10.0), PointerKind::Touch).expect("down"),
+    );
+    dispatch(
+        &realm,
+        secondary,
+        make_move_event(Offset::new(30.0, 10.0), PointerKind::Touch).expect("motion"),
+    );
+    let key = || {
+        realm.enter(|realm| {
+            realm.handle_input_addressed(
+                primary,
+                PlatformInput::Keyboard(KeyEventBuilder::new(Code::F4).build()),
+            );
+        })
+    };
+    key();
+    assert_eq!(
+        *observations.borrow(),
+        [("secondary", 30.0)],
+        "accepted Key retains resolved focus owner while its motion changes active focus"
+    );
+    key();
+    assert_eq!(
+        *observations.borrow(),
+        [("secondary", 30.0), ("primary", 0.0)],
+        "later Key resolves newly active owner"
+    );
+}
+
 pub(crate) fn ime_commit_survives_competing_motion_and_owner_failures() {
     assert_ime_motion_order(true);
 }
