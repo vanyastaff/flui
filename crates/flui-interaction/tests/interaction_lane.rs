@@ -1191,7 +1191,9 @@ fn assert_queued_hover_retirement(mismatch: bool, failing_metadata: usize) {
             unreachable!()
         };
         if changed {
-            motion.pointer.role = PointerRole::Primary;
+            // Synthetic motion is already Primary; Additional is a genuine
+            // full-PointerInfo boundary for try_coalesce.
+            motion.pointer.role = PointerRole::Additional;
         }
         PointerEvent::Move(PointerMove::new(
             motion.pointer,
