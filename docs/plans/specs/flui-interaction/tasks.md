@@ -9,7 +9,7 @@
 
 ## Текущее выполнение
 
-Сверка 2026-10-07 по интеграционной базе `3cf7329c6`, коду и именам тестов.
+Сверка 2026-10-08 по интеграционной базе `028df0a8f`, коду и именам тестов.
 Отмеченные прогоны — целевые проверки интеграции. Итоговые `check-changed`,
 optional-feature/platform gates, CI и слияние в `main` ещё не объявляются завершёнными.
 
@@ -30,9 +30,9 @@ optional-feature/platform gates, CI и слияние в `main` ещё не об
 | C6 | Реализована | PR #1478 merged; типизированные Down/Up и `DeviceId(NonZeroU64)` в новом словаре |
 | C7 | Реализована локально | Owner-local MessageClock использует `wrapping_sub` тиков; мёртвый `is_key_pressed` удалён. Реальная очередь hidden HWND и rollover прошли, обе проверки падают при откате и снова проходят после восстановления |
 | S1, S2 | Основные миграции интегрированы; итоговая проверка поверхности впереди | Owned vocabulary, checked focus ID, typed focus contracts, RAII listeners, immutable Rc builders и production estimator selection подключены. HandlerId, ложная sealed-иерархия, team/standalone signal resolver, predictor и общий vocabulary bridge удалены по scope; `__runtime` остаётся намеренным контрактом ADR-0081 |
-| S3, S4 | Документация актуализирована; финальные doctests/бенчи впереди | Пустые `include_str!` модули удалены. Ранее прошли семь Markdown примеров и 50 source doctests + один compile-fail; после новых API ожидается повторный прогон восьми Markdown примеров. Ownership baseline/after в PERFORMANCE.md относится к прежней форме событий; текущие итоговые бенчи ещё не сняты. Counting-allocator контракт `resolved_route_move_invocation_allocates_no_heap_after_setup` проходит на текущем cached Move без истории; это не bound для событий с history |
+| S3, S4 | Source doctests прошли; итоговые Markdown-проверки и бенчи впереди | Пустые `include_str!` модули удалены. На базе `3139a3193` all-features source doctests: 51 runtime-пример и один compile-fail прошли, ignored нет. Прямой повторный прогон восьми Markdown примеров ещё не объявляется завершённым. Предыдущие ownership timings относятся к прежней форме событий и не подменяют текущие wire-бенчи. Counting-allocator контракт `resolved_route_move_invocation_allocates_no_heap_after_setup` проверяет ноль аллокаций scalar Move и не более двух на каждый translated target с обеими history: измерены 2/8/32 для 1/4/16 targets, с проверкой всех sample fields и global history; PERFORMANCE.md описывает этот bound отдельно от elapsed time |
 | S5 | Реализована локально; итоговый gate впереди | DPI исправлен PR #1493; frame flush, drain и hover refresh обходят все input owners. Публичные runtime-проверки прошли |
-| R5 | Текущий same-pointer контракт закреплён; отдельный новый дефект не заявляется | В текущем `gesture_lifecycle_matrix` остаются `drag_cancel_callback_admits_the_next_contact_once` и `drag_cancelled_end_callback_admits_the_next_contact_once`; drag проверяет exact `is_current` после reentrant terminal callback. Новый continuation matrix также проверяет same-pointer replacement, первую панику и следующий Up. Исторический guard inverse не заменяет новую проверку изменённого drag |
+| R5 | Текущий same-pointer контракт закреплён; итоговый gate впереди | В `gesture_lifecycle_matrix` сохраняются `drag_cancel_callback_admits_the_next_contact_once` и `drag_cancelled_end_callback_admits_the_next_contact_once`. Таблица `drag_lifecycle_contracts` проверяет same-pointer replacement из terminal callback, первую панику и следующий Up; она прошла в restored-прогоне 49 связанных тестов на базе `502a8334f` до main merge. Этот прогон не объявляется пост-merge gate; исторический guard inverse не выдаётся за новый дефект изменённого drag |
 
 RA0 подготовлена: живые baseline-бенчи сохранены, исходные E0277 и E0038 подтверждены.
 RA1–RA4 интегрированы атомарно с публичными потребителями; обычный `trybuild_ui`
@@ -43,6 +43,18 @@ RA6 ownership-измерения сохранены; итоговый gate за�
 но финальная приёмка и ограничения producer smoke остаются в `pointer-vocabulary/tasks.md`.
 Все 20 утверждённых NEW-строк повторно сверены в `scope-closure.md`: наличие реализации
 отделено от отсутствующих inverse/нативных и итоговых проверок.
+
+Restored-прогон 49 связанных тестов на базе `502a8334f` после восстановления
+13 независимых inverse-хунков прошёл:
+
+```text
+cargo nextest run --locked -p flui-interaction -p flui-widgets -p flui-rendering -p flui-runtime -p flui-semantics -p flui-testing -E 'test(recognizer) | test(containment_and_isolation_matrix) | test(pointer) | test(scroll) | test(binding) | test(reveal) | test(resampl)' --no-fail-fast
+```
+
+Он включает `drag_lifecycle_contracts`, binding/private resampling, allocator,
+43 pointer- и 56 scroll-строк, 15 runtime containment-строк и lower reveal.
+Последующее слияние актуального `origin/main` в `8cfc0ea64` требует итоговой
+проверки интеграции; этот более ранний целевой прогон её не заменяет.
 
 ## Занятые файлы (не трогать без согласования)
 
@@ -120,7 +132,7 @@ RA6 ownership-измерения сохранены; итоговый gate за�
 | R2 ✅ | `on_start` снимает контакт при захвате: `Start → End → Update` | `recognizers/scale.rs` |
 | R3 ✅ | `on_tap_down` допускает следующий контакт — поколение растёт и уже принятый `TapUp` теряется (счёт 2 без первого Up) | `recognizers/tap_and_drag.rs` |
 | R4 ✅ | Самоуправляемая арена с соперником: Cancel у Eager делает sweep с семантикой Up и награждает соперника; отмена должна снимать поколение без победителя (и в других путях withdraw-and-sweep) | `recognizers/eager.rs`, `arena/**` |
-| R5 | Повторный допуск того же указателя из cancel-колбэка drag запускает жест дважды | `recognizers/drag.rs` |
+| R5 — контракт закреплён | Исторический дефект: повторный допуск того же указателя из cancel-колбэка drag запускал жест дважды. Текущие exact-contact проверки сохраняют replacement; same-pointer reentry и следующий Up проверяются `drag_lifecycle_contracts`. Итоговый post-merge gate остаётся впереди | `recognizers/drag.rs` |
 
 ## Измеренная история и gesture admission
 
@@ -153,6 +165,24 @@ hardware smoke и не обещание безграничного окна velo
 
 Контрольный запуск: `cargo nextest run --locked -p flui-interaction
 tap_and_drag_resolves_through_the_shared_arena --no-capture`.
+
+## Минимальный интервал DoubleTap
+
+Утверждённый M2-T4 закрыт локально: DoubleTap сохраняет время первого Up на
+owner clock арены и допускает иначе подходящий второй Down начиная с 40 ms.
+Более ранний Down игнорируется без потери удержанного первого verdict и без
+перезапуска его timeout; последующий Up не допускает этот контакт задним
+числом. Duration первого нажатия не подменяет интервал после первого Up.
+Timeout и межконтактный slop по frozen settings сохраняют отдельную политику.
+
+`tap_and_drag_resolves_through_the_shared_arena` проверяет Mouse/Touch,
+39 ms refusal, exact40 admission, первое нажатие продолжительностью 0/250 ms
+и следующую здоровую пару с повторным pointer ID. Baseline и независимый
+production inverse воспроизвели лишний second-down callback на 39 ms; контроль
+40 ms прошёл при откате. Точные production-хунки восстановлены; расширенная
+публичная таблица, обычный trybuild и `tap_builder_lifecycle_contract` после
+коррекции его нулевого timing premise прошли. Финальные gates зависимых
+потребителей и CI остаются отдельными условиями приёмки.
 
 ## Порядок принятого motion перед Keyboard и IME
 

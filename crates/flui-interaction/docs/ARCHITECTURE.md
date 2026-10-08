@@ -74,6 +74,15 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   borrow under ADR-0127. `shared_region_exit_per_device`,
   `ambient_refresh_contains_each_device` and
   `released_region_destructor_reenters_tracker` pin these contracts.
+- **Hover payload retirement preserves delivery and first failure (ADR-0127).**
+  Queued replacement commits its newer movement before the outgoing hit path
+  retires. Each entry detaches metadata before destruction and retains it
+  during unwind. Frame delivery explicitly retires metadata after an already
+  caught callback failure, while accepted sibling movements still run.
+  `binding_input_contract_matrix` pins healthy destruction, callback and
+  metadata retirement competition, reentrant replacement and fresh recovery.
+  Containment ends at each opaque payload; its own double-panicking destructor
+  cannot be rescued by the framework path.
 
 - **Focus node identities are never reissued.** The allocator admits its final nonzero identity once and then refuses every new `FocusNode` with a panic, permanently, even after that panic is caught. Wrapping would hand a retired identity, and the focus authority it names, to a new node; refusing keeps every attached node's requests and listeners intact.
 - **Configure before sharing; cancel before releasing.** Builders return `Rc`
@@ -130,6 +139,17 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   invoking callbacks outside the state borrow. A repeated poll cannot refire
   the sequence. The arena queries `deadline()` and supplies its single clock
   reading to `poll_deadline(now)` only when due.
+- **Double-tap debounce starts at the first release.** An otherwise eligible
+  second Down must arrive at least 40 ms after the first Up on the arena's owner
+  clock, independently of how long the first contact stayed down. Earlier Downs
+  are ignored while the first tap's held verdict and original timeout remain
+  pending; lifting that bounced contact after the boundary cannot admit it
+  retroactively. Exact 40 ms is eligible. Timeout and inter-tap distance retain
+  their separate frozen-settings policy. A clock callback can retire or replace
+  the contact, so the first-release snapshot commits only after checking the
+  exact contact identity again. `tap_and_drag_resolves_through_the_shared_arena`
+  pins 39/40 ms admission, both mouse and touch, a held first contact and reused-ID
+  recovery; `tap_builder_lifecycle_contract` pins cancellation and later reuse.
 - **Focus scope identity is explicit.** A `FocusScopeNode` owns an inner `FocusNode`, and that backing node carries a `Weak<FocusScopeNode>` owner link. This keeps enclosing-scope lookup, focused-child history, and `FocusManager::focus_next` / `focus_previous` rooted in the same tree instead of relying on a parallel manager structure. `descendants_are_focusable=false` gates descendant requests; a true-to-false transition evicts focus held by the node or its subtree while leaving the node eligible for a later explicit request. FLUI clears primary focus to `None` rather than selecting a previously focused child.
 - **`processing::lsq_solver` is crate-internal.** `VelocityTracker` is its only user; the resampler interpolates linearly and does not fit a polynomial.
 - **Observability is crate-public.** `pub mod observability` exports stable `GestureEvent` spellings, component-name constants, and `pointer_event_kind`. `flui-app` configures a generic subscriber; gesture-specific devtools consumption requires its own integration. `stable_recognizer_observability_kinds_reach_the_subscriber` pins admission and dispatch fields through public recognizer calls.

@@ -161,6 +161,7 @@ impl std::fmt::Debug for PresentationWindow {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PresentationWindow")
             .field("window", &self.window.id())
+            .field("pointer_resampling", &self.pointer_resampling)
             .field("accessibility", &self.accessibility.is_some())
             .field("text_store_host", &self.text_store_host.is_some())
             .finish()

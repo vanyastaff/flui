@@ -881,6 +881,13 @@ impl LocalLaneInner {
 thread_local! {
     static LOCAL_LANES: RefCell<HashMap<LaneId, Weak<LocalLaneInner>>> =
         RefCell::new(HashMap::new());
+    #[cfg_attr(
+        target_os = "android",
+        expect(
+            clippy::missing_const_for_thread_local,
+            reason = "Rust 1.99's OS TLS macro erases this explicit const initializer"
+        )
+    )]
     static ACTIVE_LANES: RefCell<Vec<LaneTicket>> = const { RefCell::new(Vec::new()) };
 }
 

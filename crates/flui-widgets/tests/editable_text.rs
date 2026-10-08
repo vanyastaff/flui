@@ -1099,12 +1099,14 @@ pub(crate) fn a_drag_selects_from_its_start_to_the_pointer() {
 /// in `wrap_double_tap_word_select` — the selection stays collapsed
 /// after the second tap, same as the first.
 pub(crate) fn a_double_tap_selects_the_word_under_it() {
+    use std::time::Duration;
+
     let controller = TextEditingController::with_text("hello world");
     let focus_node = FocusNode::with_debug_label("double-tapped field");
-    let harness = crate::common::harness::mount_with_ime(EditableText::new(
-        controller.clone(),
-        Rc::clone(&focus_node),
-    ));
+    let mut harness = crate::common::lay_out(
+        EditableText::new(controller.clone(), Rc::clone(&focus_node)),
+        crate::common::tight(200.0, 40.0),
+    );
 
     // First tap: places a collapsed caret, same as
     // `a_tap_places_the_caret_where_it_landed`.
@@ -1115,6 +1117,9 @@ pub(crate) fn a_double_tap_selects_the_word_under_it() {
         "the first tap alone only collapses"
     );
 
+    // Advance the presentation-owned arena clock past the debounce interval,
+    // while remaining inside the double-tap window.
+    harness.pump_for(Duration::from_millis(40));
     // Second tap, same spot: `on_double_tap_down` widens it to the word.
     harness.dispatch_pointer_down(1.0, 5.0);
 
@@ -2121,7 +2126,8 @@ pub(crate) mod text_store {
         );
         let _ = focus.request_focus();
         for ch in "abcdefghijklmnopqrstuvwxyz".chars() {
-            let _ = laid.focus_manager()
+            let _ = laid
+                .focus_manager()
                 .dispatch_key_event(&super::character_key_event(ch))
                 .is_handled();
         }

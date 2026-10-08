@@ -35,6 +35,7 @@
 //!   [`InteractiveViewerState::geometry`]. Adding `constrained: false` later
 //!   means that identity stops holding and a second, viewport-only anchor
 //!   becomes load bearing again.
+//!
 //! `on_interaction_start`/`on_interaction_update`/`on_interaction_end` carry
 //! FLUI's own detail types ([`InteractionStartDetails`] etc.) rather than
 //! the recognizer's cumulative measurements. The update carries the applied
@@ -1150,7 +1151,7 @@ fn contain_transform(
         return None;
     }
     if !excess_is_negligible(excess) {
-        matrix = matrix * Matrix4::translation(-excess.dx, -excess.dy, 0.0);
+        matrix *= Matrix4::translation(-excess.dx, -excess.dy, 0.0);
     }
     let result = matrix.try_inverse()?.transform_rect(&viewport);
     (matrix

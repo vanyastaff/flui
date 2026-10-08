@@ -76,6 +76,12 @@
 //! a different target. `binding_input_contract_matrix` covers native observer,
 //! claimant and capture-retirement failures, replacement, and recovery.
 //!
+//! Hover paths retire opaque metadata individually after delivery, preserving
+//! an already caught first failure while the remaining accepted frame peers
+//! run. Replacing a queued hover commits the newer packet before retiring its
+//! outgoing path. Entries retain metadata during unwind (ADR-0127).
+//! `binding_input_contract_matrix` covers these boundaries and fresh recovery.
+//!
 //! # Example
 //!
 //! ```rust
@@ -982,6 +988,9 @@ impl GestureBinding {
                     && matches!(&pending, PendingMove::Contact { sequence, .. }
                         if self.is_current_sequence(pointer_id, *sequence));
                 if !accepted_contact {
+                    if let PendingMove::Hover { hit_test, .. } = pending {
+                        hit_test.retire_metadata(&mut first_panic);
+                    }
                     continue;
                 }
             }
@@ -1011,6 +1020,7 @@ impl GestureBinding {
                     let delivered =
                         self.dispatch_ephemeral_with_hover_interleaved(&event, &hit_test);
                     RoutePanic::preserve_first(&mut first_panic, delivered, "coalesced hover move");
+                    hit_test.retire_metadata(&mut first_panic);
                     count += 1;
                 }
             }
