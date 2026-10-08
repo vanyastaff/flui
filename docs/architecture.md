@@ -6,6 +6,14 @@ FLUI combines two patterns: a **Layered Modular Workspace** (workspace structure
 
 For the deep, rule-by-rule guide (anti-patterns, code examples, dependency rules), read [`FOUNDATIONS.md`](FOUNDATIONS.md). This page is the high-level orientation.
 
+Input observation belongs to the resolved presentation. Before Keyboard or IME
+dispatch, the runtime delivers that presentation's frozen measured pointer
+prefix without advancing a frame or ending contacts; reentrant newer motion
+stays pending and the first failure remains authoritative across the accepted
+input round ([ADR-0163](adr/ADR-0163-presentation-owned-pointer-resampling.md)).
+Keyboard keeps its admitted active presentation through callback focus changes;
+layout and paint retain their ordinary frame transaction.
+
 This page describes the architecture as it is. The target architecture and its decisions (ADR-0081 to ADR-0098) are in [`design/README.md`](../design/README.md); some of those ADRs are accepted in part and the rest are Proposed, and each ADR's `Status` line says which.
 
 ## Layered Modular Workspace

@@ -190,6 +190,31 @@ host.
 
 ## Mapping decisions
 
+### Observing input follows its presentation's accepted motion
+
+Keyboard and IME drain a frozen measured motion prefix before dispatch without
+advancing frame time or ending contacts (ADR-0163). Keyboard retains the active
+presentation resolved at admission through reentrant focus changes; IME retains
+its addressed presentation. Callback failures finish accepted motion, deferred
+arena settlement and the observing input before the first failure resumes.
+Reentrant movement stays debt for the next operation or frame. This observes
+input-produced state; layout and paint still follow their frame transaction.
+
+The public flui-testing `containment_and_isolation_matrix` rows
+`mouse_motion_precedes_keyboard_without_a_frame`,
+`touch_motion_precedes_keyboard_without_a_frame` and their resampled variants
+pin measured coordinates before Key. The single and competing rows
+`motion_failure_keeps_following_keyboard_and_contact_terminal`,
+`keyboard_failure_keeps_preceding_motion_and_contact_terminal` and
+`motion_failure_precedes_competing_keyboard_failure_and_recovers` pin recovery.
+`ime_commit_observes_preceding_measured_motion` and
+`ime_commit_survives_competing_motion_and_owner_failures` pin actual text edits.
+`keyboard_reads_all_frozen_contacts_after_sibling_failure`,
+`keyboard_barrier_keeps_reentrant_contact_motion_for_the_next_round`,
+`runtime_keyboard_barrier_preserves_scale_contacts_and_continuity` and
+`keyboard_motion_barrier_uses_resolved_focus_owner_during_reentrant_focus_change`
+pin sibling prefixes, newer debt, gesture continuity and resolved ownership.
+
 ### Frame input and ambient hover belong to each presentation
 
 The frame drains deferred arena decisions and queued pointer motion in

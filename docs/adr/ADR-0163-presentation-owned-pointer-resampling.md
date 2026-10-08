@@ -62,6 +62,33 @@ predicted hardware samples are not substituted for measured history. The
 lookback is a deliberate latency cost, and the existing default period is
 16,667 microseconds rather than an assertion about the host display.
 
+### Measured motion before observing input
+
+Keyboard and IME observe their resolved presentation's accepted motion before
+their own dispatch. The runtime calls `GestureBinding::flush_pending_input`,
+which drains measured packets without advancing frame time, interpolating a
+synthetic frame sample or ending contacts. Default coalescing retains its latest
+pending move; opted-in resampling retains its measured prefix. Tracking,
+interpolation anchors, exact contact generations and capture selection remain
+owned by the admitted contact.
+
+The binding freezes every contact prefix before the first callback. Reentrant
+motion belongs to a later operation or frame; it cannot be pulled into another
+contact's frozen prefix. Capture delivery guards protect accepted measured
+prefixes until delivery finishes. The binding retains existing deterministic
+pointer iteration; this contract does not establish global timestamp ordering
+across independent devices.
+
+Keyboard resolves the focus coordinator's active presentation before the
+barrier, even when the native event names another window. That accepted input
+keeps its resolved presentation if a motion callback changes active focus. The
+next input resolves focus again. IME retains its addressed presentation and
+projects onto its actual attached text store. Motion, deferred arena settlement
+and the following observing input each have containment: an earlier failure
+cannot suppress accepted healthy tails or the following edit, and competing
+failures cannot replace the first one. Rendering geometry still changes at the
+ordinary frame boundary; this is an input-state observation barrier.
+
 ### Pending delivery and containment
 
 An accepted future sample is a delivery obligation distinct from an active
@@ -107,6 +134,24 @@ installation against resampler stop. The one-guard implementation is the
 ownership rule; a separate concurrency witness would be needed to claim that
 specific race was reproduced. Native hardware timing and display cadence are
 not implied by the headless tests.
+
+The public `flui-testing::containment_and_isolation_matrix` also mounts
+`mouse_motion_precedes_keyboard_without_a_frame`,
+`touch_motion_precedes_keyboard_without_a_frame`, their resampled counterparts,
+`motion_failure_keeps_following_keyboard_and_contact_terminal`,
+`keyboard_failure_keeps_preceding_motion_and_contact_terminal` and
+`motion_failure_precedes_competing_keyboard_failure_and_recovers`.
+`ime_commit_observes_preceding_measured_motion` and
+`ime_commit_survives_competing_motion_and_owner_failures` use an actual attached
+EditableText and text-store projection.
+`keyboard_reads_all_frozen_contacts_after_sibling_failure` and
+`keyboard_barrier_keeps_reentrant_contact_motion_for_the_next_round` pin frozen
+measured prefixes, Key's observation of motion-produced state and later debt.
+`runtime_keyboard_barrier_preserves_scale_contacts_and_continuity` exercises
+the actual GestureDetector consumer; and
+`keyboard_motion_barrier_uses_resolved_focus_owner_during_reentrant_focus_change`
+pins presentation resolution. These rows assert state before another frame,
+then terminal delivery and healthy recovery, rather than only eventual counts.
 
 ## Consequences
 
