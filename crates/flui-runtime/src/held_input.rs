@@ -1243,7 +1243,7 @@ mod tests {
         }
 
         assert!(queue.borrow().is_empty());
-        assert!(drain(&queue).is_empty());
+        assert_eq!(drain(&queue), [] as [flui_interaction::PointerEvent; 0]);
     }
 
     fn dropping_open_sequences_mid_replay_keeps_only_complete_epochs() {

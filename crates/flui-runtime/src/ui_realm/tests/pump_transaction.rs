@@ -162,12 +162,11 @@ fn resampling_sibling_case(fail: bool, compete: bool) {
             if let PointerEvent::Move(event) = event {
                 seen.borrow_mut().push(event.current().position.get().x);
                 let count = seen.borrow().len();
-                if flag.get() && count == 1 {
-                    panic!("first presentation sample");
-                }
-                if flag.get() && compete && count == 2 {
-                    panic!("second presentation sample");
-                }
+                assert!(!(flag.get() && count == 1), "first presentation sample");
+                assert!(
+                    !(flag.get() && compete && count == 2),
+                    "second presentation sample"
+                );
             }
         }));
     let seen = Rc::clone(&b_seen);

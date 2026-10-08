@@ -925,10 +925,6 @@ fn run_scoped_routes_child(fail_cursor: bool) {
     );
 }
 
-#[expect(
-    clippy::arc_with_non_send_sync,
-    reason = "the arena requires Arc members; these hostile capture probes remain on the owner thread"
-)]
 pub(crate) fn run_presentation_close_child(kind: &str) {
     if kind == "realm-sibling" {
         run_realm_sibling_child();

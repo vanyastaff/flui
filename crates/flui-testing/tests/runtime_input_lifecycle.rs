@@ -56,7 +56,7 @@ fn hover() -> PointerEvent {
     let mut event =
         make_move_event(Offset::new(8.0, 9.0), PointerKind::Mouse).expect("finite test position");
     if let PointerEvent::Move(update) = &mut event {
-        update.buttons = Default::default();
+        update.buttons = flui_platform_api::pointer::PointerButtons::default();
     }
     event
 }
@@ -121,7 +121,7 @@ pub(crate) fn runtime_keyboard_barrier_preserves_scale_contacts_and_continuity()
                     primary,
                     PlatformInput::Keyboard(KeyEventBuilder::new(Code::F4).build()),
                 );
-            })
+            });
         };
         for (left, right, expected) in [(50.0, 350.0, 1.5), (25.0, 375.0, 1.75)] {
             for (id, x) in [(one, left), (two, right)] {
@@ -241,7 +241,7 @@ pub(crate) fn keyboard_motion_barrier_uses_resolved_focus_owner_during_reentrant
                 primary,
                 PlatformInput::Keyboard(KeyEventBuilder::new(Code::F4).build()),
             );
-        })
+        });
     };
     key();
     assert_eq!(
@@ -433,7 +433,7 @@ pub(crate) fn keyboard_coalesced_prefix_survives_reentrant_capture_release() {
                         )
                         .expect("hover");
                         if let PointerEvent::Move(event) = &mut hover {
-                            event.buttons = Default::default();
+                            event.buttons = flui_platform_api::pointer::PointerButtons::default();
                         }
                         dispatch(&realm, primary, hover);
                     }
@@ -598,7 +598,7 @@ fn assert_keyboard_contact_prefix(fail: bool, reenter: bool, resampling: bool) {
                 primary,
                 PlatformInput::Keyboard(KeyEventBuilder::new(Code::F4).build()),
             );
-        })
+        });
     };
     let outcome = catch_unwind(AssertUnwindSafe(key));
     if fail {
@@ -1300,7 +1300,7 @@ fn pause_diagnostic_failure_still_drains_motion(cancel_panics: bool) {
     )
     .expect("finite test position");
     if let PointerEvent::Move(update) = &mut motion {
-        update.buttons = Default::default();
+        update.buttons = flui_platform_api::pointer::PointerButtons::default();
     }
     dispatch(&realm, primary, motion.clone());
     assert_eq!(hovers.get(), 0, "the mouse move is still queued");
