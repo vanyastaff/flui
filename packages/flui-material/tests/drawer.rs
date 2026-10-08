@@ -49,6 +49,97 @@ use flui_sdk::animation::Vsync;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{GestureDetector, MediaQuery, MediaQueryData, SizedBox, VsyncScope};
 
+#[derive(Clone, StatelessView)]
+struct DrawerFlingProfile {
+    provider: flui_interaction::settings::GestureSettingsProvider,
+    child: flui_sdk::view::BoxedView,
+}
+
+impl StatelessView for DrawerFlingProfile {
+    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+        flui_sdk::widgets::GestureArenaScope::new(
+            flui_sdk::widgets::GestureArenaScope::of(ctx),
+            self.child.clone(),
+        )
+        .settings(self.provider.clone())
+    }
+}
+
+pub fn drawer_settling_uses_the_captured_fling_profile() {
+    drawer_settling_uses_profile(false);
+}
+
+pub fn open_drawer_settling_uses_the_captured_fling_profile() {
+    drawer_settling_uses_profile(true);
+}
+
+fn drawer_settling_uses_profile(initially_open: bool) {
+    for (min, max) in [(50.0, 100.0), (5000.0, 5000.0)] {
+        let profile = |min, max| {
+            flui_interaction::GestureSettings::default()
+                .try_with_fling_velocity(min, max)
+                .expect("valid fling range")
+        };
+        let source = flui_interaction::settings::GestureSettingsSource::new(profile(min, max));
+        let slot = Rc::new(RefCell::new(None));
+        let probe = HandleProbe {
+            slot: Rc::clone(&slot),
+            on_tap: Rc::new(|_| {}),
+        };
+        let vsync = Vsync::new();
+        let mut laid = lay_out_animated(
+            DrawerFlingProfile {
+                provider: source.provider(),
+                child: themed_animated(Scaffold::new().drawer(Drawer::new()).body(probe), &vsync)
+                    .boxed(),
+            },
+            tight(400.0, 800.0),
+            vsync,
+        );
+        let handle = slot.borrow().clone().expect("mounted drawer handle");
+        if initially_open {
+            laid.enter_owner_scope(|| handle.open_drawer());
+            for _ in 0..FLING_SETTLE_PUMPS {
+                laid.pump_for(FRAME);
+            }
+        }
+        for attempt in 0..2 {
+            let start = if initially_open { 250.0 } else { 5.0 };
+            let direction = if initially_open { -1.0 } else { 1.0 };
+            laid.dispatch_pointer_down(start, 400.0);
+            for distance in [20.0, 40.0, 60.0, 80.0, 100.0] {
+                laid.dispatch_pointer_move_after(
+                    start + direction * distance,
+                    400.0,
+                    Duration::from_millis(10),
+                );
+            }
+            if attempt == 0 {
+                source.replace(profile(50.0, 2000.0));
+            }
+            laid.dispatch_pointer_up(start + direction * 100.0, 400.0);
+            for _ in 0..FLING_SETTLE_PUMPS {
+                laid.pump_for(FRAME);
+            }
+            let expected = if attempt == 0 {
+                initially_open
+            } else {
+                !initially_open
+            };
+            assert_eq!(
+                handle.is_drawer_open(),
+                expected,
+                "edge/panel {initially_open}: the admitted range suppresses old velocity, then the next contact recovers"
+            );
+            assert_eq!(
+                drawer_panels(&laid).len(),
+                usize::from(expected),
+                "settled panel geometry agrees"
+            );
+        }
+    }
+}
+
 /// Wraps `scaffold` in the `Theme`/`MediaQuery` ancestors `Scaffold`/
 /// `Drawer`/`Material` all require (`Theme::of`/`MediaQuery::of` panic
 /// without one). No `VsyncScope` — for tests driven by [`lay_out`] alone,

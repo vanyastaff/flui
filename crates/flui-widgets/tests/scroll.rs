@@ -22,6 +22,90 @@ use flui_widgets::{
     ScrollController, Scrollable, Scrollbar, SharedScrollPhysics, SizedBox, VsyncScope,
 };
 
+#[derive(Clone, flui_view::prelude::StatelessView)]
+pub(crate) struct FlingProfile {
+    pub(crate) provider: flui_interaction::settings::GestureSettingsProvider,
+    pub(crate) child: flui_view::BoxedView,
+}
+
+impl flui_view::StatelessView for FlingProfile {
+    fn build(&self, ctx: &dyn flui_view::BuildContext) -> impl IntoView {
+        flui_widgets::GestureArenaScope::new(
+            flui_widgets::GestureArenaScope::of(ctx),
+            self.child.clone(),
+        )
+        .settings(self.provider.clone())
+    }
+}
+
+pub(crate) fn terminal_scroll_motion_uses_the_admitted_fling_profile() {
+    terminal_motion_uses_the_admitted_fling_profile(false);
+}
+
+pub(crate) fn terminal_refresh_motion_uses_the_admitted_fling_profile() {
+    terminal_motion_uses_the_admitted_fling_profile(true);
+}
+
+fn terminal_motion_uses_the_admitted_fling_profile(refresh: bool) {
+    let profile = |min, max| {
+        flui_interaction::GestureSettings::default()
+            .try_with_fling_velocity(min, max)
+            .expect("valid fling range")
+    };
+    let source = flui_interaction::settings::GestureSettingsSource::new(profile(50.0, 300.0));
+    let controller = ScrollController::new();
+    controller.update_dimensions(300.0, 0.0, 4700.0);
+    let child = if refresh {
+        refresh_content(&controller, &RefreshController::new()).boxed()
+    } else {
+        Scrollable::new()
+            .controller(controller.clone())
+            .child(SizedBox::new(300.0, 5000.0))
+            .boxed()
+    };
+    let vsync = Vsync::new();
+    let mut laid = crate::common::lay_out_animated(
+        VsyncScope::new(
+            vsync.clone(),
+            FlingProfile {
+                provider: source.provider(),
+                child,
+            },
+        ),
+        tight(300.0, 300.0),
+        vsync,
+    );
+    controller.set_pixels(500.0);
+    for attempt in 0..3 {
+        laid.dispatch_pointer_down(150.0, 250.0);
+        for y in [230.0, 210.0, 190.0, 170.0, 150.0] {
+            laid.dispatch_pointer_move_after(150.0, y, Duration::from_millis(10));
+        }
+        if attempt == 0 {
+            source.replace(profile(5000.0, 5000.0));
+        }
+        laid.dispatch_pointer_up(150.0, 150.0);
+        let released = controller.pixels();
+        // Anchor the controller's first tick, then observe actual pixels.
+        laid.pump_for(Duration::from_millis(16));
+        laid.pump_for(Duration::from_millis(16));
+        let coast = controller.pixels() - released;
+        if attempt == 1 {
+            assert_eq!(
+                coast, 0.0,
+                "{refresh}: next contact below its admitted minimum does not coast"
+            );
+            source.replace(profile(50.0, 600.0));
+        } else {
+            let bound = if attempt == 0 { 10.0 } else { 20.0 };
+            assert!(
+                coast > 0.0 && coast < bound,
+                "{refresh}: attempt {attempt} uses its captured maximum, coast {coast}"
+            );
+        }
+    }
+}
+
 // ============================================================================
 // Viewport — Position/Fixed mode switching
 // ============================================================================
