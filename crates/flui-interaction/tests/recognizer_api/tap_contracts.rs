@@ -178,7 +178,8 @@ fn cancel_during_up_suppresses_tap() {
 }
 
 fn cancel_reuses_double_tap() {
-    let arena = GestureArena::new();
+    let clock = flui_interaction::ManualClock::new();
+    let arena = GestureArena::with_clock(std::sync::Arc::new(clock.clone()));
     let doubles = Rc::new(Cell::new(0));
     let recognizer = DoubleTapGestureRecognizer::builder(arena.clone())
         .on_double_tap({
@@ -196,6 +197,7 @@ fn cancel_reuses_double_tap() {
         arena.close(down.pointer_id().expect("fixture contact identity"));
         recognizer.handle_event(PointerDispatch::at_root(&up));
         arena.sweep(down.pointer_id().expect("fixture contact identity"));
+        clock.advance(std::time::Duration::from_millis(40));
     }
     assert_eq!(doubles.get(), 1);
     assert_eq!(recognizer.cancel(), CancelOutcome::Idle);
