@@ -238,40 +238,85 @@ pub(crate) fn listener_capture_retains_one_target_and_drop_delivers_loss() {
     );
 }
 
-pub(crate) fn listener_unmount_retires_capture_without_calling_disposed_callbacks() {
+pub(crate) fn listener_unmount_preserves_one_captured_contact_terminal() {
     use flui_interaction::PointerCapture;
+    use flui_platform_api::pointer::{CancelReason, PointerEvent};
     use std::cell::RefCell;
 
     let token = Rc::new(RefCell::new(None::<PointerCapture>));
     let held = token.clone();
-    let retired_callbacks = Rc::new(Cell::new(0));
-    let moved = retired_callbacks.clone();
-    let cancelled = retired_callbacks.clone();
+    let callbacks = Rc::new(RefCell::new(Vec::new()));
+    let moved = callbacks.clone();
+    let cancelled = callbacks.clone();
+    let stage = Rc::new(Cell::new("down"));
+    let move_stage = stage.clone();
+    let cancel_stage = stage.clone();
+    let down_time = Rc::new(Cell::new(None));
+    let captured_time = down_time.clone();
     let mut laid = lay_out(
         Listener::new()
             .behavior(HitTestBehavior::Opaque)
             .on_pointer_down(move |_, dispatch| {
+                let PointerEvent::Down(press) = dispatch.global else {
+                    panic!("Down callback");
+                };
+                captured_time.set(Some(press.sample.time));
                 *held.borrow_mut() = Some(dispatch.capture().expect("mounted Down authority"));
             })
-            .on_pointer_move(move |_, _| moved.set(moved.get() + 1))
-            .on_pointer_cancel(move |_, _| cancelled.set(cancelled.get() + 1))
+            .on_pointer_move(move |_, dispatch| {
+                moved
+                    .borrow_mut()
+                    .push((move_stage.get(), dispatch.global.clone()));
+            })
+            .on_pointer_cancel(move |_, dispatch| {
+                cancelled
+                    .borrow_mut()
+                    .push((cancel_stage.get(), dispatch.global.clone()));
+            })
             .child(SizedBox::new(80.0, 80.0)),
         tight(80.0, 80.0),
     );
     laid.dispatch_pointer_down(40.0, 40.0);
+    stage.set("unmount");
     laid.pump_widget(SizedBox::new(80.0, 80.0));
+    assert!(
+        callbacks.borrow().is_empty(),
+        "unmount withdraws future admission; observed {:?}",
+        callbacks.borrow()
+    );
     let retired_capture = token
         .borrow_mut()
         .take()
         .expect("capture outlives its widget");
+    stage.set("release");
     drop(retired_capture);
-    laid.dispatch_pointer_move(200.0, 200.0);
-    laid.dispatch_pointer_up(200.0, 200.0);
-    assert_eq!(
-        retired_callbacks.get(),
-        0,
-        "disposed Listener receives no capture tail"
+    assert!(
+        callbacks.borrow().is_empty(),
+        "release invokes no event callback; observed {:?}",
+        callbacks.borrow()
     );
+    stage.set("next motion");
+    laid.dispatch_pointer_move(200.0, 200.0);
+    stage.set("native terminal");
+    laid.dispatch_pointer_up(200.0, 200.0);
+    {
+        let observed = callbacks.borrow();
+        assert_eq!(
+            observed.len(),
+            1,
+            "cached contact receives one terminal, no released Move: {observed:?}"
+        );
+        let (delivery_stage, PointerEvent::Cancel(cancel)) = &observed[0] else {
+            panic!("cached contact owes CaptureLost cleanup: {observed:?}");
+        };
+        assert_eq!(*delivery_stage, "next motion");
+        assert_eq!(cancel.reason, CancelReason::CaptureLost);
+        assert_eq!(
+            Some(cancel.time),
+            down_time.get(),
+            "loss preserves the accepted contact timestamp"
+        );
+    }
 
     let new_contacts = Rc::new(Cell::new(0));
     let new_down = new_contacts.clone();
@@ -294,7 +339,11 @@ pub(crate) fn listener_unmount_retires_capture_without_calling_disposed_callback
         1,
         "replacement tree admits a fresh captured contact"
     );
-    assert_eq!(retired_callbacks.get(), 0);
+    assert_eq!(
+        callbacks.borrow().len(),
+        1,
+        "new contact cannot redeliver old terminal"
+    );
 }
 
 pub(crate) fn listener_admission_keeps_terminal_delivery_and_weak_ownership() {
