@@ -350,6 +350,34 @@ fn coalescing_preserves_the_latest_dispatch_and_real_history() {
     );
 }
 
+fn bounded_coalesced_history_keeps_latest_readings_and_predictions() {
+    use flui_platform_api::keyboard::Modifiers;
+    let ordinary = sampled_at(25);
+    let sensor = ordinary.with_pressure(Pressure::try_new(0.2).expect("valid pressure"));
+    let initial = PointerMove::new(
+        mouse().with_device(DeviceId::try_from(7_u64).expect("device identity"))
+            .with_role(PointerRole::Additional),
+        PointerButtons::only(PointerButton::PRIMARY),
+        sampled_at(50),
+    )
+    .with_modifiers(Modifiers::SHIFT)
+    .with_coalesced(vec![sampled_at(0), ordinary, sensor, sampled_at(40)])
+    .with_predicted(vec![sampled_at(60), sampled_at(75)]);
+    for (maximum, readings) in [
+        (0, vec![]),
+        (1, vec![sampled_at(40)]),
+        (2, vec![sensor, sampled_at(40)]),
+        (3, vec![ordinary, sensor, sampled_at(40)]),
+        (4, vec![sampled_at(0), ordinary, sensor, sampled_at(40)]),
+        (99, vec![sampled_at(0), ordinary, sensor, sampled_at(40)]),
+    ] {
+        let mut movement = initial.clone();
+        movement.retain_latest_coalesced(maximum);
+        assert_eq!(movement, initial.clone().with_coalesced(readings),
+            "bounded measured readings retain ordering, coarse-time identity and every other dispatch field");
+    }
+}
+
 fn coalescing_refuses_every_pointer_metadata_mismatch_without_mutation() {
     use flui_platform_api::pointer::{DeviceId, MismatchedPointerInfo};
     let base = mouse();
@@ -463,6 +491,10 @@ fn input_vocabulary_contract() {
             (
                 "coalescing_refuses_every_pointer_metadata_mismatch_without_mutation",
                 coalescing_refuses_every_pointer_metadata_mismatch_without_mutation,
+            ),
+            (
+                "bounded_coalesced_history_keeps_latest_readings_and_predictions",
+                bounded_coalesced_history_keeps_latest_readings_and_predictions,
             ),
             (
                 "coalescing_keeps_distinct_current_time_readings_and_excludes_future_history",
