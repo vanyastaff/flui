@@ -266,7 +266,7 @@ Up. Публичные Mouse/Touch строки проверяют 39 ms bounce,
 | ID | Задача | [P] |
 |---|---|---|
 | I10 | Арена: `DashMap` + `parking_lot::Mutex` внутри `!Send + !Sync` `GestureArena` → однопоточное хранилище (`RefCell` + слоты с поколением); `Arc` участника не роняется под lock слота (`arena/mod.rs:942,1221,1313`); порядок map/slot зафиксирован; `signal_resolver.rs:152` — `checked_add` | после I1 |
-| I11 | Распознаватели: `GestureSettings` строится из `SystemPreferences::gestures()` (ADR-0151 §4, после platform-layer LY8) через `GestureSettingsScope`; `Arc<Mutex<GestureSettings>>` (10 мест) → `Cell<GestureSettings>`; `GestureSettings` из binding/виджета доходит до распознавателя (matrix X2) | после I1, I3 |
+| I11 | Распознаватели и wheel consumers: host-owned `SystemPreferences` проецируется для каждой presentation через существующий `GestureArenaScope` (ADR-0172, platform-layer LY9). Read-only live providers обслуживают новые admission; активные contacts, sessions и consecutive-tap candidates сохраняют принятый профиль. Authored overrides, geometry/DPI, fling, FIFO updates и восстановление после отказа проверяются через production consumers. Отдельный `GestureSettingsScope` и изменяемый профиль активного контакта не вводятся | после I1, I3 и platform-layer LY8 |
 
 ## Спека `recognizer-api/` (сквозной рефакторинг; подтверждена владельцем 2026-10-06)
 
