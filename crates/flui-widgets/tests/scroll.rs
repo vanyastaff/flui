@@ -1889,6 +1889,84 @@ pub(crate) fn nested_fling_hands_remaining_velocity_to_matching_parent_axes() {
     }
 }
 
+pub(crate) fn nested_fling_parent_boundary_policy_receives_presentation_pixel_ratio() {
+    use flui_animation::Simulation;
+    use flui_foundation::geometry::Axis::Vertical;
+    use flui_widgets::{ScrollMetrics, ScrollPhysics};
+
+    #[derive(Debug)]
+    struct HighDensityPhysics;
+    impl ScrollPhysics for HighDensityPhysics {
+        fn apply_boundary_conditions(&self, metrics: &ScrollMetrics, proposed: f64) -> f64 {
+            if metrics.device_pixel_ratio != 2.0 {
+                return metrics.pixels;
+            }
+            ClampingScrollPhysics::new().apply_boundary_conditions(metrics, proposed)
+        }
+        fn create_ballistic_simulation(
+            &self,
+            metrics: &ScrollMetrics,
+            velocity: f64,
+        ) -> Option<Box<dyn Simulation>> {
+            ClampingScrollPhysics::new().create_ballistic_simulation(metrics, velocity)
+        }
+        fn boundary_velocity(&self, metrics: &ScrollMetrics, velocity: f64) -> Option<f64> {
+            ClampingScrollPhysics::new().boundary_velocity(metrics, velocity)
+        }
+    }
+
+    for density_sensitive in [false, true] {
+        let (outer, inner, vsync) = (
+            ScrollController::new(),
+            ScrollController::new(),
+            Vsync::new(),
+        );
+        let physics: SharedScrollPhysics = if density_sensitive {
+            Arc::new(HighDensityPhysics)
+        } else {
+            Arc::new(ClampingScrollPhysics::new())
+        };
+        let parent = Scrollable::new()
+            .controller(outer.clone())
+            .physics(physics)
+            .child(flui_widgets::Column::new(vec![
+                SizedBox::new(200.0, 600.0).boxed(),
+                SizedBox::new(200.0, 200.0)
+                    .child(
+                        Scrollable::new()
+                            .controller(inner.clone())
+                            .child(SizedBox::new(200.0, 1000.0)),
+                    )
+                    .boxed(),
+                SizedBox::new(200.0, 4800.0).boxed(),
+            ]));
+        let mut laid = crate::common::lay_out_animated(
+            VsyncScope::new(vsync.clone(), parent),
+            tight(200.0, 200.0),
+            vsync,
+        );
+        laid.pipeline_owner()
+            .with_mut(|owner| owner.set_device_pixel_ratio(2.0));
+        for _ in 0..2 {
+            outer.jump_to(600.0);
+            inner.jump_to(650.0);
+            laid.tick();
+            release_inner_fling(&laid, Vertical, false);
+            assert_eq!(inner.pixels(), 670.0, "actual child release premise");
+            assert_eq!(outer.pixels(), 600.0, "parent has not consumed the drag");
+            for _ in 0..15 {
+                laid.pump_for(Duration::from_millis(16));
+            }
+            assert_eq!(inner.pixels(), 800.0, "child reaches its hard edge");
+            assert!(
+                outer.pixels() > 600.0,
+                "density_sensitive={density_sensitive}: the real DPR2 parent's policy accepts the impulse, got {}",
+                outer.pixels()
+            );
+        }
+    }
+}
+
 pub(crate) fn nested_fling_same_controller_rebuild_preserves_accepted_handoff() {
     use flui_foundation::geometry::Axis::{Horizontal, Vertical};
     for axis in [Vertical, Horizontal] {
