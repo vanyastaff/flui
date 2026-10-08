@@ -8,6 +8,38 @@ use flui_widgets::{DefaultTextStyle, MediaQuery, MediaQueryData, Text};
 
 /// A preference must reach paragraph layout, not merely a data-reader widget.
 pub(crate) fn media_text_scaling_changes_the_laid_out_text() {
+    for scale in [
+        0.0,
+        -1.0,
+        f64::MAX,
+        f64::INFINITY,
+        f64::NAN,
+        f64::from_bits(1),
+    ] {
+        let text = || Text::new("nested scale").style(TextStyle::default().with_font_size(16.0));
+        let baseline = lay_out(text(), loose(1000.0));
+        let nested = lay_out(
+            MediaQuery::new(
+                MediaQueryData {
+                    text_scale_factor: 2.0,
+                    ..MediaQueryData::default()
+                },
+                MediaQuery::new(
+                    MediaQueryData {
+                        text_scale_factor: scale,
+                        ..MediaQueryData::default()
+                    },
+                    text(),
+                ),
+            ),
+            loose(1000.0),
+        );
+        assert_eq!(
+            nested.size(nested.root()),
+            baseline.size(baseline.root()),
+            "invalid inherited scale {scale}"
+        );
+    }
     // Exercise snapshot admission through the actual paragraph consumer. A
     // failed native observation falls back to unknown, never a non-finite size.
     for observed in [f64::MAX, f64::from_bits(1)] {

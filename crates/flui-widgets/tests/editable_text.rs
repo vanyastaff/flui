@@ -826,6 +826,21 @@ pub(crate) fn inherited_text_sizing_updates_editable_glyphs_and_caret() {
     );
     harness.swap_root(field(1.0));
     assert_eq!(geometry(&harness), original);
+    for invalid in [
+        0.0,
+        -1.0,
+        f64::MAX,
+        f64::INFINITY,
+        f64::NAN,
+        f64::from_bits(1),
+    ] {
+        harness.swap_root(field(invalid));
+        assert_eq!(
+            geometry(&harness),
+            original,
+            "invalid inherited scale {invalid}"
+        );
+    }
     assert_eq!(controller.text(), "mmmm");
     assert_eq!(controller.caret_byte_offset(), 4);
 }

@@ -13,7 +13,10 @@ the value with its unchanged authored spans to a private render view. Native
 settings and inherited lookups do not enter `RenderObjectContext`. The paragraph
 update reports layout and semantics invalidation when sizing changes, so the same
 render object produces updated geometry. `Text` composes this path after merging
-its ambient style. Initial sizing is pinned by
+its ambient style. The shared text-scale accessor resolves out-of-range
+authored values (including zero, negative, subnormal and non-finite values) to
+`1.0` before either text consumer creates or updates a render object; the
+supported range matches system preferences, `1/64..=64`. Initial sizing is pinned by
 `media_text_scaling_changes_the_laid_out_text`; live updates, restoration from
 authored size and nested override retention by
 `a_text_scale_change_relayouts_a_preserved_text_subtree`.

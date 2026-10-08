@@ -58,6 +58,8 @@ pub struct MediaQueryData {
 
     /// User-configured font scaling factor. `1.0` is the system default;
     /// values above `1.0` enlarge text for accessibility.
+    /// Text consumers resolve values outside `1/64..=64` to `1.0` through
+    /// [`MediaQuery::text_scale_factor_of`], including NaN and infinities.
     pub text_scale_factor: f64,
 
     /// Safe-area insets from the window edges reserved by the OS (notch,
@@ -182,11 +184,17 @@ impl MediaQuery {
         })
     }
 
-    /// The text scale factor, depending on `text_scale_factor` only.
+    /// The effective text scale factor, depending on `text_scale_factor` only.
+    /// Values outside `1/64..=64` fall back to `1.0`, matching the supported
+    /// system-preference range even for directly authored nested providers.
     #[must_use]
     pub fn text_scale_factor_of(ctx: &dyn BuildContext) -> Option<f64> {
         Self::depend_on_fields(ctx, MediaQueryData::FIELD_TEXT_SCALE_FACTOR, |d| {
-            d.text_scale_factor
+            if (1.0 / 64.0..=64.0).contains(&d.text_scale_factor) {
+                d.text_scale_factor
+            } else {
+                1.0
+            }
         })
     }
 
