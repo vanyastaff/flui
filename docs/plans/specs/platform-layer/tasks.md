@@ -90,7 +90,7 @@ graph LR
 
 ## Приёмка LY8/LY9
 
-Статус каждого пункта — незавершён до проверки полной цепочки. Нативная проба,
+Незавершённые пункты требуют проверки полной цепочки. Нативная проба,
 исправление существующего линейного текста или чтение getter не закрывают задачу.
 
 - [ ] Валидация значений и единиц: неизвестно/не поддержано/ошибка обновления;
@@ -106,9 +106,16 @@ graph LR
   layout/intrinsics/hit testing/caret, live change и subtree override. Политика
   sizing зафиксирована по действительным producer mappings без заявления native
   parity из одного scalar; собственные authored стили не масштабируются дважды.
-- [ ] GestureArenaScope и mounted consumers: double tap/drag/long press/fling/wheel,
+- [x] GestureArenaScope и mounted consumers: double tap/drag/long press/fling/wheel,
   настройки на текущую и следующую последовательность, per-kind fallback,
   авторские overrides, обратная смена настройки.
+  Локальная gesture/wheel приёмка: `admitted_gesture_settings_contract`,
+  `gesture_lifecycle_matrix`, `pointer_and_gesture_recognition`,
+  `scroll_physics_and_activity`, `navigator_and_overlay`, `owner_metrics_contract`
+  и `frame_pacing_and_pump_matrix`; детали и native ограничения —
+  [приёмка I11](../flui-interaction/tasks.md#текущая-локальная-приёмка-i11-gesturewheel).
+  Заключительный gate, all-features clippy/compile-fail, Win32 wheel smoke и CI
+  ещё ожидаются; остальные пункты LY8/LY9 этой отметкой не закрываются.
 - [ ] Motion и остальные значения имеют production-потребителей; политика
   приложения остаётся runtime-owned. Существующий animation spec сверяется перед
   реализацией, отдельный SystemMotion producer не появляется.

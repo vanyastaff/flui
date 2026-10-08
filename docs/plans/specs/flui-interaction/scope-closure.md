@@ -53,7 +53,8 @@ PR #1467 (held Down на blur), #1476 (контрактные тесты hover/h
 
 ## Спека
 
-Owned vocabulary и прямые producers в строках ниже интегрированы, но producer
+Историческая приёмка до публикации PR #1514: owned vocabulary и прямые producers
+в строках ниже интегрированы, но producer
 verification pending означает ограничения из `pointer-vocabulary/tasks.md`:
 предыдущая Apple cross-typecheck и свежая строгая Android libraries проверка —
 только компиляция, pen/touch activation
@@ -62,6 +63,10 @@ verification pending означает ограничения из `pointer-vocab
 macOS/iOS/Android и Linux execution пропущены по отсутствующим инструментам
 и host capabilities; ранняя cross-typecheck означает только компиляцию.
 Строки внешних focus-keyboard/text-ime/platform-layer спецификаций этим не закрываются.
+Текущие I11 gesture/wheel строки обновлены отдельно по
+[локальной приёмке](tasks.md#текущая-локальная-приёмка-i11-gesturewheel): реализация
+и целевые проверки завершены; заключительный gate, all-features clippy/compile-fail,
+Win32 wheel smoke и CI ещё ожидаются. Это не закрывает LY8/LY9 целиком.
 
 | Row | Requirement | Status | Closure |
 |---|---|---|---|
@@ -103,25 +108,25 @@ macOS/iOS/Android и Linux execution пропущены по отсутству�
 | M3-F2 | Reading order with row bands, RTL-aware | broken | spec send-flip T6d (I6 handoff) |
 | M3-F6 | Modal focus trap | partial / broken | spec send-flip T6d (N6: wire or delete `traps_focus`) |
 | M3-R1 | RTL in focus traversal | absent | spec send-flip T6d (I6 handoff, with M3-F2) |
-| M2-X1 | System timings from the OS | absent | spec platform-layer LY8 |
+| M2-X1 | System timings from the OS | implemented locally; final acceptance checks pending | ADR-0172: host-owned `SystemPreferences` publishes timings through the existing `GestureArenaScope`; `admitted_gesture_settings_contract` and `owner_metrics_contract` check admission snapshots and ordered updates. Broader LY8/LY9 acceptance remains separate |
 | M1-10 | Predicted events | withdrawn (local extrapolator) | S2: неподключённый `InputPredictor` удалён; аппаратные predicted samples сохраняются в owned-событиях и локализации по pointer-vocabulary P2/P3. Синтез будущих samples не поддерживается |
-| M1-24 | Click count / interval from the OS | partial | spec flui-interaction I11 |
+| M1-24 | Click count / interval from the OS | observed interval implemented locally; count remains recognizer-owned | I11 / ADR-0172: `native_mouse_interval_starts_at_first_down` pins observed mouse press-to-press timing; touch and authored timing retain their release-to-press policy. Consecutive candidates retain the admitted timing origin |
 | M2-A5 | Arena teams | withdrawn | S2: неподключённые team/TeamEntry и multiple-winner resolution удалены. Typed exclusive/require-first-failure composition реализована в отдельной NEW-строке M2-A6; она не возвращает удалённую team surface или multiple-winner contract |
 | M2-A7 | Pointer-signal arbitration | withdrawn (standalone priority resolver) | S2: отдельный неподключённый resolver удалён. Действующая арбитрация widget hit-path сохраняется: `a_wheel_tick_over_nested_scrollables_moves_only_the_inner` проверяет ближайшего claimant и отсутствие двойного scroll |
 | M2-T6 | Multi-finger tap semantics | partial | spec flui-interaction S3 (record as a mapping decision) |
-| M2-D2 | Pan slop value | partial | spec flui-interaction I11 |
-| M2-D6 | Mouse drag threshold from the OS | absent | spec flui-interaction I11 (after LY8) |
-| M2-V2 | Estimator choice reaches production | authored selection implemented; uniform framework baseline selected | `GestureSettings::with_velocity_estimator` reaches drag/multidrag/scale/tap-and-drag; selected-estimator public rows pass. ADR-0172 deliberately keeps least squares for absolute pointer gestures across platforms. Estimator selection is consumer policy, not an OS preference or a pending LY8 producer; native-session admission proof remains part of I11 acceptance |
+| M2-D2 | Pan slop value | implemented locally; final acceptance checks pending | I11 / ADR-0172: native touch projection preserves the authored pan-to-hit and per-axis ratios; `native_touch_span_preserves_baseline_ratio` and `native_touch_projection_preserves_authored_tier_ratios` pin this policy |
+| M2-D6 | Mouse drag threshold from the OS | implemented locally; native limits explicit | I11 / ADR-0172: per-presentation geometry projects native mouse rectangles into logical coordinates; `mouse_rectangle_is_compared_per_axis` and `native_geometry_controls_admission_and_retries_without_a_frame` cover admission and recovery. Windows query executes; Android/AppKit evidence is Rust-only compilation |
+| M2-V2 | Estimator choice reaches production | implemented locally; uniform framework baseline selected | `GestureSettings::with_velocity_estimator` reaches drag/multidrag/scale/tap-and-drag; selected-estimator rows in `gesture_lifecycle_matrix` pass. ADR-0172 keeps least squares for absolute pointer gestures across platforms. Estimator selection is consumer policy, not an OS preference. `native_scale_retains_estimator_until_end_and_readmits_next_begin` and `mounted_native_begin_retains_estimator_before_first_claim` pin native admission |
 | M2-R2 | Prediction | withdrawn (local extrapolation) | S2: локальный extrapolator удалён; сохранение аппаратных predicted samples не означает реализацию синтезированной prediction для ink/drag |
-| M2-X2 | Settings profile reaches recognizers | authored consumer implemented; OS producer pending | `GestureArenaScope::settings` reaches mounted production builders; threshold/deadline rows pass and fail with the consumer wiring reverted. `SystemPreferences` producer remains I11/LY8 |
-| M2-X5 | Cheapest sound ownership on the gesture path | owner-local implementation integrated; local gate passed; CI/merge pending | I10/recognizer-api use Rc/RefCell, weak arena slots and immutable authored configuration. No dynamic OS settings path is claimed |
+| M2-X2 | Settings profile reaches recognizers | authored and live host projections implemented locally | I11 / ADR-0172: the existing `GestureArenaScope` supplies mounted production builders; contacts, native sessions and consecutive candidates freeze admission settings. `admitted_gesture_settings_contract`, `pointer_and_gesture_recognition` and `owner_metrics_contract` cover live publication, overrides and recovery; final acceptance checks remain pending |
+| M2-X5 | Cheapest sound ownership on the gesture path | owner-local implementation integrated; original local gate passed | I10/recognizer-api use Rc/RefCell, weak arena slots and immutable configuration. I11 adds a read-only owner-local live projection; active admission snapshots remain immutable. Current final gate and CI are separate pending evidence |
 | M3-C1 | Re-hit-test after layout per presentation | partial | spec flui-interaction S5 |
 | M3-D2 | DPI change per presentation | partial | spec flui-interaction S5 |
 | M3-M1 | Per-window input state | partial | spec flui-interaction S5 |
 
 ## NEW
 
-Сверка 2026-10-08 на интеграционной базе `5f28646ad`: все 20 утверждённых строк
+Историческая сверка до публикации PR #1514, 2026-10-08 на интеграционной базе `5f28646ad`: все 20 утверждённых строк
 ниже имеют реализацию или ранее merged-реализацию. Это не означает завершение
 15 задач приёмки целиком: внешний I11, CI/merge и native hardware ограничения
 остаются явными условиями. Локальный final gate прошёл. Целевые прогоны прошли для 43 pointer-строк,
