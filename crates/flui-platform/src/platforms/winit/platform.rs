@@ -1088,6 +1088,9 @@ impl ApplicationHandler for WinitApp {
             let Some(window) = window else {
                 return;
             };
+            if let WinitWindowEvent::MouseWheel { delta, .. } = &event {
+                tracing::debug!(?delta, "MouseWheel");
+            }
             let scale = window.scale_factor();
             let inputs = self.platform.with_state(|state| {
                 if let WinitWindowEvent::CursorMoved { position, .. } = &event {
