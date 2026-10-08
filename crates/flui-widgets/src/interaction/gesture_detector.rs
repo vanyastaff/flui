@@ -133,10 +133,21 @@ type HorizontalDragCancelHandler = Rc<dyn Fn(&mut EventCx<'_>)>;
 /// Every callback receives the dispatch's `&mut EventCx<'_>` first, so it
 /// writes a signal directly (ADR-0086):
 ///
-/// ```rust,ignore
-/// GestureDetector::new()
-///     .on_tap(move |cx| count.update(cx, |n| *n += 1))
-///     .on_pan_update(move |cx, details| offset.update(cx, |o| *o += details.delta))
+/// Create element-owned signals in `init_state` and retain the configured
+/// detector or its signal handles in the widget state:
+///
+/// ```rust
+/// use flui_foundation::geometry::Offset;
+/// use flui_view::{BuildContextExt, LifecycleContext, SignalWriteExt};
+/// use flui_widgets::GestureDetector;
+///
+/// fn detector(ctx: &dyn LifecycleContext) -> GestureDetector {
+///     let count = ctx.signal(0_u32);
+///     let offset = ctx.signal(Offset::<f64>::ZERO);
+///     GestureDetector::new()
+///         .on_tap(move |cx| count.update(cx, |n| *n += 1))
+///         .on_pan_update(move |cx, details| offset.update(cx, |o| *o += details.delta))
+/// }
 /// ```
 ///
 /// A callback may return `()` or the `Result` of a write; a refused write is

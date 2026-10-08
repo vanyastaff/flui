@@ -1,20 +1,16 @@
 //! VelocityTracker benchmarks
 //!
-//! Hot path: `VelocityTracker::estimate` is called by `DragGestureRecognizer`
-//! on every `pointerup` / `pointercancel` to seed the fling animation. The
+//! Hot path: `DragGestureRecognizer` queries `VelocityTracker::velocity_at`
+//! at terminal event time; this benchmark measures its `estimate_at` fit. The
 //! algorithm walks a 20-slot circular buffer and runs a least-squares
 //! quadratic fit on the surviving samples; cost is O(N) where N ≤ 20.
 //!
 //! Performance targets (per `docs/testing.md` and the constitution's "60 fps
 //! / 16 ms frame" budget):
-//! - `estimate` on a full 20-sample buffer: < 5 µs (about 0.03% of a 16 ms
+//! - `estimate_at` on a full 20-sample buffer: < 5 µs (about 0.03% of a 16 ms
 //!   frame; this is a target, not a measured frame-time guarantee).
 //! - `add_position` push: < 100 ns (one slot write; must not allocate).
 //!   The push row measures construction plus 20 pushes, not one push.
-//!
-//! Follows the workspace benchmark template at
-//! `rust-studio/.../templates/benchmark-report.md` (Setup / Workload /
-//! Results / Profile Notes / Interpretation / Decision).
 //!
 //! Run with `cargo bench -p flui-interaction --bench velocity_tracker_bench`.
 
