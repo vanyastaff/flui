@@ -269,25 +269,26 @@ pub type ViewportBuilder = Rc<dyn Fn(ScrollPosition) -> BoxedView>;
 /// dirtied. See this module's docs.
 ///
 /// A [`VsyncScope`] must be above the `Scrollable` in the tree (or provided
-/// by the application's binding) for fling animations to run at all. There is
-/// no wall-clock fallback: the fling controller is built with
-/// `AnimationController::without_ticker_bounds`, so with no `VsyncScope` to
-/// register it, nothing ever advances it — a fling or an `animate_to` sets up
-/// and then stays put. Drag and wheel scrolling are unaffected, since both
-/// write the position directly.
+/// by the application's binding) for fling, `animate_to` and notched-wheel
+/// animations to advance. There is no wall-clock fallback: the animation
+/// controller is built with `AnimationController::unbounded_without_ticker`
+/// and registered with that scope. Drag updates and precise or unknown wheel
+/// packets write the position directly and do not require animation ticks.
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// let controller = ScrollController::new();
-/// controller.update_dimensions(400.0, 0.0, 1000.0);
+/// ```rust
+/// use flui_animation::Vsync;
+/// use flui_widgets::{ScrollController, Scrollable, SizedBox, VsyncScope};
 ///
-/// VsyncScope::new(
-///     vsync.clone(),
+/// let controller = ScrollController::new();
+///
+/// let view = VsyncScope::new(
+///     Vsync::new(),
 ///     Scrollable::new()
-///         .controller(controller.clone())
-///         .child(MyTallContent::new()),
-/// )
+///         .controller(controller)
+///         .child(SizedBox::new(300.0, 1400.0)),
+/// );
 /// ```
 ///
 /// [`Listenable`]: flui_foundation::Listenable
