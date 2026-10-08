@@ -9,7 +9,7 @@
 
 ## Текущее выполнение
 
-Сверка 2026-10-08 по интеграционной базе `a0e535e94`, коду и именам тестов.
+Сверка 2026-10-08 по интеграционной базе `3d6fae0de`, коду и именам тестов.
 Отмеченные прогоны — целевые проверки интеграции. Итоговые `check-changed`,
 optional-feature/platform gates, CI и слияние в `main` ещё не объявляются завершёнными.
 
@@ -100,12 +100,28 @@ Saturated admission ограничивает уже проверенную coale
 копирования. Публичная platform-api table проверяет limits 0/1/2/3/4/99,
 разные readings с одинаковым coarse timestamp, metadata и predictions.
 Production resampler задаёт cap 100; его публичный allocator case проверяет
-не более трёх allocations на saturated admission, все 199 сохранённых
+не более одной allocation на saturated admission, все 199 сохранённых
 readings в 99 Move, последние принятые данные, Down/Up и predictions.
 До исправления было семь allocations; consumer-only inverse возвращает семь
 при зелёной platform-api table. Точный consumer-хунк восстановлен, все девять
-целевых тестов прошли. Этот bounded contract не обещает хранить бесконечную
-историю без потерь и не подменяет окончательные elapsed-time measurements.
+целевых тестов прошли. Последующий ownership transfer через
+`PointerMove::try_coalesce_from` передаёт storage старого packet новому;
+Несовпадение полного pointer identity не изменяет оба packet. Новый публичный case был RED:
+три allocations при budget не более одной. После подключения production
+consumer десять целевых тестов API, resampling, allocator и binding прошли.
+Runtime containment этим прогоном не выбран: его matrix находится в
+flui-testing main. Независимый producer-only inverse возвращает две
+allocations при budget одной, тогда как новая API table остаётся GREEN;
+точный source-хунк восстановлен, diff обратного отката пустой.
+Этот bounded contract не обещает хранить бесконечную историю без потерь
+и не подменяет окончательные elapsed-time measurements.
+
+Borrowed-transform candidate дал means 234.505 против 216.349 для четырёх
+targets (+8.39%) и 724.587 против 692.167 для 16 targets (+4.68%). Это
+промежуточные elapsed-time regressions, а не улучшение и не окончательные
+AFTER results. Финальный повтор всех девяти route shapes и три затронутых
+бенча (route/resampler/velocity, baseline `interaction_verified`) ещё выполняются;
+окончательные timings, final gate и CI остаются pending.
 
 ## Hover retirement и double-tap debounce
 

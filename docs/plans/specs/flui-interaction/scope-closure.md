@@ -119,7 +119,7 @@ verification pending означает ограничения из `pointer-vocab
 
 ## NEW
 
-Сверка 2026-10-08 на интеграционной базе `a0e535e94`: все 20 утверждённых строк
+Сверка 2026-10-08 на интеграционной базе `3d6fae0de`: все 20 утверждённых строк
 ниже имеют реализацию или ранее merged-реализацию. Это не означает завершение
 15 задач приёмки: недостающие inverse-проверки, финальные gates и native smoke
 остаются явными условиями. Целевые прогоны прошли для 43 pointer-строк,
@@ -131,10 +131,14 @@ pointer/binding именам тестов. Точный identity и global route
 дают ноль allocations; translated и near-identity route сохраняют bound
 2/8/32 для 1/4/16 targets. Sample/Stop без изменения времени дают ноль,
 а raised-floor control сохраняет checked history policy. Saturated admission
-сохраняет cap 100 без повторной копии checked prefix: не более трёх allocations,
+сохраняет cap 100 с передачей owned history storage: не более одной allocation,
 199 сохранённых readings в 99 Move, metadata, predictions и Down/Up проверены.
 Независимые identity/unchanged-time inverses воспроизводят две лишние копии;
-consumer-only overflow inverse даёт семь allocations при зелёной API table.
+consumer-only overflow inverse дал семь allocations при зелёной API table.
+Последующий transfer case был RED при трёх allocations против budget одной;
+producer-only inverse даёт две при зелёной новой API table. Десять целевых
+API/resampling/allocator/binding тестов прошли; runtime containment этим
+прогоном не выбран. Точный inverse source-хунк восстановлен без diff.
 Все хунки восстановлены, целевые публичные проверки прошли. Подробности —
 в `tasks.md`, «Публичные allocation contracts».
 Полный gate, CI и слияние в `main` ещё не выполнены.
@@ -146,6 +150,9 @@ pointer/gesture widget-строк на базе `85a5f10e6` прошёл. Это
 doctests (33 runtime и три compile-fail; 13 других примеров ignored).
 Все пять wire-бенчей измерены на `64ab42b43`; после обнаруженных и исправленных
 allocation regressions окончательные AFTER timings ещё впереди.
+Промежуточные borrowed-transform means показывают elapsed-time regressions
++8.39% для четырёх targets и +4.68% для 16 targets; финальные девять route
+shapes и три затронутых бенча ещё выполняются, улучшение не заявлено.
 
 | Row | Requirement | Status | Closure |
 |---|---|---|---|
