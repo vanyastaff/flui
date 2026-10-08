@@ -35,7 +35,7 @@ use std::rc::Rc;
 use common::{lay_out, tight};
 use flui_material::{InputDecoration, TextField, Theme, ThemeData};
 use flui_sdk::interaction::FocusNode;
-use flui_sdk::widgets::TextEditingController;
+use flui_sdk::widgets::{SizedBox, TextEditingController};
 
 // ============================================================================
 // Focus round-trip — a REAL tap, not a direct `request_focus` call
@@ -120,6 +120,73 @@ pub fn tapping_the_decorated_area_focuses_the_field_and_reaches_the_decorator() 
 // ============================================================================
 // Unmount — the exact node listener must not leak
 // ============================================================================
+
+pub fn replacing_and_unmounting_the_field_withdraws_its_node_subscription() {
+    let theme = ThemeData::light();
+    let colors = theme.color_scheme;
+    let controller = TextEditingController::new();
+    let previous = FocusNode::with_debug_label("previous field node");
+    let replacement = FocusNode::with_debug_label("replacement field node");
+    let mut laid = lay_out(
+        Theme::new(
+            theme.clone(),
+            TextField::new(controller.clone()).focus_node(Rc::clone(&previous)),
+        ),
+        tight(300.0, 100.0),
+    );
+
+    laid.pump_widget(Theme::new(
+        theme.clone(),
+        TextField::new(controller).focus_node(Rc::clone(&replacement)),
+    ));
+    replacement.request_focus();
+    laid.tick();
+    let decorated_box = laid
+        .try_find_by_render_type("RenderDecoratedBox")
+        .expect("replacement field's decorated box");
+    let focused = laid
+        .render_property(decorated_box, "decoration")
+        .expect("resolved decoration");
+    assert!(
+        focused.contains(&format!("{:?}", colors.primary)),
+        "the effective replacement node must focus the mounted decorator: {focused}"
+    );
+
+    replacement.unfocus();
+    laid.tick();
+    let unfocused = laid
+        .render_property(decorated_box, "decoration")
+        .expect("resolved unfocused decoration");
+    assert!(unfocused.contains(&format!("{:?}", colors.on_surface_variant)));
+    let painted = laid.painted_frame_count();
+    // This notifies the retained old node without requesting a root rebuild
+    // or moving focus through another mounted widget.
+    previous.set_skip_traversal(true);
+    laid.tick();
+    assert_eq!(
+        laid.painted_frame_count(),
+        painted,
+        "the outgoing node must not schedule the replacement field"
+    );
+    assert_eq!(
+        laid.render_property(decorated_box, "decoration")
+            .expect("decoration after old-node notification"),
+        unfocused
+    );
+
+    laid.pump_widget(Theme::new(theme, SizedBox::new(300.0, 100.0)));
+    assert!(laid.try_find_by_render_type("RenderEditable").is_none());
+    let painted = laid.painted_frame_count();
+    previous.set_skip_traversal(false);
+    replacement.set_skip_traversal(true);
+    laid.tick();
+    assert_eq!(
+        laid.painted_frame_count(),
+        painted,
+        "retained nodes must not schedule a disposed field"
+    );
+    assert!(laid.try_find_by_render_type("RenderEditable").is_none());
+}
 
 // ============================================================================
 // Disable-while-focused: focus is lost, and re-enabling does not restore it
