@@ -482,6 +482,10 @@ fn owner_metrics_contract() {
         "owner_metrics_contract",
         &[
             (
+                "wheel_preferences_reach_the_next_mounted_input",
+                wheel_preferences_reach_the_next_mounted_input as fn(),
+            ),
+            (
                 "preference_fanout_survives_a_failing_runtime",
                 preference_fanout_survives_a_failing_runtime as fn(),
             ),
@@ -507,6 +511,57 @@ fn owner_metrics_contract() {
             ),
         ],
     );
+}
+
+fn wheel_preferences_reach_the_next_mounted_input() {
+    use flui_platform_api::pointer::{
+        PointerEvent, PointerId, PointerInfo, PointerKind, PointerPosition, ScrollDelta,
+        ScrollEvent, ScrollUnit,
+    };
+    use flui_platform_api::{EventTime, PlatformInput, SystemPreferences, WheelPreferences, WheelStep};
+
+    let owner = OwnerHost::new();
+    let runtime = crate::owner_publication::runtime();
+    let scroll = flui_widgets::ScrollController::new();
+    runtime
+        .attach_root_widget_with_size(
+            &flui_widgets::Scrollable::new()
+                .controller(scroll.clone())
+                .child(flui_widgets::SizedBox::new(800.0, 5000.0)),
+            800.0,
+            600.0,
+        )
+        .expect("mount scroll consumer");
+    let address = owner.publication(owner.prepare_runtime(runtime)).expect("publish").commit();
+    let size = Rc::new(Cell::new((800, 600)));
+    let effects = Effects {
+        address,
+        sink: RefCell::new(Sink { size: Rc::clone(&size), submitted: 0 }),
+        size,
+        frame_time: Cell::new(web_time::Instant::now()),
+        trace: RefCell::new(Vec::new()),
+        expects_present: Cell::new(None),
+        owner: owner.clone(),
+        burst: Cell::new(false),
+        native_sizes: RefCell::new(Vec::new()),
+        fail_resize: Cell::new(false),
+        fail_tail: Cell::new(false),
+    };
+    owner.frame_dispatcher(address).expect("frame").deliver(&effects).expect("mount frame");
+    owner.update_preferences(
+        SystemPreferences::default().with_wheel(WheelPreferences::default().with_vertical(WheelStep::Lines(3))),
+        &effects,
+    ).expect("accept wheel settings");
+    let event = PointerEvent::Scroll(ScrollEvent::new(
+        PointerInfo::new(PointerId::try_from(1_u64).expect("pointer"), PointerKind::Mouse),
+        EventTime::from_nanos(1),
+        PointerPosition::try_new(flui_foundation::geometry::Point::new(100.0, 100.0)).expect("point"),
+        ScrollDelta::try_new(ScrollUnit::Detents, 0.0, 1.0).expect("rotation"),
+    ));
+    owner.presentation_dispatcher(address).expect("input")
+        .input(PlatformInput::Pointer(event), &effects).expect("wheel input");
+    assert_eq!(scroll.pixels(), 159.0, "three authored line distances before another frame");
+    owner.shutdown(&effects);
 }
 
 fn preference_fanout_survives_a_failing_runtime() {
