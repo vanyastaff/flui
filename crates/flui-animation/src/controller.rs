@@ -647,7 +647,7 @@ impl AnimationController {
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
     /// Returns [`AnimationError::NonFiniteTarget`] if `from` is `NaN`, if
     /// `from` is infinite toward a bound this controller does not have, or
-    /// if this controller is [`unbounded`](Self::unbounded) (`forward`
+    /// if this controller is [`unbounded`](crate::AnimationControllerBuilder::unbounded) (`forward`
     /// always targets `upper_bound`, which has no finite value to run to).
     pub fn forward_from(&self, from: Option<f64>) -> Result<AnimationRunFuture, AnimationError> {
         let mut retired = RetiredSources::new();
@@ -753,7 +753,7 @@ impl AnimationController {
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
     /// Returns [`AnimationError::NonFiniteTarget`] if `from` is `NaN`, if
     /// `from` is infinite toward a bound this controller does not have, or
-    /// if this controller is [`unbounded`](Self::unbounded) (`reverse`
+    /// if this controller is [`unbounded`](crate::AnimationControllerBuilder::unbounded) (`reverse`
     /// always targets `lower_bound`, which has no finite value to run to).
     pub fn reverse_from(&self, from: Option<f64>) -> Result<AnimationRunFuture, AnimationError> {
         let mut retired = RetiredSources::new();
@@ -864,7 +864,7 @@ impl AnimationController {
     /// Reset to the beginning (lower bound).
     ///
     /// Sets the value to the beginning — `lower_bound` on a bounded
-    /// controller, `0.0` on an [`unbounded`](Self::unbounded) one (there is
+    /// controller, `0.0` on an [`unbounded`](crate::AnimationControllerBuilder::unbounded) one (there is
     /// no `lower_bound` to return to) — and the status to
     /// [`AnimationStatus::Dismissed`]. Never fails for non-finiteness: a
     /// reset always has a value to land on. Cancels the active run's
@@ -1184,7 +1184,7 @@ impl AnimationController {
     ///
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
     /// Returns [`AnimationError::NonFiniteTarget`] on an
-    /// [`unbounded`](Self::unbounded) controller — a default repeat targets
+    /// [`unbounded`](crate::AnimationControllerBuilder::unbounded) controller — a default repeat targets
     /// this controller's own (infinite) bounds; use
     /// [`repeat_with`](Self::repeat_with) with an explicit finite range
     /// instead.
@@ -1235,7 +1235,7 @@ impl AnimationController {
     /// controller). Returns [`AnimationError::NonFiniteTarget`] if the
     /// EFFECTIVE range (after defaulting unset endpoints to this
     /// controller's own bounds) is not finite — only reachable on an
-    /// [`unbounded`](Self::unbounded) controller with `min`/`max` left
+    /// [`unbounded`](crate::AnimationControllerBuilder::unbounded) controller with `min`/`max` left
     /// unset (or set on only one side); pass an explicit finite range to
     /// repeat on an unbounded controller.
     pub fn repeat_with(
@@ -1405,7 +1405,7 @@ impl AnimationController {
     ///
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
     /// Returns [`AnimationError::NonFiniteTarget`] if `velocity` is not
-    /// finite, or if this controller is [`unbounded`](Self::unbounded) in
+    /// finite, or if this controller is [`unbounded`](crate::AnimationControllerBuilder::unbounded) in
     /// the direction `velocity` drives toward (a fling has no finite end to
     /// spring at).
     /// Returns [`AnimationError::InvalidSpring`] if the spring is underdamped
@@ -1514,7 +1514,7 @@ impl AnimationController {
     }
 
     /// Drive the animation according to a custom simulation. Works
-    /// unmodified on an [`unbounded`](Self::unbounded) controller — a
+    /// unmodified on an [`unbounded`](crate::AnimationControllerBuilder::unbounded) controller — a
     /// simulation is not refused the way a bound-targeting run is, since it
     /// carries its own `is_done` termination rather than running toward
     /// `lower_bound`/`upper_bound`.
@@ -2156,7 +2156,7 @@ impl AnimationController {
     /// same rule `clamp` already applies to a finite input, made total over
     /// `NaN` (which `clamp` alone propagates unchanged and would otherwise
     /// poison every downstream curve/tween evaluation). On an
-    /// [`unbounded`](Self::unbounded) controller a non-finite input is
+    /// [`unbounded`](crate::AnimationControllerBuilder::unbounded) controller a non-finite input is
     /// instead a FULL no-op: no active run is stopped, no notification
     /// fires, the value stays exactly what it was — a poisoned gesture drag
     /// or a bad computation must not clobber a live fling or snap a

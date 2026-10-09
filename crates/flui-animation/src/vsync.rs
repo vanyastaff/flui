@@ -10,7 +10,7 @@
 //!
 //! Both runtime and headless presentations use this registry. A presentation
 //! owns its [`MotionClock`](crate::MotionClock) and supplies a typed
-//! [`FrameTick`](crate::FrameTick) to [`Vsync::tick_all`]. Controllers have no
+//! [`FrameTick`] to [`Vsync::tick_all`]. Controllers have no
 //! scheduler ticker or wall-clock sampling path.
 //!
 //! ## Restart-awareness
