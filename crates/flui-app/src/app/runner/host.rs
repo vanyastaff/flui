@@ -173,19 +173,16 @@ thread_local! {
 /// either. UI runtime construction and prepared installation resolve these
 /// services; merely installing the platform owner does not.
 #[cfg_attr(
-    any(target_os = "android", target_os = "ios", target_arch = "wasm32"),
+    any(target_os = "android", target_os = "ios"),
     expect(
         clippy::unnecessary_wraps,
-        reason = "portable bootstrap keeps one fallible contract; desktop wake registration can fail, mobile only installs the owner"
+        reason = "portable bootstrap keeps one fallible contract; desktop and web wake registration can fail, mobile only installs the owner"
     )
 )]
 pub(crate) fn install_owner_platform(
     owner: flui_platform::OwnerPlatform,
 ) -> Result<(), flui_platform::WakeRegistrationError> {
-    #[cfg(any(
-        target_os = "ios",
-        all(not(target_os = "android"), not(target_arch = "wasm32"))
-    ))]
+    #[cfg(not(target_os = "android"))]
     let owner_turn_wake: Rc<dyn Fn() -> bool> = {
         let proxy = owner.proxy();
         Rc::new(move || proxy.wake().is_ok())
@@ -195,13 +192,7 @@ pub(crate) fn install_owner_platform(
         let poke = APP_RUNTIME.with(|slot| slot.borrow().owner_turn_window_poke());
         Rc::new(move || poke())
     };
-    #[cfg(target_arch = "wasm32")]
-    let owner_turn_wake: Rc<dyn Fn() -> bool> = Rc::new(|| true);
-    #[cfg(all(
-        not(target_os = "android"),
-        not(target_os = "ios"),
-        not(target_arch = "wasm32")
-    ))]
+    #[cfg(all(not(target_os = "android"), not(target_os = "ios")))]
     let identity = {
         let identity = Arc::new(());
         let installed_identity = Arc::clone(&identity);
@@ -229,6 +220,7 @@ pub(crate) fn install_owner_platform(
                             tracing::warn!(%error, "system preference refresh failed");
                         }
                     });
+                    #[cfg(not(target_arch = "wasm32"))]
                     if current() {
                         let recovery = if first.is_some() {
                             flui_runtime::owner::RecoveryState::PreservingFailure
@@ -274,6 +266,10 @@ pub(crate) fn install_owner_platform(
                 std::mem::replace(&mut state.installed_host, super::InstalledHost::new());
             let previous_owner_turn_wake = state.owner_turn_wake.replace(owner_turn_wake);
             let previous = state.owner_platform.replace(std::rc::Rc::new(owner));
+            #[cfg(all(not(target_os = "android"), not(target_os = "ios")))]
+            {
+                state.loop_identity = identity;
+            }
             #[cfg(all(
                 not(target_os = "android"),
                 not(target_os = "ios"),
@@ -281,7 +277,6 @@ pub(crate) fn install_owner_platform(
             ))]
             {
                 state.quit_notification = crate::app::runtime::QuitNotification::Active;
-                state.loop_identity = identity;
                 state.pending_window_reservations =
                     Arc::new(std::sync::atomic::AtomicUsize::new(0));
             }

@@ -2219,6 +2219,7 @@ dependencies = [
  "ui-events",
  "ui-events-winit",
  "wasm-bindgen",
+ "wasm-bindgen-test",
  "web-sys",
  "web-time",
  "windows 0.62.2",

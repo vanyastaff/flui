@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use android_activity::AndroidApp;
 use flui_foundation::geometry::DevicePixelRatio;
-use flui_platform_api::TextWeightPreference;
+use flui_platform_api::{MotionPreference, TextWeightPreference};
 use jni::{JValue, JavaVM, jni_sig, jni_str, objects::JObject, refs::Global};
 
 use crate::{
@@ -24,6 +24,7 @@ struct Reading {
     double_tap: i32,
     long_press: i32,
     text_weight: Option<TextWeightPreference>,
+    motion: Option<MotionPreference>,
 }
 
 enum ReadScope {
@@ -165,6 +166,39 @@ fn read(app: &AndroidApp, scope: ReadScope) -> Result<Reading, PreferenceQueryEr
                 })?
             }
         };
+        let duration_scale = match scope {
+            ReadScope::Geometry => None,
+            ReadScope::Preferences => {
+                let resolver = env
+                    .call_method(
+                        activity,
+                        jni_str!("getContentResolver"),
+                        jni_sig!("()Landroid/content/ContentResolver;"),
+                        &[],
+                    )?
+                    .l()?;
+                let setting = env
+                    .get_static_field(
+                        jni_str!("android/provider/Settings$Global"),
+                        jni_str!("ANIMATOR_DURATION_SCALE"),
+                        jni_sig!("Ljava/lang/String;"),
+                    )?
+                    .l()?;
+                Some(f64::from(
+                    env.call_static_method(
+                        jni_str!("android/provider/Settings$Global"),
+                        jni_str!("getFloat"),
+                        jni_sig!("(Landroid/content/ContentResolver;Ljava/lang/String;F)F"),
+                        &[
+                            JValue::Object(&resolver),
+                            JValue::Object(&setting),
+                            JValue::Float(1.0),
+                        ],
+                    )?
+                    .f()?,
+                ))
+            }
+        };
         Ok((
             density,
             touch_slop,
@@ -174,6 +208,7 @@ fn read(app: &AndroidApp, scope: ReadScope) -> Result<Reading, PreferenceQueryEr
             double_tap,
             long_press,
             text_weight,
+            duration_scale,
         ))
     })
     .and_then(
@@ -186,6 +221,7 @@ fn read(app: &AndroidApp, scope: ReadScope) -> Result<Reading, PreferenceQueryEr
             double_tap,
             long_press,
             text_weight,
+            duration_scale,
         )| {
             let ratio =
                 DevicePixelRatio::new(density).ok_or(crate::InvalidPreference::PixelRatio)?;
@@ -198,6 +234,9 @@ fn read(app: &AndroidApp, scope: ReadScope) -> Result<Reading, PreferenceQueryEr
                 double_tap,
                 long_press,
                 text_weight,
+                motion: duration_scale
+                    .map(MotionPreference::from_duration_scale)
+                    .transpose()?,
             })
         },
     )
@@ -374,7 +413,10 @@ pub(super) fn sample(app: &AndroidApp) -> Result<SystemPreferences, PreferenceQu
         .with_double_tap_interval(duration(reading.double_tap)?)
         .with_long_press_timeout(duration(reading.long_press)?)
         .with_native_touch_geometry(native_geometry(&reading)?);
-    let preferences = SystemPreferences::default().with_gestures(gestures);
+    let mut preferences = SystemPreferences::default().with_gestures(gestures);
+    if let Some(motion) = reading.motion {
+        preferences = preferences.with_motion(motion);
+    }
     Ok(match reading.text_weight {
         Some(weight) => preferences.with_text_weight(weight),
         None => preferences,

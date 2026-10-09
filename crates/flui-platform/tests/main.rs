@@ -28,6 +28,7 @@ mod preferences;
 #[path = "text_input_mapping.rs"]
 mod text_input_mapping;
 #[path = "window_callback_unwind.rs"]
+#[cfg(not(target_arch = "wasm32"))]
 mod window_callback_unwind;
 #[path = "window_installation.rs"]
 mod window_installation;

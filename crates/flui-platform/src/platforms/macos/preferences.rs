@@ -11,8 +11,9 @@ use std::{
     time::Duration,
 };
 
+use flui_platform_api::MotionPreference;
 use objc2::MainThreadMarker;
-use objc2_app_kit::NSEvent;
+use objc2_app_kit::{NSEvent, NSWorkspace};
 
 use crate::{
     GesturePreferences, PlatformError, SystemPreferences,
@@ -103,5 +104,12 @@ fn sample() -> Result<SystemPreferences, PlatformError> {
             message: error.to_string(),
         })?;
     let gestures = GesturePreferences::default().with_double_click_interval(interval);
-    Ok(SystemPreferences::default().with_gestures(gestures))
+    let motion = if NSWorkspace::sharedWorkspace().accessibilityDisplayShouldReduceMotion() {
+        MotionPreference::Reduce
+    } else {
+        MotionPreference::NoPreference
+    };
+    Ok(SystemPreferences::default()
+        .with_gestures(gestures)
+        .with_motion(motion))
 }

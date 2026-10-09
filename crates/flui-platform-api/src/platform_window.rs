@@ -54,11 +54,11 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 ///
 /// A worker that needs the owner to act reaches it through
 /// `flui_platform::PlatformProxy`, the recorded cross-thread-to-owner lane
-/// (ADR-0039 §3). That lane is **incomplete**, and this section states the
-/// rule ahead of the mechanism for obeying it: the lane carries `open_window`
-/// and `request_quit` only, and just one backend (winit) supplies a transport
-/// at all — the rest return `ClosedTransport`, answering every request with
-/// `flui_platform::ProxySendError::Unsupported`.
+/// (ADR-0039 §3). Support is operation-specific: signals can support `wake`
+/// and `request_quit` while refusing deferred `open_window` with
+/// `flui_platform::ProxySendError::Unsupported`. The winit lane also transports
+/// deferred window creation. Direct backends create windows through their
+/// owner capability; browser signals follow ADR-0185.
 ///
 /// [`close`](Self::close) is the one method that documents itself out of this
 /// default: it is callable from any thread the native API permits, and states

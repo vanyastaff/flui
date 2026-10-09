@@ -174,6 +174,27 @@ not an actual OS preference change or a rendered native application's update.
 
 ### Native gesture sampling follows public API refresh limits
 
+Browser motion observation and owner delivery follow ADR-0185. One host-owned
+media query invalidates the existing signal; its callback runs on a later
+microtask and remains independent of canvas creation. The public WASM case
+`browser_motion_observations_wake_replace_and_retire_their_owner` covers the
+adapter's initial observation, delivery, replacement and retirement through a
+controlled JS boundary. It is not an actual OS-setting change test.
+
+The same host observation set also reads motion. AppKit samples
+`NSWorkspace::accessibilityDisplayShouldReduceMotion` on its existing owner-lane
+timer. Android reads `Settings.Global.ANIMATOR_DURATION_SCALE` through the
+Activity's ContentResolver during preference sampling, validates it before
+publication, and leaves geometry-only queries independent of that setting.
+UIKit retains both bold-text and reduced-motion notification tokens on one
+owner; notifications only wake that owner, which samples the getters and checks
+admission before publishing. Successful registrations acquire ownership
+immediately so partial registration unwinds retire earlier tokens. Closure makes
+all callbacks inert before taking tokens out of the borrow and removing them.
+These sources feed the existing ADR-0172 delivery path and ADR-0184 projection.
+Local cross-target clippy compiles these native paths; it does not execute their
+OS getters or external-setting notifications.
+
 AppKit observes `NSEvent::doubleClickInterval` on the application owner lane.
 Android observes public `ViewConfiguration` timeouts and physical touch/fling
 metrics using the Activity context and its resource density; its presentation

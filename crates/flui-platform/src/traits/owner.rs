@@ -799,48 +799,28 @@ pub(crate) trait OwnerHooks: Send + Sync {
 /// [`Platform::open_window`] itself returns the typed [`OpenWindowError`]
 /// taxonomy, so its failure passes through unmapped.
 pub(crate) struct DirectOwnerHooks {
-    signal: Option<Arc<crate::shared::owner_signal::OwnerSignal>>,
+    signal: Arc<crate::shared::owner_signal::OwnerSignal>,
     platform: Arc<dyn Platform>,
-    owner_thread: ThreadId,
 }
 
 impl DirectOwnerHooks {
     /// Captures the calling thread as the permanent owner — call this from
     /// the backend's `on_ready` (or wherever it mints its `OwnerPlatform`).
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn new(platform: Arc<dyn Platform>) -> Self {
-        Self {
-            platform,
-            signal: None,
-            owner_thread: std::thread::current().id(),
-        }
-    }
     pub(crate) fn with_signal(
         platform: Arc<dyn Platform>,
         signal: Arc<crate::shared::owner_signal::OwnerSignal>,
     ) -> Self {
-        Self {
-            platform,
-            signal: Some(signal),
-            owner_thread: std::thread::current().id(),
-        }
+        Self { signal, platform }
     }
 }
 
 impl OwnerHooks for DirectOwnerHooks {
     fn on_wake(&self, callback: Box<dyn FnMut() + Send>) -> Result<(), WakeRegistrationError> {
-        match &self.signal {
-            Some(signal) => signal.register(callback),
-            None => Err(WakeRegistrationError::Unsupported),
-        }
+        self.signal.register(callback)
     }
 
     fn open_owner_window(&self, options: WindowOptions) -> Result<WindowOpen, OpenWindowError> {
-        if self
-            .signal
-            .as_ref()
-            .is_some_and(|signal| !signal.accepting())
-        {
+        if !self.signal.accepting() {
             return Err(OpenWindowError::OwnerGone {
                 rejected: Some(options),
             });
@@ -849,16 +829,15 @@ impl OwnerHooks for DirectOwnerHooks {
     }
 
     fn transport(&self) -> Arc<dyn ProxyTransport> {
-        match &self.signal {
-            Some(signal) => Arc::new(crate::shared::owner_signal::SignalTransport::new(signal)),
-            None => Arc::new(ClosedTransport::new(self.owner_thread)),
-        }
+        Arc::new(crate::shared::owner_signal::SignalTransport::new(
+            &self.signal,
+        ))
     }
 }
 
 /// Cross-thread transport behind [`PlatformProxy`]. Winit supports window
 /// requests and signals; other desktop/headless backends support signals only.
-/// Mobile/web use [`ClosedTransport`].
+/// Direct backends support signals while refusing deferred window creation.
 pub(crate) trait ProxyTransport: Send + Sync {
     fn wake(&self) -> Result<(), ProxySendError<()>> {
         Err(ProxySendError::Unsupported { rejected: () })
@@ -887,51 +866,6 @@ pub(crate) trait ProxyTransport: Send + Sync {
 
     /// The thread identity of the event-loop owner (diagnostic only).
     fn owner_thread(&self) -> ThreadId;
-}
-
-/// A transport with no lane behind it: every request is refused with
-/// [`ProxySendError::Unsupported`] (ADR-0039 §3) until
-/// the backend gets a real owner lane — permanently, not
-/// `OwnerGone`: no lane ever existed here to die.
-pub(crate) struct ClosedTransport {
-    owner_thread: ThreadId,
-}
-
-impl ClosedTransport {
-    pub(crate) fn new(owner_thread: ThreadId) -> Self {
-        Self { owner_thread }
-    }
-}
-
-impl ProxyTransport for ClosedTransport {
-    fn open_window(
-        &self,
-        options: WindowOptions,
-    ) -> Result<PendingWindow, ProxySendError<WindowOptions>> {
-        // `debug!`, not `warn!` (this backend's posture is permanent and
-        // known at compile time, not an anomaly worth surfacing by
-        // default) — a caller probing/retrying `PlatformProxy::open_window`
-        // on a lane-less backend would otherwise flood a `warn!` per
-        // attempt.
-        tracing::debug!(
-            "PlatformProxy::open_window on a lane-less backend: permanently \
-             unsupported until the owner-thread methods leave `Platform` (ADR-0039 §3) — do not retry"
-        );
-        Err(ProxySendError::Unsupported { rejected: options })
-    }
-
-    fn request_quit(&self) -> Result<(), ProxySendError<()>> {
-        // See `open_window`'s identical `debug!`-not-`warn!` rationale.
-        tracing::debug!(
-            "PlatformProxy::request_quit on a lane-less backend: permanently \
-             unsupported until the owner-thread methods leave `Platform` (ADR-0039 §3)"
-        );
-        Err(ProxySendError::Unsupported { rejected: () })
-    }
-
-    fn owner_thread(&self) -> ThreadId {
-        self.owner_thread
-    }
 }
 
 #[cfg(test)]

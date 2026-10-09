@@ -1,5 +1,12 @@
 ### Added
 
+- Browser hosts observe reduced motion before canvas creation and deliver live
+  changes through owner turns; wake and quit proxies use the same host signal.
+
+- Native macOS and iOS hosts observe reduced motion; Android preference sampling
+  observes and validates the system animation-duration scale through the
+  existing host preference source.
+
 - Add the interactive `motion_lab` example with Full/Reduce/FollowSystem modes,
   property interruption, independent deadlines, swipe and drawer transitions.
 - Headless hosts and laid-out widget harnesses can set the application motion
