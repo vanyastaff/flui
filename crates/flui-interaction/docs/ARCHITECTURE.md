@@ -68,9 +68,10 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   a re-admitted source. `mouse_tracking_ordering_and_cursor_deferral` pins these
   boundaries, same-position reentry, callback failure and healthy recovery.
 - **Checked positions do not guarantee representable derived motion.**
-  TapAndDrag checks initial and incremental displacement before publication;
+  TapAndDrag checks initial, incremental and measured historical displacement
+  before recognition, velocity sampling or publication;
   overflow cancels the attempt rather than fabricating a clamped delta.
-  `tap_and_drag_resolves_through_the_shared_arena` covers both boundaries,
+  `tap_and_drag_resolves_through_the_shared_arena` covers these boundaries,
   cancellation failure and finite same-pointer recovery. Scale commits its
   admitted contact before calling the user clock outside its state borrow,
   then revalidates the exact generation. `public_recognizer_extension_contracts`
@@ -115,11 +116,14 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   `explicit_arrow_cursor_wins` pins both hit-path resolution and tracker delivery.
 - **Hover annotations survive until every device leaves.** The tracker keeps a
   shared resolved annotation while any device remains in its region. Devices
-  refresh in identity order, each failed hit test preserves that device's prior
+  refresh in identity order, delivering each committed callback round before
+  probing the next device. A later reentrant probe therefore observes completed
+  prior transitions, including their required exits. Each failed hit test
+  preserves that device's prior
   state for retry, and every committed callback batch runs before the first
   failure resumes. Replaced and departed captures retire outside the tracker
   borrow under ADR-0127. `shared_region_exit_per_device`,
-  `ambient_refresh_contains_each_device` and
+  `ambient_refresh_contains_each_device` (including later-probe reentry) and
   `released_region_destructor_reenters_tracker` pin these contracts.
 - **Hover payload retirement preserves delivery and first failure (ADR-0127).**
   Queued replacement commits its newer movement before the outgoing hit path

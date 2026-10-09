@@ -650,7 +650,6 @@ impl MouseTracker {
             .collect();
 
         let mut failure = crate::__runtime::ClosePanic::new();
-        let mut pending = Vec::with_capacity(device_positions.len());
         for (device_id, pointer, position, observation) in device_positions {
             let Some((resolved, new_cursor)) = failure.invoke(|| {
                 let result = hit_test_fn(position);
@@ -756,10 +755,8 @@ impl MouseTracker {
                     retired_annotations,
                 }
             };
-            pending.push(work);
-        }
-
-        for work in pending {
+            // Finish the committed transition before a later device's user
+            // hit test can publish newer physical work for this source.
             work.invoke(&mut failure);
         }
         if let Some(work) = self.fallback_cursor_work() {

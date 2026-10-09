@@ -1024,6 +1024,153 @@ fn ambient_probe_cannot_replace_reentrant_physical_observation(moved: bool, reti
     tracker.clear_cursor_change_callback();
 }
 
+fn ambient_batch_delivers_accepted_regions_before_later_probe_reentry(
+    exit_failure: bool,
+    probe_failure: bool,
+) {
+    let lane = InteractionLane::try_new().expect("lane");
+    let handle = lane.dispatch_handle();
+    let tracker = MouseTracker::new();
+    let log = Log::default();
+    let old_hovered = Rc::new(Cell::new(false));
+    let transient_hovered = Rc::new(Cell::new(false));
+    let fresh_hovered = Rc::new(Cell::new(false));
+    let sibling_hovered = Rc::new(Cell::new(false));
+    let fail_exit = Rc::new(Cell::new(exit_failure));
+    let region = |name: &'static str, hovered: &Rc<Cell<bool>>, may_fail: bool| {
+        let (entered, exited) = (log.clone(), log.clone());
+        let (enter_state, exit_state) = (hovered.clone(), hovered.clone());
+        let fail = fail_exit.clone();
+        handle
+            .register_mouse_region(MouseRegionCallbacks {
+                on_enter: Some(Rc::new(move |_, _| {
+                    enter_state.set(true);
+                    entered.borrow_mut().push(format!("enter {name}"));
+                })),
+                on_exit: Some(Rc::new(move |_, _| {
+                    exit_state.set(false);
+                    exited.borrow_mut().push(format!("exit {name}"));
+                    assert!(!(may_fail && fail.get()), "earlier ambient exit failure");
+                })),
+                ..MouseRegionCallbacks::default()
+            })
+            .expect("region")
+    };
+    lane.enter(|| {
+        let old = path(&[(71, region("Old", &old_hovered, true))]);
+        let transient = path(&[(72, region("Transient", &transient_hovered, false))]);
+        let fresh = path(&[(73, region("Fresh", &fresh_hovered, false))]);
+        let sibling = path(&[(74, region("Sibling", &sibling_hovered, false))]);
+        let original_position = Offset::new(5.0, 5.0);
+        let sibling_position = Offset::new(15.0, 15.0);
+        let fresh_position = Offset::new(25.0, 25.0);
+        tracker.update_with_motion(
+            &hover(MOUSE, PointerKind::Mouse, original_position, 1),
+            PointerMotionKind::Hover,
+            &old,
+        );
+        tracker.update_with_motion(
+            &hover(
+                PEN,
+                PointerKind::Pen { tool: PenTool::Tip },
+                sibling_position,
+                2,
+            ),
+            PointerMotionKind::Hover,
+            &HitTestResult::new(),
+        );
+        assert_eq!(take(&log), ["enter Old"]);
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            tracker.update_all_devices(|position| {
+                if position == original_position {
+                    transient.clone()
+                } else {
+                    assert_eq!(position, sibling_position);
+                    tracker.update_with_motion(
+                        &hover(MOUSE, PointerKind::Mouse, fresh_position, 3),
+                        PointerMotionKind::Hover,
+                        &fresh,
+                    );
+                    assert!(!probe_failure, "later ambient probe failure");
+                    sibling.clone()
+                }
+            })
+        }));
+        if exit_failure || probe_failure {
+            assert_eq!(
+                result
+                    .expect_err("ambient failure propagates")
+                    .downcast_ref::<&str>(),
+                Some(&if exit_failure {
+                    "earlier ambient exit failure"
+                } else {
+                    "later ambient probe failure"
+                }),
+                "first accepted notification failure remains authoritative"
+            );
+        } else {
+            result.expect("healthy refresh");
+        }
+        let mut expected = vec![
+            "exit Old",
+            "enter Transient",
+            "exit Transient",
+            "enter Fresh",
+        ];
+        if !probe_failure {
+            expected.push("enter Sibling");
+        }
+        assert_eq!(
+            take(&log),
+            expected,
+            "committed A notification debt precedes a later B probe's physical reentry"
+        );
+        assert!(!old_hovered.get(), "outgoing Old exit remains deliverable");
+        assert!(
+            !transient_hovered.get(),
+            "obsolete Transient enter cannot follow newer exit"
+        );
+        assert!(fresh_hovered.get());
+        assert_eq!(sibling_hovered.get(), !probe_failure);
+        fail_exit.set(false);
+        tracker.update_all_devices(|position| {
+            if position == fresh_position {
+                fresh.clone()
+            } else {
+                assert_eq!(position, sibling_position);
+                sibling.clone()
+            }
+        });
+        assert_eq!(
+            take(&log),
+            if probe_failure {
+                vec!["enter Sibling"]
+            } else {
+                Vec::new()
+            },
+            "healthy recovery delivers sibling work without duplicate A transitions"
+        );
+        assert!(!old_hovered.get() && !transient_hovered.get());
+        assert!(fresh_hovered.get() && sibling_hovered.get());
+    });
+}
+
+fn ambient_batch_orders_region_debt_before_probe_reentry() {
+    ambient_batch_delivers_accepted_regions_before_later_probe_reentry(false, false);
+}
+
+fn ambient_batch_exit_failure_preserves_sibling_delivery() {
+    ambient_batch_delivers_accepted_regions_before_later_probe_reentry(true, false);
+}
+
+fn ambient_batch_probe_failure_preserves_newer_hover() {
+    ambient_batch_delivers_accepted_regions_before_later_probe_reentry(false, true);
+}
+
+fn ambient_batch_competing_failures_preserve_notification_authority() {
+    ambient_batch_delivers_accepted_regions_before_later_probe_reentry(true, true);
+}
+
 fn ambient_probe_preserves_reentrant_motion() {
     ambient_probe_cannot_replace_reentrant_physical_observation(true, 0);
 }
@@ -1461,6 +1608,22 @@ fn mouse_tracking_ordering_and_cursor_deferral() {
     run_rows(
         "mouse tracking",
         &[
+            (
+                "ambient batch orders accepted region debt",
+                ambient_batch_orders_region_debt_before_probe_reentry,
+            ),
+            (
+                "ambient batch exit failure keeps sibling delivery",
+                ambient_batch_exit_failure_preserves_sibling_delivery,
+            ),
+            (
+                "ambient batch probe failure keeps newer hover",
+                ambient_batch_probe_failure_preserves_newer_hover,
+            ),
+            (
+                "ambient batch competing failure authority",
+                ambient_batch_competing_failures_preserve_notification_authority,
+            ),
             (
                 "ambient probe reentrant motion",
                 ambient_probe_preserves_reentrant_motion,

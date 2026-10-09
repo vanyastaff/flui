@@ -601,6 +601,11 @@ impl TapAndDragGestureRecognizer {
         let mut exceeded_drag = false;
         for (stamp, position) in history {
             let delta = position - state.initial;
+            if !delta.is_finite() {
+                drop(state);
+                self.cancel();
+                return;
+            }
             exceeded_tap |= settings.exceeds_hit_slop(kind, delta);
             exceeded_drag |= settings.exceeds_pan_slop_for(kind, delta);
             let timestamp = state.timeline.instant(stamp, now);

@@ -13,6 +13,9 @@
 - Retain opaque native admission retirement ownership under the binding's preserving-close policy instead of invoking further user cleanup after failure.
 - Preserve a newer same-actor native Start when older Start, Update, End or Cancelled delivery reenters hit testing or raw observation, including repeated source identities and timestamps.
 - Stop Viewer focal inertia when completed layout changes its viewport or boundary, while preserving motion before paint, unchanged rebuilds and zero-elapsed samples; release settled runs without continued Vsync requests.
+- Preserve the Viewer scene at release when no frame clock is bound, and restore inertia after reattachment.
+- Deliver each ambient mouse region transition before probing another device, preserving exit obligations and observer order during reentry.
+- Cancel tap-and-drag when a measured historical sample produces an unrepresentable displacement, including after drag recognition.
 
 ### Changed
 

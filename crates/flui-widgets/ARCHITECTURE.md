@@ -2248,6 +2248,14 @@ only when containment refuses proposed displacement; a repeated accepted frame
 sample preserves the trajectory. `a_repeated_frame_does_not_cancel_viewer_inertia`
 checks zero elapsed time followed by real progression and recovery.
 
+Viewer focal inertia requires a live bound driver. Without one, release retains
+the current scene transform and still reports the measured interaction velocity;
+it does not submit an unbound simulation that would settle synchronously.
+Clock replacement withdraws release authority before stopping and rebinding,
+then publishes the driver's actual binding state for retained callbacks.
+`viewer_focal_fling_advances_then_stops_on_new_input` covers initial detachment,
+detachment during coast, frame-work drainage and fresh motion after reattachment.
+
 
 ### Wheel precision selects local animation policy
 

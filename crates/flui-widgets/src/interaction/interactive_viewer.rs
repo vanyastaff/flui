@@ -479,6 +479,7 @@ struct GestureTracking {
 struct FocalFling {
     controller: AnimationController,
     run: RefCell<Option<Rc<FocalRun>>>,
+    clock_bound: Cell<bool>,
     closed: Cell<bool>,
 }
 
@@ -487,6 +488,7 @@ impl FocalFling {
         Self {
             controller,
             run: RefCell::new(None),
+            clock_bound: Cell::new(false),
             closed: Cell::new(false),
         }
     }
@@ -511,7 +513,7 @@ impl FocalFling {
     ) {
         self.stop();
         let speed = velocity.dx.hypot(velocity.dy);
-        if self.closed.get() || !speed.is_finite() || speed <= 0.0 {
+        if self.closed.get() || !self.clock_bound.get() || !speed.is_finite() || speed <= 0.0 {
             return;
         }
         let Some(post_frame) = post_frame else {
@@ -566,6 +568,7 @@ impl FocalFling {
 
     fn close(&self) {
         self.closed.set(true);
+        self.clock_bound.set(false);
         self.stop();
     }
 }
@@ -1103,8 +1106,11 @@ impl InteractiveViewerState {
             return;
         }
         self.clock = incoming;
+        self.fling.clock_bound.set(false);
         self.fling.stop();
-        if let Err(error) = self.controller.rebind(self.clock.as_ref()) {
+        let rebound = self.controller.rebind(self.clock.as_ref());
+        self.fling.clock_bound.set(self.controller.is_bound());
+        if let Err(error) = rebound {
             tracing::error!(%error, "InteractiveViewer lost its frame registry");
         }
     }
