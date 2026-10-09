@@ -127,10 +127,12 @@ mod probe {
 
     fn schedule_frame_observer(post_frame: PostFrameHandle, witness: Arc<Witness>) {
         let next = post_frame.clone();
-        post_frame.schedule(move |_timing| {
+        if let Err(error) = post_frame.schedule(move |_timing| {
             witness.frames.fetch_add(1, Ordering::SeqCst);
             schedule_frame_observer(next, witness);
-        });
+        }) {
+            eprintln!("lifecycle_probe frame observer stopped: {error}");
+        }
     }
 
     #[derive(Clone, StatefulView)]
