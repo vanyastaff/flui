@@ -8,6 +8,10 @@
 
 ### Fixed
 
+- Bound animation runs and playback-rate changes request their first sample from the owning
+  frame driver. Nested mute and registration migration preserve the addressed presentation;
+  failed wake delivery keeps the accepted run and finishes healthy listener delivery.
+
 - **`flui-runtime`**: each presentation ticks its `Vsync` through its own `MotionClock`, so a
   frame time that runs backwards, or a non-finite or negative test override, holds animations
   instead of freezing a run or moving it backwards.

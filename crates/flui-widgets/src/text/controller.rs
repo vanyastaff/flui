@@ -1025,8 +1025,8 @@ impl TextEditingController {
     /// The returned `Arc` wraps a clone of the internal `ChangeNotifier`, which
     /// is itself `Arc`-backed — both the widget build and the key handler share
     /// the same live listener list through their respective clones.
-    pub fn listenable(&self) -> Arc<dyn Listenable> {
-        Arc::new(self.notifier.clone())
+    pub fn listenable(&self) -> std::rc::Rc<dyn Listenable> {
+        std::rc::Rc::new(self.notifier.clone())
     }
 }
 

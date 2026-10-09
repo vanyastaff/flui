@@ -56,7 +56,6 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::rc::Rc;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
@@ -140,7 +139,7 @@ struct ModalInner {
     /// has the property `AnimatedView` needs: the same
     /// object every time `listenable()` is called, even though the `ModalScope`
     /// view is rebuilt on every overlay-entry build.
-    relay: super::lifecycle::Terminal<Arc<ChangeNotifier>>,
+    relay: super::lifecycle::Terminal<Rc<ChangeNotifier>>,
     /// The relay's subscriptions to the two animations, opened in `install` and
     /// closed in `dispose`. `Listenable` has no `Drop`-based unsubscribe.
     relay_subscriptions: Mutex<Vec<(RouteAnimation, ListenerId)>>,
@@ -153,13 +152,13 @@ struct ModalInner {
     /// That swap is the entire reason an offstage route lays out at its
     /// *final* geometry rather than wherever its entrance transition happens to be:
     /// `HeroController` measures the destination one frame before the flight.
-    primary: super::lifecycle::Terminal<Arc<ProxyAnimation<f64>>>,
+    primary: super::lifecycle::Terminal<Rc<ProxyAnimation<f64>>>,
     /// The secondary animation proxy.
     ///
     /// Parent is the `TransitionRoute` secondary train, or an always-dismissed
     /// animation while offstage — an offstage route must not be pushed aside by
     /// whatever sits above it either.
-    secondary: super::lifecycle::Terminal<Arc<ProxyAnimation<f64>>>,
+    secondary: super::lifecycle::Terminal<Rc<ProxyAnimation<f64>>>,
 
     /// The route's page subtree, owned from construction and filled while the
     /// page is mounted. ADR-0021, seam 4.
@@ -262,15 +261,15 @@ impl ModalInner {
     /// [`focus_scope`](Self::focus_scope): heroes, text fields and `Focus`
     /// widgets in the page attach under the route's own scope, so traversal stays
     /// within the route (ADR-0026).
-    fn build_scope(self: &Arc<Self>) -> BoxedView {
+    fn build_scope(self: &Rc<Self>) -> BoxedView {
         let scope = match self.transition.get() {
             Some(transition) => ModalScope {
                 page: super::lifecycle::Terminal::new(Rc::clone(&self.page)),
                 transitions: super::lifecycle::Terminal::new(Rc::clone(&self.transitions.lock())),
                 transition: super::lifecycle::Terminal::new(transition.clone()),
-                primary: super::lifecycle::Terminal::new(Arc::clone(&self.primary)),
-                secondary: super::lifecycle::Terminal::new(Arc::clone(&self.secondary)),
-                relay: super::lifecycle::Terminal::new(Arc::clone(&self.relay)),
+                primary: super::lifecycle::Terminal::new(Rc::clone(&self.primary)),
+                secondary: super::lifecycle::Terminal::new(Rc::clone(&self.secondary)),
+                relay: super::lifecycle::Terminal::new(Rc::clone(&self.relay)),
                 subtree: self.subtree.clone(),
                 heroes: super::lifecycle::Terminal::new(self.heroes.clone()),
                 pop_entries: super::lifecycle::Terminal::new(self.pop_entries.clone()),
@@ -302,8 +301,8 @@ impl ModalInner {
 
     /// The page-facing local-history capability: the registry plus this
     /// route's `changed_internal_state`, owed on the empty↔non-empty edges.
-    fn local_history_handle(self: &Arc<Self>) -> LocalHistoryHandle {
-        let inner = Arc::clone(self);
+    fn local_history_handle(self: &Rc<Self>) -> LocalHistoryHandle {
+        let inner = Rc::clone(self);
         LocalHistoryHandle::new(
             self.local_history.clone(),
             Rc::new(move || changed_internal_state(&inner)),
@@ -332,7 +331,7 @@ impl ModalInner {
             always_dismissed()
         } else {
             transition.map_or_else(always_dismissed, |transition| {
-                transition.secondary_animation() as Arc<dyn Animation<f64>>
+                transition.secondary_animation() as std::rc::Rc<dyn Animation<f64>>
             })
         });
     }
@@ -344,15 +343,15 @@ impl ModalInner {
     /// by itself. That is what carries the completed animation into the page builder
     /// within the same frame. (Nothing ticks an offstage route afterwards — its
     /// parent is a constant — which is fine: there is nothing left to animate.)
-    fn open_relay(self: &Arc<Self>) {
+    fn open_relay(self: &Rc<Self>) {
         let animations: [RouteAnimation; 2] = [
-            Arc::clone(&self.primary) as RouteAnimation,
-            Arc::clone(&self.secondary) as RouteAnimation,
+            Rc::clone(&self.primary) as RouteAnimation,
+            Rc::clone(&self.secondary) as RouteAnimation,
         ];
         let mut subscriptions = self.relay_subscriptions.lock();
         for animation in animations {
-            let relay = Arc::clone(&self.relay);
-            let id = animation.add_listener(Arc::new(move || relay.notify_listeners()));
+            let relay = Rc::clone(&self.relay);
+            let id = animation.add_listener(std::rc::Rc::new(move || relay.notify_listeners()));
             subscriptions.push((animation, id));
         }
     }
@@ -387,10 +386,10 @@ struct ModalScope {
     transition: super::lifecycle::Terminal<TransitionHandle>,
     /// The route's animation — the **proxy**, so an offstage route's builders see
     /// an always-complete animation.
-    primary: super::lifecycle::Terminal<Arc<ProxyAnimation<f64>>>,
+    primary: super::lifecycle::Terminal<Rc<ProxyAnimation<f64>>>,
     /// The route's secondary animation proxy.
-    secondary: super::lifecycle::Terminal<Arc<ProxyAnimation<f64>>>,
-    relay: super::lifecycle::Terminal<Arc<ChangeNotifier>>,
+    secondary: super::lifecycle::Terminal<Rc<ProxyAnimation<f64>>>,
+    relay: super::lifecycle::Terminal<Rc<ChangeNotifier>>,
     subtree: RouteSubtreeCell,
     heroes: super::lifecycle::Terminal<HeroRegistry>,
     /// The route's `PopScope` registry, provided to the page as an ambient.
@@ -450,8 +449,8 @@ impl Drop for ModalScope {
 impl_animated_view!(ModalScope);
 
 impl AnimatedView for ModalScope {
-    fn listenable(&self) -> Arc<dyn Listenable> {
-        Arc::clone(&self.relay) as Arc<dyn Listenable>
+    fn listenable(&self) -> std::rc::Rc<dyn Listenable> {
+        Rc::clone(&self.relay) as std::rc::Rc<dyn Listenable>
     }
 }
 
@@ -475,8 +474,8 @@ impl ViewState<ModalScope> for ModalScopeState {
     fn build(&self, view: &ModalScope, ctx: &dyn BuildContext) -> impl IntoView {
         view.transition.drain_pending_statuses();
 
-        let primary: RouteAnimation = Arc::clone(&view.primary) as RouteAnimation;
-        let secondary: RouteAnimation = Arc::clone(&view.secondary) as RouteAnimation;
+        let primary: RouteAnimation = Rc::clone(&view.primary) as RouteAnimation;
+        let secondary: RouteAnimation = Rc::clone(&view.secondary) as RouteAnimation;
         let page = (view.page)(ctx, &primary, &secondary);
         // The `HeroScope` sits **inside** the subtree anchor, so the anchor stays the
         // route's coordinate root and every hero is a descendant of it — which is what
@@ -531,7 +530,7 @@ impl ViewState<ModalScope> for ModalScopeState {
 /// Private: not exported until its parity + sign-off gate.
 pub struct ModalRoute<T> {
     transition: super::lifecycle::Terminal<TransitionRoute<T>>,
-    inner: super::lifecycle::Terminal<Arc<ModalInner>>,
+    inner: super::lifecycle::Terminal<Rc<ModalInner>>,
 }
 
 impl<T> Drop for ModalRoute<T> {
@@ -549,7 +548,7 @@ impl<T: Send + Clone + 'static> ModalRoute<T> {
     /// Defaults: `maintain_state = true`, `offstage = false`, no barrier colour,
     /// not dismissible, not opaque.
     pub fn new(duration: Duration, page: RoutePageBuilder) -> Self {
-        let inner = Arc::new(ModalInner {
+        let inner = Rc::new(ModalInner {
             offstage: AtomicBool::new(false),
             maintain_state: AtomicBool::new(true),
             barrier_dismissible: AtomicBool::new(false),
@@ -558,14 +557,14 @@ impl<T: Send + Clone + 'static> ModalRoute<T> {
             page: super::lifecycle::Terminal::new(page),
             transitions: super::lifecycle::Terminal::new(Mutex::new(default_transitions_builder())),
             transition: OnceLock::new(),
-            relay: super::lifecycle::Terminal::new(Arc::new(ChangeNotifier::new())),
+            relay: super::lifecycle::Terminal::new(Rc::new(ChangeNotifier::new())),
             relay_subscriptions: Mutex::new(Vec::new()),
             // Both rest at an always-dismissed animation until `install()` points
             // them at the controller — an unpushed route has no animation to proxy.
-            primary: super::lifecycle::Terminal::new(Arc::new(ProxyAnimation::new(
+            primary: super::lifecycle::Terminal::new(Rc::new(ProxyAnimation::new(
                 always_dismissed(),
             ))),
-            secondary: super::lifecycle::Terminal::new(Arc::new(ProxyAnimation::new(
+            secondary: super::lifecycle::Terminal::new(Rc::new(ProxyAnimation::new(
                 always_dismissed(),
             ))),
             subtree: RouteSubtreeCell::new(),
@@ -578,7 +577,7 @@ impl<T: Send + Clone + 'static> ModalRoute<T> {
         });
 
         let content = {
-            let inner = Arc::clone(&inner);
+            let inner = Rc::clone(&inner);
             move |ctx: &dyn BuildContext| -> BoxedView {
                 // Barrier first: it paints below the page and is hit-tested after
                 // it.
@@ -588,7 +587,7 @@ impl<T: Send + Clone + 'static> ModalRoute<T> {
         };
 
         let transition = TransitionRoute::new(duration, content);
-        transition.set_status_wake(Arc::clone(&inner.relay));
+        transition.set_status_wake(Rc::clone(&inner.relay));
         // The content closure captured `inner` before the route existed, so the
         // handle can only be wired in afterwards. `OnceLock` makes that a fact of
         // the type rather than a comment.
@@ -693,7 +692,7 @@ impl<T: Send + Clone + 'static> ModalRoute<T> {
     #[must_use]
     pub fn handle(&self) -> ModalHandle {
         ModalHandle {
-            inner: Arc::clone(&self.inner),
+            inner: Rc::clone(&self.inner),
         }
     }
 
@@ -725,7 +724,7 @@ impl<T> fmt::Debug for ModalRoute<T> {
 /// one per route, looked up by [`RouteId`] through the navigator's registry.
 #[derive(Clone)]
 pub struct ModalHandle {
-    inner: Arc<ModalInner>,
+    inner: Rc<ModalInner>,
 }
 
 impl fmt::Debug for ModalHandle {
@@ -793,12 +792,12 @@ impl ModalHandle {
     /// What the route's builders currently see as the route animation — the
     /// proxy, so `1.0`/completed while offstage.
     pub(crate) fn primary_animation(&self) -> RouteAnimation {
-        Arc::clone(&self.inner.primary) as RouteAnimation
+        Rc::clone(&self.inner.primary) as RouteAnimation
     }
 
     /// The route's secondary animation — `0.0`/dismissed while offstage.
     pub(crate) fn secondary_animation(&self) -> RouteAnimation {
-        Arc::clone(&self.inner.secondary) as RouteAnimation
+        Rc::clone(&self.inner.secondary) as RouteAnimation
     }
 
     /// The heroes mounted in this route's page, as a registry rather than an

@@ -35,7 +35,7 @@
 //! is closed at the BEHAVIOR FAMILY level, not at the per-`V` level).
 
 use flui_rendering::parent_data::SliverSlot;
-use std::{fmt, rc::Rc, sync::Arc};
+use std::{fmt, rc::Rc};
 
 use flui_foundation::{Listenable, ListenerId};
 
@@ -243,7 +243,7 @@ pub struct AnimationListener {
     /// concrete listenable type is captured at construction time
     /// (when the typed `V::listenable()` call site is in scope) — the
     /// closure body merely `Arc::clone`s the captured handle.
-    pub listenable_provider: Rc<dyn Fn() -> Arc<dyn Listenable>>,
+    pub listenable_provider: Rc<dyn Fn() -> std::rc::Rc<dyn Listenable>>,
     /// Identifier returned by the `Listenable::add_listener` call;
     /// passed to `remove_listener` on detach.
     pub listener_id: ListenerId,
@@ -253,7 +253,7 @@ impl AnimationListener {
     /// Construct a listener handle from a captured listenable provider
     /// and the listener-id returned by the matching `add_listener` call.
     pub fn new(
-        listenable_provider: Rc<dyn Fn() -> Arc<dyn Listenable>>,
+        listenable_provider: Rc<dyn Fn() -> std::rc::Rc<dyn Listenable>>,
         listener_id: ListenerId,
     ) -> Self {
         Self {
@@ -266,7 +266,7 @@ impl AnimationListener {
     ///
     /// Invokes the stored owner-local thunk, which `Arc::clone`s the
     /// listenable captured at construction time.
-    pub fn listenable(&self) -> Arc<dyn Listenable> {
+    pub fn listenable(&self) -> std::rc::Rc<dyn Listenable> {
         (self.listenable_provider)()
     }
 }

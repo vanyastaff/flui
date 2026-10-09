@@ -10,7 +10,6 @@ render pipeline or event loop.
 
 - **Frame Scheduling** - VSync coordination and frame lifecycle management
 - **Priority-based Task Queue** - Execute tasks in priority order (UserInput > Animation > Build > Idle)
-- **Animation Tickers** - Frame-perfect animation timing with explicit lifecycle futures
 - **Frame Budget Management** - Enforce time limits to maintain target FPS
 - **VSync Integration** - Coordinate with display refresh to avoid tearing
 - **Type-Safe Durations** - Newtype wrappers prevent unit confusion
@@ -24,7 +23,6 @@ Application
     ↓
 UpdateScheduler (orchestrates frames — logical time only)
     ├─ TaskQueue (priority-based execution)
-    ├─ TickerProvider (animation tickers)
     └─ FrameBudget (phase-duration stats)
 
 Frame Timeline:
@@ -80,31 +78,6 @@ scheduler.add_task(Priority::Build, || {
 scheduler.execute_frame(&owner);
 ```
 
-### Animation Tickers
-
-```rust
-use std::sync::Arc;
-
-use flui_scheduler::{OwnerFrame, Ticker, UpdateScheduler};
-
-let scheduler = Arc::new(UpdateScheduler::new());
-let owner = OwnerFrame::new(&scheduler).expect("the scheduler has no live owner frame");
-let mut ticker = Ticker::new_with_scheduler(&scheduler);
-
-ticker.start(|elapsed| {
-    let progress = (elapsed % 2.0) / 2.0; // 2-second loop
-    println!("Animation progress: {:.2}", progress);
-});
-
-// In your frame loop, scheduler transient callbacks drive the ticker.
-scheduler.execute_frame(&owner);
-
-// dispose()/drop stops the ticker the same way. The ticker itself resolves
-// no future of its own — see "Ticker Run Completion" below for the
-// completer/future pair a caller owns to make a run awaitable.
-ticker.stop();
-```
-
 ### Frame Budget Management
 
 ```rust
@@ -150,27 +123,6 @@ queue.execute_all();
 ## Safety Features
 
 This crate uses small, explicit Rust types for correctness at API boundaries.
-
-### Ticker Run Completion
-
-`Ticker::start`/`stop`/`dispose`/`reset` are fire-and-forget — the ticker itself resolves no
-future. A caller that needs "this run ended" as an awaitable value creates its own
-`TickerFuture::pending` completer/future pair and resolves the completer from inside the
-ticker's own callback — this is exactly what `flui-animation`'s `AnimationController` does,
-under its own lock, for every run it starts.
-
-```rust
-use flui_scheduler::ticker::TickerFuture;
-
-let (completer, future) = TickerFuture::pending();
-assert!(future.is_pending());
-
-// Resolve the run — the completer's owner does this when the run it
-// represents ends normally; `cancel()` is the counterpart for a run that is
-// superseded or torn down instead.
-completer.complete().deliver();
-assert!(future.is_complete());
-```
 
 ### Type-Safe Duration Wrappers
 
@@ -337,7 +289,9 @@ and `Priority::Build` always run to completion.
 | WebAssembly | `performance.now()` |
 | iOS/Android | Platform refresh rate |
 
-All types are `Send + Sync` and safe for multi-threaded use.
+`UpdateScheduler`, its callback queues and `OwnerFrame` belong to one UI owner.
+Callbacks accept owner-local captures. Workers request frames through
+`FrameWaker`; wake infrastructure does not retain UI callback storage (ADR-0175).
 
 ## Testing
 

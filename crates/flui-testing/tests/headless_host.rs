@@ -141,8 +141,8 @@ fn the_ui_runtime_makes_progress_after_a_raised_failure() {
 /// owner-local lane.
 fn schedule_post_frame_panic(ui_runtime: &HeadlessHost) {
     ui_runtime
-        .local_post_frame_handle()
-        .schedule_local(|_timing| panic!("post-frame callback panicked"))
+        .post_frame_handle()
+        .schedule(|_timing| panic!("post-frame callback panicked"))
         .expect("the ui_runtime's post-frame lane is alive");
 }
 
@@ -154,8 +154,8 @@ fn assert_progress_after_unwind(ui_runtime: &mut HeadlessHost) -> flui_runtime::
     let ran = Arc::new(AtomicBool::new(false));
     let ran_in_callback = Arc::clone(&ran);
     ui_runtime
-        .local_post_frame_handle()
-        .schedule_local(move |_timing| ran_in_callback.store(true, Ordering::SeqCst))
+        .post_frame_handle()
+        .schedule(move |_timing| ran_in_callback.store(true, Ordering::SeqCst))
         .expect("the post-frame lane survives the unwind");
     ui_runtime.request_frame();
 

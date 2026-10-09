@@ -425,9 +425,10 @@ impl ViewState<FormPage> for FormPageState {
         self.submitted_name.bind(ctx);
 
         let rebuild_on_edit = rebuild;
-        self.name_listener_id = Some(self.name_controller.add_listener(Arc::new(move || {
-            rebuild_on_edit.schedule(flui_view::RebuildReason::StateChange);
-        })));
+        self.name_listener_id =
+            Some(self.name_controller.add_listener(std::rc::Rc::new(move || {
+                rebuild_on_edit.schedule(flui_view::RebuildReason::StateChange);
+            })));
     }
 
     fn dispose(&mut self) {

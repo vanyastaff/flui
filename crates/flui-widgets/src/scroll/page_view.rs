@@ -51,8 +51,8 @@ use flui_rendering::view::{
 use flui_view::prelude::StatefulView;
 use flui_view::seq::ViewSeq;
 use flui_view::{
-    BoxedView, BuildContext, EventCx, EventOutcome, IntoView, LifecycleContext,
-    LocalPostFrameHandle, RebuildHandle, RebuildReason, ViewExt, ViewState, WriterSource,
+    BoxedView, BuildContext, EventCx, EventOutcome, IntoView, LifecycleContext, PostFrameHandle,
+    RebuildHandle, RebuildReason, ViewExt, ViewState, WriterSource,
 };
 use parking_lot::Mutex;
 
@@ -306,7 +306,7 @@ impl PageController {
         &self,
         page: usize,
         duration: Duration,
-        curve: Arc<dyn Curve + Send + Sync>, // see PopPacing's doc (navigator/binding.rs) — same erased easing-curve boundary
+        curve: std::rc::Rc<dyn Curve + Send + Sync>, // see PopPacing's doc (navigator/binding.rs) — same erased easing-curve boundary
     ) {
         let page_f = page as f64;
         let position = self.scroll.position();
@@ -338,7 +338,7 @@ impl PageController {
     pub fn next_page(
         &self,
         duration: Duration,
-        curve: Arc<dyn Curve + Send + Sync>, // see PopPacing's doc (navigator/binding.rs) — same erased easing-curve boundary
+        curve: std::rc::Rc<dyn Curve + Send + Sync>, // see PopPacing's doc (navigator/binding.rs) — same erased easing-curve boundary
     ) {
         let Some(page) = self.page() else { return };
         self.animate_to_page((page.round() + 1.0).max(0.0) as usize, duration, curve);
@@ -354,7 +354,7 @@ impl PageController {
     pub fn previous_page(
         &self,
         duration: Duration,
-        curve: Arc<dyn Curve + Send + Sync>, // see PopPacing's doc (navigator/binding.rs) — same erased easing-curve boundary
+        curve: std::rc::Rc<dyn Curve + Send + Sync>, // see PopPacing's doc (navigator/binding.rs) — same erased easing-curve boundary
     ) {
         let Some(page) = self.page() else { return };
         self.animate_to_page((page.round() - 1.0).max(0.0) as usize, duration, curve);
@@ -374,7 +374,7 @@ impl PageController {
 
     /// An `Arc<dyn Listenable>` pointing at the same shared position.
     #[must_use]
-    pub fn as_listenable(&self) -> Arc<dyn Listenable> {
+    pub fn as_listenable(&self) -> std::rc::Rc<dyn Listenable> {
         self.scroll.as_listenable()
     }
 }
@@ -529,7 +529,7 @@ pub struct PageViewState {
     /// through it.
     rebuild: Option<RebuildHandle>,
     /// Minted in `init_state`; recorded pages are delivered through it.
-    post_frame: Option<LocalPostFrameHandle>,
+    post_frame: Option<PostFrameHandle>,
     /// Owner-local delivery target. Queued post-frame callbacks hold only a
     /// [`Weak`] to it, so the lane cannot keep this state's callback or
     /// writer alive past teardown.
@@ -545,7 +545,7 @@ pub struct PageViewState {
     /// real one). Same shape `AnimatedBehavior::on_view_updated`
     /// (`crates/flui-view/src/element/behavior.rs`) uses for a `Listenable`
     /// swap.
-    page_listener: Option<(Arc<dyn Listenable>, ListenerId)>,
+    page_listener: Option<(std::rc::Rc<dyn Listenable>, ListenerId)>,
 }
 
 impl std::fmt::Debug for PageViewState {
@@ -617,7 +617,7 @@ impl PageViewState {
             .expect("BUG: init_state creates the delivery target before the first build");
         while let Some(page) = pending.pop_front() {
             let delivery: Weak<PageChangeDelivery> = Rc::downgrade(delivery);
-            if let Err(error) = handle.schedule_local(move |_timing| {
+            if let Err(error) = handle.schedule(move |_timing| {
                 if let Some(delivery) = delivery.upgrade() {
                     delivery.deliver(page);
                 }
@@ -651,7 +651,7 @@ impl PageViewState {
             .expect("BUG: init_state mints the rebuild handle before registering the listener");
 
         let listenable = self.controller.as_listenable();
-        let listener_id = listenable.add_listener(Arc::new(move || {
+        let listener_id = listenable.add_listener(std::rc::Rc::new(move || {
             if !position.has_applied_viewport_dimension() {
                 return;
             }
@@ -699,7 +699,7 @@ impl ViewState<PageView> for PageViewState {
             writer: ctx.writer_source(),
         }));
         self.rebuild = Some(ctx.rebuild_handle());
-        self.post_frame = ctx.local_post_frame_handle();
+        self.post_frame = ctx.post_frame_handle();
         // Last: the listener captures the rebuild handle minted above.
         self.register_page_listener();
     }
@@ -781,7 +781,7 @@ impl ViewState<PageView> for PageViewState {
         // subscription.
         let old_listenable = self.controller.as_listenable();
         let new_listenable = new_controller.as_listenable();
-        let controller_swapped = !Arc::ptr_eq(&old_listenable, &new_listenable);
+        let controller_swapped = !std::rc::Rc::ptr_eq(&old_listenable, &new_listenable);
 
         self.controller = new_controller.clone();
 

@@ -15,7 +15,7 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::hint::black_box;
-use std::sync::Arc;
+
 use std::time::Duration;
 
 use flui_animation::{Animation, AnimationController, Vsync};
@@ -73,28 +73,30 @@ const FRAME: f64 = 1.0 / 60.0;
 /// 1. **The claim:** after warmup, every `tick_all` that advances a running
 ///    controller and notifies its four value listeners allocates nothing.
 /// 2. **The negative control:** starting a run on the same controller does
-///    allocate (its `TickerFuture`), so a counter that counts nothing cannot
+///    allocate (its `AnimationRunFuture`), so a counter that counts nothing cannot
 ///    pass claim 1. It runs after the measured loop, so it cannot taint it.
 #[test]
 fn a_steady_state_frame_allocates_nothing() {
-    let controller = AnimationController::with_detached_ticker(NEVER_ENDING);
+    let vsync = Vsync::new();
+    let owner = AnimationController::builder(NEVER_ENDING).build_on(Some(&vsync));
+    let controller = owner.controller();
     for _ in 0..4 {
-        controller.add_listener(Arc::new(|| {
+        controller.add_listener(std::rc::Rc::new(|| {
             black_box(());
         }));
     }
-    controller.add_status_listener(Arc::new(|status| {
+    controller.add_status_listener(std::rc::Rc::new(|status| {
         black_box(status);
     }));
-    let vsync = Vsync::new();
-    let _registration = vsync.register(controller.clone());
     let _run = controller.forward().expect("forward on a live controller");
 
     // Warmup: the first frame anchors the run; later ones settle any
     // one-time lazy initialisation outside the measured path.
     let mut now = 0.0_f64;
     for _ in 0..16 {
-        vsync.tick_all(now);
+        vsync.tick_all(
+            &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(now)),
+        );
         now += FRAME;
     }
 
@@ -108,7 +110,9 @@ fn a_steady_state_frame_allocates_nothing() {
         let calls_before = read(&ALLOC_COUNT);
         let bytes_before = read(&ALLOC_BYTES);
 
-        vsync.tick_all(now);
+        vsync.tick_all(
+            &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(now)),
+        );
         now += FRAME;
 
         let calls = read(&ALLOC_COUNT) - calls_before;

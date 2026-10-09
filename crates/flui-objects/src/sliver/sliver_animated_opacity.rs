@@ -274,7 +274,7 @@ impl RenderSliver for RenderSliverAnimatedOpacity {
         let animation = self.animation.clone();
         let alpha = self.alpha.clone();
         let mark_handle = handle.clone();
-        self.listener_id = Some(self.animation.add_listener(Arc::new(move || {
+        self.listener_id = Some(self.animation.add_listener(std::rc::Rc::new(move || {
             Self::recompute_alpha(&animation, &alpha, &mark_handle);
         })));
         Self::recompute_alpha(&self.animation, &self.alpha, &handle);

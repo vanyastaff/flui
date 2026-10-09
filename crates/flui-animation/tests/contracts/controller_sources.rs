@@ -3,17 +3,18 @@
 use crate::child_process;
 use flui_animation::{
     Animation, AnimationController, AnimationStatus, AnimationSwitch, ConstantAnimation,
-    CurvedAnimation, ProxyAnimation, StatusCallback, Vsync, VsyncRegistration,
+    CurvedAnimation, DrivenController, ProxyAnimation, StatusCallback, Vsync,
     curve::{Curve, Split},
     simulation::Simulation,
 };
+use flui_animation::{AnimationRunFuture, RunCanceled};
 use flui_foundation::{Listenable, ListenerCallback, ListenerId};
-use flui_scheduler::{Ticker, UpdateScheduler, ticker::TickerFuture};
 use std::{
     future::Future,
     pin::Pin,
+    rc::Rc,
     sync::{
-        Arc, Mutex,
+        Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     task::{Context, Poll, Waker},
@@ -40,7 +41,7 @@ struct Hook {
     controller: AnimationController,
     action: Action,
     armed: AtomicBool,
-    replacement: Arc<Mutex<Option<TickerFuture>>>,
+    replacement: Rc<Mutex<Option<AnimationRunFuture>>>,
 }
 impl Hook {
     fn run(&self) {
@@ -62,7 +63,9 @@ impl Hook {
             Action::Stop => {
                 self.controller.stop().expect("stop from sample");
             }
-            Action::Nested => self.controller.tick_at(0.75),
+            Action::Nested => self
+                .controller
+                .tick_at(std::time::Duration::from_secs_f64(0.75)),
             Action::PanicAfterStop => {
                 self.controller.stop().expect("stop before sample panic");
                 panic!("authoritative sample failure");
@@ -71,7 +74,7 @@ impl Hook {
     }
 }
 struct CustomSimulation {
-    hook: Arc<Hook>,
+    hook: Rc<Hook>,
     method: Method,
 }
 impl Simulation for CustomSimulation {
@@ -94,7 +97,7 @@ impl Simulation for CustomSimulation {
         time >= 1.0
     }
 }
-struct CustomCurve(Arc<Hook>);
+struct CustomCurve(Rc<Hook>);
 impl Curve for CustomCurve {
     fn transform(&self, t: f64) -> f64 {
         self.0.run();
@@ -102,13 +105,15 @@ impl Curve for CustomCurve {
     }
 }
 
-fn poll(future: &mut TickerFuture) -> Poll<Result<(), flui_scheduler::ticker::TickerCanceled>> {
+fn poll(future: &mut AnimationRunFuture) -> Poll<Result<(), RunCanceled>> {
     Pin::new(future).poll(&mut Context::from_waker(Waker::noop()))
 }
 fn exercise(method: Method, action: Action) {
-    let controller = AnimationController::without_ticker(Duration::from_secs(1));
-    let replacement = Arc::new(Mutex::new(None));
-    let hook = Arc::new(Hook {
+    let mut lifecycle =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
+    let controller = lifecycle.controller().clone();
+    let replacement = Rc::new(Mutex::new(None));
+    let hook = Rc::new(Hook {
         controller: controller.clone(),
         action,
         armed: AtomicBool::new(true),
@@ -119,7 +124,7 @@ fn exercise(method: Method, action: Action) {
             .animate_to_curved(
                 1.0,
                 Some(Duration::from_secs(1)),
-                Arc::new(CustomCurve(hook)),
+                Rc::new(CustomCurve(hook)),
             )
             .expect("curved run")
     } else {
@@ -130,14 +135,14 @@ fn exercise(method: Method, action: Action) {
     if matches!(method, Method::Velocity) {
         assert_eq!(controller.velocity(), 1.0);
     } else {
-        controller.tick_at(0.25);
+        controller.tick_at(std::time::Duration::from_secs_f64(0.25));
     }
     match action {
         Action::Read => {
             if !matches!(method, Method::Velocity) {
                 assert_eq!(controller.value(), 0.25);
             }
-            controller.tick_at(1.0);
+            controller.tick_at(std::time::Duration::from_secs_f64(1.0));
             assert_eq!(poll(&mut original), Poll::Ready(Ok(())));
         }
         Action::Replace => {
@@ -153,14 +158,14 @@ fn exercise(method: Method, action: Action) {
                 .take()
                 .expect("new future installed");
             assert!(poll(&mut next).is_pending());
-            controller.tick_at(1.0);
+            controller.tick_at(std::time::Duration::from_secs_f64(1.0));
             assert_eq!(controller.value(), 0.9);
             assert_eq!(poll(&mut next), Poll::Ready(Ok(())));
         }
         Action::Stop => {
             assert_eq!(controller.value(), 0.0);
             assert!(matches!(poll(&mut original), Poll::Ready(Err(_))));
-            controller.tick_at(0.8);
+            controller.tick_at(std::time::Duration::from_secs_f64(0.8));
             assert_eq!(controller.value(), 0.0);
         }
         Action::Nested => {
@@ -169,12 +174,12 @@ fn exercise(method: Method, action: Action) {
                 0.75,
                 "outer sample must not rewind nested tick"
             );
-            controller.tick_at(1.0);
+            controller.tick_at(std::time::Duration::from_secs_f64(1.0));
             assert_eq!(poll(&mut original), Poll::Ready(Ok(())));
         }
         Action::PanicAfterStop => unreachable!(),
     }
-    controller.dispose();
+    lifecycle.dispose();
 }
 fn position_may_read() {
     exercise(Method::Position, Action::Read);
@@ -219,7 +224,7 @@ fn nested_completion_tick_wins() {
 
 struct SourceDrop {
     controller: AnimationController,
-    drops: Arc<AtomicUsize>,
+    drops: Rc<AtomicUsize>,
 }
 impl Drop for SourceDrop {
     fn drop(&mut self) {
@@ -238,39 +243,45 @@ impl Simulation for SourceDrop {
         time >= 1.0
     }
 }
-fn source_retirement(operation: fn(&AnimationController)) {
-    let controller = AnimationController::without_ticker(Duration::from_secs(1));
-    let drops = Arc::new(AtomicUsize::new(0));
+fn source_retirement(operation: fn(&mut DrivenController)) {
+    let mut owner =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
+    let controller = owner.controller().clone();
+    let drops = Rc::new(AtomicUsize::new(0));
     let _future = controller
         .animate_with(SourceDrop {
             controller: controller.clone(),
             drops: drops.clone(),
         })
         .expect("owned source");
-    operation(&controller);
+    operation(&mut owner);
     assert_eq!(
         drops.load(Ordering::SeqCst),
         1,
         "controller retires its source outside the lock"
     );
-    controller.dispose();
+    owner.dispose();
 }
 fn stop_retires_source() {
-    source_retirement(|controller| controller.stop().expect("stop"));
+    source_retirement(|owner| owner.controller().stop().expect("stop"));
 }
 fn replacement_retires_source() {
-    source_retirement(|controller| {
-        let _future = controller.forward().expect("forward");
+    source_retirement(|owner| {
+        let _future = owner.controller().forward().expect("forward");
     });
 }
 fn completion_retires_source() {
-    source_retirement(|controller| controller.tick_at(1.0));
+    source_retirement(|owner| {
+        owner
+            .controller()
+            .tick_at(std::time::Duration::from_secs_f64(1.0));
+    });
 }
 fn dispose_retires_source() {
-    source_retirement(AnimationController::dispose);
+    source_retirement(DrivenController::dispose);
 }
 
-struct Bomb(Arc<AtomicUsize>);
+struct Bomb(Rc<AtomicUsize>);
 impl Drop for Bomb {
     fn drop(&mut self) {
         self.0.fetch_add(1, Ordering::SeqCst);
@@ -278,7 +289,7 @@ impl Drop for Bomb {
     }
 }
 struct HostileSimulation {
-    hook: Arc<Hook>,
+    hook: Rc<Hook>,
     _first: Bomb,
     _second: Bomb,
     initial: bool,
@@ -299,14 +310,16 @@ impl Simulation for HostileSimulation {
     }
 }
 fn hostile_source_after_sample_failure(initial: bool) {
-    let controller = AnimationController::without_ticker(Duration::from_secs(1));
-    let drops = Arc::new(AtomicUsize::new(0));
+    let mut lifecycle =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
+    let controller = lifecycle.controller().clone();
+    let drops = Rc::new(AtomicUsize::new(0));
     let source = HostileSimulation {
-        hook: Arc::new(Hook {
+        hook: Rc::new(Hook {
             controller: controller.clone(),
             action: Action::PanicAfterStop,
             armed: AtomicBool::new(true),
-            replacement: Arc::new(Mutex::new(None)),
+            replacement: Rc::new(Mutex::new(None)),
         }),
         _first: Bomb(drops.clone()),
         _second: Bomb(drops.clone()),
@@ -316,7 +329,7 @@ fn hostile_source_after_sample_failure(initial: bool) {
         let _future = controller
             .animate_with(source)
             .expect("finite initial source");
-        controller.tick_at(0.25);
+        controller.tick_at(std::time::Duration::from_secs_f64(0.25));
     }));
     let payload = outcome.expect_err("source callback fails");
     assert_eq!(
@@ -335,10 +348,10 @@ fn hostile_source_after_sample_failure(initial: bool) {
     );
     controller.set_value(0.0);
     let mut next = controller.forward().expect("subsequent run");
-    controller.tick_at(1.0);
+    controller.tick_at(std::time::Duration::from_secs_f64(1.0));
     assert_eq!(controller.value(), 1.0);
     assert_eq!(poll(&mut next), Poll::Ready(Ok(())));
-    controller.dispose();
+    lifecycle.dispose();
 }
 fn initial_failure_retains_hostile_source() {
     hostile_source_after_sample_failure(true);
@@ -356,13 +369,15 @@ impl Curve for CurveDrop {
     }
 }
 fn curve_retirement_may_reenter() {
-    let controller = AnimationController::without_ticker(Duration::from_secs(1));
-    let drops = Arc::new(AtomicUsize::new(0));
+    let mut lifecycle =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
+    let controller = lifecycle.controller().clone();
+    let drops = Rc::new(AtomicUsize::new(0));
     let _future = controller
         .animate_to_curved(
             1.0,
             Some(Duration::from_secs(1)),
-            Arc::new(CurveDrop {
+            Rc::new(CurveDrop {
                 _source: SourceDrop {
                     controller: controller.clone(),
                     drops: drops.clone(),
@@ -372,16 +387,18 @@ fn curve_retirement_may_reenter() {
         .expect("owned curve");
     controller.stop().expect("curve stop");
     assert_eq!(drops.load(Ordering::SeqCst), 1);
-    controller.dispose();
+    lifecycle.dispose();
 }
 fn callback_retirement_may_reenter() {
-    let controller = AnimationController::without_ticker(Duration::from_secs(1));
-    let drops = Arc::new(AtomicUsize::new(0));
+    let mut lifecycle =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
+    let controller = lifecycle.controller().clone();
+    let drops = Rc::new(AtomicUsize::new(0));
     let probe = SourceDrop {
         controller: controller.clone(),
         drops: drops.clone(),
     };
-    let id = controller.add_status_listener(Arc::new(move |_| {
+    let id = controller.add_status_listener(std::rc::Rc::new(move |_| {
         let _owned = &probe;
     }));
     controller.remove_status_listener(id);
@@ -390,33 +407,35 @@ fn callback_retirement_may_reenter() {
         controller: controller.clone(),
         drops: drops.clone(),
     };
-    controller.add_status_listener(Arc::new(move |_| {
+    controller.add_status_listener(std::rc::Rc::new(move |_| {
         let _owned = &probe;
     }));
-    controller.dispose();
+    lifecycle.dispose();
     assert_eq!(drops.load(Ordering::SeqCst), 2);
 }
 fn status_failure_retains_retired_source_and_callback() {
-    let controller = AnimationController::without_ticker(Duration::from_secs(1));
-    let drops = Arc::new(AtomicUsize::new(0));
+    let mut lifecycle =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
+    let controller = lifecycle.controller().clone();
+    let drops = Rc::new(AtomicUsize::new(0));
     let source = HostileSimulation {
-        hook: Arc::new(Hook {
+        hook: Rc::new(Hook {
             controller: controller.clone(),
             action: Action::Read,
             armed: AtomicBool::new(false),
-            replacement: Arc::new(Mutex::new(None)),
+            replacement: Rc::new(Mutex::new(None)),
         }),
         _first: Bomb(drops.clone()),
         _second: Bomb(drops.clone()),
         initial: false,
     };
     let mut original = controller.animate_with(source).expect("source installed");
-    let callback_id = Arc::new(Mutex::new(None));
+    let callback_id = Rc::new(Mutex::new(None));
     let callback_id_read = callback_id.clone();
     let callback_controller = controller.clone();
     let first = Bomb(drops.clone());
     let second = Bomb(drops.clone());
-    let id = controller.add_status_listener(Arc::new(move |_| {
+    let id = controller.add_status_listener(std::rc::Rc::new(move |_| {
         let _opaque = (&first, &second);
         let id = callback_id_read
             .lock()
@@ -449,10 +468,10 @@ fn status_failure_retains_retired_source_and_callback() {
     let mut next = controller
         .forward()
         .expect("next run after notification failure");
-    controller.tick_at(1.0);
+    controller.tick_at(std::time::Duration::from_secs_f64(1.0));
     assert_eq!(poll(&mut next), Poll::Ready(Ok(())));
     assert_eq!(controller.value(), 1.0);
-    controller.dispose();
+    lifecycle.dispose();
 }
 
 struct FailingRetirement;
@@ -473,7 +492,9 @@ impl Simulation for FailingRetirement {
     }
 }
 fn ordinary_retirement_failure_preserves_new_run() {
-    let controller = AnimationController::without_ticker(Duration::from_secs(1));
+    let mut lifecycle =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
+    let controller = lifecycle.controller().clone();
     let mut old = controller
         .animate_with(FailingRetirement)
         .expect("retiring source");
@@ -485,7 +506,7 @@ fn ordinary_retirement_failure_preserves_new_run() {
     );
     std::mem::forget(payload);
     assert!(matches!(poll(&mut old), Poll::Ready(Err(_))));
-    controller.tick_at(1.0);
+    controller.tick_at(std::time::Duration::from_secs_f64(1.0));
     assert_eq!(
         controller.value(),
         1.0,
@@ -493,22 +514,24 @@ fn ordinary_retirement_failure_preserves_new_run() {
     );
     controller.set_value(0.0);
     let mut next = controller.forward().expect("later run");
-    controller.tick_at(1.0);
+    controller.tick_at(std::time::Duration::from_secs_f64(1.0));
     assert_eq!(poll(&mut next), Poll::Ready(Ok(())));
-    controller.dispose();
+    lifecycle.dispose();
 }
 fn retirement_failure_retains_later_callback_envelope() {
-    let controller = AnimationController::without_ticker(Duration::from_secs(1));
+    let mut owner =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
+    let controller = owner.controller().clone();
     let _future = controller
         .animate_with(FailingRetirement)
         .expect("retiring source");
-    let drops = Arc::new(AtomicUsize::new(0));
+    let drops = Rc::new(AtomicUsize::new(0));
     let first = Bomb(drops.clone());
     let second = Bomb(drops.clone());
-    controller.add_status_listener(Arc::new(move |_| {
+    controller.add_status_listener(std::rc::Rc::new(move |_| {
         let _opaque = (&first, &second);
     }));
-    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| controller.dispose()));
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| owner.dispose()));
     let payload = outcome.expect_err("source retirement fails");
     assert_eq!(
         payload.downcast_ref::<&str>().copied(),
@@ -520,7 +543,7 @@ fn retirement_failure_retains_later_callback_envelope() {
         0,
         "remaining callback envelope retained after first retirement failure"
     );
-    controller.dispose();
+    owner.dispose();
     assert!(controller.value().is_finite());
     assert!(matches!(
         controller.forward(),
@@ -531,7 +554,7 @@ fn retirement_failure_retains_later_callback_envelope() {
 #[derive(Clone, Debug)]
 struct TerminalProbe {
     label: &'static str,
-    drops: Arc<Mutex<Vec<&'static str>>>,
+    drops: Rc<Mutex<Vec<&'static str>>>,
     panics: bool,
 }
 impl Drop for TerminalProbe {
@@ -568,44 +591,44 @@ fn terminal_fixture(
     kind: TerminalOwner,
     first: TerminalProbe,
     second: TerminalProbe,
-) -> Box<dyn std::any::Any + Send> {
+) -> Box<dyn std::any::Any> {
     match kind {
         TerminalOwner::Controller => {
-            let controller = AnimationController::without_ticker(Duration::from_secs(1));
-            controller.add_status_listener(Arc::new(move |_| {
+            let controller = AnimationController::builder(Duration::from_secs(1)).build();
+            controller.add_status_listener(std::rc::Rc::new(move |_| {
                 let _capture = &first;
             }));
-            controller.add_status_listener(Arc::new(move |_| {
+            controller.add_status_listener(std::rc::Rc::new(move |_| {
                 let _capture = &second;
             }));
             Box::new(controller)
         }
         TerminalOwner::Proxy => {
-            let proxy = ProxyAnimation::new(Arc::new(ConstantAnimation::completed(0.5)));
-            proxy.add_status_listener(Arc::new(move |_| {
+            let proxy = ProxyAnimation::new(std::rc::Rc::new(ConstantAnimation::completed(0.5)));
+            proxy.add_status_listener(std::rc::Rc::new(move |_| {
                 let _capture = &first;
             }));
-            proxy.add_status_listener(Arc::new(move |_| {
+            proxy.add_status_listener(std::rc::Rc::new(move |_| {
                 let _capture = &second;
             }));
             Box::new(proxy)
         }
         TerminalOwner::Curved => Box::new(
             CurvedAnimation::new(
-                Arc::new(ConstantAnimation::completed(0.5)),
+                std::rc::Rc::new(ConstantAnimation::completed(0.5)),
                 TerminalCurve(first),
             )
             .with_reverse_curve(TerminalCurve(second)),
         ),
         TerminalOwner::Switch => {
             let switch = AnimationSwitch::new(
-                Arc::new(ConstantAnimation::completed(0.75)),
-                Some(Arc::new(ConstantAnimation::completed(0.25))),
+                std::rc::Rc::new(ConstantAnimation::completed(0.75)),
+                Some(std::rc::Rc::new(ConstantAnimation::completed(0.25))),
             );
-            switch.add_status_listener(Arc::new(move |_| {
+            switch.add_status_listener(std::rc::Rc::new(move |_| {
                 let _capture = &first;
             }));
-            switch.add_status_listener(Arc::new(move |_| {
+            switch.add_status_listener(std::rc::Rc::new(move |_| {
                 let _capture = &second;
             }));
             Box::new(switch)
@@ -615,7 +638,7 @@ fn terminal_fixture(
 
 fn terminal_owner_matrix(kind: TerminalOwner) {
     for (panics, incoming) in [(false, false), (true, false), (true, true)] {
-        let drops = Arc::new(Mutex::new(Vec::new()));
+        let drops = Rc::new(Mutex::new(Vec::new()));
         let probe = |label| TerminalProbe {
             label,
             drops: drops.clone(),
@@ -654,7 +677,7 @@ fn terminal_owner_matrix(kind: TerminalOwner) {
             }
         );
         // A new independent owner still releases its healthy resources.
-        let next = Arc::new(Mutex::new(Vec::new()));
+        let next = Rc::new(Mutex::new(Vec::new()));
         let probe = |label| TerminalProbe {
             label,
             drops: next.clone(),
@@ -672,328 +695,6 @@ fn terminal_owner_matrix(kind: TerminalOwner) {
     }
 }
 
-#[derive(Clone, Copy)]
-enum VsyncRemoval {
-    Controller,
-    Child,
-}
-
-struct VsyncRetirementProbe {
-    registry: Vsync,
-    registration: Arc<Mutex<Option<VsyncRegistration>>>,
-    replacement: Arc<Mutex<Option<(AnimationController, VsyncRegistration)>>>,
-    drops: Arc<AtomicUsize>,
-    removal: VsyncRemoval,
-    panics: bool,
-}
-
-impl Drop for VsyncRetirementProbe {
-    fn drop(&mut self) {
-        self.drops.fetch_add(1, Ordering::SeqCst);
-        assert_eq!(
-            self.registry.len(),
-            1,
-            "removed owner is absent during retirement"
-        );
-        let id = self
-            .registration
-            .lock()
-            .expect("vsync registration")
-            .as_ref()
-            .expect("admitted owner")
-            .clone();
-        match self.removal {
-            VsyncRemoval::Controller => self.registry.unregister(&id),
-            VsyncRemoval::Child => self.registry.detach_child(&id),
-        }
-        let fresh = AnimationController::without_ticker(Duration::from_secs(1));
-        fresh.forward().expect("retirement registers a fresh run");
-        let id = self.registry.register(fresh.clone());
-        *self.replacement.lock().expect("fresh registration") = Some((fresh, id));
-        assert_eq!(
-            self.registry.len(),
-            2,
-            "fresh work admitted during retirement"
-        );
-        assert!(!self.panics, "vsync retirement first");
-    }
-}
-
-fn vsync_retirement_reentry(removal: VsyncRemoval) {
-    for panics in [false, true] {
-        let registry = Vsync::new();
-        let sibling = AnimationController::without_ticker(Duration::from_secs(1));
-        let sibling_id = registry.register(sibling.clone());
-        sibling.forward().expect("sibling runs");
-        let registration = Arc::new(Mutex::new(None));
-        let replacement = Arc::new(Mutex::new(None));
-        let drops = Arc::new(AtomicUsize::new(0));
-        let owner = AnimationController::without_ticker(Duration::from_secs(1));
-        let probe = VsyncRetirementProbe {
-            registry: registry.clone(),
-            registration: registration.clone(),
-            replacement: replacement.clone(),
-            drops: drops.clone(),
-            removal,
-            panics,
-        };
-        owner.add_status_listener(Arc::new(move |_| {
-            let _capture = &probe;
-        }));
-
-        let child_order = Arc::new(Mutex::new(Vec::new()));
-        let mut sibling_children = Vec::new();
-        // Put the removed child between surviving siblings, with two trailing
-        // children so an order-changing swap removal would be observable.
-        let make_child = |label| {
-            let child = Vsync::new();
-            let animation = AnimationController::without_ticker(Duration::from_secs(1));
-            let order = child_order.clone();
-            animation.add_status_listener(Arc::new(move |status| {
-                if status == AnimationStatus::Completed {
-                    order.lock().expect("child tick order").push(label);
-                }
-            }));
-            animation.forward().expect("child sibling runs");
-            child.register(animation);
-            child
-        };
-        let id = match removal {
-            VsyncRemoval::Controller => registry.register(owner),
-            VsyncRemoval::Child => {
-                let before = make_child("before");
-                registry
-                    .attach_child(&before)
-                    .expect("before child admitted");
-                sibling_children.push(before);
-                let child = Vsync::new();
-                child.register(owner);
-                let id = registry.attach_child(&child).expect("owned child admitted");
-                drop(child);
-                for label in ["after first", "after second"] {
-                    let after = make_child(label);
-                    registry.attach_child(&after).expect("after child admitted");
-                    sibling_children.push(after);
-                }
-                id
-            }
-        };
-        *registration.lock().expect("registration stored") = Some(id.clone());
-        assert_eq!(
-            drops.load(Ordering::SeqCst),
-            0,
-            "registry owns the last controller"
-        );
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match removal {
-            VsyncRemoval::Controller => registry.unregister(&id),
-            VsyncRemoval::Child => registry.detach_child(&id),
-        }));
-        if panics {
-            let failure = result.expect_err("ordinary retirement failure propagates");
-            assert_eq!(
-                flui_foundation::panic::payload_text(failure.as_ref()),
-                Some("vsync retirement first")
-            );
-            flui_foundation::panic::retain_opaque_payload(failure);
-        } else {
-            assert!(result.is_ok());
-        }
-        assert_eq!(
-            drops.load(Ordering::SeqCst),
-            1,
-            "actual last owner retired once"
-        );
-        match removal {
-            VsyncRemoval::Controller => registry.unregister(&id),
-            VsyncRemoval::Child => registry.detach_child(&id),
-        }
-        assert_eq!(drops.load(Ordering::SeqCst), 1, "removal is idempotent");
-        let (fresh, fresh_id) = replacement
-            .lock()
-            .expect("fresh run preserved")
-            .take()
-            .expect("reentrant registration");
-        assert_eq!(
-            registry.len(),
-            2,
-            "independent sibling and new registration survive"
-        );
-        registry.tick_all(0.0);
-        registry.tick_all(1.0);
-        assert_eq!(
-            sibling.value(),
-            1.0,
-            "sibling reaches its target after retirement"
-        );
-        assert_eq!(fresh.value(), 1.0, "reentrantly registered run ticks next");
-        assert!(!registry.has_running(), "completed runs quiesce");
-        if let VsyncRemoval::Child = removal {
-            assert_eq!(
-                *child_order.lock().expect("surviving children order"),
-                vec!["before", "after first", "after second"]
-            );
-        }
-        registry.unregister(&sibling_id);
-        registry.unregister(&fresh_id);
-        assert!(registry.is_empty());
-        drop(sibling_children);
-    }
-}
-
-fn vsync_unregister_retires_last_owner_outside_registry_guard() {
-    vsync_retirement_reentry(VsyncRemoval::Controller);
-}
-
-#[expect(
-    clippy::redundant_clone,
-    reason = "owning registry and token clones must authorize the same public removal"
-)]
-fn vsync_tokens_only_remove_their_own_admission() {
-    let a = Vsync::new();
-    let b = Vsync::new();
-    let first = AnimationController::without_ticker(Duration::from_secs(1));
-    let second = AnimationController::without_ticker(Duration::from_secs(1));
-    let a_id = a.try_register(&first).expect("first registry admission");
-    let b_id = b.try_register(&second).expect("second registry admission");
-    first.forward().expect("first run");
-    second.forward().expect("second run");
-    a.unregister(&b_id);
-    b.unregister(&a_id);
-    assert_eq!(
-        a.len(),
-        1,
-        "foreign first-slot token preserves first registry"
-    );
-    assert_eq!(
-        b.len(),
-        1,
-        "foreign first-slot token preserves second registry"
-    );
-    for registry in [&a, &b] {
-        registry.tick_all(0.0);
-        registry.tick_all(0.5);
-    }
-    assert_eq!(first.value(), 0.5);
-    assert_eq!(second.value(), 0.5);
-    a.clone().unregister(&a_id.clone());
-    assert!(a.is_empty(), "owning registry clone accepts cloned token");
-    let replacement_id = a.register(first.clone());
-    a.unregister(&a_id);
-    a.unregister(&b_id);
-    assert_eq!(
-        a.len(),
-        1,
-        "stale or foreign token cannot remove fresh admission"
-    );
-    a.tick_all(0.5);
-    a.tick_all(1.0);
-    assert_eq!(first.value(), 0.5, "fresh admission has its own anchor");
-    a.tick_all(1.5);
-    assert_eq!(first.value(), 1.0);
-    a.unregister(&replacement_id);
-    b.unregister(&b_id);
-
-    let expired = {
-        let registry = Vsync::new();
-        registry.register(AnimationController::without_ticker(Duration::from_secs(1)))
-    };
-    let unrelated = Vsync::new();
-    let resident = AnimationController::without_ticker(Duration::from_secs(1));
-    let resident_id = unrelated.register(resident);
-    unrelated.unregister(&expired);
-    assert_eq!(
-        unrelated.len(),
-        1,
-        "expired owner token cannot name a new registry"
-    );
-    unrelated.unregister(&resident_id);
-
-    let parents = [Vsync::new(), Vsync::new()];
-    let expired_child = {
-        let parent = Vsync::new();
-        parent
-            .attach_child(&Vsync::new())
-            .expect("temporary child admission")
-    };
-    let children = [Vsync::new(), Vsync::new()];
-    let animations = [
-        AnimationController::without_ticker(Duration::from_secs(1)),
-        AnimationController::without_ticker(Duration::from_secs(1)),
-    ];
-    let child_ids: Vec<_> = parents
-        .iter()
-        .zip(&children)
-        .zip(&animations)
-        .map(|((parent, child), animation)| {
-            child.register(animation.clone());
-            animation.forward().expect("nested run");
-            parent.attach_child(child).expect("nested admission")
-        })
-        .collect();
-    parents[0].detach_child(&child_ids[1]);
-    parents[1].detach_child(&child_ids[0]);
-    parents[0].detach_child(&expired_child);
-    for parent in &parents {
-        parent.tick_all(0.0);
-        parent.tick_all(0.5);
-    }
-    assert_eq!(
-        animations[0].value(),
-        0.5,
-        "foreign child token preserves first nested run"
-    );
-    assert_eq!(
-        animations[1].value(),
-        0.5,
-        "foreign child token preserves second nested run"
-    );
-    let own_controller = AnimationController::without_ticker(Duration::from_secs(1));
-    let controller_id = parents[0].register(own_controller.clone());
-    own_controller.forward().expect("parent run");
-    parents[0].detach_child(&controller_id);
-    parents[0].unregister(&child_ids[0]);
-    parents[0].tick_all(0.5);
-    parents[0].tick_all(1.0);
-    assert_eq!(
-        own_controller.value(),
-        0.5,
-        "child removal refuses controller token"
-    );
-    assert_eq!(
-        animations[0].value(),
-        1.0,
-        "controller removal refuses child token"
-    );
-    parents[0].clone().detach_child(&child_ids[0].clone());
-    parents[0].detach_child(&child_ids[0]);
-    animations[0]
-        .reverse()
-        .expect("detached child starts a new run");
-    parents[0].tick_all(1.5);
-    assert_eq!(
-        animations[0].value(),
-        1.0,
-        "own child removal stopped nested ticks"
-    );
-    let reattached = parents[0]
-        .attach_child(&children[0])
-        .expect("fresh child admission");
-    parents[0].detach_child(&child_ids[0]);
-    parents[0].tick_all(1.5);
-    parents[0].tick_all(2.0);
-    assert_eq!(
-        animations[0].value(),
-        0.5,
-        "stale child token preserves new admission"
-    );
-    parents[0].detach_child(&reattached);
-    parents[0].unregister(&controller_id);
-}
-
-fn vsync_detach_retires_last_child_outside_parent_guard() {
-    vsync_retirement_reentry(VsyncRemoval::Child);
-}
-
 fn controller_terminal_owner() {
     terminal_owner_matrix(TerminalOwner::Controller);
 }
@@ -1008,21 +709,21 @@ fn switch_terminal_owner() {
 }
 
 fn shared_terminal_owners_keep_independent_aliases_live() {
-    let drops = Arc::new(Mutex::new(Vec::new()));
-    let controller = AnimationController::without_ticker(Duration::from_secs(1));
+    let drops = Rc::new(Mutex::new(Vec::new()));
+    let controller = AnimationController::builder(Duration::from_secs(1)).build();
     let alias = controller.clone();
     let probe = TerminalProbe {
         label: "controller alias",
         drops: drops.clone(),
         panics: false,
     };
-    controller.add_status_listener(Arc::new(move |_| {
+    controller.add_status_listener(std::rc::Rc::new(move |_| {
         let _capture = &probe;
     }));
     drop(controller);
     assert!(drops.lock().expect("alias observations").is_empty());
     alias.forward().expect("surviving controller");
-    alias.tick_at(1.0);
+    alias.tick_at(std::time::Duration::from_secs_f64(1.0));
     assert_eq!(alias.value(), 1.0);
     drop(alias);
     assert_eq!(
@@ -1030,19 +731,19 @@ fn shared_terminal_owners_keep_independent_aliases_live() {
         vec!["controller alias"]
     );
 
-    let parent = Arc::new(AnimationController::without_ticker(Duration::from_secs(1)));
+    let parent = std::rc::Rc::new(AnimationController::builder(Duration::from_secs(1)).build());
     let proxy = ProxyAnimation::new(parent.clone());
     let alias = proxy.clone();
-    let observed = Arc::new(AtomicUsize::new(0));
+    let observed = Rc::new(AtomicUsize::new(0));
     let callback_observed = observed.clone();
-    alias.add_status_listener(Arc::new(move |_| {
+    alias.add_status_listener(std::rc::Rc::new(move |_| {
         callback_observed.fetch_add(1, Ordering::SeqCst);
     }));
     drop(proxy);
     let _run = parent.forward().expect("parent run");
     assert_eq!(observed.load(Ordering::SeqCst), 1);
     drop(alias);
-    parent.tick_at(1.0);
+    parent.tick_at(std::time::Duration::from_secs_f64(1.0));
     assert_eq!(
         observed.load(Ordering::SeqCst),
         1,
@@ -1050,65 +751,106 @@ fn shared_terminal_owners_keep_independent_aliases_live() {
     );
 }
 
-fn ticker_terminal_cancels_before_retiring_callback() {
-    let scheduler = UpdateScheduler::new();
-    let drops = Arc::new(Mutex::new(Vec::new()));
+fn driven_terminal_cancels_before_retiring_callback() {
+    let vsync = Vsync::new();
+    let drops = Rc::new(Mutex::new(Vec::new()));
     let probe = TerminalProbe {
-        label: "ticker first",
+        label: "driven first",
         drops: drops.clone(),
         panics: true,
     };
-    let mut ticker = Ticker::new_with_scheduler(&scheduler);
-    ticker.start(move |_| {
-        let _capture = &probe;
-    });
-    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(ticker)))
-        .expect_err("ticker capture failure");
+    let driven = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&vsync));
+    driven
+        .controller()
+        .add_status_listener(std::rc::Rc::new(move |_| {
+            let _capture = &probe;
+        }));
+    let observer = driven.controller().clone();
+    let run = observer.forward().expect("live driven run");
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(driven)))
+        .expect_err("driven capture failure");
     assert_eq!(
         flui_foundation::panic::payload_text(failure.as_ref()),
-        Some("ticker first")
+        Some("driven first")
     );
     flui_foundation::panic::retain_opaque_payload(failure);
+    assert!(run.is_canceled());
+    assert!(matches!(
+        observer.forward(),
+        Err(flui_animation::AnimationError::Disposed)
+    ));
+    assert_eq!(vsync.len(), 0, "cancellation precedes capture retirement");
     assert_eq!(
-        scheduler.transient_callback_count(),
-        0,
-        "cancellation precedes capture retirement"
-    );
-    assert_eq!(
-        *drops.lock().expect("ticker retirement"),
-        vec!["ticker first"]
+        *drops.lock().expect("driven retirement"),
+        vec!["driven first"]
     );
 
     let probe = TerminalProbe {
-        label: "ticker retained",
+        label: "driven retained",
         drops: drops.clone(),
         panics: true,
     };
-    let mut ticker = Ticker::new_with_scheduler(&scheduler);
-    ticker.start(move |_| {
-        let _capture = &probe;
+    let driven = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&vsync));
+    driven
+        .controller()
+        .add_status_listener(std::rc::Rc::new(move |_| {
+            let _capture = &probe;
+        }));
+    let run = driven.controller().forward().expect("live driven run");
+    run.when_complete_or_cancel(|outcome| {
+        assert!(outcome.is_err());
+        panic!("secondary driven continuation");
     });
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-        let _ticker = ticker;
-        panic!("ticker incoming");
+        let _driven = driven;
+        panic!("driven incoming");
     }))
-    .expect_err("incoming ticker failure");
+    .expect_err("incoming driven failure");
     assert_eq!(
         flui_foundation::panic::payload_text(failure.as_ref()),
-        Some("ticker incoming")
+        Some("driven incoming")
     );
     flui_foundation::panic::retain_opaque_payload(failure);
-    assert_eq!(scheduler.transient_callback_count(), 0);
+    assert_eq!(vsync.len(), 0);
+    assert!(run.is_canceled());
     assert_eq!(
-        *drops.lock().expect("ticker retirement"),
-        vec!["ticker first"]
+        *drops.lock().expect("driven retirement"),
+        vec!["driven first"]
     );
+
+    let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&vsync));
+    let observer = owner.controller().clone();
+    let run = observer.forward().expect("run before continuation failure");
+    run.when_complete_or_cancel(|outcome| {
+        assert!(outcome.is_err());
+        panic!("primary driven continuation");
+    });
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(owner)))
+        .expect_err("continuation failure is authoritative");
+    assert_eq!(
+        flui_foundation::panic::payload_text(&*failure),
+        Some("primary driven continuation")
+    );
+    flui_foundation::panic::retain_opaque_payload(failure);
+    assert!(vsync.is_empty());
+    assert!(run.is_canceled());
+    assert!(matches!(
+        observer.forward(),
+        Err(flui_animation::AnimationError::Disposed)
+    ));
+    let next = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&vsync));
+    let future = next
+        .controller()
+        .forward()
+        .expect("independent operation after failure");
+    drop(next);
+    assert!(future.is_canceled());
 }
 
 struct TerminalParent {
     values: Mutex<Vec<(ListenerId, ListenerCallback)>>,
     statuses: Mutex<Vec<(ListenerId, StatusCallback)>>,
-    removed: Arc<Mutex<Vec<&'static str>>>,
+    removed: Rc<Mutex<Vec<&'static str>>>,
     fail_removal: bool,
     registrations: AtomicUsize,
     fail_registration_at: usize,
@@ -1116,7 +858,7 @@ struct TerminalParent {
     sample: f64,
     fail_status: AtomicBool,
     probe: Option<TerminalProbe>,
-    reenter: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
+    reenter: Mutex<Option<std::rc::Rc<dyn Fn()>>>,
 }
 impl std::fmt::Debug for TerminalParent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1198,11 +940,11 @@ impl Animation<f64> for TerminalParent {
         self.removed("status removal");
     }
 }
-fn terminal_parent(fail_removal: bool) -> Arc<TerminalParent> {
-    Arc::new(TerminalParent {
+fn terminal_parent(fail_removal: bool) -> std::rc::Rc<TerminalParent> {
+    std::rc::Rc::new(TerminalParent {
         values: Mutex::new(Vec::new()),
         statuses: Mutex::new(Vec::new()),
-        removed: Arc::new(Mutex::new(Vec::new())),
+        removed: Rc::new(Mutex::new(Vec::new())),
         fail_removal,
         registrations: AtomicUsize::new(0),
         fail_registration_at: 0,
@@ -1254,9 +996,9 @@ fn parent_subscriptions_detach_all_after_failure() {
 }
 fn switch_disposal_commits_before_reentrant_parent_removal() {
     let parent = terminal_parent(false);
-    let switch = Arc::new(AnimationSwitch::new(parent.clone(), None));
-    let weak = Arc::downgrade(&switch);
-    *parent.reenter.lock().expect("removal hook") = Some(Arc::new(move || {
+    let switch = Rc::new(AnimationSwitch::new(parent.clone(), None));
+    let weak = Rc::downgrade(&switch);
+    *parent.reenter.lock().expect("removal hook") = Some(std::rc::Rc::new(move || {
         let switch = weak.upgrade().expect("independent switch alias");
         switch.dispose();
         assert_eq!(switch.value(), 0.5);
@@ -1279,7 +1021,7 @@ fn split_owned_curves_retire_independently() {
         (true, true, false),
         (true, false, true),
     ] {
-        let drops = Arc::new(Mutex::new(Vec::new()));
+        let drops = Rc::new(Mutex::new(Vec::new()));
         let probe = |label| {
             TerminalCurve(TerminalProbe {
                 label,
@@ -1330,7 +1072,7 @@ fn split_owned_curves_retire_independently() {
             }
         );
     }
-    let next = Arc::new(Mutex::new(Vec::new()));
+    let next = Rc::new(Mutex::new(Vec::new()));
     let curve = |label| {
         TerminalCurve(TerminalProbe {
             label,
@@ -1371,7 +1113,7 @@ impl Curve for PartialCloneCurve {
     }
 }
 fn split_partial_clone_retains_completed_field() {
-    let drops = Arc::new(Mutex::new(Vec::new()));
+    let drops = Rc::new(Mutex::new(Vec::new()));
     let curve = |label, fail_clone| PartialCloneCurve {
         probe: TerminalProbe {
             label,
@@ -1411,9 +1153,9 @@ fn split_partial_clone_retains_completed_field() {
 }
 
 fn constructors_preserve_incoming_sources_and_partial_subscriptions() {
-    let drops = Arc::new(Mutex::new(Vec::new()));
+    let drops = Rc::new(Mutex::new(Vec::new()));
     let mut parent = terminal_parent(false);
-    Arc::get_mut(&mut parent)
+    std::rc::Rc::get_mut(&mut parent)
         .expect("unique test parent")
         .fail_registration_at = 2;
     let curve = TerminalCurve(TerminalProbe {
@@ -1444,7 +1186,7 @@ fn constructors_preserve_incoming_sources_and_partial_subscriptions() {
     );
 
     let mut parent = terminal_parent(false);
-    Arc::get_mut(&mut parent)
+    std::rc::Rc::get_mut(&mut parent)
         .expect("unique test parent")
         .fail_registration_at = 2;
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1465,11 +1207,11 @@ fn constructors_preserve_incoming_sources_and_partial_subscriptions() {
     );
 
     let mut current = terminal_parent(false);
-    Arc::get_mut(&mut current)
+    std::rc::Rc::get_mut(&mut current)
         .expect("unique current parent")
         .sample = 0.75;
     let mut next = terminal_parent(false);
-    Arc::get_mut(&mut next)
+    std::rc::Rc::get_mut(&mut next)
         .expect("unique next parent")
         .fail_registration_at = 1;
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1500,7 +1242,7 @@ fn constructors_preserve_incoming_sources_and_partial_subscriptions() {
     let mut current = terminal_parent(false);
     let mut next = terminal_parent(false);
     {
-        let current = Arc::get_mut(&mut current).expect("unique current parent");
+        let current = std::rc::Rc::get_mut(&mut current).expect("unique current parent");
         current.fail_value = true;
         current.probe = Some(TerminalProbe {
             label: "current constructor owner",
@@ -1508,7 +1250,9 @@ fn constructors_preserve_incoming_sources_and_partial_subscriptions() {
             panics: true,
         });
     }
-    Arc::get_mut(&mut next).expect("unique next parent").probe = Some(TerminalProbe {
+    std::rc::Rc::get_mut(&mut next)
+        .expect("unique next parent")
+        .probe = Some(TerminalProbe {
         label: "next constructor owner",
         drops: drops.clone(),
         panics: true,
@@ -1528,7 +1272,7 @@ fn constructors_preserve_incoming_sources_and_partial_subscriptions() {
     let proxy = ProxyAnimation::new(old.clone());
     old.fail_status.store(true, Ordering::SeqCst);
     let mut replacement = terminal_parent(false);
-    Arc::get_mut(&mut replacement)
+    std::rc::Rc::get_mut(&mut replacement)
         .expect("unique replacement")
         .probe = Some(TerminalProbe {
         label: "replacement constructor owner",
@@ -1682,18 +1426,6 @@ fn split_partial_deserialization_preserves_errors_and_wire_name() {
 fn controller_sources_allow_reentry_and_preserve_run_ownership() {
     let cases: &[(&str, fn())] = &[
         (
-            "vsync tokens preserve owner identity",
-            vsync_tokens_only_remove_their_own_admission,
-        ),
-        (
-            "vsync unregister last-owner reentry",
-            vsync_unregister_retires_last_owner_outside_registry_guard,
-        ),
-        (
-            "vsync detach last-child reentry",
-            vsync_detach_retires_last_child_outside_parent_guard,
-        ),
-        (
             "constructor custody and partial subscriptions",
             constructors_preserve_incoming_sources_and_partial_subscriptions,
         ),
@@ -1727,8 +1459,8 @@ fn controller_sources_allow_reentry_and_preserve_run_ownership() {
             shared_terminal_owners_keep_independent_aliases_live,
         ),
         (
-            "ticker final owner",
-            ticker_terminal_cancels_before_retiring_callback,
+            "driven final owner",
+            driven_terminal_cancels_before_retiring_callback,
         ),
         ("curve retirement may reenter", curve_retirement_may_reenter),
         (

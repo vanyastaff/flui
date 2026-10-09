@@ -19,14 +19,9 @@
 //! accepted one holds the timeline (the tick repeats the previous time), and
 //! every sum saturates at [`Duration::MAX`] instead of overflowing.
 //!
-//! # Interim: the scheduler's time dilation
-//!
-//! [`AnimationController`](crate::AnimationController) still divides a run's
-//! elapsed time by [`flui_scheduler::time_dilation`]. A clock's rate composes
-//! with that factor multiplicatively; the clock's rate defaults to
-//! [`PlaybackRate::NORMAL`], so until the controller reads its time only from
-//! the clock, the process-wide dilation stays the one source of slow motion
-//! for production presentations.
+//! A controller's local playback rate composes with its presentation clock.
+//! Each rate change preserves elapsed time already accepted at the old rate.
+//! Presentation clocks and controller rates have no process-global state.
 
 use std::time::Duration;
 
@@ -46,6 +41,12 @@ impl AnimationTime {
     #[must_use]
     pub const fn as_duration(self) -> Duration {
         self.0
+    }
+
+    /// Elapsed animation time, holding at zero for an earlier timestamp.
+    #[must_use]
+    pub const fn saturating_duration_since(self, earlier: Self) -> Duration {
+        self.0.saturating_sub(earlier.0)
     }
 }
 

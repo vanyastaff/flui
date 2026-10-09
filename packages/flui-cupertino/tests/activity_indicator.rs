@@ -79,10 +79,14 @@ pub fn ticks_step_once_per_eighth_of_a_second() {
     ));
     assert!(vsync.is_empty());
     assert_eq!(tick_alphas(&laid), before);
-    next.tick_all(50.0);
+    next.tick_all(
+        &flui_sdk::animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(50.0)),
+    );
     laid.pump_for(Duration::ZERO);
     assert_eq!(tick_alphas(&laid), before);
-    next.tick_all(50.25);
+    next.tick_all(
+        &flui_sdk::animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(50.25)),
+    );
     laid.pump_for(Duration::ZERO);
     let expected: Vec<_> = (0..8).map(|index| flutter_alpha(index, 380)).collect();
     assert_eq!(tick_alphas(&laid), expected);

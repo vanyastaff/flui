@@ -46,8 +46,8 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 use std::thread::{self, ThreadId};
 
+use flui_animation::AnimationRunFuture;
 use flui_foundation::ChangeNotifier;
-use flui_scheduler::TickerFuture;
 use flui_view::BuildContextExt;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
@@ -194,7 +194,7 @@ struct NavigatorShared {
     /// peers, page subtrees and modal (`offstage`) controls. FLUI's routes live
     /// behind `Box<dyn ErasedRoute>` inside the history's mutex, so they publish
     /// here instead of being read off the route object (ADR-0019).
-    registries: super::lifecycle::Terminal<Arc<RouteRegistries>>,
+    registries: super::lifecycle::Terminal<Rc<RouteRegistries>>,
 
     /// This navigator's name → route table and its two generator hooks, folded
     /// into a single resolution path. Owned per navigator, so two navigators
@@ -214,7 +214,7 @@ struct NavigatorShared {
     ///
     /// `None` when the navigator is unmounted, or when the binding installed no
     /// post-frame handle — a `HeroController` then simply never measures.
-    post_frame: Mutex<Option<flui_scheduler::LocalPostFrameHandle>>,
+    post_frame: Mutex<Option<flui_scheduler::PostFrameHandle>>,
     render_tree: Mutex<Option<flui_rendering::pipeline::PipelineCell>>,
 
     /// Whether the mounted `NavigatorState` currently holds the observers
@@ -365,8 +365,8 @@ pub(super) fn terminal_binding_authority_is_closed_before_route_retirement() {
     let slot = RouteBindingSlot::new();
     let observed = Rc::new(Cell::new(false));
     let callback_slot = slot.clone();
-    let callback_entries = Arc::clone(&entries);
-    let callback_queue = Arc::clone(&queue);
+    let callback_entries = Rc::clone(&entries);
+    let callback_queue = Rc::clone(&queue);
     let callback_observed = Rc::clone(&observed);
     navigator.seed_initial(ClosingRoute {
         settings: RouteSettings::default(),
@@ -407,6 +407,33 @@ pub(super) fn terminal_binding_authority_is_closed_before_route_retirement() {
 }
 
 impl NavigatorShared {
+    fn rebind_clock(&self, current: Option<flui_animation::Vsync>) {
+        let unchanged = match (&*self.vsync.lock(), &current) {
+            (Some(old), Some(new)) => old.is_same(new),
+            (None, None) => true,
+            _ => false,
+        };
+        if unchanged {
+            return;
+        }
+        let outgoing = std::mem::replace(&mut *self.vsync.lock(), current);
+        let mut peers: Vec<_> = self
+            .registries
+            .peers
+            .lock()
+            .iter()
+            .map(|(id, peer)| (*id, Rc::clone(&peer.rebind_clock)))
+            .collect();
+        peers.sort_unstable_by_key(|(id, _)| *id);
+        let mut recovery = flui_foundation::panic::PanicRecovery::new();
+        for (_, rebind) in peers {
+            let current = self.vsync.lock().clone();
+            recovery.run(|| rebind(current.as_ref()));
+        }
+        recovery.retire(outgoing);
+        recovery.finish();
+    }
+
     /// Apply what a flush left behind, in this order:
     ///
     /// 1. remove each disposed route's overlay entries;
@@ -528,7 +555,7 @@ impl NavigatorShared {
     /// `self` — so it is structurally incapable of touching the history or
     /// any other field, no matter which thread resolves `future` or how long
     /// from now.
-    fn await_push(&self, route: RouteId, future: TickerFuture) {
+    fn await_push(&self, route: RouteId, future: AnimationRunFuture) {
         let queue = self.history.lock().command_queue();
         let settle_wake = Arc::clone(&self.settle_wake);
         future.when_complete_or_cancel(move |_outcome| {
@@ -1055,8 +1082,8 @@ impl NavigatorHandle {
         let shared = Arc::new(NavigatorShared {
             history: super::lifecycle::Terminal::new(Mutex::new(RouteHistory::new())),
             overlay: super::lifecycle::Terminal::new(OverlayHandle::new()),
-            vsync: super::lifecycle::Terminal::new(Arc::new(Mutex::new(None))),
-            registries: super::lifecycle::Terminal::new(Arc::new(RouteRegistries::new())),
+            vsync: super::lifecycle::Terminal::new(Rc::new(Mutex::new(None))),
+            registries: super::lifecycle::Terminal::new(Rc::new(RouteRegistries::new())),
             named_routes: super::lifecycle::Terminal::new(RouteRegistry::default()),
             post_frame: Mutex::new(None),
             render_tree: Mutex::new(None),
@@ -1315,7 +1342,7 @@ impl NavigatorHandle {
                     shared.pump_route_commands();
                 }
             }),
-            Arc::clone(&self.shared.vsync),
+            Rc::clone(&self.shared.vsync),
             self.shared.registries.clone(),
         )
     }
@@ -2657,7 +2684,7 @@ impl NavigatorHandle {
     ///
     /// `None` before mount and after unmount, so a stale `HeroController` schedules
     /// nothing. Acquired in `init_state`; never in `build`/layout/paint.
-    pub(crate) fn local_post_frame_handle(&self) -> Option<flui_scheduler::LocalPostFrameHandle> {
+    pub(crate) fn post_frame_handle(&self) -> Option<flui_scheduler::PostFrameHandle> {
         self.shared.post_frame.lock().clone()
     }
 
@@ -2861,16 +2888,11 @@ impl ViewState<Navigator> for NavigatorState {
     /// lifecycle-only — alongside the other three
     /// lifecycle-only captures below.
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        // The navigator owns the clock its route transitions register with. Read
-        // once, here, exactly as `AnimatedSize`/`Scrollable` read theirs.
-        let _prev = std::mem::replace(
-            &mut *self.shared.vsync.lock(),
-            ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone()),
-        );
+        self.shared.rebind_clock(VsyncScope::maybe_of(ctx));
 
         // Both are *lifecycle-only* acquisitions: a `HeroController`
         // fires them from a post-frame callback, never from a frame phase.
-        *self.shared.post_frame.lock() = ctx.local_post_frame_handle();
+        *self.shared.post_frame.lock() = ctx.post_frame_handle();
         let _prev = std::mem::replace(&mut *self.shared.render_tree.lock(), ctx.pipeline_owner());
         let _prev = self.shared.settle_wake.lock().replace(ctx.rebuild_handle());
 
@@ -2936,6 +2958,10 @@ impl ViewState<Navigator> for NavigatorState {
         HeroControllerScope::none(Overlay::new(self.shared.overlay.clone()))
     }
 
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
+        self.shared.rebind_clock(VsyncScope::maybe_of(ctx));
+    }
+
     /// Detach the observers.
     fn deactivate(&mut self) {
         self.shared.detach_observers();
@@ -2952,6 +2978,7 @@ impl ViewState<Navigator> for NavigatorState {
     /// actually runs on a plain unmount; `detach_observers` is idempotent, so the deactivate-then-dispose
     /// path notifies exactly once.
     fn dispose(&mut self) {
+        self.shared.rebind_clock(None);
         self.shared.detach_observers();
         // The capabilities die with the tree they name, so a `HeroController` that
         // outlives its navigator schedules nothing and measures nothing, and a

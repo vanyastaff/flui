@@ -50,14 +50,14 @@ fn counting_wake_hook(scheduler: &UpdateScheduler) -> Arc<AtomicUsize> {
 /// `wake()` and keeps it alive, so the registration is observable after the
 /// waking call returns.
 struct RegisteringWaker {
-    scheduler: UpdateScheduler,
+    scheduler: crate::owner_callbacks::OwnerProbe,
     registered: Mutex<Vec<FrameCompletionFuture>>,
 }
 
 impl RegisteringWaker {
     fn new(scheduler: &UpdateScheduler) -> Arc<Self> {
         Arc::new(Self {
-            scheduler: scheduler.clone(),
+            scheduler: crate::owner_callbacks::owner_probe(scheduler),
             registered: Mutex::new(Vec::new()),
         })
     }
@@ -73,7 +73,7 @@ impl Wake for RegisteringWaker {
     }
 
     fn wake_by_ref(self: &Arc<Self>) {
-        let fresh = self.scheduler.end_of_frame();
+        let fresh = self.scheduler.upgrade().expect("live owner").end_of_frame();
         self.registered
             .lock()
             .expect("uncontended in a test")
@@ -140,7 +140,7 @@ fn a_registration_from_inside_an_aborted_frames_waker_demands_exactly_one_frame(
             .is_pending()
     );
 
-    scheduler.add_persistent_frame_callback(Arc::new(|_timing| {
+    scheduler.add_persistent_frame_callback(std::rc::Rc::new(|_timing| {
         panic!("persistent callback fails this frame");
     }));
 

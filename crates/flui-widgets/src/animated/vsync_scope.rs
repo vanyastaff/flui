@@ -29,17 +29,25 @@ use flui_view::{BoxedView, InheritedView, impl_inherited_view};
 pub struct VsyncScope {
     /// The shared registry handed to descendants. Cloning the scope clones this
     /// `Arc`-backed handle, so all clones observe the same registry.
-    vsync: Vsync,
+    vsync: Option<Vsync>,
     /// The wrapped subtree the registry is provided to.
     child: BoxedView,
 }
 
 impl VsyncScope {
+    /// Read the subtree's registry while registering a lifecycle dependency.
+    /// Rebind owned animations from init_state and did_change_dependencies.
+    #[must_use]
+    pub fn maybe_of(ctx: &dyn LifecycleContext) -> Option<Vsync> {
+        ctx.depend_on::<Self, _>(|scope| scope.vsync.clone())
+            .flatten()
+    }
+
     /// Wrap `child` in a scope that provides `vsync` to its descendants.
     #[must_use]
     pub fn new(vsync: Vsync, child: impl IntoView) -> Self {
         Self {
-            vsync,
+            vsync: Some(vsync),
             child: BoxedView(Box::new(child.into_view())),
         }
     }
@@ -47,8 +55,17 @@ impl VsyncScope {
     /// The shared registry this scope provides — what a descendant implicitly-
     /// animated widget reads in `init_state` to register its controller against.
     #[must_use]
-    pub fn vsync(&self) -> &Vsync {
-        &self.vsync
+    pub fn vsync(&self) -> Option<&Vsync> {
+        self.vsync.as_ref()
+    }
+
+    /// Provide a subtree with no frame registry. Finite animations settle.
+    #[must_use]
+    pub fn detached(child: impl IntoView) -> Self {
+        Self {
+            vsync: None,
+            child: BoxedView(Box::new(child.into_view())),
+        }
     }
 }
 
@@ -61,7 +78,7 @@ impl std::fmt::Debug for VsyncScope {
 }
 
 impl InheritedView for VsyncScope {
-    type Data = Vsync;
+    type Data = Option<Vsync>;
 
     fn data(&self) -> &Self::Data {
         &self.vsync
@@ -72,7 +89,11 @@ impl InheritedView for VsyncScope {
     }
 
     fn update_should_notify(&self, old: &Self) -> bool {
-        !self.vsync.is_same(&old.vsync)
+        match (&self.vsync, &old.vsync) {
+            (Some(new), Some(old)) => !new.is_same(old),
+            (None, None) => false,
+            _ => true,
+        }
     }
 }
 

@@ -1,6 +1,7 @@
 # ADR-0106: Ticker continuations own their captures through failure; terminal waiters wake outside locks
 
 - **Status:** Accepted
+- **Superseded-by:** ADR-0175 (run-future placement, names and thread ownership)
 - **Date:** 2026-10-03
 - **Supersedes:** ADR-0064 sections 3 and 6 only for continuation invocation and waiter delivery policy
 

@@ -1854,7 +1854,7 @@ fn panicking_stop_notifies_siblings_and_restores_runtime_delivery() {
                 RuntimeTask::TestCallback(Box::new(move |runtime| {
                     runtime
                         .scheduler()
-                        .add_lifecycle_state_listener(Arc::new(move |state| {
+                        .add_lifecycle_state_listener(std::rc::Rc::new(move |state| {
                             if state != AppLifecycleState::Detached {
                                 return;
                             }

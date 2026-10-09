@@ -136,10 +136,14 @@ pub fn indeterminate_bars_follow_the_published_timing() {
     assert_bars(&mounted, 200);
     // A new registry may have a different clock origin. Its first tick
     // preserves the painted phase; subsequent ticks advance from there.
-    next.tick_all(50.0);
+    next.tick_all(
+        &flui_sdk::animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(50.0)),
+    );
     mounted.laid.pump_for(Duration::ZERO);
     assert_bars(&mounted, 200);
-    next.tick_all(50.25);
+    next.tick_all(
+        &flui_sdk::animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(50.25)),
+    );
     mounted.laid.pump_for(Duration::ZERO);
     assert_bars(&mounted, 450);
 }

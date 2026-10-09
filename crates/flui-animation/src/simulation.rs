@@ -274,7 +274,7 @@ impl Default for Tolerance {
 /// Implementations used by the framework guarantee: `x` and `dx` are finite
 /// for every `time`; a `time` before the start (negative or NaN) yields the
 /// initial state; `is_done` is monotonic in `time`.
-pub trait Simulation: Send + Sync {
+pub trait Simulation {
     /// The position at `time` seconds.
     fn x(&self, time: f64) -> f64;
 

@@ -1,6 +1,6 @@
 //! [`AnimatedBuilder`] — rebuilds a subtree each time a [`Listenable`] changes.
 
-use std::{rc::Rc, sync::Arc};
+use std::rc::Rc;
 
 use flui_foundation::Listenable;
 use flui_view::prelude::BuildContext;
@@ -27,13 +27,13 @@ type BuilderFn = Rc<dyn Fn() -> BoxedView>;
 /// the implicit widget itself rebuilds solely on a configuration change.
 #[derive(Clone)]
 pub struct AnimatedBuilder {
-    listenable: Arc<dyn Listenable>,
+    listenable: std::rc::Rc<dyn Listenable>,
     builder: BuilderFn,
 }
 
 impl AnimatedBuilder {
     /// Rebuild `builder()` whenever `listenable` notifies.
-    pub fn new<V, F>(listenable: Arc<dyn Listenable>, builder: F) -> Self
+    pub fn new<V, F>(listenable: std::rc::Rc<dyn Listenable>, builder: F) -> Self
     where
         V: IntoView,
         F: Fn() -> V + 'static,
@@ -71,7 +71,7 @@ impl StatefulView for AnimatedBuilder {
 }
 
 impl AnimatedView for AnimatedBuilder {
-    fn listenable(&self) -> Arc<dyn Listenable> {
+    fn listenable(&self) -> std::rc::Rc<dyn Listenable> {
         self.listenable.clone()
     }
 }

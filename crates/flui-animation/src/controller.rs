@@ -1,18 +1,20 @@
 //! `AnimationController` - The primary animation driver.
 
+use crate::AnimationRunFuture;
+use crate::PlaybackRate;
+use crate::animation::StatusObserver;
 use crate::animation::{Animation, AnimationDirection, Retirement, StatusCallback, Terminal};
 use crate::curve::Curve;
 use crate::error::AnimationError;
+use crate::run_future::{RunCompleter, RunDelivery};
 use crate::simulation::{Simulation, SpringDescription, SpringSimulation, SpringType, Tolerance};
 use crate::status::AnimationStatus;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
-use flui_scheduler::config::time_dilation;
-use flui_scheduler::ticker::{TickerCompleter, TickerDelivery, TickerFuture};
-use flui_scheduler::{Ticker, UpdateScheduler};
-use parking_lot::Mutex;
 use smallvec::SmallVec;
+use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::fmt;
-use std::sync::Arc;
+use std::rc::Rc;
 use std::time::Duration;
 
 /// Absolute tolerance for "is the value at a bound" comparisons.
@@ -31,7 +33,7 @@ const FLING_TOLERANCE: Tolerance = Tolerance {
 };
 
 /// Whether `AnimationController::finish` must notify value listeners,
-/// alongside status listeners and any pending [`TickerDelivery`]. Most
+/// alongside status listeners and any pending [`RunDelivery`]. Most
 /// run-starting calls change `status` but not `value` at the call itself
 /// (the value only moves once ticks arrive) — but `repeat_with` snaps
 /// `value` to the repeat range's lower endpoint and `drive_simulation`
@@ -79,15 +81,31 @@ impl<T> Drop for Opaque<T> {
 
 #[derive(Default)]
 struct RetiredSources {
-    simulation: Option<Opaque<Arc<dyn Simulation>>>,
-    curve: Option<Opaque<Arc<dyn Curve + Send + Sync>>>,
-    callbacks: SmallVec<[Opaque<StatusCallback>; 4]>,
+    simulation: Option<Opaque<SimulationRun>>,
+    curve: Option<Opaque<Rc<dyn Curve>>>,
+    callbacks: SmallVec<[Opaque<StatusListener>; 4]>,
+    value_callbacks:
+        SmallVec<[Opaque<Rc<flui_foundation::notifier_generic::NotificationCallback<()>>>; 4]>,
 }
 
 impl RetiredSources {
     fn new() -> Self {
         Self::default()
     }
+}
+
+/// Accepted transitions and run outcomes share one controller delivery order.
+/// Snapshot ownership keeps removed callbacks alive until they can retire outside
+/// the state guard, with the round's first failure still authoritative.
+enum ControllerDelivery {
+    RequestFrame,
+    SettleRun(u64),
+    Status(
+        AnimationStatus,
+        SmallVec<[(ListenerId, Terminal<StatusListener>); 4]>,
+    ),
+    Run(Terminal<RunDelivery>),
+    Retire(RetiredSources),
 }
 
 struct SampleIdentity {
@@ -97,13 +115,58 @@ struct SampleIdentity {
 
 enum TickSource {
     Repeat(RepeatRun),
-    Simulation(Arc<dyn Simulation>),
+    Simulation(SimulationRun),
     Time {
-        curve: Option<Arc<dyn Curve + Send + Sync>>,
+        curve: Option<Rc<dyn Curve>>,
         duration: Duration,
         start: f64,
         target: f64,
     },
+}
+
+#[derive(Clone)]
+enum SimulationRun {
+    Custom(Rc<dyn Simulation>),
+    Fling {
+        source: Rc<dyn Simulation>,
+        bound: f64,
+        direction: AnimationDirection,
+    },
+}
+
+#[derive(Clone)]
+enum StatusListener {
+    User(StatusCallback),
+    Relay(StatusObserver),
+}
+
+impl StatusListener {
+    fn invoke(&self, status: AnimationStatus, recovery: &mut Retirement) {
+        match self {
+            Self::User(callback) => callback(status),
+            Self::Relay(callback) => callback(status, recovery),
+        }
+    }
+}
+
+impl SimulationRun {
+    fn source(&self) -> &Rc<dyn Simulation> {
+        match self {
+            Self::Custom(source) | Self::Fling { source, .. } => source,
+        }
+    }
+
+    fn reached_bound(&self, sample: f64) -> bool {
+        match self {
+            Self::Custom(_) => false,
+            Self::Fling {
+                bound, direction, ..
+            } => match direction {
+                AnimationDirection::Forward => sample >= *bound,
+                AnimationDirection::Reverse => sample <= *bound,
+            },
+        }
+    }
 }
 
 /// What actually happened to a non-finite value `set_value` or a running
@@ -212,24 +275,18 @@ struct RepeatSample {
 ///
 /// # Time model
 ///
-/// The controller advances on the elapsed time delivered by its [`Ticker`]
-/// callback, not on wall-clock reads. Elapsed time is scaled by the global
-/// [`time_dilation`] factor, and muting the ticker (e.g. when the view is
-/// hidden) freezes progress — so lifecycle gating is handled at the ticker
-/// layer rather than re-derived here. `restart_ticker` always begins a
-/// fresh run's timeline at zero, so every value/status/direction the
-/// controller reports — including a repeat's leg and phase — is a pure
-/// function of the elapsed time since the current run started, never of
-/// incremental per-cycle bookkeeping (see the private `tick_repeat`).
+/// Manual controllers accept elapsed [`Duration`] through [`Self::tick_at`].
+/// A [`DrivenController`](crate::DrivenController) receives samples from its
+/// presentation's [`Vsync`](crate::Vsync) and [`MotionClock`](crate::MotionClock).
+/// Playback-rate changes preserve sampled local time. Each fresh run starts
+/// its own timeline at zero; repeat phase derives from elapsed time rather
+/// than incremental cycle bookkeeping.
 ///
-/// # Thread safety
+/// # Ownership
 ///
-/// The controller is `Send + Sync` via `Arc<Mutex<…>>`. Per ADR-0027 the
-/// controller is control-plane and would ideally be thread-affine; it remains
-/// `Send + Sync` as a recorded, scoped exception until the engine-wide `!Send`
-/// flip lands.
-/// Status listeners are always fired **after** the inner lock is released, so a
-/// status callback may re-enter the controller without deadlocking.
+/// Controllers and callbacks belong to their UI owner thread. Clones share
+/// `Rc` state; every callback runs after state borrows have been released.
+/// Reentrant transitions join the active delivery queue (ADR-0177, ADR-0178).
 ///
 /// # Examples
 ///
@@ -239,10 +296,7 @@ struct RepeatSample {
 /// use std::time::Duration;
 ///
 /// let scheduler = UpdateScheduler::new();
-/// let controller = AnimationController::new(
-///     Duration::from_millis(300),
-///     &scheduler,
-/// );
+/// let controller = AnimationController::builder(Duration::from_millis(300)).build();
 ///
 /// // Start animation
 /// controller.forward().unwrap();
@@ -251,12 +305,19 @@ struct RepeatSample {
 /// let value = controller.value();
 ///
 /// // Cleanup when done
-/// controller.dispose();
+/// drop(controller);
 /// ```
 #[derive(Clone)]
 pub struct AnimationController {
-    inner: Arc<Mutex<AnimationControllerInner>>,
-    notifier: Arc<ChangeNotifier>,
+    inner: Rc<RefCell<AnimationControllerInner>>,
+    notifier: Rc<ChangeNotifier>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ClockBinding {
+    Manual,
+    Bound,
+    Missing,
 }
 
 struct AnimationControllerInner {
@@ -278,11 +339,12 @@ struct AnimationControllerInner {
     /// Upper bound (default 1.0).
     upper_bound: f64,
 
-    /// Ticker for frame callbacks (auto-scheduling via the attached `UpdateScheduler`).
-    ticker: Option<Ticker>,
-
     /// Status listeners, in registration order.
-    status_listeners: Vec<(ListenerId, StatusCallback)>,
+    status_listeners: Vec<(ListenerId, StatusListener)>,
+
+    pending_delivery: VecDeque<ControllerDelivery>,
+    delivering: bool,
+    frame_routes: Vec<crate::VsyncRegistration>,
 
     /// Current run direction.
     direction: AnimationDirection,
@@ -293,14 +355,21 @@ struct AnimationControllerInner {
     /// Target value for the current run.
     target_value: f64,
 
-    /// Most recent raw (pre-dilation) elapsed seconds seen by
+    /// Most recent raw elapsed time seen by
     /// [`AnimationController::tick_at`], so `velocity()` can report the
     /// in-progress rate without a fresh tick.
-    last_raw_elapsed_secs: f64,
+    last_elapsed: Duration,
+    local_elapsed: Duration,
+    playback_rate: PlaybackRate,
+    pending_rate: Option<PlaybackRate>,
+    rate_epoch_elapsed: Duration,
+    rate_epoch_local: Duration,
+    clock_binding: ClockBinding,
+    settle_pending: bool,
+    missing_clock_warned: bool,
 
     /// Monotonically increasing counter, bumped once each time a fresh run is
-    /// established (every [`restart_ticker`](AnimationController::restart_ticker),
-    /// which restarts the [`Ticker`] at elapsed zero). An external frame driver reads
+    /// established. An external frame driver reads
     /// [`AnimationController::run_generation`] to detect "a new run's `t = 0`
     /// was just set" and re-anchor its own per-run epoch — so a controller run
     /// twice (forward → reverse) is ticked from the second run's start instead
@@ -327,23 +396,23 @@ struct AnimationControllerInner {
     repeat: Option<RepeatRun>,
 
     /// Active physics simulation (if using fling/animate_with).
-    simulation: Option<Arc<dyn Simulation>>,
+    simulation: Option<SimulationRun>,
 
     /// Per-run easing curve for a time-based `animate_to_curved`/
     /// `animate_back_curved` run (`None` = linear). Cleared by
     /// [`clear_run_modes`](AnimationControllerInner::clear_run_modes) so a
     /// later plain `forward`/`reverse`/`animate_to` run does not inherit a
     /// stale curve.
-    run_curve: Option<Arc<dyn Curve + Send + Sync>>,
+    run_curve: Option<Rc<dyn Curve>>,
 
-    /// Status most recently delivered to status listeners. The emission seam
-    /// ([`take_status_change`](AnimationControllerInner::take_status_change))
+    /// Status most recently committed for delivery. The emission seam
+    /// ([`enqueue_status_change`](AnimationControllerInner::enqueue_status_change))
     /// compares against this before firing, so a call that leaves `status`
     /// unchanged (e.g. `set_value` re-asserting the same directional status
     /// every frame of a gesture drag) does not re-notify.
-    last_reported_status: AnimationStatus,
+    last_committed_status: AnimationStatus,
 
-    /// The write half of the current run's [`TickerFuture`], if a run is
+    /// The write half of the current run's [`AnimationRunFuture`], if a run is
     /// installed. Every run-starting method displaces this (canceling
     /// whatever it held) and installs its own fresh completer; every
     /// run-ending path (`tick_time_based`, `tick_simulation`,
@@ -351,11 +420,11 @@ struct AnimationControllerInner {
     /// this field with `=` — a direct assignment drops whatever value was
     /// here before, inline, under whatever lock is held at that statement;
     /// always go through `.replace()`/`.take()` and bind the returned
-    /// `Option<TickerCompleter>` so its displaced value reaches
+    /// `Option<RunCompleter>` so its displaced value reaches
     /// [`AnimationController::finish`] instead. `Option<T>` does not
     /// inherit `T`'s `#[must_use]`, so nothing in the compiler catches a
     /// dropped binding here.
-    active_run: Option<TickerCompleter>,
+    active_run: Option<RunCompleter>,
 
     /// Latches the "received a non-finite value" warning so a poisoned
     /// gesture drag calling [`set_value`](AnimationController::set_value)
@@ -372,7 +441,6 @@ impl Drop for AnimationControllerInner {
         self.disposed = true;
         self.repeat = None;
         self.run_duration = None;
-        let mut ticker = self.ticker.take();
         let run = self.active_run.take();
         let simulation = Terminal::new(self.simulation.take());
         let curve = Terminal::new(self.run_curve.take());
@@ -382,14 +450,10 @@ impl Drop for AnimationControllerInner {
             .collect();
         // All physical custody is withdrawn before cancellation or user Drop.
         let mut retirement = Retirement::new();
-        let delivery = run.map(TickerCompleter::cancel);
-        if let Some(ticker) = ticker.as_mut() {
-            retirement.run(|| ticker.dispose());
-        }
+        let delivery = run.map(RunCompleter::cancel);
         if let Some(delivery) = delivery {
             retirement.run(|| delivery.deliver());
         }
-        retirement.retire(ticker);
         retirement.retire(simulation);
         retirement.retire(curve);
         for callback in callbacks {
@@ -400,243 +464,87 @@ impl Drop for AnimationControllerInner {
 }
 
 impl AnimationController {
-    /// Create a new animation controller, auto-scheduled off `scheduler`.
-    ///
-    /// # Arguments
-    ///
-    /// * `duration` - Duration of the forward animation
-    /// * `scheduler` - UpdateScheduler the controller's ticker auto-schedules against
-    #[must_use]
-    pub fn new(duration: Duration, scheduler: &UpdateScheduler) -> Self {
-        // 0.0 < 1.0 always holds, so the default-bounds path cannot fail.
-        Self::with_bounds(duration, scheduler, 0.0, 1.0)
-            .expect("default bounds (0.0, 1.0) satisfy lower < upper")
-    }
-
-    /// Create an animation controller with no ticker at all — bounds `0.0..1.0`.
-    ///
-    /// This is the shape every FLUI widget-layer controller actually needs:
-    /// production widgets never attach a real, pumped `UpdateScheduler` to their
-    /// controllers (`Vsync` — see [`crate::vsync`] — is the real widget-layer
-    /// clock seam; a plain `AnimationController` advances only through
-    /// external [`Self::tick_at`] calls a `Vsync`-driven caller makes). A
-    /// controller built this way behaves identically to one built with
-    /// [`Self::new`] against a private, never-pumped `UpdateScheduler`: neither
-    /// ever auto-ticks, both advance only via `tick_at`. This constructor
-    /// simply doesn't allocate the ticker (and the dead scheduler) that
-    /// would have gone unused.
-    #[must_use]
-    pub fn without_ticker(duration: Duration) -> Self {
-        Self::with_bounds_inner(duration, None, 0.0, 1.0)
-            .expect("default bounds (0.0, 1.0) satisfy lower < upper")
-    }
-
-    /// [`Self::without_ticker`] with custom bounds — the shape a fling/
-    /// ballistic-simulation controller needs (wide-open
-    /// `f64::NEG_INFINITY..f64::INFINITY` bounds so the simulation's own
-    /// `is_done` terminates the run instead of the controller clamping it),
-    /// while still needing no ticker: the driver is `tick_at`, called
-    /// directly by the simulation stepper, never a scheduler.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`AnimationError::InvalidBounds`] unless both bounds are
-    /// finite, `lower_bound < upper_bound`, AND `upper_bound - lower_bound`
-    /// itself fits in `f64` — two finite endpoints do not by themselves
-    /// make a finite range (`(-f64::MAX, f64::MAX)` has a span of
-    /// `f64::INFINITY`).
-    pub fn without_ticker_bounds(
+    pub(crate) fn from_config(
         duration: Duration,
-        lower_bound: f64,
-        upper_bound: f64,
-    ) -> Result<Self, AnimationError> {
-        Self::with_bounds_inner(duration, None, lower_bound, upper_bound)
+        bounds: Option<crate::ValueRange>,
+        initial: Option<f64>,
+    ) -> Self {
+        let (lower, upper, default) = bounds
+            .map_or((f64::NEG_INFINITY, f64::INFINITY, 0.0), |range| {
+                (range.lower(), range.upper(), range.lower())
+            });
+        let value = initial
+            .filter(|value| value.is_finite())
+            .unwrap_or(default)
+            .clamp(lower, upper);
+        Self::new_inner(duration, lower, upper, value)
     }
 
-    /// Create an animation controller with a real, but permanently detached,
-    /// ticker — no `UpdateScheduler` at all, bounds `0.0..1.0`.
-    ///
-    /// [`Self::without_ticker`] skips the `Ticker` field entirely, and
-    /// [`AnimationController::is_animating`] is intentionally ticker-based
-    /// (it reflects the ticker being active, not this controller's own
-    /// status), so a `without_ticker` controller can never report
-    /// `is_animating() == true`, even mid-run. Some call sites need
-    /// `is_animating()` to report correctly but never actually need a live
-    /// scheduler to pump anything (`Vsync` — see [`crate::vsync`] — is the
-    /// real widget-layer clock seam; nothing ever calls
-    /// `UpdateScheduler::execute_frame` for these controllers' tickers). Before
-    /// this constructor existed, those sites built a full, private
-    /// `UpdateScheduler::new()` purely so [`Ticker::new_with_scheduler`] had
-    /// something to downgrade — a whole `SchedulerInner` allocation whose
-    /// `Weak` was already dead by the end of the constructing statement (the
-    /// `UpdateScheduler` itself was never bound to anything), labeled with a
-    /// misleading "real ticker" comment at each call site.
-    ///
-    /// [`Ticker::new()`] already builds exactly the needed shape: a
-    /// manually-driven ticker with no scheduler attached
-    /// (`Ticker`'s own `scheduler: Option<WeakUpdateScheduler>` field takes its
-    /// `None` arm). `start_inner` sets [`TickerState::Active`](flui_scheduler::TickerState::Active) before it
-    /// ever attempts to upgrade that `None` scheduler to auto-reschedule, so
-    /// `is_animating()`/`Ticker::is_active()` report correctly the instant a
-    /// run starts — the ticker simply never fires on its own, exactly like
-    /// the throwaway-`UpdateScheduler` shape it replaces, but without allocating
-    /// the scheduler nobody was ever going to pump.
-    #[must_use]
-    pub fn with_detached_ticker(duration: Duration) -> Self {
-        Self::with_bounds_inner(duration, Some(Ticker::new()), 0.0, 1.0)
-            .expect("default bounds (0.0, 1.0) satisfy lower < upper")
+    pub(crate) fn last_elapsed(&self) -> Duration {
+        self.inner.borrow().last_elapsed
     }
 
-    /// [`Self::with_detached_ticker`] with custom bounds.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`AnimationError::InvalidBounds`] unless both bounds are
-    /// finite, `lower_bound < upper_bound`, AND `upper_bound - lower_bound`
-    /// itself fits in `f64` — two finite endpoints do not by themselves
-    /// make a finite range (`(-f64::MAX, f64::MAX)` has a span of
-    /// `f64::INFINITY`).
-    pub fn with_detached_ticker_bounds(
-        duration: Duration,
-        lower_bound: f64,
-        upper_bound: f64,
-    ) -> Result<Self, AnimationError> {
-        Self::with_bounds_inner(duration, Some(Ticker::new()), lower_bound, upper_bound)
+    pub(crate) fn add_frame_route(&self, route: crate::VsyncRegistration) {
+        let mut inner = self.inner.borrow_mut();
+        inner
+            .frame_routes
+            .retain(crate::VsyncRegistration::owner_is_alive);
+        inner.frame_routes.push(route);
     }
 
-    /// Create an animation controller with custom bounds.
-    ///
-    /// # Arguments
-    ///
-    /// * `duration` - Duration of the forward animation
-    /// * `scheduler` - UpdateScheduler the controller's ticker auto-schedules against
-    /// * `lower_bound` - Minimum value (default 0.0)
-    /// * `upper_bound` - Maximum value (default 1.0)
-    ///
-    /// # Errors
-    ///
-    /// Returns [`AnimationError::InvalidBounds`] unless both bounds are
-    /// finite, `lower_bound < upper_bound`, AND `upper_bound - lower_bound`
-    /// itself fits in `f64` — two finite endpoints do not by themselves
-    /// make a finite range (`(-f64::MAX, f64::MAX)` has a span of
-    /// `f64::INFINITY`).
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # fn main() -> Result<(), flui_animation::AnimationError> {
-    /// use flui_animation::AnimationController;
-    /// use flui_scheduler::UpdateScheduler;
-    /// use std::time::Duration;
-    ///
-    /// let scheduler = UpdateScheduler::new();
-    /// let controller = AnimationController::with_bounds(
-    ///     Duration::from_millis(300),
-    ///     &scheduler,
-    ///     0.0,
-    ///     100.0,
-    /// )?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn with_bounds(
-        duration: Duration,
-        scheduler: &UpdateScheduler,
-        lower_bound: f64,
-        upper_bound: f64,
-    ) -> Result<Self, AnimationError> {
-        let ticker = Ticker::new_with_scheduler(scheduler);
-        Self::with_bounds_inner(duration, Some(ticker), lower_bound, upper_bound)
+    pub(crate) fn remove_frame_route(&self, route: &crate::VsyncRegistration) {
+        self.inner
+            .borrow_mut()
+            .frame_routes
+            .retain(|candidate| candidate != route);
     }
 
-    /// Shared construction body for [`Self::with_bounds`] and
-    /// [`Self::without_ticker`] — `ticker: None` is exactly the shape a
-    /// controller ends up in today anyway (a private scheduler's ticker that
-    /// nothing ever pumps), just without allocating the unused parts.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`AnimationError::InvalidBounds`] unless both bounds are
-    /// finite, `lower_bound < upper_bound`, AND `upper_bound - lower_bound`
-    /// itself fits in `f64` — two finite endpoints do not make a finite
-    /// RANGE (`(-f64::MAX, f64::MAX)` has a span of `f64::INFINITY`).
-    /// Bounded means finite (endpoints AND span); unbounded is
-    /// [`Self::unbounded_inner`], not a bound value — a half-open pair (one
-    /// finite, one infinite) is rejected the same way, since nothing in
-    /// this workspace needs it and the rule would otherwise be incidental
-    /// complexity.
-    fn with_bounds_inner(
-        duration: Duration,
-        ticker: Option<Ticker>,
-        lower_bound: f64,
-        upper_bound: f64,
-    ) -> Result<Self, AnimationError> {
-        // `lower_bound >= upper_bound` (not the negated `!(lower < upper)`,
-        // which clippy's `neg_cmp_op_on_partial_ord` flags on a
-        // `PartialOrd`-only type): NaN makes the two diverge, but NaN is
-        // caught by the `is_finite` clauses below regardless of which form
-        // this takes. The span check closes every bounded run start's
-        // `target - value`/`target - start` arithmetic at once — without
-        // it, `without_ticker_bounds(d, -f64::MAX, f64::MAX)` is accepted,
-        // `forward()` returns `Ok`, and the first `tick_at` publishes
-        // `value = f64::INFINITY`. `drive_to`'s own span-overflow check
-        // stays: it is still reachable from an UNBOUNDED controller, whose
-        // bounds never pass through this function.
-        if lower_bound >= upper_bound
-            || !lower_bound.is_finite()
-            || !upper_bound.is_finite()
-            || !(upper_bound - lower_bound).is_finite()
-        {
-            return Err(AnimationError::InvalidBounds(format!(
-                "lower_bound ({lower_bound}) and upper_bound ({upper_bound}) must both be \
-                 finite, with lower_bound < upper_bound, and the range \
-                 (upper_bound - lower_bound) must fit in f64"
-            )));
+    pub(crate) fn set_clock_bound(&self, bound: bool, retirement: &mut Retirement) {
+        let mut inner = self.inner.borrow_mut();
+        inner.clock_binding = if bound {
+            ClockBinding::Bound
+        } else {
+            ClockBinding::Missing
+        };
+        inner.settle_pending = !bound && inner.active_run.is_some();
+        if bound && inner.active_run.is_some() {
+            inner
+                .pending_delivery
+                .push_back(ControllerDelivery::RequestFrame);
         }
-
-        Ok(Self::new_inner(
-            duration,
-            ticker,
-            lower_bound,
-            upper_bound,
-            lower_bound,
-        ))
-    }
-
-    /// Shared construction body for [`Self::unbounded`],
-    /// [`Self::unbounded_without_ticker`], and
-    /// [`Self::unbounded_with_detached_ticker`] — fixed `(-inf, inf)`
-    /// bounds, infallible (there is no bound input to reject).
-    ///
-    /// Initial `value = 0.0` (not `lower_bound`, which would be `-inf` and
-    /// leak into [`AnimationController::velocity`]).
-    fn unbounded_inner(duration: Duration, ticker: Option<Ticker>) -> Self {
-        Self::new_inner(duration, ticker, f64::NEG_INFINITY, f64::INFINITY, 0.0)
+        let status = inner.status;
+        self.finish_with_retirement(
+            status,
+            ValueChange::Unchanged,
+            None,
+            RetiredSources::new(),
+            inner,
+            retirement,
+        );
     }
 
     /// The one place every constructor builds the inner state: `value`,
     /// `start_value`, and `target_value` all start at `initial_value`
     /// (`lower_bound` for a bounded controller, `0.0` for an unbounded one),
-    /// and `status`/`last_reported_status` are BOTH set from
+    /// and `status`/`last_committed_status` are BOTH set from
     /// [`AnimationControllerInner::settled_status_keep_direction`] at that
     /// value — the status rule applies at construction too, not only to a
     /// later `set_value` (a bounded
     /// controller at `lower_bound` stays `Dismissed`; an unbounded one at
     /// `0.0`, direction defaulted `Forward`, reports `Forward` — see
     /// `docs/ARCHITECTURE.md`'s mapping entry for the recorded cost). Both
-    /// fields must agree at construction: if `last_reported_status` stayed
+    /// fields must agree at construction: if `last_committed_status` stayed
     /// hard-coded `Dismissed` while `status` starts `Forward`, the first
     /// [`AnimationController::finish`] call — even one that changes
     /// nothing — would read them as different and fire a spurious status
     /// notification for a change that never happened.
     fn new_inner(
         duration: Duration,
-        ticker: Option<Ticker>,
         lower_bound: f64,
         upper_bound: f64,
         initial_value: f64,
     ) -> Self {
-        let notifier = Arc::new(ChangeNotifier::new());
+        let notifier = Rc::new(ChangeNotifier::new());
 
         let mut inner = AnimationControllerInner {
             value: initial_value,
@@ -645,12 +553,22 @@ impl AnimationController {
             reverse_duration: None,
             lower_bound,
             upper_bound,
-            ticker,
             status_listeners: Vec::new(),
+            pending_delivery: VecDeque::new(),
+            frame_routes: Vec::new(),
+            delivering: false,
             direction: AnimationDirection::Forward,
             start_value: initial_value,
             target_value: initial_value,
-            last_raw_elapsed_secs: 0.0,
+            last_elapsed: Duration::ZERO,
+            local_elapsed: Duration::ZERO,
+            playback_rate: PlaybackRate::NORMAL,
+            pending_rate: None,
+            rate_epoch_elapsed: Duration::ZERO,
+            rate_epoch_local: Duration::ZERO,
+            clock_binding: ClockBinding::Manual,
+            settle_pending: false,
+            missing_clock_warned: false,
             run_generation: 0,
             sample_epoch: 0,
             run_duration: None,
@@ -659,79 +577,23 @@ impl AnimationController {
             repeat: None,
             simulation: None,
             run_curve: None,
-            last_reported_status: AnimationStatus::Dismissed,
+            last_committed_status: AnimationStatus::Dismissed,
             active_run: None,
             non_finite_warned: false,
         };
         let initial_status = inner.settled_status_keep_direction();
         inner.status = initial_status;
-        inner.last_reported_status = initial_status;
+        inner.last_committed_status = initial_status;
 
         Self {
-            inner: Arc::new(Mutex::new(inner)),
+            inner: Rc::new(RefCell::new(inner)),
             notifier,
         }
     }
 
-    /// Create an unbounded animation controller, auto-scheduled off
-    /// `scheduler`: fixed `(-inf, inf)` bounds, initial `value = 0.0`,
-    /// initial [`status`](Animation::status) [`Forward`](AnimationStatus::Forward)
-    /// (see [`unbounded_without_ticker`](Self::unbounded_without_ticker)'s
-    /// own doc for the full contract — this is the same shape with a real,
-    /// scheduled ticker).
-    #[must_use]
-    pub fn unbounded(duration: Duration, scheduler: &UpdateScheduler) -> Self {
-        let ticker = Ticker::new_with_scheduler(scheduler);
-        Self::unbounded_inner(duration, Some(ticker))
-    }
-
-    /// Create an unbounded animation controller with no ticker at all — the
-    /// shape a pixel-space fling/ballistic-simulation controller needs (see
-    /// [`Self::without_ticker`] for why "no ticker, driven by `tick_at`" is
-    /// the production widget-layer shape).
-    ///
-    /// Bounds are fixed at `f64::NEG_INFINITY..f64::INFINITY`: unboundedness
-    /// is this constructor, not a bound value — [`Self::with_bounds`] and
-    /// its siblings reject a non-finite bound. Initial `value = 0.0`
-    /// and
-    /// initial [`status`](Animation::status) is
-    /// [`AnimationStatus::Forward`] — [`AnimationDirection`] defaults
-    /// `Forward` and `0.0` is not "at a bound" on an infinite range, so the
-    /// keep-direction status rule (the same one
-    /// [`set_value`](Self::set_value) applies) reports the running
-    /// direction rather than `Dismissed`. This means a never-run unbounded
-    /// controller reports `status().is_running() == true`; the real "is a
-    /// run installed" fact is [`is_animating`](Animation::is_animating), not
-    /// `status`.
-    ///
-    /// Driving this controller with a run that targets a bound —
-    /// [`forward`](Self::forward)/[`reverse`](Self::reverse)/
-    /// [`fling`](Self::fling) — is refused with
-    /// [`AnimationError::NonFiniteTarget`], since there is no finite bound
-    /// to run to; drive it with
-    /// [`animate_to`](Self::animate_to)/[`animate_back`](Self::animate_back)
-    /// (finite `target`), [`animate_with`](Self::animate_with) (a
-    /// [`Simulation`]), [`set_value`](Self::set_value), or
-    /// [`repeat_with`](Self::repeat_with) with an explicit finite range
-    /// instead. [`reset`](Self::reset) resets to `0.0` (the defined
-    /// beginning), not `-inf`.
-    #[must_use]
-    pub fn unbounded_without_ticker(duration: Duration) -> Self {
-        Self::unbounded_inner(duration, None)
-    }
-
-    /// [`Self::unbounded_without_ticker`] with a real, but permanently
-    /// detached, [`Ticker`] — the unbounded twin of
-    /// [`Self::with_detached_ticker`]: `is_animating()` reports correctly
-    /// mid-run without a live scheduler ever pumping it.
-    #[must_use]
-    pub fn unbounded_with_detached_ticker(duration: Duration) -> Self {
-        Self::unbounded_inner(duration, Some(Ticker::new()))
-    }
-
     /// Set the duration for reverse animation.
     pub fn set_reverse_duration(&self, duration: Duration) {
-        let mut inner = self.inner.lock();
+        let mut inner = self.inner.borrow_mut();
         inner.reverse_duration = Some(duration);
     }
 
@@ -743,18 +605,18 @@ impl AnimationController {
     /// already-captured `run_duration`/`duration`); the new value is read when
     /// the next `forward`/`reverse` begins the run at elapsed zero.
     pub fn set_duration(&self, duration: Duration) {
-        let mut inner = self.inner.lock();
+        let mut inner = self.inner.borrow_mut();
         inner.duration = duration;
     }
 
     /// Start animation forward from current value to upper bound.
     ///
-    /// The returned [`TickerFuture`] resolves `Ok(())` when this run finishes
-    /// and `Err(TickerCanceled)` if it is superseded (a later run starts
+    /// The returned [`AnimationRunFuture`] resolves `Ok(())` when this run finishes
+    /// and `Err(RunCanceled)` if it is superseded (a later run starts
     /// before this one ends) or torn down ([`stop`](Self::stop)/
     /// [`set_value`](Self::set_value)/[`reset`](Self::reset)/
-    /// [`dispose`](Self::dispose)). See
-    /// [`TickerFuture::when_complete_or_cancel`] for the idiom to react to
+    /// [owning disposal](crate::DrivenController::dispose)). See
+    /// [`AnimationRunFuture::when_complete_or_cancel`] for the idiom to react to
     /// either outcome without matching on it, and this method's own
     /// `# Awaiting a run` section below for the `async`/`await` route.
     ///
@@ -767,7 +629,7 @@ impl AnimationController {
     /// use std::task::{Context, Poll, Waker};
     /// use std::time::Duration;
     ///
-    /// let controller = AnimationController::without_ticker(Duration::from_millis(100));
+    /// let controller = AnimationController::builder(Duration::from_millis(100)).build();
     /// let mut run = controller.forward().unwrap();
     ///
     /// // A caller that only cares "how did it end", not "did it end yet",
@@ -778,7 +640,7 @@ impl AnimationController {
     ///
     /// // Or await it directly. `tick_at` is normally driven by a real
     /// // ticker/Vsync; this drives it to completion by hand for the example.
-    /// controller.tick_at(0.1);
+    /// controller.tick_at(Duration::from_millis(100));
     /// let waker = Waker::noop();
     /// let mut cx = Context::from_waker(waker);
     /// assert_eq!(Pin::new(&mut run).poll(&mut cx), Poll::Ready(Ok(())));
@@ -787,7 +649,7 @@ impl AnimationController {
     /// # Errors
     ///
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
-    pub fn forward(&self) -> Result<TickerFuture, AnimationError> {
+    pub fn forward(&self) -> Result<AnimationRunFuture, AnimationError> {
         self.forward_from(None)
     }
 
@@ -801,7 +663,7 @@ impl AnimationController {
     /// (starting at the upper bound) or a zero DURATION (the scaled run
     /// duration is `Duration::ZERO`) settles SYNCHRONOUSLY, before this
     /// call returns, with [`AnimationStatus::Completed`] and an
-    /// already-complete [`TickerFuture`]. See
+    /// already-complete [`AnimationRunFuture`]. See
     /// [`forward`](Self::forward) for the returned future's contract.
     ///
     /// # Errors
@@ -809,12 +671,12 @@ impl AnimationController {
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
     /// Returns [`AnimationError::NonFiniteTarget`] if `from` is `NaN`, if
     /// `from` is infinite toward a bound this controller does not have, or
-    /// if this controller is [`unbounded`](Self::unbounded) (`forward`
+    /// if this controller is [`unbounded`](crate::AnimationControllerBuilder::unbounded) (`forward`
     /// always targets `upper_bound`, which has no finite value to run to).
-    pub fn forward_from(&self, from: Option<f64>) -> Result<TickerFuture, AnimationError> {
+    pub fn forward_from(&self, from: Option<f64>) -> Result<AnimationRunFuture, AnimationError> {
         let mut retired = RetiredSources::new();
-        let mut inner = self.inner.lock();
-        Self::check_disposed(&inner)?;
+        let mut inner = self.inner.borrow_mut();
+        Self::check_run_admission(&inner)?;
 
         // `forward` always targets `upper_bound` — refuse before touching
         // `from`, so `forward()` (no `from` at all) is refused on an
@@ -869,14 +731,13 @@ impl AnimationController {
         } else {
             ValueChange::Notify
         };
-        // `restart_ticker` runs BEFORE the completer replaces `active_run` —
-        // see its own doc for why the order is load-bearing.
-        let has_ticker = self.restart_ticker(&mut inner);
-        let (completer, future) = TickerFuture::pending();
+        // Queue the restart; finish commits the run before invoking the wake hook.
+        Self::begin_run(&mut inner);
+        let (completer, future) = AnimationRunFuture::pending();
         let displaced_delivery = inner
             .active_run
             .replace(completer)
-            .map(TickerCompleter::cancel);
+            .map(RunCompleter::cancel);
 
         self.finish(
             AnimationStatus::Forward,
@@ -885,7 +746,6 @@ impl AnimationController {
             retired,
             inner,
         );
-        Self::warn_if_no_ticker(has_ticker);
         Ok(future)
     }
 
@@ -896,7 +756,7 @@ impl AnimationController {
     /// # Errors
     ///
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
-    pub fn reverse(&self) -> Result<TickerFuture, AnimationError> {
+    pub fn reverse(&self) -> Result<AnimationRunFuture, AnimationError> {
         self.reverse_from(None)
     }
 
@@ -917,12 +777,12 @@ impl AnimationController {
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
     /// Returns [`AnimationError::NonFiniteTarget`] if `from` is `NaN`, if
     /// `from` is infinite toward a bound this controller does not have, or
-    /// if this controller is [`unbounded`](Self::unbounded) (`reverse`
+    /// if this controller is [`unbounded`](crate::AnimationControllerBuilder::unbounded) (`reverse`
     /// always targets `lower_bound`, which has no finite value to run to).
-    pub fn reverse_from(&self, from: Option<f64>) -> Result<TickerFuture, AnimationError> {
+    pub fn reverse_from(&self, from: Option<f64>) -> Result<AnimationRunFuture, AnimationError> {
         let mut retired = RetiredSources::new();
-        let mut inner = self.inner.lock();
-        Self::check_disposed(&inner)?;
+        let mut inner = self.inner.borrow_mut();
+        Self::check_run_admission(&inner)?;
 
         // See `forward_from`'s own comment: refuse before touching `from`,
         // so `reverse()` (no `from` at all) is refused too.
@@ -974,14 +834,13 @@ impl AnimationController {
         } else {
             ValueChange::Notify
         };
-        // `restart_ticker` runs BEFORE the completer replaces `active_run` —
-        // see its own doc for why the order is load-bearing.
-        let has_ticker = self.restart_ticker(&mut inner);
-        let (completer, future) = TickerFuture::pending();
+        // Queue the restart; finish commits the run before invoking the wake hook.
+        Self::begin_run(&mut inner);
+        let (completer, future) = AnimationRunFuture::pending();
         let displaced_delivery = inner
             .active_run
             .replace(completer)
-            .map(TickerCompleter::cancel);
+            .map(RunCompleter::cancel);
 
         self.finish(
             AnimationStatus::Reverse,
@@ -990,7 +849,6 @@ impl AnimationController {
             retired,
             inner,
         );
-        Self::warn_if_no_ticker(has_ticker);
         Ok(future)
     }
 
@@ -1007,8 +865,8 @@ impl AnimationController {
     /// after `stop()` would allow the driver to continue ticking a stale or
     /// cleared simulation and produce non-finite pixel values.
     ///
-    /// Cancels the active run's [`TickerFuture`] with
-    /// [`TickerCanceled`](flui_scheduler::ticker::TickerCanceled),
+    /// Cancels the active run's [`AnimationRunFuture`] with
+    /// [`RunCanceled`](crate::RunCanceled),
     /// delivered with no controller lock held.
     ///
     /// # Errors
@@ -1016,7 +874,7 @@ impl AnimationController {
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
     pub fn stop(&self) -> Result<(), AnimationError> {
         let mut retired = RetiredSources::new();
-        let mut inner = self.inner.lock();
+        let mut inner = self.inner.borrow_mut();
         Self::check_disposed(&inner)?;
 
         let delivery = inner.stop_running(&mut retired);
@@ -1030,12 +888,12 @@ impl AnimationController {
     /// Reset to the beginning (lower bound).
     ///
     /// Sets the value to the beginning — `lower_bound` on a bounded
-    /// controller, `0.0` on an [`unbounded`](Self::unbounded) one (there is
+    /// controller, `0.0` on an [`unbounded`](crate::AnimationControllerBuilder::unbounded) one (there is
     /// no `lower_bound` to return to) — and the status to
     /// [`AnimationStatus::Dismissed`]. Never fails for non-finiteness: a
     /// reset always has a value to land on. Cancels the active run's
-    /// [`TickerFuture`] with
-    /// [`TickerCanceled`](flui_scheduler::ticker::TickerCanceled), delivered
+    /// [`AnimationRunFuture`] with
+    /// [`RunCanceled`](crate::RunCanceled), delivered
     /// with no controller lock held.
     ///
     /// # Errors
@@ -1043,7 +901,7 @@ impl AnimationController {
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
     pub fn reset(&self) -> Result<(), AnimationError> {
         let mut retired = RetiredSources::new();
-        let mut inner = self.inner.lock();
+        let mut inner = self.inner.borrow_mut();
         Self::check_disposed(&inner)?;
 
         let delivery = inner.stop_running(&mut retired);
@@ -1099,18 +957,18 @@ impl AnimationController {
     /// use flui_animation::AnimationController;
     /// use std::time::Duration;
     ///
-    /// let controller = AnimationController::without_ticker(Duration::from_millis(100));
+    /// let controller = AnimationController::builder(Duration::from_millis(100)).build();
     /// let run = controller.animate_to(1.0, None).unwrap();
     /// run.when_complete_or_cancel(|end| {
     ///     assert!(end.is_ok(), "a run nothing superseded or stopped must complete");
     /// });
-    /// controller.tick_at(0.1);
+    /// controller.tick_at(Duration::from_millis(100));
     /// ```
     pub fn animate_to(
         &self,
         target: f64,
         duration: Option<Duration>,
-    ) -> Result<TickerFuture, AnimationError> {
+    ) -> Result<AnimationRunFuture, AnimationError> {
         self.drive_to(target, duration, AnimationDirection::Forward, None)
     }
 
@@ -1134,7 +992,7 @@ impl AnimationController {
         &self,
         target: f64,
         duration: Option<Duration>,
-    ) -> Result<TickerFuture, AnimationError> {
+    ) -> Result<AnimationRunFuture, AnimationError> {
         self.drive_to(target, duration, AnimationDirection::Reverse, None)
     }
 
@@ -1150,9 +1008,14 @@ impl AnimationController {
         &self,
         target: f64,
         duration: Option<Duration>,
-        curve: Arc<dyn Curve + Send + Sync>,
-    ) -> Result<TickerFuture, AnimationError> {
-        self.drive_to(target, duration, AnimationDirection::Forward, Some(curve))
+        curve: impl Curve + 'static,
+    ) -> Result<AnimationRunFuture, AnimationError> {
+        self.drive_to(
+            target,
+            duration,
+            AnimationDirection::Forward,
+            Some(Rc::new(curve)),
+        )
     }
 
     /// Like [`animate_back`](Self::animate_back), but eases the run through
@@ -1167,9 +1030,14 @@ impl AnimationController {
         &self,
         target: f64,
         duration: Option<Duration>,
-        curve: Arc<dyn Curve + Send + Sync>,
-    ) -> Result<TickerFuture, AnimationError> {
-        self.drive_to(target, duration, AnimationDirection::Reverse, Some(curve))
+        curve: impl Curve + 'static,
+    ) -> Result<AnimationRunFuture, AnimationError> {
+        self.drive_to(
+            target,
+            duration,
+            AnimationDirection::Reverse,
+            Some(Rc::new(curve)),
+        )
     }
 
     /// Shared driver for [`animate_to`](Self::animate_to)/[`animate_back`](Self::animate_back)
@@ -1189,12 +1057,12 @@ impl AnimationController {
         target: f64,
         duration: Option<Duration>,
         direction: AnimationDirection,
-        curve: Option<Arc<dyn Curve + Send + Sync>>,
-    ) -> Result<TickerFuture, AnimationError> {
+        curve: Option<Rc<dyn Curve>>,
+    ) -> Result<AnimationRunFuture, AnimationError> {
         let mut curve = Opaque::new(curve);
         let mut retired = RetiredSources::new();
-        let mut inner = self.inner.lock();
-        Self::check_disposed(&inner)?;
+        let mut inner = self.inner.borrow_mut();
+        Self::check_run_admission(&inner)?;
         let entry_value = inner.value;
 
         // `drive_to` is shared by both directions -- name the actual method
@@ -1253,14 +1121,13 @@ impl AnimationController {
 
         inner.status = inner.direction.running_status();
         inner.run_duration = Some(run_duration);
-        // `restart_ticker` runs BEFORE the completer replaces `active_run` —
-        // see its own doc for why the order is load-bearing.
-        let has_ticker = self.restart_ticker(&mut inner);
-        let (completer, future) = TickerFuture::pending();
+        // Queue the restart; finish commits the run before invoking the wake hook.
+        Self::begin_run(&mut inner);
+        let (completer, future) = AnimationRunFuture::pending();
         let displaced_delivery = inner
             .active_run
             .replace(completer)
-            .map(TickerCompleter::cancel);
+            .map(RunCompleter::cancel);
 
         let status = inner.status;
         self.finish(
@@ -1270,14 +1137,13 @@ impl AnimationController {
             retired,
             inner,
         );
-        Self::warn_if_no_ticker(has_ticker);
         Ok(future)
     }
 
     /// Settle a run whose distance or duration is trivial: snap the value,
     /// stop the ticker, cancel whatever run this displaced, and report the
     /// run's directed settled status — no transient running status, no
-    /// full-duration no-op run. Returns an already-complete [`TickerFuture`]
+    /// full-duration no-op run. Returns an already-complete [`AnimationRunFuture`]
     /// for the (trivial) run this call represents. The single settle
     /// chokepoint for zero-DISTANCE (`forward()` already at the upper bound)
     /// and zero-DURATION (`forward(..., Some(Duration::ZERO))`) runs alike
@@ -1293,35 +1159,44 @@ impl AnimationController {
         &self,
         entry_value: f64,
         retired: RetiredSources,
-        mut inner: parking_lot::MutexGuard<'_, AnimationControllerInner>,
-    ) -> TickerFuture {
-        inner.value = inner.target_value;
-        // `is_running()` (Active | Muted), not `can_tick()` (Active only) —
-        // the same lesson `restart_ticker`'s doc records: a MUTED ticker
-        // still holds its run and would resume scheduling ticks against a
-        // settled controller on unmute. `AnimationController` exposes no
-        // mute today, so a Muted ticker is unreachable through the public
-        // API here and this widening has no red test of its own.
-        if let Some(ticker) = &mut inner.ticker
-            && ticker.state().is_running()
-        {
-            ticker.stop();
+        mut inner: std::cell::RefMut<'_, AnimationControllerInner>,
+    ) -> AnimationRunFuture {
+        if inner.delivering {
+            inner.start_value = inner.value;
+            inner.run_duration = Some(Duration::ZERO);
+            inner.status = inner.direction.running_status();
+            Self::begin_run(&mut inner);
+            inner.settle_pending = true;
+            let (completer, future) = AnimationRunFuture::pending();
+            let displaced = inner
+                .active_run
+                .replace(completer)
+                .map(RunCompleter::cancel);
+            let status = inner.status;
+            let change = if (inner.value - entry_value).abs() < BOUND_EPSILON {
+                ValueChange::Unchanged
+            } else {
+                ValueChange::Notify
+            };
+            self.finish(status, change, displaced, retired, inner);
+            return future;
         }
+        inner.value = inner.target_value;
         let status = inner.direction.settled_status();
         inner.status = status;
-        let delivery = inner.active_run.take().map(TickerCompleter::cancel);
+        let delivery = inner.active_run.take().map(RunCompleter::cancel);
         let value_change = if (inner.target_value - entry_value).abs() < BOUND_EPSILON {
             ValueChange::Unchanged
         } else {
             ValueChange::Notify
         };
         self.finish(status, value_change, delivery, retired, inner);
-        TickerFuture::complete()
+        AnimationRunFuture::complete()
     }
 
     /// Repeat the animation, bouncing if `reverse` is true. Repeats forever.
     ///
-    /// An infinite repeat's [`TickerFuture`] resolves only by cancellation —
+    /// An infinite repeat's [`AnimationRunFuture`] resolves only by cancellation —
     /// it has no natural end — EXCEPT that a zero effective period settles
     /// synchronously at the call with an already-complete future; see
     /// [`repeat_with`](Self::repeat_with)'s `period` bullet. A finite
@@ -1333,11 +1208,11 @@ impl AnimationController {
     ///
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
     /// Returns [`AnimationError::NonFiniteTarget`] on an
-    /// [`unbounded`](Self::unbounded) controller — a default repeat targets
+    /// [`unbounded`](crate::AnimationControllerBuilder::unbounded) controller — a default repeat targets
     /// this controller's own (infinite) bounds; use
     /// [`repeat_with`](Self::repeat_with) with an explicit finite range
     /// instead.
-    pub fn repeat(&self, reverse: bool) -> Result<TickerFuture, AnimationError> {
+    pub fn repeat(&self, reverse: bool) -> Result<AnimationRunFuture, AnimationError> {
         self.repeat_with(None, None, reverse, None, None)
     }
 
@@ -1384,7 +1259,7 @@ impl AnimationController {
     /// controller). Returns [`AnimationError::NonFiniteTarget`] if the
     /// EFFECTIVE range (after defaulting unset endpoints to this
     /// controller's own bounds) is not finite — only reachable on an
-    /// [`unbounded`](Self::unbounded) controller with `min`/`max` left
+    /// [`unbounded`](crate::AnimationControllerBuilder::unbounded) controller with `min`/`max` left
     /// unset (or set on only one side); pass an explicit finite range to
     /// repeat on an unbounded controller.
     pub fn repeat_with(
@@ -1394,10 +1269,10 @@ impl AnimationController {
         reverse: bool,
         period: Option<Duration>,
         count: Option<u32>,
-    ) -> Result<TickerFuture, AnimationError> {
+    ) -> Result<AnimationRunFuture, AnimationError> {
         let mut retired = RetiredSources::new();
-        let mut inner = self.inner.lock();
-        Self::check_disposed(&inner)?;
+        let mut inner = self.inner.borrow_mut();
+        Self::check_run_admission(&inner)?;
         let entry_value = inner.value;
 
         // A caller-supplied NaN endpoint is a range-shape error on ANY
@@ -1524,14 +1399,13 @@ impl AnimationController {
         inner.start_value = sample.start;
         inner.target_value = sample.target;
         inner.value = sample.value;
-        // `restart_ticker` runs BEFORE the completer replaces `active_run` —
-        // see its own doc for why the order is load-bearing.
-        let has_ticker = self.restart_ticker(&mut inner);
-        let (completer, future) = TickerFuture::pending();
+        // Queue the restart; finish commits the run before invoking the wake hook.
+        Self::begin_run(&mut inner);
+        let (completer, future) = AnimationRunFuture::pending();
         let displaced_delivery = inner
             .active_run
             .replace(completer)
-            .map(TickerCompleter::cancel);
+            .map(RunCompleter::cancel);
 
         // The value is set directly, without notifying listeners — the
         // value-at-the-call jump is real but reported on the run's first
@@ -1544,7 +1418,6 @@ impl AnimationController {
             retired,
             inner,
         );
-        Self::warn_if_no_ticker(has_ticker);
         Ok(future)
     }
 
@@ -1556,7 +1429,7 @@ impl AnimationController {
     ///
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
     /// Returns [`AnimationError::NonFiniteTarget`] if `velocity` is not
-    /// finite, or if this controller is [`unbounded`](Self::unbounded) in
+    /// finite, or if this controller is [`unbounded`](crate::AnimationControllerBuilder::unbounded) in
     /// the direction `velocity` drives toward (a fling has no finite end to
     /// spring at).
     /// Returns [`AnimationError::InvalidSpring`] if the spring is underdamped
@@ -1569,10 +1442,10 @@ impl AnimationController {
     /// # use flui_scheduler::UpdateScheduler;
     /// # use std::time::Duration;
     /// # let scheduler = UpdateScheduler::new();
-    /// let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
+    /// let controller = AnimationController::builder(Duration::from_millis(300)).build();
     /// controller.fling(1.0).unwrap(); // Fling forward
     /// ```
-    pub fn fling(&self, velocity: f64) -> Result<TickerFuture, AnimationError> {
+    pub fn fling(&self, velocity: f64) -> Result<AnimationRunFuture, AnimationError> {
         self.fling_with(velocity, None)
     }
 
@@ -1588,10 +1461,10 @@ impl AnimationController {
         &self,
         velocity: f64,
         spring: Option<SpringDescription>,
-    ) -> Result<TickerFuture, AnimationError> {
+    ) -> Result<AnimationRunFuture, AnimationError> {
         let mut retired = RetiredSources::new();
-        let mut inner = self.inner.lock();
-        Self::check_disposed(&inner)?;
+        let mut inner = self.inner.borrow_mut();
+        Self::check_run_admission(&inner)?;
 
         if !velocity.is_finite() {
             let err = AnimationError::NonFiniteTarget(format!(
@@ -1636,16 +1509,22 @@ impl AnimationController {
 
         inner.direction = direction;
         inner.clear_run_modes(&mut retired);
-        inner.simulation = Some(Arc::new(sim));
+        inner.simulation = Some(SimulationRun::Fling {
+            source: Rc::new(sim),
+            bound: match direction {
+                AnimationDirection::Forward => inner.upper_bound,
+                AnimationDirection::Reverse => inner.lower_bound,
+            },
+            direction,
+        });
         inner.status = inner.direction.running_status();
-        // `restart_ticker` runs BEFORE the completer replaces `active_run` —
-        // see its own doc for why the order is load-bearing.
-        let has_ticker = self.restart_ticker(&mut inner);
-        let (completer, future) = TickerFuture::pending();
+        // Queue the restart; finish commits the run before invoking the wake hook.
+        Self::begin_run(&mut inner);
+        let (completer, future) = AnimationRunFuture::pending();
         let displaced_delivery = inner
             .active_run
             .replace(completer)
-            .map(TickerCompleter::cancel);
+            .map(RunCompleter::cancel);
 
         let status = inner.status;
         self.finish(
@@ -1655,12 +1534,11 @@ impl AnimationController {
             retired,
             inner,
         );
-        Self::warn_if_no_ticker(has_ticker);
         Ok(future)
     }
 
     /// Drive the animation according to a custom simulation. Works
-    /// unmodified on an [`unbounded`](Self::unbounded) controller — a
+    /// unmodified on an [`unbounded`](crate::AnimationControllerBuilder::unbounded) controller — a
     /// simulation is not refused the way a bound-targeting run is, since it
     /// carries its own `is_done` termination rather than running toward
     /// `lower_bound`/`upper_bound`.
@@ -1679,7 +1557,7 @@ impl AnimationController {
     /// # use flui_scheduler::UpdateScheduler;
     /// # use std::time::Duration;
     /// # let scheduler = UpdateScheduler::new();
-    /// let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
+    /// let controller = AnimationController::builder(Duration::from_millis(300)).build();
     /// let spring = SpringDescription::with_damping_ratio(1.0, 300.0, 0.5);
     /// let sim = SpringSimulation::new(spring, 0.0, 1.0, 0.0);
     /// controller.animate_with(sim).unwrap();
@@ -1687,7 +1565,7 @@ impl AnimationController {
     pub fn animate_with<S: Simulation + 'static>(
         &self,
         simulation: S,
-    ) -> Result<TickerFuture, AnimationError> {
+    ) -> Result<AnimationRunFuture, AnimationError> {
         self.drive_simulation(Box::new(simulation), AnimationDirection::Forward)
     }
 
@@ -1701,7 +1579,7 @@ impl AnimationController {
     pub fn animate_back_with<S: Simulation + 'static>(
         &self,
         simulation: S,
-    ) -> Result<TickerFuture, AnimationError> {
+    ) -> Result<AnimationRunFuture, AnimationError> {
         self.drive_simulation(Box::new(simulation), AnimationDirection::Reverse)
     }
 
@@ -1709,7 +1587,7 @@ impl AnimationController {
         &self,
         simulation: Box<dyn Simulation>,
         direction: AnimationDirection,
-    ) -> Result<TickerFuture, AnimationError> {
+    ) -> Result<AnimationRunFuture, AnimationError> {
         // `Simulation::x` is arbitrary caller code, evaluated BEFORE taking
         // the lock: running it under `inner`'s guard (as a `lock, evaluate,
         // proceed` shape would) lets a caller whose `x` re-enters this same
@@ -1718,15 +1596,15 @@ impl AnimationController {
         // that starts non-finite would otherwise also install a run whose
         // `is_done` may never fire — refused below, before any mutation,
         // exactly like every other non-finite entry point.
-        let mut simulation = Opaque::new(Arc::<dyn Simulation>::from(simulation));
+        let mut simulation = Opaque::new(Rc::<dyn Simulation>::from(simulation));
         let initial = simulation.get().x(0.0);
 
         let mut retired = RetiredSources::new();
-        let mut inner = self.inner.lock();
+        let mut inner = self.inner.borrow_mut();
         // Initial sampling has already run and may have panicked or changed
         // the controller. Of the returned validation errors, Disposed wins
         // over a non-finite initial value; a sampling panic propagates first.
-        Self::check_disposed(&inner)?;
+        Self::check_run_admission(&inner)?;
 
         if !initial.is_finite() {
             let err = AnimationError::NonFiniteTarget(format!(
@@ -1739,15 +1617,14 @@ impl AnimationController {
         inner.direction = direction;
         inner.status = direction.running_status();
         inner.value = initial.clamp(inner.lower_bound, inner.upper_bound);
-        inner.simulation = Some(simulation.take());
-        // `restart_ticker` runs BEFORE the completer replaces `active_run` —
-        // see its own doc for why the order is load-bearing.
-        let has_ticker = self.restart_ticker(&mut inner);
-        let (completer, future) = TickerFuture::pending();
+        inner.simulation = Some(SimulationRun::Custom(simulation.take()));
+        // Queue the restart; finish commits the run before invoking the wake hook.
+        Self::begin_run(&mut inner);
+        let (completer, future) = AnimationRunFuture::pending();
         let displaced_delivery = inner
             .active_run
             .replace(completer)
-            .map(TickerCompleter::cancel);
+            .map(RunCompleter::cancel);
 
         let status = inner.status;
         self.finish(
@@ -1757,7 +1634,6 @@ impl AnimationController {
             retired,
             inner,
         );
-        Self::warn_if_no_ticker(has_ticker);
         Ok(future)
     }
 
@@ -1766,24 +1642,55 @@ impl AnimationController {
     pub fn velocity(&self) -> f64 {
         let source;
         let cycle;
+        let rate;
         {
-            let inner = self.inner.lock();
+            let inner = self.inner.borrow_mut();
             if inner.active_run.is_none() {
                 return 0.0;
             }
             cycle = inner.cycle_elapsed_secs();
+            rate = inner.playback_rate.get();
             if let Some(simulation) = &inner.simulation {
-                source = Opaque::new(Arc::clone(simulation));
+                source = Opaque::new(Rc::clone(simulation.source()));
             } else {
                 let duration = inner.current_duration();
                 return if duration.is_zero() {
                     0.0
                 } else {
-                    (inner.target_value - inner.start_value) / duration.as_secs_f64()
+                    (inner.target_value - inner.start_value) / duration.as_secs_f64() * rate
                 };
             }
         }
-        source.get().dx(cycle)
+        source.get().dx(cycle) * rate
+    }
+
+    /// Apply `rate` at the next sample, preserving the local run time there.
+    ///
+    /// A paused run stays installed and keeps its completion future. A bound
+    /// controller requests the sample that applies this change.
+    pub fn set_playback_rate(&self, rate: PlaybackRate) {
+        let mut inner = self.inner.borrow_mut();
+        if inner.disposed || inner.pending_rate.unwrap_or(inner.playback_rate) == rate {
+            return;
+        }
+        inner.pending_rate = Some(rate);
+        inner
+            .pending_delivery
+            .push_back(ControllerDelivery::RequestFrame);
+        let status = inner.status;
+        self.finish(
+            status,
+            ValueChange::Unchanged,
+            None,
+            RetiredSources::new(),
+            inner,
+        );
+    }
+
+    /// Rate currently applied to samples; a pending change takes effect next tick.
+    #[must_use]
+    pub fn playback_rate(&self) -> PlaybackRate {
+        self.inner.borrow().playback_rate
     }
 
     /// A monotonically increasing run-generation counter, bumped once each time
@@ -1804,11 +1711,11 @@ impl AnimationController {
     /// `animate_back` whose distance or duration is trivial; and
     /// `repeat_with`'s own zero-effective-period and zero-`count` settles —
     /// all of which settle through the private `settle_at_target`
-    /// chokepoint) leave it untouched. It wraps on `u64` overflow — only
-    /// its *change* is observed, so the wrap is harmless.
+    /// chokepoint) leave it untouched. Exhaustion permanently refuses new runs;
+    /// an already issued generation is never reused.
     #[must_use]
     pub fn run_generation(&self) -> u64 {
-        self.inner.lock().run_generation
+        self.inner.borrow().run_generation
     }
 
     /// One-lock snapshot for [`Vsync`](crate::vsync::Vsync)'s per-frame walk —
@@ -1817,8 +1724,8 @@ impl AnimationController {
     /// `live_running` is `!disposed && active_run.is_some()` — **not**
     /// `status.is_running()`, which is the wrong "is a run installed"
     /// predicate for two independent reasons:
-    /// - [`dispose`](Self::dispose) deliberately leaves `status` untouched
-    ///   (see its own doc), so a controller disposed mid-run keeps whatever
+    /// - [Owning disposal](crate::DrivenController::dispose) leaves `status` untouched,
+    ///   so a controller disposed mid-run keeps whatever
     ///   running status it had.
     /// - [`set_value`](Self::set_value) reports a *directional* running
     ///   status at an interior value
@@ -1841,22 +1748,13 @@ impl AnimationController {
     /// `true`, holding the frame loop open forever.
     #[must_use]
     pub(crate) fn walk_probe(&self) -> WalkProbe {
-        let inner = self.inner.lock();
+        let inner = self.inner.borrow();
         WalkProbe {
             generation: inner.run_generation,
-            live_running: !inner.disposed && inner.active_run.is_some(),
+            live_running: !inner.disposed
+                && inner.active_run.is_some()
+                && (!inner.playback_rate.is_paused() || inner.pending_rate.is_some()),
         }
-    }
-
-    /// Advance the animation using the ticker's most recent elapsed time.
-    ///
-    /// Normally driven by the ticker callback; exposed for manual stepping.
-    pub fn tick(&self) {
-        let raw = {
-            let inner = self.inner.lock();
-            inner.ticker.as_ref().map_or(0.0, Ticker::elapsed_secs)
-        };
-        self.tick_at(raw);
     }
 
     /// Advance the animation to `raw_elapsed_secs` seconds (ticker timeline,
@@ -1867,56 +1765,88 @@ impl AnimationController {
     /// samples its leg/phase/exhaustion as a pure function of `cycle` (see
     /// the private `tick_repeat`). Value and status listeners are fired
     /// only after the inner lock is released.
-    pub fn tick_at(&self, raw_elapsed_secs: f64) {
+    pub fn tick_at(&self, elapsed: Duration) {
+        let mut retirement = Retirement::new();
+        retirement.run_with(|retirement| self.tick_at_with_retirement(elapsed, retirement));
+        retirement.finish();
+    }
+
+    pub(crate) fn tick_at_with_retirement(&self, elapsed: Duration, retirement: &mut Retirement) {
         let source;
         let identity;
+        let cycle;
         {
-            let mut inner = self.inner.lock();
-            if inner.disposed || inner.active_run.is_none() {
+            let mut inner = self.inner.borrow_mut();
+            if inner.disposed || inner.active_run.is_none() || elapsed < inner.last_elapsed {
                 return;
             }
-            inner.last_raw_elapsed_secs = raw_elapsed_secs;
-            inner.sample_epoch = inner.sample_epoch.wrapping_add(1);
+            let Some(epoch) = inner.sample_epoch.checked_add(1) else {
+                let mut retired = RetiredSources::new();
+                let delivery = inner.stop_running(&mut retired);
+                let status = inner.settled_status_directed();
+                inner.status = status;
+                self.finish_with_retirement(
+                    status,
+                    ValueChange::Unchanged,
+                    delivery,
+                    retired,
+                    inner,
+                    retirement,
+                );
+                retirement.run(|| {
+                    tracing::warn!(
+                        "animation sample identities exhausted; the accepted run was cancelled"
+                    );
+                });
+                return;
+            };
+            inner.last_elapsed = elapsed;
+            let span = elapsed.saturating_sub(inner.rate_epoch_elapsed);
+            let scaled = if inner.playback_rate == PlaybackRate::NORMAL {
+                span
+            } else if inner.playback_rate.is_paused() {
+                Duration::ZERO
+            } else {
+                Duration::try_from_secs_f64(span.as_secs_f64() * inner.playback_rate.get())
+                    .unwrap_or(Duration::MAX)
+            };
+            inner.local_elapsed = inner.rate_epoch_local.saturating_add(scaled);
+            cycle = inner.local_elapsed.as_secs_f64();
+            if let Some(rate) = inner.pending_rate.take() {
+                inner.rate_epoch_elapsed = elapsed;
+                inner.rate_epoch_local = inner.local_elapsed;
+                inner.playback_rate = rate;
+            }
+            inner.sample_epoch = epoch;
             identity = SampleIdentity {
                 generation: inner.run_generation,
                 epoch: inner.sample_epoch,
             };
-            source = Opaque::new(if let Some(run) = inner.repeat {
-                TickSource::Repeat(run)
-            } else if let Some(simulation) = &inner.simulation {
-                TickSource::Simulation(Arc::clone(simulation))
-            } else {
-                TickSource::Time {
-                    curve: inner.run_curve.as_ref().map(Arc::clone),
-                    duration: inner.current_duration(),
-                    start: inner.start_value,
-                    target: inner.target_value,
-                }
-            });
+            source = Opaque::new(inner.tick_source());
         }
-        let cycle = (raw_elapsed_secs / time_dilation().max(f64::MIN_POSITIVE)).max(0.0);
-        match source.get() {
+        retirement.run_with(|retirement| match source.get() {
             TickSource::Repeat(run) => {
-                let inner = self.inner.lock();
+                let inner = self.inner.borrow_mut();
                 if !inner.matches_sample(&identity) {
                     return;
                 }
-                self.tick_repeat(inner, *run, cycle);
+                self.tick_repeat(inner, *run, cycle, retirement);
             }
             TickSource::Simulation(simulation) => {
-                let sampled = simulation.x(cycle);
+                let sampled = simulation.source().x(cycle);
                 // A position callback may stop or replace the run. Do not call
                 // another method on its stale source after that decision.
-                let current = { self.inner.lock().matches_sample(&identity) };
+                let current = { self.inner.borrow_mut().matches_sample(&identity) };
                 if !current {
                     return;
                 }
-                let is_done = sampled.is_finite() && simulation.is_done(cycle);
-                let inner = self.inner.lock();
+                let is_done = sampled.is_finite()
+                    && (simulation.reached_bound(sampled) || simulation.source().is_done(cycle));
+                let inner = self.inner.borrow_mut();
                 if !inner.matches_sample(&identity) {
                     return;
                 }
-                self.tick_simulation(inner, sampled, is_done);
+                self.tick_simulation(inner, sampled, is_done, retirement);
             }
             TickSource::Time {
                 curve,
@@ -1937,35 +1867,139 @@ impl AnimationController {
                     let eased = curve.as_ref().map_or(t, |curve| curve.transform(t));
                     start + (target - start) * eased
                 };
-                let inner = self.inner.lock();
+                let inner = self.inner.borrow_mut();
                 if !inner.matches_sample(&identity) {
                     return;
                 }
-                self.tick_time_based(inner, t, value);
+                self.tick_time_based(inner, t, value, retirement);
             }
+        });
+        retirement.retire(source);
+    }
+
+    /// Settle an admitted run without reading a wall clock or invoking its curve.
+    /// Reentrant replacement invalidates the source before the next callout.
+    fn settle_run(&self, generation: u64, recovery: &mut Retirement) -> bool {
+        let (source, identity, warn) = {
+            let mut inner = self.inner.borrow_mut();
+            if inner.disposed
+                || inner.active_run.is_none()
+                || inner.run_generation != generation
+                || (inner.clock_binding != ClockBinding::Missing
+                    && !inner.current_duration().is_zero())
+            {
+                return false;
+            }
+            let warn = inner.clock_binding == ClockBinding::Missing && !inner.missing_clock_warned;
+            inner.missing_clock_warned |= warn;
+            (
+                Opaque::new(inner.tick_source()),
+                SampleIdentity {
+                    generation,
+                    epoch: inner.sample_epoch,
+                },
+                warn,
+            )
+        };
+        if warn {
+            recovery
+                .run(|| tracing::warn!("animation has no clock; finite work settles immediately"));
         }
+        recovery.run_with(|recovery| match source.get() {
+            TickSource::Time { target, .. } => {
+                let inner = self.inner.borrow_mut();
+                if inner.matches_sample(&identity) {
+                    self.tick_time_based(inner, 1.0, *target, recovery);
+                }
+            }
+            TickSource::Repeat(run) => {
+                let mut inner = self.inner.borrow_mut();
+                if !inner.matches_sample(&identity) {
+                    return;
+                }
+                if let Some(count) = run.count {
+                    self.finish_repeat(inner, run, count, recovery);
+                } else {
+                    let mut parked = *run;
+                    parked.initial_ns = 0;
+                    inner.repeat = Some(parked);
+                    inner.value = run.min;
+                    inner.start_value = run.min;
+                    inner.target_value = run.max;
+                    inner.direction = AnimationDirection::Forward;
+                    inner.status = AnimationStatus::Forward;
+                    inner.last_elapsed = Duration::ZERO;
+                    inner.local_elapsed = Duration::ZERO;
+                    inner.rate_epoch_elapsed = Duration::ZERO;
+                    inner.rate_epoch_local = Duration::ZERO;
+                    self.finish_with_retirement(
+                        AnimationStatus::Forward,
+                        ValueChange::Notify,
+                        None,
+                        RetiredSources::new(),
+                        inner,
+                        recovery,
+                    );
+                }
+            }
+            TickSource::Simulation(simulation) => {
+                let mut last_finite = self.inner.borrow().value;
+                for exponent in 0..=8 {
+                    let time = 0.25 * f64::from(1u32 << exponent);
+                    let sample = simulation.source().x(time);
+                    if !self.inner.borrow().matches_sample(&identity) {
+                        return;
+                    }
+                    if sample.is_finite() {
+                        last_finite = sample;
+                        let done =
+                            simulation.reached_bound(sample) || simulation.source().is_done(time);
+                        if !self.inner.borrow().matches_sample(&identity) {
+                            return;
+                        }
+                        if done {
+                            break;
+                        }
+                    }
+                }
+                let inner = self.inner.borrow_mut();
+                if inner.matches_sample(&identity) {
+                    self.tick_simulation(inner, last_finite, true, recovery);
+                }
+            }
+        });
+        recovery.retire(source);
+        true
     }
 
     /// Commit a caller sample only after its run and tick identity survived.
     fn tick_simulation(
         &self,
-        mut inner: parking_lot::MutexGuard<'_, AnimationControllerInner>,
+        mut inner: std::cell::RefMut<'_, AnimationControllerInner>,
         sampled: f64,
         is_done: bool,
+        retirement: &mut Retirement,
     ) {
         if !sampled.is_finite() {
             let should_warn = !inner.non_finite_warned;
             inner.non_finite_warned = true;
-            self.end_simulation_run(inner, ValueChange::Unchanged);
+            self.end_simulation_run(inner, ValueChange::Unchanged, retirement);
             Self::warn_non_finite_value(should_warn, sampled, NonFiniteOutcome::EndedRun);
             return;
         }
         inner.value = sampled.clamp(inner.lower_bound, inner.upper_bound);
         if is_done {
-            self.end_simulation_run(inner, ValueChange::Notify);
+            self.end_simulation_run(inner, ValueChange::Notify, retirement);
         } else {
-            drop(inner);
-            self.notifier.notify_listeners();
+            let status = inner.status;
+            self.finish_with_retirement(
+                status,
+                ValueChange::Notify,
+                None,
+                RetiredSources::new(),
+                inner,
+                retirement,
+            );
         }
     }
 
@@ -1978,26 +2012,25 @@ impl AnimationController {
     /// sample through). Clears `simulation`, stops the ticker, settles
     /// `status` by direction, and publishes the completion BEFORE `finish`
     /// unlocks (the completer resolves before listeners are notified), so a panicking value/status listener still
-    /// leaves the run `Ok` — the unwind drops the delivery, which delivers
-    /// the already-published outcome. `complete`, not `cancel`: both paths
+    /// leaves the run `Ok` — the admitted delivery preserves the
+    /// already-published outcome. `complete`, not `cancel`: both paths
     /// are the run ending on its own terms, never a cancellation.
     fn end_simulation_run(
         &self,
-        mut inner: parking_lot::MutexGuard<'_, AnimationControllerInner>,
+        mut inner: std::cell::RefMut<'_, AnimationControllerInner>,
         value_change: ValueChange,
+        retirement: &mut Retirement,
     ) {
         let retired = RetiredSources {
             simulation: inner.simulation.take().map(Opaque::new),
             curve: None,
             callbacks: SmallVec::new(),
+            value_callbacks: SmallVec::new(),
         };
-        if let Some(ticker) = &mut inner.ticker {
-            ticker.stop();
-        }
         let status = inner.direction.settled_status();
         inner.status = status;
-        let delivery = inner.active_run.take().map(TickerCompleter::complete);
-        self.finish(status, value_change, delivery, retired, inner);
+        let delivery = inner.active_run.take().map(RunCompleter::complete);
+        self.finish_with_retirement(status, value_change, delivery, retired, inner, retirement);
     }
 
     /// Time-based (tween) branch of [`tick_at`](Self::tick_at). Never called
@@ -2005,28 +2038,37 @@ impl AnimationController {
     /// repeat to [`tick_repeat`](Self::tick_repeat) instead.
     fn tick_time_based(
         &self,
-        mut inner: parking_lot::MutexGuard<'_, AnimationControllerInner>,
+        mut inner: std::cell::RefMut<'_, AnimationControllerInner>,
         t: f64,
         value: f64,
+        retirement: &mut Retirement,
     ) {
-        inner.value = value;
-        if t < 1.0 {
-            drop(inner);
-            self.notifier.notify_listeners();
+        if !value.is_finite() {
             return;
         }
-        if let Some(ticker) = &mut inner.ticker {
-            ticker.stop();
+        inner.value = value.clamp(inner.lower_bound, inner.upper_bound);
+        if t < 1.0 {
+            let status = inner.status;
+            self.finish_with_retirement(
+                status,
+                ValueChange::Notify,
+                None,
+                RetiredSources::new(),
+                inner,
+                retirement,
+            );
+            return;
         }
         let status = inner.direction.settled_status();
         inner.status = status;
-        let delivery = inner.active_run.take().map(TickerCompleter::complete);
-        self.finish(
+        let delivery = inner.active_run.take().map(RunCompleter::complete);
+        self.finish_with_retirement(
             status,
             ValueChange::Notify,
             delivery,
             RetiredSources::new(),
             inner,
+            retirement,
         );
     }
 
@@ -2049,17 +2091,48 @@ impl AnimationController {
     /// [`AnimationControllerInner::repeat_leg`]/`repeat_landing`/
     /// `repeat_sample` are the only place the leg/landing/phase parity math
     /// lives; this function calls them instead of hand-copying it.
+    fn finish_repeat(
+        &self,
+        mut inner: std::cell::RefMut<'_, AnimationControllerInner>,
+        run: &RepeatRun,
+        count: u32,
+        recovery: &mut Retirement,
+    ) {
+        let (value, direction) = AnimationControllerInner::repeat_landing(
+            run.reverse,
+            run.min,
+            run.max,
+            u128::from(count.saturating_sub(1)),
+        );
+        inner.value = value;
+        inner.start_value = value;
+        inner.target_value = value;
+        inner.direction = direction;
+        inner.repeat = None;
+        let status = direction.settled_status();
+        inner.status = status;
+        let delivery = inner.active_run.take().map(RunCompleter::complete);
+        self.finish_with_retirement(
+            status,
+            ValueChange::Notify,
+            delivery,
+            RetiredSources::new(),
+            inner,
+            recovery,
+        );
+    }
+
     fn tick_repeat(
         &self,
-        mut inner: parking_lot::MutexGuard<'_, AnimationControllerInner>,
+        mut inner: std::cell::RefMut<'_, AnimationControllerInner>,
         run: RepeatRun,
         cycle: f64,
+        retirement: &mut Retirement,
     ) {
         // `tick_at` already clamps `cycle` to `.max(0.0)`, and NaN cannot
         // reach it (`f64::max` returns the non-NaN operand), so the only
         // remaining failure is `Err` on an out-of-range `cycle` (e.g.
-        // `f64::INFINITY`, or `raw_elapsed_secs / time_dilation` overflowing
-        // under an extreme dilation). That must saturate the SAME direction
+        // rounding `Duration::MAX` past its admitted range). That must saturate the SAME direction
         // real time does — to a very large elapsed time, not to zero: a
         // zero-rewind would let a pathological input never exhaust a finite
         // repeat while `forward()` on the same input completes normally.
@@ -2079,30 +2152,7 @@ impl AnimationController {
         if let Some(count) = run.count
             && total_ns >= u128::from(count) * run.period_ns
         {
-            let (value, direction) = AnimationControllerInner::repeat_landing(
-                run.reverse,
-                run.min,
-                run.max,
-                u128::from(count.saturating_sub(1)),
-            );
-            inner.value = value;
-            inner.start_value = value;
-            inner.target_value = value;
-            inner.direction = direction;
-            if let Some(ticker) = &mut inner.ticker {
-                ticker.stop();
-            }
-            inner.repeat = None;
-            let status = direction.settled_status();
-            inner.status = status;
-            let delivery = inner.active_run.take().map(TickerCompleter::complete);
-            self.finish(
-                status,
-                ValueChange::Notify,
-                delivery,
-                RetiredSources::new(),
-                inner,
-            );
+            self.finish_repeat(inner, &run, count, retirement);
             return;
         }
 
@@ -2110,7 +2160,7 @@ impl AnimationController {
         inner.direction = sample.direction;
         inner.start_value = sample.start;
         inner.target_value = sample.target;
-        // `take_status_change` dedups repeated same-status writes, so a leg
+        // `enqueue_status_change` dedups repeated same-status writes, so a leg
         // flip fires exactly one status change and an even number of
         // skipped bounce cycles in one long frame fires none. Value
         // listeners fire on every tick, as they do for the time-based and
@@ -2120,12 +2170,13 @@ impl AnimationController {
         inner.value = sample.value;
         let status = sample.direction.running_status();
         inner.status = status;
-        self.finish(
+        self.finish_with_retirement(
             status,
             ValueChange::Notify,
             None,
             RetiredSources::new(),
             inner,
+            retirement,
         );
     }
 
@@ -2141,7 +2192,7 @@ impl AnimationController {
     /// same rule `clamp` already applies to a finite input, made total over
     /// `NaN` (which `clamp` alone propagates unchanged and would otherwise
     /// poison every downstream curve/tween evaluation). On an
-    /// [`unbounded`](Self::unbounded) controller a non-finite input is
+    /// [`unbounded`](crate::AnimationControllerBuilder::unbounded) controller a non-finite input is
     /// instead a FULL no-op: no active run is stopped, no notification
     /// fires, the value stays exactly what it was — a poisoned gesture drag
     /// or a bad computation must not clobber a live fling or snap a
@@ -2150,7 +2201,10 @@ impl AnimationController {
     /// once per frame of a misbehaving caller.
     pub fn set_value(&self, value: f64) {
         let mut retired = RetiredSources::new();
-        let mut inner = self.inner.lock();
+        let mut inner = self.inner.borrow_mut();
+        if inner.disposed {
+            return;
+        }
 
         if !value.is_finite() {
             let should_warn = !inner.non_finite_warned;
@@ -2183,24 +2237,15 @@ impl AnimationController {
         self.finish(status, ValueChange::Notify, delivery, retired, inner);
     }
 
-    /// **CRITICAL:** Dispose when done to prevent leaks.
-    ///
-    /// Stops the animation and clears resources. Idempotent. Cancels the
-    /// active run's [`TickerFuture`] with
-    /// [`TickerCanceled`](flui_scheduler::ticker::TickerCanceled) —
-    /// delivered with no controller lock held — even though `dispose` itself never
-    /// changes `status` and so fires no status listener (they are already
-    /// cleared by the time delivery runs).
-    pub fn dispose(&self) {
+    /// Close the kernel and cancel its run under the owning lifecycle's recovery.
+    /// The owner withdraws its seat before entering this idempotent drain.
+    pub(crate) fn dispose(&self, retirement: &mut Retirement) {
         let mut retired = RetiredSources::new();
-        let mut inner = self.inner.lock();
+        let mut inner = self.inner.borrow_mut();
         if inner.disposed {
             return;
         }
-        let delivery = inner.active_run.take().map(TickerCompleter::cancel);
-        if let Some(mut ticker) = inner.ticker.take() {
-            ticker.stop();
-        }
+        let delivery = inner.active_run.take().map(RunCompleter::cancel);
         inner.clear_run_modes(&mut retired);
         retired.callbacks.extend(
             inner
@@ -2209,13 +2254,35 @@ impl AnimationController {
                 .map(|(_, callback)| Opaque::new(callback)),
         );
         inner.disposed = true;
+        retired.value_callbacks.extend(
+            self.notifier
+                .dispose_and_take_listeners()
+                .into_iter()
+                .map(Opaque::new),
+        );
         let status = inner.status;
-        self.finish(status, ValueChange::Unchanged, delivery, retired, inner);
+        self.finish_with_retirement(
+            status,
+            ValueChange::Unchanged,
+            delivery,
+            retired,
+            inner,
+            retirement,
+        );
     }
 
     fn check_disposed(inner: &AnimationControllerInner) -> Result<(), AnimationError> {
         if inner.disposed {
             Err(AnimationError::Disposed)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn check_run_admission(inner: &AnimationControllerInner) -> Result<(), AnimationError> {
+        Self::check_disposed(inner)?;
+        if inner.run_generation == u64::MAX || inner.sample_epoch == u64::MAX {
+            Err(AnimationError::IdentityExhausted)
         } else {
             Ok(())
         }
@@ -2265,11 +2332,10 @@ impl AnimationController {
     /// workspace fling controllers spell `let _ = fling.animate_to_curved(..)`
     /// and friends), so this is the only place the refusal becomes
     /// observable. Call only once the refusal is fully decided and no
-    /// mutation has been applied — it drops the controller's lock before
-    /// warning, mirroring [`warn_if_no_ticker`](Self::warn_if_no_ticker), so
-    /// the warning's arbitrary subscriber never runs under it.
+    /// mutation has been applied — it releases the controller's borrow before
+    /// warning, so an arbitrary subscriber can reenter the controller.
     fn warn_non_finite_target(
-        inner: parking_lot::MutexGuard<'_, AnimationControllerInner>,
+        inner: std::cell::RefMut<'_, AnimationControllerInner>,
         err: AnimationError,
     ) -> AnimationError {
         drop(inner);
@@ -2288,72 +2354,56 @@ impl AnimationController {
     /// `AnimationSwitch::dispose` must detach both of the listeners it attached.
     #[cfg(test)]
     pub(crate) fn debug_status_listener_count(&self) -> usize {
-        self.inner.lock().status_listeners.len()
+        self.inner.borrow_mut().status_listeners.len()
     }
 
-    /// Reset run state and (re)start the ticker for a fresh run from epoch 0.
-    ///
-    /// Returns `false` iff this controller has no ticker at all — the
-    /// caller must warn (and only after it has dropped the controller
-    /// lock). This function itself never emits, and every run-starting site
-    /// calls it **before** creating this run's [`TickerCompleter`] and
-    /// displacing the previous one — so no `TickerDelivery` is ever live
-    /// while this runs. That ordering is load-bearing, not incidental:
-    /// `Ticker::start` reaches the scheduler's `schedule_tick_if_active` →
-    /// `request_frame` → the embedder's `on_frame_scheduled` hook, which
-    /// *is* foreign code running under this guard (unavoidably — it always
-    /// has been, since `Ticker::start` was first called under the
-    /// controller's lock). What this ordering removes is only "and a live
-    /// delivery drops under the lock if that foreign code panics" — not the
-    /// foreign call itself. `replace`/`.map(TickerCompleter::cancel)` at
-    /// every call site touch only `active_run`; this function touches only
-    /// `last_raw_elapsed_secs`/`run_generation`/`ticker` — disjoint fields,
-    /// so reordering the two calls is free.
-    #[must_use]
-    fn restart_ticker(&self, inner: &mut AnimationControllerInner) -> bool {
-        inner.last_raw_elapsed_secs = 0.0;
-        // A fresh run's `t = 0` is established here — bump the generation so an
-        // external frame driver re-anchors its per-run epoch (see
-        // [`run_generation`](Self::run_generation)). `restart_ticker` is the
-        // single chokepoint every run-start path funnels through.
-        inner.run_generation = inner.run_generation.wrapping_add(1);
-        let Some(ticker) = &mut inner.ticker else {
-            return false;
-        };
-        // Restart-safe: `Ticker::start` refuses a start while a run is
-        // already installed and silently drops the callback instead, so
-        // a live run must be ended here or the restart is silently
-        // dropped. `is_running()`, not `can_tick()`: a Muted ticker still
-        // holds its run, so the narrower Active-only test skipped the
-        // stop and left the animation stuck.
-        //
-        // The guard stays rather than stopping unconditionally: `stop()` is
-        // NOT a no-op on an Idle or Stopped ticker — it clears the callback
-        // slot — and the start below is the only thing that reinstalls one.
-        // Narrowing the stop to runs that actually exist keeps that
-        // coupling out of the picture.
-        if ticker.state().is_running() {
-            ticker.stop();
-        }
-        let controller = self.clone();
-        ticker.start(move |elapsed| controller.tick_at(elapsed));
-        true
+    /// Establish a fresh run epoch before publishing its callbacks.
+    fn begin_run(inner: &mut AnimationControllerInner) {
+        inner.last_elapsed = Duration::ZERO;
+        inner.local_elapsed = Duration::ZERO;
+        inner.rate_epoch_elapsed = Duration::ZERO;
+        inner.rate_epoch_local = Duration::ZERO;
+        inner.run_generation = inner
+            .run_generation
+            .checked_add(1)
+            .expect("BUG: run admission reserves an available generation");
+        inner.settle_pending = inner.clock_binding == ClockBinding::Missing;
+        inner
+            .pending_delivery
+            .push_back(ControllerDelivery::RequestFrame);
     }
 
-    /// Emits the "no ticker" warning `restart_ticker` cannot emit itself —
-    /// call only after `finish` has unlocked and delivered, never while
-    /// this controller's own lock is still held.
-    fn warn_if_no_ticker(has_ticker: bool) {
-        if !has_ticker {
-            tracing::warn!("AnimationController has no ticker; the animation will not advance");
+    fn retire_value_callbacks(
+        &self,
+        callbacks: impl IntoIterator<
+            Item = Rc<flui_foundation::notifier_generic::NotificationCallback<()>>,
+        >,
+    ) {
+        let mut retired = RetiredSources::new();
+        retired
+            .value_callbacks
+            .extend(callbacks.into_iter().map(Opaque::new));
+        if retired.value_callbacks.is_empty() {
+            return;
         }
+        let mut inner = self.inner.borrow_mut();
+        if inner.delivering {
+            inner
+                .pending_delivery
+                .push_back(ControllerDelivery::Retire(retired));
+            return;
+        }
+        drop(inner);
+        let mut retirement = Retirement::new();
+        retirement.retire(retired);
+        retirement.finish();
     }
 
     /// Emits the "received a non-finite value" warning shared by
     /// [`set_value`](Self::set_value)'s canonicalization and
     /// [`tick_simulation`](Self::tick_simulation)'s mid-run non-finite
-    /// sample — call only after `finish` has unlocked and delivered, for
-    /// the same reason as [`warn_if_no_ticker`](Self::warn_if_no_ticker).
+    /// sample — call only after `finish` has released its borrow and delivered,
+    /// so an arbitrary subscriber can reenter the controller.
     /// `should_warn` is the caller's snapshot of the latch
     /// (`!non_finite_warned`, taken before setting it) — this fires at most
     /// once per controller, not once per frame of a poisoned gesture drag
@@ -2368,62 +2418,156 @@ impl AnimationController {
         }
     }
 
-    /// Fire status callbacks. MUST be called with no controller lock held.
-    fn fire_status(callbacks: &[Opaque<StatusCallback>], status: AnimationStatus) {
-        for cb in callbacks {
-            cb.get()(status);
+    /// The outermost caller drains accepted work; reentry only appends to it.
+    fn drain_delivery(&self, retirement: &mut Retirement) {
+        let mut settled = false;
+        loop {
+            let delivery = {
+                let mut inner = self.inner.borrow_mut();
+                if settled
+                    && matches!(
+                        inner.pending_delivery.front(),
+                        Some(ControllerDelivery::SettleRun(_))
+                    )
+                {
+                    inner.delivering = false;
+                    return;
+                }
+                let Some(delivery) = inner.pending_delivery.pop_front() else {
+                    inner.delivering = false;
+                    return;
+                };
+                delivery
+            };
+            match delivery {
+                ControllerDelivery::RequestFrame => {
+                    if self.walk_probe().live_running {
+                        let routes = self.inner.borrow().frame_routes.clone();
+                        for route in routes {
+                            route.request_frame(retirement);
+                        }
+                    }
+                }
+                ControllerDelivery::SettleRun(generation) => {
+                    retirement.run_with(|retirement| {
+                        settled |= self.settle_run(generation, retirement);
+                    });
+                }
+                ControllerDelivery::Status(status, listeners) => {
+                    for (id, callback) in &listeners {
+                        let live = {
+                            let inner = self.inner.borrow_mut();
+                            !inner.disposed
+                                && inner
+                                    .status_listeners
+                                    .iter()
+                                    .any(|(candidate, _)| candidate == id)
+                        };
+                        if live {
+                            retirement.run_with(|recovery| callback.get().invoke(status, recovery));
+                        }
+                    }
+                    for (_, callback) in listeners {
+                        retirement.retire(callback);
+                    }
+                }
+                ControllerDelivery::Run(delivery) => {
+                    let retain = retirement.has_failure();
+                    retirement.run(|| {
+                        let delivery = delivery.into_inner();
+                        if retain {
+                            delivery.deliver_after_failure();
+                        } else {
+                            delivery.deliver();
+                        }
+                    });
+                }
+                ControllerDelivery::Retire(retired) => retirement.retire(retired),
+            }
         }
     }
 
-    /// The single chokepoint for the unlock-then-fan-out sequence every
-    /// run-ending or run-starting site needs: drop the controller lock,
-    /// notify value listeners iff `value_change` says the value changed too
-    /// (a run-start changes status but not value; a settle/tick changes
-    /// both), fire status listeners for `status`, and — last — deliver a
-    /// resolved or displaced run's [`TickerDelivery`] if one is pending.
-    ///
-    /// `TickerDelivery::deliver` is called from nowhere else in this file:
-    /// every site that obtains one from [`TickerCompleter::complete`]/
-    /// [`cancel`](TickerCompleter::cancel) hands it here instead of
-    /// delivering it itself. Status fires BEFORE delivery:
-    /// a new run's status is observable before the run it displaced reports
-    /// its own cancellation, matching the order a caller sees them settle.
-    ///
-    /// `delivery` is declared before `inner` on purpose: parameters drop in
-    /// reverse declaration order, so if a panic unwinds from between
-    /// `take_status_change()` and the explicit `drop(inner)` below,
-    /// `inner`'s guard is still released before `delivery` — a delivery
-    /// dropped here always runs its fan-out with the controller lock free.
-    /// The six run-start callers run `restart_ticker` (which runs the
-    /// scheduler's `on_frame_scheduled` hook — genuinely foreign code, under
-    /// the guard, same as it always was) *before* creating this run's
-    /// completer, so no delivery is ever live across that call either; see
-    /// `restart_ticker`'s own doc. The run-ending callers (`stop`, `reset`,
-    /// `set_value`, `dispose`, the tick paths) never call it.
+    /// Commit status, run delivery and outgoing custody before unlocking.
+    /// The outermost finish owns the FIFO drain, including work admitted by
+    /// value listeners, status listeners, continuations and destructors.
+    /// Status precedes the corresponding run delivery (ADR-0064); accepted
+    /// transitions do not coalesce. A caught failure does not discard the tail
+    /// or change a published run outcome. Retirement resumes the first failure
+    /// only after the queue is empty and the delivery latch is released.
     fn finish(
         &self,
         status: AnimationStatus,
         value_change: ValueChange,
-        delivery: Option<TickerDelivery>,
+        delivery: Option<RunDelivery>,
         retired: RetiredSources,
-        mut inner: parking_lot::MutexGuard<'_, AnimationControllerInner>,
+        inner: std::cell::RefMut<'_, AnimationControllerInner>,
     ) {
-        let callbacks = inner.take_status_change();
+        let mut retirement = Retirement::new();
+        self.finish_with_retirement(
+            status,
+            value_change,
+            delivery,
+            retired,
+            inner,
+            &mut retirement,
+        );
+        retirement.finish();
+    }
+
+    fn finish_with_retirement(
+        &self,
+        status: AnimationStatus,
+        value_change: ValueChange,
+        delivery: Option<RunDelivery>,
+        retired: RetiredSources,
+        mut inner: std::cell::RefMut<'_, AnimationControllerInner>,
+        retirement: &mut Retirement,
+    ) {
+        inner.enqueue_status_change(status);
+        if let Some(delivery) = delivery {
+            inner
+                .pending_delivery
+                .push_back(ControllerDelivery::Run(Terminal::new(delivery)));
+        }
+        inner
+            .pending_delivery
+            .push_back(ControllerDelivery::Retire(retired));
+        if inner.settle_pending {
+            inner.settle_pending = false;
+            let generation = inner.run_generation;
+            inner
+                .pending_delivery
+                .push_back(ControllerDelivery::SettleRun(generation));
+        }
+        let drain = !inner.delivering;
+        inner.delivering = true;
         drop(inner);
         if value_change == ValueChange::Notify {
-            self.notifier.notify_listeners();
+            retirement
+                .run_with(|retirement| self.notifier.notify_listeners_with_recovery(retirement));
         }
-        if let Some(callbacks) = callbacks {
-            Self::fire_status(&callbacks, status);
+        if drain {
+            self.drain_delivery(retirement);
         }
-        if let Some(delivery) = delivery {
-            delivery.deliver();
-        }
-        drop(retired);
     }
 }
 
 impl AnimationControllerInner {
+    fn tick_source(&self) -> TickSource {
+        if let Some(run) = self.repeat {
+            TickSource::Repeat(run)
+        } else if let Some(simulation) = &self.simulation {
+            TickSource::Simulation(simulation.clone())
+        } else {
+            TickSource::Time {
+                curve: self.run_curve.as_ref().map(Rc::clone),
+                duration: self.current_duration(),
+                start: self.start_value,
+                target: self.target_value,
+            }
+        }
+    }
+
     fn matches_sample(&self, identity: &SampleIdentity) -> bool {
         !self.disposed
             && self.active_run.is_some()
@@ -2450,33 +2594,30 @@ impl AnimationControllerInner {
     /// This is the raw halt that `set_value` performs first; it does not
     /// recompute status (the caller does that separately).
     ///
-    /// The returned [`TickerDelivery`] must be handed to
+    /// The returned [`RunDelivery`] must be handed to
     /// [`AnimationController::finish`]; nothing else in this file may call
     /// `deliver()` on it.
-    #[must_use = "a displaced run's TickerDelivery must reach AnimationController::finish"]
-    fn stop_running(&mut self, retired: &mut RetiredSources) -> Option<TickerDelivery> {
+    #[must_use = "a displaced run's RunDelivery must reach AnimationController::finish"]
+    fn stop_running(&mut self, retired: &mut RetiredSources) -> Option<RunDelivery> {
         self.clear_run_modes(retired);
-        if let Some(ticker) = &mut self.ticker {
-            ticker.stop();
-        }
-        self.active_run.take().map(TickerCompleter::cancel)
+        self.active_run.take().map(RunCompleter::cancel)
     }
 
-    /// Snapshot the callbacks to fire **iff** `self.status` differs from the
-    /// last-reported status, updating the marker so a later same-status
-    /// emission is suppressed. Every status-emission site in this file
-    /// funnels through this seam.
-    fn take_status_change(&mut self) -> Option<SmallVec<[Opaque<StatusCallback>; 4]>> {
-        if self.status == self.last_reported_status {
-            return None;
+    /// Admit each distinct committed status with its subscription snapshot.
+    /// Equal adjacent commits are silent; returning to an earlier status after
+    /// an intervening transition still admits that transition.
+    fn enqueue_status_change(&mut self, status: AnimationStatus) {
+        if self.disposed || status == self.last_committed_status {
+            return;
         }
-        self.last_reported_status = self.status;
-        Some(
-            self.status_listeners
-                .iter()
-                .map(|(_, cb)| Opaque::new(Arc::clone(cb)))
-                .collect(),
-        )
+        self.last_committed_status = status;
+        let listeners = self
+            .status_listeners
+            .iter()
+            .map(|(id, callback)| (*id, Terminal::new(callback.clone())))
+            .collect();
+        self.pending_delivery
+            .push_back(ControllerDelivery::Status(status, listeners));
     }
 
     /// Effective duration for the current run: per-run override, else repeat
@@ -2511,21 +2652,25 @@ impl AnimationControllerInner {
         if !fraction.is_finite() {
             return base;
         }
-        base.mul_f64(fraction)
+        // The float representation of Duration::MAX rounds beyond its
+        // admitted range. Preserve a full-range duration without conversion.
+        if fraction == 1.0 {
+            base
+        } else {
+            base.mul_f64(fraction)
+        }
     }
 
     /// Dilated elapsed time since the current run started, from the last
     /// observed tick (`restart_ticker` always begins a fresh run at elapsed
     /// zero, so there is no per-run epoch left to subtract).
     fn cycle_elapsed_secs(&self) -> f64 {
-        (self.last_raw_elapsed_secs / time_dilation().max(f64::MIN_POSITIVE)).max(0.0)
+        self.local_elapsed.as_secs_f64()
     }
 
-    /// Whether this controller was built by one of the `unbounded*`
-    /// constructors. Both bounds are fixed `+-inf` TOGETHER there — FLUI
-    /// never constructs a half-open pair (one finite, one infinite); see
-    /// [`AnimationController::with_bounds_inner`]'s own doc — so checking
-    /// `lower_bound` alone detects it.
+    /// Unbounded builders store both infinite bounds; a validated value range
+    /// stores two finite endpoints. Checking `lower_bound` alone distinguishes
+    /// those configurations because a half-open pair cannot be constructed.
     fn is_unbounded(&self) -> bool {
         !self.lower_bound.is_finite()
     }
@@ -2534,7 +2679,7 @@ impl AnimationControllerInner {
     ///
     /// Uses exact equality for infinite bounds to avoid the `INFINITY - INFINITY = NaN`
     /// pitfall that breaks the epsilon comparison on an
-    /// [`unbounded`](AnimationController::unbounded)-family controller,
+    /// [`unbounded`](crate::AnimationControllerBuilder::unbounded) controller,
     /// whose bounds are fixed at `(NEG_INFINITY, INFINITY)`.
     fn is_at_upper_bound(&self) -> bool {
         self.value == self.upper_bound
@@ -2682,69 +2827,152 @@ impl AnimationDirection {
 impl Animation<f64> for AnimationController {
     #[inline]
     fn value(&self) -> f64 {
-        self.inner.lock().value
+        self.inner.borrow_mut().value
     }
 
     #[inline]
     fn status(&self) -> AnimationStatus {
-        self.inner.lock().status
+        self.inner.borrow_mut().status
     }
 
     fn add_status_listener(&self, callback: StatusCallback) -> ListenerId {
+        self.register_status_listener(StatusListener::User(callback))
+    }
+
+    fn add_status_observer(&self, observer: StatusObserver) -> ListenerId {
+        self.register_status_listener(StatusListener::Relay(observer))
+    }
+
+    fn remove_status_listener(&self, id: ListenerId) {
+        self.unregister_status_listener(id);
+    }
+
+    /// Whether the controller is currently driving a run.
+    #[inline]
+    fn is_animating(&self) -> bool {
+        let inner = self.inner.borrow();
+        !inner.disposed && inner.active_run.is_some()
+    }
+}
+
+impl AnimationController {
+    fn register_status_listener(&self, callback: StatusListener) -> ListenerId {
         let mut callback = Opaque::new(callback);
-        let mut inner = self.inner.lock();
+        let mut inner = self.inner.borrow_mut();
         let id = ListenerId::new(inner.next_listener_id);
-        inner.next_listener_id += 1;
+        inner.next_listener_id = inner
+            .next_listener_id
+            .checked_add(1)
+            .expect("BUG: listener identities exhausted");
+        if inner.disposed {
+            if inner.delivering {
+                let mut retired = RetiredSources::new();
+                retired.callbacks.push(callback);
+                inner
+                    .pending_delivery
+                    .push_back(ControllerDelivery::Retire(retired));
+            } else {
+                drop(inner);
+                drop(callback);
+            }
+            return id;
+        }
         inner.status_listeners.push((id, callback.take()));
         id
     }
 
-    fn remove_status_listener(&self, id: ListenerId) {
-        let retired;
+    fn unregister_status_listener(&self, id: ListenerId) {
+        let mut retired;
         {
-            let mut inner = self.inner.lock();
+            let mut inner = self.inner.borrow_mut();
             retired = inner
                 .status_listeners
                 .iter()
                 .position(|(candidate, _)| *candidate == id)
                 .map(|index| Opaque::new(inner.status_listeners.remove(index).1));
+            if inner.delivering
+                && let Some(callback) = retired.take()
+            {
+                let mut sources = RetiredSources::new();
+                sources.callbacks.push(callback);
+                inner
+                    .pending_delivery
+                    .push_back(ControllerDelivery::Retire(sources));
+            }
         }
         drop(retired);
-    }
-
-    /// Whether the controller is currently driving a run.
-    ///
-    /// This is ticker-based, not status-based. `set_value` at an interior
-    /// value reports a directional status while the controller is stopped,
-    /// so the trait's status-derived default would wrongly report `true`
-    /// there. A muted ticker still counts as animating.
-    #[inline]
-    fn is_animating(&self) -> bool {
-        self.inner
-            .lock()
-            .ticker
-            .as_ref()
-            .is_some_and(Ticker::is_running)
     }
 }
 
 impl Listenable for AnimationController {
+    fn add_observer(&self, observer: flui_foundation::notifier::ListenerObserver) -> ListenerId {
+        let mut inner = self.inner.borrow_mut();
+        if inner.disposed {
+            let id = ListenerId::new(inner.next_listener_id);
+            inner.next_listener_id = inner
+                .next_listener_id
+                .checked_add(1)
+                .expect("BUG: listener identities exhausted");
+            let mut retired = RetiredSources::new();
+            retired.value_callbacks.push(Opaque::new(
+                flui_foundation::notifier_generic::NotificationCallback::relay(Rc::new(
+                    move |(): &(), recovery| observer(recovery),
+                )),
+            ));
+            if inner.delivering {
+                inner
+                    .pending_delivery
+                    .push_back(ControllerDelivery::Retire(retired));
+                return id;
+            }
+            drop(inner);
+            drop(retired);
+            return id;
+        }
+        drop(inner);
+        self.notifier.add_observer(observer)
+    }
     fn add_listener(&self, callback: ListenerCallback) -> ListenerId {
+        let mut inner = self.inner.borrow_mut();
+        if inner.disposed {
+            let id = ListenerId::new(inner.next_listener_id);
+            inner.next_listener_id = inner
+                .next_listener_id
+                .checked_add(1)
+                .expect("BUG: listener identities exhausted");
+            let mut retired = RetiredSources::new();
+            retired.value_callbacks.push(Opaque::new(
+                flui_foundation::notifier_generic::NotificationCallback::user(Rc::new(
+                    move |(): &()| callback(),
+                )),
+            ));
+            if inner.delivering {
+                inner
+                    .pending_delivery
+                    .push_back(ControllerDelivery::Retire(retired));
+                return id;
+            }
+            drop(inner);
+            drop(retired);
+            return id;
+        }
+        drop(inner);
         self.notifier.add_listener(callback)
     }
 
     fn remove_listener(&self, id: ListenerId) {
-        self.notifier.remove_listener(id);
+        let callback = self.notifier.take_listener(id);
+        self.retire_value_callbacks(callback);
     }
 
     fn remove_all_listeners(&self) {
-        self.notifier.remove_all_listeners();
+        self.retire_value_callbacks(self.notifier.take_listeners());
     }
 }
 
 impl fmt::Debug for AnimationController {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let inner = self.inner.lock();
+        let inner = self.inner.borrow_mut();
         f.debug_struct("AnimationController")
             .field("value", &inner.value)
             .field("status", &inner.status)

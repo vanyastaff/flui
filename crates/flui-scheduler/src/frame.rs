@@ -20,10 +20,8 @@
 
 use std::{
     fmt,
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
+    rc::Rc,
+    sync::atomic::{AtomicUsize, Ordering},
 };
 
 #[cfg(feature = "serde")]
@@ -709,7 +707,7 @@ impl Default for FrameTiming {
 /// These are one-time callbacks that fire during the animation phase.
 /// Animation tickers use this to receive the vsync timestamp.
 /// Receives the vsync timestamp for synchronized timing.
-pub type OneShotFrameCallback = Box<dyn FnOnce(Instant) + Send>;
+pub type OneShotFrameCallback = Box<dyn FnOnce(Instant)>;
 
 /// Recurring frame callback (runs every frame)
 ///
@@ -717,13 +715,13 @@ pub type OneShotFrameCallback = Box<dyn FnOnce(Instant) + Send>;
 /// The rendering pipeline (build/layout/paint) registers here.
 /// Uses Arc for cheap cloning - recurring callbacks are cloned before execution
 /// to avoid holding locks during callback invocation.
-pub type RecurringFrameCallback = Arc<dyn Fn(&FrameTiming) + Send + Sync>;
+pub type RecurringFrameCallback = Rc<dyn Fn(&FrameTiming)>;
 
 /// Post-frame callback - executed after frame completes
 ///
 /// These run during the PostFrameCallbacks phase, after rendering is complete.
 /// Use for cleanup, analytics, or scheduling the next frame.
-pub type PostFrameCallback = Box<dyn FnOnce(&FrameTiming) + Send>;
+pub type PostFrameCallback = Box<dyn FnOnce(&FrameTiming)>;
 
 /// Builder for creating frame timing with custom configuration
 #[derive(Debug, Clone)]

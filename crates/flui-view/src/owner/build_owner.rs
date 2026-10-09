@@ -569,10 +569,9 @@ pub struct BuildOwner {
     pub(crate) post_frame_handle: Option<flui_scheduler::PostFrameHandle>,
 
     /// The binding's OWNER-LOCAL post-frame capability — see
-    /// `LifecycleContext::local_post_frame_handle`'s doc for why this is a
+    /// `LifecycleContext::post_frame_handle`'s doc for why this is a
     /// separate handle rather than a second field on `PostFrameHandle`
     /// itself. `None` under the same conditions as `post_frame_handle`.
-    pub(crate) local_post_frame_handle: Option<flui_scheduler::LocalPostFrameHandle>,
 
     /// The binding's IME/text-input attach-detach capability. `None` when no
     /// binding installed one, which makes `LifecycleContext::text_input_handle`
@@ -757,7 +756,6 @@ impl BuildOwner {
             lifecycle_handle: None,
             async_driver: None,
             post_frame_handle: None,
-            local_post_frame_handle: None,
             text_input_handle: None,
             clipboard_handle: None,
             storage: None,
@@ -820,15 +818,6 @@ impl BuildOwner {
     /// any more.
     pub fn set_post_frame_handle(&mut self, handle: flui_scheduler::PostFrameHandle) {
         self.post_frame_handle = Some(handle);
-    }
-
-    /// Install the binding's owner-local post-frame capability.
-    ///
-    /// Called once, at wiring time, alongside [`Self::set_post_frame_handle`] —
-    /// same binding, same underlying scheduler, but a handle that can capture
-    /// `Rc`/`RefCell` state because it addresses its lane directly.
-    pub fn set_local_post_frame_handle(&mut self, handle: flui_scheduler::LocalPostFrameHandle) {
-        self.local_post_frame_handle = Some(handle);
     }
 
     /// Install the binding's IME/text-input attach-detach capability.
@@ -954,12 +943,6 @@ impl BuildOwner {
     #[must_use]
     pub fn post_frame_handle(&self) -> Option<&flui_scheduler::PostFrameHandle> {
         self.post_frame_handle.as_ref()
-    }
-
-    /// The binding's owner-local post-frame capability, if one was installed.
-    #[must_use]
-    pub fn local_post_frame_handle(&self) -> Option<&flui_scheduler::LocalPostFrameHandle> {
-        self.local_post_frame_handle.as_ref()
     }
 
     /// This owner's fresh-hit-test capability, if a presentation installed one.
@@ -1274,7 +1257,6 @@ impl BuildOwner {
             lifecycle_handle: &self.lifecycle_handle,
             async_driver: &self.async_driver,
             post_frame_handle: &self.post_frame_handle,
-            local_post_frame_handle: &self.local_post_frame_handle,
             text_input_handle: &self.text_input_handle,
             clipboard_handle: &self.clipboard_handle,
             storage: &self.storage,
@@ -1808,7 +1790,6 @@ impl BuildOwner {
                     lifecycle_handle: &self.lifecycle_handle,
                     async_driver: &self.async_driver,
                     post_frame_handle: &self.post_frame_handle,
-                    local_post_frame_handle: &self.local_post_frame_handle,
                     text_input_handle: &self.text_input_handle,
                     clipboard_handle: &self.clipboard_handle,
                     storage: &self.storage,
@@ -2022,7 +2003,6 @@ impl BuildOwner {
                     lifecycle_handle: &self.lifecycle_handle,
                     async_driver: &self.async_driver,
                     post_frame_handle: &self.post_frame_handle,
-                    local_post_frame_handle: &self.local_post_frame_handle,
                     text_input_handle: &self.text_input_handle,
                     clipboard_handle: &self.clipboard_handle,
                     storage: &self.storage,
@@ -2449,7 +2429,6 @@ impl BuildOwner {
                 lifecycle_handle: &self.lifecycle_handle,
                 async_driver: &self.async_driver,
                 post_frame_handle: &self.post_frame_handle,
-                local_post_frame_handle: &self.local_post_frame_handle,
                 text_input_handle: &self.text_input_handle,
                 clipboard_handle: &self.clipboard_handle,
                 storage: &self.storage,
@@ -2658,7 +2637,6 @@ impl BuildOwner {
             lifecycle_handle: &self.lifecycle_handle,
             async_driver: &self.async_driver,
             post_frame_handle: &self.post_frame_handle,
-            local_post_frame_handle: &self.local_post_frame_handle,
             text_input_handle: &self.text_input_handle,
             clipboard_handle: &self.clipboard_handle,
             storage: &self.storage,

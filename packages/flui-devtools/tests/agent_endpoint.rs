@@ -436,6 +436,45 @@ fn reads_the_counter_and_taps_it_over_the_endpoint() {
 // The failure table
 // ---------------------------------------------------------------------------
 
+fn motion_op_round_trips_over_the_endpoint() {
+    let address = Address::new();
+    let mut owner = Owner::new(AgentServer::new(address.endpoint()));
+    let at = address.address;
+    owner.drive(move |owner| {
+        let mut client = Client::hello(&at);
+        let window = client.only_window();
+        let paused = client.call(
+            "motion",
+            json!({ "window": window, "request": { "rate": 0.0 } }),
+        );
+        assert_eq!(paused["result"]["rate"], 0.0, "{paused}");
+        let start = paused["result"]["time_ms"]
+            .as_f64()
+            .expect("animation time");
+        let stepped = client.call(
+            "motion",
+            json!({ "window": window, "request": { "step_ms": 100 } }),
+        );
+        assert_eq!(stepped["result"]["rate"], 0.0, "{stepped}");
+        assert!(
+            (stepped["result"]["time_ms"].as_f64().expect("time") - start - 100.0).abs() < 1e-9
+        );
+        let refused = client.call(
+            "motion",
+            json!({ "window": window, "request": { "rate": -1.0, "step_ms": 500 } }),
+        );
+        assert_eq!(refused["error"]["code"], "invalid_argument", "{refused}");
+        let observed = client.call("motion", json!({ "window": window }));
+        assert_eq!(
+            observed["result"], stepped["result"],
+            "a refused combined request changes neither field"
+        );
+        owner.ask(Command::CloseWindow);
+        let closed = client.call("motion", json!({ "window": window }));
+        assert_eq!(closed["error"]["code"], "gone", "{closed}");
+    });
+}
+
 fn a_connection_without_the_right_token_is_closed_unread() {
     let address = Address::new();
     let endpoint = address
@@ -834,6 +873,10 @@ fn run_cases(cases: &[(&str, fn())]) {
 #[test]
 fn the_endpoint_contains_every_failure() {
     run_cases(&[
+        (
+            "motion_op_round_trips_over_the_endpoint",
+            motion_op_round_trips_over_the_endpoint,
+        ),
         (
             "a_connection_without_the_right_token_is_closed_unread",
             a_connection_without_the_right_token_is_closed_unread,

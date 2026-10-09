@@ -32,7 +32,6 @@
 //! — direct tracking, not interpolation — while still restarting the
 //! controller from `t = 0` for bookkeeping.
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use flui_foundation::Single;
@@ -108,7 +107,7 @@ impl RenderAnimatedSize {
         alignment: Alignment,
         clip_behavior: Clip,
     ) -> Self {
-        let parent: Arc<dyn Animation<f64>> = Arc::new(controller.clone());
+        let parent: std::rc::Rc<dyn Animation<f64>> = std::rc::Rc::new(controller.clone());
         let animation = CurvedAnimation::new(parent, curve.clone());
         Self {
             inner: AligningShiftedBox::new(alignment),
@@ -163,7 +162,7 @@ impl RenderAnimatedSize {
         if self.curve == curve {
             return flui_rendering::RenderUpdateImpact::NONE;
         }
-        let parent: Arc<dyn Animation<f64>> = Arc::new(self.controller.clone());
+        let parent: std::rc::Rc<dyn Animation<f64>> = std::rc::Rc::new(self.controller.clone());
         self.animation = CurvedAnimation::new(parent, curve.clone());
         self.curve = curve;
         flui_rendering::RenderUpdateImpact::LAYOUT
@@ -437,7 +436,7 @@ impl RenderBox for RenderAnimatedSize {
 
     fn attach(&mut self, handle: RenderInvalidationHandle) {
         let mark_handle = handle.clone();
-        self.listener_id = Some(self.controller.add_listener(Arc::new(move || {
+        self.listener_id = Some(self.controller.add_listener(std::rc::Rc::new(move || {
             let _ = mark_handle.mark_needs_layout();
         })));
 

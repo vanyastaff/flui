@@ -4,8 +4,6 @@
 //! AnimatedViews provide automatic subscription to Animation/Listenable
 //! changes, eliminating boilerplate code for animated widgets.
 
-use std::sync::Arc;
-
 use flui_foundation::Listenable;
 
 use super::stateful::StatefulView;
@@ -21,21 +19,21 @@ use super::stateful::StatefulView;
 /// ```rust,ignore
 /// use flui_view::{AnimatedView, ViewState, BuildContext, IntoView};
 /// use flui_animation::Animation;
-/// use std::sync::Arc;
+/// use std::rc::Rc;
 ///
 /// #[derive(Clone)]
 /// struct FadeTransition {
-///     opacity: Arc<dyn Animation<f64>>,
+///     opacity: Rc<dyn Animation<f64>>,
 ///     child: Box<dyn View>,
 /// }
 ///
 /// impl AnimatedView for FadeTransition {
 ///     type State = FadeTransitionState;
 ///
-///     fn listenable(&self) -> Arc<dyn Listenable> {
+///     fn listenable(&self) -> Rc<dyn Listenable> {
 ///         // Return the animation as a Listenable
 ///         // (Animation<T> extends Listenable)
-///         self.opacity.clone() as Arc<dyn Listenable>
+///         self.opacity.clone() as Rc<dyn Listenable>
 ///     }
 ///
 ///     fn create_state(&self) -> Self::State {
@@ -66,7 +64,7 @@ pub trait AnimatedView: StatefulView {
     /// # Returns
     ///
     /// A Listenable that should trigger rebuilds when it changes.
-    fn listenable(&self) -> Arc<dyn Listenable>;
+    fn listenable(&self) -> std::rc::Rc<dyn Listenable>;
 }
 
 /// Implement View for an AnimatedView type.

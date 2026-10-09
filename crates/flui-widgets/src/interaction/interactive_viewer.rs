@@ -52,7 +52,7 @@ use std::sync::{
 use std::time::Duration;
 
 use flui_animation::{
-    Animation, AnimationController, FrictionSimulation, Tolerance, Vsync, VsyncRegistration,
+    Animation, AnimationController, DrivenController, FrictionSimulation, Tolerance,
 };
 use flui_foundation::geometry::Axis;
 use flui_foundation::geometry::Matrix4;
@@ -431,6 +431,10 @@ impl StatefulView for InteractiveViewer {
     type State = InteractiveViewerState;
 
     fn create_state(&self) -> Self::State {
+        let controller = AnimationController::builder(Duration::from_millis(1))
+            .unbounded()
+            .build_on(None);
+        let fling = Rc::new(FocalFling::new(controller.controller().clone()));
         InteractiveViewerState {
             subtree_anchor: SubtreeAnchor::new(),
             gesture: Rc::new(GestureTracking {
@@ -441,9 +445,8 @@ impl StatefulView for InteractiveViewer {
             }),
             pipeline_cell: None,
             writer: None,
-            fling: Rc::new(FocalFling::new()),
-            vsync: None,
-            vsync_registration: None,
+            fling,
+            controller,
         }
     }
 }
@@ -475,16 +478,14 @@ struct FocalFling {
     controller: AnimationController,
     listener: RefCell<Option<(ListenerId, Arc<AtomicBool>)>>,
     closed: Cell<bool>,
-    enabled: Cell<bool>,
 }
 
 impl FocalFling {
-    fn new() -> Self {
+    fn new(controller: AnimationController) -> Self {
         Self {
-            controller: AnimationController::unbounded_without_ticker(Duration::from_millis(1)),
+            controller,
             listener: RefCell::new(None),
             closed: Cell::new(false),
-            enabled: Cell::new(false),
         }
     }
 
@@ -506,7 +507,7 @@ impl FocalFling {
     ) {
         self.stop();
         let speed = velocity.dx.hypot(velocity.dy);
-        if self.closed.get() || !self.enabled.get() || !speed.is_finite() || speed <= 0.0 {
+        if self.closed.get() || !speed.is_finite() || speed <= 0.0 {
             return;
         }
         // Ten percent of the release speed remains after one second. The
@@ -519,7 +520,7 @@ impl FocalFling {
         let live = Arc::new(AtomicBool::new(true));
         let callback_live = live.clone();
         let animation = self.controller.clone();
-        let id = self.controller.add_listener(Arc::new(move || {
+        let id = self.controller.add_listener(std::rc::Rc::new(move || {
             if !callback_live.load(Ordering::Acquire) {
                 return;
             }
@@ -542,7 +543,6 @@ impl FocalFling {
     fn close(&self) {
         self.closed.set(true);
         self.stop();
-        self.controller.dispose();
     }
 }
 
@@ -563,18 +563,20 @@ pub struct InteractiveViewerState {
     /// `FocusState::init_state` uses for its own pipeline handle.
     pipeline_cell: Option<PipelineCell>,
     fling: Rc<FocalFling>,
-    vsync: Option<Vsync>,
-    vsync_registration: Option<VsyncRegistration>,
+    controller: DrivenController,
 }
 
 impl ViewState<InteractiveViewer> for InteractiveViewerState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.pipeline_cell = ctx.pipeline_owner();
         self.writer = Some(ctx.writer_source());
-        if let Some(vsync) = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone()) {
-            self.vsync_registration = Some(vsync.register(self.fling.controller.clone()));
-            self.vsync = Some(vsync);
-            self.fling.enabled.set(true);
+        self.did_change_dependencies(ctx);
+    }
+
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
+        self.pipeline_cell = ctx.pipeline_owner();
+        if let Err(error) = self.controller.rebind(VsyncScope::maybe_of(ctx).as_ref()) {
+            tracing::error!(%error, "InteractiveViewer lost its frame registry");
         }
     }
 
@@ -585,12 +587,8 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
     }
 
     fn dispose(&mut self) {
-        if let Some(registration) = self.vsync_registration.take()
-            && let Some(vsync) = self.vsync.take()
-        {
-            vsync.unregister(&registration);
-        }
         self.fling.close();
+        self.controller.dispose();
     }
 
     #[expect(clippy::too_many_lines)] // one gesture-wiring build(); splitting fragments the callback capture set

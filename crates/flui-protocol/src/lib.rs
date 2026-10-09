@@ -36,6 +36,7 @@ mod vocabulary;
 
 pub mod act;
 pub mod error;
+pub mod motion;
 pub mod semantics;
 pub mod tree;
 pub mod version;
@@ -43,6 +44,7 @@ pub mod wire;
 
 pub use act::ActionRequest;
 pub use error::{ErrorCode, Retry};
+pub use motion::{MotionRequest, MotionState};
 pub use semantics::{SemanticsAction, SemanticsRole};
 pub use tree::{ElementId, Node, ReadQuery, Rect, Tree, WindowId, outline};
 pub use version::{PROTOCOL_VERSION, ProtocolVersion};

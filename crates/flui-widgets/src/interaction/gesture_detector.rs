@@ -124,7 +124,7 @@ type HorizontalDragCancelHandler = Rc<dyn Fn(&mut EventCx<'_>)>;
 /// detector's callbacks are `Rc` (they capture the tree's own state), so the
 /// handler only records the request and schedules a rebuild
 /// (`RebuildHandle`); the next `build`, on the UI thread, hands the request
-/// to a `LocalPostFrameHandle` which runs the `Rc` callback after that
+/// to a `PostFrameHandle` which runs the `Rc` callback after that
 /// frame — never inside `build`, where a callback that sets state would be
 /// re-entrant and its signal writes are refused. One frame of latency, no
 /// unsafe, and a request that arrives while the detector is unmounted is
@@ -842,7 +842,7 @@ pub struct GestureDetectorState {
     rebuild: Option<RebuildHandle>,
     /// Minted in `init_state`; the drained request's `Rc` callback runs
     /// through it after the frame.
-    local_post_frame: Option<flui_view::LocalPostFrameHandle>,
+    local_post_frame: Option<flui_view::PostFrameHandle>,
     /// Owner-local target for queued semantics delivery. Post-frame callbacks
     /// retain only a weak reference, so the lane cannot keep this detector's
     /// callbacks or writer source alive after the state is dropped.
@@ -999,7 +999,7 @@ impl GestureDetectorState {
             .expect("BUG: init_state creates the semantics delivery target before the first build");
         while let Some(action) = pending.pop_front() {
             let delivery = Rc::downgrade(delivery);
-            if let Err(error) = handle.schedule_local(move |_timing| {
+            if let Err(error) = handle.schedule(move |_timing| {
                 if let Some(delivery) = delivery.upgrade() {
                     delivery.deliver(action);
                 }
@@ -1125,7 +1125,7 @@ impl ViewState<GestureDetector> for GestureDetectorState {
             writer,
         });
         self.rebuild = Some(ctx.rebuild_handle());
-        self.local_post_frame = ctx.local_post_frame_handle();
+        self.local_post_frame = ctx.post_frame_handle();
         let recognizers = self.make_recognizers();
         self.attach_recognizers(&recognizers);
         self.recognizers = Some(recognizers);
@@ -1637,7 +1637,7 @@ mod tests {
                 writer: writer.clone(),
                 mounted: Rc::clone(&state.mounted),
             }));
-            state.local_post_frame = Some(owner_frame.local_post_frame_handle());
+            state.local_post_frame = Some(owner_frame.post_frame_handle());
             state.semantics_requests.push(PendingSemanticsAction::Tap);
             // Queue through the production semantics-to-post-frame bridge,
             // then alter its target before the real scheduler delivers it.

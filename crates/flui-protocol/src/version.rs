@@ -44,7 +44,7 @@ impl ProtocolVersion {
 }
 
 /// The schema this build of the crate speaks.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(0, 1);
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(0, 2);
 
 /// The versions whose schema is not additive to the one before it, each with
 /// the ADR that decided the break. Empty: every published schema so far only
@@ -132,8 +132,9 @@ mod tests {
 
     #[test]
     fn a_version_is_spelled_major_dot_minor_and_parses_back() {
-        assert_eq!(PROTOCOL_VERSION.to_string(), "0.1");
-        assert_eq!("0.1".parse(), Ok(PROTOCOL_VERSION));
+        assert_eq!(PROTOCOL_VERSION.to_string(), "0.2");
+        assert_eq!("0.2".parse(), Ok(PROTOCOL_VERSION));
+        assert_eq!("0.1".parse(), Ok(ProtocolVersion::new(0, 1)));
         assert_eq!("12.30".parse(), Ok(ProtocolVersion::new(12, 30)));
         for refused in ["", "1", "0.01", "+0.1", "0.1.2", "0.x", " 0.1", "00.1"] {
             assert!(
@@ -154,10 +155,10 @@ mod tests {
     fn a_version_serializes_as_its_string() {
         assert_eq!(
             serde_json::to_value(PROTOCOL_VERSION).ok(),
-            Some(serde_json::json!("0.1"))
+            Some(serde_json::json!("0.2"))
         );
         assert_eq!(
-            serde_json::from_value::<ProtocolVersion>(serde_json::json!("0.1")).ok(),
+            serde_json::from_value::<ProtocolVersion>(serde_json::json!("0.2")).ok(),
             Some(PROTOCOL_VERSION)
         );
         assert!(serde_json::from_value::<ProtocolVersion>(serde_json::json!(0.1)).is_err());

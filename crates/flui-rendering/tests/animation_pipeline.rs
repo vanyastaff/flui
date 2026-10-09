@@ -25,12 +25,11 @@ use flui_foundation::geometry::Size;
 use flui_layer::{Layer, LayerTree};
 use flui_objects::{RenderColoredBox, RenderOpacity};
 use flui_rendering::{constraints::BoxConstraints, pipeline::PipelineOwner};
-use flui_scheduler::UpdateScheduler;
 
 use crate::common::BoxedRenderObject;
 
 fn controller() -> AnimationController {
-    AnimationController::new(Duration::from_secs(1), &UpdateScheduler::new())
+    AnimationController::builder(Duration::from_secs(1)).build()
 }
 
 fn frame(owner: PipelineOwner) -> (PipelineOwner, Option<LayerTree>) {
@@ -82,7 +81,7 @@ pub(crate) fn animated_opacity_layer_follows_and_zero_alpha_skips() {
     // Frame at t=0: still fully opaque. `paint_effects().opacity` is `None`
     // at alpha 255 (a fully opaque RenderOpacity pushes no
     // layer) — the child paints directly, with no OpacityLayer to pay for.
-    ctrl.tick_at(0.0);
+    ctrl.tick_at(std::time::Duration::from_secs_f64(0.0));
     let impact = {
         let entry = owner
             .render_tree_mut()
@@ -109,7 +108,7 @@ pub(crate) fn animated_opacity_layer_follows_and_zero_alpha_skips() {
 
     // Fade out: opacity = 1 - value, the layer alpha tracks per frame.
     for (i, t) in [0.25f64, 0.5].iter().enumerate() {
-        ctrl.tick_at(*t);
+        ctrl.tick_at(std::time::Duration::from_secs_f64(*t));
         let opacity = 1.0 - ctrl.value();
         {
             let entry = owner
@@ -139,7 +138,7 @@ pub(crate) fn animated_opacity_layer_follows_and_zero_alpha_skips() {
     }
 
     // Final frame: opacity 0 — the subtree is skipped entirely.
-    ctrl.tick_at(1.0);
+    ctrl.tick_at(std::time::Duration::from_secs_f64(1.0));
     let impact = {
         let entry = owner
             .render_tree_mut()

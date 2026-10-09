@@ -44,7 +44,7 @@ static LISTENER_ID_COUNTER: AtomicUsize = AtomicUsize::new(1);
 #[derive(Clone)]
 pub struct ConstantAnimation<T>
 where
-    T: Clone + Send + Sync + 'static,
+    T: Clone + 'static,
 {
     value: T,
     status: AnimationStatus,
@@ -52,7 +52,7 @@ where
 
 impl<T> ConstantAnimation<T>
 where
-    T: Clone + Send + Sync + 'static,
+    T: Clone + 'static,
 {
     /// Creates a new constant animation with the given value.
     ///
@@ -96,7 +96,7 @@ where
 
 impl<T> Animation<T> for ConstantAnimation<T>
 where
-    T: Clone + Send + Sync + fmt::Debug + 'static,
+    T: Clone + fmt::Debug + 'static,
 {
     #[inline]
     fn value(&self) -> T {
@@ -121,7 +121,7 @@ where
 
 impl<T> Listenable for ConstantAnimation<T>
 where
-    T: Clone + Send + Sync + 'static,
+    T: Clone + 'static,
 {
     fn add_listener(&self, _callback: ListenerCallback) -> ListenerId {
         // Value never changes, so we don't need to store the listener.
@@ -140,7 +140,7 @@ where
 
 impl<T> fmt::Debug for ConstantAnimation<T>
 where
-    T: Clone + Send + Sync + fmt::Debug + 'static,
+    T: Clone + fmt::Debug + 'static,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ConstantAnimation")

@@ -68,6 +68,17 @@ rather than dropped (ADR-0127).
 
 ## Terminal navigation ownership
 
+The mounted navigator acquires its frame registry through `VsyncScope::maybe_of`
+during lifecycle initialization and dependency changes. Each transition peer
+publishes a weak callback to its route-owned `DrivenController`. The navigator
+commits the clock and snapshots those callbacks before invoking them, outside
+registry guards. A route withdraws its handle before rebinding and restores it
+only if disposal has not superseded it. Unmount clears the clock even when an
+external navigator handle retains the route state. Registry replacement keeps
+the last sampled elapsed time, rather than restarting the transition.
+`scope_replacement_moves_an_existing_route_without_restarting_it` pins progress
+and withdrawal through a mounted navigator.
+
 Navigation bindings hold the navigator's registry weakly. The navigator closes
 the registry before retiring its history, so a closure installed by a modal
 route or overlay entry cannot keep its route alive through the registry or
@@ -113,8 +124,8 @@ their query signature and open the viewer's lifecycle-acquired `WriterSource`
 only for the interaction notifications. `PopScope` preserves synchronous
 navigation outcome delivery and the existing observer ordering.
 
-Animation listeners still carry `Send + Sync`. `AnimatedSize` therefore
-observes completion counts during build but invokes `on_end` after the frame.
+Animation listeners accept owner-local captures. `AnimatedSize` observes
+completion counts during build but invokes `on_end` after the frame.
 `Dismissible` likewise calculates transitions with layout constraints, then
 queues the event payloads on the owner-local post-frame lane; its fully-slid
 input-time completion bypass remains synchronous. Animation-listener
@@ -147,7 +158,7 @@ draining that entry later is an inert no-op.
 user code. An unmount mid-drag cancels from `dispose`, which runs in
 `finalize_tree` outside any build, so the cancel callbacks' writes land; the
 feedback layer is removed before that cancel runs user code. `PageView`'s
-controller listener is still `Send + Sync`, so it only records each page change
+controller listener only records each page change
 and schedules a rebuild; `build` queues one post-frame entry per recorded page,
 and delivery reads the current callback (mapping decision 37).
 
@@ -223,6 +234,26 @@ named in the panic message. The test names cited in this document are those row 
 find one with `rg <name> tests/`.
 
 ## Mapping decisions
+
+### Implicit retarget captures the displayed sample before changing easing
+
+When a target changes, implicit animations read their current value or eased
+progress before configuring the new curve. The replacement tween starts at that
+sample. Container and alignment properties share an optional restart progress,
+so unchanged properties are re-anchored at the same instant as changed ones.
+A curve-only update keeps the existing run timeline.
+
+The public rows `opacity_retarget_with_a_new_curve_keeps_the_displayed_sample`,
+`padding_retarget_with_a_new_curve_keeps_the_displayed_sample`,
+`container_retarget_with_a_new_curve_keeps_the_displayed_sample`,
+`align_retarget_with_a_new_curve_keeps_the_displayed_sample` and
+`rotation_retarget_with_a_new_curve_keeps_the_displayed_sample` pin continuity
+through rendered opacity, layout and a transform layer. The container row also
+keeps an unchanged height continuous. The separate row
+`changing_only_the_curve_keeps_the_existing_deadline` pins the original completion
+deadline. It does not prove position or velocity continuity for curve-only
+changes. Transferring velocity into replacement motion remains part of the
+retarget design.
 
 ### Focused document selection uses the normal action chain
 
@@ -1302,7 +1333,7 @@ narrow the gate): **Unasserted:** no test pins this.
 belongs here; [ADR-0064](../../docs/adr/ADR-0064-animation-completion-is-one-controller-resolved-future.md)
 records the cross-crate design this decision consumes.
 
-**Choice:** `PushCompletion::Animating(TickerFuture)` carries the future
+**Choice:** `PushCompletion::Animating(AnimationRunFuture)` carries the future
 `AnimationController::forward()` (or an equivalent run-starting call) returns,
 but the continuation that awaits it is registered from `NavigatorShared::apply`
 — after the flush that produced the entry has released the history lock —

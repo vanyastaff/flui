@@ -1,7 +1,7 @@
 //! [`RotationTransition`] — animates its child's rotation from an
 //! [`Animation<f64>`] of turns.
 
-use std::sync::Arc;
+use std::rc::Rc;
 
 use flui_animation::{Animation, ProxyAnimation};
 use flui_objects::TransformMotion;
@@ -19,13 +19,13 @@ use super::transform_view::AnimatedTransformView;
 /// Rotation is paint-only; the child is laid out as if unrotated.
 #[derive(Clone, StatefulView)]
 pub struct RotationTransition {
-    turns: Arc<dyn Animation<f64>>,
+    turns: std::rc::Rc<dyn Animation<f64>>,
     child: BoxedView,
 }
 
 impl RotationTransition {
     /// A rotation driven by `turns` (1.0 = a full revolution), rotating `child`.
-    pub fn new(turns: Arc<dyn Animation<f64>>, child: impl IntoView) -> Self {
+    pub fn new(turns: std::rc::Rc<dyn Animation<f64>>, child: impl IntoView) -> Self {
         Self {
             turns,
             child: child.into_view().boxed(),
@@ -46,7 +46,7 @@ impl std::fmt::Debug for RotationTransition {
 #[derive(Debug)]
 pub struct RotationTransitionState {
     proxy: ProxyAnimation<f64>,
-    turns: Arc<dyn Animation<f64>>,
+    turns: std::rc::Rc<dyn Animation<f64>>,
 }
 
 impl ViewState<RotationTransition> for RotationTransitionState {
@@ -62,9 +62,9 @@ impl ViewState<RotationTransition> for RotationTransitionState {
     }
 
     fn did_update_view(&mut self, _old_view: &RotationTransition, new_view: &RotationTransition) {
-        if !Arc::ptr_eq(&self.turns, &new_view.turns) {
-            self.turns = Arc::clone(&new_view.turns);
-            self.proxy.set_parent(Arc::clone(&new_view.turns));
+        if !Rc::ptr_eq(&self.turns, &new_view.turns) {
+            self.turns = Rc::clone(&new_view.turns);
+            self.proxy.set_parent(Rc::clone(&new_view.turns));
         }
     }
 }
@@ -74,8 +74,8 @@ impl StatefulView for RotationTransition {
 
     fn create_state(&self) -> Self::State {
         RotationTransitionState {
-            proxy: ProxyAnimation::new(Arc::clone(&self.turns)),
-            turns: Arc::clone(&self.turns),
+            proxy: ProxyAnimation::new(Rc::clone(&self.turns)),
+            turns: Rc::clone(&self.turns),
         }
     }
 }

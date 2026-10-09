@@ -46,7 +46,7 @@
 
 use std::cell::Cell;
 use std::rc::Rc;
-use std::sync::Arc;
+
 use std::time::Duration;
 
 use flui_sdk::animation::{Animation, AnimationController, Curve, Curves};
@@ -55,8 +55,8 @@ use flui_sdk::painting::Clip;
 use flui_sdk::view::RebuildHandle;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
-    Align, AnimatedBuilder, ClipRect, DefaultTextStyle, Expanded, Padding, Row, SafeArea,
-    WidgetStateProperty,
+    Align, AnimatedBuilder, ClipRect, DefaultTextStyle, Expanded, MouseRegion, Padding, Row,
+    SafeArea, WidgetStateProperty,
 };
 use flui_sdk::{
     geometry::EdgeInsets,
@@ -65,7 +65,9 @@ use flui_sdk::{
 
 use crate::button_style::ButtonStyle;
 use crate::material::Material;
-use crate::scaffold_messenger::{ScaffoldMessengerScope, SnackBarClosedReason};
+use crate::scaffold_messenger::{
+    ScaffoldMessengerScope, SnackBarClosedReason, SnackBarHoverTarget,
+};
 use crate::text_button::TextButton;
 use crate::theme::Theme;
 use crate::theme_data::ThemeData;
@@ -326,17 +328,23 @@ fn build_content(snack_bar: &SnackBar, theme: &ThemeData) -> BoxedView {
 /// wraps [`build_content`] in the [`Curves::FastOutSlowIn`] `heightFactor`
 /// entrance/exit animation, re-rendering on every `animation` tick via
 /// [`AnimatedBuilder`]. See the module docs' "Entrance animation" section.
-#[derive(Clone, StatelessView)]
+#[derive(Clone, StatefulView)]
 pub(crate) struct SnackBarPresenter {
     snack_bar: SnackBar,
     animation: AnimationController,
+    hover: SnackBarHoverTarget,
 }
 
 impl SnackBarPresenter {
-    pub(crate) fn new(snack_bar: SnackBar, animation: AnimationController) -> Self {
+    pub(crate) fn new(
+        snack_bar: SnackBar,
+        animation: AnimationController,
+        hover: SnackBarHoverTarget,
+    ) -> Self {
         Self {
             snack_bar,
             animation,
+            hover,
         }
     }
 }
@@ -347,12 +355,101 @@ impl std::fmt::Debug for SnackBarPresenter {
     }
 }
 
-impl StatelessView for SnackBarPresenter {
-    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+struct HoverLease {
+    target: SnackBarHoverTarget,
+    state: Cell<HoverState>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HoverState {
+    Idle,
+    Hovered,
+    Retired,
+}
+
+impl HoverLease {
+    fn set(&self, hovered: bool) {
+        if self.state.get() == HoverState::Retired {
+            return;
+        }
+        let next = if hovered {
+            HoverState::Hovered
+        } else {
+            HoverState::Idle
+        };
+        if self.state.replace(next) != next {
+            self.target.set_hovered(hovered);
+        }
+    }
+
+    fn retire(&self) {
+        if self.state.replace(HoverState::Retired) == HoverState::Hovered {
+            self.target.set_hovered(false);
+        }
+    }
+}
+
+impl Drop for HoverLease {
+    fn drop(&mut self) {
+        let mut recovery = flui_sdk::foundation::panic::PanicRecovery::new();
+        recovery.run(|| self.retire());
+        recovery.finish();
+    }
+}
+
+pub(crate) struct SnackBarPresenterState {
+    hover: Rc<HoverLease>,
+}
+
+impl std::fmt::Debug for SnackBarPresenterState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SnackBarPresenterState")
+            .field("hover", &self.hover.state.get())
+            .finish()
+    }
+}
+
+impl StatefulView for SnackBarPresenter {
+    type State = SnackBarPresenterState;
+
+    fn create_state(&self) -> Self::State {
+        SnackBarPresenterState {
+            hover: Rc::new(HoverLease {
+                target: self.hover.clone(),
+                state: Cell::new(HoverState::Idle),
+            }),
+        }
+    }
+}
+
+impl ViewState<SnackBarPresenter> for SnackBarPresenterState {
+    fn did_update_view(&mut self, _old: &SnackBarPresenter, new: &SnackBarPresenter) {
+        if self.hover.target.is_same(&new.hover) {
+            return;
+        }
+        let hovered = self.hover.state.get() == HoverState::Hovered;
+        let next = Rc::new(HoverLease {
+            target: new.hover.clone(),
+            state: Cell::new(HoverState::Idle),
+        });
+        let outgoing = std::mem::replace(&mut self.hover, next);
+        let mut recovery = flui_sdk::foundation::panic::PanicRecovery::new();
+        recovery.run(|| self.hover.set(hovered));
+        recovery.retire(outgoing);
+        recovery.finish();
+    }
+
+    fn dispose(&mut self) {
+        self.hover.retire();
+    }
+
+    fn build(&self, view: &SnackBarPresenter, ctx: &dyn BuildContext) -> impl IntoView {
         let theme = Theme::of(ctx);
-        let content = build_content(&self.snack_bar, &theme);
-        let animation = self.animation.clone();
-        let listenable = Arc::new(self.animation.clone()) as Arc<dyn Listenable>;
+        let content = build_content(&view.snack_bar, &theme);
+        let animation = view.animation.clone();
+        let listenable = std::rc::Rc::new(view.animation.clone()) as std::rc::Rc<dyn Listenable>;
+        let enter = Rc::downgrade(&self.hover);
+        let exit = Rc::downgrade(&self.hover);
 
         // The outermost wrap is
         // `ClipRect(clipBehavior: widget.clipBehavior, child: snackBarTransition)`,
@@ -368,11 +465,25 @@ impl StatelessView for SnackBarPresenter {
         // `Align`'s reported box. `ClipRect`'s own layout is a pass-through
         // (it reports exactly its child's size), so wrapping it here clips
         // paint to the CURRENT animated height every tick, not a stale one.
-        ClipRect::new().child(AnimatedBuilder::new(listenable, move || {
-            let height_factor = Curves::FastOutSlowIn.transform(animation.value().clamp(0.0, 1.0));
-            Align::new(Alignment::TOP_LEFT)
-                .height_factor(height_factor)
-                .child(content.clone())
-        }))
+        MouseRegion::new()
+            .on_enter(move |_, _, _| {
+                if let Some(hover) = enter.upgrade() {
+                    hover.set(true);
+                }
+            })
+            .on_exit(move |_, _, _| {
+                if let Some(hover) = exit.upgrade() {
+                    hover.set(false);
+                }
+            })
+            .child(
+                ClipRect::new().child(AnimatedBuilder::new(listenable, move || {
+                    let height_factor =
+                        Curves::FastOutSlowIn.transform(animation.value().clamp(0.0, 1.0));
+                    Align::new(Alignment::TOP_LEFT)
+                        .height_factor(height_factor)
+                        .child(content.clone())
+                })),
+            )
     }
 }

@@ -3,7 +3,6 @@
 use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::sync::Arc;
 
 use flui_foundation::geometry::{Point, Size};
 use flui_interaction::routing::FocusNode;
@@ -322,7 +321,7 @@ impl ViewState<Disclosure> for DisclosureState {
             let header = Flexible::new(header.take_value()).boxed();
             let indicator = CustomPaint::new()
                 .size(Size::new(side, side))
-                .painter(Arc::new(Chevron {
+                .painter(std::rc::Rc::new(Chevron {
                     state: snapshot.state,
                     direction,
                     color: snapshot.indicator_color,

@@ -15,11 +15,9 @@
 //! 3. **Build** - Widget tree rebuilds
 //! 4. **Idle** (lowest) - Background work, GC, telemetry
 
-use std::{cmp::Ordering, collections::BinaryHeap, sync::Arc};
-
-use parking_lot::Mutex;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
+use std::{cell::RefCell, cmp::Ordering, collections::BinaryHeap, rc::Rc};
 
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 
@@ -170,7 +168,7 @@ pub use flui_foundation::TaskId;
 pub struct Task {
     id: TaskId,
     priority: Priority,
-    callback: Box<dyn FnOnce() + Send>,
+    callback: Box<dyn FnOnce()>,
 }
 
 impl Task {
@@ -186,7 +184,7 @@ impl Task {
     /// to rejected admission; accepted callbacks retain their ordinary lifetime.
     pub fn new<F>(priority: Priority, callback: F) -> Self
     where
-        F: FnOnce() + Send + 'static,
+        F: FnOnce() + 'static,
     {
         Self::new_with_allocator(priority, callback, next_task_id)
     }
@@ -197,7 +195,7 @@ impl Task {
         allocate: impl FnOnce() -> Option<TaskId>,
     ) -> Self
     where
-        F: FnOnce() + Send + 'static,
+        F: FnOnce() + 'static,
     {
         let Some(id) = allocate() else {
             std::mem::forget(callback);
@@ -279,16 +277,7 @@ impl Ord for PriorityTask {
 /// ```
 #[derive(Clone)]
 pub struct TaskQueue {
-    queue: Arc<Mutex<BinaryHeap<PriorityTask>>>,
-    /// Lock-free mirror of the BinaryHeap length.
-    ///
-    /// Write-through on push / pop / drain operations. Allows callers like
-    /// `UpdateScheduler::is_over_budget` to check queue depth without acquiring
-    /// the queue lock. Per Gjengset *Rust Atomics and Locks* Ch 3:
-    /// Acquire/Release ordering is sufficient because readers don't need
-    /// total ordering across multiple atomics — they only care about a
-    /// fresh observation of this single counter.
-    len: Arc<AtomicUsize>,
+    queue: Rc<RefCell<BinaryHeap<PriorityTask>>>,
 }
 
 impl std::fmt::Debug for TaskQueue {
@@ -304,54 +293,50 @@ impl TaskQueue {
     /// Create a new task queue
     pub fn new() -> Self {
         Self {
-            queue: Arc::new(Mutex::new(BinaryHeap::new())),
-            len: Arc::new(AtomicUsize::new(0)),
+            queue: Rc::new(RefCell::new(BinaryHeap::new())),
         }
     }
 
     /// Create a task queue with pre-allocated capacity
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            queue: Arc::new(Mutex::new(BinaryHeap::with_capacity(capacity))),
-            len: Arc::new(AtomicUsize::new(0)),
+            queue: Rc::new(RefCell::new(BinaryHeap::with_capacity(capacity))),
         }
     }
 
     /// Add a task to the queue
     pub fn add_task(&self, task: Task) {
-        let mut queue = self.queue.lock();
+        let mut queue = self.queue.borrow_mut();
         queue.push(PriorityTask(task));
         // Update the atomic len mirror BEFORE releasing the heap mutex.
         // Otherwise concurrent observers see a window where the heap
         // contains the new task but `len()` still reads the old value:
         // updating the atomic outside the critical section creates a
         // TOCTOU gap between the heap mutation and the atomic mirror update.
-        self.len.fetch_add(1, AtomicOrdering::AcqRel);
     }
 
     /// Add a task with priority
     pub fn add<F>(&self, priority: Priority, callback: F)
     where
-        F: FnOnce() + Send + 'static,
+        F: FnOnce() + 'static,
     {
         self.add_task(Task::new(priority, callback));
     }
 
     /// Get the next task (highest priority)
     pub fn pop(&self) -> Option<Task> {
-        let mut queue = self.queue.lock();
+        let mut queue = self.queue.borrow_mut();
         let popped = queue.pop().map(|pt| pt.0);
         if popped.is_some() {
             // Decrement inside the critical section — matches add_task
             // ordering so observers don't see len > heap-size or vice versa.
-            self.len.fetch_sub(1, AtomicOrdering::AcqRel);
         }
         popped
     }
 
     /// Peek at the next task without removing it
     pub fn peek_priority(&self) -> Option<Priority> {
-        self.queue.lock().peek().map(|pt| pt.0.priority)
+        self.queue.borrow_mut().peek().map(|pt| pt.0.priority)
     }
 
     /// Get number of pending tasks (lock-free).
@@ -359,7 +344,7 @@ impl TaskQueue {
     /// Reads the atomic length mirror; no lock acquisition. See [`TaskQueue::len`]
     /// field docs for ordering rationale.
     pub fn len(&self) -> usize {
-        self.len.load(AtomicOrdering::Acquire)
+        self.queue.borrow().len()
     }
 
     /// Check if queue is empty (lock-free).
@@ -422,11 +407,11 @@ impl TaskQueue {
     /// propagates past this method with that count short of the full
     /// matching run; the caller observes the panic, not a partial count.
     pub fn execute_until(&self, min_priority: Priority) -> usize {
-        let mut budget = self.queue.lock().len();
+        let mut budget = self.queue.borrow_mut().len();
         let mut executed = 0usize;
         while budget > 0 {
             let task = {
-                let mut queue = self.queue.lock();
+                let mut queue = self.queue.borrow_mut();
                 match queue.peek() {
                     Some(pt) if pt.0.priority >= min_priority => {
                         let popped = queue.pop().expect(
@@ -434,7 +419,6 @@ impl TaskQueue {
                         );
                         // Decrement inside the critical section — matches
                         // add_task / pop ordering.
-                        self.len.fetch_sub(1, AtomicOrdering::AcqRel);
                         Some(popped.0)
                     }
                     _ => None,
@@ -455,7 +439,7 @@ impl TaskQueue {
     /// Returns number of tasks executed
     pub fn execute_priority(&self, priority: Priority) -> usize {
         let tasks = {
-            let mut queue = self.queue.lock();
+            let mut queue = self.queue.borrow_mut();
             let mut batch = Vec::with_capacity(queue.len());
             while let Some(pt) = queue.peek() {
                 if pt.0.priority == priority {
@@ -466,9 +450,6 @@ impl TaskQueue {
                 } else {
                     break;
                 }
-            }
-            if !batch.is_empty() {
-                self.len.fetch_sub(batch.len(), AtomicOrdering::AcqRel);
             }
             batch
         };
@@ -485,14 +466,10 @@ impl TaskQueue {
     /// Returns number of tasks executed
     pub fn execute_all(&self) -> usize {
         let tasks: Vec<Task> = {
-            let mut queue = self.queue.lock();
+            let mut queue = self.queue.borrow_mut();
             let mut batch = Vec::with_capacity(queue.len());
             while let Some(pt) = queue.pop() {
                 batch.push(pt.0);
-            }
-            // Decrement atomic len inside the critical section.
-            if !batch.is_empty() {
-                self.len.fetch_sub(batch.len(), AtomicOrdering::AcqRel);
             }
             batch
         };
@@ -508,7 +485,7 @@ impl TaskQueue {
     pub fn count_by_priority(&self) -> PriorityCount {
         let mut counts = PriorityCount::default();
         {
-            let queue = self.queue.lock();
+            let queue = self.queue.borrow_mut();
             for pt in queue.iter() {
                 match pt.0.priority {
                     Priority::UserInput => counts.user_input += 1,
@@ -531,7 +508,7 @@ impl TaskQueue {
     /// this method rather than reaching into the field directly.
     #[cfg(test)]
     pub(crate) fn is_unlocked(&self) -> bool {
-        self.queue.try_lock().is_some()
+        self.queue.try_borrow_mut().ok().is_some()
     }
 }
 
@@ -581,13 +558,13 @@ mod tests {
     /// removed before it runs.
     fn priority_task_panic_preserves_same_priority_tail() {
         let queue = TaskQueue::new();
-        let ran: Arc<Mutex<Vec<u32>>> = Arc::new(Mutex::new(Vec::new()));
+        let ran: Rc<RefCell<Vec<u32>>> = Rc::new(RefCell::new(Vec::new()));
 
-        let ran_before = Arc::clone(&ran);
-        queue.add(Priority::Build, move || ran_before.lock().push(1));
+        let ran_before = Rc::clone(&ran);
+        queue.add(Priority::Build, move || ran_before.borrow_mut().push(1));
         queue.add(Priority::Build, || panic!("build task probe"));
-        let ran_after = Arc::clone(&ran);
-        queue.add(Priority::Build, move || ran_after.lock().push(3));
+        let ran_after = Rc::clone(&ran);
+        queue.add(Priority::Build, move || ran_after.borrow_mut().push(3));
 
         let queue_len_before = queue.len();
         let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -596,7 +573,7 @@ mod tests {
         assert!(unwind.is_err(), "the panic must propagate");
 
         assert_eq!(
-            *ran.lock(),
+            *ran.borrow(),
             vec![1],
             "only the task queued before the panic ran"
         );
@@ -609,12 +586,12 @@ mod tests {
         // The next call resumes exactly where the panic left off.
         let executed = queue.execute_until(Priority::Build);
         assert_eq!(executed, 1);
-        assert_eq!(*ran.lock(), vec![1, 3]);
+        assert_eq!(*ran.borrow(), vec![1, 3]);
         assert_eq!(queue.len(), queue_len_before - 3);
     }
 
     fn exhausted_task_ids_preserve_priority_fifo() {
-        struct RejectedCapture(Arc<AtomicUsize>);
+        struct RejectedCapture(Rc<AtomicUsize>);
         impl Drop for RejectedCapture {
             fn drop(&mut self) {
                 self.0.fetch_add(1, AtomicOrdering::Relaxed);
@@ -623,18 +600,18 @@ mod tests {
 
         let counter = AtomicUsize::new(usize::MAX - 2);
         let queue = TaskQueue::new();
-        let ran = Arc::new(Mutex::new(Vec::new()));
+        let ran = Rc::new(RefCell::new(Vec::new()));
         for value in [1, 2] {
-            let output = Arc::clone(&ran);
+            let output = Rc::clone(&ran);
             queue.add_task(Task::new_with_allocator(
                 Priority::Build,
-                move || output.lock().push(value),
+                move || output.borrow_mut().push(value),
                 || next_task_id_with_counter(&counter),
             ));
         }
-        let rejected_drops = Arc::new(AtomicUsize::new(0));
+        let rejected_drops = Rc::new(AtomicUsize::new(0));
         for _ in 0..8 {
-            let capture = RejectedCapture(Arc::clone(&rejected_drops));
+            let capture = RejectedCapture(Rc::clone(&rejected_drops));
             let refusal = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 queue.add_task(Task::new_with_allocator(
                     Priority::Build,
@@ -651,18 +628,18 @@ mod tests {
         }
         assert_eq!(rejected_drops.load(AtomicOrdering::Relaxed), 0);
         assert_eq!(queue.execute_until(Priority::Build), 2);
-        assert_eq!(*ran.lock(), vec![1, 2]);
+        assert_eq!(*ran.borrow(), vec![1, 2]);
         assert!(queue.is_empty());
         for _ in 0..4 {
             assert!(next_task_id_with_counter(&counter).is_none());
         }
 
-        let output = Arc::clone(&ran);
-        queue.add(Priority::Build, move || output.lock().push(3));
-        let output = Arc::clone(&ran);
-        queue.add(Priority::Build, move || output.lock().push(4));
+        let output = Rc::clone(&ran);
+        queue.add(Priority::Build, move || output.borrow_mut().push(3));
+        let output = Rc::clone(&ran);
+        queue.add(Priority::Build, move || output.borrow_mut().push(4));
         assert_eq!(queue.execute_until(Priority::Build), 2);
-        assert_eq!(*ran.lock(), vec![1, 2, 3, 4]);
+        assert_eq!(*ran.borrow(), vec![1, 2, 3, 4]);
     }
 
     #[test]

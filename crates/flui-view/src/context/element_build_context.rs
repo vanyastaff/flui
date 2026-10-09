@@ -596,9 +596,6 @@ impl LifecycleContext for ElementBuildContext {
     fn post_frame_handle(&self) -> Option<flui_scheduler::PostFrameHandle> {
         self.owner.read().post_frame_handle().cloned()
     }
-    fn local_post_frame_handle(&self) -> Option<flui_scheduler::LocalPostFrameHandle> {
-        self.owner.read().local_post_frame_handle().cloned()
-    }
     fn keep_alive_lease(&self) -> crate::owner::KeepAliveLease {
         self.keep_alive_handle().hold()
     }
@@ -698,7 +695,6 @@ pub(crate) struct BuildCapabilities {
     /// The binding's post-frame capability.
     pub(crate) post_frame_handle: Option<flui_scheduler::PostFrameHandle>,
     /// The binding's owner-local post-frame capability.
-    pub(crate) local_post_frame_handle: Option<flui_scheduler::LocalPostFrameHandle>,
     /// The binding's IME/text-input attach-detach capability.
     pub(crate) text_input_handle: Option<flui_interaction::TextInputHandle>,
     /// The presentation's plain-text clipboard.
@@ -1038,9 +1034,6 @@ impl LifecycleContext for BuildCtx<'_> {
     }
     fn post_frame_handle(&self) -> Option<flui_scheduler::PostFrameHandle> {
         self.capabilities.post_frame_handle.clone()
-    }
-    fn local_post_frame_handle(&self) -> Option<flui_scheduler::LocalPostFrameHandle> {
-        self.capabilities.local_post_frame_handle.clone()
     }
     fn text_input_handle(&self) -> Option<flui_interaction::TextInputHandle> {
         self.capabilities.text_input_handle.clone()

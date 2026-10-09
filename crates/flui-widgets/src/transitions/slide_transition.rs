@@ -1,7 +1,7 @@
 //! [`SlideTransition`] — animates its child's position as a fraction of its
 //! own size from an [`Animation<TranslationFraction>`].
 
-use std::sync::Arc;
+use std::rc::Rc;
 
 use flui_animation::{Animation, ProxyAnimation};
 use flui_objects::{TransformMotion, TranslationFraction};
@@ -35,7 +35,7 @@ use super::transform_view::AnimatedTransformView;
 /// toward the reading-direction start instead.
 ///
 /// ```rust,ignore
-/// let controller = AnimationController::without_ticker(Duration::from_millis(300));
+/// let controller = AnimationController::builder(Duration::from_millis(300)).build();
 /// let tween = Tween::new(TranslationFraction::new(-1.0, 0.0), TranslationFraction::ZERO);
 /// let position = Arc::new(tween.animate(Arc::new(controller.clone()) as Arc<dyn Animation<f64>>));
 /// let slide = SlideTransition::new(position, Text::new("hi"));
@@ -43,7 +43,7 @@ use super::transform_view::AnimatedTransformView;
 /// ```
 #[derive(Clone, StatefulView)]
 pub struct SlideTransition {
-    position: Arc<dyn Animation<TranslationFraction>>,
+    position: std::rc::Rc<dyn Animation<TranslationFraction>>,
     transform_hit_tests: bool,
     text_direction: Option<TextDirection>,
     child: BoxedView,
@@ -51,7 +51,10 @@ pub struct SlideTransition {
 
 impl SlideTransition {
     /// A slide driven by `position`, translating `child`.
-    pub fn new(position: Arc<dyn Animation<TranslationFraction>>, child: impl IntoView) -> Self {
+    pub fn new(
+        position: std::rc::Rc<dyn Animation<TranslationFraction>>,
+        child: impl IntoView,
+    ) -> Self {
         Self {
             position,
             transform_hit_tests: true,
@@ -96,7 +99,7 @@ impl std::fmt::Debug for SlideTransition {
 #[derive(Debug)]
 pub struct SlideTransitionState {
     proxy: ProxyAnimation<TranslationFraction>,
-    position: Arc<dyn Animation<TranslationFraction>>,
+    position: std::rc::Rc<dyn Animation<TranslationFraction>>,
 }
 
 impl ViewState<SlideTransition> for SlideTransitionState {
@@ -113,9 +116,9 @@ impl ViewState<SlideTransition> for SlideTransitionState {
     }
 
     fn did_update_view(&mut self, _old_view: &SlideTransition, new_view: &SlideTransition) {
-        if !Arc::ptr_eq(&self.position, &new_view.position) {
-            self.position = Arc::clone(&new_view.position);
-            self.proxy.set_parent(Arc::clone(&new_view.position));
+        if !Rc::ptr_eq(&self.position, &new_view.position) {
+            self.position = Rc::clone(&new_view.position);
+            self.proxy.set_parent(Rc::clone(&new_view.position));
         }
     }
 }
@@ -125,8 +128,8 @@ impl StatefulView for SlideTransition {
 
     fn create_state(&self) -> Self::State {
         SlideTransitionState {
-            proxy: ProxyAnimation::new(Arc::clone(&self.position)),
-            position: Arc::clone(&self.position),
+            proxy: ProxyAnimation::new(Rc::clone(&self.position)),
+            position: Rc::clone(&self.position),
         }
     }
 }

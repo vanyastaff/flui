@@ -99,7 +99,7 @@ pub(crate) type ItemBuilder = Rc<dyn Fn(usize) -> Option<BoxedView>>;
 /// the two production implementors, paired with the [`SliverList`] and
 /// [`SliverGrid`] view aliases respectively.
 pub trait LazyMultiBoxRender:
-    RenderSliver<Arity = Variable, ParentData = SliverMultiBoxAdaptorParentData> + Send + Sync + 'static
+    RenderSliver<Arity = Variable, ParentData = SliverMultiBoxAdaptorParentData> + 'static
 {
     /// The render-object-specific configuration the view carries — a
     /// per-item extent estimate for a list, a grid delegate for a grid, …

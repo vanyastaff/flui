@@ -104,10 +104,10 @@ pub(crate) mod transition_route;
 pub use binding::RouteBindingSlot;
 // `PushCompletion::Animating` carries one of these (ADR-0064): a third-party
 // `Route` implementation needs to name the type without taking a direct
-// `flui-scheduler` dependency of its own. `TickerCompleter`/`TickerDelivery`
+// `flui-scheduler` dependency of its own. `RunCompleter`/`RunDelivery`
 // are deliberately not re-exported — nothing in this crate's public contract
 // takes or returns them.
-pub use flui_scheduler::{TickerCanceled, TickerFuture};
+pub use flui_animation::{AnimationRunFuture, RunCanceled};
 pub use hero::{Hero, HeroMode};
 pub use hero_controller::{FlightDirection, HeroController};
 pub use hero_controller_scope::HeroControllerScope;

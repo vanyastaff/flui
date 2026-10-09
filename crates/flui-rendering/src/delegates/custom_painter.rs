@@ -4,7 +4,7 @@
 //! without creating a new render object. It provides methods for painting,
 //! hit testing, and accessibility.
 
-use std::{any::Any, fmt::Debug, sync::Arc, sync::Once};
+use std::{any::Any, fmt::Debug, sync::Once};
 
 use flui_foundation::Listenable;
 use flui_foundation::geometry::{Offset, Size};
@@ -100,7 +100,7 @@ impl Default for SemanticsBuilder {
 ///     }
 /// }
 /// ```
-pub trait CustomPainter: Send + Sync + Debug {
+pub trait CustomPainter: Debug {
     /// Paint custom content on the canvas.
     ///
     /// The canvas coordinate space is configured such that the origin is at
@@ -132,7 +132,7 @@ pub trait CustomPainter: Send + Sync + Debug {
     /// Implementations that return `Some` MUST return the *same* instance
     /// across calls, so the host can unsubscribe on detach / painter swap.
     /// Defaults to `None` (a static painter that never self-invalidates).
-    fn repaint(&self) -> Option<Arc<dyn Listenable>> {
+    fn repaint(&self) -> Option<std::rc::Rc<dyn Listenable>> {
         None
     }
 

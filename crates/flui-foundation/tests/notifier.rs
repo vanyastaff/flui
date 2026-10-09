@@ -23,7 +23,7 @@ fn non_clone_argument() {
     let notifier = Notifier::<Argument>::new();
     let observed = Arc::new(Mutex::new(String::new()));
     let listener_observed = Arc::clone(&observed);
-    let id = notifier.add(Arc::new(move |argument| {
+    let id = notifier.add(std::rc::Rc::new(move |argument| {
         listener_observed
             .lock()
             .expect("observation")
@@ -47,7 +47,7 @@ fn borrowed_argument_type_accepts_a_non_static_reference() {
     let notifier = Notifier::<&str>::new();
     let observed = Arc::new(Mutex::new(String::new()));
     let listener_observed = Arc::clone(&observed);
-    notifier.add(Arc::new(move |argument| {
+    notifier.add(std::rc::Rc::new(move |argument| {
         listener_observed
             .lock()
             .expect("observation")
@@ -73,7 +73,7 @@ fn non_clone_owned_value() {
     let mut notifier = ValueNotifier::new(OwnedValue("initial".into()));
     let calls = Arc::new(AtomicUsize::new(0));
     let listener_calls = Arc::clone(&calls);
-    notifier.add_listener(Arc::new(move || {
+    notifier.add_listener(std::rc::Rc::new(move || {
         listener_calls.fetch_add(1, Ordering::SeqCst);
     }));
     assert_eq!(read(&notifier), "initial");
@@ -96,7 +96,7 @@ fn cloneable_values_keep_independent_values_and_shared_listeners() {
     let mut cloned = original.clone();
     let calls = Arc::new(AtomicUsize::new(0));
     let listener_calls = Arc::clone(&calls);
-    original.add_listener(Arc::new(move || {
+    original.add_listener(std::rc::Rc::new(move || {
         listener_calls.fetch_add(1, Ordering::SeqCst);
     }));
     cloned.set_value(2);
@@ -129,7 +129,7 @@ fn contained_failure(aggregate: bool, hostile_capture: bool) {
             },
         )
     });
-    let id = notifier.add(Arc::new(move |&()| {
+    let id = notifier.add(std::rc::Rc::new(move |&()| {
         let _captures = &captures;
         callback_notifier.remove(callback_id.lock().expect("listener id").expect("installed"));
         if aggregate {
@@ -152,10 +152,12 @@ fn contained_failure(aggregate: bool, hostile_capture: bool) {
     *self_id.lock().expect("listener id") = Some(id);
     let later = Arc::new(AtomicUsize::new(0));
     let listener_later = Arc::clone(&later);
-    notifier.add(Arc::new(move |&()| {
+    notifier.add(std::rc::Rc::new(move |&()| {
         listener_later.fetch_add(1, Ordering::SeqCst);
     }));
-    notifier.notify(&());
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| notifier.notify(&())))
+        .expect_err("first callback failure propagates after the tail");
+    flui_foundation::panic::retain_opaque_payload(failure);
     assert_eq!(later.load(Ordering::SeqCst), 1);
     assert_eq!(
         drops.load(Ordering::SeqCst),
@@ -229,7 +231,7 @@ fn retirement_competition() {
             drops: Arc::clone(&drops),
             message,
         };
-        let id = notifier.add(Arc::new(move |&()| {
+        let id = notifier.add(std::rc::Rc::new(move |&()| {
             let _capture = &capture;
             callback_notifier.remove(callback_id.lock().expect("listener id").expect("installed"));
         }));
@@ -249,7 +251,7 @@ fn retirement_competition() {
     assert!(notifier.is_empty());
     let later = Arc::new(AtomicUsize::new(0));
     let listener_later = Arc::clone(&later);
-    notifier.add(Arc::new(move |&()| {
+    notifier.add(std::rc::Rc::new(move |&()| {
         listener_later.fetch_add(1, Ordering::SeqCst);
     }));
     notifier.notify(&());
@@ -263,7 +265,7 @@ fn install_retirement_bombs(notifier: &Notifier<()>, drops: &Arc<AtomicUsize>) -
             drops: Arc::clone(drops),
             message,
         };
-        let id = notifier.add(Arc::new(move |&()| {
+        let id = notifier.add(std::rc::Rc::new(move |&()| {
             let _capture = &capture;
         }));
         first.get_or_insert(id);
@@ -299,7 +301,7 @@ fn terminal_retirement_competition() {
             drops: Arc::clone(&drops),
             message,
         };
-        notifier.add_listener(Arc::new(move || {
+        notifier.add_listener(std::rc::Rc::new(move || {
             let _capture = &capture;
         }));
     }
@@ -327,7 +329,7 @@ fn terminal_retirement_competition() {
         } else {
             let calls = Arc::new(AtomicUsize::new(0));
             let observed = Arc::clone(&calls);
-            notifier.add(Arc::new(move |&()| {
+            notifier.add(std::rc::Rc::new(move |&()| {
                 observed.fetch_add(1, Ordering::SeqCst);
             }));
             notifier.notify(&());
@@ -403,7 +405,7 @@ fn healthy_terminal_retirement_waits_for_the_last_owner() {
             order: Arc::clone(&order),
             index,
         };
-        notifier.add(Arc::new(move |&()| {
+        notifier.add(std::rc::Rc::new(move |&()| {
             let _capture = &capture;
         }));
     }
@@ -426,7 +428,7 @@ fn value_terminal_retirement_preserves_the_first_failure() {
             drops: Arc::clone(&listener_drops),
             message: "listener retirement failure",
         };
-        notifier.add_listener(Arc::new(move || {
+        notifier.add_listener(std::rc::Rc::new(move || {
             let _capture = &capture;
         }));
         let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
@@ -468,7 +470,7 @@ fn value_retirement_failure_releases_the_shared_channel() {
     let listener_drops = Arc::new(AtomicUsize::new(0));
     let capture = Counted(Arc::clone(&listener_drops));
     let observed = Arc::clone(&calls);
-    notifier.add_listener(Arc::new(move || {
+    notifier.add_listener(std::rc::Rc::new(move || {
         let _capture = &capture;
         observed.fetch_add(1, Ordering::SeqCst);
     }));
@@ -509,7 +511,7 @@ fn value_terminal_retirement_preserves_incoming_unwind() {
         drops: Arc::clone(&listener_drops),
         message: "listener retirement failure",
     };
-    notifier.add_listener(Arc::new(move || {
+    notifier.add_listener(std::rc::Rc::new(move || {
         let _capture = &capture;
     }));
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
@@ -568,7 +570,7 @@ fn healthy_value_extraction_preserves_reentry_and_shared_channel_disposal() {
         id: Arc::clone(&id),
         calls: Arc::clone(&reentries),
     };
-    let installed = notifier.add_listener(Arc::new(move || {
+    let installed = notifier.add_listener(std::rc::Rc::new(move || {
         let _capture = &capture;
     }));
     *id.lock().expect("listener id") = Some(installed);
@@ -601,11 +603,86 @@ fn healthy_value_extraction_preserves_reentry_and_shared_channel_disposal() {
     );
 }
 
+fn failure_propagates_after_healthy_tail() {
+    let notifier = Notifier::<()>::new();
+    let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+    let first = notifier.add(std::rc::Rc::new(|()| panic!("first listener failure")));
+    let observed = calls.clone();
+    notifier.add(std::rc::Rc::new(move |()| observed.set(observed.get() + 1)));
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| notifier.notify(&())))
+        .expect_err("notification propagates its first failure after the healthy tail");
+    assert_eq!(
+        flui_foundation::panic::payload_text(&*failure),
+        Some("first listener failure")
+    );
+    assert_eq!(calls.get(), 1);
+    notifier.remove(first);
+    notifier.notify(&());
+    assert_eq!(calls.get(), 2, "the next round makes progress");
+}
+
+fn disposal_silences_the_snapshot_tail() {
+    let notifier = ChangeNotifier::new();
+    let alias = notifier.clone();
+    notifier.add_listener(std::rc::Rc::new(move || alias.dispose()));
+    let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+    let observed = calls.clone();
+    notifier.add_listener(std::rc::Rc::new(move || observed.set(observed.get() + 1)));
+    notifier.notify_listeners();
+    assert_eq!(
+        calls.get(),
+        0,
+        "disposed subscriptions do not fire from an older snapshot"
+    );
+}
+
+fn caught_failure_preserves_reentrant_retirement() {
+    let notifier = Notifier::<()>::new();
+    let first = notifier.add(std::rc::Rc::new(|()| panic!("first listener failure")));
+    let alias = notifier.clone();
+    let drops = Arc::new(AtomicUsize::new(0));
+    let callback_drops = drops.clone();
+    let late = notifier.add(std::rc::Rc::new(move |()| {
+        let probe = Bomb {
+            drops: callback_drops.clone(),
+            message: "late capture failure",
+        };
+        let id = alias.add(std::rc::Rc::new(move |()| {
+            let _ = &probe;
+        }));
+        alias.remove(id);
+    }));
+    let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+    let observed = calls.clone();
+    notifier.add(std::rc::Rc::new(move |()| observed.set(observed.get() + 1)));
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| notifier.notify(&())))
+        .expect_err("first failure propagates");
+    assert_eq!(
+        flui_foundation::panic::payload_text(&*failure),
+        Some("first listener failure")
+    );
+    assert_eq!(
+        drops.load(Ordering::SeqCst),
+        0,
+        "no opaque retirement after a caught failure"
+    );
+    assert_eq!(calls.get(), 1);
+    notifier.remove(first);
+    notifier.remove(late);
+    notifier.notify(&());
+    assert_eq!(calls.get(), 2);
+}
+
 #[test]
 fn notifier_ownership_and_recovery() {
     const CHILD: &str = "FLUI_NOTIFIER_RECOVERY_CASE";
     if let Ok(case) = std::env::var(CHILD) {
         match case.as_str() {
+            "failure_propagates_after_healthy_tail" => failure_propagates_after_healthy_tail(),
+            "disposal_silences_the_snapshot_tail" => disposal_silences_the_snapshot_tail(),
+            "caught_failure_preserves_reentrant_retirement" => {
+                caught_failure_preserves_reentrant_retirement();
+            }
             "non_clone_argument" => non_clone_argument(),
             "borrowed_argument_type_accepts_a_non_static_reference" => {
                 borrowed_argument_type_accepts_a_non_static_reference();
@@ -644,6 +721,9 @@ fn notifier_ownership_and_recovery() {
     }
     let mut failures = Vec::new();
     for case in [
+        "failure_propagates_after_healthy_tail",
+        "disposal_silences_the_snapshot_tail",
+        "caught_failure_preserves_reentrant_retirement",
         "non_clone_argument",
         "borrowed_argument_type_accepts_a_non_static_reference",
         "non_clone_owned_value",

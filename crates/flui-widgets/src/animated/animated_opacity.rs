@@ -13,7 +13,7 @@
 //! retarget (`did_update_view`) swaps the proxy's parent instead of
 //! replacing the render object.
 
-use std::sync::Arc;
+use std::rc::Rc;
 use std::time::Duration;
 
 use flui_animation::curve::{ArcCurve, Curve};
@@ -22,8 +22,8 @@ use flui_objects::RenderAnimatedOpacity;
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
 use flui_view::{
-    BoxedView, BuildContextExt, IntoView, RenderObjectContext, RenderView, View, ViewExt,
-    ViewState, impl_render_view,
+    BoxedView, IntoView, RenderObjectContext, RenderView, View, ViewExt, ViewState,
+    impl_render_view,
 };
 
 use crate::animated::implicitly_animated::{DEFAULT_DURATION, ImplicitAnimation, default_curve};
@@ -94,9 +94,9 @@ impl std::fmt::Debug for AnimatedOpacity {
 /// new parent on every retarget (`ProxyAnimation::set_parent`) — the render
 /// object never sees the swap, only the proxy's re-fired notification. See
 /// `RenderAnimatedOpacity`'s module docs' *Retargeting* section.
-fn compose_animation(animation: &ImplicitAnimation<f64>) -> Arc<dyn Animation<f64>> {
-    let curved: Arc<dyn Animation<f64>> = Arc::new(animation.curved());
-    Arc::new(animation.tween().animate(curved))
+fn compose_animation(animation: &ImplicitAnimation<f64>) -> std::rc::Rc<dyn Animation<f64>> {
+    let curved: std::rc::Rc<dyn Animation<f64>> = std::rc::Rc::new(animation.curved());
+    Rc::new(animation.tween().animate(curved))
 }
 
 /// State for [`AnimatedOpacity`] — owns the persistent opacity animation and
@@ -124,9 +124,11 @@ impl StatefulView for AnimatedOpacity {
 
 impl ViewState<AnimatedOpacity> for AnimatedOpacityState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        if let Some(vsync) = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone()) {
-            self.animation.register(vsync);
-        }
+        self.animation.rebind(VsyncScope::maybe_of(ctx).as_ref());
+    }
+
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
+        self.animation.rebind(VsyncScope::maybe_of(ctx).as_ref());
     }
 
     fn build(&self, _view: &AnimatedOpacity, _ctx: &dyn BuildContext) -> impl IntoView {

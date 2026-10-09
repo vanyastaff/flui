@@ -58,6 +58,9 @@ use super::{SchedulerClosed, SchedulerInner};
 /// argument.
 impl Drop for SchedulerInner {
     fn drop(&mut self) {
+        self.wake
+            .closed
+            .store(true, std::sync::atomic::Ordering::Release);
         let waiters = self.frame.completion_waiters.get_mut().drain();
         let mut delivery = crate::completion_wake::WakeBatch::new("scheduler teardown", false);
 

@@ -582,14 +582,14 @@ impl ViewState<Scaffold> for ScaffoldState {
             ));
         }
 
-        if let Some((snack_bar, animation)) = self
+        if let Some((snack_bar, animation, hover)) = self
             .messenger
             .as_ref()
             .and_then(ScaffoldMessengerHandle::current_entry)
         {
             children.push(LayoutId::new(
                 SLOT_SNACK_BAR,
-                SnackBarPresenter::new(snack_bar, animation),
+                SnackBarPresenter::new(snack_bar, animation, hover),
             ));
         }
 

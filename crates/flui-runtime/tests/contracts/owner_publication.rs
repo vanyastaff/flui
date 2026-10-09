@@ -72,9 +72,9 @@ fn cancelled_proposal_preserves_retirement_and_retention_policy() {
                 retired: Arc::clone(&local_retired),
                 failure: first,
             };
-            let post_frame = runtime.owner_frame().local_post_frame_handle();
+            let post_frame = runtime.owner_frame().post_frame_handle();
             post_frame
-                .schedule_local(move |_| drop(local_capture))
+                .schedule(move |_| drop(local_capture))
                 .expect("live runtime accepts capture");
             let prepared = owner.prepare_runtime(runtime);
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -95,7 +95,7 @@ fn cancelled_proposal_preserves_retirement_and_retention_policy() {
                 usize::from(!outer_failure && first.is_none())
             );
             assert!(
-                post_frame.schedule_local(|_| {}).is_err(),
+                post_frame.schedule(|_| {}).is_err(),
                 "retention cannot leave callback admission open"
             );
             let expected = if outer_failure {
@@ -232,8 +232,8 @@ fn owner_retirement_preserves_the_first_failure_and_releases_every_runtime() {
             };
             runtime
                 .owner_frame()
-                .local_post_frame_handle()
-                .schedule_local(move |_| drop(capture))
+                .post_frame_handle()
+                .schedule(move |_| drop(capture))
                 .expect("live runtime accepts capture");
             let _ = owner
                 .publication(owner.prepare_runtime(runtime))
@@ -281,8 +281,8 @@ fn abandoned_publication_releases_the_registry_before_runtime_retirement() {
     };
     runtime
         .owner_frame()
-        .local_post_frame_handle()
-        .schedule_local(move |_| drop(capture))
+        .post_frame_handle()
+        .schedule(move |_| drop(capture))
         .expect("live runtime accepts the callback");
     let prepared = owner.prepare_runtime(runtime);
     let permit = owner.publication(prepared).expect("reserve publication");

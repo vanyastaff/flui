@@ -38,8 +38,8 @@ pub(crate) fn a_cross_thread_frame_request_reaches_the_ui_runtimes_platform_wake
     ui_runtime.scheduler().finish_async_pump();
     let before = wakes.load(AtomicOrdering::Relaxed);
 
-    let scheduler = ui_runtime.scheduler().clone();
-    std::thread::spawn(move || scheduler.request_frame())
+    let waker = ui_runtime.scheduler().frame_waker();
+    std::thread::spawn(move || waker.request_frame())
         .join()
         .expect("waker thread completes");
 

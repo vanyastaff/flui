@@ -139,7 +139,6 @@
 //!   at `0.0` for both types in V1 (matches "flat only").
 
 use std::rc::Rc;
-use std::sync::Arc;
 
 use flui_sdk::painting::Canvas;
 use flui_sdk::painting::TextStyle;
@@ -561,9 +560,8 @@ impl StatelessView for Chip {
         }
 
         let container = CustomPaint::new()
-            .foreground_painter(
-                Arc::new(ChipBorderPainter { side, shape }) as Arc<dyn CustomPainter>
-            )
+            .foreground_painter(std::rc::Rc::new(ChipBorderPainter { side, shape })
+                as std::rc::Rc<dyn CustomPainter>)
             .child(Material::new(background_color).shape(shape).child(ink_well));
 
         Semantics::new()
@@ -780,9 +778,9 @@ impl StatelessView for FilterChip {
             FilterChipLeading::Checkmark => Some(
                 CustomPaint::new()
                     .size(Size::new(CHIP_ICON_SIZE, CHIP_ICON_SIZE))
-                    .painter(Arc::new(ChipCheckmarkPainter {
+                    .painter(std::rc::Rc::new(ChipCheckmarkPainter {
                         color: checkmark_color,
-                    }) as Arc<dyn CustomPainter>)
+                    }) as std::rc::Rc<dyn CustomPainter>)
                     .boxed(),
             ),
             FilterChipLeading::Avatar => self.avatar.clone().map(|avatar| {
@@ -839,9 +837,8 @@ impl StatelessView for FilterChip {
         }
 
         let container = CustomPaint::new()
-            .foreground_painter(
-                Arc::new(ChipBorderPainter { side, shape }) as Arc<dyn CustomPainter>
-            )
+            .foreground_painter(std::rc::Rc::new(ChipBorderPainter { side, shape })
+                as std::rc::Rc<dyn CustomPainter>)
             .child(Material::new(background_color).shape(shape).child(ink_well));
 
         Semantics::new()

@@ -138,10 +138,14 @@ fn registry_migration_preserves_the_painted_phase() {
     ));
     assert!(vsync.is_empty());
     assert_eq!(only_arc(&laid), before);
-    next.tick_all(50.0);
+    next.tick_all(
+        &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(50.0)),
+    );
     laid.pump_for(Duration::ZERO);
     assert_eq!(only_arc(&laid), before);
-    next.tick_all(50.3);
+    next.tick_all(
+        &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(50.3)),
+    );
     laid.pump_for(Duration::ZERO);
     assert_angle(
         only_arc(&laid).0,

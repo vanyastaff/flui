@@ -974,7 +974,7 @@ fn a_read_tree_round_trips_through_json() {
 
     let tree = f.read(&ReadQuery::new());
     let json = serde_json::to_value(&tree).expect("a tree serializes");
-    assert_eq!(json["protocol"], "0.1");
+    assert_eq!(json["protocol"], "0.2");
     assert_eq!(
         json["roots"][0]["children"][0],
         serde_json::json!({

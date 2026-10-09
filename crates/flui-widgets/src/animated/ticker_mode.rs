@@ -19,18 +19,17 @@
 //!
 //! **The clock keeps running while muted.** A disabled subtree delivers no
 //! ticks, and when it
-//! is re-enabled its animations land where the wall clock says they should be
-//! — they do not resume from where they stopped. A `TickerMode` is a mute
-//! button, not a pause button. (FLUI's `Ticker::mute` freezes elapsed time
-//! instead; that is a different, unrelated layer with no consumer here.)
+//! is re-enabled its animations catch up to the presentation's virtual time.
+//! Muting does not freeze that timeline; pausing the presentation motion clock
+//! does.
 //!
 //! # Deferred, and named
 //!
 //! * A query for the current mode — no consumer; descendants need the
 //!   registry, not the flag.
-//! * A widget that *creates* controllers outside the ambient registry (its own
-//!   wall-clock ticker fallback) is not muted: it is not in the registry to
-//!   mute. Every in-tree animated widget prefers the ambient `VsyncScope`.
+//! * A manually sampled controller outside the ambient registry is driven by
+//!   its caller. Without an ambient clock, descendants receive a detached scope:
+//!   finite runs settle immediately and repeats park until bound.
 
 use flui_animation::{Vsync, VsyncRegistration};
 use flui_view::element::ElementKind;
@@ -42,7 +41,7 @@ use super::VsyncScope;
 ///
 /// While `enabled` is `false`, descendant animation controllers receive no
 /// ticks. **The clock keeps running** — this is a mute button, not a pause
-/// button: a re-enabled subtree lands where the wall clock says it should be,
+/// button: a re-enabled subtree catches up to the presentation's virtual time,
 /// not where it stopped.
 /// Nesting composes as an AND — a `TickerMode` inside a disabled one cannot
 /// re-enable its subtree.
@@ -126,8 +125,8 @@ impl std::fmt::Debug for TickerModeState {
 impl TickerModeState {
     /// Re-derive the ambient registry and move this one under it. Idempotent:
     /// re-nesting under the same parent is a no-op.
-    fn renest(&mut self, ctx: &dyn BuildContext) {
-        let ambient = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone());
+    fn renest(&mut self, ctx: &dyn LifecycleContext) {
+        let ambient = VsyncScope::maybe_of(ctx);
         let unchanged = self
             .parent
             .as_ref()
@@ -180,15 +179,12 @@ impl ViewState<TickerMode> for TickerModeState {
     /// The subtree sees **this** registry as its ambient `Vsync`, so every
     /// controller a descendant registers lands here and is muted with it.
     ///
-    /// **Unless nothing would drive it.** With no ambient `VsyncScope` above,
-    /// this registry is nested under nobody and would never be ticked; handing
-    /// it down would turn descendants that fall back to their own wall-clock
-    /// ticker into *frozen* ones — a widget documented as changing nothing
-    /// would silently kill the animations it wraps. So the child passes through
-    /// bare and the fallback keeps working.
+    /// Without an ambient clock, provide an explicitly detached scope rather
+    /// than an undriven child registry. Finite runs then settle immediately and
+    /// repeats park under the missing-clock contract.
     fn build(&self, view: &TickerMode, _ctx: &dyn BuildContext) -> impl IntoView {
         if self.parent.is_none() {
-            return view.child.clone();
+            return VsyncScope::detached(view.child.clone()).into_view().boxed();
         }
         VsyncScope::new(self.registry.clone(), view.child.clone())
             .into_view()

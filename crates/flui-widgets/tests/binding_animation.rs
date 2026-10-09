@@ -12,31 +12,32 @@
 //! `build_scope` (the dirty entry would miss this frame's drain — a one-frame
 //! lag).
 
-use std::sync::Arc;
 use std::time::Duration;
 
-use crate::common::{lay_out, tight};
+use crate::common::tight;
 use flui_animation::{Animation, AnimationController, AnimationStatus};
 use flui_widgets::{FadeTransition, SizedBox};
 
 /// A registered, running controller drives a `FadeTransition`'s opacity upward
 /// frame-to-frame as `pump_for` advances virtual time.
 pub(crate) fn registered_controller_advances_fade_opacity_frame_to_frame() {
-    let controller = AnimationController::without_ticker(Duration::from_millis(100));
+    let vsync = flui_animation::Vsync::new();
+    let owner = AnimationController::builder(Duration::from_millis(100)).build_on(Some(&vsync));
+    let controller = owner.controller();
     // The `Arc<dyn Animation>` handed to the FadeTransition and the clone
     // registered with the binding share the same inner notifier, so a binding
     // tick notifies the transition's listener.
-    let opacity: Arc<dyn Animation<f64>> = Arc::new(controller.clone());
+    let opacity: std::rc::Rc<dyn Animation<f64>> = std::rc::Rc::new(controller.clone());
 
-    let mut laid = lay_out(
+    let mut laid = flui_testing::widgets::lay_out_animated(
         FadeTransition::new(opacity, SizedBox::new(100.0, 50.0)),
         tight(100.0, 50.0),
+        vsync,
     );
     let render_opacity = laid.root();
 
     // Register before starting, then start: the binding re-anchors this run's
     // `t = 0` on the first pump that observes the new run-generation.
-    laid.register_controller(controller.clone());
     controller.forward().expect("a fresh controller forwards");
 
     // The detection frame (first pump after `forward`) holds the run-start value

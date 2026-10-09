@@ -26,12 +26,11 @@
 //!    route's animation*, so it will need a lookup handle — noted as a follow-up.
 
 use std::fmt;
-use std::sync::Arc;
 
 use std::cell::Cell;
 use std::rc::Rc;
 
-use flui_scheduler::TickerFuture;
+use flui_animation::AnimationRunFuture;
 
 use super::binding::{RouteCommand, RouteCommandQueue};
 use super::lifecycle::RouteLifecycle;
@@ -259,7 +258,7 @@ impl RouteEntry {
         previous: Option<RouteId>,
         previous_present: Option<RouteId>,
         is_new_first: bool,
-    ) -> (Observation, Option<TickerFuture>) {
+    ) -> (Observation, Option<AnimationRunFuture>) {
         let previous_state = self.state;
         debug_assert!(matches!(
             previous_state,
@@ -442,7 +441,7 @@ pub(crate) struct FlushOutcome {
 /// released, in the order it was produced.
 ///
 /// Not `Copy`/`PartialEq`/`Eq`: [`AwaitPush`](Self::AwaitPush) carries a
-/// [`TickerFuture`], which is neither.
+/// [`AnimationRunFuture`], which is neither.
 #[derive(Debug, Clone)]
 pub(crate) enum DeferredEffect {
     /// The pop-invoked callback (`did_pop`, …) for this route's `PopScope`s —
@@ -459,7 +458,7 @@ pub(crate) enum DeferredEffect {
     /// future (a zero-duration push) settle within that same flush instead of
     /// on the next one, which is exactly the timing ADR-0064's
     /// navigator-consumer constraint rules out.
-    AwaitPush(RouteId, TickerFuture),
+    AwaitPush(RouteId, AnimationRunFuture),
 }
 
 impl Drop for FlushOutcome {
@@ -549,7 +548,7 @@ impl RouteHistory {
     /// Cloned into every binding the navigator mints.
     ///
     pub(crate) fn command_queue(&self) -> RouteCommandQueue {
-        Arc::clone(&self.commands)
+        Rc::clone(&self.commands)
     }
 
     /// Whether any route has raised a command that has not been applied.
@@ -1116,7 +1115,7 @@ impl RouteHistory {
         let mut passes = 1;
 
         // A command raised *during* the walk — `did_pop`'s `reverse()`
-        // canceling a still-pending `forward()` run (its `TickerFuture`
+        // canceling a still-pending `forward()` run (its `AnimationRunFuture`
         // continuation fires synchronously and queues `PushCompleted`), or
         // `finalize` from `did_pop` — is applied here and settled by another
         // pass.

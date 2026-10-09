@@ -213,7 +213,7 @@ fn persistent_callback_panic_closes_the_frame_before_the_pipeline_slot_ever_open
     let panicked_once = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let calls_cb = Arc::clone(&calls);
     let panicked_once_cb = Arc::clone(&panicked_once);
-    scheduler.add_persistent_frame_callback(Arc::new(move |_timing| {
+    scheduler.add_persistent_frame_callback(std::rc::Rc::new(move |_timing| {
         calls_cb.fetch_add(1, Ordering::SeqCst);
         assert!(
             panicked_once_cb.swap(true, Ordering::SeqCst),

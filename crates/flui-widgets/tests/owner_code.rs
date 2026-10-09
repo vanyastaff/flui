@@ -234,8 +234,8 @@ fn the_owner_edit_reaches_the_platform_first(
     field.set_observer(Some(Rc::new(Logged(Rc::clone(&log)))));
     let (queued, second) = (Rc::clone(field), Rc::clone(&log));
     harness
-        .local_post_frame_handle()
-        .schedule_local(move |_| {
+        .post_frame_handle()
+        .schedule(move |_| {
             for grant in [
                 insert("a"),
                 LockGrant::read_write(move |_| second.borrow_mut().push("second grant")),
@@ -2098,7 +2098,7 @@ fn editable_on_changed_failure_ahead_of_a_nested_one() {
     let field = field(&harness);
     NESTING_FIELD.with(|slot| *slot.borrow_mut() = Some(Rc::clone(&field)));
     let once = Arc::new(AtomicBool::new(false));
-    let listener = controller.add_listener(Arc::new(move || {
+    let listener = controller.add_listener(std::rc::Rc::new(move || {
         if once.swap(true, Ordering::SeqCst) {
             return;
         }
@@ -2139,7 +2139,7 @@ fn editable_key_edit_whose_listener_retirement_fails() {
     let capture = Arc::new(Mutex::new(Some(PanicsOnDropSend(
         "listener capture destroyed",
     ))));
-    let id = controller.add_listener(Arc::new(move || {
+    let id = controller.add_listener(std::rc::Rc::new(move || {
         let _keep_alive = &capture;
         let id = own.lock().expect("unpoisoned").take();
         if let Some(id) = id {
@@ -2708,7 +2708,7 @@ fn field_rebuilt_by_its_listener(
             }
         }));
     });
-    let _listening = controller.add_listener(Arc::new(|| {
+    let _listening = controller.add_listener(std::rc::Rc::new(|| {
         let rebuild = ON_NEXT_CHANGE.with(|slot| slot.borrow_mut().take());
         if let Some(rebuild) = rebuild {
             rebuild();
@@ -3276,7 +3276,7 @@ fn editable_store_outliving_its_field() {
     // The store ends up holding the controller's last handle; a listener
     // capture of it panics when destroyed.
     let listener_capture = std::sync::Mutex::new(PanicsOnDropSend("listener capture destroyed"));
-    let _listener = controller.add_listener(Arc::new(move || {
+    let _listener = controller.add_listener(std::rc::Rc::new(move || {
         let _keep_alive = &listener_capture;
     }));
     let node = FocusNode::with_debug_label("outlived field");

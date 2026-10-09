@@ -4,7 +4,7 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
-use flui_animation::{AnimationController, Vsync, VsyncRegistration};
+use flui_animation::{AnimationController, DrivenController};
 use flui_foundation::ListenerId;
 use flui_objects::{SnapAction, SnapCommand};
 use flui_rendering::view::{ScrollDirection, ScrollPosition};
@@ -175,9 +175,7 @@ struct SnapTriggerSlot {
 }
 
 struct FloatingHeaderHostState {
-    snap_controller: Option<AnimationController>,
-    vsync: Option<Vsync>,
-    vsync_registration: Option<VsyncRegistration>,
+    snap_controller: Option<DrivenController>,
     position: Option<ScrollPosition>,
     activity_listener: Option<ListenerId>,
     slot: Arc<parking_lot::Mutex<SnapTriggerSlot>>,
@@ -198,8 +196,6 @@ impl StatefulView for FloatingHeaderHost {
     fn create_state(&self) -> Self::State {
         FloatingHeaderHostState {
             snap_controller: None,
-            vsync: None,
-            vsync_registration: None,
             position: None,
             activity_listener: None,
             slot: Arc::new(parking_lot::Mutex::new(SnapTriggerSlot::default())),
@@ -225,7 +221,7 @@ impl FloatingHeaderHostState {
             position: position.clone(),
             rebuild,
         };
-        let id = position.add_activity_listener(std::sync::Arc::new(move || {
+        let id = position.add_activity_listener(std::rc::Rc::new(move || {
             listener.on_activity();
         }));
         self.position = Some(position);
@@ -241,12 +237,8 @@ impl ViewState<FloatingHeaderHost> for FloatingHeaderHostState {
         // The controller: built where the vsync lives. Duration is a
         // placeholder — `maybe_start_snap_animation` re-applies the snap
         // configuration's own duration on every start.
-        let controller = AnimationController::without_ticker(std::time::Duration::from_millis(200));
-        if let Some(vsync) = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone()) {
-            let registration = vsync.register(controller.clone());
-            self.vsync = Some(vsync);
-            self.vsync_registration = Some(registration);
-        }
+        let controller = AnimationController::builder(std::time::Duration::from_millis(200))
+            .build_on(VsyncScope::maybe_of(ctx).as_ref());
         self.snap_controller = Some(controller);
 
         // The trigger: subscribe to the enclosing scrollable's activity.
@@ -262,6 +254,11 @@ impl ViewState<FloatingHeaderHost> for FloatingHeaderHostState {
     }
 
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
+        if let Some(controller) = self.snap_controller.as_mut()
+            && let Err(error) = controller.rebind(VsyncScope::maybe_of(ctx).as_ref())
+        {
+            tracing::error!(%error, "FloatingHeader lost its frame registry");
+        }
         let position = ctx.depend_on::<ScrollPositionScope, _>(|scope| scope.position().clone());
         let unchanged = match (&self.position, &position) {
             (Some(current), Some(new)) => current.ptr_eq(new),
@@ -275,7 +272,10 @@ impl ViewState<FloatingHeaderHost> for FloatingHeaderHostState {
 
     fn build(&self, view: &FloatingHeaderHost, _ctx: &dyn BuildContext) -> impl IntoView {
         let command = self.slot.lock().pending;
-        let controller = self.snap_controller.clone();
+        let controller = self
+            .snap_controller
+            .as_ref()
+            .map(|owner| owner.controller().clone());
         if view.pinned {
             FloatingPinnedPersistentHeaderView::new(Rc::clone(&view.delegate))
                 .with_snap_controller(controller)
@@ -293,11 +293,7 @@ impl ViewState<FloatingHeaderHost> for FloatingHeaderHostState {
         if let (Some(position), Some(id)) = (self.position.take(), self.activity_listener.take()) {
             position.remove_activity_listener(id);
         }
-        if let (Some(vsync), Some(registration)) =
-            (self.vsync.take(), self.vsync_registration.take())
-        {
-            vsync.unregister(&registration);
-        }
+        self.snap_controller.take();
     }
 }
 

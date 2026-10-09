@@ -73,6 +73,7 @@ fn drive_frame_runs_post_frame_callbacks_after_the_pipeline() {
 /// this a `Drop` guard running during unwind — double-panic into `abort`.
 fn a_panicking_pipeline_aborts_the_frame_and_runs_no_post_frame_callbacks() {
     let scheduler = UpdateScheduler::new();
+    let owner = flui_scheduler::OwnerFrame::new(&scheduler).expect("one frame owner");
     let fired = Arc::new(AtomicUsize::new(0));
     let fired_cb = Arc::clone(&fired);
     scheduler.add_post_frame_callback(Box::new(move |_| {
@@ -80,13 +81,9 @@ fn a_panicking_pipeline_aborts_the_frame_and_runs_no_post_frame_callbacks() {
     }));
 
     let panicked = catch_unwind(AssertUnwindSafe(|| {
-        scheduler.drive_frame(
-            &flui_scheduler::OwnerFrame::new(&scheduler)
-                .expect("the scheduler has no live owner frame"),
-            Instant::now(),
-            far_deadline(),
-            || panic!("pipeline exploded"),
-        );
+        scheduler.drive_frame(&owner, Instant::now(), far_deadline(), || {
+            panic!("pipeline exploded")
+        });
     }))
     .is_err();
     assert!(panicked, "the panic must propagate, not be swallowed");
@@ -103,13 +100,7 @@ fn a_panicking_pipeline_aborts_the_frame_and_runs_no_post_frame_callbacks() {
     );
 
     // The recovered scheduler drives a clean frame, and the queued callback runs.
-    scheduler.drive_frame(
-        &flui_scheduler::OwnerFrame::new(&scheduler)
-            .expect("the scheduler has no live owner frame"),
-        Instant::now(),
-        far_deadline(),
-        || {},
-    );
+    scheduler.drive_frame(&owner, Instant::now(), far_deadline(), || {});
     assert_eq!(fired.load(Ordering::SeqCst), 1);
 }
 
@@ -118,14 +109,9 @@ fn a_panicking_pipeline_aborts_the_frame_and_runs_no_post_frame_callbacks() {
 /// illegal `PersistentCallbacks -> TransientCallbacks` transition.
 fn a_frame_after_a_panicking_frame_starts_cleanly() {
     let scheduler = UpdateScheduler::new();
+    let owner = flui_scheduler::OwnerFrame::new(&scheduler).expect("one frame owner");
     let _ = catch_unwind(AssertUnwindSafe(|| {
-        scheduler.drive_frame(
-            &flui_scheduler::OwnerFrame::new(&scheduler)
-                .expect("the scheduler has no live owner frame"),
-            Instant::now(),
-            far_deadline(),
-            || panic!("boom"),
-        );
+        scheduler.drive_frame(&owner, Instant::now(), far_deadline(), || panic!("boom"));
     }));
 
     let ran = Arc::new(AtomicUsize::new(0));
@@ -135,13 +121,7 @@ fn a_frame_after_a_panicking_frame_starts_cleanly() {
     }));
 
     // Would `debug_assert!` on the illegal transition if the frame were still open.
-    scheduler.drive_frame(
-        &flui_scheduler::OwnerFrame::new(&scheduler)
-            .expect("the scheduler has no live owner frame"),
-        Instant::now(),
-        far_deadline(),
-        || {},
-    );
+    scheduler.drive_frame(&owner, Instant::now(), far_deadline(), || {});
     assert_eq!(ran.load(Ordering::SeqCst), 1);
     assert_eq!(scheduler.phase(), SchedulerPhase::Idle);
 }
@@ -156,7 +136,7 @@ fn persistent_callbacks_run_before_the_pipeline() {
     let log = Log::default();
 
     let log_persistent = log.clone();
-    scheduler.add_persistent_frame_callback(Arc::new(move |_| {
+    scheduler.add_persistent_frame_callback(std::rc::Rc::new(move |_| {
         log_persistent.push("persistent");
     }));
 
@@ -186,16 +166,16 @@ fn retiring_owner_cancels_the_active_local_tail() {
     for fail_after_retire in [false, true] {
         let scheduler = UpdateScheduler::new();
         let owner = std::rc::Rc::new(flui_scheduler::OwnerFrame::new(&scheduler).expect("owner"));
-        let lane = owner.local_post_frame_handle();
+        let lane = owner.post_frame_handle();
         let head = owner.clone();
-        lane.schedule_local(move |_| {
+        lane.schedule(move |_| {
             assert!(head.retire().is_none());
             assert!(!fail_after_retire, "head failure");
         })
         .expect("head");
         let ran = std::rc::Rc::new(std::cell::Cell::new(false));
         let tail = ran.clone();
-        lane.schedule_local(move |_| tail.set(true)).expect("tail");
+        lane.schedule(move |_| tail.set(true)).expect("tail");
         let result = catch_unwind(AssertUnwindSafe(|| {
             scheduler.drive_frame(&owner, Instant::now(), far_deadline(), || {});
         }));
@@ -236,19 +216,19 @@ fn retiring_owner_preserves_registration_order_across_the_active_tail() {
     for failures in [[false, false], [true, false], [false, true], [true, true]] {
         let scheduler = UpdateScheduler::new();
         let owner = std::rc::Rc::new(flui_scheduler::OwnerFrame::new(&scheduler).expect("owner"));
-        let lane = owner.local_post_frame_handle();
+        let lane = owner.post_frame_handle();
         let log = Log::default();
         let head = owner.clone();
         let later_lane = lane.clone();
         let later_log = log.clone();
-        lane.schedule_local(move |_| {
+        lane.schedule(move |_| {
             let newer = Capture {
                 name: "newer",
                 log: later_log,
                 fail: failures[1],
             };
             later_lane
-                .schedule_local(move |_| drop(newer))
+                .schedule(move |_| drop(newer))
                 .expect("newer callback");
             let failure = head.retire();
             let expected = if failures[0] {
@@ -272,13 +252,12 @@ fn retiring_owner_preserves_registration_order_across_the_active_tail() {
                 log: log.clone(),
                 fail,
             };
-            lane.schedule_local(move |_| drop(capture))
-                .expect("active tail");
+            lane.schedule(move |_| drop(capture)).expect("active tail");
         }
         scheduler.drive_frame(&owner, Instant::now(), far_deadline(), || {});
         assert_eq!(log.get(), ["older", "middle", "newer"]);
         assert!(owner.retire().is_none());
-        assert!(lane.schedule_local(|_| {}).is_err());
+        assert!(lane.schedule(|_| {}).is_err());
         scheduler.drive_frame(&owner, Instant::now(), far_deadline(), || {});
         assert_eq!(log.get(), ["older", "middle", "newer"]);
     }

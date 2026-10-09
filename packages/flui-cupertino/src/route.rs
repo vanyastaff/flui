@@ -58,7 +58,6 @@
 //! - A modal popup route, a dialog route and a page-transitions builder —
 //!   separate route/theme types, out of this component's scope.
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use flui_sdk::animation::{Animation, ArcCurve, Curve, CurvedAnimation, Curves, Tween, animate};
@@ -144,23 +143,23 @@ fn cupertino_page_transitions(
         .is_some_and(|navigator| navigator.user_gesture_in_progress());
 
     let primary_position = if linear_transition {
-        animate(right_middle_tween(), Arc::clone(primary))
+        animate(right_middle_tween(), std::rc::Rc::clone(primary))
     } else {
         let curved = CurvedAnimation::new(
-            Arc::clone(primary),
+            std::rc::Rc::clone(primary),
             ArcCurve::new(Curves::FastEaseInToSlowEaseOut),
         )
         .with_reverse_curve(ArcCurve::new(Curves::FastEaseInToSlowEaseOut.flipped()));
-        let curved: Arc<dyn Animation<f64>> = Arc::new(curved);
+        let curved: std::rc::Rc<dyn Animation<f64>> = std::rc::Rc::new(curved);
         animate(right_middle_tween(), curved)
     };
 
     let secondary_position = if linear_transition {
-        animate(middle_left_tween(), Arc::clone(secondary))
+        animate(middle_left_tween(), std::rc::Rc::clone(secondary))
     } else {
-        let curved = CurvedAnimation::new(Arc::clone(secondary), Curves::LinearToEaseOut)
+        let curved = CurvedAnimation::new(std::rc::Rc::clone(secondary), Curves::LinearToEaseOut)
             .with_reverse_curve(Curves::EaseInToLinear);
-        let curved: Arc<dyn Animation<f64>> = Arc::new(curved);
+        let curved: std::rc::Rc<dyn Animation<f64>> = std::rc::Rc::new(curved);
         animate(middle_left_tween(), curved)
     };
 
@@ -168,14 +167,15 @@ fn cupertino_page_transitions(
 
     // The inner slide keeps `transform_hit_tests`'s default of `true` (only the
     // outer/secondary one turns it off).
-    let mut primary_slide = SlideTransition::new(Arc::new(primary_position), child);
+    let mut primary_slide = SlideTransition::new(std::rc::Rc::new(primary_position), child);
     if let Some(direction) = text_direction {
         primary_slide = primary_slide.text_direction(direction);
     }
 
     // The secondary slide wraps the primary one and does not transform hit tests.
-    let mut secondary_slide = SlideTransition::new(Arc::new(secondary_position), primary_slide)
-        .transform_hit_tests(false);
+    let mut secondary_slide =
+        SlideTransition::new(std::rc::Rc::new(secondary_position), primary_slide)
+            .transform_hit_tests(false);
     if let Some(direction) = text_direction {
         secondary_slide = secondary_slide.text_direction(direction);
     }

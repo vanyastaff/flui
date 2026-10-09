@@ -687,13 +687,13 @@ proptest! {
         let rest = observed_rest(&sim);
         let mut at_sixths: Vec<Vec<f64>> = Vec::new();
         for hz in [30_u32, 60, 120, 144] {
-            let controller = AnimationController::unbounded_without_ticker(Duration::from_secs(1));
+            let controller = AnimationController::builder(Duration::from_secs(1)).unbounded().build();
             controller.animate_with(sim.clone()).expect("run starts");
             let mut sixths = Vec::new();
             let mut frame = 1_u32;
             loop {
                 let t = f64::from(frame) / f64::from(hz);
-                controller.tick_at(t);
+                controller.tick_at(Duration::from_secs_f64(t));
                 if frame.is_multiple_of(hz / 6) {
                     sixths.push(controller.value());
                 }
@@ -710,7 +710,7 @@ proptest! {
                 frame += 1;
             }
             at_sixths.push(sixths);
-            controller.dispose();
+            drop(controller);
         }
         for run in &at_sixths[1..] {
             for (a, b) in run.iter().zip(&at_sixths[0]) {
@@ -725,13 +725,12 @@ proptest! {
 /// The default fling spring (`ω = √500`, `ζ = 1`) from 0 at 1 unit/s crosses
 /// the upper bound at 0.295369722567422 s: frame 18 at 60 Hz, not frame 17.
 #[test]
-#[ignore = "contract: a fling completes on the frame that reaches the bound"]
 fn fling_completes_on_the_frame_that_reaches_the_bound() {
-    let controller = AnimationController::without_ticker(Duration::from_secs(1));
+    let controller = AnimationController::builder(Duration::from_secs(1)).build();
     controller.fling(1.0).expect("fling starts");
     let mut finished = None;
     for frame in 1..=120_u32 {
-        controller.tick_at(f64::from(frame) / 60.0);
+        controller.tick_at(std::time::Duration::from_secs_f64(f64::from(frame) / 60.0));
         if controller.status() != AnimationStatus::Forward {
             finished = Some(frame);
             break;
@@ -895,15 +894,19 @@ fn infallible_constructor_rests_on_overflow() {
 
 /// A finite fling whose spring overflows does not unwind the caller.
 fn fling_with_overflowing_spring_does_not_panic() {
-    let controller =
-        AnimationController::without_ticker_bounds(Duration::from_secs(1), 1e308, 1.1e308)
-            .expect("finite range");
+    let controller = flui_animation::ValueRange::new(1e308, 1.1e308)
+        .map(|bounds| {
+            AnimationController::builder(Duration::from_secs(1))
+                .bounds(bounds)
+                .build()
+        })
+        .expect("finite range");
     let spring = SpringDescription::with_damping_ratio(1.0, 1e308, 1.0);
     let flung = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         controller.fling_with(1.0, Some(spring)).is_ok()
     }));
     assert!(flung.is_ok(), "fling_with panicked");
-    controller.tick_at(0.016);
+    controller.tick_at(std::time::Duration::from_secs_f64(0.016));
     assert!(controller.value().is_finite());
 }
 

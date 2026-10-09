@@ -110,7 +110,7 @@ impl RenderFlow {
         let handle = self.render_invalidation_handle.as_ref()?;
         let listenable = self.delegate.repaint()?;
         let mark = handle.clone();
-        Some(listenable.add_listener(Arc::new(move || {
+        Some(listenable.add_listener(std::rc::Rc::new(move || {
             // A stale handle (node removed) is a silent no-op by design.
             let _ = mark.mark_needs_paint();
         })))

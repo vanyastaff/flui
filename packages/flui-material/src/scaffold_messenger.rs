@@ -118,7 +118,7 @@
 //!   queue and schedule further rebuilds *after* this build's siblings have
 //!   already built against the pre-mutation tree, silently.
 //!   `MessengerCore::pop_and_advance` instead defers the fire through the
-//!   [`flui_sdk::view::LocalPostFrameHandle`] acquired in
+//!   [`flui_sdk::view::PostFrameHandle`] acquired in
 //!   [`ScaffoldMessengerState::init_state`] (ADR-0021) — the callback runs
 //!   after this frame's build/layout/paint have committed, its own reentrant
 //!   `show_snack_bar`/etc. call landing squarely in a safe, ordinary
@@ -194,14 +194,14 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
 use std::rc::{Rc, Weak};
-use std::sync::Arc;
+
 use std::time::Duration;
 
 use flui_sdk::animation::{
-    Animation, AnimationController, AnimationStatus, UpdateScheduler, Vsync, VsyncRegistration,
+    Animation, AnimationController, AnimationStatus, DrivenController, PlaybackRate, Vsync,
 };
 use flui_sdk::foundation::ElementId;
-use flui_sdk::view::LocalPostFrameHandle;
+use flui_sdk::view::PostFrameHandle;
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{RebuildHandle, impl_inherited_view};
 use flui_sdk::widgets::animated::VsyncScope;
@@ -287,8 +287,66 @@ impl std::fmt::Debug for SnackBarController {
 /// slot. See the module docs' "Completion slot" section.
 struct QueuedEntry {
     snack_bar: SnackBar,
+    hovered_presenters: Cell<usize>,
     reason: Cell<Option<SnackBarClosedReason>>,
     on_closed: ClosedCallbackSlot,
+}
+
+/// Exact queued entry addressed by a mounted presenter; neither weak handle
+/// keeps a messenger or a retired entry alive.
+#[derive(Clone)]
+pub(crate) struct SnackBarHoverTarget {
+    messenger: Weak<MessengerCore>,
+    entry: Weak<QueuedEntry>,
+}
+
+impl SnackBarHoverTarget {
+    pub(crate) fn is_same(&self, other: &Self) -> bool {
+        Weak::ptr_eq(&self.messenger, &other.messenger) && Weak::ptr_eq(&self.entry, &other.entry)
+    }
+
+    pub(crate) fn set_hovered(&self, hovered: bool) {
+        let Some(entry) = self.entry.upgrade() else {
+            return;
+        };
+        let count = entry.hovered_presenters.get();
+        let next = if hovered {
+            count
+                .checked_add(1)
+                .expect("BUG: mounted SnackBar hover count exhausted")
+        } else {
+            count
+                .checked_sub(1)
+                .expect("BUG: a hover lease releases its own admission")
+        };
+        entry.hovered_presenters.set(next);
+        if (count == 0) == (next == 0) {
+            return;
+        }
+        let Some(messenger) = self.messenger.upgrade() else {
+            return;
+        };
+        let current = messenger
+            .queue
+            .borrow()
+            .front()
+            .is_some_and(|current| Rc::ptr_eq(current, &entry));
+        if !current {
+            return;
+        }
+        let timer = messenger
+            .duration_controller
+            .borrow()
+            .as_ref()
+            .map(|owner| owner.controller().clone());
+        if let Some(timer) = timer {
+            timer.set_playback_rate(if next == 0 {
+                PlaybackRate::NORMAL
+            } else {
+                PlaybackRate::PAUSED
+            });
+        }
+    }
 }
 
 impl QueuedEntry {
@@ -346,10 +404,10 @@ enum ReconcileOrigin {
 /// type never appears inside an `AnimationController`'s own listener list.
 struct MessengerCore {
     entry_controller: AnimationController,
-    duration_controller: RefCell<Option<AnimationController>>,
+    duration_controller: RefCell<Option<DrivenController>>,
     vsync: RefCell<Option<Vsync>>,
-    entry_vsync_registration: RefCell<Option<VsyncRegistration>>,
-    duration_vsync_registration: RefCell<Option<VsyncRegistration>>,
+    entry_owner: RefCell<Option<DrivenController>>,
+    attached: Cell<bool>,
     /// [`ScaffoldMessenger`]'s own rebuild handle — cloned into both
     /// controllers' Send-safe "reschedule" listeners, so a purely
     /// tick-driven status settle (no explicit API call in between) still
@@ -360,7 +418,7 @@ struct MessengerCore {
     /// ADR-0021). `None` until then, or if no binding installed
     /// one — see the module docs' "Deferring `on_closed` out of the build
     /// phase" section for cancellation when no lane is available.
-    post_frame: RefCell<Option<LocalPostFrameHandle>>,
+    post_frame: RefCell<Option<PostFrameHandle>>,
     writer: RefCell<Option<WriterSource>>,
     queue: RefCell<VecDeque<Rc<QueuedEntry>>>,
     last_entry_status: Cell<AnimationStatus>,
@@ -427,7 +485,7 @@ impl MessengerCore {
                 .duration_controller
                 .borrow()
                 .as_ref()
-                .map(Animation::status);
+                .map(|owner| owner.controller().status());
             match duration_status {
                 Some(status) if status != self.last_duration_status.get() => {
                     self.last_duration_status.set(status);
@@ -536,7 +594,7 @@ impl MessengerCore {
             return;
         };
         let cancelled_entry = Rc::clone(&entry);
-        let scheduled = post_frame.schedule_local(move |_timing| entry.complete());
+        let scheduled = post_frame.schedule(move |_timing| entry.complete());
         if let Err(error) = scheduled {
             tracing::warn!(
                 %error,
@@ -550,38 +608,31 @@ impl MessengerCore {
         let Some(front) = self.queue.borrow().front().cloned() else {
             return;
         };
-        let controller = AnimationController::new(
-            front.snack_bar.configured_duration(),
-            &UpdateScheduler::new(),
-        );
-        if let Some(vsync) = self.vsync.borrow().as_ref() {
-            let registration = vsync.register(controller.clone());
-            *self.duration_vsync_registration.borrow_mut() = Some(registration);
+        let vsync = self.vsync.borrow().clone();
+        let owner = AnimationController::builder(front.snack_bar.configured_duration())
+            .build_on(vsync.as_ref());
+        let controller = owner.controller().clone();
+        if front.hovered_presenters.get() != 0 {
+            controller.set_playback_rate(PlaybackRate::PAUSED);
         }
         if let Some(rebuild) = self.rebuild.borrow().clone() {
-            controller.add_status_listener(Arc::new(move |_status| {
+            controller.add_status_listener(std::rc::Rc::new(move |_status| {
                 rebuild.schedule(flui_sdk::view::RebuildReason::AnimationTick);
             }));
         }
         self.last_duration_status.set(AnimationStatus::Dismissed);
-        let _ = controller.forward();
-        let _prev = self.duration_controller.borrow_mut().replace(controller);
+        let outgoing = self.duration_controller.borrow_mut().replace(owner);
+        let mut recovery = flui_sdk::foundation::panic::PanicRecovery::new();
+        recovery.run(|| {
+            let _ = controller.forward();
+        });
+        recovery.retire(outgoing);
+        recovery.finish();
     }
 
     fn cancel_display_timer(&self) {
-        // Take both out before unregistering: dropping the controller there may
-        // run its retired callbacks, which must not find these cells borrowed.
-        let registration = self.duration_vsync_registration.borrow_mut().take();
-        let vsync = self.vsync.borrow().clone();
-        if let Some(registration) = registration
-            && let Some(vsync) = vsync
-        {
-            vsync.unregister(&registration);
-        }
-        let taken = self.duration_controller.borrow_mut().take();
-        if let Some(controller) = taken {
-            controller.dispose();
-        }
+        let outgoing = self.duration_controller.borrow_mut().take();
+        drop(outgoing);
         self.last_duration_status.set(AnimationStatus::Dismissed);
     }
 
@@ -673,13 +724,13 @@ impl ScaffoldMessengerHandle {
     /// that.
     fn new() -> Self {
         let entry_controller =
-            AnimationController::new(ENTRY_TRANSITION_DURATION, &UpdateScheduler::new());
+            AnimationController::builder(ENTRY_TRANSITION_DURATION).build_on(None);
         let shared = Rc::new(MessengerCore {
-            entry_controller,
+            entry_controller: entry_controller.controller().clone(),
             duration_controller: RefCell::new(None),
             vsync: RefCell::new(None),
-            entry_vsync_registration: RefCell::new(None),
-            duration_vsync_registration: RefCell::new(None),
+            entry_owner: RefCell::new(Some(entry_controller)),
+            attached: Cell::new(false),
             rebuild: RefCell::new(None),
             post_frame: RefCell::new(None),
             writer: RefCell::new(None),
@@ -699,27 +750,54 @@ impl ScaffoldMessengerHandle {
     /// the module docs' "Deferring `on_closed` out of the build phase"
     /// section for what the post-frame handle is for.
     pub(crate) fn attach(&self, ctx: &dyn LifecycleContext) {
+        self.shared.attached.set(true);
         *self.shared.writer.borrow_mut() = Some(ctx.writer_source());
         let rebuild = ctx.rebuild_handle();
         let rebuild_for_listener = rebuild.clone();
         self.shared
             .entry_controller
-            .add_status_listener(Arc::new(move |_status| {
+            .add_status_listener(std::rc::Rc::new(move |_status| {
                 rebuild_for_listener.schedule(flui_sdk::view::RebuildReason::AnimationTick);
             }));
         let _prev = self.shared.rebuild.borrow_mut().replace(rebuild);
-        *self.shared.post_frame.borrow_mut() = ctx.local_post_frame_handle();
+        *self.shared.post_frame.borrow_mut() = ctx.post_frame_handle();
 
-        let vsync = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone());
-        if let Some(vsync) = &vsync {
-            let registration = vsync.register(self.shared.entry_controller.clone());
-            *self.shared.entry_vsync_registration.borrow_mut() = Some(registration);
-        }
-        let _prev = std::mem::replace(&mut *self.shared.vsync.borrow_mut(), vsync);
+        self.rebind(ctx);
     }
 
-    /// Unregisters from `Vsync` and disposes both controllers.
+    fn rebind(&self, ctx: &dyn LifecycleContext) {
+        let vsync = VsyncScope::maybe_of(ctx);
+        self.shared.vsync.replace(vsync.clone());
+        let entry = self.shared.entry_owner.borrow_mut().take();
+        let timer = self.shared.duration_controller.borrow_mut().take();
+        let mut recovery = flui_sdk::foundation::panic::PanicRecovery::new();
+        for (slot, owner) in [
+            (&self.shared.entry_owner, entry),
+            (&self.shared.duration_controller, timer),
+        ] {
+            if let Some(mut owner) = owner {
+                recovery.run(|| {
+                    if let Err(error) = owner.rebind(vsync.as_ref()) {
+                        tracing::error!(%error, "ScaffoldMessenger lost its frame registry");
+                    }
+                });
+                let outgoing = {
+                    let mut current = slot.borrow_mut();
+                    if self.shared.attached.get() && current.is_none() {
+                        current.replace(owner)
+                    } else {
+                        Some(owner)
+                    }
+                };
+                recovery.retire(outgoing);
+            }
+        }
+        recovery.finish();
+    }
+
+    /// Release both owning handles.
     pub(crate) fn detach(&self) {
+        self.shared.attached.set(false);
         self.shared.writer.borrow_mut().take();
         self.shared.post_frame.borrow_mut().take();
         let entries = std::mem::take(&mut *self.shared.queue.borrow_mut());
@@ -727,14 +805,9 @@ impl ScaffoldMessengerHandle {
             entry.complete_silently();
         }
         self.shared.cancel_display_timer();
-        let registration = self.shared.entry_vsync_registration.borrow_mut().take();
-        let vsync = self.shared.vsync.borrow_mut().take();
-        if let Some(registration) = registration
-            && let Some(vsync) = vsync
-        {
-            vsync.unregister(&registration);
-        }
-        self.shared.entry_controller.dispose();
+        self.shared.vsync.borrow_mut().take();
+        let outgoing = self.shared.entry_owner.borrow_mut().take();
+        drop(outgoing);
     }
 
     /// Re-runs the state-machine reconciliation for a purely tick-driven
@@ -791,11 +864,17 @@ impl ScaffoldMessengerHandle {
     /// display, if any: the config plus a clone of the shared entrance/exit
     /// controller driving its height animation.
     #[must_use]
-    pub(crate) fn current_entry(&self) -> Option<(SnackBar, AnimationController)> {
+    pub(crate) fn current_entry(
+        &self,
+    ) -> Option<(SnackBar, AnimationController, SnackBarHoverTarget)> {
         self.shared.queue.borrow().front().map(|entry| {
             (
                 entry.snack_bar.clone(),
                 self.shared.entry_controller.clone(),
+                SnackBarHoverTarget {
+                    messenger: Rc::downgrade(&self.shared),
+                    entry: Rc::downgrade(entry),
+                },
             )
         })
     }
@@ -812,6 +891,7 @@ impl ScaffoldMessengerHandle {
         let on_closed = Rc::new(RefCell::new(None));
         let entry = Rc::new(QueuedEntry {
             snack_bar,
+            hovered_presenters: Cell::new(0),
             reason: Cell::new(None),
             on_closed: Rc::clone(&on_closed),
         });
@@ -988,6 +1068,10 @@ impl StatefulView for ScaffoldMessenger {
 impl ViewState<ScaffoldMessenger> for ScaffoldMessengerState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.handle.attach(ctx);
+    }
+
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
+        self.handle.rebind(ctx);
     }
 
     fn build(&self, view: &ScaffoldMessenger, _ctx: &dyn BuildContext) -> impl IntoView {

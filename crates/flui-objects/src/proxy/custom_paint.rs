@@ -17,7 +17,7 @@
 //! plumbing yet — [`PaintCx`] has no raster-cache-hint API. The two hint
 //! fields are carried on this type but are currently inert.
 
-use std::sync::Arc;
+use std::rc::Rc;
 
 use flui_foundation::ListenerId;
 use flui_foundation::Single;
@@ -46,9 +46,9 @@ use flui_rendering::{
 #[derive(Debug)]
 pub struct RenderCustomPaint {
     /// Painted behind the child.
-    painter: Option<Arc<dyn CustomPainter>>,
+    painter: Option<Rc<dyn CustomPainter>>,
     /// Painted in front of the child.
-    foreground_painter: Option<Arc<dyn CustomPainter>>,
+    foreground_painter: Option<Rc<dyn CustomPainter>>,
     /// Size used when there is no child.
     preferred_size: Size,
     /// Raster-cache "this layer is complex" hint — carried, not yet wired.
@@ -73,8 +73,8 @@ impl RenderCustomPaint {
     /// preferred size.
     #[must_use]
     pub fn new(
-        painter: Option<Arc<dyn CustomPainter>>,
-        foreground_painter: Option<Arc<dyn CustomPainter>>,
+        painter: Option<Rc<dyn CustomPainter>>,
+        foreground_painter: Option<Rc<dyn CustomPainter>>,
         preferred_size: Size,
     ) -> Self {
         Self {
@@ -95,11 +95,11 @@ impl RenderCustomPaint {
     /// self-dirty handle, so a notify marks the node needing paint. Returns
     /// the subscription id, or `None` when detached or the painter has no
     /// repaint listenable.
-    fn subscribe(&self, painter: Option<&Arc<dyn CustomPainter>>) -> Option<ListenerId> {
+    fn subscribe(&self, painter: Option<&Rc<dyn CustomPainter>>) -> Option<ListenerId> {
         let handle = self.render_invalidation_handle.as_ref()?;
         let listenable = painter?.repaint()?;
         let mark = handle.clone();
-        Some(listenable.add_listener(Arc::new(move || {
+        Some(listenable.add_listener(std::rc::Rc::new(move || {
             // A stale handle (node removed) is a silent no-op by design.
             let _ = mark.mark_needs_paint();
         })))
@@ -107,7 +107,7 @@ impl RenderCustomPaint {
 
     /// Tears down a subscription created by [`Self::subscribe`], removing it
     /// from the *same* painter's repaint listenable it was added to.
-    fn unsubscribe(painter: Option<&Arc<dyn CustomPainter>>, id: Option<ListenerId>) {
+    fn unsubscribe(painter: Option<&Rc<dyn CustomPainter>>, id: Option<ListenerId>) {
         if let (Some(painter), Some(id)) = (painter, id)
             && let Some(listenable) = painter.repaint()
         {
@@ -137,13 +137,13 @@ impl RenderCustomPaint {
 
     /// The background painter, if any.
     #[must_use]
-    pub fn painter(&self) -> Option<&Arc<dyn CustomPainter>> {
+    pub fn painter(&self) -> Option<&Rc<dyn CustomPainter>> {
         self.painter.as_ref()
     }
 
     /// The foreground painter, if any.
     #[must_use]
-    pub fn foreground_painter(&self) -> Option<&Arc<dyn CustomPainter>> {
+    pub fn foreground_painter(&self) -> Option<&Rc<dyn CustomPainter>> {
         self.foreground_painter.as_ref()
     }
 
@@ -176,7 +176,7 @@ impl RenderCustomPaint {
     /// [`CustomPainter::should_rebuild_semantics`] separately.
     pub fn set_painter(
         &mut self,
-        painter: Option<Arc<dyn CustomPainter>>,
+        painter: Option<Rc<dyn CustomPainter>>,
     ) -> flui_rendering::RenderUpdateImpact {
         let impact = painter_update_impact(self.painter.as_ref(), painter.as_ref());
         // Migrate the repaint subscription to the new painter (no-op while
@@ -192,7 +192,7 @@ impl RenderCustomPaint {
     /// change-detection rule.
     pub fn set_foreground_painter(
         &mut self,
-        painter: Option<Arc<dyn CustomPainter>>,
+        painter: Option<Rc<dyn CustomPainter>>,
     ) -> flui_rendering::RenderUpdateImpact {
         let impact = painter_update_impact(self.foreground_painter.as_ref(), painter.as_ref());
         Self::unsubscribe(
@@ -222,8 +222,8 @@ impl RenderCustomPaint {
 /// The impact of a painter swap, with paint and semantics decisions kept
 /// independent for same-type delegates.
 fn painter_update_impact(
-    old: Option<&Arc<dyn CustomPainter>>,
-    new: Option<&Arc<dyn CustomPainter>>,
+    old: Option<&Rc<dyn CustomPainter>>,
+    new: Option<&Rc<dyn CustomPainter>>,
 ) -> flui_rendering::RenderUpdateImpact {
     match (old, new) {
         (None, None) => flui_rendering::RenderUpdateImpact::NONE,
@@ -231,7 +231,7 @@ fn painter_update_impact(
             flui_rendering::RenderUpdateImpact::PAINT
                 | flui_rendering::RenderUpdateImpact::SEMANTICS
         }
-        (Some(old), Some(new)) if Arc::ptr_eq(old, new) => flui_rendering::RenderUpdateImpact::NONE,
+        (Some(old), Some(new)) if Rc::ptr_eq(old, new) => flui_rendering::RenderUpdateImpact::NONE,
         (Some(old), Some(new)) if old.as_any().type_id() != new.as_any().type_id() => {
             flui_rendering::RenderUpdateImpact::PAINT
                 | flui_rendering::RenderUpdateImpact::SEMANTICS

@@ -1,0 +1,28 @@
+error[E0599]: no method named `register` found for struct `Vsync` in the current scope
+ --> crates/flui-animation/tests/compile_fail/registering_a_bare_controller_does_not_compile.rs:8:25
+  |
+8 |     let seat = registry.register(controller.clone());
+  |                         ^^^^^^^^ method not found in `Vsync`
+
+error[E0599]: no method named `try_register` found for struct `Vsync` in the current scope
+ --> crates/flui-animation/tests/compile_fail/registering_a_bare_controller_does_not_compile.rs:9:22
+  |
+9 |     let _ = registry.try_register(&controller);
+  |                      ^^^^^^^^^^^^
+  |
+help: there is a method `try_into` with a similar name, but with different arguments
+ --> $RUST/core/src/convert/mod.rs
+  |
+  |     fn try_into(self) -> Result<T, Self::Error>;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0624]: method `unregister` is private
+  --> crates/flui-animation/tests/compile_fail/registering_a_bare_controller_does_not_compile.rs:10:14
+   |
+10 |     registry.unregister(&seat);
+   |              ^^^^^^^^^^ private method
+   |
+  ::: crates/flui-animation/src/vsync.rs
+   |
+   |     pub(crate) fn unregister(&self, id: &VsyncRegistration) {
+   |     ------------------------------------------------------- private method defined here
