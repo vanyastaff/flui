@@ -529,7 +529,7 @@ impl FocalFling {
                 let _ = animation.stop();
                 return;
             };
-            if next == target.value() && animation.value() != 0.0 {
+            if next == target.value() && proposed != next {
                 let _ = animation.stop();
             } else {
                 target.set_value(next);
