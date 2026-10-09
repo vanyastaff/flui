@@ -8,6 +8,9 @@
   existing host preference source.
 - The macOS winit fallback shares the AppKit preference sampler and retires it
   with its event-loop owner, including during unwinding.
+- Linux hosts observe reduced motion through the Settings portal, with the
+  GNOME enable-animations fallback and legacy portal support. Failed reads
+  preserve the accepted motion preference and retry without another notification.
 
 - Add the interactive `motion_lab` example with Full/Reduce/FollowSystem modes,
   property interruption, independent deadlines, swipe and drawer transitions.
@@ -59,6 +62,10 @@
   leave the callback registered until source closure.
 
 ### Fixed
+
+- Retiring the final platform background-executor owner from an async task no
+  longer panics during runtime shutdown, including when a stopped host's last
+  proxy is released after Linux preference observation.
 
 - Rebuild only the RefreshIndicator overlay when refresh starts or finishes;
   retain scroll content and gesture handlers across phase changes.

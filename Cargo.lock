@@ -1675,6 +1675,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b5343afd4a8365a643ac588dab4cf234a190c7f6c88c9f6dd6ffe00837661b7"
 
 [[package]]
+name = "escape8259"
+version = "0.5.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9f1f0d310082fd5de539d4f41601182241147498444a7695c520288a0cdbead6"
+
+[[package]]
 name = "etagere"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2199,9 +2205,11 @@ dependencies = [
  "flui-foundation",
  "flui-platform-api",
  "flui-semantics",
+ "futures-util",
  "jni",
  "js-sys",
  "keyboard-types",
+ "libtest-mimic",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
@@ -2225,6 +2233,7 @@ dependencies = [
  "windows 0.62.2",
  "windows-core 0.62.2",
  "winit",
+ "zbus",
 ]
 
 [[package]]
@@ -3534,6 +3543,18 @@ dependencies = [
  "bindgen",
  "cc",
  "system-deps",
+]
+
+[[package]]
+name = "libtest-mimic"
+version = "0.8.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "14e6ba06f0ade6e504aff834d7c34298e5155c6baca353cc6a4aaff2f9fd7f33"
+dependencies = [
+ "anstream",
+ "anstyle",
+ "clap",
+ "escape8259",
 ]
 
 [[package]]
@@ -6209,6 +6230,7 @@ dependencies = [
  "signal-hook-registry",
  "socket2",
  "tokio-macros",
+ "tracing",
  "windows-sys 0.61.2",
 ]
 
@@ -7861,6 +7883,7 @@ dependencies = [
  "rustix 1.1.5",
  "serde",
  "serde_repr",
+ "tokio",
  "tracing",
  "uds_windows",
  "uuid",

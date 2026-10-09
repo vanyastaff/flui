@@ -234,6 +234,8 @@ struct WinitPlatformState {
     preferences: PreferenceObservation,
     #[cfg(target_os = "macos")]
     preferences: std::sync::Weak<super::super::macos::preferences::PreferenceSource>,
+    #[cfg(target_os = "linux")]
+    preferences: std::sync::Weak<super::preferences::PreferenceSource>,
     /// Native pointer identities and phase state are committed before dispatch.
     native_pointer: winit_events::NativePointerState,
     /// Callback handlers
@@ -303,7 +305,7 @@ impl WinitPlatformState {
             native_pointer: winit_events::NativePointerState::default(),
             #[cfg(windows)]
             preferences: PreferenceObservation::Deferred,
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
             preferences: std::sync::Weak::new(),
             handlers: PlatformHandlers::new(),
             background_executor: Arc::new(BackgroundExecutor::new()),
@@ -441,7 +443,7 @@ impl WinitPlatform {
 
         let mut app = WinitApp {
             platform: Arc::clone(&self),
-            #[cfg(any(windows, target_os = "macos"))]
+            #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
             preference_source: None,
             on_ready: Some(on_ready),
             control: receiver,
@@ -840,6 +842,8 @@ struct WinitApp {
     preference_source: Option<super::super::windows::preferences::PreferenceSource>,
     #[cfg(target_os = "macos")]
     preference_source: Option<Arc<super::super::macos::preferences::PreferenceSource>>,
+    #[cfg(target_os = "linux")]
+    preference_source: Option<Arc<super::preferences::PreferenceSource>>,
     platform: Arc<WinitPlatform>,
     on_ready: Option<PlatformReadyCallback>,
     control: ControlReceiver,
@@ -1017,7 +1021,7 @@ impl ApplicationHandler for WinitApp {
                 state.init_displays(event_loop);
             }
         });
-        #[cfg(any(windows, target_os = "macos"))]
+        #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
         if let Err(error) = self.initialize_preferences() {
             self.bootstrap_error = Some(error.into());
             self.request_exit(event_loop);
@@ -1509,6 +1513,25 @@ enum DragPath {
 
 // Helper methods for WinitApp
 impl WinitApp {
+    #[cfg(target_os = "linux")]
+    fn initialize_preferences(&mut self) -> Result<(), PlatformError> {
+        if self.preference_source.is_none() {
+            let signal = self.platform.owner_signal.lock().clone().ok_or_else(|| {
+                PlatformError::Preferences {
+                    message: "the Linux preference owner is unavailable".into(),
+                }
+            })?;
+            let executor = self
+                .platform
+                .with_state(|state| Arc::clone(&state.background_executor));
+            let source = super::preferences::PreferenceSource::new(&executor, &signal);
+            self.platform
+                .with_state(|state| state.preferences = Arc::downgrade(&source));
+            self.preference_source = Some(source);
+        }
+        Ok(())
+    }
+
     #[cfg(target_os = "macos")]
     fn initialize_preferences(&mut self) -> Result<(), PlatformError> {
         if self.preference_source.is_none() {
@@ -2015,13 +2038,13 @@ impl WinitApp {
     }
 
     fn finish_shutdown(&mut self) {
-        #[cfg(any(windows, target_os = "macos"))]
+        #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
         let preference_source = self.preference_source.take();
         let signal = self.platform.owner_signal.lock().clone();
         if let Some(signal) = signal {
             signal.close();
         }
-        #[cfg(any(windows, target_os = "macos"))]
+        #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
         drop(preference_source);
         self.release_open_window_callbacks();
         self.close_owner_lane();
@@ -2061,13 +2084,13 @@ impl WinitApp {
     }
 
     fn close_owner_lane(&mut self) {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         {
             let signal = self.platform.owner_signal.lock().clone();
             if let Some(signal) = signal {
                 signal.fence();
             }
-            // Also runs during unwind: native timers become inert before the
+            // Also runs during unwind: native observation ends before the
             // owner releases its source, without retiring user callback captures.
             let source = self.preference_source.take();
             drop(source);
@@ -2112,6 +2135,23 @@ impl Drop for WinitApp {
 }
 
 impl Platform for WinitPlatform {
+    #[cfg(target_os = "linux")]
+    fn preferences(&self) -> Result<flui_platform_api::SystemPreferences, PlatformError> {
+        let signal = self.owner_signal.lock().clone();
+        if !signal
+            .as_ref()
+            .is_some_and(|signal| signal.accepting() && signal.owner() == thread::current().id())
+        {
+            return Err(PlatformError::Preferences {
+                message: "Linux preferences require the live winit event-loop owner".into(),
+            });
+        }
+        let source = self.with_state(|state| state.preferences.upgrade());
+        source
+            .map(|source| source.read())
+            .ok_or(PlatformError::PreferencesDeferred)
+    }
+
     #[cfg(target_os = "macos")]
     fn preferences(&self) -> Result<flui_platform_api::SystemPreferences, PlatformError> {
         let signal = self.owner_signal.lock().clone();
@@ -2774,7 +2814,7 @@ mod tests {
         }));
         let mut app = WinitApp {
             platform: Arc::clone(&platform),
-            #[cfg(any(windows, target_os = "macos"))]
+            #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
             preference_source: None,
             on_ready: None,
             control: receiver,

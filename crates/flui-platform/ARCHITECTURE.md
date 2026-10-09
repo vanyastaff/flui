@@ -203,6 +203,39 @@ These sources feed the existing ADR-0172 delivery path and ADR-0184 projection.
 Local cross-target clippy compiles these native paths; it does not execute their
 OS getters or external-setting notifications.
 
+Linux winit owners use one Settings portal connection on the existing background
+executor. Setting and service-owner subscriptions precede the initial read;
+the accepted snapshot is committed before waking the owner. Initial bootstrap
+waits at most 500ms before `on_ready`; unavailable or stalled observations stay
+unknown and can recover later. No D-Bus call runs in the frame path. Successful
+unsigned `org.freedesktop.appearance/reduced-motion` values map 1 to Reduce and
+other values to NoPreference. A missing key permits the GNOME
+`org.gnome.desktop.interface/enable-animations` fallback; transient errors
+preserve the last accepted snapshot. Settings v1 uses its double-variant `Read`
+reply. Healthy observations use notifications; failed reads retain a bounded
+retry that unrelated notifications cannot postpone. Service-owner changes
+refresh the same observation set. Shutdown fences owner admission before
+cancelling the task, whose state holds no strong owner/source cycle.
+
+The process-isolated `linux_preferences` table runs through public
+`WinitPlatform` owner capabilities with a private session bus. It checks initial
+sampling without a window, live changes, unknown values, unsupported observations,
+GNOME and legacy portal reads, service replacement, failed-read recovery without
+another notification, foreign-thread refusal and reentrant capture retirement.
+`libtest-mimic` keeps execution on winit's required main thread and supplies the
+Cargo/nextest protocol. `linux_preferences_probe` runs the same fixture scenarios
+manually. These tests execute Linux D-Bus and winit, but do not change a desktop's
+actual OS settings or establish live behavior of the other native platforms.
+
+Thread-safe residual handles may outlive the event-loop owner. The background
+executor's final shared owner requests nonblocking runtime shutdown, so releasing
+a retired proxy inside another async runtime or inside the executor's own task
+cannot invoke Tokio's blocking runtime destructor. This retains normal runtime
+cancellation of queued async work; already executing blocking work finishes
+independently. `background_executor_retirement` exercises both contexts through
+the public executor, and the Linux table's `late-proxy` case covers the actual
+preference source and stopped host.
+
 AppKit observes `NSEvent::doubleClickInterval` on the application owner lane.
 Android observes public `ViewConfiguration` timeouts and physical touch/fling
 metrics using the Activity context and its resource density; its presentation
