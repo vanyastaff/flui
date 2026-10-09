@@ -1,5 +1,6 @@
 ### Fixed
 
+- Commit a driven controller's new clock binding before retiring the outgoing registry; preserve the first delivery failure and keep subsequent runs usable.
 - Preserve controller status and run-delivery order during reentrant animation changes, finish healthy status listeners after a panic, and skip listeners removed or disposed during delivery.
 - Continue ticking remaining Vsync controllers and child registries after a contained failure; retain the first failure through wrapper relays and capture retirement.
 - Preserve animation progress when mounted implicit widgets and open navigator routes change their ambient frame registry; release their registration on unmount.

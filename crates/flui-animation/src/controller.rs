@@ -499,7 +499,7 @@ impl AnimationController {
             .retain(|candidate| candidate != route);
     }
 
-    pub(crate) fn set_clock_bound(&self, bound: bool) {
+    pub(crate) fn set_clock_bound(&self, bound: bool, retirement: &mut Retirement) {
         let mut inner = self.inner.borrow_mut();
         inner.clock_binding = if bound {
             ClockBinding::Bound
@@ -513,12 +513,13 @@ impl AnimationController {
                 .push_back(ControllerDelivery::RequestFrame);
         }
         let status = inner.status;
-        self.finish(
+        self.finish_with_retirement(
             status,
             ValueChange::Unchanged,
             None,
             RetiredSources::new(),
             inner,
+            retirement,
         );
     }
 

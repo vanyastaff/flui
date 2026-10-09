@@ -150,6 +150,139 @@ fn unbound_time_run_completes_once() {
     assert_eq!(owner.controller().status(), AnimationStatus::Completed);
 }
 
+fn rebinding_retires_the_old_registry_after_committing_the_new_clock() {
+    use std::cell::Cell;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::rc::Rc;
+
+    struct Capture {
+        controller: AnimationController,
+        seen: Rc<Cell<f64>>,
+    }
+    impl Drop for Capture {
+        fn drop(&mut self) {
+            self.seen.set(self.controller.value());
+            panic!("registry retirement");
+        }
+    }
+
+    let old = Vsync::new();
+    let mut owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&old));
+    let seen = Rc::new(Cell::new(-1.0));
+    let capture = Capture {
+        controller: owner.controller().clone(),
+        seen: seen.clone(),
+    };
+    old.set_frame_requester(Some(Rc::new(move || {
+        let _ = &capture;
+    })));
+    let mut run = owner.controller().forward().expect("bound run");
+    drop(old);
+
+    let failure = catch_unwind(AssertUnwindSafe(|| {
+        owner.rebind(None).expect("release old clock");
+    }))
+    .expect_err("outgoing registry capture fails");
+    assert_eq!(failure.downcast_ref::<&str>(), Some(&"registry retirement"));
+    assert!(!owner.is_bound());
+    assert_eq!(
+        owner.controller().value(),
+        1.0,
+        "losing the clock settles the run"
+    );
+    assert_eq!(
+        seen.get(),
+        1.0,
+        "retirement observes the committed clock transition"
+    );
+    assert!(matches!(
+        Pin::new(&mut run).poll(&mut Context::from_waker(Waker::noop())),
+        Poll::Ready(Ok(()))
+    ));
+
+    let next = Vsync::new();
+    owner.rebind(Some(&next)).expect("recover with a new clock");
+    let reverse = owner.controller().reverse().expect("next run");
+    let mut clock = flui_animation::MotionClock::new();
+    next.tick_all(&clock.frame(Duration::ZERO));
+    next.tick_all(&clock.frame(Duration::from_secs(1)));
+    assert_eq!(owner.controller().value(), 0.0);
+    assert!(reverse.is_complete());
+}
+
+fn rebinding_preserves_delivery_failure_before_outgoing_retirement() {
+    use std::cell::Cell;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::rc::Rc;
+
+    struct Capture(Rc<Cell<usize>>);
+    impl Drop for Capture {
+        fn drop(&mut self) {
+            self.0.set(self.0.get() + 1);
+            panic!("outgoing registry retirement");
+        }
+    }
+
+    for binding in ["missing", "replacement"] {
+        let old = Vsync::new();
+        let mut owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&old));
+        let retired = Rc::new(Cell::new(0));
+        let capture = Capture(retired.clone());
+        old.set_frame_requester(Some(Rc::new(move || {
+            let _ = &capture;
+        })));
+        let run = owner.controller().forward().expect("initial bound run");
+        drop(old);
+
+        let replacement = Vsync::new();
+        let healthy = Rc::new(Cell::new(0));
+        if binding == "replacement" {
+            replacement.set_frame_requester(Some(Rc::new(|| panic!("clock delivery"))));
+        } else {
+            owner
+                .controller()
+                .add_listener(Rc::new(|| panic!("clock delivery")));
+            let observed = healthy.clone();
+            owner
+                .controller()
+                .add_listener(Rc::new(move || observed.set(observed.get() + 1)));
+        }
+        let failure = catch_unwind(AssertUnwindSafe(|| {
+            owner
+                .rebind((binding == "replacement").then_some(&replacement))
+                .expect("clock transition");
+        }))
+        .expect_err("clock delivery fails");
+        assert_eq!(failure.downcast_ref::<&str>(), Some(&"clock delivery"));
+        assert_eq!(
+            retired.get(),
+            0,
+            "opaque outgoing captures retain first-failure custody"
+        );
+        assert_eq!(owner.is_bound(), binding == "replacement");
+        if binding == "missing" {
+            assert_eq!(owner.controller().value(), 1.0);
+            assert!(run.is_complete());
+            assert_eq!(healthy.get(), 1, "healthy settlement delivery finishes");
+            owner.controller().remove_all_listeners();
+            owner.rebind(Some(&replacement)).expect("restore clock");
+        } else {
+            assert_eq!(replacement.len(), 1);
+            assert!(!run.is_complete(), "accepted run survives the failed wake");
+            replacement.set_frame_requester(None);
+        }
+        let next_run = owner
+            .controller()
+            .reverse()
+            .expect("next operation after recovery");
+        let mut clock = flui_animation::MotionClock::new();
+        replacement.tick_all(&clock.frame(Duration::ZERO));
+        replacement.tick_all(&clock.frame(Duration::from_secs(1)));
+        assert_eq!(owner.controller().value(), 0.0);
+        assert!(next_run.is_complete());
+    }
+}
+
 fn dropping_the_last_owner_from_its_own_listener_mid_frame() {
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
@@ -280,6 +413,14 @@ fn an_unbound_controller_settles_every_run_kind_at_once() {
 #[test]
 fn driven_controller_owns_its_seat_and_run() {
     crate::run_table(&[
+        (
+            "rebind preserves delivery failure before outgoing retirement",
+            rebinding_preserves_delivery_failure_before_outgoing_retirement,
+        ),
+        (
+            "rebind commits the clock before retiring the outgoing registry",
+            rebinding_retires_the_old_registry_after_committing_the_new_clock,
+        ),
         (
             "run restart and rate resume request samples",
             runs_and_rate_changes_request_samples,
