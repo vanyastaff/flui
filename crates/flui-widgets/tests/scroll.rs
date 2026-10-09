@@ -684,9 +684,10 @@ pub(crate) fn refresh_motion_notifies_activity_through_release_and_recovery() {
 pub(crate) fn a_failed_refresh_notification_releases_activity_and_recovers() {
     use std::sync::atomic::{AtomicBool, Ordering};
 
+    for (phase_fault, activity_fault) in [(true, false), (false, true), (true, true)] {
     let scroll = ScrollController::new();
     let refresh = RefreshController::new();
-    let fail = Arc::new(AtomicBool::new(true));
+    let fail = Arc::new(AtomicBool::new(phase_fault));
     let failed = Arc::new(AtomicBool::new(false));
     let watched = refresh.clone();
     let fail_callback = fail.clone();
@@ -696,6 +697,21 @@ pub(crate) fn a_failed_refresh_notification_releases_activity_and_recovers() {
         if watched.is_refreshing() && fail_callback.swap(false, Ordering::SeqCst) {
             failed_callback.store(true, Ordering::SeqCst);
             panic!("refresh phase subscriber failed");
+        }
+    }));
+    let activity_fail = Arc::new(AtomicBool::new(activity_fault));
+    let activity_failed = Arc::new(AtomicBool::new(false));
+    let activity_flag = activity_fail.clone();
+    let activity_observed = activity_failed.clone();
+    let phase = refresh.clone();
+    let position = scroll.position();
+    let watched_position = position.clone();
+    let activity_listener = position.add_activity_listener(Arc::new(move || {
+        if phase.is_refreshing() && !watched_position.is_scrolling()
+            && activity_flag.swap(false, Ordering::SeqCst)
+        {
+            activity_observed.store(true, Ordering::SeqCst);
+            panic!("refresh activity subscriber failed");
         }
     }));
     let calls = Rc::new(Cell::new(0));
@@ -720,10 +736,14 @@ pub(crate) fn a_failed_refresh_notification_releases_activity_and_recovers() {
         laid.dispatch_pointer_up(150.0, 250.0);
     }));
     if let Err(payload) = failure {
-        assert_eq!(flui_foundation::panic::payload_text(payload.as_ref()),
-            Some("refresh phase subscriber failed"));
+        assert_eq!(flui_foundation::panic::payload_text(payload.as_ref()), Some(if phase_fault {
+            "refresh phase subscriber failed"
+        } else {
+            "refresh activity subscriber failed"
+        }));
     }
-    assert!(failed.load(Ordering::SeqCst), "the real phase subscriber was invoked");
+    assert_eq!(failed.load(Ordering::SeqCst), phase_fault);
+    let attempted_cleanup = activity_failed.load(Ordering::SeqCst);
     assert!(refresh.is_refreshing(), "accepted refresh phase survives its observer");
     let stranded = scroll.position().is_scrolling();
     refresh.finish();
@@ -734,7 +754,10 @@ pub(crate) fn a_failed_refresh_notification_releases_activity_and_recovers() {
     refresh.finish();
     assert!(!scroll.position().is_scrolling());
     listenable.remove_listener(listener);
+    position.remove_activity_listener(activity_listener);
+    assert_eq!(attempted_cleanup, activity_fault, "mandatory cleanup notification remains attempted");
     assert!(!stranded, "a failed phase observer stranded terminal scroll activity");
+    }
 }
 
 pub(crate) fn scroll_activity_tracks_the_whole_gesture_lifecycle() {
