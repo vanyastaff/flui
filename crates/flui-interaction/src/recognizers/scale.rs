@@ -1321,38 +1321,45 @@ impl GestureRecognizer for ScaleGestureRecognizer {
             return;
         };
 
+        let (claim, sequence) = {
+            let mut state = self.gesture_state.borrow_mut();
+            // A contact added while this recognizer owns the gesture is claimed
+            // with it.
+            if state.contacts.is_empty()
+                && let PointerEvent::Down(data) = down.local
+            {
+                state.settings = settings;
+                state.scale_velocity_tracker = VelocityTracker::for_gesture(
+                    data.pointer.kind,
+                    state.settings.velocity_estimator(),
+                );
+                state.focal_velocity_tracker = VelocityTracker::for_gesture(
+                    data.pointer.kind,
+                    state.settings.velocity_estimator(),
+                );
+            }
+            let claim = state.won.then(|| entry.clone());
+            state.contacts.push(Contact {
+                id,
+                pointer,
+                position,
+                global_position: global,
+                entry,
+            });
+            if state.phase == ScalePhase::Idle {
+                state.phase = ScalePhase::Possible;
+                state.sequence = Some(id);
+            }
+            state.rebaseline();
+            (claim, state.sequence)
+        };
+        let clock = self.membership.now();
         let mut state = self.gesture_state.borrow_mut();
-        // A contact added while this recognizer owns the gesture is claimed
-        // with it.
-        if state.contacts.is_empty()
-            && let PointerEvent::Down(data) = down.local
-        {
-            state.settings = settings;
-            state.scale_velocity_tracker = VelocityTracker::for_gesture(
-                data.pointer.kind,
-                state.settings.velocity_estimator(),
-            );
-            state.focal_velocity_tracker = VelocityTracker::for_gesture(
-                data.pointer.kind,
-                state.settings.velocity_estimator(),
-            );
+        // Clocks may cancel or admit a new generation using this same pointer.
+        if state.sequence != sequence || !state.contacts.iter().any(|contact| contact.id == id) {
+            return;
         }
-        let claim = state.won.then(|| entry.clone());
-        state.contacts.push(Contact {
-            id,
-            pointer,
-            position,
-            global_position: global,
-            entry,
-        });
-        if state.phase == ScalePhase::Idle {
-            state.phase = ScalePhase::Possible;
-            state.sequence = Some(id);
-        }
-        state.rebaseline();
-        let now = state
-            .timeline
-            .instant(event_time(down.local), self.membership.now());
+        let now = state.timeline.instant(event_time(down.local), clock);
         let focal = state.focal_point;
         state.focal_velocity_tracker.add_position(now, focal);
         let start = state.try_start();
