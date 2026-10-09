@@ -432,7 +432,8 @@ impl UiRuntime {
     ///
     /// Each window has its own scale (monitors differ), so the ratio reaches
     /// only the presentation whose window reported it; its siblings keep
-    /// theirs. Returns `false`, changing nothing, when `id` names no
+    /// theirs. Returns `false`, changing nothing, for a non-positive or
+    /// non-finite ratio, or when `id` names no
     /// presentation this UI runtime hosts — for example, when its close was
     /// delivered before the scale change.
     pub fn set_device_pixel_ratio_for(&self, id: PresentationId, device_pixel_ratio: f64) -> bool {
@@ -453,6 +454,9 @@ impl UiRuntime {
         id: PresentationId,
         device_pixel_ratio: f64,
     ) -> bool {
+        if !device_pixel_ratio.is_finite() || device_pixel_ratio <= 0.0 {
+            return false;
+        }
         let Some(presentation) = self.presentations.get(id) else {
             return false;
         };

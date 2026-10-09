@@ -33,7 +33,10 @@ authored size and nested override retention by
 `EditableText` subscribes during its own build and carries sizing through its
 appearance value to `RenderEditable`. The editor retains authored styles and
 document offsets; selection and caret position use the newly laid-out paragraph.
-An explicitly configured caret height remains a logical length. Mount/update
+The default caret follows the laid-out line height, including empty text and
+authored font sizes, through `RenderEditable`'s automatic-height policy.
+`RawTextField` preserves that default. An explicitly configured caret height
+remains a logical length; removing the override restores automatic height. Mount/update
 equivalence and restoration of glyph/caret geometry are pinned by
 `inherited_text_sizing_updates_editable_glyphs_and_caret`.
 

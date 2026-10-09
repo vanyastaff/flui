@@ -372,8 +372,8 @@ pub struct EditableText {
     /// Focus ownership is explicit and presentation-local. The caller owns
     /// the node.
     pub(super) focus_node: Rc<FocusNode>,
-    /// Height of the rendered caret bar in logical pixels.
-    pub(super) caret_height: f64,
+    /// Explicit logical height, or the laid-out line height when absent.
+    pub(super) caret_height: Option<f64>,
     /// Color of the caret bar when the field is focused.
     pub(super) caret_color: Color,
     pub(super) selection_color: Color,
@@ -424,7 +424,7 @@ impl EditableText {
         Self {
             controller,
             focus_node,
-            caret_height: 18.0,
+            caret_height: None,
             caret_color: Color::BLACK,
             // Transparent by default, so the primitive paints no highlight
             // until a caller (a decorated `TextField`, a theme) chooses one.
@@ -438,10 +438,11 @@ impl EditableText {
         }
     }
 
-    /// Override the caret bar height (default 18 logical pixels).
+    /// Override the caret bar height in logical pixels. By default it follows
+    /// the laid-out text line; an override is independent of text scaling.
     #[must_use]
     pub fn caret_height(mut self, height: f64) -> Self {
-        self.caret_height = height;
+        self.caret_height = Some(height);
         self
     }
 
@@ -2458,7 +2459,7 @@ struct EditableTextRenderView {
     /// field is obscured, because [`build_field_view`] masks before this point
     /// and the render object never sees the source characters.
     selection: Option<Range<usize>>,
-    caret_height: f64,
+    caret_height: Option<f64>,
     caret_color: Color,
     selection_color: Color,
     text_style: Option<TextStyle>,
@@ -2537,7 +2538,7 @@ impl_render_view!(EditableTextRenderView);
 #[derive(Clone, Debug)]
 struct FieldAppearance {
     text_scale_factor: f64,
-    caret_height: f64,
+    caret_height: Option<f64>,
     caret_color: Color,
     selection_color: Color,
     text_style: Option<TextStyle>,

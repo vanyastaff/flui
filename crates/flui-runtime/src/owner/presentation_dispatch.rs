@@ -52,11 +52,9 @@ impl WindowObservation {
     ) {
         let id = address.presentation_id;
         match self {
-            Self::Metrics { size, scale_factor } => PendingWindowState {
-                metrics: Some((size, scale_factor)),
-                ..Default::default()
+            Self::Metrics { size, scale_factor } => {
+                PendingWindowState::metrics(size, scale_factor).apply(runtime, address, effects);
             }
-            .apply(runtime, address, effects),
             Self::Focus(focused) => runtime.update_window_focus(id, focused),
             Self::Visibility(visible) => runtime.update_window_visibility(id, visible),
             Self::Execution(execution) => runtime.update_window_execution(id, execution),
@@ -92,14 +90,22 @@ pub(super) struct PendingWindowState {
 }
 
 impl PendingWindowState {
+    fn metrics(size: Size<f64>, scale: f64) -> Self {
+        Self {
+            // Reject before coalescing so a bad observation cannot replace
+            // an accepted resize still awaiting delivery.
+            metrics: (scale.is_finite() && scale > 0.0).then_some((size, scale)),
+            ..Self::default()
+        }
+    }
+
     pub(super) fn from_observation(
         observation: WindowObservation,
     ) -> Result<Self, WindowObservation> {
         match observation {
-            WindowObservation::Metrics { size, scale_factor } => Ok(Self {
-                metrics: Some((size, scale_factor)),
-                ..Self::default()
-            }),
+            WindowObservation::Metrics { size, scale_factor } => {
+                Ok(Self::metrics(size, scale_factor))
+            }
             WindowObservation::SafeArea(insets) => Ok(Self {
                 safe_area: Some(insets),
                 ..Self::default()
