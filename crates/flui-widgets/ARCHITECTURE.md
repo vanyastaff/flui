@@ -14,7 +14,11 @@ and verifies that update events continue on each moving frame.
 `dismissal_updates_follow_owner_lifetime` queues several pointer updates before
 one frame and verifies ordered delivery through writable event contexts,
 callback replacement, cancellation on unmount, and accepted tail delivery
-after a callback panic.
+after a callback panic. Capture retirement during configuration replacement
+follows lifecycle substitution; retirement by the last queued event follows
+post-frame propagation. Neither path delivers updates to the removed actor.
+The same table verifies the original failure, competing post-frame failures,
+healthy tail delivery and fresh drag input after recovery.
 
 Dismissible preserves the dragged side while a reverse release moves back
 toward the origin. Physical velocity uses `AnimationController::fling_across`
@@ -26,6 +30,16 @@ input reads committed size before controller calls, and post-frame snapshots
 provide geometry to deferred collapse. Build never queries the pipeline.
 `a_dismissible_collapses_its_laid_out_size` verifies the initial painted collapse
 extent and single completion delivery.
+
+## Selected pointer coordinates retain the admitted motion sample
+
+A selected hit path carries its global-to-local mapping through delivery.
+Changing the animation after selection does not remap that pointer event;
+the next selection observes the new committed sample.
+`a_moving_slide_preserves_selected_pointer_coordinates` drives an owner-bound
+slide, changes its public sample between selection and delivery, and observes
+actual `Listener` local and root coordinates in LTR and RTL without rebuilding.
+Removing the transition's hit transform makes this acceptance row fail.
 
 ## Independent implicit property motion
 

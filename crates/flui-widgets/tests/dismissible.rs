@@ -15,6 +15,18 @@ enum UpdateDelivery {
     Replaced,
     Unmounted,
     Panicking,
+    CaptureReplacement,
+    CaptureUnmounted,
+    CaptureUnmountedCompeting,
+}
+
+struct UpdateCapture(Rc<Cell<usize>>);
+
+impl Drop for UpdateCapture {
+    fn drop(&mut self) {
+        self.0.set(self.0.get() + 1);
+        panic!("intentional dismissal capture retirement panic");
+    }
 }
 
 pub(crate) fn dismissal_updates_follow_owner_lifetime() {
@@ -27,12 +39,26 @@ pub(crate) fn dismissal_updates_follow_owner_lifetime() {
         UpdateDelivery::Ordered,
         UpdateDelivery::Replaced,
         UpdateDelivery::Unmounted,
+        UpdateDelivery::CaptureReplacement,
+        UpdateDelivery::CaptureUnmounted,
+        UpdateDelivery::CaptureUnmountedCompeting,
         UpdateDelivery::Panicking,
     ] {
         let generation = Rc::new(Cell::new(1_u32));
         let show = Rc::new(Cell::new(true));
         let delivered = Rc::new(RefCell::new(Vec::new()));
         let first = Rc::new(Cell::new(true));
+        let retired = Rc::new(Cell::new(0));
+        let capture = matches!(
+            delivery,
+            UpdateDelivery::CaptureReplacement
+                | UpdateDelivery::CaptureUnmounted
+                | UpdateDelivery::CaptureUnmountedCompeting
+        )
+        .then(|| Rc::new(UpdateCapture(Rc::clone(&retired))));
+        let reach = capture
+            .as_ref()
+            .map_or_else(std::rc::Weak::new, Rc::downgrade);
         let probe = {
             let generation = Rc::clone(&generation);
             let show = Rc::clone(&show);
@@ -43,11 +69,13 @@ pub(crate) fn dismissal_updates_follow_owner_lifetime() {
                     return SizedBox::shrink().boxed();
                 }
                 let generation = generation.get();
+                let capture = (generation == 1).then(|| reach.upgrade()).flatten();
                 let delivered = Rc::clone(&delivered);
                 let first = Rc::clone(&first);
                 Dismissible::new(ColoredBox::new(Color::rgb(10, 20, 30)))
                     .direction(DismissDirection::Horizontal)
                     .on_update(move |cx, details| {
+                        let _keep_alive = &capture;
                         assert!(
                             !first.replace(false) || !matches!(delivery, UpdateDelivery::Panicking),
                             "intentional dismissal update panic"
@@ -66,12 +94,28 @@ pub(crate) fn dismissal_updates_follow_owner_lifetime() {
             tight(200.0, 200.0),
             vsync,
         );
+        drop(capture);
         app.dispatch_pointer_down(20.0, 20.0);
         for x in [40.0, 60.0, 80.0, 100.0] {
             app.dispatch_pointer_move_after(x, 20.0, Duration::from_millis(10));
         }
         assert!(delivered.borrow().is_empty(), "updates wait for the frame");
         assert_eq!(probe.value(), Ok(0));
+        let sibling_retired = Rc::new(Cell::new(0));
+        let healthy_tail = Rc::new(Cell::new(false));
+        if matches!(delivery, UpdateDelivery::CaptureUnmountedCompeting) {
+            let sibling = Rc::clone(&sibling_retired);
+            app.post_frame_handle()
+                .schedule(move |_| {
+                    sibling.set(sibling.get() + 1);
+                    panic!("competing post-frame callback panic");
+                })
+                .expect("sibling callback is accepted");
+            let healthy = Rc::clone(&healthy_tail);
+            app.post_frame_handle()
+                .schedule(move |_| healthy.set(true))
+                .expect("healthy callback tail is accepted");
+        }
         match delivery {
             UpdateDelivery::Ordered => app.tick(),
             UpdateDelivery::Replaced => {
@@ -87,9 +131,92 @@ pub(crate) fn dismissal_updates_follow_owner_lifetime() {
                 assert!(result.is_err(), "the first callback's panic propagates");
                 app.tick();
             }
+            UpdateDelivery::CaptureReplacement
+            | UpdateDelivery::CaptureUnmounted
+            | UpdateDelivery::CaptureUnmountedCompeting => {
+                if matches!(delivery, UpdateDelivery::CaptureReplacement) {
+                    generation.set(2);
+                } else {
+                    show.set(false);
+                }
+                let (result, log) = flui_testing::log_capture::capture(|| {
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| app.pump()))
+                });
+                let reports: Vec<_> = log
+                    .records()
+                    .iter()
+                    .filter(|record| {
+                        record.message
+                            == "lifecycle panic contained; frame continued for this presentation"
+                    })
+                    .collect();
+                if matches!(delivery, UpdateDelivery::CaptureReplacement) {
+                    result.expect("lifecycle substitution completes the frame");
+                    assert_eq!(
+                        reports.len(),
+                        1,
+                        "capture retirement is reported once: {log}"
+                    );
+                    assert_eq!(
+                        reports[0].field("panic_message"),
+                        Some("intentional dismissal capture retirement panic"),
+                        "capture retirement remains the authoritative failure: {log}"
+                    );
+                    assert_eq!(reports[0].field("hook"), Some("Update"));
+                } else {
+                    // Queued updates own the retired event source until their
+                    // final post-frame callback drops it. Its capture failure
+                    // follows scheduler propagation, not lifecycle substitution.
+                    let payload = result.expect_err("post-frame retirement propagates");
+                    assert_eq!(
+                        payload.downcast_ref::<&str>().copied(),
+                        Some("intentional dismissal capture retirement panic")
+                    );
+                    assert!(
+                        reports.is_empty(),
+                        "unmount did not substitute an actor: {log}"
+                    );
+                }
+                assert_eq!(retired.get(), 1, "the last capture retires exactly once");
+                assert_eq!(
+                    app.count_elements_by_view_type::<Dismissible>(),
+                    0,
+                    "the retired or substituted actor cannot deliver accepted updates: {log}"
+                );
+                if matches!(delivery, UpdateDelivery::CaptureUnmountedCompeting) {
+                    assert_eq!(
+                        sibling_retired.get(),
+                        0,
+                        "first failure precedes its accepted tail"
+                    );
+                    assert!(!healthy_tail.get());
+                    let result =
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| app.tick()));
+                    let payload = result.expect_err("the accepted sibling runs on the next frame");
+                    assert_eq!(
+                        payload.downcast_ref::<&str>().copied(),
+                        Some("competing post-frame callback panic")
+                    );
+                    assert_eq!(sibling_retired.get(), 1);
+                    assert!(
+                        !healthy_tail.get(),
+                        "the second failure preserves its own tail"
+                    );
+                }
+                app.tick();
+                if matches!(delivery, UpdateDelivery::CaptureUnmountedCompeting) {
+                    assert!(
+                        healthy_tail.get(),
+                        "healthy accepted work survives both failures"
+                    );
+                }
+            }
         }
         let expected: &[f64] = match delivery {
-            UpdateDelivery::Unmounted => &[],
+            UpdateDelivery::Unmounted
+            | UpdateDelivery::CaptureReplacement
+            | UpdateDelivery::CaptureUnmounted
+            | UpdateDelivery::CaptureUnmountedCompeting => &[],
             UpdateDelivery::Panicking => &[0.2, 0.3, 0.4],
             _ => &[0.1, 0.2, 0.3, 0.4],
         };
@@ -102,7 +229,10 @@ pub(crate) fn dismissal_updates_follow_owner_lifetime() {
         for ((callback, progress), expected) in actual.iter().zip(expected) {
             assert_eq!(
                 *callback,
-                if matches!(delivery, UpdateDelivery::Replaced) {
+                if matches!(
+                    delivery,
+                    UpdateDelivery::Replaced | UpdateDelivery::CaptureReplacement
+                ) {
                     2
                 } else {
                     1
@@ -118,6 +248,35 @@ pub(crate) fn dismissal_updates_follow_owner_lifetime() {
             Ok(expected.len() as u32),
             "each update has a writable EventCx"
         );
+        drop(actual);
+        if matches!(
+            delivery,
+            UpdateDelivery::CaptureReplacement
+                | UpdateDelivery::CaptureUnmounted
+                | UpdateDelivery::CaptureUnmountedCompeting
+        ) {
+            generation.set(2);
+            show.set(true);
+            app.pump();
+            app.dispatch_pointer_cancel();
+            app.dispatch_pointer_down(20.0, 20.0);
+            for x in [40.0, 60.0, 80.0, 100.0] {
+                app.dispatch_pointer_move_after(x, 20.0, Duration::from_millis(10));
+            }
+            app.tick();
+            let actual = delivered.borrow();
+            assert_eq!(
+                actual.len(),
+                4,
+                "fresh input works after capture retirement"
+            );
+            for ((callback, progress), expected) in actual.iter().zip([0.1, 0.2, 0.3, 0.4]) {
+                assert_eq!(*callback, 2, "only the remounted callback receives input");
+                assert!((progress - expected).abs() < 1e-9);
+            }
+            assert_eq!(probe.value(), Ok(4));
+            assert_eq!(retired.get(), 1, "recovery cannot retire the capture again");
+        }
     }
 }
 

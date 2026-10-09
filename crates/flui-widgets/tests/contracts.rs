@@ -634,6 +634,10 @@ fn transitions_follow_the_painted_transform() {
                 crate::transitions::hit_test_follows_the_painted_transform as fn(),
             ),
             (
+                "a_moving_slide_preserves_selected_pointer_coordinates",
+                crate::transitions::a_moving_slide_preserves_selected_pointer_coordinates,
+            ),
+            (
                 "transitions_swap_their_animation_in_place",
                 crate::transitions::swapping_the_animation_keeps_the_render_object,
             ),
