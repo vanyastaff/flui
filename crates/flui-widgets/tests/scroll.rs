@@ -744,6 +744,7 @@ pub(crate) fn a_failed_refresh_notification_releases_activity_and_recovers() {
     }
     assert_eq!(failed.load(Ordering::SeqCst), phase_fault);
     let attempted_cleanup = activity_failed.load(Ordering::SeqCst);
+    activity_fail.store(false, Ordering::SeqCst);
     assert!(refresh.is_refreshing(), "accepted refresh phase survives its observer");
     let stranded = scroll.position().is_scrolling();
     refresh.finish();
